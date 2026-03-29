@@ -1,11 +1,14 @@
 from fastapi import FastAPI
+
+import camera_core
 import camera_core as core
 
 app = FastAPI()
 
 @app.get("/")
-def home2():
-    return {"message": "Hello World"}
+def main():
+    if camera_core.check():
+        return {"status": "ok"}
 
 @app.get("/cams")
 def cams():

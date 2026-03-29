@@ -1,16 +1,17 @@
 from fastapi import FastAPI
-
-import camera_core
 import camera_core as core
 
 app = FastAPI()
 
 @app.get("/")
 def main():
-    if camera_core.check():
+    core.load_driver()
+    if core.check():
         return {"status": "ok"}
+    else:
+        return {"status": "error"}
 
 @app.get("/cams")
 def cams():
-    output = core.scan_cams()
-    return output
+    cams = core.scan_cams()
+    return cams

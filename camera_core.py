@@ -1,28 +1,33 @@
 from harvesters.core import Harvester
 
+cti_path = "Driver/MvProducerGEV.cti"
+H = Harvester()
 
-Harvester = Harvester()
 # статус всех камер
 cam_online = {}
+# состояние загрузки драйвера
+Driver = False
 
-# подгрузка драйвера для работы
-def main(H):
+
+# загрузка драйвера для работы
+def load_driver():
+    global Driver,cti_path
     try:
-        H.add_file("MvProducerGEV.cti")
+        H.add_file(cti_path)
         H.update()
+        Driver = True
     except:
-        return False
-    finally:
-        return True
+        Driver = False
 
-# проверка подгрузки драйвера
+
+# проверка состояния загрузки драйвера
 def check():
-    return main(Harvester)
+    return Driver
 
 # сканирование всех сетевых камер
 # вывод серийник: статус камеры
 def scan_cams():
-    if main(Harvester):
-        for device in Harvester.device_info_list:
+    if check():
+        for device in H.device_info_list:
             cam_online [device.serial_number] = device.access_status
-            return cam_online
+    return cam_online

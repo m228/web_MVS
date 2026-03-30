@@ -1,17 +1,31 @@
 from fastapi import FastAPI
+from fastapi.responses import FileResponse
 import camera_core as core
-
 app = FastAPI()
 
-@app.get("/")
-def main():
+@app.on_event("startup")
+def startup():
     core.load_driver()
-    if core.check():
-        return {"status": "ok"}
-    else:
-        return {"status": "error"}
+
+@app.get("/")
+def home():
+    return FileResponse("page/index.html")
 
 @app.get("/cams")
 def cams():
-    cams = core.scan_cams()
-    return cams
+    return FileResponse("page/cams.html")
+
+
+
+@app.get("/api/cams")
+def api_cams():
+    return core.scan_cams()
+
+@app.get("/api/status")
+def api_status():
+    try:
+        return {"status": core.check()}
+    except Exception as e:
+        return {"status": False, "error": str(e)}
+
+

@@ -1,0 +1,19 @@
+<!DOCTYPE html>
+<html lang="ru">
+<body>
+    <h1>Главная</h1>
+
+    <p>Статус драйвера: <span id="status"></span></p>
+    <button onclick="location.href='/cams'">Список камер</button>
+
+    <script>
+    async function loadStatus() {
+        const response = await fetch('/api/status');
+        const data = await response.json();
+        document.getElementById('status').innerText = data.status;
+    }
+    loadStatus()
+    </script>
+
+</body>
+</html>

@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="ru">
+<body>
+    <h1>Камеры</h1>
+
+    <button onclick="location.href='/'">Главная</button>
+
+        <table border="1">
+            <thead>
+                <tr>
+                  <th>Камеры (серийник)</th>
+                  <th>Статусы</th>
+                  <th>Действие</th>
+                </tr>
+            </thead>
+            <tbody id="table"></tbody>
+        </table>
+
+    <script>
+        async function loadCams() {
+            const response = await fetch('/api/cams');
+            const data = await response.json();
+            document.getElementById('table').innerText = table.innerHTML = '';
+               for (const serial in data) {
+                const row = `
+                    <tr>
+                        <td>${serial}</td>
+                        <td>${data[serial]}</td>
+                        <button onclick="openCam('${serial}')">▶</button>
+                    </tr>
+                `;
+                table.innerHTML += row;
+            }
+        }
+         function openCam(serial) {
+            alert('Нажали на камеру: ' + serial);
+        }
+        loadCams()
+
+    </script>
+</body>
+</html>

@@ -16,7 +16,7 @@ def load_driver():
         H.add_file(cti_path)
         H.update()
         Driver = True
-    except:
+    except Exception:
         Driver = False
 
 

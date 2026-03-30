@@ -28,4 +28,8 @@ def api_status():
     except Exception as e:
         return {"status": False, "error": str(e)}
 
+@app.get("/api/ip")
+def get_ip(serial_number):
+   return core.get_ip(serial_number)
+
 

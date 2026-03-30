@@ -5,38 +5,44 @@
 
     <button onclick="location.href='/'">Главная</button>
 
-        <table border="1">
-            <thead>
-                <tr>
-                  <th>Камеры (серийник)</th>
-                  <th>Статусы</th>
-                  <th>Действие</th>
-                </tr>
-            </thead>
-            <tbody id="table"></tbody>
-        </table>
+    <table style="border-collapse: collapse;">
+        <thead>
+            <tr>
+                <th style="border: 1px solid black;">Камеры (серийник)</th>
+                <th style="border: 1px solid black;">Статусы</th>
+                <th></th>
+            </tr>
+        </thead>
+        <tbody id="table"></tbody>
+    </table>
 
     <script>
         async function loadCams() {
             const response = await fetch('/api/cams');
             const data = await response.json();
-            document.getElementById('table').innerText = table.innerHTML = '';
-               for (const serial in data) {
-                const row = `
+
+            const table = document.getElementById('table');
+            table.innerHTML = '';
+
+            for (const serial in data) {
+                table.innerHTML += `
                     <tr>
-                        <td>${serial}</td>
-                        <td>${data[serial]}</td>
-                        <button onclick="openCam('${serial}')">▶</button>
+                        <td style="border: 1px solid black;">${serial}</td>
+                        <td style="border: 1px solid black;">${data[serial]}</td>
+                        <td style="padding-left: 10px;">
+                            <button onclick="openCam('${serial}')">▶</button>
+                        </td>
                     </tr>
                 `;
-                table.innerHTML += row;
             }
         }
-         function openCam(serial) {
-            alert('Нажали на камеру: ' + serial);
+        async function openCam(serial) {
+            const response = await fetch(`/api/ip?serial_number=${encodeURIComponent(serial)}`);
+            const data = await response.json();
+            alert(data.ip);
         }
-        loadCams()
 
+        loadCams();
     </script>
 </body>
 </html>

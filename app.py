@@ -29,7 +29,7 @@ def api_status():
         return {"status": False, "error": str(e)}
 
 @app.get("/api/ip")
-def get_ip(serial_number):
-   return core.get_ip(serial_number)
+def get_ip(serial_number: str):
+    return core.get_ip(serial_number)
 
 

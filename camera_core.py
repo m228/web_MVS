@@ -49,7 +49,7 @@ def scan_cams():
 
 # подключение к камере и получение nodemap
 def get_node_map_cam(H,serial_number):
-    ia = H.create({'serial': f"'{serial_number}'"})
+    ia = H.create({'serial_number': f'{serial_number}'})
     node_map = ia.remote_device.node_map
     return node_map
 
@@ -61,7 +61,7 @@ def get_ip(serial_number: str):
         node_map = get_node_map_cam(H,serial_number)
         ip_ = node_map.GevCurrentIPAddress.value
         ip = int_to_ip(ip_)
-    return ip
+    return {"ip":ip}
 
 
 

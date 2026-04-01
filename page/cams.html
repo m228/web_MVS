@@ -10,13 +10,22 @@
             <tr>
                 <th style="border: 1px solid black;">Камеры (серийник)</th>
                 <th style="border: 1px solid black;">Статусы</th>
-                <th></th>
+                <th style="border: 1px solid black;">Ip-адрес </th>
             </tr>
         </thead>
         <tbody id="table"></tbody>
     </table>
 
     <script>
+        async function getIp(serial) {
+            try {
+                const response = await fetch(`/api/ip?serial_number=${encodeURIComponent(serial)}`);
+                const data = await response.json();
+                return data.ip ?? 'Нет IP';
+            } catch (error) {
+                return 'Ошибка';
+            }
+        }
         async function loadCams() {
             const response = await fetch('/api/cams');
             const data = await response.json();
@@ -25,21 +34,16 @@
             table.innerHTML = '';
 
             for (const serial in data) {
+                const ip = await getIp(serial);
+
                 table.innerHTML += `
                     <tr>
                         <td style="border: 1px solid black;">${serial}</td>
                         <td style="border: 1px solid black;">${data[serial]}</td>
-                        <td style="padding-left: 10px;">
-                            <button onclick="openCam('${serial}')">▶</button>
-                        </td>
+                        <td style="border: 1px solid black;">${ip}</td>
                     </tr>
                 `;
             }
-        }
-        async function openCam(serial) {
-            const response = await fetch(`/api/ip?serial_number=${encodeURIComponent(serial)}`);
-            const data = await response.json();
-            alert(data.ip);
         }
 
         loadCams();

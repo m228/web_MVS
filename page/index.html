@@ -1,19 +1,27 @@
 <!DOCTYPE html>
 <html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <title>Главная</title>
+  <link rel="stylesheet" href="/static/css/style.css">
+</head>
 <body>
-    <h1>Главная</h1>
+  <div class="layout">
+    <aside class="sidebar">
+      <a href="/" class="menu-item active">Главная</a>
+      <a href="/cams" class="menu-item">Камеры</a>
+      <a href="/camera" class="menu-item">Настройки</a>
+    </aside>
 
-    <p>Статус драйвера: <span id="status"></span></p>
-    <button onclick="location.href='/cams'">Список камер</button>
+    <main class="content">
+      <h1>Главная</h1>
+      <p>Статус драйвера: <span id="status"></span></p>
+    </main>
+  </div>
 
-    <script>
-    async function loadStatus() {
-        const response = await fetch('/api/status');
-        const data = await response.json();
-        document.getElementById('status').innerText = data.status;
-    }
-    loadStatus()
-    </script>
-
+  <script src="/static/js/main.js"></script>
+  <script>
+    loadStatus();
+  </script>
 </body>
 </html>

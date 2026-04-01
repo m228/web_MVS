@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <title>Camera Setup</title>
+</head>
+<body>
+  <h1>Настройка камеры</h1>
+
+  <div>
+    <img src="/stream.mjpg" alt="camera stream" style="max-width: 600px; border: 1px solid #ccc;" />
+  </div>
+
+  <hr>
+
+  <form id="settingsForm">
+    <label>
+      Width:
+      <input type="number" name="width" value="1300">
+    </label>
+    <br>
+
+    <label>
+      Height:
+      <input type="number" name="height" value="1300">
+    </label>
+    <br>
+
+    <label>
+      FPS:
+      <input type="number" step="0.1" name="fps" value="1">
+    </label>
+    <br>
+
+    <label>
+      Exposure auto:
+      <select name="exposure_auto">
+        <option value="Off">Off</option>
+        <option value="Once">Once</option>
+        <option value="Continuous" selected>Continuous</option>
+      </select>
+    </label>
+    <br>
+
+    <label>
+      Exposure time:
+      <input type="number" step="1" name="exposure_time">
+    </label>
+    <br>
+
+    <button type="submit">Применить</button>
+  </form>
+
+  <script>
+    document.getElementById("settingsForm").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const form = e.target;
+
+      const payload = {
+        width: Number(form.width.value),
+        height: Number(form.height.value),
+        fps: Number(form.fps.value),
+        exposure_auto: form.exposure_auto.value,
+        exposure_time: form.exposure_time.value ? Number(form.exposure_time.value) : null,
+        gain_auto: "Off",
+        gain: null
+      };
+
+      const res = await fetch("/settings", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify(payload)
+      });
+
+      const data = await res.json();
+      console.log(data);
+    });
+  </script>
+</body>
+</html>

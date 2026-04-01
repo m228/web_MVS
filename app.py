@@ -15,7 +15,9 @@ def home():
 def cams():
     return FileResponse("page/cams.html")
 
-
+@app.get("/camera")
+def home():
+    return FileResponse("page/camera.html")
 
 @app.get("/api/cams")
 def api_cams():

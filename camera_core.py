@@ -1,5 +1,3 @@
-from pickle import GLOBAL
-
 from harvesters.core import Harvester
 import socket
 import struct
@@ -26,14 +24,14 @@ def int_to_ip(n):
 
 # загрузка драйвера для работы
 def load_driver():
-    global Driver,cti_path
+    global Driver,cti_path, H
     try:
         H.add_file(cti_path)
         H.update()
         Driver = True
-    except Exception:
+    except Exception as e:
+        print("Ошибка загрузки драйвера:", e)
         Driver = False
-
 
 # проверка состояния загрузки драйвера
 def check():
@@ -42,13 +40,17 @@ def check():
 # сканирование всех сетевых камер
 # вывод серийник: статус камеры
 def scan_cams():
+    global cam_online
+    cam_online = {}
+
     if check():
         for device in H.device_info_list:
             cam_online [device.serial_number] = device.access_status
     return cam_online
 
 # подключение к камере и получение nodemap
-def get_node_map_cam(H,serial_number):
+def get_node_map_cam(serial_number):
+    global H
     ia = H.create({'serial_number': f'{serial_number}'})
     node_map = ia.remote_device.node_map
     return node_map, ia
@@ -56,11 +58,10 @@ def get_node_map_cam(H,serial_number):
 
 # получение айпи камеры по серийнику
 def get_ip(serial_number: str):
-    global H
     ia = None
     if check():
         try:
-            node_map, ia = get_node_map_cam(H,serial_number)
+            node_map, ia = get_node_map_cam(serial_number)
             ip_ = node_map.GevCurrentIPAddress.value
             ip = int_to_ip(ip_)
             return {"ip":ip}

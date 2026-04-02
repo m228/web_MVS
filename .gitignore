@@ -1,7 +1,4 @@
-.venv
-.idea
-__pycache__
-__pycache__/camera_core.cpython-311.pyc
-__pycache__/app.cpython-311.pyc
-.idea/misc.xml
+/.venv
 /.idea
+/__pycache__
+

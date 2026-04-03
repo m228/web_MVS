@@ -1,7 +1,9 @@
 from fastapi import FastAPI
 from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 import camera_core as core
 app = FastAPI()
+app.mount("/static", StaticFiles(directory="page/static"), name="static")
 
 @app.on_event("startup")
 def startup():
@@ -16,7 +18,7 @@ def cams():
     return FileResponse("page/cams.html")
 
 @app.get("/camera")
-def home():
+def camera():
     return FileResponse("page/camera.html")
 
 @app.get("/api/cams")

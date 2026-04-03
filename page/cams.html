@@ -1,52 +1,40 @@
 <!DOCTYPE html>
 <html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Камеры</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
 <body>
-    <h1>Камеры</h1>
+  <div class="layout">
+    <aside class="sidebar">
+      <a href="/" class="menu-item">Главная</a>
+      <a href="/cams" class="menu-item active">Камеры</a>
+      <a href="/camera" class="menu-item">Настройки</a>
+    </aside>
 
-    <button onclick="location.href='/'">Главная</button>
+    <main class="content">
+      <h1>Камеры</h1>
 
-    <table style="border-collapse: collapse;">
-        <thead>
+      <div class="card">
+        <table>
+          <thead>
             <tr>
-                <th style="border: 1px solid black;">Камеры (серийник)</th>
-                <th style="border: 1px solid black;">Статусы</th>
-                <th style="border: 1px solid black;">Ip-адрес </th>
+              <th>Камеры (серийник)</th>
+              <th>Статусы</th>
+              <th>IP-адрес</th>
             </tr>
-        </thead>
-        <tbody id="table"></tbody>
-    </table>
+          </thead>
+          <tbody id="table"></tbody>
+        </table>
+      </div>
+    </main>
+  </div>
 
-    <script>
-        async function getIp(serial) {
-            try {
-                const response = await fetch(`/api/ip?serial_number=${encodeURIComponent(serial)}`);
-                const data = await response.json();
-                return data.ip ?? 'Нет IP';
-            } catch (error) {
-                return 'Ошибка';
-            }
-        }
-        async function loadCams() {
-            const response = await fetch('/api/cams');
-            const data = await response.json();
-
-            const table = document.getElementById('table');
-            table.innerHTML = '';
-
-            for (const serial in data) {
-                const ip = await getIp(serial);
-
-                table.innerHTML += `
-                    <tr>
-                        <td style="border: 1px solid black;">${serial}</td>
-                        <td style="border: 1px solid black;">${data[serial]}</td>
-                        <td style="border: 1px solid black;">${ip}</td>
-                    </tr>
-                `;
-            }
-        }
-
-        loadCams();
-    </script>
+  <script src="/static/main.js"></script>
+  <script>
+    loadCams();
+  </script>
 </body>
 </html>

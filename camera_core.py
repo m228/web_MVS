@@ -76,4 +76,50 @@ def count_cams():
     return {"count": len(cam_online)}
 
 
+# получение данных с камеры, текущие + лимиты
+def get_camera_settings(serial_number):
+    ia = None
+    if check():
+        try:
+            node_map = get_node_map_cam(serial_number)
+            data = {
+                "width": {
+                    "value": node_map.Width.value,
+                    "min": node_map.Width.min,
+                    "max": node_map.Width.max,
+                },
+                "height": {
+                    "value": node_map.Height.value,
+                    "min": node_map.Height.min,
+                    "max": node_map.Height.max,
+                },
+                "offset_x": {
+                    "value": node_map.OffsetX.value,
+                    "min": node_map.OffsetX.min,
+                    "max": node_map.OffsetX.max,
+                },
+                "offset_y": {
+                    "value": node_map.OffsetY.value,
+                    "min": node_map.OffsetY.min,
+                    "max": node_map.OffsetY.max,
+                },
+                "exposure_time": {
+                    "value": node_map.ExposureTime.value,
+                    "min": node_map.ExposureTime.min,
+                    "max": node_map.ExposureTime.max,
+                },
+                "exposure_auto": {
+                    "value": node_map.ExposureAuto.value,
+                    "options": node_map.ExposureAuto.symbolics,
+                }
+            }
+            return data
+        finally:
+            if ia is not None:
+                ia.destroy()
+
+
+def connect_camera(serial_number):
+    node_map = get_node_map_cam(serial_number)
+
 

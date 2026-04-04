@@ -66,6 +66,10 @@ async function loadCams() {
         <td>${serial}</td>
         <td>${data[serial]}</td>
         <td>${ip}</td>
+        <td> 
+            <button onclick="alert('Подключение: ${serial}')" title="Подключиться"><span>🔌</span></button>
+            <button onclick="alert('Сетевые настройки: ${serial}')" title="Подключиться"><span>⚙️</span></button>
+        </td>
       </tr>
     `;
   }
@@ -73,4 +77,29 @@ async function loadCams() {
 
 
 
+
 // page camera
+
+const form = document.getElementById('settingsForm');
+
+if (form) {
+  form.addEventListener('submit_settings', async function (event) {
+    event.preventDefault();
+
+    const formData = new FormData(form);
+
+    const response = await fetch('/api/camera/settings', {
+      method: 'POST',
+      body: formData
+    });
+
+    const result = await response.json();
+    console.log(result);
+
+    if (result.ok) {
+      alert('Настройки применены');
+    } else {
+      alert('Ошибка: ' + result.error);
+    }
+  });
+}

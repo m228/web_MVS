@@ -50,3 +50,10 @@ def get_ip(serial_number: str):
 def count_cams():
     return core.count_cams()
 
+
+
+
+
+#@app.post("/api/camera/settings")
+#def camera_settings():
+#    return null

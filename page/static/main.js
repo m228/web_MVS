@@ -1,3 +1,4 @@
+// page index
 async function loadStatus() {
   const response = await fetch('/api/status');
   const data = await response.json();
@@ -12,6 +13,31 @@ async function loadStatus() {
   }
 }
 
+async function count_cams() {
+  const response = await fetch('/api/count_cams');
+  const data = await response.json();
+  const el = document.getElementById('count_cams');
+  if (el) {
+    el.textContent = data.count;
+  }
+}
+
+function updateTime() {
+  const now = new Date();
+  const timeString = now.toLocaleTimeString(); // например: 14:23:05
+  const el = document.getElementById('time');
+  if (el) {
+    el.textContent = timeString;
+  }
+}
+
+window.addEventListener('DOMContentLoaded', () => {
+  count_cams();
+  updateTime();
+  setInterval(updateTime, 1000);
+});
+
+// page cams
 async function getIp(serial) {
   try {
     const response = await fetch(`/api/ip?serial_number=${encodeURIComponent(serial)}`);
@@ -21,6 +47,7 @@ async function getIp(serial) {
     return 'Ошибка';
   }
 }
+
 
 async function loadCams() {
   const response = await fetch('/api/cams');
@@ -43,3 +70,7 @@ async function loadCams() {
     `;
   }
 }
+
+
+
+// page camera

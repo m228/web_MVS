@@ -1,13 +1,20 @@
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
-import camera_core as core
-app = FastAPI()
-app.mount("/static", StaticFiles(directory="page/static"), name="static")
 
-@app.on_event("startup")
-def startup():
+import camera_core as core
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
     core.load_driver()
+    core.scan_cams()
+    yield
+
+app = FastAPI(lifespan=lifespan)
+app.mount("/static", StaticFiles(directory="page/static"), name="static")
 
 @app.get("/")
 def home():
@@ -20,6 +27,9 @@ def cams():
 @app.get("/camera")
 def camera():
     return FileResponse("page/camera.html")
+
+
+
 
 @app.get("/api/cams")
 def api_cams():
@@ -36,4 +46,7 @@ def api_status():
 def get_ip(serial_number: str):
     return core.get_ip(serial_number)
 
+@app.get("/api/count_cams")
+def count_cams():
+    return core.count_cams()
 

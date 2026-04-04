@@ -70,7 +70,10 @@ def get_ip(serial_number: str):
                 ia.destroy()
 
 
-
+def count_cams():
+    global cam_online
+    print(len(cam_online))
+    return {"count": len(cam_online)}
 
 
 

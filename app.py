@@ -64,10 +64,12 @@ def apply_settings_camera(
     exposure_time: float = Form(None),
 ):
     try:
-        img = core.connect_camera(serial_number=serial_number,width=width,height=height,offset_x=offset_x,offset_y=offset_y,fps=fps,exposure_auto=exposure_auto,exposure_time=exposure_time)
+        img = core.connect_camera(serial_number=serial_number, width=width, height=height, offset_x=offset_x,
+                                  offset_y=offset_y, fps=fps, exposure_auto=exposure_auto, exposure_time=exposure_time)
 
         if img is None:
-            return {"status": False}
+            return {"status": False, "error": "Не удалось применить настройки или получить кадр"}
+
         return {"status": True}
     except Exception as e:
         return {"status": False, "error": str(e)}

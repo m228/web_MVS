@@ -69,6 +69,7 @@
         <aside class="camera-sidebar">
           <div class="card">
             <h2>Параметры камеры</h2>
+            <p>Серийный номер: <span id="cameraSerial"></span></p>
 
             <form id="settingsForm">
               <label>
@@ -83,12 +84,12 @@
 
               <label>
                 OffsetX
-                <input type="number" name="offsetx" value="0" />
+                <input type="number" name="offset_x" value="0" />
               </label>
 
               <label>
                 OffsetY
-                <input type="number" name="offsety" value="0" />
+                <input type="number" name="offset_y" value="0" />
               </label>
 
               <label>
@@ -110,7 +111,7 @@
                 <input type="number" step="1" name="exposure_time" />
               </label>
 
-              <button type="submit_settings">Применить</button>
+              <button type="submit">Применить</button>
             </form>
           </div>
         </aside>

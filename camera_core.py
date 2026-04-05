@@ -1,4 +1,5 @@
 from harvesters.core import Harvester
+import numpy as np
 import socket
 import struct
 
@@ -81,7 +82,7 @@ def get_camera_settings(serial_number):
     ia = None
     if check():
         try:
-            node_map = get_node_map_cam(serial_number)
+            node_map,ia = get_node_map_cam(serial_number)
             data = {
                 "width": {
                     "value": node_map.Width.value,
@@ -118,8 +119,76 @@ def get_camera_settings(serial_number):
             if ia is not None:
                 ia.destroy()
 
+# нужна для проверки в submit_settings_camera
+def check_value(value,min,max) -> bool:
+    if value is None:
+        return False
+    return min <= value <= max
 
-def connect_camera(serial_number):
-    node_map = get_node_map_cam(serial_number)
+def apply_settings_camera(node_map, data_limit, width=None, height=None, offset_x=None, offset_y=None, fps=None, exposure_auto=None, exposure_time=None):
+    try:
+        if check_value(width,data_limit["width"]["min"],data_limit["width"]["max"]): node_map.Width.value = int(width)
+        if check_value(height, data_limit["height"]["min"], data_limit["height"]["max"]): node_map.Height.value = int(height)
+        if check_value(offset_x, data_limit["offset_x"]["min"], data_limit["offset_x"]["max"]): node_map.OffsetX.value = int(offset_x)
+        if check_value(offset_y, data_limit["offset_y"]["min"], data_limit["offset_y"]["max"]): node_map.OffsetY.value = int(offset_y)
+        return True
+    except Exception as e:
+        print("Ошибка применение настроек камеры:", e)
+        return False
+
+    # разобрать с fps exposure_auto exposure_time чуть позже
 
 
+def get_frame(ia,node_map):
+    with ia.fetch() as buffer:
+        data = buffer.payload.components[0].data
+        real_width = node_map.Width.value
+        real_height = node_map.Height.value
+        img = np.array(data, dtype=np.uint8).reshape(real_height, real_width, 3)
+        return img
+
+def connect_camera(serial_number, width=None, height=None, offset_x=None, offset_y=None, fps=None, exposure_auto=None, exposure_time=None):
+    ia = None
+    if check():
+        try:
+            node_map, ia = get_node_map_cam(serial_number)
+            data_limit = get_camera_settings(serial_number)
+
+            if apply_settings_camera(node_map,data_limit,width=width,height=height,offset_x=offset_x,offset_y=offset_y,fps=fps,exposure_auto=exposure_auto,exposure_time=exposure_time):
+                ia.start()
+                img = get_frame(ia, node_map)
+                ia.stop()
+                return img
+            else:
+                return None
+        finally:
+            if ia is not None:
+                ia.destroy()
+
+
+# сначала вбиваются настройки и потом кнопка подключиться(она меняется, потом на применить) и камера подключается и запускается с этими настройками
+
+"""
+будем от этого плясать
+def get_frame():
+    global ia
+
+    node_map = ia.remote_device.node_map
+    width = node_map.Width.value
+    height = node_map.Height.value
+
+    with ia.fetch() as buffer:
+        data = buffer.payload.components[0].data
+        img = np.array(data, dtype=np.uint8).reshape(height, width, 3)
+        return img
+
+
+def get_jpeg():
+    frame = get_frame()
+    success, jpeg = cv2.imencode(".jpg", frame)
+
+    if not success:
+        return None
+
+    return jpeg.tobytes()
+"""

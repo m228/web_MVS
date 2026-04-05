@@ -3,6 +3,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
+from fastapi import Form
 
 import camera_core as core
 
@@ -51,9 +52,22 @@ def count_cams():
     return core.count_cams()
 
 
+@app.post("/api/camera/settings")
+def apply_settings_camera(
+    serial_number: str = Form(...),
+    width: int = Form(None),
+    height: int = Form(None),
+    offset_x: int = Form(None),
+    offset_y: int = Form(None),
+    fps: float = Form(None),
+    exposure_auto: str = Form(None),
+    exposure_time: float = Form(None),
+):
+    try:
+        img = core.connect_camera(serial_number=serial_number,width=width,height=height,offset_x=offset_x,offset_y=offset_y,fps=fps,exposure_auto=exposure_auto,exposure_time=exposure_time)
 
-
-
-#@app.post("/api/camera/settings")
-#def camera_settings():
-#    return null
+        if img is None:
+            return {"status": False}
+        return {"status": True}
+    except Exception as e:
+        return {"status": False, "error": str(e)}

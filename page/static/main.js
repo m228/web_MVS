@@ -48,6 +48,9 @@ async function getIp(serial) {
   }
 }
 
+function openCamera(serial) {
+  window.location.href = '/camera?serial_number=' + encodeURIComponent(serial);
+}
 
 async function loadCams() {
   const response = await fetch('/api/cams');
@@ -67,7 +70,7 @@ async function loadCams() {
         <td>${data[serial]}</td>
         <td>${ip}</td>
         <td> 
-            <button onclick="alert('Подключение: ${serial}')" title="Подключиться"><span>🔌</span></button>
+            <button onclick="openCamera('${serial}')" title="Подключиться"><span>🔌</span></button>
             <button onclick="alert('Сетевые настройки: ${serial}')" title="Подключиться"><span>⚙️</span></button>
         </td>
       </tr>
@@ -81,12 +84,34 @@ async function loadCams() {
 // page camera
 
 const form = document.getElementById('settingsForm');
+const serialElement = document.getElementById('cameraSerial');
+
+const params = new URLSearchParams(window.location.search);
+const serialNumber = params.get('serial_number');
+
+if (serialElement) {
+  serialElement.innerText = serialNumber ? serialNumber : 'не выбран';
+}
 
 if (form) {
-  form.addEventListener('submit_settings', async function (event) {
+  const fields = form.querySelectorAll('input, select, button');
+
+  if (!serialNumber) {
+    fields.forEach(field => {
+      field.disabled = true;
+    });
+  }
+
+  form.addEventListener('submit', async function (event) {
     event.preventDefault();
 
+    if (!serialNumber) {
+      alert('Камера не выбрана');
+      return;
+    }
+
     const formData = new FormData(form);
+    formData.append('serial_number', serialNumber);
 
     const response = await fetch('/api/camera/settings', {
       method: 'POST',
@@ -94,12 +119,12 @@ if (form) {
     });
 
     const result = await response.json();
-    console.log(result);
 
-    if (result.ok) {
+    if (result.status) {
       alert('Настройки применены');
     } else {
       alert('Ошибка: ' + result.error);
     }
   });
 }
+

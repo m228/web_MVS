@@ -78,46 +78,41 @@ def count_cams():
 
 
 # получение данных с камеры, текущие + лимиты
-def get_camera_settings(serial_number):
-    ia = None
+def get_camera_settings(node_map):
     if check():
-        try:
-            node_map,ia = get_node_map_cam(serial_number)
-            data = {
-                "width": {
-                    "value": node_map.Width.value,
-                    "min": node_map.Width.min,
-                    "max": node_map.Width.max,
-                },
-                "height": {
-                    "value": node_map.Height.value,
-                    "min": node_map.Height.min,
-                    "max": node_map.Height.max,
-                },
-                "offset_x": {
-                    "value": node_map.OffsetX.value,
-                    "min": node_map.OffsetX.min,
-                    "max": node_map.OffsetX.max,
-                },
-                "offset_y": {
-                    "value": node_map.OffsetY.value,
-                    "min": node_map.OffsetY.min,
-                    "max": node_map.OffsetY.max,
-                },
-                "exposure_time": {
-                    "value": node_map.ExposureTime.value,
-                    "min": node_map.ExposureTime.min,
-                    "max": node_map.ExposureTime.max,
-                },
-                "exposure_auto": {
-                    "value": node_map.ExposureAuto.value,
-                    "options": node_map.ExposureAuto.symbolics,
-                }
+        data = {
+            "width": {
+                "value": node_map.Width.value,
+                "min": node_map.Width.min,
+                "max": node_map.Width.max,
+            },
+            "height": {
+                "value": node_map.Height.value,
+                "min": node_map.Height.min,
+                "max": node_map.Height.max,
+            },
+            "offset_x": {
+                "value": node_map.OffsetX.value,
+                "min": node_map.OffsetX.min,
+                "max": node_map.OffsetX.max,
+            },
+            "offset_y": {
+                "value": node_map.OffsetY.value,
+                "min": node_map.OffsetY.min,
+                "max": node_map.OffsetY.max,
+            },
+            "exposure_time": {
+                "value": node_map.ExposureTime.value,
+                "min": node_map.ExposureTime.min,
+                "max": node_map.ExposureTime.max,
+            },
+            "exposure_auto": {
+                "value": node_map.ExposureAuto.value,
+                "options": node_map.ExposureAuto.symbolics,
             }
-            return data
-        finally:
-            if ia is not None:
-                ia.destroy()
+        }
+        return data
+
 
 # нужна для проверки в submit_settings_camera
 def check_value(value,min,max) -> bool:
@@ -165,7 +160,7 @@ def connect_camera(serial_number, width=None, height=None, offset_x=None, offset
     if check():
         try:
             node_map, ia = get_node_map_cam(serial_number)
-            data_limit = get_camera_settings(serial_number)
+            data_limit = get_camera_settings(node_map)
 
             if apply_settings_camera(node_map,data_limit,width=width,height=height,offset_x=offset_x,offset_y=offset_y,fps=fps,exposure_auto=exposure_auto,exposure_time=exposure_time):
                 ia.start()

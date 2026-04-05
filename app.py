@@ -4,6 +4,8 @@ from fastapi import FastAPI
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi import Form
+from fastapi.responses import Response
+import cv2
 
 import camera_core as core
 
@@ -63,13 +65,14 @@ def apply_settings_camera(
     exposure_auto: str = Form(None),
     exposure_time: float = Form(None),
 ):
-    try:
-        img = core.connect_camera(serial_number=serial_number, width=width, height=height, offset_x=offset_x,
+    img = core.connect_camera(serial_number=serial_number, width=width, height=height, offset_x=offset_x,
                                   offset_y=offset_y, fps=fps, exposure_auto=exposure_auto, exposure_time=exposure_time)
 
-        if img is None:
-            return {"status": False, "error": "Не удалось применить настройки или получить кадр"}
+    if img is None:
+        return Response(status_code=500)
 
-        return {"status": True}
-    except Exception as e:
-        return {"status": False, "error": str(e)}
+    ok, buffer = cv2.imencode(".jpg", img)
+    if not ok:
+        return Response(status_code=500)
+
+    return Response(content=buffer.tobytes(), media_type="image/jpeg")

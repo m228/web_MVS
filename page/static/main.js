@@ -82,7 +82,6 @@ async function loadCams() {
 
 
 // page camera
-
 const form = document.getElementById('settingsForm');
 const serialElement = document.getElementById('cameraSerial');
 
@@ -118,13 +117,17 @@ if (form) {
       body: formData
     });
 
-    const result = await response.json();
+    if (!response.ok) {
+      alert('Ошибка получения кадра');
+      return;
+    }
 
-    if (result.status) {
-      alert('Настройки применены');
-    } else {
-      alert('Ошибка: ' + result.error);
+    const blob = await response.blob();
+    const imageUrl = URL.createObjectURL(blob);
+
+    const img = document.getElementById('cameraFrame');
+    if (img) {
+      img.src = imageUrl;
     }
   });
 }
-

@@ -19,7 +19,9 @@
 
       <div class="camera-layout">
         <div class="camera-main">
-          <div class="camera-screen"></div>
+          <div class="camera-screen">
+            <img id="cameraFrame" alt="Кадр камеры" style="width: 100%; height: 100%; object-fit: contain;" />
+          </div>
 
           <div class="camera-bottom">
             <div class="card">
@@ -74,12 +76,12 @@
             <form id="settingsForm">
               <label>
                 Width
-                <input type="number" name="width" value="1300" />
+                <input type="number" name="width" value="2448" />
               </label>
 
               <label>
                 Height
-                <input type="number" name="height" value="1300" />
+                <input type="number" name="height" value="2048" />
               </label>
 
               <label>
@@ -100,9 +102,9 @@
               <label>
                 Exposure auto
                 <select name="exposure_auto">
-                  <option value="Off">Off</option>
+                  <option value="Off" selected>Off</option>
                   <option value="Once">Once</option>
-                  <option value="Continuous" selected>Continuous</option>
+                  <option value="Continuous">Continuous</option>
                 </select>
               </label>
 

@@ -101,7 +101,7 @@ if (form) {
     });
   }
 
-  form.addEventListener('submit', async function (event) {
+  form.addEventListener('submit', function (event) {
     event.preventDefault();
 
     if (!serialNumber) {
@@ -110,24 +110,22 @@ if (form) {
     }
 
     const formData = new FormData(form);
-    formData.append('serial_number', serialNumber);
 
-    const response = await fetch('/api/camera/settings', {
-      method: 'POST',
-      body: formData
+    const query = new URLSearchParams({
+      serial_number: serialNumber,
+      width: formData.get('width') || '',
+      height: formData.get('height') || '',
+      offset_x: formData.get('offset_x') || '',
+      offset_y: formData.get('offset_y') || '',
+      fps: formData.get('fps') || '',
+      exposure_auto: formData.get('exposure_auto') || '',
+      exposure_time: formData.get('exposure_time') || ''
     });
 
-    if (!response.ok) {
-      alert('Ошибка получения кадра');
-      return;
-    }
-
-    const blob = await response.blob();
-    const imageUrl = URL.createObjectURL(blob);
-
     const img = document.getElementById('cameraFrame');
+
     if (img) {
-      img.src = imageUrl;
+      img.src = '/api/camera/stream?' + query.toString();
     }
   });
 }

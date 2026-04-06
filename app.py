@@ -3,9 +3,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
-from fastapi import Form
-from fastapi.responses import Response
-import cv2
+from fastapi.responses import StreamingResponse
 
 import camera_core as core
 
@@ -54,25 +52,27 @@ def count_cams():
     return core.count_cams()
 
 
-@app.post("/api/camera/settings")
-def apply_settings_camera(
-    serial_number: str = Form(...),
-    width: int = Form(None),
-    height: int = Form(None),
-    offset_x: int = Form(None),
-    offset_y: int = Form(None),
-    fps: float = Form(None),
-    exposure_auto: str = Form(None),
-    exposure_time: float = Form(None),
+@app.get("/api/camera/stream")
+def camera_stream(
+    serial_number: str,
+    width: int = None,
+    height: int = None,
+    offset_x: int = None,
+    offset_y: int = None,
+    fps: float = None,
+    exposure_auto: str = None,
+    exposure_time: float = None,
 ):
-    img = core.connect_camera(serial_number=serial_number, width=width, height=height, offset_x=offset_x,
-                                  offset_y=offset_y, fps=fps, exposure_auto=exposure_auto, exposure_time=exposure_time)
-
-    if img is None:
-        return Response(status_code=500)
-
-    ok, buffer = cv2.imencode(".jpg", img)
-    if not ok:
-        return Response(status_code=500)
-
-    return Response(content=buffer.tobytes(), media_type="image/jpeg")
+    return StreamingResponse(
+        core.generate_stream(
+            serial_number=serial_number,
+            width=width,
+            height=height,
+            offset_x=offset_x,
+            offset_y=offset_y,
+            fps=fps,
+            exposure_auto=exposure_auto,
+            exposure_time=exposure_time
+        ),
+        media_type="multipart/x-mixed-replace; boundary=frame"
+    )

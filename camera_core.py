@@ -2,6 +2,7 @@ from harvesters.core import Harvester
 import numpy as np
 import socket
 import struct
+import cv2
 
 
 cti_path = "Driver/MvProducerGEV.cti"
@@ -153,50 +154,61 @@ def get_frame(ia,node_map):
         real_width = node_map.Width.value
         real_height = node_map.Height.value
         img = np.array(data, dtype=np.uint8).reshape(real_height, real_width, 3)
-        return img
+        ok, buffer = cv2.imencode(".jpg", img)
 
-def connect_camera(serial_number, width=None, height=None, offset_x=None, offset_y=None, fps=None, exposure_auto=None, exposure_time=None):
+        if not ok:
+            return None
+
+        return buffer.tobytes()
+
+def generate_stream(serial_number, width=None, height=None, offset_x=None, offset_y=None, fps=None, exposure_auto=None, exposure_time=None):
     ia = None
-    if check():
-        try:
-            node_map, ia = get_node_map_cam(serial_number)
-            data_limit = get_camera_settings(node_map)
 
-            if apply_settings_camera(node_map,data_limit,width=width,height=height,offset_x=offset_x,offset_y=offset_y,fps=fps,exposure_auto=exposure_auto,exposure_time=exposure_time):
-                ia.start()
-                img = get_frame(ia, node_map)
+    if not check():
+        return
+
+    try:
+        node_map, ia = get_node_map_cam(serial_number)
+        data_limit = get_camera_settings(node_map)
+
+        ok = apply_settings_camera(
+            node_map,
+            data_limit,
+            width=width,
+            height=height,
+            offset_x=offset_x,
+            offset_y=offset_y,
+            fps=fps,
+            exposure_auto=exposure_auto,
+            exposure_time=exposure_time
+        )
+
+        if not ok:
+            return
+
+        ia.start()
+
+        while True:
+            frame = get_frame(ia, node_map)
+            if frame is None:
+                continue
+
+            yield (
+                b"--frame\r\n"
+                b"Content-Type: image/jpeg\r\n\r\n" + frame + b"\r\n"
+            )
+
+    except Exception as e:
+        print("Ошибка потока:", repr(e))
+
+    finally:
+        if ia is not None:
+            try:
                 ia.stop()
-                return img
-            else:
-                return None
-        finally:
-            if ia is not None:
-                ia.destroy()
+            except:
+                pass
+            ia.destroy()
+
 
 
 # сначала вбиваются настройки и потом кнопка подключиться(она меняется, потом на применить) и камера подключается и запускается с этими настройками
-
-"""
-будем от этого плясать
-def get_frame():
-    global ia
-
-    node_map = ia.remote_device.node_map
-    width = node_map.Width.value
-    height = node_map.Height.value
-
-    with ia.fetch() as buffer:
-        data = buffer.payload.components[0].data
-        img = np.array(data, dtype=np.uint8).reshape(height, width, 3)
-        return img
-
-
-def get_jpeg():
-    frame = get_frame()
-    success, jpeg = cv2.imencode(".jpg", frame)
-
-    if not success:
-        return None
-
-    return jpeg.tobytes()
-"""

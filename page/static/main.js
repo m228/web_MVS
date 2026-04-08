@@ -85,6 +85,7 @@ async function loadCams() {
 const form = document.getElementById('settingsForm');
 const serialElement = document.getElementById('cameraSerial');
 const cameraFrame = document.getElementById('cameraFrame');
+const cameraPlaceholder = document.getElementById('cameraPlaceholder');
 
 const StartBtn = document.getElementById('startStream');
 const applyBtn = document.getElementById('applyBtn');
@@ -145,6 +146,10 @@ function buildQueryFromForm() {
 function startStream() {
   const query = buildQueryFromForm();
   cameraFrame.src = '/api/camera/stream?' + query.toString();
+  cameraFrame.classList.add('visible');
+  if (cameraPlaceholder) {
+    cameraPlaceholder.classList.add('hidden');
+  }
 }
 
 async function stopStreamOnly() {
@@ -183,7 +188,12 @@ async function stopCamera() {
 
   if (cameraFrame) {
     cameraFrame.src = '';
+    cameraFrame.classList.remove('visible');
   }
+  if (cameraPlaceholder) {
+    cameraPlaceholder.classList.remove('hidden');
+  }
+
 
   isConnected = false;
   isChange = false;
@@ -218,3 +228,7 @@ if (stopBtn) {
 }
 
 updateToolbarState();
+
+// if (form && serialElement && cameraFrame && StartBtn && applyBtn && stopBtn) {
+//   // весь код page camera здесь
+// }

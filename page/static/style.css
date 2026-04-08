@@ -84,22 +84,105 @@ button {
 /* CAMERA PAGE */
 .camera-layout {
   display: grid;
-  grid-template-columns: 1fr 320px;
+  grid-template-columns: minmax(0, 1fr) 320px;
   gap: 24px;
   align-items: start;
+}
+
+.camera-layout.sidebar-collapsed {
+  grid-template-columns: minmax(0, 1fr) 0;
 }
 
 .camera-main {
   display: flex;
   flex-direction: column;
   gap: 24px;
+  min-width: 0;
+}
+
+.camera-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px;
+}
+
+.toolbar-btn {
+  width: 52px;
+  height: 52px;
+  padding: 0;
+  margin: 0;
+  border: none !important;
+  outline: none !important;
+  background: transparent !important;
+  box-shadow: none !important;
+
+  display: flex;
+  align-items: center;
+  justify-content: center;
+
+  appearance: none;
+  -webkit-appearance: none;
+  -moz-appearance: none;
+}
+
+.toolbar-btn:hover,
+.toolbar-btn:focus,
+.toolbar-btn:active {
+  border: none !important;
+  outline: none !important;
+  background: transparent !important;
+  box-shadow: none !important;
+}
+
+.toolbar-btn img,
+.toolbar-img {
+  width: 28px !important;
+  height: 28px !important;
+  max-width: 28px !important;
+  max-height: 28px !important;
+  object-fit: contain;
+  display: block;
+  border: none;
 }
 
 .camera-screen {
+  position: relative;
   width: 100%;
   height: 520px;
-  background: black;
+  background: #0b0b0b;
   border-radius: 12px;
+  overflow: hidden;
+  padding: 0;
+}
+
+.camera-frame {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  display: none;
+  position: relative;
+  z-index: 2;
+}
+
+.camera-frame.visible {
+  display: block;
+}
+
+.camera-placeholder {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #9ca3af;
+  font-size: 22px;
+  letter-spacing: 1px;
+  z-index: 1;
+}
+
+.camera-placeholder.hidden {
+  display: none;
 }
 
 .camera-bottom {
@@ -112,6 +195,15 @@ button {
   display: flex;
   flex-direction: column;
   gap: 24px;
+  min-width: 0;
+  overflow: hidden;
+  transition: opacity 0.25s ease, transform 0.25s ease;
+}
+
+.camera-layout.sidebar-collapsed .camera-sidebar {
+  opacity: 0;
+  transform: translateX(10px);
+  pointer-events: none;
 }
 
 .camera-sidebar .card form {
@@ -119,6 +211,13 @@ button {
   padding: 0;
   background: transparent;
   border-radius: 0;
+}
+
+.camera-sidebar-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
 }
 
 .record-form {
@@ -136,4 +235,38 @@ button {
 
 .record-actions button {
   min-width: 150px;
+}
+
+.hidden {
+  display: none !important;
+}
+
+@media (max-width: 1200px) {
+  .camera-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .camera-layout.sidebar-collapsed {
+    grid-template-columns: 1fr;
+  }
+
+  .camera-sidebar {
+    opacity: 1 !important;
+    transform: none !important;
+    pointer-events: auto !important;
+  }
+}
+
+@media (max-width: 900px) {
+  .camera-bottom {
+    grid-template-columns: 1fr;
+  }
+
+  .sidebar {
+    width: 180px;
+  }
+
+  .content {
+    padding: 20px;
+  }
 }

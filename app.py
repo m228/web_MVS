@@ -76,3 +76,7 @@ def camera_stream(
         ),
         media_type="multipart/x-mixed-replace; boundary=frame"
     )
+
+@app.get("/api/camera/close_stream")
+def close_stream():
+    return core.close_stream()

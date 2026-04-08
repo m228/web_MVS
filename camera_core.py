@@ -12,6 +12,11 @@ H = Harvester()
 cam_online = {}
 # состояние загрузки драйвера
 Driver = False
+# глобальные переменные потоки стрима
+current_ia = None
+stream_running = False
+
+
 
 # из ip в int для записи в камеру
 def ip_to_int(ip):
@@ -20,8 +25,6 @@ def ip_to_int(ip):
 # обратно для показа на списке
 def int_to_ip(n):
     return socket.inet_ntoa(struct.pack("!I", n))
-
-
 
 
 # загрузка драйвера для работы
@@ -162,6 +165,7 @@ def get_frame(ia,node_map):
         return buffer.tobytes()
 
 def generate_stream(serial_number, width=None, height=None, offset_x=None, offset_y=None, fps=None, exposure_auto=None, exposure_time=None):
+    global stream_running, current_ia
     ia = None
 
     if not check():
@@ -186,9 +190,12 @@ def generate_stream(serial_number, width=None, height=None, offset_x=None, offse
         if not ok:
             return
 
+        current_ia = ia
+        stream_running = True
+
         ia.start()
 
-        while True:
+        while stream_running:
             frame = get_frame(ia, node_map)
             if frame is None:
                 continue
@@ -202,13 +209,25 @@ def generate_stream(serial_number, width=None, height=None, offset_x=None, offse
         print("Ошибка потока:", repr(e))
 
     finally:
+        stream_running = False
         if ia is not None:
+
             try:
                 ia.stop()
             except:
                 pass
-            ia.destroy()
 
+            try:
+                ia.destroy()
+            except:
+                pass
 
+            if current_ia is ia:
+                current_ia = None
+
+def close_stream():
+  global stream_running
+  stream_running = False
 
 # сначала вбиваются настройки и потом кнопка подключиться(она меняется, потом на применить) и камера подключается и запускается с этими настройками
+# добавить кнопку стоп

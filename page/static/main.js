@@ -70,7 +70,7 @@ async function loadCams() {
         <td>${data[serial]}</td>
         <td>${ip}</td>
         <td> 
-            <button onclick="openCamera('${serial}')" title="Подключиться"><span>🔌</span></button>
+            <button onclick="openCamera('${serial}')" title="Подключиться"><img src="/static/icon/connect.png" alt="Подключиться" class="toolbar-img"></button>
             <button onclick="alert('Сетевые настройки: ${serial}')" title="Подключиться"><span>⚙️</span></button>
         </td>
       </tr>
@@ -84,48 +84,137 @@ async function loadCams() {
 // page camera
 const form = document.getElementById('settingsForm');
 const serialElement = document.getElementById('cameraSerial');
+const cameraFrame = document.getElementById('cameraFrame');
+
+const StartBtn = document.getElementById('startStream');
+const applyBtn = document.getElementById('applyBtn');
+const stopBtn = document.getElementById('stopStream');
 
 const params = new URLSearchParams(window.location.search);
 const serialNumber = params.get('serial_number');
 
+let isChange = false;
+let isConnected = false;
+
 if (serialElement) {
-  serialElement.innerText = serialNumber ? serialNumber : 'не выбран';
+  serialElement.textContent = serialNumber ? serialNumber : 'не выбран';
+}
+
+function updateToolbarState() {
+  if (!serialNumber) {
+    StartBtn.disabled = true;
+    applyBtn.disabled = true;
+    stopBtn.disabled = true;
+    return;
+  }
+
+  if (!isConnected) {
+    StartBtn.classList.remove('hidden');
+    applyBtn.classList.add('hidden');
+    stopBtn.classList.add('hidden');
+
+    StartBtn.disabled = false;
+    applyBtn.disabled = true;
+    stopBtn.disabled = true;
+    return;
+  }
+
+  StartBtn.classList.add('hidden');
+  applyBtn.classList.remove('hidden');
+  stopBtn.classList.remove('hidden');
+
+  applyBtn.disabled = !isChange;
+  stopBtn.disabled = false;
+}
+
+function buildQueryFromForm() {
+  const formData = new FormData(form);
+
+  return new URLSearchParams({
+    serial_number: serialNumber,
+    width: formData.get('width') || '',
+    height: formData.get('height') || '',
+    offset_x: formData.get('offset_x') || '',
+    offset_y: formData.get('offset_y') || '',
+    fps: formData.get('fps') || '',
+    exposure_auto: formData.get('exposure_auto') || '',
+    exposure_time: formData.get('exposure_time') || ''
+  });
+}
+
+function startStream() {
+  const query = buildQueryFromForm();
+  cameraFrame.src = '/api/camera/stream?' + query.toString();
+}
+
+async function stopStreamOnly() {
+  try {
+    await fetch('/api/camera/close_stream');
+  } catch (error) {
+    console.error('Ошибка остановки потока:', error);
+  }
+}
+
+async function connectCamera() {
+  if (!serialNumber) {
+    alert('Камера не выбрана');
+    return;
+  }
+
+  startStream();
+  isConnected = true;
+  isChange = false;
+  updateToolbarState();
+}
+
+async function applySettings() {
+  if (!serialNumber || !isConnected || !isChange) return;
+
+  await stopStreamOnly();
+  cameraFrame.src = '';
+  startStream();
+
+  isChange = false;
+  updateToolbarState();
+}
+
+async function stopCamera() {
+  await stopStreamOnly();
+
+  if (cameraFrame) {
+    cameraFrame.src = '';
+  }
+
+  isConnected = false;
+  isChange = false;
+  updateToolbarState();
+}
+
+function markDirty() {
+  if (!isConnected) return;
+  isChange = true;
+  updateToolbarState();
 }
 
 if (form) {
-  const fields = form.querySelectorAll('input, select, button');
+  const fields = form.querySelectorAll('input, select');
 
-  if (!serialNumber) {
-    fields.forEach(field => {
-      field.disabled = true;
-    });
-  }
-
-  form.addEventListener('submit', function (event) {
-    event.preventDefault();
-
-    if (!serialNumber) {
-      alert('Камера не выбрана');
-      return;
-    }
-
-    const formData = new FormData(form);
-
-    const query = new URLSearchParams({
-      serial_number: serialNumber,
-      width: formData.get('width') || '',
-      height: formData.get('height') || '',
-      offset_x: formData.get('offset_x') || '',
-      offset_y: formData.get('offset_y') || '',
-      fps: formData.get('fps') || '',
-      exposure_auto: formData.get('exposure_auto') || '',
-      exposure_time: formData.get('exposure_time') || ''
-    });
-
-    const img = document.getElementById('cameraFrame');
-
-    if (img) {
-      img.src = '/api/camera/stream?' + query.toString();
-    }
+  fields.forEach(field => {
+    field.addEventListener('input', markDirty);
+    field.addEventListener('change', markDirty);
   });
 }
+
+if (StartBtn) {
+  StartBtn.addEventListener('click', connectCamera);
+}
+
+if (applyBtn) {
+  applyBtn.addEventListener('click', applySettings);
+}
+
+if (stopBtn) {
+  stopBtn.addEventListener('click', stopCamera);
+}
+
+updateToolbarState();

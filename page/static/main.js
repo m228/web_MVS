@@ -76,7 +76,7 @@ async function loadCams() {
 
             
             <button onclick="alert('Сетевые настройки: ${serial}')" type="button" id="NetworkSettings" class="toolbar-btn" title="Сетевые настройки">
-               <img src="/static/icon/newtwork-settings.png" alt="Сетевые настройки" class="toolbar-img">
+               <img src="/static/icon/network_settings.png" alt="Сетевые настройки" class="toolbar-img">
             </button>
         </td>
       </tr>
@@ -97,6 +97,7 @@ const cameraPlaceholder = document.getElementById('cameraPlaceholder');
 const startBtn = document.getElementById('startStream');
 const applyBtn = document.getElementById('applyBtn');
 const stopBtn = document.getElementById('stopStream');
+const applyIcon = document.getElementById('applyicon');
 
 const params = new URLSearchParams(window.location.search);
 const serialNumber = params.get('serial_number');
@@ -117,16 +118,16 @@ if (
   serialElement.textContent = serialNumber ? serialNumber : 'не выбран';
 
   function setApplyVisualState() {
-    if (!applyBtn) return;
+  if (!applyBtn || !applyIcon) return;
 
-    applyBtn.classList.remove('ready-state', 'disabled-state');
-
-    if (!isConnected || !isChange) {
-      applyBtn.classList.add('disabled-state');
-    } else {
-      applyBtn.classList.add('ready-state');
-    }
+  if (!isConnected || !isChange) {
+    applyBtn.disabled = true;
+    applyIcon.src = '/static/icon/submit-gray.png';
+  } else {
+    applyBtn.disabled = false;
+    applyIcon.src = '/static/icon/submit-green.png';
   }
+}
 
   function updateToolbarState() {
     if (!serialNumber) {
@@ -177,6 +178,9 @@ if (
 
     setApplyVisualState();
   }
+
+
+}
 
   function buildQueryFromForm() {
     const formData = new FormData(form);

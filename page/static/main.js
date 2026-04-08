@@ -70,8 +70,14 @@ async function loadCams() {
         <td>${data[serial]}</td>
         <td>${ip}</td>
         <td> 
-            <button onclick="openCamera('${serial}')" title="Подключиться"><img src="/static/icon/connect.png" alt="Подключиться" class="toolbar-img"></button>
-            <button onclick="alert('Сетевые настройки: ${serial}')" title="Подключиться"><span>⚙️</span></button>
+            <button onclick="openCamera('${serial}')" type="button" title="Подключиться" class="toolbar-btn" >
+                <img src="/static/icon/connect.png" alt="Подключиться" class="toolbar-img">
+            </button>
+
+            
+            <button onclick="alert('Сетевые настройки: ${serial}')" type="button" id="NetworkSettings" class="toolbar-btn" title="Сетевые настройки">
+               <img src="/static/icon/newtwork-settings.png" alt="Сетевые настройки" class="toolbar-img">
+            </button>
         </td>
       </tr>
     `;
@@ -82,12 +88,13 @@ async function loadCams() {
 
 
 // page camera
+// page camera
 const form = document.getElementById('settingsForm');
 const serialElement = document.getElementById('cameraSerial');
 const cameraFrame = document.getElementById('cameraFrame');
 const cameraPlaceholder = document.getElementById('cameraPlaceholder');
 
-const StartBtn = document.getElementById('startStream');
+const startBtn = document.getElementById('startStream');
 const applyBtn = document.getElementById('applyBtn');
 const stopBtn = document.getElementById('stopStream');
 
@@ -96,139 +103,208 @@ const serialNumber = params.get('serial_number');
 
 let isChange = false;
 let isConnected = false;
+let isLoading = false;
 
-if (serialElement) {
+if (
+  form &&
+  serialElement &&
+  cameraFrame &&
+  cameraPlaceholder &&
+  startBtn &&
+  applyBtn &&
+  stopBtn
+) {
   serialElement.textContent = serialNumber ? serialNumber : 'не выбран';
-}
 
-function updateToolbarState() {
-  if (!serialNumber) {
-    StartBtn.disabled = true;
-    applyBtn.disabled = true;
-    stopBtn.disabled = true;
-    return;
+  function setApplyVisualState() {
+    if (!applyBtn) return;
+
+    applyBtn.classList.remove('ready-state', 'disabled-state');
+
+    if (!isConnected || !isChange) {
+      applyBtn.classList.add('disabled-state');
+    } else {
+      applyBtn.classList.add('ready-state');
+    }
   }
 
-  if (!isConnected) {
-    StartBtn.classList.remove('hidden');
-    applyBtn.classList.add('hidden');
-    stopBtn.classList.add('hidden');
+  function updateToolbarState() {
+    if (!serialNumber) {
+      startBtn.classList.remove('hidden');
+      applyBtn.classList.add('hidden');
+      stopBtn.classList.add('hidden');
 
-    StartBtn.disabled = false;
-    applyBtn.disabled = true;
-    stopBtn.disabled = true;
-    return;
+      startBtn.disabled = true;
+      applyBtn.disabled = true;
+      stopBtn.disabled = true;
+
+      setApplyVisualState();
+      return;
+    }
+
+    if (isLoading) {
+      startBtn.classList.remove('hidden');
+      applyBtn.classList.add('hidden');
+      stopBtn.classList.add('hidden');
+
+      startBtn.disabled = true;
+      applyBtn.disabled = true;
+      stopBtn.disabled = true;
+
+      setApplyVisualState();
+      return;
+    }
+
+    if (!isConnected) {
+      startBtn.classList.remove('hidden');
+      applyBtn.classList.add('hidden');
+      stopBtn.classList.add('hidden');
+
+      startBtn.disabled = false;
+      applyBtn.disabled = true;
+      stopBtn.disabled = true;
+
+      setApplyVisualState();
+      return;
+    }
+
+    startBtn.classList.add('hidden');
+    applyBtn.classList.remove('hidden');
+    stopBtn.classList.remove('hidden');
+
+    applyBtn.disabled = !isChange;
+    stopBtn.disabled = false;
+
+    setApplyVisualState();
   }
 
-  StartBtn.classList.add('hidden');
-  applyBtn.classList.remove('hidden');
-  stopBtn.classList.remove('hidden');
+  function buildQueryFromForm() {
+    const formData = new FormData(form);
+    const query = new URLSearchParams();
 
-  applyBtn.disabled = !isChange;
-  stopBtn.disabled = false;
-}
+    query.set('serial_number', serialNumber);
 
-function buildQueryFromForm() {
-  const formData = new FormData(form);
+    const width = formData.get('width');
+    const height = formData.get('height');
+    const offsetX = formData.get('offset_x');
+    const offsetY = formData.get('offset_y');
+    const fps = formData.get('fps');
+    const exposureAuto = formData.get('exposure_auto');
+    const exposureTime = formData.get('exposure_time');
 
-  return new URLSearchParams({
-    serial_number: serialNumber,
-    width: formData.get('width') || '',
-    height: formData.get('height') || '',
-    offset_x: formData.get('offset_x') || '',
-    offset_y: formData.get('offset_y') || '',
-    fps: formData.get('fps') || '',
-    exposure_auto: formData.get('exposure_auto') || '',
-    exposure_time: formData.get('exposure_time') || ''
-  });
-}
+    if (width !== '') query.set('width', width);
+    if (height !== '') query.set('height', height);
+    if (offsetX !== '') query.set('offset_x', offsetX);
+    if (offsetY !== '') query.set('offset_y', offsetY);
+    if (fps !== '') query.set('fps', fps);
+    if (exposureAuto !== '') query.set('exposure_auto', exposureAuto);
+    if (exposureTime !== '') query.set('exposure_time', exposureTime);
 
-function startStream() {
-  const query = buildQueryFromForm();
-  cameraFrame.src = '/api/camera/stream?' + query.toString();
-  cameraFrame.classList.add('visible');
-  if (cameraPlaceholder) {
-    cameraPlaceholder.classList.add('hidden');
-  }
-}
-
-async function stopStreamOnly() {
-  try {
-    await fetch('/api/camera/close_stream');
-  } catch (error) {
-    console.error('Ошибка остановки потока:', error);
-  }
-}
-
-async function connectCamera() {
-  if (!serialNumber) {
-    alert('Камера не выбрана');
-    return;
+    return query;
   }
 
-  startStream();
-  isConnected = true;
-  isChange = false;
-  updateToolbarState();
-}
-
-async function applySettings() {
-  if (!serialNumber || !isConnected || !isChange) return;
-
-  await stopStreamOnly();
-  cameraFrame.src = '';
-  startStream();
-
-  isChange = false;
-  updateToolbarState();
-}
-
-async function stopCamera() {
-  await stopStreamOnly();
-
-  if (cameraFrame) {
-    cameraFrame.src = '';
+  function showNoVideo() {
     cameraFrame.classList.remove('visible');
-  }
-  if (cameraPlaceholder) {
     cameraPlaceholder.classList.remove('hidden');
   }
 
+  function showVideo() {
+    cameraFrame.classList.add('visible');
+    cameraPlaceholder.classList.add('hidden');
+  }
 
-  isConnected = false;
-  isChange = false;
-  updateToolbarState();
-}
+  function startStream() {
+    const query = buildQueryFromForm();
+    isLoading = true;
+    updateToolbarState();
 
-function markDirty() {
-  if (!isConnected) return;
-  isChange = true;
-  updateToolbarState();
-}
+    cameraFrame.src = '/api/camera/stream?' + query.toString();
+  }
 
-if (form) {
+  async function stopStreamOnly() {
+    try {
+      await fetch('/api/camera/close_stream');
+    } catch (error) {
+      console.error('Ошибка остановки потока:', error);
+    }
+  }
+
+  async function connectCamera() {
+    if (!serialNumber) {
+      alert('Камера не выбрана');
+      return;
+    }
+
+    isConnected = false;
+    isChange = false;
+    startStream();
+  }
+
+  async function applySettings() {
+    if (!serialNumber || !isConnected || !isChange) return;
+
+    isConnected = false;
+    isLoading = true;
+    updateToolbarState();
+
+    await stopStreamOnly();
+
+    cameraFrame.src = '';
+    showNoVideo();
+    startStream();
+  }
+
+  async function stopCamera() {
+    isLoading = false;
+
+    await stopStreamOnly();
+
+    cameraFrame.src = '';
+    showNoVideo();
+
+    isConnected = false;
+    isChange = false;
+
+    updateToolbarState();
+  }
+
+  function markDirty() {
+    if (!isConnected) return;
+
+    isChange = true;
+    updateToolbarState();
+  }
+
   const fields = form.querySelectorAll('input, select');
 
-  fields.forEach(field => {
+  fields.forEach((field) => {
     field.addEventListener('input', markDirty);
     field.addEventListener('change', markDirty);
   });
-}
 
-if (StartBtn) {
-  StartBtn.addEventListener('click', connectCamera);
-}
-
-if (applyBtn) {
+  startBtn.addEventListener('click', connectCamera);
   applyBtn.addEventListener('click', applySettings);
-}
-
-if (stopBtn) {
   stopBtn.addEventListener('click', stopCamera);
+
+  cameraFrame.addEventListener('load', () => {
+    isLoading = false;
+    isConnected = true;
+    isChange = false;
+
+    showVideo();
+    updateToolbarState();
+  });
+
+  cameraFrame.addEventListener('error', () => {
+    isLoading = false;
+    isConnected = false;
+    isChange = false;
+
+    cameraFrame.src = '';
+    showNoVideo();
+    updateToolbarState();
+  });
+
+  showNoVideo();
+  updateToolbarState();
 }
-
-updateToolbarState();
-
-// if (form && serialElement && cameraFrame && StartBtn && applyBtn && stopBtn) {
-//   // весь код page camera здесь
-// }

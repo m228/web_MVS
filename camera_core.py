@@ -46,7 +46,8 @@ def check():
 # вывод серийник: статус камеры
 def scan_cams():
     global cam_online
-    cam_online = {}
+    # пробные данные(потом убрать)
+    cam_online = {"DA123123":"1"}
 
     if check():
         for device in H.device_info_list:
@@ -64,6 +65,10 @@ def get_node_map_cam(serial_number):
 # получение айпи камеры по серийнику
 def get_ip(serial_number: str):
     ia = None
+    # пробные данные(потом убрать)
+    if serial_number == "DA123123":
+        return {"ip": "192.168.2.10"}
+
     if check():
         try:
             node_map, ia = get_node_map_cam(serial_number)
@@ -77,7 +82,6 @@ def get_ip(serial_number: str):
 
 def count_cams():
     global cam_online
-    print(len(cam_online))
     return {"count": len(cam_online)}
 
 

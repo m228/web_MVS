@@ -7,7 +7,6 @@ from fastapi.responses import StreamingResponse
 
 import camera_core as core
 
-
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     core.load_driver()
@@ -21,14 +20,9 @@ app.mount("/static", StaticFiles(directory="page/static"), name="static")
 def home():
     return FileResponse("page/index.html")
 
-@app.get("/cams")
-def cams():
-    return FileResponse("page/cams.html")
-
 @app.get("/camera")
 def camera():
     return FileResponse("page/camera.html")
-
 
 
 

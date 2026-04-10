@@ -37,7 +37,6 @@ window.addEventListener('DOMContentLoaded', () => {
   setInterval(updateTime, 1000);
 });
 
-// page cams
 async function getIp(serial) {
   try {
     const response = await fetch(`/api/ip?serial_number=${encodeURIComponent(serial)}`);
@@ -69,16 +68,12 @@ async function loadCams() {
         <td>${serial}</td>
         <td>${data[serial]}</td>
         <td>${ip}</td>
-        <td> 
-            <button onclick="openCamera('${serial}')" type="button" title="Подключиться" class="toolbar-btn" >
-                <img src="/static/icon/connect.png" alt="Подключиться" class="toolbar-img">
-            </button>
-
-            
-            <button onclick="alert('Сетевые настройки: ${serial}')" type="button" id="NetworkSettings" class="toolbar-btn" title="Сетевые настройки">
-               <img src="/static/icon/network_settings.png" alt="Сетевые настройки" class="toolbar-img">
-            </button>
-        </td>
+        <td>
+            <div class="table-actions">
+              <button type="button" class="toolbar-btn" onclick="openCamera('${serial}')"><img src="/static/icon/connect.png" alt="Подключиться" class="toolbar-img"></button>
+              <button type="button" class="toolbar-btn" onclick="alert('Сетевые настройки: ${serial}')"><img src="/static/icon/network-settings.png" alt="Сетевые настройки" class="toolbar-img"></button>
+            </div>
+        </td> 
       </tr>
     `;
   }
@@ -87,7 +82,7 @@ async function loadCams() {
 
 
 
-// page camera
+
 // page camera
 const form = document.getElementById('settingsForm');
 const serialElement = document.getElementById('cameraSerial');
@@ -179,8 +174,6 @@ if (
     setApplyVisualState();
   }
 
-
-}
 
   function buildQueryFromForm() {
     const formData = new FormData(form);

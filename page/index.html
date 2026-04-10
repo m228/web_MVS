@@ -8,26 +8,38 @@
 </head>
 <body>
   <div class="layout">
-    <aside class="sidebar">
-      <a href="/" class="menu-item active">Главная</a>
-      <a href="/cams" class="menu-item">Камеры</a>
-      <a href="/camera" class="menu-item">Настройки</a>
-    </aside>
-
     <main class="content">
       <div class="card">
         <h1>Главная</h1>
         <p>Время: <span id="time"></span></p>
         <p>Статус драйвера: <span id="status"></span></p>
         <p>Кол-во камер: <span id="count_cams"></span></p>
-
       </div>
+
+      <div class="card" style="margin-top: 20px;">
+        <h2>Камеры</h2>
+        <table>
+          <thead>
+            <tr>
+              <th>Камеры (серийник)</th>
+              <th>Статусы</th>
+              <th>IP-адрес</th>
+              <th>Действие</th>
+            </tr>
+          </thead>
+          <tbody id="table"></tbody>
+        </table>
+      </div>
+
+    </main>
+  </div>
     </main>
   </div>
 
   <script src="/static/main.js"></script>
   <script>
     loadStatus();
+    loadCams()
   </script>
 </body>
 </html>

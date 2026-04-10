@@ -14,26 +14,6 @@ body {
   min-height: 100vh;
 }
 
-.sidebar {
-  width: 220px;
-  background: #1f2937;
-  padding-top: 20px;
-  flex-shrink: 0;
-}
-
-.menu-item {
-  display: block;
-  color: white;
-  text-decoration: none;
-  padding: 15px 20px;
-  white-space: nowrap;
-}
-
-.menu-item:hover,
-.menu-item.active {
-  background: #374151;
-}
-
 .content {
   flex: 1;
   padding: 30px;
@@ -103,8 +83,9 @@ button {
 .camera-toolbar {
   display: flex;
   align-items: center;
+  justify-content: flex-start;
   gap: 10px;
-  padding: 12px;
+  flex-wrap: nowrap;
 }
 
 .toolbar-btn {
@@ -116,11 +97,10 @@ button {
   outline: none !important;
   background: transparent !important;
   box-shadow: none !important;
-
+  flex: 0 0 auto;
   display: flex;
   align-items: center;
   justify-content: center;
-
   appearance: none;
   -webkit-appearance: none;
   -moz-appearance: none;
@@ -134,8 +114,28 @@ button {
   background: transparent !important;
   box-shadow: none !important;
 }
+.page-header {
+  position: relative;
+  min-height: 40px;
+}
 
+.page-header h1 {
+  margin: 0;
+}
 
+.logo-link {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  line-height: 0;
+}
+
+.logo {
+  width: 50px;
+  height: 50px;
+  display: block;
+}
 
 .toolbar-btn img,
 .toolbar-img {
@@ -244,10 +244,7 @@ button {
 }
 
 @media (max-width: 1200px) {
-  .camera-layout {
-    grid-template-columns: 1fr;
-  }
-
+  .camera-layout,
   .camera-layout.sidebar-collapsed {
     grid-template-columns: 1fr;
   }
@@ -271,4 +268,21 @@ button {
   .content {
     padding: 20px;
   }
+}
+
+input[type="number"] {
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.table-actions {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: nowrap;
+}
+
+.table-actions .toolbar-btn {
+  flex: 0 0 auto;
 }

@@ -1,3 +1,9 @@
+from datetime import datetime
+import os
+import time
+from os import mkdir
+from pathlib import Path
+
 from harvesters.core import Harvester
 import numpy as np
 import socket
@@ -15,6 +21,14 @@ Driver = False
 # глобальные переменные потоки стрима
 current_ia = None
 stream_running = False
+# сохранение фото и видео
+photo_enabled = False
+photo_interval = None
+last_save = None
+
+video_enabled = False
+video_length = None
+
 
 
 
@@ -166,10 +180,10 @@ def get_frame(ia,node_map):
         if not ok:
             return None
 
-        return buffer.tobytes()
+        return img, buffer.tobytes()
 
 def generate_stream(serial_number, width=None, height=None, offset_x=None, offset_y=None, fps=None, exposure_auto=None, exposure_time=None):
-    global stream_running, current_ia
+    global stream_running, current_ia, photo_enabled, photo_interval, last_save
     ia = None
 
     if not check():
@@ -200,9 +214,16 @@ def generate_stream(serial_number, width=None, height=None, offset_x=None, offse
         ia.start()
 
         while stream_running:
-            frame = get_frame(ia, node_map)
-            if frame is None:
+            img, frame = get_frame(ia, node_map)
+            if frame is None or img is None:
                 continue
+
+            # для фото проверка
+            if photo_enabled and check_save_photo(photo_interval):
+                save_photo(img)
+
+            # для видео проверка
+
 
             yield (
                 b"--frame\r\n"
@@ -229,9 +250,53 @@ def generate_stream(serial_number, width=None, height=None, offset_x=None, offse
             if current_ia is ia:
                 current_ia = None
 
+            photo_enabled = False
+            photo_interval = None
+            last_save = None
+
 def close_stream():
   global stream_running
   stream_running = False
 
-# сначала вбиваются настройки и потом кнопка подключиться(она меняется, потом на применить) и камера подключается и запускается с этими настройками
-# добавить кнопку стоп
+# Для фото
+def on_save(interval):
+    global photo_interval, photo_enabled
+    photo_enabled = True
+    photo_interval = interval
+    return {"status": "ok", "photo_enabled": True, "interval": photo_interval}
+
+
+def off_save():
+    global photo_enabled,photo_interval, last_save
+    photo_enabled = False
+    photo_interval = None
+    last_save = None
+    return {"status": "ok", "photo_enabled": False}
+
+def check_save_photo(interval):
+    current_time = time.time()
+    global last_save
+
+    if interval is None:
+        return False
+
+    if last_save is None:
+        last_save = current_time
+        return True
+
+    else:
+        if current_time - last_save >= interval:
+            last_save = current_time
+            return True
+
+    return False
+
+
+def save_photo(frame):
+    folder = Path("dataset")
+    folder.mkdir(parents=True, exist_ok=True)
+    filename = f"frame_{datetime.now().strftime('%d_%m_%H_%M_%S')}.jpg"
+    path = os.path.join(folder, filename)
+    cv2.imwrite(path, frame)
+
+# для видео

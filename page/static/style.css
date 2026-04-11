@@ -21,7 +21,7 @@ body {
 
 .card {
   background: white;
-  padding: 20px;
+  padding: 10px;
   border-radius: 12px;
 }
 
@@ -49,6 +49,17 @@ label {
   flex-direction: column;
   gap: 6px;
 }
+
+.one-line-label {
+  display: block;
+  white-space: nowrap;
+}
+
+.photo-interval-input {
+  width: 80px;
+  flex: 0 0 80px;
+}
+
 
 input,
 select,
@@ -105,6 +116,12 @@ button {
   -webkit-appearance: none;
   -moz-appearance: none;
 }
+
+.grey-btn {
+  filter: grayscale(100%);
+
+}
+
 
 .toolbar-btn:hover,
 .toolbar-btn:focus,
@@ -285,4 +302,51 @@ input[type="number"] {
 
 .table-actions .toolbar-btn {
   flex: 0 0 auto;
+}
+
+.photo-card-popup {
+  position: fixed;
+  display: none;
+  width: 260px;
+  max-width: calc(100vw - 20px);
+  background: #fff;
+  border-radius: 12px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
+  padding: 20px;
+  z-index: 9999;
+}
+
+.photo-card-popup.show {
+  display: block;
+}
+
+.photo-card-popup h2 {
+  margin-top: 0;
+}
+
+.photo-card-popup .record-actions button {
+  min-width: 50px;
+}
+
+.photo-card-popup .photo-interval-input {
+  width: 80px !important;
+  min-width: 80px;
+  max-width: 80px;
+  flex: 0 0 80px;
+}
+
+.video-card-popup {
+  position: fixed;
+  display: none;
+  width: 260px;
+  max-width: calc(100vw - 20px);
+  background: #fff;
+  border-radius: 12px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
+  padding: 12px;
+  z-index: 9999;
+}
+
+.video-card-popup.show {
+  display: block;
 }

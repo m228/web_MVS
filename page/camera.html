@@ -19,90 +19,42 @@
       </div>
 
       <p>Серийный номер: <span id="cameraSerial"></span></p>
-
       <div class="camera-layout" id="cameraLayout">
         <div class="camera-main">
           <div class="camera-toolbar card">
-
-            <button type="button" id="startStream" class="toolbar-btn" title="Запустить поток">
+            <button type="button" id="startBtn" class="toolbar-btn" title="Запустить поток">
               <img src="/static/icon/start.png" alt="Запустить поток" class="toolbar-img">
             </button>
 
-            <button type="button" id="applyBtn" class="toolbar-btn hidden" title="Применить">
-              <img src="/static/icon/submit-gray.png" alt="Применить" class="toolbar-img" id="applyicon">
+            <button type="button" id="applyBtn" class="toolbar-btn" title="Применить">
+              <img src="/static/icon/submit-green.png" alt="Применить" class="toolbar-img grey-btn" id="applyicon">
             </button>
 
-            <button type="button" id="stopStream" class="toolbar-btn hidden" title="Остановить поток">
+            <button type="button" id="stopBtn" class="toolbar-btn hidden" title="Остановить поток">
               <img src="/static/icon/stop.png" alt="Остановить поток" class="toolbar-img">
             </button>
 
-            <button type="button" id="SavePhoto" class="toolbar-btn" title="Сохранение фото">
-               <img src="/static/icon/photo.png" alt="Сохранение фото" class="toolbar-img">
+            <button type="button" id="photoBtn" class="toolbar-btn" title="Сохранение фото">
+              <img src="/static/icon/photo.png" alt="Сохранение фото" class="toolbar-img">
             </button>
 
-            <button type="button" id="SaveVideo" class="toolbar-btn" title="Сохранение видео">
-               <img src="/static/icon/video.png" alt="Сохранение видео" class="toolbar-img">
+            <button type="button" id="videoBtn" class="toolbar-btn" title="Сохранение видео">
+              <img src="/static/icon/video.png" alt="Сохранение видео" class="toolbar-img">
             </button>
 
-            <button type="button" id="NetworkSettings" class="toolbar-btn" title="Сетевые настройки">
-               <img src="/static/icon/network-settings.png" alt="Сетевые настройки" class="toolbar-img">
+            <button type="button" id="networkSettingsBtn" class="toolbar-btn" title="Сетевые настройки">
+              <img src="/static/icon/network-settings.png" alt="Сетевые настройки" class="toolbar-img">
             </button>
           </div>
 
           <div class="camera-screen card">
-            <img
-              id="cameraFrame"
-              alt="Кадр камеры"
-              class="camera-frame"
-            />
+            <img id="cameraFrame" alt="Кадр камеры" class="camera-frame" />
             <div id="cameraPlaceholder" class="camera-placeholder">
               NO VIDEO
             </div>
           </div>
 
-          <div class="camera-bottom">
-            <div class="card">
-              <h2>Запись видео</h2>
-              <div class="record-form">
-                <label>
-                  Записывать видео
-                  <select name="record_video">
-                    <option value="off">Выключено</option>
-                    <option value="on">Включено</option>
-                  </select>
-                </label>
 
-                <label>
-                  Длительность записи (мин)
-                  <input type="number" name="video_minutes" value="10" min="1" />
-                </label>
-
-                <div class="record-actions">
-                  <button type="button">Начать запись</button>
-                  <button type="button">Остановить запись</button>
-                </div>
-              </div>
-            </div>
-
-            <div class="card">
-              <h2>Фото</h2>
-              <div class="record-form">
-                <label>
-                  Делать фото каждые (мин)
-                  <input type="number" name="photo_interval" value="5" min="1" />
-                </label>
-
-                <label>
-                  Имя папки / сессии
-                  <input type="text" name="session_name" placeholder="Например: camera_01" />
-                </label>
-
-                <div class="record-actions">
-                  <button type="button">Сделать фото</button>
-                </div>
-              </div>
-            </div>
-          </div>
         </div>
 
         <aside class="camera-sidebar" id="cameraSidebar">
@@ -111,33 +63,31 @@
               <h2>Параметры камеры</h2>
             </div>
 
-
-
             <form id="settingsForm">
-              <label>
+              <label class="one-line-label">
                 Width (Min: <span id="WidthMax"></span>, Max: <span id="WidthMin"></span>)
-                <input type="number" name="width" value="2448" />
               </label>
+              <input type="number" name="width" value="2448" />
 
-              <label>
+              <label class="one-line-label">
                 Height (Min: <span id="HeightMin"></span>, Max: <span id="HeightMax"></span>)
-                <input type="number" name="height" value="2048" />
               </label>
+              <input type="number" name="height" value="2048" />
 
-              <label>
+              <label class="one-line-label">
                 OffsetX
-                <input type="number" name="offset_x" value="0" />
               </label>
+              <input type="number" name="offset_x" value="0" />
 
-              <label>
+              <label class="one-line-label">
                 OffsetY
-                <input type="number" name="offset_y" value="0" />
               </label>
+              <input type="number" name="offset_y" value="0" />
 
-              <label>
+              <label class="one-line-label">
                 FPS (Min: <span id="FpsMin"></span>, Max: <span id="FpsMax"></span>)
-                <input type="number" step="0.1" name="fps" value="1" />
               </label>
+              <input type="number" step="0.1" name="fps" value="1" />
 
               <label>
                 Exposure auto
@@ -148,13 +98,42 @@
                 </select>
               </label>
 
-              <label>
+              <label class="one-line-label">
                 Exposure time (Min: <span id="ExposureMin"></span>, Max: <span id="ExposureMax"></span>)
-                <input type="number" step="1" name="exposure_time" value="10000"/>
               </label>
+              <input type="number" step="1" name="exposure_time" value="10000" />
             </form>
           </div>
         </aside>
+      </div>
+
+      <div class="card photo-card-popup" id="photoCard">
+        <h2>Сохранение фото</h2>
+        <div class="record-form">
+          <label class="one-line-label">
+            Интервал (сек)
+            <input class="photo-interval-input" type="number" name="photo_interval" value="5" min="1" >
+          </label>
+          <div class="record-actions">
+            <button type="button" id="photoOn">Включить</button>
+            <button type="button" id="photoOff">Выключить</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="card video-card-popup" id="videoCard">
+        <h2>Запись видео</h2>
+        <div class="record-form">
+          <label>
+            Длительность записи (мин)
+            <input type="number" name="video_minutes" value="10" min="1" />
+          </label>
+
+          <div class="record-actions">
+            <button type="button" id="videoOn">Начать запись</button>
+            <button type="button" id="videoOff">Остановить запись</button>
+          </div>
+        </div>
       </div>
 
       <script src="/static/main.js"></script>

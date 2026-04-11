@@ -14,17 +14,21 @@ async function loadStatus() {
 }
 
 async function count_cams() {
-  const response = await fetch('/api/count_cams');
-  const data = await response.json();
-  const el = document.getElementById('count_cams');
-  if (el) {
-    el.textContent = data.count;
+  try {
+    const response = await fetch('/api/count_cams');
+    const data = await response.json();
+    const el = document.getElementById('count_cams');
+    if (el) {
+      el.textContent = data.count;
+    }
+  } catch (error) {
+    console.error('count_cams error:', error);
   }
 }
 
 function updateTime() {
   const now = new Date();
-  const timeString = now.toLocaleTimeString(); // например: 14:23:05
+  const timeString = now.toLocaleTimeString();
   const el = document.getElementById('time');
   if (el) {
     el.textContent = timeString;
@@ -69,29 +73,25 @@ async function loadCams() {
         <td>${data[serial]}</td>
         <td>${ip}</td>
         <td>
-            <div class="table-actions">
-              <button type="button" class="toolbar-btn" onclick="openCamera('${serial}')"><img src="/static/icon/connect.png" alt="Подключиться" class="toolbar-img"></button>
-              <button type="button" class="toolbar-btn" onclick="alert('Сетевые настройки: ${serial}')"><img src="/static/icon/network-settings.png" alt="Сетевые настройки" class="toolbar-img"></button>
-            </div>
-        </td> 
+          <div class="table-actions">
+            <button type="button" class="toolbar-btn" onclick="openCamera('${serial}')">
+              <img src="/static/icon/connect.png" alt="Подключиться" class="toolbar-img">
+            </button>
+            <button type="button" class="toolbar-btn" onclick="alert('Сетевые настройки: ${serial}')">
+              <img src="/static/icon/network-settings.png" alt="Сетевые настройки" class="toolbar-img">
+            </button>
+          </div>
+        </td>
       </tr>
     `;
   }
 }
-
-
-
-
 
 // page camera
 const form = document.getElementById('settingsForm');
 const serialElement = document.getElementById('cameraSerial');
 const cameraFrame = document.getElementById('cameraFrame');
 const cameraPlaceholder = document.getElementById('cameraPlaceholder');
-
-const startBtn = document.getElementById('startStream');
-const applyBtn = document.getElementById('applyBtn');
-const stopBtn = document.getElementById('stopStream');
 const applyIcon = document.getElementById('applyicon');
 
 const params = new URLSearchParams(window.location.search);
@@ -101,79 +101,119 @@ let isChange = false;
 let isConnected = false;
 let isLoading = false;
 
+let isSavePhoto = false;
+let isSaveVideo = false;
+
+const buttons = {
+  start: document.getElementById('startBtn'),
+  apply: document.getElementById('applyBtn'),
+  stop: document.getElementById('stopBtn'),
+  photo: document.getElementById('photoBtn'),
+  video: document.getElementById('videoBtn'),
+  network_settings: document.getElementById('networkSettingsBtn'),
+};
+
+const photoCard = document.getElementById('photoCard');
+const photoOnBtn = document.getElementById('photoOn');
+const photoOffBtn = document.getElementById('photoOff');
+
+const videoCard =
+  document.getElementById('videoCard') ||
+  document.getElementById('VideoCard');
+
+const videoOnBtn =
+  document.getElementById('videoOn') ||
+  document.getElementById('VideoOn');
+
+const videoOffBtn =
+  document.getElementById('videoOff') ||
+  document.getElementById('VideoOff');
+
 if (
   form &&
   serialElement &&
   cameraFrame &&
   cameraPlaceholder &&
-  startBtn &&
-  applyBtn &&
-  stopBtn
+  buttons.start &&
+  buttons.apply &&
+  buttons.stop
 ) {
   serialElement.textContent = serialNumber ? serialNumber : 'не выбран';
 
   function setApplyVisualState() {
-  if (!applyBtn || !applyIcon) return;
+    const applyBtn = buttons.apply;
+    if (!applyBtn || !applyIcon) return;
 
-  if (!isConnected || !isChange) {
-    applyBtn.disabled = true;
-    applyIcon.src = '/static/icon/submit-gray.png';
-  } else {
-    applyBtn.disabled = false;
-    applyIcon.src = '/static/icon/submit-green.png';
+    if (!isConnected || !isChange) {
+      applyBtn.disabled = true;
+      applyBtn.classList.add('grey-btn');
+    } else {
+      applyBtn.disabled = false;
+      applyBtn.classList.remove('grey-btn');
+    }
   }
-}
 
-  function updateToolbarState() {
-    if (!serialNumber) {
-      startBtn.classList.remove('hidden');
-      applyBtn.classList.add('hidden');
-      stopBtn.classList.add('hidden');
+  function applyState(state) {
+    for (const [name, config] of Object.entries(state)) {
+      const button = buttons[name];
+      if (!button) continue;
 
-      startBtn.disabled = true;
-      applyBtn.disabled = true;
-      stopBtn.disabled = true;
+      const hidden = config.hidden ?? false;
+      const disabled = config.disabled ?? false;
 
-      setApplyVisualState();
-      return;
+      button.classList.toggle('hidden', hidden);
+      button.disabled = disabled;
     }
-
-    if (isLoading) {
-      startBtn.classList.remove('hidden');
-      applyBtn.classList.add('hidden');
-      stopBtn.classList.add('hidden');
-
-      startBtn.disabled = true;
-      applyBtn.disabled = true;
-      stopBtn.disabled = true;
-
-      setApplyVisualState();
-      return;
-    }
-
-    if (!isConnected) {
-      startBtn.classList.remove('hidden');
-      applyBtn.classList.add('hidden');
-      stopBtn.classList.add('hidden');
-
-      startBtn.disabled = false;
-      applyBtn.disabled = true;
-      stopBtn.disabled = true;
-
-      setApplyVisualState();
-      return;
-    }
-
-    startBtn.classList.add('hidden');
-    applyBtn.classList.remove('hidden');
-    stopBtn.classList.remove('hidden');
-
-    applyBtn.disabled = !isChange;
-    stopBtn.disabled = false;
 
     setApplyVisualState();
   }
 
+  function updateToolbarState() {
+    if (!serialNumber) {
+      applyState({ // отладочный режим
+        start: { hidden: false, disabled: false }, // false true
+        apply: { hidden: false, disabled: false }, // true true
+        stop: { hidden: false, disabled: false }, // true true
+        photo: { hidden: false, disabled: false }, // true true
+        video: { hidden: false, disabled: false }, // true true
+        network_settings: { hidden: false, disabled: false },// true true
+      });
+      return;
+    }
+
+    if (isLoading) {
+      applyState({
+        start: { hidden: false, disabled: true },
+        apply: { hidden: true, disabled: true },
+        stop: { hidden: true, disabled: true },
+        photo: { hidden: true, disabled: true },
+        video: { hidden: true, disabled: true },
+        network_settings: { hidden: true, disabled: true },
+      });
+      return;
+    }
+
+    if (!isConnected) {
+      applyState({
+        start: { hidden: false, disabled: false },
+        apply: { hidden: true, disabled: true },
+        stop: { hidden: true, disabled: true },
+        photo: { hidden: true, disabled: true },
+        video: { hidden: true, disabled: true },
+        network_settings: { hidden: false, disabled: false },
+      });
+      return;
+    }
+
+    applyState({
+      start: { hidden: true, disabled: true },
+      apply: { hidden: false, disabled: !isChange },
+      stop: { hidden: false, disabled: false },
+      photo: { hidden: false, disabled: false },
+      video: { hidden: false, disabled: false },
+      network_settings: { hidden: false, disabled: false },
+    });
+  }
 
   function buildQueryFromForm() {
     const formData = new FormData(form);
@@ -251,6 +291,61 @@ if (
     startStream();
   }
 
+  function createPopupController(card, button) {
+    function isOpen() {
+      return !!(card && card.classList.contains('show'));
+    }
+
+    function close() {
+      if (!card) return;
+      card.classList.remove('show');
+    }
+
+    function open() {
+      if (!card || !button) return;
+
+      const rect = button.getBoundingClientRect();
+
+      card.classList.add('show');
+      card.style.left = '0px';
+      card.style.top = '0px';
+
+      const cardWidth = card.offsetWidth;
+      const cardHeight = card.offsetHeight;
+
+      let left = rect.left;
+      let top = rect.bottom + 8;
+
+      if (left + cardWidth > window.innerWidth - 10) {
+        left = window.innerWidth - cardWidth - 10;
+      }
+
+      if (top + cardHeight > window.innerHeight - 10) {
+        top = rect.top - cardHeight - 8;
+      }
+
+      if (left < 10) left = 10;
+      if (top < 10) top = 10;
+
+      card.style.left = `${left}px`;
+      card.style.top = `${top}px`;
+    }
+
+    function toggle() {
+      if (!card) return;
+      if (isOpen()) {
+        close();
+      } else {
+        open();
+      }
+    }
+
+    return { isOpen, open, close, toggle };
+  }
+
+  const photoPopup = createPopupController(photoCard, buttons.photo);
+  const videoPopup = createPopupController(videoCard, buttons.video);
+
   async function stopCamera() {
     isLoading = false;
 
@@ -261,8 +356,97 @@ if (
 
     isConnected = false;
     isChange = false;
+    isSavePhoto = false;
+    isSaveVideo = false;
 
+    photoPopup.close();
+    videoPopup.close();
     updateToolbarState();
+  }
+
+  function openPhotoPopup() {
+    photoPopup.toggle();
+  }
+
+  function openVideoPopup() {
+    videoPopup.toggle();
+  }
+
+  async function startPhotoSaving() {
+  if (!isConnected) return;
+
+  try {
+    const intervalInput = document.querySelector('input[name="photo_interval"]');
+    const rawInterval = intervalInput ? intervalInput.value.trim() : '';
+
+    if (!rawInterval) {
+      alert('Не выбран интервал сохранения');
+      return;
+    }
+
+    const interval = Number(rawInterval);
+
+    if (Number.isNaN(interval) || interval <= 0) {
+      alert('Не выбран интервал сохранения');
+      return;
+    }
+
+    const response = await fetch(`/api/camera/on_save_photo?interval=${encodeURIComponent(interval)}`);
+    const data = await response.json();
+
+    console.log('Ответ сервера:', data);
+    isSavePhoto = true;
+  } catch (error) {
+    console.error('Ошибка запуска сохранения фото:', error);
+  }
+}
+  async function stopPhotoSaving() {
+  try {
+    const response = await fetch('/api/camera/off_save_photo');
+    const data = await response.json();
+
+    console.log('Ответ сервера:', data);
+    isSavePhoto = false;
+  } catch (error) {
+    console.error('Ошибка остановки сохранения фото:', error);
+  }
+}
+
+  async function startVideoSaving() {
+    if (!isConnected) return;
+
+    const minutesInput = document.querySelector('input[name="video_minutes"]');
+    const minutes = minutesInput ? Number(minutesInput.value) : 10;
+
+    console.log('Старт записи видео', { minutes });
+
+    // пример для backend:
+    // await fetch('/api/video/start', {
+    //   method: 'POST',
+    //   headers: { 'Content-Type': 'application/json' },
+    //   body: JSON.stringify({ serial_number: serialNumber, minutes })
+    // });
+
+    isSaveVideo = true;
+  }
+
+  async function stopVideoSaving() {
+    if (!isConnected) return;
+
+    console.log('Стоп записи видео');
+
+    // пример для backend:
+    // await fetch('/api/video/stop', {
+    //   method: 'POST',
+    //   headers: { 'Content-Type': 'application/json' },
+    //   body: JSON.stringify({ serial_number: serialNumber })
+    // });
+
+    isSaveVideo = false;
+  }
+
+  function openNetworkSettings() {
+    console.log('Открыть сетевые настройки');
   }
 
   function markDirty() {
@@ -272,16 +456,97 @@ if (
     updateToolbarState();
   }
 
+  const actions = {
+    start: connectCamera,
+    apply: applySettings,
+    stop: stopCamera,
+    photo: openPhotoPopup,
+    video: openVideoPopup,
+    network_settings: openNetworkSettings,
+  };
+
+  for (const [name, button] of Object.entries(buttons)) {
+    if (!button) continue;
+    if (!actions[name]) continue;
+    button.addEventListener('click', actions[name]);
+  }
+
+  if (photoOnBtn) {
+    photoOnBtn.addEventListener('click', startPhotoSaving);
+  }
+
+  if (photoOffBtn) {
+    photoOffBtn.addEventListener('click', stopPhotoSaving);
+  }
+
+  if (videoOnBtn) {
+    videoOnBtn.addEventListener('click', startVideoSaving);
+  }
+
+  if (videoOffBtn) {
+    videoOffBtn.addEventListener('click', stopVideoSaving);
+  }
+
+  if (photoCard) {
+    photoCard.addEventListener('click', (event) => {
+      event.stopPropagation();
+    });
+  }
+
+  if (videoCard) {
+    videoCard.addEventListener('click', (event) => {
+      event.stopPropagation();
+    });
+  }
+
+  if (buttons.photo) {
+    buttons.photo.addEventListener('click', (event) => {
+      event.stopPropagation();
+    });
+  }
+
+  if (buttons.video) {
+    buttons.video.addEventListener('click', (event) => {
+      event.stopPropagation();
+    });
+  }
+
+  document.addEventListener('click', (event) => {
+    const clickInsidePhoto = photoCard && photoCard.contains(event.target);
+    const clickOnPhotoBtn = buttons.photo && buttons.photo.contains(event.target);
+
+    const clickInsideVideo = videoCard && videoCard.contains(event.target);
+    const clickOnVideoBtn = buttons.video && buttons.video.contains(event.target);
+
+    if (!clickInsidePhoto && !clickOnPhotoBtn) {
+      photoPopup.close();
+    }
+
+    if (!clickInsideVideo && !clickOnVideoBtn) {
+      videoPopup.close();
+    }
+  });
+
+  window.addEventListener('resize', () => {
+    if (photoPopup.isOpen()) photoPopup.open();
+    if (videoPopup.isOpen()) videoPopup.open();
+  });
+
+  window.addEventListener(
+    'scroll',
+    () => {
+      if (photoPopup.isOpen()) photoPopup.open();
+      if (videoPopup.isOpen()) videoPopup.open();
+    },
+    true
+  );
+
   const fields = form.querySelectorAll('input, select');
 
   fields.forEach((field) => {
     field.addEventListener('input', markDirty);
     field.addEventListener('change', markDirty);
   });
-
-  startBtn.addEventListener('click', connectCamera);
-  applyBtn.addEventListener('click', applySettings);
-  stopBtn.addEventListener('click', stopCamera);
 
   cameraFrame.addEventListener('load', () => {
     isLoading = false;
@@ -296,9 +561,13 @@ if (
     isLoading = false;
     isConnected = false;
     isChange = false;
+    isSavePhoto = false;
+    isSaveVideo = false;
 
     cameraFrame.src = '';
     showNoVideo();
+    photoPopup.close();
+    videoPopup.close();
     updateToolbarState();
   });
 

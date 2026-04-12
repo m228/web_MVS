@@ -443,7 +443,7 @@ if (
     }
 
     const response = await fetch(
-      `/api/camera/on_save_video?interval=${encodeURIComponent(durationInSeconds)}`
+      `/api/camera/on_save_video?duration=${encodeURIComponent(durationInSeconds)}`
     );
 
     const data = await response.json();

@@ -364,7 +364,7 @@ def writer_video(img,fps):
     if video_writer is None:
         folder = Path("Videos")
         folder.mkdir(parents=True, exist_ok=True)
-        filename = f"Video{datetime.now().strftime('%d_%m_%H_%M_%S')}.mp4"
+        filename = f"Video{datetime.now().strftime('%d_%m_%H_%M_%S')}.avi"
         path = os.path.join(folder, filename)
         fourcc = cv2.VideoWriter_fourcc(*"MJPG")
         video_writer = cv2.VideoWriter(path,fourcc, fps, (img.shape[1],img.shape[0]))

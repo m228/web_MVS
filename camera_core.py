@@ -216,7 +216,15 @@ def generate_stream(serial_number, width=None, height=None, offset_x=None, offse
         ia.start()
 
         while stream_running:
-            img, frame = get_frame(ia, node_map)
+
+            try:
+                img, frame = get_frame(ia, node_map)
+            except Exception as e:
+                if not stream_running:
+                    break
+                print("Ошибка получения кадра:", repr(e))
+                break
+
             if frame is None or img is None:
                 continue
 
@@ -224,8 +232,7 @@ def generate_stream(serial_number, width=None, height=None, offset_x=None, offse
             if photo_enabled and check_save_photo(photo_interval):
                 save_photo(img)
 
-
-
+            check_video_enabled()
             if video_enabled == 1:
                writer_video(img,fps)
 
@@ -236,15 +243,19 @@ def generate_stream(serial_number, width=None, height=None, offset_x=None, offse
                 video_duration = None
                 video_start = None
 
-            check_video_enabled()
+
 
             yield (
                 b"--frame\r\n"
                 b"Content-Type: image/jpeg\r\n\r\n" + frame + b"\r\n"
             )
 
+
     except Exception as e:
-        print("Ошибка потока:", repr(e))
+        if not stream_running:
+            print("Поток остановлен")
+        else:
+            print("Ошибка потока:", repr(e))
 
     finally:
         stream_running = False

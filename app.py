@@ -90,3 +90,7 @@ def on_save_video(duration: int):
 @app.get("/api/camera/off_save_video")
 def off_save_video():
     return core.off_video()
+
+@app.get("/api/camera/status_video_photo")
+def status_video_photo():
+    return {"video": core.video_enabled, "photo": core.photo_enabled}

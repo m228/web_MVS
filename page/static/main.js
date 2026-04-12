@@ -1,28 +1,33 @@
 // page index
-async function loadStatus() {
-  const response = await fetch('/api/status');
-  const data = await response.json();
-
-  const el = document.getElementById('status');
-  if (el) {
-    if (data.status) {
-      el.innerHTML = '<span style="color: #16a34a; font-size: 20px;">✔</span>';
-    } else {
-      el.innerHTML = '<span style="color: #dc2626; font-size: 20px;">✖</span>';
-    }
+async function apiGet(url, errorText = 'Ошибка запроса') {
+  try {
+    const response = await fetch(url, { cache: 'no-store' });
+    return await response.json();
+  } catch (error) {
+    console.error(errorText, error);
+    return null;
   }
 }
 
+async function loadStatus() {
+  const data = await apiGet('/api/status', 'Ошибка получения статуса:');
+  if (!data) return;
+
+  const el = document.getElementById('status');
+  if (!el) return;
+
+  el.innerHTML = data.status
+    ? '<span style="color: #16a34a; font-size: 20px;">✔</span>'
+    : '<span style="color: #dc2626; font-size: 20px;">✖</span>';
+}
+
 async function count_cams() {
-  try {
-    const response = await fetch('/api/count_cams');
-    const data = await response.json();
-    const el = document.getElementById('count_cams');
-    if (el) {
-      el.textContent = data.count;
-    }
-  } catch (error) {
-    console.error('count_cams error:', error);
+  const data = await apiGet('/api/count_cams', 'count_cams error:');
+  if (!data) return;
+
+  const el = document.getElementById('count_cams');
+  if (el) {
+    el.textContent = data.count;
   }
 }
 
@@ -42,13 +47,11 @@ window.addEventListener('DOMContentLoaded', () => {
 });
 
 async function getIp(serial) {
-  try {
-    const response = await fetch(`/api/ip?serial_number=${encodeURIComponent(serial)}`);
-    const data = await response.json();
-    return data.ip ?? 'Нет IP';
-  } catch (error) {
-    return 'Ошибка';
-  }
+  const data = await apiGet(
+    `/api/ip?serial_number=${encodeURIComponent(serial)}`,
+    'Ошибка получения IP:'
+  );
+  return data?.ip ?? 'Ошибка';
 }
 
 function openCamera(serial) {
@@ -56,8 +59,8 @@ function openCamera(serial) {
 }
 
 async function loadCams() {
-  const response = await fetch('/api/cams');
-  const data = await response.json();
+  const data = await apiGet('/api/cams', 'Ошибка получения списка камер:');
+  if (!data) return;
 
   const table = document.getElementById('table');
   if (!table) return;
@@ -103,6 +106,7 @@ let isLoading = false;
 
 let isSavePhoto = false;
 let isSaveVideo = false;
+let statusTimer = null;
 
 const buttons = {
   start: document.getElementById('startBtn'),
@@ -118,12 +122,10 @@ const photoOnBtn = document.getElementById('photoOn');
 const photoOffBtn = document.getElementById('photoOff');
 const photoIndicator = document.getElementById('photoIndicator');
 
-
-const videoCard =  document.getElementById('videoCard');
+const videoCard = document.getElementById('videoCard');
 const videoOnBtn = document.getElementById('videoOn');
 const videoOffBtn = document.getElementById('videoOff');
 const videoIndicator = document.getElementById('videoIndicator');
-
 
 if (
   form &&
@@ -136,17 +138,42 @@ if (
 ) {
   serialElement.textContent = serialNumber ? serialNumber : 'не выбран';
 
+  function refreshModeUI() {
+    updateModeIndicators();
+    updateSaveButtonsState();
+  }
+
+  function setSaveState({ photo = isSavePhoto, video = isSaveVideo } = {}) {
+    isSavePhoto = photo;
+    isSaveVideo = video;
+    refreshModeUI();
+  }
+
+  function getPositiveNumber(selector, message) {
+    const input = document.querySelector(selector);
+    const rawValue = input ? input.value.trim() : '';
+
+    if (!rawValue) {
+      alert(message);
+      return null;
+    }
+
+    const value = Number(rawValue);
+
+    if (Number.isNaN(value) || value <= 0) {
+      alert(message);
+      return null;
+    }
+
+    return value;
+  }
+
   function setApplyVisualState() {
     const applyBtn = buttons.apply;
     if (!applyBtn || !applyIcon) return;
 
-    if (!isConnected || !isChange) {
-      applyBtn.disabled = true;
-      applyBtn.classList.add('grey-btn');
-    } else {
-      applyBtn.disabled = false;
-      applyBtn.classList.remove('grey-btn');
-    }
+    applyBtn.disabled = !isConnected || !isChange;
+    applyBtn.classList.toggle('grey-btn', !isConnected || !isChange);
   }
 
   function applyState(state) {
@@ -154,61 +181,52 @@ if (
       const button = buttons[name];
       if (!button) continue;
 
-      const hidden = config.hidden ?? false;
-      const disabled = config.disabled ?? false;
-
-      button.classList.toggle('hidden', hidden);
-      button.disabled = disabled;
+      button.classList.toggle('hidden', config.hidden ?? false);
+      button.disabled = config.disabled ?? false;
     }
 
     setApplyVisualState();
   }
 
   function updateToolbarState() {
+    const state = {
+      start: { hidden: true, disabled: true },
+      apply: { hidden: true, disabled: true },
+      stop: { hidden: true, disabled: true },
+      photo: { hidden: true, disabled: true },
+      video: { hidden: true, disabled: true },
+      network_settings: { hidden: false, disabled: false },
+    };
+
     if (!serialNumber) {
-      applyState({ // отладочный режим
-        start: { hidden: false, disabled: false }, // false true
-        apply: { hidden: false, disabled: false }, // true true
-        stop: { hidden: false, disabled: false }, // true true
-        photo: { hidden: false, disabled: false }, // true true
-        video: { hidden: false, disabled: false }, // true true
-        network_settings: { hidden: false, disabled: false },// true true
-      });
+      state.start = { hidden: false, disabled: false };
+      state.apply = { hidden: false, disabled: false };
+      state.stop = { hidden: false, disabled: false };
+      state.photo = { hidden: false, disabled: false };
+      state.video = { hidden: false, disabled: false };
+      applyState(state);
       return;
     }
 
     if (isLoading) {
-      applyState({
-        start: { hidden: false, disabled: true },
-        apply: { hidden: true, disabled: true },
-        stop: { hidden: true, disabled: true },
-        photo: { hidden: true, disabled: true },
-        video: { hidden: true, disabled: true },
-        network_settings: { hidden: true, disabled: true },
-      });
+      state.start = { hidden: false, disabled: true };
+      state.network_settings = { hidden: true, disabled: true };
+      applyState(state);
       return;
     }
 
     if (!isConnected) {
-      applyState({
-        start: { hidden: false, disabled: false },
-        apply: { hidden: true, disabled: true },
-        stop: { hidden: true, disabled: true },
-        photo: { hidden: true, disabled: true },
-        video: { hidden: true, disabled: true },
-        network_settings: { hidden: false, disabled: false },
-      });
+      state.start = { hidden: false, disabled: false };
+      applyState(state);
       return;
     }
 
-    applyState({
-      start: { hidden: true, disabled: true },
-      apply: { hidden: false, disabled: !isChange },
-      stop: { hidden: false, disabled: false },
-      photo: { hidden: false, disabled: false },
-      video: { hidden: false, disabled: false },
-      network_settings: { hidden: false, disabled: false },
-    });
+    state.apply = { hidden: false, disabled: !isChange };
+    state.stop = { hidden: false, disabled: false };
+    state.photo = { hidden: false, disabled: false };
+    state.video = { hidden: false, disabled: false };
+
+    applyState(state);
   }
 
   function buildQueryFromForm() {
@@ -217,21 +235,22 @@ if (
 
     query.set('serial_number', serialNumber);
 
-    const width = formData.get('width');
-    const height = formData.get('height');
-    const offsetX = formData.get('offset_x');
-    const offsetY = formData.get('offset_y');
-    const fps = formData.get('fps');
-    const exposureAuto = formData.get('exposure_auto');
-    const exposureTime = formData.get('exposure_time');
+    const fields = [
+      ['width', 'width'],
+      ['height', 'height'],
+      ['offset_x', 'offset_x'],
+      ['offset_y', 'offset_y'],
+      ['fps', 'fps'],
+      ['exposure_auto', 'exposure_auto'],
+      ['exposure_time', 'exposure_time'],
+    ];
 
-    if (width !== '') query.set('width', width);
-    if (height !== '') query.set('height', height);
-    if (offsetX !== '') query.set('offset_x', offsetX);
-    if (offsetY !== '') query.set('offset_y', offsetY);
-    if (fps !== '') query.set('fps', fps);
-    if (exposureAuto !== '') query.set('exposure_auto', exposureAuto);
-    if (exposureTime !== '') query.set('exposure_time', exposureTime);
+    for (const [formName, queryName] of fields) {
+      const value = formData.get(formName);
+      if (value !== '') {
+        query.set(queryName, value);
+      }
+    }
 
     return query;
   }
@@ -246,24 +265,59 @@ if (
     cameraPlaceholder.classList.add('hidden');
   }
 
+  function startStatusPolling() {
+    stopStatusPolling();
+    statusTimer = setInterval(syncVideoPhotoStatus, 1000);
+  }
+
+  function stopStatusPolling() {
+    if (statusTimer) {
+      clearInterval(statusTimer);
+      statusTimer = null;
+    }
+  }
+
+  async function syncVideoPhotoStatus() {
+    if (!isConnected) return;
+
+    const data = await apiGet(
+      '/api/camera/status_video_photo',
+      'Ошибка получения статуса video/photo:'
+    );
+    if (!data) return;
+
+    setSaveState({
+      video: Number(data.video) === 1,
+      photo: !!data.photo,
+    });
+  }
+
   function startStream() {
     const query = buildQueryFromForm();
     isLoading = true;
     updateToolbarState();
-
     cameraFrame.src = '/api/camera/stream?' + query.toString();
   }
 
   async function stopStreamOnly() {
-  try {
-    const response = await fetch('/api/camera/close_stream');
-    const data = await response.json();
-    return data;
-  } catch (error) {
-    console.error('Ошибка остановки потока:', error);
-    return null;
+    return await apiGet('/api/camera/close_stream', 'Ошибка остановки потока:');
   }
-}
+
+  function resetCameraUI() {
+    isConnected = false;
+    isChange = false;
+    isLoading = false;
+
+    setSaveState({ photo: false, video: false });
+
+    cameraFrame.src = '';
+    showNoVideo();
+
+    photoPopup.close();
+    videoPopup.close();
+
+    updateToolbarState();
+  }
 
   async function connectCamera() {
     if (!serialNumber) {
@@ -282,6 +336,7 @@ if (
     isConnected = false;
     isLoading = true;
     updateToolbarState();
+    stopStatusPolling();
 
     await stopStreamOnly();
 
@@ -331,12 +386,7 @@ if (
     }
 
     function toggle() {
-      if (!card) return;
-      if (isOpen()) {
-        close();
-      } else {
-        open();
-      }
+      isOpen() ? close() : open();
     }
 
     return { isOpen, open, close, toggle };
@@ -346,27 +396,16 @@ if (
   const videoPopup = createPopupController(videoCard, buttons.video);
 
   async function stopCamera() {
-    isLoading = false;
+    stopStatusPolling();
 
     const result = await stopStreamOnly();
-    cameraFrame.src = '';
-    showNoVideo();
+
+    resetCameraUI();
 
     if (result?.status === 'stopped') {
-      await new Promise(r => setTimeout(r, 300));
+      await new Promise((r) => setTimeout(r, 300));
       updateToolbarState();
     }
-
-    isConnected = false;
-    isChange = false;
-    isSavePhoto = false;
-    isSaveVideo = false;
-
-    photoPopup.close();
-    videoPopup.close();
-    updateToolbarState();
-    updateModeIndicators();
-    updateSaveButtonsState();
   }
 
   function openPhotoPopup() {
@@ -378,133 +417,87 @@ if (
   }
 
   async function startPhotoSaving() {
-  if (!isConnected) return;
+    if (!isConnected) return;
 
-  try {
-    const intervalInput = document.querySelector('input[name="photo_interval"]');
-    const rawInterval = intervalInput ? intervalInput.value.trim() : '';
+    const interval = getPositiveNumber(
+      'input[name="photo_interval"]',
+      'Не выбран интервал сохранения'
+    );
+    if (interval === null) return;
 
-    if (!rawInterval) {
-      alert('Не выбран интервал сохранения');
-      return;
-    }
-
-    const interval = Number(rawInterval);
-
-    if (Number.isNaN(interval) || interval <= 0) {
-      alert('Не выбран интервал сохранения');
-      return;
-    }
-
-    const response = await fetch(`/api/camera/on_save_photo?interval=${encodeURIComponent(interval)}`);
-    const data = await response.json();
+    const data = await apiGet(
+      `/api/camera/on_save_photo?interval=${encodeURIComponent(interval)}`,
+      'Ошибка запуска сохранения фото:'
+    );
+    if (!data) return;
 
     console.log('Ответ сервера:', data);
-    isSavePhoto = true;
-    updateModeIndicators();
-    updateSaveButtonsState();
-  } catch (error) {
-    console.error('Ошибка запуска сохранения фото:', error);
+    await syncVideoPhotoStatus();
   }
-}
+
   async function stopPhotoSaving() {
-  try {
-    const response = await fetch('/api/camera/off_save_photo');
-    const data = await response.json();
+    const data = await apiGet(
+      '/api/camera/off_save_photo',
+      'Ошибка остановки сохранения фото:'
+    );
+    if (!data) return;
 
     console.log('Ответ сервера:', data);
-    isSavePhoto = false;
-    updateModeIndicators();
-    updateSaveButtonsState();
-  } catch (error) {
-    console.error('Ошибка остановки сохранения фото:', error);
+    await syncVideoPhotoStatus();
   }
-}
 
   async function startVideoSaving() {
-  if (!isConnected) return;
+    if (!isConnected) return;
 
-  try {
-    const durationInput = document.querySelector('input[name="video_duration"]');
-    const unitSelect = document.querySelector('select[name="video_duration_unit"]');
-
-    const rawDuration = durationInput ? durationInput.value.trim() : '';
-    const unit = unitSelect ? unitSelect.value : 'minutes';
-
-    if (!rawDuration) {
-      alert('Не выбрана длительность записи');
-      return;
-    }
-
-    const duration = Number(rawDuration);
-
-    if (Number.isNaN(duration) || duration <= 0) {
-      alert('Не выбрана длительность записи');
-      return;
-    }
-
-    let durationInSeconds = duration;
-
-    if (unit === 'minutes') {
-      durationInSeconds = duration * 60;
-    }
-
-    const response = await fetch(
-      `/api/camera/on_save_video?duration=${encodeURIComponent(durationInSeconds)}`
+    const duration = getPositiveNumber(
+      'input[name="video_duration"]',
+      'Не выбрана длительность записи'
     );
+    if (duration === null) return;
 
-    const data = await response.json();
+    const unitSelect = document.querySelector('select[name="video_duration_unit"]');
+    const unit = unitSelect ? unitSelect.value : 'minutes';
+    const durationInSeconds = unit === 'minutes' ? duration * 60 : duration;
+
+    const data = await apiGet(
+      `/api/camera/on_save_video?duration=${encodeURIComponent(durationInSeconds)}`,
+      'Ошибка запуска записи видео:'
+    );
+    if (!data) return;
+
     console.log('Ответ сервера:', data);
-
-    isSaveVideo = true;
-    updateModeIndicators();
-    updateSaveButtonsState();
-  } catch (error) {
-    console.error('Ошибка запуска записи видео:', error);
+    await syncVideoPhotoStatus();
   }
-}
 
   async function stopVideoSaving() {
-  if (!isConnected) return;
+    if (!isConnected) return;
 
-  try {
-    const response = await fetch('/api/camera/off_save_video');
-    const data = await response.json();
+    const data = await apiGet(
+      '/api/camera/off_save_video',
+      'Ошибка остановки записи видео:'
+    );
+    if (!data) return;
 
     console.log('Ответ сервера:', data);
-    isSaveVideo = false;
-    updateModeIndicators();
-    updateSaveButtonsState();
-  } catch (error) {
-    console.error('Ошибка остановки записи видео:', error);
+    await syncVideoPhotoStatus();
   }
-}
+
   function updateModeIndicators() {
-  if (photoIndicator) {
-    photoIndicator.classList.toggle('hidden', !isSavePhoto);
+    if (photoIndicator) {
+      photoIndicator.classList.toggle('hidden', !isSavePhoto);
+    }
+
+    if (videoIndicator) {
+      videoIndicator.classList.toggle('hidden', !isSaveVideo);
+    }
   }
 
-  if (videoIndicator) {
-    videoIndicator.classList.toggle('hidden', !isSaveVideo);
-  }
-}
   function updateSaveButtonsState() {
-  if (photoOnBtn) {
-    photoOnBtn.disabled = isSavePhoto;
+    if (photoOnBtn) photoOnBtn.disabled = isSavePhoto;
+    if (photoOffBtn) photoOffBtn.disabled = !isSavePhoto;
+    if (videoOnBtn) videoOnBtn.disabled = isSaveVideo;
+    if (videoOffBtn) videoOffBtn.disabled = !isSaveVideo;
   }
-
-  if (photoOffBtn) {
-    photoOffBtn.disabled = !isSavePhoto;
-  }
-
-  if (videoOnBtn) {
-    videoOnBtn.disabled = isSaveVideo;
-  }
-
-  if (videoOffBtn) {
-    videoOffBtn.disabled = !isSaveVideo;
-  }
-}
 
   function openNetworkSettings() {
     console.log('Открыть сетевые настройки');
@@ -512,7 +505,6 @@ if (
 
   function markDirty() {
     if (!isConnected) return;
-
     isChange = true;
     updateToolbarState();
   }
@@ -527,49 +519,29 @@ if (
   };
 
   for (const [name, button] of Object.entries(buttons)) {
-    if (!button) continue;
-    if (!actions[name]) continue;
+    if (!button || !actions[name]) continue;
     button.addEventListener('click', actions[name]);
   }
 
-  if (photoOnBtn) {
-    photoOnBtn.addEventListener('click', startPhotoSaving);
-  }
-
-  if (photoOffBtn) {
-    photoOffBtn.addEventListener('click', stopPhotoSaving);
-  }
-
-  if (videoOnBtn) {
-    videoOnBtn.addEventListener('click', startVideoSaving);
-  }
-
-  if (videoOffBtn) {
-    videoOffBtn.addEventListener('click', stopVideoSaving);
-  }
+  if (photoOnBtn) photoOnBtn.addEventListener('click', startPhotoSaving);
+  if (photoOffBtn) photoOffBtn.addEventListener('click', stopPhotoSaving);
+  if (videoOnBtn) videoOnBtn.addEventListener('click', startVideoSaving);
+  if (videoOffBtn) videoOffBtn.addEventListener('click', stopVideoSaving);
 
   if (photoCard) {
-    photoCard.addEventListener('click', (event) => {
-      event.stopPropagation();
-    });
+    photoCard.addEventListener('click', (event) => event.stopPropagation());
   }
 
   if (videoCard) {
-    videoCard.addEventListener('click', (event) => {
-      event.stopPropagation();
-    });
+    videoCard.addEventListener('click', (event) => event.stopPropagation());
   }
 
   if (buttons.photo) {
-    buttons.photo.addEventListener('click', (event) => {
-      event.stopPropagation();
-    });
+    buttons.photo.addEventListener('click', (event) => event.stopPropagation());
   }
 
   if (buttons.video) {
-    buttons.video.addEventListener('click', (event) => {
-      event.stopPropagation();
-    });
+    buttons.video.addEventListener('click', (event) => event.stopPropagation());
   }
 
   document.addEventListener('click', (event) => {
@@ -602,9 +574,8 @@ if (
     true
   );
 
-  const fields = form.querySelectorAll('input, select');
-
-  fields.forEach((field) => {
+  const formFields = form.querySelectorAll('input, select');
+  formFields.forEach((field) => {
     field.addEventListener('input', markDirty);
     field.addEventListener('change', markDirty);
   });
@@ -616,27 +587,16 @@ if (
 
     showVideo();
     updateToolbarState();
+    syncVideoPhotoStatus();
+    startStatusPolling();
   });
 
   cameraFrame.addEventListener('error', () => {
-    isLoading = false;
-    isConnected = false;
-    isChange = false;
-    isSavePhoto = false;
-    isSaveVideo = false;
-    updateModeIndicators();
-    updateSaveButtonsState();
-
-    cameraFrame.src = '';
-    showNoVideo();
-    photoPopup.close();
-    videoPopup.close();
-    updateToolbarState();
-    updateSaveButtonsState();
+    stopStatusPolling();
+    resetCameraUI();
   });
 
   showNoVideo();
   updateToolbarState();
-  updateModeIndicators();
-  updateSaveButtonsState();
+  refreshModeUI();
 }

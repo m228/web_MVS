@@ -26,8 +26,10 @@ photo_enabled = False
 photo_interval = None
 last_save = None
 
-video_enabled = False
-video_length = None
+video_enabled = 0
+video_duration = None
+video_start = None
+video_writer = None
 
 
 
@@ -183,7 +185,7 @@ def get_frame(ia,node_map):
         return img, buffer.tobytes()
 
 def generate_stream(serial_number, width=None, height=None, offset_x=None, offset_y=None, fps=None, exposure_auto=None, exposure_time=None):
-    global stream_running, current_ia, photo_enabled, photo_interval, last_save
+    global stream_running, current_ia, photo_enabled, photo_interval, last_save, video_writer, video_enabled, video_duration, video_start
     ia = None
 
     if not check():
@@ -222,8 +224,19 @@ def generate_stream(serial_number, width=None, height=None, offset_x=None, offse
             if photo_enabled and check_save_photo(photo_interval):
                 save_photo(img)
 
-            # для видео проверка
 
+
+            if video_enabled == 1:
+               writer_video(img,fps)
+
+            if video_enabled == 2 and video_writer is not None:
+                video_writer.release()
+                video_writer = None
+                video_enabled = 0
+                video_duration = None
+                video_start = None
+
+            check_video_enabled()
 
             yield (
                 b"--frame\r\n"
@@ -254,6 +267,15 @@ def generate_stream(serial_number, width=None, height=None, offset_x=None, offse
             photo_interval = None
             last_save = None
 
+            if video_writer is not None:
+                video_writer.release()
+                video_writer = None
+                video_enabled = 0
+                video_duration = None
+                video_start = None
+
+
+
 def close_stream():
   global stream_running
   stream_running = False
@@ -265,9 +287,8 @@ def on_save(interval):
     photo_interval = interval
     return {"status": "ok", "photo_enabled": True, "interval": photo_interval}
 
-
 def off_save():
-    global photo_enabled,photo_interval, last_save
+    global photo_enabled, photo_interval, last_save
     photo_enabled = False
     photo_interval = None
     last_save = None
@@ -292,11 +313,71 @@ def check_save_photo(interval):
     return False
 
 
-def save_photo(frame):
+def save_photo(img):
     folder = Path("dataset")
     folder.mkdir(parents=True, exist_ok=True)
     filename = f"frame_{datetime.now().strftime('%d_%m_%H_%M_%S')}.jpg"
     path = os.path.join(folder, filename)
-    cv2.imwrite(path, frame)
+    cv2.imwrite(path, img)
+
 
 # для видео
+# video_enabled
+# 0 нет автосохранение видео
+# 1 идет автосохранение видео
+# 2 завершение автосохранение видео
+
+def on_video(duration):
+    global video_enabled, video_duration, video_start, video_writer
+
+    if duration is None:
+        video_duration = None
+    elif video_enabled == 0:
+        video_duration = duration
+
+    if video_enabled == 0:
+        video_enabled = 1
+        video_start = time.time()
+    return {"status": "ok", "video_enabled": "1"}
+
+
+def off_video():
+    global video_enabled, video_duration, video_start, video_writer
+    if video_enabled == 1:
+        video_enabled = 2
+    return {"status": "ok", "video_enabled": "2"}
+
+
+def check_video_enabled():
+    global video_enabled, video_duration, video_start
+    if video_enabled == 1:
+        current_time = time.time()
+        if video_duration is not None:
+            if current_time - video_start >= video_duration:
+                video_enabled = 2
+
+
+
+def writer_video(img,fps):
+    global video_writer, video_fps
+
+    if video_writer is None:
+        folder = Path("Videos")
+        folder.mkdir(parents=True, exist_ok=True)
+        filename = f"Video{datetime.now().strftime('%d_%m_%H_%M_%S')}.mp4"
+        path = os.path.join(folder, filename)
+        fourcc = cv2.VideoWriter_fourcc(*"MJPG")
+        video_writer = cv2.VideoWriter(path,fourcc, fps, (img.shape[1],img.shape[0]))
+        video_writer.write(img)
+    else:
+        video_writer.write(img)
+
+
+
+
+
+
+
+
+
+

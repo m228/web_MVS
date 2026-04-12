@@ -116,18 +116,14 @@ const buttons = {
 const photoCard = document.getElementById('photoCard');
 const photoOnBtn = document.getElementById('photoOn');
 const photoOffBtn = document.getElementById('photoOff');
+const photoIndicator = document.getElementById('photoIndicator');
 
-const videoCard =
-  document.getElementById('videoCard') ||
-  document.getElementById('VideoCard');
 
-const videoOnBtn =
-  document.getElementById('videoOn') ||
-  document.getElementById('VideoOn');
+const videoCard =  document.getElementById('videoCard');
+const videoOnBtn = document.getElementById('videoOn');
+const videoOffBtn = document.getElementById('videoOff');
+const videoIndicator = document.getElementById('videoIndicator');
 
-const videoOffBtn =
-  document.getElementById('videoOff') ||
-  document.getElementById('VideoOff');
 
 if (
   form &&
@@ -362,6 +358,8 @@ if (
     photoPopup.close();
     videoPopup.close();
     updateToolbarState();
+    updateModeIndicators();
+    updateSaveButtonsState();
   }
 
   function openPhotoPopup() {
@@ -396,6 +394,8 @@ if (
 
     console.log('Ответ сервера:', data);
     isSavePhoto = true;
+    updateModeIndicators();
+    updateSaveButtonsState();
   } catch (error) {
     console.error('Ошибка запуска сохранения фото:', error);
   }
@@ -407,43 +407,97 @@ if (
 
     console.log('Ответ сервера:', data);
     isSavePhoto = false;
+    updateModeIndicators();
+    updateSaveButtonsState();
   } catch (error) {
     console.error('Ошибка остановки сохранения фото:', error);
   }
 }
 
   async function startVideoSaving() {
-    if (!isConnected) return;
+  if (!isConnected) return;
 
-    const minutesInput = document.querySelector('input[name="video_minutes"]');
-    const minutes = minutesInput ? Number(minutesInput.value) : 10;
+  try {
+    const durationInput = document.querySelector('input[name="video_duration"]');
+    const unitSelect = document.querySelector('select[name="video_duration_unit"]');
 
-    console.log('Старт записи видео', { minutes });
+    const rawDuration = durationInput ? durationInput.value.trim() : '';
+    const unit = unitSelect ? unitSelect.value : 'minutes';
 
-    // пример для backend:
-    // await fetch('/api/video/start', {
-    //   method: 'POST',
-    //   headers: { 'Content-Type': 'application/json' },
-    //   body: JSON.stringify({ serial_number: serialNumber, minutes })
-    // });
+    if (!rawDuration) {
+      alert('Не выбрана длительность записи');
+      return;
+    }
+
+    const duration = Number(rawDuration);
+
+    if (Number.isNaN(duration) || duration <= 0) {
+      alert('Не выбрана длительность записи');
+      return;
+    }
+
+    let durationInSeconds = duration;
+
+    if (unit === 'minutes') {
+      durationInSeconds = duration * 60;
+    }
+
+    const response = await fetch(
+      `/api/camera/on_save_video?interval=${encodeURIComponent(durationInSeconds)}`
+    );
+
+    const data = await response.json();
+    console.log('Ответ сервера:', data);
 
     isSaveVideo = true;
+    updateModeIndicators();
+    updateSaveButtonsState();
+  } catch (error) {
+    console.error('Ошибка запуска записи видео:', error);
   }
+}
 
   async function stopVideoSaving() {
-    if (!isConnected) return;
+  if (!isConnected) return;
 
-    console.log('Стоп записи видео');
+  try {
+    const response = await fetch('/api/camera/off_save_video');
+    const data = await response.json();
 
-    // пример для backend:
-    // await fetch('/api/video/stop', {
-    //   method: 'POST',
-    //   headers: { 'Content-Type': 'application/json' },
-    //   body: JSON.stringify({ serial_number: serialNumber })
-    // });
-
+    console.log('Ответ сервера:', data);
     isSaveVideo = false;
+    updateModeIndicators();
+    updateSaveButtonsState();
+  } catch (error) {
+    console.error('Ошибка остановки записи видео:', error);
   }
+}
+  function updateModeIndicators() {
+  if (photoIndicator) {
+    photoIndicator.classList.toggle('hidden', !isSavePhoto);
+  }
+
+  if (videoIndicator) {
+    videoIndicator.classList.toggle('hidden', !isSaveVideo);
+  }
+}
+  function updateSaveButtonsState() {
+  if (photoOnBtn) {
+    photoOnBtn.disabled = isSavePhoto;
+  }
+
+  if (photoOffBtn) {
+    photoOffBtn.disabled = !isSavePhoto;
+  }
+
+  if (videoOnBtn) {
+    videoOnBtn.disabled = isSaveVideo;
+  }
+
+  if (videoOffBtn) {
+    videoOffBtn.disabled = !isSaveVideo;
+  }
+}
 
   function openNetworkSettings() {
     console.log('Открыть сетевые настройки');
@@ -563,14 +617,19 @@ if (
     isChange = false;
     isSavePhoto = false;
     isSaveVideo = false;
+    updateModeIndicators();
+    updateSaveButtonsState();
 
     cameraFrame.src = '';
     showNoVideo();
     photoPopup.close();
     videoPopup.close();
     updateToolbarState();
+    updateSaveButtonsState();
   });
 
   showNoVideo();
   updateToolbarState();
+  updateModeIndicators();
+  updateSaveButtonsState();
 }

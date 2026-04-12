@@ -100,6 +100,7 @@ button {
 }
 
 .toolbar-btn {
+  position: relative;
   width: 52px;
   height: 52px;
   padding: 0;
@@ -115,6 +116,18 @@ button {
   appearance: none;
   -webkit-appearance: none;
   -moz-appearance: none;
+}
+
+.mode-indicator {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 10px;
+  height: 10px;
+  background: red;
+  border-radius: 50%;
+  border: 2px solid white;
+  z-index: 2;
 }
 
 .grey-btn {
@@ -338,7 +351,7 @@ input[type="number"] {
 .video-card-popup {
   position: fixed;
   display: none;
-  width: 260px;
+  width: 350px;
   max-width: calc(100vw - 20px);
   background: #fff;
   border-radius: 12px;
@@ -349,4 +362,28 @@ input[type="number"] {
 
 .video-card-popup.show {
   display: block;
+}
+
+.video-time-row {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.video-time-controls {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.video-minutes-input {
+  width: 90px !important;
+  min-width: 90px;
+  max-width: 90px;
+  flex: 0 0 90px;
+}
+
+.video-duration-unit {
+  width: 80px;
+  min-width: 80px;
 }

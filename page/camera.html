@@ -36,10 +36,12 @@
 
             <button type="button" id="photoBtn" class="toolbar-btn" title="Сохранение фото">
               <img src="/static/icon/photo.png" alt="Сохранение фото" class="toolbar-img">
+              <span class="mode-indicator hidden" id="photoIndicator"></span>
             </button>
 
             <button type="button" id="videoBtn" class="toolbar-btn" title="Сохранение видео">
               <img src="/static/icon/video.png" alt="Сохранение видео" class="toolbar-img">
+              <span class="mode-indicator hidden" id="videoIndicator"></span>
             </button>
 
             <button type="button" id="networkSettingsBtn" class="toolbar-btn" title="Сетевые настройки">
@@ -124,9 +126,23 @@
       <div class="card video-card-popup" id="videoCard">
         <h2>Запись видео</h2>
         <div class="record-form">
-          <label>
-            Длительность записи (мин)
-            <input type="number" name="video_minutes" value="10" min="1" />
+          <label class="video-time-row">
+            <span>Длительность записи</span>
+
+            <div class="video-time-controls">
+              <input
+                class="video-minutes-input"
+                type="number"
+                name="video_duration"
+                value="10"
+                min="1"
+              >
+
+              <select name="video_duration_unit" class="video-duration-unit">
+                <option value="minutes" selected>мин</option>
+                <option value="seconds">сек</option>
+              </select>
+            </div>
           </label>
 
           <div class="record-actions">
@@ -135,6 +151,9 @@
           </div>
         </div>
       </div>
+
+
+
 
       <script src="/static/main.js"></script>
     </main>

@@ -76,9 +76,17 @@ def close_stream():
     return core.close_stream()
 
 @app.get("/api/camera/on_save_photo")
-def camera_on_save_photo(interval: int):
+def on_save_photo(interval: int):
     return core.on_save(interval)
 
 @app.get("/api/camera/off_save_photo")
 def off_save_photo():
     return core.off_save()
+
+@app.get("/api/camera/on_save_video")
+def on_save_video(duration: int):
+    return core.on_video(duration)
+
+@app.get("/api/camera/off_save_video")
+def off_save_video():
+    return core.off_video()

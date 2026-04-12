@@ -276,9 +276,23 @@ def generate_stream(serial_number, width=None, height=None, offset_x=None, offse
 
 
 
+
 def close_stream():
-  global stream_running
-  stream_running = False
+    global stream_running, current_ia
+    stream_running = False
+
+    if current_ia is not None:
+        try:
+            current_ia.stop()
+        except:
+            pass
+        try:
+            current_ia.destroy()
+        except:
+            pass
+        current_ia = None
+
+    return {"status": "stopped"}
 
 # Для фото
 def on_save(interval):
@@ -352,6 +366,7 @@ def check_video_enabled():
     global video_enabled, video_duration, video_start
     if video_enabled == 1:
         current_time = time.time()
+        print("current_time: ", current_time, ", video_start: ", video_start, ", video_duration", video_duration)
         if video_duration is not None:
             if current_time - video_start >= video_duration:
                 video_enabled = 2

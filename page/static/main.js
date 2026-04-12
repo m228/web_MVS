@@ -255,12 +255,15 @@ if (
   }
 
   async function stopStreamOnly() {
-    try {
-      await fetch('/api/camera/close_stream');
-    } catch (error) {
-      console.error('Ошибка остановки потока:', error);
-    }
+  try {
+    const response = await fetch('/api/camera/close_stream');
+    const data = await response.json();
+    return data;
+  } catch (error) {
+    console.error('Ошибка остановки потока:', error);
+    return null;
   }
+}
 
   async function connectCamera() {
     if (!serialNumber) {
@@ -345,10 +348,14 @@ if (
   async function stopCamera() {
     isLoading = false;
 
-    await stopStreamOnly();
-
+    const result = await stopStreamOnly();
     cameraFrame.src = '';
     showNoVideo();
+
+    if (result?.status === 'stopped') {
+      await new Promise(r => setTimeout(r, 300));
+      updateToolbarState();
+    }
 
     isConnected = false;
     isChange = false;

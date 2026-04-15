@@ -1,4 +1,4 @@
-// static/js/camera-page.js
+// static/js/camera .js
 function initCameraPage() {
   const form = document.getElementById('settingsForm');
   const serialElement = document.getElementById('cameraSerial');

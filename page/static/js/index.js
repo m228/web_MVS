@@ -1,4 +1,4 @@
-// static/js/index-page.js
+// static/js/index.js
 function updateTime() {
   const now = new Date();
   const timeString = now.toLocaleTimeString();
@@ -88,17 +88,26 @@ function initIndexPage() {
   const timeEl = document.getElementById('time');
   const statusEl = document.getElementById('status');
   const countEl = document.getElementById('count_cams');
+  const refreshBtn = document.getElementById('refreshCamsBtn');
 
   if (!table && !timeEl && !statusEl && !countEl) return;
 
-  countCams();
-  loadStatus();
-  loadCams();
+  refreshCameras();
+
+  if (refreshBtn) {
+    refreshBtn.addEventListener('click', refreshCameras);
+  }
 
   if (timeEl) {
     updateTime();
     setInterval(updateTime, 1000);
   }
+}
+
+async function refreshCameras() {
+  await loadStatus();
+  await countCams();
+  await loadCams();
 }
 
 window.addEventListener('DOMContentLoaded', initIndexPage);

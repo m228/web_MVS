@@ -387,3 +387,14 @@ input[type="number"] {
   width: 80px;
   min-width: 80px;
 }
+
+.section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+
+.section-header h2 {
+  margin: 0;
+}

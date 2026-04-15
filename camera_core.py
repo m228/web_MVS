@@ -147,20 +147,16 @@ def check_value(value,min,max) -> bool:
 def apply_settings_camera(node_map, data_limit, width=None, height=None, offset_x=None, offset_y=None, fps=None, exposure_auto=None, exposure_time=None):
     try:
         if check_value(width, data_limit["width"]["min"], data_limit["width"]["max"]):
-            print("set Width", width)
             node_map.Width.value = int(width)
 
         if check_value(height, data_limit["height"]["min"], data_limit["height"]["max"]):
-            print("set Height", height)
             node_map.Height.value = int(height)
 
-        if check_value(offset_x, data_limit["offset_x"]["min"], data_limit["offset_x"]["max"]):
-            print("set OffsetX", offset_x)
-            node_map.OffsetX.value = int(offset_x)
+        if check_value(fps, data_limit["fps"]["min"], 30):
+           node_map.FPS.value = int(fps)
 
-        if check_value(offset_y, data_limit["offset_y"]["min"], data_limit["offset_y"]["max"]):
-            print("set OffsetY", offset_y)
-            node_map.OffsetY.value = int(offset_y)
+        if check_value(exposure_time, data_limit["exposure_time"]["min"], data_limit["exposure_time"]["max"]):
+            node_map.ExposureTime.value = int(exposure_time)
 
         return True
 

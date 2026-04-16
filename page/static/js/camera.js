@@ -133,7 +133,6 @@ function initCameraPage() {
       ['height', 'height'],
       ['offset_x', 'offset_x'],
       ['offset_y', 'offset_y'],
-      ['fps', 'fps'],
       ['exposure_auto', 'exposure_auto'],
       ['exposure_time', 'exposure_time'],
     ];
@@ -300,7 +299,6 @@ function initCameraPage() {
     setFieldLimits('height', data.height);
     setFieldLimits('offset_x', data.offset_x);
     setFieldLimits('offset_y', data.offset_y);
-    setFieldLimits('fps', data.fps);
     setFieldLimits('exposure_time', data.exposure_time);
 
     // Select options
@@ -312,9 +310,6 @@ function initCameraPage() {
 
     setText('HeightMin', data.height?.min);
     setText('HeightMax', data.height?.max);
-
-    setText('FpsMin', data.fps?.min);
-    setText('FpsMax', data.fps?.max);
 
     setText('ExposureMin', data.exposure_time?.min);
     setText('ExposureMax', data.exposure_time?.max);
@@ -349,23 +344,16 @@ function initCameraPage() {
     slider.value = input.value || min;
     slider.className = 'input-slider';
 
-    const valueLabel = document.createElement('div');
-    valueLabel.className = 'input-slider-value';
-    valueLabel.textContent = slider.value;
-
     slider.addEventListener('input', () => {
       input.value = slider.value;
-      valueLabel.textContent = slider.value;
       markDirty();
     });
 
     input.addEventListener('input', () => {
       slider.value = input.value;
-      valueLabel.textContent = input.value;
     });
 
     wrap.appendChild(slider);
-    wrap.appendChild(valueLabel);
 
     input.insertAdjacentElement('afterend', wrap);
     activeSliderWrap = wrap;
@@ -375,7 +363,6 @@ function initCameraPage() {
     const sliderFields = [
       form.querySelector('[name="width"]'),
       form.querySelector('[name="height"]'),
-      form.querySelector('[name="fps"]'),
       form.querySelector('[name="exposure_time"]'),
     ].filter(Boolean);
 

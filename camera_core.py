@@ -25,7 +25,7 @@ Driver = False
 current_ia = None
 
 stream_running = False
-stream_closed = False
+stream_closed = True
 # сохранение фото и видео
 photo_enabled = False
 photo_interval = None
@@ -174,7 +174,7 @@ def apply_settings_camera(node_map, data_limit, width=None, height=None, offset_
             node_map.Height.value = int(height)
 
         if check_value(fps, 0.1, 30):
-           node_map.AcquisitionFrameRateEnable.value = int(fps)
+           node_map.AcquisitionFrameRate.value = int(fps)
 
         if check_value(exposure_time, data_limit["exposure_time"]["min"], data_limit["exposure_time"]["max"]):
             node_map.ExposureTime.value = int(exposure_time)
@@ -207,6 +207,11 @@ def generate_stream(serial_number, width=None, height=None, offset_x=None, offse
 
     if not check():
         return
+
+    if stream_running and not stream_closed:
+        print("Старый поток еще не закрыт, force stop")
+        close_stream_force()
+        time.sleep(0.3)
 
     try:
         node_map, ia = get_node_map_cam(serial_number)

@@ -398,3 +398,19 @@ input[type="number"] {
 .section-header h2 {
   margin: 0;
 }
+
+.input-slider-wrap {
+  margin-top: 8px;
+  margin-bottom: 8px;
+  padding: 8px 0;
+}
+
+.input-slider {
+  width: 100%;
+}
+
+.input-slider-value {
+  margin-top: 4px;
+  font-size: 13px;
+  color: #444;
+}

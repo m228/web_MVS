@@ -1,4 +1,4 @@
-// static/js/camera .js
+// static/js/camera.js
 function initCameraPage() {
   const form = document.getElementById('settingsForm');
   const serialElement = document.getElementById('cameraSerial');
@@ -46,6 +46,7 @@ function initCameraPage() {
   let isSavePhoto = false;
   let isSaveVideo = false;
   let statusTimer = null;
+  let activeSliderWrap = null;
 
   serialElement.textContent = serialNumber ? serialNumber : 'не выбран';
 
@@ -207,6 +208,7 @@ function initCameraPage() {
 
     photoPopup.close();
     videoPopup.close();
+    removeActiveSlider();
 
     updateToolbarState();
   }
@@ -220,6 +222,172 @@ function initCameraPage() {
     isConnected = false;
     isChange = false;
     startStream();
+  }
+
+  function setFieldValue(name, value) {
+    if (value === undefined || value === null) return;
+
+    const field = form.querySelector(`[name="${name}"]`);
+    if (field) {
+      field.value = value;
+    }
+  }
+
+  function setFieldLimits(name, config) {
+    if (!config) return;
+
+    const field = form.querySelector(`[name="${name}"]`);
+    if (!field) return;
+
+    if (config.min !== undefined && config.min !== null) {
+      field.min = config.min;
+    }
+
+    if (config.max !== undefined && config.max !== null) {
+      field.max = config.max;
+    }
+  }
+
+  function setText(id, value) {
+    if (value === undefined || value === null) return;
+
+    const el = document.getElementById(id);
+    if (el) {
+      el.textContent = value;
+    }
+  }
+
+  function fillSelectOptions(name, config) {
+    if (!config) return;
+
+    const select = form.querySelector(`[name="${name}"]`);
+    if (!select) return;
+
+    select.innerHTML = '';
+
+    if (Array.isArray(config.options)) {
+      for (const optionValue of config.options) {
+        const option = document.createElement('option');
+        option.value = optionValue;
+        option.textContent = optionValue;
+
+        if (optionValue === config.value) {
+          option.selected = true;
+        }
+
+        select.appendChild(option);
+      }
+    } else if (config.value !== undefined && config.value !== null) {
+      const option = document.createElement('option');
+      option.value = config.value;
+      option.textContent = config.value;
+      option.selected = true;
+      select.appendChild(option);
+    }
+  }
+
+  async function loadDataLimitToForm() {
+    const data = await CameraApi.getDataLimit();
+    if (!data) return;
+
+    // Подставляем только часть значений
+    setFieldValue('width', data.width?.value);
+    setFieldValue('height', data.height?.value);
+    setFieldValue('exposure_time', data.exposure_time?.value);
+
+    // Лимиты в поля
+    setFieldLimits('width', data.width);
+    setFieldLimits('height', data.height);
+    setFieldLimits('offset_x', data.offset_x);
+    setFieldLimits('offset_y', data.offset_y);
+    setFieldLimits('fps', data.fps);
+    setFieldLimits('exposure_time', data.exposure_time);
+
+    // Select options
+    fillSelectOptions('exposure_auto', data.exposure_auto);
+
+    // Тексты min/max
+    setText('WidthMin', data.width?.min);
+    setText('WidthMax', data.width?.max);
+
+    setText('HeightMin', data.height?.min);
+    setText('HeightMax', data.height?.max);
+
+    setText('FpsMin', data.fps?.min);
+    setText('FpsMax', data.fps?.max);
+
+    setText('ExposureMin', data.exposure_time?.min);
+    setText('ExposureMax', data.exposure_time?.max);
+  }
+
+  function removeActiveSlider() {
+    if (activeSliderWrap) {
+      activeSliderWrap.remove();
+      activeSliderWrap = null;
+    }
+  }
+
+  function createSliderForInput(input) {
+    if (!input) return;
+
+    const min = input.min;
+    const max = input.max;
+    const step = input.step && input.step !== 'any' ? input.step : '1';
+
+    if (min === '' || max === '') return;
+
+    removeActiveSlider();
+
+    const wrap = document.createElement('div');
+    wrap.className = 'input-slider-wrap';
+
+    const slider = document.createElement('input');
+    slider.type = 'range';
+    slider.min = min;
+    slider.max = max;
+    slider.step = step;
+    slider.value = input.value || min;
+    slider.className = 'input-slider';
+
+    const valueLabel = document.createElement('div');
+    valueLabel.className = 'input-slider-value';
+    valueLabel.textContent = slider.value;
+
+    slider.addEventListener('input', () => {
+      input.value = slider.value;
+      valueLabel.textContent = slider.value;
+      markDirty();
+    });
+
+    input.addEventListener('input', () => {
+      slider.value = input.value;
+      valueLabel.textContent = input.value;
+    });
+
+    wrap.appendChild(slider);
+    wrap.appendChild(valueLabel);
+
+    input.insertAdjacentElement('afterend', wrap);
+    activeSliderWrap = wrap;
+  }
+
+  function initFieldSliders() {
+    const sliderFields = [
+      form.querySelector('[name="width"]'),
+      form.querySelector('[name="height"]'),
+      form.querySelector('[name="fps"]'),
+      form.querySelector('[name="exposure_time"]'),
+    ].filter(Boolean);
+
+    sliderFields.forEach((field) => {
+      field.addEventListener('focus', () => {
+        createSliderForInput(field);
+      });
+
+      field.addEventListener('click', () => {
+        createSliderForInput(field);
+      });
+    });
   }
 
   async function applySettings() {
@@ -375,6 +543,15 @@ function initCameraPage() {
   }
 
   document.addEventListener('click', (event) => {
+    const clickedInput = event.target.closest('#settingsForm input');
+    const clickedSlider = event.target.closest('.input-slider-wrap');
+
+    if (!clickedInput && !clickedSlider) {
+      removeActiveSlider();
+    }
+  });
+
+  document.addEventListener('click', (event) => {
     const clickInsidePhoto = photoCard && photoCard.contains(event.target);
     const clickOnPhotoBtn = buttons.photo && buttons.photo.contains(event.target);
 
@@ -424,6 +601,10 @@ function initCameraPage() {
   cameraFrame.addEventListener('error', () => {
     stopStatusPolling();
     resetCameraUI();
+  });
+
+  loadDataLimitToForm().then(() => {
+    initFieldSliders();
   });
 
   showNoVideo();

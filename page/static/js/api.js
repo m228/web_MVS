@@ -29,6 +29,10 @@ const CameraApi = {
     );
   },
 
+  getDataLimit() {
+  return apiGet('/api/camera/data_limit', 'Ошибка получения data_limit:');
+  },
+
   closeStream() {
     return apiGet('/api/camera/close_stream', 'Ошибка остановки потока:');
   },

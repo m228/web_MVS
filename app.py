@@ -75,6 +75,10 @@ def camera_stream(
 def close_stream():
     return core.close_stream()
 
+@app.get("/api/camera/data_limit")
+def data_limit():
+    return core.get_data_limit()
+
 @app.get("/api/camera/on_save_photo")
 def on_save_photo(interval: int):
     return core.on_save(interval)

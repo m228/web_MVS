@@ -25,6 +25,7 @@ Driver = False
 current_ia = None
 
 stream_running = False
+stream_closed = False
 # сохранение фото и видео
 photo_enabled = False
 photo_interval = None
@@ -139,7 +140,6 @@ def get_camera_settings(node_map):
                 "value": node_map.ExposureTime.value,
                 "min": node_map.ExposureTime.min,
                 "max": node_map.ExposureTime.max,
-                "step": node_map.ExposureTime.inc,
             },
             "exposure_auto": {
                 "value": node_map.ExposureAuto.value,
@@ -151,6 +151,13 @@ def get_camera_settings(node_map):
 def get_data_limit(serial_number):
     global data_limit
     return data_limit.get(serial_number)
+
+def get_stream_state():
+    global stream_running, stream_closed
+    return {
+        "running": stream_running,
+        "closed": stream_closed,
+    }
 
 # нужна для проверки в submit_settings_camera
 def check_value(value,min,max) -> bool:
@@ -166,8 +173,8 @@ def apply_settings_camera(node_map, data_limit, width=None, height=None, offset_
         if check_value(height, data_limit["height"]["min"], data_limit["height"]["max"]):
             node_map.Height.value = int(height)
 
-        if check_value(fps, 1, 30):
-           node_map.FPS.value = int(fps)
+        if check_value(fps, 0.1, 30):
+           node_map.AcquisitionFrameRateEnable.value = int(fps)
 
         if check_value(exposure_time, data_limit["exposure_time"]["min"], data_limit["exposure_time"]["max"]):
             node_map.ExposureTime.value = int(exposure_time)
@@ -195,7 +202,7 @@ def get_frame(ia,node_map):
         return img, buffer.tobytes()
 
 def generate_stream(serial_number, width=None, height=None, offset_x=None, offset_y=None, fps=None, exposure_auto=None, exposure_time=None):
-    global stream_running, current_ia, photo_enabled, photo_interval, last_save, video_writer, video_enabled, video_duration, video_start, data_limit
+    global stream_running, stream_closed, current_ia, photo_enabled, photo_interval, last_save, video_writer, video_enabled, video_duration, video_start, data_limit
     ia = None
 
     if not check():
@@ -204,6 +211,8 @@ def generate_stream(serial_number, width=None, height=None, offset_x=None, offse
     try:
         node_map, ia = get_node_map_cam(serial_number)
         data_limit[serial_number] = get_camera_settings(node_map)
+
+
 
         ok = apply_settings_camera(
             node_map,
@@ -222,6 +231,7 @@ def generate_stream(serial_number, width=None, height=None, offset_x=None, offse
 
         current_ia = ia
         stream_running = True
+        stream_closed = False
 
         ia.start()
 
@@ -269,6 +279,7 @@ def generate_stream(serial_number, width=None, height=None, offset_x=None, offse
 
     finally:
         stream_running = False
+        stream_closed = True
         if ia is not None:
 
             try:
@@ -296,24 +307,31 @@ def generate_stream(serial_number, width=None, height=None, offset_x=None, offse
                 video_start = None
 
 
-
-
 def close_stream():
-    global stream_running, current_ia
+    global stream_running
+    stream_running = False
+    return {"status": "stopping"}
+
+def close_stream_force():
+    global stream_running, current_ia, stream_closed
+
     stream_running = False
 
     if current_ia is not None:
         try:
             current_ia.stop()
-        except:
-            pass
+        except Exception as e:
+            print("Ошибка force stop():", repr(e))
+
         try:
             current_ia.destroy()
-        except:
-            pass
+        except Exception as e:
+            print("Ошибка force destroy():", repr(e))
+
         current_ia = None
 
-    return {"status": "stopped"}
+    stream_closed = True
+    return {"status": "force_stopped"}
 
 # Для фото
 def on_save(interval):

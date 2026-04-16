@@ -13,6 +13,7 @@ function initCameraPage() {
     start: document.getElementById('startBtn'),
     apply: document.getElementById('applyBtn'),
     stop: document.getElementById('stopBtn'),
+    force_stop: document.getElementById('forceStopBtn'),
     photo: document.getElementById('photoBtn'),
     video: document.getElementById('videoBtn'),
     network_settings: document.getElementById('networkSettingsBtn'),
@@ -48,6 +49,8 @@ function initCameraPage() {
   let statusTimer = null;
   let activeSliderWrap = null;
   let isLeavingPage = false;
+  let forceStopTimer = null;
+  let waitingSoftStop = false;
 
   const photoPopup = UIHelpers.createPopupController(photoCard, buttons.photo);
   const videoPopup = UIHelpers.createPopupController(videoCard, buttons.video);
@@ -408,6 +411,56 @@ function initCameraPage() {
     return await CameraApi.closeStream();
   }
 
+  async function stopStreamForce() {
+    return await CameraApi.closeStreamForce();
+  }
+
+
+
+  function showForceStopButton() {
+    if (buttons.force_stop) {
+      buttons.force_stop.classList.remove('hidden');
+      buttons.force_stop.disabled = false;
+    }
+  }
+
+  function hideForceStopButton() {
+    if (buttons.force_stop) {
+      buttons.force_stop.classList.add('hidden');
+      buttons.force_stop.disabled = true;
+    }
+  }
+
+  function clearForceStopTimer() {
+    if (forceStopTimer) {
+      clearTimeout(forceStopTimer);
+      forceStopTimer = null;
+    }
+  }
+
+  async function waitSoftStopResult() {
+    const timeoutMs = 3000;
+    const intervalMs = 200;
+    const startedAt = Date.now();
+
+    while (Date.now() - startedAt < timeoutMs) {
+      const state = await CameraApi.getStreamState();
+
+      if (state?.closed === true) {
+        waitingSoftStop = false;
+        hideForceStopButton();
+        clearForceStopTimer();
+        resetCameraUI();
+        return true;
+      }
+
+      await new Promise((resolve) => setTimeout(resolve, intervalMs));
+    }
+
+    showForceStopButton();
+    return false;
+}
+
   async function connectCamera() {
     if (!serialNumber) {
       alert('Камера не выбрана');
@@ -435,16 +488,39 @@ function initCameraPage() {
   }
 
   async function stopCamera() {
-    stopStatusPolling();
+  stopStatusPolling();
+  hideForceStopButton();
+  clearForceStopTimer();
 
-    const result = await stopStreamOnly();
+  waitingSoftStop = true;
 
-    resetCameraUI();
+  const result = await stopStreamOnly();
+  if (!result) {
+    waitingSoftStop = false;
+    return;
+  }
 
-    if (result?.status === 'stopped') {
-      await new Promise((resolve) => setTimeout(resolve, 300));
-      updateToolbarState();
+  forceStopTimer = setTimeout(() => {
+    if (waitingSoftStop) {
+      showForceStopButton();
     }
+  }, 3000);
+
+  const closed = await waitSoftStopResult();
+
+  if (closed) {
+    updateToolbarState();
+  }
+}
+  async function forceStopCamera() {
+    clearForceStopTimer();
+    waitingSoftStop = false;
+
+    await stopStreamForce();
+
+    hideForceStopButton();
+    resetCameraUI();
+    updateToolbarState();
   }
 
   // =========================
@@ -553,6 +629,7 @@ function initCameraPage() {
     start: connectCamera,
     apply: applySettings,
     stop: stopCamera,
+    force_stop: forceStopCamera,
     photo: openPhotoPopup,
     video: openVideoPopup,
     network_settings: openNetworkSettings,
@@ -633,6 +710,9 @@ function initCameraPage() {
     isLoading = false;
     isConnected = true;
     isChange = false;
+    waitingSoftStop = false;
+    hideForceStopButton();
+    clearForceStopTimer();
 
     showVideo();
     updateToolbarState();

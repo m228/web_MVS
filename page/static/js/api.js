@@ -40,6 +40,14 @@ const CameraApi = {
     return apiGet('/api/camera/close_stream', 'Ошибка остановки потока:');
   },
 
+  closeStreamForce() {
+    return apiGet('/api/camera/close_stream_force', 'Ошибка принудительной остановки потока:');
+  },
+
+  getStreamState() {
+    return apiGet('/api/camera/stream_state', 'Ошибка получения состояния потока:');
+  },
+
   startPhotoSaving(interval) {
     return apiGet(
       `/api/camera/on_save_photo?interval=${encodeURIComponent(interval)}`,

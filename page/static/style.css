@@ -305,6 +305,10 @@ input[type="number"] {
   box-sizing: border-box;
 }
 
+input[type="range"] {
+  padding: 0;
+}
+
 .table-actions {
   display: flex;
   flex-direction: row;
@@ -400,8 +404,8 @@ input[type="number"] {
 }
 
 .input-slider-wrap {
-  margin-top: 4px;
-  margin-bottom: 2px;
+  margin-top: 0px;
+  margin-bottom: 0px;
   padding: 0;
 }
 
@@ -409,4 +413,6 @@ input[type="number"] {
   width: 100%;
   margin: 0;
   display: block;
+  padding: 0;
+  box-sizing: border-box;
 }

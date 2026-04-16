@@ -117,11 +117,13 @@ def get_camera_settings(node_map):
                 "value": node_map.Width.value,
                 "min": node_map.Width.min,
                 "max": node_map.Width.max,
+                "step": node_map.Width.inc,
             },
             "height": {
                 "value": node_map.Height.value,
                 "min": node_map.Height.min,
                 "max": node_map.Height.max,
+                "step": node_map.Height.inc,
             },
             "offset_x": {
                 "value": node_map.OffsetX.value,
@@ -137,6 +139,7 @@ def get_camera_settings(node_map):
                 "value": node_map.ExposureTime.value,
                 "min": node_map.ExposureTime.min,
                 "max": node_map.ExposureTime.max,
+                "step": node_map.ExposureTime.inc,
             },
             "exposure_auto": {
                 "value": node_map.ExposureAuto.value,

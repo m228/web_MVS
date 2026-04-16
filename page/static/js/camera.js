@@ -194,19 +194,23 @@ function initCameraPage() {
   }
 
   function setFieldLimits(name, config) {
-    if (!config) return;
+  if (!config) return;
 
-    const field = form.querySelector(`[name="${name}"]`);
-    if (!field) return;
+  const field = form.querySelector(`[name="${name}"]`);
+  if (!field) return;
 
-    if (config.min !== undefined && config.min !== null) {
-      field.min = config.min;
-    }
-
-    if (config.max !== undefined && config.max !== null) {
-      field.max = config.max;
-    }
+  if (config.min !== undefined && config.min !== null) {
+    field.min = config.min;
   }
+
+  if (config.max !== undefined && config.max !== null) {
+    field.max = config.max;
+  }
+
+  if (config.step !== undefined && config.step !== null) {
+    field.step = config.step;
+  }
+}
 
   function setText(id, value) {
     if (value === undefined || value === null) return;

@@ -47,8 +47,16 @@ function initCameraPage() {
   let isSaveVideo = false;
   let statusTimer = null;
   let activeSliderWrap = null;
+  let isLeavingPage = false;
+
+  const photoPopup = UIHelpers.createPopupController(photoCard, buttons.photo);
+  const videoPopup = UIHelpers.createPopupController(videoCard, buttons.video);
 
   serialElement.textContent = serialNumber ? serialNumber : 'не выбран';
+
+  // =========================
+  // UI STATE
+  // =========================
 
   function refreshModeUI() {
     updateModeIndicators();
@@ -122,31 +130,6 @@ function initCameraPage() {
     applyState(state);
   }
 
-  function buildQueryFromForm() {
-    const formData = new FormData(form);
-    const query = new URLSearchParams();
-
-    query.set('serial_number', serialNumber);
-
-    const fields = [
-      ['width', 'width'],
-      ['height', 'height'],
-      ['offset_x', 'offset_x'],
-      ['offset_y', 'offset_y'],
-      ['exposure_auto', 'exposure_auto'],
-      ['exposure_time', 'exposure_time'],
-    ];
-
-    for (const [formName, queryName] of fields) {
-      const value = formData.get(formName);
-      if (value !== '') {
-        query.set(queryName, value);
-      }
-    }
-
-    return query;
-  }
-
   function showNoVideo() {
     cameraFrame.classList.remove('visible');
     cameraPlaceholder.classList.remove('hidden');
@@ -157,43 +140,28 @@ function initCameraPage() {
     cameraPlaceholder.classList.add('hidden');
   }
 
-  function startStatusPolling() {
-    stopStatusPolling();
-    statusTimer = setInterval(syncVideoPhotoStatus, 1000);
-  }
+  function updateModeIndicators() {
+    if (photoIndicator) {
+      photoIndicator.classList.toggle('hidden', !isSavePhoto);
+    }
 
-  function stopStatusPolling() {
-    if (statusTimer) {
-      clearInterval(statusTimer);
-      statusTimer = null;
+    if (videoIndicator) {
+      videoIndicator.classList.toggle('hidden', !isSaveVideo);
     }
   }
 
-  async function syncVideoPhotoStatus() {
+  function updateSaveButtonsState() {
+    if (photoOnBtn) photoOnBtn.disabled = isSavePhoto;
+    if (photoOffBtn) photoOffBtn.disabled = !isSavePhoto;
+    if (videoOnBtn) videoOnBtn.disabled = isSaveVideo;
+    if (videoOffBtn) videoOffBtn.disabled = !isSaveVideo;
+  }
+
+  function markDirty() {
     if (!isConnected) return;
-
-    const data = await CameraApi.getVideoPhotoStatus();
-    if (!data) return;
-
-    setSaveState({
-      video: Number(data.video) === 1,
-      photo: !!data.photo,
-    });
-  }
-
-  function startStream() {
-    const query = buildQueryFromForm();
-    isLoading = true;
+    isChange = true;
     updateToolbarState();
-    cameraFrame.src = '/api/camera/stream?' + query.toString();
   }
-
-  async function stopStreamOnly() {
-    return await CameraApi.closeStream();
-  }
-
-  const photoPopup = UIHelpers.createPopupController(photoCard, buttons.photo);
-  const videoPopup = UIHelpers.createPopupController(videoCard, buttons.video);
 
   function resetCameraUI() {
     isConnected = false;
@@ -212,16 +180,9 @@ function initCameraPage() {
     updateToolbarState();
   }
 
-  async function connectCamera() {
-    if (!serialNumber) {
-      alert('Камера не выбрана');
-      return;
-    }
-
-    isConnected = false;
-    isChange = false;
-    startStream();
-  }
+  // =========================
+  // FORM / SETTINGS
+  // =========================
 
   function setFieldValue(name, value) {
     if (value === undefined || value === null) return;
@@ -286,7 +247,9 @@ function initCameraPage() {
   }
 
   async function loadDataLimitToForm() {
-    const data = await CameraApi.getDataLimit();
+    if (!serialNumber) return;
+
+    const data = await CameraApi.getDataLimit(serialNumber);
     if (!data) return;
 
     // Подставляем только часть значений
@@ -294,17 +257,17 @@ function initCameraPage() {
     setFieldValue('height', data.height?.value);
     setFieldValue('exposure_time', data.exposure_time?.value);
 
-    // Лимиты в поля
+    // Лимиты в input
     setFieldLimits('width', data.width);
     setFieldLimits('height', data.height);
     setFieldLimits('offset_x', data.offset_x);
     setFieldLimits('offset_y', data.offset_y);
     setFieldLimits('exposure_time', data.exposure_time);
 
-    // Select options
+    // Select
     fillSelectOptions('exposure_auto', data.exposure_auto);
 
-    // Тексты min/max
+    // min/max текст
     setText('WidthMin', data.width?.min);
     setText('WidthMax', data.width?.max);
 
@@ -314,6 +277,36 @@ function initCameraPage() {
     setText('ExposureMin', data.exposure_time?.min);
     setText('ExposureMax', data.exposure_time?.max);
   }
+
+  function buildQueryFromForm() {
+    const formData = new FormData(form);
+    const query = new URLSearchParams();
+
+    query.set('serial_number', serialNumber);
+
+    const fields = [
+      ['width', 'width'],
+      ['height', 'height'],
+      ['offset_x', 'offset_x'],
+      ['offset_y', 'offset_y'],
+      ['fps', 'fps'],
+      ['exposure_auto', 'exposure_auto'],
+      ['exposure_time', 'exposure_time'],
+    ];
+
+    for (const [formName, queryName] of fields) {
+      const value = formData.get(formName);
+      if (value !== '') {
+        query.set(queryName, value);
+      }
+    }
+
+    return query;
+  }
+
+  // =========================
+  // SLIDERS
+  // =========================
 
   function removeActiveSlider() {
     if (activeSliderWrap) {
@@ -354,7 +347,6 @@ function initCameraPage() {
     });
 
     wrap.appendChild(slider);
-
     input.insertAdjacentElement('afterend', wrap);
     activeSliderWrap = wrap;
   }
@@ -370,11 +362,57 @@ function initCameraPage() {
       field.addEventListener('focus', () => {
         createSliderForInput(field);
       });
-
-      field.addEventListener('click', () => {
-        createSliderForInput(field);
-      });
     });
+  }
+
+  // =========================
+  // STREAM
+  // =========================
+
+  function startStatusPolling() {
+    stopStatusPolling();
+    statusTimer = setInterval(syncVideoPhotoStatus, 1000);
+  }
+
+  function stopStatusPolling() {
+    if (statusTimer) {
+      clearInterval(statusTimer);
+      statusTimer = null;
+    }
+  }
+
+  async function syncVideoPhotoStatus() {
+    if (!isConnected) return;
+
+    const data = await CameraApi.getVideoPhotoStatus();
+    if (!data) return;
+
+    setSaveState({
+      video: Number(data.video) === 1,
+      photo: !!data.photo,
+    });
+  }
+
+  function startStream() {
+    const query = buildQueryFromForm();
+    isLoading = true;
+    updateToolbarState();
+    cameraFrame.src = '/api/camera/stream?' + query.toString();
+  }
+
+  async function stopStreamOnly() {
+    return await CameraApi.closeStream();
+  }
+
+  async function connectCamera() {
+    if (!serialNumber) {
+      alert('Камера не выбрана');
+      return;
+    }
+
+    isConnected = false;
+    isChange = false;
+    startStream();
   }
 
   async function applySettings() {
@@ -404,6 +442,10 @@ function initCameraPage() {
       updateToolbarState();
     }
   }
+
+  // =========================
+  // PHOTO / VIDEO POPUPS
+  // =========================
 
   function openPhotoPopup() {
     photoPopup.toggle();
@@ -467,31 +509,40 @@ function initCameraPage() {
     await syncVideoPhotoStatus();
   }
 
-  function updateModeIndicators() {
-    if (photoIndicator) {
-      photoIndicator.classList.toggle('hidden', !isSavePhoto);
-    }
+  // =========================
+  // PAGE LEAVE CLEANUP
+  // =========================
 
-    if (videoIndicator) {
-      videoIndicator.classList.toggle('hidden', !isSaveVideo);
+  function cleanupCameraPage() {
+    stopStatusPolling();
+    resetCameraUI();
+  }
+
+  function notifyBackendBeforeUnload() {
+    try {
+      navigator.sendBeacon('/api/camera/close_stream');
+    } catch (error) {
+      fetch('/api/camera/close_stream', {
+        method: 'GET',
+        keepalive: true,
+      }).catch(() => {});
     }
   }
 
-  function updateSaveButtonsState() {
-    if (photoOnBtn) photoOnBtn.disabled = isSavePhoto;
-    if (photoOffBtn) photoOffBtn.disabled = !isSavePhoto;
-    if (videoOnBtn) videoOnBtn.disabled = isSaveVideo;
-    if (videoOffBtn) videoOffBtn.disabled = !isSaveVideo;
+  function handlePageLeave() {
+    if (isLeavingPage) return;
+    isLeavingPage = true;
+
+    cleanupCameraPage();
+    notifyBackendBeforeUnload();
   }
+
+  // =========================
+  // EVENTS
+  // =========================
 
   function openNetworkSettings() {
     console.log('Открыть сетевые настройки');
-  }
-
-  function markDirty() {
-    if (!isConnected) return;
-    isChange = true;
-    updateToolbarState();
   }
 
   const actions = {
@@ -530,10 +581,10 @@ function initCameraPage() {
   }
 
   document.addEventListener('click', (event) => {
-    const clickedInput = event.target.closest('#settingsForm input');
+    const clickedInsideForm = event.target.closest('#settingsForm');
     const clickedSlider = event.target.closest('.input-slider-wrap');
 
-    if (!clickedInput && !clickedSlider) {
+    if (!clickedInsideForm && !clickedSlider) {
       removeActiveSlider();
     }
   });
@@ -589,6 +640,13 @@ function initCameraPage() {
     stopStatusPolling();
     resetCameraUI();
   });
+
+  window.addEventListener('beforeunload', handlePageLeave);
+  window.addEventListener('pagehide', handlePageLeave);
+
+  // =========================
+  // INIT
+  // =========================
 
   loadDataLimitToForm().then(() => {
     initFieldSliders();

@@ -16,11 +16,14 @@ H = Harvester()
 
 # статус всех камер
 cam_online = {}
+# data limit камер
+data_limit = {}
+
 # состояние загрузки драйвера
 Driver = False
 # глобальные переменные потоки стрима
 current_ia = None
-current_data_limit = None
+
 stream_running = False
 # сохранение фото и видео
 photo_enabled = False
@@ -69,15 +72,17 @@ def scan_cams():
     if check():
         for device in H.device_info_list:
             cam_online [device.serial_number] = device.access_status
+            if device.serial_number not in data_limit:
+                data_limit[device.serial_number] = None
     return cam_online
 
 # подключение к камере и получение nodemap
 def get_node_map_cam(serial_number):
-    global H, current_data_limit
+    global H, data_limit
     ia = H.create({'serial_number': f'{serial_number}'})
     node_map = ia.remote_device.node_map
     # получение лимитов
-    current_data_limit = get_camera_settings(node_map)
+    data_limit[serial_number] = get_camera_settings(node_map)
     return node_map, ia
 
 
@@ -140,10 +145,9 @@ def get_camera_settings(node_map):
         }
         return data
 
-def get_data_limit():
-    global current_data_limit
-    return current_data_limit
-
+def get_data_limit(serial_number):
+    global data_limit
+    return data_limit.get(serial_number)
 
 # нужна для проверки в submit_settings_camera
 def check_value(value,min,max) -> bool:
@@ -159,7 +163,7 @@ def apply_settings_camera(node_map, data_limit, width=None, height=None, offset_
         if check_value(height, data_limit["height"]["min"], data_limit["height"]["max"]):
             node_map.Height.value = int(height)
 
-        if check_value(fps, data_limit["fps"]["min"], 30):
+        if check_value(fps, 1, 30):
            node_map.FPS.value = int(fps)
 
         if check_value(exposure_time, data_limit["exposure_time"]["min"], data_limit["exposure_time"]["max"]):
@@ -188,7 +192,7 @@ def get_frame(ia,node_map):
         return img, buffer.tobytes()
 
 def generate_stream(serial_number, width=None, height=None, offset_x=None, offset_y=None, fps=None, exposure_auto=None, exposure_time=None):
-    global stream_running, current_ia, photo_enabled, photo_interval, last_save, video_writer, video_enabled, video_duration, video_start, current_data_limit
+    global stream_running, current_ia, photo_enabled, photo_interval, last_save, video_writer, video_enabled, video_duration, video_start, data_limit
     ia = None
 
     if not check():
@@ -196,12 +200,11 @@ def generate_stream(serial_number, width=None, height=None, offset_x=None, offse
 
     try:
         node_map, ia = get_node_map_cam(serial_number)
-        data_limit = get_camera_settings(node_map)
-        current_data_limit = data_limit
+        data_limit[serial_number] = get_camera_settings(node_map)
 
         ok = apply_settings_camera(
             node_map,
-            data_limit,
+            data_limit[serial_number],
             width=width,
             height=height,
             offset_x=offset_x,

@@ -29,9 +29,12 @@ const CameraApi = {
     );
   },
 
-  getDataLimit() {
-  return apiGet('/api/camera/data_limit', 'Ошибка получения data_limit:');
-  },
+  getDataLimit(serial) {
+  return apiGet(
+    `/api/camera/data_limit?serial_number=${encodeURIComponent(serial)}`,
+    'Ошибка получения data_limit:'
+  );
+},
 
   closeStream() {
     return apiGet('/api/camera/close_stream', 'Ошибка остановки потока:');

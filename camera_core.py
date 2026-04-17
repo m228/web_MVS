@@ -18,6 +18,16 @@ H = Harvester()
 cam_online = {}
 # data limit камер
 data_limit = {}
+# метрики стрима
+stream_metrics = {
+    "fps": 0.0,
+    "image_number": 0,
+    "bandwidth_mbps": 0.0,
+    "width": 0,
+    "height": 0,
+    "errors": 0,
+    "packets_lost": 0,
+}
 
 # состояние загрузки драйвера
 Driver = False
@@ -152,6 +162,10 @@ def get_data_limit(serial_number):
     global data_limit
     return data_limit.get(serial_number)
 
+def get_metrics():
+    global stream_metrics
+    return stream_metrics
+
 def get_stream_state():
     global stream_running, stream_closed
     return {
@@ -185,9 +199,6 @@ def apply_settings_camera(node_map, data_limit, width=None, height=None, offset_
         print("Ошибка применение настроек камеры:", e)
         return False
 
-    # разобрать с fps exposure_auto exposure_time чуть позже
-
-
 def get_frame(ia,node_map):
     with ia.fetch() as buffer:
         data = buffer.payload.components[0].data
@@ -204,6 +215,7 @@ def get_frame(ia,node_map):
 def generate_stream(serial_number, width=None, height=None, offset_x=None, offset_y=None, fps=None, exposure_auto=None, exposure_time=None):
     global stream_running, stream_closed, current_ia, photo_enabled, photo_interval, last_save, video_writer, video_enabled, video_duration, video_start, data_limit
     ia = None
+    last_frame_time = None
 
     if not check():
         return
@@ -216,8 +228,6 @@ def generate_stream(serial_number, width=None, height=None, offset_x=None, offse
     try:
         node_map, ia = get_node_map_cam(serial_number)
         data_limit[serial_number] = get_camera_settings(node_map)
-
-
 
         ok = apply_settings_camera(
             node_map,
@@ -244,6 +254,24 @@ def generate_stream(serial_number, width=None, height=None, offset_x=None, offse
 
             try:
                 img, frame = get_frame(ia, node_map)
+
+                now = time.time()
+
+                stream_metrics["image_number"] += 1
+                stream_metrics["width"] = img.shape[1]
+                stream_metrics["height"] = img.shape[0]
+
+                if last_frame_time is not None:
+                    dt = now - last_frame_time
+                    if dt > 0:
+                        stream_metrics["fps"] = 1.0 / dt
+
+                if stream_metrics["fps"] > 0:
+                    stream_metrics["bandwidth_mbps"] = (len(frame) * 8 * stream_metrics["fps"]) / 1_000_000
+
+                last_frame_time = now
+
+
             except Exception as e:
                 if not stream_running:
                     break
@@ -281,6 +309,7 @@ def generate_stream(serial_number, width=None, height=None, offset_x=None, offse
             print("Поток остановлен")
         else:
             print("Ошибка потока:", repr(e))
+            stream_metrics["errors"] += 1
 
     finally:
         stream_running = False

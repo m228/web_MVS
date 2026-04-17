@@ -416,3 +416,21 @@ input[type="range"] {
   padding: 0;
   box-sizing: border-box;
 }
+
+.camera-status-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px 20px;
+  align-items: center;
+  font-size: 14px;
+  line-height: 1.4;
+}
+
+.camera-status-bar span {
+  white-space: nowrap;
+}
+
+.camera-status-bar strong {
+  font-weight: 700;
+  color: #111;
+}

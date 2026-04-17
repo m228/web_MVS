@@ -48,6 +48,10 @@ const CameraApi = {
     return apiGet('/api/camera/stream_state', 'Ошибка получения состояния потока:');
   },
 
+  getMetrics() {
+    return apiGet('/api/camera/metrics', 'Ошибка получения метрик камеры:');
+  },
+
   startPhotoSaving(interval) {
     return apiGet(
       `/api/camera/on_save_photo?interval=${encodeURIComponent(interval)}`,

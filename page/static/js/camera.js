@@ -6,6 +6,13 @@ function initCameraPage() {
   const cameraPlaceholder = document.getElementById('cameraPlaceholder');
   const applyIcon = document.getElementById('applyicon');
 
+  const metricFps = document.getElementById('metricFps');
+  const metricImageNumber = document.getElementById('metricImageNumber');
+  const metricBandwidth = document.getElementById('metricBandwidth');
+  const metricResolution = document.getElementById('metricResolution');
+  const metricErrors = document.getElementById('metricErrors');
+  const metricPacketsLost = document.getElementById('metricPacketsLost');
+
   const params = new URLSearchParams(window.location.search);
   const serialNumber = params.get('serial_number');
 
@@ -181,6 +188,52 @@ function initCameraPage() {
     removeActiveSlider();
 
     updateToolbarState();
+    stopMetricsPolling();
+    resetMetricsUI();
+  }
+
+  let metricsTimer = null;
+
+  function updateMetricsUI(data) {
+    if (metricFps) metricFps.textContent = `${Number(data.fps ?? 0).toFixed(2)}fps`;
+    if (metricImageNumber) metricImageNumber.textContent = data.image_number ?? 0;
+    if (metricBandwidth) metricBandwidth.textContent = `${Number(data.bandwidth_mbps ?? 0).toFixed(1)}Mbps`;
+    if (metricResolution) metricResolution.textContent = `${data.width ?? 0} x ${data.height ?? 0}`;
+    if (metricErrors) metricErrors.textContent = data.errors ?? 0;
+    if (metricPacketsLost) metricPacketsLost.textContent = data.packets_lost ?? 0;
+  }
+
+  function resetMetricsUI() {
+    updateMetricsUI({
+      fps: 0,
+      image_number: 0,
+      bandwidth_mbps: 0,
+      width: 0,
+      height: 0,
+      errors: 0,
+      packets_lost: 0,
+    });
+  }
+
+  async function syncMetrics() {
+    if (!isConnected) return;
+
+    const data = await CameraApi.getMetrics();
+    if (!data) return;
+
+    updateMetricsUI(data);
+  }
+
+  function startMetricsPolling() {
+    stopMetricsPolling();
+    metricsTimer = setInterval(syncMetrics, 1000);
+  }
+
+  function stopMetricsPolling() {
+    if (metricsTimer) {
+      clearInterval(metricsTimer);
+      metricsTimer = null;
+    }
   }
 
   // =========================
@@ -726,6 +779,8 @@ function initCameraPage() {
     updateToolbarState();
     syncVideoPhotoStatus();
     startStatusPolling();
+    syncMetrics();
+    startMetricsPolling();
   });
 
   cameraFrame.addEventListener('error', () => {

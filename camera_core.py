@@ -26,7 +26,6 @@ stream_metrics = {
     "width": 0,
     "height": 0,
     "errors": 0,
-    "packets_lost": 0,
 }
 
 # состояние загрузки драйвера
@@ -213,7 +212,7 @@ def get_frame(ia,node_map):
         return img, buffer.tobytes()
 
 def generate_stream(serial_number, width=None, height=None, offset_x=None, offset_y=None, fps=None, exposure_auto=None, exposure_time=None):
-    global stream_running, stream_closed, current_ia, photo_enabled, photo_interval, last_save, video_writer, video_enabled, video_duration, video_start, data_limit
+    global stream_running, stream_closed, stream_metrics, current_ia, photo_enabled, photo_interval, last_save, video_writer, video_enabled, video_duration, video_start, data_limit
     ia = None
     last_frame_time = None
 
@@ -314,6 +313,17 @@ def generate_stream(serial_number, width=None, height=None, offset_x=None, offse
     finally:
         stream_running = False
         stream_closed = True
+
+        stream_metrics = {
+            "fps": 0.0,
+            "image_number": 0,
+            "bandwidth_mbps": 0.0,
+            "width": 0,
+            "height": 0,
+            "errors": 0,
+        }
+
+
         if ia is not None:
 
             try:
@@ -339,6 +349,7 @@ def generate_stream(serial_number, width=None, height=None, offset_x=None, offse
                 video_enabled = 0
                 video_duration = None
                 video_start = None
+
 
 
 def close_stream():

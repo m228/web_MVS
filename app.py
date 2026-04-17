@@ -83,6 +83,10 @@ def close_stream_force():
 def stream_state():
     return core.get_stream_state()
 
+@app.get("/api/camera/metrics")
+def metrics():
+    return core.get_metrics()
+
 @app.get("/api/camera/data_limit")
 def data_limit(serial_number: str):
     return core.get_data_limit(serial_number)

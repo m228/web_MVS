@@ -11,7 +11,6 @@ function initCameraPage() {
   const metricBandwidth = document.getElementById('metricBandwidth');
   const metricResolution = document.getElementById('metricResolution');
   const metricErrors = document.getElementById('metricErrors');
-  const metricPacketsLost = document.getElementById('metricPacketsLost');
 
   const params = new URLSearchParams(window.location.search);
   const serialNumber = params.get('serial_number');
@@ -200,7 +199,6 @@ function initCameraPage() {
     if (metricBandwidth) metricBandwidth.textContent = `${Number(data.bandwidth_mbps ?? 0).toFixed(1)}Mbps`;
     if (metricResolution) metricResolution.textContent = `${data.width ?? 0} x ${data.height ?? 0}`;
     if (metricErrors) metricErrors.textContent = data.errors ?? 0;
-    if (metricPacketsLost) metricPacketsLost.textContent = data.packets_lost ?? 0;
   }
 
   function resetMetricsUI() {
@@ -211,7 +209,6 @@ function initCameraPage() {
       width: 0,
       height: 0,
       errors: 0,
-      packets_lost: 0,
     });
   }
 

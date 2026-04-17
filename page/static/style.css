@@ -434,3 +434,8 @@ input[type="range"] {
   font-weight: 700;
   color: #111;
 }
+
+.force-stop-btn img,
+.force-stop-btn .toolbar-img {
+  filter: sepia(1) saturate(6) hue-rotate(-20deg) brightness(1.05);
+}

@@ -225,6 +225,15 @@ def generate_stream(serial_number, width=None, height=None, offset_x=None, offse
         time.sleep(0.3)
 
     try:
+        stream_metrics = {
+            "fps": 0.0,
+            "image_number": 0,
+            "bandwidth_mbps": 0.0,
+            "width": 0,
+            "height": 0,
+            "errors": 0,
+        }
+
         node_map, ia = get_node_map_cam(serial_number)
         data_limit[serial_number] = get_camera_settings(node_map)
 
@@ -313,16 +322,6 @@ def generate_stream(serial_number, width=None, height=None, offset_x=None, offse
     finally:
         stream_running = False
         stream_closed = True
-
-        stream_metrics = {
-            "fps": 0.0,
-            "image_number": 0,
-            "bandwidth_mbps": 0.0,
-            "width": 0,
-            "height": 0,
-            "errors": 0,
-        }
-
 
         if ia is not None:
 

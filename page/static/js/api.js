@@ -10,6 +10,27 @@ async function apiGet(url, errorText = 'Ошибка запроса') {
 }
 
 const CameraApi = {
+  getNetworkSettings(serial) {
+    return apiGet(
+      `/api/get_network_settings?serial_number=${encodeURIComponent(serial)}`,
+      'Ошибка получения сетевых настроек:'
+    );
+  },
+
+  changeNetworkSettings(serial, payload) {
+    const query = new URLSearchParams({
+      serial_number: serial,
+      ip: payload.ip ?? '',
+      mask: payload.mask ?? '',
+      gateway: payload.gateway ?? '',
+    });
+
+    return apiGet(
+      `/api/change_ip?${query.toString()}`,
+      'Ошибка изменения сетевых настроек:'
+    );
+  },
+
   getStatus() {
     return apiGet('/api/status', 'Ошибка получения статуса:');
   },

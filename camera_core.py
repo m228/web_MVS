@@ -1,7 +1,6 @@
 from datetime import datetime
 import os
 import time
-from os import mkdir
 from pathlib import Path
 
 from harvesters.core import Harvester
@@ -9,6 +8,8 @@ import numpy as np
 import socket
 import struct
 import cv2
+
+import subprocess
 
 
 cti_path = "Driver/MvProducerGEV.cti"
@@ -27,6 +28,17 @@ stream_metrics = {
     "height": 0,
     "errors": 0,
 }
+# статусы доступа к камерам
+access_status = {
+    0: "Неизвестно",
+    1: "Ok",
+    2: "Только чтение",
+    3: "Нет доступа",
+    4: "Занята",
+    5: "OpenReadWrite",
+    6: "OpenReadOnly",
+}
+
 
 # состояние загрузки драйвера
 Driver = False
@@ -45,7 +57,8 @@ video_duration = None
 video_start = None
 video_writer = None
 
-
+# расширенные настройки в смене айпи
+advanced_network_settings = False
 
 
 # из ip в int для записи в камеру
@@ -55,6 +68,7 @@ def ip_to_int(ip):
 # обратно для показа на списке
 def int_to_ip(n):
     return socket.inet_ntoa(struct.pack("!I", n))
+
 
 
 # загрузка драйвера для работы
@@ -77,18 +91,23 @@ def check():
 def scan_cams():
     global cam_online
     # пробные данные(потом убрать)
-    cam_online = {"DA123123":"1"}
+    cam_online = {"DA123123":1}
 
     if check():
         for device in H.device_info_list:
-            cam_online [device.serial_number] = device.access_status
+            cam_online [device.serial_number] = int(device.access_status)
             if device.serial_number not in data_limit:
                 data_limit[device.serial_number] = None
     return cam_online
 
 # подключение к камере и получение nodemap
 def get_node_map_cam(serial_number):
-    global H, data_limit
+    global H, data_limit, cam_online
+
+    status = cam_online.get(serial_number)
+    if status != 1:
+        return None, None
+
     ia = H.create({'serial_number': f'{serial_number}'})
     node_map = ia.remote_device.node_map
     # получение лимитов
@@ -98,7 +117,12 @@ def get_node_map_cam(serial_number):
 
 # получение айпи камеры по серийнику
 def get_ip(serial_number: str):
+    global cam_online
     ia = None
+    status = cam_online.get(serial_number)
+    if status != 1:
+        return None
+
     # пробные данные(потом убрать)
     if serial_number == "DA123123":
         return {"ip": "192.168.2.10"}
@@ -117,7 +141,6 @@ def get_ip(serial_number: str):
 def count_cams():
     global cam_online
     return {"count": len(cam_online)}
-
 
 # получение данных с камеры, текущие + лимиты
 def get_camera_settings(node_map):
@@ -215,6 +238,14 @@ def generate_stream(serial_number, width=None, height=None, offset_x=None, offse
     global stream_running, stream_closed, stream_metrics, current_ia, photo_enabled, photo_interval, last_save, video_writer, video_enabled, video_duration, video_start, data_limit
     ia = None
     last_frame_time = None
+    stream_metrics = {
+        "fps": 0.0,
+        "image_number": 0,
+        "bandwidth_mbps": 0.0,
+        "width": 0,
+        "height": 0,
+        "errors": 0,
+    }
 
     if not check():
         return
@@ -225,15 +256,6 @@ def generate_stream(serial_number, width=None, height=None, offset_x=None, offse
         time.sleep(0.3)
 
     try:
-        stream_metrics = {
-            "fps": 0.0,
-            "image_number": 0,
-            "bandwidth_mbps": 0.0,
-            "width": 0,
-            "height": 0,
-            "errors": 0,
-        }
-
         node_map, ia = get_node_map_cam(serial_number)
         data_limit[serial_number] = get_camera_settings(node_map)
 
@@ -304,13 +326,10 @@ def generate_stream(serial_number, width=None, height=None, offset_x=None, offse
                 video_duration = None
                 video_start = None
 
-
-
             yield (
                 b"--frame\r\n"
                 b"Content-Type: image/jpeg\r\n\r\n" + frame + b"\r\n"
             )
-
 
     except Exception as e:
         if not stream_running:
@@ -455,7 +474,6 @@ def check_video_enabled():
                 video_enabled = 2
 
 
-
 def writer_video(img,fps):
     global video_writer, video_fps
 
@@ -470,14 +488,124 @@ def writer_video(img,fps):
     else:
         video_writer.write(img)
 
+def get_network_settings(serial_number):
+    global cam_online
+    ia = None
+    status = cam_online.get(serial_number)
+    if status != 1:
+        return None, None, None, None
 
-def change_ip():
+    if check():
+        try:
+            node_map, ia = get_node_map_cam(serial_number)
 
-    return None
+            ip = int_to_ip(node_map.GevCurrentIPAddress.value)
+            mask = int_to_ip(node_map.GevCurrentSubnetMask.value)
+            gateway = int_to_ip(node_map.GevCurrentDefaultGateway.value)
+            dhcp_enabled = node_map.GevCurrentIPConfigurationDHCP.value
+
+            return ip, mask, gateway, dhcp_enabled
+        except Exception as e:
+            print(e)
+            return None, None, None, None
+
+        finally:
+            if ia is not None:
+                ia.destroy()
 
 
 
+def ping_device(ip: str) -> bool:
+    result = subprocess.run(
+        ["ping", "-n", "1", ip],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL
+    )
+    return result.returncode == 0
 
+def set_advanced_network_settings():
+    global advanced_network_settings
+    advanced_network_settings = True
+    return {"advanced_network_settings": advanced_network_settings}
 
+def change_ip(serial_number, ip, mask="", gateway=""):
+    global advanced_network_settings
+    ia = None
+    try:
+        if check():
+            if stream_closed:
+                old_ip, old_mask, old_gateway, dhcp_enabled = get_network_settings(serial_number)
 
+                if old_ip is not None and old_mask is not None and old_gateway is not None:
 
+                    if mask == "" and gateway == "":
+                        advanced_network_settings = False
+
+                    if not advanced_network_settings:
+                        if not mask:
+                            mask = old_mask
+                        if not gateway:
+                            gateway = old_gateway
+
+                    ip_changed = old_ip != ip
+                    mask_changed = old_mask != mask
+                    gateway_changed = old_gateway != gateway
+                    advanced_changed = mask_changed or gateway_changed
+
+                    if not ip_changed and not advanced_changed:
+                        return {"ip": "no_changes"}
+
+                    if ip == gateway:
+                        return {"ip": "gateway==ip"}
+
+                    if ip_changed:
+                        device_busy = ping_device(ip)
+                        if device_busy:
+                            return {"ip": "ip_busy"}
+
+                    try:
+                        node_map, ia = get_node_map_cam(serial_number)
+                        if node_map is None or ia is None:
+                            return {"ip": "node_map_not_available"}
+
+                        if dhcp_enabled:
+                            node_map.GevCurrentIPConfigurationPersistentIP.value = True
+                            node_map.GevCurrentIPConfigurationDHCP.value = False
+
+                        if ip_changed:
+                            node_map.GevPersistentIPAddress.value = ip_to_int(ip)
+
+                        if advanced_network_settings:
+                            if mask_changed:
+                                node_map.GevPersistentSubnetMask.value = ip_to_int(mask)
+                            if gateway_changed:
+                                node_map.GevPersistentDefaultGateway.value = ip_to_int(gateway)
+                        elif advanced_changed:
+                            return {"ip": "mask_gateway_not_changed_advanced_off"}
+
+                        time.sleep(1)
+                        node_map.DeviceReset.execute()
+
+                        if ip_changed and advanced_network_settings and advanced_changed:
+                            return {"ip": "ip_mask_gateway_changed"}
+                        elif ip_changed:
+                            return {"ip": "ip_changed"}
+                        elif advanced_network_settings and advanced_changed:
+                            return {"ip": "mask_gateway_changed"}
+
+                        return {"ip": "unknown"}
+
+                    except Exception as e:
+                        print(e)
+                        return {"error": "Ошибка изменения ip-mask-gateway"}
+                    finally:
+                        if ia is not None:
+                            ia.destroy()
+                else:
+                    return {"ip": "ip_not_received"}
+            else:
+                return {"ip": "stream_not_closed"}
+        else:
+            return {"ip": "not_driver"}
+    finally:
+        advanced_network_settings = False

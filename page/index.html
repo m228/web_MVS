@@ -39,6 +39,108 @@
   </div>
 
 
+  <div class="modal-backdrop" id="networkSettingsModal" aria-hidden="true">
+    <div class="network-modal__card" role="dialog" aria-modal="true" aria-labelledby="networkSettingsTitle">
+      <div class="network-modal__header">
+        <div class="network-modal__title-group">
+          <h2 id="networkSettingsTitle">Сетевые настройки</h2>
+          <span class="network-modal__serial">Серийный номер: <strong id="networkSettingsSerial">-</strong></span>
+        </div>
+        <button type="button" class="modal-close-btn" id="networkSettingsCloseBtn" aria-label="Закрыть">×</button>
+      </div>
+
+      <div class="network-modal__body">
+        <div class="network-status-row">
+          <div id="networkSettingsLoader" class="network-loader">Загрузка сетевых настроек...</div>
+          <div id="networkDhcpBadge" class="dhcp-badge dhcp-badge--off">DHCP выкл.</div>
+        </div>
+
+        <div id="networkSettingsError" class="network-error"></div>
+
+        <div class="network-settings-grid">
+          <div class="network-setting-row" id="networkIpRow">
+            <div class="network-setting-label">IP-адрес:</div>
+            <div class="ip-inputs" id="networkIpGroup">
+              <input type="text" class="ip-octet" maxlength="3" inputmode="numeric" />
+              <span class="dot">.</span>
+              <input type="text" class="ip-octet" maxlength="3" inputmode="numeric" />
+              <span class="dot">.</span>
+              <input type="text" class="ip-octet" maxlength="3" inputmode="numeric" />
+              <span class="dot">.</span>
+              <input type="text" class="ip-octet" maxlength="3" inputmode="numeric" />
+            </div>
+          </div>
+
+          <div class="network-setting-row is-locked" id="networkMaskRow">
+            <div class="network-setting-label">Маска подсети:</div>
+            <div class="ip-inputs" id="networkMaskGroup">
+              <input type="text" class="ip-octet" maxlength="3" inputmode="numeric" />
+              <span class="dot">.</span>
+              <input type="text" class="ip-octet" maxlength="3" inputmode="numeric" />
+              <span class="dot">.</span>
+              <input type="text" class="ip-octet" maxlength="3" inputmode="numeric" />
+              <span class="dot">.</span>
+              <input type="text" class="ip-octet" maxlength="3" inputmode="numeric" />
+            </div>
+          </div>
+
+          <div class="network-setting-row is-locked" id="networkGatewayRow">
+            <div class="network-setting-label">Основной шлюз:</div>
+            <div class="ip-inputs" id="networkGatewayGroup">
+              <input type="text" class="ip-octet" maxlength="3" inputmode="numeric" />
+              <span class="dot">.</span>
+              <input type="text" class="ip-octet" maxlength="3" inputmode="numeric" />
+              <span class="dot">.</span>
+              <input type="text" class="ip-octet" maxlength="3" inputmode="numeric" />
+              <span class="dot">.</span>
+              <input type="text" class="ip-octet" maxlength="3" inputmode="numeric" />
+            </div>
+          </div>
+        </div>
+
+        <div class="network-advanced-row">
+          <label class="checkbox-line" for="networkAdvancedToggle">
+            <input type="checkbox" id="networkAdvancedToggle" />
+            <span>
+              Расширенные настройки
+              <div class="network-helper-text">
+                После подтверждения станут доступны редактирование маски подсети и основного шлюза.
+              </div>
+            </span>
+          </label>
+        </div>
+      </div>
+
+      <div class="network-modal__footer">
+        <button type="button" class="btn-secondary" id="networkSettingsCancelBtn">Отмена</button>
+        <button type="button" class="btn-primary" id="networkSettingsApplyBtn">Применить</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal-backdrop modal-backdrop--small" id="networkRiskModal" aria-hidden="true">
+    <div class="confirm-modal__card" role="dialog" aria-modal="true" aria-labelledby="networkRiskTitle">
+      <div class="network-modal__header">
+        <div class="network-modal__title-group">
+          <h2 id="networkRiskTitle">Подтверждение расширенных настроек</h2>
+        </div>
+        <button type="button" class="modal-close-btn" id="networkRiskCloseBtn" aria-label="Закрыть">×</button>
+      </div>
+
+      <div class="confirm-modal__body">
+        <p>Неправильный ввод маски подсети или шлюза может привести к потере связи с камерой и потребовать ручного восстановления сети.</p>
+        <div class="confirm-modal__note">
+          Подтвердите, что вы понимаете риски и берёте ответственность за изменение расширенных сетевых параметров.
+        </div>
+      </div>
+
+      <div class="network-modal__footer">
+        <button type="button" class="btn-secondary" id="networkRiskCancelBtn">Отмена</button>
+        <button type="button" class="btn-primary" id="networkRiskAcceptBtn">Я принимаю риск</button>
+      </div>
+    </div>
+  </div>
+
 
   <script src="/static/js/api.js"></script>
   <script src="/static/js/ui.js"></script>

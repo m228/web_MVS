@@ -667,12 +667,6 @@ function initCameraPage() {
     notifyBackendBeforeUnload();
   }
 
-  function handleVisibilityChange() {
-  if (document.visibilityState === 'hidden') {
-    handlePageLeave();
-  }
-}
-
   // =========================
   // EVENTS
   // =========================
@@ -690,8 +684,6 @@ function initCameraPage() {
     video: openVideoPopup,
     network_settings: openNetworkSettings,
   };
-
-  document.addEventListener('visibilitychange', handleVisibilityChange);
 
   for (const [name, button] of Object.entries(buttons)) {
     if (!button || !actions[name]) continue;

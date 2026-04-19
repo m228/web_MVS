@@ -45,6 +45,29 @@ def get_ip(serial_number: str):
 def count_cams():
     return core.count_cams()
 
+@app.get("/api/get_network_settings")
+def network_settings(serial_number: str):
+    ip, mask, gateway, dhcp = core.get_network_settings(serial_number)
+    if ip is None:
+        return {"error": "Не удалось получить сетевые настройки"}
+    return {
+        "ip": ip,
+        "mask": mask,
+        "gateway": gateway,
+        "dhcp": dhcp
+    }
+@app.get("/api/network_settings_advanced")
+def network_settings_advanced():
+    return core.set_advanced_network_settings()
+@app.get("/api/change_ip")
+def change_ip(
+    serial_number: str,
+    ip: str,
+    mask: str = "",
+    gateway: str = ""
+    ):
+    return core.change_ip(serial_number, ip, mask, gateway)
+
 
 @app.get("/api/camera/stream")
 def camera_stream(

@@ -416,6 +416,12 @@ select {
   box-shadow: 0 14px 30px rgba(56, 189, 248, 0.22);
 }
 
+.action-btn--danger {
+  background: linear-gradient(135deg, #ef4444, #be123c);
+  color: #ffffff;
+  box-shadow: 0 14px 30px rgba(239, 68, 68, 0.22);
+}
+
 .btn:disabled,
 .btn-primary:disabled,
 .btn-secondary:disabled,

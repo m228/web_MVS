@@ -68,7 +68,6 @@ def change_ip(
     ):
     return core.change_ip(serial_number, ip, mask, gateway)
 
-
 @app.get("/api/camera/stream")
 def camera_stream(
     serial_number: str,

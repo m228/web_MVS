@@ -12,6 +12,18 @@ function openCamera(serial) {
   window.location.href = '/camera?serial_number=' + encodeURIComponent(serial);
 }
 
+async function closeCameraStream(serial) {
+  const result = await CameraApi.closeStreamForce();
+
+  if (!result) {
+    alert('Не удалось закрыть поток');
+    return;
+  }
+
+  alert(`Поток закрыт для камеры ${serial}`);
+  await refreshCameras();
+}
+
 const ACCESS_STATUS_MAP = {
   0: 'Неизвестно',
   1: 'Ok',
@@ -613,11 +625,21 @@ async function loadCams() {
     const actionsHtml = canOpenCamera(statusCode)
       ? `
         <div class="table-actions">
-          <button type="button" class="action-btn action-btn--primary" data-open-camera>Подключиться</button>
-          <button type="button" class="action-btn action-btn--secondary" data-network-settings>Сменить IP</button>
+          <button type="button" class="action-btn action-btn--primary" data-open-camera>
+            Подключиться
+          </button>
+          <button type="button" class="action-btn action-btn--secondary" data-network-settings>
+            Сменить IP
+          </button>
         </div>
       `
-      : '<span class="table-empty">Недоступно</span>';
+      : `
+        <div class="table-actions">
+          <button type="button" class="action-btn action-btn--danger" data-close-stream>
+            Закрыть поток
+          </button>
+        </div>
+      `;
 
     const row = document.createElement('tr');
     row.innerHTML = `
@@ -631,6 +653,7 @@ async function loadCams() {
 
     const openBtn = row.querySelector('[data-open-camera]');
     const networkBtn = row.querySelector('[data-network-settings]');
+    const closeStreamBtn = row.querySelector('[data-close-stream]');
 
     if (openBtn) {
       openBtn.addEventListener('click', () => {
@@ -641,6 +664,11 @@ async function loadCams() {
     if (networkBtn) {
       networkBtn.addEventListener('click', () => {
         openNetworkSettingsModal(serial);
+      });
+    }
+    if (closeStreamBtn) {
+      closeStreamBtn.addEventListener('click', async () => {
+        await closeCameraStream(serial);
       });
     }
 

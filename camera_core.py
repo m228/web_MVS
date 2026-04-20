@@ -142,6 +142,7 @@ def count_cams():
     global cam_online
     return {"count": len(cam_online)}
 
+
 # получение данных с камеры, текущие + лимиты
 def get_camera_settings(node_map):
     if check():

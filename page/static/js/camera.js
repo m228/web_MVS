@@ -106,8 +106,8 @@ function initCameraPage() {
       state.start = { hidden: false, disabled: false };
       state.apply = { hidden: false, disabled: true };
       state.stop = { hidden: false, disabled: true };
-      state.photo = { hidden: false, disabled: true };
-      state.video = { hidden: false, disabled: true };
+      state.photo = { hidden: false, disabled: false };
+      state.video = { hidden: false, disabled: false };
       applyState(state);
       return;
     }
@@ -498,20 +498,45 @@ function initCameraPage() {
     startStream();
   }
 
-  async function applySettings() {
-    if (!serialNumber || !isConnected || !isChange) return;
+  async function waitUntilStreamClosed(timeoutMs = 4000, intervalMs = 150) {
+    const startedAt = Date.now();
 
-    isConnected = false;
-    isLoading = true;
-    updateToolbarState();
-    stopStatusPolling();
+    while (Date.now() - startedAt < timeoutMs) {
+      const state = await CameraApi.getStreamState();
 
-    await stopStreamOnly();
+      if (state?.closed === true) {
+        return true;
+      }
 
-    cameraFrame.src = '';
-    showNoVideo();
-    startStream();
+      await new Promise((resolve) => setTimeout(resolve, intervalMs));
+    }
+
+    return false;
   }
+
+  async function applySettings() {
+  if (!serialNumber || !isConnected || !isChange) return;
+
+  isConnected = false;
+  isLoading = true;
+  updateToolbarState();
+  stopStatusPolling();
+
+  await stopStreamOnly();
+
+  const closed = await waitUntilStreamClosed();
+
+  if (!closed) {
+    isLoading = false;
+    alert('Предыдущий поток не успел корректно закрыться');
+    updateToolbarState();
+    return;
+  }
+
+  cameraFrame.src = '';
+  showNoVideo();
+  startStream();
+}
 
   async function stopCamera() {
     stopStatusPolling();

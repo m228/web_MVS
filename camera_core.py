@@ -236,7 +236,7 @@ def get_frame(ia, node_map):
             return img, encoded.tobytes()
     except Exception as e:
         if not stream_running:
-            print("get_frame:" e)
+            print("get_frame:", e)
             return None, None
         raise
 
@@ -256,7 +256,7 @@ def generate_stream(serial_number, width=None, height=None, offset_x=None, offse
     if not check():
         return
 
-    if stream_running and not stream_closed:
+    if stream_running or not stream_closed:
         print("Старый поток еще не закрыт, force stop")
         close_stream_force()
         time.sleep(0.3)

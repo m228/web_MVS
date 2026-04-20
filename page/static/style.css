@@ -1010,9 +1010,16 @@ body.modal-open {
 .network-status-row {
   display: flex;
   align-items: center;
-  justify-content: space-between;
   gap: 12px;
-  flex-wrap: wrap;
+  width: 100%;
+}
+
+#networkSettingsLoader {
+  min-width: 0;
+}
+
+#networkDhcpBadge {
+  margin-left: auto;
 }
 
 .network-loader {

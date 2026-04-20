@@ -98,6 +98,7 @@ def scan_cams():
             cam_online [device.serial_number] = int(device.access_status)
             if device.serial_number not in data_limit:
                 data_limit[device.serial_number] = None
+    print("cam_online", cam_online)
     return cam_online
 
 # подключение к камере и получение nodemap
@@ -539,8 +540,7 @@ def set_advanced_network_settings():
     return {"advanced_network_settings": advanced_network_settings}
 
 def change_ip(serial_number, ip, mask="", gateway=""):
-    global advanced_network_settings
-    ia = None
+    global advanced_network_settings, current_ia
     try:
         if check():
             if stream_closed:
@@ -574,8 +574,8 @@ def change_ip(serial_number, ip, mask="", gateway=""):
                             return {"ip": "ip_busy"}
 
                     try:
-                        node_map, ia = get_node_map_cam(serial_number)
-                        if node_map is None or ia is None:
+                        node_map, current_ia = get_node_map_cam(serial_number)
+                        if node_map is None or current_ia is None:
                             return {"ip": "node_map_not_available"}
 
                         if dhcp_enabled:
@@ -590,7 +590,7 @@ def change_ip(serial_number, ip, mask="", gateway=""):
                                 node_map.GevPersistentSubnetMask.value = ip_to_int(mask)
                             if gateway_changed:
                                 node_map.GevPersistentDefaultGateway.value = ip_to_int(gateway)
-                        elif advanced_changed:
+                        else:
                             return {"ip": "mask_gateway_not_changed_advanced_off"}
 
                         time.sleep(1)
@@ -609,8 +609,16 @@ def change_ip(serial_number, ip, mask="", gateway=""):
                         print(e)
                         return {"error": "Ошибка изменения ip-mask-gateway"}
                     finally:
-                        if ia is not None:
-                            ia.destroy()
+                        print("current_ia:",current_ia)
+                        if current_ia is not None:
+                            try:
+                                current_ia.stop()
+                            except:
+                                pass
+                            try:
+                                current_ia.destroy()
+                            except:
+                                pass
                 else:
                     return {"ip": "ip_not_received"}
             else:

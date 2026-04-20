@@ -527,11 +527,20 @@ function initNetworkSettingsModal() {
   }
 
   if (elements.riskAcceptBtn) {
-    elements.riskAcceptBtn.addEventListener('click', () => {
-      setAdvancedNetworkMode(true);
+  elements.riskAcceptBtn.addEventListener('click', async () => {
+    const result = await CameraApi.enableAdvancedNetworkSettings();
+
+    if (!result) {
+      alert('Не удалось включить расширенные сетевые настройки');
+      setAdvancedNetworkMode(false);
       closeRiskModal();
-    });
-  }
+      return;
+    }
+
+    setAdvancedNetworkMode(true);
+    closeRiskModal();
+  });
+}
 
   const disableAdvanced = () => {
     setAdvancedNetworkMode(false);

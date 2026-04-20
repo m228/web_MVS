@@ -56,6 +56,11 @@ const CameraApi = {
     'Ошибка получения data_limit:'
   );
 },
+  enableAdvancedNetworkSettings() {
+    return apiGet(
+        `/api/network_settings_advanced`, 'Network settings advanced btn error'
+    );
+  },
 
   closeStream() {
     return apiGet('/api/camera/close_stream', 'Ошибка остановки потока:');

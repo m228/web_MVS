@@ -560,7 +560,7 @@ def change_ip(serial_number, ip, mask="", gateway=""):
 
                     if ip_changed:
                         device_busy = ping_device(ip)
-                        if device_busy:
+                        if not device_busy:
                             return {"ip": "ip_busy"}
 
                     try:

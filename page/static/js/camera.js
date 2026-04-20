@@ -1,10 +1,8 @@
-// static/js/camera.js
 function initCameraPage() {
   const form = document.getElementById('settingsForm');
   const serialElement = document.getElementById('cameraSerial');
   const cameraFrame = document.getElementById('cameraFrame');
   const cameraPlaceholder = document.getElementById('cameraPlaceholder');
-  const applyIcon = document.getElementById('applyicon');
 
   const metricFps = document.getElementById('metricFps');
   const metricImageNumber = document.getElementById('metricImageNumber');
@@ -63,10 +61,6 @@ function initCameraPage() {
 
   serialElement.textContent = serialNumber ? serialNumber : 'не выбран';
 
-  // =========================
-  // UI STATE
-  // =========================
-
   function refreshModeUI() {
     updateModeIndicators();
     updateSaveButtonsState();
@@ -80,7 +74,7 @@ function initCameraPage() {
 
   function setApplyVisualState() {
     const applyBtn = buttons.apply;
-    if (!applyBtn || !applyIcon) return;
+    if (!applyBtn) return;
 
     applyBtn.disabled = !isConnected || !isChange;
     applyBtn.classList.toggle('grey-btn', !isConnected || !isChange);
@@ -105,22 +99,22 @@ function initCameraPage() {
       stop: { hidden: true, disabled: true },
       photo: { hidden: true, disabled: true },
       video: { hidden: true, disabled: true },
-      network_settings: { hidden: false, disabled: false },
+      network_settings: { hidden: false, disabled: !serialNumber },
     };
 
     if (!serialNumber) {
       state.start = { hidden: false, disabled: false };
-      state.apply = { hidden: false, disabled: false };
-      state.stop = { hidden: false, disabled: false };
-      state.photo = { hidden: false, disabled: false };
-      state.video = { hidden: false, disabled: false };
+      state.apply = { hidden: false, disabled: true };
+      state.stop = { hidden: false, disabled: true };
+      state.photo = { hidden: false, disabled: true };
+      state.video = { hidden: false, disabled: true };
       applyState(state);
       return;
     }
 
     if (isLoading) {
       state.start = { hidden: false, disabled: true };
-      state.network_settings = { hidden: true, disabled: true };
+      state.network_settings = { hidden: false, disabled: true };
       applyState(state);
       return;
     }
@@ -194,10 +188,10 @@ function initCameraPage() {
   let metricsTimer = null;
 
   function updateMetricsUI(data) {
-    if (metricFps) metricFps.textContent = `${Number(data.fps ?? 0).toFixed(2)}fps`;
+    if (metricFps) metricFps.textContent = `${Number(data.fps ?? 0).toFixed(2)} fps`;
     if (metricImageNumber) metricImageNumber.textContent = data.image_number ?? 0;
-    if (metricBandwidth) metricBandwidth.textContent = `${Number(data.bandwidth_mbps ?? 0).toFixed(1)}Mbps`;
-    if (metricResolution) metricResolution.textContent = `${data.width ?? 0} x ${data.height ?? 0}`;
+    if (metricBandwidth) metricBandwidth.textContent = `${Number(data.bandwidth_mbps ?? 0).toFixed(1)} Mbps`;
+    if (metricResolution) metricResolution.textContent = `${data.width ?? 0} × ${data.height ?? 0}`;
     if (metricErrors) metricErrors.textContent = data.errors ?? 0;
   }
 
@@ -233,10 +227,6 @@ function initCameraPage() {
     }
   }
 
-  // =========================
-  // FORM / SETTINGS
-  // =========================
-
   function setFieldValue(name, value) {
     if (value === undefined || value === null) return;
 
@@ -247,23 +237,23 @@ function initCameraPage() {
   }
 
   function setFieldLimits(name, config) {
-  if (!config) return;
+    if (!config) return;
 
-  const field = form.querySelector(`[name="${name}"]`);
-  if (!field) return;
+    const field = form.querySelector(`[name="${name}"]`);
+    if (!field) return;
 
-  if (config.min !== undefined && config.min !== null) {
-    field.min = config.min;
+    if (config.min !== undefined && config.min !== null) {
+      field.min = config.min;
+    }
+
+    if (config.max !== undefined && config.max !== null) {
+      field.max = config.max;
+    }
+
+    if (config.step !== undefined && config.step !== null) {
+      field.step = config.step;
+    }
   }
-
-  if (config.max !== undefined && config.max !== null) {
-    field.max = config.max;
-  }
-
-  if (config.step !== undefined && config.step !== null) {
-    field.step = config.step;
-  }
-}
 
   function setText(id, value) {
     if (value === undefined || value === null) return;
@@ -309,22 +299,18 @@ function initCameraPage() {
     const data = await CameraApi.getDataLimit(serialNumber);
     if (!data) return;
 
-    // Подставляем только часть значений
     setFieldValue('width', data.width?.value);
     setFieldValue('height', data.height?.value);
     setFieldValue('exposure_time', data.exposure_time?.value);
 
-    // Лимиты в input
     setFieldLimits('width', data.width);
     setFieldLimits('height', data.height);
     setFieldLimits('offset_x', data.offset_x);
     setFieldLimits('offset_y', data.offset_y);
     setFieldLimits('exposure_time', data.exposure_time);
 
-    // Select
     fillSelectOptions('exposure_auto', data.exposure_auto);
 
-    // min/max текст
     setText('WidthMin', data.width?.min);
     setText('WidthMax', data.width?.max);
 
@@ -360,10 +346,6 @@ function initCameraPage() {
 
     return query;
   }
-
-  // =========================
-  // SLIDERS
-  // =========================
 
   function removeActiveSlider() {
     if (activeSliderWrap) {
@@ -422,10 +404,6 @@ function initCameraPage() {
     });
   }
 
-  // =========================
-  // STREAM
-  // =========================
-
   function startStatusPolling() {
     stopStatusPolling();
     statusTimer = setInterval(syncVideoPhotoStatus, 1000);
@@ -464,8 +442,6 @@ function initCameraPage() {
   async function stopStreamForce() {
     return await CameraApi.closeStreamForce();
   }
-
-
 
   function showForceStopButton() {
     if (buttons.force_stop) {
@@ -509,7 +485,7 @@ function initCameraPage() {
 
     showForceStopButton();
     return false;
-}
+  }
 
   async function connectCamera() {
     if (!serialNumber) {
@@ -538,30 +514,31 @@ function initCameraPage() {
   }
 
   async function stopCamera() {
-  stopStatusPolling();
-  hideForceStopButton();
-  clearForceStopTimer();
+    stopStatusPolling();
+    hideForceStopButton();
+    clearForceStopTimer();
 
-  waitingSoftStop = true;
+    waitingSoftStop = true;
 
-  const result = await stopStreamOnly();
-  if (!result) {
-    waitingSoftStop = false;
-    return;
-  }
-
-  forceStopTimer = setTimeout(() => {
-    if (waitingSoftStop) {
-      showForceStopButton();
+    const result = await stopStreamOnly();
+    if (!result) {
+      waitingSoftStop = false;
+      return;
     }
-  }, 3000);
 
-  const closed = await waitSoftStopResult();
+    forceStopTimer = setTimeout(() => {
+      if (waitingSoftStop) {
+        showForceStopButton();
+      }
+    }, 3000);
 
-  if (closed) {
-    updateToolbarState();
+    const closed = await waitSoftStopResult();
+
+    if (closed) {
+      updateToolbarState();
+    }
   }
-}
+
   async function forceStopCamera() {
     clearForceStopTimer();
     waitingSoftStop = false;
@@ -572,10 +549,6 @@ function initCameraPage() {
     resetCameraUI();
     updateToolbarState();
   }
-
-  // =========================
-  // PHOTO / VIDEO POPUPS
-  // =========================
 
   function openPhotoPopup() {
     photoPopup.toggle();
@@ -639,10 +612,6 @@ function initCameraPage() {
     await syncVideoPhotoStatus();
   }
 
-  // =========================
-  // PAGE LEAVE CLEANUP
-  // =========================
-
   function cleanupCameraPage() {
     stopStatusPolling();
     resetCameraUI();
@@ -667,12 +636,18 @@ function initCameraPage() {
     notifyBackendBeforeUnload();
   }
 
-  // =========================
-  // EVENTS
-  // =========================
-
   function openNetworkSettings() {
-    console.log('Открыть сетевые настройки');
+    if (!serialNumber) {
+      alert('Не выбран серийный номер камеры');
+      return;
+    }
+
+    const query = new URLSearchParams({
+      serial_number: serialNumber,
+      open_network_settings: '1',
+    });
+
+    window.location.href = '/?' + query.toString();
   }
 
   const actions = {
@@ -779,10 +754,6 @@ function initCameraPage() {
 
   window.addEventListener('beforeunload', handlePageLeave);
   window.addEventListener('pagehide', handlePageLeave);
-
-  // =========================
-  // INIT
-  // =========================
 
   loadDataLimitToForm().then(() => {
     initFieldSliders();

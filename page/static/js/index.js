@@ -1,8 +1,8 @@
-// static/js/index.js
 function updateTime() {
   const now = new Date();
   const timeString = now.toLocaleTimeString();
   const el = document.getElementById('time');
+
   if (el) {
     el.textContent = timeString;
   }
@@ -27,11 +27,65 @@ function getAccessStatusText(statusCode) {
   return ACCESS_STATUS_MAP[code] ?? `Неизвестный статус (${statusCode})`;
 }
 
+function getAccessStatusVariant(statusCode) {
+  const code = Number(statusCode);
+
+  switch (code) {
+    case 1:
+      return 'status-badge--ok';
+    case 2:
+    case 6:
+      return 'status-badge--warning';
+    case 4:
+      return 'status-badge--busy';
+    case 5:
+      return 'status-badge--info';
+    default:
+      return 'status-badge--danger';
+  }
+}
+
 function canOpenCamera(statusCode) {
   const code = Number(statusCode);
   return code === 1;
 }
 
+function escapeHtml(value) {
+  return String(value ?? '').replace(/[&<>"']/g, (symbol) => {
+    switch (symbol) {
+      case '&':
+        return '&amp;';
+      case '<':
+        return '&lt;';
+      case '>':
+        return '&gt;';
+      case '"':
+        return '&quot;';
+      case "'":
+        return '&#39;';
+      default:
+        return symbol;
+    }
+  });
+}
+
+function getDriverStatusHtml(isOnline) {
+  return isOnline
+    ? '<span class="status-chip status-chip--ok">Драйвер активен</span>'
+    : '<span class="status-chip status-chip--error">Драйвер недоступен</span>';
+}
+
+function getAccessStatusHtml(statusCode) {
+  const safeStatusText = escapeHtml(getAccessStatusText(statusCode));
+  const safeStatusCode = escapeHtml(statusCode);
+
+  return `
+    <div class="status-cell">
+      <span class="status-badge ${getAccessStatusVariant(statusCode)}">${safeStatusText}</span>
+      <span class="status-code">Код доступа: ${safeStatusCode}</span>
+    </div>
+  `;
+}
 
 function getNetworkModalElements() {
   return {
@@ -74,6 +128,7 @@ function getIpv4Inputs(group) {
 
 function splitIpv4(value) {
   const parts = String(value ?? '').split('.').slice(0, 4);
+
   while (parts.length < 4) {
     parts.push('');
   }
@@ -226,7 +281,9 @@ function closeSimpleModal(modal) {
   modal.setAttribute('aria-hidden', 'true');
 
   const elements = getNetworkModalElements();
-  const hasOpenedModal = [elements.modal, elements.riskModal].some((item) => item && item.classList.contains('show'));
+  const hasOpenedModal = [elements.modal, elements.riskModal].some(
+    (item) => item && item.classList.contains('show')
+  );
 
   if (!hasOpenedModal) {
     document.body.classList.remove('modal-open');
@@ -282,6 +339,7 @@ async function openNetworkSettingsModal(serial) {
   if (!elements.modal) return;
 
   networkSettingsState.serial = serial;
+
   if (elements.serial) {
     elements.serial.textContent = serial;
   }
@@ -304,7 +362,7 @@ async function applyNetworkSettings() {
 
   try {
     const payload = {
-      ip: readIpv4Value(elements.ipGroup, 'IP-адрес')
+      ip: readIpv4Value(elements.ipGroup, 'IP-адрес'),
     };
 
     if (networkSettingsState.advancedEnabled) {
@@ -400,7 +458,6 @@ async function applyNetworkSettings() {
       default:
         alert('Получен неизвестный ответ от сервера');
         console.log('Неизвестный ответ change_ip:', result);
-        return;
     }
   } catch (error) {
     setNetworkLoading(false);
@@ -491,6 +548,14 @@ function initNetworkSettingsModal() {
   });
 }
 
+function setRefreshButtonState(isLoading) {
+  const refreshBtn = document.getElementById('refreshCamsBtn');
+  if (!refreshBtn) return;
+
+  refreshBtn.disabled = isLoading;
+  refreshBtn.textContent = isLoading ? 'Обновление…' : 'Обновить список';
+}
+
 async function loadStatus() {
   const data = await CameraApi.getStatus();
   if (!data) return;
@@ -498,9 +563,7 @@ async function loadStatus() {
   const el = document.getElementById('status');
   if (!el) return;
 
-  el.innerHTML = data.status
-    ? '<span style="color: #16a34a; font-size: 20px;">✔</span>'
-    : '<span style="color: #dc2626; font-size: 20px;">✖</span>';
+  el.innerHTML = getDriverStatusHtml(!!data.status);
 }
 
 async function countCams() {
@@ -509,7 +572,7 @@ async function countCams() {
 
   const el = document.getElementById('count_cams');
   if (el) {
-    el.textContent = data.count;
+    el.textContent = data.count ?? 0;
   }
 }
 
@@ -522,36 +585,49 @@ async function loadCams() {
 
   table.innerHTML = '';
 
-  for (const serial in data) {
-    const statusCode = Number(data[serial]);
-    const statusText = getAccessStatusText(statusCode);
+  const entries = Object.entries(data).sort(([serialA], [serialB]) =>
+    String(serialA).localeCompare(String(serialB), 'ru')
+  );
 
-    let ip = '-';
-    if (canOpenCamera(statusCode)) {
-      const ipData = await CameraApi.getIp(serial);
-      ip = ipData?.ip ?? 'Ошибка';
-    }
+  if (!entries.length) {
+    table.innerHTML = `
+      <tr>
+        <td colspan="4">
+          <div class="table-empty-state">Камеры не найдены. Нажмите «Обновить список», чтобы повторить поиск.</div>
+        </td>
+      </tr>
+    `;
+    return;
+  }
+
+  const ipResponses = await Promise.all(
+    entries.map(([serial, statusCode]) =>
+      canOpenCamera(statusCode) ? CameraApi.getIp(serial) : Promise.resolve(null)
+    )
+  );
+
+  entries.forEach(([serial, statusCode], index) => {
+    const statusText = getAccessStatusText(statusCode);
+    const ip = canOpenCamera(statusCode) ? ipResponses[index]?.ip ?? 'Ошибка' : '-';
 
     const actionsHtml = canOpenCamera(statusCode)
       ? `
         <div class="table-actions">
-          <button type="button" class="toolbar-btn" data-open-camera>
-            <img src="/static/icon/connect.png" alt="Подключиться" class="toolbar-img">
-          </button>
-          <button type="button" class="toolbar-btn" data-network-settings>
-            <img src="/static/icon/network-settings.png" alt="Сетевые настройки" class="toolbar-img">
-          </button>
+          <button type="button" class="action-btn action-btn--primary" data-open-camera>Подключиться</button>
+          <button type="button" class="action-btn action-btn--secondary" data-network-settings>Сменить IP</button>
         </div>
       `
-      : `<span>-</span>`;
+      : '<span class="table-empty">Недоступно</span>';
 
     const row = document.createElement('tr');
     row.innerHTML = `
-      <td>${serial}</td>
-      <td>${statusCode} (${statusText})</td>
-      <td>${ip}</td>
+      <td><span class="serial-chip">${escapeHtml(serial)}</span></td>
+      <td>${getAccessStatusHtml(statusCode)}</td>
+      <td><span class="ip-chip">${escapeHtml(ip)}</span></td>
       <td>${actionsHtml}</td>
     `;
+
+    row.dataset.statusText = statusText;
 
     const openBtn = row.querySelector('[data-open-camera]');
     const networkBtn = row.querySelector('[data-network-settings]');
@@ -569,10 +645,42 @@ async function loadCams() {
     }
 
     table.appendChild(row);
+  });
+}
+
+function getAutoOpenSerial() {
+  const params = new URLSearchParams(window.location.search);
+
+  if (params.get('open_network_settings') !== '1') {
+    return null;
+  }
+
+  return params.get('serial_number');
+}
+
+function clearAutoOpenQuery() {
+  const url = new URL(window.location.href);
+  url.searchParams.delete('open_network_settings');
+  url.searchParams.delete('serial_number');
+
+  const search = url.searchParams.toString();
+  const nextUrl = `${url.pathname}${search ? `?${search}` : ''}${url.hash}`;
+  window.history.replaceState({}, '', nextUrl);
+}
+
+async function refreshCameras() {
+  setRefreshButtonState(true);
+
+  try {
+    await loadStatus();
+    await countCams();
+    await loadCams();
+  } finally {
+    setRefreshButtonState(false);
   }
 }
 
-function initIndexPage() {
+async function initIndexPage() {
   const table = document.getElementById('table');
   const timeEl = document.getElementById('time');
   const statusEl = document.getElementById('status');
@@ -582,7 +690,13 @@ function initIndexPage() {
   if (!table && !timeEl && !statusEl && !countEl) return;
 
   initNetworkSettingsModal();
-  refreshCameras();
+  await refreshCameras();
+
+  const autoOpenSerial = getAutoOpenSerial();
+  if (autoOpenSerial) {
+    clearAutoOpenQuery();
+    openNetworkSettingsModal(autoOpenSerial);
+  }
 
   if (refreshBtn) {
     refreshBtn.addEventListener('click', refreshCameras);
@@ -594,10 +708,6 @@ function initIndexPage() {
   }
 }
 
-async function refreshCameras() {
-  await loadStatus();
-  await countCams();
-  await loadCams();
-}
-
-window.addEventListener('DOMContentLoaded', initIndexPage);
+window.addEventListener('DOMContentLoaded', () => {
+  initIndexPage();
+});

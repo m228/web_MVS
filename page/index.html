@@ -5,39 +5,95 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Главная</title>
   <link rel="stylesheet" href="/static/style.css" />
+  <script src="/static/js/theme.js" defer></script>
 </head>
 <body>
   <div class="layout">
     <main class="content">
-      <div class="card">
-        <h1>Главная</h1>
-        <p>Время: <span id="time"></span></p>
-        <p>Статус драйвера: <span id="status"></span></p>
-        <p>Кол-во камер: <span id="count_cams"></span></p>
-      </div>
+      <div class="app-shell">
+        <header class="topbar">
+          <div class="theme-panel">
+            <span class="theme-panel__label">Тема интерфейса</span>
+            <div class="theme-switcher" data-theme-switcher></div>
+          </div>
 
-      <div class="card" style="margin-top: 20px;">
-        <div class="section-header">
-          <h2>Камеры</h2>
-          <button type="button" id="refreshCamsBtn" class="toolbar-btn" title="Обновить">
-            <img src="/static/icon/update.png" alt="Обновить" class="toolbar-img">
-          </button>
-        </div>
-        <table>
-          <thead>
-            <tr>
-              <th>Камеры (серийник)</th>
-              <th>Статусы</th>
-              <th>IP-адрес</th>
-              <th>Действие</th>
-            </tr>
-          </thead>
-          <tbody id="table"></tbody>
-        </table>
+          <div class="brand-slot" aria-label="Логотип компании">
+            <span class="brand-slot__label">Логотип компании</span>
+            <div class="brand-slot__logo-wrap">
+              <img
+                class="brand-logo"
+                data-theme-logo
+                data-logo-light="/static/icon/Logo_Black.png"
+                data-logo-dark="/static/icon/Logo_White.png"
+                src="/static/icon/Logo_Black.png"
+                alt="MA logo"
+              />
+            </div>
+          </div>
+        </header>
+
+        <section class="card page-hero">
+          <div class="page-hero__content">
+            <p class="page-hero__eyebrow">Панель мониторинга</p>
+            <h1 class="page-hero__title">Главная</h1>
+            <p class="page-hero__subtitle">
+              Единый экран для проверки драйвера, просмотра найденных камер и быстрого доступа
+              к подключению и изменению сетевых параметров.
+            </p>
+          </div>
+
+          <div class="page-hero__actions">
+            <button type="button" id="refreshCamsBtn" class="btn btn-primary">Обновить список</button>
+          </div>
+        </section>
+
+        <section class="stats-grid">
+          <article class="card metric-card">
+            <span class="metric-card__label">Текущее время</span>
+            <strong class="metric-card__value" id="time">--:--:--</strong>
+            <span class="metric-card__hint">Обновляется каждую секунду</span>
+          </article>
+
+          <article class="card metric-card">
+            <span class="metric-card__label">Статус драйвера</span>
+            <strong class="metric-card__value" id="status">
+              <span class="status-chip">Проверка...</span>
+            </strong>
+            <span class="metric-card__hint">Показывает доступность драйвера камер</span>
+          </article>
+
+          <article class="card metric-card">
+            <span class="metric-card__label">Кол-во камер</span>
+            <strong class="metric-card__value" id="count_cams">0</strong>
+            <span class="metric-card__hint">Устройства, найденные в сети</span>
+          </article>
+        </section>
+
+        <section class="card table-card">
+          <div class="section-header">
+            <div>
+              <p class="section-subtitle">Обнаруженные устройства</p>
+              <h2>Камеры</h2>
+            </div>
+          </div>
+
+          <div class="table-wrap">
+            <table class="camera-table">
+              <thead>
+                <tr>
+                  <th>Камера / серийник</th>
+                  <th>Статус</th>
+                  <th>IP-адрес</th>
+                  <th>Действия</th>
+                </tr>
+              </thead>
+              <tbody id="table"></tbody>
+            </table>
+          </div>
+        </section>
       </div>
     </main>
   </div>
-
 
   <div class="modal-backdrop" id="networkSettingsModal" aria-hidden="true">
     <div class="network-modal__card" role="dialog" aria-modal="true" aria-labelledby="networkSettingsTitle">
@@ -128,9 +184,13 @@
       </div>
 
       <div class="confirm-modal__body">
-        <p>Неправильный ввод маски подсети или шлюза может привести к потере связи с камерой и потребовать ручного восстановления сети.</p>
+        <p>
+          Неправильный ввод маски подсети или шлюза может привести к потере связи с камерой и
+          потребовать ручного восстановления сети.
+        </p>
         <div class="confirm-modal__note">
-          Подтвердите, что вы понимаете риски и берёте ответственность за изменение расширенных сетевых параметров.
+          Подтвердите, что вы понимаете риски и берёте ответственность за изменение расширенных
+          сетевых параметров.
         </div>
       </div>
 
@@ -140,7 +200,6 @@
       </div>
     </div>
   </div>
-
 
   <script src="/static/js/api.js"></script>
   <script src="/static/js/ui.js"></script>

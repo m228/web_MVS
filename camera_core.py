@@ -221,18 +221,24 @@ def apply_settings_camera(node_map, data_limit, width=None, height=None, offset_
         print("Ошибка применение настроек камеры:", e)
         return False
 
-def get_frame(ia,node_map):
-    with ia.fetch() as buffer:
-        data = buffer.payload.components[0].data
-        real_width = node_map.Width.value
-        real_height = node_map.Height.value
-        img = np.array(data, dtype=np.uint8).reshape(real_height, real_width, 3)
-        ok, buffer = cv2.imencode(".jpg", img)
+def get_frame(ia, node_map):
+    try:
+        with ia.fetch() as buffer:
+            data = buffer.payload.components[0].data
+            real_width = node_map.Width.value
+            real_height = node_map.Height.value
+            img = np.array(data, dtype=np.uint8).reshape(real_height, real_width, 3)
+            ok, encoded = cv2.imencode(".jpg", img)
 
-        if not ok:
-            return None
+            if not ok:
+                return None, None
 
-        return img, buffer.tobytes()
+            return img, encoded.tobytes()
+    except Exception as e:
+        if not stream_running:
+            print("get_frame:" e)
+            return None, None
+        raise
 
 def generate_stream(serial_number, width=None, height=None, offset_x=None, offset_y=None, fps=None, exposure_auto=None, exposure_time=None):
     global stream_running, stream_closed, stream_metrics, current_ia, photo_enabled, photo_interval, last_save, video_writer, video_enabled, video_duration, video_start, data_limit
@@ -285,6 +291,10 @@ def generate_stream(serial_number, width=None, height=None, offset_x=None, offse
             try:
                 img, frame = get_frame(ia, node_map)
 
+                if frame is None or img is None:
+                    stream_metrics["errors"] += 1
+                    continue
+
                 now = time.time()
 
                 stream_metrics["image_number"] += 1
@@ -308,8 +318,7 @@ def generate_stream(serial_number, width=None, height=None, offset_x=None, offse
                 print("Ошибка получения кадра:", repr(e))
                 break
 
-            if frame is None or img is None:
-                continue
+
 
             # для фото проверка
             if photo_enabled and check_save_photo(photo_interval):
@@ -333,7 +342,7 @@ def generate_stream(serial_number, width=None, height=None, offset_x=None, offse
 
     except Exception as e:
         if not stream_running:
-            print("Поток остановлен")
+            print("Поток остановлен: ", e)
         else:
             print("Ошибка потока:", repr(e))
             stream_metrics["errors"] += 1

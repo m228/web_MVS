@@ -18,10 +18,6 @@
     }
   }
 
-  function getThemeMeta(theme) {
-    return THEMES.find((item) => item.id === theme) || THEMES[0];
-  }
-
   function getCurrentTheme() {
     return normalizeTheme(document.documentElement.getAttribute('data-theme') || getSavedTheme());
   }
@@ -68,14 +64,6 @@
       console.warn('Не удалось сохранить тему интерфейса', error);
     }
 
-    document.dispatchEvent(
-      new CustomEvent('app-theme-change', {
-        detail: {
-          theme: safeTheme,
-          meta: getThemeMeta(safeTheme),
-        },
-      })
-    );
 
     syncThemeSwitchers(safeTheme);
     syncThemeLogos(safeTheme);

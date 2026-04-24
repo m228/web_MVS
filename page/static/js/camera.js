@@ -42,6 +42,7 @@ function initCameraPage() {
     !buttons.apply ||
     !buttons.stop
   ) {
+    window.AppLog?.error('camera', 'Не найдены обязательные элементы страницы камеры');
     return;
   }
 
@@ -55,11 +56,22 @@ function initCameraPage() {
   let isLeavingPage = false;
   let forceStopTimer = null;
   let waitingSoftStop = false;
+  let metricsTimer = null;
 
   const photoPopup = UIHelpers.createPopupController(photoCard, buttons.photo);
   const videoPopup = UIHelpers.createPopupController(videoCard, buttons.video);
 
   serialElement.textContent = serialNumber ? serialNumber : 'не выбран';
+
+  const log = {
+    info: (message, payload) => window.AppLog?.info('camera', message, payload),
+    success: (message, payload) => window.AppLog?.success('camera', message, payload),
+    warn: (message, payload) => window.AppLog?.warn('camera', message, payload),
+    error: (message, payload) => window.AppLog?.error('camera', message, payload),
+    debug: (message, payload) => window.AppLog?.debug('camera', message, payload),
+  };
+
+  log.info('Страница камеры открыта', { serialNumber });
 
   function refreshModeUI() {
     updateModeIndicators();
@@ -67,8 +79,20 @@ function initCameraPage() {
   }
 
   function setSaveState({ photo = isSavePhoto, video = isSaveVideo } = {}) {
+    const prevPhoto = isSavePhoto;
+    const prevVideo = isSaveVideo;
+
     isSavePhoto = photo;
     isSaveVideo = video;
+
+    if (prevPhoto !== isSavePhoto) {
+      log.info(isSavePhoto ? 'Сохранение фото включено' : 'Сохранение фото выключено');
+    }
+
+    if (prevVideo !== isSaveVideo) {
+      log.info(isSaveVideo ? 'Сохранение видео включено' : 'Сохранение видео выключено');
+    }
+
     refreshModeUI();
   }
 
@@ -162,30 +186,14 @@ function initCameraPage() {
 
   function markDirty() {
     if (!isConnected) return;
+
+    if (!isChange) {
+      log.debug('Параметры камеры изменены пользователем');
+    }
+
     isChange = true;
     updateToolbarState();
   }
-
-  function resetCameraUI() {
-    isConnected = false;
-    isChange = false;
-    isLoading = false;
-
-    setSaveState({ photo: false, video: false });
-
-    cameraFrame.src = '';
-    showNoVideo();
-
-    photoPopup.close();
-    videoPopup.close();
-    removeActiveSlider();
-
-    updateToolbarState();
-    stopMetricsPolling();
-    resetMetricsUI();
-  }
-
-  let metricsTimer = null;
 
   function updateMetricsUI(data) {
     if (metricFps) metricFps.textContent = `${Number(data.fps ?? 0).toFixed(2)} fps`;
@@ -206,6 +214,18 @@ function initCameraPage() {
     });
   }
 
+  function stopMetricsPolling() {
+    if (metricsTimer) {
+      clearInterval(metricsTimer);
+      metricsTimer = null;
+    }
+  }
+
+  function startMetricsPolling() {
+    stopMetricsPolling();
+    metricsTimer = setInterval(syncMetrics, 1000);
+  }
+
   async function syncMetrics() {
     if (!isConnected) return;
 
@@ -215,16 +235,23 @@ function initCameraPage() {
     updateMetricsUI(data);
   }
 
-  function startMetricsPolling() {
-    stopMetricsPolling();
-    metricsTimer = setInterval(syncMetrics, 1000);
-  }
+  function resetCameraUI() {
+    isConnected = false;
+    isChange = false;
+    isLoading = false;
 
-  function stopMetricsPolling() {
-    if (metricsTimer) {
-      clearInterval(metricsTimer);
-      metricsTimer = null;
-    }
+    setSaveState({ photo: false, video: false });
+
+    cameraFrame.src = '';
+    showNoVideo();
+
+    photoPopup.close();
+    videoPopup.close();
+    removeActiveSlider();
+
+    updateToolbarState();
+    stopMetricsPolling();
+    resetMetricsUI();
   }
 
   function setFieldValue(name, value) {
@@ -296,8 +323,15 @@ function initCameraPage() {
   async function loadDataLimitToForm() {
     if (!serialNumber) return;
 
+    log.info('Загрузка ограничений камеры', { serialNumber });
+
     const data = await CameraApi.getDataLimit(serialNumber);
-    if (!data) return;
+    if (!data) {
+      log.warn('Не удалось получить data_limit', { serialNumber });
+      return;
+    }
+
+    log.success('Ограничения камеры загружены', data);
 
     setFieldValue('width', data.width?.value);
     setFieldValue('height', data.height?.value);
@@ -404,16 +438,16 @@ function initCameraPage() {
     });
   }
 
-  function startStatusPolling() {
-    stopStatusPolling();
-    statusTimer = setInterval(syncVideoPhotoStatus, 1000);
-  }
-
   function stopStatusPolling() {
     if (statusTimer) {
       clearInterval(statusTimer);
       statusTimer = null;
     }
+  }
+
+  function startStatusPolling() {
+    stopStatusPolling();
+    statusTimer = setInterval(syncVideoPhotoStatus, 1000);
   }
 
   async function syncVideoPhotoStatus() {
@@ -430,6 +464,9 @@ function initCameraPage() {
 
   function startStream() {
     const query = buildQueryFromForm();
+
+    log.info('Старт потока', Object.fromEntries(query.entries()));
+
     isLoading = true;
     updateToolbarState();
     cameraFrame.src = '/api/camera/stream?' + query.toString();
@@ -488,7 +525,10 @@ function initCameraPage() {
   }
 
   async function connectCamera() {
+    log.info('Нажата кнопка "Подключить"');
+
     if (!serialNumber) {
+      log.warn('Подключение отменено: камера не выбрана');
       alert('Камера не выбрана');
       return;
     }
@@ -515,30 +555,35 @@ function initCameraPage() {
   }
 
   async function applySettings() {
-  if (!serialNumber || !isConnected || !isChange) return;
+    if (!serialNumber || !isConnected || !isChange) return;
 
-  isConnected = false;
-  isLoading = true;
-  updateToolbarState();
-  stopStatusPolling();
+    log.info('Применение новых настроек', Object.fromEntries(buildQueryFromForm().entries()));
 
-  await stopStreamOnly();
-
-  const closed = await waitUntilStreamClosed();
-
-  if (!closed) {
-    isLoading = false;
-    alert('Предыдущий поток не успел корректно закрыться');
+    isConnected = false;
+    isLoading = true;
     updateToolbarState();
-    return;
+    stopStatusPolling();
+
+    await stopStreamOnly();
+
+    const closed = await waitUntilStreamClosed();
+
+    if (!closed) {
+      log.warn('Поток не успел корректно закрыться перед применением настроек');
+      isLoading = false;
+      alert('Предыдущий поток не успел корректно закрыться');
+      updateToolbarState();
+      return;
+    }
+
+    cameraFrame.src = '';
+    showNoVideo();
+    startStream();
   }
 
-  cameraFrame.src = '';
-  showNoVideo();
-  startStream();
-}
-
   async function stopCamera() {
+    log.info('Запрошена мягкая остановка потока');
+
     stopStatusPolling();
     hideForceStopButton();
     clearForceStopTimer();
@@ -547,12 +592,14 @@ function initCameraPage() {
 
     const result = await stopStreamOnly();
     if (!result) {
+      log.warn('Сервер не подтвердил мягкую остановку потока');
       waitingSoftStop = false;
       return;
     }
 
     forceStopTimer = setTimeout(() => {
       if (waitingSoftStop) {
+        log.warn('Мягкая остановка зависла, показываю кнопку принудительной остановки');
         showForceStopButton();
       }
     }, 3000);
@@ -560,11 +607,14 @@ function initCameraPage() {
     const closed = await waitSoftStopResult();
 
     if (closed) {
+      log.success('Поток остановлен мягко');
       updateToolbarState();
     }
   }
 
   async function forceStopCamera() {
+    log.warn('Запрошена принудительная остановка потока');
+
     clearForceStopTimer();
     waitingSoftStop = false;
 
@@ -592,18 +642,28 @@ function initCameraPage() {
     );
     if (interval === null) return;
 
-    const data = await CameraApi.startPhotoSaving(interval);
-    if (!data) return;
+    log.info('Запуск сохранения фото', { interval });
 
-    console.log('Ответ сервера:', data);
+    const data = await CameraApi.startPhotoSaving(interval);
+    if (!data) {
+      log.warn('Сервер не подтвердил запуск сохранения фото');
+      return;
+    }
+
+    log.success('Сохранение фото включено сервером', data);
     await syncVideoPhotoStatus();
   }
 
   async function stopPhotoSaving() {
-    const data = await CameraApi.stopPhotoSaving();
-    if (!data) return;
+    log.info('Отключение сохранения фото');
 
-    console.log('Ответ сервера:', data);
+    const data = await CameraApi.stopPhotoSaving();
+    if (!data) {
+      log.warn('Сервер не подтвердил отключение сохранения фото');
+      return;
+    }
+
+    log.success('Сохранение фото выключено сервером', data);
     await syncVideoPhotoStatus();
   }
 
@@ -620,20 +680,34 @@ function initCameraPage() {
     const unit = unitSelect ? unitSelect.value : 'minutes';
     const durationInSeconds = unit === 'minutes' ? duration * 60 : duration;
 
-    const data = await CameraApi.startVideoSaving(durationInSeconds);
-    if (!data) return;
+    log.info('Запуск записи видео', {
+      duration,
+      unit,
+      durationInSeconds,
+    });
 
-    console.log('Ответ сервера:', data);
+    const data = await CameraApi.startVideoSaving(durationInSeconds);
+    if (!data) {
+      log.warn('Сервер не подтвердил запуск записи видео');
+      return;
+    }
+
+    log.success('Запись видео включена сервером', data);
     await syncVideoPhotoStatus();
   }
 
   async function stopVideoSaving() {
     if (!isConnected) return;
 
-    const data = await CameraApi.stopVideoSaving();
-    if (!data) return;
+    log.info('Отключение записи видео');
 
-    console.log('Ответ сервера:', data);
+    const data = await CameraApi.stopVideoSaving();
+    if (!data) {
+      log.warn('Сервер не подтвердил отключение записи видео');
+      return;
+    }
+
+    log.success('Запись видео выключена сервером', data);
     await syncVideoPhotoStatus();
   }
 
@@ -655,17 +729,22 @@ function initCameraPage() {
 
   function handlePageLeave() {
     if (isLeavingPage) return;
-    isLeavingPage = true;
 
+    log.debug('Пользователь покидает страницу камеры');
+
+    isLeavingPage = true;
     cleanupCameraPage();
     notifyBackendBeforeUnload();
   }
 
   function openNetworkSettings() {
     if (!serialNumber) {
+      log.warn('Открытие сетевых настроек отменено: serial_number отсутствует');
       alert('Не выбран серийный номер камеры');
       return;
     }
+
+    log.info('Переход к сетевым настройкам', { serialNumber });
 
     const query = new URLSearchParams({
       serial_number: serialNumber,
@@ -757,6 +836,8 @@ function initCameraPage() {
   });
 
   cameraFrame.addEventListener('load', () => {
+    log.success('Видеопоток успешно загружен');
+
     isLoading = false;
     isConnected = true;
     isChange = false;
@@ -773,6 +854,8 @@ function initCameraPage() {
   });
 
   cameraFrame.addEventListener('error', () => {
+    log.error('Ошибка загрузки видеопотока');
+
     stopStatusPolling();
     resetCameraUI();
   });

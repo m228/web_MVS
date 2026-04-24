@@ -1302,3 +1302,125 @@ body.modal-open {
   border: 1px solid rgba(255, 255, 255, 0.06);
   pointer-events: none;
 }
+
+.toolbar-btn--logs {
+  background: linear-gradient(135deg, var(--info), var(--accent));
+  color: #ffffff;
+  box-shadow: 0 14px 30px var(--info-soft);
+}
+
+.log-counter {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 24px;
+  height: 24px;
+  margin-left: 8px;
+  padding: 0 8px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.18);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.debug-console {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.debug-console__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.debug-console__header h2 {
+  margin: 6px 0 0;
+  font-size: 28px;
+}
+
+.debug-console__actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.debug-console__state {
+  display: inline-flex;
+  align-items: center;
+  min-height: 40px;
+  padding: 8px 14px;
+  border-radius: 999px;
+  background: var(--chip-bg);
+  border: 1px solid var(--chip-border);
+  color: var(--chip-text);
+  font-weight: 700;
+}
+
+.debug-console__list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-height: 420px;
+  overflow: auto;
+  padding-right: 4px;
+}
+
+.debug-entry {
+  padding: 14px 16px;
+  border-radius: 18px;
+  border: 1px solid var(--border);
+  border-left-width: 4px;
+  background: var(--surface-muted);
+  box-shadow: var(--shadow-soft);
+}
+
+.debug-entry--info,
+.debug-entry--debug {
+  border-left-color: var(--info);
+}
+
+.debug-entry--success {
+  border-left-color: var(--success);
+}
+
+.debug-entry--warn {
+  border-left-color: var(--warning);
+}
+
+.debug-entry--error {
+  border-left-color: var(--danger);
+}
+
+.debug-entry__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 8px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.debug-entry__message {
+  font-family: "JetBrains Mono", "Fira Code", monospace;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--text);
+}
+
+.debug-entry__payload {
+  margin: 10px 0 0;
+  padding: 12px;
+  border-radius: 14px;
+  border: 1px solid var(--border);
+  background: var(--surface-strong);
+  font-family: "JetBrains Mono", "Fira Code", monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  overflow: auto;
+}

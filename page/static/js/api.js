@@ -1,9 +1,30 @@
 // static/js/api.js
-async function apiGet(url, errorText = 'Ошибка запроса') {
+async function apiGet(url, errorText = 'Ошибка запроса', options = {}) {
+  const {
+    source = 'api',
+    logRequest = true,
+    logSuccess = true,
+  } = options;
+
+  if (logRequest) {
+    window.AppLog?.debug(source, `GET ${url}`);
+  }
+
   try {
     const response = await fetch(url, { cache: 'no-store' });
-    return await response.json();
+    const data = await response.json();
+
+    if (logSuccess) {
+      window.AppLog?.success(source, `Ответ ${response.status} для ${url}`, data);
+    }
+
+    return data;
   } catch (error) {
+    window.AppLog?.error(source, errorText, {
+      url,
+      error: error.message,
+    });
+
     console.error(errorText, error);
     return null;
   }
@@ -71,11 +92,19 @@ const CameraApi = {
   },
 
   getStreamState() {
-    return apiGet('/api/camera/stream_state', 'Ошибка получения состояния потока:');
+    return apiGet('/api/camera/stream_state', 'Ошибка получения состояния потока:', {
+      source: 'api.stream_state',
+      logRequest: false,
+      logSuccess: false,
+    });
   },
 
   getMetrics() {
-    return apiGet('/api/camera/metrics', 'Ошибка получения метрик камеры:');
+    return apiGet('/api/camera/metrics', 'Ошибка получения метрик камеры:', {
+      source: 'api.metrics',
+      logRequest: false,
+      logSuccess: false,
+    });
   },
 
   startPhotoSaving(interval) {
@@ -107,10 +136,11 @@ const CameraApi = {
   },
 
   getVideoPhotoStatus() {
-    return apiGet(
-      '/api/camera/status_video_photo',
-      'Ошибка получения статуса video/photo:'
-    );
+    return apiGet('/api/camera/status_video_photo', 'Ошибка получения статуса video/photo:', {
+      source: 'api.status_video_photo',
+      logRequest: false,
+      logSuccess: false,
+    });
   }
 };
 

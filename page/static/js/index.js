@@ -1,3 +1,11 @@
+const log = {
+  info: (message, payload) => window.AppLog?.info('index', message, payload),
+  success: (message, payload) => window.AppLog?.success('index', message, payload),
+  warn: (message, payload) => window.AppLog?.warn('index', message, payload),
+  error: (message, payload) => window.AppLog?.error('index', message, payload),
+  debug: (message, payload) => window.AppLog?.debug('index', message, payload),
+};
+
 function updateTime() {
   const now = new Date();
   const timeString = now.toLocaleTimeString();
@@ -9,17 +17,22 @@ function updateTime() {
 }
 
 function openCamera(serial) {
+  log.info('Открытие страницы камеры', { serial });
   window.location.href = '/camera?serial_number=' + encodeURIComponent(serial);
 }
 
 async function closeCameraStream(serial) {
+  log.warn('Запрошено принудительное закрытие потока', { serial });
+
   const result = await CameraApi.closeStreamForce();
 
   if (!result) {
+    log.error('Не удалось закрыть поток', { serial });
     alert('Не удалось закрыть поток');
     return;
   }
 
+  log.success('Поток закрыт', { serial, result });
   alert(`Поток закрыт для камеры ${serial}`);
   await refreshCameras();
 }
@@ -240,6 +253,12 @@ function setNetworkError(message) {
   elements.error.classList.add('show');
 }
 
+function showNetworkError(message, payload) {
+  setNetworkError(message);
+  log.warn(message, payload);
+  alert(message);
+}
+
 function setNetworkLoading(isLoading) {
   const elements = getNetworkModalElements();
   if (!elements.loader || !elements.applyBtn) return;
@@ -309,6 +328,10 @@ function closeRiskModal() {
 
 function closeNetworkSettingsModal() {
   const elements = getNetworkModalElements();
+  log.debug('Закрытие модального окна сетевых настроек', {
+    serial: networkSettingsState.serial,
+  });
+
   networkSettingsState.serial = null;
   setNetworkError('');
   setAdvancedNetworkMode(false);
@@ -318,6 +341,8 @@ function closeNetworkSettingsModal() {
 
 async function loadNetworkSettingsData(serial) {
   const elements = getNetworkModalElements();
+  log.info('Загрузка сетевых настроек', { serial });
+
   setNetworkLoading(true);
   setNetworkError('');
 
@@ -326,14 +351,18 @@ async function loadNetworkSettingsData(serial) {
   setNetworkLoading(false);
 
   if (!data) {
+    log.error('Не удалось получить сетевые настройки', { serial });
     setNetworkError('Не удалось получить сетевые настройки');
     return;
   }
 
   if (data.error) {
+    log.warn('Сервер вернул ошибку сетевых настроек', { serial, error: data.error });
     setNetworkError(data.error);
     return;
   }
+
+  log.success('Сетевые настройки загружены', { serial, data });
 
   const ip = data.ip ?? data.address ?? '';
   const mask = data.mask ?? data.subnet_mask ?? '';
@@ -349,6 +378,8 @@ async function loadNetworkSettingsData(serial) {
 async function openNetworkSettingsModal(serial) {
   const elements = getNetworkModalElements();
   if (!elements.modal) return;
+
+  log.info('Открытие модального окна сетевых настроек', { serial });
 
   networkSettingsState.serial = serial;
 
@@ -382,6 +413,12 @@ async function applyNetworkSettings() {
       payload.gateway = readIpv4Value(elements.gatewayGroup, 'Основной шлюз');
     }
 
+    log.info('Применение сетевых настроек', {
+      serial,
+      advanced: networkSettingsState.advancedEnabled,
+    });
+    log.debug('Payload сетевых настроек', payload);
+
     setNetworkLoading(true);
     setNetworkError('');
 
@@ -390,90 +427,102 @@ async function applyNetworkSettings() {
     setNetworkLoading(false);
 
     if (!result) {
-      setNetworkError('Не удалось применить сетевые настройки');
-      alert('Не удалось применить сетевые настройки');
+      showNetworkError('Не удалось применить сетевые настройки', { serial, payload });
       return;
     }
 
+    log.debug('Ответ changeNetworkSettings', result);
+
     if (result.error) {
-      setNetworkError(result.error);
-      alert(result.error);
+      showNetworkError(result.error, { serial, result });
       return;
     }
 
     if (result.ip === 'not_driver') {
-      setNetworkError('Драйвер не загружен');
-      alert('Драйвер не загружен');
+      showNetworkError('Драйвер не загружен', { serial, result });
       return;
     }
 
     switch (result.ip) {
       case 'stream_not_closed':
-        setNetworkError('Нельзя менять сетевые настройки при открытом потоке');
-        alert('Нельзя менять сетевые настройки при открытом потоке');
+        showNetworkError('Нельзя менять сетевые настройки при открытом потоке', { serial, result });
         return;
 
       case 'no_changes':
+        log.info('Изменений сетевых настроек нет', { serial });
         alert('Изменений нет');
         closeNetworkSettingsModal();
         return;
 
       case 'gateway==ip':
-        setNetworkError('IP-адрес не должен совпадать со шлюзом');
-        alert('IP-адрес не должен совпадать со шлюзом');
+        showNetworkError('IP-адрес не должен совпадать со шлюзом', { serial, result });
         return;
 
       case 'ip_busy':
-        setNetworkError('Указанный IP уже занят');
-        alert('Указанный IP уже занят');
+        showNetworkError('Указанный IP уже занят', { serial, result });
         return;
 
       case 'node_map_not_available':
-        setNetworkError('Не удалось получить доступ к настройкам камеры');
-        alert('Не удалось получить доступ к настройкам камеры');
+        showNetworkError('Не удалось получить доступ к настройкам камеры', { serial, result });
         return;
 
       case 'mask_gateway_not_changed_advanced_off':
-        setNetworkError('Для изменения маски или шлюза включите расширенные настройки');
-        alert('Для изменения маски или шлюза включите расширенные настройки');
+        showNetworkError('Для изменения маски или шлюза включите расширенные настройки', {
+          serial,
+          result,
+        });
         return;
 
       case 'ip_not_received':
-        setNetworkError('Не удалось получить текущие сетевые настройки камеры');
-        alert('Не удалось получить текущие сетевые настройки камеры');
+        showNetworkError('Не удалось получить текущие сетевые настройки камеры', {
+          serial,
+          result,
+        });
         return;
 
       case 'ip_changed':
+        log.success('IP-адрес успешно изменён', { serial, result });
         alert('IP-адрес успешно изменён');
         closeNetworkSettingsModal();
         await refreshCameras();
         return;
 
       case 'mask_gateway_changed':
+        log.success('Маска и шлюз успешно изменены', { serial, result });
         alert('Маска и шлюз успешно изменены');
         closeNetworkSettingsModal();
         await refreshCameras();
         return;
 
       case 'ip_mask_gateway_changed':
+        log.success('IP, маска и шлюз успешно изменены', { serial, result });
         alert('IP, маска и шлюз успешно изменены');
         closeNetworkSettingsModal();
         await refreshCameras();
         return;
 
       case 'unknown':
+        log.warn('Настройки применены, но сервер вернул неопределённый статус', {
+          serial,
+          result,
+        });
         alert('Настройки применены, но сервер вернул неопределённый статус');
         closeNetworkSettingsModal();
         await refreshCameras();
         return;
 
       default:
+        log.error('Получен неизвестный ответ от сервера', { serial, result });
         alert('Получен неизвестный ответ от сервера');
         console.log('Неизвестный ответ change_ip:', result);
     }
   } catch (error) {
     setNetworkLoading(false);
     setNetworkError(error.message || 'Ошибка проверки сетевых данных');
+    log.error('Ошибка проверки сетевых данных', {
+      serial,
+      error: error.message,
+    });
     alert(error.message || 'Ошибка проверки сетевых данных');
   }
 }
@@ -518,8 +567,10 @@ function initNetworkSettingsModal() {
   if (elements.advancedToggle) {
     elements.advancedToggle.addEventListener('change', () => {
       if (elements.advancedToggle.checked) {
+        log.info('Запрошено включение расширенных сетевых настроек');
         openSimpleModal(elements.riskModal);
       } else {
+        log.info('Расширенные сетевые настройки выключены');
         closeRiskModal();
         setAdvancedNetworkMode(false);
       }
@@ -527,22 +578,27 @@ function initNetworkSettingsModal() {
   }
 
   if (elements.riskAcceptBtn) {
-  elements.riskAcceptBtn.addEventListener('click', async () => {
-    const result = await CameraApi.enableAdvancedNetworkSettings();
+    elements.riskAcceptBtn.addEventListener('click', async () => {
+      log.warn('Подтверждено включение расширенных сетевых настроек');
 
-    if (!result) {
-      alert('Не удалось включить расширенные сетевые настройки');
-      setAdvancedNetworkMode(false);
+      const result = await CameraApi.enableAdvancedNetworkSettings();
+
+      if (!result) {
+        log.error('Не удалось включить расширенные сетевые настройки');
+        alert('Не удалось включить расширенные сетевые настройки');
+        setAdvancedNetworkMode(false);
+        closeRiskModal();
+        return;
+      }
+
+      log.success('Расширенные сетевые настройки включены', result);
+      setAdvancedNetworkMode(true);
       closeRiskModal();
-      return;
-    }
-
-    setAdvancedNetworkMode(true);
-    closeRiskModal();
-  });
-}
+    });
+  }
 
   const disableAdvanced = () => {
+    log.info('Включение расширенных сетевых настроек отменено');
     setAdvancedNetworkMode(false);
     closeRiskModal();
   };
@@ -579,7 +635,12 @@ function setRefreshButtonState(isLoading) {
 
 async function loadStatus() {
   const data = await CameraApi.getStatus();
-  if (!data) return;
+  if (!data) {
+    log.error('Не удалось получить статус драйвера');
+    return;
+  }
+
+  log.debug('Статус драйвера', data);
 
   const el = document.getElementById('status');
   if (!el) return;
@@ -589,7 +650,12 @@ async function loadStatus() {
 
 async function countCams() {
   const data = await CameraApi.getCountCams();
-  if (!data) return;
+  if (!data) {
+    log.error('Не удалось получить количество камер');
+    return;
+  }
+
+  log.debug('Количество камер', data);
 
   const el = document.getElementById('count_cams');
   if (el) {
@@ -598,8 +664,15 @@ async function countCams() {
 }
 
 async function loadCams() {
+  log.info('Загрузка списка камер');
+
   const data = await CameraApi.getCams();
-  if (!data) return;
+  if (!data) {
+    log.error('Не удалось получить список камер');
+    return;
+  }
+
+  log.debug('Получены камеры', data);
 
   const table = document.getElementById('table');
   if (!table) return;
@@ -609,6 +682,8 @@ async function loadCams() {
   const entries = Object.entries(data).sort(([serialA], [serialB]) =>
     String(serialA).localeCompare(String(serialB), 'ru')
   );
+
+  log.info('Камер найдено', { count: entries.length });
 
   if (!entries.length) {
     table.innerHTML = `
@@ -627,7 +702,13 @@ async function loadCams() {
     )
   );
 
+  log.debug('IP адреса получены', ipResponses);
+
   entries.forEach(([serial, statusCode], index) => {
+    if (canOpenCamera(statusCode) && !ipResponses[index]) {
+      log.warn('Не удалось получить IP камеры', { serial, statusCode });
+    }
+
     const statusText = getAccessStatusText(statusCode);
     const ip = canOpenCamera(statusCode) ? ipResponses[index]?.ip ?? 'Ошибка' : '-';
 
@@ -675,6 +756,7 @@ async function loadCams() {
         openNetworkSettingsModal(serial);
       });
     }
+
     if (closeStreamBtn) {
       closeStreamBtn.addEventListener('click', async () => {
         await closeCameraStream(serial);
@@ -706,12 +788,19 @@ function clearAutoOpenQuery() {
 }
 
 async function refreshCameras() {
+  log.info('Обновление списка камер');
   setRefreshButtonState(true);
 
   try {
     await loadStatus();
     await countCams();
     await loadCams();
+    log.success('Список камер обновлён');
+  } catch (error) {
+    log.error('Ошибка обновления камер', {
+      error: error?.message ?? String(error),
+    });
+    throw error;
   } finally {
     setRefreshButtonState(false);
   }
@@ -726,11 +815,14 @@ async function initIndexPage() {
 
   if (!table && !timeEl && !statusEl && !countEl) return;
 
+  log.info('Инициализация главной страницы');
+
   initNetworkSettingsModal();
   await refreshCameras();
 
   const autoOpenSerial = getAutoOpenSerial();
   if (autoOpenSerial) {
+    log.info('Автооткрытие сетевых настроек по query-параметру', { autoOpenSerial });
     clearAutoOpenQuery();
     openNetworkSettingsModal(autoOpenSerial);
   }
@@ -746,5 +838,10 @@ async function initIndexPage() {
 }
 
 window.addEventListener('DOMContentLoaded', () => {
-  initIndexPage();
+  log.info('Index страница загружена');
+  initIndexPage().catch((error) => {
+    log.error('Ошибка инициализации главной страницы', {
+      error: error?.message ?? String(error),
+    });
+  });
 });

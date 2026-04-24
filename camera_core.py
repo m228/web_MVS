@@ -1,6 +1,7 @@
 from datetime import datetime
 import os
 import time
+from lib2to3.pgen2 import driver
 from pathlib import Path
 
 from harvesters.core import Harvester
@@ -8,6 +9,8 @@ import numpy as np
 import socket
 import struct
 import cv2
+
+from logger import log_event
 
 import subprocess
 
@@ -78,12 +81,15 @@ def load_driver():
         H.add_file(cti_path)
         H.update()
         Driver = True
+        log_event("camera_core.load_driver", "Драйвер загружен", "success", {"cti_path": cti_path})
     except Exception as e:
-        print("Ошибка загрузки драйвера:", e)
         Driver = False
+        log_event("camera_core.load_driver", "Ошибка загрузки драйвера", "error", {"error": str(e)})
 
 # проверка состояния загрузки драйвера
 def check():
+    if not Driver:
+        log_event("camera_core.load_driver", "Ошибка загрузки драйвера", "error", )
     return Driver
 
 # сканирование всех сетевых камер
@@ -92,13 +98,13 @@ def scan_cams():
     global cam_online
     # пробные данные(потом убрать)
     cam_online = {"DA123123":1}
+    log_event("camera_core.scan_cams", "Запущено сканирование камер")
 
     if check():
         for device in H.device_info_list:
             cam_online [device.serial_number] = int(device.access_status)
             if device.serial_number not in data_limit:
                 data_limit[device.serial_number] = None
-    print("cam_online", cam_online)
     return cam_online
 
 # подключение к камере и получение nodemap
@@ -107,13 +113,20 @@ def get_node_map_cam(serial_number):
 
     status = cam_online.get(serial_number)
     if status != 1:
+        log_event("camera_core.get_node_map_cam", "Ошибка статуса камеры", "error", {"status_camera": str(status)})
+        return None, None
+    try:
+
+        ia = H.create({'serial_number': f'{serial_number}'})
+        node_map = ia.remote_device.node_map
+        # получение лимитов
+        data_limit[serial_number] = get_camera_settings(node_map)
+        log_event("camera_core.get_node_map_cam", "Получен nodemap камеры", "success", {"status_camera": str(node_map)})
+        return node_map, ia
+    except Exception as e:
+        log_event("camera_core.get_node_map_cam", "Ошибка статуса камеры", "error", {"status_camera": e})
         return None, None
 
-    ia = H.create({'serial_number': f'{serial_number}'})
-    node_map = ia.remote_device.node_map
-    # получение лимитов
-    data_limit[serial_number] = get_camera_settings(node_map)
-    return node_map, ia
 
 
 # получение айпи камеры по серийнику
@@ -122,6 +135,7 @@ def get_ip(serial_number: str):
     ia = None
     status = cam_online.get(serial_number)
     if status != 1:
+        log_event("camera_core.get_ip", "Ошибка получения ip камеры", "error", {"status_camera": str(status)})
         return None
 
     # пробные данные(потом убрать)
@@ -133,6 +147,7 @@ def get_ip(serial_number: str):
             node_map, ia = get_node_map_cam(serial_number)
             ip_ = node_map.GevCurrentIPAddress.value
             ip = int_to_ip(ip_)
+            log_event("camera_core.get_node_map_cam", "Получен ip камеры", "success",{"ip": str(ip)})
             return {"ip":ip}
         finally:
             if ia is not None:
@@ -216,12 +231,12 @@ def apply_settings_camera(node_map, data_limit, width=None, height=None, offset_
 
         if check_value(exposure_time, data_limit["exposure_time"]["min"], data_limit["exposure_time"]["max"]):
             node_map.ExposureTime.value = int(exposure_time)
-
-        return True
+        log_event("camera_core.apply_settings_camera", "Применение всех параметров камеры", "success")
+        return True, None
 
     except Exception as e:
-        print("Ошибка применение настроек камеры:", e)
-        return False
+        log_event("camera_core.apply_settings_camera", "Ошибка применение параметров камеры", "error", {"error": str(e)})
+        return False, e
 
 def get_frame(ia, node_map):
     try:
@@ -233,12 +248,13 @@ def get_frame(ia, node_map):
             ok, encoded = cv2.imencode(".jpg", img)
 
             if not ok:
+                log_event("camera_core.get_frame", "Ошибка получения кадра", "error", {"ok": str(ok)})
                 return None, None
 
             return img, encoded.tobytes()
     except Exception as e:
         if not stream_running:
-            print("get_frame:", e)
+            log_event("camera_core.get_frame", "Ошибка получения кадра", "error",{"error": str(e)})
             return None, None
         raise
 
@@ -259,15 +275,32 @@ def generate_stream(serial_number, width=None, height=None, offset_x=None, offse
         return
 
     if stream_running or not stream_closed:
-        print("Старый поток еще не закрыт, force stop")
+        log_event("camera_core.generate_stream", "Старый поток открыт, принудительно закрытие", "warn")
         close_stream_force()
         time.sleep(0.3)
 
     try:
+
+        log_event(
+            "camera_core.generate_stream",
+            "Запрошен старт потока",
+            "info",
+            {
+                "serial_number": serial_number,
+                "width": width,
+                "height": height,
+                "offset_x": offset_x,
+                "offset_y": offset_y,
+                "fps": fps,
+                "exposure_auto": exposure_auto,
+                "exposure_time": exposure_time,
+            },
+        )
+
         node_map, ia = get_node_map_cam(serial_number)
         data_limit[serial_number] = get_camera_settings(node_map)
 
-        ok = apply_settings_camera(
+        ok, err = apply_settings_camera(
             node_map,
             data_limit[serial_number],
             width=width,
@@ -280,6 +313,7 @@ def generate_stream(serial_number, width=None, height=None, offset_x=None, offse
         )
 
         if not ok:
+            log_event("camera_core.generate_stream", "ошибка принятия настроек камеры", "warn", {"error": err, "ok": ok})
             return
 
         current_ia = ia
@@ -287,6 +321,7 @@ def generate_stream(serial_number, width=None, height=None, offset_x=None, offse
         stream_closed = False
 
         ia.start()
+        log_event("camera_core.generate_stream", "Поток камеры запущен", "success", {"serial_number": serial_number})
 
         while stream_running:
 
@@ -317,7 +352,7 @@ def generate_stream(serial_number, width=None, height=None, offset_x=None, offse
             except Exception as e:
                 if not stream_running:
                     break
-                print("Ошибка получения кадра:", repr(e))
+                log_event("camera_core.generate_stream", "Ошибка получения потока", "error", {"error": repr(e)})
                 break
 
 
@@ -344,12 +379,14 @@ def generate_stream(serial_number, width=None, height=None, offset_x=None, offse
 
     except Exception as e:
         if not stream_running:
-            print("Поток остановлен: ", e)
+            log_event("camera_core.generate_stream", "Поток остановлен", "error", {"error": repr(e)})
         else:
-            print("Ошибка потока:", repr(e))
+            log_event("camera_core.generate_stream", "Ошибка потока", "error", {"error": repr(e)})
             stream_metrics["errors"] += 1
 
     finally:
+        log_event("camera_core.generate_stream", "Поток камеры закрыт", "info", {"serial_number": serial_number})
+
         stream_running = False
         stream_closed = True
 
@@ -384,10 +421,12 @@ def generate_stream(serial_number, width=None, height=None, offset_x=None, offse
 def close_stream():
     global stream_running
     stream_running = False
+    log_event("camera_core.close_stream", "Запрошена мягкая остановка потока")
     return {"status": "stopping"}
 
 def close_stream_force():
     global stream_running, current_ia, stream_closed
+
 
     stream_running = False
 
@@ -395,30 +434,34 @@ def close_stream_force():
         try:
             current_ia.stop()
         except Exception as e:
-            print("Ошибка force stop():", repr(e))
+            log_event("camera_core.close_stream_force", "Ошибка force stop", "warn",{"error": e})
 
         try:
             current_ia.destroy()
         except Exception as e:
-            print("Ошибка force destroy():", repr(e))
+            log_event("camera_core.close_stream_force", "Ошибка force destroy", "warn", {"error": e})
 
         current_ia = None
 
     stream_closed = True
+
+    log_event("camera_core.close_stream_force", "Запрошена принудительная остановка потока", "warn")
     return {"status": "force_stopped"}
 
 # Для фото
-def on_save(interval):
+def on_photo(interval):
     global photo_interval, photo_enabled
     photo_enabled = True
     photo_interval = interval
+    log_event("camera_core.on_save", "Вкл. автосохранение фото c интервалом", "info", {"interval": interval})
     return {"status": "ok", "photo_enabled": True, "interval": photo_interval}
 
-def off_save():
+def off_photo():
     global photo_enabled, photo_interval, last_save
     photo_enabled = False
     photo_interval = None
     last_save = None
+    log_event("camera_core.off_save", "Выкл. автосохранение фото")
     return {"status": "ok", "photo_enabled": False}
 
 def check_save_photo(interval):
@@ -465,6 +508,7 @@ def on_video(duration):
     if video_enabled == 0:
         video_enabled = 1
         video_start = time.time()
+    log_event("camera_core.on_video", "Вкл. автосохранение видео с длительностью: ", "info", {"video_duration": video_duration})
     return {"status": "ok", "video_enabled": "1"}
 
 
@@ -472,6 +516,7 @@ def off_video():
     global video_enabled, video_duration, video_start, video_writer
     if video_enabled == 1:
         video_enabled = 2
+    log_event("camera_core.off_video", "Выкл. автосохранение видео")
     return {"status": "ok", "video_enabled": "2"}
 
 
@@ -479,7 +524,6 @@ def check_video_enabled():
     global video_enabled, video_duration, video_start
     if video_enabled == 1:
         current_time = time.time()
-        print("current_time: ", current_time, ", video_start: ", video_start, ", video_duration", video_duration)
         if video_duration is not None:
             if current_time - video_start >= video_duration:
                 video_enabled = 2
@@ -514,10 +558,10 @@ def get_network_settings(serial_number):
             mask = int_to_ip(node_map.GevCurrentSubnetMask.value)
             gateway = int_to_ip(node_map.GevCurrentDefaultGateway.value)
             dhcp_enabled = node_map.GevCurrentIPConfigurationDHCP.value
-
+            log_event("camera_core.get_network_settings", "Успешное получение всех сетевых настроек камеры", "success", {"serial_number": serial_number})
             return ip, mask, gateway, dhcp_enabled
         except Exception as e:
-            print(e)
+            log_event("camera_core.get_network_settings", "Ошибка получение сетевых настроек", "error", {"error": e})
             return None, None, None, None
 
         finally:
@@ -532,6 +576,7 @@ def ping_device(ip: str) -> bool:
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL
     )
+    log_event("camera_core.change_ip", "пинг до устройства", "info", {"result": result.returncode})
     return result.returncode == 0
 
 def set_advanced_network_settings():
@@ -541,12 +586,19 @@ def set_advanced_network_settings():
 
 def change_ip(serial_number, ip, mask="", gateway=""):
     global advanced_network_settings, current_ia
+
+    log_event("camera_core.change_ip","Запрошено изменение ip-mask-gateway","info",
+              {"serial_number": serial_number, "ip": ip, "mask": mask, "gateway": gateway, "advanced": advanced_network_settings})
+
     try:
         if check():
             if stream_closed:
                 old_ip, old_mask, old_gateway, dhcp_enabled = get_network_settings(serial_number)
 
                 if old_ip is not None and old_mask is not None and old_gateway is not None:
+
+                    log_event("camera_core.change_ip", "Запрошены старые сетевые настройки", "info",
+                              {"serial_number": serial_number, "ip": ip, "mask": mask, "gateway": gateway,"advanced": dhcp_enabled})
 
                     if mask == "" and gateway == "":
                         advanced_network_settings = False
@@ -563,19 +615,23 @@ def change_ip(serial_number, ip, mask="", gateway=""):
                     advanced_changed = mask_changed or gateway_changed
 
                     if not ip_changed and not advanced_changed:
+                        log_event("camera_core.change_ip", "нет изменений ip-mask-gateway","warn")
                         return {"ip": "no_changes"}
 
                     if ip == gateway:
+                        log_event("camera_core.change_ip", "ip совпадает с gateway", "warn")
                         return {"ip": "gateway==ip"}
 
                     if ip_changed:
                         device_busy = ping_device(ip)
                         if not device_busy:
+                            log_event("camera_core.change_ip", "данный IP занят", "warn")
                             return {"ip": "ip_busy"}
 
                     try:
                         node_map, current_ia = get_node_map_cam(serial_number)
                         if node_map is None or current_ia is None:
+                            log_event("camera_core.change_ip", "не доступен node_map", "warn")
                             return {"ip": "node_map_not_available"}
 
                         if dhcp_enabled:
@@ -591,39 +647,47 @@ def change_ip(serial_number, ip, mask="", gateway=""):
                             if gateway_changed:
                                 node_map.GevPersistentDefaultGateway.value = ip_to_int(gateway)
                         else:
+                            log_event("camera_core.change_ip", "mask-gateway нет изменени, т.к. не прожата кнопка", "warn")
                             return {"ip": "mask_gateway_not_changed_advanced_off"}
 
                         time.sleep(1)
                         node_map.DeviceReset.execute()
 
                         if ip_changed and advanced_network_settings and advanced_changed:
+                            log_event("camera_core.change_ip", "Ip mask gateway успешно поменяны","info")
                             return {"ip": "ip_mask_gateway_changed"}
                         elif ip_changed:
+                            log_event("camera_core.change_ip", "Ip успешно поменян", "info")
                             return {"ip": "ip_changed"}
                         elif advanced_network_settings and advanced_changed:
+                            log_event("camera_core.change_ip", "Mask gateway успешно поменяны", "info")
                             return {"ip": "mask_gateway_changed"}
 
+                        log_event("camera_core.change_ip", "неизвестная ошибка ip", "warn")
                         return {"ip": "unknown"}
 
                     except Exception as e:
-                        print(e)
+                        log_event("camera_core.change_ip", "Ошибка изменения ip-mask-gateway", "warn")
                         return {"error": "Ошибка изменения ip-mask-gateway"}
                     finally:
-                        print("current_ia:",current_ia)
                         if current_ia is not None:
                             try:
                                 current_ia.stop()
-                            except:
-                                pass
+                            except Exception as e:
+                                log_event("camera_core.close_stream_force", "Ошибка force stop", "warn", {"error": e})
+
                             try:
                                 current_ia.destroy()
-                            except:
-                                pass
+                            except Exception as e:
+                                log_event("camera_core.close_stream_force", "Ошибка force destroy", "warn",{"error": e})
                 else:
+                    log_event("camera_core.change_ip", "Ip не получен", "warn")
                     return {"ip": "ip_not_received"}
             else:
+                log_event("camera_core.change_ip", "Поток видео не закрыт", "warn")
                 return {"ip": "stream_not_closed"}
         else:
+            log_event("camera_core.change_ip", "не загружен драйвер", "warn")
             return {"ip": "not_driver"}
     finally:
         advanced_network_settings = False

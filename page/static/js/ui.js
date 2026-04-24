@@ -4,6 +4,7 @@ function getPositiveNumber(selector, message) {
   const rawValue = input ? input.value.trim() : '';
 
   if (!rawValue) {
+    window.AppLog?.warn('ui', message, { selector, rawValue });
     alert(message);
     return null;
   }
@@ -11,6 +12,10 @@ function getPositiveNumber(selector, message) {
   const value = Number(rawValue);
 
   if (Number.isNaN(value) || value <= 0) {
+    window.AppLog?.warn('ui', 'Введено некорректное число', {
+      selector,
+      rawValue,
+    });
     alert(message);
     return null;
   }

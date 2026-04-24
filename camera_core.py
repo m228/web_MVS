@@ -99,7 +99,7 @@ def scan_cams():
     # пробные данные(потом убрать)
     cam_online = {"DA123123":1}
     log_event("camera_core.scan_cams", "Запущено сканирование камер")
-
+    H.update()
     if check():
         for device in H.device_info_list:
             cam_online [device.serial_number] = int(device.access_status)

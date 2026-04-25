@@ -14,14 +14,20 @@ from logger import log_event
 
 import subprocess
 
+from pathlib import Path
 
-cti_path = "Driver/MvProducerGEV.cti"
+# Путь до директории и имя файла для поиска
+program_dir = Path(__file__).resolve().parent
+filename = "MvProducerGEV.cti"
+
+# создание объекта для работы
 H = Harvester()
 
 # статус всех камер
 cam_online = {}
 # data limit камер
 data_limit = {}
+
 # метрики стрима
 stream_metrics = {
     "fps": 0.0,
@@ -31,6 +37,7 @@ stream_metrics = {
     "height": 0,
     "errors": 0,
 }
+
 # статусы доступа к камерам
 access_status = {
     0: "Неизвестно",
@@ -41,7 +48,6 @@ access_status = {
     5: "OpenReadWrite",
     6: "OpenReadOnly",
 }
-
 
 # состояние загрузки драйвера
 Driver = False
@@ -63,7 +69,6 @@ video_writer = None
 # расширенные настройки в смене айпи
 advanced_network_settings = False
 
-
 # из ip в int для записи в камеру
 def ip_to_int(ip):
     return struct.unpack("!I", socket.inet_aton(ip))[0]
@@ -72,16 +77,20 @@ def ip_to_int(ip):
 def int_to_ip(n):
     return socket.inet_ntoa(struct.pack("!I", n))
 
-
-
 # загрузка драйвера для работы
 def load_driver():
-    global Driver,cti_path, H
+    global Driver, H, filename
     try:
-        H.add_file(cti_path)
-        H.update()
-        Driver = True
-        log_event("camera_core.load_driver", "Драйвер загружен", "success", {"cti_path": cti_path})
+        cti_path = next(program_dir.rglob(filename), None)
+        if cti_path is not None:
+            cti_path = str(cti_path)
+            H.add_file(cti_path)
+            H.update()
+            Driver = True
+            log_event("camera_core.load_driver", "Драйвер загружен", "success", {"cti_path": cti_path})
+        else:
+            log_event("camera_core.load_driver", "Драйвер отсутствует в папке программы", "error")
+            Driver = False
     except Exception as e:
         Driver = False
         log_event("camera_core.load_driver", "Ошибка загрузки драйвера", "error", {"error": str(e)})
@@ -89,7 +98,10 @@ def load_driver():
 # проверка состояния загрузки драйвера
 def check():
     if not Driver:
+        load_driver()
         log_event("camera_core.load_driver", "Ошибка загрузки драйвера", "error", )
+        if Driver:
+            return Driver
     return Driver
 
 # сканирование всех сетевых камер
@@ -100,6 +112,7 @@ def scan_cams():
     cam_online = {"DA123123":1}
     log_event("camera_core.scan_cams", "Запущено сканирование камер")
     H.update()
+    load_driver()
     if check():
         for device in H.device_info_list:
             cam_online [device.serial_number] = int(device.access_status)
@@ -110,13 +123,12 @@ def scan_cams():
 # подключение к камере и получение nodemap
 def get_node_map_cam(serial_number):
     global H, data_limit, cam_online
-
     status = cam_online.get(serial_number)
+
     if status != 1:
         log_event("camera_core.get_node_map_cam", "Ошибка статуса камеры", "error", {"status_camera": str(status)})
         return None, None
     try:
-
         ia = H.create({'serial_number': f'{serial_number}'})
         node_map = ia.remote_device.node_map
         # получение лимитов
@@ -426,8 +438,6 @@ def close_stream():
 
 def close_stream_force():
     global stream_running, current_ia, stream_closed
-
-
     stream_running = False
 
     if current_ia is not None:
@@ -558,6 +568,7 @@ def get_network_settings(serial_number):
             mask = int_to_ip(node_map.GevCurrentSubnetMask.value)
             gateway = int_to_ip(node_map.GevCurrentDefaultGateway.value)
             dhcp_enabled = node_map.GevCurrentIPConfigurationDHCP.value
+
             log_event("camera_core.get_network_settings", "Успешное получение всех сетевых настроек камеры", "success", {"serial_number": serial_number})
             return ip, mask, gateway, dhcp_enabled
         except Exception as e:

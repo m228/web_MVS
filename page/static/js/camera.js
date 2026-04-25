@@ -51,12 +51,14 @@ function initCameraPage() {
   let isLoading = false;
   let isSavePhoto = false;
   let isSaveVideo = false;
+  let isStoppingStream = false;
   let statusTimer = null;
   let activeSliderWrap = null;
   let isLeavingPage = false;
   let forceStopTimer = null;
   let waitingSoftStop = false;
   let metricsTimer = null;
+
 
   const photoPopup = UIHelpers.createPopupController(photoCard, buttons.photo);
   const videoPopup = UIHelpers.createPopupController(videoCard, buttons.video);
@@ -239,6 +241,8 @@ function initCameraPage() {
     isConnected = false;
     isChange = false;
     isLoading = false;
+    isStoppingStream = false;
+    waitingSoftStop = false;
 
     setSaveState({ photo: false, video: false });
 
@@ -561,6 +565,7 @@ function initCameraPage() {
 
     isConnected = false;
     isLoading = true;
+    isStoppingStream = true;
     updateToolbarState();
     stopStatusPolling();
 
@@ -589,6 +594,7 @@ function initCameraPage() {
     clearForceStopTimer();
 
     waitingSoftStop = true;
+    isStoppingStream = true;
 
     const result = await stopStreamOnly();
     if (!result) {
@@ -617,6 +623,7 @@ function initCameraPage() {
 
     clearForceStopTimer();
     waitingSoftStop = false;
+    isStoppingStream = true;
 
     await stopStreamForce();
 
@@ -733,6 +740,7 @@ function initCameraPage() {
     log.debug('Пользователь покидает страницу камеры');
 
     isLeavingPage = true;
+    isStoppingStream = true;
     cleanupCameraPage();
     notifyBackendBeforeUnload();
   }
@@ -842,6 +850,7 @@ function initCameraPage() {
     isConnected = true;
     isChange = false;
     waitingSoftStop = false;
+    isStoppingStream = false;
     hideForceStopButton();
     clearForceStopTimer();
 
@@ -854,11 +863,16 @@ function initCameraPage() {
   });
 
   cameraFrame.addEventListener('error', () => {
-    log.error('Ошибка загрузки видеопотока');
+  if (isStoppingStream || waitingSoftStop || !cameraFrame.src) {
+    log.info('Поток остановлен или сброшен штатно');
+    return;
+  }
 
-    stopStatusPolling();
-    resetCameraUI();
-  });
+  log.error('Ошибка загрузки видеопотока');
+
+  stopStatusPolling();
+  resetCameraUI();
+});
 
   window.addEventListener('beforeunload', handlePageLeave);
   window.addEventListener('pagehide', handlePageLeave);

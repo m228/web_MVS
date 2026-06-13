@@ -58,6 +58,7 @@ function initCameraPage() {
   let forceStopTimer = null;
   let waitingSoftStop = false;
   let metricsTimer = null;
+  let streamErrorHandled = false;
 
 
   const photoPopup = UIHelpers.createPopupController(photoCard, buttons.photo);
@@ -241,7 +242,7 @@ function initCameraPage() {
     isConnected = false;
     isChange = false;
     isLoading = false;
-    isStoppingStream = false;
+    isStoppingStream = true;
     waitingSoftStop = false;
 
     setSaveState({ photo: false, video: false });
@@ -471,6 +472,8 @@ function initCameraPage() {
 
     log.info('Старт потока', Object.fromEntries(query.entries()));
 
+    isStoppingStream = false;
+    streamErrorHandled = false;
     isLoading = true;
     updateToolbarState();
     cameraFrame.src = '/api/camera/stream?' + query.toString();
@@ -855,6 +858,7 @@ function initCameraPage() {
     isChange = false;
     waitingSoftStop = false;
     isStoppingStream = false;
+    streamErrorHandled = false;
     hideForceStopButton();
     clearForceStopTimer();
 
@@ -867,11 +871,11 @@ function initCameraPage() {
   });
 
   cameraFrame.addEventListener('error', () => {
-  if (isStoppingStream || waitingSoftStop || !cameraFrame.src) {
-    log.info('Поток остановлен или сброшен штатно');
+  if (isStoppingStream || waitingSoftStop || streamErrorHandled || !cameraFrame.src) {
     return;
   }
 
+  streamErrorHandled = true;
   log.error('Ошибка загрузки видеопотока');
 
   stopStatusPolling();

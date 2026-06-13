@@ -1,3 +1,4 @@
+import asyncio
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -17,6 +18,8 @@ def api_log(source: str, message: str, level: str = "info", payload: dict | None
 async def lifespan(app: FastAPI):
     api_log("app", "Запуск приложения")
     manager.load_driver()
+    # даём продюсеру время на обнаружение камер, иначе первый опрос ловит ошибки
+    await asyncio.sleep(2.0)
     manager.scan_cams()
     yield
     api_log("app", "Остановка приложения")
@@ -48,17 +51,13 @@ def api_debug_logs(since_id: int = 0):
 
 @app.get("/api/cams")
 def api_cams():
-    data = manager.scan_cams()
-    api_log("api.cams", "Получен список камер", payload={"count": len(data)})
-    return data
+    return manager.scan_cams()
 
 
 @app.get("/api/status")
 def api_status():
     try:
-        status = manager.check()
-        api_log("api.status", "Получен статус драйвера", payload={"status": status})
-        return {"status": status}
+        return {"status": manager.check()}
     except Exception as error:
         api_log("api.status", "Ошибка получения статуса драйвера", "error", {"error": str(error)})
         return {"status": False, "error": str(error)}
@@ -66,16 +65,12 @@ def api_status():
 
 @app.get("/api/ip")
 def get_ip(serial_number: str):
-    data = manager.get(serial_number).get_ip()
-    api_log("api.get_ip", "Получен IP камеры", payload={"serial_number": serial_number, "data": data})
-    return data
+    return manager.get(serial_number).get_ip()
 
 
 @app.get("/api/count_cams")
 def count_cams():
-    data = manager.count_cams()
-    api_log("api.count_cams", "Получено количество камер", payload=data)
-    return data
+    return manager.count_cams()
 
 
 @app.get("/api/get_network_settings")
@@ -191,9 +186,7 @@ def metrics(serial_number: str):
 
 @app.get("/api/camera/data_limit")
 def data_limit(serial_number: str):
-    data = manager.get(serial_number).data_limit
-    api_log("api.camera.data_limit", "Получены ограничения камеры", payload={"serial_number": serial_number})
-    return data
+    return manager.get(serial_number).data_limit
 
 
 @app.get("/api/camera/on_save_photo")

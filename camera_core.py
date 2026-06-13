@@ -24,17 +24,6 @@ CTI_FILENAME = "MvProducerGEV.cti"
 # fps по умолчанию для записи видео, когда камера не сообщила частоту кадров
 DEFAULT_VIDEO_FPS = 20.0
 
-# статусы доступа к камерам
-ACCESS_STATUS = {
-    0: "Неизвестно",
-    1: "Ok",
-    2: "Только чтение",
-    3: "Нет доступа",
-    4: "Занята",
-    5: "OpenReadWrite",
-    6: "OpenReadOnly",
-}
-
 
 # из ip в int для записи в камеру
 def ip_to_int(ip):
@@ -224,6 +213,8 @@ class CameraWorker(BaseCameraWorker):
         if status != 1:
             log_event("camera_core.get_node_map_cam", "Ошибка статуса камеры", "error", {"status_camera": str(status)})
             return None, None
+
+        ia = None
         try:
             ia = self.manager.create_acquirer(self.serial_number)
             node_map = ia.remote_device.node_map
@@ -231,6 +222,12 @@ class CameraWorker(BaseCameraWorker):
             self.data_limit = self.read_settings(node_map)
             return node_map, ia
         except Exception as e:
+            # не оставляем открытый хэндл (иначе GenTL: resource exhausted)
+            if ia is not None:
+                try:
+                    ia.destroy()
+                except Exception:
+                    pass
             log_event("camera_core.get_node_map_cam", "Ошибка подключения к камере", "error",
                       {"serial_number": self.serial_number, "error": repr(e)})
             return None, None
@@ -858,11 +855,16 @@ class CameraManager:
         if not matches:
             raise ValueError(f"устройство не найдено: {serial_number}")
 
-        if len(matches) > 1:
-            log_event("camera_core.create_acquirer", "Найдено несколько записей устройства, выбрана первая", "warn",
-                      {"serial_number": serial_number, "count": len(matches)})
+        # одно устройство может быть видно через несколько сетевых интерфейсов,
+        # причём рабочая запись не всегда первая — пробуем по очереди, пока не откроется
+        last_error = None
+        for index in matches:
+            try:
+                return self.harvester.create(index)
+            except Exception as e:
+                last_error = e
 
-        return self.harvester.create(matches[0])
+        raise last_error if last_error is not None else ValueError(f"не удалось открыть устройство: {serial_number}")
 
     # создать/получить RTSP-камеру (rtsp_url нужен при первом обращении)
     def get_rtsp(self, serial_number, rtsp_url=None):
@@ -916,7 +918,6 @@ class CameraManager:
     def scan_cams(self):
         # пробные данные(потом убрать)
         self.cam_online = {"DA123123": 1}
-        log_event("camera_core.scan_cams", "Запущено сканирование камер")
         # load_driver сам обновит список устройств (и при первом вызове добавит .cti)
         self.load_driver()
         if self.check():

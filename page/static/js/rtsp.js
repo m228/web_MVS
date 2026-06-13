@@ -51,6 +51,7 @@ function initRtspPage() {
   let metricsTimer = null;
   let statusTimer = null;
   let isLeavingPage = false;
+  let streamErrorHandled = false;
 
   const photoPopup = UIHelpers.createPopupController(photoCard, buttons.photo);
   const videoPopup = UIHelpers.createPopupController(videoCard, buttons.video);
@@ -162,7 +163,7 @@ function initRtspPage() {
   function resetUI() {
     isConnected = false;
     isLoading = false;
-    isStoppingStream = false;
+    isStoppingStream = true;
     isSavePhoto = false;
     isSaveVideo = false;
 
@@ -191,6 +192,8 @@ function initRtspPage() {
     serialElement.textContent = serial;
     log.info('Подключение к RTSP-камере', { serial });
 
+    isStoppingStream = false;
+    streamErrorHandled = false;
     isLoading = true;
     updateToolbarState();
 
@@ -366,6 +369,7 @@ function initRtspPage() {
     isLoading = false;
     isConnected = true;
     isStoppingStream = false;
+    streamErrorHandled = false;
 
     showVideo();
     updateToolbarState();
@@ -376,11 +380,11 @@ function initRtspPage() {
   });
 
   rtspFrame.addEventListener('error', () => {
-    if (isStoppingStream || !rtspFrame.src) {
-      log.info('RTSP-поток остановлен или сброшен штатно');
+    if (isStoppingStream || streamErrorHandled || !rtspFrame.src) {
       return;
     }
 
+    streamErrorHandled = true;
     log.error('Ошибка загрузки RTSP-потока', { serial });
     resetUI();
   });

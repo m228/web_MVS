@@ -1,6 +1,7 @@
 from datetime import datetime
 import os
 import re
+import threading
 import time
 from pathlib import Path
 
@@ -231,12 +232,24 @@ class CameraWorker(BaseCameraWorker):
         self.data_limit = None
         self.advanced_settings = False
 
-        # GenTL ID сетевого интерфейса, через который подключаемся.
-        # None = автовыбор первого available из device_info_list
+        # GenTL ID сетевого интерфейса (вспомогательный фильтр)
         self.interface_id = None
+        # уникальный ключ конкретной записи в device_info_list — основной критерий выбора
+        self.device_handle = None
 
-    # запомнить выбранный пользователем интерфейс (стабильный GenTL ID)
-    def select_interface(self, interface_id):
+        # сериализация одновременных control-операций к одной камере
+        # (без него Promise.all из фронта открывает 5 acquirer'ов на один control-канал
+        # и они дерутся за -1005 AccessDenied)
+        self._control_lock = threading.Lock()
+
+        # кэш последних "сетевых" данных, чтобы не дёргать control повторно
+        self._cached_ip = None              # {"ip": "..."} | None
+        self._cached_network = None         # (ip, mask, gateway, dhcp) | None
+        self._cache_ts = 0.0
+        self._cache_ttl = 10.0              # сек — кэш живёт между refresh-цикл UI
+
+    # запомнить выбранную пользователем запись (handle) и/или интерфейс
+    def select_interface(self, interface_id=None, device_handle=None):
         # переключение допустимо только при закрытом потоке —
         # иначе self.ia, открытый через старый интерфейс, повиснет
         if self.running:
@@ -244,52 +257,50 @@ class CameraWorker(BaseCameraWorker):
                     "hint": "сначала остановите поток, потом меняйте интерфейс"}
 
         self.interface_id = interface_id or None
-        log_event("camera_core.select_interface", "Выбран сетевой интерфейс камеры", "info",
-                  {"serial_number": self.serial_number, "interface_id": self.interface_id})
-        return {"status": "ok", "interface_id": self.interface_id}
+        self.device_handle = device_handle or None
+        # при смене записи кэш мог относиться к другой — инвалидируем
+        self._cached_ip = None
+        self._cached_network = None
+        log_event("camera_core.select_interface", "Выбрана запись камеры", "info",
+                  {"serial_number": self.serial_number,
+                   "interface_id": self.interface_id, "device_handle": self.device_handle})
+        return {"status": "ok",
+                "interface_id": self.interface_id, "device_handle": self.device_handle}
 
     # ---------- доступ к камере / nodemap ----------
 
     # подключение к камере и получение nodemap
     def open_node_map(self):
-        status = self.manager.access_status(self.serial_number, self.interface_id)
-
-        if status != 1:
+        # access_status проверяем агрегированный (по серийнику) — статус для конкретной
+        # записи может быть != 1, но другая запись того же серийника при этом откроется
+        if not self.manager.cam_online.get(self.serial_number):
             log_event("camera_core.get_node_map_cam", "Камера недоступна для подключения", "error",
-                      {"serial_number": self.serial_number, "interface_id": self.interface_id,
-                       "access_status": status,
+                      {"serial_number": self.serial_number,
                        "hint": "пересканируйте список камер или проверьте, не занята ли камера другим приложением"})
             return None, None
 
-        last_error = None
-        # одна повторная попытка с авто-сбросом продюсера, если ресурсы исчерпаны
-        for attempt in range(2):
-            ia = None
-            try:
-                ia = self.manager.create_acquirer(self.serial_number, self.interface_id)
-                node_map = ia.remote_device.node_map
-                self.data_limit = self.read_settings(node_map)
-                return node_map, ia
-            except Exception as e:
-                last_error = e
-                if ia is not None:
-                    try:
-                        ia.destroy()
-                    except Exception:
-                        pass
-
-                code = _gentl_code(repr(e))
-                if code == -1020 and attempt == 0:
-                    log_event("camera_core.get_node_map_cam",
-                              "Ресурсы драйвера исчерпаны, пересоздаю Harvester и повторяю попытку",
-                              "warn", {"serial_number": self.serial_number})
-                    self.manager.reset_harvester()
-                    continue
-                break
-
-        payload = {"serial_number": self.serial_number, **_explain_error(last_error)}
-        log_event("camera_core.get_node_map_cam", "Ошибка подключения к камере", "error", payload)
-        return None, None
+        ia = None
+        try:
+            ia = self.manager.create_acquirer(
+                self.serial_number,
+                interface_id=self.interface_id,
+                device_handle=self.device_handle,
+            )
+            node_map = ia.remote_device.node_map
+            self.data_limit = self.read_settings(node_map)
+            return node_map, ia
+        except Exception as e:
+            if ia is not None:
+                try:
+                    ia.destroy()
+                except Exception:
+                    pass
+            payload = {"serial_number": self.serial_number,
+                       "interface_id": self.interface_id,
+                       "device_handle": self.device_handle,
+                       **_explain_error(e)}
+            log_event("camera_core.get_node_map_cam", "Ошибка подключения к камере", "error", payload)
+            return None, None
 
     # получение данных с камеры, текущие + лимиты
     def read_settings(self, node_map):
@@ -342,17 +353,34 @@ class CameraWorker(BaseCameraWorker):
         if self.serial_number == "DA123123":
             return {"ip": "192.168.2.10"}
 
-        if self.manager.check():
+        # кэш — если параллельно/недавно уже спрашивали, возвращаем без открытия control
+        if self._cached_ip is not None and (time.time() - self._cache_ts) < self._cache_ttl:
+            return self._cached_ip
+
+        if not self.manager.check():
+            return None
+
+        # control-операция — сериализуем (см. self._control_lock)
+        with self._control_lock:
+            # пока ждали лок, кто-то другой мог уже получить ответ — используем его
+            if self._cached_ip is not None and (time.time() - self._cache_ts) < self._cache_ttl:
+                return self._cached_ip
+
             ia = None
             try:
                 node_map, ia = self.open_node_map()
                 if node_map is None:
                     return None
                 ip = int_to_ip(node_map.GevCurrentIPAddress.value)
-                return {"ip": ip}
+                self._cached_ip = {"ip": ip}
+                self._cache_ts = time.time()
+                return self._cached_ip
             finally:
                 if ia is not None:
-                    ia.destroy()
+                    try:
+                        ia.destroy()
+                    except Exception:
+                        pass
 
     # ---------- применение настроек ----------
 
@@ -588,7 +616,16 @@ class CameraWorker(BaseCameraWorker):
         if status != 1:
             return None, None, None, None
 
-        if self.manager.check():
+        if self._cached_network is not None and (time.time() - self._cache_ts) < self._cache_ttl:
+            return self._cached_network
+
+        if not self.manager.check():
+            return None, None, None, None
+
+        with self._control_lock:
+            if self._cached_network is not None and (time.time() - self._cache_ts) < self._cache_ttl:
+                return self._cached_network
+
             ia = None
             try:
                 node_map, ia = self.open_node_map()
@@ -601,16 +638,21 @@ class CameraWorker(BaseCameraWorker):
                 gateway = int_to_ip(node_map.GevCurrentDefaultGateway.value)
                 dhcp_enabled = node_map.GevCurrentIPConfigurationDHCP.value
 
-                return ip, mask, gateway, dhcp_enabled
+                self._cached_network = (ip, mask, gateway, dhcp_enabled)
+                # IP оттуда же — обновим и его кэш
+                self._cached_ip = {"ip": ip}
+                self._cache_ts = time.time()
+                return self._cached_network
             except Exception as e:
                 log_event("camera_core.get_network_settings", "Ошибка чтения сетевых настроек", "error",
                           {"serial_number": self.serial_number, **_explain_error(e)})
                 return None, None, None, None
             finally:
                 if ia is not None:
-                    ia.destroy()
-
-        return None, None, None, None
+                    try:
+                        ia.destroy()
+                    except Exception:
+                        pass
 
     def change_ip(self, ip, mask="", gateway=""):
         node_map, ia = None, None
@@ -618,6 +660,16 @@ class CameraWorker(BaseCameraWorker):
         log_event("camera_core.change_ip", "Запрошено изменение ip-mask-gateway", "info",
                   {"serial_number": self.serial_number, "ip": ip, "mask": mask, "gateway": gateway, "advanced": self.advanced_settings})
 
+        # инвалидируем кэш до старта — после ребута камеры он точно устарел
+        self._cached_ip = None
+        self._cached_network = None
+
+        # сериализуем с остальными control-операциями
+        with self._control_lock:
+            return self._change_ip_locked(ip, mask, gateway)
+
+    def _change_ip_locked(self, ip, mask, gateway):
+        node_map, ia = None, None
         try:
             if not self.manager.check():
                 log_event("camera_core.change_ip", "не загружен драйвер", "warn")
@@ -690,8 +742,9 @@ class CameraWorker(BaseCameraWorker):
                 node_map.DeviceReset.execute()
 
                 # после смены IP старая GenTL-запись устарела:
-                # сбрасываем "запомненный" интерфейс — следующий scan/connect возьмёт новый
+                # сбрасываем "запомненный" handle/интерфейс — следующий scan/connect возьмёт новый
                 self.interface_id = None
+                self.device_handle = None
 
                 if ip_changed and self.advanced_settings and advanced_changed:
                     log_event("camera_core.change_ip", "Ip mask gateway успешно поменяны", "info")
@@ -942,48 +995,80 @@ class CameraManager:
         self.load_driver()
         log_event("camera_core.reset_harvester", "Harvester пересоздан", "info")
 
-    # создать acquirer по (серийник + интерфейс).
-    # interface_id=None → автовыбор: сначала available, потом любая запись.
-    # interface_id задан → сначала пробуем его, потом fallback на остальные available.
-    def create_acquirer(self, serial_number, interface_id=None):
+    # создать acquirer по серийнику. Подбирает рабочий экземпляр устройства из всех дублей.
+    # device_handle — уникальный ключ конкретной записи (приоритет № 1).
+    # interface_id  — id GenTL-интерфейса (приоритет № 2, если он различает дубли).
+    # Без параметров — просто пробует все доступные подряд.
+    def create_acquirer(self, serial_number, interface_id=None, device_handle=None):
+        # перечитываем список — даём шанс продюсеру актуализировать дубли
+        try:
+            self.harvester.update()
+        except Exception:
+            pass
+
         devices = self.harvester.device_info_list
 
-        same_serial = []
+        matches = []
         for index, device in enumerate(devices):
             if device.serial_number != serial_number:
                 continue
-            d_iface = self._interface_id(device)
-            d_status = self._safe_status(device)
-            same_serial.append((index, d_iface, d_status))
+            matches.append({
+                "index": index,
+                "interface_id": self._interface_id(device),
+                "device_handle": self._device_handle(device, index),
+                "access_status": self._safe_status(device),
+            })
 
-        if not same_serial:
+        if not matches:
             raise ValueError(f"устройство не найдено: {serial_number}")
 
-        # порядок проб: предпочтительный интерфейс → остальные available → недоступные.
-        # это даёт shooting fish-устойчивость: если "выбранная" запись не открывается,
-        # перебираем дубликаты этой же камеры через другие сетевые интерфейсы.
-        preferred = [e for e in same_serial if interface_id and e[1] == interface_id]
-        available = [e for e in same_serial if e[2] == 1 and e not in preferred]
-        fallback = [e for e in same_serial if e not in preferred and e not in available]
+        # приоритеты выбора:
+        # 1) запись с конкретным device_handle (если он у нас сохранён);
+        # 2) записи на конкретном interface_id (если он реально различает дубли);
+        # 3) остальные available;
+        # 4) недоступные — как последний шанс.
+        preferred = [m for m in matches if device_handle and m["device_handle"] == device_handle]
+
+        if not preferred and interface_id:
+            unique_ifaces = {m["interface_id"] for m in matches}
+            if len(unique_ifaces) > 1:
+                preferred = [m for m in matches if m["interface_id"] == interface_id]
+
+        available = [m for m in matches if m["access_status"] == 1 and m not in preferred]
+        fallback = [m for m in matches if m not in preferred and m not in available]
         ordered = preferred + available + fallback
 
         last_error = None
-        tried_interfaces = []
-        for index, d_iface, _status in ordered:
+        tried = []
+        for attempt_index, m in enumerate(ordered):
+            index = m["index"]
+            # перед второй и последующими попытками — короткая пауза,
+            # чтобы продюсер успел освободить control-канал после неудачи
+            if attempt_index > 0:
+                time.sleep(0.15)
             try:
+                # защита от гонки: список мог сократиться между update() и create()
+                if index >= len(self.harvester.device_info_list):
+                    continue
                 acquirer = self.harvester.create(index)
-                if interface_id and d_iface != interface_id:
+                if device_handle and m["device_handle"] != device_handle:
                     log_event("camera_core.create_acquirer",
-                              "Предпочтительный интерфейс не открылся, подключено через резервный",
+                              "Выбранная запись не открылась, подключено через резервную",
                               "warn", {"serial_number": serial_number,
-                                       "preferred": interface_id, "used": d_iface})
+                                       "preferred_handle": device_handle,
+                                       "used_handle": m["device_handle"]})
+                else:
+                    log_event("camera_core.create_acquirer", "Подключение к камере открыто", "info",
+                              {"serial_number": serial_number,
+                               "device_handle": m["device_handle"],
+                               "interface_id": m["interface_id"]})
                 return acquirer
             except Exception as e:
                 last_error = e
-                tried_interfaces.append(d_iface)
+                tried.append({"handle": m["device_handle"], "error": _gentl_code(repr(e)) or "n/a"})
 
         raise last_error if last_error is not None else ValueError(
-            f"не удалось открыть устройство: {serial_number} (пробовали: {tried_interfaces})")
+            f"не удалось открыть устройство: {serial_number} (пробовали: {tried})")
 
     # ---------- перечисление устройств с разбивкой по интерфейсам ----------
 
@@ -994,6 +1079,13 @@ class CameraManager:
         if parent is None:
             return None
         return getattr(parent, "id_", None) or getattr(parent, "id", None)
+
+    @staticmethod
+    def _device_handle(device_info, index):
+        # уникальный ключ записи в device_info_list: id_ устройства, либо его суффикс с индексом,
+        # если у продюсера id_ не уникален (как у Hikrobot, где у всех 5 копий один id_).
+        raw = getattr(device_info, "id_", None) or getattr(device_info, "id", None) or ""
+        return f"{raw}#{index}" if raw else f"dev#{index}"
 
     @staticmethod
     def _interface_name(device_info):
@@ -1046,6 +1138,7 @@ class CameraManager:
             status = self._safe_status(device)
             result.append({
                 "device_index": index,
+                "device_handle": self._device_handle(device, index),
                 "serial_number": serial,
                 "access_status": status,
                 "available": status == 1,
@@ -1059,6 +1152,7 @@ class CameraManager:
     def list_devices_grouped(self):
         grouped = {"DA123123": [{
             "device_index": -1,
+            "device_handle": "mock#DA123123",
             "serial_number": "DA123123",
             "access_status": 1,
             "available": True,

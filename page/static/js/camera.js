@@ -13,6 +13,7 @@ function initCameraPage() {
   const params = new URLSearchParams(window.location.search);
   const serialNumber = params.get('serial_number');
   const interfaceId = params.get('interface_id') || '';
+  const deviceHandle = params.get('device_handle') || '';
 
   const buttons = {
     start: document.getElementById('startBtn'),
@@ -374,6 +375,7 @@ function initCameraPage() {
 
     query.set('serial_number', serialNumber);
     if (interfaceId) query.set('interface_id', interfaceId);
+    if (deviceHandle) query.set('device_handle', deviceHandle);
 
     const fields = [
       ['width', 'width'],

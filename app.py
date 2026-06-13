@@ -61,11 +61,12 @@ def api_cams_detailed():
     return manager.list_devices_grouped()
 
 
-# выбрать сетевой интерфейс, через который будет открываться камера
+# выбрать конкретную запись (handle) и/или интерфейс, через которые открывать камеру
 @app.get("/api/camera/select_interface")
-def select_interface(serial_number: str, interface_id: str = ""):
-    data = manager.get(serial_number).select_interface(interface_id or None)
-    api_log("api.camera.select_interface", "Выбран интерфейс камеры",
+def select_interface(serial_number: str, interface_id: str = "", device_handle: str = ""):
+    data = manager.get(serial_number).select_interface(
+        interface_id or None, device_handle or None)
+    api_log("api.camera.select_interface", "Выбрана запись камеры",
             payload={"serial_number": serial_number, **data})
     return data
 
@@ -80,10 +81,12 @@ def api_status():
 
 
 @app.get("/api/ip")
-def get_ip(serial_number: str, interface_id: str = ""):
+def get_ip(serial_number: str, interface_id: str = "", device_handle: str = ""):
     worker = manager.get(serial_number)
     if interface_id:
         worker.interface_id = interface_id
+    if device_handle:
+        worker.device_handle = device_handle
     return worker.get_ip()
 
 
@@ -93,10 +96,12 @@ def count_cams():
 
 
 @app.get("/api/get_network_settings")
-def network_settings(serial_number: str, interface_id: str = ""):
+def network_settings(serial_number: str, interface_id: str = "", device_handle: str = ""):
     worker = manager.get(serial_number)
     if interface_id:
         worker.interface_id = interface_id
+    if device_handle:
+        worker.device_handle = device_handle
     ip, mask, gateway, dhcp = worker.get_network_settings()
     if ip is None:
         api_log(
@@ -147,6 +152,7 @@ def change_ip(
 def camera_stream(
     serial_number: str,
     interface_id: str = "",
+    device_handle: str = "",
     width: int = None,
     height: int = None,
     offset_x: int = None,
@@ -158,6 +164,8 @@ def camera_stream(
     worker = manager.get(serial_number)
     if interface_id:
         worker.interface_id = interface_id
+    if device_handle:
+        worker.device_handle = device_handle
     api_log(
         "api.camera.stream",
         "Запрошен видеопоток",

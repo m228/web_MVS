@@ -31,9 +31,10 @@ async function apiGet(url, errorText = 'Ошибка запроса', options = 
 }
 
 const CameraApi = {
-  getNetworkSettings(serial, interfaceId) {
+  getNetworkSettings(serial, interfaceId, deviceHandle) {
     const query = new URLSearchParams({ serial_number: serial });
     if (interfaceId) query.set('interface_id', interfaceId);
+    if (deviceHandle) query.set('device_handle', deviceHandle);
     return apiGet(`/api/get_network_settings?${query.toString()}`,
       'Ошибка получения сетевых настроек:');
   },
@@ -74,9 +75,10 @@ const CameraApi = {
       'Ошибка выбора интерфейса камеры:');
   },
 
-  getIp(serial, interfaceId) {
+  getIp(serial, interfaceId, deviceHandle) {
     const query = new URLSearchParams({ serial_number: serial });
     if (interfaceId) query.set('interface_id', interfaceId);
+    if (deviceHandle) query.set('device_handle', deviceHandle);
     return apiGet(`/api/ip?${query.toString()}`, 'Ошибка получения IP:');
   },
 

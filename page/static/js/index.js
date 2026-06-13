@@ -16,10 +16,11 @@ function updateTime() {
   }
 }
 
-function openCamera(serial, interfaceId) {
-  log.info('Открытие страницы камеры', { serial, interfaceId });
+function openCamera(serial, interfaceId, deviceHandle) {
+  log.info('Открытие страницы камеры', { serial, interfaceId, deviceHandle });
   const query = new URLSearchParams({ serial_number: serial });
   if (interfaceId) query.set('interface_id', interfaceId);
+  if (deviceHandle) query.set('device_handle', deviceHandle);
   window.location.href = '/camera?' + query.toString();
 }
 
@@ -342,14 +343,14 @@ function closeNetworkSettingsModal() {
   closeSimpleModal(elements.modal);
 }
 
-async function loadNetworkSettingsData(serial, interfaceId) {
+async function loadNetworkSettingsData(serial, interfaceId, deviceHandle) {
   const elements = getNetworkModalElements();
-  log.info('Загрузка сетевых настроек', { serial, interfaceId });
+  log.info('Загрузка сетевых настроек', { serial, interfaceId, deviceHandle });
 
   setNetworkLoading(true);
   setNetworkError('');
 
-  const data = await CameraApi.getNetworkSettings(serial, interfaceId);
+  const data = await CameraApi.getNetworkSettings(serial, interfaceId, deviceHandle);
 
   setNetworkLoading(false);
 
@@ -378,14 +379,15 @@ async function loadNetworkSettingsData(serial, interfaceId) {
   setDhcpBadge(dhcp);
 }
 
-async function openNetworkSettingsModal(serial, interfaceId) {
+async function openNetworkSettingsModal(serial, interfaceId, deviceHandle) {
   const elements = getNetworkModalElements();
   if (!elements.modal) return;
 
-  log.info('Открытие модального окна сетевых настроек', { serial, interfaceId });
+  log.info('Открытие модального окна сетевых настроек', { serial, interfaceId, deviceHandle });
 
   networkSettingsState.serial = serial;
   networkSettingsState.interfaceId = interfaceId || null;
+  networkSettingsState.deviceHandle = deviceHandle || null;
 
   if (elements.serial) {
     elements.serial.textContent = serial;
@@ -398,7 +400,7 @@ async function openNetworkSettingsModal(serial, interfaceId) {
   setIpv4Value(elements.gatewayGroup, '');
   setAdvancedNetworkMode(false);
   openSimpleModal(elements.modal);
-  await loadNetworkSettingsData(serial, networkSettingsState.interfaceId);
+  await loadNetworkSettingsData(serial, networkSettingsState.interfaceId, networkSettingsState.deviceHandle);
 }
 
 // после DeviceReset камера перезагружается ~5-15 сек, до этого discovery пустой
@@ -715,19 +717,22 @@ async function loadCams() {
     return;
   }
 
-  // IP запрашиваем только для available-записей и только по одной на (serial+interface).
-  // "рабочей" считаем запись, у которой реально пришёл IP — она и пойдёт в основной список.
-  const ipResponses = await Promise.all(
-    rows.map(({ serial, entry }) =>
-      entry.available ? CameraApi.getIp(serial, entry.interface_id) : Promise.resolve(null)
-    )
-  );
+  // ВАЖНО: control-канал у камеры один. Если делать параллельные getIp по каждому
+  // дублю (для одного серийника их 5), они борются за -1005 AccessDenied.
+  // Делаем один запрос на уникальный серийник и раздаём результат всем его строкам.
+  const uniqueSerials = [...new Set(rows.filter((r) => r.entry.available).map((r) => r.serial))];
+  const ipBySerial = new Map();
 
-  // нормализуем строки (с разрешённым IP) для последующего рендера/фильтра
-  camsState.rows = rows.map(({ serial, entry }, index) => ({
+  // последовательно — чтобы между серийниками тоже не было гонки за общий продюсер
+  for (const serial of uniqueSerials) {
+    const response = await CameraApi.getIp(serial);
+    if (response?.ip) ipBySerial.set(serial, response.ip);
+  }
+
+  camsState.rows = rows.map(({ serial, entry }) => ({
     serial,
     entry,
-    ip: entry.available && ipResponses[index]?.ip ? ipResponses[index].ip : null,
+    ip: entry.available ? ipBySerial.get(serial) || null : null,
   }));
 
   renderCamsTable();
@@ -794,36 +799,33 @@ function renderCamsTable() {
     const networkBtn = row.querySelector('[data-network-settings]');
 
     if (openBtn) {
-      openBtn.addEventListener('click', () => openCamera(serial, entry.interface_id));
+      openBtn.addEventListener('click', () => openCamera(serial, entry.interface_id, entry.device_handle));
     }
 
     if (networkBtn) {
-      networkBtn.addEventListener('click', () => openNetworkSettingsModal(serial, entry.interface_id));
+      networkBtn.addEventListener('click', () => openNetworkSettingsModal(serial, entry.interface_id, entry.device_handle));
     }
 
     table.appendChild(row);
   });
 }
 
-// для каждого серийника: предпочтительно — запись с реальным IP; иначе — одну любую (для индикации)
+// для каждого серийника — одна основная строка.
+// IP у камеры один, поэтому нет смысла плодить дубли в обычном режиме.
 function pickPrimaryRows(rows) {
   const bySerial = new Map();
   for (const row of rows) {
-    const list = bySerial.get(row.serial) || [];
-    list.push(row);
-    bySerial.set(row.serial, list);
-  }
-
-  const result = [];
-  for (const [, list] of bySerial) {
-    const withIp = list.filter((r) => r.ip);
-    if (withIp.length) {
-      result.push(...withIp);
-    } else {
-      result.push(list[0]);
+    if (!bySerial.has(row.serial)) {
+      bySerial.set(row.serial, row);
+      continue;
     }
+    const current = bySerial.get(row.serial);
+    // приоритет: с IP, потом available, потом любой
+    const better = (row.ip && !current.ip)
+      || (row.entry.available && !current.entry.available);
+    if (better) bySerial.set(row.serial, row);
   }
-  return result;
+  return [...bySerial.values()];
 }
 
 function getAutoOpenSerial() {

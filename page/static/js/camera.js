@@ -331,11 +331,11 @@ function initCameraPage() {
 
     const data = await CameraApi.getDataLimit(serialNumber);
     if (!data) {
-      log.warn('Не удалось получить data_limit', { serialNumber });
+      log.debug('data_limit пока недоступен (камера не подключалась)', { serialNumber });
       return;
     }
 
-    log.success('Ограничения камеры загружены', data);
+    log.debug('Ограничения камеры загружены', data);
 
     setFieldValue('width', data.width?.value);
     setFieldValue('height', data.height?.value);

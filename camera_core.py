@@ -229,10 +229,10 @@ class CameraWorker(BaseCameraWorker):
             node_map = ia.remote_device.node_map
             # получение лимитов
             self.data_limit = self.read_settings(node_map)
-            log_event("camera_core.get_node_map_cam", "Получен nodemap камеры", "success", {"status_camera": str(node_map)})
             return node_map, ia
         except Exception as e:
-            log_event("camera_core.get_node_map_cam", "Ошибка статуса камеры", "error", {"status_camera": e})
+            log_event("camera_core.get_node_map_cam", "Ошибка подключения к камере", "error",
+                      {"serial_number": self.serial_number, "error": repr(e)})
             return None, None
 
     # получение данных с камеры, текущие + лимиты
@@ -290,8 +290,9 @@ class CameraWorker(BaseCameraWorker):
             ia = None
             try:
                 node_map, ia = self.open_node_map()
+                if node_map is None:
+                    return None
                 ip = int_to_ip(node_map.GevCurrentIPAddress.value)
-                log_event("camera_core.get_node_map_cam", "Получен ip камеры", "success", {"ip": str(ip)})
                 return {"ip": ip}
             finally:
                 if ia is not None:
@@ -336,7 +337,6 @@ class CameraWorker(BaseCameraWorker):
             ):
                 node_map.ExposureTime.value = int(exposure_time)
 
-            log_event("camera_core.apply_settings_camera", "Применение всех параметров камеры", "success")
             return True, None
 
         except Exception as e:
@@ -396,6 +396,10 @@ class CameraWorker(BaseCameraWorker):
             )
 
             node_map, ia = self.open_node_map()
+            if node_map is None or ia is None:
+                log_event("camera_core.generate_stream", "Не удалось подключиться к камере", "error",
+                          {"serial_number": self.serial_number})
+                return
 
             ok, err = self.apply_settings(
                 node_map,
@@ -409,7 +413,7 @@ class CameraWorker(BaseCameraWorker):
             )
 
             if not ok:
-                log_event("camera_core.generate_stream", "ошибка принятия настроек камеры", "warn", {"error": err, "ok": ok})
+                log_event("camera_core.generate_stream", "Ошибка применения настроек камеры", "warn", {"error": str(err)})
                 return
 
             self.ia = ia
@@ -491,12 +495,12 @@ class CameraWorker(BaseCameraWorker):
             try:
                 self.ia.stop()
             except Exception as e:
-                log_event("camera_core.close_stream_force", "Ошибка force stop", "warn", {"error": e})
+                log_event("camera_core.close_stream_force", "Ошибка force stop", "warn", {"error": str(e)})
 
             try:
                 self.ia.destroy()
             except Exception as e:
-                log_event("camera_core.close_stream_force", "Ошибка force destroy", "warn", {"error": e})
+                log_event("camera_core.close_stream_force", "Ошибка force destroy", "warn", {"error": str(e)})
 
             self.ia = None
 
@@ -524,10 +528,9 @@ class CameraWorker(BaseCameraWorker):
                 gateway = int_to_ip(node_map.GevCurrentDefaultGateway.value)
                 dhcp_enabled = node_map.GevCurrentIPConfigurationDHCP.value
 
-                log_event("camera_core.get_network_settings", "Успешное получение всех сетевых настроек камеры", "success", {"serial_number": self.serial_number})
                 return ip, mask, gateway, dhcp_enabled
             except Exception as e:
-                log_event("camera_core.get_network_settings", "Ошибка получение сетевых настроек", "error", {"error": e})
+                log_event("camera_core.get_network_settings", "Ошибка получение сетевых настроек", "error", {"error": str(e)})
                 return None, None, None, None
             finally:
                 if ia is not None:
@@ -633,7 +636,7 @@ class CameraWorker(BaseCameraWorker):
                     try:
                         ia.destroy()
                     except Exception as e:
-                        log_event("camera_core.close_stream_force", "Ошибка force destroy", "warn", {"error": e})
+                        log_event("camera_core.change_ip", "Ошибка освобождения nodemap", "warn", {"error": str(e)})
         finally:
             self.advanced_settings = False
 
@@ -794,7 +797,7 @@ class RtspCameraWorker(BaseCameraWorker):
             try:
                 self.capture.release()
             except Exception as e:
-                log_event("camera_core.rtsp_force", "Ошибка release RTSP", "warn", {"error": e})
+                log_event("camera_core.rtsp_force", "Ошибка release RTSP", "warn", {"error": str(e)})
 
             self.capture = None
 

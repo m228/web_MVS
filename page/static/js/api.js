@@ -2,8 +2,8 @@
 async function apiGet(url, errorText = 'Ошибка запроса', options = {}) {
   const {
     source = 'api',
-    logRequest = true,
-    logSuccess = true,
+    logRequest = false,
+    logSuccess = false,
   } = options;
 
   if (logRequest) {

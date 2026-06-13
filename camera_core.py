@@ -226,15 +226,33 @@ class CameraWorker(BaseCameraWorker):
         self.data_limit = None
         self.advanced_settings = False
 
+        # GenTL ID сетевого интерфейса, через который подключаемся.
+        # None = автовыбор первого available из device_info_list
+        self.interface_id = None
+
+    # запомнить выбранный пользователем интерфейс (стабильный GenTL ID)
+    def select_interface(self, interface_id):
+        # переключение допустимо только при закрытом потоке —
+        # иначе self.ia, открытый через старый интерфейс, повиснет
+        if self.running:
+            return {"status": "stream_running",
+                    "hint": "сначала остановите поток, потом меняйте интерфейс"}
+
+        self.interface_id = interface_id or None
+        log_event("camera_core.select_interface", "Выбран сетевой интерфейс камеры", "info",
+                  {"serial_number": self.serial_number, "interface_id": self.interface_id})
+        return {"status": "ok", "interface_id": self.interface_id}
+
     # ---------- доступ к камере / nodemap ----------
 
     # подключение к камере и получение nodemap
     def open_node_map(self):
-        status = self.manager.access_status(self.serial_number)
+        status = self.manager.access_status(self.serial_number, self.interface_id)
 
         if status != 1:
             log_event("camera_core.get_node_map_cam", "Камера недоступна для подключения", "error",
-                      {"serial_number": self.serial_number, "access_status": status,
+                      {"serial_number": self.serial_number, "interface_id": self.interface_id,
+                       "access_status": status,
                        "hint": "пересканируйте список камер или проверьте, не занята ли камера другим приложением"})
             return None, None
 
@@ -243,7 +261,7 @@ class CameraWorker(BaseCameraWorker):
         for attempt in range(2):
             ia = None
             try:
-                ia = self.manager.create_acquirer(self.serial_number)
+                ia = self.manager.create_acquirer(self.serial_number, self.interface_id)
                 node_map = ia.remote_device.node_map
                 self.data_limit = self.read_settings(node_map)
                 return node_map, ia
@@ -873,8 +891,10 @@ class CameraManager:
     def __init__(self):
         self.harvester = Harvester()
         self.driver_loaded = False
-        # серийник -> код статуса доступа
+        # серийник -> агрегированный лучший статус (для обратной совместимости)
         self.cam_online = {}
+        # (serial_number, interface_id) -> {access_status, interface_name, interface_ip, available, ...}
+        self.devices = {}
         # серийник -> CameraWorker (GigE Vision)
         self.workers = {}
         # серийник -> RtspCameraWorker (RTSP)
@@ -898,24 +918,129 @@ class CameraManager:
         self.load_driver()
         log_event("camera_core.reset_harvester", "Harvester пересоздан", "info")
 
-    # создать acquirer по серийнику, устойчиво к дублирующимся записям устройств
-    def create_acquirer(self, serial_number):
+    # создать acquirer по (серийник + интерфейс).
+    # interface_id=None → автовыбор: сначала available, потом любая запись.
+    def create_acquirer(self, serial_number, interface_id=None):
         devices = self.harvester.device_info_list
-        matches = [index for index, device in enumerate(devices) if device.serial_number == serial_number]
 
-        if not matches:
+        same_serial = []
+        for index, device in enumerate(devices):
+            if device.serial_number != serial_number:
+                continue
+            d_iface = self._interface_id(device)
+            d_status = self._safe_status(device)
+            same_serial.append((index, d_iface, d_status))
+
+        if not same_serial:
             raise ValueError(f"устройство не найдено: {serial_number}")
 
-        # одно устройство может быть видно через несколько сетевых интерфейсов,
-        # причём рабочая запись не всегда первая — пробуем по очереди, пока не откроется
+        # отбор по интерфейсу (точное совпадение), либо автовыбор
+        if interface_id:
+            candidates = [entry for entry in same_serial if entry[1] == interface_id]
+            if not candidates:
+                raise ValueError(
+                    f"камера {serial_number} не видна через выбранный интерфейс {interface_id}")
+        else:
+            available = [entry for entry in same_serial if entry[2] == 1]
+            candidates = available if available else same_serial
+
         last_error = None
-        for index in matches:
+        for index, d_iface, _status in candidates:
             try:
-                return self.harvester.create(index)
+                acquirer = self.harvester.create(index)
+                log_event("camera_core.create_acquirer", "Подключение к камере открыто", "info",
+                          {"serial_number": serial_number, "interface_id": d_iface})
+                return acquirer
             except Exception as e:
                 last_error = e
 
-        raise last_error if last_error is not None else ValueError(f"не удалось открыть устройство: {serial_number}")
+        raise last_error if last_error is not None else ValueError(
+            f"не удалось открыть устройство: {serial_number}")
+
+    # ---------- перечисление устройств с разбивкой по интерфейсам ----------
+
+    @staticmethod
+    def _interface_id(device_info):
+        # стабильный GenTL-идентификатор сетевого интерфейса (parent)
+        parent = getattr(device_info, "parent", None)
+        if parent is None:
+            return None
+        return getattr(parent, "id_", None) or getattr(parent, "id", None)
+
+    @staticmethod
+    def _interface_name(device_info):
+        parent = getattr(device_info, "parent", None)
+        if parent is None:
+            return None
+        return getattr(parent, "display_name", None) or getattr(parent, "model", None)
+
+    @staticmethod
+    def _interface_ip(device_info):
+        parent = getattr(device_info, "parent", None)
+        if parent is None:
+            return None
+        # 1) GEV-нода интерфейса (если продюсер её предоставляет)
+        try:
+            value = parent.node_map.GevInterfaceSubnetIPAddress.value
+            if value:
+                return int_to_ip(int(value))
+        except Exception:
+            pass
+        # 2) fallback — вытаскиваем IPv4 из display_name (часто там "Ethernet [192.168.1.222]")
+        try:
+            match = re.search(r"(\d+\.\d+\.\d+\.\d+)", parent.display_name or "")
+            if match:
+                return match.group(1)
+        except Exception:
+            pass
+        return None
+
+    @staticmethod
+    def _safe_status(device_info):
+        try:
+            return int(device_info.access_status)
+        except Exception:
+            return 0
+
+    # полный список записей устройств (одна запись на пару серийник+интерфейс)
+    def list_devices(self):
+        self.load_driver()
+        result = []
+        if not self.driver_loaded:
+            return result
+
+        for index, device in enumerate(self.harvester.device_info_list):
+            try:
+                serial = device.serial_number
+            except Exception:
+                continue
+
+            status = self._safe_status(device)
+            result.append({
+                "device_index": index,
+                "serial_number": serial,
+                "access_status": status,
+                "available": status == 1,
+                "interface_id": self._interface_id(device),
+                "interface_name": self._interface_name(device),
+                "interface_ip": self._interface_ip(device),
+            })
+        return result
+
+    # сгруппированный список: {серийник: [записи по интерфейсам]}
+    def list_devices_grouped(self):
+        grouped = {"DA123123": [{
+            "device_index": -1,
+            "serial_number": "DA123123",
+            "access_status": 1,
+            "available": True,
+            "interface_id": "mock",
+            "interface_name": "Mock-интерфейс",
+            "interface_ip": "192.168.2.10",
+        }]}
+        for entry in self.list_devices():
+            grouped.setdefault(entry["serial_number"], []).append(entry)
+        return grouped
 
     # создать/получить RTSP-камеру (rtsp_url нужен при первом обращении)
     def get_rtsp(self, serial_number, rtsp_url=None):
@@ -929,8 +1054,22 @@ class CameraManager:
             worker.rtsp_url = rtsp_url
         return worker
 
-    def access_status(self, serial_number):
-        return self.cam_online.get(serial_number)
+    # статус доступа: для пары (serial, interface_id), либо лучший статус по серийнику
+    def access_status(self, serial_number, interface_id=None):
+        if interface_id is None:
+            return self.cam_online.get(serial_number)
+
+        entry = self.devices.get((serial_number, interface_id))
+        if entry is not None:
+            return entry["access_status"]
+
+        # запись могла появиться после scan'а: ищем напрямую в device_info_list
+        if not self.driver_loaded:
+            return None
+        for device in self.harvester.device_info_list:
+            if device.serial_number == serial_number and self._interface_id(device) == interface_id:
+                return self._safe_status(device)
+        return None
 
     # загрузка драйвера для работы
     def load_driver(self):
@@ -965,17 +1104,32 @@ class CameraManager:
                 log_event("camera_core.load_driver", "Ошибка загрузки драйвера", "error")
         return self.driver_loaded
 
-    # сканирование всех сетевых камер -> {серийник: статус}
+    # сканирование всех сетевых камер.
+    # обновляет devices (по парам serial+interface) и cam_online (агрегированный статус)
     def scan_cams(self):
-        # пробные данные(потом убрать)
-        self.cam_online = {"DA123123": 1}
+        self.cam_online = {"DA123123": 1}  # пробные данные(потом убрать)
+        self.devices = {}
+
         # load_driver сам обновит список устройств (и при первом вызове добавит .cti)
         self.load_driver()
-        if self.check():
-            for device in self.harvester.device_info_list:
-                self.cam_online[device.serial_number] = int(device.access_status)
-                # гарантируем наличие воркера (и его data_limit)
-                self.get(device.serial_number)
+        if not self.check():
+            return self.cam_online
+
+        for entry in self.list_devices():
+            serial = entry["serial_number"]
+            iface = entry["interface_id"]
+            status = entry["access_status"]
+
+            self.devices[(serial, iface)] = entry
+
+            # в cam_online держим лучший статус по серийнику (Ok приоритетнее остальных)
+            prev = self.cam_online.get(serial)
+            if prev is None or status == 1:
+                self.cam_online[serial] = status
+
+            # гарантируем наличие воркера
+            self.get(serial)
+
         return self.cam_online
 
     def count_cams(self):

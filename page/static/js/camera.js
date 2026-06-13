@@ -12,6 +12,7 @@ function initCameraPage() {
 
   const params = new URLSearchParams(window.location.search);
   const serialNumber = params.get('serial_number');
+  const interfaceId = params.get('interface_id') || '';
 
   const buttons = {
     start: document.getElementById('startBtn'),
@@ -65,6 +66,13 @@ function initCameraPage() {
   const videoPopup = UIHelpers.createPopupController(videoCard, buttons.video);
 
   serialElement.textContent = serialNumber ? serialNumber : 'не выбран';
+  if (interfaceId && serialElement.parentElement) {
+    const ifaceLine = document.createElement('div');
+    ifaceLine.className = 'status-code';
+    ifaceLine.style.marginTop = '6px';
+    ifaceLine.textContent = 'Интерфейс: ' + interfaceId;
+    serialElement.parentElement.insertAdjacentElement('afterend', ifaceLine);
+  }
 
   const log = {
     info: (message, payload) => window.AppLog?.info('camera', message, payload),
@@ -365,6 +373,7 @@ function initCameraPage() {
     const query = new URLSearchParams();
 
     query.set('serial_number', serialNumber);
+    if (interfaceId) query.set('interface_id', interfaceId);
 
     const fields = [
       ['width', 'width'],

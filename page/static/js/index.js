@@ -16,9 +16,11 @@ function updateTime() {
   }
 }
 
-function openCamera(serial) {
-  log.info('Открытие страницы камеры', { serial });
-  window.location.href = '/camera?serial_number=' + encodeURIComponent(serial);
+function openCamera(serial, interfaceId) {
+  log.info('Открытие страницы камеры', { serial, interfaceId });
+  const query = new URLSearchParams({ serial_number: serial });
+  if (interfaceId) query.set('interface_id', interfaceId);
+  window.location.href = '/camera?' + query.toString();
 }
 
 async function closeCameraStream(serial) {
@@ -137,6 +139,7 @@ function getNetworkModalElements() {
 
 const networkSettingsState = {
   serial: null,
+  interfaceId: null,
   advancedEnabled: false,
 };
 
@@ -339,14 +342,14 @@ function closeNetworkSettingsModal() {
   closeSimpleModal(elements.modal);
 }
 
-async function loadNetworkSettingsData(serial) {
+async function loadNetworkSettingsData(serial, interfaceId) {
   const elements = getNetworkModalElements();
-  log.info('Загрузка сетевых настроек', { serial });
+  log.info('Загрузка сетевых настроек', { serial, interfaceId });
 
   setNetworkLoading(true);
   setNetworkError('');
 
-  const data = await CameraApi.getNetworkSettings(serial);
+  const data = await CameraApi.getNetworkSettings(serial, interfaceId);
 
   setNetworkLoading(false);
 
@@ -375,13 +378,14 @@ async function loadNetworkSettingsData(serial) {
   setDhcpBadge(dhcp);
 }
 
-async function openNetworkSettingsModal(serial) {
+async function openNetworkSettingsModal(serial, interfaceId) {
   const elements = getNetworkModalElements();
   if (!elements.modal) return;
 
-  log.info('Открытие модального окна сетевых настроек', { serial });
+  log.info('Открытие модального окна сетевых настроек', { serial, interfaceId });
 
   networkSettingsState.serial = serial;
+  networkSettingsState.interfaceId = interfaceId || null;
 
   if (elements.serial) {
     elements.serial.textContent = serial;
@@ -394,7 +398,7 @@ async function openNetworkSettingsModal(serial) {
   setIpv4Value(elements.gatewayGroup, '');
   setAdvancedNetworkMode(false);
   openSimpleModal(elements.modal);
-  await loadNetworkSettingsData(serial);
+  await loadNetworkSettingsData(serial, networkSettingsState.interfaceId);
 }
 
 async function applyNetworkSettings() {
@@ -663,10 +667,16 @@ async function countCams() {
   }
 }
 
+function interfaceLabel(entry) {
+  const ip = entry.interface_ip ? entry.interface_ip : null;
+  const name = entry.interface_name || entry.interface_id || 'интерфейс не определён';
+  return ip ? `${name} [${ip}]` : name;
+}
+
 async function loadCams() {
   log.info('Загрузка списка камер');
 
-  const data = await CameraApi.getCams();
+  const data = await CameraApi.getCamsDetailed();
   if (!data) {
     log.error('Не удалось получить список камер');
     return;
@@ -679,13 +689,21 @@ async function loadCams() {
 
   table.innerHTML = '';
 
-  const entries = Object.entries(data).sort(([serialA], [serialB]) =>
-    String(serialA).localeCompare(String(serialB), 'ru')
+  // плоский список: одна строка = пара (серийник, интерфейс)
+  const rows = [];
+  for (const [serial, entries] of Object.entries(data)) {
+    const sorted = [...entries].sort((a, b) => Number(b.available) - Number(a.available));
+    sorted.forEach((entry) => rows.push({ serial, entry }));
+  }
+
+  rows.sort((a, b) =>
+    String(a.serial).localeCompare(String(b.serial), 'ru') ||
+    (interfaceLabel(a.entry) || '').localeCompare(interfaceLabel(b.entry) || '', 'ru')
   );
 
-  log.info('Камер найдено', { count: entries.length });
+  log.info('Камер найдено (записей)', { count: rows.length });
 
-  if (!entries.length) {
+  if (!rows.length) {
     table.innerHTML = `
       <tr>
         <td colspan="4">
@@ -696,23 +714,20 @@ async function loadCams() {
     return;
   }
 
+  // IP запрашиваем только для available-записей и только по одной на (serial+interface)
   const ipResponses = await Promise.all(
-    entries.map(([serial, statusCode]) =>
-      canOpenCamera(statusCode) ? CameraApi.getIp(serial) : Promise.resolve(null)
+    rows.map(({ serial, entry }) =>
+      entry.available ? CameraApi.getIp(serial, entry.interface_id) : Promise.resolve(null)
     )
   );
 
-  log.debug('IP адреса получены', ipResponses);
-
-  entries.forEach(([serial, statusCode], index) => {
-    if (canOpenCamera(statusCode) && !ipResponses[index]) {
-      log.warn('Не удалось получить IP камеры', { serial, statusCode });
-    }
-
+  rows.forEach(({ serial, entry }, index) => {
+    const statusCode = entry.access_status;
     const statusText = getAccessStatusText(statusCode);
-    const ip = canOpenCamera(statusCode) ? ipResponses[index]?.ip ?? 'Ошибка' : '-';
+    const ifaceText = interfaceLabel(entry);
+    const ip = entry.available ? ipResponses[index]?.ip ?? 'Ошибка' : '-';
 
-    const actionsHtml = canOpenCamera(statusCode)
+    const actionsHtml = entry.available
       ? `
         <div class="table-actions">
           <button type="button" class="action-btn action-btn--primary" data-open-camera>
@@ -725,15 +740,18 @@ async function loadCams() {
       `
       : `
         <div class="table-actions">
-          <button type="button" class="action-btn action-btn--danger" data-close-stream>
-            Закрыть поток
+          <button type="button" class="action-btn action-btn--secondary" disabled title="Камера недоступна через этот интерфейс">
+            Недоступна
           </button>
         </div>
       `;
 
     const row = document.createElement('tr');
     row.innerHTML = `
-      <td><span class="serial-chip">${escapeHtml(serial)}</span></td>
+      <td>
+        <span class="serial-chip">${escapeHtml(serial)}</span>
+        <div class="status-code" style="margin-top:4px;">${escapeHtml(ifaceText)}</div>
+      </td>
       <td>${getAccessStatusHtml(statusCode)}</td>
       <td><span class="ip-chip">${escapeHtml(ip)}</span></td>
       <td>${actionsHtml}</td>
@@ -743,23 +761,16 @@ async function loadCams() {
 
     const openBtn = row.querySelector('[data-open-camera]');
     const networkBtn = row.querySelector('[data-network-settings]');
-    const closeStreamBtn = row.querySelector('[data-close-stream]');
 
     if (openBtn) {
       openBtn.addEventListener('click', () => {
-        openCamera(serial);
+        openCamera(serial, entry.interface_id);
       });
     }
 
     if (networkBtn) {
       networkBtn.addEventListener('click', () => {
-        openNetworkSettingsModal(serial);
-      });
-    }
-
-    if (closeStreamBtn) {
-      closeStreamBtn.addEventListener('click', async () => {
-        await closeCameraStream(serial);
+        openNetworkSettingsModal(serial, entry.interface_id);
       });
     }
 

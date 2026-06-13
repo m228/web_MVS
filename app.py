@@ -54,6 +54,22 @@ def api_cams():
     return manager.scan_cams()
 
 
+# детальный список с разбивкой по сетевым интерфейсам (как в MVS)
+@app.get("/api/cams/detailed")
+def api_cams_detailed():
+    manager.scan_cams()
+    return manager.list_devices_grouped()
+
+
+# выбрать сетевой интерфейс, через который будет открываться камера
+@app.get("/api/camera/select_interface")
+def select_interface(serial_number: str, interface_id: str = ""):
+    data = manager.get(serial_number).select_interface(interface_id or None)
+    api_log("api.camera.select_interface", "Выбран интерфейс камеры",
+            payload={"serial_number": serial_number, **data})
+    return data
+
+
 @app.get("/api/status")
 def api_status():
     try:
@@ -64,8 +80,11 @@ def api_status():
 
 
 @app.get("/api/ip")
-def get_ip(serial_number: str):
-    return manager.get(serial_number).get_ip()
+def get_ip(serial_number: str, interface_id: str = ""):
+    worker = manager.get(serial_number)
+    if interface_id:
+        worker.interface_id = interface_id
+    return worker.get_ip()
 
 
 @app.get("/api/count_cams")
@@ -74,8 +93,11 @@ def count_cams():
 
 
 @app.get("/api/get_network_settings")
-def network_settings(serial_number: str):
-    ip, mask, gateway, dhcp = manager.get(serial_number).get_network_settings()
+def network_settings(serial_number: str, interface_id: str = ""):
+    worker = manager.get(serial_number)
+    if interface_id:
+        worker.interface_id = interface_id
+    ip, mask, gateway, dhcp = worker.get_network_settings()
     if ip is None:
         api_log(
             "api.get_network_settings",
@@ -124,6 +146,7 @@ def change_ip(
 @app.get("/api/camera/stream")
 def camera_stream(
     serial_number: str,
+    interface_id: str = "",
     width: int = None,
     height: int = None,
     offset_x: int = None,
@@ -132,11 +155,15 @@ def camera_stream(
     exposure_auto: str = None,
     exposure_time: float = None,
 ):
+    worker = manager.get(serial_number)
+    if interface_id:
+        worker.interface_id = interface_id
     api_log(
         "api.camera.stream",
         "Запрошен видеопоток",
         payload={
             "serial_number": serial_number,
+            "interface_id": worker.interface_id,
             "width": width,
             "height": height,
             "offset_x": offset_x,
@@ -147,7 +174,7 @@ def camera_stream(
         },
     )
     return StreamingResponse(
-        manager.get(serial_number).generate(
+        worker.generate(
             width=width,
             height=height,
             offset_x=offset_x,

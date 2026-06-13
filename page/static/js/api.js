@@ -31,11 +31,11 @@ async function apiGet(url, errorText = 'Ошибка запроса', options = 
 }
 
 const CameraApi = {
-  getNetworkSettings(serial) {
-    return apiGet(
-      `/api/get_network_settings?serial_number=${encodeURIComponent(serial)}`,
-      'Ошибка получения сетевых настроек:'
-    );
+  getNetworkSettings(serial, interfaceId) {
+    const query = new URLSearchParams({ serial_number: serial });
+    if (interfaceId) query.set('interface_id', interfaceId);
+    return apiGet(`/api/get_network_settings?${query.toString()}`,
+      'Ошибка получения сетевых настроек:');
   },
 
   changeNetworkSettings(serial, payload) {
@@ -64,11 +64,20 @@ const CameraApi = {
     return apiGet('/api/cams', 'Ошибка получения списка камер:');
   },
 
-  getIp(serial) {
-    return apiGet(
-      `/api/ip?serial_number=${encodeURIComponent(serial)}`,
-      'Ошибка получения IP:'
-    );
+  getCamsDetailed() {
+    return apiGet('/api/cams/detailed', 'Ошибка получения детального списка камер:');
+  },
+
+  selectInterface(serial, interfaceId) {
+    const query = new URLSearchParams({ serial_number: serial, interface_id: interfaceId || '' });
+    return apiGet(`/api/camera/select_interface?${query.toString()}`,
+      'Ошибка выбора интерфейса камеры:');
+  },
+
+  getIp(serial, interfaceId) {
+    const query = new URLSearchParams({ serial_number: serial });
+    if (interfaceId) query.set('interface_id', interfaceId);
+    return apiGet(`/api/ip?${query.toString()}`, 'Ошибка получения IP:');
   },
 
   getDataLimit(serial) {

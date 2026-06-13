@@ -20,8 +20,13 @@ GENTL_HINTS = {
     -1003: "операция не поддерживается камерой или GenTL-интерфейсом",
     -1005: "доступ запрещён — камера занята другим клиентом (закройте MVS / другое приложение)",
     -1006: "выбранный сетевой интерфейс не подходит для этой камеры (другая подсеть)",
+    -1011: "таймаут получения кадра — потери UDP-пакетов (другая подсеть / маршрутизатор / MTU)",
     -1020: "исчерпаны ресурсы драйвера, требуется сброс",
 }
+
+# таймаут на один кадр (сек) и сколько таймаутов подряд можно стерпеть до выхода
+FRAME_FETCH_TIMEOUT = 5.0
+MAX_FRAME_TIMEOUTS = 10
 
 
 def _gentl_code(error_text):
@@ -398,7 +403,7 @@ class CameraWorker(BaseCameraWorker):
 
     def get_frame(self, ia, node_map):
         try:
-            with ia.fetch() as buffer:
+            with ia.fetch(timeout=FRAME_FETCH_TIMEOUT) as buffer:
                 data = buffer.payload.components[0].data
                 real_width = node_map.Width.value
                 real_height = node_map.Height.value
@@ -406,13 +411,15 @@ class CameraWorker(BaseCameraWorker):
                 ok, encoded = cv2.imencode(".jpg", img)
 
                 if not ok:
-                    log_event("camera_core.get_frame", "Ошибка получения кадра", "error", {"ok": str(ok)})
+                    log_event("camera_core.get_frame", "Ошибка кодирования кадра", "warn")
                     return None, None
 
                 return img, encoded.tobytes()
         except Exception as e:
+            # таймаут получения кадра — не фатально, пропускаем кадр и крутим цикл дальше
+            if _gentl_code(repr(e)) == -1011:
+                return None, None
             if not self.running:
-                log_event("camera_core.get_frame", "Ошибка получения кадра", "error", {"error": str(e)})
                 return None, None
             raise
 
@@ -472,13 +479,25 @@ class CameraWorker(BaseCameraWorker):
             ia.start()
             log_event("camera_core.generate_stream", "Поток камеры запущен", "success", {"serial_number": self.serial_number})
 
+            timeouts_in_a_row = 0
+
             while self.running:
                 try:
                     img, frame = self.get_frame(ia, node_map)
 
                     if frame is None or img is None:
                         self.metrics["errors"] += 1
+                        timeouts_in_a_row += 1
+                        if timeouts_in_a_row >= MAX_FRAME_TIMEOUTS:
+                            log_event("camera_core.generate_stream",
+                                      "Поток прерван: подряд слишком много таймаутов получения кадра", "error",
+                                      {"serial_number": self.serial_number,
+                                       "timeouts": timeouts_in_a_row,
+                                       "hint": GENTL_HINTS[-1011]})
+                            break
                         continue
+
+                    timeouts_in_a_row = 0
 
                     now = time.time()
 
@@ -499,7 +518,8 @@ class CameraWorker(BaseCameraWorker):
                 except Exception as e:
                     if not self.running:
                         break
-                    log_event("camera_core.generate_stream", "Ошибка получения потока", "error", {"error": repr(e)})
+                    log_event("camera_core.generate_stream", "Ошибка получения потока", "error",
+                              {"serial_number": self.serial_number, **_explain_error(e)})
                     break
 
                 # автофото + запись видео

@@ -16,6 +16,52 @@ import subprocess
 
 from pathlib import Path
 
+class CameraWorker:
+    def __init__(self,serial_number):
+        self.serial_number = serial_number
+        self.ia = None
+        self.node_map = None
+        self.running = False
+
+        self.save_photo = False
+        self.photo_interval = None
+        self.last_photo = None
+
+        self.save_video = 0
+        self.video_duration = None
+        self.video_start = None
+        self.video_writer = None
+
+        self.advanced_settings = False
+
+        self.metrics = {
+            "fps": 0.0,
+            "image_number": 0,
+            "bandwidth_mbps": 0.0,
+            "width": 0,
+            "height": 0,
+            "errors": 0,
+        }
+
+
+workers = {}
+
+# создать объект камеры если нет
+def get_CameraWorker(serial_number):
+    global workers
+    if serial_number not in workers:
+        workers[serial_number] = CameraWorker(serial_number)
+    return workers[serial_number]
+
+
+
+
+
+
+
+
+
+
 # Путь до директории и имя файла для поиска
 program_dir = Path(__file__).resolve().parent
 filename = "MvProducerGEV.cti"
@@ -27,16 +73,6 @@ H = Harvester()
 cam_online = {}
 # data limit камер
 data_limit = {}
-
-# метрики стрима
-stream_metrics = {
-    "fps": 0.0,
-    "image_number": 0,
-    "bandwidth_mbps": 0.0,
-    "width": 0,
-    "height": 0,
-    "errors": 0,
-}
 
 # статусы доступа к камерам
 access_status = {
@@ -51,23 +87,24 @@ access_status = {
 
 # состояние загрузки драйвера
 Driver = False
-# глобальные переменные потоки стрима
-current_ia = None
 
-stream_running = False
-stream_closed = True
-# сохранение фото и видео
-photo_enabled = False
-photo_interval = None
-last_save = None
-
-video_enabled = 0
-video_duration = None
-video_start = None
-video_writer = None
-
-# расширенные настройки в смене айпи
-advanced_network_settings = False
+## глобальные переменные потоки стрима
+#current_ia = None
+#
+#stream_running = False
+#stream_closed = True
+## сохранение фото и видео
+#photo_enabled = False
+#photo_interval = None
+#last_save = None
+#
+#video_enabled = 0
+#video_duration = None
+#video_start = None
+#video_writer = None
+#
+## расширенные настройки в смене айпи
+#advanced_network_settings = False
 
 # из ip в int для записи в камеру
 def ip_to_int(ip):
@@ -213,15 +250,15 @@ def get_data_limit(serial_number):
     global data_limit
     return data_limit.get(serial_number)
 
-def get_metrics():
-    global stream_metrics
-    return stream_metrics
+def get_metrics(serial_number):
+    cam = get_CameraWorker(serial_number)
+    return cam.metrics
 
-def get_stream_state():
-    global stream_running, stream_closed
+def get_stream_state(serial_number):
+    cam = get_CameraWorker(serial_number)
     return {
-        "running": stream_running,
-        "closed": stream_closed,
+        "serial_number": serial_number,
+        "running": cam.running
     }
 
 # нужна для проверки в submit_settings_camera
@@ -250,7 +287,8 @@ def apply_settings_camera(node_map, data_limit, width=None, height=None, offset_
         log_event("camera_core.apply_settings_camera", "Ошибка применение параметров камеры", "error", {"error": str(e)})
         return False, e
 
-def get_frame(ia, node_map):
+def get_frame(serial_number, ia, node_map):
+    cam = get_CameraWorker(serial_number)
     try:
         with ia.fetch() as buffer:
             data = buffer.payload.components[0].data
@@ -265,30 +303,27 @@ def get_frame(ia, node_map):
 
             return img, encoded.tobytes()
     except Exception as e:
-        if not stream_running:
+        if not cam.running:
             log_event("camera_core.get_frame", "Ошибка получения кадра", "error",{"error": str(e)})
             return None, None
         raise
 
 def generate_stream(serial_number, width=None, height=None, offset_x=None, offset_y=None, fps=None, exposure_auto=None, exposure_time=None):
-    global stream_running, stream_closed, stream_metrics, current_ia, photo_enabled, photo_interval, last_save, video_writer, video_enabled, video_duration, video_start, data_limit
+    cam = get_CameraWorker(serial_number)
+
+
+
+   #global stream_running, stream_closed, stream_metrics, current_ia, photo_enabled, photo_interval, last_save, video_writer, video_enabled, video_duration, video_start, data_limit
     ia = None
     last_frame_time = None
-    stream_metrics = {
-        "fps": 0.0,
-        "image_number": 0,
-        "bandwidth_mbps": 0.0,
-        "width": 0,
-        "height": 0,
-        "errors": 0,
-    }
+
 
     if not check():
         return
 
-    if stream_running or not stream_closed:
+    if cam.running:
         log_event("camera_core.generate_stream", "Старый поток открыт, принудительно закрытие", "warn")
-        close_stream_force()
+        close_stream_force(serial_number)
         time.sleep(0.3)
 
     try:
@@ -328,41 +363,43 @@ def generate_stream(serial_number, width=None, height=None, offset_x=None, offse
             log_event("camera_core.generate_stream", "ошибка принятия настроек камеры", "warn", {"error": err, "ok": ok})
             return
 
-        current_ia = ia
-        stream_running = True
-        stream_closed = False
+
+
+        cam.ia = ia
+        cam.running = True
 
         ia.start()
         log_event("camera_core.generate_stream", "Поток камеры запущен", "success", {"serial_number": serial_number})
 
-        while stream_running:
+
+        while cam.running:
 
             try:
-                img, frame = get_frame(ia, node_map)
+                img, frame = get_frame(serial_number, ia, node_map)
 
                 if frame is None or img is None:
-                    stream_metrics["errors"] += 1
+                    cam.metrics["errors"] += 1
                     continue
 
                 now = time.time()
 
-                stream_metrics["image_number"] += 1
-                stream_metrics["width"] = img.shape[1]
-                stream_metrics["height"] = img.shape[0]
+                cam.metrics["image_number"] += 1
+                cam.metrics["width"] = img.shape[1]
+                cam.metrics["height"] = img.shape[0]
 
                 if last_frame_time is not None:
                     dt = now - last_frame_time
                     if dt > 0:
-                        stream_metrics["fps"] = 1.0 / dt
+                        cam.metrics["fps"] = 1.0 / dt
 
-                if stream_metrics["fps"] > 0:
-                    stream_metrics["bandwidth_mbps"] = (len(frame) * 8 * stream_metrics["fps"]) / 1_000_000
+                if cam.metrics["fps"] > 0:
+                    cam.metrics["bandwidth_mbps"] = (len(frame) * 8 * cam.metrics["fps"]) / 1_000_000
 
                 last_frame_time = now
 
 
             except Exception as e:
-                if not stream_running:
+                if not cam.running:
                     break
                 log_event("camera_core.generate_stream", "Ошибка получения потока", "error", {"error": repr(e)})
                 break
@@ -370,19 +407,19 @@ def generate_stream(serial_number, width=None, height=None, offset_x=None, offse
 
 
             # для фото проверка
-            if photo_enabled and check_save_photo(photo_interval):
+            if cam.save_photo and check_save_photo(serial_number,cam.photo_interval):
                 save_photo(img)
 
-            check_video_enabled()
-            if video_enabled == 1:
-               writer_video(img,fps)
+            check_video_enabled(serial_number)
+            if cam.save_video == 1:
+               writer_video(serial_number,img,fps)
 
-            if video_enabled == 2 and video_writer is not None:
-                video_writer.release()
-                video_writer = None
-                video_enabled = 0
-                video_duration = None
-                video_start = None
+            if cam.save_video == 2 and cam.video_writer is not None:
+                cam.video_writer.release()
+                cam.video_writer = None
+                cam.save_video = 0
+                cam.video_duration = None
+                cam.video_start = None
 
             yield (
                 b"--frame\r\n"
@@ -390,104 +427,105 @@ def generate_stream(serial_number, width=None, height=None, offset_x=None, offse
             )
 
     except Exception as e:
-        if not stream_running:
+        if not cam.running:
             log_event("camera_core.generate_stream", "Поток остановлен", "error", {"error": repr(e)})
         else:
             log_event("camera_core.generate_stream", "Ошибка потока", "error", {"error": repr(e)})
-            stream_metrics["errors"] += 1
+            cam.metrics["errors"] += 1
 
     finally:
         log_event("camera_core.generate_stream", "Поток камеры закрыт", "info", {"serial_number": serial_number})
 
-        stream_running = False
-        stream_closed = True
+        cam.running = False
 
-        if ia is not None:
+        if cam.ia is not None:
 
             try:
-                ia.stop()
+                cam.ia.stop()
             except:
                 pass
 
             try:
-                ia.destroy()
+                cam.ia.destroy()
             except:
                 pass
 
-            if current_ia is ia:
-                current_ia = None
+            if cam.ia is ia:
+                cam.ia = None
 
-            photo_enabled = False
-            photo_interval = None
-            last_save = None
+            cam.save_photo = False
+            cam.photo_interval = None
+            cam.last_photo = None
 
-            if video_writer is not None:
-                video_writer.release()
-                video_writer = None
-                video_enabled = 0
-                video_duration = None
-                video_start = None
+            if cam.video_writer is not None:
+                cam.video_writer.release()
+                cam.video_writer = None
+                cam.save_video = 0
+                cam.video_duration = None
+                cam.video_start = None
 
 
 
-def close_stream():
-    global stream_running
-    stream_running = False
+def close_stream(serial_number):
+    cam = get_CameraWorker(serial_number)
+    cam.running = False
     log_event("camera_core.close_stream", "Запрошена мягкая остановка потока")
     return {"status": "stopping"}
 
-def close_stream_force():
-    global stream_running, current_ia, stream_closed
-    stream_running = False
+def close_stream_force(serial_number):
+    cam = get_CameraWorker(serial_number)
+    cam.running = False
 
-    if current_ia is not None:
+    if cam.ia is not None:
         try:
-            current_ia.stop()
+            cam.ia.stop()
         except Exception as e:
             log_event("camera_core.close_stream_force", "Ошибка force stop", "warn",{"error": e})
 
         try:
-            current_ia.destroy()
+            cam.ia.destroy()
         except Exception as e:
             log_event("camera_core.close_stream_force", "Ошибка force destroy", "warn", {"error": e})
 
-        current_ia = None
-
-    stream_closed = True
+        cam.ia = None
 
     log_event("camera_core.close_stream_force", "Запрошена принудительная остановка потока", "warn")
     return {"status": "force_stopped"}
 
 # Для фото
-def on_photo(interval):
-    global photo_interval, photo_enabled
-    photo_enabled = True
-    photo_interval = interval
-    log_event("camera_core.on_save", "Вкл. автосохранение фото c интервалом", "info", {"interval": interval})
-    return {"status": "ok", "photo_enabled": True, "interval": photo_interval}
+def on_photo(serial_number, interval):
+    cam = get_CameraWorker(serial_number)
 
-def off_photo():
-    global photo_enabled, photo_interval, last_save
-    photo_enabled = False
-    photo_interval = None
-    last_save = None
+    cam.save_photo = True
+    cam.photo_interval = interval
+
+    log_event("camera_core.on_save", "Вкл. автосохранение фото c интервалом", "info", {"interval": interval})
+    return {"status": "ok", "photo_enabled": True, "interval": cam.photo_interval}
+
+def off_photo(serial_number):
+    cam = get_CameraWorker(serial_number)
+
+    cam.save_photo = False
+    cam.photo_interval = None
+    cam.last_photo = None
+
     log_event("camera_core.off_save", "Выкл. автосохранение фото")
     return {"status": "ok", "photo_enabled": False}
 
-def check_save_photo(interval):
+def check_save_photo(serial_number, interval):
     current_time = time.time()
-    global last_save
+    cam = get_CameraWorker(serial_number)
 
     if interval is None:
         return False
 
-    if last_save is None:
-        last_save = current_time
+    if cam.last_photo is None:
+        cam.last_photo = current_time
         return True
 
     else:
-        if current_time - last_save >= interval:
-            last_save = current_time
+        if current_time - cam.last_photo >= interval:
+            cam.last_photo = current_time
             return True
 
     return False
@@ -507,51 +545,52 @@ def save_photo(img):
 # 1 идет автосохранение видео
 # 2 завершение автосохранение видео
 
-def on_video(duration):
-    global video_enabled, video_duration, video_start, video_writer
+def on_video(serial_number, duration):
+    cam = get_CameraWorker(serial_number)
+
 
     if duration is None:
-        video_duration = None
-    elif video_enabled == 0:
-        video_duration = duration
+        cam.video_duration = None
+    elif cam.save_video == 0:
+        cam.video_duration = duration
 
-    if video_enabled == 0:
-        video_enabled = 1
-        video_start = time.time()
-    log_event("camera_core.on_video", "Вкл. автосохранение видео с длительностью: ", "info", {"video_duration": video_duration})
+    if cam.save_video == 0:
+        cam.save_video = 1
+        cam.video_start = time.time()
+    log_event("camera_core.on_video", "Вкл. автосохранение видео с длительностью: ", "info", {"video_duration": cam.video_duration})
     return {"status": "ok", "video_enabled": "1"}
 
 
-def off_video():
-    global video_enabled, video_duration, video_start, video_writer
-    if video_enabled == 1:
-        video_enabled = 2
+def off_video(serial_number):
+    cam = get_CameraWorker(serial_number)
+    if cam.save_video == 1:
+        cam.save_video = 2
     log_event("camera_core.off_video", "Выкл. автосохранение видео")
     return {"status": "ok", "video_enabled": "2"}
 
 
-def check_video_enabled():
-    global video_enabled, video_duration, video_start
-    if video_enabled == 1:
+def check_video_enabled(serial_number):
+    cam = get_CameraWorker(serial_number)
+    if cam.save_video == 1:
         current_time = time.time()
-        if video_duration is not None:
-            if current_time - video_start >= video_duration:
-                video_enabled = 2
+        if cam.video_duration is not None:
+            if current_time - cam.video_start >= cam.video_duration:
+                cam.save_video = 2
 
 
-def writer_video(img,fps):
-    global video_writer, video_fps
+def writer_video(serial_number,img,fps):
+    cam = get_CameraWorker(serial_number)
 
-    if video_writer is None:
+    if cam.video_writer is None:
         folder = Path("Videos")
         folder.mkdir(parents=True, exist_ok=True)
         filename = f"Video{datetime.now().strftime('%d_%m_%H_%M_%S')}.avi"
         path = os.path.join(folder, filename)
         fourcc = cv2.VideoWriter_fourcc(*"MJPG")
-        video_writer = cv2.VideoWriter(path,fourcc, fps, (img.shape[1],img.shape[0]))
-        video_writer.write(img)
+        cam.video_writer = cv2.VideoWriter(path,fourcc, fps, (img.shape[1],img.shape[0]))
+        cam.video_writer.write(img)
     else:
-        video_writer.write(img)
+        cam.video_writer.write(img)
 
 def get_network_settings(serial_number):
     global cam_online
@@ -590,20 +629,21 @@ def ping_device(ip: str) -> bool:
     log_event("camera_core.change_ip", "пинг до устройства", "info", {"result": result.returncode})
     return result.returncode == 0
 
-def set_advanced_network_settings():
-    global advanced_network_settings
-    advanced_network_settings = True
-    return {"advanced_network_settings": advanced_network_settings}
+def set_advanced_network_settings(serial_number):
+    cam = get_CameraWorker(serial_number)
+    cam.advanced_settings = True
+    return {"advanced_network_settings": cam.advanced_settings}
 
 def change_ip(serial_number, ip, mask="", gateway=""):
-    global advanced_network_settings, current_ia
+    cam = get_CameraWorker(serial_number)
+    node_map, ia = None, None
 
     log_event("camera_core.change_ip","Запрошено изменение ip-mask-gateway","info",
-              {"serial_number": serial_number, "ip": ip, "mask": mask, "gateway": gateway, "advanced": advanced_network_settings})
+              {"serial_number": serial_number, "ip": ip, "mask": mask, "gateway": gateway, "advanced": cam.advanced_settings})
 
     try:
         if check():
-            if stream_closed:
+            if not cam.running:
                 old_ip, old_mask, old_gateway, dhcp_enabled = get_network_settings(serial_number)
 
                 if old_ip is not None and old_mask is not None and old_gateway is not None:
@@ -612,9 +652,9 @@ def change_ip(serial_number, ip, mask="", gateway=""):
                               {"serial_number": serial_number, "ip": ip, "mask": mask, "gateway": gateway,"advanced": dhcp_enabled})
 
                     if mask == "" and gateway == "":
-                        advanced_network_settings = False
+                        cam.advanced_settings = False
 
-                    if not advanced_network_settings:
+                    if not cam.advanced_settings:
                         if not mask:
                             mask = old_mask
                         if not gateway:
@@ -640,8 +680,8 @@ def change_ip(serial_number, ip, mask="", gateway=""):
                             return {"ip": "ip_busy"}
 
                     try:
-                        node_map, current_ia = get_node_map_cam(serial_number)
-                        if node_map is None or current_ia is None:
+                        node_map, ia = get_node_map_cam(serial_number)
+                        if node_map is None or ia is None:
                             log_event("camera_core.change_ip", "не доступен node_map", "warn")
                             return {"ip": "node_map_not_available"}
 
@@ -652,7 +692,7 @@ def change_ip(serial_number, ip, mask="", gateway=""):
                         if ip_changed:
                             node_map.GevPersistentIPAddress.value = ip_to_int(ip)
 
-                        if advanced_network_settings:
+                        if cam.advanced_settings:
                             if mask_changed:
                                 node_map.GevPersistentSubnetMask.value = ip_to_int(mask)
                             if gateway_changed:
@@ -664,13 +704,13 @@ def change_ip(serial_number, ip, mask="", gateway=""):
                         time.sleep(1)
                         node_map.DeviceReset.execute()
 
-                        if ip_changed and advanced_network_settings and advanced_changed:
+                        if ip_changed and cam.advanced_settings and advanced_changed:
                             log_event("camera_core.change_ip", "Ip mask gateway успешно поменяны","info")
                             return {"ip": "ip_mask_gateway_changed"}
                         elif ip_changed:
                             log_event("camera_core.change_ip", "Ip успешно поменян", "info")
                             return {"ip": "ip_changed"}
-                        elif advanced_network_settings and advanced_changed:
+                        elif cam.advanced_settings and advanced_changed:
                             log_event("camera_core.change_ip", "Mask gateway успешно поменяны", "info")
                             return {"ip": "mask_gateway_changed"}
 
@@ -681,14 +721,14 @@ def change_ip(serial_number, ip, mask="", gateway=""):
                         log_event("camera_core.change_ip", "Ошибка изменения ip-mask-gateway", "warn")
                         return {"error": "Ошибка изменения ip-mask-gateway"}
                     finally:
-                        if current_ia is not None:
+                        if ia is not None:
                             try:
-                                current_ia.stop()
+                                cam.ia.stop()
                             except Exception as e:
                                 log_event("camera_core.close_stream_force", "Ошибка force stop", "warn", {"error": e})
 
                             try:
-                                current_ia.destroy()
+                                cam.ia.destroy()
                             except Exception as e:
                                 log_event("camera_core.close_stream_force", "Ошибка force destroy", "warn",{"error": e})
                 else:
@@ -701,4 +741,4 @@ def change_ip(serial_number, ip, mask="", gateway=""):
             log_event("camera_core.change_ip", "не загружен драйвер", "warn")
             return {"ip": "not_driver"}
     finally:
-        advanced_network_settings = False
+        cam.advanced_settings = False

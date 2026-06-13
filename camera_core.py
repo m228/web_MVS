@@ -1,5 +1,6 @@
 from datetime import datetime
 import os
+import re
 import time
 from pathlib import Path
 
@@ -12,6 +13,27 @@ import cv2
 from logger import log_event
 
 import subprocess
+
+
+# понятные подсказки для типичных GenTL-кодов
+GENTL_HINTS = {
+    -1003: "операция не поддерживается камерой или GenTL-интерфейсом",
+    -1005: "доступ запрещён — камера занята другим клиентом (закройте MVS / другое приложение)",
+    -1006: "выбранный сетевой интерфейс не подходит для этой камеры (другая подсеть)",
+    -1020: "исчерпаны ресурсы драйвера, требуется сброс",
+}
+
+
+def _gentl_code(error_text):
+    match = re.search(r"ID:\s*(-?\d+)", error_text or "")
+    return int(match.group(1)) if match else None
+
+
+def _explain_error(error):
+    text = repr(error)
+    code = _gentl_code(text)
+    hint = GENTL_HINTS.get(code)
+    return {"error": text, "code": code, "hint": hint} if code else {"error": text}
 
 
 # RTSP поверх TCP — стабильнее, меньше «рассыпающихся» кадров
@@ -211,26 +233,40 @@ class CameraWorker(BaseCameraWorker):
         status = self.manager.access_status(self.serial_number)
 
         if status != 1:
-            log_event("camera_core.get_node_map_cam", "Ошибка статуса камеры", "error", {"status_camera": str(status)})
+            log_event("camera_core.get_node_map_cam", "Камера недоступна для подключения", "error",
+                      {"serial_number": self.serial_number, "access_status": status,
+                       "hint": "пересканируйте список камер или проверьте, не занята ли камера другим приложением"})
             return None, None
 
-        ia = None
-        try:
-            ia = self.manager.create_acquirer(self.serial_number)
-            node_map = ia.remote_device.node_map
-            # получение лимитов
-            self.data_limit = self.read_settings(node_map)
-            return node_map, ia
-        except Exception as e:
-            # не оставляем открытый хэндл (иначе GenTL: resource exhausted)
-            if ia is not None:
-                try:
-                    ia.destroy()
-                except Exception:
-                    pass
-            log_event("camera_core.get_node_map_cam", "Ошибка подключения к камере", "error",
-                      {"serial_number": self.serial_number, "error": repr(e)})
-            return None, None
+        last_error = None
+        # одна повторная попытка с авто-сбросом продюсера, если ресурсы исчерпаны
+        for attempt in range(2):
+            ia = None
+            try:
+                ia = self.manager.create_acquirer(self.serial_number)
+                node_map = ia.remote_device.node_map
+                self.data_limit = self.read_settings(node_map)
+                return node_map, ia
+            except Exception as e:
+                last_error = e
+                if ia is not None:
+                    try:
+                        ia.destroy()
+                    except Exception:
+                        pass
+
+                code = _gentl_code(repr(e))
+                if code == -1020 and attempt == 0:
+                    log_event("camera_core.get_node_map_cam",
+                              "Ресурсы драйвера исчерпаны, пересоздаю Harvester и повторяю попытку",
+                              "warn", {"serial_number": self.serial_number})
+                    self.manager.reset_harvester()
+                    continue
+                break
+
+        payload = {"serial_number": self.serial_number, **_explain_error(last_error)}
+        log_event("camera_core.get_node_map_cam", "Ошибка подключения к камере", "error", payload)
+        return None, None
 
     # получение данных с камеры, текущие + лимиты
     def read_settings(self, node_map):
@@ -394,8 +430,7 @@ class CameraWorker(BaseCameraWorker):
 
             node_map, ia = self.open_node_map()
             if node_map is None or ia is None:
-                log_event("camera_core.generate_stream", "Не удалось подключиться к камере", "error",
-                          {"serial_number": self.serial_number})
+                # подробная причина уже в логе open_node_map — здесь только статус потока
                 return
 
             ok, err = self.apply_settings(
@@ -519,6 +554,9 @@ class CameraWorker(BaseCameraWorker):
             ia = None
             try:
                 node_map, ia = self.open_node_map()
+                if node_map is None:
+                    # подробная причина уже в логе open_node_map
+                    return None, None, None, None
 
                 ip = int_to_ip(node_map.GevCurrentIPAddress.value)
                 mask = int_to_ip(node_map.GevCurrentSubnetMask.value)
@@ -527,7 +565,8 @@ class CameraWorker(BaseCameraWorker):
 
                 return ip, mask, gateway, dhcp_enabled
             except Exception as e:
-                log_event("camera_core.get_network_settings", "Ошибка получение сетевых настроек", "error", {"error": str(e)})
+                log_event("camera_core.get_network_settings", "Ошибка чтения сетевых настроек", "error",
+                          {"serial_number": self.serial_number, **_explain_error(e)})
                 return None, None, None, None
             finally:
                 if ia is not None:
@@ -846,6 +885,18 @@ class CameraManager:
         if serial_number not in self.workers:
             self.workers[serial_number] = CameraWorker(serial_number, self)
         return self.workers[serial_number]
+
+    # полный сброс Harvester (используется при GenTL -1020 resource exhausted)
+    def reset_harvester(self):
+        try:
+            self.harvester.reset()
+        except Exception as e:
+            log_event("camera_core.reset_harvester", "Ошибка сброса Harvester", "warn", {"error": str(e)})
+
+        self.harvester = Harvester()
+        self.driver_loaded = False
+        self.load_driver()
+        log_event("camera_core.reset_harvester", "Harvester пересоздан", "info")
 
     # создать acquirer по серийнику, устойчиво к дублирующимся записям устройств
     def create_acquirer(self, serial_number):

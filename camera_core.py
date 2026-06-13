@@ -225,7 +225,7 @@ class CameraWorker(BaseCameraWorker):
             log_event("camera_core.get_node_map_cam", "Ошибка статуса камеры", "error", {"status_camera": str(status)})
             return None, None
         try:
-            ia = self.manager.harvester.create({'serial_number': f'{self.serial_number}'})
+            ia = self.manager.create_acquirer(self.serial_number)
             node_map = ia.remote_device.node_map
             # получение лимитов
             self.data_limit = self.read_settings(node_map)
@@ -669,9 +669,19 @@ class RtspCameraWorker(BaseCameraWorker):
 
     # ---------- стрим ----------
 
-    def generate(self):
+    def generate(self, scale=100, target_fps=None):
         capture = None
         last_frame_time = None
+        last_emit = 0.0
+
+        # масштаб кадра: 10..100 % от оригинала
+        try:
+            scale_factor = max(10, min(100, int(scale))) / 100.0
+        except (TypeError, ValueError):
+            scale_factor = 1.0
+
+        # ограничение частоты кадров (троттлинг по времени)
+        min_interval = (1.0 / target_fps) if (target_fps and target_fps > 0) else 0.0
 
         if self.running:
             log_event("camera_core.rtsp_stream", "Старый RTSP-поток открыт, принудительно закрытие", "warn")
@@ -680,7 +690,8 @@ class RtspCameraWorker(BaseCameraWorker):
 
         try:
             log_event("camera_core.rtsp_stream", "Запрошен старт RTSP-потока", "info",
-                      {"serial_number": self.serial_number, "rtsp_url": self.rtsp_url})
+                      {"serial_number": self.serial_number, "rtsp_url": self.rtsp_url,
+                       "scale": scale, "target_fps": target_fps})
 
             capture = self._open_capture()
             if not capture.isOpened():
@@ -689,15 +700,17 @@ class RtspCameraWorker(BaseCameraWorker):
 
             self.capture = capture
             self.running = True
-            fps = self._capture_fps(capture)
+            source_fps = self._capture_fps(capture)
+            # fps для записи видео: целевой, если задан, иначе из камеры
+            video_fps = target_fps if (target_fps and target_fps > 0) else source_fps
 
             log_event("camera_core.rtsp_stream", "RTSP-поток запущен", "success",
-                      {"serial_number": self.serial_number, "fps": fps})
+                      {"serial_number": self.serial_number, "fps": source_fps})
 
             while self.running:
-                ok, img = capture.read()
+                ok, raw = capture.read()
 
-                if not ok or img is None:
+                if not ok or raw is None:
                     self.metrics["errors"] += 1
                     if not self.running:
                         break
@@ -705,13 +718,28 @@ class RtspCameraWorker(BaseCameraWorker):
                     time.sleep(0.05)
                     continue
 
+                # полноразмерный кадр держим для снимка
+                self.last_frame = raw
+
+                now = time.time()
+                # троттлинг: пропускаем кадр, если интервал ещё не прошёл
+                if min_interval and (now - last_emit) < min_interval:
+                    continue
+                last_emit = now
+
+                # масштабирование для снижения нагрузки на сеть
+                if scale_factor < 1.0:
+                    new_w = max(2, int(raw.shape[1] * scale_factor))
+                    new_h = max(2, int(raw.shape[0] * scale_factor))
+                    img = cv2.resize(raw, (new_w, new_h), interpolation=cv2.INTER_AREA)
+                else:
+                    img = raw
+
                 ok_jpeg, encoded = cv2.imencode(".jpg", img)
                 if not ok_jpeg:
                     self.metrics["errors"] += 1
                     continue
                 frame = encoded.tobytes()
-
-                now = time.time()
 
                 self.metrics["image_number"] += 1
                 self.metrics["width"] = img.shape[1]
@@ -727,10 +755,8 @@ class RtspCameraWorker(BaseCameraWorker):
 
                 last_frame_time = now
 
-                self.last_frame = img
-
                 # автофото + запись видео (тот же механизм, что и у GigE)
-                self._maybe_save(img, fps)
+                self._maybe_save(img, video_fps)
 
                 yield (
                     b"--frame\r\n"
@@ -824,6 +850,20 @@ class CameraManager:
             self.workers[serial_number] = CameraWorker(serial_number, self)
         return self.workers[serial_number]
 
+    # создать acquirer по серийнику, устойчиво к дублирующимся записям устройств
+    def create_acquirer(self, serial_number):
+        devices = self.harvester.device_info_list
+        matches = [index for index, device in enumerate(devices) if device.serial_number == serial_number]
+
+        if not matches:
+            raise ValueError(f"устройство не найдено: {serial_number}")
+
+        if len(matches) > 1:
+            log_event("camera_core.create_acquirer", "Найдено несколько записей устройства, выбрана первая", "warn",
+                      {"serial_number": serial_number, "count": len(matches)})
+
+        return self.harvester.create(matches[0])
+
     # создать/получить RTSP-камеру (rtsp_url нужен при первом обращении)
     def get_rtsp(self, serial_number, rtsp_url=None):
         worker = self.rtsp_workers.get(serial_number)
@@ -842,16 +882,24 @@ class CameraManager:
     # загрузка драйвера для работы
     def load_driver(self):
         try:
-            cti_path = next(PROGRAM_DIR.rglob(CTI_FILENAME), None)
-            if cti_path is not None:
-                cti_path = str(cti_path)
-                self.harvester.add_file(cti_path)
+            # драйвер уже загружен — повторно .cti не добавляем (иначе производитель
+            # регистрируется дублями и устройства задваиваются → "multiple devices found"),
+            # только обновляем список устройств
+            if self.driver_loaded:
                 self.harvester.update()
-                self.driver_loaded = True
-                log_event("camera_core.load_driver", "Драйвер загружен", "success", {"cti_path": cti_path})
-            else:
+                return
+
+            cti_path = next(PROGRAM_DIR.rglob(CTI_FILENAME), None)
+            if cti_path is None:
                 log_event("camera_core.load_driver", "Драйвер отсутствует в папке программы", "error")
                 self.driver_loaded = False
+                return
+
+            cti_path = str(cti_path)
+            self.harvester.add_file(cti_path)
+            self.harvester.update()
+            self.driver_loaded = True
+            log_event("camera_core.load_driver", "Драйвер загружен", "success", {"cti_path": cti_path})
         except Exception as e:
             self.driver_loaded = False
             log_event("camera_core.load_driver", "Ошибка загрузки драйвера", "error", {"error": str(e)})
@@ -869,7 +917,7 @@ class CameraManager:
         # пробные данные(потом убрать)
         self.cam_online = {"DA123123": 1}
         log_event("camera_core.scan_cams", "Запущено сканирование камер")
-        self.harvester.update()
+        # load_driver сам обновит список устройств (и при первом вызове добавит .cti)
         self.load_driver()
         if self.check():
             for device in self.harvester.device_info_list:

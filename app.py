@@ -250,6 +250,8 @@ def rtsp_stream(
     password: str = "",
     channel: int = 1,
     subtype: int = 0,
+    scale: int = 100,
+    fps: float = None,
 ):
     rtsp_url = _resolve_rtsp_url(url, ip, username, password, channel, subtype)
     worker = manager.get_rtsp(serial_number, rtsp_url)
@@ -257,9 +259,10 @@ def rtsp_stream(
         api_log("api.rtsp.stream", "RTSP-камера не зарегистрирована", "warn", {"serial_number": serial_number})
         return {"error": "rtsp_url_required"}
 
-    api_log("api.rtsp.stream", "Запрошен RTSP-видеопоток", payload={"serial_number": serial_number, "rtsp_url": worker.rtsp_url})
+    api_log("api.rtsp.stream", "Запрошен RTSP-видеопоток",
+            payload={"serial_number": serial_number, "rtsp_url": worker.rtsp_url, "scale": scale, "fps": fps})
     return StreamingResponse(
-        worker.generate(),
+        worker.generate(scale=scale, target_fps=fps),
         media_type="multipart/x-mixed-replace; boundary=frame",
     )
 

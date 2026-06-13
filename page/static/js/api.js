@@ -181,6 +181,14 @@ const RtspApi = {
       query.set('subtype', connection.subtype ?? 0);
     }
 
+    if (connection.scale) {
+      query.set('scale', connection.scale);
+    }
+
+    if (connection.fps) {
+      query.set('fps', connection.fps);
+    }
+
     return `/api/rtsp/stream?${query.toString()}`;
   },
 

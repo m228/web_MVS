@@ -69,6 +69,8 @@ function initRtspPage() {
       password: String(data.get('password') || ''),
       channel: Number(data.get('channel') || 1),
       subtype: Number(data.get('subtype') || 0),
+      scale: Number(data.get('scale') || 100),
+      fps: String(data.get('fps') || '').trim(),
     };
   }
 

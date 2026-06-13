@@ -140,6 +140,29 @@
                   </select>
                 </label>
 
+                <label>
+                  Масштаб (разрешение)
+                  <select name="scale">
+                    <option value="100" selected>100 % (оригинал)</option>
+                    <option value="70">70 %</option>
+                    <option value="50">50 %</option>
+                    <option value="30">30 %</option>
+                  </select>
+                </label>
+
+                <label>
+                  Частота кадров (FPS)
+                  <select name="fps">
+                    <option value="" selected>Авто (как у камеры)</option>
+                    <option value="30">30</option>
+                    <option value="25">25</option>
+                    <option value="20">20</option>
+                    <option value="15">15</option>
+                    <option value="10">10</option>
+                    <option value="5">5</option>
+                  </select>
+                </label>
+
                 <label class="one-line-label">Либо полный RTSP-URL (приоритетнее)</label>
                 <input type="text" name="url" value="" placeholder="rtsp://admin:pass@192.168.1.108:554/cam/realmonitor?channel=1&subtype=0" />
               </form>

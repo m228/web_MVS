@@ -19,7 +19,7 @@ import subprocess
 GENTL_HINTS = {
     -1003: "операция не поддерживается камерой или GenTL-интерфейсом",
     -1005: "доступ запрещён — камера занята другим клиентом (закройте MVS / другое приложение)",
-    -1006: "выбранный сетевой интерфейс не подходит для этой камеры (другая подсеть)",
+    -1006: "продюсер не может работать с камерой через этот интерфейс (попробуйте автовыбор или другую запись из списка)",
     -1011: "таймаут получения кадра — потери UDP-пакетов (другая подсеть / маршрутизатор / MTU)",
     -1020: "исчерпаны ресурсы драйвера, требуется сброс",
 }
@@ -689,6 +689,10 @@ class CameraWorker(BaseCameraWorker):
                 time.sleep(1)
                 node_map.DeviceReset.execute()
 
+                # после смены IP старая GenTL-запись устарела:
+                # сбрасываем "запомненный" интерфейс — следующий scan/connect возьмёт новый
+                self.interface_id = None
+
                 if ip_changed and self.advanced_settings and advanced_changed:
                     log_event("camera_core.change_ip", "Ip mask gateway успешно поменяны", "info")
                     return {"ip": "ip_mask_gateway_changed"}
@@ -940,6 +944,7 @@ class CameraManager:
 
     # создать acquirer по (серийник + интерфейс).
     # interface_id=None → автовыбор: сначала available, потом любая запись.
+    # interface_id задан → сначала пробуем его, потом fallback на остальные available.
     def create_acquirer(self, serial_number, interface_id=None):
         devices = self.harvester.device_info_list
 
@@ -954,28 +959,31 @@ class CameraManager:
         if not same_serial:
             raise ValueError(f"устройство не найдено: {serial_number}")
 
-        # отбор по интерфейсу (точное совпадение), либо автовыбор
-        if interface_id:
-            candidates = [entry for entry in same_serial if entry[1] == interface_id]
-            if not candidates:
-                raise ValueError(
-                    f"камера {serial_number} не видна через выбранный интерфейс {interface_id}")
-        else:
-            available = [entry for entry in same_serial if entry[2] == 1]
-            candidates = available if available else same_serial
+        # порядок проб: предпочтительный интерфейс → остальные available → недоступные.
+        # это даёт shooting fish-устойчивость: если "выбранная" запись не открывается,
+        # перебираем дубликаты этой же камеры через другие сетевые интерфейсы.
+        preferred = [e for e in same_serial if interface_id and e[1] == interface_id]
+        available = [e for e in same_serial if e[2] == 1 and e not in preferred]
+        fallback = [e for e in same_serial if e not in preferred and e not in available]
+        ordered = preferred + available + fallback
 
         last_error = None
-        for index, d_iface, _status in candidates:
+        tried_interfaces = []
+        for index, d_iface, _status in ordered:
             try:
                 acquirer = self.harvester.create(index)
-                log_event("camera_core.create_acquirer", "Подключение к камере открыто", "info",
-                          {"serial_number": serial_number, "interface_id": d_iface})
+                if interface_id and d_iface != interface_id:
+                    log_event("camera_core.create_acquirer",
+                              "Предпочтительный интерфейс не открылся, подключено через резервный",
+                              "warn", {"serial_number": serial_number,
+                                       "preferred": interface_id, "used": d_iface})
                 return acquirer
             except Exception as e:
                 last_error = e
+                tried_interfaces.append(d_iface)
 
         raise last_error if last_error is not None else ValueError(
-            f"не удалось открыть устройство: {serial_number}")
+            f"не удалось открыть устройство: {serial_number} (пробовали: {tried_interfaces})")
 
     # ---------- перечисление устройств с разбивкой по интерфейсам ----------
 

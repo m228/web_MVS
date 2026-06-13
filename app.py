@@ -1,12 +1,12 @@
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from logger import get_events, log_event
 
-import camera_core as core
+from camera_core import manager, build_rtsp_url
 
 
 def api_log(source: str, message: str, level: str = "info", payload: dict | None = None):
@@ -16,8 +16,8 @@ def api_log(source: str, message: str, level: str = "info", payload: dict | None
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     api_log("app", "Запуск приложения")
-    core.load_driver()
-    core.scan_cams()
+    manager.load_driver()
+    manager.scan_cams()
     yield
     api_log("app", "Остановка приложения")
 
@@ -36,6 +36,11 @@ def camera():
     return FileResponse("page/camera.html")
 
 
+@app.get("/rtsp")
+def rtsp_page():
+    return FileResponse("page/rtsp.html")
+
+
 @app.get("/api/debug/logs")
 def api_debug_logs(since_id: int = 0):
     return get_events(since_id)
@@ -43,7 +48,7 @@ def api_debug_logs(since_id: int = 0):
 
 @app.get("/api/cams")
 def api_cams():
-    data = core.scan_cams()
+    data = manager.scan_cams()
     api_log("api.cams", "Получен список камер", payload={"count": len(data)})
     return data
 
@@ -51,7 +56,7 @@ def api_cams():
 @app.get("/api/status")
 def api_status():
     try:
-        status = core.check()
+        status = manager.check()
         api_log("api.status", "Получен статус драйвера", payload={"status": status})
         return {"status": status}
     except Exception as error:
@@ -61,21 +66,21 @@ def api_status():
 
 @app.get("/api/ip")
 def get_ip(serial_number: str):
-    data = core.get_ip(serial_number)
+    data = manager.get(serial_number).get_ip()
     api_log("api.get_ip", "Получен IP камеры", payload={"serial_number": serial_number, "data": data})
     return data
 
 
 @app.get("/api/count_cams")
 def count_cams():
-    data = core.count_cams()
+    data = manager.count_cams()
     api_log("api.count_cams", "Получено количество камер", payload=data)
     return data
 
 
 @app.get("/api/get_network_settings")
 def network_settings(serial_number: str):
-    ip, mask, gateway, dhcp = core.get_network_settings(serial_number)
+    ip, mask, gateway, dhcp = manager.get(serial_number).get_network_settings()
     if ip is None:
         api_log(
             "api.get_network_settings",
@@ -96,8 +101,8 @@ def network_settings(serial_number: str):
 
 
 @app.get("/api/network_settings_advanced")
-def network_settings_advanced():
-    data = core.set_advanced_network_settings()
+def network_settings_advanced(serial_number: str):
+    data = manager.get(serial_number).set_advanced()
     api_log("api.network_settings_advanced", "Включены расширенные сетевые настройки", payload=data)
     return data
 
@@ -116,7 +121,7 @@ def change_ip(
         "gateway": gateway,
     }
     api_log("api.change_ip", "Запрошено изменение сетевых настроек", payload=payload)
-    data = core.change_ip(serial_number, ip, mask, gateway)
+    data = manager.get(serial_number).change_ip(ip, mask, gateway)
     api_log("api.change_ip", "Получен ответ изменения сетевых настроек", payload={**payload, "result": data})
     return data
 
@@ -147,8 +152,7 @@ def camera_stream(
         },
     )
     return StreamingResponse(
-        core.generate_stream(
-            serial_number=serial_number,
+        manager.get(serial_number).generate(
             width=width,
             height=height,
             offset_x=offset_x,
@@ -162,64 +166,199 @@ def camera_stream(
 
 
 @app.get("/api/camera/close_stream")
-def close_stream():
-    data = core.close_stream()
+def close_stream(serial_number: str):
+    data = manager.get(serial_number).close()
     api_log("api.camera.close_stream", "Запрошена мягкая остановка потока", payload=data)
     return data
 
 
 @app.get("/api/camera/close_stream_force")
-def close_stream_force():
-    data = core.close_stream_force()
+def close_stream_force(serial_number: str):
+    data = manager.get(serial_number).force_close()
     api_log("api.camera.close_stream_force", "Запрошена принудительная остановка потока", "warn", data)
     return data
 
 
 @app.get("/api/camera/stream_state")
-def stream_state():
-    return core.get_stream_state()
+def stream_state(serial_number: str):
+    return manager.get(serial_number).stream_state()
 
 
 @app.get("/api/camera/metrics")
-def metrics():
-    return core.get_metrics()
+def metrics(serial_number: str):
+    return manager.get(serial_number).metrics
 
 
 @app.get("/api/camera/data_limit")
 def data_limit(serial_number: str):
-    data = core.get_data_limit(serial_number)
+    data = manager.get(serial_number).data_limit
     api_log("api.camera.data_limit", "Получены ограничения камеры", payload={"serial_number": serial_number})
     return data
 
 
 @app.get("/api/camera/on_save_photo")
-def on_save_photo(interval: int):
-    data = core.on_save(interval)
+def on_save_photo(serial_number: str, interval: int):
+    data = manager.get(serial_number).on_photo(interval)
     api_log("api.camera.on_save_photo", "Включено сохранение фото", payload={"interval": interval, "result": data})
     return data
 
 
 @app.get("/api/camera/off_save_photo")
-def off_save_photo():
-    data = core.off_save()
+def off_save_photo(serial_number: str):
+    data = manager.get(serial_number).off_photo()
     api_log("api.camera.off_save_photo", "Выключено сохранение фото", payload=data)
     return data
 
 
 @app.get("/api/camera/on_save_video")
-def on_save_video(duration: int):
-    data = core.on_video(duration)
+def on_save_video(serial_number: str, duration: int):
+    data = manager.get(serial_number).on_video(duration)
     api_log("api.camera.on_save_video", "Включена запись видео", payload={"duration": duration, "result": data})
     return data
 
 
 @app.get("/api/camera/off_save_video")
-def off_save_video():
-    data = core.off_video()
+def off_save_video(serial_number: str):
+    data = manager.get(serial_number).off_video()
     api_log("api.camera.off_save_video", "Выключена запись видео", payload=data)
     return data
 
 
 @app.get("/api/camera/status_video_photo")
-def status_video_photo():
-    return {"video": core.video_enabled, "photo": core.photo_enabled}
+def status_video_photo(serial_number: str):
+    worker = manager.get(serial_number)
+    return {"video": worker.save_video, "photo": worker.save_photo}
+
+
+# ---------- RTSP-камера (просмотр / запись / снимки) ----------
+
+
+def _resolve_rtsp_url(url, ip, username, password, channel, subtype):
+    if url:
+        return url
+    if ip:
+        return build_rtsp_url(ip, username, password, channel, subtype)
+    return None
+
+
+@app.get("/api/rtsp/stream")
+def rtsp_stream(
+    serial_number: str,
+    url: str = None,
+    ip: str = None,
+    username: str = "admin",
+    password: str = "",
+    channel: int = 1,
+    subtype: int = 0,
+):
+    rtsp_url = _resolve_rtsp_url(url, ip, username, password, channel, subtype)
+    worker = manager.get_rtsp(serial_number, rtsp_url)
+    if worker is None:
+        api_log("api.rtsp.stream", "RTSP-камера не зарегистрирована", "warn", {"serial_number": serial_number})
+        return {"error": "rtsp_url_required"}
+
+    api_log("api.rtsp.stream", "Запрошен RTSP-видеопоток", payload={"serial_number": serial_number, "rtsp_url": worker.rtsp_url})
+    return StreamingResponse(
+        worker.generate(),
+        media_type="multipart/x-mixed-replace; boundary=frame",
+    )
+
+
+@app.get("/api/rtsp/snapshot")
+def rtsp_snapshot(serial_number: str):
+    worker = manager.get_rtsp(serial_number)
+    if worker is None:
+        api_log("api.rtsp.snapshot", "RTSP-камера не подключена", "warn", {"serial_number": serial_number})
+        return {"error": "rtsp_not_connected"}
+
+    data = worker.snapshot()
+    if not data:
+        api_log("api.rtsp.snapshot", "Не удалось получить снимок", "warn", {"serial_number": serial_number})
+        return {"error": "snapshot_failed"}
+
+    api_log("api.rtsp.snapshot", "Снимок RTSP сохранён", payload={"serial_number": serial_number})
+    return Response(content=data, media_type="image/jpeg")
+
+
+@app.get("/api/rtsp/close_stream")
+def rtsp_close_stream(serial_number: str):
+    worker = manager.get_rtsp(serial_number)
+    if worker is None:
+        return {"error": "rtsp_not_connected"}
+    data = worker.close()
+    api_log("api.rtsp.close_stream", "Запрошена мягкая остановка RTSP-потока", payload=data)
+    return data
+
+
+@app.get("/api/rtsp/close_stream_force")
+def rtsp_close_stream_force(serial_number: str):
+    worker = manager.get_rtsp(serial_number)
+    if worker is None:
+        return {"error": "rtsp_not_connected"}
+    data = worker.force_close()
+    api_log("api.rtsp.close_stream_force", "Запрошена принудительная остановка RTSP-потока", "warn", data)
+    return data
+
+
+@app.get("/api/rtsp/stream_state")
+def rtsp_stream_state(serial_number: str):
+    worker = manager.get_rtsp(serial_number)
+    if worker is None:
+        return {"serial_number": serial_number, "running": False, "closed": True}
+    return worker.stream_state()
+
+
+@app.get("/api/rtsp/metrics")
+def rtsp_metrics(serial_number: str):
+    worker = manager.get_rtsp(serial_number)
+    if worker is None:
+        return {"error": "rtsp_not_connected"}
+    return worker.metrics
+
+
+@app.get("/api/rtsp/on_save_photo")
+def rtsp_on_save_photo(serial_number: str, interval: int):
+    worker = manager.get_rtsp(serial_number)
+    if worker is None:
+        return {"error": "rtsp_not_connected"}
+    data = worker.on_photo(interval)
+    api_log("api.rtsp.on_save_photo", "Включено автосохранение фото (RTSP)", payload={"interval": interval, "result": data})
+    return data
+
+
+@app.get("/api/rtsp/off_save_photo")
+def rtsp_off_save_photo(serial_number: str):
+    worker = manager.get_rtsp(serial_number)
+    if worker is None:
+        return {"error": "rtsp_not_connected"}
+    data = worker.off_photo()
+    api_log("api.rtsp.off_save_photo", "Выключено автосохранение фото (RTSP)", payload=data)
+    return data
+
+
+@app.get("/api/rtsp/on_save_video")
+def rtsp_on_save_video(serial_number: str, duration: int):
+    worker = manager.get_rtsp(serial_number)
+    if worker is None:
+        return {"error": "rtsp_not_connected"}
+    data = worker.on_video(duration)
+    api_log("api.rtsp.on_save_video", "Включена запись видео (RTSP)", payload={"duration": duration, "result": data})
+    return data
+
+
+@app.get("/api/rtsp/off_save_video")
+def rtsp_off_save_video(serial_number: str):
+    worker = manager.get_rtsp(serial_number)
+    if worker is None:
+        return {"error": "rtsp_not_connected"}
+    data = worker.off_video()
+    api_log("api.rtsp.off_save_video", "Выключена запись видео (RTSP)", payload=data)
+    return data
+
+
+@app.get("/api/rtsp/status_video_photo")
+def rtsp_status_video_photo(serial_number: str):
+    worker = manager.get_rtsp(serial_number)
+    if worker is None:
+        return {"video": 0, "photo": False}
+    return {"video": worker.save_video, "photo": worker.save_photo}

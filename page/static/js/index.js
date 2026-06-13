@@ -24,7 +24,7 @@ function openCamera(serial) {
 async function closeCameraStream(serial) {
   log.warn('Запрошено принудительное закрытие потока', { serial });
 
-  const result = await CameraApi.closeStreamForce();
+  const result = await CameraApi.closeStreamForce(serial);
 
   if (!result) {
     log.error('Не удалось закрыть поток', { serial });
@@ -581,7 +581,7 @@ function initNetworkSettingsModal() {
     elements.riskAcceptBtn.addEventListener('click', async () => {
       log.warn('Подтверждено включение расширенных сетевых настроек');
 
-      const result = await CameraApi.enableAdvancedNetworkSettings();
+      const result = await CameraApi.enableAdvancedNetworkSettings(networkSettingsState.serial);
 
       if (!result) {
         log.error('Не удалось включить расширенные сетевые настройки');

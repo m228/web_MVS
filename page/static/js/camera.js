@@ -231,7 +231,7 @@ function initCameraPage() {
   async function syncMetrics() {
     if (!isConnected) return;
 
-    const data = await CameraApi.getMetrics();
+    const data = await CameraApi.getMetrics(serialNumber);
     if (!data) return;
 
     updateMetricsUI(data);
@@ -457,7 +457,7 @@ function initCameraPage() {
   async function syncVideoPhotoStatus() {
     if (!isConnected) return;
 
-    const data = await CameraApi.getVideoPhotoStatus();
+    const data = await CameraApi.getVideoPhotoStatus(serialNumber);
     if (!data) return;
 
     setSaveState({
@@ -477,11 +477,11 @@ function initCameraPage() {
   }
 
   async function stopStreamOnly() {
-    return await CameraApi.closeStream();
+    return await CameraApi.closeStream(serialNumber);
   }
 
   async function stopStreamForce() {
-    return await CameraApi.closeStreamForce();
+    return await CameraApi.closeStreamForce(serialNumber);
   }
 
   function showForceStopButton() {
@@ -511,7 +511,7 @@ function initCameraPage() {
     const startedAt = Date.now();
 
     while (Date.now() - startedAt < timeoutMs) {
-      const state = await CameraApi.getStreamState();
+      const state = await CameraApi.getStreamState(serialNumber);
 
       if (state?.closed === true) {
         waitingSoftStop = false;
@@ -546,7 +546,7 @@ function initCameraPage() {
     const startedAt = Date.now();
 
     while (Date.now() - startedAt < timeoutMs) {
-      const state = await CameraApi.getStreamState();
+      const state = await CameraApi.getStreamState(serialNumber);
 
       if (state?.closed === true) {
         return true;
@@ -651,7 +651,7 @@ function initCameraPage() {
 
     log.info('Запуск сохранения фото', { interval });
 
-    const data = await CameraApi.startPhotoSaving(interval);
+    const data = await CameraApi.startPhotoSaving(serialNumber, interval);
     if (!data) {
       log.warn('Сервер не подтвердил запуск сохранения фото');
       return;
@@ -664,7 +664,7 @@ function initCameraPage() {
   async function stopPhotoSaving() {
     log.info('Отключение сохранения фото');
 
-    const data = await CameraApi.stopPhotoSaving();
+    const data = await CameraApi.stopPhotoSaving(serialNumber);
     if (!data) {
       log.warn('Сервер не подтвердил отключение сохранения фото');
       return;
@@ -693,7 +693,7 @@ function initCameraPage() {
       durationInSeconds,
     });
 
-    const data = await CameraApi.startVideoSaving(durationInSeconds);
+    const data = await CameraApi.startVideoSaving(serialNumber, durationInSeconds);
     if (!data) {
       log.warn('Сервер не подтвердил запуск записи видео');
       return;
@@ -708,7 +708,7 @@ function initCameraPage() {
 
     log.info('Отключение записи видео');
 
-    const data = await CameraApi.stopVideoSaving();
+    const data = await CameraApi.stopVideoSaving(serialNumber);
     if (!data) {
       log.warn('Сервер не подтвердил отключение записи видео');
       return;
@@ -724,10 +724,14 @@ function initCameraPage() {
   }
 
   function notifyBackendBeforeUnload() {
+    if (!serialNumber) return;
+
+    const url = '/api/camera/close_stream?serial_number=' + encodeURIComponent(serialNumber);
+
     try {
-      navigator.sendBeacon('/api/camera/close_stream');
+      navigator.sendBeacon(url);
     } catch (error) {
-      fetch('/api/camera/close_stream', {
+      fetch(url, {
         method: 'GET',
         keepalive: true,
       }).catch(() => {});

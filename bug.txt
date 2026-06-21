@@ -1,68 +1,51 @@
 Это сборник в котором будут кейсы для решения багов, сюда записывается баг и потом он решается и потом commit
 
-1. bug: Камера (GigE Vision) перестала подключаться — "раньше работало, теперь нет".
+1. bug: Камера (GigE Vision) перестала подключаться после рефактора — "раньше работало".
 
    Симптом (в "История событий"):
      source: camera_core.get_node_map_cam — "Ошибка подключения к камере"
-     error:  UnicodeDecodeError('utf-8', b'GenTL exception: Requested operation not
-             implemented. (Message from the source: \xc0\x1d\x1e\x1f\x07\x02) (ID: -1003)',
-             80, 81, 'invalid start byte')
+     error:  GenTL exception: Requested operation not implemented.
+             (Message from the source: <мусор>) (ID: -1003)
      code:   -1003
+     Изначально приходило как UnicodeDecodeError (genicam не мог декодировать
+     не-UTF-8 текст ошибки продюсера) — это уже починено в _explain_error.
 
    Где падает:
-     open_node_map() -> manager.create_acquirer() -> harvester.create(index).
-     На реальной камере (DA5896461). DA123123 — это мок (хардкод), он не идёт в genicam.
+     generate()/get_ip()/... -> open_node_map() -> manager.create_acquirer()
+     -> harvester.create(). На реальной DA5896461 (MV-CS050-10GC).
+     DA123123 — мок (хардкод), в genicam не идёт.
 
-   Причина (две связанные вещи):
-     1) GenTL-продюсер Driver/MvProducerGEV.cti (Hikrobot) возвращает текст ошибки
-        с байтами не из UTF-8 (\xc0... — невалидный старт-байт UTF-8).
-     2) Новая версия genicam декодирует сообщения продюсера СТРОГО как UTF-8 и
-        падает с UnicodeDecodeError ещё до того, как отдать нормальную GenTL-ошибку
-        (-1003 = операция не реализована / рассинхрон ABI между свежей genicam и
-        старым .cti).
-     => Драйвер-файл .cti НЕ менялся. Обновилась Python-библиотека genicam/harvesters
-        (пересоздавали venv, ставили из requirements.txt: genicam==1.5.1,
-        harvesters==1.4.3, numpy==2.4.3; интерпретатор тоже менялся: __pycache__
-        хранит и cpython-314, и cpython-311). Раньше старая genicam терпимо
-        относилась к не-UTF-8 байтам — поэтому "работало".
+   Диагностика (diag.py на машине Server):
+     - python diag.py -> STAGE 1: свежий Harvester, h.create(0) и node_map -> OK
+       (Width=2448, Height=2048). Значит genicam/runtime/.cti/камера ИСПРАВНЫ.
+     - Версии: python 3.11.9, genicam 1.5.1, harvesters 0.post.dev63, numpy 2.4.3.
+     => Раннее предположение про обновление библиотек / нехватку runtime — НЕВЕРНО.
 
-   УТОЧНЕНИЕ после проверки (21.06):
-     - замена файла .cti НЕ помогла -> проблема не в самом файле;
-     - -1003 возникает на harvester.create() (чтение XML камеры через GenTL-порт),
-       enumerate при этом проходит (камера опознаётся: MV-CS050-10GC);
-     - "Message from the source" меняется от запуска к запуску (мусор из памяти) ->
-       почерк нехватки runtime продюсера / рассинхрона ABI, а не порчи файла;
-     - приложение крутится на машине Server (C:\Users\Server\...), не на исходной.
-     Главная гипотеза: одинокий Driver/MvProducerGEV.cti без runtime MVS
-     (MvCameraControl.dll и пр.). Продюсер перечисляет камеру, но на create() ему
-     нужен runtime, чтобы прочитать XML -> -1003. На прошлой машине MVS был
-     установлен (runtime в PATH), на Server — видимо нет / другой версии.
+   ПРИЧИНА (регрессия рефактора):
+     create_acquirer() перед каждым harvester.create() вызывает harvester.update()
+     на ДОЛГОЖИВУЩЕМ (персистентном) Harvester. Лишний update() прямо перед create()
+     дестабилизирует Hikrobot-продюсер -> create() возвращает -1003 и "мусор из
+     памяти". В diag свежий Harvester делает update() ОДИН раз -> работает.
+     Рабочая (до-рефактора) версия camera_core.py (коммит 8de8234) открывала так:
+         ia = H.create({'serial_number': serial})   # БЕЗ update() перед create
+     Рефактор добавил update() в начало create_acquirer — отсюда баг.
+     (Не зря в истории есть коммит 2c44f9b "fix h.update".)
 
-   Что сделано в коде (диагностика + понятная ошибка + выбор продюсера):
-     - _decode_gentl_message()/_explain_error(): при UnicodeDecodeError достаём
-       читаемый текст (latin-1), помечаем decode_error=true, добавляем lib_hint.
-     - log_environment(): логируем версии Python/genicam/harvesters/numpy, путь и
-       ИСТОЧНИК .cti, и найден ли runtime MVS (mvs_runtime).
-     - _discover_cti(): продюсер ищется так — MVS_CTI_PATH -> GENICAM_GENTL64_PATH
-       -> установленный MVS SDK (рядом с runtime!) -> копия в Driver/ (fallback).
-     - diag.py: отдельный скрипт, печатает версии, пути, runtime и полный traceback
-       места, где возникает -1003.
+   ФИКС:
+     В create_acquirer переобновляем список ТОЛЬКО если камеры ещё нет в
+     device_info_list (горячее подключение). Если камера уже известна после scan
+     (обычный сценарий "Подключить") — update() пропускаем, идём сразу в create().
 
-   Как ПОЧИНИТЬ (среда, не код) — по приоритету:
-     1) Установить/починить MVS SDK на машине Server (Hikrobot MVS) — даёт и
-        продюсер, и runtime; убедиться, что MVS\Runtime\Win64 в PATH.
-        После этого _discover_cti() сам возьмёт установленный продюсер.
-     2) Либо задать MVS_CTI_PATH на установленный .cti и добавить его папку с
-        runtime в PATH (или GENICAM_GENTL64_PATH).
-     3) Почистить кэш GenICam (папка genicam_cache / %TEMP%) — если XML битый.
-     4) Закрыть приложение MVS, если оно держит control-канал камеры.
-     5) В крайнем случае — откатить genicam/harvesters к рабочей паре версий.
+   Доп. улучшения (диагностика):
+     - _decode_gentl_message()/_explain_error(): читаемый текст + decode_error + lib_hint.
+     - log_environment(): версии Python/genicam/harvesters/numpy + путь/источник .cti.
+     - _discover_cti(): MVS_CTI_PATH -> GENICAM_GENTL64_PATH -> MVS SDK -> Driver/.
+     - diag.py: STAGE 1 (база) / STAGE 2 (воспроизведение бага: 2-й update перед
+       create) / STAGE 3 (реальный путь manager.open_node_map — с фиксом).
 
    Как проверить:
-     - python diag.py (в venv приложения на Server) -> прислать вывод;
-     - Start.bat -> в "История событий" строка "Версии окружения ...": смотреть
-       cti_source и mvs_runtime (если "НЕ НАЙДЕН" — это и есть причина -1003);
-     - повторить подключение DA5896461.
+     - python diag.py: STAGE 2 должен дать -1003 (старое поведение), STAGE 3 — OK.
+     - В приложении нажать "Подключить" на DA5896461 -> поток должен пойти.
 
 
 

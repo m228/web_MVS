@@ -108,4 +108,64 @@ try:
     h.reset()
 except Exception:
     pass
+del h
+
+# --------------------------------------------------------------------------
+# STAGE 2: воспроизводим РЕГРЕССИЮ — повторный update() прямо перед create(),
+# как делал create_acquirer до фикса. Если здесь -1003, а в STAGE 1 было OK —
+# причина именно в лишнем update() на уже живущем Harvester.
+# --------------------------------------------------------------------------
+line()
+print("== STAGE 2: повторный update() перед create() (старое поведение) ==")
+import gc
+gc.collect()
+h2 = Harvester()
+h2.add_file(str(cti))
+h2.update()
+_ = list(h2.device_info_list)        # камера уже перечислена
+print("  делаю ВТОРОЙ update() перед create() ...")
+try:
+    h2.update()                       # <-- лишний апдейт (воспроизведение бага)
+    ia = h2.create(0)
+    print("  create(0) после второго update(): OK ->",
+          "Width =", ia.remote_device.node_map.Width.value)
+    ia.destroy()
+except Exception as exc:
+    print("  create(0) после второго update(): ОШИБКА ->", _explain_error(exc))
+    traceback.print_exc()
+try:
+    h2.reset()
+except Exception:
+    pass
+del h2
+gc.collect()
+
+# --------------------------------------------------------------------------
+# STAGE 3: реальный путь приложения через manager.open_node_map() (уже с фиксом
+# create_acquirer). Должен пройти OK.
+# --------------------------------------------------------------------------
+line()
+print("== STAGE 3: реальный путь приложения (manager.open_node_map) ==")
+try:
+    from camera_core import manager
+    manager.load_driver()
+    manager.scan_cams()
+    worker = manager.get("DA5896461")
+    worker.select_interface(device_handle="Hikrobot MV-CS050-10GC (DA5896461)#0")
+    node_map, ia = worker.open_node_map()
+    if node_map is not None:
+        print("  open_node_map(): OK ->",
+              "Width =", node_map.Width.value, "Height =", node_map.Height.value)
+        print("  data_limit:", "получен" if worker.data_limit else "пусто")
+    else:
+        print("  open_node_map(): FAIL — смотри ERROR-запись выше/в логе приложения")
+    if ia is not None:
+        try:
+            ia.destroy()
+        except Exception:
+            pass
+except Exception as exc:
+    print("  STAGE 3 исключение:", _explain_error(exc))
+    traceback.print_exc()
+
 print("\nГотово. Пришли мне весь вывод этого скрипта.")

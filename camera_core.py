@@ -85,6 +85,8 @@ CTI_FILENAME = "MvProducerGEV.cti"
 # падает на create() с -1003 — продюсеру нужен runtime, чтобы прочитать XML камеры.
 # Поэтому установленный продюсер приоритетнее копии из папки Driver/.
 MVS_GENTL_DIRS = [
+    r"C:\Program Files (x86)\Common Files\MVS\Runtime\Win64_x64",
+    r"C:\Program Files\Common Files\MVS\Runtime\Win64_x64",
     r"C:\Program Files (x86)\MVS\Development\GenTL\Win64",
     r"C:\Program Files\MVS\Development\GenTL\Win64",
     r"C:\Program Files (x86)\MVS\Runtime\Win64",
@@ -118,16 +120,27 @@ def _discover_cti():
     return None, None
 
 
-# Путь к runtime-DLL продюсера (PATH или штатная установка MVS), либо None.
+# Путь к runtime-DLL продюсера. Ищем в PATH, штатных папках MVS, рядом с самим
+# .cti и в записях PATH, где встречается "MVS" (там же, откуда грузится продюсер).
 def _find_mvs_runtime():
     import shutil
     found = shutil.which(MVS_RUNTIME_DLL)
     if found:
         return found
-    for raw in MVS_GENTL_DIRS:
-        candidate = Path(raw) / MVS_RUNTIME_DLL
-        if candidate.is_file():
-            return str(candidate)
+
+    search = list(MVS_GENTL_DIRS)
+    cti, _ = _discover_cti()
+    if cti is not None:
+        search.append(str(cti.parent))
+    search += [d for d in os.environ.get("PATH", "").split(os.pathsep) if "MVS" in d.upper()]
+
+    for raw in search:
+        try:
+            candidate = Path(raw) / MVS_RUNTIME_DLL
+            if candidate.is_file():
+                return str(candidate)
+        except Exception:
+            pass
     return None
 
 # fps по умолчанию для записи видео, когда камера не сообщила частоту кадров
@@ -1081,11 +1094,19 @@ class CameraManager:
     # interface_id  — id GenTL-интерфейса (приоритет № 2, если он различает дубли).
     # Без параметров — просто пробует все доступные подряд.
     def create_acquirer(self, serial_number, interface_id=None, device_handle=None):
-        # перечитываем список — даём шанс продюсеру актуализировать дубли
-        try:
-            self.harvester.update()
-        except Exception:
-            pass
+        # ВАЖНО (регрессия рефактора): лишний harvester.update() прямо перед
+        # create() на долгоживущем Harvester дестабилизирует Hikrobot-продюсер —
+        # create() падает с -1003 и "мусором из памяти". Рабочая (до-рефакторная)
+        # версия делала create({'serial_number': ...}) вообще без update() здесь.
+        # Поэтому переобновляем список ТОЛЬКО если камеры в нём ещё нет (горячее
+        # подключение); если камера уже известна после scan — open сразу.
+        known = any(getattr(d, "serial_number", None) == serial_number
+                    for d in self.harvester.device_info_list)
+        if not known:
+            try:
+                self.harvester.update()
+            except Exception:
+                pass
 
         devices = self.harvester.device_info_list
 

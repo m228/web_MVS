@@ -16,6 +16,59 @@ from logger import log_event
 import subprocess
 
 
+# --- Совместимость с Hikrobot MVS: неподдерживаемая регистрация событий GenTL ---
+# harvesters в ImageAcquirer.__init__ вызывает module.register_event(...) для
+# модулей System/Interface/Device. Hikrobot-продюсер их не реализует (GenTL -1003)
+# и harvesters штатно ловит это как NotImplementedException и пропускает. НО
+# genicam 1.5.1, собирая текст ошибки из не-UTF-8 байтов продюсера, бросает
+# UnicodeDecodeError ВМЕСТО NotImplementedException — а его harvesters не ловит,
+# и create() падает (нестабильно, в зависимости от "мусорных" байтов).
+# Чиним точечно: оборачиваем register_event этих модулей так, чтобы такой
+# UnicodeDecodeError превращался обратно в NotImplementedException. События нужны
+# только для асинхронных уведомлений; кадры мы берём через fetch(), DataStream
+# не трогаем — стрим не страдает.
+def _patch_genicam_register_event():
+    try:
+        from genicam import gentl
+    except Exception as exc:
+        log_event("camera_core.compat", "genicam.gentl недоступен, патч событий пропущен", "warn", {"error": str(exc)})
+        return
+
+    not_implemented = getattr(gentl, "NotImplementedException", None)
+    if not_implemented is None:
+        return
+
+    patched = []
+    for cls_name in ("System", "Interface", "Device"):
+        cls = getattr(gentl, cls_name, None)
+        original = getattr(cls, "register_event", None) if cls is not None else None
+        if original is None or getattr(original, "_mvs_guarded", False):
+            continue
+
+        def make_guard(orig):
+            def guard(self, *args, **kwargs):
+                try:
+                    return orig(self, *args, **kwargs)
+                except UnicodeDecodeError as exc:
+                    raise not_implemented(
+                        "register_event не поддерживается продюсером (не-UTF-8 ответ GenTL)"
+                    ) from exc
+            guard._mvs_guarded = True
+            return guard
+
+        try:
+            cls.register_event = make_guard(original)
+            patched.append(cls_name)
+        except Exception as exc:
+            log_event("camera_core.compat", f"не удалось пропатчить {cls_name}.register_event", "warn", {"error": str(exc)})
+
+    if patched:
+        log_event("camera_core.compat", "Включена совместимость событий GenTL (Hikrobot)", "info", {"patched": patched})
+
+
+_patch_genicam_register_event()
+
+
 # понятные подсказки для типичных GenTL-кодов
 GENTL_HINTS = {
     -1003: "операция не поддерживается камерой или GenTL-интерфейсом",
@@ -1094,19 +1147,11 @@ class CameraManager:
     # interface_id  — id GenTL-интерфейса (приоритет № 2, если он различает дубли).
     # Без параметров — просто пробует все доступные подряд.
     def create_acquirer(self, serial_number, interface_id=None, device_handle=None):
-        # ВАЖНО (регрессия рефактора): лишний harvester.update() прямо перед
-        # create() на долгоживущем Harvester дестабилизирует Hikrobot-продюсер —
-        # create() падает с -1003 и "мусором из памяти". Рабочая (до-рефакторная)
-        # версия делала create({'serial_number': ...}) вообще без update() здесь.
-        # Поэтому переобновляем список ТОЛЬКО если камеры в нём ещё нет (горячее
-        # подключение); если камера уже известна после scan — open сразу.
-        known = any(getattr(d, "serial_number", None) == serial_number
-                    for d in self.harvester.device_info_list)
-        if not known:
-            try:
-                self.harvester.update()
-            except Exception:
-                pass
+        # перечитываем список — даём шанс продюсеру актуализировать дубли
+        try:
+            self.harvester.update()
+        except Exception:
+            pass
 
         devices = self.harvester.device_info_list
 

@@ -1,51 +1,46 @@
 Это сборник в котором будут кейсы для решения багов, сюда записывается баг и потом он решается и потом commit
 
-1. bug: Камера (GigE Vision) перестала подключаться после рефактора — "раньше работало".
+1. bug: Камера (GigE Vision, Hikrobot MV-CS050-10GC) не подключается — "раньше работало".
 
-   Симптом (в "История событий"):
-     source: camera_core.get_node_map_cam — "Ошибка подключения к камере"
-     error:  GenTL exception: Requested operation not implemented.
-             (Message from the source: <мусор>) (ID: -1003)
-     code:   -1003
-     Изначально приходило как UnicodeDecodeError (genicam не мог декодировать
-     не-UTF-8 текст ошибки продюсера) — это уже починено в _explain_error.
+   Симптом: при подключении create() падает с
+     GenTL exception: Requested operation not implemented. (Message from the
+     source: <мусор>) (ID: -1003)  -> приходило как UnicodeDecodeError.
 
-   Где падает:
-     generate()/get_ip()/... -> open_node_map() -> manager.create_acquirer()
-     -> harvester.create(). На реальной DA5896461 (MV-CS050-10GC).
-     DA123123 — мок (хардкод), в genicam не идёт.
+   ИСТИННАЯ ПРИЧИНА (вскрыл traceback из diag.py):
+     Падает не update() и не сам .cti, а внутри harvesters:
+       ImageAcquirer.__init__ -> module.register_event(event_type)
+       -> genicam.gentl System/Device.register_event -> UnicodeDecodeError.
+     1) Hikrobot-продюсер НЕ реализует register_event для модулей System/Interface/
+        Device -> GenTL -1003. harvesters это штатно ловит как NotImplementedException
+        и пропускает (см. core.py ImageAcquirer.__init__: try/except NotImplemented).
+     2) НО genicam 1.5.1, формируя текст ошибки из не-UTF-8 байтов продюсера, бросает
+        UnicodeDecodeError ВМЕСТО NotImplementedException. harvesters его не ловит ->
+        __init__ обрывается -> create() падает.
+     Баг ПЛАВАЮЩИЙ: мусорные байты иногда оказываются валидным UTF-8, тогда проходит
+     (поэтому в diag STAGE 3 проходил, а STAGE 1/2 — нет).
 
-   Диагностика (diag.py на машине Server):
-     - python diag.py -> STAGE 1: свежий Harvester, h.create(0) и node_map -> OK
-       (Width=2448, Height=2048). Значит genicam/runtime/.cti/камера ИСПРАВНЫ.
-     - Версии: python 3.11.9, genicam 1.5.1, harvesters 0.post.dev63, numpy 2.4.3.
-     => Раннее предположение про обновление библиотек / нехватку runtime — НЕВЕРНО.
+   Почему "раньше работало":
+     Установлена DEV-сборка harvesters 0.post.dev64 (в requirements.txt — 1.4.3!).
+     Между dev63 и dev64 регистрацию событий расширили на System/Device, и оно
+     начало падать на Hikrobot. venv собран не из релиза.
 
-   ПРИЧИНА (регрессия рефактора):
-     create_acquirer() перед каждым harvester.create() вызывает harvester.update()
-     на ДОЛГОЖИВУЩЕМ (персистентном) Harvester. Лишний update() прямо перед create()
-     дестабилизирует Hikrobot-продюсер -> create() возвращает -1003 и "мусор из
-     памяти". В diag свежий Harvester делает update() ОДИН раз -> работает.
-     Рабочая (до-рефактора) версия camera_core.py (коммит 8de8234) открывала так:
-         ia = H.create({'serial_number': serial})   # БЕЗ update() перед create
-     Рефактор добавил update() в начало create_acquirer — отсюда баг.
-     (Не зря в истории есть коммит 2c44f9b "fix h.update".)
+   ФИКС (код, camera_core.py): _patch_genicam_register_event()
+     Оборачиваем genicam.gentl System/Interface/Device.register_event так, чтобы
+     UnicodeDecodeError превращался обратно в NotImplementedException — и harvesters
+     сам его проглатывал. DataStream не трогаем (там события кадров, fetch работает).
+     Патч ставится при импорте camera_core, пишет в лог camera_core.compat.
 
-   ФИКС:
-     В create_acquirer переобновляем список ТОЛЬКО если камеры ещё нет в
-     device_info_list (горячее подключение). Если камера уже известна после scan
-     (обычный сценарий "Подключить") — update() пропускаем, идём сразу в create().
+   ГИГИЕНА окружения (желательно): привести venv в соответствие requirements.txt
+     pip install --force-reinstall --no-cache-dir "harvesters==1.4.3"
+     (проверить: pip show harvesters -> 1.4.3, а не 0.post.devNN).
 
-   Доп. улучшения (диагностика):
-     - _decode_gentl_message()/_explain_error(): читаемый текст + decode_error + lib_hint.
-     - log_environment(): версии Python/genicam/harvesters/numpy + путь/источник .cti.
-     - _discover_cti(): MVS_CTI_PATH -> GENICAM_GENTL64_PATH -> MVS SDK -> Driver/.
-     - diag.py: STAGE 1 (база) / STAGE 2 (воспроизведение бага: 2-й update перед
-       create) / STAGE 3 (реальный путь manager.open_node_map — с фиксом).
+   Доп. диагностика: _explain_error (читаемый текст), log_environment (версии/пути),
+     _discover_cti (выбор продюсера), diag.py (3 стадии).
 
    Как проверить:
-     - python diag.py: STAGE 2 должен дать -1003 (старое поведение), STAGE 3 — OK.
-     - В приложении нажать "Подключить" на DA5896461 -> поток должен пойти.
+     - python diag.py: STAGE 1/2/3 -> все OK (в логе будет camera_core.compat
+       "Включена совместимость событий GenTL").
+     - В приложении "Подключить" на DA5896461 -> поток идёт.
 
 
 

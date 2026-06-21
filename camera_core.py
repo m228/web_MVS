@@ -35,11 +35,42 @@ def _gentl_code(error_text):
     return int(match.group(1)) if match else None
 
 
+# genicam новых версий декодирует сообщения GenTL-продюсера строго как UTF-8.
+# Hikrobot MvProducerGEV.cti для части операций отдаёт сообщение с байтами не из
+# UTF-8 (например, b'...\xc0\x1d\x1e...'), и genicam падает с UnicodeDecodeError
+# ещё до того, как поднять нормальную GenTL-ошибку. Достаём сырые байты и
+# декодируем терпимо (latin-1), чтобы вытащить читаемый текст и код (ID: -1003).
+def _decode_gentl_message(error):
+    if isinstance(error, UnicodeDecodeError):
+        try:
+            return error.object.decode("latin-1", "replace")
+        except Exception:
+            return None
+    return None
+
+
 def _explain_error(error):
-    text = repr(error)
+    decoded = _decode_gentl_message(error)
+    text = decoded if decoded is not None else repr(error)
     code = _gentl_code(text)
-    hint = GENTL_HINTS.get(code)
-    return {"error": text, "code": code, "hint": hint} if code else {"error": text}
+
+    if code:
+        result = {"error": text, "code": code, "hint": GENTL_HINTS.get(code)}
+    else:
+        result = {"error": text}
+
+    # это не баг приложения: продюсер вернул не-UTF-8 сообщение, а свежая genicam
+    # не смогла его декодировать — почти всегда это рассинхрон версий
+    # genicam/harvesters и драйвера (.cti) после обновления библиотек
+    if isinstance(error, UnicodeDecodeError):
+        result["decode_error"] = True
+        result.setdefault("hint", GENTL_HINTS.get(-1003))
+        result["lib_hint"] = (
+            "genicam не смог декодировать сообщение GenTL-продюсера (не UTF-8). "
+            "Скорее всего обновились genicam/harvesters — откатите их к рабочей "
+            "версии или замените Driver/MvProducerGEV.cti на совместимый."
+        )
+    return result
 
 
 # RTSP поверх TCP — стабильнее, меньше «рассыпающихся» кадров
@@ -1192,6 +1223,34 @@ class CameraManager:
             if device.serial_number == serial_number and self._interface_id(device) == interface_id:
                 return self._safe_status(device)
         return None
+
+    # диагностика окружения: версии Python и библиотек + параметры файла .cti.
+    # Нужна, чтобы видеть, не сменилась ли версия genicam/harvesters между
+    # запусками (типовая причина "раньше работало, теперь нет"). Сам .cti при
+    # этом обычно не меняется — сверяем его дату/размер.
+    def log_environment(self):
+        import platform
+
+        info = {"python": platform.python_version()}
+        for name in ("harvesters", "genicam", "numpy", "cv2"):
+            try:
+                module = __import__(name)
+                info[name] = getattr(module, "__version__", "?")
+            except Exception:
+                info[name] = "n/a"
+
+        cti_path = next(PROGRAM_DIR.rglob(CTI_FILENAME), None)
+        if cti_path is not None:
+            try:
+                stat = cti_path.stat()
+                info["cti"] = cti_path.name
+                info["cti_size"] = stat.st_size
+                info["cti_modified"] = datetime.fromtimestamp(stat.st_mtime).isoformat(timespec="seconds")
+            except Exception:
+                pass
+
+        log_event("camera_core.environment", "Версии окружения (Python/драйвер/библиотеки)", "info", info)
+        return info
 
     # загрузка драйвера для работы
     def load_driver(self):

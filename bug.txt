@@ -1,6 +1,48 @@
 Это сборник в котором будут кейсы для решения багов, сюда записывается баг и потом он решается и потом commit
 
-1. bug:
+1. bug: Камера (GigE Vision) перестала подключаться — "раньше работало, теперь нет".
+
+   Симптом (в "История событий"):
+     source: camera_core.get_node_map_cam — "Ошибка подключения к камере"
+     error:  UnicodeDecodeError('utf-8', b'GenTL exception: Requested operation not
+             implemented. (Message from the source: \xc0\x1d\x1e\x1f\x07\x02) (ID: -1003)',
+             80, 81, 'invalid start byte')
+     code:   -1003
+
+   Где падает:
+     open_node_map() -> manager.create_acquirer() -> harvester.create(index).
+     На реальной камере (DA5896461). DA123123 — это мок (хардкод), он не идёт в genicam.
+
+   Причина (две связанные вещи):
+     1) GenTL-продюсер Driver/MvProducerGEV.cti (Hikrobot) возвращает текст ошибки
+        с байтами не из UTF-8 (\xc0... — невалидный старт-байт UTF-8).
+     2) Новая версия genicam декодирует сообщения продюсера СТРОГО как UTF-8 и
+        падает с UnicodeDecodeError ещё до того, как отдать нормальную GenTL-ошибку
+        (-1003 = операция не реализована / рассинхрон ABI между свежей genicam и
+        старым .cti).
+     => Драйвер-файл .cti НЕ менялся. Обновилась Python-библиотека genicam/harvesters
+        (пересоздавали venv, ставили из requirements.txt: genicam==1.5.1,
+        harvesters==1.4.3, numpy==2.4.3; интерпретатор тоже менялся: __pycache__
+        хранит и cpython-314, и cpython-311). Раньше старая genicam терпимо
+        относилась к не-UTF-8 байтам — поэтому "работало".
+
+   Что сделано в коде (диагностика + понятная ошибка, не сам фикс железа):
+     - _decode_gentl_message()/_explain_error() в camera_core.py: при UnicodeDecodeError
+       достаём читаемый текст (latin-1), помечаем decode_error=true и добавляем lib_hint.
+     - CameraManager.log_environment(): на старте логируем версии Python/genicam/
+       harvesters/numpy и дату+размер .cti — видно, что именно обновилось.
+
+   Как ПОЧИНИТЬ (среда, не код):
+     - откатить genicam/harvesters к версии, что работала на прошлом venv
+       (или закрепить рабочие версии в requirements.txt и пересоздать .venv);
+     - либо заменить Driver/MvProducerGEV.cti на совместимый с новой genicam
+       (свежий MVS SDK от Hikrobot).
+
+   Как проверить:
+     - запустить Start.bat, в "История событий" найти "Версии окружения ..." —
+       сверить версии с прошлым рабочим запуском;
+     - повторить подключение DA5896461: при -1003 запись лога теперь читаемая
+       (decode_error=true, lib_hint с инструкцией), а не сырой traceback.
 
 
 

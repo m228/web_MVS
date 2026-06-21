@@ -17,6 +17,9 @@ def api_log(source: str, message: str, level: str = "info", payload: dict | None
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     api_log("app", "Запуск приложения")
+    # версии Python/genicam/harvesters + дата .cti — видно, не обновилась ли
+    # библиотека (типовая причина "драйвер раньше работал, теперь нет")
+    manager.log_environment()
     manager.load_driver()
     # даём продюсеру время на обнаружение камер, иначе первый опрос ловит ошибки
     await asyncio.sleep(2.0)

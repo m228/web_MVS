@@ -12,6 +12,8 @@ function initCameraPage() {
 
   const params = new URLSearchParams(window.location.search);
   const serialNumber = params.get('serial_number');
+  const interfaceId = params.get('interface_id') || '';
+  const deviceHandle = params.get('device_handle') || '';
 
   const buttons = {
     start: document.getElementById('startBtn'),
@@ -58,12 +60,20 @@ function initCameraPage() {
   let forceStopTimer = null;
   let waitingSoftStop = false;
   let metricsTimer = null;
+  let streamErrorHandled = false;
 
 
   const photoPopup = UIHelpers.createPopupController(photoCard, buttons.photo);
   const videoPopup = UIHelpers.createPopupController(videoCard, buttons.video);
 
   serialElement.textContent = serialNumber ? serialNumber : 'не выбран';
+  if (interfaceId && serialElement.parentElement) {
+    const ifaceLine = document.createElement('div');
+    ifaceLine.className = 'status-code';
+    ifaceLine.style.marginTop = '6px';
+    ifaceLine.textContent = 'Интерфейс: ' + interfaceId;
+    serialElement.parentElement.insertAdjacentElement('afterend', ifaceLine);
+  }
 
   const log = {
     info: (message, payload) => window.AppLog?.info('camera', message, payload),
@@ -231,7 +241,7 @@ function initCameraPage() {
   async function syncMetrics() {
     if (!isConnected) return;
 
-    const data = await CameraApi.getMetrics();
+    const data = await CameraApi.getMetrics(serialNumber);
     if (!data) return;
 
     updateMetricsUI(data);
@@ -241,7 +251,7 @@ function initCameraPage() {
     isConnected = false;
     isChange = false;
     isLoading = false;
-    isStoppingStream = false;
+    isStoppingStream = true;
     waitingSoftStop = false;
 
     setSaveState({ photo: false, video: false });
@@ -331,11 +341,11 @@ function initCameraPage() {
 
     const data = await CameraApi.getDataLimit(serialNumber);
     if (!data) {
-      log.warn('Не удалось получить data_limit', { serialNumber });
+      log.debug('data_limit пока недоступен (камера не подключалась)', { serialNumber });
       return;
     }
 
-    log.success('Ограничения камеры загружены', data);
+    log.debug('Ограничения камеры загружены', data);
 
     setFieldValue('width', data.width?.value);
     setFieldValue('height', data.height?.value);
@@ -364,6 +374,8 @@ function initCameraPage() {
     const query = new URLSearchParams();
 
     query.set('serial_number', serialNumber);
+    if (interfaceId) query.set('interface_id', interfaceId);
+    if (deviceHandle) query.set('device_handle', deviceHandle);
 
     const fields = [
       ['width', 'width'],
@@ -457,7 +469,7 @@ function initCameraPage() {
   async function syncVideoPhotoStatus() {
     if (!isConnected) return;
 
-    const data = await CameraApi.getVideoPhotoStatus();
+    const data = await CameraApi.getVideoPhotoStatus(serialNumber);
     if (!data) return;
 
     setSaveState({
@@ -471,17 +483,19 @@ function initCameraPage() {
 
     log.info('Старт потока', Object.fromEntries(query.entries()));
 
+    isStoppingStream = false;
+    streamErrorHandled = false;
     isLoading = true;
     updateToolbarState();
     cameraFrame.src = '/api/camera/stream?' + query.toString();
   }
 
   async function stopStreamOnly() {
-    return await CameraApi.closeStream();
+    return await CameraApi.closeStream(serialNumber);
   }
 
   async function stopStreamForce() {
-    return await CameraApi.closeStreamForce();
+    return await CameraApi.closeStreamForce(serialNumber);
   }
 
   function showForceStopButton() {
@@ -511,7 +525,7 @@ function initCameraPage() {
     const startedAt = Date.now();
 
     while (Date.now() - startedAt < timeoutMs) {
-      const state = await CameraApi.getStreamState();
+      const state = await CameraApi.getStreamState(serialNumber);
 
       if (state?.closed === true) {
         waitingSoftStop = false;
@@ -546,7 +560,7 @@ function initCameraPage() {
     const startedAt = Date.now();
 
     while (Date.now() - startedAt < timeoutMs) {
-      const state = await CameraApi.getStreamState();
+      const state = await CameraApi.getStreamState(serialNumber);
 
       if (state?.closed === true) {
         return true;
@@ -651,7 +665,7 @@ function initCameraPage() {
 
     log.info('Запуск сохранения фото', { interval });
 
-    const data = await CameraApi.startPhotoSaving(interval);
+    const data = await CameraApi.startPhotoSaving(serialNumber, interval);
     if (!data) {
       log.warn('Сервер не подтвердил запуск сохранения фото');
       return;
@@ -664,7 +678,7 @@ function initCameraPage() {
   async function stopPhotoSaving() {
     log.info('Отключение сохранения фото');
 
-    const data = await CameraApi.stopPhotoSaving();
+    const data = await CameraApi.stopPhotoSaving(serialNumber);
     if (!data) {
       log.warn('Сервер не подтвердил отключение сохранения фото');
       return;
@@ -693,7 +707,7 @@ function initCameraPage() {
       durationInSeconds,
     });
 
-    const data = await CameraApi.startVideoSaving(durationInSeconds);
+    const data = await CameraApi.startVideoSaving(serialNumber, durationInSeconds);
     if (!data) {
       log.warn('Сервер не подтвердил запуск записи видео');
       return;
@@ -708,7 +722,7 @@ function initCameraPage() {
 
     log.info('Отключение записи видео');
 
-    const data = await CameraApi.stopVideoSaving();
+    const data = await CameraApi.stopVideoSaving(serialNumber);
     if (!data) {
       log.warn('Сервер не подтвердил отключение записи видео');
       return;
@@ -724,10 +738,14 @@ function initCameraPage() {
   }
 
   function notifyBackendBeforeUnload() {
+    if (!serialNumber) return;
+
+    const url = '/api/camera/close_stream?serial_number=' + encodeURIComponent(serialNumber);
+
     try {
-      navigator.sendBeacon('/api/camera/close_stream');
+      navigator.sendBeacon(url);
     } catch (error) {
-      fetch('/api/camera/close_stream', {
+      fetch(url, {
         method: 'GET',
         keepalive: true,
       }).catch(() => {});
@@ -851,6 +869,7 @@ function initCameraPage() {
     isChange = false;
     waitingSoftStop = false;
     isStoppingStream = false;
+    streamErrorHandled = false;
     hideForceStopButton();
     clearForceStopTimer();
 
@@ -863,11 +882,11 @@ function initCameraPage() {
   });
 
   cameraFrame.addEventListener('error', () => {
-  if (isStoppingStream || waitingSoftStop || !cameraFrame.src) {
-    log.info('Поток остановлен или сброшен штатно');
+  if (isStoppingStream || waitingSoftStop || streamErrorHandled || !cameraFrame.src) {
     return;
   }
 
+  streamErrorHandled = true;
   log.error('Ошибка загрузки видеопотока');
 
   stopStatusPolling();

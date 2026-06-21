@@ -149,6 +149,40 @@
     render();
   }
 
+  function formatForExport() {
+    return state.items
+      .map((item) => {
+        const time = new Date(item.time).toLocaleString('ru-RU');
+        const head = `[${time}] ${item.level.toUpperCase()} ${item.source} — ${item.message}`;
+
+        if (item.payload === null || item.payload === undefined) {
+          return head;
+        }
+
+        const payload =
+          typeof item.payload === 'string' ? item.payload : safeStringify(item.payload);
+        return `${head}\n${payload}`;
+      })
+      .join('\n\n');
+  }
+
+  function download() {
+    const text = formatForExport();
+    const blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `logs_${stamp}.txt`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+
+    info('logger', 'Логи выгружены в файл', { count: state.items.length });
+  }
+
   function openPanel() {
     const panel = state.elements.panel;
     if (!panel) return;
@@ -246,9 +280,11 @@
     state.elements.counter = document.getElementById('logCounter');
     state.elements.toggle = document.getElementById('logsBtn');
     state.elements.clear = document.getElementById('debugClearBtn');
+    state.elements.save = document.getElementById('debugSaveBtn');
 
     state.elements.toggle?.addEventListener('click', toggle);
     state.elements.clear?.addEventListener('click', clear);
+    state.elements.save?.addEventListener('click', download);
 
     render();
     syncToggleState();
@@ -283,6 +319,7 @@
     error,
     debug,
     clear,
+    download,
     open: openPanel,
     close: closePanel,
     toggle,

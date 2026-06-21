@@ -43,6 +43,11 @@
           </div>
 
           <div class="page-hero__actions">
+            <label class="one-line-label" style="display:flex; align-items:center; gap:6px; margin:0; cursor:pointer;">
+              <input type="checkbox" id="showAllCamsBtn" />
+              <span>Показать все</span>
+            </label>
+            <a href="/rtsp" class="btn btn-secondary">RTSP-камера</a>
             <button type="button" id="refreshCamsBtn" class="btn btn-primary">Обновить список</button>
             <button type="button" id="logsBtn" class="btn toolbar-btn--logs" title="Открыть журнал">
               логи
@@ -103,6 +108,7 @@
 
             <div class="debug-console__actions">
               <span class="debug-console__state">JS + backend</span>
+              <button type="button" id="debugSaveBtn" class="btn-secondary">Сохранить логи</button>
               <button type="button" id="debugClearBtn" class="btn-secondary">Очистить</button>
             </div>
           </div>

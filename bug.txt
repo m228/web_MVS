@@ -1,6 +1,46 @@
 Это сборник в котором будут кейсы для решения багов, сюда записывается баг и потом он решается и потом commit
 
-1. bug:
+1. bug: Камера (GigE Vision, Hikrobot MV-CS050-10GC) не подключается — "раньше работало".
+
+   Симптом: при подключении create() падает с
+     GenTL exception: Requested operation not implemented. (Message from the
+     source: <мусор>) (ID: -1003)  -> приходило как UnicodeDecodeError.
+
+   ИСТИННАЯ ПРИЧИНА (вскрыл traceback из diag.py):
+     Падает не update() и не сам .cti, а внутри harvesters:
+       ImageAcquirer.__init__ -> module.register_event(event_type)
+       -> genicam.gentl System/Device.register_event -> UnicodeDecodeError.
+     1) Hikrobot-продюсер НЕ реализует register_event для модулей System/Interface/
+        Device -> GenTL -1003. harvesters это штатно ловит как NotImplementedException
+        и пропускает (см. core.py ImageAcquirer.__init__: try/except NotImplemented).
+     2) НО genicam 1.5.1, формируя текст ошибки из не-UTF-8 байтов продюсера, бросает
+        UnicodeDecodeError ВМЕСТО NotImplementedException. harvesters его не ловит ->
+        __init__ обрывается -> create() падает.
+     Баг ПЛАВАЮЩИЙ: мусорные байты иногда оказываются валидным UTF-8, тогда проходит
+     (поэтому в diag STAGE 3 проходил, а STAGE 1/2 — нет).
+
+   Почему "раньше работало":
+     Установлена DEV-сборка harvesters 0.post.dev64 (в requirements.txt — 1.4.3!).
+     Между dev63 и dev64 регистрацию событий расширили на System/Device, и оно
+     начало падать на Hikrobot. venv собран не из релиза.
+
+   ФИКС (код, camera_core.py): _patch_genicam_register_event()
+     Оборачиваем genicam.gentl System/Interface/Device.register_event так, чтобы
+     UnicodeDecodeError превращался обратно в NotImplementedException — и harvesters
+     сам его проглатывал. DataStream не трогаем (там события кадров, fetch работает).
+     Патч ставится при импорте camera_core, пишет в лог camera_core.compat.
+
+   ГИГИЕНА окружения (желательно): привести venv в соответствие requirements.txt
+     pip install --force-reinstall --no-cache-dir "harvesters==1.4.3"
+     (проверить: pip show harvesters -> 1.4.3, а не 0.post.devNN).
+
+   Доп. диагностика: _explain_error (читаемый текст), log_environment (версии/пути),
+     _discover_cti (выбор продюсера), diag.py (3 стадии).
+
+   Как проверить:
+     - python diag.py: STAGE 1/2/3 -> все OK (в логе будет camera_core.compat
+       "Включена совместимость событий GenTL").
+     - В приложении "Подключить" на DA5896461 -> поток идёт.
 
 
 

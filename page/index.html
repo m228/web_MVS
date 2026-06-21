@@ -1,0 +1,232 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Главная</title>
+  <link rel="stylesheet" href="/static/style.css" />
+  <script src="/static/js/logger.js"></script>
+  <script src="/static/js/theme.js" defer></script>
+</head>
+<body>
+  <div class="layout">
+    <main class="content">
+      <div class="app-shell">
+        <header class="topbar">
+          <div class="theme-panel">
+            <span class="theme-panel__label">Тема интерфейса</span>
+            <div class="theme-switcher" data-theme-switcher></div>
+          </div>
+
+          <div class="brand-slot" aria-label="Логотип компании">
+            <div class="brand-slot__logo-wrap">
+              <img
+                class="brand-logo"
+                data-theme-logo
+                data-logo-light="/static/icon/Logo_Black.png"
+                data-logo-dark="/static/icon/Logo_White.png"
+                src="/static/icon/Logo_Black.png"
+                alt="MA logo"
+              />
+            </div>
+          </div>
+        </header>
+
+        <section class="card page-hero">
+          <div class="page-hero__content">
+            <p class="page-hero__eyebrow">Панель мониторинга</p>
+            <h1 class="page-hero__title">Главная</h1>
+            <p class="page-hero__subtitle">
+              Единый экран для проверки драйвера, просмотра найденных камер и быстрого доступа
+              к подключению и изменению сетевых параметров.
+            </p>
+          </div>
+
+          <div class="page-hero__actions">
+            <label class="one-line-label" style="display:flex; align-items:center; gap:6px; margin:0; cursor:pointer;">
+              <input type="checkbox" id="showAllCamsBtn" />
+              <span>Показать все</span>
+            </label>
+            <a href="/rtsp" class="btn btn-secondary">RTSP-камера</a>
+            <button type="button" id="refreshCamsBtn" class="btn btn-primary">Обновить список</button>
+            <button type="button" id="logsBtn" class="btn toolbar-btn--logs" title="Открыть журнал">
+              логи
+              <span class="log-counter" id="logCounter">0</span>
+            </button>
+          </div>
+        </section>
+
+        <section class="stats-grid">
+          <article class="card metric-card">
+            <span class="metric-card__label">Текущее время</span>
+            <strong class="metric-card__value" id="time">--:--:--</strong>
+          </article>
+
+          <article class="card metric-card">
+            <span class="metric-card__label">Статус драйвера</span>
+            <strong class="metric-card__value" id="status">
+              <span class="status-chip">Проверка...</span>
+            </strong>
+          </article>
+
+          <article class="card metric-card">
+            <span class="metric-card__label">Кол-во камер</span>
+            <strong class="metric-card__value" id="count_cams">0</strong>
+            <span class="metric-card__hint">Устройства, найденные в сети</span>
+          </article>
+        </section>
+
+        <section class="card table-card">
+          <div class="section-header">
+            <div>
+              <p class="section-subtitle">Обнаруженные устройства</p>
+              <h2>Камеры</h2>
+            </div>
+          </div>
+
+          <div class="table-wrap">
+            <table class="camera-table">
+              <thead>
+                <tr>
+                  <th>Камера / серийник</th>
+                  <th>Статус</th>
+                  <th>IP-адрес</th>
+                  <th>Действия</th>
+                </tr>
+              </thead>
+              <tbody id="table"></tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="card debug-console hidden" id="debugConsoleSection" aria-live="polite">
+          <div class="debug-console__header">
+            <div>
+              <p class="section-subtitle">Отладка</p>
+              <h2>История событий</h2>
+            </div>
+
+            <div class="debug-console__actions">
+              <span class="debug-console__state">JS + backend</span>
+              <button type="button" id="debugSaveBtn" class="btn-secondary">Сохранить логи</button>
+              <button type="button" id="debugClearBtn" class="btn-secondary">Очистить</button>
+            </div>
+          </div>
+
+          <div class="debug-console__list" id="debugConsoleList"></div>
+        </section>
+      </div>
+    </main>
+  </div>
+
+  <div class="modal-backdrop" id="networkSettingsModal" aria-hidden="true">
+    <div class="network-modal__card" role="dialog" aria-modal="true" aria-labelledby="networkSettingsTitle">
+      <div class="network-modal__header">
+        <div class="network-modal__title-group">
+          <h2 id="networkSettingsTitle">Сетевые настройки</h2>
+          <span class="network-modal__serial">Серийный номер: <strong id="networkSettingsSerial">-</strong></span>
+        </div>
+        <button type="button" class="modal-close-btn" id="networkSettingsCloseBtn" aria-label="Закрыть">×</button>
+      </div>
+
+      <div class="network-modal__body">
+        <div class="network-status-row">
+          <div id="networkSettingsLoader" class="network-loader">Загрузка сетевых настроек...</div>
+          <div id="networkDhcpBadge" class="dhcp-badge dhcp-badge--off">DHCP выкл.</div>
+        </div>
+
+        <div id="networkSettingsError" class="network-error"></div>
+
+        <div class="network-settings-grid">
+          <div class="network-setting-row" id="networkIpRow">
+            <div class="network-setting-label">IP-адрес:</div>
+            <div class="ip-inputs" id="networkIpGroup">
+              <input type="text" class="ip-octet" maxlength="3" inputmode="numeric" />
+              <span class="dot">.</span>
+              <input type="text" class="ip-octet" maxlength="3" inputmode="numeric" />
+              <span class="dot">.</span>
+              <input type="text" class="ip-octet" maxlength="3" inputmode="numeric" />
+              <span class="dot">.</span>
+              <input type="text" class="ip-octet" maxlength="3" inputmode="numeric" />
+            </div>
+          </div>
+
+          <div class="network-setting-row is-locked" id="networkMaskRow">
+            <div class="network-setting-label">Маска подсети:</div>
+            <div class="ip-inputs" id="networkMaskGroup">
+              <input type="text" class="ip-octet" maxlength="3" inputmode="numeric" />
+              <span class="dot">.</span>
+              <input type="text" class="ip-octet" maxlength="3" inputmode="numeric" />
+              <span class="dot">.</span>
+              <input type="text" class="ip-octet" maxlength="3" inputmode="numeric" />
+              <span class="dot">.</span>
+              <input type="text" class="ip-octet" maxlength="3" inputmode="numeric" />
+            </div>
+          </div>
+
+          <div class="network-setting-row is-locked" id="networkGatewayRow">
+            <div class="network-setting-label">Основной шлюз:</div>
+            <div class="ip-inputs" id="networkGatewayGroup">
+              <input type="text" class="ip-octet" maxlength="3" inputmode="numeric" />
+              <span class="dot">.</span>
+              <input type="text" class="ip-octet" maxlength="3" inputmode="numeric" />
+              <span class="dot">.</span>
+              <input type="text" class="ip-octet" maxlength="3" inputmode="numeric" />
+              <span class="dot">.</span>
+              <input type="text" class="ip-octet" maxlength="3" inputmode="numeric" />
+            </div>
+          </div>
+        </div>
+
+        <div class="network-advanced-row">
+          <label class="checkbox-line" for="networkAdvancedToggle">
+            <input type="checkbox" id="networkAdvancedToggle" />
+            <span>
+              Расширенные настройки
+              <div class="network-helper-text">
+                После подтверждения станут доступны редактирование маски подсети и основного шлюза.
+              </div>
+            </span>
+          </label>
+        </div>
+      </div>
+
+      <div class="network-modal__footer">
+        <button type="button" class="btn-secondary" id="networkSettingsCancelBtn">Отмена</button>
+        <button type="button" class="btn-primary" id="networkSettingsApplyBtn">Применить</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal-backdrop modal-backdrop--small" id="networkRiskModal" aria-hidden="true">
+    <div class="confirm-modal__card" role="dialog" aria-modal="true" aria-labelledby="networkRiskTitle">
+      <div class="network-modal__header">
+        <div class="network-modal__title-group">
+          <h2 id="networkRiskTitle">Подтверждение расширенных настроек</h2>
+        </div>
+        <button type="button" class="modal-close-btn" id="networkRiskCloseBtn" aria-label="Закрыть">×</button>
+      </div>
+
+      <div class="confirm-modal__body">
+        <p>
+          Неправильный ввод маски подсети или шлюза может привести к потере связи с камерой и
+          потребовать ручного восстановления сети.
+        </p>
+        <div class="confirm-modal__note">
+          Подтвердите, что вы понимаете риски и берёте ответственность за изменение расширенных
+          сетевых параметров.
+        </div>
+      </div>
+
+      <div class="network-modal__footer">
+        <button type="button" class="btn-secondary" id="networkRiskCancelBtn">Отмена</button>
+        <button type="button" class="btn-primary" id="networkRiskAcceptBtn">Я принимаю риск</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="/static/js/api.js"></script>
+  <script src="/static/js/ui.js"></script>
+  <script src="/static/js/index.js"></script>
+</body>
+</html>

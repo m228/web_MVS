@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>RTSP-камера</title>
+  <link rel="stylesheet" href="/static/style.css" />
+  <script src="/static/js/logger.js"></script>
+  <script src="/static/js/theme.js" defer></script>
+</head>
+<body>
+  <div class="layout">
+    <main class="content">
+      <div class="app-shell">
+        <header class="topbar">
+          <div class="theme-panel">
+            <span class="theme-panel__label">Тема интерфейса</span>
+            <div class="theme-switcher" data-theme-switcher></div>
+          </div>
+
+          <div class="brand-slot" aria-label="Логотип компании">
+            <div class="brand-slot__logo-wrap">
+              <img
+                class="brand-logo"
+                data-theme-logo
+                data-logo-light="/static/icon/Logo_Black.png"
+                data-logo-dark="/static/icon/Logo_White.png"
+                src="/static/icon/Logo_Black.png"
+                alt="MA logo"
+              />
+            </div>
+          </div>
+        </header>
+
+        <section class="card page-hero">
+          <div class="page-hero__content">
+            <p class="page-hero__eyebrow">Управление устройством</p>
+            <h1 class="page-hero__title">RTSP-камера</h1>
+            <span class="serial-badge">Источник: <strong id="rtspSerial">не подключён</strong></span>
+          </div>
+
+          <div class="page-hero__actions">
+            <a href="/" class="btn btn-secondary">К списку камер</a>
+          </div>
+        </section>
+
+        <div class="camera-layout" id="cameraLayout">
+          <div class="camera-main">
+            <div class="camera-toolbar card">
+              <button type="button" id="connectBtn" class="toolbar-btn toolbar-btn--primary" title="Подключить">
+                Подключить
+              </button>
+
+              <button type="button" id="stopBtn" class="toolbar-btn toolbar-btn--danger hidden" title="Остановить поток">
+                Остановить
+              </button>
+
+              <button type="button" id="forceStopBtn" class="toolbar-btn toolbar-btn--danger-force force-stop-btn hidden" title="Принудительно остановить поток">
+                Стоп принудительно
+              </button>
+
+              <button type="button" id="snapshotBtn" class="toolbar-btn toolbar-btn--photo" title="Сделать снимок">
+                Снимок
+              </button>
+
+              <button type="button" id="photoBtn" class="toolbar-btn toolbar-btn--photo" title="Автосохранение фото">
+                Фото
+                <span class="mode-indicator hidden" id="photoIndicator"></span>
+              </button>
+
+              <button type="button" id="videoBtn" class="toolbar-btn toolbar-btn--accent" title="Запись видео">
+                Видео
+                <span class="mode-indicator hidden" id="videoIndicator"></span>
+              </button>
+
+              <button type="button" id="logsBtn" class="toolbar-btn toolbar-btn--neutral toolbar-btn--logs" title="Открыть журнал">
+                логи
+                <span class="log-counter" id="logCounter">0</span>
+              </button>
+            </div>
+
+            <div class="camera-screen card">
+              <img id="rtspFrame" alt="Кадр камеры" class="camera-frame" />
+              <div id="rtspPlaceholder" class="camera-placeholder">No video</div>
+            </div>
+
+            <div class="camera-status-bar card" id="cameraStatusBar">
+              <span>Частота кадров<strong id="metricFps">0.00 fps</strong></span>
+              <span>Количество изображений<strong id="metricImageNumber">0</strong></span>
+              <span>Скорость потока<strong id="metricBandwidth">0.0 Mbps</strong></span>
+              <span>Разрешение<strong id="metricResolution">0 × 0</strong></span>
+              <span>Ошибки<strong id="metricErrors">0</strong></span>
+            </div>
+
+            <section class="card debug-console hidden" id="debugConsoleSection" aria-live="polite">
+              <div class="debug-console__header">
+                <div>
+                  <p class="section-subtitle">Отладка</p>
+                  <h2>История событий</h2>
+                </div>
+
+                <div class="debug-console__actions">
+                  <span class="debug-console__state">JS + camera_core</span>
+                  <button type="button" id="debugSaveBtn" class="btn-secondary">Сохранить логи</button>
+                  <button type="button" id="debugClearBtn" class="btn-secondary">Очистить</button>
+                </div>
+              </div>
+
+              <div class="debug-console__list" id="debugConsoleList"></div>
+            </section>
+          </div>
+
+          <aside class="camera-sidebar" id="cameraSidebar">
+            <div class="card">
+              <div class="camera-sidebar-header">
+                <div>
+                  <p class="section-subtitle">Подключение</p>
+                  <h2>Параметры RTSP</h2>
+                </div>
+              </div>
+
+              <form id="rtspForm">
+                <label class="one-line-label">IP-адрес камеры</label>
+                <input type="text" name="ip" value="192.168.1.108" placeholder="192.168.1.108" />
+
+                <label class="one-line-label">Логин</label>
+                <input type="text" name="username" value="admin" />
+
+                <label class="one-line-label">Пароль</label>
+                <input type="password" name="password" value="" />
+
+                <label class="one-line-label">Канал</label>
+                <input type="number" name="channel" value="1" min="1" />
+
+                <label>
+                  Поток
+                  <select name="subtype">
+                    <option value="0" selected>Основной (0)</option>
+                    <option value="1">Дополнительный (1)</option>
+                  </select>
+                </label>
+
+                <label>
+                  Масштаб (разрешение)
+                  <select name="scale">
+                    <option value="100" selected>100 % (оригинал)</option>
+                    <option value="70">70 %</option>
+                    <option value="50">50 %</option>
+                    <option value="30">30 %</option>
+                  </select>
+                </label>
+
+                <label>
+                  Частота кадров (FPS)
+                  <select name="fps">
+                    <option value="" selected>Авто (как у камеры)</option>
+                    <option value="30">30</option>
+                    <option value="25">25</option>
+                    <option value="20">20</option>
+                    <option value="15">15</option>
+                    <option value="10">10</option>
+                    <option value="5">5</option>
+                  </select>
+                </label>
+
+                <label class="one-line-label">Либо полный RTSP-URL (приоритетнее)</label>
+                <input type="text" name="url" value="" placeholder="rtsp://admin:pass@192.168.1.108:554/cam/realmonitor?channel=1&subtype=0" />
+              </form>
+            </div>
+          </aside>
+        </div>
+
+        <div class="card photo-card-popup" id="photoCard">
+          <h2>Автосохранение фото</h2>
+          <div class="record-form">
+            <label class="one-line-label">
+              Интервал (сек)
+              <input class="photo-interval-input" type="number" name="photo_interval" value="5" min="1" />
+            </label>
+            <div class="record-actions">
+              <button type="button" id="photoOn" class="btn-primary">Включить</button>
+              <button type="button" id="photoOff" class="btn-secondary">Выключить</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="card video-card-popup" id="videoCard">
+          <h2>Запись видео</h2>
+          <div class="record-form">
+            <label class="video-time-row">
+              <span>Длительность записи</span>
+              <div class="video-time-controls">
+                <input class="video-minutes-input" type="number" name="video_duration" value="10" min="1" />
+                <select name="video_duration_unit" class="video-duration-unit">
+                  <option value="minutes" selected>мин</option>
+                  <option value="seconds">сек</option>
+                </select>
+              </div>
+            </label>
+
+            <div class="record-actions">
+              <button type="button" id="videoOn" class="btn-primary">Начать запись</button>
+              <button type="button" id="videoOff" class="btn-secondary">Остановить запись</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <script src="/static/js/api.js"></script>
+      <script src="/static/js/ui.js"></script>
+      <script src="/static/js/rtsp.js"></script>
+    </main>
+  </div>
+</body>
+</html>

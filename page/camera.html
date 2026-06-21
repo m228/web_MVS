@@ -1,0 +1,216 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Настройка камеры</title>
+  <link rel="stylesheet" href="/static/style.css" />
+  <script src="/static/js/logger.js"></script>
+  <script src="/static/js/theme.js" defer></script>
+</head>
+<body>
+  <div class="layout">
+    <main class="content">
+      <div class="app-shell">
+        <header class="topbar">
+          <div class="theme-panel">
+            <span class="theme-panel__label">Тема интерфейса</span>
+            <div class="theme-switcher" data-theme-switcher></div>
+          </div>
+
+          <div class="brand-slot" aria-label="Логотип компании">
+            <div class="brand-slot__logo-wrap">
+              <img
+                class="brand-logo"
+                data-theme-logo
+                data-logo-light="/static/icon/Logo_Black.png"
+                data-logo-dark="/static/icon/Logo_White.png"
+                src="/static/icon/Logo_Black.png"
+                alt="MA logo"
+              />
+            </div>
+          </div>
+        </header>
+
+        <section class="card page-hero">
+          <div class="page-hero__content">
+            <p class="page-hero__eyebrow">Управление устройством</p>
+            <h1 class="page-hero__title">Настройка камеры</h1>
+            <span class="serial-badge">Серийный номер: <strong id="cameraSerial">не выбран</strong></span>
+          </div>
+
+          <div class="page-hero__actions">
+            <a href="/" class="btn btn-secondary">К списку камер</a>
+          </div>
+        </section>
+
+        <div class="camera-layout" id="cameraLayout">
+          <div class="camera-main">
+            <div class="camera-toolbar card">
+              <button type="button" id="startBtn" class="toolbar-btn toolbar-btn--primary" title="Подключить">
+                Подключить
+              </button>
+
+              <button type="button" id="applyBtn" class="toolbar-btn toolbar-btn--success grey-btn" title="Применить изменения">
+                Применить
+              </button>
+
+              <button type="button" id="stopBtn" class="toolbar-btn toolbar-btn--danger hidden" title="Остановить поток">
+                Остановить
+              </button>
+
+              <button type="button" id="forceStopBtn" class="toolbar-btn toolbar-btn--danger-force force-stop-btn hidden" title="Принудительно остановить поток">
+                Стоп принудительно
+              </button>
+
+              <button type="button" id="photoBtn" class="toolbar-btn toolbar-btn--photo" title="Сохранение фото">
+                Фото
+                <span class="mode-indicator hidden" id="photoIndicator"></span>
+              </button>
+
+              <button type="button" id="videoBtn" class="toolbar-btn toolbar-btn--accent" title="Сохранение видео">
+                Видео
+                <span class="mode-indicator hidden" id="videoIndicator"></span>
+              </button>
+
+              <button type="button" id="networkSettingsBtn" class="toolbar-btn toolbar-btn--secondary" title="Сетевые настройки">
+                Сетевые настройки
+              </button>
+
+              <button type="button" id="logsBtn" class="toolbar-btn toolbar-btn--neutral toolbar-btn--logs" title="Открыть журнал">
+                логи
+                <span class="log-counter" id="logCounter">0</span>
+              </button>
+            </div>
+
+            <div class="camera-screen card">
+              <img id="cameraFrame" alt="Кадр камеры" class="camera-frame" />
+              <div id="cameraPlaceholder" class="camera-placeholder">No video</div>
+            </div>
+
+            <div class="camera-status-bar card" id="cameraStatusBar">
+              <span>Частота кадров<strong id="metricFps">0.00 fps</strong></span>
+              <span>Количество изображений<strong id="metricImageNumber">0</strong></span>
+              <span>Скорость потока<strong id="metricBandwidth">0.0 Mbps</strong></span>
+              <span>Разрешение<strong id="metricResolution">0 × 0</strong></span>
+              <span>Ошибки<strong id="metricErrors">0</strong></span>
+            </div>
+
+            <section class="card debug-console hidden" id="debugConsoleSection" aria-live="polite">
+            <div class="debug-console__header">
+              <div>
+                <p class="section-subtitle">Отладка</p>
+                <h2>История событий</h2>
+              </div>
+
+              <div class="debug-console__actions">
+                <span class="debug-console__state">JS + camera_core</span>
+                <button type="button" id="debugSaveBtn" class="btn-secondary">Сохранить логи</button>
+                <button type="button" id="debugClearBtn" class="btn-secondary">Очистить</button>
+              </div>
+            </div>
+
+            <div class="debug-console__list" id="debugConsoleList"></div>
+          </section>
+          </div>
+
+
+
+          <aside class="camera-sidebar" id="cameraSidebar">
+            <div class="card">
+              <div class="camera-sidebar-header">
+                <div>
+                  <p class="section-subtitle">Параметры устройства</p>
+                  <h2>Параметры камеры</h2>
+                </div>
+              </div>
+
+              <form id="settingsForm">
+                <label class="one-line-label">
+                  Ширина (мин: <span id="WidthMin"></span>, макс: <span id="WidthMax"></span>)
+                </label>
+                <input type="number" name="width" value="2448" />
+
+                <label class="one-line-label">
+                  Высота (мин: <span id="HeightMin"></span>, макс: <span id="HeightMax"></span>)
+                </label>
+                <input type="number" name="height" value="2048" />
+
+                <label class="one-line-label">Смещение X</label>
+                <input type="number" name="offset_x" value="0" />
+
+                <label class="one-line-label">Смещение Y</label>
+                <input type="number" name="offset_y" value="0" />
+
+                <label class="one-line-label">FPS</label>
+                <input type="number" step="0.1" name="fps" value="1" />
+
+                <label>
+                  Автоэкспозиция
+                  <select name="exposure_auto">
+                    <option value="Off" selected>Off</option>
+                    <option value="Once">Once</option>
+                    <option value="Continuous">Continuous</option>
+                  </select>
+                </label>
+
+                <label class="one-line-label">
+                  Время экспозиции (мин: <span id="ExposureMin"></span>, макс: <span id="ExposureMax"></span>)
+                </label>
+                <input type="number" step="1" name="exposure_time" value="10000" />
+              </form>
+            </div>
+          </aside>
+        </div>
+
+        <div class="card photo-card-popup" id="photoCard">
+          <h2>Сохранение фото</h2>
+          <div class="record-form">
+            <label class="one-line-label">
+              Интервал (сек)
+              <input class="photo-interval-input" type="number" name="photo_interval" value="5" min="1" />
+            </label>
+            <div class="record-actions">
+              <button type="button" id="photoOn" class="btn-primary">Включить</button>
+              <button type="button" id="photoOff" class="btn-secondary">Выключить</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="card video-card-popup" id="videoCard">
+          <h2>Запись видео</h2>
+          <div class="record-form">
+            <label class="video-time-row">
+              <span>Длительность записи</span>
+
+              <div class="video-time-controls">
+                <input
+                  class="video-minutes-input"
+                  type="number"
+                  name="video_duration"
+                  value="10"
+                  min="1"
+                />
+
+                <select name="video_duration_unit" class="video-duration-unit">
+                  <option value="minutes" selected>мин</option>
+                  <option value="seconds">сек</option>
+                </select>
+              </div>
+            </label>
+
+            <div class="record-actions">
+              <button type="button" id="videoOn" class="btn-primary">Начать запись</button>
+              <button type="button" id="videoOff" class="btn-secondary">Остановить запись</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <script src="/static/js/api.js"></script>
+      <script src="/static/js/ui.js"></script>
+      <script src="/static/js/camera.js"></script>
+    </main>
+  </div>
+</body>
+</html>

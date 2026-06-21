@@ -26,23 +26,43 @@
         хранит и cpython-314, и cpython-311). Раньше старая genicam терпимо
         относилась к не-UTF-8 байтам — поэтому "работало".
 
-   Что сделано в коде (диагностика + понятная ошибка, не сам фикс железа):
-     - _decode_gentl_message()/_explain_error() в camera_core.py: при UnicodeDecodeError
-       достаём читаемый текст (latin-1), помечаем decode_error=true и добавляем lib_hint.
-     - CameraManager.log_environment(): на старте логируем версии Python/genicam/
-       harvesters/numpy и дату+размер .cti — видно, что именно обновилось.
+   УТОЧНЕНИЕ после проверки (21.06):
+     - замена файла .cti НЕ помогла -> проблема не в самом файле;
+     - -1003 возникает на harvester.create() (чтение XML камеры через GenTL-порт),
+       enumerate при этом проходит (камера опознаётся: MV-CS050-10GC);
+     - "Message from the source" меняется от запуска к запуску (мусор из памяти) ->
+       почерк нехватки runtime продюсера / рассинхрона ABI, а не порчи файла;
+     - приложение крутится на машине Server (C:\Users\Server\...), не на исходной.
+     Главная гипотеза: одинокий Driver/MvProducerGEV.cti без runtime MVS
+     (MvCameraControl.dll и пр.). Продюсер перечисляет камеру, но на create() ему
+     нужен runtime, чтобы прочитать XML -> -1003. На прошлой машине MVS был
+     установлен (runtime в PATH), на Server — видимо нет / другой версии.
 
-   Как ПОЧИНИТЬ (среда, не код):
-     - откатить genicam/harvesters к версии, что работала на прошлом venv
-       (или закрепить рабочие версии в requirements.txt и пересоздать .venv);
-     - либо заменить Driver/MvProducerGEV.cti на совместимый с новой genicam
-       (свежий MVS SDK от Hikrobot).
+   Что сделано в коде (диагностика + понятная ошибка + выбор продюсера):
+     - _decode_gentl_message()/_explain_error(): при UnicodeDecodeError достаём
+       читаемый текст (latin-1), помечаем decode_error=true, добавляем lib_hint.
+     - log_environment(): логируем версии Python/genicam/harvesters/numpy, путь и
+       ИСТОЧНИК .cti, и найден ли runtime MVS (mvs_runtime).
+     - _discover_cti(): продюсер ищется так — MVS_CTI_PATH -> GENICAM_GENTL64_PATH
+       -> установленный MVS SDK (рядом с runtime!) -> копия в Driver/ (fallback).
+     - diag.py: отдельный скрипт, печатает версии, пути, runtime и полный traceback
+       места, где возникает -1003.
+
+   Как ПОЧИНИТЬ (среда, не код) — по приоритету:
+     1) Установить/починить MVS SDK на машине Server (Hikrobot MVS) — даёт и
+        продюсер, и runtime; убедиться, что MVS\Runtime\Win64 в PATH.
+        После этого _discover_cti() сам возьмёт установленный продюсер.
+     2) Либо задать MVS_CTI_PATH на установленный .cti и добавить его папку с
+        runtime в PATH (или GENICAM_GENTL64_PATH).
+     3) Почистить кэш GenICam (папка genicam_cache / %TEMP%) — если XML битый.
+     4) Закрыть приложение MVS, если оно держит control-канал камеры.
+     5) В крайнем случае — откатить genicam/harvesters к рабочей паре версий.
 
    Как проверить:
-     - запустить Start.bat, в "История событий" найти "Версии окружения ..." —
-       сверить версии с прошлым рабочим запуском;
-     - повторить подключение DA5896461: при -1003 запись лога теперь читаемая
-       (decode_error=true, lib_hint с инструкцией), а не сырой traceback.
+     - python diag.py (в venv приложения на Server) -> прислать вывод;
+     - Start.bat -> в "История событий" строка "Версии окружения ...": смотреть
+       cti_source и mvs_runtime (если "НЕ НАЙДЕН" — это и есть причина -1003);
+     - повторить подключение DA5896461.
 
 
 

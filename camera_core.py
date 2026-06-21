@@ -80,6 +80,56 @@ os.environ.setdefault("OPENCV_FFMPEG_CAPTURE_OPTIONS", "rtsp_transport;tcp")
 PROGRAM_DIR = Path(__file__).resolve().parent
 CTI_FILENAME = "MvProducerGEV.cti"
 
+# Каталоги штатной установки MVS SDK, где лежит и продюсер (.cti), и его runtime.
+# ВАЖНО: одинокий .cti без runtime (MvCameraControl.dll) перечисляет камеру, но
+# падает на create() с -1003 — продюсеру нужен runtime, чтобы прочитать XML камеры.
+# Поэтому установленный продюсер приоритетнее копии из папки Driver/.
+MVS_GENTL_DIRS = [
+    r"C:\Program Files (x86)\MVS\Development\GenTL\Win64",
+    r"C:\Program Files\MVS\Development\GenTL\Win64",
+    r"C:\Program Files (x86)\MVS\Runtime\Win64",
+    r"C:\Program Files\MVS\Runtime\Win64",
+]
+MVS_RUNTIME_DLL = "MvCameraControl.dll"
+
+
+# Поиск GenTL-продюсера. Приоритет: явный путь -> GENICAM_GENTL64_PATH ->
+# установленный MVS SDK (рядом с runtime) -> копия в папке программы (Driver/).
+def _discover_cti():
+    explicit = os.environ.get("MVS_CTI_PATH")
+    if explicit and Path(explicit).is_file():
+        return Path(explicit), "env:MVS_CTI_PATH"
+
+    for raw in (os.environ.get("GENICAM_GENTL64_PATH") or "").split(os.pathsep):
+        directory = Path(raw) if raw else None
+        if directory and directory.is_dir():
+            hit = next(directory.glob(CTI_FILENAME), None)
+            if hit:
+                return hit, "env:GENICAM_GENTL64_PATH"
+
+    for raw in MVS_GENTL_DIRS:
+        candidate = Path(raw) / CTI_FILENAME
+        if candidate.is_file():
+            return candidate, "MVS install"
+
+    bundled = next(PROGRAM_DIR.rglob(CTI_FILENAME), None)
+    if bundled is not None:
+        return bundled, "bundled"
+    return None, None
+
+
+# Путь к runtime-DLL продюсера (PATH или штатная установка MVS), либо None.
+def _find_mvs_runtime():
+    import shutil
+    found = shutil.which(MVS_RUNTIME_DLL)
+    if found:
+        return found
+    for raw in MVS_GENTL_DIRS:
+        candidate = Path(raw) / MVS_RUNTIME_DLL
+        if candidate.is_file():
+            return str(candidate)
+    return None
+
 # fps по умолчанию для записи видео, когда камера не сообщила частоту кадров
 DEFAULT_VIDEO_FPS = 20.0
 
@@ -1239,15 +1289,20 @@ class CameraManager:
             except Exception:
                 info[name] = "n/a"
 
-        cti_path = next(PROGRAM_DIR.rglob(CTI_FILENAME), None)
+        cti_path, cti_source = _discover_cti()
         if cti_path is not None:
             try:
                 stat = cti_path.stat()
-                info["cti"] = cti_path.name
+                info["cti"] = str(cti_path)
+                info["cti_source"] = cti_source
                 info["cti_size"] = stat.st_size
                 info["cti_modified"] = datetime.fromtimestamp(stat.st_mtime).isoformat(timespec="seconds")
             except Exception:
                 pass
+
+        # runtime продюсера: без него create() падает с -1003, даже если .cti найден
+        runtime = _find_mvs_runtime()
+        info["mvs_runtime"] = runtime or "НЕ НАЙДЕН (нужен MVS SDK для create() камеры)"
 
         log_event("camera_core.environment", "Версии окружения (Python/драйвер/библиотеки)", "info", info)
         return info
@@ -1262,9 +1317,9 @@ class CameraManager:
                 self.harvester.update()
                 return
 
-            cti_path = next(PROGRAM_DIR.rglob(CTI_FILENAME), None)
+            cti_path, cti_source = _discover_cti()
             if cti_path is None:
-                log_event("camera_core.load_driver", "Драйвер отсутствует в папке программы", "error")
+                log_event("camera_core.load_driver", "Драйвер (.cti) не найден ни в MVS, ни в папке программы", "error")
                 self.driver_loaded = False
                 return
 
@@ -1272,7 +1327,12 @@ class CameraManager:
             self.harvester.add_file(cti_path)
             self.harvester.update()
             self.driver_loaded = True
-            log_event("camera_core.load_driver", "Драйвер загружен", "success", {"cti_path": cti_path})
+            # если продюсер взят как "bundled", но рядом нет runtime — это и есть
+            # типовая причина -1003 на create(); подсветим источник в логе
+            runtime = _find_mvs_runtime()
+            log_event("camera_core.load_driver", "Драйвер загружен", "success",
+                      {"cti_path": cti_path, "source": cti_source,
+                       "mvs_runtime": runtime or "НЕ НАЙДЕН"})
         except Exception as e:
             self.driver_loaded = False
             log_event("camera_core.load_driver", "Ошибка загрузки драйвера", "error", {"error": str(e)})

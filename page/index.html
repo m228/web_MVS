@@ -45,7 +45,6 @@
           </div>
 
           <div class="page-hero__actions">
-            <a href="/multi" class="btn btn-multi" title="Просмотр нескольких камер одновременно">Мультипоточность</a>
             <a href="/rtsp" class="btn btn-rtsp" title="Открыть просмотр RTSP-камеры">RTSP-камера</a>
             <button type="button" id="refreshCamsBtn" class="btn btn-primary">Обновить список</button>
             <button type="button" id="logsBtn" class="btn toolbar-btn--logs" title="Открыть журнал">
@@ -81,11 +80,14 @@
               <p class="section-subtitle">Обнаруженные устройства</p>
               <h2>Камеры</h2>
             </div>
-            <label class="show-all-toggle" title="Показывать все записи интерфейсов камеры">
-              <input type="checkbox" id="showAllCamsBtn" />
-              <span class="show-all-toggle__switch"></span>
-              <span class="show-all-toggle__text">Показать все</span>
-            </label>
+            <div class="section-header__tools">
+              <label class="show-all-toggle" title="Показывать все записи интерфейсов камеры">
+                <input type="checkbox" id="showAllCamsBtn" />
+                <span class="show-all-toggle__switch"></span>
+                <span class="show-all-toggle__text">Показать все</span>
+              </label>
+              <a href="/multi" class="btn btn-multi" title="Мультипросмотр камер">Мульти</a>
+            </div>
           </div>
 
           <div class="table-wrap">

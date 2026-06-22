@@ -56,7 +56,7 @@
         <!-- единое меню: действует на камеру в фокусе -->
         <div class="card multi-toolbar" id="multiToolbar">
           <div class="multi-toolbar__focus">
-            <span class="multi-toolbar__focus-label">Фокус</span>
+            <span class="multi-toolbar__focus-label">фокус</span>
             <strong id="multiFocusSerial">— не выбрана —</strong>
           </div>
 
@@ -83,14 +83,15 @@
           <!-- шторка слева: источники камер -->
           <aside class="card multi-drawer" id="multiDrawer">
             <div class="multi-drawer__header">
-              <div>
-                <p class="section-subtitle">Доступные камеры</p>
-                <h2>Источники</h2>
+              <p class="section-subtitle">Доступные камеры</p>
+              <h2>Источники</h2>
+              <div class="multi-drawer__buttons">
+                <button type="button" id="multiRefreshBtn" class="btn-secondary" title="Обновить список камер">Обновить</button>
+                <button type="button" id="multiAddRtspBtn" class="btn-secondary" title="Добавить RTSP-камеру">+ RTSP</button>
               </div>
-              <button type="button" id="multiRefreshBtn" class="btn-secondary" title="Обновить список камер">Обновить</button>
             </div>
             <div class="multi-drawer__list" id="multiDrawerList"></div>
-            <p class="multi-drawer__hint">Перетащите камеру на ячейку →</p>
+            <p class="multi-drawer__hint">Нажмите камеру — откроются настройки. Перетащите её на ячейку →</p>
           </aside>
 
           <!-- сетка ячеек (заполняется из multi.js) -->
@@ -115,6 +116,139 @@
         </section>
       </div>
     </main>
+  </div>
+
+  <!-- модалка: сохранение фото (для камеры в фокусе) -->
+  <div class="modal-backdrop modal-backdrop--small" id="multiPhotoModal" aria-hidden="true">
+    <div class="confirm-modal__card" role="dialog" aria-modal="true">
+      <div class="network-modal__header">
+        <div class="network-modal__title-group">
+          <h2>Сохранение фото</h2>
+          <span class="network-modal__serial">Камера: <strong id="multiPhotoSerial">-</strong></span>
+        </div>
+        <button type="button" class="modal-close-btn" id="multiPhotoClose" aria-label="Закрыть">×</button>
+      </div>
+      <div class="confirm-modal__body">
+        <label class="one-line-label">
+          Интервал (сек)
+          <input type="number" id="multiPhotoInterval" value="5" min="1" />
+        </label>
+      </div>
+      <div class="network-modal__footer">
+        <button type="button" class="btn-secondary" id="multiPhotoOff">Выключить</button>
+        <button type="button" class="btn-primary" id="multiPhotoOn">Включить</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- модалка: запись видео (для камеры в фокусе) -->
+  <div class="modal-backdrop modal-backdrop--small" id="multiVideoModal" aria-hidden="true">
+    <div class="confirm-modal__card" role="dialog" aria-modal="true">
+      <div class="network-modal__header">
+        <div class="network-modal__title-group">
+          <h2>Запись видео</h2>
+          <span class="network-modal__serial">Камера: <strong id="multiVideoSerial">-</strong></span>
+        </div>
+        <button type="button" class="modal-close-btn" id="multiVideoClose" aria-label="Закрыть">×</button>
+      </div>
+      <div class="confirm-modal__body">
+        <label class="video-time-row">
+          <span>Длительность</span>
+          <div class="video-time-controls">
+            <input type="number" id="multiVideoDuration" value="10" min="1" />
+            <select id="multiVideoUnit" class="video-duration-unit">
+              <option value="minutes" selected>мин</option>
+              <option value="seconds">сек</option>
+            </select>
+          </div>
+        </label>
+      </div>
+      <div class="network-modal__footer">
+        <button type="button" class="btn-secondary" id="multiVideoOff">Остановить</button>
+        <button type="button" class="btn-primary" id="multiVideoOn">Начать запись</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- модалка: информация о камере (read-only) -->
+  <div class="modal-backdrop" id="multiInfoModal" aria-hidden="true">
+    <div class="network-modal__card" role="dialog" aria-modal="true">
+      <div class="network-modal__header">
+        <div class="network-modal__title-group">
+          <h2>Информация о камере</h2>
+          <span class="network-modal__serial">Серийный номер: <strong id="multiInfoSerial">-</strong></span>
+        </div>
+        <button type="button" class="modal-close-btn" id="multiInfoClose" aria-label="Закрыть">×</button>
+      </div>
+      <div class="network-modal__body">
+        <div id="multiInfoLoader" class="network-loader">Загрузка информации о камере...</div>
+        <div id="multiInfoError" class="network-error"></div>
+        <dl class="info-list" id="multiInfoList"></dl>
+      </div>
+      <div class="network-modal__footer">
+        <button type="button" class="btn-secondary" id="multiInfoCloseFooter">Закрыть</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- модалка: добавить RTSP-камеру -->
+  <div class="modal-backdrop" id="multiRtspModal" aria-hidden="true">
+    <div class="network-modal__card" role="dialog" aria-modal="true">
+      <div class="network-modal__header">
+        <div class="network-modal__title-group">
+          <h2>RTSP-камера</h2>
+          <span class="network-modal__serial">Параметры подключения</span>
+        </div>
+        <button type="button" class="modal-close-btn" id="multiRtspClose" aria-label="Закрыть">×</button>
+      </div>
+      <div class="network-modal__body">
+        <div id="multiRtspError" class="network-error"></div>
+        <form id="multiRtspForm" class="rtsp-form">
+          <label class="one-line-label">Название (необязательно)
+            <input type="text" name="name" placeholder="Например, Вход" />
+          </label>
+          <label class="one-line-label">RTSP URL (если задан — приоритетнее)
+            <input type="text" name="url" placeholder="rtsp://user:pass@192.168.1.10:554/..." />
+          </label>
+          <div class="rtsp-form__row">
+            <label class="one-line-label">IP-адрес
+              <input type="text" name="ip" placeholder="192.168.1.10" />
+            </label>
+            <label class="one-line-label">Порт
+              <input type="number" name="port" value="554" min="1" />
+            </label>
+          </div>
+          <div class="rtsp-form__row">
+            <label class="one-line-label">Логин
+              <input type="text" name="username" value="admin" />
+            </label>
+            <label class="one-line-label">Пароль
+              <input type="password" name="password" />
+            </label>
+          </div>
+          <div class="rtsp-form__row">
+            <label class="one-line-label">Канал
+              <input type="number" name="channel" value="1" min="1" />
+            </label>
+            <label class="one-line-label">Subtype
+              <input type="number" name="subtype" value="0" min="0" />
+            </label>
+          </div>
+          <div class="rtsp-form__row">
+            <label class="one-line-label">Масштаб, %
+              <input type="number" name="scale" value="100" min="10" max="100" />
+            </label>
+            <label class="one-line-label">FPS (ограничение)
+              <input type="number" name="fps" step="0.1" min="0" placeholder="без ограничения" />
+            </label>
+          </div>
+        </form>
+      </div>
+      <div class="network-modal__footer">
+        <button type="button" class="btn-secondary" id="multiRtspCancel">Отмена</button>
+        <button type="button" class="btn-primary" id="multiRtspAdd">Добавить</button>
+      </div>
+    </div>
   </div>
 
   <script src="/static/js/api.js"></script>

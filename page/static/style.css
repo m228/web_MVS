@@ -1518,6 +1518,13 @@ body.modal-open {
   color: var(--text);
 }
 
+.section-header__tools {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+
 /* ---------- иконка-кнопка «информация» в строке камеры ---------- */
 .action-btn--icon {
   min-width: 0;
@@ -1609,15 +1616,17 @@ body.modal-open {
 
 .multi-toolbar__focus {
   display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 14px;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 1px;
+  line-height: 1.2;
+  min-width: 96px;
 }
 
 .multi-toolbar__focus-label {
   text-transform: uppercase;
   letter-spacing: 0.12em;
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 800;
   color: var(--muted);
 }
@@ -1687,15 +1696,27 @@ body.modal-open {
 
 .multi-drawer__header {
   display: flex;
-  align-items: flex-end;
-  justify-content: space-between;
-  gap: 12px;
+  flex-direction: column;
+  gap: 4px;
   margin-bottom: 8px;
 }
 
 .multi-drawer__header h2 {
-  margin: 4px 0 0;
+  margin: 2px 0 8px;
   font-size: 22px;
+}
+
+.multi-drawer__buttons {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.multi-drawer__buttons .btn-secondary {
+  flex: 1 1 auto;
+  min-height: 40px;
+  padding: 8px 12px;
+  min-width: 0;
 }
 
 .multi-drawer__list {
@@ -1900,4 +1921,124 @@ body.modal-open {
   .multi-grid--4 {
     grid-template-columns: 1fr;
   }
+}
+
+/* --- карточка источника: заголовок + IP + инфо + настройки --- */
+.camera-chip {
+  padding: 0;
+  gap: 0;
+  cursor: default;
+  overflow: hidden;
+}
+
+.camera-chip__main {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 10px 12px;
+  cursor: grab;
+}
+
+.camera-chip--off .camera-chip__main {
+  cursor: not-allowed;
+}
+
+.camera-chip__info {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.camera-chip__ip {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.camera-chip__info-btn {
+  flex: none;
+  width: 30px;
+  height: 30px;
+  border-radius: 8px;
+  border: 1px solid var(--border-strong);
+  background: var(--surface);
+  color: var(--muted);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: color 0.18s ease, border-color 0.18s ease;
+}
+
+.camera-chip__info-btn:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.camera-chip__settings {
+  padding: 0 12px 12px;
+  border-top: 1px solid var(--border);
+}
+
+.chip-settings__grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.chip-settings__grid label {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.chip-settings__grid input,
+.chip-settings__grid select {
+  padding: 6px 8px;
+  border-radius: 8px;
+  border: 1px solid var(--border-strong);
+  background: var(--surface);
+  color: var(--text);
+  font-size: 13px;
+}
+
+.chip-settings__wide {
+  grid-column: 1 / -1;
+}
+
+.chip-settings__hint {
+  margin: 8px 0 0;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.chip-rtsp-summary {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 10px;
+  font-size: 12px;
+  color: var(--muted);
+  word-break: break-all;
+}
+
+.chip-rtsp-summary strong {
+  color: var(--text);
+}
+
+/* --- форма RTSP --- */
+.rtsp-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.rtsp-form__row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
 }

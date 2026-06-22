@@ -626,6 +626,99 @@ function initNetworkSettingsModal() {
   });
 }
 
+// ---------- модалка «Информация о камере» (read-only) ----------
+
+function getCameraInfoElements() {
+  return {
+    modal: document.getElementById('cameraInfoModal'),
+    serial: document.getElementById('cameraInfoSerial'),
+    closeBtn: document.getElementById('cameraInfoCloseBtn'),
+    closeFooterBtn: document.getElementById('cameraInfoCloseFooterBtn'),
+    loader: document.getElementById('cameraInfoLoader'),
+    error: document.getElementById('cameraInfoError'),
+    list: document.getElementById('cameraInfoList'),
+  };
+}
+
+function setCameraInfoError(message) {
+  const el = getCameraInfoElements();
+  if (!el.error) return;
+  el.error.textContent = message || '';
+  el.error.classList.toggle('show', !!message);
+}
+
+function renderCameraInfoItems(items) {
+  const el = getCameraInfoElements();
+  if (!el.list) return;
+
+  el.list.innerHTML = '';
+
+  if (!items || !items.length) {
+    el.list.innerHTML = '<div class="info-empty">Нет данных для отображения</div>';
+    return;
+  }
+
+  items.forEach(({ label, value }) => {
+    const row = document.createElement('div');
+    row.className = 'info-row';
+    row.innerHTML = `
+      <dt class="info-row__label">${escapeHtml(label)}</dt>
+      <dd class="info-row__value">${escapeHtml(value)}</dd>
+    `;
+    el.list.appendChild(row);
+  });
+}
+
+function closeCameraInfoModal() {
+  const el = getCameraInfoElements();
+  closeSimpleModal(el.modal);
+}
+
+async function openCameraInfoModal(serial, interfaceId, deviceHandle) {
+  const el = getCameraInfoElements();
+  if (!el.modal) return;
+
+  log.info('Открытие информации о камере', { serial, interfaceId, deviceHandle });
+
+  if (el.serial) el.serial.textContent = serial;
+  setCameraInfoError('');
+  renderCameraInfoItems([]);
+  if (el.loader) el.loader.classList.add('show');
+  openSimpleModal(el.modal);
+
+  const data = await CameraApi.getCameraInfo(serial, interfaceId, deviceHandle);
+
+  if (el.loader) el.loader.classList.remove('show');
+
+  if (!data || data.error) {
+    const message = data?.error || 'Не удалось получить информацию о камере';
+    setCameraInfoError(message);
+    log.warn('Ошибка получения информации о камере', { serial, message });
+    return;
+  }
+
+  log.success('Информация о камере получена', { serial, count: data.items?.length || 0 });
+  renderCameraInfoItems(data.items);
+}
+
+function initCameraInfoModal() {
+  const el = getCameraInfoElements();
+  if (!el.modal) return;
+
+  if (el.closeBtn) el.closeBtn.addEventListener('click', closeCameraInfoModal);
+  if (el.closeFooterBtn) el.closeFooterBtn.addEventListener('click', closeCameraInfoModal);
+
+  el.modal.addEventListener('click', (event) => {
+    if (event.target === el.modal) closeCameraInfoModal();
+  });
+
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape' && el.modal.classList.contains('show')) {
+      closeCameraInfoModal();
+    }
+  });
+}
+
 function setRefreshButtonState(isLoading) {
   const refreshBtn = document.getElementById('refreshCamsBtn');
   if (!refreshBtn) return;
@@ -763,7 +856,9 @@ function renderCamsTable() {
   visibleRows.forEach(({ serial, entry, ip }) => {
     const statusCode = entry.access_status;
     const statusText = getAccessStatusText(statusCode);
-    const ifaceText = interfaceLabel(entry);
+    // в подзаголовке показываем модель камеры (например, MV-CS050-10GC),
+    // а если её нет — название интерфейса как раньше
+    const subtitleText = entry.model || interfaceLabel(entry);
     const ipText = ip || (entry.available ? 'Ошибка' : '-');
     const hasIp = !!ip;
 
@@ -772,6 +867,9 @@ function renderCamsTable() {
         <div class="table-actions">
           <button type="button" class="action-btn action-btn--primary" data-open-camera>Подключиться</button>
           <button type="button" class="action-btn action-btn--secondary" data-network-settings>Сменить IP</button>
+          <button type="button" class="action-btn action-btn--icon" data-camera-info title="Информация о камере" aria-label="Информация о камере">
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><line x1="12" y1="11" x2="12" y2="16"></line><circle cx="12" cy="7.5" r="1" fill="currentColor" stroke="none"></circle></svg>
+          </button>
         </div>
       `
       : `
@@ -786,7 +884,7 @@ function renderCamsTable() {
     row.innerHTML = `
       <td>
         <span class="serial-chip">${escapeHtml(serial)}</span>
-        <div class="status-code" style="margin-top:4px;">${escapeHtml(ifaceText)}</div>
+        <div class="status-code" style="margin-top:4px;">${escapeHtml(subtitleText)}</div>
       </td>
       <td>${getAccessStatusHtml(statusCode)}</td>
       <td><span class="ip-chip">${escapeHtml(ipText)}</span></td>
@@ -804,6 +902,11 @@ function renderCamsTable() {
 
     if (networkBtn) {
       networkBtn.addEventListener('click', () => openNetworkSettingsModal(serial, entry.interface_id, entry.device_handle));
+    }
+
+    const infoBtn = row.querySelector('[data-camera-info]');
+    if (infoBtn) {
+      infoBtn.addEventListener('click', () => openCameraInfoModal(serial, entry.interface_id, entry.device_handle));
     }
 
     table.appendChild(row);
@@ -879,6 +982,7 @@ async function initIndexPage() {
   log.info('Инициализация главной страницы');
 
   initNetworkSettingsModal();
+  initCameraInfoModal();
   await refreshCameras();
 
   const autoOpenSerial = getAutoOpenSerial();

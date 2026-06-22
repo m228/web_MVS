@@ -227,6 +227,22 @@ def data_limit(serial_number: str):
     return manager.get(serial_number).data_limit
 
 
+@app.get("/api/camera/info")
+def camera_info(serial_number: str, interface_id: str = "", device_handle: str = ""):
+    worker = manager.get(serial_number)
+    if interface_id:
+        worker.interface_id = interface_id
+    if device_handle:
+        worker.device_handle = device_handle
+    data = worker.get_info()
+    if not data:
+        api_log("api.camera.info", "Не удалось получить информацию о камере", "warn", {"serial_number": serial_number})
+        return {"error": "Не удалось получить информацию о камере"}
+    api_log("api.camera.info", "Получена информация о камере",
+            payload={"serial_number": serial_number, "count": len(data.get("items", []))})
+    return data
+
+
 @app.get("/api/camera/on_save_photo")
 def on_save_photo(serial_number: str, interval: int):
     data = manager.get(serial_number).on_photo(interval)

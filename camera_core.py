@@ -80,7 +80,7 @@ GENTL_HINTS = {
 
 # таймаут на один кадр (сек) и сколько таймаутов подряд можно стерпеть до выхода
 FRAME_FETCH_TIMEOUT = 5.0
-MAX_FRAME_TIMEOUTS = 10
+MAX_FRAME_TIMEOUTS = 20
 
 
 def _gentl_code(error_text):
@@ -129,31 +129,26 @@ def _explain_error(error):
 # RTSP поверх TCP — стабильнее, меньше «рассыпающихся» кадров
 os.environ.setdefault("OPENCV_FFMPEG_CAPTURE_OPTIONS", "rtsp_transport;tcp")
 
-# Путь до директории и имя файла драйвера для поиска
+# Путь до директории программы и имена файлов драйвера. Поставка самодостаточна:
+# и продюсер (.cti), и его runtime (MvCameraControl.dll) лежат в папке Driver/.
 PROGRAM_DIR = Path(__file__).resolve().parent
 CTI_FILENAME = "MvProducerGEV.cti"
-
-# Каталоги штатной установки MVS SDK, где лежит и продюсер (.cti), и его runtime.
-# ВАЖНО: одинокий .cti без runtime (MvCameraControl.dll) перечисляет камеру, но
-# падает на create() с -1003 — продюсеру нужен runtime, чтобы прочитать XML камеры.
-# Поэтому установленный продюсер приоритетнее копии из папки Driver/.
-MVS_GENTL_DIRS = [
-    r"C:\Program Files (x86)\Common Files\MVS\Runtime\Win64_x64",
-    r"C:\Program Files\Common Files\MVS\Runtime\Win64_x64",
-    r"C:\Program Files (x86)\MVS\Development\GenTL\Win64",
-    r"C:\Program Files\MVS\Development\GenTL\Win64",
-    r"C:\Program Files (x86)\MVS\Runtime\Win64",
-    r"C:\Program Files\MVS\Runtime\Win64",
-]
 MVS_RUNTIME_DLL = "MvCameraControl.dll"
 
 
-# Поиск GenTL-продюсера. Приоритет: явный путь -> GENICAM_GENTL64_PATH ->
-# установленный MVS SDK (рядом с runtime) -> копия в папке программы (Driver/).
+# Поиск GenTL-продюсера: явный путь (MVS_CTI_PATH) -> копия в папке программы
+# (Driver/), но только если рядом лежит её runtime-DLL -> каталоги из
+# GENICAM_GENTL64_PATH (системный MVS) -> бандл без runtime как последний шанс.
 def _discover_cti():
     explicit = os.environ.get("MVS_CTI_PATH")
     if explicit and Path(explicit).is_file():
         return Path(explicit), "env:MVS_CTI_PATH"
+
+    # бандл берём, только если рядом есть и его runtime (MvCameraControl.dll) —
+    # иначе продюсер не загрузится, и лучше упасть на системный MVS
+    bundled = next(PROGRAM_DIR.rglob(CTI_FILENAME), None)
+    if bundled is not None and (bundled.parent / MVS_RUNTIME_DLL).is_file():
+        return bundled, "bundled"
 
     for raw in (os.environ.get("GENICAM_GENTL64_PATH") or "").split(os.pathsep):
         directory = Path(raw) if raw else None
@@ -162,34 +157,34 @@ def _discover_cti():
             if hit:
                 return hit, "env:GENICAM_GENTL64_PATH"
 
-    for raw in MVS_GENTL_DIRS:
-        candidate = Path(raw) / CTI_FILENAME
-        if candidate.is_file():
-            return candidate, "MVS install"
-
-    bundled = next(PROGRAM_DIR.rglob(CTI_FILENAME), None)
     if bundled is not None:
         return bundled, "bundled"
     return None, None
 
 
-# Путь к runtime-DLL продюсера. Ищем в PATH, штатных папках MVS, рядом с самим
-# .cti и в записях PATH, где встречается "MVS" (там же, откуда грузится продюсер).
-def _find_mvs_runtime():
-    import shutil
-    found = shutil.which(MVS_RUNTIME_DLL)
-    if found:
-        return found
-
-    search = list(MVS_GENTL_DIRS)
+# Регистрируем папку с .cti в путях поиска DLL, чтобы бандл MvCameraControl.dll
+# подхватывался без установленного в системе MVS (самодостаточная поставка).
+def _register_driver_dll_dir():
     cti, _ = _discover_cti()
-    if cti is not None:
-        search.append(str(cti.parent))
-    search += [d for d in os.environ.get("PATH", "").split(os.pathsep) if "MVS" in d.upper()]
+    if cti is None or not hasattr(os, "add_dll_directory"):
+        return
+    try:
+        os.add_dll_directory(str(cti.parent))
+    except Exception as exc:
+        log_event("camera_core.driver", "Не удалось добавить папку DLL в поиск", "warn", {"error": str(exc)})
 
-    for raw in search:
+
+_register_driver_dll_dir()
+
+
+# Путь к runtime-DLL продюсера (рядом с .cti или в PATH), либо None.
+def _find_mvs_runtime():
+    cti, _ = _discover_cti()
+    search = [cti.parent] if cti is not None else []
+    search += [Path(d) for d in os.environ.get("PATH", "").split(os.pathsep) if d]
+    for directory in search:
         try:
-            candidate = Path(raw) / MVS_RUNTIME_DLL
+            candidate = directory / MVS_RUNTIME_DLL
             if candidate.is_file():
                 return str(candidate)
         except Exception:
@@ -208,6 +203,12 @@ def ip_to_int(ip):
 # обратно для показа на списке
 def int_to_ip(n):
     return socket.inet_ntoa(struct.pack("!I", n))
+
+
+# целое -> MAC вида AA:BB:CC:DD:EE:FF (для показа в инфо о камере)
+def _format_mac(value):
+    value = int(value)
+    return ":".join(f"{(value >> shift) & 0xFF:02X}" for shift in (40, 32, 24, 16, 8, 0))
 
 
 # сборка RTSP-ссылки (формат Dahua/Hikvision-совместимый)
@@ -528,6 +529,98 @@ class CameraWorker(BaseCameraWorker):
                         ia.destroy()
                     except Exception:
                         pass
+
+    # полная read-only информация о камере (для модалки «инфо»).
+    # Как и get_ip: открываем control, читаем доступные узлы, отдаём список.
+    def get_info(self):
+        status = self.manager.access_status(self.serial_number)
+        if status != 1:
+            log_event("camera_core.get_info", "Камера недоступна для запроса информации", "warn",
+                      {"serial_number": self.serial_number, "status_camera": str(status)})
+            return None
+
+        # пробные данные(потом убрать)
+        if self.serial_number == "DA123123":
+            return {"items": [
+                {"label": "Модель", "value": "Mock-камера"},
+                {"label": "Серийный номер", "value": "DA123123"},
+                {"label": "IP-адрес", "value": "192.168.2.10"},
+            ]}
+
+        if not self.manager.check():
+            return None
+
+        # control-операция — сериализуем (один control-канал на камеру)
+        with self._control_lock:
+            ia = None
+            try:
+                node_map, ia = self.open_node_map()
+                if node_map is None:
+                    return None
+                return {"items": self._collect_info(node_map)}
+            finally:
+                if ia is not None:
+                    try:
+                        ia.destroy()
+                    except Exception:
+                        pass
+
+    # сбор доступных read-only полей; отсутствующие узлы тихо пропускаем
+    @staticmethod
+    def _collect_info(node_map):
+        def val(node_name, fmt=None):
+            try:
+                value = getattr(node_map, node_name).value
+            except Exception:
+                return None
+            if fmt is not None:
+                try:
+                    return fmt(value)
+                except Exception:
+                    return value
+            return value
+
+        items = []
+
+        def add(label, value):
+            if value is not None and value != "":
+                items.append({"label": label, "value": str(value)})
+
+        add("Модель", val("DeviceModelName"))
+        add("Производитель", val("DeviceVendorName"))
+        add("Серийный номер", val("DeviceSerialNumber"))
+        add("Версия прошивки", val("DeviceVersion") or val("DeviceFirmwareVersion"))
+        add("Имя устройства", val("DeviceUserID"))
+        add("IP-адрес", val("GevCurrentIPAddress", lambda v: int_to_ip(int(v))))
+        add("Маска подсети", val("GevCurrentSubnetMask", lambda v: int_to_ip(int(v))))
+        add("Шлюз", val("GevCurrentDefaultGateway", lambda v: int_to_ip(int(v))))
+        add("MAC-адрес", val("GevMACAddress", _format_mac))
+
+        width_max, height_max = val("WidthMax"), val("HeightMax")
+        if width_max and height_max:
+            add("Макс. разрешение", f"{width_max} × {height_max}")
+
+        width, height = val("Width"), val("Height")
+        if width and height:
+            add("Текущее разрешение", f"{width} × {height}")
+
+        add("Формат пикселей", val("PixelFormat"))
+
+        frame_rate = val("AcquisitionFrameRate")
+        if frame_rate:
+            try:
+                add("Частота кадров", f"{float(frame_rate):.2f} fps")
+            except Exception:
+                add("Частота кадров", frame_rate)
+
+        temperature = val("DeviceTemperature")
+        if temperature is not None:
+            try:
+                add("Температура", f"{float(temperature):.1f} °C")
+            except Exception:
+                add("Температура", temperature)
+
+        return items
 
     # ---------- применение настроек ----------
 
@@ -1123,12 +1216,17 @@ class CameraManager:
         self.workers = {}
         # серийник -> RtspCameraWorker (RTSP)
         self.rtsp_workers = {}
+        # реестр воркеров общий на все потоки. Под многопоточный режим (несколько
+        # камер стримятся одновременно) создание воркера сериализуем, чтобы два
+        # запроса по одному серийнику не создали два конкурирующих объекта.
+        self._registry_lock = threading.Lock()
 
     # создать/получить GigE-камеру
     def get(self, serial_number) -> CameraWorker:
-        if serial_number not in self.workers:
-            self.workers[serial_number] = CameraWorker(serial_number, self)
-        return self.workers[serial_number]
+        with self._registry_lock:
+            if serial_number not in self.workers:
+                self.workers[serial_number] = CameraWorker(serial_number, self)
+            return self.workers[serial_number]
 
     # полный сброс Harvester (используется при GenTL -1020 resource exhausted)
     def reset_harvester(self):
@@ -1242,6 +1340,11 @@ class CameraManager:
         return getattr(parent, "display_name", None) or getattr(parent, "model", None)
 
     @staticmethod
+    def _model(device_info):
+        # модель камеры (например, MV-CS050-10GC) — показываем её в списке
+        return getattr(device_info, "model", None) or None
+
+    @staticmethod
     def _interface_ip(device_info):
         parent = getattr(device_info, "parent", None)
         if parent is None:
@@ -1289,6 +1392,7 @@ class CameraManager:
                 "serial_number": serial,
                 "access_status": status,
                 "available": status == 1,
+                "model": self._model(device),
                 "interface_id": self._interface_id(device),
                 "interface_name": self._interface_name(device),
                 "interface_ip": self._interface_ip(device),
@@ -1303,6 +1407,7 @@ class CameraManager:
             "serial_number": "DA123123",
             "access_status": 1,
             "available": True,
+            "model": "Mock-камера",
             "interface_id": "mock",
             "interface_name": "Mock-интерфейс",
             "interface_ip": "192.168.2.10",
@@ -1313,15 +1418,16 @@ class CameraManager:
 
     # создать/получить RTSP-камеру (rtsp_url нужен при первом обращении)
     def get_rtsp(self, serial_number, rtsp_url=None):
-        worker = self.rtsp_workers.get(serial_number)
-        if worker is None:
-            if not rtsp_url:
-                return None
-            worker = RtspCameraWorker(serial_number, self, rtsp_url)
-            self.rtsp_workers[serial_number] = worker
-        elif rtsp_url:
-            worker.rtsp_url = rtsp_url
-        return worker
+        with self._registry_lock:
+            worker = self.rtsp_workers.get(serial_number)
+            if worker is None:
+                if not rtsp_url:
+                    return None
+                worker = RtspCameraWorker(serial_number, self, rtsp_url)
+                self.rtsp_workers[serial_number] = worker
+            elif rtsp_url:
+                worker.rtsp_url = rtsp_url
+            return worker
 
     # статус доступа: для пары (serial, interface_id), либо лучший статус по серийнику
     def access_status(self, serial_number, interface_id=None):
@@ -1393,8 +1499,8 @@ class CameraManager:
             self.harvester.add_file(cti_path)
             self.harvester.update()
             self.driver_loaded = True
-            # если продюсер взят как "bundled", но рядом нет runtime — это и есть
-            # типовая причина -1003 на create(); подсветим источник в логе
+            # в лог пишем, откуда взят продюсер и найден ли его runtime — удобно
+            # для диагностики самодостаточной поставки (всё из папки Driver/)
             runtime = _find_mvs_runtime()
             log_event("camera_core.load_driver", "Драйвер загружен", "success",
                       {"cti_path": cti_path, "source": cti_source,

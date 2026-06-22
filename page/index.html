@@ -20,14 +20,16 @@
 
           <div class="brand-slot" aria-label="Логотип компании">
             <div class="brand-slot__logo-wrap">
-              <img
-                class="brand-logo"
-                data-theme-logo
-                data-logo-light="/static/icon/Logo_Black.png"
-                data-logo-dark="/static/icon/Logo_White.png"
-                src="/static/icon/Logo_Black.png"
-                alt="MA logo"
-              />
+              <a class="brand-link" href="https://max-automation.ru/" target="_blank" rel="noopener" title="Перейти на сайт Maximum Automation">
+                <img
+                  class="brand-logo"
+                  data-theme-logo
+                  data-logo-light="/static/icon/Logo_Black.png"
+                  data-logo-dark="/static/icon/Logo_White.png"
+                  src="/static/icon/Logo_Black.png"
+                  alt="MA logo"
+                />
+              </a>
             </div>
           </div>
         </header>
@@ -43,11 +45,7 @@
           </div>
 
           <div class="page-hero__actions">
-            <label class="one-line-label" style="display:flex; align-items:center; gap:6px; margin:0; cursor:pointer;">
-              <input type="checkbox" id="showAllCamsBtn" />
-              <span>Показать все</span>
-            </label>
-            <a href="/rtsp" class="btn btn-secondary">RTSP-камера</a>
+            <a href="/rtsp" class="btn btn-rtsp" title="Открыть просмотр RTSP-камеры">RTSP-камера</a>
             <button type="button" id="refreshCamsBtn" class="btn btn-primary">Обновить список</button>
             <button type="button" id="logsBtn" class="btn toolbar-btn--logs" title="Открыть журнал">
               логи
@@ -82,6 +80,11 @@
               <p class="section-subtitle">Обнаруженные устройства</p>
               <h2>Камеры</h2>
             </div>
+            <label class="show-all-toggle" title="Показывать все записи интерфейсов камеры">
+              <input type="checkbox" id="showAllCamsBtn" />
+              <span class="show-all-toggle__switch"></span>
+              <span class="show-all-toggle__text">Показать все</span>
+            </label>
           </div>
 
           <div class="table-wrap">
@@ -221,6 +224,28 @@
       <div class="network-modal__footer">
         <button type="button" class="btn-secondary" id="networkRiskCancelBtn">Отмена</button>
         <button type="button" class="btn-primary" id="networkRiskAcceptBtn">Я принимаю риск</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal-backdrop" id="cameraInfoModal" aria-hidden="true">
+    <div class="network-modal__card" role="dialog" aria-modal="true" aria-labelledby="cameraInfoTitle">
+      <div class="network-modal__header">
+        <div class="network-modal__title-group">
+          <h2 id="cameraInfoTitle">Информация о камере</h2>
+          <span class="network-modal__serial">Серийный номер: <strong id="cameraInfoSerial">-</strong></span>
+        </div>
+        <button type="button" class="modal-close-btn" id="cameraInfoCloseBtn" aria-label="Закрыть">×</button>
+      </div>
+
+      <div class="network-modal__body">
+        <div id="cameraInfoLoader" class="network-loader">Загрузка информации о камере...</div>
+        <div id="cameraInfoError" class="network-error"></div>
+        <dl class="info-list" id="cameraInfoList"></dl>
+      </div>
+
+      <div class="network-modal__footer">
+        <button type="button" class="btn-secondary" id="cameraInfoCloseFooterBtn">Закрыть</button>
       </div>
     </div>
   </div>

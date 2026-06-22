@@ -88,6 +88,14 @@ const CameraApi = {
     'Ошибка получения data_limit:'
   );
 },
+
+  getCameraInfo(serial, interfaceId, deviceHandle) {
+    const query = new URLSearchParams({ serial_number: serial });
+    if (interfaceId) query.set('interface_id', interfaceId);
+    if (deviceHandle) query.set('device_handle', deviceHandle);
+    return apiGet(`/api/camera/info?${query.toString()}`, 'Ошибка получения информации о камере:');
+  },
+
   enableAdvancedNetworkSettings(serial) {
     return apiGet(
         `/api/network_settings_advanced?serial_number=${encodeURIComponent(serial)}`,

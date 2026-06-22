@@ -724,7 +724,8 @@ function setRefreshButtonState(isLoading) {
   if (!refreshBtn) return;
 
   refreshBtn.disabled = isLoading;
-  refreshBtn.textContent = isLoading ? 'Обновление…' : 'Обновить список';
+  // кнопка теперь иконочная — не затираем содержимое, крутим значок
+  refreshBtn.classList.toggle('is-loading', isLoading);
 }
 
 async function loadStatus() {

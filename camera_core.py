@@ -652,7 +652,14 @@ class CameraWorker(BaseCameraWorker):
                 node_map.OffsetY.value = int(offset_y)
 
             if self.check_value(fps, 0.1, 30):
-                node_map.AcquisitionFrameRate.value = int(fps)
+                # камера следует заданному FPS только при включённом
+                # AcquisitionFrameRateEnable (в MVS это галочка "Frame Rate
+                # Control Enable"); иначе AcquisitionFrameRate игнорируется
+                try:
+                    node_map.AcquisitionFrameRateEnable.value = True
+                except Exception:
+                    pass
+                node_map.AcquisitionFrameRate.value = float(fps)
 
             # авто-экспозиция (Off / Once / Continuous)
             if exposure_auto is not None and exposure_auto in node_map.ExposureAuto.symbolics:

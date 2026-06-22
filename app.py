@@ -47,6 +47,11 @@ def rtsp_page():
     return FileResponse("page/rtsp.html")
 
 
+@app.get("/multi")
+def multi_page():
+    return FileResponse("page/multi.html")
+
+
 @app.get("/api/debug/logs")
 def api_debug_logs(since_id: int = 0):
     return get_events(since_id)

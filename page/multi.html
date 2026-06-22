@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Мультипоточность</title>
+  <link rel="stylesheet" href="/static/style.css" />
+  <script src="/static/js/logger.js"></script>
+  <script src="/static/js/theme.js" defer></script>
+</head>
+<body>
+  <div class="layout">
+    <main class="content">
+      <div class="app-shell">
+        <header class="topbar">
+          <div class="theme-panel">
+            <span class="theme-panel__label">Тема интерфейса</span>
+            <div class="theme-switcher" data-theme-switcher></div>
+          </div>
+
+          <div class="brand-slot" aria-label="Логотип компании">
+            <div class="brand-slot__logo-wrap">
+              <a class="brand-link" href="https://max-automation.ru/" target="_blank" rel="noopener" title="Перейти на сайт Maximum Automation">
+                <img
+                  class="brand-logo"
+                  data-theme-logo
+                  data-logo-light="/static/icon/Logo_Black.png"
+                  data-logo-dark="/static/icon/Logo_White.png"
+                  src="/static/icon/Logo_Black.png"
+                  alt="MA logo"
+                />
+              </a>
+            </div>
+          </div>
+        </header>
+
+        <section class="card page-hero">
+          <div class="page-hero__content">
+            <p class="page-hero__eyebrow">Мультипросмотр</p>
+            <h1 class="page-hero__title">Мультипоточность</h1>
+            <p class="page-hero__subtitle">
+              Несколько камер одновременно. Выберите раскладку, перетащите камеры из панели слева
+              на ячейки. Меню сверху управляет камерой в фокусе.
+            </p>
+          </div>
+
+          <div class="page-hero__actions">
+            <a href="/" class="btn btn-secondary">К списку камер</a>
+            <button type="button" id="logsBtn" class="btn toolbar-btn--logs" title="Открыть журнал">
+              логи
+              <span class="log-counter" id="logCounter">0</span>
+            </button>
+          </div>
+        </section>
+
+        <!-- единое меню: действует на камеру в фокусе -->
+        <div class="card multi-toolbar" id="multiToolbar">
+          <div class="multi-toolbar__focus">
+            <span class="multi-toolbar__focus-label">Фокус</span>
+            <strong id="multiFocusSerial">— не выбрана —</strong>
+          </div>
+
+          <div class="multi-toolbar__actions">
+            <button type="button" id="multiConnectBtn" class="toolbar-btn toolbar-btn--primary" disabled>Подключиться</button>
+            <button type="button" id="multiDisconnectBtn" class="toolbar-btn toolbar-btn--danger" disabled>Отключиться</button>
+            <button type="button" id="multiPhotoBtn" class="toolbar-btn toolbar-btn--photo" disabled>
+              Фото<span class="mode-indicator hidden" id="multiPhotoIndicator"></span>
+            </button>
+            <button type="button" id="multiVideoBtn" class="toolbar-btn toolbar-btn--accent" disabled>
+              Видео<span class="mode-indicator hidden" id="multiVideoIndicator"></span>
+            </button>
+          </div>
+
+          <div class="multi-toolbar__layouts" role="group" aria-label="Раскладка">
+            <span class="multi-toolbar__layouts-label">Камер:</span>
+            <button type="button" class="layout-btn is-active" data-layout="1">1</button>
+            <button type="button" class="layout-btn" data-layout="2">2</button>
+            <button type="button" class="layout-btn" data-layout="4">4</button>
+          </div>
+        </div>
+
+        <div class="multi-workspace">
+          <!-- шторка слева: источники камер -->
+          <aside class="card multi-drawer" id="multiDrawer">
+            <div class="multi-drawer__header">
+              <div>
+                <p class="section-subtitle">Доступные камеры</p>
+                <h2>Источники</h2>
+              </div>
+              <button type="button" id="multiRefreshBtn" class="btn-secondary" title="Обновить список камер">Обновить</button>
+            </div>
+            <div class="multi-drawer__list" id="multiDrawerList"></div>
+            <p class="multi-drawer__hint">Перетащите камеру на ячейку →</p>
+          </aside>
+
+          <!-- сетка ячеек (заполняется из multi.js) -->
+          <div class="multi-grid multi-grid--1" id="multiGrid"></div>
+        </div>
+
+        <section class="card debug-console hidden" id="debugConsoleSection" aria-live="polite">
+          <div class="debug-console__header">
+            <div>
+              <p class="section-subtitle">Отладка</p>
+              <h2>История событий</h2>
+            </div>
+
+            <div class="debug-console__actions">
+              <span class="debug-console__state">JS + backend</span>
+              <button type="button" id="debugSaveBtn" class="btn-secondary">Сохранить логи</button>
+              <button type="button" id="debugClearBtn" class="btn-secondary">Очистить</button>
+            </div>
+          </div>
+
+          <div class="debug-console__list" id="debugConsoleList"></div>
+        </section>
+      </div>
+    </main>
+  </div>
+
+  <script src="/static/js/api.js"></script>
+  <script src="/static/js/ui.js"></script>
+  <script src="/static/js/multi.js"></script>
+</body>
+</html>

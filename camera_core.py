@@ -81,6 +81,9 @@ GENTL_HINTS = {
 # таймаут на один кадр (сек) и сколько таймаутов подряд можно стерпеть до выхода
 FRAME_FETCH_TIMEOUT = 5.0
 MAX_FRAME_TIMEOUTS = 20
+# пока камера прогревается (до первого кадра) таймауты не считаем ошибками и
+# терпим дольше — промышленная камера может «раскачиваться» несколько секунд
+WARMUP_MAX_TIMEOUTS = 60
 
 
 def _gentl_code(error_text):
@@ -747,16 +750,27 @@ class CameraWorker(BaseCameraWorker):
             ia.start()
             log_event("camera_core.generate_stream", "Поток камеры запущен", "success", {"serial_number": self.serial_number})
 
+            # метрики считаем по факту текущего сеанса (стартовый прогрев не копим)
+            self.metrics["errors"] = 0
+            self.metrics["image_number"] = 0
+            self.metrics["fps"] = 0.0
+            self.metrics["bandwidth_mbps"] = 0.0
+
             timeouts_in_a_row = 0
+            first_frame = False
 
             while self.running:
                 try:
                     img, frame = self.get_frame(ia, node_map)
 
                     if frame is None or img is None:
-                        self.metrics["errors"] += 1
                         timeouts_in_a_row += 1
-                        if timeouts_in_a_row >= MAX_FRAME_TIMEOUTS:
+                        # до первого кадра камера ещё прогружается: таймауты не
+                        # считаем ошибками и терпим дольше (WARMUP_MAX_TIMEOUTS)
+                        limit = MAX_FRAME_TIMEOUTS if first_frame else WARMUP_MAX_TIMEOUTS
+                        if first_frame:
+                            self.metrics["errors"] += 1
+                        if timeouts_in_a_row >= limit:
                             log_event("camera_core.generate_stream",
                                       "Поток прерван: подряд слишком много таймаутов получения кадра", "error",
                                       {"serial_number": self.serial_number,
@@ -766,6 +780,7 @@ class CameraWorker(BaseCameraWorker):
                         continue
 
                     timeouts_in_a_row = 0
+                    first_frame = True
 
                     now = time.time()
 

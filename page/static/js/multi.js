@@ -107,7 +107,7 @@ function renderDrawer() {
     const chip = document.createElement('div');
     const draggable = cam.kind === 'rtsp' || cam.available;
     chip.className = 'camera-chip' + (draggable ? '' : ' camera-chip--off');
-    chip.draggable = draggable;
+    chip.draggable = false; // тащим только за шапку карточки, не за всю
     chip.dataset.source = cam.serial;
 
     const ipText = cam.kind === 'rtsp'
@@ -115,27 +115,31 @@ function renderDrawer() {
       : (cam.ip || (cam.available ? '—' : 'недоступна'));
 
     chip.innerHTML = `
-      <div class="camera-chip__main" data-chip-toggle>
+      <div class="camera-chip__main" data-chip-toggle draggable="${draggable}">
         <div class="camera-chip__info">
           <span class="camera-chip__serial">${escapeHtml(cam.label)}</span>
           <span class="camera-chip__model">${escapeHtml(cam.model || (cam.kind === 'rtsp' ? 'RTSP' : 'камера'))}</span>
           <span class="camera-chip__ip">IP: ${escapeHtml(ipText)}</span>
         </div>
-        ${cam.kind === 'gige' ? `<button type="button" class="camera-chip__info-btn" data-chip-info title="Информация о камере" aria-label="Информация о камере">${INFO_SVG}</button>` : ''}
+        <div class="camera-chip__actions">
+          ${cam.kind === 'gige' ? `<button type="button" class="camera-chip__info-btn" data-chip-info title="Информация о камере" aria-label="Информация о камере">${INFO_SVG}</button>` : ''}
+          ${cam.kind === 'rtsp' ? `<button type="button" class="camera-chip__remove" data-chip-remove title="Удалить камеру" aria-label="Удалить">×</button>` : ''}
+        </div>
       </div>
       <div class="camera-chip__settings" draggable="false" ${state.expandedSerial === cam.serial ? '' : 'hidden'}></div>
     `;
 
-    chip.addEventListener('dragstart', (event) => {
-      event.dataTransfer.setData('text/plain', cam.serial);
-      event.dataTransfer.effectAllowed = 'copy';
-      chip.classList.add('is-dragging');
-    });
-    chip.addEventListener('dragend', () => chip.classList.remove('is-dragging'));
-
     const main = chip.querySelector('[data-chip-toggle]');
+    if (draggable) {
+      main.addEventListener('dragstart', (event) => {
+        event.dataTransfer.setData('text/plain', cam.serial);
+        event.dataTransfer.effectAllowed = 'copy';
+        chip.classList.add('is-dragging');
+      });
+      main.addEventListener('dragend', () => chip.classList.remove('is-dragging'));
+    }
     main.addEventListener('click', (event) => {
-      if (event.target.closest('[data-chip-info]')) return;
+      if (event.target.closest('[data-chip-info]') || event.target.closest('[data-chip-remove]')) return;
       toggleChipSettings(cam.serial);
     });
 
@@ -144,6 +148,14 @@ function renderDrawer() {
       infoBtn.addEventListener('click', (event) => {
         event.stopPropagation();
         openInfoModal(cam.serial);
+      });
+    }
+
+    const removeBtn = chip.querySelector('[data-chip-remove]');
+    if (removeBtn) {
+      removeBtn.addEventListener('click', (event) => {
+        event.stopPropagation();
+        removeSource(cam.serial);
       });
     }
 
@@ -159,6 +171,27 @@ function renderDrawer() {
 function toggleChipSettings(serial) {
   state.expandedSerial = state.expandedSerial === serial ? null : serial;
   renderDrawer();
+}
+
+// удаление источника (для добавленных вручную RTSP-камер)
+function removeSource(serial) {
+  state.tiles.forEach((tile, i) => {
+    if (tile.serial === serial) {
+      if (tile.connected) stopStream(serial, tile.kind);
+      tile.serial = null;
+      tile.kind = null;
+      tile.connected = false;
+      tile.photo = false;
+      tile.video = false;
+      renderTile(i);
+    }
+  });
+  state.cameras = state.cameras.filter((c) => c.serial !== serial);
+  if (state.expandedSerial === serial) state.expandedSerial = null;
+  renderDrawer();
+  refreshTileSelects();
+  updateToolbar();
+  log.info('Источник удалён', { serial });
 }
 
 // форма настроек внутри карточки источника (GigE — параметры камеры; RTSP — сводка)
@@ -561,6 +594,7 @@ async function applyPhoto(on) {
     await api.stopPhotoSaving(source.serial);
     tile.photo = false;
   }
+  renderTile(state.focused);
   updateToolbar();
   closeModal('multiPhotoModal');
 }
@@ -589,6 +623,7 @@ async function applyVideo(on) {
     await api.stopVideoSaving(source.serial);
     tile.video = false;
   }
+  renderTile(state.focused);
   updateToolbar();
   closeModal('multiVideoModal');
 }
@@ -665,6 +700,33 @@ function addRtspSource() {
     resolvedUrl = `rtsp://${cred}${ip}:${port}/cam/realmonitor?channel=${channel}&subtype=${subtype}`;
   }
 
+  const connection = { url: resolvedUrl, scale, fps: fps || null };
+
+  // повторное добавление той же камеры (тот же URL) — обновляем на месте
+  // с новыми настройками, а не создаём дубль
+  const existing = state.cameras.find(
+    (c) => c.kind === 'rtsp' && c.connection && c.connection.url === resolvedUrl
+  );
+  if (existing) {
+    existing.label = name || existing.label;
+    existing.ip = ip || existing.ip;
+    existing.connection = connection;
+    // если уже в эфире — перезапускаем поток с новыми настройками
+    state.tiles.forEach((tile, i) => {
+      if (tile.serial === existing.serial && tile.connected) {
+        const el = getTileEl(i);
+        const frame = el?.querySelector('[data-tile-frame]');
+        if (frame) frame.src = buildStreamUrl(existing);
+      }
+    });
+    renderDrawer();
+    refreshTileSelects();
+    closeModal('multiRtspModal');
+    form.reset();
+    log.info('RTSP-камера обновлена', { serial: existing.serial, url: resolvedUrl });
+    return;
+  }
+
   state.rtspCounter += 1;
   const serial = `rtsp_${state.rtspCounter}`;
   state.cameras.push({
@@ -675,7 +737,7 @@ function addRtspSource() {
     ip: ip || null,
     available: true,
     settings: null,
-    connection: { url: resolvedUrl, scale, fps: fps || null },
+    connection,
   });
 
   renderDrawer();

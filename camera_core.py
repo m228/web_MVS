@@ -653,13 +653,23 @@ class CameraWorker(BaseCameraWorker):
 
             if self.check_value(fps, 0.1, 30):
                 # камера следует заданному FPS только при включённом
-                # AcquisitionFrameRateEnable (в MVS это галочка "Frame Rate
-                # Control Enable"); иначе AcquisitionFrameRate игнорируется
+                # AcquisitionFrameRateEnable (в MVS — галочка "Acquisition Frame
+                # Rate Control Enable"); иначе AcquisitionFrameRate игнорируется.
+                # Имя ноды у разных прошивок отличается — пробуем оба варианта.
+                enabled = False
+                for node_name in ("AcquisitionFrameRateEnable", "AcquisitionFrameRateControlEnable"):
+                    try:
+                        getattr(node_map, node_name).value = True
+                        enabled = True
+                        break
+                    except Exception:
+                        continue
                 try:
-                    node_map.AcquisitionFrameRateEnable.value = True
-                except Exception:
-                    pass
-                node_map.AcquisitionFrameRate.value = float(fps)
+                    node_map.AcquisitionFrameRate.value = float(fps)
+                except Exception as e:
+                    log_event("camera_core.apply_settings_camera", "Не удалось задать FPS", "warn", {"error": str(e)})
+                log_event("camera_core.apply_settings_camera", "FPS применён", "info",
+                          {"requested_fps": float(fps), "rate_control_enabled": enabled})
 
             # авто-экспозиция (Off / Once / Continuous)
             if exposure_auto is not None and exposure_auto in node_map.ExposureAuto.symbolics:

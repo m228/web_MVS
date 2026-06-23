@@ -137,6 +137,16 @@ def network_settings_advanced(serial_number: str):
     return data
 
 
+# ForceIP — задать IP камере, недоступной из-за чужой подсети (control не открыть)
+@app.get("/api/force_ip")
+def force_ip(serial_number: str, ip: str, mask: str = "", gateway: str = ""):
+    api_log("api.force_ip", "Запрошен ForceIP",
+            payload={"serial_number": serial_number, "ip": ip, "mask": mask, "gateway": gateway})
+    data = manager.force_ip(serial_number, ip, mask or None, gateway or None)
+    api_log("api.force_ip", "Ответ ForceIP", payload={"serial_number": serial_number, "result": data})
+    return data
+
+
 @app.get("/api/change_ip")
 def change_ip(
     serial_number: str,

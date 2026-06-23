@@ -1994,10 +1994,14 @@ body.modal-open {
   gap: 3px;
   font-size: 11px;
   color: var(--muted);
+  min-width: 0; /* иначе содержимое распирает грид и ломает рамку карточки */
 }
 
 .chip-settings__grid input,
 .chip-settings__grid select {
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
   padding: 6px 8px;
   border-radius: 8px;
   border: 1px solid var(--border-strong);

@@ -142,6 +142,7 @@ const networkSettingsState = {
   serial: null,
   interfaceId: null,
   advancedEnabled: false,
+  forceMode: false,
 };
 
 function isDhcpEnabled(value) {
@@ -379,15 +380,16 @@ async function loadNetworkSettingsData(serial, interfaceId, deviceHandle) {
   setDhcpBadge(dhcp);
 }
 
-async function openNetworkSettingsModal(serial, interfaceId, deviceHandle) {
+async function openNetworkSettingsModal(serial, interfaceId, deviceHandle, options = {}) {
   const elements = getNetworkModalElements();
   if (!elements.modal) return;
 
-  log.info('Открытие модального окна сетевых настроек', { serial, interfaceId, deviceHandle });
+  log.info('Открытие модального окна сетевых настроек', { serial, interfaceId, deviceHandle, force: !!options.force });
 
   networkSettingsState.serial = serial;
   networkSettingsState.interfaceId = interfaceId || null;
   networkSettingsState.deviceHandle = deviceHandle || null;
+  networkSettingsState.forceMode = !!options.force;
 
   if (elements.serial) {
     elements.serial.textContent = serial;
@@ -400,6 +402,14 @@ async function openNetworkSettingsModal(serial, interfaceId, deviceHandle) {
   setIpv4Value(elements.gatewayGroup, '');
   setAdvancedNetworkMode(false);
   openSimpleModal(elements.modal);
+
+  if (networkSettingsState.forceMode) {
+    // камера в другой подсети — текущие настройки по control не прочитать,
+    // применим ForceIP. Поля оставляем пустыми, пользователь вводит новый IP.
+    setNetworkError('Камера в другой подсети — будет применён временный ForceIP. Укажите IP в вашей подсети (маску/шлюз можно задать через расширенные настройки).');
+    return;
+  }
+
   await loadNetworkSettingsData(serial, networkSettingsState.interfaceId, networkSettingsState.deviceHandle);
 }
 
@@ -423,6 +433,32 @@ async function applyNetworkSettings() {
     if (networkSettingsState.advancedEnabled) {
       payload.mask = readIpv4Value(elements.maskGroup, 'Маска подсети');
       payload.gateway = readIpv4Value(elements.gatewayGroup, 'Основной шлюз');
+    }
+
+    // ForceIP — для камеры в другой подсети (control-канал не открыть)
+    if (networkSettingsState.forceMode) {
+      setNetworkLoading(true);
+      setNetworkError('');
+      const forceResult = await CameraApi.forceIp(serial, payload);
+      setNetworkLoading(false);
+
+      if (!forceResult || forceResult.error || forceResult.ip === 'force_ip_failed') {
+        showNetworkError('Не удалось применить ForceIP: ' + (forceResult?.error || forceResult?.ip || 'ошибка'), { serial, forceResult });
+        return;
+      }
+      if (forceResult.ip === 'not_driver') { showNetworkError('Драйвер не загружен', { serial }); return; }
+      if (forceResult.ip === 'not_found') { showNetworkError('Камера не найдена в списке устройств', { serial }); return; }
+      if (forceResult.ip === 'no_interface' || forceResult.ip === 'device_select_failed') {
+        showNetworkError('Продюсер не поддерживает ForceIP для этой камеры', { serial, forceResult });
+        return;
+      }
+
+      log.success('ForceIP применён', { serial, forceResult });
+      alert('IP временно изменён (ForceIP). Камера должна появиться в вашей подсети — обновляю список.');
+      closeNetworkSettingsModal();
+      await waitForCameraReboot(3000);
+      await refreshCameras();
+      return;
     }
 
     log.info('Применение сетевых настроек', {
@@ -875,8 +911,8 @@ function renderCamsTable() {
       `
       : `
         <div class="table-actions">
-          <button type="button" class="action-btn action-btn--secondary" disabled title="Эта запись интерфейса не отвечает на запросы к камере">
-            Недоступна
+          <button type="button" class="action-btn action-btn--secondary" data-network-settings data-force-ip title="Камера в другой подсети — задать IP принудительно (ForceIP)">
+            Сменить IP
           </button>
         </div>
       `;
@@ -902,7 +938,8 @@ function renderCamsTable() {
     }
 
     if (networkBtn) {
-      networkBtn.addEventListener('click', () => openNetworkSettingsModal(serial, entry.interface_id, entry.device_handle));
+      const force = networkBtn.hasAttribute('data-force-ip');
+      networkBtn.addEventListener('click', () => openNetworkSettingsModal(serial, entry.interface_id, entry.device_handle, { force }));
     }
 
     const infoBtn = row.querySelector('[data-camera-info]');

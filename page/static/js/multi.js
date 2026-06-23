@@ -218,14 +218,14 @@ function renderChipSettings(box, cam) {
       <label>Смещение Y<input type="number" data-set="offset_y" value="${escapeHtml(s.offset_y)}" /></label>
       <label>FPS<input type="number" step="0.1" data-set="fps" value="${escapeHtml(s.fps)}" /></label>
       <label>Экспозиция<input type="number" data-set="exposure_time" value="${escapeHtml(s.exposure_time)}" /></label>
-      <label class="chip-settings__wide">Автоэкспозиция
+      <label>Автоэкспозиция
         <select data-set="exposure_auto">
           <option value="Off"${s.exposure_auto === 'Off' ? ' selected' : ''}>Off</option>
           <option value="Once"${s.exposure_auto === 'Once' ? ' selected' : ''}>Once</option>
           <option value="Continuous"${s.exposure_auto === 'Continuous' ? ' selected' : ''}>Continuous</option>
         </select>
       </label>
-      <label class="chip-settings__wide">Формат пикселей (цвет)
+      <label>Формат (RGB)
         <select data-set="pixel_format">
           <option value=""${!s.pixel_format ? ' selected' : ''}>— как есть —</option>
           ${['RGB8', 'BGR8', 'Mono8', 'BayerRG8', 'BayerGB8', 'BayerGR8', 'BayerBG8', 'YUV422_8'].map((f) => `<option value="${f}"${s.pixel_format === f ? ' selected' : ''}>${f}</option>`).join('')}

@@ -53,6 +53,16 @@ const CameraApi = {
     );
   },
 
+  forceIp(serial, payload) {
+    const query = new URLSearchParams({
+      serial_number: serial,
+      ip: payload.ip ?? '',
+      mask: payload.mask ?? '',
+      gateway: payload.gateway ?? '',
+    });
+    return apiGet(`/api/force_ip?${query.toString()}`, 'Ошибка ForceIP:');
+  },
+
   getStatus() {
     return apiGet('/api/status', 'Ошибка получения статуса:');
   },

@@ -1402,6 +1402,112 @@ class CameraManager:
         raise last_error if last_error is not None else ValueError(
             f"не удалось открыть устройство: {serial_number} (пробовали: {tried})")
 
+    # ---------- ForceIP (смена IP для камеры в другой подсети) ----------
+
+    # принудительно задать IP через node_map GenTL-интерфейса.
+    # Работает, даже когда control-канал не открыть (камера в чужой подсети),
+    # т.к. ForceIP идёт широковещательно на уровне интерфейса. IP временный —
+    # держится до перезагрузки камеры, но этого достаточно, чтобы она появилась
+    # в нашей подсети и дальше уже можно прописать постоянный IP обычным путём.
+    def force_ip(self, serial_number, ip, mask=None, gateway=None):
+        self.load_driver()
+        if not self.driver_loaded:
+            return {"ip": "not_driver"}
+        try:
+            self.harvester.update()
+        except Exception:
+            pass
+
+        device = next((d for d in self.harvester.device_info_list
+                       if getattr(d, "serial_number", None) == serial_number), None)
+        if device is None:
+            log_event("camera_core.force_ip", "Камера не найдена для ForceIP", "warn",
+                      {"serial_number": serial_number})
+            return {"ip": "not_found"}
+
+        parent = getattr(device, "parent", None)
+        iface = getattr(parent, "node_map", None) if parent is not None else None
+        if iface is None:
+            log_event("camera_core.force_ip", "Нет доступа к node_map интерфейса", "warn",
+                      {"serial_number": serial_number})
+            return {"ip": "no_interface"}
+
+        if not mask:
+            mask = "255.255.255.0"
+        if not gateway:
+            gateway = "0.0.0.0"
+
+        try:
+            # обновим список устройств на интерфейсе (имя команды у продюсеров разное)
+            for cmd in ("DeviceUpdateList", "GevDeviceUpdateList"):
+                try:
+                    getattr(iface, cmd).execute()
+                    break
+                except Exception:
+                    continue
+
+            if not self._select_iface_device(iface, serial_number):
+                log_event("camera_core.force_ip", "Не удалось выбрать камеру на интерфейсе", "warn",
+                          {"serial_number": serial_number})
+                return {"ip": "device_select_failed"}
+
+            iface.GevDeviceForceIPAddress.value = ip_to_int(ip)
+            iface.GevDeviceForceSubnetMask.value = ip_to_int(mask)
+            try:
+                iface.GevDeviceForceGateway.value = ip_to_int(gateway)
+            except Exception:
+                pass
+            iface.GevDeviceForceIP.execute()
+
+            log_event("camera_core.force_ip", "ForceIP выполнен", "success",
+                      {"serial_number": serial_number, "ip": ip, "mask": mask, "gateway": gateway})
+
+            # запись устарела — следующий scan/connect возьмёт новую
+            worker = self.workers.get(serial_number)
+            if worker is not None:
+                worker.interface_id = None
+                worker.device_handle = None
+            return {"ip": "force_ip_ok", "new_ip": ip}
+        except Exception as e:
+            log_event("camera_core.force_ip", "Ошибка ForceIP", "error",
+                      {"serial_number": serial_number, **_explain_error(e)})
+            return {"ip": "force_ip_failed", "error": str(e)}
+
+    # выбрать нужное устройство на интерфейсе по серийнику (через DeviceSelector)
+    @staticmethod
+    def _select_iface_device(iface, serial_number):
+        try:
+            selector = iface.DeviceSelector
+        except Exception:
+            # нет селектора — возможно, ForceIP-ноды относятся к единственному устройству
+            return True
+
+        try:
+            max_index = int(selector.max)
+        except Exception:
+            max_index = 0
+
+        for index in range(max_index + 1):
+            try:
+                selector.value = index
+            except Exception:
+                continue
+            for node_name in ("DeviceSerialNumber", "GevDeviceSerialNumber"):
+                try:
+                    if str(getattr(iface, node_name).value) == str(serial_number):
+                        return True
+                except Exception:
+                    continue
+
+        # серийник не прочитать, но устройство на интерфейсе одно — выбираем его
+        if max_index == 0:
+            try:
+                selector.value = 0
+                return True
+            except Exception:
+                return False
+        return False
+
     # ---------- перечисление устройств с разбивкой по интерфейсам ----------
 
     @staticmethod

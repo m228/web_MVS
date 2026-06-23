@@ -246,20 +246,22 @@ function renderChipSettings(box, cam) {
 }
 
 // ---------- раскладка ----------
-function setLayout(n) {
-  state.tiles.forEach((tile) => {
-    if (tile.connected && tile.serial) stopStream(tile.serial, tile.kind);
-  });
+function newTile() {
+  return { serial: null, kind: null, connected: false, photo: false, video: false, live: true, el: null };
+}
 
-  const old = state.tiles;
-  state.tiles = [];
-  for (let i = 0; i < n; i += 1) {
-    const prev = old[i];
-    state.tiles.push({
-      serial: prev ? prev.serial : null,
-      kind: prev ? prev.kind : null,
-      connected: false, photo: false, video: false,
-    });
+function setLayout(n) {
+  // закрываем потоки ТОЛЬКО у ячеек, которые уходят (index >= n);
+  // оставшиеся (index < n) сохраняют поток и DOM — не пересоздаём их
+  for (let i = n; i < state.tiles.length; i += 1) {
+    const tile = state.tiles[i];
+    if (tile && tile.connected && tile.serial) stopStream(tile.serial, tile.kind);
+  }
+
+  if (state.tiles.length > n) {
+    state.tiles.length = n;
+  } else {
+    while (state.tiles.length < n) state.tiles.push(newTile());
   }
 
   state.layout = n;
@@ -281,60 +283,68 @@ function getTileEl(index) {
   return document.querySelector(`.multi-tile[data-tile="${index}"]`);
 }
 
+// создаём DOM ячейки один раз; индекс читаем из data-tile (он стабилен,
+// т.к. ячейки убираются только с конца)
+function createTileEl() {
+  const el = document.createElement('div');
+  el.className = 'multi-tile';
+  el.innerHTML = `
+    <div class="multi-tile__head">
+      <select class="multi-tile__serial" data-tile-serial title="Камера в ячейке"></select>
+      <span class="multi-tile__badge" data-tile-badge></span>
+    </div>
+    <div class="multi-tile__screen" data-tile-screen>
+      <img class="multi-tile__frame hidden" alt="Кадр камеры" data-tile-frame />
+      <div class="multi-tile__placeholder" data-tile-placeholder>NO CAMERA</div>
+    </div>
+    <div class="multi-tile__status">
+      <span>FPS<strong data-metric="fps">0.00</strong></span>
+      <span>Кадры<strong data-metric="images">0</strong></span>
+      <span>Мбит/с<strong data-metric="bandwidth">0.0</strong></span>
+      <span>Разрешение<strong data-metric="resolution">0 × 0</strong></span>
+      <span>Ошибки<strong data-metric="errors">0</strong></span>
+      <div class="multi-tile__rec">
+        <span class="rec-icon" data-rec-photo title="Сохранение фото">${PHOTO_SVG}</span>
+        <span class="rec-icon" data-rec-video title="Запись видео">${VIDEO_SVG}</span>
+      </div>
+    </div>
+  `;
+
+  const idx = () => Number(el.dataset.tile);
+
+  el.addEventListener('click', () => setFocus(idx()));
+  el.addEventListener('dragover', (event) => {
+    event.preventDefault();
+    event.dataTransfer.dropEffect = 'copy';
+    el.classList.add('is-drop');
+  });
+  el.addEventListener('dragleave', () => el.classList.remove('is-drop'));
+  el.addEventListener('drop', (event) => {
+    event.preventDefault();
+    el.classList.remove('is-drop');
+    const serial = event.dataTransfer.getData('text/plain');
+    if (serial) assignSource(idx(), serial);
+  });
+
+  const select = el.querySelector('[data-tile-serial]');
+  select.addEventListener('change', () => assignSource(idx(), select.value || null));
+  select.addEventListener('click', (event) => event.stopPropagation());
+
+  return el;
+}
+
 function renderGrid() {
   const grid = document.getElementById('multiGrid');
   if (!grid) return;
 
   grid.className = `multi-grid multi-grid--${state.layout}`;
-  grid.innerHTML = '';
 
-  state.tiles.forEach((tile, index) => {
-    const el = document.createElement('div');
-    el.className = 'multi-tile';
-    el.dataset.tile = String(index);
-    el.innerHTML = `
-      <div class="multi-tile__head">
-        <select class="multi-tile__serial" data-tile-serial title="Камера в ячейке"></select>
-        <span class="multi-tile__badge" data-tile-badge></span>
-      </div>
-      <div class="multi-tile__screen" data-tile-screen>
-        <img class="multi-tile__frame hidden" alt="Кадр камеры" data-tile-frame />
-        <div class="multi-tile__placeholder" data-tile-placeholder>NO CAMERA</div>
-      </div>
-      <div class="multi-tile__status">
-        <span>FPS<strong data-metric="fps">0.00</strong></span>
-        <span>Кадры<strong data-metric="images">0</strong></span>
-        <span>Мбит/с<strong data-metric="bandwidth">0.0</strong></span>
-        <span>Разрешение<strong data-metric="resolution">0 × 0</strong></span>
-        <span>Ошибки<strong data-metric="errors">0</strong></span>
-        <div class="multi-tile__rec">
-          <span class="rec-icon" data-rec-photo title="Сохранение фото">${PHOTO_SVG}</span>
-          <span class="rec-icon" data-rec-video title="Запись видео">${VIDEO_SVG}</span>
-        </div>
-      </div>
-    `;
-
-    el.addEventListener('click', () => setFocus(index));
-
-    el.addEventListener('dragover', (event) => {
-      event.preventDefault();
-      event.dataTransfer.dropEffect = 'copy';
-      el.classList.add('is-drop');
-    });
-    el.addEventListener('dragleave', () => el.classList.remove('is-drop'));
-    el.addEventListener('drop', (event) => {
-      event.preventDefault();
-      el.classList.remove('is-drop');
-      const serial = event.dataTransfer.getData('text/plain');
-      if (serial) assignSource(index, serial);
-    });
-
-    const select = el.querySelector('[data-tile-serial]');
-    select.addEventListener('change', () => assignSource(index, select.value || null));
-    select.addEventListener('click', (event) => event.stopPropagation());
-
-    grid.appendChild(el);
+  // у живых ячеек DOM (и их <img> с потоком) сохраняем — создаём только новым
+  state.tiles.forEach((tile) => {
+    if (!tile.el) tile.el = createTileEl();
   });
+  state.tiles.forEach((tile, index) => { tile.el.dataset.tile = String(index); });
+  grid.replaceChildren(...state.tiles.map((tile) => tile.el));
 
   refreshTileSelects();
   renderAllTiles();
@@ -370,9 +380,15 @@ function renderTile(index) {
   const select = el.querySelector('[data-tile-serial]');
 
   if (select) select.value = tile.serial || '';
-  if (badge) badge.textContent = tile.connected ? '● в эфире' : (source ? 'готова' : 'пусто');
+  const stalled = tile.connected && tile.live === false;
+  if (badge) {
+    badge.textContent = tile.connected
+      ? (stalled ? '● нет кадров' : '● в эфире')
+      : (source ? 'готова' : 'пусто');
+  }
 
-  el.classList.toggle('is-live', tile.connected);
+  el.classList.toggle('is-live', tile.connected && !stalled);
+  el.classList.toggle('is-stalled', stalled);
   el.classList.toggle('is-empty', !source);
 
   const recPhoto = el.querySelector('[data-rec-photo]');
@@ -488,6 +504,9 @@ function startStream(index) {
   if (!frame) return;
 
   tile.connected = true;
+  tile.live = true;
+  tile._lastImages = undefined;
+  tile._lastFrameTs = Date.now();
   frame.src = buildStreamUrl(source);
 
   renderTile(index);
@@ -543,13 +562,33 @@ function resetTileMetrics(index) {
   updateTileMetrics(index, { fps: 0, image_number: 0, bandwidth_mbps: 0, width: 0, height: 0, errors: 0 });
 }
 
+// порог «зависания»: если за столько мс не пришло ни одного нового кадра,
+// считаем камеру не «в эфире» (даже если поток формально открыт)
+const LIVENESS_MS = 5000;
+
 function startMetricsPolling() {
   setInterval(async () => {
+    const now = Date.now();
     for (let i = 0; i < state.tiles.length; i += 1) {
       const tile = state.tiles[i];
       if (!tile.connected || !tile.serial) continue;
+
       const metrics = await apiFor(tile.kind).getMetrics(tile.serial);
-      if (metrics && !metrics.error) updateTileMetrics(i, metrics);
+      if (!metrics || metrics.error) continue;
+
+      updateTileMetrics(i, metrics);
+
+      // живость определяем по росту счётчика кадров
+      const images = Number(metrics.image_number ?? 0);
+      if (tile._lastImages === undefined || images > tile._lastImages) {
+        tile._lastImages = images;
+        tile._lastFrameTs = now;
+      }
+      const live = (now - (tile._lastFrameTs || now)) < LIVENESS_MS;
+      if (live !== tile.live) {
+        tile.live = live;
+        renderTile(i);
+      }
     }
   }, 1000);
 }

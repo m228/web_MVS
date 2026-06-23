@@ -2167,3 +2167,65 @@ body.modal-open {
 @keyframes icon-spin {
   to { transform: rotate(360deg); }
 }
+
+/* всегда резервируем место под вертикальный скроллбар, чтобы при открытии
+   модалки (body.modal-open -> overflow:hidden) страница не «съезжала» вбок */
+html {
+  scrollbar-gutter: stable;
+}
+
+/* ячейка с открытым потоком, но без новых кадров (зависла) */
+.multi-tile.is-stalled .multi-tile__badge {
+  color: var(--danger);
+}
+
+/* фильтр истории событий по уровням */
+.debug-filter {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 14px;
+}
+
+.debug-filter__btn {
+  padding: 6px 12px;
+  border-radius: 999px;
+  border: 1px solid var(--border-strong);
+  background: var(--surface-elevated);
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  cursor: pointer;
+  opacity: 0.45;
+  transition: opacity 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+}
+
+.debug-filter__btn.is-active {
+  opacity: 1;
+}
+
+.debug-filter__btn--info.is-active {
+  color: var(--info);
+  border-color: var(--info);
+}
+
+.debug-filter__btn--success.is-active {
+  color: var(--success);
+  border-color: var(--success);
+}
+
+.debug-filter__btn--warn.is-active {
+  color: var(--warning);
+  border-color: var(--warning);
+}
+
+.debug-filter__btn--error.is-active {
+  color: var(--danger);
+  border-color: var(--danger);
+}
+
+.debug-filter__btn--debug.is-active {
+  color: var(--text);
+  border-color: var(--border-strong);
+}

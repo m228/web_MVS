@@ -85,6 +85,12 @@ MAX_FRAME_TIMEOUTS = 20
 # терпим дольше — промышленная камера может «раскачиваться» несколько секунд
 WARMUP_MAX_TIMEOUTS = 60
 
+# размер очереди буферов приёма у acquirer'а. Дефолтные 3 буфера малы для
+# нескольких камер одновременно: под нагрузкой кадры не успевают разбираться и
+# одна из камер «зависает». Больший пул даёт продюсеру довосстановить кадр
+# через resend (как это делает MVS) — и поток не рвётся.
+STREAM_NUM_BUFFERS = 24
+
 
 def _gentl_code(error_text):
     match = re.search(r"ID:\s*(-?\d+)", error_text or "")
@@ -819,8 +825,15 @@ class CameraWorker(BaseCameraWorker):
             self.ia = ia
             self.running = True
 
+            # больше буферов приёма — критично для нескольких камер сразу
+            try:
+                ia.num_buffers = STREAM_NUM_BUFFERS
+            except Exception as e:
+                log_event("camera_core.generate_stream", "Не удалось задать num_buffers", "warn", {"error": str(e)})
+
             ia.start()
-            log_event("camera_core.generate_stream", "Поток камеры запущен", "success", {"serial_number": self.serial_number})
+            log_event("camera_core.generate_stream", "Поток камеры запущен", "success",
+                      {"serial_number": self.serial_number, "num_buffers": getattr(ia, "num_buffers", None)})
 
             # метрики считаем по факту текущего сеанса (стартовый прогрев не копим)
             self.metrics["errors"] = 0

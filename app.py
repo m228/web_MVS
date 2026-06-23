@@ -168,6 +168,7 @@ def camera_stream(
     fps: float = None,
     exposure_auto: str = None,
     exposure_time: float = None,
+    pixel_format: str = None,
 ):
     worker = manager.get(serial_number)
     if interface_id:
@@ -187,6 +188,7 @@ def camera_stream(
             "fps": fps,
             "exposure_auto": exposure_auto,
             "exposure_time": exposure_time,
+            "pixel_format": pixel_format,
         },
     )
     return StreamingResponse(
@@ -198,6 +200,7 @@ def camera_stream(
             fps=fps,
             exposure_auto=exposure_auto,
             exposure_time=exposure_time,
+            pixel_format=pixel_format,
         ),
         media_type="multipart/x-mixed-replace; boundary=frame",
     )

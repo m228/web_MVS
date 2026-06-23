@@ -358,6 +358,7 @@ function initCameraPage() {
     setFieldLimits('exposure_time', data.exposure_time);
 
     fillSelectOptions('exposure_auto', data.exposure_auto);
+    fillSelectOptions('pixel_format', data.pixel_format);
 
     setText('WidthMin', data.width?.min);
     setText('WidthMax', data.width?.max);
@@ -385,6 +386,7 @@ function initCameraPage() {
       ['fps', 'fps'],
       ['exposure_auto', 'exposure_auto'],
       ['exposure_time', 'exposure_time'],
+      ['pixel_format', 'pixel_format'],
     ];
 
     for (const [formName, queryName] of fields) {

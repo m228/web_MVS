@@ -220,6 +220,27 @@ def build_rtsp_url(ip, username="admin", password="", channel=1, subtype=0, port
     return f"rtsp://{credentials}{ip}:{port}/cam/realmonitor?channel={channel}&subtype={subtype}"
 
 
+# разбор сырого буфера кадра в BGR-картинку независимо от пиксельного формата.
+# Число каналов определяем по размеру буфера: 3 (RGB/BGR), 1 (Mono/Bayer -> серое),
+# 4 (RGBA). Раньше код жёстко решейпил в 3 канала и падал на моно-камере
+# (ValueError: cannot reshape array of size ... into (h, w, 3)).
+def _to_bgr(data, width, height):
+    arr = np.asarray(data, dtype=np.uint8).reshape(-1)
+    pixels = width * height
+    if pixels <= 0 or arr.size == 0 or arr.size % pixels != 0:
+        return None
+
+    channels = arr.size // pixels
+    if channels == 3:
+        # как и раньше: продюсер отдаёт 3 канала — кодируем как есть
+        return arr.reshape(height, width, 3)
+    if channels == 1:
+        return cv2.cvtColor(arr.reshape(height, width), cv2.COLOR_GRAY2BGR)
+    if channels == 4:
+        return cv2.cvtColor(arr.reshape(height, width, 4), cv2.COLOR_RGBA2BGR)
+    return None
+
+
 class BaseCameraWorker:
     """Общее состояние и механизмы сохранения (фото/видео) для всех типов камер."""
 
@@ -457,7 +478,7 @@ class CameraWorker(BaseCameraWorker):
     def read_settings(self, node_map):
         if not self.manager.check():
             return None
-        return {
+        data = {
             "width": {
                 "value": node_map.Width.value,
                 "min": node_map.Width.min,
@@ -490,6 +511,16 @@ class CameraWorker(BaseCameraWorker):
                 "options": node_map.ExposureAuto.symbolics,
             },
         }
+        # пиксельный формат (RGB8/Mono8/BayerRG8/...) — нужен, чтобы выбрать цвет;
+        # набор у каждой камеры свой, поэтому через try
+        try:
+            data["pixel_format"] = {
+                "value": node_map.PixelFormat.value,
+                "options": list(node_map.PixelFormat.symbolics),
+            }
+        except Exception:
+            pass
+        return data
 
     # ---------- информация о камере ----------
 
@@ -635,9 +666,22 @@ class CameraWorker(BaseCameraWorker):
         return min_value <= value <= max_value
 
     def apply_settings(self, node_map, width=None, height=None, offset_x=None, offset_y=None,
-                       fps=None, exposure_auto=None, exposure_time=None):
+                       fps=None, exposure_auto=None, exposure_time=None, pixel_format=None):
         limits = self.data_limit
         try:
+            # пиксельный формат задаём первым: он меняет размер кадра/каналы,
+            # и от него зависит корректный разбор буфера в get_frame
+            if pixel_format:
+                try:
+                    if pixel_format in node_map.PixelFormat.symbolics:
+                        node_map.PixelFormat.value = pixel_format
+                    else:
+                        log_event("camera_core.apply_settings_camera", "Пиксельный формат не поддерживается камерой",
+                                  "warn", {"pixel_format": pixel_format})
+                except Exception as e:
+                    log_event("camera_core.apply_settings_camera", "Не удалось задать пиксельный формат",
+                              "warn", {"error": str(e), "pixel_format": pixel_format})
+
             if self.check_value(width, limits["width"]["min"], limits["width"]["max"]):
                 node_map.Width.value = int(width)
 
@@ -695,7 +739,16 @@ class CameraWorker(BaseCameraWorker):
                 data = buffer.payload.components[0].data
                 real_width = node_map.Width.value
                 real_height = node_map.Height.value
-                img = np.array(data, dtype=np.uint8).reshape(real_height, real_width, 3)
+                img = _to_bgr(data, real_width, real_height)
+
+                if img is None:
+                    log_event("camera_core.get_frame", "Не удалось разобрать кадр (формат пикселей)", "warn",
+                              {"serial_number": self.serial_number,
+                               "size": int(np.asarray(data).size),
+                               "width": real_width, "height": real_height,
+                               "hint": "выберите подходящий пиксельный формат (RGB/Mono)"})
+                    return None, None
+
                 ok, encoded = cv2.imencode(".jpg", img)
 
                 if not ok:
@@ -712,7 +765,7 @@ class CameraWorker(BaseCameraWorker):
             raise
 
     def generate(self, width=None, height=None, offset_x=None, offset_y=None,
-                 fps=None, exposure_auto=None, exposure_time=None):
+                 fps=None, exposure_auto=None, exposure_time=None, pixel_format=None):
         ia = None
         last_frame_time = None
 
@@ -738,6 +791,7 @@ class CameraWorker(BaseCameraWorker):
                     "fps": fps,
                     "exposure_auto": exposure_auto,
                     "exposure_time": exposure_time,
+                    "pixel_format": pixel_format,
                 },
             )
 
@@ -755,6 +809,7 @@ class CameraWorker(BaseCameraWorker):
                 fps=fps,
                 exposure_auto=exposure_auto,
                 exposure_time=exposure_time,
+                pixel_format=pixel_format,
             )
 
             if not ok:

@@ -21,7 +21,7 @@ const VIDEO_SVG = '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" s
 function defaultGigeSettings() {
   return {
     width: 2448, height: 2048, offset_x: 0, offset_y: 0,
-    fps: 1, exposure_auto: 'Off', exposure_time: 10000,
+    fps: 1, exposure_auto: 'Off', exposure_time: 10000, pixel_format: '',
   };
 }
 
@@ -223,6 +223,12 @@ function renderChipSettings(box, cam) {
           <option value="Off"${s.exposure_auto === 'Off' ? ' selected' : ''}>Off</option>
           <option value="Once"${s.exposure_auto === 'Once' ? ' selected' : ''}>Once</option>
           <option value="Continuous"${s.exposure_auto === 'Continuous' ? ' selected' : ''}>Continuous</option>
+        </select>
+      </label>
+      <label class="chip-settings__wide">Формат пикселей (цвет)
+        <select data-set="pixel_format">
+          <option value=""${!s.pixel_format ? ' selected' : ''}>— как есть —</option>
+          ${['RGB8', 'BGR8', 'Mono8', 'BayerRG8', 'BayerGB8', 'BayerGR8', 'BayerBG8', 'YUV422_8'].map((f) => `<option value="${f}"${s.pixel_format === f ? ' selected' : ''}>${f}</option>`).join('')}
         </select>
       </label>
     </div>
@@ -464,7 +470,7 @@ function buildStreamUrl(source) {
   }
   const s = source.settings || {};
   const query = new URLSearchParams({ serial_number: source.serial });
-  ['width', 'height', 'offset_x', 'offset_y', 'fps', 'exposure_auto', 'exposure_time'].forEach((key) => {
+  ['width', 'height', 'offset_x', 'offset_y', 'fps', 'exposure_auto', 'exposure_time', 'pixel_format'].forEach((key) => {
     const value = s[key];
     if (value !== '' && value !== null && value !== undefined) query.set(key, value);
   });

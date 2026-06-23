@@ -286,6 +286,27 @@ const RtspApi = {
       { source: 'api.rtsp.status_video_photo', logRequest: false, logSuccess: false }
     );
   },
+
+  // мини-база сохранённых RTSP-камер
+  listSaved() {
+    return apiGet('/api/rtsp/saved', 'Ошибка загрузки сохранённых RTSP:',
+      { source: 'api.rtsp.saved', logRequest: false, logSuccess: false });
+  },
+
+  saveCam(entry) {
+    const query = new URLSearchParams({
+      url: entry.url || '',
+      label: entry.label || '',
+      ip: entry.ip || '',
+      scale: entry.scale ?? 100,
+      fps: entry.fps ?? 0,
+    });
+    return apiGet(`/api/rtsp/save?${query.toString()}`, 'Ошибка сохранения RTSP в базу:');
+  },
+
+  removeSaved(url) {
+    return apiGet(`/api/rtsp/remove_saved?url=${encodeURIComponent(url)}`, 'Ошибка удаления RTSP из базы:');
+  },
 };
 
 window.RtspApi = RtspApi;

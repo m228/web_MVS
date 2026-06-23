@@ -21,7 +21,7 @@ const VIDEO_SVG = '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" s
 function defaultGigeSettings() {
   return {
     width: 2448, height: 2048, offset_x: 0, offset_y: 0,
-    fps: 1, exposure_auto: 'Off', exposure_time: 10000, pixel_format: '',
+    fps: 1, exposure_auto: 'Off', exposure_time: 10000, pixel_format: '', packet_size: '',
   };
 }
 
@@ -89,6 +89,36 @@ async function loadCameras() {
   renderDrawer();
   refreshTileSelects();
   log.info('Список камер загружен', { gige: gige.length, rtsp: rtsp.length });
+}
+
+// подгрузка сохранённых RTSP-камер из мини-базы (после перезапуска)
+async function loadSavedRtsp() {
+  const data = await RtspApi.listSaved();
+  const items = (data && data.items) || [];
+
+  items.forEach((it) => {
+    if (!it.url) return;
+    if (state.cameras.some((c) => c.kind === 'rtsp' && c.connection && c.connection.url === it.url)) return;
+
+    state.rtspCounter += 1;
+    state.cameras.push({
+      serial: `rtsp_${state.rtspCounter}`,
+      kind: 'rtsp',
+      label: it.label || `RTSP ${it.ip || ''}`.trim(),
+      model: 'RTSP',
+      ip: it.ip || null,
+      available: true,
+      settings: null,
+      connection: { url: it.url, scale: it.scale ?? 100, fps: it.fps || null },
+      saved: true,
+    });
+  });
+
+  if (items.length) {
+    renderDrawer();
+    refreshTileSelects();
+    log.info('Загружены сохранённые RTSP-камеры', { count: items.length });
+  }
 }
 
 // ---------- шторка слева (источники, drag + настройки) ----------
@@ -175,6 +205,8 @@ function toggleChipSettings(serial) {
 
 // удаление источника (для добавленных вручную RTSP-камер)
 function removeSource(serial) {
+  const source = getSource(serial);
+
   state.tiles.forEach((tile, i) => {
     if (tile.serial === serial) {
       if (tile.connected) stopStream(serial, tile.kind);
@@ -188,6 +220,12 @@ function removeSource(serial) {
   });
   state.cameras = state.cameras.filter((c) => c.serial !== serial);
   if (state.expandedSerial === serial) state.expandedSerial = null;
+
+  // удалённую вручную RTSP-камеру убираем и из мини-базы
+  if (source && source.kind === 'rtsp' && source.connection && source.connection.url) {
+    RtspApi.removeSaved(source.connection.url);
+  }
+
   renderDrawer();
   refreshTileSelects();
   updateToolbar();
@@ -230,6 +268,9 @@ function renderChipSettings(box, cam) {
           <option value=""${!s.pixel_format ? ' selected' : ''}>— как есть —</option>
           ${['RGB8', 'BGR8', 'Mono8', 'BayerRG8', 'BayerGB8', 'BayerGR8', 'BayerBG8', 'YUV422_8'].map((f) => `<option value="${f}"${s.pixel_format === f ? ' selected' : ''}>${f}</option>`).join('')}
         </select>
+      </label>
+      <label class="chip-settings__wide">Размер пакета (jumbo, напр. 8164)
+        <input type="number" data-set="packet_size" value="${escapeHtml(s.packet_size)}" placeholder="как есть (нужны jumbo-кадры)" />
       </label>
     </div>
     <p class="chip-settings__hint">Настройки сохраняются за камерой и применяются при подключении.</p>
@@ -486,7 +527,7 @@ function buildStreamUrl(source) {
   }
   const s = source.settings || {};
   const query = new URLSearchParams({ serial_number: source.serial });
-  ['width', 'height', 'offset_x', 'offset_y', 'fps', 'exposure_auto', 'exposure_time', 'pixel_format'].forEach((key) => {
+  ['width', 'height', 'offset_x', 'offset_y', 'fps', 'exposure_auto', 'exposure_time', 'pixel_format', 'packet_size'].forEach((key) => {
     const value = s[key];
     if (value !== '' && value !== null && value !== undefined) query.set(key, value);
   });
@@ -585,12 +626,29 @@ function startMetricsPolling() {
         tile._lastFrameTs = now;
       }
       const live = (now - (tile._lastFrameTs || now)) < LIVENESS_MS;
+      // RTSP подключилась успешно (есть кадры) — сохраняем её в мини-базу
+      if (live && tile.kind === 'rtsp') saveRtspIfNeeded(tile.serial);
       if (live !== tile.live) {
         tile.live = live;
         renderTile(i);
       }
     }
   }, 1000);
+}
+
+// сохранить RTSP-источник в базу один раз, когда он реально начал отдавать кадры
+function saveRtspIfNeeded(serial) {
+  const src = getSource(serial);
+  if (!src || src.kind !== 'rtsp' || src.saved || !src.connection || !src.connection.url) return;
+  src.saved = true;
+  RtspApi.saveCam({
+    url: src.connection.url,
+    label: src.label,
+    ip: src.ip,
+    scale: src.connection.scale,
+    fps: src.connection.fps,
+  });
+  log.info('RTSP-камера сохранена в базу (подключение удалось)', { serial, url: src.connection.url });
 }
 
 // ---------- модалки ----------
@@ -845,6 +903,7 @@ async function initMultiPage() {
 
   setLayout(1);
   await loadCameras();
+  await loadSavedRtsp();
   startMetricsPolling();
 
   window.addEventListener('beforeunload', () => {

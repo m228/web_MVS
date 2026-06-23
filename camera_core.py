@@ -672,9 +672,25 @@ class CameraWorker(BaseCameraWorker):
         return min_value <= value <= max_value
 
     def apply_settings(self, node_map, width=None, height=None, offset_x=None, offset_y=None,
-                       fps=None, exposure_auto=None, exposure_time=None, pixel_format=None):
+                       fps=None, exposure_auto=None, exposure_time=None, pixel_format=None,
+                       packet_size=None):
         limits = self.data_limit
         try:
+            # Размер GVSP-пакета: главный рычаг для нескольких GigE-камер сразу.
+            # MVS сам подбирает оптимальный (jumbo) размер — крупные пакеты резко
+            # снижают их количество на кадр, CPU и потери. Тут задаём вручную
+            # (нужно включить jumbo-кадры на адаптере). Клампим к диапазону узла.
+            if packet_size:
+                try:
+                    node = node_map.GevSCPSPacketSize
+                    value = max(int(node.min), min(int(node.max), int(packet_size)))
+                    node.value = value
+                    log_event("camera_core.apply_settings_camera", "Размер GVSP-пакета задан", "info",
+                              {"GevSCPSPacketSize": value})
+                except Exception as e:
+                    log_event("camera_core.apply_settings_camera", "Не удалось задать размер пакета",
+                              "warn", {"error": str(e), "packet_size": packet_size})
+
             # пиксельный формат задаём первым: он меняет размер кадра/каналы,
             # и от него зависит корректный разбор буфера в get_frame
             if pixel_format:
@@ -771,7 +787,8 @@ class CameraWorker(BaseCameraWorker):
             raise
 
     def generate(self, width=None, height=None, offset_x=None, offset_y=None,
-                 fps=None, exposure_auto=None, exposure_time=None, pixel_format=None):
+                 fps=None, exposure_auto=None, exposure_time=None, pixel_format=None,
+                 packet_size=None):
         ia = None
         last_frame_time = None
 
@@ -816,6 +833,7 @@ class CameraWorker(BaseCameraWorker):
                 exposure_auto=exposure_auto,
                 exposure_time=exposure_time,
                 pixel_format=pixel_format,
+                packet_size=packet_size,
             )
 
             if not ok:

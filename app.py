@@ -8,6 +8,7 @@ from fastapi.staticfiles import StaticFiles
 from logger import get_events, log_event
 
 from camera_core import manager, build_rtsp_url
+import rtsp_store
 
 
 def api_log(source: str, message: str, level: str = "info", payload: dict | None = None):
@@ -147,6 +148,26 @@ def force_ip(serial_number: str, ip: str, mask: str = "", gateway: str = ""):
     return data
 
 
+# ---------- мини-база сохранённых RTSP-камер ----------
+@app.get("/api/rtsp/saved")
+def rtsp_saved():
+    return {"items": rtsp_store.load()}
+
+
+@app.get("/api/rtsp/save")
+def rtsp_save(url: str, label: str = "", ip: str = "", scale: int = 100, fps: float = 0):
+    items = rtsp_store.save({"url": url, "label": label, "ip": ip, "scale": scale, "fps": fps})
+    api_log("api.rtsp.save", "RTSP-камера сохранена в базу", payload={"url": url, "count": len(items)})
+    return {"items": items}
+
+
+@app.get("/api/rtsp/remove_saved")
+def rtsp_remove_saved(url: str):
+    items = rtsp_store.remove(url)
+    api_log("api.rtsp.remove_saved", "RTSP-камера удалена из базы", payload={"url": url, "count": len(items)})
+    return {"items": items}
+
+
 @app.get("/api/change_ip")
 def change_ip(
     serial_number: str,
@@ -179,6 +200,7 @@ def camera_stream(
     exposure_auto: str = None,
     exposure_time: float = None,
     pixel_format: str = None,
+    packet_size: int = None,
 ):
     worker = manager.get(serial_number)
     if interface_id:
@@ -211,6 +233,7 @@ def camera_stream(
             exposure_auto=exposure_auto,
             exposure_time=exposure_time,
             pixel_format=pixel_format,
+            packet_size=packet_size,
         ),
         media_type="multipart/x-mixed-replace; boundary=frame",
     )

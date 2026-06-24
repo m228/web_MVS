@@ -91,13 +91,6 @@ WARMUP_MAX_TIMEOUTS = 60
 # через resend (как это делает MVS) — и поток не рвётся.
 STREAM_NUM_BUFFERS = 24
 
-# Доля скорости линии (1GbE ≈ 1000 Мбит/с), которую суммарно отдаём GigE-камерам.
-# Одна 5 МП камера на 24 fps уже почти забивает линию (~970 Мбит/с), поэтому две
-# камеры сразу переполняют приёмный буфер NIC и первая теряет кадры. Делим лимит
-# между камерами; 0.9 — запас на служебный трафик/джиттер (так же работает
-# «Bandwidth Control» в самом MVS через DeviceLinkThroughputLimit).
-LINK_BANDWIDTH_SAFETY = 0.9
-
 
 def _gentl_code(error_text):
     match = re.search(r"ID:\s*(-?\d+)", error_text or "")
@@ -701,33 +694,6 @@ class CameraWorker(BaseCameraWorker):
                 except Exception as e:
                     log_event("camera_core.apply_settings_camera", "Не удалось задать размер пакета",
                               "warn", {"error": str(e), "packet_size": packet_size})
-
-            # Ограничение полосы на линию — как «Bandwidth Control» в MVS.
-            # Одна 5 МП GigE-камера на 1 Гбит/с при полном fps занимает почти всю
-            # линию, поэтому без лимита вторая камера переполняет приёмный буфер
-            # NIC и первая начинает копить таймауты получения кадра (GenTL -1011).
-            # Делим пропускную способность линии поровну между всеми GigE-камерами:
-            # сумма лимитов укладывается в линию, и обе камеры стримят стабильно
-            # (ценой ~половины fps на каждую — ровно так делает и сам MVS).
-            try:
-                share = self.manager.gige_link_share()
-                # режим лимита: у части прошивок нужен явный On, у других лимит
-                # активен всегда — поэтому ошибку режима глушим
-                try:
-                    node_map.DeviceLinkThroughputLimitMode.value = "On"
-                except Exception:
-                    pass
-                limit_node = node_map.DeviceLinkThroughputLimit
-                full = int(limit_node.max)
-                value = int(full * LINK_BANDWIDTH_SAFETY / share)
-                value = max(int(limit_node.min), min(full, value))
-                limit_node.value = value
-                log_event("camera_core.apply_settings_camera", "Ограничение полосы линии задано", "info",
-                          {"DeviceLinkThroughputLimit": value, "node_max": full,
-                           "share_cameras": share})
-            except Exception as e:
-                log_event("camera_core.apply_settings_camera", "Не удалось задать ограничение полосы линии",
-                          "warn", {"error": str(e)})
 
             # пиксельный формат задаём первым: он меняет размер кадра/каналы,
             # и от него зависит корректный разбор буфера в get_frame
@@ -1809,16 +1775,6 @@ class CameraManager:
 
     def count_cams(self):
         return {"count": len(self.cam_online)}
-
-    # сколько GigE-камер делят одну сетевую линию — знаменатель для
-    # DeviceLinkThroughputLimit. Считаем доступные (status==1) камеры, исключая
-    # тестовую запись. Делёж задаётся ДО старта каждого потока (на ходу лимит не
-    # сменить — он залочен во время съёмки), поэтому опираемся на стабильный
-    # счётчик «сколько камер вообще на линии», а не «сколько прямо сейчас стримит».
-    def gige_link_share(self):
-        serials = [s for s, st in self.cam_online.items()
-                   if s != "DA123123" and st == 1]
-        return max(1, len(serials))
 
 
 def ping_device(ip: str) -> bool:

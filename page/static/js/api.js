@@ -322,6 +322,12 @@ const NetApi = {
   enableFilter(adapter) {
     return apiGet(`/api/net/enable_filter?adapter=${encodeURIComponent(adapter)}`, 'Ошибка включения фильтра:');
   },
+  disableJumbo(adapter) {
+    return apiGet(`/api/net/disable_jumbo?adapter=${encodeURIComponent(adapter)}`, 'Ошибка выключения jumbo:');
+  },
+  disableFilter(adapter) {
+    return apiGet(`/api/net/disable_filter?adapter=${encodeURIComponent(adapter)}`, 'Ошибка выключения фильтра:');
+  },
 };
 
 window.NetApi = NetApi;

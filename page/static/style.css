@@ -1520,9 +1520,22 @@ body.modal-open {
 
 .section-header__tools {
   display: flex;
-  align-items: center;
-  gap: 14px;
-  flex-wrap: wrap;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 10px;
+}
+
+/* кнопки действий на главной — сеткой 2×2, чтобы не занимали всю ширину */
+.page-hero__actions--grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(150px, 1fr));
+  gap: 10px;
+  align-items: stretch;
+}
+
+.page-hero__actions--grid > * {
+  width: 100%;
+  justify-content: center;
 }
 
 /* ---------- иконка-кнопка «информация» в строке камеры ---------- */
@@ -1928,7 +1941,7 @@ body.modal-open {
   padding: 0;
   gap: 0;
   cursor: default;
-  overflow: hidden;
+  overflow: visible;
 }
 
 .camera-chip__main {

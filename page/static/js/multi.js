@@ -269,7 +269,7 @@ function renderChipSettings(box, cam) {
           ${['RGB8', 'BGR8', 'Mono8', 'BayerRG8', 'BayerGB8', 'BayerGR8', 'BayerBG8', 'YUV422_8'].map((f) => `<option value="${f}"${s.pixel_format === f ? ' selected' : ''}>${f}</option>`).join('')}
         </select>
       </label>
-      <label class="chip-settings__wide">Размер пакета (max или число, нужны jumbo)
+      <label>Пакет (max/число)
         <input type="text" data-set="packet_size" value="${escapeHtml(s.packet_size)}" placeholder="max или 8164" />
       </label>
     </div>

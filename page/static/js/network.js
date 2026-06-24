@@ -51,7 +51,7 @@ function adapterCard(adapter, isAdmin) {
         <span class="net-dot ${jOn ? 'net-dot--ok' : 'net-dot--off'}"></span>
         Jumbo-кадры: <strong>${escapeHtml(adapter.jumbo || 'нет')}</strong>
       </div>
-      <button type="button" class="btn-secondary net-btn" data-jumbo ${isAdmin ? '' : 'disabled'}>Включить</button>
+      <button type="button" class="btn-secondary net-btn" data-jumbo ${isAdmin ? '' : 'disabled'}>${jOn ? 'Выключить' : 'Включить'}</button>
     </div>
 
     <div class="net-row">
@@ -59,7 +59,7 @@ function adapterCard(adapter, isAdmin) {
         <span class="net-dot ${adapter.filter_enabled ? 'net-dot--ok' : 'net-dot--off'}"></span>
         Фильтр-драйвер GigE: <strong>${escapeHtml(filterText)}</strong>
       </div>
-      <button type="button" class="btn-secondary net-btn" data-filter ${(!adapter.filter_present || !isAdmin) ? 'disabled' : ''}>Включить</button>
+      <button type="button" class="btn-secondary net-btn" data-filter ${(!adapter.filter_present || !isAdmin) ? 'disabled' : ''}>${adapter.filter_enabled ? 'Выключить' : 'Включить'}</button>
     </div>
   `;
 
@@ -67,11 +67,11 @@ function adapterCard(adapter, isAdmin) {
   jumboBtn?.addEventListener('click', async () => {
     jumboBtn.disabled = true;
     jumboBtn.textContent = '…';
-    const res = await NetApi.enableJumbo(adapter.name);
+    const res = jOn ? await NetApi.disableJumbo(adapter.name) : await NetApi.enableJumbo(adapter.name);
     if (res?.ok) {
-      log.success('Jumbo-кадры включены', { adapter: adapter.name, jumbo: res.jumbo });
+      log.success(jOn ? 'Jumbo-кадры выключены' : 'Jumbo-кадры включены', { adapter: adapter.name, jumbo: res.jumbo });
     } else {
-      alert('Не удалось включить jumbo: ' + (res?.error || 'ошибка'));
+      alert('Не удалось изменить jumbo: ' + (res?.error || 'ошибка'));
     }
     loadStatus();
   });
@@ -80,11 +80,11 @@ function adapterCard(adapter, isAdmin) {
   filterBtn?.addEventListener('click', async () => {
     filterBtn.disabled = true;
     filterBtn.textContent = '…';
-    const res = await NetApi.enableFilter(adapter.name);
+    const res = adapter.filter_enabled ? await NetApi.disableFilter(adapter.name) : await NetApi.enableFilter(adapter.name);
     if (res?.ok) {
-      log.success('Фильтр-драйвер GigE включён', { adapter: adapter.name });
+      log.success(adapter.filter_enabled ? 'Фильтр-драйвер выключен' : 'Фильтр-драйвер включён', { adapter: adapter.name });
     } else {
-      alert('Не удалось включить фильтр-драйвер: ' + (res?.error || 'ошибка'));
+      alert('Не удалось изменить фильтр-драйвер: ' + (res?.error || 'ошибка'));
     }
     loadStatus();
   });

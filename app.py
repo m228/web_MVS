@@ -194,6 +194,20 @@ def net_enable_filter(adapter: str):
     return data
 
 
+@app.get("/api/net/disable_jumbo")
+def net_disable_jumbo(adapter: str):
+    data = net_tools.disable_jumbo(adapter)
+    api_log("api.net.disable_jumbo", "Выключение jumbo-кадров", payload={"adapter": adapter, "result": data})
+    return data
+
+
+@app.get("/api/net/disable_filter")
+def net_disable_filter(adapter: str):
+    data = net_tools.disable_filter(adapter)
+    api_log("api.net.disable_filter", "Выключение фильтр-драйвера GigE", payload={"adapter": adapter, "result": data})
+    return data
+
+
 @app.get("/api/change_ip")
 def change_ip(
     serial_number: str,

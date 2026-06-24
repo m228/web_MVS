@@ -310,3 +310,18 @@ const RtspApi = {
 };
 
 window.RtspApi = RtspApi;
+
+const NetApi = {
+  status() {
+    return apiGet('/api/net/status', 'Ошибка статуса сети:',
+      { source: 'api.net', logRequest: false, logSuccess: false });
+  },
+  enableJumbo(adapter) {
+    return apiGet(`/api/net/enable_jumbo?adapter=${encodeURIComponent(adapter)}`, 'Ошибка включения jumbo:');
+  },
+  enableFilter(adapter) {
+    return apiGet(`/api/net/enable_filter?adapter=${encodeURIComponent(adapter)}`, 'Ошибка включения фильтра:');
+  },
+};
+
+window.NetApi = NetApi;

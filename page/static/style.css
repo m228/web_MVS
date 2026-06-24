@@ -2229,3 +2229,96 @@ html {
   color: var(--text);
   border-color: var(--border-strong);
 }
+
+/* ====================== Страница «Сеть камер» ====================== */
+.net-banner {
+  padding: 14px 18px;
+  border-radius: 16px;
+  border: 1px solid var(--warning);
+  background: var(--warning-soft);
+  color: var(--text);
+  font-weight: 700;
+}
+
+.net-adapters {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: 16px;
+}
+
+.net-adapter {
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  background: var(--surface-elevated);
+  padding: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.net-adapter__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.net-adapter__head h3 {
+  margin: 0;
+  font-size: 18px;
+}
+
+.net-adapter__ip {
+  font-size: 13px;
+  color: var(--muted);
+  font-family: "JetBrains Mono", "Fira Code", monospace;
+}
+
+.net-chip {
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.net-chip--ok {
+  background: var(--success-soft);
+  color: var(--success);
+}
+
+.net-chip--off {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
+.net-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+}
+
+.net-row__label {
+  font-size: 14px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.net-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex: none;
+}
+
+.net-dot--ok { background: var(--success); }
+.net-dot--off { background: var(--muted); opacity: 0.6; }
+
+.net-btn {
+  min-height: 38px;
+  padding: 8px 14px;
+}

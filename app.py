@@ -9,6 +9,7 @@ from logger import get_events, log_event
 
 from camera_core import manager, build_rtsp_url
 import rtsp_store
+import net_tools
 
 
 def api_log(source: str, message: str, level: str = "info", payload: dict | None = None):
@@ -51,6 +52,11 @@ def rtsp_page():
 @app.get("/multi")
 def multi_page():
     return FileResponse("page/multi.html")
+
+
+@app.get("/network")
+def network_page():
+    return FileResponse("page/network.html")
 
 
 @app.get("/api/debug/logs")
@@ -168,6 +174,26 @@ def rtsp_remove_saved(url: str):
     return {"items": items}
 
 
+# ---------- сетевая оптимизация приёма GigE (замена утилит MVS) ----------
+@app.get("/api/net/status")
+def net_status():
+    return net_tools.status()
+
+
+@app.get("/api/net/enable_jumbo")
+def net_enable_jumbo(adapter: str):
+    data = net_tools.enable_jumbo(adapter)
+    api_log("api.net.enable_jumbo", "Включение jumbo-кадров", payload={"adapter": adapter, "result": data})
+    return data
+
+
+@app.get("/api/net/enable_filter")
+def net_enable_filter(adapter: str):
+    data = net_tools.enable_filter(adapter)
+    api_log("api.net.enable_filter", "Включение фильтр-драйвера GigE", payload={"adapter": adapter, "result": data})
+    return data
+
+
 @app.get("/api/change_ip")
 def change_ip(
     serial_number: str,
@@ -200,7 +226,7 @@ def camera_stream(
     exposure_auto: str = None,
     exposure_time: float = None,
     pixel_format: str = None,
-    packet_size: int = None,
+    packet_size: str = None,
 ):
     worker = manager.get(serial_number)
     if interface_id:

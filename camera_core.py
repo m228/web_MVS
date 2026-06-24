@@ -683,10 +683,14 @@ class CameraWorker(BaseCameraWorker):
             if packet_size:
                 try:
                     node = node_map.GevSCPSPacketSize
-                    value = max(int(node.min), min(int(node.max), int(packet_size)))
+                    if str(packet_size).strip().lower() in ("max", "auto", "optimal"):
+                        # авто: максимально поддерживаемый камерой размер (нужны jumbo-кадры)
+                        value = int(node.max)
+                    else:
+                        value = max(int(node.min), min(int(node.max), int(packet_size)))
                     node.value = value
                     log_event("camera_core.apply_settings_camera", "Размер GVSP-пакета задан", "info",
-                              {"GevSCPSPacketSize": value})
+                              {"GevSCPSPacketSize": value, "requested": str(packet_size)})
                 except Exception as e:
                     log_event("camera_core.apply_settings_camera", "Не удалось задать размер пакета",
                               "warn", {"error": str(e), "packet_size": packet_size})

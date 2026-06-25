@@ -8,6 +8,8 @@ from fastapi.staticfiles import StaticFiles
 from logger import get_events, log_event
 
 from camera_core import manager, build_rtsp_url
+import rtsp_store
+import net_tools
 
 
 def api_log(source: str, message: str, level: str = "info", payload: dict | None = None):
@@ -45,6 +47,16 @@ def camera():
 @app.get("/rtsp")
 def rtsp_page():
     return FileResponse("page/rtsp.html")
+
+
+@app.get("/multi")
+def multi_page():
+    return FileResponse("page/multi.html")
+
+
+@app.get("/network")
+def network_page():
+    return FileResponse("page/network.html")
 
 
 @app.get("/api/debug/logs")
@@ -132,6 +144,70 @@ def network_settings_advanced(serial_number: str):
     return data
 
 
+# ForceIP — задать IP камере, недоступной из-за чужой подсети (control не открыть)
+@app.get("/api/force_ip")
+def force_ip(serial_number: str, ip: str, mask: str = "", gateway: str = ""):
+    api_log("api.force_ip", "Запрошен ForceIP",
+            payload={"serial_number": serial_number, "ip": ip, "mask": mask, "gateway": gateway})
+    data = manager.force_ip(serial_number, ip, mask or None, gateway or None)
+    api_log("api.force_ip", "Ответ ForceIP", payload={"serial_number": serial_number, "result": data})
+    return data
+
+
+# ---------- мини-база сохранённых RTSP-камер ----------
+@app.get("/api/rtsp/saved")
+def rtsp_saved():
+    return {"items": rtsp_store.load()}
+
+
+@app.get("/api/rtsp/save")
+def rtsp_save(url: str, label: str = "", ip: str = "", scale: int = 100, fps: float = 0):
+    items = rtsp_store.save({"url": url, "label": label, "ip": ip, "scale": scale, "fps": fps})
+    api_log("api.rtsp.save", "RTSP-камера сохранена в базу", payload={"url": url, "count": len(items)})
+    return {"items": items}
+
+
+@app.get("/api/rtsp/remove_saved")
+def rtsp_remove_saved(url: str):
+    items = rtsp_store.remove(url)
+    api_log("api.rtsp.remove_saved", "RTSP-камера удалена из базы", payload={"url": url, "count": len(items)})
+    return {"items": items}
+
+
+# ---------- сетевая оптимизация приёма GigE (замена утилит MVS) ----------
+@app.get("/api/net/status")
+def net_status():
+    return net_tools.status()
+
+
+@app.get("/api/net/enable_jumbo")
+def net_enable_jumbo(adapter: str):
+    data = net_tools.enable_jumbo(adapter)
+    api_log("api.net.enable_jumbo", "Включение jumbo-кадров", payload={"adapter": adapter, "result": data})
+    return data
+
+
+@app.get("/api/net/enable_filter")
+def net_enable_filter(adapter: str):
+    data = net_tools.enable_filter(adapter)
+    api_log("api.net.enable_filter", "Включение фильтр-драйвера GigE", payload={"adapter": adapter, "result": data})
+    return data
+
+
+@app.get("/api/net/disable_jumbo")
+def net_disable_jumbo(adapter: str):
+    data = net_tools.disable_jumbo(adapter)
+    api_log("api.net.disable_jumbo", "Выключение jumbo-кадров", payload={"adapter": adapter, "result": data})
+    return data
+
+
+@app.get("/api/net/disable_filter")
+def net_disable_filter(adapter: str):
+    data = net_tools.disable_filter(adapter)
+    api_log("api.net.disable_filter", "Выключение фильтр-драйвера GigE", payload={"adapter": adapter, "result": data})
+    return data
+
+
 @app.get("/api/change_ip")
 def change_ip(
     serial_number: str,
@@ -163,6 +239,8 @@ def camera_stream(
     fps: float = None,
     exposure_auto: str = None,
     exposure_time: float = None,
+    pixel_format: str = None,
+    packet_size: str = None,
 ):
     worker = manager.get(serial_number)
     if interface_id:
@@ -182,6 +260,7 @@ def camera_stream(
             "fps": fps,
             "exposure_auto": exposure_auto,
             "exposure_time": exposure_time,
+            "pixel_format": pixel_format,
         },
     )
     return StreamingResponse(
@@ -193,6 +272,8 @@ def camera_stream(
             fps=fps,
             exposure_auto=exposure_auto,
             exposure_time=exposure_time,
+            pixel_format=pixel_format,
+            packet_size=packet_size,
         ),
         media_type="multipart/x-mixed-replace; boundary=frame",
     )
@@ -225,6 +306,22 @@ def metrics(serial_number: str):
 @app.get("/api/camera/data_limit")
 def data_limit(serial_number: str):
     return manager.get(serial_number).data_limit
+
+
+@app.get("/api/camera/info")
+def camera_info(serial_number: str, interface_id: str = "", device_handle: str = ""):
+    worker = manager.get(serial_number)
+    if interface_id:
+        worker.interface_id = interface_id
+    if device_handle:
+        worker.device_handle = device_handle
+    data = worker.get_info()
+    if not data:
+        api_log("api.camera.info", "Не удалось получить информацию о камере", "warn", {"serial_number": serial_number})
+        return {"error": "Не удалось получить информацию о камере"}
+    api_log("api.camera.info", "Получена информация о камере",
+            payload={"serial_number": serial_number, "count": len(data.get("items", []))})
+    return data
 
 
 @app.get("/api/camera/on_save_photo")

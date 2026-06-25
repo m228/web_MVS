@@ -53,6 +53,16 @@ const CameraApi = {
     );
   },
 
+  forceIp(serial, payload) {
+    const query = new URLSearchParams({
+      serial_number: serial,
+      ip: payload.ip ?? '',
+      mask: payload.mask ?? '',
+      gateway: payload.gateway ?? '',
+    });
+    return apiGet(`/api/force_ip?${query.toString()}`, 'Ошибка ForceIP:');
+  },
+
   getStatus() {
     return apiGet('/api/status', 'Ошибка получения статуса:');
   },
@@ -88,6 +98,14 @@ const CameraApi = {
     'Ошибка получения data_limit:'
   );
 },
+
+  getCameraInfo(serial, interfaceId, deviceHandle) {
+    const query = new URLSearchParams({ serial_number: serial });
+    if (interfaceId) query.set('interface_id', interfaceId);
+    if (deviceHandle) query.set('device_handle', deviceHandle);
+    return apiGet(`/api/camera/info?${query.toString()}`, 'Ошибка получения информации о камере:');
+  },
+
   enableAdvancedNetworkSettings(serial) {
     return apiGet(
         `/api/network_settings_advanced?serial_number=${encodeURIComponent(serial)}`,
@@ -268,6 +286,48 @@ const RtspApi = {
       { source: 'api.rtsp.status_video_photo', logRequest: false, logSuccess: false }
     );
   },
+
+  // мини-база сохранённых RTSP-камер
+  listSaved() {
+    return apiGet('/api/rtsp/saved', 'Ошибка загрузки сохранённых RTSP:',
+      { source: 'api.rtsp.saved', logRequest: false, logSuccess: false });
+  },
+
+  saveCam(entry) {
+    const query = new URLSearchParams({
+      url: entry.url || '',
+      label: entry.label || '',
+      ip: entry.ip || '',
+      scale: entry.scale ?? 100,
+      fps: entry.fps ?? 0,
+    });
+    return apiGet(`/api/rtsp/save?${query.toString()}`, 'Ошибка сохранения RTSP в базу:');
+  },
+
+  removeSaved(url) {
+    return apiGet(`/api/rtsp/remove_saved?url=${encodeURIComponent(url)}`, 'Ошибка удаления RTSP из базы:');
+  },
 };
 
 window.RtspApi = RtspApi;
+
+const NetApi = {
+  status() {
+    return apiGet('/api/net/status', 'Ошибка статуса сети:',
+      { source: 'api.net', logRequest: false, logSuccess: false });
+  },
+  enableJumbo(adapter) {
+    return apiGet(`/api/net/enable_jumbo?adapter=${encodeURIComponent(adapter)}`, 'Ошибка включения jumbo:');
+  },
+  enableFilter(adapter) {
+    return apiGet(`/api/net/enable_filter?adapter=${encodeURIComponent(adapter)}`, 'Ошибка включения фильтра:');
+  },
+  disableJumbo(adapter) {
+    return apiGet(`/api/net/disable_jumbo?adapter=${encodeURIComponent(adapter)}`, 'Ошибка выключения jumbo:');
+  },
+  disableFilter(adapter) {
+    return apiGet(`/api/net/disable_filter?adapter=${encodeURIComponent(adapter)}`, 'Ошибка выключения фильтра:');
+  },
+};
+
+window.NetApi = NetApi;

@@ -85,16 +85,10 @@ MAX_FRAME_TIMEOUTS = 20
 # терпим дольше — промышленная камера может «раскачиваться» несколько секунд
 WARMUP_MAX_TIMEOUTS = 60
 
-# размер очереди буферов приёма у acquirer'а. Дефолтные 3 буфера малы для
-# нескольких камер одновременно: под нагрузкой кадры не успевают разбираться и
-# одна из камер «зависает». Больший пул даёт продюсеру довосстановить кадр
-# через resend (как это делает MVS) — и поток не рвётся. НО для тяжёлых кадров
-# (5 МП RGB8 ≈ 15 МБ) фиксированные 24 буфера = ~360 МБ и могут вредить даже
-# одиночной камере — поэтому число буферов подбираем под размер кадра, держась
-# в бюджете памяти.
-STREAM_BUFFER_BUDGET = 96 * 1024 * 1024   # ~96 МБ на весь пул буферов
-STREAM_MIN_BUFFERS = 3
-STREAM_MAX_BUFFERS = 24
+# ПРИМЕЧАНИЕ про буферы приёма (num_buffers): НЕ переопределяем — оставляем дефолт
+# harvesters. Раздувание пула до 24 буферов (≈360 МБ для 5 МП RGB8) дестабилизировало
+# продюсер Hikrobot на одиночной камере (~5 кадров, затем сплошные -1011). Несколько
+# GigE одновременно запрещены в UI, поэтому большой пул не нужен. См. bug.txt, кейс №2.
 
 
 def _gentl_code(error_text):
@@ -890,23 +884,6 @@ class CameraWorker(BaseCameraWorker):
                 return None, None
             raise
 
-    # число буферов приёма под размер кадра: тяжёлые кадры -> меньше буферов
-    # (держим бюджет памяти STREAM_BUFFER_BUDGET), лёгкие -> больше.
-    @staticmethod
-    def _choose_num_buffers(node_map):
-        frame_bytes = 0
-        try:
-            frame_bytes = int(node_map.PayloadSize.value)
-        except Exception:
-            try:
-                frame_bytes = int(node_map.Width.value) * int(node_map.Height.value) * 3
-            except Exception:
-                frame_bytes = 0
-        if frame_bytes <= 0:
-            return STREAM_MAX_BUFFERS
-        n = STREAM_BUFFER_BUDGET // frame_bytes
-        return max(STREAM_MIN_BUFFERS, min(STREAM_MAX_BUFFERS, int(n)))
-
     def generate(self, width=None, height=None, offset_x=None, offset_y=None,
                  fps=None, exposure_auto=None, exposure_time=None, pixel_format=None,
                  packet_size=None, packet_delay=None):
@@ -965,11 +942,12 @@ class CameraWorker(BaseCameraWorker):
             self.ia = ia
             self.running = True
 
-            # число буферов приёма под размер кадра (см. STREAM_BUFFER_BUDGET)
-            try:
-                ia.num_buffers = self._choose_num_buffers(node_map)
-            except Exception as e:
-                log_event("camera_core.generate_stream", "Не удалось задать num_buffers", "warn", {"error": str(e)})
+            # num_buffers НЕ трогаем — оставляем дефолт harvesters, как было до
+            # multicam-рефактора (тогда поток одиночной камеры был стабилен).
+            # Принудительные 24 буфера (≈360 МБ на 5 МП RGB8) дестабилизировали
+            # продюсер Hikrobot: проходило ~5 кадров, дальше сплошные таймауты -1011
+            # ("хватает на 5 кадров и потом падает"). Несколько GigE одновременно мы
+            # больше не запускаем (ограничение в UI), поэтому раздувать пул не нужно.
 
             ia.start()
             log_event("camera_core.generate_stream", "Поток камеры запущен", "success",

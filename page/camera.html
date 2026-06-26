@@ -166,6 +166,9 @@
                 <label class="one-line-label">Размер пакета GVSP (max или число, нужны jumbo)</label>
                 <input type="text" name="packet_size" placeholder="max или 8164" />
 
+                <label class="one-line-label">Задержка пакета GevSCPD (от «нет кадров»: ↑ значение)</label>
+                <input type="number" name="packet_delay" min="0" step="100" placeholder="напр. 1000–5000" />
+
                 <label class="one-line-label">
                   Время экспозиции (мин: <span id="ExposureMin"></span>, макс: <span id="ExposureMax"></span>)
                 </label>

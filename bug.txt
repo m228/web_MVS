@@ -67,10 +67,22 @@
      4) Брандмауэр блокирует входящий GVSP (UDP) — кадры не доходят.
      5) Камера в чужой подсети/за маршрутизатором — потеря пакетов (см. ForceIP).
 
+   ФИКСЫ В КОДЕ (camera_core.py / app.py / фронтенд):
+     - AcquisitionMode=Continuous + TriggerMode=Off перед стартом (apply_settings).
+     - GevSCPD (межпакетная задержка) — добавлен параметр packet_delay в stream ->
+       generate -> apply_settings; есть поле в UI (camera.html, чипы multi). ГЛАВНЫЙ
+       рычаг против burst-потерь: размазывает отправку пакетов кадра во времени.
+     - _to_bgr теперь дебайерит Bayer (_BAYER_TO_BGR) и переводит RGB8 -> BGR.
+       Bayer втрое легче RGB8 по трафику -> меньше потерь.
+     - num_buffers подбирается под размер кадра (_choose_num_buffers,
+       STREAM_BUFFER_BUDGET), а не фикс. 24 (для 5МП RGB8 это было ~360 МБ).
+     - Пошаговая настройка: см. НАСТРОЙКА_КАМЕРЫ.md.
+
    Как проверить (на Server):
      - Подключить одну камеру -> поток идёт стабильно; в логе apply_settings
        нет ошибок по AcquisitionMode/TriggerMode.
-     - Если всё ещё -1011: включить jumbo на адаптере и уменьшить packet_size.
+     - Если всё ещё -1011: формат BayerRG8, включить jumbo, поднимать GevSCPD
+       (1000 -> 2000 -> 5000) пока "ОШИБКИ" не перестанут расти.
 
 
 

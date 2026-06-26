@@ -88,8 +88,13 @@ WARMUP_MAX_TIMEOUTS = 60
 # размер очереди буферов приёма у acquirer'а. Дефолтные 3 буфера малы для
 # нескольких камер одновременно: под нагрузкой кадры не успевают разбираться и
 # одна из камер «зависает». Больший пул даёт продюсеру довосстановить кадр
-# через resend (как это делает MVS) — и поток не рвётся.
-STREAM_NUM_BUFFERS = 24
+# через resend (как это делает MVS) — и поток не рвётся. НО для тяжёлых кадров
+# (5 МП RGB8 ≈ 15 МБ) фиксированные 24 буфера = ~360 МБ и могут вредить даже
+# одиночной камере — поэтому число буферов подбираем под размер кадра, держась
+# в бюджете памяти.
+STREAM_BUFFER_BUDGET = 96 * 1024 * 1024   # ~96 МБ на весь пул буферов
+STREAM_MIN_BUFFERS = 3
+STREAM_MAX_BUFFERS = 24
 
 
 def _gentl_code(error_text):
@@ -226,24 +231,59 @@ def build_rtsp_url(ip, username="admin", password="", channel=1, subtype=0, port
     return f"rtsp://{credentials}{ip}:{port}/cam/realmonitor?channel={channel}&subtype={subtype}"
 
 
-# разбор сырого буфера кадра в BGR-картинку независимо от пиксельного формата.
-# Число каналов определяем по размеру буфера: 3 (RGB/BGR), 1 (Mono/Bayer -> серое),
+# GenICam Bayer-формат -> код дебайеринга OpenCV. ВНИМАНИЕ: OpenCV именует
+# Байер-паттерн от ВТОРОГО пикселя строки/столбца, поэтому имена «перевёрнуты»
+# относительно GenICam (GenICam BayerRG соответствует OpenCV BayerBG2BGR и т.д.).
+# Если после перехода на Bayer красный и синий поменяны местами — поставьте
+# соседний код из этой таблицы (RG<->BG, GR<->GB).
+_BAYER_TO_BGR = {
+    "BayerRG": cv2.COLOR_BayerBG2BGR,
+    "BayerGB": cv2.COLOR_BayerGR2BGR,
+    "BayerGR": cv2.COLOR_BayerGB2BGR,
+    "BayerBG": cv2.COLOR_BayerRG2BGR,
+}
+
+
+def _bayer_code(pixel_format):
+    if not pixel_format:
+        return None
+    for key, code in _BAYER_TO_BGR.items():
+        if str(pixel_format).startswith(key):
+            return code
+    return None
+
+
+# разбор сырого буфера кадра в BGR-картинку c учётом пиксельного формата.
+# Число каналов определяем по размеру буфера: 3 (RGB/BGR), 1 (Mono/Bayer),
 # 4 (RGBA). Раньше код жёстко решейпил в 3 канала и падал на моно-камере
 # (ValueError: cannot reshape array of size ... into (h, w, 3)).
-def _to_bgr(data, width, height):
+def _to_bgr(data, width, height, pixel_format=None):
     arr = np.asarray(data, dtype=np.uint8).reshape(-1)
     pixels = width * height
     if pixels <= 0 or arr.size == 0 or arr.size % pixels != 0:
         return None
 
     channels = arr.size // pixels
-    if channels == 3:
-        # как и раньше: продюсер отдаёт 3 канала — кодируем как есть
-        return arr.reshape(height, width, 3)
+
     if channels == 1:
+        # 1 байт/пиксель: Bayer -> цвет (дебайеринг), иначе Mono -> серое.
+        # Bayer втрое легче RGB8 по трафику — рекомендуемый формат для GigE.
+        bayer = _bayer_code(pixel_format)
+        if bayer is not None:
+            return cv2.cvtColor(arr.reshape(height, width), bayer)
         return cv2.cvtColor(arr.reshape(height, width), cv2.COLOR_GRAY2BGR)
+
+    if channels == 3:
+        frame = arr.reshape(height, width, 3)
+        # продюсер отдаёт RGB8 -> переводим в BGR (иначе R и B перепутаны в OpenCV).
+        # Формат неизвестен -> оставляем как есть (прежнее поведение).
+        if pixel_format and str(pixel_format).upper().startswith("RGB"):
+            return cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+        return frame
+
     if channels == 4:
         return cv2.cvtColor(arr.reshape(height, width, 4), cv2.COLOR_RGBA2BGR)
+
     return None
 
 
@@ -703,7 +743,7 @@ class CameraWorker(BaseCameraWorker):
 
     def apply_settings(self, node_map, width=None, height=None, offset_x=None, offset_y=None,
                        fps=None, exposure_auto=None, exposure_time=None, pixel_format=None,
-                       packet_size=None):
+                       packet_size=None, packet_delay=None):
         limits = self.data_limit
         try:
             # Непрерывный режим без триггера. Если камера осталась в TriggerMode=On
@@ -734,6 +774,22 @@ class CameraWorker(BaseCameraWorker):
                 except Exception as e:
                     log_event("camera_core.apply_settings_camera", "Не удалось задать размер пакета",
                               "warn", {"error": str(e), "packet_size": packet_size})
+
+            # Межпакетная задержка GevSCPD: "размазывает" отправку пакетов кадра во
+            # времени, чтобы буфер сетевой карты не переполнялся всплеском данных —
+            # ГЛАВНАЯ мера против -1011 "нет кадров" (см. bug.txt, кейс №2). Значение
+            # в тиках таймера камеры; увеличивайте, пока поток не станет стабильным.
+            # Платой будет небольшое снижение макс. FPS.
+            if packet_delay is not None and str(packet_delay).strip() != "":
+                try:
+                    node = node_map.GevSCPD
+                    value = max(int(node.min), min(int(node.max), int(packet_delay)))
+                    node.value = value
+                    log_event("camera_core.apply_settings_camera", "Межпакетная задержка GevSCPD задана", "info",
+                              {"GevSCPD": value, "requested": str(packet_delay)})
+                except Exception as e:
+                    log_event("camera_core.apply_settings_camera", "Не удалось задать GevSCPD",
+                              "warn", {"error": str(e), "packet_delay": packet_delay})
 
             # пиксельный формат задаём первым: он меняет размер кадра/каналы,
             # и от него зависит корректный разбор буфера в get_frame
@@ -805,7 +861,11 @@ class CameraWorker(BaseCameraWorker):
                 data = buffer.payload.components[0].data
                 real_width = node_map.Width.value
                 real_height = node_map.Height.value
-                img = _to_bgr(data, real_width, real_height)
+                try:
+                    pixel_format = node_map.PixelFormat.value
+                except Exception:
+                    pixel_format = None
+                img = _to_bgr(data, real_width, real_height, pixel_format)
 
                 if img is None:
                     log_event("camera_core.get_frame", "Не удалось разобрать кадр (формат пикселей)", "warn",
@@ -830,9 +890,26 @@ class CameraWorker(BaseCameraWorker):
                 return None, None
             raise
 
+    # число буферов приёма под размер кадра: тяжёлые кадры -> меньше буферов
+    # (держим бюджет памяти STREAM_BUFFER_BUDGET), лёгкие -> больше.
+    @staticmethod
+    def _choose_num_buffers(node_map):
+        frame_bytes = 0
+        try:
+            frame_bytes = int(node_map.PayloadSize.value)
+        except Exception:
+            try:
+                frame_bytes = int(node_map.Width.value) * int(node_map.Height.value) * 3
+            except Exception:
+                frame_bytes = 0
+        if frame_bytes <= 0:
+            return STREAM_MAX_BUFFERS
+        n = STREAM_BUFFER_BUDGET // frame_bytes
+        return max(STREAM_MIN_BUFFERS, min(STREAM_MAX_BUFFERS, int(n)))
+
     def generate(self, width=None, height=None, offset_x=None, offset_y=None,
                  fps=None, exposure_auto=None, exposure_time=None, pixel_format=None,
-                 packet_size=None):
+                 packet_size=None, packet_delay=None):
         ia = None
         last_frame_time = None
 
@@ -878,6 +955,7 @@ class CameraWorker(BaseCameraWorker):
                 exposure_time=exposure_time,
                 pixel_format=pixel_format,
                 packet_size=packet_size,
+                packet_delay=packet_delay,
             )
 
             if not ok:
@@ -887,9 +965,9 @@ class CameraWorker(BaseCameraWorker):
             self.ia = ia
             self.running = True
 
-            # больше буферов приёма — критично для нескольких камер сразу
+            # число буферов приёма под размер кадра (см. STREAM_BUFFER_BUDGET)
             try:
-                ia.num_buffers = STREAM_NUM_BUFFERS
+                ia.num_buffers = self._choose_num_buffers(node_map)
             except Exception as e:
                 log_event("camera_core.generate_stream", "Не удалось задать num_buffers", "warn", {"error": str(e)})
 

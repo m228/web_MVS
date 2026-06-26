@@ -388,6 +388,7 @@ function initCameraPage() {
       ['exposure_time', 'exposure_time'],
       ['pixel_format', 'pixel_format'],
       ['packet_size', 'packet_size'],
+      ['packet_delay', 'packet_delay'],
     ];
 
     for (const [formName, queryName] of fields) {

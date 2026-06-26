@@ -1424,3 +1424,914 @@ body.modal-open {
   line-height: 1.5;
   overflow: auto;
 }
+
+/* ---------- логотип-ссылка на сайт ---------- */
+.brand-link {
+  display: inline-flex;
+  align-items: center;
+  text-decoration: none;
+  transition: transform 0.18s ease, opacity 0.18s ease;
+}
+
+.brand-link:hover {
+  transform: translateY(-1px) scale(1.02);
+  opacity: 0.92;
+}
+
+/* ---------- кнопка перехода на RTSP (отдельный навигационный акцент) ---------- */
+.btn-rtsp {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  text-decoration: none;
+  background: var(--accent-soft);
+  color: var(--accent-strong);
+  border-color: var(--chip-border);
+  box-shadow: var(--shadow-soft);
+}
+
+.btn-rtsp:hover {
+  background: var(--accent);
+  color: var(--accent-contrast);
+  border-color: transparent;
+}
+
+/* ---------- компактный тумблер «Показать все» в шапке списка камер ---------- */
+.show-all-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  cursor: pointer;
+  user-select: none;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--muted);
+}
+
+.show-all-toggle input {
+  position: absolute;
+  width: 0;
+  height: 0;
+  opacity: 0;
+}
+
+.show-all-toggle__switch {
+  position: relative;
+  flex: none;
+  width: 38px;
+  height: 22px;
+  border-radius: 999px;
+  background: var(--surface-muted);
+  border: 1px solid var(--border-strong);
+  transition: background 0.18s ease, border-color 0.18s ease;
+}
+
+.show-all-toggle__switch::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--surface-elevated);
+  box-shadow: 0 2px 6px rgba(15, 23, 42, 0.25);
+  transition: transform 0.18s ease;
+}
+
+.show-all-toggle input:checked + .show-all-toggle__switch {
+  background: linear-gradient(135deg, var(--accent), var(--accent-strong));
+  border-color: transparent;
+}
+
+.show-all-toggle input:checked + .show-all-toggle__switch::after {
+  transform: translateX(16px);
+  background: #ffffff;
+}
+
+.show-all-toggle input:focus-visible + .show-all-toggle__switch {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.show-all-toggle:hover .show-all-toggle__text {
+  color: var(--text);
+}
+
+.section-header__tools {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 10px;
+}
+
+/* кнопки действий на главной — сеткой 2×2, чтобы не занимали всю ширину */
+.page-hero__actions--grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(150px, 1fr));
+  gap: 10px;
+  align-items: stretch;
+}
+
+.page-hero__actions--grid > * {
+  width: 100%;
+  justify-content: center;
+}
+
+/* ---------- иконка-кнопка «информация» в строке камеры ---------- */
+.action-btn--icon {
+  min-width: 0;
+  width: 48px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--surface-elevated);
+  color: var(--muted);
+  border-color: var(--border-strong);
+  box-shadow: var(--shadow-soft);
+}
+
+.action-btn--icon:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+/* ---------- список «Информация о камере» (read-only) ---------- */
+.info-list {
+  margin: 4px 0 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.info-row {
+  display: grid;
+  grid-template-columns: minmax(120px, 40%) 1fr;
+  gap: 14px;
+  align-items: baseline;
+  margin: 0;
+  padding: 11px 4px;
+  border-bottom: 1px solid var(--border);
+}
+
+.info-row:last-child {
+  border-bottom: none;
+}
+
+.info-row__label {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--muted);
+}
+
+.info-row__value {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+  word-break: break-word;
+  font-family: "JetBrains Mono", "Fira Code", monospace;
+}
+
+.info-empty {
+  padding: 16px 4px;
+  color: var(--muted);
+  font-weight: 600;
+}
+
+/* ====================== Мультипоточность ====================== */
+
+.btn-multi {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  text-decoration: none;
+  background: linear-gradient(135deg, var(--info), var(--accent));
+  color: #ffffff;
+  border-color: transparent;
+  box-shadow: 0 14px 30px var(--info-soft);
+}
+
+.btn-multi:hover {
+  filter: brightness(1.06);
+}
+
+/* --- единое меню (фокусная камера) --- */
+.multi-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  flex-wrap: wrap;
+  padding: 16px 20px;
+  margin-bottom: 18px;
+}
+
+.multi-toolbar__focus {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 1px;
+  line-height: 1.2;
+  min-width: 96px;
+}
+
+.multi-toolbar__focus-label {
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  font-size: 11px;
+  font-weight: 800;
+  color: var(--muted);
+}
+
+.multi-toolbar__focus strong {
+  font-size: 16px;
+  color: var(--text);
+}
+
+.multi-toolbar__actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.multi-toolbar__layouts {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+}
+
+.multi-toolbar__layouts-label {
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin-right: 4px;
+}
+
+.layout-btn {
+  width: 42px;
+  height: 42px;
+  border-radius: 12px;
+  border: 1px solid var(--border-strong);
+  background: var(--surface-elevated);
+  color: var(--text);
+  font-weight: 800;
+  font-size: 16px;
+  cursor: pointer;
+  transition: transform 0.18s ease, background 0.18s ease, border-color 0.18s ease, color 0.18s ease;
+}
+
+.layout-btn:hover {
+  transform: translateY(-1px);
+}
+
+.layout-btn.is-active {
+  background: linear-gradient(135deg, var(--accent), var(--accent-strong));
+  color: var(--accent-contrast);
+  border-color: transparent;
+}
+
+/* --- рабочая область: шторка слева + сетка --- */
+.multi-workspace {
+  display: flex;
+  align-items: flex-start;
+  gap: 18px;
+}
+
+.multi-drawer {
+  width: 264px;
+  flex: none;
+  padding: 20px;
+}
+
+.multi-drawer__header {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 8px;
+}
+
+.multi-drawer__header h2 {
+  margin: 2px 0 8px;
+  font-size: 22px;
+}
+
+.multi-drawer__buttons {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.multi-drawer__buttons .btn-secondary {
+  flex: 1 1 auto;
+  min-height: 40px;
+  padding: 8px 12px;
+  min-width: 0;
+}
+
+.multi-drawer__list {
+  margin-top: 12px;
+  max-height: 560px;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.multi-drawer__hint,
+.multi-drawer__empty {
+  margin-top: 10px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.camera-chip {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid var(--border-strong);
+  background: var(--surface-elevated);
+  box-shadow: var(--shadow-soft);
+  cursor: grab;
+  user-select: none;
+  transition: transform 0.18s ease, border-color 0.18s ease, opacity 0.18s ease;
+}
+
+.camera-chip:hover {
+  transform: translateY(-1px);
+  border-color: var(--accent);
+}
+
+.camera-chip:active {
+  cursor: grabbing;
+}
+
+.camera-chip.is-dragging {
+  opacity: 0.5;
+}
+
+.camera-chip--off {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.camera-chip__serial {
+  font-weight: 800;
+  color: var(--text);
+}
+
+.camera-chip__model {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+/* --- сетка ячеек --- */
+.multi-grid {
+  flex: 1;
+  display: grid;
+  gap: 16px;
+  min-width: 0;
+}
+
+.multi-grid--1 {
+  grid-template-columns: 1fr;
+}
+
+.multi-grid--2 {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.multi-grid--4 {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.multi-tile {
+  display: flex;
+  flex-direction: column;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  overflow: hidden;
+  cursor: pointer;
+  transition: border-color 0.18s ease, box-shadow 0.18s ease;
+}
+
+.multi-tile.is-focused {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-soft);
+}
+
+.multi-tile.is-drop {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.multi-tile__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.multi-tile__serial {
+  max-width: 70%;
+  padding: 6px 8px;
+  border-radius: 10px;
+  border: 1px solid var(--border-strong);
+  background: var(--surface-elevated);
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.multi-tile__badge {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.multi-tile.is-live .multi-tile__badge {
+  color: var(--success);
+}
+
+.multi-tile__screen {
+  position: relative;
+  aspect-ratio: 4 / 3;
+  background: #05080d;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+
+.multi-tile__frame {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  display: block;
+}
+
+.multi-tile__placeholder {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  letter-spacing: 0.18em;
+  font-size: 13px;
+  font-weight: 800;
+  color: rgba(153, 170, 199, 0.55);
+}
+
+.multi-tile__status {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 18px;
+  padding: 10px 12px;
+  border-top: 1px solid var(--border);
+}
+
+.multi-tile__status span {
+  display: flex;
+  flex-direction: column;
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.multi-tile__status strong {
+  font-size: 14px;
+  text-transform: none;
+  letter-spacing: 0;
+  color: var(--text);
+}
+
+@media (max-width: 900px) {
+  .multi-workspace {
+    flex-direction: column;
+  }
+
+  .multi-drawer {
+    width: 100%;
+  }
+
+  .multi-drawer__list {
+    flex-direction: row;
+    flex-wrap: wrap;
+  }
+
+  .multi-grid--2,
+  .multi-grid--4 {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* --- карточка источника: заголовок + IP + инфо + настройки --- */
+.camera-chip {
+  padding: 0;
+  gap: 0;
+  cursor: default;
+  overflow: visible;
+}
+
+.camera-chip__main {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 10px 12px;
+  cursor: grab;
+}
+
+.camera-chip--off .camera-chip__main {
+  cursor: not-allowed;
+}
+
+.camera-chip__info {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.camera-chip__ip {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.camera-chip__info-btn {
+  flex: none;
+  width: 30px;
+  height: 30px;
+  border-radius: 8px;
+  border: 1px solid var(--border-strong);
+  background: var(--surface);
+  color: var(--muted);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: color 0.18s ease, border-color 0.18s ease;
+}
+
+.camera-chip__info-btn:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.camera-chip__settings {
+  padding: 0 12px 12px;
+  border-top: 1px solid var(--border);
+}
+
+.chip-settings__grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.chip-settings__grid label {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  font-size: 11px;
+  color: var(--muted);
+  min-width: 0; /* иначе содержимое распирает грид и ломает рамку карточки */
+}
+
+.chip-settings__grid input,
+.chip-settings__grid select {
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+  padding: 6px 8px;
+  border-radius: 8px;
+  border: 1px solid var(--border-strong);
+  background: var(--surface);
+  color: var(--text);
+  font-size: 13px;
+}
+
+.chip-settings__wide {
+  grid-column: 1 / -1;
+}
+
+.chip-settings__hint {
+  margin: 8px 0 0;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.chip-rtsp-summary {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 10px;
+  font-size: 12px;
+  color: var(--muted);
+  word-break: break-all;
+}
+
+.chip-rtsp-summary strong {
+  color: var(--text);
+}
+
+/* --- форма RTSP --- */
+.rtsp-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.rtsp-form__row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+/* --- иконочная кнопка (обновить список) --- */
+.icon-btn {
+  width: 44px;
+  height: 44px;
+  min-height: 44px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 14px;
+  border: 1px solid var(--border-strong);
+  background: var(--surface-elevated);
+  color: var(--text);
+  cursor: pointer;
+  box-shadow: var(--shadow-soft);
+  transition: transform 0.18s ease, color 0.18s ease, border-color 0.18s ease;
+}
+
+.icon-btn:hover {
+  transform: translateY(-1px);
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.icon-btn:disabled {
+  opacity: 0.6;
+  cursor: default;
+  transform: none;
+}
+
+.icon-btn.is-loading svg {
+  animation: icon-spin 0.8s linear infinite;
+}
+
+@keyframes icon-spin {
+  to { transform: rotate(360deg); }
+}
+
+/* --- значки записи фото/видео в строке состояния ячейки --- */
+.multi-tile__rec {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.rec-icon {
+  display: inline-flex;
+  align-items: center;
+  color: var(--muted);
+  opacity: 0.45;
+  transition: color 0.18s ease, opacity 0.18s ease;
+}
+
+.rec-icon.is-active {
+  color: var(--success);
+  opacity: 1;
+}
+
+.camera-chip__actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+}
+
+.camera-chip__remove {
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  border: 1px solid var(--border-strong);
+  background: var(--surface);
+  color: var(--muted);
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: color 0.18s ease, border-color 0.18s ease;
+}
+
+.camera-chip__remove:hover {
+  color: var(--danger);
+  border-color: var(--danger);
+}
+
+/* иконочная кнопка обновления списка камер (в шапке секции «Камеры») */
+.icon-btn {
+  width: 42px;
+  height: 42px;
+  border-radius: 12px;
+  border: 1px solid var(--border-strong);
+  background: var(--surface-elevated);
+  color: var(--text);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  box-shadow: var(--shadow-soft);
+  transition: transform 0.18s ease, color 0.18s ease, border-color 0.18s ease;
+}
+
+.icon-btn:hover {
+  transform: translateY(-1px);
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.icon-btn.is-loading {
+  opacity: 0.6;
+  pointer-events: none;
+}
+
+.icon-btn.is-loading svg {
+  animation: icon-spin 0.8s linear infinite;
+}
+
+@keyframes icon-spin {
+  to { transform: rotate(360deg); }
+}
+
+/* всегда резервируем место под вертикальный скроллбар, чтобы при открытии
+   модалки (body.modal-open -> overflow:hidden) страница не «съезжала» вбок */
+html {
+  scrollbar-gutter: stable;
+}
+
+/* ячейка с открытым потоком, но без новых кадров (зависла) */
+.multi-tile.is-stalled .multi-tile__badge {
+  color: var(--danger);
+}
+
+/* фильтр истории событий по уровням */
+.debug-filter {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 14px;
+}
+
+.debug-filter__btn {
+  padding: 6px 12px;
+  border-radius: 999px;
+  border: 1px solid var(--border-strong);
+  background: var(--surface-elevated);
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  cursor: pointer;
+  opacity: 0.45;
+  transition: opacity 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+}
+
+.debug-filter__btn.is-active {
+  opacity: 1;
+}
+
+.debug-filter__btn--info.is-active {
+  color: var(--info);
+  border-color: var(--info);
+}
+
+.debug-filter__btn--success.is-active {
+  color: var(--success);
+  border-color: var(--success);
+}
+
+.debug-filter__btn--warn.is-active {
+  color: var(--warning);
+  border-color: var(--warning);
+}
+
+.debug-filter__btn--error.is-active {
+  color: var(--danger);
+  border-color: var(--danger);
+}
+
+.debug-filter__btn--debug.is-active {
+  color: var(--text);
+  border-color: var(--border-strong);
+}
+
+/* ====================== Страница «Сеть камер» ====================== */
+.net-banner {
+  padding: 14px 18px;
+  border-radius: 16px;
+  border: 1px solid var(--warning);
+  background: var(--warning-soft);
+  color: var(--text);
+  font-weight: 700;
+}
+
+.net-adapters {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: 16px;
+}
+
+.net-adapter {
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  background: var(--surface-elevated);
+  padding: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.net-adapter__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.net-adapter__head h3 {
+  margin: 0;
+  font-size: 18px;
+}
+
+.net-adapter__ip {
+  font-size: 13px;
+  color: var(--muted);
+  font-family: "JetBrains Mono", "Fira Code", monospace;
+}
+
+.net-chip {
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.net-chip--ok {
+  background: var(--success-soft);
+  color: var(--success);
+}
+
+.net-chip--off {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
+.net-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+}
+
+.net-row__label {
+  font-size: 14px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.net-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex: none;
+}
+
+.net-dot--ok { background: var(--success); }
+.net-dot--off { background: var(--muted); opacity: 0.6; }
+
+.net-btn {
+  min-height: 38px;
+  padding: 8px 14px;
+}

@@ -20,14 +20,16 @@
 
           <div class="brand-slot" aria-label="Логотип компании">
             <div class="brand-slot__logo-wrap">
-              <img
-                class="brand-logo"
-                data-theme-logo
-                data-logo-light="/static/icon/Logo_Black.png"
-                data-logo-dark="/static/icon/Logo_White.png"
-                src="/static/icon/Logo_Black.png"
-                alt="MA logo"
-              />
+              <a class="brand-link" href="https://max-automation.ru/" target="_blank" rel="noopener" title="Перейти на сайт Maximum Automation">
+                <img
+                  class="brand-logo"
+                  data-theme-logo
+                  data-logo-light="/static/icon/Logo_Black.png"
+                  data-logo-dark="/static/icon/Logo_White.png"
+                  src="/static/icon/Logo_Black.png"
+                  alt="MA logo"
+                />
+              </a>
             </div>
           </div>
         </header>
@@ -153,6 +155,16 @@
                     <option value="Continuous">Continuous</option>
                   </select>
                 </label>
+
+                <label>
+                  Формат пикселей (цвет)
+                  <select name="pixel_format">
+                    <option value="">— как есть —</option>
+                  </select>
+                </label>
+
+                <label class="one-line-label">Размер пакета GVSP (max или число, нужны jumbo)</label>
+                <input type="text" name="packet_size" placeholder="max или 8164" />
 
                 <label class="one-line-label">
                   Время экспозиции (мин: <span id="ExposureMin"></span>, макс: <span id="ExposureMax"></span>)

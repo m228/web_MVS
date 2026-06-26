@@ -76,7 +76,7 @@
               </button>
 
               <button type="button" id="logsBtn" class="toolbar-btn toolbar-btn--neutral toolbar-btn--logs" title="Открыть журнал">
-                логи
+                Логи
                 <span class="log-counter" id="logCounter">0</span>
               </button>
             </div>
@@ -179,10 +179,20 @@
               Интервал (сек)
               <input class="photo-interval-input" type="number" name="photo_interval" value="5" min="1" />
             </label>
+            <p class="record-path" id="photoSavePath" hidden></p>
             <div class="record-actions">
               <button type="button" id="photoOn" class="btn-primary">Включить</button>
               <button type="button" id="photoOff" class="btn-secondary">Выключить</button>
             </div>
+            <details class="record-help">
+              <summary>Почему фото может не записываться?</summary>
+              <ul>
+                <li>Камера не подключена или поток не запущен — нет кадров для сохранения.</li>
+                <li>RTSP недоступен: неверный URL/логин/пароль или камера не отвечает по сети.</li>
+                <li>Нет прав на запись или нет места в папке сохранения.</li>
+                <li>Поток рвётся из-за слабой сети — снизьте масштаб/FPS.</li>
+              </ul>
+            </details>
           </div>
         </div>
 
@@ -200,10 +210,20 @@
               </div>
             </label>
 
+            <p class="record-path" id="videoSavePath" hidden></p>
             <div class="record-actions">
               <button type="button" id="videoOn" class="btn-primary">Начать запись</button>
               <button type="button" id="videoOff" class="btn-secondary">Остановить запись</button>
             </div>
+            <details class="record-help">
+              <summary>Почему видео может не записываться?</summary>
+              <ul>
+                <li>Камера не подключена или поток не запущен — нет кадров для записи.</li>
+                <li>RTSP недоступен: неверный URL/логин/пароль или камера не отвечает по сети.</li>
+                <li>Нет прав на запись или нет места в папке сохранения.</li>
+                <li>Поток рвётся из-за слабой сети — снизьте масштаб/FPS.</li>
+              </ul>
+            </details>
           </div>
         </div>
       </div>

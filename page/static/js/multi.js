@@ -540,6 +540,27 @@ function startStream(index) {
   const source = getSource(tile.serial);
   if (!source) return;
 
+  // Одновременно стабильно работает только одна GigE-камера (Hikrobot): продюсер/
+  // полоса не тянут два потока сразу — второй стартует, но кадров нет. Если уже
+  // есть активная GigE-ячейка, спрашиваем подтверждение и закрываем её.
+  if (source.kind === 'gige') {
+    const busyIndex = state.tiles.findIndex((t, i) =>
+      i !== index && t.connected && t.kind === 'gige');
+    if (busyIndex !== -1) {
+      askReplaceGige(busyIndex, index);
+      return;
+    }
+  }
+
+  doStartStream(index);
+}
+
+function doStartStream(index) {
+  const tile = state.tiles[index];
+  if (!tile || !tile.serial || tile.connected) return;
+  const source = getSource(tile.serial);
+  if (!source) return;
+
   const el = getTileEl(index);
   const frame = el?.querySelector('[data-tile-frame]');
   if (!frame) return;
@@ -553,6 +574,38 @@ function startStream(index) {
   renderTile(index);
   updateToolbar();
   log.success('Старт потока в ячейке', { tile: index, serial: tile.serial, kind: tile.kind });
+}
+
+// подтверждение замены активной GigE-камеры на другую
+let pendingGigeStart = null;
+
+function askReplaceGige(busyIndex, newIndex) {
+  const busyTile = state.tiles[busyIndex] || {};
+  const newTile = state.tiles[newIndex] || {};
+  const busySource = busyTile.serial ? getSource(busyTile.serial) : null;
+  const newSource = newTile.serial ? getSource(newTile.serial) : null;
+
+  const busyEl = document.getElementById('multiGigeReplaceBusy');
+  const newEl = document.getElementById('multiGigeReplaceNew');
+  if (busyEl) busyEl.textContent = busySource ? busySource.label : '—';
+  if (newEl) newEl.textContent = newSource ? newSource.label : '—';
+
+  pendingGigeStart = { busyIndex, newIndex };
+  openModal('multiGigeReplaceModal');
+}
+
+async function confirmReplaceGige() {
+  if (!pendingGigeStart) return;
+  const { busyIndex, newIndex } = pendingGigeStart;
+  pendingGigeStart = null;
+  closeModal('multiGigeReplaceModal');
+  await disconnectTile(busyIndex);
+  doStartStream(newIndex);
+}
+
+function cancelReplaceGige() {
+  pendingGigeStart = null;
+  closeModal('multiGigeReplaceModal');
 }
 
 async function stopStream(serial, kind) {
@@ -675,12 +728,26 @@ function focusedSource() {
   return tile.serial ? getSource(tile.serial) : null;
 }
 
+// показать путь сохранения (папка + шаблон имени файла) из ответа сервера
+function showSavePath(elementId, data) {
+  const el = document.getElementById(elementId);
+  if (!el) return;
+  if (data && data.save_dir) {
+    el.textContent = `Сохранение в: ${data.save_dir}\\${data.file_pattern || ''}`;
+    el.hidden = false;
+  } else {
+    el.hidden = true;
+    el.textContent = '';
+  }
+}
+
 // --- фото ---
 function openPhotoModal() {
   const source = focusedSource();
   if (!source) return;
   const serialEl = document.getElementById('multiPhotoSerial');
   if (serialEl) serialEl.textContent = source.label;
+  showSavePath('multiPhotoSavePath', null);
   openModal('multiPhotoModal');
 }
 
@@ -691,12 +758,16 @@ async function applyPhoto(on) {
   const api = apiFor(tile.kind);
   if (on) {
     const interval = Number(document.getElementById('multiPhotoInterval')?.value) || 5;
-    await api.startPhotoSaving(source.serial, interval);
+    const data = await api.startPhotoSaving(source.serial, interval);
     tile.photo = true;
-  } else {
-    await api.stopPhotoSaving(source.serial);
-    tile.photo = false;
+    renderTile(state.focused);
+    updateToolbar();
+    // оставляем модалку открытой, чтобы был виден путь сохранения
+    showSavePath('multiPhotoSavePath', data);
+    return;
   }
+  await api.stopPhotoSaving(source.serial);
+  tile.photo = false;
   renderTile(state.focused);
   updateToolbar();
   closeModal('multiPhotoModal');
@@ -708,6 +779,7 @@ function openVideoModal() {
   if (!source) return;
   const serialEl = document.getElementById('multiVideoSerial');
   if (serialEl) serialEl.textContent = source.label;
+  showSavePath('multiVideoSavePath', null);
   openModal('multiVideoModal');
 }
 
@@ -720,12 +792,16 @@ async function applyVideo(on) {
     const amount = Number(document.getElementById('multiVideoDuration')?.value) || 10;
     const unit = document.getElementById('multiVideoUnit')?.value || 'minutes';
     const seconds = unit === 'minutes' ? amount * 60 : amount;
-    await api.startVideoSaving(source.serial, seconds);
+    const data = await api.startVideoSaving(source.serial, seconds);
     tile.video = true;
-  } else {
-    await api.stopVideoSaving(source.serial);
-    tile.video = false;
+    renderTile(state.focused);
+    updateToolbar();
+    // оставляем модалку открытой, чтобы был виден путь сохранения
+    showSavePath('multiVideoSavePath', data);
+    return;
   }
+  await api.stopVideoSaving(source.serial);
+  tile.video = false;
   renderTile(state.focused);
   updateToolbar();
   closeModal('multiVideoModal');
@@ -875,6 +951,10 @@ function initModals() {
 
   document.getElementById('multiInfoClose')?.addEventListener('click', () => closeModal('multiInfoModal'));
   document.getElementById('multiInfoCloseFooter')?.addEventListener('click', () => closeModal('multiInfoModal'));
+
+  document.getElementById('multiGigeReplaceClose')?.addEventListener('click', cancelReplaceGige);
+  document.getElementById('multiGigeReplaceCancel')?.addEventListener('click', cancelReplaceGige);
+  document.getElementById('multiGigeReplaceAccept')?.addEventListener('click', confirmReplaceGige);
 
   document.getElementById('multiAddRtspBtn')?.addEventListener('click', openRtspModal);
   document.getElementById('multiRtspClose')?.addEventListener('click', () => closeModal('multiRtspModal'));

@@ -47,7 +47,7 @@
           <div class="page-hero__actions">
             <a href="/" class="btn btn-secondary">К списку камер</a>
             <button type="button" id="logsBtn" class="btn toolbar-btn--logs" title="Открыть журнал">
-              логи
+              Логи
               <span class="log-counter" id="logCounter">0</span>
             </button>
           </div>
@@ -133,6 +133,17 @@
           Интервал (сек)
           <input type="number" id="multiPhotoInterval" value="5" min="1" />
         </label>
+        <p class="record-path" id="multiPhotoSavePath" hidden></p>
+        <details class="record-help">
+          <summary>Почему фото может не записываться?</summary>
+          <ul>
+            <li>Камера не подключена или поток не запущен — нет кадров для сохранения.</li>
+            <li>Нет кадров с GigE: большой размер пакета без jumbo-кадров → потеря пакетов (включите jumbo на странице «Сеть камер»).</li>
+            <li>Камера занята другим приложением (MVS) — закройте его.</li>
+            <li>Нет прав на запись или нет места в папке сохранения.</li>
+            <li>Одновременно стабильно работает только одна GigE-камера.</li>
+          </ul>
+        </details>
       </div>
       <div class="network-modal__footer">
         <button type="button" class="btn-secondary" id="multiPhotoOff">Выключить</button>
@@ -162,10 +173,47 @@
             </select>
           </div>
         </label>
+        <p class="record-path" id="multiVideoSavePath" hidden></p>
+        <details class="record-help">
+          <summary>Почему видео может не записываться?</summary>
+          <ul>
+            <li>Камера не подключена или поток не запущен — нет кадров для записи.</li>
+            <li>Нет кадров с GigE: большой размер пакета без jumbo-кадров → потеря пакетов (включите jumbo на странице «Сеть камер»).</li>
+            <li>Камера занята другим приложением (MVS) — закройте его.</li>
+            <li>Нет прав на запись или нет места в папке сохранения.</li>
+            <li>Одновременно стабильно работает только одна GigE-камера.</li>
+          </ul>
+        </details>
       </div>
       <div class="network-modal__footer">
         <button type="button" class="btn-secondary" id="multiVideoOff">Остановить</button>
         <button type="button" class="btn-primary" id="multiVideoOn">Начать запись</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- модалка: подтверждение замены активной GigE-камеры -->
+  <div class="modal-backdrop modal-backdrop--small" id="multiGigeReplaceModal" aria-hidden="true">
+    <div class="confirm-modal__card" role="dialog" aria-modal="true">
+      <div class="network-modal__header">
+        <div class="network-modal__title-group">
+          <h2>Уже запущена GigE-камера</h2>
+        </div>
+        <button type="button" class="modal-close-btn" id="multiGigeReplaceClose" aria-label="Закрыть">×</button>
+      </div>
+      <div class="confirm-modal__body">
+        <p>
+          Одновременно стабильно работает только одна GigE-камера (Hikrobot).
+          Сейчас активна камера <strong id="multiGigeReplaceBusy">-</strong>.
+        </p>
+        <div class="confirm-modal__note">
+          Чтобы запустить <strong id="multiGigeReplaceNew">-</strong>, текущая камера будет
+          остановлена. Продолжить?
+        </div>
+      </div>
+      <div class="network-modal__footer">
+        <button type="button" class="btn-secondary" id="multiGigeReplaceCancel">Отмена</button>
+        <button type="button" class="btn-primary" id="multiGigeReplaceAccept">Закрыть и запустить</button>
       </div>
     </div>
   </div>

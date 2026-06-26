@@ -259,12 +259,16 @@ class BaseCameraWorker:
         self.save_photo = False
         self.photo_interval = None
         self.last_photo = None
+        # последний сохранённый файл фото (для показа во фронтенде)
+        self.last_photo_path = None
 
         # 0 нет автосохранения видео / 1 идёт / 2 завершение
         self.save_video = 0
         self.video_duration = None
         self.video_start = None
         self.video_writer = None
+        # последний файл записи видео (для показа во фронтенде)
+        self.last_video_path = None
 
         self.metrics = {
             "fps": 0.0,
@@ -289,14 +293,34 @@ class BaseCameraWorker:
         log_event("camera_core.close_stream", "Запрошена мягкая остановка потока")
         return {"status": "stopping"}
 
+    # ---------- пути сохранения ----------
+
+    # безопасное имя камеры для имён файлов (серийник без спецсимволов)
+    def _camera_tag(self):
+        tag = re.sub(r"[^A-Za-z0-9_.-]+", "_", str(self.serial_number or "camera")).strip("_")
+        return tag or "camera"
+
+    # папка и шаблон имени файлов фото — показываем во фронтенде
+    def photo_save_info(self):
+        folder = Path("dataset").resolve()
+        return {"dir": str(folder), "pattern": f"{self._camera_tag()}_photo_<дата>.jpg"}
+
+    # папка и шаблон имени файлов видео — показываем во фронтенде
+    def video_save_info(self):
+        folder = Path("Videos").resolve()
+        return {"dir": str(folder), "pattern": f"{self._camera_tag()}_video_<дата>.avi"}
+
     # ---------- фото ----------
 
     def on_photo(self, interval):
         self.save_photo = True
         self.photo_interval = interval
 
-        log_event("camera_core.on_save", "Вкл. автосохранение фото c интервалом", "info", {"interval": interval})
-        return {"status": "ok", "photo_enabled": True, "interval": self.photo_interval}
+        info = self.photo_save_info()
+        log_event("camera_core.on_save", "Вкл. автосохранение фото c интервалом", "info",
+                  {"interval": interval, "save_dir": info["dir"], "file_pattern": info["pattern"]})
+        return {"status": "ok", "photo_enabled": True, "interval": self.photo_interval,
+                "save_dir": info["dir"], "file_pattern": info["pattern"]}
 
     def off_photo(self):
         self.save_photo = False
@@ -322,13 +346,15 @@ class BaseCameraWorker:
 
         return False
 
-    @staticmethod
-    def write_photo(img):
+    # имя файла: <камера>_photo_<дата-время>.jpg в папке dataset/
+    def write_photo(self, img):
         folder = Path("dataset")
         folder.mkdir(parents=True, exist_ok=True)
-        filename = f"frame_{datetime.now().strftime('%d_%m_%H_%M_%S')}.jpg"
+        filename = f"{self._camera_tag()}_photo_{datetime.now().strftime('%d_%m_%Y_%H_%M_%S')}.jpg"
         path = os.path.join(folder, filename)
         cv2.imwrite(path, img)
+        self.last_photo_path = path
+        return path
 
     # ---------- видео ----------
 
@@ -341,8 +367,11 @@ class BaseCameraWorker:
         if self.save_video == 0:
             self.save_video = 1
             self.video_start = time.time()
-        log_event("camera_core.on_video", "Вкл. автосохранение видео с длительностью: ", "info", {"video_duration": self.video_duration})
-        return {"status": "ok", "video_enabled": "1"}
+        info = self.video_save_info()
+        log_event("camera_core.on_video", "Вкл. автосохранение видео с длительностью: ", "info",
+                  {"video_duration": self.video_duration, "save_dir": info["dir"], "file_pattern": info["pattern"]})
+        return {"status": "ok", "video_enabled": "1",
+                "save_dir": info["dir"], "file_pattern": info["pattern"]}
 
     def off_video(self):
         if self.save_video == 1:
@@ -359,11 +388,12 @@ class BaseCameraWorker:
         if self.video_writer is None:
             folder = Path("Videos")
             folder.mkdir(parents=True, exist_ok=True)
-            filename = f"Video{datetime.now().strftime('%d_%m_%H_%M_%S')}.avi"
+            filename = f"{self._camera_tag()}_video_{datetime.now().strftime('%d_%m_%Y_%H_%M_%S')}.avi"
             path = os.path.join(folder, filename)
             fourcc = cv2.VideoWriter_fourcc(*"MJPG")
             writer_fps = fps if fps and fps > 0 else DEFAULT_VIDEO_FPS
             self.video_writer = cv2.VideoWriter(path, fourcc, writer_fps, (img.shape[1], img.shape[0]))
+            self.last_video_path = path
 
         self.video_writer.write(img)
 
@@ -676,6 +706,16 @@ class CameraWorker(BaseCameraWorker):
                        packet_size=None):
         limits = self.data_limit
         try:
+            # Непрерывный режим без триггера. Если камера осталась в TriggerMode=On
+            # (напр. после работы в MVS), acquisition стартует, но кадры НЕ приходят —
+            # ia.fetch() ловит таймаут (-1011) и поток "запускается, но нет кадров".
+            # Принудительно ставим Continuous + TriggerMode Off перед стартом.
+            for node_name, node_value in (("AcquisitionMode", "Continuous"), ("TriggerMode", "Off")):
+                try:
+                    getattr(node_map, node_name).value = node_value
+                except Exception:
+                    pass
+
             # Размер GVSP-пакета: главный рычаг для нескольких GigE-камер сразу.
             # MVS сам подбирает оптимальный (jumbo) размер — крупные пакеты резко
             # снижают их количество на кадр, CPU и потери. Тут задаём вручную

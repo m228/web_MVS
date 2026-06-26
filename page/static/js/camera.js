@@ -657,6 +657,19 @@ function initCameraPage() {
     videoPopup.toggle();
   }
 
+  // показать путь сохранения (папка + шаблон имени файла) из ответа сервера
+  function showSavePath(elementId, data) {
+    const el = document.getElementById(elementId);
+    if (!el) return;
+    if (data && data.save_dir) {
+      el.textContent = `Сохранение в: ${data.save_dir}\\${data.file_pattern || ''}`;
+      el.hidden = false;
+    } else {
+      el.hidden = true;
+      el.textContent = '';
+    }
+  }
+
   async function startPhotoSaving() {
     if (!isConnected) return;
 
@@ -675,6 +688,7 @@ function initCameraPage() {
     }
 
     log.success('Сохранение фото включено сервером', data);
+    showSavePath('photoSavePath', data);
     await syncVideoPhotoStatus();
   }
 
@@ -688,6 +702,7 @@ function initCameraPage() {
     }
 
     log.success('Сохранение фото выключено сервером', data);
+    showSavePath('photoSavePath', null);
     await syncVideoPhotoStatus();
   }
 
@@ -717,6 +732,7 @@ function initCameraPage() {
     }
 
     log.success('Запись видео включена сервером', data);
+    showSavePath('videoSavePath', data);
     await syncVideoPhotoStatus();
   }
 
@@ -732,6 +748,7 @@ function initCameraPage() {
     }
 
     log.success('Запись видео выключена сервером', data);
+    showSavePath('videoSavePath', null);
     await syncVideoPhotoStatus();
   }
 

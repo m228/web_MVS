@@ -69,12 +69,11 @@ async function loadCameras() {
     }
   }
 
-  // IP запрашиваем по одному на серийник (как на главной — без гонки за control)
-  for (const serial of serials) {
-    const response = await CameraApi.getIp(serial);
-    const cam = gige.find((c) => c.serial === serial);
-    if (cam && response?.ip) cam.ip = response.ip;
-  }
+  // НЕ запрашиваем IP по каждой камере: это открывало control-канал ко ВСЕМ
+  // камерам сразу (multicam-логика), что дестабилизировало GenTL-продюсер Hikrobot
+  // и ломало последующий стрим (-1011 "нет кадров"). IP не критичен для multi —
+  // его можно посмотреть на главной/в инфо о камере.
+  void serials;
 
   // переносим уже введённые пользователем настройки GigE между обновлениями
   const prevGige = state.cameras.filter((c) => c.kind === 'gige');

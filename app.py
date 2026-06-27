@@ -353,7 +353,18 @@ def off_save_video(serial_number: str):
 @app.get("/api/camera/status_video_photo")
 def status_video_photo(serial_number: str):
     worker = manager.get(serial_number)
-    return {"video": worker.save_video, "photo": worker.save_photo}
+    return {
+        "video": worker.save_video,
+        "photo": worker.save_photo,
+        "photo_count": worker.photo_saved_count,
+        "video_elapsed": worker.video_elapsed(),
+    }
+
+
+# текущий конфиг запуска камеры (фактические значения с камеры) — для значка «инфо»
+@app.get("/api/camera/current_config")
+def camera_current_config(serial_number: str):
+    return manager.get(serial_number).current_config or {}
 
 
 # ---------- RTSP-камера (просмотр / запись / снимки) ----------

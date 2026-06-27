@@ -191,6 +191,14 @@ const CameraApi = {
         logSuccess: false,
       }
     );
+  },
+
+  getCurrentConfig(serial) {
+    return apiGet(
+      `/api/camera/current_config?serial_number=${encodeURIComponent(serial)}`,
+      'Ошибка получения текущего конфига камеры:',
+      { source: 'api.current_config', logRequest: false, logSuccess: false }
+    );
   }
 };
 

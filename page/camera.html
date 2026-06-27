@@ -96,6 +96,8 @@
               <span>Скорость потока<strong id="metricBandwidth">0.0 Mbps</strong></span>
               <span>Разрешение<strong id="metricResolution">0 × 0</strong></span>
               <span>Ошибки<strong id="metricErrors">0</strong></span>
+              <span>Сохранено фото<strong id="metricPhotoCount">0</strong></span>
+              <span>Запись видео<strong id="metricVideoTime">—</strong></span>
             </div>
 
             <section class="card debug-console hidden" id="debugConsoleSection" aria-live="polite">
@@ -125,6 +127,9 @@
                   <p class="section-subtitle">Параметры устройства</p>
                   <h2>Параметры камеры</h2>
                 </div>
+                <button type="button" id="configInfoBtn" class="action-btn action-btn--icon" title="Текущий конфиг запуска камеры" aria-label="Текущий конфиг запуска камеры">
+                  <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="16" x2="12" y2="12"></line><line x1="12" y1="8" x2="12.01" y2="8"></line></svg>
+                </button>
               </div>
 
               <form id="settingsForm">
@@ -170,6 +175,13 @@
               </form>
             </div>
           </aside>
+        </div>
+
+        <div class="card photo-card-popup" id="configCard">
+          <h2>Текущий конфиг камеры</h2>
+          <dl class="info-list" id="configList"></dl>
+          <p class="record-path" id="configEmpty" hidden>Камера ещё не запускалась — конфиг появится после первого старта потока.</p>
+          <p class="config-hint">Это значения, с которыми камера запущена сейчас. Сравните с полями слева и подвиньте нужное.</p>
         </div>
 
         <div class="card photo-card-popup" id="photoCard">

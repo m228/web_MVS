@@ -295,6 +295,8 @@ class BaseCameraWorker:
         self.last_photo = None
         # последний сохранённый файл фото (для показа во фронтенде)
         self.last_photo_path = None
+        # сколько фото сохранено за текущую сессию автосохранения
+        self.photo_saved_count = 0
 
         # 0 нет автосохранения видео / 1 идёт / 2 завершение
         self.save_video = 0
@@ -334,21 +336,35 @@ class BaseCameraWorker:
         tag = re.sub(r"[^A-Za-z0-9_.-]+", "_", str(self.serial_number or "camera")).strip("_")
         return tag or "camera"
 
+    # папка сохранения фото: dataset/<серийник> (своя на каждую камеру)
+    def photo_dir(self):
+        return Path("dataset") / self._camera_tag()
+
+    # папка сохранения видео: Videos/<серийник>
+    def video_dir(self):
+        return Path("Videos") / self._camera_tag()
+
     # папка и шаблон имени файлов фото — показываем во фронтенде
     def photo_save_info(self):
-        folder = Path("dataset").resolve()
-        return {"dir": str(folder), "pattern": f"{self._camera_tag()}_photo_<дата>.jpg"}
+        return {"dir": str(self.photo_dir().resolve()), "pattern": "frame_<дата>.jpg"}
 
     # папка и шаблон имени файлов видео — показываем во фронтенде
     def video_save_info(self):
-        folder = Path("Videos").resolve()
-        return {"dir": str(folder), "pattern": f"{self._camera_tag()}_video_<дата>.avi"}
+        return {"dir": str(self.video_dir().resolve()), "pattern": "video_<дата>.avi"}
 
     # ---------- фото ----------
+
+    # длительность текущей записи видео в секундах (0 если не пишем)
+    def video_elapsed(self):
+        if self.save_video == 1 and self.video_start:
+            return int(time.time() - self.video_start)
+        return 0
 
     def on_photo(self, interval):
         self.save_photo = True
         self.photo_interval = interval
+        # новая сессия автосохранения — обнуляем счётчик
+        self.photo_saved_count = 0
 
         info = self.photo_save_info()
         log_event("camera_core.on_save", "Вкл. автосохранение фото c интервалом", "info",
@@ -380,14 +396,15 @@ class BaseCameraWorker:
 
         return False
 
-    # имя файла: <камера>_photo_<дата-время>.jpg в папке dataset/
+    # путь: dataset/<серийник>/frame_<дата-время>.jpg
     def write_photo(self, img):
-        folder = Path("dataset")
+        folder = self.photo_dir()
         folder.mkdir(parents=True, exist_ok=True)
-        filename = f"{self._camera_tag()}_photo_{datetime.now().strftime('%d_%m_%Y_%H_%M_%S')}.jpg"
+        filename = f"frame_{datetime.now().strftime('%d_%m_%Y_%H_%M_%S')}.jpg"
         path = os.path.join(folder, filename)
         cv2.imwrite(path, img)
         self.last_photo_path = path
+        self.photo_saved_count += 1
         return path
 
     # ---------- видео ----------
@@ -420,9 +437,9 @@ class BaseCameraWorker:
 
     def _write_video(self, img, fps):
         if self.video_writer is None:
-            folder = Path("Videos")
+            folder = self.video_dir()
             folder.mkdir(parents=True, exist_ok=True)
-            filename = f"{self._camera_tag()}_video_{datetime.now().strftime('%d_%m_%Y_%H_%M_%S')}.avi"
+            filename = f"video_{datetime.now().strftime('%d_%m_%Y_%H_%M_%S')}.avi"
             path = os.path.join(folder, filename)
             fourcc = cv2.VideoWriter_fourcc(*"MJPG")
             writer_fps = fps if fps and fps > 0 else DEFAULT_VIDEO_FPS
@@ -472,6 +489,9 @@ class CameraWorker(BaseCameraWorker):
         self.ia = None
         # лимиты/текущие настройки камеры (заполняется при подключении)
         self.data_limit = None
+        # фактический конфиг, с которым камера запущена в последний раз
+        # (читается с камеры после применения настроек) — для значка «инфо»
+        self.current_config = None
         self.advanced_settings = False
 
         # GenTL ID сетевого интерфейса (вспомогательный фильтр)
@@ -825,6 +845,29 @@ class CameraWorker(BaseCameraWorker):
                 return None, None
             raise
 
+    # фактические значения, прочитанные с камеры (для значка «инфо»).
+    # Отсутствующие узлы тихо пропускаем.
+    @staticmethod
+    def _read_current_config(node_map):
+        def rv(name, cast=None):
+            try:
+                value = getattr(node_map, name).value
+                return cast(value) if cast is not None else value
+            except Exception:
+                return None
+
+        config = {
+            "width": rv("Width", int),
+            "height": rv("Height", int),
+            "offset_x": rv("OffsetX", int),
+            "offset_y": rv("OffsetY", int),
+            "exposure_auto": rv("ExposureAuto"),
+            "exposure_time": rv("ExposureTime", lambda v: int(float(v))),
+            "pixel_format": rv("PixelFormat"),
+            "fps": rv("AcquisitionFrameRate", lambda v: round(float(v), 2)),
+        }
+        return {k: v for k, v in config.items() if v is not None}
+
     def generate(self, width=None, height=None, offset_x=None, offset_y=None,
                  fps=None, exposure_auto=None, exposure_time=None, pixel_format=None):
         ia = None
@@ -876,6 +919,10 @@ class CameraWorker(BaseCameraWorker):
             if not ok:
                 log_event("camera_core.generate_stream", "Ошибка применения настроек камеры", "warn", {"error": str(err)})
                 return
+
+            # запоминаем фактический конфиг (читаем с камеры ПОСЛЕ применения,
+            # пока держим node_map) — для значка «инфо» на странице камеры
+            self.current_config = self._read_current_config(node_map)
 
             self.ia = ia
             self.running = True

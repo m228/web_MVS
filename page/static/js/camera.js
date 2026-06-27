@@ -9,6 +9,13 @@ function initCameraPage() {
   const metricBandwidth = document.getElementById('metricBandwidth');
   const metricResolution = document.getElementById('metricResolution');
   const metricErrors = document.getElementById('metricErrors');
+  const metricPhotoCount = document.getElementById('metricPhotoCount');
+  const metricVideoTime = document.getElementById('metricVideoTime');
+
+  const configCard = document.getElementById('configCard');
+  const configInfoBtn = document.getElementById('configInfoBtn');
+  const configList = document.getElementById('configList');
+  const configEmpty = document.getElementById('configEmpty');
 
   const params = new URLSearchParams(window.location.search);
   const serialNumber = params.get('serial_number');
@@ -65,6 +72,7 @@ function initCameraPage() {
 
   const photoPopup = UIHelpers.createPopupController(photoCard, buttons.photo);
   const videoPopup = UIHelpers.createPopupController(videoCard, buttons.video);
+  const configPopup = UIHelpers.createPopupController(configCard, configInfoBtn);
 
   serialElement.textContent = serialNumber ? serialNumber : 'не выбран';
   if (interfaceId && serialElement.parentElement) {
@@ -224,6 +232,8 @@ function initCameraPage() {
       height: 0,
       errors: 0,
     });
+    if (metricPhotoCount) metricPhotoCount.textContent = '0';
+    if (metricVideoTime) metricVideoTime.textContent = '—';
   }
 
   function stopMetricsPolling() {
@@ -261,6 +271,7 @@ function initCameraPage() {
 
     photoPopup.close();
     videoPopup.close();
+    configPopup.close();
     removeActiveSlider();
 
     updateToolbarState();
@@ -478,6 +489,23 @@ function initCameraPage() {
       video: Number(data.video) === 1,
       photo: !!data.photo,
     });
+
+    if (metricPhotoCount) metricPhotoCount.textContent = data.photo_count ?? 0;
+    if (metricVideoTime) {
+      metricVideoTime.textContent = Number(data.video) === 1
+        ? formatDuration(data.video_elapsed)
+        : '—';
+    }
+  }
+
+  // секунды -> «M:SS» (или «H:MM:SS» если больше часа)
+  function formatDuration(totalSeconds) {
+    const s = Math.max(0, Math.floor(Number(totalSeconds) || 0));
+    const hh = Math.floor(s / 3600);
+    const mm = Math.floor((s % 3600) / 60);
+    const ss = s % 60;
+    const pad = (n) => String(n).padStart(2, '0');
+    return hh > 0 ? `${hh}:${pad(mm)}:${pad(ss)}` : `${mm}:${pad(ss)}`;
   }
 
   function startStream() {
@@ -656,6 +684,43 @@ function initCameraPage() {
     videoPopup.toggle();
   }
 
+  // подписи и порядок строк текущего конфига
+  const CONFIG_ROWS = [
+    ['width', 'Ширина'],
+    ['height', 'Высота'],
+    ['offset_x', 'Смещение X'],
+    ['offset_y', 'Смещение Y'],
+    ['fps', 'FPS'],
+    ['exposure_auto', 'Автоэкспозиция'],
+    ['exposure_time', 'Время экспозиции, мкс'],
+    ['pixel_format', 'Формат пикселей'],
+  ];
+
+  async function renderCurrentConfig() {
+    if (!configList) return;
+    const cfg = await CameraApi.getCurrentConfig(serialNumber);
+    const hasData = cfg && Object.keys(cfg).length > 0;
+
+    if (configEmpty) configEmpty.hidden = hasData;
+    configList.innerHTML = '';
+    if (!hasData) return;
+
+    CONFIG_ROWS.forEach(([key, label]) => {
+      if (cfg[key] === undefined || cfg[key] === null) return;
+      const row = document.createElement('div');
+      row.className = 'info-row';
+      row.innerHTML =
+        `<dt class="info-row__label">${label}</dt>` +
+        `<dd class="info-row__value">${String(cfg[key])}</dd>`;
+      configList.appendChild(row);
+    });
+  }
+
+  async function openConfigPopup() {
+    configPopup.toggle();
+    if (configPopup.isOpen()) await renderCurrentConfig();
+  }
+
   // показать путь сохранения (папка + шаблон имени файла) из ответа сервера
   function showSavePath(elementId, data) {
     const el = document.getElementById(elementId);
@@ -819,6 +884,16 @@ function initCameraPage() {
   if (videoOnBtn) videoOnBtn.addEventListener('click', startVideoSaving);
   if (videoOffBtn) videoOffBtn.addEventListener('click', stopVideoSaving);
 
+  if (configInfoBtn) {
+    configInfoBtn.addEventListener('click', (event) => {
+      event.stopPropagation();
+      openConfigPopup();
+    });
+  }
+  if (configCard) {
+    configCard.addEventListener('click', (event) => event.stopPropagation());
+  }
+
   if (photoCard) {
     photoCard.addEventListener('click', (event) => event.stopPropagation());
   }
@@ -858,11 +933,18 @@ function initCameraPage() {
     if (!clickInsideVideo && !clickOnVideoBtn) {
       videoPopup.close();
     }
+
+    const clickInsideConfig = configCard && configCard.contains(event.target);
+    const clickOnConfigBtn = configInfoBtn && configInfoBtn.contains(event.target);
+    if (!clickInsideConfig && !clickOnConfigBtn) {
+      configPopup.close();
+    }
   });
 
   window.addEventListener('resize', () => {
     if (photoPopup.isOpen()) photoPopup.open();
     if (videoPopup.isOpen()) videoPopup.open();
+    if (configPopup.isOpen()) configPopup.open();
   });
 
   window.addEventListener(
@@ -870,6 +952,7 @@ function initCameraPage() {
     () => {
       if (photoPopup.isOpen()) photoPopup.open();
       if (videoPopup.isOpen()) videoPopup.open();
+      if (configPopup.isOpen()) configPopup.open();
     },
     true
   );

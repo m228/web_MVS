@@ -877,6 +877,14 @@ input[type="range"] {
   font-family: "JetBrains Mono", "Fira Code", monospace;
 }
 
+/* подсказка под текущим конфигом камеры */
+.config-hint {
+  margin: 12px 0 0;
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--muted);
+}
+
 /* подсказка «почему не записывается» */
 .record-help {
   margin-top: 4px;

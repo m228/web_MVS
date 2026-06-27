@@ -298,7 +298,10 @@ def stream_state(serial_number: str):
 
 @app.get("/api/camera/metrics")
 def metrics(serial_number: str):
-    return manager.get(serial_number).metrics
+    worker = manager.get(serial_number)
+    return {**worker.metrics,
+            "photo_count": worker.photo_saved_count,
+            "video_elapsed": worker.video_elapsed()}
 
 
 @app.get("/api/camera/data_limit")
@@ -453,7 +456,9 @@ def rtsp_metrics(serial_number: str):
     worker = manager.get_rtsp(serial_number)
     if worker is None:
         return {"error": "rtsp_not_connected"}
-    return worker.metrics
+    return {**worker.metrics,
+            "photo_count": worker.photo_saved_count,
+            "video_elapsed": worker.video_elapsed()}
 
 
 @app.get("/api/rtsp/on_save_photo")

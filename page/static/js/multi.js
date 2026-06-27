@@ -343,6 +343,8 @@ function createTileEl() {
       <span>Мбит/с<strong data-metric="bandwidth">0.0</strong></span>
       <span>Разрешение<strong data-metric="resolution">0 × 0</strong></span>
       <span>Ошибки<strong data-metric="errors">0</strong></span>
+      <span>Фото<strong data-metric="photo_count">0</strong></span>
+      <span>Видео<strong data-metric="video_time">—</strong></span>
       <div class="multi-tile__rec">
         <span class="rec-icon" data-rec-photo title="Сохранение фото">${PHOTO_SVG}</span>
         <span class="rec-icon" data-rec-video title="Запись видео">${VIDEO_SVG}</span>
@@ -504,6 +506,8 @@ function updateToolbar() {
   setDisabled('multiDisconnectBtn', !hasSource || !tile.connected);
   setDisabled('multiPhotoBtn', !hasSource || !tile.connected);
   setDisabled('multiVideoBtn', !hasSource || !tile.connected);
+  // конфиг — только для GigE (у RTSP его нет); доступен и после остановки
+  setDisabled('multiConfigBtn', !hasSource || source.kind !== 'gige');
 
   toggleIndicator('multiPhotoIndicator', tile.photo);
   toggleIndicator('multiVideoIndicator', tile.video);
@@ -641,6 +645,16 @@ function setMetric(el, name, value) {
   if (node) node.textContent = value;
 }
 
+// секунды -> «M:SS» (или «H:MM:SS»)
+function formatDuration(totalSeconds) {
+  const s = Math.max(0, Math.floor(Number(totalSeconds) || 0));
+  const hh = Math.floor(s / 3600);
+  const mm = Math.floor((s % 3600) / 60);
+  const ss = s % 60;
+  const pad = (n) => String(n).padStart(2, '0');
+  return hh > 0 ? `${hh}:${pad(mm)}:${pad(ss)}` : `${mm}:${pad(ss)}`;
+}
+
 function updateTileMetrics(index, m) {
   const el = getTileEl(index);
   if (!el) return;
@@ -649,10 +663,14 @@ function updateTileMetrics(index, m) {
   setMetric(el, 'bandwidth', Number(m.bandwidth_mbps ?? 0).toFixed(1));
   setMetric(el, 'resolution', `${m.width ?? 0} × ${m.height ?? 0}`);
   setMetric(el, 'errors', m.errors ?? 0);
+  setMetric(el, 'photo_count', m.photo_count ?? 0);
+  // длительность показываем, только если ячейка пишет видео
+  const tile = state.tiles[index];
+  setMetric(el, 'video_time', tile && tile.video ? formatDuration(m.video_elapsed) : '—');
 }
 
 function resetTileMetrics(index) {
-  updateTileMetrics(index, { fps: 0, image_number: 0, bandwidth_mbps: 0, width: 0, height: 0, errors: 0 });
+  updateTileMetrics(index, { fps: 0, image_number: 0, bandwidth_mbps: 0, width: 0, height: 0, errors: 0, photo_count: 0, video_elapsed: 0 });
 }
 
 // порог «зависания»: если за столько мс не пришло ни одного нового кадра,
@@ -843,6 +861,46 @@ async function openInfoModal(serial) {
   }
 }
 
+// --- текущий конфиг запуска камеры (фокусная GigE-ячейка) ---
+const CONFIG_ROWS = [
+  ['width', 'Ширина'],
+  ['height', 'Высота'],
+  ['offset_x', 'Смещение X'],
+  ['offset_y', 'Смещение Y'],
+  ['fps', 'FPS'],
+  ['exposure_auto', 'Автоэкспозиция'],
+  ['exposure_time', 'Время экспозиции, мкс'],
+  ['pixel_format', 'Формат пикселей'],
+];
+
+async function openConfigModal() {
+  const source = focusedSource();
+  if (!source || source.kind !== 'gige') return;
+
+  const serialEl = document.getElementById('multiConfigSerial');
+  const listEl = document.getElementById('multiConfigList');
+  const emptyEl = document.getElementById('multiConfigEmpty');
+
+  if (serialEl) serialEl.textContent = source.label;
+  if (listEl) listEl.innerHTML = '';
+  if (emptyEl) emptyEl.hidden = true;
+  openModal('multiConfigModal');
+
+  const cfg = await CameraApi.getCurrentConfig(source.serial);
+  const hasData = cfg && Object.keys(cfg).length > 0;
+  if (emptyEl) emptyEl.hidden = hasData;
+  if (!listEl || !hasData) return;
+
+  listEl.innerHTML = '';
+  CONFIG_ROWS.forEach(([key, label]) => {
+    if (cfg[key] === undefined || cfg[key] === null) return;
+    const row = document.createElement('div');
+    row.className = 'info-row';
+    row.innerHTML = `<dt class="info-row__label">${escapeHtml(label)}</dt><dd class="info-row__value">${escapeHtml(String(cfg[key]))}</dd>`;
+    listEl.appendChild(row);
+  });
+}
+
 // --- добавить RTSP ---
 function openRtspModal() {
   const error = document.getElementById('multiRtspError');
@@ -939,6 +997,7 @@ function initToolbar() {
   document.getElementById('multiDisconnectBtn')?.addEventListener('click', () => disconnectTile(state.focused));
   document.getElementById('multiPhotoBtn')?.addEventListener('click', openPhotoModal);
   document.getElementById('multiVideoBtn')?.addEventListener('click', openVideoModal);
+  document.getElementById('multiConfigBtn')?.addEventListener('click', openConfigModal);
 }
 
 function initModals() {
@@ -952,6 +1011,9 @@ function initModals() {
 
   document.getElementById('multiInfoClose')?.addEventListener('click', () => closeModal('multiInfoModal'));
   document.getElementById('multiInfoCloseFooter')?.addEventListener('click', () => closeModal('multiInfoModal'));
+
+  document.getElementById('multiConfigClose')?.addEventListener('click', () => closeModal('multiConfigModal'));
+  document.getElementById('multiConfigCloseFooter')?.addEventListener('click', () => closeModal('multiConfigModal'));
 
   document.getElementById('multiGigeReplaceClose')?.addEventListener('click', cancelReplaceGige);
   document.getElementById('multiGigeReplaceCancel')?.addEventListener('click', cancelReplaceGige);

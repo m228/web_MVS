@@ -69,6 +69,9 @@
             <button type="button" id="multiVideoBtn" class="toolbar-btn toolbar-btn--accent" disabled>
               Видео<span class="mode-indicator hidden" id="multiVideoIndicator"></span>
             </button>
+            <button type="button" id="multiConfigBtn" class="toolbar-btn toolbar-btn--secondary" disabled title="Текущий конфиг запуска камеры">
+              Конфиг
+            </button>
           </div>
 
           <div class="multi-toolbar__layouts" role="group" aria-label="Раскладка">
@@ -235,6 +238,27 @@
       </div>
       <div class="network-modal__footer">
         <button type="button" class="btn-secondary" id="multiInfoCloseFooter">Закрыть</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- модалка: текущий конфиг запуска камеры (read-only) -->
+  <div class="modal-backdrop" id="multiConfigModal" aria-hidden="true">
+    <div class="network-modal__card" role="dialog" aria-modal="true">
+      <div class="network-modal__header">
+        <div class="network-modal__title-group">
+          <h2>Текущий конфиг камеры</h2>
+          <span class="network-modal__serial">Камера: <strong id="multiConfigSerial">-</strong></span>
+        </div>
+        <button type="button" class="modal-close-btn" id="multiConfigClose" aria-label="Закрыть">×</button>
+      </div>
+      <div class="network-modal__body">
+        <dl class="info-list" id="multiConfigList"></dl>
+        <p class="config-hint" id="multiConfigEmpty" hidden>Камера ещё не запускалась — конфиг появится после первого старта потока.</p>
+        <p class="config-hint">Значения, с которыми камера запущена сейчас. Сравните с настройками камеры в списке слева и подвиньте нужное.</p>
+      </div>
+      <div class="network-modal__footer">
+        <button type="button" class="btn-secondary" id="multiConfigCloseFooter">Закрыть</button>
       </div>
     </div>
   </div>

@@ -733,55 +733,9 @@ class CameraWorker(BaseCameraWorker):
         return min_value <= value <= max_value
 
     def apply_settings(self, node_map, width=None, height=None, offset_x=None, offset_y=None,
-                       fps=None, exposure_auto=None, exposure_time=None, pixel_format=None,
-                       packet_size=None, packet_delay=None):
+                       fps=None, exposure_auto=None, exposure_time=None, pixel_format=None):
         limits = self.data_limit
         try:
-            # Непрерывный режим без триггера. Если камера осталась в TriggerMode=On
-            # (напр. после работы в MVS), acquisition стартует, но кадры НЕ приходят —
-            # ia.fetch() ловит таймаут (-1011) и поток "запускается, но нет кадров".
-            # Принудительно ставим Continuous + TriggerMode Off перед стартом.
-            for node_name, node_value in (("AcquisitionMode", "Continuous"), ("TriggerMode", "Off")):
-                try:
-                    getattr(node_map, node_name).value = node_value
-                except Exception:
-                    pass
-
-            # Размер GVSP-пакета: главный рычаг для нескольких GigE-камер сразу.
-            # MVS сам подбирает оптимальный (jumbo) размер — крупные пакеты резко
-            # снижают их количество на кадр, CPU и потери. Тут задаём вручную
-            # (нужно включить jumbo-кадры на адаптере). Клампим к диапазону узла.
-            if packet_size:
-                try:
-                    node = node_map.GevSCPSPacketSize
-                    if str(packet_size).strip().lower() in ("max", "auto", "optimal"):
-                        # авто: максимально поддерживаемый камерой размер (нужны jumbo-кадры)
-                        value = int(node.max)
-                    else:
-                        value = max(int(node.min), min(int(node.max), int(packet_size)))
-                    node.value = value
-                    log_event("camera_core.apply_settings_camera", "Размер GVSP-пакета задан", "info",
-                              {"GevSCPSPacketSize": value, "requested": str(packet_size)})
-                except Exception as e:
-                    log_event("camera_core.apply_settings_camera", "Не удалось задать размер пакета",
-                              "warn", {"error": str(e), "packet_size": packet_size})
-
-            # Межпакетная задержка GevSCPD: "размазывает" отправку пакетов кадра во
-            # времени, чтобы буфер сетевой карты не переполнялся всплеском данных —
-            # ГЛАВНАЯ мера против -1011 "нет кадров" (см. bug.txt, кейс №2). Значение
-            # в тиках таймера камеры; увеличивайте, пока поток не станет стабильным.
-            # Платой будет небольшое снижение макс. FPS.
-            if packet_delay is not None and str(packet_delay).strip() != "":
-                try:
-                    node = node_map.GevSCPD
-                    value = max(int(node.min), min(int(node.max), int(packet_delay)))
-                    node.value = value
-                    log_event("camera_core.apply_settings_camera", "Межпакетная задержка GevSCPD задана", "info",
-                              {"GevSCPD": value, "requested": str(packet_delay)})
-                except Exception as e:
-                    log_event("camera_core.apply_settings_camera", "Не удалось задать GevSCPD",
-                              "warn", {"error": str(e), "packet_delay": packet_delay})
-
             # пиксельный формат задаём первым: он меняет размер кадра/каналы,
             # и от него зависит корректный разбор буфера в get_frame
             if pixel_format:
@@ -882,8 +836,7 @@ class CameraWorker(BaseCameraWorker):
             raise
 
     def generate(self, width=None, height=None, offset_x=None, offset_y=None,
-                 fps=None, exposure_auto=None, exposure_time=None, pixel_format=None,
-                 packet_size=None, packet_delay=None):
+                 fps=None, exposure_auto=None, exposure_time=None, pixel_format=None):
         ia = None
         last_frame_time = None
 
@@ -928,8 +881,6 @@ class CameraWorker(BaseCameraWorker):
                 exposure_auto=exposure_auto,
                 exposure_time=exposure_time,
                 pixel_format=pixel_format,
-                packet_size=packet_size,
-                packet_delay=packet_delay,
             )
 
             if not ok:

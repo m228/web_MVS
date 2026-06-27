@@ -21,7 +21,7 @@ const VIDEO_SVG = '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" s
 function defaultGigeSettings() {
   return {
     width: 2448, height: 2048, offset_x: 0, offset_y: 0,
-    fps: 1, exposure_auto: 'Off', exposure_time: 10000, pixel_format: '', packet_size: '', packet_delay: '',
+    fps: 1, exposure_auto: 'Off', exposure_time: 10000, pixel_format: '',
   };
 }
 
@@ -268,12 +268,6 @@ function renderChipSettings(box, cam) {
           <option value=""${!s.pixel_format ? ' selected' : ''}>— как есть —</option>
           ${['RGB8', 'BGR8', 'Mono8', 'BayerRG8', 'BayerGB8', 'BayerGR8', 'BayerBG8', 'YUV422_8'].map((f) => `<option value="${f}"${s.pixel_format === f ? ' selected' : ''}>${f}</option>`).join('')}
         </select>
-      </label>
-      <label>Пакет (max/число)
-        <input type="text" data-set="packet_size" value="${escapeHtml(s.packet_size)}" placeholder="max или 8164" />
-      </label>
-      <label>Задержка GevSCPD (↑ от «нет кадров»)
-        <input type="number" data-set="packet_delay" min="0" step="100" value="${escapeHtml(s.packet_delay)}" placeholder="1000–5000" />
       </label>
     </div>
     <p class="chip-settings__hint">Настройки сохраняются за камерой и применяются при подключении.</p>
@@ -530,7 +524,7 @@ function buildStreamUrl(source) {
   }
   const s = source.settings || {};
   const query = new URLSearchParams({ serial_number: source.serial });
-  ['width', 'height', 'offset_x', 'offset_y', 'fps', 'exposure_auto', 'exposure_time', 'pixel_format', 'packet_size', 'packet_delay'].forEach((key) => {
+  ['width', 'height', 'offset_x', 'offset_y', 'fps', 'exposure_auto', 'exposure_time', 'pixel_format'].forEach((key) => {
     const value = s[key];
     if (value !== '' && value !== null && value !== undefined) query.set(key, value);
   });

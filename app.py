@@ -240,8 +240,6 @@ def camera_stream(
     exposure_auto: str = None,
     exposure_time: float = None,
     pixel_format: str = None,
-    packet_size: str = None,
-    packet_delay: str = None,
 ):
     worker = manager.get(serial_number)
     if interface_id:
@@ -262,8 +260,6 @@ def camera_stream(
             "exposure_auto": exposure_auto,
             "exposure_time": exposure_time,
             "pixel_format": pixel_format,
-            "packet_size": packet_size,
-            "packet_delay": packet_delay,
         },
     )
     return StreamingResponse(
@@ -276,8 +272,6 @@ def camera_stream(
             exposure_auto=exposure_auto,
             exposure_time=exposure_time,
             pixel_format=pixel_format,
-            packet_size=packet_size,
-            packet_delay=packet_delay,
         ),
         media_type="multipart/x-mixed-replace; boundary=frame",
     )

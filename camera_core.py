@@ -81,9 +81,6 @@ GENTL_HINTS = {
 # таймаут на один кадр (сек) и сколько таймаутов подряд можно стерпеть до выхода
 FRAME_FETCH_TIMEOUT = 5.0
 MAX_FRAME_TIMEOUTS = 20
-# пока камера прогревается (до первого кадра) таймауты не считаем ошибками и
-# терпим дольше — промышленная камера может «раскачиваться» несколько секунд
-WARMUP_MAX_TIMEOUTS = 60
 
 # ПРИМЕЧАНИЕ про буферы приёма (num_buffers): НЕ переопределяем — оставляем дефолт
 # harvesters. Раздувание пула до 24 буферов (≈360 МБ для 5 МП RGB8) дестабилизировало
@@ -959,21 +956,18 @@ class CameraWorker(BaseCameraWorker):
             self.metrics["fps"] = 0.0
             self.metrics["bandwidth_mbps"] = 0.0
 
+            # простая логика таймаутов как до multicam (02f71aa "6.7"): считаем
+            # подряд идущие пропуски кадра, выходим после MAX_FRAME_TIMEOUTS.
             timeouts_in_a_row = 0
-            first_frame = False
 
             while self.running:
                 try:
                     img, frame = self.get_frame(ia, node_map)
 
                     if frame is None or img is None:
+                        self.metrics["errors"] += 1
                         timeouts_in_a_row += 1
-                        # до первого кадра камера ещё прогружается: таймауты не
-                        # считаем ошибками и терпим дольше (WARMUP_MAX_TIMEOUTS)
-                        limit = MAX_FRAME_TIMEOUTS if first_frame else WARMUP_MAX_TIMEOUTS
-                        if first_frame:
-                            self.metrics["errors"] += 1
-                        if timeouts_in_a_row >= limit:
+                        if timeouts_in_a_row >= MAX_FRAME_TIMEOUTS:
                             log_event("camera_core.generate_stream",
                                       "Поток прерван: подряд слишком много таймаутов получения кадра", "error",
                                       {"serial_number": self.serial_number,
@@ -983,7 +977,6 @@ class CameraWorker(BaseCameraWorker):
                         continue
 
                     timeouts_in_a_row = 0
-                    first_frame = True
 
                     now = time.time()
 

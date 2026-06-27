@@ -84,6 +84,10 @@
 
    ФИКСЫ В КОДЕ (camera_core.py / app.py / фронтенд):
      - УБРАН принудительный num_buffers=24 (корень "5 кадров и падает").
+     - Цикл таймаутов кадра возвращён к простой до-multicam логике 02f71aa "6.7"
+       (убраны WARMUP_MAX_TIMEOUTS / first_frame — это была multicam-правка d4e07ce).
+     - Замки _control_lock/_registry_lock ОСТАВЛЕНЫ: они защитные (не дают параллельным
+       запросам фронта ловить -1005 AccessDenied), на стрим одиночной камеры не влияют.
      - AcquisitionMode=Continuous + TriggerMode=Off перед стартом (apply_settings).
      - GevSCPD (межпакетная задержка) — добавлен параметр packet_delay в stream ->
        generate -> apply_settings; есть поле в UI (camera.html, чипы multi). ГЛАВНЫЙ

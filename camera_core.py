@@ -78,9 +78,12 @@ GENTL_HINTS = {
     -1020: "исчерпаны ресурсы драйвера, требуется сброс",
 }
 
-# таймаут на один кадр (сек) и сколько таймаутов подряд можно стерпеть до выхода
-FRAME_FETCH_TIMEOUT = 5.0
-MAX_FRAME_TIMEOUTS = 20
+# таймаут на один кадр (сек) и сколько таймаутов подряд можно стерпеть до выхода.
+# Значения с запасом: камера долго «раскачивается» на старте (особенно 5 МП и при
+# 2 камерах), а -1011 между кадрами на низком FPS — норма. Меньшие значения рвут
+# поток до того, как камера прогрелась → она «ложится».
+FRAME_FETCH_TIMEOUT = 10.0
+MAX_FRAME_TIMEOUTS = 60
 
 # ПРИМЕЧАНИЕ про буферы приёма (num_buffers): НЕ переопределяем — оставляем дефолт
 # harvesters. Раздувание пула до 24 буферов (≈360 МБ для 5 МП RGB8) дестабилизировало
@@ -903,7 +906,10 @@ class CameraWorker(BaseCameraWorker):
                     img, frame = self.get_frame(ia, node_map)
 
                     if frame is None or img is None:
-                        self.metrics["errors"] += 1
+                        # -1011 / пустой кадр — это НЕ ошибка приложения, а нормальный
+                        # пропуск/недокадр (на низком FPS между кадрами и при потере
+                        # пакетов их много). В "errors" их не считаем, иначе счётчик
+                        # сыпет по 20/сек при 1 fps. Копим только для логики выхода.
                         timeouts_in_a_row += 1
                         if timeouts_in_a_row >= MAX_FRAME_TIMEOUTS:
                             log_event("camera_core.generate_stream",
@@ -935,6 +941,8 @@ class CameraWorker(BaseCameraWorker):
                 except Exception as e:
                     if not self.running:
                         break
+                    # настоящая ошибка потока (не -1011) — вот её и считаем
+                    self.metrics["errors"] += 1
                     log_event("camera_core.generate_stream", "Ошибка получения потока", "error",
                               {"serial_number": self.serial_number, **_explain_error(e)})
                     break

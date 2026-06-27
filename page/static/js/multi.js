@@ -69,11 +69,14 @@ async function loadCameras() {
     }
   }
 
-  // НЕ запрашиваем IP по каждой камере: это открывало control-канал ко ВСЕМ
-  // камерам сразу (multicam-логика), что дестабилизировало GenTL-продюсер Hikrobot
-  // и ломало последующий стрим (-1011 "нет кадров"). IP не критичен для multi —
-  // его можно посмотреть на главной/в инфо о камере.
-  void serials;
+  // IP запрашиваем строго ПО ОДНОМУ серийнику за раз (не параллельно) — как на
+  // главной. Это короткая control-операция с ia.destroy() в finally; гонки за
+  // control нет. Стрим ломал не этот опрос, а отдельные правки (см. bug.txt №2).
+  for (const serial of serials) {
+    const response = await CameraApi.getIp(serial);
+    const cam = gige.find((c) => c.serial === serial);
+    if (cam && response?.ip) cam.ip = response.ip;
+  }
 
   // переносим уже введённые пользователем настройки GigE между обновлениями
   const prevGige = state.cameras.filter((c) => c.kind === 'gige');
@@ -654,7 +657,9 @@ function resetTileMetrics(index) {
 
 // порог «зависания»: если за столько мс не пришло ни одного нового кадра,
 // считаем камеру не «в эфире» (даже если поток формально открыт)
-const LIVENESS_MS = 5000;
+// окно «свежести» кадра: камера на 1 fps + потери пакетов растит image_number
+// рывками; маленькое окно мигало "нет кадров" при редких просадках. 10 c терпимо.
+const LIVENESS_MS = 10000;
 
 function startMetricsPolling() {
   setInterval(async () => {

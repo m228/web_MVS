@@ -689,6 +689,20 @@ function startMetricsPolling() {
       const metrics = await apiFor(tile.kind).getMetrics(tile.serial);
       if (!metrics || metrics.error) continue;
 
+      // синхронизируем статус фото/видео с РЕАЛЬНЫМ состоянием бэкенда:
+      // авто-запись видео могла сама завершиться по длительности (save_video=0),
+      // тогда индикатор/значок надо погасить, а не держать по клику пользователя.
+      if (metrics.photo !== undefined || metrics.video !== undefined) {
+        const photoOn = !!metrics.photo;
+        const videoOn = Number(metrics.video) === 1;
+        if (photoOn !== tile.photo || videoOn !== tile.video) {
+          tile.photo = photoOn;
+          tile.video = videoOn;
+          renderTile(i);
+          if (i === state.focused) updateToolbar();
+        }
+      }
+
       updateTileMetrics(i, metrics);
 
       // живость определяем по росту счётчика кадров

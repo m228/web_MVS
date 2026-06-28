@@ -300,6 +300,8 @@ def stream_state(serial_number: str):
 def metrics(serial_number: str):
     worker = manager.get(serial_number)
     return {**worker.metrics,
+            "photo": worker.save_photo,
+            "video": worker.save_video,
             "photo_count": worker.photo_saved_count,
             "video_elapsed": worker.video_elapsed()}
 
@@ -457,6 +459,8 @@ def rtsp_metrics(serial_number: str):
     if worker is None:
         return {"error": "rtsp_not_connected"}
     return {**worker.metrics,
+            "photo": worker.save_photo,
+            "video": worker.save_video,
             "photo_count": worker.photo_saved_count,
             "video_elapsed": worker.video_elapsed()}
 

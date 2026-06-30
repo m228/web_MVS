@@ -2,7 +2,9 @@
 /.venv
 /.idea
 /.vscode
-/.claude/launch.json
+/.claude
+/rules
+/agents
 
 # --- кэш Python ---
 __pycache__/

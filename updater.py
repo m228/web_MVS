@@ -134,38 +134,67 @@ def apply_update():
 
     app_dir = _app_dir()
     pid = os.getpid()
-    run_bat = app_dir / "run.bat"
-    relaunch = str(run_bat if run_bat.is_file() else (app_dir / "web_MVS.exe"))
+    exe = app_dir / "web_MVS.exe"
+    log_file = app_dir / "update.log"
 
-    # PowerShell-скрипт: ждёт выхода приложения, заменяет файлы, перезапускает.
-    # _internal может быть кратко занят при выходе — снимаем с повторами.
-    ps = f"""$ErrorActionPreference = 'SilentlyContinue'
+    # PowerShell-апдейтер: ждёт выхода приложения, заменяет файлы и перезапускает exe
+    # НАПРЯМУЮ. Раньше перезапуск шёл через run.bat с запросом UAC в фоне — в detached
+    # без окна повышение прав молча проваливалось, и приложение не стартовало. Теперь
+    # права даёт встроенный в exe манифест (uac_admin), а detached-хелпер и так наследует
+    # админ-токен запущенного приложения. Ход пишем в update.log рядом с exe — для отладки.
+    ps = f"""$ErrorActionPreference = 'Continue'
 $app = '{app_dir}'
 $staging = '{STAGING}'
 $staged = '{STAGED}'
+$exe = '{exe}'
+$log = '{log_file}'
+function W($m) {{ "$(Get-Date -Format 'HH:mm:ss') $m" | Out-File -FilePath $log -Append -Encoding utf8 }}
+W "=== apply: жду выхода приложения (pid {pid}) ==="
 try {{ Wait-Process -Id {pid} -Timeout 60 }} catch {{}}
 Start-Sleep -Seconds 1
-for ($i = 0; $i -lt 20; $i++) {{
-    try {{ Remove-Item -LiteralPath (Join-Path $app '_internal') -Recurse -Force -ErrorAction Stop; break }}
-    catch {{ Start-Sleep -Milliseconds 500 }}
+for ($i = 0; $i -lt 30; $i++) {{
+    try {{
+        if (Test-Path -LiteralPath (Join-Path $app '_internal')) {{
+            Remove-Item -LiteralPath (Join-Path $app '_internal') -Recurse -Force -ErrorAction Stop
+        }}
+        break
+    }} catch {{ Start-Sleep -Milliseconds 500 }}
 }}
-Remove-Item -LiteralPath (Join-Path $app 'web_MVS.exe') -Force
-Copy-Item -Path (Join-Path $staged '*') -Destination $app -Recurse -Force
-Remove-Item -LiteralPath $staging -Recurse -Force
-Start-Process -FilePath '{relaunch}' -WorkingDirectory $app
+Remove-Item -LiteralPath $exe -Force -ErrorAction SilentlyContinue
+try {{
+    Copy-Item -Path (Join-Path $staged '*') -Destination $app -Recurse -Force -ErrorAction Stop
+    W "файлы заменены"
+}} catch {{ W "ОШИБКА копирования: $_" }}
+Remove-Item -LiteralPath $staging -Recurse -Force -ErrorAction SilentlyContinue
+if (Test-Path -LiteralPath $exe) {{
+    W "перезапуск $exe"
+    Start-Process -FilePath $exe -WorkingDirectory $app
+}} else {{
+    W "ОШИБКА: web_MVS.exe не найден после обновления"
+}}
+W "=== apply: готово ==="
 """
     helper = Path(tempfile.gettempdir()) / f"web_mvs_apply_{pid}.ps1"
     # UTF-8 с BOM — иначе PowerShell 5.1 неверно прочитает не-ASCII в путях
     helper.write_bytes(b"\xef\xbb\xbf" + ps.encode("utf-8"))
 
-    DETACHED_PROCESS = 0x00000008
+    CREATE_NEW_CONSOLE = 0x00000010
     CREATE_NEW_PROCESS_GROUP = 0x00000200
-    CREATE_NO_WINDOW = 0x08000000
-    subprocess.Popen(
-        ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(helper)],
-        creationflags=DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW,
-        close_fds=True,
-    )
+    CREATE_BREAKAWAY_FROM_JOB = 0x01000000
+    # ВАЖНО: хелперу нужна СВОЯ консоль (CREATE_NEW_CONSOLE) — без консоли PowerShell-хост
+    # молча не инициализируется и скрипт не выполняется (проверено: с DETACHED_PROCESS
+    # хелпер не стартовал, update.log не появлялся). Окно прячем через -WindowStyle Hidden.
+    # Своя консоль + новая группа также отвязывают хелпер от приложения, чтобы он пережил
+    # его выход. CREATE_BREAKAWAY_FROM_JOB — на случай kill-on-close job; если job его не
+    # разрешает (или job нет), CreateProcess падает с OSError → откатываемся без него.
+    cmd = ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass",
+           "-WindowStyle", "Hidden", "-File", str(helper)]
+    base = CREATE_NEW_CONSOLE | CREATE_NEW_PROCESS_GROUP
+    try:
+        subprocess.Popen(cmd, creationflags=base | CREATE_BREAKAWAY_FROM_JOB, close_fds=True)
+    except OSError:
+        subprocess.Popen(cmd, creationflags=base, close_fds=True)
+
     log_event("updater.apply", "Запущен апдейтер; приложение завершается для замены файлов",
               "warn", {"helper": str(helper)})
     return {"ok": True}

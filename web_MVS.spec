@@ -51,6 +51,10 @@ exe = EXE(
     console=True,
     strip=False,
     upx=False,
+    # встраиваем манифест requireAdministrator: exe всегда запускается от админа
+    # (нужно для сетевых функций: jumbo, фильтр GigE). UAC-запрос при старте — один раз,
+    # без ручной настройки «Запуск от имени администратора».
+    uac_admin=True,
 )
 
 coll = COLLECT(

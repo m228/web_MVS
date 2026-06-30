@@ -78,18 +78,17 @@ GENTL_HINTS = {
     -1020: "исчерпаны ресурсы драйвера, требуется сброс",
 }
 
-# таймаут на один кадр (сек) и сколько таймаутов подряд можно стерпеть до выхода
-FRAME_FETCH_TIMEOUT = 5.0
-MAX_FRAME_TIMEOUTS = 20
-# пока камера прогревается (до первого кадра) таймауты не считаем ошибками и
-# терпим дольше — промышленная камера может «раскачиваться» несколько секунд
-WARMUP_MAX_TIMEOUTS = 60
+# таймаут на один кадр (сек) и сколько таймаутов подряд можно стерпеть до выхода.
+# Значения с запасом: камера долго «раскачивается» на старте (особенно 5 МП и при
+# 2 камерах), а -1011 между кадрами на низком FPS — норма. Меньшие значения рвут
+# поток до того, как камера прогрелась → она «ложится».
+FRAME_FETCH_TIMEOUT = 10.0
+MAX_FRAME_TIMEOUTS = 60
 
-# размер очереди буферов приёма у acquirer'а. Дефолтные 3 буфера малы для
-# нескольких камер одновременно: под нагрузкой кадры не успевают разбираться и
-# одна из камер «зависает». Больший пул даёт продюсеру довосстановить кадр
-# через resend (как это делает MVS) — и поток не рвётся.
-STREAM_NUM_BUFFERS = 24
+# ПРИМЕЧАНИЕ про буферы приёма (num_buffers): НЕ переопределяем — оставляем дефолт
+# harvesters. Раздувание пула до 24 буферов (≈360 МБ для 5 МП RGB8) дестабилизировало
+# продюсер Hikrobot на одиночной камере (~5 кадров, затем сплошные -1011). Несколько
+# GigE одновременно запрещены в UI, поэтому большой пул не нужен. См. bug.txt, кейс №2.
 
 
 def _gentl_code(error_text):
@@ -226,24 +225,59 @@ def build_rtsp_url(ip, username="admin", password="", channel=1, subtype=0, port
     return f"rtsp://{credentials}{ip}:{port}/cam/realmonitor?channel={channel}&subtype={subtype}"
 
 
-# разбор сырого буфера кадра в BGR-картинку независимо от пиксельного формата.
-# Число каналов определяем по размеру буфера: 3 (RGB/BGR), 1 (Mono/Bayer -> серое),
+# GenICam Bayer-формат -> код дебайеринга OpenCV. ВНИМАНИЕ: OpenCV именует
+# Байер-паттерн от ВТОРОГО пикселя строки/столбца, поэтому имена «перевёрнуты»
+# относительно GenICam (GenICam BayerRG соответствует OpenCV BayerBG2BGR и т.д.).
+# Если после перехода на Bayer красный и синий поменяны местами — поставьте
+# соседний код из этой таблицы (RG<->BG, GR<->GB).
+_BAYER_TO_BGR = {
+    "BayerRG": cv2.COLOR_BayerBG2BGR,
+    "BayerGB": cv2.COLOR_BayerGR2BGR,
+    "BayerGR": cv2.COLOR_BayerGB2BGR,
+    "BayerBG": cv2.COLOR_BayerRG2BGR,
+}
+
+
+def _bayer_code(pixel_format):
+    if not pixel_format:
+        return None
+    for key, code in _BAYER_TO_BGR.items():
+        if str(pixel_format).startswith(key):
+            return code
+    return None
+
+
+# разбор сырого буфера кадра в BGR-картинку c учётом пиксельного формата.
+# Число каналов определяем по размеру буфера: 3 (RGB/BGR), 1 (Mono/Bayer),
 # 4 (RGBA). Раньше код жёстко решейпил в 3 канала и падал на моно-камере
 # (ValueError: cannot reshape array of size ... into (h, w, 3)).
-def _to_bgr(data, width, height):
+def _to_bgr(data, width, height, pixel_format=None):
     arr = np.asarray(data, dtype=np.uint8).reshape(-1)
     pixels = width * height
     if pixels <= 0 or arr.size == 0 or arr.size % pixels != 0:
         return None
 
     channels = arr.size // pixels
-    if channels == 3:
-        # как и раньше: продюсер отдаёт 3 канала — кодируем как есть
-        return arr.reshape(height, width, 3)
+
     if channels == 1:
+        # 1 байт/пиксель: Bayer -> цвет (дебайеринг), иначе Mono -> серое.
+        # Bayer втрое легче RGB8 по трафику — рекомендуемый формат для GigE.
+        bayer = _bayer_code(pixel_format)
+        if bayer is not None:
+            return cv2.cvtColor(arr.reshape(height, width), bayer)
         return cv2.cvtColor(arr.reshape(height, width), cv2.COLOR_GRAY2BGR)
+
+    if channels == 3:
+        frame = arr.reshape(height, width, 3)
+        # продюсер отдаёт RGB8 -> переводим в BGR (иначе R и B перепутаны в OpenCV).
+        # Формат неизвестен -> оставляем как есть (прежнее поведение).
+        if pixel_format and str(pixel_format).upper().startswith("RGB"):
+            return cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+        return frame
+
     if channels == 4:
         return cv2.cvtColor(arr.reshape(height, width, 4), cv2.COLOR_RGBA2BGR)
+
     return None
 
 
@@ -259,12 +293,18 @@ class BaseCameraWorker:
         self.save_photo = False
         self.photo_interval = None
         self.last_photo = None
+        # последний сохранённый файл фото (для показа во фронтенде)
+        self.last_photo_path = None
+        # сколько фото сохранено за текущую сессию автосохранения
+        self.photo_saved_count = 0
 
         # 0 нет автосохранения видео / 1 идёт / 2 завершение
         self.save_video = 0
         self.video_duration = None
         self.video_start = None
         self.video_writer = None
+        # последний файл записи видео (для показа во фронтенде)
+        self.last_video_path = None
 
         self.metrics = {
             "fps": 0.0,
@@ -289,14 +329,48 @@ class BaseCameraWorker:
         log_event("camera_core.close_stream", "Запрошена мягкая остановка потока")
         return {"status": "stopping"}
 
+    # ---------- пути сохранения ----------
+
+    # безопасное имя камеры для имён файлов (серийник без спецсимволов)
+    def _camera_tag(self):
+        tag = re.sub(r"[^A-Za-z0-9_.-]+", "_", str(self.serial_number or "camera")).strip("_")
+        return tag or "camera"
+
+    # папка сохранения фото: dataset/<серийник> (своя на каждую камеру)
+    def photo_dir(self):
+        return Path("dataset") / self._camera_tag()
+
+    # папка сохранения видео: Videos/<серийник>
+    def video_dir(self):
+        return Path("Videos") / self._camera_tag()
+
+    # папка и шаблон имени файлов фото — показываем во фронтенде
+    def photo_save_info(self):
+        return {"dir": str(self.photo_dir().resolve()), "pattern": "frame_<дата>.jpg"}
+
+    # папка и шаблон имени файлов видео — показываем во фронтенде
+    def video_save_info(self):
+        return {"dir": str(self.video_dir().resolve()), "pattern": "video_<дата>.avi"}
+
     # ---------- фото ----------
+
+    # длительность текущей записи видео в секундах (0 если не пишем)
+    def video_elapsed(self):
+        if self.save_video == 1 and self.video_start:
+            return int(time.time() - self.video_start)
+        return 0
 
     def on_photo(self, interval):
         self.save_photo = True
         self.photo_interval = interval
+        # новая сессия автосохранения — обнуляем счётчик
+        self.photo_saved_count = 0
 
-        log_event("camera_core.on_save", "Вкл. автосохранение фото c интервалом", "info", {"interval": interval})
-        return {"status": "ok", "photo_enabled": True, "interval": self.photo_interval}
+        info = self.photo_save_info()
+        log_event("camera_core.on_save", "Вкл. автосохранение фото c интервалом", "info",
+                  {"interval": interval, "save_dir": info["dir"], "file_pattern": info["pattern"]})
+        return {"status": "ok", "photo_enabled": True, "interval": self.photo_interval,
+                "save_dir": info["dir"], "file_pattern": info["pattern"]}
 
     def off_photo(self):
         self.save_photo = False
@@ -322,13 +396,16 @@ class BaseCameraWorker:
 
         return False
 
-    @staticmethod
-    def write_photo(img):
-        folder = Path("dataset")
+    # путь: dataset/<серийник>/frame_<дата-время>.jpg
+    def write_photo(self, img):
+        folder = self.photo_dir()
         folder.mkdir(parents=True, exist_ok=True)
-        filename = f"frame_{datetime.now().strftime('%d_%m_%H_%M_%S')}.jpg"
+        filename = f"frame_{datetime.now().strftime('%d_%m_%Y_%H_%M_%S')}.jpg"
         path = os.path.join(folder, filename)
         cv2.imwrite(path, img)
+        self.last_photo_path = path
+        self.photo_saved_count += 1
+        return path
 
     # ---------- видео ----------
 
@@ -341,8 +418,11 @@ class BaseCameraWorker:
         if self.save_video == 0:
             self.save_video = 1
             self.video_start = time.time()
-        log_event("camera_core.on_video", "Вкл. автосохранение видео с длительностью: ", "info", {"video_duration": self.video_duration})
-        return {"status": "ok", "video_enabled": "1"}
+        info = self.video_save_info()
+        log_event("camera_core.on_video", "Вкл. автосохранение видео с длительностью: ", "info",
+                  {"video_duration": self.video_duration, "save_dir": info["dir"], "file_pattern": info["pattern"]})
+        return {"status": "ok", "video_enabled": "1",
+                "save_dir": info["dir"], "file_pattern": info["pattern"]}
 
     def off_video(self):
         if self.save_video == 1:
@@ -357,13 +437,14 @@ class BaseCameraWorker:
 
     def _write_video(self, img, fps):
         if self.video_writer is None:
-            folder = Path("Videos")
+            folder = self.video_dir()
             folder.mkdir(parents=True, exist_ok=True)
-            filename = f"Video{datetime.now().strftime('%d_%m_%H_%M_%S')}.avi"
+            filename = f"video_{datetime.now().strftime('%d_%m_%Y_%H_%M_%S')}.avi"
             path = os.path.join(folder, filename)
             fourcc = cv2.VideoWriter_fourcc(*"MJPG")
             writer_fps = fps if fps and fps > 0 else DEFAULT_VIDEO_FPS
             self.video_writer = cv2.VideoWriter(path, fourcc, writer_fps, (img.shape[1], img.shape[0]))
+            self.last_video_path = path
 
         self.video_writer.write(img)
 
@@ -408,6 +489,9 @@ class CameraWorker(BaseCameraWorker):
         self.ia = None
         # лимиты/текущие настройки камеры (заполняется при подключении)
         self.data_limit = None
+        # фактический конфиг, с которым камера запущена в последний раз
+        # (читается с камеры после применения настроек) — для значка «инфо»
+        self.current_config = None
         self.advanced_settings = False
 
         # GenTL ID сетевого интерфейса (вспомогательный фильтр)
@@ -672,29 +756,9 @@ class CameraWorker(BaseCameraWorker):
         return min_value <= value <= max_value
 
     def apply_settings(self, node_map, width=None, height=None, offset_x=None, offset_y=None,
-                       fps=None, exposure_auto=None, exposure_time=None, pixel_format=None,
-                       packet_size=None):
+                       fps=None, exposure_auto=None, exposure_time=None, pixel_format=None):
         limits = self.data_limit
         try:
-            # Размер GVSP-пакета: главный рычаг для нескольких GigE-камер сразу.
-            # MVS сам подбирает оптимальный (jumbo) размер — крупные пакеты резко
-            # снижают их количество на кадр, CPU и потери. Тут задаём вручную
-            # (нужно включить jumbo-кадры на адаптере). Клампим к диапазону узла.
-            if packet_size:
-                try:
-                    node = node_map.GevSCPSPacketSize
-                    if str(packet_size).strip().lower() in ("max", "auto", "optimal"):
-                        # авто: максимально поддерживаемый камерой размер (нужны jumbo-кадры)
-                        value = int(node.max)
-                    else:
-                        value = max(int(node.min), min(int(node.max), int(packet_size)))
-                    node.value = value
-                    log_event("camera_core.apply_settings_camera", "Размер GVSP-пакета задан", "info",
-                              {"GevSCPSPacketSize": value, "requested": str(packet_size)})
-                except Exception as e:
-                    log_event("camera_core.apply_settings_camera", "Не удалось задать размер пакета",
-                              "warn", {"error": str(e), "packet_size": packet_size})
-
             # пиксельный формат задаём первым: он меняет размер кадра/каналы,
             # и от него зависит корректный разбор буфера в get_frame
             if pixel_format:
@@ -722,24 +786,11 @@ class CameraWorker(BaseCameraWorker):
                 node_map.OffsetY.value = int(offset_y)
 
             if self.check_value(fps, 0.1, 30):
-                # камера следует заданному FPS только при включённом
-                # AcquisitionFrameRateEnable (в MVS — галочка "Acquisition Frame
-                # Rate Control Enable"); иначе AcquisitionFrameRate игнорируется.
-                # Имя ноды у разных прошивок отличается — пробуем оба варианта.
-                enabled = False
-                for node_name in ("AcquisitionFrameRateEnable", "AcquisitionFrameRateControlEnable"):
-                    try:
-                        getattr(node_map, node_name).value = True
-                        enabled = True
-                        break
-                    except Exception:
-                        continue
-                try:
-                    node_map.AcquisitionFrameRate.value = float(fps)
-                except Exception as e:
-                    log_event("camera_core.apply_settings_camera", "Не удалось задать FPS", "warn", {"error": str(e)})
-                log_event("camera_core.apply_settings_camera", "FPS применён", "info",
-                          {"requested_fps": float(fps), "rate_control_enabled": enabled})
+                # как в рабочей до-multicam версии (02f71aa): просто пишем
+                # AcquisitionFrameRate, НЕ включаем AcquisitionFrameRateEnable.
+                # Принудительное включение rate-control было единственным
+                # всегда-исполняемым отличием от рабочего потока — убрано.
+                node_map.AcquisitionFrameRate.value = int(fps)
 
             # авто-экспозиция (Off / Once / Continuous)
             if exposure_auto is not None and exposure_auto in node_map.ExposureAuto.symbolics:
@@ -765,7 +816,11 @@ class CameraWorker(BaseCameraWorker):
                 data = buffer.payload.components[0].data
                 real_width = node_map.Width.value
                 real_height = node_map.Height.value
-                img = _to_bgr(data, real_width, real_height)
+                try:
+                    pixel_format = node_map.PixelFormat.value
+                except Exception:
+                    pixel_format = None
+                img = _to_bgr(data, real_width, real_height, pixel_format)
 
                 if img is None:
                     log_event("camera_core.get_frame", "Не удалось разобрать кадр (формат пикселей)", "warn",
@@ -790,9 +845,31 @@ class CameraWorker(BaseCameraWorker):
                 return None, None
             raise
 
+    # фактические значения, прочитанные с камеры (для значка «инфо»).
+    # Отсутствующие узлы тихо пропускаем.
+    @staticmethod
+    def _read_current_config(node_map):
+        def rv(name, cast=None):
+            try:
+                value = getattr(node_map, name).value
+                return cast(value) if cast is not None else value
+            except Exception:
+                return None
+
+        config = {
+            "width": rv("Width", int),
+            "height": rv("Height", int),
+            "offset_x": rv("OffsetX", int),
+            "offset_y": rv("OffsetY", int),
+            "exposure_auto": rv("ExposureAuto"),
+            "exposure_time": rv("ExposureTime", lambda v: int(float(v))),
+            "pixel_format": rv("PixelFormat"),
+            "fps": rv("AcquisitionFrameRate", lambda v: round(float(v), 2)),
+        }
+        return {k: v for k, v in config.items() if v is not None}
+
     def generate(self, width=None, height=None, offset_x=None, offset_y=None,
-                 fps=None, exposure_auto=None, exposure_time=None, pixel_format=None,
-                 packet_size=None):
+                 fps=None, exposure_auto=None, exposure_time=None, pixel_format=None):
         ia = None
         last_frame_time = None
 
@@ -837,21 +914,25 @@ class CameraWorker(BaseCameraWorker):
                 exposure_auto=exposure_auto,
                 exposure_time=exposure_time,
                 pixel_format=pixel_format,
-                packet_size=packet_size,
             )
 
             if not ok:
                 log_event("camera_core.generate_stream", "Ошибка применения настроек камеры", "warn", {"error": str(err)})
                 return
 
+            # запоминаем фактический конфиг (читаем с камеры ПОСЛЕ применения,
+            # пока держим node_map) — для значка «инфо» на странице камеры
+            self.current_config = self._read_current_config(node_map)
+
             self.ia = ia
             self.running = True
 
-            # больше буферов приёма — критично для нескольких камер сразу
-            try:
-                ia.num_buffers = STREAM_NUM_BUFFERS
-            except Exception as e:
-                log_event("camera_core.generate_stream", "Не удалось задать num_buffers", "warn", {"error": str(e)})
+            # num_buffers НЕ трогаем — оставляем дефолт harvesters, как было до
+            # multicam-рефактора (тогда поток одиночной камеры был стабилен).
+            # Принудительные 24 буфера (≈360 МБ на 5 МП RGB8) дестабилизировали
+            # продюсер Hikrobot: проходило ~5 кадров, дальше сплошные таймауты -1011
+            # ("хватает на 5 кадров и потом падает"). Несколько GigE одновременно мы
+            # больше не запускаем (ограничение в UI), поэтому раздувать пул не нужно.
 
             ia.start()
             log_event("camera_core.generate_stream", "Поток камеры запущен", "success",
@@ -863,21 +944,21 @@ class CameraWorker(BaseCameraWorker):
             self.metrics["fps"] = 0.0
             self.metrics["bandwidth_mbps"] = 0.0
 
+            # простая логика таймаутов как до multicam (02f71aa "6.7"): считаем
+            # подряд идущие пропуски кадра, выходим после MAX_FRAME_TIMEOUTS.
             timeouts_in_a_row = 0
-            first_frame = False
 
             while self.running:
                 try:
                     img, frame = self.get_frame(ia, node_map)
 
                     if frame is None or img is None:
+                        # -1011 / пустой кадр — это НЕ ошибка приложения, а нормальный
+                        # пропуск/недокадр (на низком FPS между кадрами и при потере
+                        # пакетов их много). В "errors" их не считаем, иначе счётчик
+                        # сыпет по 20/сек при 1 fps. Копим только для логики выхода.
                         timeouts_in_a_row += 1
-                        # до первого кадра камера ещё прогружается: таймауты не
-                        # считаем ошибками и терпим дольше (WARMUP_MAX_TIMEOUTS)
-                        limit = MAX_FRAME_TIMEOUTS if first_frame else WARMUP_MAX_TIMEOUTS
-                        if first_frame:
-                            self.metrics["errors"] += 1
-                        if timeouts_in_a_row >= limit:
+                        if timeouts_in_a_row >= MAX_FRAME_TIMEOUTS:
                             log_event("camera_core.generate_stream",
                                       "Поток прерван: подряд слишком много таймаутов получения кадра", "error",
                                       {"serial_number": self.serial_number,
@@ -887,7 +968,6 @@ class CameraWorker(BaseCameraWorker):
                         continue
 
                     timeouts_in_a_row = 0
-                    first_frame = True
 
                     now = time.time()
 
@@ -908,6 +988,8 @@ class CameraWorker(BaseCameraWorker):
                 except Exception as e:
                     if not self.running:
                         break
+                    # настоящая ошибка потока (не -1011) — вот её и считаем
+                    self.metrics["errors"] += 1
                     log_event("camera_core.generate_stream", "Ошибка получения потока", "error",
                               {"serial_number": self.serial_number, **_explain_error(e)})
                     break

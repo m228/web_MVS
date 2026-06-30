@@ -468,7 +468,7 @@ select {
 
 .section-header {
   display: flex;
-  align-items: flex-end;
+  align-items: center;
   justify-content: space-between;
   gap: 18px;
   flex-wrap: wrap;
@@ -861,6 +861,49 @@ input[type="range"] {
 
 .record-actions button {
   min-width: 150px;
+}
+
+/* путь сохранения файлов (папка + шаблон имени) */
+.record-path {
+  margin: 0;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: var(--surface-muted);
+  border: 1px solid var(--border);
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.4;
+  word-break: break-all;
+  font-family: "JetBrains Mono", "Fira Code", monospace;
+}
+
+/* подсказка под текущим конфигом камеры */
+.config-hint {
+  margin: 12px 0 0;
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--muted);
+}
+
+/* подсказка «почему не записывается» */
+.record-help {
+  margin-top: 4px;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.record-help summary {
+  cursor: pointer;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.record-help ul {
+  margin: 8px 0 0;
+  padding-left: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
 }
 
 .photo-card-popup,
@@ -1438,8 +1481,9 @@ body.modal-open {
   opacity: 0.92;
 }
 
-/* ---------- кнопка перехода на RTSP (отдельный навигационный акцент) ---------- */
-.btn-rtsp {
+/* ---------- навигационные акценты (RTSP, «Сеть камер») ---------- */
+.btn-rtsp,
+.btn-net {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -1450,7 +1494,8 @@ body.modal-open {
   box-shadow: var(--shadow-soft);
 }
 
-.btn-rtsp:hover {
+.btn-rtsp:hover,
+.btn-net:hover {
   background: var(--accent);
   color: var(--accent-contrast);
   border-color: transparent;
@@ -1535,6 +1580,8 @@ body.modal-open {
 
 .page-hero__actions--grid > * {
   width: 100%;
+  display: inline-flex;
+  align-items: center;
   justify-content: center;
 }
 

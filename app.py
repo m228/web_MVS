@@ -240,7 +240,6 @@ def camera_stream(
     exposure_auto: str = None,
     exposure_time: float = None,
     pixel_format: str = None,
-    packet_size: str = None,
 ):
     worker = manager.get(serial_number)
     if interface_id:
@@ -273,7 +272,6 @@ def camera_stream(
             exposure_auto=exposure_auto,
             exposure_time=exposure_time,
             pixel_format=pixel_format,
-            packet_size=packet_size,
         ),
         media_type="multipart/x-mixed-replace; boundary=frame",
     )
@@ -300,7 +298,12 @@ def stream_state(serial_number: str):
 
 @app.get("/api/camera/metrics")
 def metrics(serial_number: str):
-    return manager.get(serial_number).metrics
+    worker = manager.get(serial_number)
+    return {**worker.metrics,
+            "photo": worker.save_photo,
+            "video": worker.save_video,
+            "photo_count": worker.photo_saved_count,
+            "video_elapsed": worker.video_elapsed()}
 
 
 @app.get("/api/camera/data_limit")
@@ -355,7 +358,18 @@ def off_save_video(serial_number: str):
 @app.get("/api/camera/status_video_photo")
 def status_video_photo(serial_number: str):
     worker = manager.get(serial_number)
-    return {"video": worker.save_video, "photo": worker.save_photo}
+    return {
+        "video": worker.save_video,
+        "photo": worker.save_photo,
+        "photo_count": worker.photo_saved_count,
+        "video_elapsed": worker.video_elapsed(),
+    }
+
+
+# текущий конфиг запуска камеры (фактические значения с камеры) — для значка «инфо»
+@app.get("/api/camera/current_config")
+def camera_current_config(serial_number: str):
+    return manager.get(serial_number).current_config or {}
 
 
 # ---------- RTSP-камера (просмотр / запись / снимки) ----------
@@ -444,7 +458,11 @@ def rtsp_metrics(serial_number: str):
     worker = manager.get_rtsp(serial_number)
     if worker is None:
         return {"error": "rtsp_not_connected"}
-    return worker.metrics
+    return {**worker.metrics,
+            "photo": worker.save_photo,
+            "video": worker.save_video,
+            "photo_count": worker.photo_saved_count,
+            "video_elapsed": worker.video_elapsed()}
 
 
 @app.get("/api/rtsp/on_save_photo")

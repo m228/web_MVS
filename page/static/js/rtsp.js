@@ -251,6 +251,19 @@ function initRtspPage() {
     }
   }
 
+  // показать путь сохранения (папка + шаблон имени файла) из ответа сервера
+  function showSavePath(elementId, data) {
+    const el = document.getElementById(elementId);
+    if (!el) return;
+    if (data && data.save_dir) {
+      el.textContent = `Сохранение в: ${data.save_dir}\\${data.file_pattern || ''}`;
+      el.hidden = false;
+    } else {
+      el.hidden = true;
+      el.textContent = '';
+    }
+  }
+
   async function startPhotoSaving() {
     if (!isConnected) return;
 
@@ -267,6 +280,7 @@ function initRtspPage() {
     }
 
     log.success('Автосохранение фото включено', data);
+    showSavePath('photoSavePath', data);
     await syncVideoPhotoStatus();
   }
 
@@ -278,6 +292,7 @@ function initRtspPage() {
     }
 
     log.success('Автосохранение фото выключено', data);
+    showSavePath('photoSavePath', null);
     await syncVideoPhotoStatus();
   }
 
@@ -301,6 +316,7 @@ function initRtspPage() {
     }
 
     log.success('Запись видео включена', data);
+    showSavePath('videoSavePath', data);
     await syncVideoPhotoStatus();
   }
 
@@ -314,6 +330,7 @@ function initRtspPage() {
     }
 
     log.success('Запись видео выключена', data);
+    showSavePath('videoSavePath', null);
     await syncVideoPhotoStatus();
   }
 

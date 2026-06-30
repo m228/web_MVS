@@ -78,9 +78,17 @@ GENTL_HINTS = {
     -1020: "исчерпаны ресурсы драйвера, требуется сброс",
 }
 
-# таймаут на один кадр (сек) и сколько таймаутов подряд можно стерпеть до выхода
-FRAME_FETCH_TIMEOUT = 5.0
-MAX_FRAME_TIMEOUTS = 10
+# таймаут на один кадр (сек) и сколько таймаутов подряд можно стерпеть до выхода.
+# Значения с запасом: камера долго «раскачивается» на старте (особенно 5 МП и при
+# 2 камерах), а -1011 между кадрами на низком FPS — норма. Меньшие значения рвут
+# поток до того, как камера прогрелась → она «ложится».
+FRAME_FETCH_TIMEOUT = 10.0
+MAX_FRAME_TIMEOUTS = 60
+
+# ПРИМЕЧАНИЕ про буферы приёма (num_buffers): НЕ переопределяем — оставляем дефолт
+# harvesters. Раздувание пула до 24 буферов (≈360 МБ для 5 МП RGB8) дестабилизировало
+# продюсер Hikrobot на одиночной камере (~5 кадров, затем сплошные -1011). Несколько
+# GigE одновременно запрещены в UI, поэтому большой пул не нужен. См. bug.txt, кейс №2.
 
 
 def _gentl_code(error_text):
@@ -129,31 +137,26 @@ def _explain_error(error):
 # RTSP поверх TCP — стабильнее, меньше «рассыпающихся» кадров
 os.environ.setdefault("OPENCV_FFMPEG_CAPTURE_OPTIONS", "rtsp_transport;tcp")
 
-# Путь до директории и имя файла драйвера для поиска
+# Путь до директории программы и имена файлов драйвера. Поставка самодостаточна:
+# и продюсер (.cti), и его runtime (MvCameraControl.dll) лежат в папке Driver/.
 PROGRAM_DIR = Path(__file__).resolve().parent
 CTI_FILENAME = "MvProducerGEV.cti"
-
-# Каталоги штатной установки MVS SDK, где лежит и продюсер (.cti), и его runtime.
-# ВАЖНО: одинокий .cti без runtime (MvCameraControl.dll) перечисляет камеру, но
-# падает на create() с -1003 — продюсеру нужен runtime, чтобы прочитать XML камеры.
-# Поэтому установленный продюсер приоритетнее копии из папки Driver/.
-MVS_GENTL_DIRS = [
-    r"C:\Program Files (x86)\Common Files\MVS\Runtime\Win64_x64",
-    r"C:\Program Files\Common Files\MVS\Runtime\Win64_x64",
-    r"C:\Program Files (x86)\MVS\Development\GenTL\Win64",
-    r"C:\Program Files\MVS\Development\GenTL\Win64",
-    r"C:\Program Files (x86)\MVS\Runtime\Win64",
-    r"C:\Program Files\MVS\Runtime\Win64",
-]
 MVS_RUNTIME_DLL = "MvCameraControl.dll"
 
 
-# Поиск GenTL-продюсера. Приоритет: явный путь -> GENICAM_GENTL64_PATH ->
-# установленный MVS SDK (рядом с runtime) -> копия в папке программы (Driver/).
+# Поиск GenTL-продюсера: явный путь (MVS_CTI_PATH) -> копия в папке программы
+# (Driver/), но только если рядом лежит её runtime-DLL -> каталоги из
+# GENICAM_GENTL64_PATH (системный MVS) -> бандл без runtime как последний шанс.
 def _discover_cti():
     explicit = os.environ.get("MVS_CTI_PATH")
     if explicit and Path(explicit).is_file():
         return Path(explicit), "env:MVS_CTI_PATH"
+
+    # бандл берём, только если рядом есть и его runtime (MvCameraControl.dll) —
+    # иначе продюсер не загрузится, и лучше упасть на системный MVS
+    bundled = next(PROGRAM_DIR.rglob(CTI_FILENAME), None)
+    if bundled is not None and (bundled.parent / MVS_RUNTIME_DLL).is_file():
+        return bundled, "bundled"
 
     for raw in (os.environ.get("GENICAM_GENTL64_PATH") or "").split(os.pathsep):
         directory = Path(raw) if raw else None
@@ -162,34 +165,34 @@ def _discover_cti():
             if hit:
                 return hit, "env:GENICAM_GENTL64_PATH"
 
-    for raw in MVS_GENTL_DIRS:
-        candidate = Path(raw) / CTI_FILENAME
-        if candidate.is_file():
-            return candidate, "MVS install"
-
-    bundled = next(PROGRAM_DIR.rglob(CTI_FILENAME), None)
     if bundled is not None:
         return bundled, "bundled"
     return None, None
 
 
-# Путь к runtime-DLL продюсера. Ищем в PATH, штатных папках MVS, рядом с самим
-# .cti и в записях PATH, где встречается "MVS" (там же, откуда грузится продюсер).
-def _find_mvs_runtime():
-    import shutil
-    found = shutil.which(MVS_RUNTIME_DLL)
-    if found:
-        return found
-
-    search = list(MVS_GENTL_DIRS)
+# Регистрируем папку с .cti в путях поиска DLL, чтобы бандл MvCameraControl.dll
+# подхватывался без установленного в системе MVS (самодостаточная поставка).
+def _register_driver_dll_dir():
     cti, _ = _discover_cti()
-    if cti is not None:
-        search.append(str(cti.parent))
-    search += [d for d in os.environ.get("PATH", "").split(os.pathsep) if "MVS" in d.upper()]
+    if cti is None or not hasattr(os, "add_dll_directory"):
+        return
+    try:
+        os.add_dll_directory(str(cti.parent))
+    except Exception as exc:
+        log_event("camera_core.driver", "Не удалось добавить папку DLL в поиск", "warn", {"error": str(exc)})
 
-    for raw in search:
+
+_register_driver_dll_dir()
+
+
+# Путь к runtime-DLL продюсера (рядом с .cti или в PATH), либо None.
+def _find_mvs_runtime():
+    cti, _ = _discover_cti()
+    search = [cti.parent] if cti is not None else []
+    search += [Path(d) for d in os.environ.get("PATH", "").split(os.pathsep) if d]
+    for directory in search:
         try:
-            candidate = Path(raw) / MVS_RUNTIME_DLL
+            candidate = directory / MVS_RUNTIME_DLL
             if candidate.is_file():
                 return str(candidate)
         except Exception:
@@ -210,10 +213,72 @@ def int_to_ip(n):
     return socket.inet_ntoa(struct.pack("!I", n))
 
 
+# целое -> MAC вида AA:BB:CC:DD:EE:FF (для показа в инфо о камере)
+def _format_mac(value):
+    value = int(value)
+    return ":".join(f"{(value >> shift) & 0xFF:02X}" for shift in (40, 32, 24, 16, 8, 0))
+
+
 # сборка RTSP-ссылки (формат Dahua/Hikvision-совместимый)
 def build_rtsp_url(ip, username="admin", password="", channel=1, subtype=0, port=554):
     credentials = f"{username}:{password}@" if username else ""
     return f"rtsp://{credentials}{ip}:{port}/cam/realmonitor?channel={channel}&subtype={subtype}"
+
+
+# GenICam Bayer-формат -> код дебайеринга OpenCV. ВНИМАНИЕ: OpenCV именует
+# Байер-паттерн от ВТОРОГО пикселя строки/столбца, поэтому имена «перевёрнуты»
+# относительно GenICam (GenICam BayerRG соответствует OpenCV BayerBG2BGR и т.д.).
+# Если после перехода на Bayer красный и синий поменяны местами — поставьте
+# соседний код из этой таблицы (RG<->BG, GR<->GB).
+_BAYER_TO_BGR = {
+    "BayerRG": cv2.COLOR_BayerBG2BGR,
+    "BayerGB": cv2.COLOR_BayerGR2BGR,
+    "BayerGR": cv2.COLOR_BayerGB2BGR,
+    "BayerBG": cv2.COLOR_BayerRG2BGR,
+}
+
+
+def _bayer_code(pixel_format):
+    if not pixel_format:
+        return None
+    for key, code in _BAYER_TO_BGR.items():
+        if str(pixel_format).startswith(key):
+            return code
+    return None
+
+
+# разбор сырого буфера кадра в BGR-картинку c учётом пиксельного формата.
+# Число каналов определяем по размеру буфера: 3 (RGB/BGR), 1 (Mono/Bayer),
+# 4 (RGBA). Раньше код жёстко решейпил в 3 канала и падал на моно-камере
+# (ValueError: cannot reshape array of size ... into (h, w, 3)).
+def _to_bgr(data, width, height, pixel_format=None):
+    arr = np.asarray(data, dtype=np.uint8).reshape(-1)
+    pixels = width * height
+    if pixels <= 0 or arr.size == 0 or arr.size % pixels != 0:
+        return None
+
+    channels = arr.size // pixels
+
+    if channels == 1:
+        # 1 байт/пиксель: Bayer -> цвет (дебайеринг), иначе Mono -> серое.
+        # Bayer втрое легче RGB8 по трафику — рекомендуемый формат для GigE.
+        bayer = _bayer_code(pixel_format)
+        if bayer is not None:
+            return cv2.cvtColor(arr.reshape(height, width), bayer)
+        return cv2.cvtColor(arr.reshape(height, width), cv2.COLOR_GRAY2BGR)
+
+    if channels == 3:
+        frame = arr.reshape(height, width, 3)
+        # продюсер отдаёт RGB8 -> переводим в BGR (иначе R и B перепутаны в OpenCV).
+        # Формат неизвестен -> оставляем как есть (прежнее поведение).
+        if pixel_format and str(pixel_format).upper().startswith("RGB"):
+            return cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+        return frame
+
+    if channels == 4:
+        return cv2.cvtColor(arr.reshape(height, width, 4), cv2.COLOR_RGBA2BGR)
+
+    return None
 
 
 class BaseCameraWorker:
@@ -228,12 +293,18 @@ class BaseCameraWorker:
         self.save_photo = False
         self.photo_interval = None
         self.last_photo = None
+        # последний сохранённый файл фото (для показа во фронтенде)
+        self.last_photo_path = None
+        # сколько фото сохранено за текущую сессию автосохранения
+        self.photo_saved_count = 0
 
         # 0 нет автосохранения видео / 1 идёт / 2 завершение
         self.save_video = 0
         self.video_duration = None
         self.video_start = None
         self.video_writer = None
+        # последний файл записи видео (для показа во фронтенде)
+        self.last_video_path = None
 
         self.metrics = {
             "fps": 0.0,
@@ -258,14 +329,48 @@ class BaseCameraWorker:
         log_event("camera_core.close_stream", "Запрошена мягкая остановка потока")
         return {"status": "stopping"}
 
+    # ---------- пути сохранения ----------
+
+    # безопасное имя камеры для имён файлов (серийник без спецсимволов)
+    def _camera_tag(self):
+        tag = re.sub(r"[^A-Za-z0-9_.-]+", "_", str(self.serial_number or "camera")).strip("_")
+        return tag or "camera"
+
+    # папка сохранения фото: dataset/<серийник> (своя на каждую камеру)
+    def photo_dir(self):
+        return Path("dataset") / self._camera_tag()
+
+    # папка сохранения видео: Videos/<серийник>
+    def video_dir(self):
+        return Path("Videos") / self._camera_tag()
+
+    # папка и шаблон имени файлов фото — показываем во фронтенде
+    def photo_save_info(self):
+        return {"dir": str(self.photo_dir().resolve()), "pattern": "frame_<дата>.jpg"}
+
+    # папка и шаблон имени файлов видео — показываем во фронтенде
+    def video_save_info(self):
+        return {"dir": str(self.video_dir().resolve()), "pattern": "video_<дата>.avi"}
+
     # ---------- фото ----------
+
+    # длительность текущей записи видео в секундах (0 если не пишем)
+    def video_elapsed(self):
+        if self.save_video == 1 and self.video_start:
+            return int(time.time() - self.video_start)
+        return 0
 
     def on_photo(self, interval):
         self.save_photo = True
         self.photo_interval = interval
+        # новая сессия автосохранения — обнуляем счётчик
+        self.photo_saved_count = 0
 
-        log_event("camera_core.on_save", "Вкл. автосохранение фото c интервалом", "info", {"interval": interval})
-        return {"status": "ok", "photo_enabled": True, "interval": self.photo_interval}
+        info = self.photo_save_info()
+        log_event("camera_core.on_save", "Вкл. автосохранение фото c интервалом", "info",
+                  {"interval": interval, "save_dir": info["dir"], "file_pattern": info["pattern"]})
+        return {"status": "ok", "photo_enabled": True, "interval": self.photo_interval,
+                "save_dir": info["dir"], "file_pattern": info["pattern"]}
 
     def off_photo(self):
         self.save_photo = False
@@ -291,13 +396,16 @@ class BaseCameraWorker:
 
         return False
 
-    @staticmethod
-    def write_photo(img):
-        folder = Path("dataset")
+    # путь: dataset/<серийник>/frame_<дата-время>.jpg
+    def write_photo(self, img):
+        folder = self.photo_dir()
         folder.mkdir(parents=True, exist_ok=True)
-        filename = f"frame_{datetime.now().strftime('%d_%m_%H_%M_%S')}.jpg"
+        filename = f"frame_{datetime.now().strftime('%d_%m_%Y_%H_%M_%S')}.jpg"
         path = os.path.join(folder, filename)
         cv2.imwrite(path, img)
+        self.last_photo_path = path
+        self.photo_saved_count += 1
+        return path
 
     # ---------- видео ----------
 
@@ -310,8 +418,11 @@ class BaseCameraWorker:
         if self.save_video == 0:
             self.save_video = 1
             self.video_start = time.time()
-        log_event("camera_core.on_video", "Вкл. автосохранение видео с длительностью: ", "info", {"video_duration": self.video_duration})
-        return {"status": "ok", "video_enabled": "1"}
+        info = self.video_save_info()
+        log_event("camera_core.on_video", "Вкл. автосохранение видео с длительностью: ", "info",
+                  {"video_duration": self.video_duration, "save_dir": info["dir"], "file_pattern": info["pattern"]})
+        return {"status": "ok", "video_enabled": "1",
+                "save_dir": info["dir"], "file_pattern": info["pattern"]}
 
     def off_video(self):
         if self.save_video == 1:
@@ -326,13 +437,14 @@ class BaseCameraWorker:
 
     def _write_video(self, img, fps):
         if self.video_writer is None:
-            folder = Path("Videos")
+            folder = self.video_dir()
             folder.mkdir(parents=True, exist_ok=True)
-            filename = f"Video{datetime.now().strftime('%d_%m_%H_%M_%S')}.avi"
+            filename = f"video_{datetime.now().strftime('%d_%m_%Y_%H_%M_%S')}.avi"
             path = os.path.join(folder, filename)
             fourcc = cv2.VideoWriter_fourcc(*"MJPG")
             writer_fps = fps if fps and fps > 0 else DEFAULT_VIDEO_FPS
             self.video_writer = cv2.VideoWriter(path, fourcc, writer_fps, (img.shape[1], img.shape[0]))
+            self.last_video_path = path
 
         self.video_writer.write(img)
 
@@ -377,6 +489,9 @@ class CameraWorker(BaseCameraWorker):
         self.ia = None
         # лимиты/текущие настройки камеры (заполняется при подключении)
         self.data_limit = None
+        # фактический конфиг, с которым камера запущена в последний раз
+        # (читается с камеры после применения настроек) — для значка «инфо»
+        self.current_config = None
         self.advanced_settings = False
 
         # GenTL ID сетевого интерфейса (вспомогательный фильтр)
@@ -453,7 +568,7 @@ class CameraWorker(BaseCameraWorker):
     def read_settings(self, node_map):
         if not self.manager.check():
             return None
-        return {
+        data = {
             "width": {
                 "value": node_map.Width.value,
                 "min": node_map.Width.min,
@@ -486,6 +601,16 @@ class CameraWorker(BaseCameraWorker):
                 "options": node_map.ExposureAuto.symbolics,
             },
         }
+        # пиксельный формат (RGB8/Mono8/BayerRG8/...) — нужен, чтобы выбрать цвет;
+        # набор у каждой камеры свой, поэтому через try
+        try:
+            data["pixel_format"] = {
+                "value": node_map.PixelFormat.value,
+                "options": list(node_map.PixelFormat.symbolics),
+            }
+        except Exception:
+            pass
+        return data
 
     # ---------- информация о камере ----------
 
@@ -529,6 +654,98 @@ class CameraWorker(BaseCameraWorker):
                     except Exception:
                         pass
 
+    # полная read-only информация о камере (для модалки «инфо»).
+    # Как и get_ip: открываем control, читаем доступные узлы, отдаём список.
+    def get_info(self):
+        status = self.manager.access_status(self.serial_number)
+        if status != 1:
+            log_event("camera_core.get_info", "Камера недоступна для запроса информации", "warn",
+                      {"serial_number": self.serial_number, "status_camera": str(status)})
+            return None
+
+        # пробные данные(потом убрать)
+        if self.serial_number == "DA123123":
+            return {"items": [
+                {"label": "Модель", "value": "Mock-камера"},
+                {"label": "Серийный номер", "value": "DA123123"},
+                {"label": "IP-адрес", "value": "192.168.2.10"},
+            ]}
+
+        if not self.manager.check():
+            return None
+
+        # control-операция — сериализуем (один control-канал на камеру)
+        with self._control_lock:
+            ia = None
+            try:
+                node_map, ia = self.open_node_map()
+                if node_map is None:
+                    return None
+                return {"items": self._collect_info(node_map)}
+            finally:
+                if ia is not None:
+                    try:
+                        ia.destroy()
+                    except Exception:
+                        pass
+
+    # сбор доступных read-only полей; отсутствующие узлы тихо пропускаем
+    @staticmethod
+    def _collect_info(node_map):
+        def val(node_name, fmt=None):
+            try:
+                value = getattr(node_map, node_name).value
+            except Exception:
+                return None
+            if fmt is not None:
+                try:
+                    return fmt(value)
+                except Exception:
+                    return value
+            return value
+
+        items = []
+
+        def add(label, value):
+            if value is not None and value != "":
+                items.append({"label": label, "value": str(value)})
+
+        add("Модель", val("DeviceModelName"))
+        add("Производитель", val("DeviceVendorName"))
+        add("Серийный номер", val("DeviceSerialNumber"))
+        add("Версия прошивки", val("DeviceVersion") or val("DeviceFirmwareVersion"))
+        add("Имя устройства", val("DeviceUserID"))
+        add("IP-адрес", val("GevCurrentIPAddress", lambda v: int_to_ip(int(v))))
+        add("Маска подсети", val("GevCurrentSubnetMask", lambda v: int_to_ip(int(v))))
+        add("Шлюз", val("GevCurrentDefaultGateway", lambda v: int_to_ip(int(v))))
+        add("MAC-адрес", val("GevMACAddress", _format_mac))
+
+        width_max, height_max = val("WidthMax"), val("HeightMax")
+        if width_max and height_max:
+            add("Макс. разрешение", f"{width_max} × {height_max}")
+
+        width, height = val("Width"), val("Height")
+        if width and height:
+            add("Текущее разрешение", f"{width} × {height}")
+
+        add("Формат пикселей", val("PixelFormat"))
+
+        frame_rate = val("AcquisitionFrameRate")
+        if frame_rate:
+            try:
+                add("Частота кадров", f"{float(frame_rate):.2f} fps")
+            except Exception:
+                add("Частота кадров", frame_rate)
+
+        temperature = val("DeviceTemperature")
+        if temperature is not None:
+            try:
+                add("Температура", f"{float(temperature):.1f} °C")
+            except Exception:
+                add("Температура", temperature)
+
+        return items
+
     # ---------- применение настроек ----------
 
     # проверка диапазона значения настройки
@@ -539,9 +756,22 @@ class CameraWorker(BaseCameraWorker):
         return min_value <= value <= max_value
 
     def apply_settings(self, node_map, width=None, height=None, offset_x=None, offset_y=None,
-                       fps=None, exposure_auto=None, exposure_time=None):
+                       fps=None, exposure_auto=None, exposure_time=None, pixel_format=None):
         limits = self.data_limit
         try:
+            # пиксельный формат задаём первым: он меняет размер кадра/каналы,
+            # и от него зависит корректный разбор буфера в get_frame
+            if pixel_format:
+                try:
+                    if pixel_format in node_map.PixelFormat.symbolics:
+                        node_map.PixelFormat.value = pixel_format
+                    else:
+                        log_event("camera_core.apply_settings_camera", "Пиксельный формат не поддерживается камерой",
+                                  "warn", {"pixel_format": pixel_format})
+                except Exception as e:
+                    log_event("camera_core.apply_settings_camera", "Не удалось задать пиксельный формат",
+                              "warn", {"error": str(e), "pixel_format": pixel_format})
+
             if self.check_value(width, limits["width"]["min"], limits["width"]["max"]):
                 node_map.Width.value = int(width)
 
@@ -556,6 +786,10 @@ class CameraWorker(BaseCameraWorker):
                 node_map.OffsetY.value = int(offset_y)
 
             if self.check_value(fps, 0.1, 30):
+                # как в рабочей до-multicam версии (02f71aa): просто пишем
+                # AcquisitionFrameRate, НЕ включаем AcquisitionFrameRateEnable.
+                # Принудительное включение rate-control было единственным
+                # всегда-исполняемым отличием от рабочего потока — убрано.
                 node_map.AcquisitionFrameRate.value = int(fps)
 
             # авто-экспозиция (Off / Once / Continuous)
@@ -582,7 +816,20 @@ class CameraWorker(BaseCameraWorker):
                 data = buffer.payload.components[0].data
                 real_width = node_map.Width.value
                 real_height = node_map.Height.value
-                img = np.array(data, dtype=np.uint8).reshape(real_height, real_width, 3)
+                try:
+                    pixel_format = node_map.PixelFormat.value
+                except Exception:
+                    pixel_format = None
+                img = _to_bgr(data, real_width, real_height, pixel_format)
+
+                if img is None:
+                    log_event("camera_core.get_frame", "Не удалось разобрать кадр (формат пикселей)", "warn",
+                              {"serial_number": self.serial_number,
+                               "size": int(np.asarray(data).size),
+                               "width": real_width, "height": real_height,
+                               "hint": "выберите подходящий пиксельный формат (RGB/Mono)"})
+                    return None, None
+
                 ok, encoded = cv2.imencode(".jpg", img)
 
                 if not ok:
@@ -598,8 +845,31 @@ class CameraWorker(BaseCameraWorker):
                 return None, None
             raise
 
+    # фактические значения, прочитанные с камеры (для значка «инфо»).
+    # Отсутствующие узлы тихо пропускаем.
+    @staticmethod
+    def _read_current_config(node_map):
+        def rv(name, cast=None):
+            try:
+                value = getattr(node_map, name).value
+                return cast(value) if cast is not None else value
+            except Exception:
+                return None
+
+        config = {
+            "width": rv("Width", int),
+            "height": rv("Height", int),
+            "offset_x": rv("OffsetX", int),
+            "offset_y": rv("OffsetY", int),
+            "exposure_auto": rv("ExposureAuto"),
+            "exposure_time": rv("ExposureTime", lambda v: int(float(v))),
+            "pixel_format": rv("PixelFormat"),
+            "fps": rv("AcquisitionFrameRate", lambda v: round(float(v), 2)),
+        }
+        return {k: v for k, v in config.items() if v is not None}
+
     def generate(self, width=None, height=None, offset_x=None, offset_y=None,
-                 fps=None, exposure_auto=None, exposure_time=None):
+                 fps=None, exposure_auto=None, exposure_time=None, pixel_format=None):
         ia = None
         last_frame_time = None
 
@@ -625,6 +895,7 @@ class CameraWorker(BaseCameraWorker):
                     "fps": fps,
                     "exposure_auto": exposure_auto,
                     "exposure_time": exposure_time,
+                    "pixel_format": pixel_format,
                 },
             )
 
@@ -642,18 +913,39 @@ class CameraWorker(BaseCameraWorker):
                 fps=fps,
                 exposure_auto=exposure_auto,
                 exposure_time=exposure_time,
+                pixel_format=pixel_format,
             )
 
             if not ok:
                 log_event("camera_core.generate_stream", "Ошибка применения настроек камеры", "warn", {"error": str(err)})
                 return
 
+            # запоминаем фактический конфиг (читаем с камеры ПОСЛЕ применения,
+            # пока держим node_map) — для значка «инфо» на странице камеры
+            self.current_config = self._read_current_config(node_map)
+
             self.ia = ia
             self.running = True
 
-            ia.start()
-            log_event("camera_core.generate_stream", "Поток камеры запущен", "success", {"serial_number": self.serial_number})
+            # num_buffers НЕ трогаем — оставляем дефолт harvesters, как было до
+            # multicam-рефактора (тогда поток одиночной камеры был стабилен).
+            # Принудительные 24 буфера (≈360 МБ на 5 МП RGB8) дестабилизировали
+            # продюсер Hikrobot: проходило ~5 кадров, дальше сплошные таймауты -1011
+            # ("хватает на 5 кадров и потом падает"). Несколько GigE одновременно мы
+            # больше не запускаем (ограничение в UI), поэтому раздувать пул не нужно.
 
+            ia.start()
+            log_event("camera_core.generate_stream", "Поток камеры запущен", "success",
+                      {"serial_number": self.serial_number, "num_buffers": getattr(ia, "num_buffers", None)})
+
+            # метрики считаем по факту текущего сеанса (стартовый прогрев не копим)
+            self.metrics["errors"] = 0
+            self.metrics["image_number"] = 0
+            self.metrics["fps"] = 0.0
+            self.metrics["bandwidth_mbps"] = 0.0
+
+            # простая логика таймаутов как до multicam (02f71aa "6.7"): считаем
+            # подряд идущие пропуски кадра, выходим после MAX_FRAME_TIMEOUTS.
             timeouts_in_a_row = 0
 
             while self.running:
@@ -661,7 +953,10 @@ class CameraWorker(BaseCameraWorker):
                     img, frame = self.get_frame(ia, node_map)
 
                     if frame is None or img is None:
-                        self.metrics["errors"] += 1
+                        # -1011 / пустой кадр — это НЕ ошибка приложения, а нормальный
+                        # пропуск/недокадр (на низком FPS между кадрами и при потере
+                        # пакетов их много). В "errors" их не считаем, иначе счётчик
+                        # сыпет по 20/сек при 1 fps. Копим только для логики выхода.
                         timeouts_in_a_row += 1
                         if timeouts_in_a_row >= MAX_FRAME_TIMEOUTS:
                             log_event("camera_core.generate_stream",
@@ -693,6 +988,8 @@ class CameraWorker(BaseCameraWorker):
                 except Exception as e:
                     if not self.running:
                         break
+                    # настоящая ошибка потока (не -1011) — вот её и считаем
+                    self.metrics["errors"] += 1
                     log_event("camera_core.generate_stream", "Ошибка получения потока", "error",
                               {"serial_number": self.serial_number, **_explain_error(e)})
                     break
@@ -1123,12 +1420,17 @@ class CameraManager:
         self.workers = {}
         # серийник -> RtspCameraWorker (RTSP)
         self.rtsp_workers = {}
+        # реестр воркеров общий на все потоки. Под многопоточный режим (несколько
+        # камер стримятся одновременно) создание воркера сериализуем, чтобы два
+        # запроса по одному серийнику не создали два конкурирующих объекта.
+        self._registry_lock = threading.Lock()
 
     # создать/получить GigE-камеру
     def get(self, serial_number) -> CameraWorker:
-        if serial_number not in self.workers:
-            self.workers[serial_number] = CameraWorker(serial_number, self)
-        return self.workers[serial_number]
+        with self._registry_lock:
+            if serial_number not in self.workers:
+                self.workers[serial_number] = CameraWorker(serial_number, self)
+            return self.workers[serial_number]
 
     # полный сброс Harvester (используется при GenTL -1020 resource exhausted)
     def reset_harvester(self):
@@ -1217,6 +1519,112 @@ class CameraManager:
         raise last_error if last_error is not None else ValueError(
             f"не удалось открыть устройство: {serial_number} (пробовали: {tried})")
 
+    # ---------- ForceIP (смена IP для камеры в другой подсети) ----------
+
+    # принудительно задать IP через node_map GenTL-интерфейса.
+    # Работает, даже когда control-канал не открыть (камера в чужой подсети),
+    # т.к. ForceIP идёт широковещательно на уровне интерфейса. IP временный —
+    # держится до перезагрузки камеры, но этого достаточно, чтобы она появилась
+    # в нашей подсети и дальше уже можно прописать постоянный IP обычным путём.
+    def force_ip(self, serial_number, ip, mask=None, gateway=None):
+        self.load_driver()
+        if not self.driver_loaded:
+            return {"ip": "not_driver"}
+        try:
+            self.harvester.update()
+        except Exception:
+            pass
+
+        device = next((d for d in self.harvester.device_info_list
+                       if getattr(d, "serial_number", None) == serial_number), None)
+        if device is None:
+            log_event("camera_core.force_ip", "Камера не найдена для ForceIP", "warn",
+                      {"serial_number": serial_number})
+            return {"ip": "not_found"}
+
+        parent = getattr(device, "parent", None)
+        iface = getattr(parent, "node_map", None) if parent is not None else None
+        if iface is None:
+            log_event("camera_core.force_ip", "Нет доступа к node_map интерфейса", "warn",
+                      {"serial_number": serial_number})
+            return {"ip": "no_interface"}
+
+        if not mask:
+            mask = "255.255.255.0"
+        if not gateway:
+            gateway = "0.0.0.0"
+
+        try:
+            # обновим список устройств на интерфейсе (имя команды у продюсеров разное)
+            for cmd in ("DeviceUpdateList", "GevDeviceUpdateList"):
+                try:
+                    getattr(iface, cmd).execute()
+                    break
+                except Exception:
+                    continue
+
+            if not self._select_iface_device(iface, serial_number):
+                log_event("camera_core.force_ip", "Не удалось выбрать камеру на интерфейсе", "warn",
+                          {"serial_number": serial_number})
+                return {"ip": "device_select_failed"}
+
+            iface.GevDeviceForceIPAddress.value = ip_to_int(ip)
+            iface.GevDeviceForceSubnetMask.value = ip_to_int(mask)
+            try:
+                iface.GevDeviceForceGateway.value = ip_to_int(gateway)
+            except Exception:
+                pass
+            iface.GevDeviceForceIP.execute()
+
+            log_event("camera_core.force_ip", "ForceIP выполнен", "success",
+                      {"serial_number": serial_number, "ip": ip, "mask": mask, "gateway": gateway})
+
+            # запись устарела — следующий scan/connect возьмёт новую
+            worker = self.workers.get(serial_number)
+            if worker is not None:
+                worker.interface_id = None
+                worker.device_handle = None
+            return {"ip": "force_ip_ok", "new_ip": ip}
+        except Exception as e:
+            log_event("camera_core.force_ip", "Ошибка ForceIP", "error",
+                      {"serial_number": serial_number, **_explain_error(e)})
+            return {"ip": "force_ip_failed", "error": str(e)}
+
+    # выбрать нужное устройство на интерфейсе по серийнику (через DeviceSelector)
+    @staticmethod
+    def _select_iface_device(iface, serial_number):
+        try:
+            selector = iface.DeviceSelector
+        except Exception:
+            # нет селектора — возможно, ForceIP-ноды относятся к единственному устройству
+            return True
+
+        try:
+            max_index = int(selector.max)
+        except Exception:
+            max_index = 0
+
+        for index in range(max_index + 1):
+            try:
+                selector.value = index
+            except Exception:
+                continue
+            for node_name in ("DeviceSerialNumber", "GevDeviceSerialNumber"):
+                try:
+                    if str(getattr(iface, node_name).value) == str(serial_number):
+                        return True
+                except Exception:
+                    continue
+
+        # серийник не прочитать, но устройство на интерфейсе одно — выбираем его
+        if max_index == 0:
+            try:
+                selector.value = 0
+                return True
+            except Exception:
+                return False
+        return False
+
     # ---------- перечисление устройств с разбивкой по интерфейсам ----------
 
     @staticmethod
@@ -1240,6 +1648,11 @@ class CameraManager:
         if parent is None:
             return None
         return getattr(parent, "display_name", None) or getattr(parent, "model", None)
+
+    @staticmethod
+    def _model(device_info):
+        # модель камеры (например, MV-CS050-10GC) — показываем её в списке
+        return getattr(device_info, "model", None) or None
 
     @staticmethod
     def _interface_ip(device_info):
@@ -1289,6 +1702,7 @@ class CameraManager:
                 "serial_number": serial,
                 "access_status": status,
                 "available": status == 1,
+                "model": self._model(device),
                 "interface_id": self._interface_id(device),
                 "interface_name": self._interface_name(device),
                 "interface_ip": self._interface_ip(device),
@@ -1303,6 +1717,7 @@ class CameraManager:
             "serial_number": "DA123123",
             "access_status": 1,
             "available": True,
+            "model": "Mock-камера",
             "interface_id": "mock",
             "interface_name": "Mock-интерфейс",
             "interface_ip": "192.168.2.10",
@@ -1313,15 +1728,16 @@ class CameraManager:
 
     # создать/получить RTSP-камеру (rtsp_url нужен при первом обращении)
     def get_rtsp(self, serial_number, rtsp_url=None):
-        worker = self.rtsp_workers.get(serial_number)
-        if worker is None:
-            if not rtsp_url:
-                return None
-            worker = RtspCameraWorker(serial_number, self, rtsp_url)
-            self.rtsp_workers[serial_number] = worker
-        elif rtsp_url:
-            worker.rtsp_url = rtsp_url
-        return worker
+        with self._registry_lock:
+            worker = self.rtsp_workers.get(serial_number)
+            if worker is None:
+                if not rtsp_url:
+                    return None
+                worker = RtspCameraWorker(serial_number, self, rtsp_url)
+                self.rtsp_workers[serial_number] = worker
+            elif rtsp_url:
+                worker.rtsp_url = rtsp_url
+            return worker
 
     # статус доступа: для пары (serial, interface_id), либо лучший статус по серийнику
     def access_status(self, serial_number, interface_id=None):
@@ -1393,8 +1809,8 @@ class CameraManager:
             self.harvester.add_file(cti_path)
             self.harvester.update()
             self.driver_loaded = True
-            # если продюсер взят как "bundled", но рядом нет runtime — это и есть
-            # типовая причина -1003 на create(); подсветим источник в логе
+            # в лог пишем, откуда взят продюсер и найден ли его runtime — удобно
+            # для диагностики самодостаточной поставки (всё из папки Driver/)
             runtime = _find_mvs_runtime()
             log_event("camera_core.load_driver", "Драйвер загружен", "success",
                       {"cti_path": cti_path, "source": cti_source,

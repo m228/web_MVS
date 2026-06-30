@@ -9,6 +9,7 @@
     backendTimer: null,
     backendErrorShown: false,
     elements: {},
+    filter: new Set(['info', 'success', 'warn', 'error', 'debug']),
   };
 
   function normalizeLevel(level) {
@@ -88,6 +89,7 @@
     state.items
       .slice()
       .reverse()
+      .filter((item) => state.filter.has(item.level))
       .forEach((item) => {
         const card = document.createElement('article');
         card.className = `debug-entry debug-entry--${item.level}`;
@@ -274,6 +276,43 @@
     };
   }
 
+  function buildFilterBar() {
+    const { panel, list } = state.elements;
+    if (!panel || !list || state.elements.filterBar) return;
+
+    const bar = document.createElement('div');
+    bar.className = 'debug-filter';
+
+    const levels = [
+      ['info', 'INFO'],
+      ['success', 'SUCCESS'],
+      ['warn', 'WARNING'],
+      ['error', 'ERROR'],
+      ['debug', 'DEBUG'],
+    ];
+
+    levels.forEach(([level, label]) => {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = `debug-filter__btn debug-filter__btn--${level} is-active`;
+      btn.textContent = label;
+      btn.addEventListener('click', () => {
+        if (state.filter.has(level)) {
+          state.filter.delete(level);
+          btn.classList.remove('is-active');
+        } else {
+          state.filter.add(level);
+          btn.classList.add('is-active');
+        }
+        render();
+      });
+      bar.appendChild(btn);
+    });
+
+    list.parentNode.insertBefore(bar, list);
+    state.elements.filterBar = bar;
+  }
+
   function mount() {
     state.elements.panel = document.getElementById('debugConsoleSection');
     state.elements.list = document.getElementById('debugConsoleList');
@@ -286,6 +325,7 @@
     state.elements.clear?.addEventListener('click', clear);
     state.elements.save?.addEventListener('click', download);
 
+    buildFilterBar();
     render();
     syncToggleState();
 

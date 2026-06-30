@@ -1,4 +1,6 @@
 import asyncio
+import os
+import threading
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -10,6 +12,8 @@ from logger import get_events, log_event
 from camera_core import manager, build_rtsp_url
 import rtsp_store
 import net_tools
+import updater
+from paths import read_version, BUNDLE_DIR, DATA_DIR
 
 
 def api_log(source: str, message: str, level: str = "info", payload: dict | None = None):
@@ -62,6 +66,43 @@ def network_page():
 @app.get("/api/debug/logs")
 def api_debug_logs(since_id: int = 0):
     return get_events(since_id)
+
+
+# версия поставки + окружение (Python/genicam/harvesters + .cti) — удобно проверить
+# на целевой машине, что обновление применилось и драйвер тот же
+@app.get("/api/debug/info")
+def api_debug_info():
+    return {
+        "version": read_version(),
+        "data_dir": str(DATA_DIR),
+        "bundle_dir": str(BUNDLE_DIR),
+        **manager.log_environment(),
+    }
+
+
+# --- самообновление из релизов GitHub (см. updater.py) ---
+
+@app.get("/api/update/check")
+def api_update_check():
+    api_log("api.update", "Проверка обновлений")
+    return updater.check_latest()
+
+
+@app.get("/api/update/download")
+def api_update_download():
+    api_log("api.update", "Скачивание обновления")
+    return updater.download_latest()
+
+
+@app.get("/api/update/apply")
+def api_update_apply():
+    api_log("api.update", "Применение обновления (перезапуск)")
+    result = updater.apply_update()
+    if result.get("ok"):
+        # даём ответу уйти клиенту, затем выходим — апдейтер ждёт выхода процесса,
+        # заменяет файлы и снова запускает приложение
+        threading.Timer(2.0, lambda: os._exit(0)).start()
+    return result
 
 
 @app.get("/api/cams")

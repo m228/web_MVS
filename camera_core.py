@@ -12,6 +12,7 @@ import struct
 import cv2
 
 from logger import log_event
+from paths import BUNDLE_DIR, DATA_DIR
 
 import subprocess
 
@@ -139,7 +140,8 @@ os.environ.setdefault("OPENCV_FFMPEG_CAPTURE_OPTIONS", "rtsp_transport;tcp")
 
 # Путь до директории программы и имена файлов драйвера. Поставка самодостаточна:
 # и продюсер (.cti), и его runtime (MvCameraControl.dll) лежат в папке Driver/.
-PROGRAM_DIR = Path(__file__).resolve().parent
+# каталог с кодом/ассетами и драйвером (рядом с exe в собранном бандле); см. paths.py
+PROGRAM_DIR = BUNDLE_DIR
 CTI_FILENAME = "MvProducerGEV.cti"
 MVS_RUNTIME_DLL = "MvCameraControl.dll"
 
@@ -336,13 +338,14 @@ class BaseCameraWorker:
         tag = re.sub(r"[^A-Za-z0-9_.-]+", "_", str(self.serial_number or "camera")).strip("_")
         return tag or "camera"
 
-    # папка сохранения фото: dataset/<серийник> (своя на каждую камеру)
+    # папка сохранения фото: <данные>/dataset/<серийник> (своя на каждую камеру).
+    # DATA_DIR — каталог пользовательских данных, переживающий обновление (см. paths.py)
     def photo_dir(self):
-        return Path("dataset") / self._camera_tag()
+        return DATA_DIR / "dataset" / self._camera_tag()
 
-    # папка сохранения видео: Videos/<серийник>
+    # папка сохранения видео: <данные>/Videos/<серийник>
     def video_dir(self):
-        return Path("Videos") / self._camera_tag()
+        return DATA_DIR / "Videos" / self._camera_tag()
 
     # папка и шаблон имени файлов фото — показываем во фронтенде
     def photo_save_info(self):

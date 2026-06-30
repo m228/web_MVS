@@ -298,7 +298,7 @@ select {
 
 .stats-grid {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
   gap: 18px;
 }
 
@@ -1825,6 +1825,49 @@ body.modal-open {
 .camera-chip--off {
   opacity: 0.55;
   cursor: not-allowed;
+}
+
+/* --- карточка «Обновление» (компактная, внутри stats-grid) --- */
+.status-chip--warn {
+  background: var(--warning-soft);
+  color: var(--warning);
+}
+
+.metric-card--update {
+  justify-content: flex-start;
+  gap: 10px;
+}
+
+.metric-card--update .metric-card__value {
+  font-size: clamp(22px, 3vw, 28px);
+}
+
+.update-status:empty,
+.update-actions:empty {
+  display: none;
+}
+
+.update-status .status-chip {
+  min-height: auto;
+  padding: 7px 12px;
+  font-size: 13px;
+  text-align: center;
+}
+
+.update-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.update-actions .btn-primary,
+.update-actions .btn-secondary {
+  width: 100%;
+}
+
+.update-check-btn {
+  margin-top: auto;
+  width: 100%;
 }
 
 .camera-chip__serial {

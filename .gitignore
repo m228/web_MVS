@@ -1,7 +1,23 @@
+# --- окружение и IDE (локальное, у каждого своё) ---
 /.venv
 /.idea
-/__pycache__
+/.vscode
+/.claude/launch.json
+
+# --- кэш Python ---
+__pycache__/
 *.pyc
+*.pyo
+
+# --- артефакты сборки PyInstaller (собираются из исходников) ---
+/build
+/dist
+/app
+
+# --- пользовательские данные (создаются в работе приложения) ---
 /dataset
 /Videos
 /rtsp_cameras.json
+
+# --- временная папка самообновления ---
+/.update

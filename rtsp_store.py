@@ -4,11 +4,12 @@
 перезапуска их не вводить заново. Ключ записи — URL подключения.
 """
 import json
-from pathlib import Path
 
 from logger import log_event
+from paths import DATA_DIR
 
-STORE = Path(__file__).resolve().parent / "rtsp_cameras.json"
+# в каталоге пользовательских данных, чтобы база переживала обновление (см. paths.py)
+STORE = DATA_DIR / "rtsp_cameras.json"
 
 
 def load():

@@ -339,3 +339,25 @@ const NetApi = {
 };
 
 window.NetApi = NetApi;
+
+const UpdateApi = {
+  check() {
+    return apiGet('/api/update/check', 'Ошибка проверки обновлений:',
+      { source: 'api.update', logRequest: false, logSuccess: false });
+  },
+  download() {
+    return apiGet('/api/update/download', 'Ошибка скачивания обновления:',
+      { source: 'api.update' });
+  },
+  apply() {
+    return apiGet('/api/update/apply', 'Ошибка применения обновления:',
+      { source: 'api.update' });
+  },
+  // текущая версия + окружение (используем для показа версии при загрузке)
+  info() {
+    return apiGet('/api/debug/info', 'Ошибка получения версии:',
+      { source: 'api.update', logRequest: false, logSuccess: false });
+  },
+};
+
+window.UpdateApi = UpdateApi;

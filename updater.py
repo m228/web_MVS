@@ -20,6 +20,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import urllib.request
 import zipfile
 from pathlib import Path
@@ -69,8 +70,20 @@ def _version_tuple(version: str):
     return tuple(int(n) for n in nums) if nums else (0,)
 
 
-def _fetch_latest_meta():
-    """(tag, asset_dict|None, notes) последнего релиза с GitHub."""
+_meta_cache = None  # (ts, (tag, asset, notes)) — чтобы download не дёргал API повторно
+
+
+def _fetch_latest_meta(max_age: float = 0.0):
+    """(tag, asset_dict|None, notes) последнего релиза с GitHub.
+
+    max_age>0 позволяет переиспользовать недавний ответ (download после check),
+    чтобы не делать второй запрос и гарантированно скачать ту же версию, что
+    показана в UI — между двумя запросами релиз мог смениться.
+    """
+    global _meta_cache
+    if max_age > 0 and _meta_cache is not None and (time.time() - _meta_cache[0]) < max_age:
+        return _meta_cache[1]
+
     req = urllib.request.Request(API_LATEST, headers={
         "User-Agent": "web_MVS-update",
         "Accept": "application/vnd.github+json",
@@ -84,7 +97,9 @@ def _fetch_latest_meta():
         if name.startswith(ASSET_PREFIX) and name.endswith(".zip"):
             asset = item
             break
-    return data.get("tag_name") or "", asset, data.get("body") or ""
+    meta = (data.get("tag_name") or "", asset, data.get("body") or "")
+    _meta_cache = (time.time(), meta)
+    return meta
 
 
 def check_latest():
@@ -145,7 +160,9 @@ def download_latest():
     if not is_frozen():
         return {"ok": False, "error": "Обновление доступно только в собранной версии (.exe)"}
     try:
-        tag, asset, _ = _fetch_latest_meta()
+        # переиспользуем свежий ответ от check_latest (последние 2 минуты),
+        # чтобы не делать второй запрос и скачать ту же версию, что в UI
+        tag, asset, _ = _fetch_latest_meta(max_age=120)
     except Exception as exc:
         return {"ok": False, "error": "Не удалось связаться с GitHub: " + str(exc)}
     if asset is None:

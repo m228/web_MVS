@@ -709,9 +709,15 @@ function initCameraPage() {
       if (cfg[key] === undefined || cfg[key] === null) return;
       const row = document.createElement('div');
       row.className = 'info-row';
-      row.innerHTML =
-        `<dt class="info-row__label">${label}</dt>` +
-        `<dd class="info-row__value">${String(cfg[key])}</dd>`;
+      // значение приходит с бэкенда (GenICam nodemap) — вставляем через textContent,
+      // а не innerHTML, чтобы исключить XSS при неожиданном содержимом
+      const dt = document.createElement('dt');
+      dt.className = 'info-row__label';
+      dt.textContent = label;
+      const dd = document.createElement('dd');
+      dd.className = 'info-row__value';
+      dd.textContent = String(cfg[key]);
+      row.append(dt, dd);
       configList.appendChild(row);
     });
   }

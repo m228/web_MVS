@@ -679,8 +679,9 @@ function resetTileMetrics(index) {
 // рывками; маленькое окно мигало "нет кадров" при редких просадках. 10 c терпимо.
 const LIVENESS_MS = 10000;
 
+let metricsTimer = null;
 function startMetricsPolling() {
-  setInterval(async () => {
+  metricsTimer = setInterval(async () => {
     const now = Date.now();
     for (let i = 0; i < state.tiles.length; i += 1) {
       const tile = state.tiles[i];
@@ -1064,6 +1065,7 @@ async function initMultiPage() {
   startMetricsPolling();
 
   window.addEventListener('beforeunload', () => {
+    if (metricsTimer) clearInterval(metricsTimer);
     state.tiles.forEach((tile) => {
       if (tile.connected && tile.serial) {
         const base = tile.kind === 'rtsp' ? '/api/rtsp/close_stream_force' : '/api/camera/close_stream_force';

@@ -2,6 +2,7 @@ import asyncio
 import os
 import threading
 from contextlib import asynccontextmanager
+from urllib.parse import urlparse
 
 from fastapi import FastAPI
 from fastapi.responses import FileResponse, StreamingResponse, Response
@@ -422,6 +423,11 @@ def camera_current_config(serial_number: str):
 
 def _resolve_rtsp_url(url, ip, username, password, channel, subtype):
     if url:
+        # только rtsp(s): без проверки cv2.VideoCapture открыл бы file://, http:// и пр.
+        # (чтение локальных файлов / запросы во внутреннюю сеть — SSRF)
+        if urlparse(url).scheme.lower() not in ("rtsp", "rtsps"):
+            log_event("api.rtsp.stream", "Отклонён RTSP-URL с недопустимой схемой", "warn", {"url": url})
+            return None
         return url
     if ip:
         return build_rtsp_url(ip, username, password, channel, subtype)

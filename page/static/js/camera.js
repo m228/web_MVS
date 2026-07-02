@@ -499,14 +499,7 @@ function initCameraPage() {
   }
 
   // секунды -> «M:SS» (или «H:MM:SS» если больше часа)
-  function formatDuration(totalSeconds) {
-    const s = Math.max(0, Math.floor(Number(totalSeconds) || 0));
-    const hh = Math.floor(s / 3600);
-    const mm = Math.floor((s % 3600) / 60);
-    const ss = s % 60;
-    const pad = (n) => String(n).padStart(2, '0');
-    return hh > 0 ? `${hh}:${pad(mm)}:${pad(ss)}` : `${mm}:${pad(ss)}`;
-  }
+  // formatDuration / showSavePath вынесены в ui.js (общие для camera/multi/rtsp)
 
   function startStream() {
     const query = buildQueryFromForm();
@@ -728,18 +721,6 @@ function initCameraPage() {
   }
 
   // показать путь сохранения (папка + шаблон имени файла) из ответа сервера
-  function showSavePath(elementId, data) {
-    const el = document.getElementById(elementId);
-    if (!el) return;
-    if (data && data.save_dir) {
-      el.textContent = `Сохранение в: ${data.save_dir}\\${data.file_pattern || ''}`;
-      el.hidden = false;
-    } else {
-      el.hidden = true;
-      el.textContent = '';
-    }
-  }
-
   async function startPhotoSaving() {
     if (!isConnected) return;
 

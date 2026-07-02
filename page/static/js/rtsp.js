@@ -252,17 +252,7 @@ function initRtspPage() {
   }
 
   // показать путь сохранения (папка + шаблон имени файла) из ответа сервера
-  function showSavePath(elementId, data) {
-    const el = document.getElementById(elementId);
-    if (!el) return;
-    if (data && data.save_dir) {
-      el.textContent = `Сохранение в: ${data.save_dir}\\${data.file_pattern || ''}`;
-      el.hidden = false;
-    } else {
-      el.hidden = true;
-      el.textContent = '';
-    }
-  }
+  // showSavePath вынесена в ui.js (общая для camera/multi/rtsp)
 
   async function startPhotoSaving() {
     if (!isConnected) return;

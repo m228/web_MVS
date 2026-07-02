@@ -1015,7 +1015,6 @@ function getUpdateEls() {
     card: document.getElementById('updateCard'),
     checkBtn: document.getElementById('updateCheckBtn'),
     current: document.getElementById('updateCurrent'),
-    latest: document.getElementById('updateLatest'),
     status: document.getElementById('updateStatus'),
     actions: document.getElementById('updateActions'),
   };
@@ -1071,7 +1070,6 @@ async function checkUpdates() {
   }
 
   if (els.current && data.current) els.current.textContent = data.current;
-  if (els.latest) els.latest.textContent = data.latest || '—';
 
   if (data.error) {
     setUpdateStatus(data.error, 'status-chip--error');

@@ -505,7 +505,9 @@ class CameraWorker(BaseCameraWorker):
         # сериализация одновременных control-операций к одной камере
         # (без него Promise.all из фронта открывает 5 acquirer'ов на один control-канал
         # и они дерутся за -1005 AccessDenied)
-        self._control_lock = threading.Lock()
+        # RLock (не Lock): change_ip держит лок и внутри зовёт get_network_settings,
+        # который берёт этот же лок повторно — с нереентрантным Lock это дедлок.
+        self._control_lock = threading.RLock()
 
         # кэш последних "сетевых" данных, чтобы не дёргать control повторно
         self._cached_ip = None              # {"ip": "..."} | None

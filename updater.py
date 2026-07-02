@@ -37,6 +37,21 @@ def is_frozen() -> bool:
     return bool(getattr(sys, "frozen", False))
 
 
+def _safe_extract(zf: zipfile.ZipFile, dest: Path) -> None:
+    """Распаковать zip, отклоняя записи с путём за пределы dest (zip-slip).
+
+    Python 3.11 не поддерживает extractall(filter='data') (появился в 3.12),
+    поэтому проверяем цель каждой записи вручную. Архив приходит из сети —
+    а распаковывается в каталог приложения, работающего от админа.
+    """
+    dest = dest.resolve()
+    for member in zf.infolist():
+        target = (dest / member.filename).resolve()
+        if target != dest and dest not in target.parents:
+            raise ValueError(f"Небезопасный путь в архиве: {member.filename!r}")
+    zf.extractall(dest)
+
+
 def _app_dir() -> Path:
     """Папка, где лежат web_MVS.exe и _internal\\ (рядом с exe)."""
     return Path(sys.executable).resolve().parent
@@ -101,7 +116,8 @@ def download_latest():
     if STAGING.exists():
         shutil.rmtree(STAGING, ignore_errors=True)
     STAGING.mkdir(parents=True, exist_ok=True)
-    zip_path = STAGING / str(asset.get("name", "web_MVS_new.zip"))
+    # имя приходит из GitHub API — берём только basename, чтобы оно не увело файл из STAGING
+    zip_path = STAGING / Path(str(asset.get("name") or "web_MVS_new.zip")).name
 
     try:
         log_event("updater.download", "Скачиваю релиз", "info", {"name": asset.get("name")})
@@ -110,7 +126,7 @@ def download_latest():
         with urllib.request.urlopen(req, timeout=180) as resp, open(zip_path, "wb") as out:
             shutil.copyfileobj(resp, out)
         with zipfile.ZipFile(zip_path) as zf:
-            zf.extractall(STAGED)
+            _safe_extract(zf, STAGED)
     except Exception as exc:
         log_event("updater.download", "Ошибка скачивания/распаковки", "error", {"error": str(exc)})
         return {"ok": False, "error": "Ошибка скачивания: " + str(exc)}

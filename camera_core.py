@@ -1019,21 +1019,26 @@ class CameraWorker(BaseCameraWorker):
 
             self.running = False
 
-            if self.ia is not None:
+            # уничтожаем ЛОКАЛЬНЫЙ acquirer этого сеанса (ia), а не self.ia: при раннем
+            # выходе (провал apply_settings/open_node_map) self.ia ещё не выставлен, и
+            # опора на него утекала бы acquirer. destroy в try — если параллельный
+            # force_close уже уничтожил тот же объект, повторный вызов молча пройдёт.
+            if ia is not None:
                 try:
-                    self.ia.stop()
+                    ia.stop()
                 except Exception:
                     pass
 
                 try:
-                    self.ia.destroy()
+                    ia.destroy()
                 except Exception:
                     pass
 
-                if self.ia is ia:
-                    self.ia = None
+            # обнуляем ссылку, только если это всё ещё наш acquirer (не мешаем force_close)
+            if self.ia is ia:
+                self.ia = None
 
-                self._reset_save_state()
+            self._reset_save_state()
 
     def force_close(self):
         self.running = False

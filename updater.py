@@ -171,6 +171,16 @@ def download_latest():
     return {"ok": True, "version": staged_ver or _norm(tag)}
 
 
+def _ps_quote(value) -> str:
+    """Экранировать значение для вставки внутрь одинарных кавычек PowerShell.
+
+    В PS одинарная кавычка внутри '...' удваивается. Пути берутся из sys.executable,
+    но имя пользователя может содержать апостроф (например O'Brien) — без экранирования
+    такой путь разорвёт строку и сломает (в худшем случае — исказит) генерируемый скрипт.
+    """
+    return str(value).replace("'", "''")
+
+
 def apply_update():
     """Запустить отделённый апдейтер. Вызвавший эндпоинт после этого должен завершить
     процесс, чтобы апдейтер смог заменить файлы и перезапустить приложение."""
@@ -190,11 +200,11 @@ def apply_update():
     # права даёт встроенный в exe манифест (uac_admin), а detached-хелпер и так наследует
     # админ-токен запущенного приложения. Ход пишем в update.log рядом с exe — для отладки.
     ps = f"""$ErrorActionPreference = 'Continue'
-$app = '{app_dir}'
-$staging = '{STAGING}'
-$staged = '{STAGED}'
-$exe = '{exe}'
-$log = '{log_file}'
+$app = '{_ps_quote(app_dir)}'
+$staging = '{_ps_quote(STAGING)}'
+$staged = '{_ps_quote(STAGED)}'
+$exe = '{_ps_quote(exe)}'
+$log = '{_ps_quote(log_file)}'
 function W($m) {{ "$(Get-Date -Format 'HH:mm:ss') $m" | Out-File -FilePath $log -Append -Encoding utf8 }}
 W "=== apply: жду выхода приложения (pid {pid}) ==="
 try {{ Wait-Process -Id {pid} -Timeout 60 }} catch {{}}

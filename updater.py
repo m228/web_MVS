@@ -258,6 +258,7 @@ if (Test-Path -LiteralPath $exe) {{
     W "ОШИБКА: web_MVS.exe не найден после обновления"
 }}
 W "=== apply: готово ==="
+Remove-Item -LiteralPath $PSCommandPath -Force -ErrorAction SilentlyContinue
 """
     helper = Path(tempfile.gettempdir()) / f"web_mvs_apply_{pid}.ps1"
     # UTF-8 с BOM — иначе PowerShell 5.1 неверно прочитает не-ASCII в путях

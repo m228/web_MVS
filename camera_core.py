@@ -1158,9 +1158,9 @@ class CameraWorker(BaseCameraWorker):
                 return {"ip": "gateway==ip"}
 
             if ip_changed:
-                device_busy = ping_device(ip)
-                if not device_busy:
-                    log_event("camera_core.change_ip", "данный IP занят", "warn")
+                # ping отвечает → по новому IP уже кто-то есть → адрес занят, менять нельзя
+                if ping_device(ip):
+                    log_event("camera_core.change_ip", "данный IP уже занят другим устройством", "warn")
                     return {"ip": "ip_busy"}
 
             try:
@@ -1863,8 +1863,10 @@ class CameraManager:
 
 
 def ping_device(ip: str) -> bool:
+    # -w 500: ждём ответа максимум 0.5 c. Пинг зовётся под _control_lock, а дефолтный
+    # таймаут неответа (~4 c на Windows) заблокировал бы все control-операции на это время.
     result = subprocess.run(
-        ["ping", "-n", "1", ip],
+        ["ping", "-n", "1", "-w", "500", ip],
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     )

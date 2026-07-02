@@ -209,19 +209,47 @@ function W($m) {{ "$(Get-Date -Format 'HH:mm:ss') $m" | Out-File -FilePath $log 
 W "=== apply: жду выхода приложения (pid {pid}) ==="
 try {{ Wait-Process -Id {pid} -Timeout 60 }} catch {{}}
 Start-Sleep -Seconds 1
+$internal = Join-Path $app '_internal'
+$backup = Join-Path $env:TEMP ('web_mvs_bak_' + [guid]::NewGuid().ToString('N'))
+New-Item -ItemType Directory -Path $backup -Force | Out-Null
+
+# бэкап текущих _internal и exe ПЕРЕМЕЩЕНИЕМ (быстро и обратимо) — чтобы при сбое
+# копирования новой версии откатиться, а не остаться без рабочего приложения
+$ok = $true
 for ($i = 0; $i -lt 30; $i++) {{
     try {{
-        if (Test-Path -LiteralPath (Join-Path $app '_internal')) {{
-            Remove-Item -LiteralPath (Join-Path $app '_internal') -Recurse -Force -ErrorAction Stop
+        if (Test-Path -LiteralPath $internal) {{
+            Move-Item -LiteralPath $internal -Destination (Join-Path $backup '_internal') -Force -ErrorAction Stop
+        }}
+        if (Test-Path -LiteralPath $exe) {{
+            Move-Item -LiteralPath $exe -Destination (Join-Path $backup 'web_MVS.exe') -Force -ErrorAction Stop
         }}
         break
-    }} catch {{ Start-Sleep -Milliseconds 500 }}
+    }} catch {{
+        W "ожидание освобождения файлов: $_"
+        Start-Sleep -Milliseconds 500
+        if ($i -eq 29) {{ $ok = $false; W "ОШИБКА: файлы не освободились за 15 c" }}
+    }}
 }}
-Remove-Item -LiteralPath $exe -Force -ErrorAction SilentlyContinue
-try {{
-    Copy-Item -Path (Join-Path $staged '*') -Destination $app -Recurse -Force -ErrorAction Stop
-    W "файлы заменены"
-}} catch {{ W "ОШИБКА копирования: $_" }}
+if ($ok) {{
+    try {{
+        Copy-Item -Path (Join-Path $staged '*') -Destination $app -Recurse -Force -ErrorAction Stop
+        W "файлы заменены"
+    }} catch {{ W "ОШИБКА копирования: $_ — откатываюсь"; $ok = $false }}
+}}
+if (-not $ok) {{
+    # откат: вернуть сохранённые _internal и exe на место
+    if (Test-Path -LiteralPath (Join-Path $backup '_internal')) {{
+        Remove-Item -LiteralPath $internal -Recurse -Force -ErrorAction SilentlyContinue
+        Move-Item -LiteralPath (Join-Path $backup '_internal') -Destination $internal -Force -ErrorAction SilentlyContinue
+    }}
+    if (Test-Path -LiteralPath (Join-Path $backup 'web_MVS.exe')) {{
+        Remove-Item -LiteralPath $exe -Force -ErrorAction SilentlyContinue
+        Move-Item -LiteralPath (Join-Path $backup 'web_MVS.exe') -Destination $exe -Force -ErrorAction SilentlyContinue
+    }}
+    W "выполнен откат к предыдущей версии"
+}}
+Remove-Item -LiteralPath $backup -Recurse -Force -ErrorAction SilentlyContinue
 Remove-Item -LiteralPath $staging -Recurse -Force -ErrorAction SilentlyContinue
 if (Test-Path -LiteralPath $exe) {{
     W "перезапуск $exe"

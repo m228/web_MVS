@@ -34,33 +34,37 @@ async def lifespan(app: FastAPI):
     api_log("app", "Остановка приложения")
 
 
+# фронтенд лежит в бандле (под заморозкой — в _internal, см. paths.BUNDLE_DIR),
+# поэтому пути строим от BUNDLE_DIR, а не относительно CWD запуска
+PAGE_DIR = BUNDLE_DIR / "page"
+
 app = FastAPI(lifespan=lifespan)
-app.mount("/static", StaticFiles(directory="page/static"), name="static")
+app.mount("/static", StaticFiles(directory=str(PAGE_DIR / "static")), name="static")
 
 
 @app.get("/")
 def home():
-    return FileResponse("page/index.html")
+    return FileResponse(str(PAGE_DIR / "index.html"))
 
 
 @app.get("/camera")
 def camera():
-    return FileResponse("page/camera.html")
+    return FileResponse(str(PAGE_DIR / "camera.html"))
 
 
 @app.get("/rtsp")
 def rtsp_page():
-    return FileResponse("page/rtsp.html")
+    return FileResponse(str(PAGE_DIR / "rtsp.html"))
 
 
 @app.get("/multi")
 def multi_page():
-    return FileResponse("page/multi.html")
+    return FileResponse(str(PAGE_DIR / "multi.html"))
 
 
 @app.get("/network")
 def network_page():
-    return FileResponse("page/network.html")
+    return FileResponse(str(PAGE_DIR / "network.html"))
 
 
 @app.get("/api/debug/logs")

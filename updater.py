@@ -15,6 +15,7 @@
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -62,6 +63,12 @@ def _norm(version: str) -> str:
     return (version or "").strip().lstrip("vV")
 
 
+def _version_tuple(version: str):
+    """Числовые компоненты версии для сравнения ('1.10.0' > '1.9.9')."""
+    nums = re.findall(r"\d+", _norm(version))
+    return tuple(int(n) for n in nums) if nums else (0,)
+
+
 def _fetch_latest_meta():
     """(tag, asset_dict|None, notes) последнего релиза с GitHub."""
     req = urllib.request.Request(API_LATEST, headers={
@@ -91,7 +98,8 @@ def check_latest():
                 "error": "Не удалось связаться с GitHub: " + str(exc)}
 
     latest = _norm(tag)
-    available = bool(latest) and asset is not None and _norm(current) != latest
+    # апдейт доступен только если релиз строго новее текущей — не предлагаем даунгрейд
+    available = asset is not None and _version_tuple(latest) > _version_tuple(current)
     log_event("updater.check", "Проверка обновлений", "info",
               {"current": current, "latest": latest, "available": available})
     return {

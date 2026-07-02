@@ -1176,14 +1176,14 @@ class CameraWorker(BaseCameraWorker):
                 if ip_changed:
                     node_map.GevPersistentIPAddress.value = ip_to_int(ip)
 
+                # маску/шлюз пишем только в расширенном режиме; но выходить здесь нельзя —
+                # иначе при смене только IP пропускается DeviceReset ниже, и новый IP
+                # не применяется к камере (persistent-IP подхватывается лишь после ресета)
                 if self.advanced_settings:
                     if mask_changed:
                         node_map.GevPersistentSubnetMask.value = ip_to_int(mask)
                     if gateway_changed:
                         node_map.GevPersistentDefaultGateway.value = ip_to_int(gateway)
-                else:
-                    log_event("camera_core.change_ip", "mask-gateway нет изменени, т.к. не прожата кнопка", "warn")
-                    return {"ip": "mask_gateway_not_changed_advanced_off"}
 
                 time.sleep(1)
                 node_map.DeviceReset.execute()

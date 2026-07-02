@@ -12,6 +12,7 @@
 
 Зависимостей нет — только стандартная библиотека (urllib, zipfile, shutil).
 """
+import hashlib
 import json
 import os
 import shutil
@@ -102,6 +103,35 @@ def check_latest():
     }
 
 
+def _verify_download(zip_path: Path, asset: dict) -> None:
+    """Сверить скачанный zip с метаданными релиза; бросить ValueError при расхождении.
+
+    GitHub отдаёт для ассета поле digest вида 'sha256:<hex>' (не для всех старых
+    релизов) — если оно есть, проверяем криптографически. Иначе — хотя бы сверяем
+    размер (защита от обрыва скачивания) и пишем предупреждение в лог.
+    Полная защита от подмены требует, чтобы релиз всегда содержал sha256 (build.bat).
+    """
+    expected_size = asset.get("size")
+    actual_size = zip_path.stat().st_size
+    if isinstance(expected_size, int) and expected_size > 0 and actual_size != expected_size:
+        raise ValueError(f"размер архива {actual_size} != ожидаемого {expected_size}")
+
+    digest = str(asset.get("digest") or "")
+    if digest.startswith("sha256:"):
+        expected = digest.split(":", 1)[1].strip().lower()
+        h = hashlib.sha256()
+        with open(zip_path, "rb") as f:
+            for chunk in iter(lambda: f.read(1 << 20), b""):
+                h.update(chunk)
+        actual = h.hexdigest().lower()
+        if actual != expected:
+            raise ValueError(f"sha256 не совпал: {actual} != {expected}")
+        log_event("updater.download", "Контрольная сумма подтверждена", "info", {"sha256": actual})
+    else:
+        log_event("updater.download", "У релиза нет sha256-дайджеста — проверка целостности пропущена",
+                  "warn")
+
+
 def download_latest():
     """Скачать и распаковать последний релиз во временную папку (только в бандле)."""
     if not is_frozen():
@@ -125,6 +155,7 @@ def download_latest():
                                      headers={"User-Agent": "web_MVS-update"})
         with urllib.request.urlopen(req, timeout=180) as resp, open(zip_path, "wb") as out:
             shutil.copyfileobj(resp, out)
+        _verify_download(zip_path, asset)
         with zipfile.ZipFile(zip_path) as zf:
             _safe_extract(zf, STAGED)
     except Exception as exc:

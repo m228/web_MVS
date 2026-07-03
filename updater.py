@@ -34,6 +34,9 @@ ASSET_PREFIX = "web_MVS_"
 
 STAGING = DATA_DIR / ".update"      # сюда качаем и распаковываем обновление
 STAGED = STAGING / "staged"          # распакованное содержимое архива
+# бэкап прежних _internal\ + exe (для отката). ВНЕ STAGING: apply в конце сносит
+# STAGING целиком, а бэкап должен пережить сбой и остаться для восстановления.
+BACKUP = DATA_DIR / ".update_backup"
 
 
 def is_frozen() -> bool:
@@ -228,6 +231,7 @@ def apply_update():
 $app = '{_ps_quote(app_dir)}'
 $staging = '{_ps_quote(STAGING)}'
 $staged = '{_ps_quote(STAGED)}'
+$backup = '{_ps_quote(BACKUP)}'
 $exe = '{_ps_quote(exe)}'
 $log = '{_ps_quote(log_file)}'
 function W($m) {{ "$(Get-Date -Format 'HH:mm:ss') $m" | Out-File -FilePath $log -Append -Encoding utf8 }}
@@ -235,7 +239,10 @@ W "=== apply: жду выхода приложения (pid {pid}) ==="
 try {{ Wait-Process -Id {pid} -Timeout 60 }} catch {{}}
 Start-Sleep -Seconds 1
 $internal = Join-Path $app '_internal'
-$backup = Join-Path $env:TEMP ('web_mvs_bak_' + [guid]::NewGuid().ToString('N'))
+# бэкап держим рядом с данными (DATA_DIR\\.update\\backup), а НЕ в %TEMP%: он должен
+# пережить сбой/убийство этого скрипта, чтобы приложение можно было восстановить.
+# Снимаем прошлый (успешный) бэкап и создаём чистый.
+Remove-Item -LiteralPath $backup -Recurse -Force -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Path $backup -Force | Out-Null
 
 # бэкап текущих _internal и exe ПЕРЕМЕЩЕНИЕМ (быстро и обратимо) — чтобы при сбое
@@ -274,14 +281,22 @@ if (-not $ok) {{
     }}
     W "выполнен откат к предыдущей версии"
 }}
-Remove-Item -LiteralPath $backup -Recurse -Force -ErrorAction SilentlyContinue
-Remove-Item -LiteralPath $staging -Recurse -Force -ErrorAction SilentlyContinue
+$restarted = $false
 if (Test-Path -LiteralPath $exe) {{
     W "перезапуск $exe"
-    Start-Process -FilePath $exe -WorkingDirectory $app
+    try {{ Start-Process -FilePath $exe -WorkingDirectory $app -ErrorAction Stop; $restarted = $true }}
+    catch {{ W "ОШИБКА перезапуска: $_" }}
 }} else {{
     W "ОШИБКА: web_MVS.exe не найден после обновления"
 }}
+# бэкап удаляем ТОЛЬКО при успешном обновлении И успешном перезапуске; иначе
+# оставляем его на диске для ручного восстановления (путь пишем в лог).
+if ($ok -and $restarted) {{
+    Remove-Item -LiteralPath $backup -Recurse -Force -ErrorAction SilentlyContinue
+}} else {{
+    W "бэкап предыдущей версии сохранён: $backup"
+}}
+Remove-Item -LiteralPath $staging -Recurse -Force -ErrorAction SilentlyContinue
 W "=== apply: готово ==="
 Remove-Item -LiteralPath $PSCommandPath -Force -ErrorAction SilentlyContinue
 """

@@ -145,12 +145,9 @@ def api_status():
 
 @app.get("/api/ip")
 def get_ip(serial_number: str, interface_id: str = "", device_handle: str = ""):
-    worker = manager.get(serial_number)
-    if interface_id:
-        worker.interface_id = interface_id
-    if device_handle:
-        worker.device_handle = device_handle
-    return worker.get_ip()
+    # interface/handle передаём разово, не мутируя общее состояние воркера:
+    # параллельные запросы фронта иначе перетирали бы выбор друг друга
+    return manager.get(serial_number).get_ip(interface_id or None, device_handle or None)
 
 
 @app.get("/api/count_cams")
@@ -161,11 +158,8 @@ def count_cams():
 @app.get("/api/get_network_settings")
 def network_settings(serial_number: str, interface_id: str = "", device_handle: str = ""):
     worker = manager.get(serial_number)
-    if interface_id:
-        worker.interface_id = interface_id
-    if device_handle:
-        worker.device_handle = device_handle
-    ip, mask, gateway, dhcp = worker.get_network_settings()
+    # interface/handle разово, без мутации общего состояния (см. /api/ip)
+    ip, mask, gateway, dhcp = worker.get_network_settings(interface_id or None, device_handle or None)
     if ip is None:
         api_log(
             "api.get_network_settings",
@@ -362,11 +356,8 @@ def data_limit(serial_number: str):
 @app.get("/api/camera/info")
 def camera_info(serial_number: str, interface_id: str = "", device_handle: str = ""):
     worker = manager.get(serial_number)
-    if interface_id:
-        worker.interface_id = interface_id
-    if device_handle:
-        worker.device_handle = device_handle
-    data = worker.get_info()
+    # interface/handle разово, без мутации общего состояния (см. /api/ip)
+    data = worker.get_info(interface_id or None, device_handle or None)
     if not data:
         api_log("api.camera.info", "Не удалось получить информацию о камере", "warn", {"serial_number": serial_number})
         return {"error": "Не удалось получить информацию о камере"}

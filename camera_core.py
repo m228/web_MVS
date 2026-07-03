@@ -541,8 +541,15 @@ class CameraWorker(BaseCameraWorker):
 
     # ---------- доступ к камере / nodemap ----------
 
-    # подключение к камере и получение nodemap
-    def open_node_map(self):
+    # подключение к камере и получение nodemap.
+    # interface_id/device_handle можно передать разово (read-запросы дают их как
+    # параметр запроса) — тогда общее состояние воркера не мутируется и параллельные
+    # запросы не перетирают выбор друг друга. Без явных значений берём то, что
+    # зафиксировал select_interface (используется потоком generate).
+    def open_node_map(self, interface_id=None, device_handle=None):
+        iid = interface_id if interface_id is not None else self.interface_id
+        handle = device_handle if device_handle is not None else self.device_handle
+
         # access_status проверяем агрегированный (по серийнику) — статус для конкретной
         # записи может быть != 1, но другая запись того же серийника при этом откроется
         if not self.manager.cam_online.get(self.serial_number):
@@ -555,8 +562,8 @@ class CameraWorker(BaseCameraWorker):
         try:
             ia = self.manager.create_acquirer(
                 self.serial_number,
-                interface_id=self.interface_id,
-                device_handle=self.device_handle,
+                interface_id=iid,
+                device_handle=handle,
             )
             node_map = ia.remote_device.node_map
             self.data_limit = self.read_settings(node_map)
@@ -568,8 +575,8 @@ class CameraWorker(BaseCameraWorker):
                 except Exception:
                     pass
             payload = {"serial_number": self.serial_number,
-                       "interface_id": self.interface_id,
-                       "device_handle": self.device_handle,
+                       "interface_id": iid,
+                       "device_handle": handle,
                        **_explain_error(e)}
             log_event("camera_core.get_node_map_cam", "Ошибка подключения к камере", "error", payload)
             return None, None
@@ -624,8 +631,9 @@ class CameraWorker(BaseCameraWorker):
 
     # ---------- информация о камере ----------
 
-    # получение айпи камеры по серийнику
-    def get_ip(self):
+    # получение айпи камеры по серийнику.
+    # interface_id/device_handle — разовые (из параметров запроса), состояние не мутируем
+    def get_ip(self, interface_id=None, device_handle=None):
         status = self.manager.access_status(self.serial_number)
         if status != 1:
             log_event("camera_core.get_ip", "Ошибка получения ip камеры", "error", {"status_camera": str(status)})
@@ -650,7 +658,7 @@ class CameraWorker(BaseCameraWorker):
 
             ia = None
             try:
-                node_map, ia = self.open_node_map()
+                node_map, ia = self.open_node_map(interface_id, device_handle)
                 if node_map is None:
                     return None
                 ip = int_to_ip(node_map.GevCurrentIPAddress.value)
@@ -666,7 +674,7 @@ class CameraWorker(BaseCameraWorker):
 
     # полная read-only информация о камере (для модалки «инфо»).
     # Как и get_ip: открываем control, читаем доступные узлы, отдаём список.
-    def get_info(self):
+    def get_info(self, interface_id=None, device_handle=None):
         status = self.manager.access_status(self.serial_number)
         if status != 1:
             log_event("camera_core.get_info", "Камера недоступна для запроса информации", "warn",
@@ -688,7 +696,7 @@ class CameraWorker(BaseCameraWorker):
         with self._control_lock:
             ia = None
             try:
-                node_map, ia = self.open_node_map()
+                node_map, ia = self.open_node_map(interface_id, device_handle)
                 if node_map is None:
                     return None
                 return {"items": self._collect_info(node_map)}
@@ -1076,7 +1084,7 @@ class CameraWorker(BaseCameraWorker):
         self.advanced_settings = True
         return {"advanced_network_settings": self.advanced_settings}
 
-    def get_network_settings(self):
+    def get_network_settings(self, interface_id=None, device_handle=None):
         status = self.manager.access_status(self.serial_number)
         if status != 1:
             return None, None, None, None
@@ -1093,7 +1101,7 @@ class CameraWorker(BaseCameraWorker):
 
             ia = None
             try:
-                node_map, ia = self.open_node_map()
+                node_map, ia = self.open_node_map(interface_id, device_handle)
                 if node_map is None:
                     # подробная причина уже в логе open_node_map
                     return None, None, None, None

@@ -4,7 +4,7 @@ import threading
 from contextlib import asynccontextmanager
 from urllib.parse import urlparse
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Query
 from fastapi.responses import FileResponse, StreamingResponse, Response
 from fastapi.staticfiles import StaticFiles
 
@@ -19,6 +19,12 @@ from paths import read_version, BUNDLE_DIR, DATA_DIR
 
 def api_log(source: str, message: str, level: str = "info", payload: dict | None = None):
     log_event(source, message, level, payload)
+
+
+def _is_rtsp_scheme(url: str) -> bool:
+    # только rtsp(s): иначе cv2.VideoCapture открыл бы file://, http:// и пр.
+    # (чтение локальных файлов / запросы во внутреннюю сеть — SSRF)
+    return urlparse(url or "").scheme.lower() in ("rtsp", "rtsps")
 
 
 @asynccontextmanager
@@ -181,6 +187,8 @@ def network_settings(serial_number: str, interface_id: str = "", device_handle: 
 
 @app.get("/api/network_settings_advanced")
 def network_settings_advanced(serial_number: str):
+    # GET, меняющий состояние (advanced_settings=True) — это по соглашению проекта:
+    # все эндпоинты GET-only (см. CLAUDE.md), поэтому и «сеттеры» тоже GET
     data = manager.get(serial_number).set_advanced()
     api_log("api.network_settings_advanced", "Включены расширенные сетевые настройки", payload=data)
     return data
@@ -204,6 +212,11 @@ def rtsp_saved():
 
 @app.get("/api/rtsp/save")
 def rtsp_save(url: str, label: str = "", ip: str = "", scale: int = 100, fps: float = 0):
+    # проверяем схему уже при сохранении, а не только при стриминге — иначе в базу
+    # попадает мусор (напр. file://), который потом отклоняется при попытке смотреть
+    if not _is_rtsp_scheme(url):
+        api_log("api.rtsp.save", "Отклонён RTSP-URL с недопустимой схемой", "warn", {"url": url})
+        return {"error": "invalid_rtsp_scheme"}
     items = rtsp_store.save({"url": url, "label": label, "ip": ip, "scale": scale, "fps": fps})
     api_log("api.rtsp.save", "RTSP-камера сохранена в базу", payload={"url": url, "count": len(items)})
     return {"items": items}
@@ -274,14 +287,14 @@ def camera_stream(
     serial_number: str,
     interface_id: str = "",
     device_handle: str = "",
-    width: int = None,
-    height: int = None,
-    offset_x: int = None,
-    offset_y: int = None,
-    fps: float = None,
-    exposure_auto: str = None,
-    exposure_time: float = None,
-    pixel_format: str = None,
+    width: int | None = Query(None, gt=0),
+    height: int | None = Query(None, gt=0),
+    offset_x: int | None = Query(None, ge=0),
+    offset_y: int | None = Query(None, ge=0),
+    fps: float | None = Query(None, gt=0),
+    exposure_auto: str | None = None,
+    exposure_time: float | None = Query(None, gt=0),
+    pixel_format: str | None = None,
 ):
     worker = manager.get(serial_number)
     if interface_id:
@@ -416,9 +429,7 @@ def camera_current_config(serial_number: str):
 
 def _resolve_rtsp_url(url, ip, username, password, channel, subtype):
     if url:
-        # только rtsp(s): без проверки cv2.VideoCapture открыл бы file://, http:// и пр.
-        # (чтение локальных файлов / запросы во внутреннюю сеть — SSRF)
-        if urlparse(url).scheme.lower() not in ("rtsp", "rtsps"):
+        if not _is_rtsp_scheme(url):
             log_event("api.rtsp.stream", "Отклонён RTSP-URL с недопустимой схемой", "warn", {"url": url})
             return None
         return url

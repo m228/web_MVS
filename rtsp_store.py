@@ -18,11 +18,22 @@ STORE = DATA_DIR / "rtsp_cameras.json"
 _lock = threading.Lock()
 
 
+def _read_strict():
+    """Прочитать базу, ПРОБРАСЫВАЯ ошибку чтения/парсинга.
+
+    Нужно для save/remove: там нельзя молча получить [] при сбое чтения —
+    иначе read-modify-write затрёт всю базу одной записью (или очистит её).
+    """
+    if not STORE.is_file():
+        return []
+    data = json.loads(STORE.read_text(encoding="utf-8"))
+    return data if isinstance(data, list) else []
+
+
 def load():
+    # мягкое чтение для отображения: при повреждении/сбое отдаём пустой список
     try:
-        if STORE.is_file():
-            data = json.loads(STORE.read_text(encoding="utf-8"))
-            return data if isinstance(data, list) else []
+        return _read_strict()
     except Exception as e:
         log_event("rtsp_store", "Не удалось прочитать базу RTSP", "warn", {"error": str(e)})
     return []
@@ -45,7 +56,14 @@ def save(entry):
     if not url:
         return load()
     with _lock:
-        items = [i for i in load() if i.get("url") != url]
+        # строгое чтение: если база не читается — НЕ пишем, иначе затрём остальные камеры
+        try:
+            existing = _read_strict()
+        except Exception as e:
+            log_event("rtsp_store", "Чтение базы перед сохранением не удалось — запись отменена",
+                      "error", {"url": url, "error": str(e)})
+            return load()
+        items = [i for i in existing if i.get("url") != url]
         items.append({
             "url": url,
             "label": entry.get("label") or "",
@@ -62,7 +80,13 @@ def remove(url):
     if not url:
         return load()
     with _lock:
-        items = [i for i in load() if i.get("url") != url]
+        try:
+            existing = _read_strict()
+        except Exception as e:
+            log_event("rtsp_store", "Чтение базы перед удалением не удалось — операция отменена",
+                      "error", {"url": url, "error": str(e)})
+            return load()
+        items = [i for i in existing if i.get("url") != url]
         _write(items)
     log_event("rtsp_store", "RTSP-камера удалена из базы", "info", {"url": url})
     return items

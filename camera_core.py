@@ -424,14 +424,14 @@ class BaseCameraWorker:
         info = self.video_save_info()
         log_event("camera_core.on_video", "Вкл. автосохранение видео с длительностью: ", "info",
                   {"video_duration": self.video_duration, "save_dir": info["dir"], "file_pattern": info["pattern"]})
-        return {"status": "ok", "video_enabled": "1",
+        return {"status": "ok", "video_enabled": True,
                 "save_dir": info["dir"], "file_pattern": info["pattern"]}
 
     def off_video(self):
         if self.save_video == 1:
             self.save_video = 2
         log_event("camera_core.off_video", "Выкл. автосохранение видео")
-        return {"status": "ok", "video_enabled": "2"}
+        return {"status": "ok", "video_enabled": False}
 
     def _check_video_finished(self):
         if self.save_video == 1 and self.video_duration is not None:
@@ -808,7 +808,9 @@ class CameraWorker(BaseCameraWorker):
                 # AcquisitionFrameRate, НЕ включаем AcquisitionFrameRateEnable.
                 # Принудительное включение rate-control было единственным
                 # всегда-исполняемым отличием от рабочего потока — убрано.
-                node_map.AcquisitionFrameRate.value = int(fps)
+                # float, а не int: узел дробный, а нижняя граница check_value = 0.1 —
+                # int() рубил бы дробный fps (0.5 -> 0, что вырубает поток).
+                node_map.AcquisitionFrameRate.value = float(fps)
 
             # авто-экспозиция (Off / Once / Continuous)
             if exposure_auto is not None and exposure_auto in node_map.ExposureAuto.symbolics:
@@ -1232,8 +1234,11 @@ class CameraWorker(BaseCameraWorker):
                 log_event("camera_core.change_ip", "неизвестная ошибка ip", "warn")
                 return {"ip": "unknown"}
 
-            except Exception:
-                log_event("camera_core.change_ip", "Ошибка изменения ip-mask-gateway", "warn")
+            except Exception as e:
+                # тип и текст ошибки + расшифровку кода GenTL кладём в payload:
+                # без них в логе только строка, и причину (напр. -1005 занято) не видно
+                log_event("camera_core.change_ip", "Ошибка изменения ip-mask-gateway", "warn",
+                          {"serial_number": self.serial_number, **_explain_error(e)})
                 return {"error": "Ошибка изменения ip-mask-gateway"}
             finally:
                 if ia is not None:
@@ -1399,7 +1404,12 @@ class RtspCameraWorker(BaseCameraWorker):
 
     # сохранить отдельный снимок и вернуть его как jpeg
     def snapshot(self):
+        # берём живой кадр и СРАЗУ копируем: generate() в другом потоке параллельно
+        # перезаписывает self.last_frame, а cv2 может переиспользовать буфер —
+        # без копии imencode получил бы кадр, меняющийся под ним.
         img = self.last_frame
+        if img is not None:
+            img = img.copy()
         opened = None
         try:
             if img is None:
@@ -1894,10 +1904,18 @@ class CameraManager:
 
 
 def ping_device(ip: str) -> bool:
+    # отбрасываем мусорный ввод до запуска ping: аргументы и так идут списком
+    # (shell-инъекция невозможна), но невалидный IP гонять смысла нет
+    try:
+        socket.inet_aton((ip or "").strip())
+    except (OSError, AttributeError):
+        log_event("camera_core.change_ip", "пинг: невалидный IP", "warn", {"ip": ip})
+        return False
+
     # -w 500: ждём ответа максимум 0.5 c. Пинг зовётся под _control_lock, а дефолтный
     # таймаут неответа (~4 c на Windows) заблокировал бы все control-операции на это время.
     result = subprocess.run(
-        ["ping", "-n", "1", "-w", "500", ip],
+        ["ping", "-n", "1", "-w", "500", ip.strip()],
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     )

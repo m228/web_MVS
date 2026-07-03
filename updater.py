@@ -158,6 +158,32 @@ def _verify_download(zip_path: Path, asset: dict) -> None:
                   "warn")
 
 
+# верхняя граница размера, если GitHub не сообщил size (страховка от заполнения диска)
+_MAX_DOWNLOAD_FALLBACK = 500 * 1024 * 1024   # 500 МБ
+_DOWNLOAD_DEADLINE = 900                       # сек на весь трансфер (не на сокет)
+
+
+def _download_stream(resp, out, max_bytes, deadline):
+    """Читать ответ чанками с лимитом размера и общим дедлайном.
+
+    urlopen(timeout=) — таймаут сокета (на одно чтение), он НЕ ограничивает общее
+    время: при медленном, но непрерывном потоке скачивание висело бы бесконечно.
+    Плюс без лимита размера подменённый/битый ответ мог бы забить диск.
+    """
+    total = 0
+    while True:
+        if time.time() > deadline:
+            raise TimeoutError("превышено общее время скачивания")
+        chunk = resp.read(1 << 20)
+        if not chunk:
+            break
+        total += len(chunk)
+        if total > max_bytes:
+            raise ValueError(f"размер загрузки превысил лимит {max_bytes} байт")
+        out.write(chunk)
+    return total
+
+
 def download_latest():
     """Скачать и распаковать последний релиз во временную папку (только в бандле)."""
     if not is_frozen():
@@ -181,8 +207,12 @@ def download_latest():
         log_event("updater.download", "Скачиваю релиз", "info", {"name": asset.get("name")})
         req = urllib.request.Request(asset["browser_download_url"],
                                      headers={"User-Agent": "web_MVS-update"})
-        with urllib.request.urlopen(req, timeout=180) as resp, open(zip_path, "wb") as out:
-            shutil.copyfileobj(resp, out)
+        size = int(asset.get("size") or 0)
+        # лимит: заявленный размер +5% на расхождения, иначе — страховочный потолок
+        max_bytes = int(size * 1.05) if size > 0 else _MAX_DOWNLOAD_FALLBACK
+        deadline = time.time() + _DOWNLOAD_DEADLINE
+        with urllib.request.urlopen(req, timeout=60) as resp, open(zip_path, "wb") as out:
+            _download_stream(resp, out, max_bytes, deadline)
         _verify_download(zip_path, asset)
         with zipfile.ZipFile(zip_path) as zf:
             _safe_extract(zf, STAGED)
@@ -246,9 +276,12 @@ Remove-Item -LiteralPath $backup -Recurse -Force -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Path $backup -Force | Out-Null
 
 # бэкап текущих _internal и exe ПЕРЕМЕЩЕНИЕМ (быстро и обратимо) — чтобы при сбое
-# копирования новой версии откатиться, а не остаться без рабочего приложения
+# копирования новой версии откатиться, а не остаться без рабочего приложения.
+# Ждём освобождения файлов до $maxTries * $stepMs миллисекунд.
+$maxTries = 30
+$stepMs = 500
 $ok = $true
-for ($i = 0; $i -lt 30; $i++) {{
+for ($i = 0; $i -lt $maxTries; $i++) {{
     try {{
         if (Test-Path -LiteralPath $internal) {{
             Move-Item -LiteralPath $internal -Destination (Join-Path $backup '_internal') -Force -ErrorAction Stop
@@ -259,8 +292,8 @@ for ($i = 0; $i -lt 30; $i++) {{
         break
     }} catch {{
         W "ожидание освобождения файлов: $_"
-        Start-Sleep -Milliseconds 500
-        if ($i -eq 29) {{ $ok = $false; W "ОШИБКА: файлы не освободились за 15 c" }}
+        Start-Sleep -Milliseconds $stepMs
+        if ($i -eq ($maxTries - 1)) {{ $ok = $false; W "ОШИБКА: файлы не освободились за $($maxTries * $stepMs / 1000) c" }}
     }}
 }}
 if ($ok) {{
@@ -313,7 +346,13 @@ Remove-Item -LiteralPath $PSCommandPath -Force -ErrorAction SilentlyContinue
     # Своя консоль + новая группа также отвязывают хелпер от приложения, чтобы он пережил
     # его выход. CREATE_BREAKAWAY_FROM_JOB — на случай kill-on-close job; если job его не
     # разрешает (или job нет), CreateProcess падает с OSError → откатываемся без него.
-    cmd = ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass",
+    # абсолютный путь к powershell.exe (а не через PATH) — на случай PATH hijacking:
+    # apply запускается с админ-токеном, подмена powershell в PATH дала бы выполнение
+    # чужого кода. Если по каким-то причинам файла нет — откат на поиск по PATH.
+    ps_exe = os.path.expandvars(r"%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe")
+    if not os.path.isfile(ps_exe):
+        ps_exe = "powershell"
+    cmd = [ps_exe, "-NoProfile", "-ExecutionPolicy", "Bypass",
            "-WindowStyle", "Hidden", "-File", str(helper)]
     base = CREATE_NEW_CONSOLE | CREATE_NEW_PROCESS_GROUP
     try:

@@ -490,6 +490,11 @@ class CameraWorker(BaseCameraWorker):
         super().__init__(serial_number, manager)
 
         self.ia = None
+        # защищает жизненный цикл self.ia: старт потока в generate() и
+        # остановку в force_close() могут дёргать разные потоки uvicorn
+        # (/stream и /force_close). Без него force_close мог уничтожить
+        # acquirer между `self.ia = ia` и `ia.start()`.
+        self._ia_lock = threading.Lock()
         # лимиты/текущие настройки камеры (заполняется при подключении)
         self.data_limit = None
         # фактический конфиг, с которым камера запущена в последний раз
@@ -929,9 +934,6 @@ class CameraWorker(BaseCameraWorker):
             # пока держим node_map) — для значка «инфо» на странице камеры
             self.current_config = self._read_current_config(node_map)
 
-            self.ia = ia
-            self.running = True
-
             # num_buffers НЕ трогаем — оставляем дефолт harvesters, как было до
             # multicam-рефактора (тогда поток одиночной камеры был стабилен).
             # Принудительные 24 буфера (≈360 МБ на 5 МП RGB8) дестабилизировали
@@ -939,7 +941,12 @@ class CameraWorker(BaseCameraWorker):
             # ("хватает на 5 кадров и потом падает"). Несколько GigE одновременно мы
             # больше не запускаем (ограничение в UI), поэтому раздувать пул не нужно.
 
-            ia.start()
+            # выставление self.ia и старт — под локом, чтобы параллельный
+            # force_close не уничтожил acquirer между присваиванием и start()
+            with self._ia_lock:
+                self.ia = ia
+                self.running = True
+                ia.start()
             log_event("camera_core.generate_stream", "Поток камеры запущен", "success",
                       {"serial_number": self.serial_number, "num_buffers": getattr(ia, "num_buffers", None)})
 
@@ -1035,26 +1042,30 @@ class CameraWorker(BaseCameraWorker):
                     pass
 
             # обнуляем ссылку, только если это всё ещё наш acquirer (не мешаем force_close)
-            if self.ia is ia:
-                self.ia = None
+            with self._ia_lock:
+                if self.ia is ia:
+                    self.ia = None
 
             self._reset_save_state()
 
     def force_close(self):
-        self.running = False
+        # под тем же локом, что и старт в generate: снимаем acquirer атомарно,
+        # чтобы не разойтись с `self.ia = ia; ia.start()`
+        with self._ia_lock:
+            self.running = False
+            ia = self.ia
+            self.ia = None
 
-        if self.ia is not None:
+        if ia is not None:
             try:
-                self.ia.stop()
+                ia.stop()
             except Exception as e:
                 log_event("camera_core.close_stream_force", "Ошибка force stop", "warn", {"error": str(e)})
 
             try:
-                self.ia.destroy()
+                ia.destroy()
             except Exception as e:
                 log_event("camera_core.close_stream_force", "Ошибка force destroy", "warn", {"error": str(e)})
-
-            self.ia = None
 
         log_event("camera_core.close_stream_force", "Запрошена принудительная остановка потока", "warn")
         return {"status": "force_stopped"}
@@ -1360,14 +1371,19 @@ class RtspCameraWorker(BaseCameraWorker):
 
             self.running = False
 
-            if self.capture is not None:
+            # освобождаем ЛОКАЛЬНЫЙ capture этого сеанса независимо от self.capture:
+            # параллельный force_close мог уже обнулить self.capture, и тогда наш
+            # capture остался бы неосвобождённым (утечка сокета и потока FFmpeg).
+            # release идемпотентен, повторный вызов после force_close безопасен.
+            if capture is not None:
                 try:
-                    self.capture.release()
+                    capture.release()
                 except Exception:
                     pass
 
-                if self.capture is capture:
-                    self.capture = None
+            # обнуляем ссылку, только если это всё ещё наш capture (не мешаем force_close)
+            if self.capture is capture:
+                self.capture = None
 
             self._reset_save_state()
 

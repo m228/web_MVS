@@ -12,6 +12,7 @@ import struct
 import cv2
 
 from logger import log_event
+from paths import BUNDLE_DIR, DATA_DIR
 
 import subprocess
 
@@ -139,7 +140,8 @@ os.environ.setdefault("OPENCV_FFMPEG_CAPTURE_OPTIONS", "rtsp_transport;tcp")
 
 # Путь до директории программы и имена файлов драйвера. Поставка самодостаточна:
 # и продюсер (.cti), и его runtime (MvCameraControl.dll) лежат в папке Driver/.
-PROGRAM_DIR = Path(__file__).resolve().parent
+# каталог с кодом/ассетами и драйвером (рядом с exe в собранном бандле); см. paths.py
+PROGRAM_DIR = BUNDLE_DIR
 CTI_FILENAME = "MvProducerGEV.cti"
 MVS_RUNTIME_DLL = "MvCameraControl.dll"
 
@@ -336,13 +338,14 @@ class BaseCameraWorker:
         tag = re.sub(r"[^A-Za-z0-9_.-]+", "_", str(self.serial_number or "camera")).strip("_")
         return tag or "camera"
 
-    # папка сохранения фото: dataset/<серийник> (своя на каждую камеру)
+    # папка сохранения фото: <данные>/dataset/<серийник> (своя на каждую камеру).
+    # DATA_DIR — каталог пользовательских данных, переживающий обновление (см. paths.py)
     def photo_dir(self):
-        return Path("dataset") / self._camera_tag()
+        return DATA_DIR / "dataset" / self._camera_tag()
 
-    # папка сохранения видео: Videos/<серийник>
+    # папка сохранения видео: <данные>/Videos/<серийник>
     def video_dir(self):
-        return Path("Videos") / self._camera_tag()
+        return DATA_DIR / "Videos" / self._camera_tag()
 
     # папка и шаблон имени файлов фото — показываем во фронтенде
     def photo_save_info(self):
@@ -421,14 +424,14 @@ class BaseCameraWorker:
         info = self.video_save_info()
         log_event("camera_core.on_video", "Вкл. автосохранение видео с длительностью: ", "info",
                   {"video_duration": self.video_duration, "save_dir": info["dir"], "file_pattern": info["pattern"]})
-        return {"status": "ok", "video_enabled": "1",
+        return {"status": "ok", "video_enabled": True,
                 "save_dir": info["dir"], "file_pattern": info["pattern"]}
 
     def off_video(self):
         if self.save_video == 1:
             self.save_video = 2
         log_event("camera_core.off_video", "Выкл. автосохранение видео")
-        return {"status": "ok", "video_enabled": "2"}
+        return {"status": "ok", "video_enabled": False}
 
     def _check_video_finished(self):
         if self.save_video == 1 and self.video_duration is not None:
@@ -487,6 +490,11 @@ class CameraWorker(BaseCameraWorker):
         super().__init__(serial_number, manager)
 
         self.ia = None
+        # защищает жизненный цикл self.ia: старт потока в generate() и
+        # остановку в force_close() могут дёргать разные потоки uvicorn
+        # (/stream и /force_close). Без него force_close мог уничтожить
+        # acquirer между `self.ia = ia` и `ia.start()`.
+        self._ia_lock = threading.Lock()
         # лимиты/текущие настройки камеры (заполняется при подключении)
         self.data_limit = None
         # фактический конфиг, с которым камера запущена в последний раз
@@ -502,7 +510,9 @@ class CameraWorker(BaseCameraWorker):
         # сериализация одновременных control-операций к одной камере
         # (без него Promise.all из фронта открывает 5 acquirer'ов на один control-канал
         # и они дерутся за -1005 AccessDenied)
-        self._control_lock = threading.Lock()
+        # RLock (не Lock): change_ip держит лок и внутри зовёт get_network_settings,
+        # который берёт этот же лок повторно — с нереентрантным Lock это дедлок.
+        self._control_lock = threading.RLock()
 
         # кэш последних "сетевых" данных, чтобы не дёргать control повторно
         self._cached_ip = None              # {"ip": "..."} | None
@@ -531,8 +541,15 @@ class CameraWorker(BaseCameraWorker):
 
     # ---------- доступ к камере / nodemap ----------
 
-    # подключение к камере и получение nodemap
-    def open_node_map(self):
+    # подключение к камере и получение nodemap.
+    # interface_id/device_handle можно передать разово (read-запросы дают их как
+    # параметр запроса) — тогда общее состояние воркера не мутируется и параллельные
+    # запросы не перетирают выбор друг друга. Без явных значений берём то, что
+    # зафиксировал select_interface (используется потоком generate).
+    def open_node_map(self, interface_id=None, device_handle=None):
+        iid = interface_id if interface_id is not None else self.interface_id
+        handle = device_handle if device_handle is not None else self.device_handle
+
         # access_status проверяем агрегированный (по серийнику) — статус для конкретной
         # записи может быть != 1, но другая запись того же серийника при этом откроется
         if not self.manager.cam_online.get(self.serial_number):
@@ -545,8 +562,8 @@ class CameraWorker(BaseCameraWorker):
         try:
             ia = self.manager.create_acquirer(
                 self.serial_number,
-                interface_id=self.interface_id,
-                device_handle=self.device_handle,
+                interface_id=iid,
+                device_handle=handle,
             )
             node_map = ia.remote_device.node_map
             self.data_limit = self.read_settings(node_map)
@@ -558,8 +575,8 @@ class CameraWorker(BaseCameraWorker):
                 except Exception:
                     pass
             payload = {"serial_number": self.serial_number,
-                       "interface_id": self.interface_id,
-                       "device_handle": self.device_handle,
+                       "interface_id": iid,
+                       "device_handle": handle,
                        **_explain_error(e)}
             log_event("camera_core.get_node_map_cam", "Ошибка подключения к камере", "error", payload)
             return None, None
@@ -614,8 +631,9 @@ class CameraWorker(BaseCameraWorker):
 
     # ---------- информация о камере ----------
 
-    # получение айпи камеры по серийнику
-    def get_ip(self):
+    # получение айпи камеры по серийнику.
+    # interface_id/device_handle — разовые (из параметров запроса), состояние не мутируем
+    def get_ip(self, interface_id=None, device_handle=None):
         status = self.manager.access_status(self.serial_number)
         if status != 1:
             log_event("camera_core.get_ip", "Ошибка получения ip камеры", "error", {"status_camera": str(status)})
@@ -640,7 +658,7 @@ class CameraWorker(BaseCameraWorker):
 
             ia = None
             try:
-                node_map, ia = self.open_node_map()
+                node_map, ia = self.open_node_map(interface_id, device_handle)
                 if node_map is None:
                     return None
                 ip = int_to_ip(node_map.GevCurrentIPAddress.value)
@@ -656,7 +674,7 @@ class CameraWorker(BaseCameraWorker):
 
     # полная read-only информация о камере (для модалки «инфо»).
     # Как и get_ip: открываем control, читаем доступные узлы, отдаём список.
-    def get_info(self):
+    def get_info(self, interface_id=None, device_handle=None):
         status = self.manager.access_status(self.serial_number)
         if status != 1:
             log_event("camera_core.get_info", "Камера недоступна для запроса информации", "warn",
@@ -678,7 +696,7 @@ class CameraWorker(BaseCameraWorker):
         with self._control_lock:
             ia = None
             try:
-                node_map, ia = self.open_node_map()
+                node_map, ia = self.open_node_map(interface_id, device_handle)
                 if node_map is None:
                     return None
                 return {"items": self._collect_info(node_map)}
@@ -790,7 +808,9 @@ class CameraWorker(BaseCameraWorker):
                 # AcquisitionFrameRate, НЕ включаем AcquisitionFrameRateEnable.
                 # Принудительное включение rate-control было единственным
                 # всегда-исполняемым отличием от рабочего потока — убрано.
-                node_map.AcquisitionFrameRate.value = int(fps)
+                # float, а не int: узел дробный, а нижняя граница check_value = 0.1 —
+                # int() рубил бы дробный fps (0.5 -> 0, что вырубает поток).
+                node_map.AcquisitionFrameRate.value = float(fps)
 
             # авто-экспозиция (Off / Once / Continuous)
             if exposure_auto is not None and exposure_auto in node_map.ExposureAuto.symbolics:
@@ -924,9 +944,6 @@ class CameraWorker(BaseCameraWorker):
             # пока держим node_map) — для значка «инфо» на странице камеры
             self.current_config = self._read_current_config(node_map)
 
-            self.ia = ia
-            self.running = True
-
             # num_buffers НЕ трогаем — оставляем дефолт harvesters, как было до
             # multicam-рефактора (тогда поток одиночной камеры был стабилен).
             # Принудительные 24 буфера (≈360 МБ на 5 МП RGB8) дестабилизировали
@@ -934,7 +951,12 @@ class CameraWorker(BaseCameraWorker):
             # ("хватает на 5 кадров и потом падает"). Несколько GigE одновременно мы
             # больше не запускаем (ограничение в UI), поэтому раздувать пул не нужно.
 
-            ia.start()
+            # выставление self.ia и старт — под локом, чтобы параллельный
+            # force_close не уничтожил acquirer между присваиванием и start()
+            with self._ia_lock:
+                self.ia = ia
+                self.running = True
+                ia.start()
             log_event("camera_core.generate_stream", "Поток камеры запущен", "success",
                       {"serial_number": self.serial_number, "num_buffers": getattr(ia, "num_buffers", None)})
 
@@ -1014,37 +1036,46 @@ class CameraWorker(BaseCameraWorker):
 
             self.running = False
 
-            if self.ia is not None:
+            # уничтожаем ЛОКАЛЬНЫЙ acquirer этого сеанса (ia), а не self.ia: при раннем
+            # выходе (провал apply_settings/open_node_map) self.ia ещё не выставлен, и
+            # опора на него утекала бы acquirer. destroy в try — если параллельный
+            # force_close уже уничтожил тот же объект, повторный вызов молча пройдёт.
+            if ia is not None:
                 try:
-                    self.ia.stop()
+                    ia.stop()
                 except Exception:
                     pass
 
                 try:
-                    self.ia.destroy()
+                    ia.destroy()
                 except Exception:
                     pass
 
+            # обнуляем ссылку, только если это всё ещё наш acquirer (не мешаем force_close)
+            with self._ia_lock:
                 if self.ia is ia:
                     self.ia = None
 
-                self._reset_save_state()
+            self._reset_save_state()
 
     def force_close(self):
-        self.running = False
+        # под тем же локом, что и старт в generate: снимаем acquirer атомарно,
+        # чтобы не разойтись с `self.ia = ia; ia.start()`
+        with self._ia_lock:
+            self.running = False
+            ia = self.ia
+            self.ia = None
 
-        if self.ia is not None:
+        if ia is not None:
             try:
-                self.ia.stop()
+                ia.stop()
             except Exception as e:
                 log_event("camera_core.close_stream_force", "Ошибка force stop", "warn", {"error": str(e)})
 
             try:
-                self.ia.destroy()
+                ia.destroy()
             except Exception as e:
                 log_event("camera_core.close_stream_force", "Ошибка force destroy", "warn", {"error": str(e)})
-
-            self.ia = None
 
         log_event("camera_core.close_stream_force", "Запрошена принудительная остановка потока", "warn")
         return {"status": "force_stopped"}
@@ -1055,7 +1086,7 @@ class CameraWorker(BaseCameraWorker):
         self.advanced_settings = True
         return {"advanced_network_settings": self.advanced_settings}
 
-    def get_network_settings(self):
+    def get_network_settings(self, interface_id=None, device_handle=None):
         status = self.manager.access_status(self.serial_number)
         if status != 1:
             return None, None, None, None
@@ -1072,7 +1103,7 @@ class CameraWorker(BaseCameraWorker):
 
             ia = None
             try:
-                node_map, ia = self.open_node_map()
+                node_map, ia = self.open_node_map(interface_id, device_handle)
                 if node_map is None:
                     # подробная причина уже в логе open_node_map
                     return None, None, None, None
@@ -1155,9 +1186,9 @@ class CameraWorker(BaseCameraWorker):
                 return {"ip": "gateway==ip"}
 
             if ip_changed:
-                device_busy = ping_device(ip)
-                if not device_busy:
-                    log_event("camera_core.change_ip", "данный IP занят", "warn")
+                # ping отвечает → по новому IP уже кто-то есть → адрес занят, менять нельзя
+                if ping_device(ip):
+                    log_event("camera_core.change_ip", "данный IP уже занят другим устройством", "warn")
                     return {"ip": "ip_busy"}
 
             try:
@@ -1173,14 +1204,14 @@ class CameraWorker(BaseCameraWorker):
                 if ip_changed:
                     node_map.GevPersistentIPAddress.value = ip_to_int(ip)
 
+                # маску/шлюз пишем только в расширенном режиме; но выходить здесь нельзя —
+                # иначе при смене только IP пропускается DeviceReset ниже, и новый IP
+                # не применяется к камере (persistent-IP подхватывается лишь после ресета)
                 if self.advanced_settings:
                     if mask_changed:
                         node_map.GevPersistentSubnetMask.value = ip_to_int(mask)
                     if gateway_changed:
                         node_map.GevPersistentDefaultGateway.value = ip_to_int(gateway)
-                else:
-                    log_event("camera_core.change_ip", "mask-gateway нет изменени, т.к. не прожата кнопка", "warn")
-                    return {"ip": "mask_gateway_not_changed_advanced_off"}
 
                 time.sleep(1)
                 node_map.DeviceReset.execute()
@@ -1203,8 +1234,11 @@ class CameraWorker(BaseCameraWorker):
                 log_event("camera_core.change_ip", "неизвестная ошибка ip", "warn")
                 return {"ip": "unknown"}
 
-            except Exception:
-                log_event("camera_core.change_ip", "Ошибка изменения ip-mask-gateway", "warn")
+            except Exception as e:
+                # тип и текст ошибки + расшифровку кода GenTL кладём в payload:
+                # без них в логе только строка, и причину (напр. -1005 занято) не видно
+                log_event("camera_core.change_ip", "Ошибка изменения ip-mask-gateway", "warn",
+                          {"serial_number": self.serial_number, **_explain_error(e)})
                 return {"error": "Ошибка изменения ip-mask-gateway"}
             finally:
                 if ia is not None:
@@ -1350,14 +1384,19 @@ class RtspCameraWorker(BaseCameraWorker):
 
             self.running = False
 
-            if self.capture is not None:
+            # освобождаем ЛОКАЛЬНЫЙ capture этого сеанса независимо от self.capture:
+            # параллельный force_close мог уже обнулить self.capture, и тогда наш
+            # capture остался бы неосвобождённым (утечка сокета и потока FFmpeg).
+            # release идемпотентен, повторный вызов после force_close безопасен.
+            if capture is not None:
                 try:
-                    self.capture.release()
+                    capture.release()
                 except Exception:
                     pass
 
-                if self.capture is capture:
-                    self.capture = None
+            # обнуляем ссылку, только если это всё ещё наш capture (не мешаем force_close)
+            if self.capture is capture:
+                self.capture = None
 
             self._reset_save_state()
 
@@ -1365,7 +1404,12 @@ class RtspCameraWorker(BaseCameraWorker):
 
     # сохранить отдельный снимок и вернуть его как jpeg
     def snapshot(self):
+        # берём живой кадр и СРАЗУ копируем: generate() в другом потоке параллельно
+        # перезаписывает self.last_frame, а cv2 может переиспользовать буфер —
+        # без копии imencode получил бы кадр, меняющийся под ним.
         img = self.last_frame
+        if img is not None:
+            img = img.copy()
         opened = None
         try:
             if img is None:
@@ -1860,8 +1904,18 @@ class CameraManager:
 
 
 def ping_device(ip: str) -> bool:
+    # отбрасываем мусорный ввод до запуска ping: аргументы и так идут списком
+    # (shell-инъекция невозможна), но невалидный IP гонять смысла нет
+    try:
+        socket.inet_aton((ip or "").strip())
+    except (OSError, AttributeError):
+        log_event("camera_core.change_ip", "пинг: невалидный IP", "warn", {"ip": ip})
+        return False
+
+    # -w 500: ждём ответа максимум 0.5 c. Пинг зовётся под _control_lock, а дефолтный
+    # таймаут неответа (~4 c на Windows) заблокировал бы все control-операции на это время.
     result = subprocess.run(
-        ["ping", "-n", "1", ip],
+        ["ping", "-n", "1", "-w", "500", ip.strip()],
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     )

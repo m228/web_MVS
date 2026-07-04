@@ -4,14 +4,19 @@ async function apiGet(url, errorText = 'Ошибка запроса', options = 
     source = 'api',
     logRequest = false,
     logSuccess = false,
+    timeout = 15000,
   } = options;
 
   if (logRequest) {
     window.AppLog?.debug(source, `GET ${url}`);
   }
 
+  // без таймаута зависший бэкенд (напр. рестарт при обновлении) вешает fetch навсегда,
+  // а вместе с ним и последовательные опросы камер в UI
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeout);
   try {
-    const response = await fetch(url, { cache: 'no-store' });
+    const response = await fetch(url, { cache: 'no-store', signal: controller.signal });
     const data = await response.json();
 
     if (logSuccess) {
@@ -20,13 +25,16 @@ async function apiGet(url, errorText = 'Ошибка запроса', options = 
 
     return data;
   } catch (error) {
+    const message = error.name === 'AbortError' ? `Таймаут запроса (${timeout} мс)` : error.message;
     window.AppLog?.error(source, errorText, {
       url,
-      error: error.message,
+      error: message,
     });
 
     console.error(errorText, error);
     return null;
+  } finally {
+    clearTimeout(timer);
   }
 }
 
@@ -339,3 +347,25 @@ const NetApi = {
 };
 
 window.NetApi = NetApi;
+
+const UpdateApi = {
+  check() {
+    return apiGet('/api/update/check', 'Ошибка проверки обновлений:',
+      { source: 'api.update', logRequest: false, logSuccess: false });
+  },
+  download() {
+    return apiGet('/api/update/download', 'Ошибка скачивания обновления:',
+      { source: 'api.update' });
+  },
+  apply() {
+    return apiGet('/api/update/apply', 'Ошибка применения обновления:',
+      { source: 'api.update' });
+  },
+  // текущая версия + окружение (используем для показа версии при загрузке)
+  info() {
+    return apiGet('/api/debug/info', 'Ошибка получения версии:',
+      { source: 'api.update', logRequest: false, logSuccess: false });
+  },
+};
+
+window.UpdateApi = UpdateApi;

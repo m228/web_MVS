@@ -1,7 +1,10 @@
 import asyncio
+import os
+import threading
 from contextlib import asynccontextmanager
+from urllib.parse import urlparse
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Query
 from fastapi.responses import FileResponse, StreamingResponse, Response
 from fastapi.staticfiles import StaticFiles
 
@@ -10,10 +13,18 @@ from logger import get_events, log_event
 from camera_core import manager, build_rtsp_url
 import rtsp_store
 import net_tools
+import updater
+from paths import read_version, BUNDLE_DIR, DATA_DIR
 
 
 def api_log(source: str, message: str, level: str = "info", payload: dict | None = None):
     log_event(source, message, level, payload)
+
+
+def _is_rtsp_scheme(url: str) -> bool:
+    # только rtsp(s): иначе cv2.VideoCapture открыл бы file://, http:// и пр.
+    # (чтение локальных файлов / запросы во внутреннюю сеть — SSRF)
+    return urlparse(url or "").scheme.lower() in ("rtsp", "rtsps")
 
 
 @asynccontextmanager
@@ -30,38 +41,79 @@ async def lifespan(app: FastAPI):
     api_log("app", "Остановка приложения")
 
 
+# фронтенд лежит в бандле (под заморозкой — в _internal, см. paths.BUNDLE_DIR),
+# поэтому пути строим от BUNDLE_DIR, а не относительно CWD запуска
+PAGE_DIR = BUNDLE_DIR / "page"
+
 app = FastAPI(lifespan=lifespan)
-app.mount("/static", StaticFiles(directory="page/static"), name="static")
+app.mount("/static", StaticFiles(directory=str(PAGE_DIR / "static")), name="static")
 
 
 @app.get("/")
 def home():
-    return FileResponse("page/index.html")
+    return FileResponse(str(PAGE_DIR / "index.html"))
 
 
 @app.get("/camera")
 def camera():
-    return FileResponse("page/camera.html")
+    return FileResponse(str(PAGE_DIR / "camera.html"))
 
 
 @app.get("/rtsp")
 def rtsp_page():
-    return FileResponse("page/rtsp.html")
+    return FileResponse(str(PAGE_DIR / "rtsp.html"))
 
 
 @app.get("/multi")
 def multi_page():
-    return FileResponse("page/multi.html")
+    return FileResponse(str(PAGE_DIR / "multi.html"))
 
 
 @app.get("/network")
 def network_page():
-    return FileResponse("page/network.html")
+    return FileResponse(str(PAGE_DIR / "network.html"))
 
 
 @app.get("/api/debug/logs")
 def api_debug_logs(since_id: int = 0):
     return get_events(since_id)
+
+
+# версия поставки + окружение (Python/genicam/harvesters + .cti) — удобно проверить
+# на целевой машине, что обновление применилось и драйвер тот же
+@app.get("/api/debug/info")
+def api_debug_info():
+    return {
+        "version": read_version(),
+        "data_dir": str(DATA_DIR),
+        "bundle_dir": str(BUNDLE_DIR),
+        **manager.log_environment(),
+    }
+
+
+# --- самообновление из релизов GitHub (см. updater.py) ---
+
+@app.get("/api/update/check")
+def api_update_check():
+    api_log("api.update", "Проверка обновлений")
+    return updater.check_latest()
+
+
+@app.get("/api/update/download")
+def api_update_download():
+    api_log("api.update", "Скачивание обновления")
+    return updater.download_latest()
+
+
+@app.get("/api/update/apply")
+def api_update_apply():
+    api_log("api.update", "Применение обновления (перезапуск)")
+    result = updater.apply_update()
+    if result.get("ok"):
+        # даём ответу уйти клиенту, затем выходим — апдейтер ждёт выхода процесса,
+        # заменяет файлы и снова запускает приложение
+        threading.Timer(2.0, lambda: os._exit(0)).start()
+    return result
 
 
 @app.get("/api/cams")
@@ -79,6 +131,8 @@ def api_cams_detailed():
 # выбрать конкретную запись (handle) и/или интерфейс, через которые открывать камеру
 @app.get("/api/camera/select_interface")
 def select_interface(serial_number: str, interface_id: str = "", device_handle: str = ""):
+    api_log("api.camera.select_interface", "Запрошен выбор записи камеры",
+            payload={"serial_number": serial_number, "interface_id": interface_id, "device_handle": device_handle})
     data = manager.get(serial_number).select_interface(
         interface_id or None, device_handle or None)
     api_log("api.camera.select_interface", "Выбрана запись камеры",
@@ -97,12 +151,9 @@ def api_status():
 
 @app.get("/api/ip")
 def get_ip(serial_number: str, interface_id: str = "", device_handle: str = ""):
-    worker = manager.get(serial_number)
-    if interface_id:
-        worker.interface_id = interface_id
-    if device_handle:
-        worker.device_handle = device_handle
-    return worker.get_ip()
+    # interface/handle передаём разово, не мутируя общее состояние воркера:
+    # параллельные запросы фронта иначе перетирали бы выбор друг друга
+    return manager.get(serial_number).get_ip(interface_id or None, device_handle or None)
 
 
 @app.get("/api/count_cams")
@@ -113,11 +164,8 @@ def count_cams():
 @app.get("/api/get_network_settings")
 def network_settings(serial_number: str, interface_id: str = "", device_handle: str = ""):
     worker = manager.get(serial_number)
-    if interface_id:
-        worker.interface_id = interface_id
-    if device_handle:
-        worker.device_handle = device_handle
-    ip, mask, gateway, dhcp = worker.get_network_settings()
+    # interface/handle разово, без мутации общего состояния (см. /api/ip)
+    ip, mask, gateway, dhcp = worker.get_network_settings(interface_id or None, device_handle or None)
     if ip is None:
         api_log(
             "api.get_network_settings",
@@ -139,6 +187,8 @@ def network_settings(serial_number: str, interface_id: str = "", device_handle: 
 
 @app.get("/api/network_settings_advanced")
 def network_settings_advanced(serial_number: str):
+    # GET, меняющий состояние (advanced_settings=True) — это по соглашению проекта:
+    # все эндпоинты GET-only (см. CLAUDE.md), поэтому и «сеттеры» тоже GET
     data = manager.get(serial_number).set_advanced()
     api_log("api.network_settings_advanced", "Включены расширенные сетевые настройки", payload=data)
     return data
@@ -162,6 +212,11 @@ def rtsp_saved():
 
 @app.get("/api/rtsp/save")
 def rtsp_save(url: str, label: str = "", ip: str = "", scale: int = 100, fps: float = 0):
+    # проверяем схему уже при сохранении, а не только при стриминге — иначе в базу
+    # попадает мусор (напр. file://), который потом отклоняется при попытке смотреть
+    if not _is_rtsp_scheme(url):
+        api_log("api.rtsp.save", "Отклонён RTSP-URL с недопустимой схемой", "warn", {"url": url})
+        return {"error": "invalid_rtsp_scheme"}
     items = rtsp_store.save({"url": url, "label": label, "ip": ip, "scale": scale, "fps": fps})
     api_log("api.rtsp.save", "RTSP-камера сохранена в базу", payload={"url": url, "count": len(items)})
     return {"items": items}
@@ -232,14 +287,14 @@ def camera_stream(
     serial_number: str,
     interface_id: str = "",
     device_handle: str = "",
-    width: int = None,
-    height: int = None,
-    offset_x: int = None,
-    offset_y: int = None,
-    fps: float = None,
-    exposure_auto: str = None,
-    exposure_time: float = None,
-    pixel_format: str = None,
+    width: int | None = Query(None, gt=0),
+    height: int | None = Query(None, gt=0),
+    offset_x: int | None = Query(None, ge=0),
+    offset_y: int | None = Query(None, ge=0),
+    fps: float | None = Query(None, gt=0),
+    exposure_auto: str | None = None,
+    exposure_time: float | None = Query(None, gt=0),
+    pixel_format: str | None = None,
 ):
     worker = manager.get(serial_number)
     if interface_id:
@@ -314,11 +369,8 @@ def data_limit(serial_number: str):
 @app.get("/api/camera/info")
 def camera_info(serial_number: str, interface_id: str = "", device_handle: str = ""):
     worker = manager.get(serial_number)
-    if interface_id:
-        worker.interface_id = interface_id
-    if device_handle:
-        worker.device_handle = device_handle
-    data = worker.get_info()
+    # interface/handle разово, без мутации общего состояния (см. /api/ip)
+    data = worker.get_info(interface_id or None, device_handle or None)
     if not data:
         api_log("api.camera.info", "Не удалось получить информацию о камере", "warn", {"serial_number": serial_number})
         return {"error": "Не удалось получить информацию о камере"}
@@ -377,6 +429,9 @@ def camera_current_config(serial_number: str):
 
 def _resolve_rtsp_url(url, ip, username, password, channel, subtype):
     if url:
+        if not _is_rtsp_scheme(url):
+            log_event("api.rtsp.stream", "Отклонён RTSP-URL с недопустимой схемой", "warn", {"url": url})
+            return None
         return url
     if ip:
         return build_rtsp_url(ip, username, password, channel, subtype)

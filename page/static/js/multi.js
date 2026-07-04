@@ -646,14 +646,7 @@ function setMetric(el, name, value) {
 }
 
 // секунды -> «M:SS» (или «H:MM:SS»)
-function formatDuration(totalSeconds) {
-  const s = Math.max(0, Math.floor(Number(totalSeconds) || 0));
-  const hh = Math.floor(s / 3600);
-  const mm = Math.floor((s % 3600) / 60);
-  const ss = s % 60;
-  const pad = (n) => String(n).padStart(2, '0');
-  return hh > 0 ? `${hh}:${pad(mm)}:${pad(ss)}` : `${mm}:${pad(ss)}`;
-}
+// formatDuration / showSavePath вынесены в ui.js (общие для camera/multi/rtsp)
 
 function updateTileMetrics(index, m) {
   const el = getTileEl(index);
@@ -679,8 +672,9 @@ function resetTileMetrics(index) {
 // рывками; маленькое окно мигало "нет кадров" при редких просадках. 10 c терпимо.
 const LIVENESS_MS = 10000;
 
+let metricsTimer = null;
 function startMetricsPolling() {
-  setInterval(async () => {
+  metricsTimer = setInterval(async () => {
     const now = Date.now();
     for (let i = 0; i < state.tiles.length; i += 1) {
       const tile = state.tiles[i];
@@ -762,18 +756,6 @@ function focusedSource() {
 }
 
 // показать путь сохранения (папка + шаблон имени файла) из ответа сервера
-function showSavePath(elementId, data) {
-  const el = document.getElementById(elementId);
-  if (!el) return;
-  if (data && data.save_dir) {
-    el.textContent = `Сохранение в: ${data.save_dir}\\${data.file_pattern || ''}`;
-    el.hidden = false;
-  } else {
-    el.hidden = true;
-    el.textContent = '';
-  }
-}
-
 // --- фото ---
 function openPhotoModal() {
   const source = focusedSource();
@@ -1064,6 +1046,7 @@ async function initMultiPage() {
   startMetricsPolling();
 
   window.addEventListener('beforeunload', () => {
+    if (metricsTimer) clearInterval(metricsTimer);
     state.tiles.forEach((tile) => {
       if (tile.connected && tile.serial) {
         const base = tile.kind === 'rtsp' ? '/api/rtsp/close_stream_force' : '/api/camera/close_stream_force';

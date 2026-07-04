@@ -1008,6 +1008,160 @@ async function refreshCameras() {
   }
 }
 
+// ---------- карточка «Обновление» ----------
+
+function getUpdateEls() {
+  return {
+    card: document.getElementById('updateCard'),
+    checkBtn: document.getElementById('updateCheckBtn'),
+    current: document.getElementById('updateCurrent'),
+    status: document.getElementById('updateStatus'),
+    actions: document.getElementById('updateActions'),
+  };
+}
+
+function setUpdateStatus(message, variant = '') {
+  const el = getUpdateEls().status;
+  if (!el) return;
+  el.innerHTML = message
+    ? `<span class="status-chip ${variant}">${escapeHtml(message)}</span>`
+    : '';
+}
+
+function clearUpdateActions() {
+  const el = getUpdateEls().actions;
+  if (el) el.innerHTML = '';
+}
+
+function addUpdateButton(label, className, handler) {
+  const el = getUpdateEls().actions;
+  if (!el) return null;
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = className;
+  btn.textContent = label;
+  btn.addEventListener('click', handler);
+  el.appendChild(btn);
+  return btn;
+}
+
+async function loadCurrentVersion() {
+  const els = getUpdateEls();
+  const info = await UpdateApi.info();
+  if (info?.version && els.current) {
+    els.current.textContent = info.version;
+  }
+}
+
+async function checkUpdates() {
+  const els = getUpdateEls();
+  if (!els.checkBtn) return;
+
+  els.checkBtn.disabled = true;
+  setUpdateStatus('Проверяю…');
+  clearUpdateActions();
+
+  const data = await UpdateApi.check();
+  els.checkBtn.disabled = false;
+
+  if (!data) {
+    setUpdateStatus('Не удалось проверить обновления', 'status-chip--error');
+    return;
+  }
+
+  if (els.current && data.current) els.current.textContent = data.current;
+
+  if (data.error) {
+    setUpdateStatus(data.error, 'status-chip--error');
+    return;
+  }
+
+  if (data.update_available) {
+    log.info('Доступно обновление', { current: data.current, latest: data.latest });
+    setUpdateStatus(`Доступна новая версия ${data.latest}`, 'status-chip--warn');
+    addUpdateButton('Скачать обновление', 'btn-primary', downloadUpdate);
+  } else {
+    setUpdateStatus('Установлена последняя версия', 'status-chip--ok');
+  }
+}
+
+async function downloadUpdate() {
+  const els = getUpdateEls();
+  clearUpdateActions();
+  setUpdateStatus('Скачиваю обновление…');
+
+  const data = await UpdateApi.download();
+
+  if (!data || !data.ok) {
+    setUpdateStatus(data?.error || 'Не удалось скачать обновление', 'status-chip--error');
+    addUpdateButton('Повторить', 'btn-secondary', downloadUpdate);
+    return;
+  }
+
+  log.success('Обновление скачано', { version: data.version });
+  setUpdateStatus(`Версия ${data.version || ''} загружена и готова к установке`, 'status-chip--ok');
+  addUpdateButton('Обновить и перезапустить', 'btn-primary', applyUpdate);
+}
+
+async function applyUpdate() {
+  if (!confirm('Приложение закроется, обновит файлы и запустится заново. Продолжить?')) {
+    return;
+  }
+
+  clearUpdateActions();
+  setUpdateStatus('Запускаю обновление…');
+
+  const data = await UpdateApi.apply();
+
+  if (!data || !data.ok) {
+    setUpdateStatus(data?.error || 'Не удалось запустить обновление', 'status-chip--error');
+    addUpdateButton('Повторить', 'btn-secondary', applyUpdate);
+    return;
+  }
+
+  log.warn('Приложение перезапускается для обновления');
+  setUpdateStatus('Обновление… приложение перезапускается, подождите', 'status-chip--warn');
+  await pollUntilBack();
+}
+
+// после apply сервер выходит и поднимается заново (с новой версией) — ждём, пока ответит
+async function pollUntilBack(timeoutMs = 180000) {
+  const started = Date.now();
+  // дать серверу время выйти и начать замену
+  await new Promise((r) => setTimeout(r, 5000));
+
+  while (Date.now() - started < timeoutMs) {
+    try {
+      // лёгкий health-check: /api/debug/info отвечает локально и мгновенно.
+      // /api/update/check синхронно ходит на GitHub (timeout 15 c) — для «сервер уже поднялся?» не годится
+      const resp = await fetch('/api/debug/info', { cache: 'no-store' });
+      if (resp.ok) {
+        setUpdateStatus('Готово! Перезагружаю страницу…', 'status-chip--ok');
+        await new Promise((r) => setTimeout(r, 1200));
+        window.location.reload();
+        return;
+      }
+    } catch (e) {
+      // сервер ещё перезапускается — это ожидаемо
+    }
+    await new Promise((r) => setTimeout(r, 2500));
+  }
+
+  setUpdateStatus('Сервер долго не отвечает. Обновите страницу вручную позже.', 'status-chip--error');
+}
+
+function initUpdateCard() {
+  const els = getUpdateEls();
+  if (!els.card) return;
+
+  if (els.checkBtn) {
+    els.checkBtn.addEventListener('click', checkUpdates);
+  }
+
+  // показать текущую версию сразу при загрузке
+  loadCurrentVersion().catch(() => {});
+}
+
 async function initIndexPage() {
   const table = document.getElementById('table');
   const timeEl = document.getElementById('time');
@@ -1021,6 +1175,7 @@ async function initIndexPage() {
 
   initNetworkSettingsModal();
   initCameraInfoModal();
+  initUpdateCard();
   await refreshCameras();
 
   const autoOpenSerial = getAutoOpenSerial();

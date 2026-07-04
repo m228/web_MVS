@@ -146,18 +146,30 @@ CTI_FILENAME = "MvProducerGEV.cti"
 MVS_RUNTIME_DLL = "MvCameraControl.dll"
 
 
-# Поиск GenTL-продюсера: явный путь (MVS_CTI_PATH) -> копия в папке программы
-# (Driver/), но только если рядом лежит её runtime-DLL -> каталоги из
-# GENICAM_GENTL64_PATH (системный MVS) -> бандл без runtime как последний шанс.
+# самодостаточен ли bundled-продюсер: рядом с .cti должен лежать ВЕСЬ его runtime,
+# а не только MvCameraControl.dll. Ключевая зависимость — genicam-рантайм
+# GenApi_*_MV.dll (на её отсутствие прямо ругается сборка PyInstaller: "could not
+# resolve GenApi_MD_VC120_v3_0_MV.dll"). Имя версионное (VC120/VC140, v3_0/...),
+# поэтому проверяем по маске. Без полного runtime продюсер ГРУЗИТСЯ, но GigE-камеры
+# не перечисляет — список устройств пуст (это и ловили: bundled → 0 камер).
+def _bundle_has_full_runtime(cti_dir):
+    if not (cti_dir / MVS_RUNTIME_DLL).is_file():
+        return False
+    return next(cti_dir.glob("GenApi_*_MV.dll"), None) is not None
+
+
+# Поиск GenTL-продюсера: явный путь (MVS_CTI_PATH) -> САМОДОСТАТОЧНЫЙ бандл (Driver/
+# со всем runtime) -> системный MVS (GENICAM_GENTL64_PATH) -> неполный бандл как
+# последний шанс. Порядок важен: неполный бандл перечисляет 0 камер, поэтому при
+# нехватке его runtime сперва пробуем полноценный системный MVS.
 def _discover_cti():
     explicit = os.environ.get("MVS_CTI_PATH")
     if explicit and Path(explicit).is_file():
         return Path(explicit), "env:MVS_CTI_PATH"
 
-    # бандл берём, только если рядом есть и его runtime (MvCameraControl.dll) —
-    # иначе продюсер не загрузится, и лучше упасть на системный MVS
+    # бандл берём первым, ТОЛЬКО если он самодостаточен (весь runtime рядом с .cti)
     bundled = next(PROGRAM_DIR.rglob(CTI_FILENAME), None)
-    if bundled is not None and (bundled.parent / MVS_RUNTIME_DLL).is_file():
+    if bundled is not None and _bundle_has_full_runtime(bundled.parent):
         return bundled, "bundled"
 
     for raw in (os.environ.get("GENICAM_GENTL64_PATH") or "").split(os.pathsep):
@@ -167,6 +179,8 @@ def _discover_cti():
             if hit:
                 return hit, "env:GENICAM_GENTL64_PATH"
 
+    # системного MVS нет — как последний шанс берём неполный бандл (вдруг зависимости
+    # найдутся в PATH); всё равно лучше, чем совсем без продюсера
     if bundled is not None:
         return bundled, "bundled"
     return None, None

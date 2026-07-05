@@ -9,17 +9,73 @@
 удобнее `uvicorn app:app --reload`.
 """
 import os
+import sys
 import webbrowser
 
 import uvicorn
 
-from paths import BUNDLE_DIR, read_version
+from paths import BUNDLE_DIR, DATA_DIR, read_version
 
 HOST = "0.0.0.0"
 PORT = 8000
 
 
+class _Tee:
+    """Пишет одновременно в несколько потоков (консоль + файл)."""
+    def __init__(self, *streams):
+        self._streams = streams
+
+    def write(self, data):
+        for s in self._streams:
+            try:
+                s.write(data)
+            except Exception:
+                pass
+
+    def flush(self):
+        for s in self._streams:
+            try:
+                s.flush()
+            except Exception:
+                pass
+
+
+def run_diag():
+    """Прогон диагностики В ТОМ ЖЕ frozen-окружении, что и приложение.
+    Запуск: web_MVS.exe --diag  (или env WEB_MVS_DIAG=1). Вывод дублируется в
+    diag_output.txt рядом с exe — этот файл удобно прислать."""
+    os.chdir(BUNDLE_DIR)
+    out_path = DATA_DIR / "diag_output.txt"
+    f = None
+    orig = sys.stdout
+    try:
+        f = open(out_path, "w", encoding="utf-8")
+        sys.stdout = _Tee(orig, f)
+    except Exception:
+        f = None
+    try:
+        import diag
+        diag.main()
+    except SystemExit:
+        pass
+    except Exception:
+        import traceback
+        traceback.print_exc()
+    finally:
+        sys.stdout = orig
+        if f is not None:
+            f.close()
+    print(f"\nДиагностика сохранена в: {out_path}")
+    try:
+        input("Нажми Enter, чтобы закрыть окно...")
+    except Exception:
+        pass
+
+
 def main():
+    if "--diag" in sys.argv or os.environ.get("WEB_MVS_DIAG"):
+        run_diag()
+        return
     # ассеты (page/) ищутся относительно CWD -> переходим в каталог бандла
     os.chdir(BUNDLE_DIR)
     print(f"web_MVS {read_version()} -> http://localhost:{PORT}")

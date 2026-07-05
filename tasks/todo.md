@@ -28,7 +28,32 @@
 
 ## Как собрать (важно)
 - Локально dist собрать НЕЛЬЗЯ: нет genicam/harvesters (dev-машина без камеры).
-- Сборка на Server: `git pull` → `build.bat` → `dist\web_MVS_v1.0.6.zip`.
+- Сборка на Server: `git pull` → `build.bat` → `dist\web_MVS_v1.0.7.zip`.
+
+## ОБНОВЛЁННЫЙ ДИАГНОЗ (2026-07-05, после логов с Server)
+- Гипотеза про env `GENICAM_GENTL64_PATH` НЕ подтвердилась: в exe она есть, cti тот же
+  системный MVS (`env:GENICAM_GENTL64_PATH`), что и в PyCharm.
+- Разница версий harvesters (1.4.2 в exe vs 0.post.dev138 в PyCharm) — ШУМ versioneer:
+  он запускает git и читает версию НАШЕГО репозитория (.venv лежит внутри web_MVS).
+  По dist-info harvesters везде 1.4.3. Версии одинаковы.
+- Реальный факт: на Server exe перечисляет 0 камер, PyCharm — 10, при идентичных
+  продюсере/genicam/harvesters. Разница ТОЛЬКО в заморозке (frozen exe vs исходники).
+- Локально баг не воспроизвести: на dev-машине нет ни MVS, ни камер в сети.
+- Причину из одних логов не вычислить → нужна диагностика ИЗ frozen-окружения.
+
+## Сделано (диагностический билд 1.0.7)
+1. diag.py: рефакторинг в main() + проба загрузки DLL продюсера (ctypes) +
+   логгер harvesters на DEBUG (ловит немую причину пустого списка) + печать PATH.
+2. run.py: режим `--diag` (env WEB_MVS_DIAG) — прогон diag.main() в ТОМ ЖЕ
+   frozen-процессе; вывод дублируется в `diag_output.txt` рядом с exe.
+3. web_MVS.spec: `diag` добавлен в hiddenimports (попадает в бандл).
+4. VERSION → 1.0.7.
+Проверил: py_compile run/diag/camera_core/app ✓, diag.main() прогнан локально
+до конца без падений ✓ (логгер поймал GenTL -10001 на неполном бандле).
+
+## СЛЕДУЮЩИЙ ШАГ (нужен вывод с Server)
+- Server: `git pull` → `build.bat` → в dist: `web_MVS.exe --diag`
+- прислать `diag_output.txt` → по нему точная причина 0 камер в exe → фикс.
 
 ## Review (2026-07-05)
 Сделано:

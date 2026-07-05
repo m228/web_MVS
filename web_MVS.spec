@@ -16,7 +16,7 @@ from PyInstaller.utils.hooks import collect_all, collect_submodules
 
 datas = [('page', 'page'), ('Driver', 'Driver'), ('VERSION', '.')]
 binaries = []
-hiddenimports = ['app', 'camera_core', 'rtsp_store', 'net_tools', 'paths', 'logger', 'updater']
+hiddenimports = ['app', 'camera_core', 'rtsp_store', 'net_tools', 'paths', 'logger', 'updater', 'diag']
 hiddenimports += collect_submodules('uvicorn')
 
 for pkg in ('genicam', 'harvesters'):

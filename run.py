@@ -73,30 +73,66 @@ def run_diag():
 
 
 def _preflight():
-    """Предзагрузка драйвера в чистом главном потоке ДО старта uvicorn.
+    """Диагностика перечисления камер ДО старта uvicorn (event loop ещё не мешает).
 
-    Симптом: в --diag (главный поток, без event loop) продюсер перечисляет 10 камер,
-    а внутри uvicorn (и на старте, и по /api/cams) — 0. Разница — только запуск
-    uvicorn на весь процесс. Инициализируем продюсер здесь, пока uvicorn ещё НЕ
-    запущен: продюсер откроет System-модуль в том же контексте, что и рабочий --diag,
-    и (гипотеза) продолжит видеть камеры дальше. Плюс лог — решающая проба: если тут
-    камеры есть, а в lifespan уже нет, значит виноват именно uvicorn.run."""
+    Разводим три переменные, чтобы понять, что именно ломается в exe (в --diag камеры
+    видны, как сервер — нет):
+      A) СВЕЖИЙ Harvester в главном потоке — как в рабочем --diag;
+      B) СВЕЖИЙ Harvester в ОТДЕЛЬНОМ потоке — проверка привязки продюсера к потоку;
+      C) штатный путь manager.scan_cams в главном потоке — как в приложении.
+    Все три пишут количество камер в «Историю событий». Сравнив A/B/C, увидим причину:
+    свежий vs manager-Harvester, главный vs рабочий поток."""
+    import threading
+    from logger import log_event
+
+    def _enum_fresh():
+        try:
+            from camera_core import _discover_cti
+            from harvesters.core import Harvester
+            cti, _ = _discover_cti()
+            h = Harvester()
+            h.add_file(str(cti))
+            h.update()
+            n = len(h.device_info_list)
+            try:
+                h.reset()
+            except Exception:
+                pass
+            return n
+        except Exception as exc:
+            return f"ERR: {exc}"
+
+    # A) свежий Harvester, главный поток
     try:
-        import threading
-        from logger import log_event
+        a = _enum_fresh()
+        log_event("run.preflight", "A: свежий Harvester (главный поток)", "info",
+                  {"thread": threading.current_thread().name, "count": a})
+    except Exception as exc:
+        log_event("run.preflight", "A: ошибка", "warn", {"error": str(exc)})
+
+    # B) свежий Harvester, отдельный поток
+    box = {}
+    def _worker():
+        box["thread"] = threading.current_thread().name
+        box["count"] = _enum_fresh()
+    try:
+        t = threading.Thread(target=_worker, name="preflight-worker")
+        t.start(); t.join()
+        log_event("run.preflight", "B: свежий Harvester (отдельный поток)", "info",
+                  {"thread": box.get("thread"), "count": box.get("count")})
+    except Exception as exc:
+        log_event("run.preflight", "B: ошибка", "warn", {"error": str(exc)})
+
+    # C) штатный путь приложения (manager) в главном потоке — заодно прогреваем драйвер
+    try:
         from camera_core import manager
         manager.load_driver()
         cams = manager.scan_cams()
         real = [s for s in (cams or {}) if s != "DA123123"]
-        log_event("run.preflight", "Предзагрузка драйвера до uvicorn", "info",
-                  {"thread": threading.current_thread().name,
-                   "device_count_online": len(real), "serials": real})
+        log_event("run.preflight", "C: manager.scan_cams (главный поток)", "info",
+                  {"thread": threading.current_thread().name, "online_real": len(real)})
     except Exception as exc:
-        try:
-            from logger import log_event
-            log_event("run.preflight", "Предзагрузка не удалась", "warn", {"error": str(exc)})
-        except Exception:
-            pass
+        log_event("run.preflight", "C: ошибка", "warn", {"error": str(exc)})
 
 
 def main():

@@ -1946,16 +1946,6 @@ class CameraManager:
             # гарантируем наличие воркера
             self.get(serial)
 
-        # диагностика: сколько записей реально отдал продюсер и в каком потоке —
-        # ловим случай «в главном потоке 10, из uvicorn-потока 0»
-        try:
-            raw = len(self.harvester.device_info_list)
-        except Exception:
-            raw = None
-        real = [s for s in self.cam_online if s != "DA123123"]
-        log_event("camera_core.scan_cams", "Скан камер", "debug",
-                  {"thread": threading.current_thread().name,
-                   "raw_devices": raw, "online_real": len(real)})
         return self.cam_online
 
     def count_cams(self):

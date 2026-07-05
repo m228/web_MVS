@@ -72,67 +72,43 @@ def run_diag():
         pass
 
 
-def _preflight():
-    """Диагностика перечисления камер ДО старта uvicorn (event loop ещё не мешает).
+def _warmup():
+    """Прогрев GenTL-продюсера в главном потоке ДО старта uvicorn.
 
-    Разводим три переменные, чтобы понять, что именно ломается в exe (в --diag камеры
-    видны, как сервер — нет):
-      A) СВЕЖИЙ Harvester в главном потоке — как в рабочем --diag;
-      B) СВЕЖИЙ Harvester в ОТДЕЛЬНОМ потоке — проверка привязки продюсера к потоку;
-      C) штатный путь manager.scan_cams в главном потоке — как в приложении.
-    Все три пишут количество камер в «Историю событий». Сравнив A/B/C, увидим причину:
-    свежий vs manager-Harvester, главный vs рабочий поток."""
-    import threading
-    from logger import log_event
+    Симптом (только в собранном exe, из PyCharm никогда не всплывал): продюсер
+    Hikrobot без раннего прогрева в главном потоке инициализируется так, что из
+    рабочих потоков uvicorn (обработчик /api/cams) перечисляет 0 камер, хотя из
+    главного потока (режим --diag) видит все. Один update() свежего Harvester в
+    главном потоке до старта uvicorn проводит одноразовую глобальную инициализацию
+    продюсера — после этого сканирование из любых потоков работает.
 
-    def _enum_fresh():
+    Эффект глобальный (на процесс), поэтому Harvester здесь одноразовый: создаём,
+    перечисляем, сбрасываем. Реальный список камер потом строит приложение."""
+    try:
+        import threading
+        from logger import log_event
+        from camera_core import _discover_cti
+        from harvesters.core import Harvester
+
+        cti, _ = _discover_cti()
+        if cti is None:
+            return
+        h = Harvester()
+        h.add_file(str(cti))
+        h.update()
+        count = len(h.device_info_list)
         try:
-            from camera_core import _discover_cti
-            from harvesters.core import Harvester
-            cti, _ = _discover_cti()
-            h = Harvester()
-            h.add_file(str(cti))
-            h.update()
-            n = len(h.device_info_list)
-            try:
-                h.reset()
-            except Exception:
-                pass
-            return n
-        except Exception as exc:
-            return f"ERR: {exc}"
-
-    # A) свежий Harvester, главный поток
-    try:
-        a = _enum_fresh()
-        log_event("run.preflight", "A: свежий Harvester (главный поток)", "info",
-                  {"thread": threading.current_thread().name, "count": a})
+            h.reset()
+        except Exception:
+            pass
+        log_event("run.warmup", "Прогрев продюсера в главном потоке", "info",
+                  {"thread": threading.current_thread().name, "device_count": count})
     except Exception as exc:
-        log_event("run.preflight", "A: ошибка", "warn", {"error": str(exc)})
-
-    # B) свежий Harvester, отдельный поток
-    box = {}
-    def _worker():
-        box["thread"] = threading.current_thread().name
-        box["count"] = _enum_fresh()
-    try:
-        t = threading.Thread(target=_worker, name="preflight-worker")
-        t.start(); t.join()
-        log_event("run.preflight", "B: свежий Harvester (отдельный поток)", "info",
-                  {"thread": box.get("thread"), "count": box.get("count")})
-    except Exception as exc:
-        log_event("run.preflight", "B: ошибка", "warn", {"error": str(exc)})
-
-    # C) штатный путь приложения (manager) в главном потоке — заодно прогреваем драйвер
-    try:
-        from camera_core import manager
-        manager.load_driver()
-        cams = manager.scan_cams()
-        real = [s for s in (cams or {}) if s != "DA123123"]
-        log_event("run.preflight", "C: manager.scan_cams (главный поток)", "info",
-                  {"thread": threading.current_thread().name, "online_real": len(real)})
-    except Exception as exc:
-        log_event("run.preflight", "C: ошибка", "warn", {"error": str(exc)})
+        try:
+            from logger import log_event
+            log_event("run.warmup", "Прогрев не выполнен", "warn", {"error": str(exc)})
+        except Exception:
+            pass
 
 
 def main():
@@ -141,8 +117,9 @@ def main():
         return
     # ассеты (page/) ищутся относительно CWD -> переходим в каталог бандла
     os.chdir(BUNDLE_DIR)
-    # предзагрузка драйвера в главном потоке до uvicorn (см. _preflight)
-    _preflight()
+    # прогрев продюсера в главном потоке до uvicorn — иначе в exe рабочие потоки
+    # видят 0 камер (см. _warmup)
+    _warmup()
     print(f"web_MVS {read_version()} -> http://localhost:{PORT}")
     try:
         webbrowser.open(f"http://localhost:{PORT}")

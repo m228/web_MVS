@@ -145,6 +145,23 @@ PROGRAM_DIR = BUNDLE_DIR
 CTI_FILENAME = "MvProducerGEV.cti"
 MVS_RUNTIME_DLL = "MvCameraControl.dll"
 
+# Стандартные папки установки MVS SDK, где лежит GenTL-продюсер и его runtime.
+# Нужны, потому что env GENICAM_GENTL64_PATH есть НЕ всегда: свежий процесс (двойной
+# клик по exe + UAC-элевейшн) может не унаследовать её из окружения, хотя из PyCharm
+# она видна. Тогда системный MVS ищем прямо по этим путям. Runtime-папки идут первыми:
+# в них рядом с .cti лежит ВЕСЬ runtime (MvCameraControl.dll + genicam), поэтому
+# зависимости продюсера резолвятся из одного места (см. _register_driver_dll_dir).
+MVS_GENTL_DIRS = [
+    r"C:\Program Files (x86)\MVS\Runtime\Win64_x64",
+    r"C:\Program Files\MVS\Runtime\Win64_x64",
+    r"C:\Program Files (x86)\MVS\Runtime\Win64",
+    r"C:\Program Files\MVS\Runtime\Win64",
+    r"C:\Program Files (x86)\MVS\Development\GenTL\Win64_x64",
+    r"C:\Program Files\MVS\Development\GenTL\Win64_x64",
+    r"C:\Program Files (x86)\MVS\Development\GenTL\Win64",
+    r"C:\Program Files\MVS\Development\GenTL\Win64",
+]
+
 
 # самодостаточен ли bundled-продюсер: рядом с .cti должен лежать ВЕСЬ его runtime,
 # а не только MvCameraControl.dll. Ключевая зависимость — genicam-рантайм
@@ -159,9 +176,11 @@ def _bundle_has_full_runtime(cti_dir):
 
 
 # Поиск GenTL-продюсера: явный путь (MVS_CTI_PATH) -> САМОДОСТАТОЧНЫЙ бандл (Driver/
-# со всем runtime) -> системный MVS (GENICAM_GENTL64_PATH) -> неполный бандл как
-# последний шанс. Порядок важен: неполный бандл перечисляет 0 камер, поэтому при
-# нехватке его runtime сперва пробуем полноценный системный MVS.
+# со всем runtime) -> системный MVS (env GENICAM_GENTL64_PATH ИЛИ стандартные папки
+# установки MVS_GENTL_DIRS) -> неполный бандл как последний шанс. Порядок важен:
+# неполный бандл перечисляет 0 камер, поэтому при нехватке его runtime сперва пробуем
+# полноценный системный MVS. Системный MVS ищем и по env, и по фиксированным путям —
+# env есть не всегда (exe от Explorer + UAC её не наследует, а из PyCharm видна).
 def _discover_cti():
     explicit = os.environ.get("MVS_CTI_PATH")
     if explicit and Path(explicit).is_file():
@@ -178,6 +197,14 @@ def _discover_cti():
             hit = next(directory.glob(CTI_FILENAME), None)
             if hit:
                 return hit, "env:GENICAM_GENTL64_PATH"
+
+    # env не задана (типично для exe) — ищем системный MVS по стандартным папкам установки
+    for raw in MVS_GENTL_DIRS:
+        directory = Path(raw)
+        if directory.is_dir():
+            hit = next(directory.glob(CTI_FILENAME), None)
+            if hit:
+                return hit, "mvs_install_dir"
 
     # системного MVS нет — как последний шанс берём неполный бандл (вдруг зависимости
     # найдутся в PATH); всё равно лучше, чем совсем без продюсера
@@ -1870,9 +1897,16 @@ class CameraManager:
             # в лог пишем, откуда взят продюсер и найден ли его runtime — удобно
             # для диагностики самодостаточной поставки (всё из папки Driver/)
             runtime = _find_mvs_runtime()
+            # число перечисленных устройств кладём в лог: главный маркер той самой
+            # проблемы (продюсер грузится, но 0 камер → выбран неполный бандл вместо MVS)
+            try:
+                device_count = len(self.harvester.device_info_list)
+            except Exception:
+                device_count = None
             log_event("camera_core.load_driver", "Драйвер загружен", "success",
                       {"cti_path": cti_path, "source": cti_source,
-                       "mvs_runtime": runtime or "НЕ НАЙДЕН"})
+                       "mvs_runtime": runtime or "НЕ НАЙДЕН",
+                       "device_count": device_count})
         except Exception as e:
             self.driver_loaded = False
             log_event("camera_core.load_driver", "Ошибка загрузки драйвера", "error", {"error": str(e)})

@@ -72,12 +72,41 @@ def run_diag():
         pass
 
 
+def _preflight():
+    """Предзагрузка драйвера в чистом главном потоке ДО старта uvicorn.
+
+    Симптом: в --diag (главный поток, без event loop) продюсер перечисляет 10 камер,
+    а внутри uvicorn (и на старте, и по /api/cams) — 0. Разница — только запуск
+    uvicorn на весь процесс. Инициализируем продюсер здесь, пока uvicorn ещё НЕ
+    запущен: продюсер откроет System-модуль в том же контексте, что и рабочий --diag,
+    и (гипотеза) продолжит видеть камеры дальше. Плюс лог — решающая проба: если тут
+    камеры есть, а в lifespan уже нет, значит виноват именно uvicorn.run."""
+    try:
+        import threading
+        from logger import log_event
+        from camera_core import manager
+        manager.load_driver()
+        cams = manager.scan_cams()
+        real = [s for s in (cams or {}) if s != "DA123123"]
+        log_event("run.preflight", "Предзагрузка драйвера до uvicorn", "info",
+                  {"thread": threading.current_thread().name,
+                   "device_count_online": len(real), "serials": real})
+    except Exception as exc:
+        try:
+            from logger import log_event
+            log_event("run.preflight", "Предзагрузка не удалась", "warn", {"error": str(exc)})
+        except Exception:
+            pass
+
+
 def main():
     if "--diag" in sys.argv or os.environ.get("WEB_MVS_DIAG"):
         run_diag()
         return
     # ассеты (page/) ищутся относительно CWD -> переходим в каталог бандла
     os.chdir(BUNDLE_DIR)
+    # предзагрузка драйвера в главном потоке до uvicorn (см. _preflight)
+    _preflight()
     print(f"web_MVS {read_version()} -> http://localhost:{PORT}")
     try:
         webbrowser.open(f"http://localhost:{PORT}")

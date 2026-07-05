@@ -1906,7 +1906,8 @@ class CameraManager:
             log_event("camera_core.load_driver", "Драйвер загружен", "success",
                       {"cti_path": cti_path, "source": cti_source,
                        "mvs_runtime": runtime or "НЕ НАЙДЕН",
-                       "device_count": device_count})
+                       "device_count": device_count,
+                       "thread": threading.current_thread().name})
         except Exception as e:
             self.driver_loaded = False
             log_event("camera_core.load_driver", "Ошибка загрузки драйвера", "error", {"error": str(e)})
@@ -1945,6 +1946,16 @@ class CameraManager:
             # гарантируем наличие воркера
             self.get(serial)
 
+        # диагностика: сколько записей реально отдал продюсер и в каком потоке —
+        # ловим случай «в главном потоке 10, из uvicorn-потока 0»
+        try:
+            raw = len(self.harvester.device_info_list)
+        except Exception:
+            raw = None
+        real = [s for s in self.cam_online if s != "DA123123"]
+        log_event("camera_core.scan_cams", "Скан камер", "debug",
+                  {"thread": threading.current_thread().name,
+                   "raw_devices": raw, "online_real": len(real)})
         return self.cam_online
 
     def count_cams(self):

@@ -75,6 +75,16 @@
                 <span class="mode-indicator hidden" id="videoIndicator"></span>
               </button>
 
+              <button type="button" id="lightBtn" class="toolbar-btn toolbar-btn--light" title="Подсветка камеры">
+                Подсветка
+                <span class="mode-indicator hidden" id="lightIndicator"></span>
+              </button>
+
+              <button type="button" id="zoomBtn" class="toolbar-btn toolbar-btn--neutral" title="Зум">
+                Зум
+                <span class="mode-indicator hidden" id="zoomIndicator"></span>
+              </button>
+
               <button type="button" id="logsBtn" class="toolbar-btn toolbar-btn--neutral toolbar-btn--logs" title="Открыть журнал">
                 Логи
                 <span class="log-counter" id="logCounter">0</span>
@@ -225,6 +235,85 @@
               </ul>
             </details>
           </div>
+        </div>
+
+        <div class="card light-card-popup" id="lightCard">
+          <div class="feature-head">
+            <span class="feature-icon feature-icon--bulb" id="lightBulb" aria-hidden="true">
+              <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M9 18h6M10 21h4M12 3a6 6 0 0 0-4 10.5c.7.7 1 1.4 1 2.5h6c0-1.1.3-1.8 1-2.5A6 6 0 0 0 12 3z"/>
+              </svg>
+            </span>
+            <h2>Подсветка</h2>
+            <button type="button" class="cap-refresh" id="lightRecheck" title="Проверить возможности" aria-label="Проверить возможности">
+              <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M21 12a9 9 0 1 1-2.64-6.36M21 3v6h-6"/>
+              </svg>
+            </button>
+          </div>
+
+          <p class="cap-line" id="lightCap" data-state="unknown"><span class="cap-dot"></span><span class="cap-text">Проверяю…</span></p>
+
+          <label class="switch-row">
+            <span class="switch">
+              <input type="checkbox" id="lightSwitch" />
+              <span class="switch-track"></span>
+            </span>
+            <span class="switch-label" id="lightSwitchLabel">Выключено</span>
+          </label>
+
+          <label class="slider-row" id="lightLevelRow">
+            <span>Яркость</span>
+            <input type="range" id="lightLevel" min="1" max="100" value="100" />
+          </label>
+        </div>
+
+        <div class="card zoom-card-popup" id="zoomCard">
+          <div class="feature-head">
+            <span class="feature-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                <circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3M11 8v6M8 11h6"/>
+              </svg>
+            </span>
+            <h2>Зум</h2>
+            <button type="button" class="cap-refresh" id="zoomRecheck" title="Проверить возможности" aria-label="Проверить возможности">
+              <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M21 12a9 9 0 1 1-2.64-6.36M21 3v6h-6"/>
+              </svg>
+            </button>
+          </div>
+
+          <p class="cap-line" id="zoomCap" data-state="yes"><span class="cap-dot"></span><span class="cap-text">Цифровой зум</span></p>
+          <div class="zoom-levels" id="zoomLevels">
+            <button type="button" class="btn-secondary" data-zoom="1">1×</button>
+            <button type="button" class="btn-secondary" data-zoom="2">2×</button>
+            <button type="button" class="btn-secondary" data-zoom="4">4×</button>
+          </div>
+
+          <div class="zoom-pan" id="zoomPan" hidden>
+            <span class="zoom-sub">Область просмотра</span>
+            <div class="pan-grid" id="panGrid">
+              <button type="button" data-px="0" data-py="0" title="Левый верх"></button>
+              <button type="button" data-px="0.5" data-py="0" title="Верх"></button>
+              <button type="button" data-px="1" data-py="0" title="Правый верх"></button>
+              <button type="button" data-px="0" data-py="0.5" title="Лево"></button>
+              <button type="button" data-px="0.5" data-py="0.5" title="Центр"></button>
+              <button type="button" data-px="1" data-py="0.5" title="Право"></button>
+              <button type="button" data-px="0" data-py="1" title="Левый низ"></button>
+              <button type="button" data-px="0.5" data-py="1" title="Низ"></button>
+              <button type="button" data-px="1" data-py="1" title="Правый низ"></button>
+            </div>
+          </div>
+
+          <div class="optical-zoom-controls" id="opticalZoomControls" hidden>
+            <span class="zoom-sub">Оптический зум камеры</span>
+            <div class="zoom-levels">
+              <button type="button" class="btn-secondary" data-optical="wide">Отдалить</button>
+              <button type="button" class="btn-secondary" data-optical="stop">Стоп</button>
+              <button type="button" class="btn-secondary" data-optical="tele">Приблизить</button>
+            </div>
+          </div>
+          <p class="zoom-hint" id="zoomOpticalHint">Оптического зума нет — доступен только цифровой.</p>
         </div>
       </div>
 

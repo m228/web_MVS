@@ -13,6 +13,7 @@ import cv2
 
 from logger import log_event
 from paths import BUNDLE_DIR, DATA_DIR
+import dahua_control
 
 import subprocess
 
@@ -1301,6 +1302,13 @@ class RtspCameraWorker(BaseCameraWorker):
         self.capture = None
         # последний полученный кадр — для снимка без повторного подключения
         self.last_frame = None
+        # цифровой зум (кроп + растяжение): 1.0 = без зума, до 4.0
+        self.zoom_factor = 1.0
+        # положение окна кропа (панорамирование): 0.5,0.5 = центр; 0,0 = левый верх; 1,1 = правый низ
+        self.zoom_pan_x = 0.5
+        self.zoom_pan_y = 0.5
+        # кэш возможностей камеры (белый свет / оптический зум), заполняется по запросу
+        self._caps = None
 
     def _open_capture(self):
         capture = cv2.VideoCapture(self.rtsp_url, cv2.CAP_FFMPEG)
@@ -1377,13 +1385,16 @@ class RtspCameraWorker(BaseCameraWorker):
                     continue
                 last_emit = now
 
+                # цифровой зум (кроп центра + растяжение), затем сетевой масштаб
+                zoomed = self._apply_digital_zoom(raw)
+
                 # масштабирование для снижения нагрузки на сеть
                 if scale_factor < 1.0:
-                    new_w = max(2, int(raw.shape[1] * scale_factor))
-                    new_h = max(2, int(raw.shape[0] * scale_factor))
-                    img = cv2.resize(raw, (new_w, new_h), interpolation=cv2.INTER_AREA)
+                    new_w = max(2, int(zoomed.shape[1] * scale_factor))
+                    new_h = max(2, int(zoomed.shape[0] * scale_factor))
+                    img = cv2.resize(zoomed, (new_w, new_h), interpolation=cv2.INTER_AREA)
                 else:
-                    img = raw
+                    img = zoomed
 
                 ok_jpeg, encoded = cv2.imencode(".jpg", img)
                 if not ok_jpeg:
@@ -1463,6 +1474,8 @@ class RtspCameraWorker(BaseCameraWorker):
                     log_event("camera_core.rtsp_snapshot", "Не удалось получить кадр для снимка", "error")
                     return None
 
+            # снимок отражает то же, что видно в потоке (с учётом цифрового зума)
+            img = self._apply_digital_zoom(img)
             self.write_photo(img)
 
             ok_jpeg, encoded = cv2.imencode(".jpg", img)
@@ -1489,6 +1502,95 @@ class RtspCameraWorker(BaseCameraWorker):
 
         log_event("camera_core.rtsp_force", "Запрошена принудительная остановка RTSP-потока", "warn")
         return {"status": "force_stopped"}
+
+    # ---------- цифровой зум ----------
+
+    def _apply_digital_zoom(self, frame):
+        """Кроп области 1/factor (с учётом панорамирования) и растяжение к размеру кадра."""
+        factor = self.zoom_factor
+        if not factor or factor <= 1.0:
+            return frame
+        h, w = frame.shape[:2]
+        crop_w = max(2, int(w / factor))
+        crop_h = max(2, int(h / factor))
+        # положение окна: pan 0..1 отображается в диапазон [0 .. (размер - кроп)]
+        x0 = int(round((w - crop_w) * self.zoom_pan_x))
+        y0 = int(round((h - crop_h) * self.zoom_pan_y))
+        x0 = max(0, min(w - crop_w, x0))
+        y0 = max(0, min(h - crop_h, y0))
+        crop = frame[y0:y0 + crop_h, x0:x0 + crop_w]
+        return cv2.resize(crop, (w, h), interpolation=cv2.INTER_LINEAR)
+
+    def set_zoom(self, factor=None, pan_x=None, pan_y=None):
+        """Задать кратность цифрового зума (1.0..4.0) и/или положение окна (pan 0..1).
+
+        При смене кратности окно возвращается в центр. Панорамирование (pan_x/pan_y)
+        можно менять отдельно, не трогая кратность. Читается потоком на лету.
+        """
+        if factor is not None:
+            try:
+                factor = float(factor)
+            except (TypeError, ValueError):
+                return {"error": "bad_factor"}
+            self.zoom_factor = max(1.0, min(4.0, factor))
+            # новая кратность — сбрасываем вид в центр
+            self.zoom_pan_x = 0.5
+            self.zoom_pan_y = 0.5
+        if pan_x is not None:
+            try:
+                self.zoom_pan_x = max(0.0, min(1.0, float(pan_x)))
+            except (TypeError, ValueError):
+                pass
+        if pan_y is not None:
+            try:
+                self.zoom_pan_y = max(0.0, min(1.0, float(pan_y)))
+            except (TypeError, ValueError):
+                pass
+        log_event("camera_core.rtsp_zoom", "Цифровой зум", "info",
+                  {"serial_number": self.serial_number, "factor": self.zoom_factor,
+                   "pan_x": self.zoom_pan_x, "pan_y": self.zoom_pan_y})
+        return {"status": "ok", "mode": "digital", "factor": self.zoom_factor,
+                "pan_x": self.zoom_pan_x, "pan_y": self.zoom_pan_y}
+
+    # ---------- управление камерой (Dahua CGI) ----------
+
+    def _dahua_creds(self):
+        return dahua_control.parse_rtsp_credentials(self.rtsp_url)
+
+    def get_capabilities(self, refresh=False):
+        """Возможности камеры (белый свет / оптический зум). Кэшируется на воркере."""
+        if self._caps is not None and not refresh:
+            return self._caps
+        host, user, password = self._dahua_creds()
+        caps = dahua_control.get_capabilities(host, user, password)
+        # цифровой зум делаем у себя — он доступен всегда
+        caps["digital_zoom"] = True
+        caps["zoom_factor"] = self.zoom_factor
+        self._caps = caps
+        return caps
+
+    def set_light(self, on, brightness=100):
+        """Включить/выключить белый прожектор камеры."""
+        host, user, password = self._dahua_creds()
+        if not host:
+            return {"error": "no_host"}
+        ok = dahua_control.set_white_light(host, user, password, on, brightness)
+        return {"status": "ok" if ok else "failed", "on": bool(on)}
+
+    def get_light(self):
+        """Текущее состояние белого прожектора: on | off | auto | None."""
+        host, user, password = self._dahua_creds()
+        if not host:
+            return {"error": "no_host"}
+        return {"state": dahua_control.get_white_light(host, user, password)}
+
+    def optical_zoom(self, direction):
+        """Оптический зум камеры (если поддерживается). direction: tele|wide|stop."""
+        host, user, password = self._dahua_creds()
+        if not host:
+            return {"error": "no_host"}
+        ok = dahua_control.optical_zoom(host, user, password, direction)
+        return {"status": "ok" if ok else "failed", "direction": direction, "mode": "optical"}
 
 
 class CameraManager:

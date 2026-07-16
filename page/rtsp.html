@@ -48,45 +48,45 @@
 
         <div class="camera-layout" id="cameraLayout">
           <div class="camera-main">
-            <div class="camera-toolbar card">
-              <button type="button" id="connectBtn" class="toolbar-btn toolbar-btn--primary" title="Подключить">
-                Подключить
+            <div class="camera-toolbar card camera-toolbar--icons">
+              <button type="button" id="connectBtn" class="toolbar-btn toolbar-btn--primary" title="Подключить" aria-label="Подключить">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><polygon points="6 4 20 12 6 20 6 4"/></svg>
               </button>
 
-              <button type="button" id="stopBtn" class="toolbar-btn toolbar-btn--danger hidden" title="Остановить поток">
-                Остановить
+              <button type="button" id="stopBtn" class="toolbar-btn toolbar-btn--danger hidden" title="Остановить поток" aria-label="Остановить поток">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>
               </button>
 
-              <button type="button" id="forceStopBtn" class="toolbar-btn toolbar-btn--danger-force force-stop-btn hidden" title="Принудительно остановить поток">
-                Стоп принудительно
+              <button type="button" id="forceStopBtn" class="toolbar-btn toolbar-btn--danger-force force-stop-btn hidden" title="Принудительно остановить поток" aria-label="Принудительно остановить">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M15 9l-6 6M9 9l6 6"/></svg>
               </button>
 
-              <button type="button" id="snapshotBtn" class="toolbar-btn toolbar-btn--photo" title="Сделать снимок">
-                Снимок
+              <button type="button" id="snapshotBtn" class="toolbar-btn toolbar-btn--photo" title="Сделать снимок" aria-label="Сделать снимок">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><text x="12" y="13.8" text-anchor="middle" dominant-baseline="central" font-size="11" font-weight="700" fill="currentColor" stroke="none">1</text></svg>
               </button>
 
-              <button type="button" id="photoBtn" class="toolbar-btn toolbar-btn--photo" title="Автосохранение фото">
-                Фото
+              <button type="button" id="photoBtn" class="toolbar-btn toolbar-btn--photo" title="Автосохранение фото" aria-label="Автосохранение фото">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="3.5"/></svg>
                 <span class="mode-indicator hidden" id="photoIndicator"></span>
               </button>
 
-              <button type="button" id="videoBtn" class="toolbar-btn toolbar-btn--accent" title="Запись видео">
-                Видео
+              <button type="button" id="videoBtn" class="toolbar-btn toolbar-btn--accent" title="Запись видео" aria-label="Запись видео">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M23 7l-7 5 7 5V7z"/><rect x="1" y="5" width="15" height="14" rx="2"/></svg>
                 <span class="mode-indicator hidden" id="videoIndicator"></span>
               </button>
 
-              <button type="button" id="lightBtn" class="toolbar-btn toolbar-btn--light" title="Подсветка камеры">
-                Подсветка
+              <button type="button" id="lightBtn" class="toolbar-btn toolbar-btn--light" title="Подсветка камеры" aria-label="Подсветка камеры">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18h6M10 21h4M12 3a6 6 0 0 0-4 10.5c.7.7 1 1.4 1 2.5h6c0-1.1.3-1.8 1-2.5A6 6 0 0 0 12 3z"/></svg>
                 <span class="mode-indicator hidden" id="lightIndicator"></span>
               </button>
 
-              <button type="button" id="zoomBtn" class="toolbar-btn toolbar-btn--neutral" title="Зум">
-                Зум
+              <button type="button" id="zoomBtn" class="toolbar-btn toolbar-btn--neutral" title="Зум" aria-label="Зум">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3M11 8v6M8 11h6"/></svg>
                 <span class="mode-indicator hidden" id="zoomIndicator"></span>
               </button>
 
-              <button type="button" id="logsBtn" class="toolbar-btn toolbar-btn--neutral toolbar-btn--logs" title="Открыть журнал">
-                Логи
+              <button type="button" id="logsBtn" class="toolbar-btn toolbar-btn--neutral toolbar-btn--logs" title="Открыть журнал" aria-label="Открыть журнал">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/></svg>
                 <span class="log-counter" id="logCounter">0</span>
               </button>
             </div>
@@ -184,104 +184,67 @@
 
         <div class="card photo-card-popup" id="photoCard">
           <h2>Автосохранение фото</h2>
-          <div class="record-form">
-            <label class="one-line-label">
-              Интервал (сек)
-              <input class="photo-interval-input" type="number" name="photo_interval" value="5" min="1" />
-            </label>
-            <p class="record-path" id="photoSavePath" hidden></p>
-            <div class="record-actions">
-              <button type="button" id="photoOn" class="btn-primary">Включить</button>
-              <button type="button" id="photoOff" class="btn-secondary">Выключить</button>
-            </div>
-            <details class="record-help">
-              <summary>Почему фото может не записываться?</summary>
-              <ul>
-                <li>Камера не подключена или поток не запущен — нет кадров для сохранения.</li>
-                <li>RTSP недоступен: неверный URL/логин/пароль или камера не отвечает по сети.</li>
-                <li>Нет прав на запись или нет места в папке сохранения.</li>
-                <li>Поток рвётся из-за слабой сети — снизьте масштаб/FPS.</li>
-              </ul>
-            </details>
+
+          <label class="field-row">
+            <span>Интервал</span>
+            <span class="field-inline">
+              <input class="field-input field-input--sm" type="number" name="photo_interval" value="5" min="1" />
+              <select class="field-select" name="photo_interval_unit">
+                <option value="seconds" selected>сек</option>
+                <option value="minutes">мин</option>
+              </select>
+            </span>
+          </label>
+
+          <p class="record-path" id="photoSavePath" hidden></p>
+
+          <div class="popup-actions">
+            <button type="button" id="photoOn" class="btn-primary">Включить</button>
+            <button type="button" id="photoOff" class="btn-secondary">Выключить</button>
           </div>
         </div>
 
         <div class="card video-card-popup" id="videoCard">
           <h2>Запись видео</h2>
-          <div class="record-form">
-            <label class="video-time-row">
-              <span>Длительность записи</span>
-              <div class="video-time-controls">
-                <input class="video-minutes-input" type="number" name="video_duration" value="10" min="1" />
-                <select name="video_duration_unit" class="video-duration-unit">
-                  <option value="minutes" selected>мин</option>
-                  <option value="seconds">сек</option>
-                </select>
-              </div>
-            </label>
 
-            <p class="record-path" id="videoSavePath" hidden></p>
-            <div class="record-actions">
-              <button type="button" id="videoOn" class="btn-primary">Начать запись</button>
-              <button type="button" id="videoOff" class="btn-secondary">Остановить запись</button>
-            </div>
-            <details class="record-help">
-              <summary>Почему видео может не записываться?</summary>
-              <ul>
-                <li>Камера не подключена или поток не запущен — нет кадров для записи.</li>
-                <li>RTSP недоступен: неверный URL/логин/пароль или камера не отвечает по сети.</li>
-                <li>Нет прав на запись или нет места в папке сохранения.</li>
-                <li>Поток рвётся из-за слабой сети — снизьте масштаб/FPS.</li>
-              </ul>
-            </details>
+          <label class="field-row">
+            <span>Длительность</span>
+            <span class="field-inline">
+              <input class="field-input field-input--sm" type="number" name="video_duration" value="10" min="1" />
+              <select class="field-select" name="video_duration_unit">
+                <option value="minutes" selected>мин</option>
+                <option value="seconds">сек</option>
+              </select>
+            </span>
+          </label>
+
+          <p class="record-path" id="videoSavePath" hidden></p>
+
+          <div class="popup-actions">
+            <button type="button" id="videoOn" class="btn-primary">Начать</button>
+            <button type="button" id="videoOff" class="btn-secondary">Остановить</button>
           </div>
         </div>
 
         <div class="card light-card-popup" id="lightCard">
-          <div class="feature-head">
-            <span class="feature-icon feature-icon--bulb" id="lightBulb" aria-hidden="true">
-              <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-                <path d="M9 18h6M10 21h4M12 3a6 6 0 0 0-4 10.5c.7.7 1 1.4 1 2.5h6c0-1.1.3-1.8 1-2.5A6 6 0 0 0 12 3z"/>
-              </svg>
-            </span>
-            <h2>Подсветка</h2>
-            <button type="button" class="cap-refresh" id="lightRecheck" title="Проверить возможности" aria-label="Проверить возможности">
-              <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <path d="M21 12a9 9 0 1 1-2.64-6.36M21 3v6h-6"/>
-              </svg>
-            </button>
-          </div>
+          <h2>Подсветка</h2>
 
           <p class="cap-line" id="lightCap" data-state="unknown"><span class="cap-dot"></span><span class="cap-text">Проверяю…</span></p>
 
-          <label class="switch-row">
-            <span class="switch">
-              <input type="checkbox" id="lightSwitch" />
-              <span class="switch-track"></span>
-            </span>
-            <span class="switch-label" id="lightSwitchLabel">Выключено</span>
-          </label>
-
-          <label class="slider-row" id="lightLevelRow">
-            <span>Яркость</span>
-            <input type="range" id="lightLevel" min="1" max="100" value="100" />
-          </label>
+          <div class="light-controls">
+            <label class="switch-toggle">
+              <span class="switch">
+                <input type="checkbox" id="lightSwitch" />
+                <span class="switch-track"></span>
+              </span>
+              <span class="switch-label" id="lightSwitchLabel">Выключено</span>
+            </label>
+            <input type="range" id="lightLevel" class="light-brightness" min="1" max="100" value="100" title="Яркость, %" />
+          </div>
         </div>
 
         <div class="card zoom-card-popup" id="zoomCard">
-          <div class="feature-head">
-            <span class="feature-icon" aria-hidden="true">
-              <svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-                <circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3M11 8v6M8 11h6"/>
-              </svg>
-            </span>
-            <h2>Зум</h2>
-            <button type="button" class="cap-refresh" id="zoomRecheck" title="Проверить возможности" aria-label="Проверить возможности">
-              <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <path d="M21 12a9 9 0 1 1-2.64-6.36M21 3v6h-6"/>
-              </svg>
-            </button>
-          </div>
+          <h2>Зум</h2>
 
           <p class="cap-line" id="zoomCap" data-state="yes"><span class="cap-dot"></span><span class="cap-text">Цифровой зум</span></p>
           <div class="zoom-levels" id="zoomLevels">

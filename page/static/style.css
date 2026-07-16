@@ -749,6 +749,36 @@ input[type="range"] {
   padding: 12px 16px;
 }
 
+/* --- иконочный тулбар (RTSP): квадратные кнопки только с иконкой --- */
+.camera-toolbar--icons .toolbar-btn {
+  position: relative;
+  min-width: 0;
+  width: 46px;
+  height: 46px;
+  padding: 0;
+}
+
+.camera-toolbar--icons .toolbar-btn svg {
+  width: 22px;
+  height: 22px;
+}
+
+/* счётчик логов — угловой бейдж в иконочном режиме */
+.camera-toolbar--icons .toolbar-btn--logs .log-counter {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  font-size: 10px;
+  line-height: 16px;
+  text-align: center;
+  border-radius: 8px;
+  background: var(--accent, #3b82f6);
+  color: #fff;
+}
+
 .mode-indicator {
   position: absolute;
   top: 10px;
@@ -1091,6 +1121,71 @@ input[type="range"] {
 .slider-row { display: flex; flex-direction: column; gap: 6px; font-size: 13px; color: var(--text-muted, #9aa); }
 .slider-row input[type="range"] { width: 100%; accent-color: #ffb02e; }
 .slider-row[hidden] { display: none; }
+
+/* --- подсветка: тумблер + яркость в одну строку --- */
+.light-controls { display: flex; align-items: center; gap: 14px; }
+.switch-toggle { display: inline-flex; align-items: center; gap: 10px; cursor: pointer; flex: none; }
+.light-brightness { flex: 1; min-width: 0; accent-color: #ffb02e; }
+.light-brightness:disabled { opacity: .45; }
+
+/* --- единый стиль формы в окошках Фото/Видео (как в карточках) --- */
+.field-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 13px;
+  color: var(--text-muted, #9aa);
+  margin-bottom: 14px;
+}
+
+.field-inline { display: inline-flex; gap: 6px; }
+
+.field-input,
+.field-select {
+  background: var(--surface-elevated);
+  color: var(--text);
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  padding: 7px 9px;
+  font-size: 13px;
+}
+
+.field-input { width: 84px; }
+.field-input--sm { width: 58px; }
+
+.popup-actions { display: flex; gap: 8px; }
+.popup-actions .btn-primary,
+.popup-actions .btn-secondary { flex: 1; }
+
+/* --- модалка «Настройки» (мультипоточность): всё зонами в одном окне --- */
+.settings-card { width: 640px; max-width: calc(100vw - 32px); }
+
+.settings-zones {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 14px;
+}
+
+.settings-zone {
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 14px 16px;
+  background: var(--surface-elevated);
+}
+
+.settings-zone h3 {
+  margin: 0 0 12px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.settings-zone[hidden] { display: none; }
+
+@media (max-width: 560px) {
+  .settings-zones { grid-template-columns: 1fr; }
+}
 
 /* --- зум --- */
 .zoom-levels {

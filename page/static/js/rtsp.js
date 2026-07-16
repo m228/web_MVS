@@ -34,18 +34,14 @@ function initRtspPage() {
   const lightCard = document.getElementById('lightCard');
   const lightSwitch = document.getElementById('lightSwitch');
   const lightSwitchLabel = document.getElementById('lightSwitchLabel');
-  const lightBulb = document.getElementById('lightBulb');
   const lightLevel = document.getElementById('lightLevel');
-  const lightLevelRow = document.getElementById('lightLevelRow');
   const lightCap = document.getElementById('lightCap');
   const lightIndicator = document.getElementById('lightIndicator');
-  const lightRecheckBtn = document.getElementById('lightRecheck');
 
   const zoomCard = document.getElementById('zoomCard');
   const zoomCap = document.getElementById('zoomCap');
   const zoomLevels = document.getElementById('zoomLevels');
   const zoomIndicator = document.getElementById('zoomIndicator');
-  const zoomRecheckBtn = document.getElementById('zoomRecheck');
   const opticalZoomControls = document.getElementById('opticalZoomControls');
   const zoomOpticalHint = document.getElementById('zoomOpticalHint');
   const zoomPan = document.getElementById('zoomPan');
@@ -296,7 +292,12 @@ function initRtspPage() {
     );
     if (interval === null) return;
 
-    const data = await RtspApi.startPhotoSaving(serial, interval);
+    // единица интервала: как в видео — минуты переводим в секунды
+    const unitSelect = document.querySelector('select[name="photo_interval_unit"]');
+    const unit = unitSelect ? unitSelect.value : 'seconds';
+    const intervalInSeconds = unit === 'minutes' ? interval * 60 : interval;
+
+    const data = await RtspApi.startPhotoSaving(serial, intervalInSeconds);
     if (!data || data.error) {
       log.warn('Сервер не подтвердил запуск сохранения фото', data);
       return;
@@ -370,7 +371,7 @@ function initRtspPage() {
   function reflectLightOn(on) {
     if (lightSwitch) lightSwitch.checked = on;
     if (lightSwitchLabel) lightSwitchLabel.textContent = on ? 'Включено' : 'Выключено';
-    if (lightBulb) lightBulb.classList.toggle('is-on', on);
+    // подсветка кнопки в тулбаре: лампочка «горит», когда свет включён
     if (buttons.light) buttons.light.classList.toggle('is-on', on);
     if (lightIndicator) lightIndicator.classList.toggle('hidden', !on);
   }
@@ -386,7 +387,6 @@ function initRtspPage() {
       caps.reachable ? 'Подсветка не поддерживается' : 'Камера не отвечает на управление');
     if (lightSwitch) lightSwitch.disabled = !hasLight;
     if (lightLevel) lightLevel.disabled = !hasLight;
-    if (lightLevelRow) lightLevelRow.hidden = !hasLight;
     if (!hasLight) reflectLightOn(false);
 
     // --- зум ---
@@ -527,8 +527,6 @@ function initRtspPage() {
   if (videoOffBtn) videoOffBtn.addEventListener('click', stopVideoSaving);
 
   if (lightSwitch) lightSwitch.addEventListener('change', () => setLight(lightSwitch.checked));
-  if (lightRecheckBtn) lightRecheckBtn.addEventListener('click', () => refreshCapabilities(true));
-  if (zoomRecheckBtn) zoomRecheckBtn.addEventListener('click', () => refreshCapabilities(true));
 
   if (zoomLevels) zoomLevels.addEventListener('click', (event) => {
     const btn = event.target.closest('button[data-zoom]');

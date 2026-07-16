@@ -566,3 +566,57 @@ def rtsp_status_video_photo(serial_number: str):
     if worker is None:
         return {"video": 0, "photo": False}
     return {"video": worker.save_video, "photo": worker.save_photo}
+
+
+@app.get("/api/rtsp/capabilities")
+def rtsp_capabilities(serial_number: str, refresh: int = 0):
+    worker = manager.get_rtsp(serial_number)
+    if worker is None:
+        return {"error": "rtsp_not_connected"}
+    data = worker.get_capabilities(refresh=bool(refresh))
+    api_log("api.rtsp.capabilities", "Опрос возможностей RTSP-камеры",
+            payload={"serial_number": serial_number, "result": data})
+    return data
+
+
+@app.get("/api/rtsp/light")
+def rtsp_light(serial_number: str, on: int, level: int = 100):
+    worker = manager.get_rtsp(serial_number)
+    if worker is None:
+        return {"error": "rtsp_not_connected"}
+    data = worker.set_light(bool(on), level)
+    api_log("api.rtsp.light", "Управление белым прожектором (RTSP)",
+            payload={"serial_number": serial_number, "on": bool(on), "level": level, "result": data})
+    return data
+
+
+@app.get("/api/rtsp/light_state")
+def rtsp_light_state(serial_number: str):
+    worker = manager.get_rtsp(serial_number)
+    if worker is None:
+        return {"error": "rtsp_not_connected"}
+    return worker.get_light()
+
+
+@app.get("/api/rtsp/zoom")
+def rtsp_zoom(serial_number: str, factor: float | None = None,
+              px: float | None = None, py: float | None = None):
+    worker = manager.get_rtsp(serial_number)
+    if worker is None:
+        return {"error": "rtsp_not_connected"}
+    data = worker.set_zoom(factor, px, py)
+    api_log("api.rtsp.zoom", "Цифровой зум RTSP",
+            payload={"serial_number": serial_number, "factor": factor,
+                     "px": px, "py": py, "result": data})
+    return data
+
+
+@app.get("/api/rtsp/optical_zoom")
+def rtsp_optical_zoom(serial_number: str, direction: str):
+    worker = manager.get_rtsp(serial_number)
+    if worker is None:
+        return {"error": "rtsp_not_connected"}
+    data = worker.optical_zoom(direction)
+    api_log("api.rtsp.optical_zoom", "Оптический зум RTSP",
+            payload={"serial_number": serial_number, "direction": direction, "result": data})
+    return data

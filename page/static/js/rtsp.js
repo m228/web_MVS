@@ -17,6 +17,8 @@ function initRtspPage() {
     snapshot: document.getElementById('snapshotBtn'),
     photo: document.getElementById('photoBtn'),
     video: document.getElementById('videoBtn'),
+    light: document.getElementById('lightBtn'),
+    zoom: document.getElementById('zoomBtn'),
   };
 
   const photoCard = document.getElementById('photoCard');
@@ -28,6 +30,22 @@ function initRtspPage() {
   const videoOnBtn = document.getElementById('videoOn');
   const videoOffBtn = document.getElementById('videoOff');
   const videoIndicator = document.getElementById('videoIndicator');
+
+  const lightCard = document.getElementById('lightCard');
+  const lightSwitch = document.getElementById('lightSwitch');
+  const lightSwitchLabel = document.getElementById('lightSwitchLabel');
+  const lightLevel = document.getElementById('lightLevel');
+  const lightCap = document.getElementById('lightCap');
+  const lightIndicator = document.getElementById('lightIndicator');
+
+  const zoomCard = document.getElementById('zoomCard');
+  const zoomCap = document.getElementById('zoomCap');
+  const zoomLevels = document.getElementById('zoomLevels');
+  const zoomIndicator = document.getElementById('zoomIndicator');
+  const opticalZoomControls = document.getElementById('opticalZoomControls');
+  const zoomOpticalHint = document.getElementById('zoomOpticalHint');
+  const zoomPan = document.getElementById('zoomPan');
+  const panGrid = document.getElementById('panGrid');
 
   if (!form || !rtspFrame || !rtspPlaceholder || !buttons.connect) {
     window.AppLog?.error('rtsp', 'Не найдены обязательные элементы RTSP-страницы');
@@ -55,6 +73,12 @@ function initRtspPage() {
 
   const photoPopup = UIHelpers.createPopupController(photoCard, buttons.photo);
   const videoPopup = UIHelpers.createPopupController(videoCard, buttons.video);
+  const lightPopup = UIHelpers.createPopupController(lightCard, buttons.light);
+  const zoomPopup = UIHelpers.createPopupController(zoomCard, buttons.zoom);
+
+  // возможности камеры (заполняются после опроса) и текущая кратность цифрового зума
+  let capabilities = null;
+  let currentZoom = 1;
 
   log.info('RTSP-страница открыта');
 
@@ -96,6 +120,8 @@ function initRtspPage() {
     buttons.snapshot.disabled = !isConnected;
     buttons.photo.disabled = !isConnected;
     buttons.video.disabled = !isConnected;
+    if (buttons.light) buttons.light.disabled = !isConnected;
+    if (buttons.zoom) buttons.zoom.disabled = !isConnected;
     buttons.connect.disabled = isLoading;
   }
 
@@ -171,6 +197,9 @@ function initRtspPage() {
     showNoVideo();
     photoPopup.close();
     videoPopup.close();
+    lightPopup.close();
+    zoomPopup.close();
+    capabilities = null;
 
     stopMetricsPolling();
     stopStatusPolling();
@@ -263,7 +292,12 @@ function initRtspPage() {
     );
     if (interval === null) return;
 
-    const data = await RtspApi.startPhotoSaving(serial, interval);
+    // единица интервала: как в видео — минуты переводим в секунды
+    const unitSelect = document.querySelector('select[name="photo_interval_unit"]');
+    const unit = unitSelect ? unitSelect.value : 'seconds';
+    const intervalInSeconds = unit === 'minutes' ? interval * 60 : interval;
+
+    const data = await RtspApi.startPhotoSaving(serial, intervalInSeconds);
     if (!data || data.error) {
       log.warn('Сервер не подтвердил запуск сохранения фото', data);
       return;
@@ -324,6 +358,133 @@ function initRtspPage() {
     await syncVideoPhotoStatus();
   }
 
+  // ---------- возможности камеры (свет / зум) ----------
+
+  function setCapLine(el, supported, textYes, textNo) {
+    if (!el) return;
+    el.dataset.state = supported ? 'yes' : 'no';
+    const textEl = el.querySelector('.cap-text');
+    if (textEl) textEl.textContent = supported ? textYes : textNo;
+  }
+
+  // единое отражение состояния света: тумблер, лампочка, кнопка в тулбаре, индикатор
+  function reflectLightOn(on) {
+    if (lightSwitch) lightSwitch.checked = on;
+    if (lightSwitchLabel) lightSwitchLabel.textContent = on ? 'Включено' : 'Выключено';
+    // подсветка кнопки в тулбаре: лампочка «горит», когда свет включён
+    if (buttons.light) buttons.light.classList.toggle('is-on', on);
+    if (lightIndicator) lightIndicator.classList.toggle('hidden', !on);
+  }
+
+  function applyCapabilitiesUI() {
+    const caps = capabilities || {};
+    const hasLight = !!caps.white_light;
+    const hasOptical = !!caps.optical_zoom;
+
+    // --- подсветка ---
+    setCapLine(lightCap, hasLight,
+      'Белый прожектор поддерживается',
+      caps.reachable ? 'Подсветка не поддерживается' : 'Камера не отвечает на управление');
+    if (lightSwitch) lightSwitch.disabled = !hasLight;
+    if (lightLevel) lightLevel.disabled = !hasLight;
+    if (!hasLight) reflectLightOn(false);
+
+    // --- зум ---
+    setCapLine(zoomCap, true, 'Цифровой зум', 'Цифровой зум');
+    if (opticalZoomControls) opticalZoomControls.hidden = !hasOptical;
+    if (zoomOpticalHint) zoomOpticalHint.hidden = hasOptical;
+  }
+
+  async function refreshCapabilities(force) {
+    if (!isConnected || !serial) return;
+    const data = await RtspApi.getCapabilities(serial, force);
+    if (data && !data.error) {
+      capabilities = data;
+      log.info('Возможности камеры получены', data);
+    } else {
+      capabilities = { reachable: false, white_light: false, optical_zoom: false };
+      log.warn('Не удалось опросить возможности камеры', data);
+    }
+    applyCapabilitiesUI();
+    syncLightState();
+  }
+
+  async function syncLightState() {
+    if (!isConnected || !serial || !(capabilities && capabilities.white_light)) {
+      reflectLightOn(false);
+      return;
+    }
+    const data = await RtspApi.getLightState(serial);
+    reflectLightOn(!!(data && data.state === 'on'));
+  }
+
+  async function setLight(on) {
+    if (!serial || !(capabilities && capabilities.white_light)) return;
+    const level = lightLevel ? Number(lightLevel.value) || 100 : 100;
+    const data = await RtspApi.setLight(serial, on, level);
+    if (!data || data.error || data.status === 'failed') {
+      log.warn('Камера не подтвердила смену подсветки', data);
+      syncLightState(); // откат тумблера к фактическому состоянию
+      return;
+    }
+    log.success(on ? 'Подсветка включена' : 'Подсветка выключена', data);
+    reflectLightOn(on);
+  }
+
+  function markZoomLevel(factor) {
+    if (zoomLevels) {
+      zoomLevels.querySelectorAll('button[data-zoom]').forEach((btn) => {
+        btn.classList.toggle('active', Number(btn.dataset.zoom) === factor);
+      });
+    }
+    if (zoomIndicator) zoomIndicator.classList.toggle('hidden', factor <= 1);
+    // сетку области показываем только при зуме > 1
+    if (zoomPan) zoomPan.hidden = factor <= 1;
+  }
+
+  // подсветить активную ячейку области (px, py: 0 / 0.5 / 1)
+  function markPan(px, py) {
+    if (!panGrid) return;
+    panGrid.querySelectorAll('button[data-px]').forEach((btn) => {
+      btn.classList.toggle('active',
+        Number(btn.dataset.px) === px && Number(btn.dataset.py) === py);
+    });
+  }
+
+  async function applyDigitalZoom(factor) {
+    if (!serial) return;
+    const data = await RtspApi.setZoom(serial, factor);
+    if (!data || data.error) {
+      log.warn('Камера не подтвердила цифровой зум', data);
+      return;
+    }
+    currentZoom = data.factor || factor;
+    markZoomLevel(currentZoom);
+    markPan(0.5, 0.5); // новая кратность — вид в центре
+    log.success('Цифровой зум ×' + currentZoom, data);
+  }
+
+  async function applyZoomPan(px, py) {
+    if (!serial || currentZoom <= 1) return;
+    const data = await RtspApi.setZoomPan(serial, px, py);
+    if (!data || data.error) {
+      log.warn('Камера не подтвердила смещение области зума', data);
+      return;
+    }
+    markPan(px, py);
+    log.success('Область зума смещена', data);
+  }
+
+  async function opticalZoom(direction) {
+    if (!serial || !(capabilities && capabilities.optical_zoom)) return;
+    const data = await RtspApi.opticalZoom(serial, direction);
+    if (!data || data.error || data.status === 'failed') {
+      log.warn('Камера не подтвердила оптический зум', data);
+      return;
+    }
+    log.success('Оптический зум: ' + direction, data);
+  }
+
   function handlePageLeave() {
     if (isLeavingPage || !serial) return;
     isLeavingPage = true;
@@ -351,23 +512,54 @@ function initRtspPage() {
     event.stopPropagation();
     videoPopup.toggle();
   });
+  if (buttons.light) buttons.light.addEventListener('click', (event) => {
+    event.stopPropagation();
+    lightPopup.toggle();
+  });
+  if (buttons.zoom) buttons.zoom.addEventListener('click', (event) => {
+    event.stopPropagation();
+    zoomPopup.toggle();
+  });
 
   if (photoOnBtn) photoOnBtn.addEventListener('click', startPhotoSaving);
   if (photoOffBtn) photoOffBtn.addEventListener('click', stopPhotoSaving);
   if (videoOnBtn) videoOnBtn.addEventListener('click', startVideoSaving);
   if (videoOffBtn) videoOffBtn.addEventListener('click', stopVideoSaving);
 
+  if (lightSwitch) lightSwitch.addEventListener('change', () => setLight(lightSwitch.checked));
+
+  if (zoomLevels) zoomLevels.addEventListener('click', (event) => {
+    const btn = event.target.closest('button[data-zoom]');
+    if (btn) applyDigitalZoom(Number(btn.dataset.zoom));
+  });
+  if (panGrid) panGrid.addEventListener('click', (event) => {
+    const btn = event.target.closest('button[data-px]');
+    if (btn) applyZoomPan(Number(btn.dataset.px), Number(btn.dataset.py));
+  });
+  if (opticalZoomControls) opticalZoomControls.addEventListener('click', (event) => {
+    const btn = event.target.closest('button[data-optical]');
+    if (btn) opticalZoom(btn.dataset.optical);
+  });
+
   if (photoCard) photoCard.addEventListener('click', (event) => event.stopPropagation());
   if (videoCard) videoCard.addEventListener('click', (event) => event.stopPropagation());
+  if (lightCard) lightCard.addEventListener('click', (event) => event.stopPropagation());
+  if (zoomCard) zoomCard.addEventListener('click', (event) => event.stopPropagation());
 
   document.addEventListener('click', (event) => {
     const insidePhoto = photoCard && photoCard.contains(event.target);
     const onPhotoBtn = buttons.photo && buttons.photo.contains(event.target);
     const insideVideo = videoCard && videoCard.contains(event.target);
     const onVideoBtn = buttons.video && buttons.video.contains(event.target);
+    const insideLight = lightCard && lightCard.contains(event.target);
+    const onLightBtn = buttons.light && buttons.light.contains(event.target);
+    const insideZoom = zoomCard && zoomCard.contains(event.target);
+    const onZoomBtn = buttons.zoom && buttons.zoom.contains(event.target);
 
     if (!insidePhoto && !onPhotoBtn) photoPopup.close();
     if (!insideVideo && !onVideoBtn) videoPopup.close();
+    if (!insideLight && !onLightBtn) lightPopup.close();
+    if (!insideZoom && !onZoomBtn) zoomPopup.close();
   });
 
   rtspFrame.addEventListener('load', () => {
@@ -384,6 +576,11 @@ function initRtspPage() {
     startMetricsPolling();
     syncVideoPhotoStatus();
     startStatusPolling();
+
+    // сброс зума и автоматический опрос возможностей (свет / оптический зум)
+    currentZoom = 1;
+    markZoomLevel(1);
+    refreshCapabilities(false);
   });
 
   rtspFrame.addEventListener('error', () => {

@@ -303,6 +303,43 @@ const RtspApi = {
     );
   },
 
+  // возможности камеры (белый прожектор / оптический зум); refresh=1 — пересъём
+  getCapabilities(serial, refresh = false) {
+    const query = new URLSearchParams({ serial_number: serial });
+    if (refresh) query.set('refresh', '1');
+    return apiGet(`/api/rtsp/capabilities?${query.toString()}`,
+      'Ошибка опроса возможностей RTSP-камеры:',
+      { source: 'api.rtsp.capabilities', logRequest: false, logSuccess: false });
+  },
+
+  setLight(serial, on, level = 100) {
+    const query = new URLSearchParams({ serial_number: serial, on: on ? 1 : 0, level });
+    return apiGet(`/api/rtsp/light?${query.toString()}`, 'Ошибка управления подсветкой (RTSP):');
+  },
+
+  getLightState(serial) {
+    return apiGet(
+      `/api/rtsp/light_state?serial_number=${encodeURIComponent(serial)}`,
+      'Ошибка получения состояния подсветки (RTSP):',
+      { source: 'api.rtsp.light_state', logRequest: false, logSuccess: false }
+    );
+  },
+
+  setZoom(serial, factor) {
+    const query = new URLSearchParams({ serial_number: serial, factor });
+    return apiGet(`/api/rtsp/zoom?${query.toString()}`, 'Ошибка цифрового зума (RTSP):');
+  },
+
+  setZoomPan(serial, px, py) {
+    const query = new URLSearchParams({ serial_number: serial, px, py });
+    return apiGet(`/api/rtsp/zoom?${query.toString()}`, 'Ошибка смещения зума (RTSP):');
+  },
+
+  opticalZoom(serial, direction) {
+    const query = new URLSearchParams({ serial_number: serial, direction });
+    return apiGet(`/api/rtsp/optical_zoom?${query.toString()}`, 'Ошибка оптического зума (RTSP):');
+  },
+
   // мини-база сохранённых RTSP-камер
   listSaved() {
     return apiGet('/api/rtsp/saved', 'Ошибка загрузки сохранённых RTSP:',

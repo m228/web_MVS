@@ -60,17 +60,19 @@
             <strong id="multiFocusSerial">— не выбрана —</strong>
           </div>
 
-          <div class="multi-toolbar__actions">
-            <button type="button" id="multiConnectBtn" class="toolbar-btn toolbar-btn--primary" disabled>Подключиться</button>
-            <button type="button" id="multiDisconnectBtn" class="toolbar-btn toolbar-btn--danger" disabled>Отключиться</button>
-            <button type="button" id="multiPhotoBtn" class="toolbar-btn toolbar-btn--photo" disabled>
-              Фото<span class="mode-indicator hidden" id="multiPhotoIndicator"></span>
+          <div class="multi-toolbar__actions camera-toolbar--icons">
+            <button type="button" id="multiConnectBtn" class="toolbar-btn toolbar-btn--primary" disabled title="Подключиться" aria-label="Подключиться">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><polygon points="6 4 20 12 6 20 6 4"/></svg>
             </button>
-            <button type="button" id="multiVideoBtn" class="toolbar-btn toolbar-btn--accent" disabled>
-              Видео<span class="mode-indicator hidden" id="multiVideoIndicator"></span>
+            <button type="button" id="multiDisconnectBtn" class="toolbar-btn toolbar-btn--danger" disabled title="Отключиться" aria-label="Отключиться">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>
             </button>
-            <button type="button" id="multiConfigBtn" class="toolbar-btn toolbar-btn--secondary" disabled title="Текущий конфиг запуска камеры">
-              Конфиг
+            <button type="button" id="multiSettingsBtn" class="toolbar-btn toolbar-btn--accent" disabled title="Настройки: фото, видео, подсветка, зум" aria-label="Настройки">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><line x1="4" y1="7" x2="20" y2="7"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="17" x2="20" y2="17"/><circle cx="9" cy="7" r="2" fill="var(--surface-strong)"/><circle cx="15" cy="12" r="2" fill="var(--surface-strong)"/><circle cx="8" cy="17" r="2" fill="var(--surface-strong)"/></svg>
+              <span class="mode-indicator hidden" id="multiRecIndicator"></span>
+            </button>
+            <button type="button" id="multiConfigBtn" class="toolbar-btn toolbar-btn--secondary" disabled title="Конфиг запуска камеры (GigE)" aria-label="Конфиг">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><path d="M14 3v6h6M8 13h8M8 17h5"/></svg>
             </button>
           </div>
 
@@ -121,76 +123,114 @@
     </main>
   </div>
 
-  <!-- модалка: сохранение фото (для камеры в фокусе) -->
-  <div class="modal-backdrop modal-backdrop--small" id="multiPhotoModal" aria-hidden="true">
-    <div class="confirm-modal__card" role="dialog" aria-modal="true">
+  <!-- модалка: настройки камеры в фокусе (всё в одном окне, зонами) -->
+  <div class="modal-backdrop" id="multiSettingsModal" aria-hidden="true">
+    <div class="network-modal__card settings-card" role="dialog" aria-modal="true">
       <div class="network-modal__header">
         <div class="network-modal__title-group">
-          <h2>Сохранение фото</h2>
-          <span class="network-modal__serial">Камера: <strong id="multiPhotoSerial">-</strong></span>
+          <h2>Настройки</h2>
+          <span class="network-modal__serial">Камера: <strong id="multiSettingsSerial">-</strong></span>
         </div>
-        <button type="button" class="modal-close-btn" id="multiPhotoClose" aria-label="Закрыть">×</button>
+        <button type="button" class="modal-close-btn" id="multiSettingsClose" aria-label="Закрыть">×</button>
       </div>
-      <div class="confirm-modal__body">
-        <label class="one-line-label">
-          Интервал (сек)
-          <input type="number" id="multiPhotoInterval" value="5" min="1" />
-        </label>
-        <p class="record-path" id="multiPhotoSavePath" hidden></p>
-        <details class="record-help">
-          <summary>Почему фото может не записываться?</summary>
-          <ul>
-            <li>Камера не подключена или поток не запущен — нет кадров для сохранения.</li>
-            <li>Нет кадров с GigE: большой размер пакета без jumbo-кадров → потеря пакетов (включите jumbo на странице «Сеть камер»).</li>
-            <li>Камера занята другим приложением (MVS) — закройте его.</li>
-            <li>Нет прав на запись или нет места в папке сохранения.</li>
-            <li>Одновременно стабильно работает только одна GigE-камера.</li>
-          </ul>
-        </details>
-      </div>
-      <div class="network-modal__footer">
-        <button type="button" class="btn-secondary" id="multiPhotoOff">Выключить</button>
-        <button type="button" class="btn-primary" id="multiPhotoOn">Включить</button>
-      </div>
-    </div>
-  </div>
 
-  <!-- модалка: запись видео (для камеры в фокусе) -->
-  <div class="modal-backdrop modal-backdrop--small" id="multiVideoModal" aria-hidden="true">
-    <div class="confirm-modal__card" role="dialog" aria-modal="true">
-      <div class="network-modal__header">
-        <div class="network-modal__title-group">
-          <h2>Запись видео</h2>
-          <span class="network-modal__serial">Камера: <strong id="multiVideoSerial">-</strong></span>
+      <div class="network-modal__body">
+        <div class="settings-zones">
+          <!-- зона: фото -->
+          <section class="settings-zone" data-zone="photo">
+            <h3>Автосохранение фото</h3>
+            <label class="field-row">
+              <span>Интервал</span>
+              <span class="field-inline">
+                <input class="field-input field-input--sm" type="number" id="multiPhotoInterval" value="5" min="1" />
+                <select class="field-select" id="multiPhotoUnit">
+                  <option value="seconds" selected>сек</option>
+                  <option value="minutes">мин</option>
+                </select>
+              </span>
+            </label>
+            <div class="popup-actions">
+              <button type="button" class="btn-primary" id="multiPhotoOn">Включить</button>
+              <button type="button" class="btn-secondary" id="multiPhotoOff">Выключить</button>
+            </div>
+            <p class="record-path" id="multiPhotoSavePath" hidden></p>
+          </section>
+
+          <!-- зона: видео -->
+          <section class="settings-zone" data-zone="video">
+            <h3>Запись видео</h3>
+            <label class="field-row">
+              <span>Длительность</span>
+              <span class="field-inline">
+                <input class="field-input field-input--sm" type="number" id="multiVideoDuration" value="10" min="1" />
+                <select class="field-select" id="multiVideoUnit">
+                  <option value="minutes" selected>мин</option>
+                  <option value="seconds">сек</option>
+                </select>
+              </span>
+            </label>
+            <div class="popup-actions">
+              <button type="button" class="btn-primary" id="multiVideoOn">Начать</button>
+              <button type="button" class="btn-secondary" id="multiVideoOff">Остановить</button>
+            </div>
+            <p class="record-path" id="multiVideoSavePath" hidden></p>
+          </section>
+
+          <!-- зона: подсветка (только RTSP) -->
+          <section class="settings-zone settings-zone--rtsp" data-zone="light">
+            <h3>Подсветка</h3>
+            <p class="cap-line" id="multiLightCap" data-state="unknown"><span class="cap-dot"></span><span class="cap-text">Проверяю…</span></p>
+            <div class="light-controls">
+              <label class="switch-toggle">
+                <span class="switch">
+                  <input type="checkbox" id="multiLightSwitch" />
+                  <span class="switch-track"></span>
+                </span>
+                <span class="switch-label" id="multiLightLabel">Выключено</span>
+              </label>
+              <input type="range" id="multiLightLevel" class="light-brightness" min="1" max="100" value="100" title="Яркость, %" />
+            </div>
+          </section>
+
+          <!-- зона: зум (только RTSP) -->
+          <section class="settings-zone settings-zone--rtsp" data-zone="zoom">
+            <h3>Зум</h3>
+            <p class="cap-line" id="multiZoomCap" data-state="yes"><span class="cap-dot"></span><span class="cap-text">Цифровой зум</span></p>
+            <div class="zoom-levels" id="multiZoomLevels">
+              <button type="button" class="btn-secondary" data-zoom="1">1×</button>
+              <button type="button" class="btn-secondary" data-zoom="2">2×</button>
+              <button type="button" class="btn-secondary" data-zoom="4">4×</button>
+            </div>
+            <div class="zoom-pan" id="multiZoomPan" hidden>
+              <span class="zoom-sub">Область просмотра</span>
+              <div class="pan-grid" id="multiPanGrid">
+                <button type="button" data-px="0" data-py="0" title="Левый верх"></button>
+                <button type="button" data-px="0.5" data-py="0" title="Верх"></button>
+                <button type="button" data-px="1" data-py="0" title="Правый верх"></button>
+                <button type="button" data-px="0" data-py="0.5" title="Лево"></button>
+                <button type="button" data-px="0.5" data-py="0.5" title="Центр"></button>
+                <button type="button" data-px="1" data-py="0.5" title="Право"></button>
+                <button type="button" data-px="0" data-py="1" title="Левый низ"></button>
+                <button type="button" data-px="0.5" data-py="1" title="Низ"></button>
+                <button type="button" data-px="1" data-py="1" title="Правый низ"></button>
+              </div>
+            </div>
+            <p class="zoom-hint" id="multiZoomHint">Оптического зума нет — доступен только цифровой.</p>
+          </section>
+
+          <!-- зона: параметры камеры (RTSP: FPS) -->
+          <section class="settings-zone settings-zone--rtsp" data-zone="camera">
+            <h3>Камера</h3>
+            <label class="field-row">
+              <span>FPS</span>
+              <span class="field-inline">
+                <input class="field-input field-input--sm" type="number" id="multiFps" min="1" max="60" step="1" placeholder="авто" />
+                <button type="button" class="btn-secondary" id="multiFpsApply">Применить</button>
+              </span>
+            </label>
+            <p class="zoom-hint">Изменение перезапустит поток камеры.</p>
+          </section>
         </div>
-        <button type="button" class="modal-close-btn" id="multiVideoClose" aria-label="Закрыть">×</button>
-      </div>
-      <div class="confirm-modal__body">
-        <label class="video-time-row">
-          <span>Длительность</span>
-          <div class="video-time-controls">
-            <input type="number" id="multiVideoDuration" value="10" min="1" />
-            <select id="multiVideoUnit" class="video-duration-unit">
-              <option value="minutes" selected>мин</option>
-              <option value="seconds">сек</option>
-            </select>
-          </div>
-        </label>
-        <p class="record-path" id="multiVideoSavePath" hidden></p>
-        <details class="record-help">
-          <summary>Почему видео может не записываться?</summary>
-          <ul>
-            <li>Камера не подключена или поток не запущен — нет кадров для записи.</li>
-            <li>Нет кадров с GigE: большой размер пакета без jumbo-кадров → потеря пакетов (включите jumbo на странице «Сеть камер»).</li>
-            <li>Камера занята другим приложением (MVS) — закройте его.</li>
-            <li>Нет прав на запись или нет места в папке сохранения.</li>
-            <li>Одновременно стабильно работает только одна GigE-камера.</li>
-          </ul>
-        </details>
-      </div>
-      <div class="network-modal__footer">
-        <button type="button" class="btn-secondary" id="multiVideoOff">Остановить</button>
-        <button type="button" class="btn-primary" id="multiVideoOn">Начать запись</button>
       </div>
     </div>
   </div>

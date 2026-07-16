@@ -504,13 +504,13 @@ function updateToolbar() {
   const hasSource = !!source;
   setDisabled('multiConnectBtn', !hasSource || tile.connected);
   setDisabled('multiDisconnectBtn', !hasSource || !tile.connected);
-  setDisabled('multiPhotoBtn', !hasSource || !tile.connected);
-  setDisabled('multiVideoBtn', !hasSource || !tile.connected);
+  // настройки (фото/видео/подсветка/зум) — когда камера в фокусе подключена
+  setDisabled('multiSettingsBtn', !hasSource || !tile.connected);
   // конфиг — только для GigE (у RTSP его нет); доступен и после остановки
   setDisabled('multiConfigBtn', !hasSource || source.kind !== 'gige');
 
-  toggleIndicator('multiPhotoIndicator', tile.photo);
-  toggleIndicator('multiVideoIndicator', tile.video);
+  // индикатор записи на кнопке настроек: активно фото или видео
+  toggleIndicator('multiRecIndicator', tile.photo || tile.video);
 }
 
 function setDisabled(id, disabled) {
@@ -755,29 +755,115 @@ function focusedSource() {
   return tile.serial ? getSource(tile.serial) : null;
 }
 
-// показать путь сохранения (папка + шаблон имени файла) из ответа сервера
-// --- фото ---
-function openPhotoModal() {
-  const source = focusedSource();
-  if (!source) return;
-  const serialEl = document.getElementById('multiPhotoSerial');
-  if (serialEl) serialEl.textContent = source.label;
-  showSavePath('multiPhotoSavePath', null);
-  openModal('multiPhotoModal');
+// ---------- настройки камеры в фокусе (фото/видео/подсветка/зум) ----------
+let settingsCaps = null;   // возможности RTSP-камеры в открытой модалке
+let multiZoom = 1;         // текущая кратность цифрового зума камеры в фокусе
+
+// строка возможности: точка + текст (общая для подсветки/зума)
+function setCapLine(el, supported, textYes, textNo) {
+  if (!el) return;
+  el.dataset.state = supported ? 'yes' : 'no';
+  const textEl = el.querySelector('.cap-text');
+  if (textEl) textEl.textContent = supported ? textYes : textNo;
 }
 
+function openSettingsModal() {
+  const source = focusedSource();
+  const tile = state.tiles[state.focused];
+  if (!source || !tile) return;
+
+  const serialEl = document.getElementById('multiSettingsSerial');
+  if (serialEl) serialEl.textContent = source.label;
+
+  // зоны «Подсветка/Зум/Камера(FPS)» — только для RTSP (у GigE их нет)
+  const isRtsp = source.kind === 'rtsp';
+  document.querySelectorAll('#multiSettingsModal .settings-zone--rtsp').forEach((z) => { z.hidden = !isRtsp; });
+
+  // подставить текущий FPS камеры
+  const fpsInput = document.getElementById('multiFps');
+  if (fpsInput) fpsInput.value = (source.connection && source.connection.fps) || '';
+
+  showSavePath('multiPhotoSavePath', null);
+  showSavePath('multiVideoSavePath', null);
+  openModal('multiSettingsModal');
+
+  settingsCaps = null;
+  if (isRtsp) refreshSettingsCaps(source.serial);
+}
+
+// изменить FPS RTSP-камеры в фокусе (перезапуск потока с новым ограничением)
+function applyMultiFps() {
+  const tile = state.tiles[state.focused];
+  const source = focusedSource();
+  if (!tile || !source || source.kind !== 'rtsp' || !source.connection) return;
+
+  const val = Number(document.getElementById('multiFps')?.value);
+  source.connection.fps = (val && val > 0) ? val : null;
+
+  // перезапускаем поток с новым FPS, если камера в эфире
+  if (tile.connected) {
+    const el = getTileEl(state.focused);
+    const frame = el?.querySelector('[data-tile-frame]');
+    if (frame) frame.src = buildStreamUrl(source);
+  }
+
+  // обновляем сохранённую запись в мини-базе, чтобы FPS пережил перезапуск
+  if (source.saved && source.connection.url) {
+    RtspApi.saveCam({
+      url: source.connection.url, label: source.label, ip: source.ip,
+      scale: source.connection.scale, fps: source.connection.fps,
+    });
+  }
+
+  log.info('FPS изменён', { serial: source.serial, fps: source.connection.fps });
+}
+
+async function refreshSettingsCaps(serial) {
+  const data = await RtspApi.getCapabilities(serial);
+  settingsCaps = (data && !data.error)
+    ? data
+    : { reachable: false, white_light: false, optical_zoom: false };
+  applySettingsCaps();
+  syncMultiLightState(serial);
+}
+
+function applySettingsCaps() {
+  const caps = settingsCaps || {};
+  const hasLight = !!caps.white_light;
+  const hasOptical = !!caps.optical_zoom;
+
+  setCapLine(document.getElementById('multiLightCap'), hasLight,
+    'Белый прожектор поддерживается',
+    caps.reachable ? 'Подсветка не поддерживается' : 'Камера не отвечает на управление');
+  const sw = document.getElementById('multiLightSwitch');
+  const lv = document.getElementById('multiLightLevel');
+  if (sw) sw.disabled = !hasLight;
+  if (lv) lv.disabled = !hasLight;
+  if (!hasLight) reflectMultiLight(false);
+
+  const hint = document.getElementById('multiZoomHint');
+  if (hint) hint.hidden = hasOptical;
+
+  // отразить текущую кратность зума камеры
+  multiZoom = Number(caps.zoom_factor) || 1;
+  markMultiZoom(multiZoom);
+  markMultiPan(0.5, 0.5);
+}
+
+// --- фото ---
 async function applyPhoto(on) {
   const tile = state.tiles[state.focused];
   const source = focusedSource();
   if (!tile || !source) return;
   const api = apiFor(tile.kind);
   if (on) {
-    const interval = Number(document.getElementById('multiPhotoInterval')?.value) || 5;
-    const data = await api.startPhotoSaving(source.serial, interval);
+    const amount = Number(document.getElementById('multiPhotoInterval')?.value) || 5;
+    const unit = document.getElementById('multiPhotoUnit')?.value || 'seconds';
+    const seconds = unit === 'minutes' ? amount * 60 : amount;
+    const data = await api.startPhotoSaving(source.serial, seconds);
     tile.photo = true;
     renderTile(state.focused);
     updateToolbar();
-    // оставляем модалку открытой, чтобы был виден путь сохранения
     showSavePath('multiPhotoSavePath', data);
     return;
   }
@@ -785,19 +871,10 @@ async function applyPhoto(on) {
   tile.photo = false;
   renderTile(state.focused);
   updateToolbar();
-  closeModal('multiPhotoModal');
+  showSavePath('multiPhotoSavePath', null);
 }
 
 // --- видео ---
-function openVideoModal() {
-  const source = focusedSource();
-  if (!source) return;
-  const serialEl = document.getElementById('multiVideoSerial');
-  if (serialEl) serialEl.textContent = source.label;
-  showSavePath('multiVideoSavePath', null);
-  openModal('multiVideoModal');
-}
-
 async function applyVideo(on) {
   const tile = state.tiles[state.focused];
   const source = focusedSource();
@@ -811,7 +888,6 @@ async function applyVideo(on) {
     tile.video = true;
     renderTile(state.focused);
     updateToolbar();
-    // оставляем модалку открытой, чтобы был виден путь сохранения
     showSavePath('multiVideoSavePath', data);
     return;
   }
@@ -819,7 +895,66 @@ async function applyVideo(on) {
   tile.video = false;
   renderTile(state.focused);
   updateToolbar();
-  closeModal('multiVideoModal');
+  showSavePath('multiVideoSavePath', null);
+}
+
+// --- подсветка (только RTSP-камера в фокусе) ---
+function reflectMultiLight(on) {
+  const sw = document.getElementById('multiLightSwitch');
+  const label = document.getElementById('multiLightLabel');
+  if (sw) sw.checked = on;
+  if (label) label.textContent = on ? 'Включено' : 'Выключено';
+}
+
+async function syncMultiLightState(serial) {
+  if (!(settingsCaps && settingsCaps.white_light)) { reflectMultiLight(false); return; }
+  const data = await RtspApi.getLightState(serial);
+  reflectMultiLight(!!(data && data.state === 'on'));
+}
+
+async function applyMultiLight(on) {
+  const source = focusedSource();
+  if (!source || source.kind !== 'rtsp' || !(settingsCaps && settingsCaps.white_light)) return;
+  const level = Number(document.getElementById('multiLightLevel')?.value) || 100;
+  const data = await RtspApi.setLight(source.serial, on, level);
+  if (!data || data.error || data.status === 'failed') {
+    syncMultiLightState(source.serial); // откат тумблера к фактическому состоянию
+    return;
+  }
+  reflectMultiLight(on);
+}
+
+// --- зум (только RTSP-камера в фокусе) ---
+function markMultiZoom(factor) {
+  document.querySelectorAll('#multiZoomLevels button[data-zoom]').forEach((b) => {
+    b.classList.toggle('active', Number(b.dataset.zoom) === factor);
+  });
+  const pan = document.getElementById('multiZoomPan');
+  if (pan) pan.hidden = factor <= 1;
+}
+
+function markMultiPan(px, py) {
+  document.querySelectorAll('#multiPanGrid button[data-px]').forEach((b) => {
+    b.classList.toggle('active', Number(b.dataset.px) === px && Number(b.dataset.py) === py);
+  });
+}
+
+async function applyMultiZoom(factor) {
+  const source = focusedSource();
+  if (!source || source.kind !== 'rtsp') return;
+  const data = await RtspApi.setZoom(source.serial, factor);
+  if (!data || data.error) return;
+  multiZoom = data.factor || factor;
+  markMultiZoom(multiZoom);
+  markMultiPan(0.5, 0.5);
+}
+
+async function applyMultiPan(px, py) {
+  const source = focusedSource();
+  if (!source || source.kind !== 'rtsp' || multiZoom <= 1) return;
+  const data = await RtspApi.setZoomPan(source.serial, px, py);
+  if (!data || data.error) return;
+  markMultiPan(px, py);
 }
 
 // --- информация о камере ---
@@ -991,19 +1126,27 @@ function initLayoutButtons() {
 function initToolbar() {
   document.getElementById('multiConnectBtn')?.addEventListener('click', () => startStream(state.focused));
   document.getElementById('multiDisconnectBtn')?.addEventListener('click', () => disconnectTile(state.focused));
-  document.getElementById('multiPhotoBtn')?.addEventListener('click', openPhotoModal);
-  document.getElementById('multiVideoBtn')?.addEventListener('click', openVideoModal);
+  document.getElementById('multiSettingsBtn')?.addEventListener('click', openSettingsModal);
   document.getElementById('multiConfigBtn')?.addEventListener('click', openConfigModal);
 }
 
 function initModals() {
-  document.getElementById('multiPhotoClose')?.addEventListener('click', () => closeModal('multiPhotoModal'));
+  // единая модалка настроек: зоны + управление
+  document.getElementById('multiSettingsClose')?.addEventListener('click', () => closeModal('multiSettingsModal'));
+  document.getElementById('multiFpsApply')?.addEventListener('click', applyMultiFps);
   document.getElementById('multiPhotoOn')?.addEventListener('click', () => applyPhoto(true));
   document.getElementById('multiPhotoOff')?.addEventListener('click', () => applyPhoto(false));
-
-  document.getElementById('multiVideoClose')?.addEventListener('click', () => closeModal('multiVideoModal'));
   document.getElementById('multiVideoOn')?.addEventListener('click', () => applyVideo(true));
   document.getElementById('multiVideoOff')?.addEventListener('click', () => applyVideo(false));
+  document.getElementById('multiLightSwitch')?.addEventListener('change', (e) => applyMultiLight(e.target.checked));
+  document.getElementById('multiZoomLevels')?.addEventListener('click', (e) => {
+    const b = e.target.closest('button[data-zoom]');
+    if (b) applyMultiZoom(Number(b.dataset.zoom));
+  });
+  document.getElementById('multiPanGrid')?.addEventListener('click', (e) => {
+    const b = e.target.closest('button[data-px]');
+    if (b) applyMultiPan(Number(b.dataset.px), Number(b.dataset.py));
+  });
 
   document.getElementById('multiInfoClose')?.addEventListener('click', () => closeModal('multiInfoModal'));
   document.getElementById('multiInfoCloseFooter')?.addEventListener('click', () => closeModal('multiInfoModal'));

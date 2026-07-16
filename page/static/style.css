@@ -410,6 +410,24 @@ select {
   box-shadow: 0 14px 30px rgba(56, 189, 248, 0.22);
 }
 
+/* Подсветка — мягко-белая кнопка, чтобы выделяться среди синих */
+.toolbar-btn--light {
+  background: linear-gradient(135deg, #fbfbf7, #d6d8e0);
+  color: #26262e;
+  border: 1px solid rgba(255, 255, 255, 0.55);
+  box-shadow: 0 14px 30px rgba(226, 222, 200, 0.22);
+}
+
+.toolbar-btn--light:hover {
+  filter: brightness(1.04);
+}
+
+/* когда свет включён — кнопка светится тёплым */
+.toolbar-btn--light.is-on {
+  background: linear-gradient(135deg, #fff7e0, #ffe9a8);
+  box-shadow: 0 0 0 1px rgba(255, 214, 110, 0.6), 0 14px 34px rgba(255, 199, 84, 0.45);
+}
+
 .toolbar-btn--danger-force  {
   background: linear-gradient(135deg, #e700ff, #ffb600);
   color: #ffffff;
@@ -731,6 +749,36 @@ input[type="range"] {
   padding: 12px 16px;
 }
 
+/* --- иконочный тулбар (RTSP): квадратные кнопки только с иконкой --- */
+.camera-toolbar--icons .toolbar-btn {
+  position: relative;
+  min-width: 0;
+  width: 46px;
+  height: 46px;
+  padding: 0;
+}
+
+.camera-toolbar--icons .toolbar-btn svg {
+  width: 22px;
+  height: 22px;
+}
+
+/* счётчик логов — угловой бейдж в иконочном режиме */
+.camera-toolbar--icons .toolbar-btn--logs .log-counter {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  font-size: 10px;
+  line-height: 16px;
+  text-align: center;
+  border-radius: 8px;
+  background: var(--accent, #3b82f6);
+  color: #fff;
+}
+
 .mode-indicator {
   position: absolute;
   top: 10px;
@@ -907,7 +955,9 @@ input[type="range"] {
 }
 
 .photo-card-popup,
-.video-card-popup {
+.video-card-popup,
+.light-card-popup,
+.zoom-card-popup {
   position: fixed;
   display: none;
   max-width: calc(100vw - 24px);
@@ -928,16 +978,260 @@ input[type="range"] {
   padding: 18px;
 }
 
+.light-card-popup,
+.zoom-card-popup {
+  width: 260px;
+  padding: 20px;
+}
+
 .photo-card-popup.show,
-.video-card-popup.show {
+.video-card-popup.show,
+.light-card-popup.show,
+.zoom-card-popup.show {
   display: block;
 }
 
 .photo-card-popup h2,
-.video-card-popup h2 {
+.video-card-popup h2,
+.light-card-popup h2,
+.zoom-card-popup h2 {
   margin-top: 0;
   margin-bottom: 14px;
 }
+
+/* --- шапка карточки фичи (иконка + заголовок + кнопка обновления) --- */
+.feature-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.feature-head h2 {
+  margin: 0;
+  flex: 1;
+  font-size: 18px;
+}
+
+.feature-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 10px;
+  background: var(--surface-elevated);
+  color: var(--text-muted, #9aa);
+  transition: color .25s ease, box-shadow .25s ease, background .25s ease;
+}
+
+/* лампочка загорается, когда свет включён */
+.feature-icon--bulb.is-on {
+  color: #ffcf5c;
+  background: rgba(255, 207, 92, 0.14);
+  box-shadow: 0 0 14px rgba(255, 207, 92, 0.55);
+}
+
+/* маленькая круглая кнопка «проверить возможности» */
+.cap-refresh {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border-radius: 50%;
+  border: 1px solid var(--border-strong);
+  background: var(--surface-elevated);
+  color: var(--text-muted, #9aa);
+  cursor: pointer;
+  transition: color .2s ease, transform .3s ease;
+}
+
+.cap-refresh:hover { color: var(--text); }
+.cap-refresh:active { transform: rotate(180deg); }
+
+/* строка статуса возможности: точка + текст */
+.cap-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  margin: 0 0 14px;
+  color: var(--text-muted, #888);
+}
+
+.cap-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--text-muted, #888);
+  flex: none;
+}
+
+.cap-line[data-state="yes"] { color: var(--success, #2e9e5b); }
+.cap-line[data-state="yes"] .cap-dot {
+  background: var(--success, #2e9e5b);
+  box-shadow: 0 0 8px var(--success, #2e9e5b);
+}
+.cap-line[data-state="no"] { color: var(--danger, #c0392b); }
+.cap-line[data-state="no"] .cap-dot { background: var(--danger, #c0392b); }
+
+/* --- тумблер вкл/выкл --- */
+.switch-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 14px;
+  cursor: pointer;
+}
+
+.switch { position: relative; display: inline-block; width: 46px; height: 26px; flex: none; }
+.switch input { position: absolute; opacity: 0; width: 0; height: 0; }
+
+.switch-track {
+  position: absolute;
+  inset: 0;
+  border-radius: 999px;
+  background: var(--surface-elevated);
+  border: 1px solid var(--border-strong);
+  transition: background .2s ease;
+}
+.switch-track::before {
+  content: "";
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: #cfd2da;
+  transition: transform .2s ease, background .2s ease;
+}
+.switch input:checked + .switch-track {
+  background: linear-gradient(135deg, #ffd876, #ffb02e);
+  border-color: transparent;
+}
+.switch input:checked + .switch-track::before { transform: translateX(20px); background: #fff; }
+.switch input:disabled + .switch-track { opacity: .45; }
+
+.switch-label { font-size: 14px; color: var(--text); }
+
+/* --- слайдер яркости --- */
+.slider-row { display: flex; flex-direction: column; gap: 6px; font-size: 13px; color: var(--text-muted, #9aa); }
+.slider-row input[type="range"] { width: 100%; accent-color: #ffb02e; }
+.slider-row[hidden] { display: none; }
+
+/* --- подсветка: тумблер + яркость в одну строку --- */
+.light-controls { display: flex; align-items: center; gap: 14px; }
+.switch-toggle { display: inline-flex; align-items: center; gap: 10px; cursor: pointer; flex: none; }
+.light-brightness { flex: 1; min-width: 0; accent-color: #ffb02e; }
+.light-brightness:disabled { opacity: .45; }
+
+/* --- единый стиль формы в окошках Фото/Видео (как в карточках) --- */
+.field-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 13px;
+  color: var(--text-muted, #9aa);
+  margin-bottom: 14px;
+}
+
+.field-inline { display: inline-flex; gap: 6px; }
+
+.field-input,
+.field-select {
+  background: var(--surface-elevated);
+  color: var(--text);
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  padding: 7px 9px;
+  font-size: 13px;
+}
+
+.field-input { width: 84px; }
+.field-input--sm { width: 58px; }
+
+.popup-actions { display: flex; gap: 8px; }
+.popup-actions .btn-primary,
+.popup-actions .btn-secondary { flex: 1; }
+
+/* --- модалка «Настройки» (мультипоточность): всё зонами в одном окне --- */
+.settings-card { width: 640px; max-width: calc(100vw - 32px); }
+
+.settings-zones {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 14px;
+}
+
+.settings-zone {
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 14px 16px;
+  background: var(--surface-elevated);
+}
+
+.settings-zone h3 {
+  margin: 0 0 12px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.settings-zone[hidden] { display: none; }
+
+@media (max-width: 560px) {
+  .settings-zones { grid-template-columns: 1fr; }
+}
+
+/* --- зум --- */
+.zoom-levels {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+
+.zoom-levels button.active {
+  outline: 2px solid var(--accent, #3b82f6);
+  outline-offset: 1px;
+}
+
+.zoom-sub { display: block; font-size: 13px; color: var(--text-muted, #9aa); margin-bottom: 6px; }
+.zoom-hint { font-size: 12px; color: var(--text-muted, #888); margin: 4px 0 0; }
+
+/* --- панорамирование зума: сетка 3×3 (центр / углы / края) --- */
+.zoom-pan { margin-bottom: 12px; }
+
+.pan-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 5px;
+  width: 108px;
+}
+
+.pan-grid button {
+  aspect-ratio: 1 / 1;
+  border-radius: 7px;
+  border: 1px solid var(--border-strong);
+  background: var(--surface-elevated);
+  cursor: pointer;
+  transition: border-color .15s ease, background .15s ease;
+}
+
+.pan-grid button:hover { border-color: var(--accent, #3b82f6); }
+
+.pan-grid button.active {
+  background: var(--accent, #3b82f6);
+  border-color: var(--accent, #3b82f6);
+}
+
+.zoom-pan[hidden],
+.optical-zoom-controls[hidden],
+.zoom-hint[hidden] { display: none; }
 
 .photo-card-popup .record-actions button {
   min-width: 110px;

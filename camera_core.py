@@ -1558,16 +1558,23 @@ class RtspCameraWorker(BaseCameraWorker):
         return dahua_control.parse_rtsp_credentials(self.rtsp_url)
 
     def get_capabilities(self, refresh=False):
-        """Возможности камеры (белый свет / оптический зум). Кэшируется на воркере."""
-        if self._caps is not None and not refresh:
-            return self._caps
-        host, user, password = self._dahua_creds()
-        caps = dahua_control.get_capabilities(host, user, password)
-        # цифровой зум делаем у себя — он доступен всегда
-        caps["digital_zoom"] = True
-        caps["zoom_factor"] = self.zoom_factor
-        self._caps = caps
-        return caps
+        """Возможности камеры (белый свет / оптический зум).
+
+        Статичная часть (свет/оптика/модель) кэшируется; динамическая (текущий зум и
+        положение окна) добавляется всегда свежей — иначе UI при переоткрытии видит
+        устаревшую кратность из кэша.
+        """
+        if self._caps is None or refresh:
+            host, user, password = self._dahua_creds()
+            caps = dahua_control.get_capabilities(host, user, password)
+            caps["digital_zoom"] = True  # цифровой зум делаем у себя — доступен всегда
+            self._caps = caps
+        # динамические поля — всегда актуальные, не из кэша
+        result = dict(self._caps)
+        result["zoom_factor"] = self.zoom_factor
+        result["zoom_pan_x"] = self.zoom_pan_x
+        result["zoom_pan_y"] = self.zoom_pan_y
+        return result
 
     def set_light(self, on, brightness=100):
         """Включить/выключить белый прожектор камеры."""

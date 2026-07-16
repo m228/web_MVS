@@ -1163,9 +1163,21 @@ input[type="range"] {
 
 .settings-zones {
   display: grid;
-  grid-template-columns: repeat(2, 1fr);
+  grid-template-columns: 1fr 1fr;
+  grid-template-areas:
+    "photo  camera"
+    "video  zoom"
+    "light  pan";
   gap: 14px;
+  align-items: start;
 }
+
+.settings-zone[data-zone="photo"]  { grid-area: photo; }
+.settings-zone[data-zone="video"]  { grid-area: video; }
+.settings-zone[data-zone="light"]  { grid-area: light; }
+.settings-zone[data-zone="camera"] { grid-area: camera; }
+.settings-zone[data-zone="zoom"]   { grid-area: zoom; }
+.settings-zone[data-zone="pan"]    { grid-area: pan; }
 
 .settings-zone {
   border: 1px solid var(--border);
@@ -1184,7 +1196,8 @@ input[type="range"] {
 .settings-zone[hidden] { display: none; }
 
 @media (max-width: 560px) {
-  .settings-zones { grid-template-columns: 1fr; }
+  .settings-zones { grid-template-columns: 1fr; grid-template-areas: none; }
+  .settings-zone { grid-area: auto !important; }
 }
 
 /* --- зум --- */
@@ -1202,6 +1215,11 @@ input[type="range"] {
 
 .zoom-sub { display: block; font-size: 13px; color: var(--text-muted, #9aa); margin-bottom: 6px; }
 .zoom-hint { font-size: 12px; color: var(--text-muted, #888); margin: 4px 0 0; }
+
+/* плавное панорамирование зума — два ползунка (гориз./верт.) */
+.pan-row { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
+.pan-row .pan-ax { width: 18px; text-align: center; color: var(--text-muted, #9aa); font-size: 15px; flex: none; }
+.pan-row input[type="range"] { flex: 1; min-width: 0; accent-color: var(--accent, #3b82f6); }
 
 /* --- панорамирование зума: сетка 3×3 (центр / углы / края) --- */
 .zoom-pan { margin-bottom: 12px; }
@@ -2500,6 +2518,21 @@ body.modal-open {
 .rec-icon.is-active {
   color: var(--success);
   opacity: 1;
+}
+
+/* лампа подсветки в ячейке — светится тёплым, когда включена */
+.rec-icon[data-rec-light].is-active {
+  color: #ffcf5c;
+  filter: drop-shadow(0 0 4px rgba(255, 207, 92, 0.7));
+}
+
+/* зум в ячейке — иконка + подпись кратности («2×») */
+.rec-icon--zoom { gap: 2px; }
+.rec-icon[data-rec-zoom].is-active { color: var(--accent, #3b82f6); }
+.rec-zoom-x {
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1;
 }
 
 .camera-chip__actions {

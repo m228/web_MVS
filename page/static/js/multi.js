@@ -18,6 +18,10 @@ const PHOTO_SVG = '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" s
 
 const VIDEO_SVG = '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polygon points="23 7 16 12 23 17 23 7"></polygon><rect x="1" y="5" width="15" height="14" rx="2" ry="2"></rect></svg>';
 
+const LIGHT_SVG = '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 18h6M10 21h4M12 3a6 6 0 0 0-4 10.5c.7.7 1 1.4 1 2.5h6c0-1.1.3-1.8 1-2.5A6 6 0 0 0 12 3z"></path></svg>';
+
+const ZOOM_SVG = '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"></circle><path d="M21 21l-4.3-4.3M11 8v6M8 11h6"></path></svg>';
+
 function defaultGigeSettings() {
   return {
     width: 2448, height: 2048, offset_x: 0, offset_y: 0,
@@ -287,7 +291,7 @@ function renderChipSettings(box, cam) {
 
 // ---------- раскладка ----------
 function newTile() {
-  return { serial: null, kind: null, connected: false, photo: false, video: false, live: true, el: null };
+  return { serial: null, kind: null, connected: false, photo: false, video: false, light: false, zoomFactor: 1, live: true, el: null };
 }
 
 function setLayout(n) {
@@ -346,6 +350,8 @@ function createTileEl() {
       <span>Фото<strong data-metric="photo_count">0</strong></span>
       <span>Видео<strong data-metric="video_time">—</strong></span>
       <div class="multi-tile__rec">
+        <span class="rec-icon" data-rec-light title="Подсветка">${LIGHT_SVG}</span>
+        <span class="rec-icon rec-icon--zoom" data-rec-zoom title="Зум"><span class="rec-zoom-x" data-rec-zoom-x></span>${ZOOM_SVG}</span>
         <span class="rec-icon" data-rec-photo title="Сохранение фото">${PHOTO_SVG}</span>
         <span class="rec-icon" data-rec-video title="Запись видео">${VIDEO_SVG}</span>
       </div>
@@ -437,6 +443,16 @@ function renderTile(index) {
   const recVideo = el.querySelector('[data-rec-video]');
   if (recPhoto) recPhoto.classList.toggle('is-active', !!tile.photo);
   if (recVideo) recVideo.classList.toggle('is-active', !!tile.video);
+
+  // индикаторы подсветки и зума (только для RTSP-камеры в эфире)
+  const isRtsp = source && source.kind === 'rtsp';
+  const recLight = el.querySelector('[data-rec-light]');
+  const recZoom = el.querySelector('[data-rec-zoom]');
+  const recZoomX = el.querySelector('[data-rec-zoom-x]');
+  const zoomOn = isRtsp && Number(tile.zoomFactor) > 1;
+  if (recLight) recLight.classList.toggle('is-active', isRtsp && !!tile.light && tile.connected);
+  if (recZoom) recZoom.classList.toggle('is-active', zoomOn && tile.connected);
+  if (recZoomX) recZoomX.textContent = zoomOn ? (Number(tile.zoomFactor) + '×') : '';
 
   if (!tile.connected) {
     if (frame) { frame.classList.add('hidden'); frame.src = ''; }
@@ -697,6 +713,12 @@ function startMetricsPolling() {
         }
       }
 
+      // индикатор зума в ячейке: кратность приходит в метриках RTSP
+      if (metrics.zoom_factor !== undefined) {
+        const zf = Number(metrics.zoom_factor) || 1;
+        if (zf !== tile.zoomFactor) { tile.zoomFactor = zf; renderTile(i); }
+      }
+
       updateTileMetrics(i, metrics);
 
       // живость определяем по росту счётчика кадров
@@ -844,10 +866,10 @@ function applySettingsCaps() {
   const hint = document.getElementById('multiZoomHint');
   if (hint) hint.hidden = hasOptical;
 
-  // отразить текущую кратность зума камеры
+  // отразить текущую кратность и положение окна зума (свежие, не из кэша)
   multiZoom = Number(caps.zoom_factor) || 1;
   markMultiZoom(multiZoom);
-  markMultiPan(0.5, 0.5);
+  setMultiPanSliders(caps.zoom_pan_x, caps.zoom_pan_y);
 }
 
 // --- фото ---
@@ -906,10 +928,17 @@ function reflectMultiLight(on) {
   if (label) label.textContent = on ? 'Включено' : 'Выключено';
 }
 
+function setTileLight(on) {
+  const tile = state.tiles[state.focused];
+  if (tile) { tile.light = on; renderTile(state.focused); }
+}
+
 async function syncMultiLightState(serial) {
-  if (!(settingsCaps && settingsCaps.white_light)) { reflectMultiLight(false); return; }
+  if (!(settingsCaps && settingsCaps.white_light)) { reflectMultiLight(false); setTileLight(false); return; }
   const data = await RtspApi.getLightState(serial);
-  reflectMultiLight(!!(data && data.state === 'on'));
+  const on = !!(data && data.state === 'on');
+  reflectMultiLight(on);
+  setTileLight(on);
 }
 
 async function applyMultiLight(on) {
@@ -922,6 +951,7 @@ async function applyMultiLight(on) {
     return;
   }
   reflectMultiLight(on);
+  setTileLight(on);
 }
 
 // --- зум (только RTSP-камера в фокусе) ---
@@ -929,32 +959,40 @@ function markMultiZoom(factor) {
   document.querySelectorAll('#multiZoomLevels button[data-zoom]').forEach((b) => {
     b.classList.toggle('active', Number(b.dataset.zoom) === factor);
   });
-  const pan = document.getElementById('multiZoomPan');
-  if (pan) pan.hidden = factor <= 1;
+  // «Область просмотра» — отдельная ячейка, появляется только при зуме > 1
+  const panZone = document.getElementById('multiPanZone');
+  if (panZone) panZone.hidden = factor <= 1;
 }
 
-function markMultiPan(px, py) {
-  document.querySelectorAll('#multiPanGrid button[data-px]').forEach((b) => {
-    b.classList.toggle('active', Number(b.dataset.px) === px && Number(b.dataset.py) === py);
-  });
+// вертикальный ползунок перевёрнут: вправо = вверх (py=0), влево = вниз (py=1)
+function setMultiPanSliders(px, py) {
+  const sx = document.getElementById('multiPanX');
+  const sy = document.getElementById('multiPanY');
+  if (sx) sx.value = Math.round((px ?? 0.5) * 100);
+  if (sy) sy.value = Math.round((1 - (py ?? 0.5)) * 100);
 }
 
 async function applyMultiZoom(factor) {
+  const tile = state.tiles[state.focused];
   const source = focusedSource();
   if (!source || source.kind !== 'rtsp') return;
   const data = await RtspApi.setZoom(source.serial, factor);
   if (!data || data.error) return;
   multiZoom = data.factor || factor;
   markMultiZoom(multiZoom);
-  markMultiPan(0.5, 0.5);
+  setMultiPanSliders(0.5, 0.5);
+  if (tile) { tile.zoomFactor = multiZoom; renderTile(state.focused); }
 }
 
-async function applyMultiPan(px, py) {
+// применить положение области из ползунков (плавно при перетаскивании)
+async function applyMultiPan() {
   const source = focusedSource();
   if (!source || source.kind !== 'rtsp' || multiZoom <= 1) return;
-  const data = await RtspApi.setZoomPan(source.serial, px, py);
-  if (!data || data.error) return;
-  markMultiPan(px, py);
+  const sx = document.getElementById('multiPanX');
+  const sy = document.getElementById('multiPanY');
+  const px = sx ? Number(sx.value) / 100 : 0.5;
+  const py = sy ? 1 - Number(sy.value) / 100 : 0.5; // вправо = вверх
+  await RtspApi.setZoomPan(source.serial, px, py);
 }
 
 // --- информация о камере ---
@@ -1143,10 +1181,8 @@ function initModals() {
     const b = e.target.closest('button[data-zoom]');
     if (b) applyMultiZoom(Number(b.dataset.zoom));
   });
-  document.getElementById('multiPanGrid')?.addEventListener('click', (e) => {
-    const b = e.target.closest('button[data-px]');
-    if (b) applyMultiPan(Number(b.dataset.px), Number(b.dataset.py));
-  });
+  document.getElementById('multiPanX')?.addEventListener('input', applyMultiPan);
+  document.getElementById('multiPanY')?.addEventListener('input', applyMultiPan);
 
   document.getElementById('multiInfoClose')?.addEventListener('click', () => closeModal('multiInfoModal'));
   document.getElementById('multiInfoCloseFooter')?.addEventListener('click', () => closeModal('multiInfoModal'));

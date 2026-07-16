@@ -517,7 +517,8 @@ def rtsp_metrics(serial_number: str):
             "photo": worker.save_photo,
             "video": worker.save_video,
             "photo_count": worker.photo_saved_count,
-            "video_elapsed": worker.video_elapsed()}
+            "video_elapsed": worker.video_elapsed(),
+            "zoom_factor": worker.zoom_factor}
 
 
 @app.get("/api/rtsp/on_save_photo")

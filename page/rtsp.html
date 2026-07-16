@@ -249,23 +249,20 @@
           <p class="cap-line" id="zoomCap" data-state="yes"><span class="cap-dot"></span><span class="cap-text">Цифровой зум</span></p>
           <div class="zoom-levels" id="zoomLevels">
             <button type="button" class="btn-secondary" data-zoom="1">1×</button>
+            <button type="button" class="btn-secondary" data-zoom="1.5">1.5×</button>
             <button type="button" class="btn-secondary" data-zoom="2">2×</button>
+            <button type="button" class="btn-secondary" data-zoom="3">3×</button>
             <button type="button" class="btn-secondary" data-zoom="4">4×</button>
           </div>
 
           <div class="zoom-pan" id="zoomPan" hidden>
             <span class="zoom-sub">Область просмотра</span>
-            <div class="pan-grid" id="panGrid">
-              <button type="button" data-px="0" data-py="0" title="Левый верх"></button>
-              <button type="button" data-px="0.5" data-py="0" title="Верх"></button>
-              <button type="button" data-px="1" data-py="0" title="Правый верх"></button>
-              <button type="button" data-px="0" data-py="0.5" title="Лево"></button>
-              <button type="button" data-px="0.5" data-py="0.5" title="Центр"></button>
-              <button type="button" data-px="1" data-py="0.5" title="Право"></button>
-              <button type="button" data-px="0" data-py="1" title="Левый низ"></button>
-              <button type="button" data-px="0.5" data-py="1" title="Низ"></button>
-              <button type="button" data-px="1" data-py="1" title="Правый низ"></button>
-            </div>
+            <label class="pan-row"><span class="pan-ax" title="По горизонтали">⟷</span>
+              <input type="range" id="panX" min="0" max="100" value="50" />
+            </label>
+            <label class="pan-row"><span class="pan-ax" title="По вертикали">↕</span>
+              <input type="range" id="panY" min="0" max="100" value="50" />
+            </label>
           </div>
 
           <div class="optical-zoom-controls" id="opticalZoomControls" hidden>

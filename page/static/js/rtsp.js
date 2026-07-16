@@ -45,7 +45,8 @@ function initRtspPage() {
   const opticalZoomControls = document.getElementById('opticalZoomControls');
   const zoomOpticalHint = document.getElementById('zoomOpticalHint');
   const zoomPan = document.getElementById('zoomPan');
-  const panGrid = document.getElementById('panGrid');
+  const panX = document.getElementById('panX');
+  const panY = document.getElementById('panY');
 
   if (!form || !rtspFrame || !rtspPlaceholder || !buttons.connect) {
     window.AppLog?.error('rtsp', 'Не найдены обязательные элементы RTSP-страницы');
@@ -407,6 +408,10 @@ function initRtspPage() {
     }
     applyCapabilitiesUI();
     syncLightState();
+    // восстановить UI зума из фактического состояния воркера (не из кэша)
+    currentZoom = Number(capabilities.zoom_factor) || 1;
+    markZoomLevel(currentZoom);
+    setPanSliders(capabilities.zoom_pan_x, capabilities.zoom_pan_y);
   }
 
   async function syncLightState() {
@@ -442,13 +447,10 @@ function initRtspPage() {
     if (zoomPan) zoomPan.hidden = factor <= 1;
   }
 
-  // подсветить активную ячейку области (px, py: 0 / 0.5 / 1)
-  function markPan(px, py) {
-    if (!panGrid) return;
-    panGrid.querySelectorAll('button[data-px]').forEach((btn) => {
-      btn.classList.toggle('active',
-        Number(btn.dataset.px) === px && Number(btn.dataset.py) === py);
-    });
+  // выставить ползунки области (px, py в 0..1); вертикаль перевёрнута: вправо = вверх
+  function setPanSliders(px, py) {
+    if (panX) panX.value = Math.round((px ?? 0.5) * 100);
+    if (panY) panY.value = Math.round((1 - (py ?? 0.5)) * 100);
   }
 
   async function applyDigitalZoom(factor) {
@@ -460,19 +462,19 @@ function initRtspPage() {
     }
     currentZoom = data.factor || factor;
     markZoomLevel(currentZoom);
-    markPan(0.5, 0.5); // новая кратность — вид в центре
+    setPanSliders(0.5, 0.5); // новая кратность — вид в центре
     log.success('Цифровой зум ×' + currentZoom, data);
   }
 
-  async function applyZoomPan(px, py) {
+  // применить положение области из ползунков (плавно, во время перетаскивания)
+  async function applyZoomPan() {
     if (!serial || currentZoom <= 1) return;
+    const px = panX ? Number(panX.value) / 100 : 0.5;
+    const py = panY ? 1 - Number(panY.value) / 100 : 0.5; // вправо = вверх
     const data = await RtspApi.setZoomPan(serial, px, py);
     if (!data || data.error) {
       log.warn('Камера не подтвердила смещение области зума', data);
-      return;
     }
-    markPan(px, py);
-    log.success('Область зума смещена', data);
   }
 
   async function opticalZoom(direction) {
@@ -532,10 +534,8 @@ function initRtspPage() {
     const btn = event.target.closest('button[data-zoom]');
     if (btn) applyDigitalZoom(Number(btn.dataset.zoom));
   });
-  if (panGrid) panGrid.addEventListener('click', (event) => {
-    const btn = event.target.closest('button[data-px]');
-    if (btn) applyZoomPan(Number(btn.dataset.px), Number(btn.dataset.py));
-  });
+  if (panX) panX.addEventListener('input', applyZoomPan);
+  if (panY) panY.addEventListener('input', applyZoomPan);
   if (opticalZoomControls) opticalZoomControls.addEventListener('click', (event) => {
     const btn = event.target.closest('button[data-optical]');
     if (btn) opticalZoom(btn.dataset.optical);

@@ -1166,8 +1166,7 @@ input[type="range"] {
   grid-template-columns: 1fr 1fr;
   grid-template-areas:
     "photo  camera"
-    "video  zoom"
-    "light  pan";
+    "video  light";
   gap: 14px;
   align-items: start;
 }
@@ -1176,8 +1175,6 @@ input[type="range"] {
 .settings-zone[data-zone="video"]  { grid-area: video; }
 .settings-zone[data-zone="light"]  { grid-area: light; }
 .settings-zone[data-zone="camera"] { grid-area: camera; }
-.settings-zone[data-zone="zoom"]   { grid-area: zoom; }
-.settings-zone[data-zone="pan"]    { grid-area: pan; }
 
 .settings-zone {
   border: 1px solid var(--border);
@@ -1215,6 +1212,82 @@ input[type="range"] {
 
 .zoom-sub { display: block; font-size: 13px; color: var(--text-muted, #9aa); margin-bottom: 6px; }
 .zoom-hint { font-size: 12px; color: var(--text-muted, #888); margin: 4px 0 0; }
+
+/* --- зум выделением области в ячейке мультипоточности --- */
+.tile-region-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 1px solid var(--border-strong);
+  border-radius: 7px;
+  background: var(--surface-elevated);
+  color: var(--text-muted, #9aa);
+  cursor: pointer;
+  flex: none;
+}
+.tile-region-btn:hover { color: var(--text); }
+.tile-region-btn[hidden] { display: none; }
+
+.tile-marquee-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  cursor: crosshair;
+  user-select: none;
+}
+.tile-marquee-layer[hidden] { display: none; }
+
+.tile-marquee-box {
+  position: absolute;
+  border: 2px solid #ff3b3b;
+  background: rgba(255, 59, 59, 0.12);
+  box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.28);
+  pointer-events: none;
+}
+.tile-marquee-box[hidden] { display: none; }
+
+/* --- зум выделением области (рамкой) поверх видео --- */
+.zoom-marquee-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  cursor: crosshair;
+  user-select: none;
+}
+.zoom-marquee-layer[hidden] { display: none; }
+
+.zoom-marquee-box {
+  position: absolute;
+  border: 2px solid #ff3b3b;
+  background: rgba(255, 59, 59, 0.12);
+  box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.28);
+  pointer-events: none;
+}
+.zoom-marquee-box[hidden] { display: none; }
+
+.zoom-marquee-hint {
+  position: absolute;
+  top: 10px;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 5px 12px;
+  border-radius: 999px;
+  background: rgba(255, 59, 59, 0.85);
+  color: #fff;
+  font-size: 13px;
+  pointer-events: none;
+}
+
+/* кнопка «зум областью» активна — подсвечена оранжевым */
+.toolbar-btn.is-region-active,
+.tile-region-btn.is-region-active {
+  background: linear-gradient(135deg, #ffb300, #ff8f00);
+  color: #1a1a1a;
+  box-shadow: 0 0 0 1px rgba(255, 179, 0, 0.6), 0 0 16px rgba(255, 143, 0, 0.5);
+}
 
 /* плавное панорамирование зума — два ползунка (гориз./верт.) */
 .pan-row { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }

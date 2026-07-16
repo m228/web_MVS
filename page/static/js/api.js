@@ -335,6 +335,12 @@ const RtspApi = {
     return apiGet(`/api/rtsp/zoom?${query.toString()}`, 'Ошибка смещения зума (RTSP):');
   },
 
+  // зум по выделенной области: кратность + центр одним запросом
+  setZoomRegion(serial, factor, px, py) {
+    const query = new URLSearchParams({ serial_number: serial, factor, px, py });
+    return apiGet(`/api/rtsp/zoom?${query.toString()}`, 'Ошибка зума по области (RTSP):');
+  },
+
   opticalZoom(serial, direction) {
     const query = new URLSearchParams({ serial_number: serial, direction });
     return apiGet(`/api/rtsp/optical_zoom?${query.toString()}`, 'Ошибка оптического зума (RTSP):');

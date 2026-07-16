@@ -22,6 +22,8 @@ const LIGHT_SVG = '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" s
 
 const ZOOM_SVG = '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"></circle><path d="M21 21l-4.3-4.3M11 8v6M8 11h6"></path></svg>';
 
+const REGION_SVG = '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 8V5a2 2 0 0 1 2-2h3M16 3h3a2 2 0 0 1 2 2v3M21 16v3a2 2 0 0 1-2 2h-3M8 21H5a2 2 0 0 1-2-2v-3"></path><path d="M8.5 12h7M12 8.5v7"></path></svg>';
+
 function defaultGigeSettings() {
   return {
     width: 2448, height: 2048, offset_x: 0, offset_y: 0,
@@ -336,10 +338,14 @@ function createTileEl() {
     <div class="multi-tile__head">
       <select class="multi-tile__serial" data-tile-serial title="Камера в ячейке"></select>
       <span class="multi-tile__badge" data-tile-badge></span>
+      <button type="button" class="tile-region-btn" data-tile-region title="Зум областью — выделите рамку" aria-label="Зум областью" hidden>${REGION_SVG}</button>
     </div>
     <div class="multi-tile__screen" data-tile-screen>
       <img class="multi-tile__frame hidden" alt="Кадр камеры" data-tile-frame />
       <div class="multi-tile__placeholder" data-tile-placeholder>NO CAMERA</div>
+      <div class="tile-marquee-layer" data-tile-marquee hidden>
+        <div class="tile-marquee-box" data-tile-marquee-box hidden></div>
+      </div>
     </div>
     <div class="multi-tile__status">
       <span>FPS<strong data-metric="fps">0.00</strong></span>
@@ -377,6 +383,24 @@ function createTileEl() {
   const select = el.querySelector('[data-tile-serial]');
   select.addEventListener('change', () => assignSource(idx(), select.value || null));
   select.addEventListener('click', (event) => event.stopPropagation());
+
+  // зум областью (рамкой) в ячейке
+  const regionBtn = el.querySelector('[data-tile-region]');
+  regionBtn.addEventListener('click', (event) => {
+    event.stopPropagation();
+    setFocus(idx());
+    onTileRegionClick(idx());
+  });
+  const marquee = el.querySelector('[data-tile-marquee]');
+  marquee.addEventListener('mousedown', (event) => {
+    const tile = state.tiles[idx()];
+    if (!tile || !tile.regionMode) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const p = tileLayerXY(marquee, event);
+    tileDrag = { index: idx(), x0: p.x, y0: p.y, x1: p.x, y1: p.y };
+    updateTileMarqueeBox();
+  });
 
   return el;
 }
@@ -457,10 +481,13 @@ function renderTile(index) {
   if (!tile.connected) {
     if (frame) { frame.classList.add('hidden'); frame.src = ''; }
     if (placeholder) placeholder.classList.remove('hidden');
+    tile.regionMode = false;
   } else {
     if (placeholder) placeholder.classList.add('hidden');
     if (frame) frame.classList.remove('hidden');
   }
+
+  applyTileRegionUI(index); // кнопка «зум областью» и слой рамки
 }
 
 function renderAllTiles() {
@@ -777,9 +804,8 @@ function focusedSource() {
   return tile.serial ? getSource(tile.serial) : null;
 }
 
-// ---------- настройки камеры в фокусе (фото/видео/подсветка/зум) ----------
+// ---------- настройки камеры в фокусе (фото/видео/подсветка) ----------
 let settingsCaps = null;   // возможности RTSP-камеры в открытой модалке
-let multiZoom = 1;         // текущая кратность цифрового зума камеры в фокусе
 
 // строка возможности: точка + текст (общая для подсветки/зума)
 function setCapLine(el, supported, textYes, textNo) {
@@ -852,7 +878,6 @@ async function refreshSettingsCaps(serial) {
 function applySettingsCaps() {
   const caps = settingsCaps || {};
   const hasLight = !!caps.white_light;
-  const hasOptical = !!caps.optical_zoom;
 
   setCapLine(document.getElementById('multiLightCap'), hasLight,
     'Белый прожектор поддерживается',
@@ -862,14 +887,7 @@ function applySettingsCaps() {
   if (sw) sw.disabled = !hasLight;
   if (lv) lv.disabled = !hasLight;
   if (!hasLight) reflectMultiLight(false);
-
-  const hint = document.getElementById('multiZoomHint');
-  if (hint) hint.hidden = hasOptical;
-
-  // отразить текущую кратность и положение окна зума (свежие, не из кэша)
-  multiZoom = Number(caps.zoom_factor) || 1;
-  markMultiZoom(multiZoom);
-  setMultiPanSliders(caps.zoom_pan_x, caps.zoom_pan_y);
+  // зум делается рамкой прямо в ячейке (кнопка на плитке), в настройках его нет
 }
 
 // --- фото ---
@@ -954,46 +972,128 @@ async function applyMultiLight(on) {
   setTileLight(on);
 }
 
-// --- зум (только RTSP-камера в фокусе) ---
-function markMultiZoom(factor) {
-  document.querySelectorAll('#multiZoomLevels button[data-zoom]').forEach((b) => {
-    b.classList.toggle('active', Number(b.dataset.zoom) === factor);
-  });
-  // «Область просмотра» — отдельная ячейка, появляется только при зуме > 1
-  const panZone = document.getElementById('multiPanZone');
-  if (panZone) panZone.hidden = factor <= 1;
+// ---------- зум областью (рамкой) в ячейке ----------
+let tileDrag = null; // { index, x0, y0, x1, y1 }
+
+function tileLayerXY(layer, event) {
+  const r = layer.getBoundingClientRect();
+  return { x: event.clientX - r.left, y: event.clientY - r.top };
 }
 
-// вертикальный ползунок перевёрнут: вправо = вверх (py=0), влево = вниз (py=1)
-function setMultiPanSliders(px, py) {
-  const sx = document.getElementById('multiPanX');
-  const sy = document.getElementById('multiPanY');
-  if (sx) sx.value = Math.round((px ?? 0.5) * 100);
-  if (sy) sy.value = Math.round((1 - (py ?? 0.5)) * 100);
+function updateTileMarqueeBox() {
+  if (!tileDrag) return;
+  const el = getTileEl(tileDrag.index);
+  const box = el && el.querySelector('[data-tile-marquee-box]');
+  if (!box) return;
+  const { x0, y0, x1, y1 } = tileDrag;
+  box.hidden = false;
+  box.style.left = Math.min(x0, x1) + 'px';
+  box.style.top = Math.min(y0, y1) + 'px';
+  box.style.width = Math.abs(x1 - x0) + 'px';
+  box.style.height = Math.abs(y1 - y0) + 'px';
 }
 
-async function applyMultiZoom(factor) {
-  const tile = state.tiles[state.focused];
-  const source = focusedSource();
-  if (!source || source.kind !== 'rtsp') return;
-  const data = await RtspApi.setZoom(source.serial, factor);
-  if (!data || data.error) return;
-  multiZoom = data.factor || factor;
-  markMultiZoom(multiZoom);
-  setMultiPanSliders(0.5, 0.5);
-  if (tile) { tile.zoomFactor = multiZoom; renderTile(state.focused); }
+// видимый прямоугольник видео внутри <img> (object-fit: contain, с полями)
+function tileVideoRect(frame) {
+  const nw = frame.naturalWidth, nh = frame.naturalHeight;
+  const bw = frame.clientWidth, bh = frame.clientHeight;
+  if (!nw || !nh || !bw || !bh) return null;
+  const nr = nw / nh, br = bw / bh;
+  if (nr > br) { const dh = bw / nr; return { dw: bw, dh, ox: 0, oy: (bh - dh) / 2 }; }
+  const dw = bh * nr; return { dw, dh: bh, ox: (bw - dw) / 2, oy: 0 };
 }
 
-// применить положение области из ползунков (плавно при перетаскивании)
-async function applyMultiPan() {
-  const source = focusedSource();
-  if (!source || source.kind !== 'rtsp' || multiZoom <= 1) return;
-  const sx = document.getElementById('multiPanX');
-  const sy = document.getElementById('multiPanY');
-  const px = sx ? Number(sx.value) / 100 : 0.5;
-  const py = sy ? 1 - Number(sy.value) / 100 : 0.5; // вправо = вверх
-  await RtspApi.setZoomPan(source.serial, px, py);
+// кнопка (оранжевая при активности) и слой рамки в ячейке
+function applyTileRegionUI(index) {
+  const tile = state.tiles[index];
+  const el = getTileEl(index);
+  if (!tile || !el) return;
+  const source = getSource(tile.serial);
+  const isRtsp = source && source.kind === 'rtsp';
+  const btn = el.querySelector('[data-tile-region]');
+  const layer = el.querySelector('[data-tile-marquee]');
+  const box = el.querySelector('[data-tile-marquee-box]');
+  if (btn) {
+    btn.hidden = !(isRtsp && tile.connected);
+    btn.classList.toggle('is-region-active', !!tile.regionMode || Number(tile.zoomFactor) > 1);
+  }
+  if (layer) layer.hidden = !tile.regionMode;
+  if (box && !tile.regionMode) box.hidden = true;
 }
+
+function onTileRegionClick(index) {
+  const tile = state.tiles[index];
+  const source = tile && getSource(tile.serial);
+  if (!tile || !source || source.kind !== 'rtsp' || !tile.connected) return;
+  if (Number(tile.zoomFactor) > 1) {
+    resetTileZoom(index); // приближено → сброс на 1×
+  } else {
+    tile.regionMode = !tile.regionMode; // иначе — вход/выход из выделения
+    applyTileRegionUI(index);
+  }
+}
+
+async function resetTileZoom(index) {
+  const tile = state.tiles[index];
+  const source = tile && getSource(tile.serial);
+  if (!source) return;
+  await RtspApi.setZoom(source.serial, 1);
+  tile.zoomFactor = 1;
+  tile.regionMode = false;
+  renderTile(index);
+  applyTileRegionUI(index);
+}
+
+async function applyTileRegionZoom() {
+  const drag = tileDrag;
+  tileDrag = null;
+  if (!drag) return;
+  const index = drag.index;
+  const tile = state.tiles[index];
+  const el = getTileEl(index);
+  const source = tile && getSource(tile.serial);
+  const frame = el && el.querySelector('[data-tile-frame]');
+  const box = el && el.querySelector('[data-tile-marquee-box]');
+  if (box) box.hidden = true;
+  if (!tile || !source || source.kind !== 'rtsp' || !frame) return;
+  const rect = tileVideoRect(frame);
+  if (!rect) return;
+  if (Math.abs(drag.x1 - drag.x0) < 10 || Math.abs(drag.y1 - drag.y0) < 10) return;
+
+  const { dw, dh, ox, oy } = rect;
+  const cl = (v) => Math.max(0, Math.min(1, v));
+  const nx0 = cl((Math.min(drag.x0, drag.x1) - ox) / dw);
+  const ny0 = cl((Math.min(drag.y0, drag.y1) - oy) / dh);
+  const nx1 = cl((Math.max(drag.x0, drag.x1) - ox) / dw);
+  const ny1 = cl((Math.max(drag.y0, drag.y1) - oy) / dh);
+  const rw = Math.max(0.02, nx1 - nx0);
+  const rh = Math.max(0.02, ny1 - ny0);
+  const ncx = (nx0 + nx1) / 2, ncy = (ny0 + ny1) / 2;
+  let factor = Math.max(1, Math.min(4, Math.min(1 / rw, 1 / rh)));
+  const z = 1 / factor;
+  const px = factor > 1 ? cl((ncx - z / 2) / (1 - z)) : 0.5;
+  const py = factor > 1 ? cl((ncy - z / 2) / (1 - z)) : 0.5;
+
+  const data = await RtspApi.setZoomRegion(source.serial, factor, px, py);
+  if (data && !data.error) tile.zoomFactor = data.factor || factor;
+  tile.regionMode = false;
+  renderTile(index);
+  applyTileRegionUI(index);
+}
+
+// глобальные обработчики перетаскивания рамки в ячейке
+window.addEventListener('mousemove', (event) => {
+  if (!tileDrag) return;
+  const el = getTileEl(tileDrag.index);
+  const layer = el && el.querySelector('[data-tile-marquee]');
+  if (!layer) return;
+  const p = tileLayerXY(layer, event);
+  tileDrag.x1 = p.x; tileDrag.y1 = p.y;
+  updateTileMarqueeBox();
+});
+window.addEventListener('mouseup', () => {
+  if (tileDrag) applyTileRegionZoom();
+});
 
 // --- информация о камере ---
 async function openInfoModal(serial) {
@@ -1177,12 +1277,6 @@ function initModals() {
   document.getElementById('multiVideoOn')?.addEventListener('click', () => applyVideo(true));
   document.getElementById('multiVideoOff')?.addEventListener('click', () => applyVideo(false));
   document.getElementById('multiLightSwitch')?.addEventListener('change', (e) => applyMultiLight(e.target.checked));
-  document.getElementById('multiZoomLevels')?.addEventListener('click', (e) => {
-    const b = e.target.closest('button[data-zoom]');
-    if (b) applyMultiZoom(Number(b.dataset.zoom));
-  });
-  document.getElementById('multiPanX')?.addEventListener('input', applyMultiPan);
-  document.getElementById('multiPanY')?.addEventListener('input', applyMultiPan);
 
   document.getElementById('multiInfoClose')?.addEventListener('click', () => closeModal('multiInfoModal'));
   document.getElementById('multiInfoCloseFooter')?.addEventListener('click', () => closeModal('multiInfoModal'));

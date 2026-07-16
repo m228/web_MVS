@@ -80,9 +80,8 @@
                 <span class="mode-indicator hidden" id="lightIndicator"></span>
               </button>
 
-              <button type="button" id="zoomBtn" class="toolbar-btn toolbar-btn--neutral" title="Зум" aria-label="Зум">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3M11 8v6M8 11h6"/></svg>
-                <span class="mode-indicator hidden" id="zoomIndicator"></span>
+              <button type="button" id="regionZoomBtn" class="toolbar-btn toolbar-btn--neutral" title="Зум областью — выделите рамку на видео" aria-label="Зум областью">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8V5a2 2 0 0 1 2-2h3M16 3h3a2 2 0 0 1 2 2v3M21 16v3a2 2 0 0 1-2 2h-3M8 21H5a2 2 0 0 1-2-2v-3"/><path d="M8.5 12h7M12 8.5v7"/></svg>
               </button>
 
               <button type="button" id="logsBtn" class="toolbar-btn toolbar-btn--neutral toolbar-btn--logs" title="Открыть журнал" aria-label="Открыть журнал">
@@ -91,9 +90,13 @@
               </button>
             </div>
 
-            <div class="camera-screen card">
+            <div class="camera-screen card" id="cameraScreen">
               <img id="rtspFrame" alt="Кадр камеры" class="camera-frame" />
               <div id="rtspPlaceholder" class="camera-placeholder">No video</div>
+              <div class="zoom-marquee-layer" id="zoomMarqueeLayer" hidden>
+                <div class="zoom-marquee-box" id="zoomMarqueeBox" hidden></div>
+                <div class="zoom-marquee-hint">Выделите область для приближения</div>
+              </div>
             </div>
 
             <div class="camera-status-bar card" id="cameraStatusBar">
@@ -243,38 +246,6 @@
           </div>
         </div>
 
-        <div class="card zoom-card-popup" id="zoomCard">
-          <h2>Зум</h2>
-
-          <p class="cap-line" id="zoomCap" data-state="yes"><span class="cap-dot"></span><span class="cap-text">Цифровой зум</span></p>
-          <div class="zoom-levels" id="zoomLevels">
-            <button type="button" class="btn-secondary" data-zoom="1">1×</button>
-            <button type="button" class="btn-secondary" data-zoom="1.5">1.5×</button>
-            <button type="button" class="btn-secondary" data-zoom="2">2×</button>
-            <button type="button" class="btn-secondary" data-zoom="3">3×</button>
-            <button type="button" class="btn-secondary" data-zoom="4">4×</button>
-          </div>
-
-          <div class="zoom-pan" id="zoomPan" hidden>
-            <span class="zoom-sub">Область просмотра</span>
-            <label class="pan-row"><span class="pan-ax" title="По горизонтали">⟷</span>
-              <input type="range" id="panX" min="0" max="100" value="50" />
-            </label>
-            <label class="pan-row"><span class="pan-ax" title="По вертикали">↕</span>
-              <input type="range" id="panY" min="0" max="100" value="50" />
-            </label>
-          </div>
-
-          <div class="optical-zoom-controls" id="opticalZoomControls" hidden>
-            <span class="zoom-sub">Оптический зум камеры</span>
-            <div class="zoom-levels">
-              <button type="button" class="btn-secondary" data-optical="wide">Отдалить</button>
-              <button type="button" class="btn-secondary" data-optical="stop">Стоп</button>
-              <button type="button" class="btn-secondary" data-optical="tele">Приблизить</button>
-            </div>
-          </div>
-          <p class="zoom-hint" id="zoomOpticalHint">Оптического зума нет — доступен только цифровой.</p>
-        </div>
       </div>
 
       <script src="/static/js/api.js"></script>

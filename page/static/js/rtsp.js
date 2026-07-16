@@ -123,6 +123,8 @@ function initRtspPage() {
     buttons.video.disabled = !isConnected;
     if (buttons.light) buttons.light.disabled = !isConnected;
     if (buttons.zoom) buttons.zoom.disabled = !isConnected;
+    const regionBtn = document.getElementById('regionZoomBtn');
+    if (regionBtn) regionBtn.disabled = !isConnected;
     buttons.connect.disabled = isLoading;
   }
 
@@ -200,6 +202,7 @@ function initRtspPage() {
     videoPopup.close();
     lightPopup.close();
     zoomPopup.close();
+    setRegionMode(false);
     capabilities = null;
 
     stopMetricsPolling();
@@ -443,8 +446,8 @@ function initRtspPage() {
       });
     }
     if (zoomIndicator) zoomIndicator.classList.toggle('hidden', factor <= 1);
-    // сетку области показываем только при зуме > 1
     if (zoomPan) zoomPan.hidden = factor <= 1;
+    updateRegionBtn(); // иконка «зум областью» отражает активность зума
   }
 
   // выставить ползунки области (px, py в 0..1); вертикаль перевёрнута: вправо = вверх
@@ -475,6 +478,115 @@ function initRtspPage() {
     if (!data || data.error) {
       log.warn('Камера не подтвердила смещение области зума', data);
     }
+  }
+
+  // ---------- ТЕСТ: зум выделением области (рамкой) поверх видео ----------
+  const regionZoomBtn = document.getElementById('regionZoomBtn');
+  const marqueeLayer = document.getElementById('zoomMarqueeLayer');
+  const marqueeBox = document.getElementById('zoomMarqueeBox');
+  let regionMode = false;
+  let regionDrag = null;
+
+  // иконка горит оранжевым, когда идёт выделение ИЛИ активен зум (>1×)
+  function updateRegionBtn() {
+    if (regionZoomBtn) regionZoomBtn.classList.toggle('is-region-active', regionMode || currentZoom > 1);
+  }
+
+  function setRegionMode(on) {
+    regionMode = !!on && isConnected;
+    if (marqueeLayer) marqueeLayer.hidden = !regionMode;
+    if (marqueeBox) marqueeBox.hidden = true;
+    if (!regionMode) regionDrag = null;
+    updateRegionBtn();
+  }
+
+  // сброс зума на 1× (по повторному клику на иконку, когда уже приближено)
+  async function resetRegionZoom() {
+    if (!serial) return;
+    const data = await RtspApi.setZoom(serial, 1);
+    if (data && !data.error) { currentZoom = 1; markZoomLevel(1); }
+    setRegionMode(false);
+  }
+
+  // видимый прямоугольник видео внутри <img> (object-fit: contain, с полями)
+  function displayedVideoRect() {
+    const nw = rtspFrame.naturalWidth, nh = rtspFrame.naturalHeight;
+    const bw = rtspFrame.clientWidth, bh = rtspFrame.clientHeight;
+    if (!nw || !nh || !bw || !bh) return null;
+    const nr = nw / nh, br = bw / bh;
+    if (nr > br) { const dh = bw / nr; return { dw: bw, dh, ox: 0, oy: (bh - dh) / 2 }; }
+    const dw = bh * nr; return { dw, dh: bh, ox: (bw - dw) / 2, oy: 0 };
+  }
+
+  function layerXY(event) {
+    const r = marqueeLayer.getBoundingClientRect();
+    return { x: event.clientX - r.left, y: event.clientY - r.top };
+  }
+
+  function updateMarqueeBox() {
+    if (!marqueeBox || !regionDrag) return;
+    const { x0, y0, x1, y1 } = regionDrag;
+    marqueeBox.hidden = false;
+    marqueeBox.style.left = Math.min(x0, x1) + 'px';
+    marqueeBox.style.top = Math.min(y0, y1) + 'px';
+    marqueeBox.style.width = Math.abs(x1 - x0) + 'px';
+    marqueeBox.style.height = Math.abs(y1 - y0) + 'px';
+  }
+
+  async function applyRegionZoom() {
+    const rect = displayedVideoRect();
+    if (!rect || !regionDrag || !serial) { setRegionMode(false); return; }
+    const { x0, y0, x1, y1 } = regionDrag;
+    if (Math.abs(x1 - x0) < 12 || Math.abs(y1 - y0) < 12) { setRegionMode(false); return; }
+
+    const { dw, dh, ox, oy } = rect;
+    const clamp01 = (v) => Math.max(0, Math.min(1, v));
+    const nx0 = clamp01((Math.min(x0, x1) - ox) / dw);
+    const ny0 = clamp01((Math.min(y0, y1) - oy) / dh);
+    const nx1 = clamp01((Math.max(x0, x1) - ox) / dw);
+    const ny1 = clamp01((Math.max(y0, y1) - oy) / dh);
+    const rw = Math.max(0.02, nx1 - nx0);
+    const rh = Math.max(0.02, ny1 - ny0);
+    const ncx = (nx0 + nx1) / 2, ncy = (ny0 + ny1) / 2;
+
+    // кратность: чтобы выделенный прямоугольник влез в область просмотра
+    let factor = Math.max(1, Math.min(4, Math.min(1 / rw, 1 / rh)));
+    const z = 1 / factor;
+    const px = factor > 1 ? clamp01((ncx - z / 2) / (1 - z)) : 0.5;
+    const py = factor > 1 ? clamp01((ncy - z / 2) / (1 - z)) : 0.5;
+
+    const data = await RtspApi.setZoomRegion(serial, factor, px, py);
+    if (data && !data.error) {
+      currentZoom = data.factor || factor;
+      markZoomLevel(currentZoom);
+      setPanSliders(data.pan_x, data.pan_y);
+      log.success('Зум по области ×' + currentZoom.toFixed(1), { px, py });
+    }
+    setRegionMode(false); // после выделения выходим из режима
+  }
+
+  if (regionZoomBtn) regionZoomBtn.addEventListener('click', () => {
+    // приближено → повторный клик сбрасывает на 1×; иначе — вход в выделение
+    if (currentZoom > 1) resetRegionZoom();
+    else setRegionMode(!regionMode);
+  });
+  if (marqueeLayer) {
+    marqueeLayer.addEventListener('mousedown', (event) => {
+      if (!regionMode) return;
+      event.preventDefault();
+      const p = layerXY(event);
+      regionDrag = { x0: p.x, y0: p.y, x1: p.x, y1: p.y };
+      updateMarqueeBox();
+    });
+    window.addEventListener('mousemove', (event) => {
+      if (!regionDrag) return;
+      const p = layerXY(event);
+      regionDrag.x1 = p.x; regionDrag.y1 = p.y;
+      updateMarqueeBox();
+    });
+    window.addEventListener('mouseup', () => {
+      if (regionDrag) applyRegionZoom();
+    });
   }
 
   async function opticalZoom(direction) {

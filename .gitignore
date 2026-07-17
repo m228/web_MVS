@@ -23,4 +23,8 @@ __pycache__/
 
 # --- временная папка самообновления ---
 /.update
-tmp/plans/plan-rtsp-image-settings.md
+
+# --- локальная временная папка (планы, разовые пробы, кэш) ---
+/tmp
+CLAUDE.md
+tasks/todo.md

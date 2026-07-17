@@ -19,6 +19,7 @@ function initRtspPage() {
     video: document.getElementById('videoBtn'),
     light: document.getElementById('lightBtn'),
     zoom: document.getElementById('zoomBtn'),
+    image: document.getElementById('imageBtn'),
   };
 
   const photoCard = document.getElementById('photoCard');
@@ -45,7 +46,16 @@ function initRtspPage() {
   const opticalZoomControls = document.getElementById('opticalZoomControls');
   const zoomOpticalHint = document.getElementById('zoomOpticalHint');
   const zoomPan = document.getElementById('zoomPan');
-  const panGrid = document.getElementById('panGrid');
+  const panX = document.getElementById('panX');
+  const panY = document.getElementById('panY');
+
+  const imageCard = document.getElementById('imageCard');
+  const imageCap = document.getElementById('imageCap');
+  const imageWb = document.getElementById('imageWb');
+  const imageDayNight = document.getElementById('imageDayNight');
+  const imageCompensation = document.getElementById('imageCompensation');
+  const imageGainMin = document.getElementById('imageGainMin');
+  const imageGainMax = document.getElementById('imageGainMax');
 
   if (!form || !rtspFrame || !rtspPlaceholder || !buttons.connect) {
     window.AppLog?.error('rtsp', 'Не найдены обязательные элементы RTSP-страницы');
@@ -75,6 +85,7 @@ function initRtspPage() {
   const videoPopup = UIHelpers.createPopupController(videoCard, buttons.video);
   const lightPopup = UIHelpers.createPopupController(lightCard, buttons.light);
   const zoomPopup = UIHelpers.createPopupController(zoomCard, buttons.zoom);
+  const imagePopup = UIHelpers.createPopupController(imageCard, buttons.image);
 
   // возможности камеры (заполняются после опроса) и текущая кратность цифрового зума
   let capabilities = null;
@@ -122,6 +133,9 @@ function initRtspPage() {
     buttons.video.disabled = !isConnected;
     if (buttons.light) buttons.light.disabled = !isConnected;
     if (buttons.zoom) buttons.zoom.disabled = !isConnected;
+    if (buttons.image) buttons.image.disabled = !isConnected;
+    const regionBtn = document.getElementById('regionZoomBtn');
+    if (regionBtn) regionBtn.disabled = !isConnected;
     buttons.connect.disabled = isLoading;
   }
 
@@ -199,6 +213,8 @@ function initRtspPage() {
     videoPopup.close();
     lightPopup.close();
     zoomPopup.close();
+    imagePopup.close();
+    setRegionMode(false);
     capabilities = null;
 
     stopMetricsPolling();
@@ -393,6 +409,12 @@ function initRtspPage() {
     setCapLine(zoomCap, true, 'Цифровой зум', 'Цифровой зум');
     if (opticalZoomControls) opticalZoomControls.hidden = !hasOptical;
     if (zoomOpticalHint) zoomOpticalHint.hidden = hasOptical;
+
+    // --- настройки изображения ---
+    const hasImage = !!caps.image_settings;
+    setCapLine(imageCap, hasImage, 'Настройки изображения доступны',
+      caps.reachable ? 'Настройки изображения не поддерживаются' : 'Камера не отвечает на управление');
+    setImageControlsEnabled(hasImage);
   }
 
   async function refreshCapabilities(force) {
@@ -402,11 +424,16 @@ function initRtspPage() {
       capabilities = data;
       log.info('Возможности камеры получены', data);
     } else {
-      capabilities = { reachable: false, white_light: false, optical_zoom: false };
+      capabilities = { reachable: false, white_light: false, optical_zoom: false, image_settings: false };
       log.warn('Не удалось опросить возможности камеры', data);
     }
     applyCapabilitiesUI();
     syncLightState();
+    refreshImageSettings();
+    // восстановить UI зума из фактического состояния воркера (не из кэша)
+    currentZoom = Number(capabilities.zoom_factor) || 1;
+    markZoomLevel(currentZoom);
+    setPanSliders(capabilities.zoom_pan_x, capabilities.zoom_pan_y);
   }
 
   async function syncLightState() {
@@ -431,6 +458,79 @@ function initRtspPage() {
     reflectLightOn(on);
   }
 
+  // ---------- настройки изображения (экспозиция / баланс белого / день-ночь) ----------
+
+  function populateImageUI(data) {
+    UIHelpers.fillSelect(imageWb, data.wb_presets, UIHelpers.IMAGE_WB_LABELS,
+      data.white_balance && data.white_balance.mode);
+    UIHelpers.fillSelect(imageDayNight, data.day_night_modes, UIHelpers.IMAGE_DAY_NIGHT_LABELS,
+      data.day_night && data.day_night.mode);
+    const exp = data.exposure || {};
+    if (imageCompensation && exp.compensation != null) imageCompensation.value = exp.compensation;
+    if (imageGainMin && exp.gain_min != null) imageGainMin.value = exp.gain_min;
+    if (imageGainMax && exp.gain_max != null) imageGainMax.value = exp.gain_max;
+  }
+
+  function setImageControlsEnabled(enabled) {
+    [imageWb, imageDayNight, imageCompensation, imageGainMin, imageGainMax].forEach((el) => {
+      if (el) el.disabled = !enabled;
+    });
+  }
+
+  async function refreshImageSettings() {
+    if (!isConnected || !serial || !(capabilities && capabilities.image_settings)) {
+      setImageControlsEnabled(false);
+      return;
+    }
+    const data = await RtspApi.getImageSettings(serial);
+    if (!data || data.error || !data.reachable) {
+      setCapLine(imageCap, false, '', 'Камера не отвечает на управление');
+      setImageControlsEnabled(false);
+      log.warn('Не удалось получить настройки изображения', data);
+      return;
+    }
+    setCapLine(imageCap, true, 'Настройки изображения доступны', '');
+    setImageControlsEnabled(true);
+    populateImageUI(data);
+    log.info('Настройки изображения получены', data);
+  }
+
+  async function applyWhiteBalance() {
+    if (!serial || !imageWb) return;
+    const mode = imageWb.value;
+    const data = await RtspApi.setWhiteBalance(serial, mode);
+    if (!data || data.error || data.ok === false) {
+      log.warn('Камера не подтвердила баланс белого', data);
+      refreshImageSettings(); // откат к фактическому
+      return;
+    }
+    log.success('Баланс белого применён', { mode });
+  }
+
+  async function applyDayNight() {
+    if (!serial || !imageDayNight) return;
+    const mode = imageDayNight.value;
+    const data = await RtspApi.setDayNight(serial, mode);
+    if (!data || data.error || data.ok === false) {
+      log.warn('Камера не подтвердила режим день/ночь', data);
+      refreshImageSettings();
+      return;
+    }
+    log.success('Режим день/ночь применён', { mode });
+  }
+
+  // применить одно поле экспозиции (компенсация / пределы усиления)
+  async function applyExposure(field, value) {
+    if (!serial) return;
+    const data = await RtspApi.setExposure(serial, { [field]: Number(value) });
+    if (!data || data.error || data.ok === false) {
+      log.warn('Камера не подтвердила экспозицию', data);
+      refreshImageSettings();
+      return;
+    }
+    log.success('Экспозиция применена', { [field]: Number(value) });
+  }
+
   function markZoomLevel(factor) {
     if (zoomLevels) {
       zoomLevels.querySelectorAll('button[data-zoom]').forEach((btn) => {
@@ -438,17 +538,14 @@ function initRtspPage() {
       });
     }
     if (zoomIndicator) zoomIndicator.classList.toggle('hidden', factor <= 1);
-    // сетку области показываем только при зуме > 1
     if (zoomPan) zoomPan.hidden = factor <= 1;
+    updateRegionBtn(); // иконка «зум областью» отражает активность зума
   }
 
-  // подсветить активную ячейку области (px, py: 0 / 0.5 / 1)
-  function markPan(px, py) {
-    if (!panGrid) return;
-    panGrid.querySelectorAll('button[data-px]').forEach((btn) => {
-      btn.classList.toggle('active',
-        Number(btn.dataset.px) === px && Number(btn.dataset.py) === py);
-    });
+  // выставить ползунки области (px, py в 0..1); вертикаль перевёрнута: вправо = вверх
+  function setPanSliders(px, py) {
+    if (panX) panX.value = Math.round((px ?? 0.5) * 100);
+    if (panY) panY.value = Math.round((1 - (py ?? 0.5)) * 100);
   }
 
   async function applyDigitalZoom(factor) {
@@ -460,19 +557,128 @@ function initRtspPage() {
     }
     currentZoom = data.factor || factor;
     markZoomLevel(currentZoom);
-    markPan(0.5, 0.5); // новая кратность — вид в центре
+    setPanSliders(0.5, 0.5); // новая кратность — вид в центре
     log.success('Цифровой зум ×' + currentZoom, data);
   }
 
-  async function applyZoomPan(px, py) {
+  // применить положение области из ползунков (плавно, во время перетаскивания)
+  async function applyZoomPan() {
     if (!serial || currentZoom <= 1) return;
+    const px = panX ? Number(panX.value) / 100 : 0.5;
+    const py = panY ? 1 - Number(panY.value) / 100 : 0.5; // вправо = вверх
     const data = await RtspApi.setZoomPan(serial, px, py);
     if (!data || data.error) {
       log.warn('Камера не подтвердила смещение области зума', data);
-      return;
     }
-    markPan(px, py);
-    log.success('Область зума смещена', data);
+  }
+
+  // ---------- ТЕСТ: зум выделением области (рамкой) поверх видео ----------
+  const regionZoomBtn = document.getElementById('regionZoomBtn');
+  const marqueeLayer = document.getElementById('zoomMarqueeLayer');
+  const marqueeBox = document.getElementById('zoomMarqueeBox');
+  let regionMode = false;
+  let regionDrag = null;
+
+  // иконка горит оранжевым, когда идёт выделение ИЛИ активен зум (>1×)
+  function updateRegionBtn() {
+    if (regionZoomBtn) regionZoomBtn.classList.toggle('is-region-active', regionMode || currentZoom > 1);
+  }
+
+  function setRegionMode(on) {
+    regionMode = !!on && isConnected;
+    if (marqueeLayer) marqueeLayer.hidden = !regionMode;
+    if (marqueeBox) marqueeBox.hidden = true;
+    if (!regionMode) regionDrag = null;
+    updateRegionBtn();
+  }
+
+  // сброс зума на 1× (по повторному клику на иконку, когда уже приближено)
+  async function resetRegionZoom() {
+    if (!serial) return;
+    const data = await RtspApi.setZoom(serial, 1);
+    if (data && !data.error) { currentZoom = 1; markZoomLevel(1); }
+    setRegionMode(false);
+  }
+
+  // видимый прямоугольник видео внутри <img> (object-fit: contain, с полями)
+  function displayedVideoRect() {
+    const nw = rtspFrame.naturalWidth, nh = rtspFrame.naturalHeight;
+    const bw = rtspFrame.clientWidth, bh = rtspFrame.clientHeight;
+    if (!nw || !nh || !bw || !bh) return null;
+    const nr = nw / nh, br = bw / bh;
+    if (nr > br) { const dh = bw / nr; return { dw: bw, dh, ox: 0, oy: (bh - dh) / 2 }; }
+    const dw = bh * nr; return { dw, dh: bh, ox: (bw - dw) / 2, oy: 0 };
+  }
+
+  function layerXY(event) {
+    const r = marqueeLayer.getBoundingClientRect();
+    return { x: event.clientX - r.left, y: event.clientY - r.top };
+  }
+
+  function updateMarqueeBox() {
+    if (!marqueeBox || !regionDrag) return;
+    const { x0, y0, x1, y1 } = regionDrag;
+    marqueeBox.hidden = false;
+    marqueeBox.style.left = Math.min(x0, x1) + 'px';
+    marqueeBox.style.top = Math.min(y0, y1) + 'px';
+    marqueeBox.style.width = Math.abs(x1 - x0) + 'px';
+    marqueeBox.style.height = Math.abs(y1 - y0) + 'px';
+  }
+
+  async function applyRegionZoom() {
+    const rect = displayedVideoRect();
+    if (!rect || !regionDrag || !serial) { setRegionMode(false); return; }
+    const { x0, y0, x1, y1 } = regionDrag;
+    if (Math.abs(x1 - x0) < 12 || Math.abs(y1 - y0) < 12) { setRegionMode(false); return; }
+
+    const { dw, dh, ox, oy } = rect;
+    const clamp01 = (v) => Math.max(0, Math.min(1, v));
+    const nx0 = clamp01((Math.min(x0, x1) - ox) / dw);
+    const ny0 = clamp01((Math.min(y0, y1) - oy) / dh);
+    const nx1 = clamp01((Math.max(x0, x1) - ox) / dw);
+    const ny1 = clamp01((Math.max(y0, y1) - oy) / dh);
+    const rw = Math.max(0.02, nx1 - nx0);
+    const rh = Math.max(0.02, ny1 - ny0);
+    const ncx = (nx0 + nx1) / 2, ncy = (ny0 + ny1) / 2;
+
+    // кратность: чтобы выделенный прямоугольник влез в область просмотра
+    let factor = Math.max(1, Math.min(4, Math.min(1 / rw, 1 / rh)));
+    const z = 1 / factor;
+    const px = factor > 1 ? clamp01((ncx - z / 2) / (1 - z)) : 0.5;
+    const py = factor > 1 ? clamp01((ncy - z / 2) / (1 - z)) : 0.5;
+
+    const data = await RtspApi.setZoomRegion(serial, factor, px, py);
+    if (data && !data.error) {
+      currentZoom = data.factor || factor;
+      markZoomLevel(currentZoom);
+      setPanSliders(data.pan_x, data.pan_y);
+      log.success('Зум по области ×' + currentZoom.toFixed(1), { px, py });
+    }
+    setRegionMode(false); // после выделения выходим из режима
+  }
+
+  if (regionZoomBtn) regionZoomBtn.addEventListener('click', () => {
+    // приближено → повторный клик сбрасывает на 1×; иначе — вход в выделение
+    if (currentZoom > 1) resetRegionZoom();
+    else setRegionMode(!regionMode);
+  });
+  if (marqueeLayer) {
+    marqueeLayer.addEventListener('mousedown', (event) => {
+      if (!regionMode) return;
+      event.preventDefault();
+      const p = layerXY(event);
+      regionDrag = { x0: p.x, y0: p.y, x1: p.x, y1: p.y };
+      updateMarqueeBox();
+    });
+    window.addEventListener('mousemove', (event) => {
+      if (!regionDrag) return;
+      const p = layerXY(event);
+      regionDrag.x1 = p.x; regionDrag.y1 = p.y;
+      updateMarqueeBox();
+    });
+    window.addEventListener('mouseup', () => {
+      if (regionDrag) applyRegionZoom();
+    });
   }
 
   async function opticalZoom(direction) {
@@ -520,6 +726,10 @@ function initRtspPage() {
     event.stopPropagation();
     zoomPopup.toggle();
   });
+  if (buttons.image) buttons.image.addEventListener('click', (event) => {
+    event.stopPropagation();
+    imagePopup.toggle();
+  });
 
   if (photoOnBtn) photoOnBtn.addEventListener('click', startPhotoSaving);
   if (photoOffBtn) photoOffBtn.addEventListener('click', stopPhotoSaving);
@@ -528,14 +738,19 @@ function initRtspPage() {
 
   if (lightSwitch) lightSwitch.addEventListener('change', () => setLight(lightSwitch.checked));
 
+  // настройки изображения: применяем сразу при изменении (ползунки — по отпусканию)
+  if (imageWb) imageWb.addEventListener('change', applyWhiteBalance);
+  if (imageDayNight) imageDayNight.addEventListener('change', applyDayNight);
+  if (imageCompensation) imageCompensation.addEventListener('change', () => applyExposure('compensation', imageCompensation.value));
+  if (imageGainMin) imageGainMin.addEventListener('change', () => applyExposure('gain_min', imageGainMin.value));
+  if (imageGainMax) imageGainMax.addEventListener('change', () => applyExposure('gain_max', imageGainMax.value));
+
   if (zoomLevels) zoomLevels.addEventListener('click', (event) => {
     const btn = event.target.closest('button[data-zoom]');
     if (btn) applyDigitalZoom(Number(btn.dataset.zoom));
   });
-  if (panGrid) panGrid.addEventListener('click', (event) => {
-    const btn = event.target.closest('button[data-px]');
-    if (btn) applyZoomPan(Number(btn.dataset.px), Number(btn.dataset.py));
-  });
+  if (panX) panX.addEventListener('input', applyZoomPan);
+  if (panY) panY.addEventListener('input', applyZoomPan);
   if (opticalZoomControls) opticalZoomControls.addEventListener('click', (event) => {
     const btn = event.target.closest('button[data-optical]');
     if (btn) opticalZoom(btn.dataset.optical);
@@ -545,6 +760,7 @@ function initRtspPage() {
   if (videoCard) videoCard.addEventListener('click', (event) => event.stopPropagation());
   if (lightCard) lightCard.addEventListener('click', (event) => event.stopPropagation());
   if (zoomCard) zoomCard.addEventListener('click', (event) => event.stopPropagation());
+  if (imageCard) imageCard.addEventListener('click', (event) => event.stopPropagation());
 
   document.addEventListener('click', (event) => {
     const insidePhoto = photoCard && photoCard.contains(event.target);
@@ -555,11 +771,14 @@ function initRtspPage() {
     const onLightBtn = buttons.light && buttons.light.contains(event.target);
     const insideZoom = zoomCard && zoomCard.contains(event.target);
     const onZoomBtn = buttons.zoom && buttons.zoom.contains(event.target);
+    const insideImage = imageCard && imageCard.contains(event.target);
+    const onImageBtn = buttons.image && buttons.image.contains(event.target);
 
     if (!insidePhoto && !onPhotoBtn) photoPopup.close();
     if (!insideVideo && !onVideoBtn) videoPopup.close();
     if (!insideLight && !onLightBtn) lightPopup.close();
     if (!insideZoom && !onZoomBtn) zoomPopup.close();
+    if (!insideImage && !onImageBtn) imagePopup.close();
   });
 
   rtspFrame.addEventListener('load', () => {

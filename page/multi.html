@@ -192,32 +192,6 @@
             </div>
           </section>
 
-          <!-- зона: зум (только RTSP) -->
-          <section class="settings-zone settings-zone--rtsp" data-zone="zoom">
-            <h3>Зум</h3>
-            <p class="cap-line" id="multiZoomCap" data-state="yes"><span class="cap-dot"></span><span class="cap-text">Цифровой зум</span></p>
-            <div class="zoom-levels" id="multiZoomLevels">
-              <button type="button" class="btn-secondary" data-zoom="1">1×</button>
-              <button type="button" class="btn-secondary" data-zoom="2">2×</button>
-              <button type="button" class="btn-secondary" data-zoom="4">4×</button>
-            </div>
-            <div class="zoom-pan" id="multiZoomPan" hidden>
-              <span class="zoom-sub">Область просмотра</span>
-              <div class="pan-grid" id="multiPanGrid">
-                <button type="button" data-px="0" data-py="0" title="Левый верх"></button>
-                <button type="button" data-px="0.5" data-py="0" title="Верх"></button>
-                <button type="button" data-px="1" data-py="0" title="Правый верх"></button>
-                <button type="button" data-px="0" data-py="0.5" title="Лево"></button>
-                <button type="button" data-px="0.5" data-py="0.5" title="Центр"></button>
-                <button type="button" data-px="1" data-py="0.5" title="Право"></button>
-                <button type="button" data-px="0" data-py="1" title="Левый низ"></button>
-                <button type="button" data-px="0.5" data-py="1" title="Низ"></button>
-                <button type="button" data-px="1" data-py="1" title="Правый низ"></button>
-              </div>
-            </div>
-            <p class="zoom-hint" id="multiZoomHint">Оптического зума нет — доступен только цифровой.</p>
-          </section>
-
           <!-- зона: параметры камеры (RTSP: FPS) -->
           <section class="settings-zone settings-zone--rtsp" data-zone="camera">
             <h3>Камера</h3>
@@ -230,6 +204,35 @@
             </label>
             <p class="zoom-hint">Изменение перезапустит поток камеры.</p>
           </section>
+
+          <!-- зона: изображение (только RTSP) — экспозиция / баланс белого / день-ночь -->
+          <section class="settings-zone settings-zone--rtsp" data-zone="image">
+            <h3>Изображение</h3>
+            <p class="cap-line" id="multiImageCap" data-state="unknown"><span class="cap-dot"></span><span class="cap-text">Проверяю…</span></p>
+            <div class="image-settings">
+              <label class="field-row">
+                <span>Баланс белого</span>
+                <select class="field-select" id="multiImageWb"></select>
+              </label>
+              <label class="field-row">
+                <span>Режим день/ночь</span>
+                <select class="field-select" id="multiImageDayNight"></select>
+              </label>
+              <label class="field-row">
+                <span>Экспокоррекция</span>
+                <input type="range" id="multiImageCompensation" class="light-brightness" min="0" max="100" value="50" title="Экспокоррекция" />
+              </label>
+              <label class="field-row">
+                <span>Усиление, мин</span>
+                <input type="range" id="multiImageGainMin" class="light-brightness" min="0" max="100" value="0" title="Минимум усиления" />
+              </label>
+              <label class="field-row">
+                <span>Усиление, макс</span>
+                <input type="range" id="multiImageGainMax" class="light-brightness" min="0" max="100" value="50" title="Максимум усиления" />
+              </label>
+            </div>
+          </section>
+
         </div>
       </div>
     </div>

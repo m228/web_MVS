@@ -128,18 +128,6 @@ def api_cams_detailed():
     return manager.list_devices_grouped()
 
 
-# выбрать конкретную запись (handle) и/или интерфейс, через которые открывать камеру
-@app.get("/api/camera/select_interface")
-def select_interface(serial_number: str, interface_id: str = "", device_handle: str = ""):
-    api_log("api.camera.select_interface", "Запрошен выбор записи камеры",
-            payload={"serial_number": serial_number, "interface_id": interface_id, "device_handle": device_handle})
-    data = manager.get(serial_number).select_interface(
-        interface_id or None, device_handle or None)
-    api_log("api.camera.select_interface", "Выбрана запись камеры",
-            payload={"serial_number": serial_number, **data})
-    return data
-
-
 @app.get("/api/status")
 def api_status():
     try:
@@ -517,7 +505,8 @@ def rtsp_metrics(serial_number: str):
             "photo": worker.save_photo,
             "video": worker.save_video,
             "photo_count": worker.photo_saved_count,
-            "video_elapsed": worker.video_elapsed()}
+            "video_elapsed": worker.video_elapsed(),
+            "zoom_factor": worker.zoom_factor}
 
 
 @app.get("/api/rtsp/on_save_photo")
@@ -619,4 +608,52 @@ def rtsp_optical_zoom(serial_number: str, direction: str):
     data = worker.optical_zoom(direction)
     api_log("api.rtsp.optical_zoom", "Оптический зум RTSP",
             payload={"serial_number": serial_number, "direction": direction, "result": data})
+    return data
+
+
+# ---------- настройки изображения RTSP (экспозиция / баланс белого / день-ночь) ----------
+@app.get("/api/rtsp/image")
+def rtsp_image(serial_number: str):
+    worker = manager.get_rtsp(serial_number)
+    if worker is None:
+        return {"error": "rtsp_not_connected"}
+    data = worker.get_image_settings()
+    api_log("api.rtsp.image", "Опрос настроек изображения RTSP",
+            payload={"serial_number": serial_number,
+                     "reachable": data.get("reachable"), "error": data.get("error")})
+    return data
+
+
+@app.get("/api/rtsp/exposure")
+def rtsp_exposure(serial_number: str, compensation: int | None = None,
+                  gain_min: int | None = None, gain_max: int | None = None):
+    worker = manager.get_rtsp(serial_number)
+    if worker is None:
+        return {"error": "rtsp_not_connected"}
+    data = worker.set_exposure(compensation, gain_min, gain_max)
+    api_log("api.rtsp.exposure", "Настройка экспозиции RTSP",
+            payload={"serial_number": serial_number, "compensation": compensation,
+                     "gain_min": gain_min, "gain_max": gain_max, "result": data})
+    return data
+
+
+@app.get("/api/rtsp/white_balance")
+def rtsp_white_balance(serial_number: str, mode: str):
+    worker = manager.get_rtsp(serial_number)
+    if worker is None:
+        return {"error": "rtsp_not_connected"}
+    data = worker.set_white_balance(mode)
+    api_log("api.rtsp.white_balance", "Настройка баланса белого RTSP",
+            payload={"serial_number": serial_number, "mode": mode, "result": data})
+    return data
+
+
+@app.get("/api/rtsp/day_night")
+def rtsp_day_night(serial_number: str, mode: str):
+    worker = manager.get_rtsp(serial_number)
+    if worker is None:
+        return {"error": "rtsp_not_connected"}
+    data = worker.set_day_night(mode)
+    api_log("api.rtsp.day_night", "Настройка день/ночь RTSP",
+            payload={"serial_number": serial_number, "mode": mode, "result": data})
     return data

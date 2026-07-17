@@ -18,6 +18,12 @@ const PHOTO_SVG = '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" s
 
 const VIDEO_SVG = '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polygon points="23 7 16 12 23 17 23 7"></polygon><rect x="1" y="5" width="15" height="14" rx="2" ry="2"></rect></svg>';
 
+const LIGHT_SVG = '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 18h6M10 21h4M12 3a6 6 0 0 0-4 10.5c.7.7 1 1.4 1 2.5h6c0-1.1.3-1.8 1-2.5A6 6 0 0 0 12 3z"></path></svg>';
+
+const ZOOM_SVG = '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"></circle><path d="M21 21l-4.3-4.3M11 8v6M8 11h6"></path></svg>';
+
+const REGION_SVG = '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 8V5a2 2 0 0 1 2-2h3M16 3h3a2 2 0 0 1 2 2v3M21 16v3a2 2 0 0 1-2 2h-3M8 21H5a2 2 0 0 1-2-2v-3"></path><path d="M8.5 12h7M12 8.5v7"></path></svg>';
+
 function defaultGigeSettings() {
   return {
     width: 2448, height: 2048, offset_x: 0, offset_y: 0,
@@ -287,7 +293,7 @@ function renderChipSettings(box, cam) {
 
 // ---------- раскладка ----------
 function newTile() {
-  return { serial: null, kind: null, connected: false, photo: false, video: false, live: true, el: null };
+  return { serial: null, kind: null, connected: false, photo: false, video: false, light: false, zoomFactor: 1, live: true, el: null };
 }
 
 function setLayout(n) {
@@ -332,10 +338,14 @@ function createTileEl() {
     <div class="multi-tile__head">
       <select class="multi-tile__serial" data-tile-serial title="Камера в ячейке"></select>
       <span class="multi-tile__badge" data-tile-badge></span>
+      <button type="button" class="tile-region-btn" data-tile-region title="Зум областью — выделите рамку" aria-label="Зум областью" hidden>${REGION_SVG}</button>
     </div>
     <div class="multi-tile__screen" data-tile-screen>
       <img class="multi-tile__frame hidden" alt="Кадр камеры" data-tile-frame />
       <div class="multi-tile__placeholder" data-tile-placeholder>NO CAMERA</div>
+      <div class="tile-marquee-layer" data-tile-marquee hidden>
+        <div class="tile-marquee-box" data-tile-marquee-box hidden></div>
+      </div>
     </div>
     <div class="multi-tile__status">
       <span>FPS<strong data-metric="fps">0.00</strong></span>
@@ -346,6 +356,8 @@ function createTileEl() {
       <span>Фото<strong data-metric="photo_count">0</strong></span>
       <span>Видео<strong data-metric="video_time">—</strong></span>
       <div class="multi-tile__rec">
+        <span class="rec-icon" data-rec-light title="Подсветка">${LIGHT_SVG}</span>
+        <span class="rec-icon" data-rec-zoom title="Зум">${ZOOM_SVG}</span>
         <span class="rec-icon" data-rec-photo title="Сохранение фото">${PHOTO_SVG}</span>
         <span class="rec-icon" data-rec-video title="Запись видео">${VIDEO_SVG}</span>
       </div>
@@ -371,6 +383,24 @@ function createTileEl() {
   const select = el.querySelector('[data-tile-serial]');
   select.addEventListener('change', () => assignSource(idx(), select.value || null));
   select.addEventListener('click', (event) => event.stopPropagation());
+
+  // зум областью (рамкой) в ячейке
+  const regionBtn = el.querySelector('[data-tile-region]');
+  regionBtn.addEventListener('click', (event) => {
+    event.stopPropagation();
+    setFocus(idx());
+    onTileRegionClick(idx());
+  });
+  const marquee = el.querySelector('[data-tile-marquee]');
+  marquee.addEventListener('mousedown', (event) => {
+    const tile = state.tiles[idx()];
+    if (!tile || !tile.regionMode) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const p = tileLayerXY(marquee, event);
+    tileDrag = { index: idx(), x0: p.x, y0: p.y, x1: p.x, y1: p.y };
+    updateTileMarqueeBox();
+  });
 
   return el;
 }
@@ -438,13 +468,24 @@ function renderTile(index) {
   if (recPhoto) recPhoto.classList.toggle('is-active', !!tile.photo);
   if (recVideo) recVideo.classList.toggle('is-active', !!tile.video);
 
+  // индикаторы подсветки и зума (только для RTSP-камеры в эфире)
+  const isRtsp = source && source.kind === 'rtsp';
+  const recLight = el.querySelector('[data-rec-light]');
+  const recZoom = el.querySelector('[data-rec-zoom]');
+  const zoomOn = isRtsp && Number(tile.zoomFactor) > 1;
+  if (recLight) recLight.classList.toggle('is-active', isRtsp && !!tile.light && tile.connected);
+  if (recZoom) recZoom.classList.toggle('is-active', zoomOn && tile.connected);
+
   if (!tile.connected) {
     if (frame) { frame.classList.add('hidden'); frame.src = ''; }
     if (placeholder) placeholder.classList.remove('hidden');
+    tile.regionMode = false;
   } else {
     if (placeholder) placeholder.classList.add('hidden');
     if (frame) frame.classList.remove('hidden');
   }
+
+  applyTileRegionUI(index); // кнопка «зум областью» и слой рамки
 }
 
 function renderAllTiles() {
@@ -697,6 +738,12 @@ function startMetricsPolling() {
         }
       }
 
+      // индикатор зума в ячейке: кратность приходит в метриках RTSP
+      if (metrics.zoom_factor !== undefined) {
+        const zf = Number(metrics.zoom_factor) || 1;
+        if (zf !== tile.zoomFactor) { tile.zoomFactor = zf; renderTile(i); }
+      }
+
       updateTileMetrics(i, metrics);
 
       // живость определяем по росту счётчика кадров
@@ -755,9 +802,8 @@ function focusedSource() {
   return tile.serial ? getSource(tile.serial) : null;
 }
 
-// ---------- настройки камеры в фокусе (фото/видео/подсветка/зум) ----------
+// ---------- настройки камеры в фокусе (фото/видео/подсветка) ----------
 let settingsCaps = null;   // возможности RTSP-камеры в открытой модалке
-let multiZoom = 1;         // текущая кратность цифрового зума камеры в фокусе
 
 // строка возможности: точка + текст (общая для подсветки/зума)
 function setCapLine(el, supported, textYes, textNo) {
@@ -822,15 +868,15 @@ async function refreshSettingsCaps(serial) {
   const data = await RtspApi.getCapabilities(serial);
   settingsCaps = (data && !data.error)
     ? data
-    : { reachable: false, white_light: false, optical_zoom: false };
+    : { reachable: false, white_light: false, optical_zoom: false, image_settings: false };
   applySettingsCaps();
   syncMultiLightState(serial);
+  refreshMultiImageSettings(serial);
 }
 
 function applySettingsCaps() {
   const caps = settingsCaps || {};
   const hasLight = !!caps.white_light;
-  const hasOptical = !!caps.optical_zoom;
 
   setCapLine(document.getElementById('multiLightCap'), hasLight,
     'Белый прожектор поддерживается',
@@ -840,14 +886,100 @@ function applySettingsCaps() {
   if (sw) sw.disabled = !hasLight;
   if (lv) lv.disabled = !hasLight;
   if (!hasLight) reflectMultiLight(false);
+  // зум делается рамкой прямо в ячейке (кнопка на плитке), в настройках его нет
 
-  const hint = document.getElementById('multiZoomHint');
-  if (hint) hint.hidden = hasOptical;
+  // настройки изображения
+  const hasImage = !!caps.image_settings;
+  setCapLine(document.getElementById('multiImageCap'), hasImage,
+    'Настройки изображения доступны',
+    caps.reachable ? 'Настройки изображения не поддерживаются' : 'Камера не отвечает на управление');
+  setMultiImageControlsEnabled(hasImage);
+}
 
-  // отразить текущую кратность зума камеры
-  multiZoom = Number(caps.zoom_factor) || 1;
-  markMultiZoom(multiZoom);
-  markMultiPan(0.5, 0.5);
+// --- настройки изображения (экспозиция / баланс белого / день-ночь) ---
+function multiImageEls() {
+  return {
+    wb: document.getElementById('multiImageWb'),
+    dayNight: document.getElementById('multiImageDayNight'),
+    compensation: document.getElementById('multiImageCompensation'),
+    gainMin: document.getElementById('multiImageGainMin'),
+    gainMax: document.getElementById('multiImageGainMax'),
+    cap: document.getElementById('multiImageCap'),
+  };
+}
+
+function setMultiImageControlsEnabled(enabled) {
+  const e = multiImageEls();
+  [e.wb, e.dayNight, e.compensation, e.gainMin, e.gainMax].forEach((el) => {
+    if (el) el.disabled = !enabled;
+  });
+}
+
+function populateMultiImageUI(data) {
+  const e = multiImageEls();
+  UIHelpers.fillSelect(e.wb, data.wb_presets, UIHelpers.IMAGE_WB_LABELS,
+    data.white_balance && data.white_balance.mode);
+  UIHelpers.fillSelect(e.dayNight, data.day_night_modes, UIHelpers.IMAGE_DAY_NIGHT_LABELS,
+    data.day_night && data.day_night.mode);
+  const exp = data.exposure || {};
+  if (e.compensation && exp.compensation != null) e.compensation.value = exp.compensation;
+  if (e.gainMin && exp.gain_min != null) e.gainMin.value = exp.gain_min;
+  if (e.gainMax && exp.gain_max != null) e.gainMax.value = exp.gain_max;
+}
+
+async function refreshMultiImageSettings(serial) {
+  if (!(settingsCaps && settingsCaps.image_settings)) {
+    setMultiImageControlsEnabled(false);
+    return;
+  }
+  const data = await RtspApi.getImageSettings(serial);
+  if (!data || data.error || !data.reachable) {
+    setCapLine(multiImageEls().cap, false, '', 'Камера не отвечает на управление');
+    setMultiImageControlsEnabled(false);
+    log.warn('Не удалось получить настройки изображения', data);
+    return;
+  }
+  setCapLine(multiImageEls().cap, true, 'Настройки изображения доступны', '');
+  setMultiImageControlsEnabled(true);
+  populateMultiImageUI(data);
+}
+
+async function applyMultiWhiteBalance() {
+  const source = focusedSource();
+  const e = multiImageEls();
+  if (!source || source.kind !== 'rtsp' || !e.wb) return;
+  const data = await RtspApi.setWhiteBalance(source.serial, e.wb.value);
+  if (!data || data.error || data.ok === false) {
+    log.warn('Камера не подтвердила баланс белого', data);
+    refreshMultiImageSettings(source.serial);
+    return;
+  }
+  log.success('Баланс белого применён', { mode: e.wb.value });
+}
+
+async function applyMultiDayNight() {
+  const source = focusedSource();
+  const e = multiImageEls();
+  if (!source || source.kind !== 'rtsp' || !e.dayNight) return;
+  const data = await RtspApi.setDayNight(source.serial, e.dayNight.value);
+  if (!data || data.error || data.ok === false) {
+    log.warn('Камера не подтвердила режим день/ночь', data);
+    refreshMultiImageSettings(source.serial);
+    return;
+  }
+  log.success('Режим день/ночь применён', { mode: e.dayNight.value });
+}
+
+async function applyMultiExposure(field, value) {
+  const source = focusedSource();
+  if (!source || source.kind !== 'rtsp') return;
+  const data = await RtspApi.setExposure(source.serial, { [field]: Number(value) });
+  if (!data || data.error || data.ok === false) {
+    log.warn('Камера не подтвердила экспозицию', data);
+    refreshMultiImageSettings(source.serial);
+    return;
+  }
+  log.success('Экспозиция применена', { [field]: Number(value) });
 }
 
 // --- фото ---
@@ -906,10 +1038,17 @@ function reflectMultiLight(on) {
   if (label) label.textContent = on ? 'Включено' : 'Выключено';
 }
 
+function setTileLight(on) {
+  const tile = state.tiles[state.focused];
+  if (tile) { tile.light = on; renderTile(state.focused); }
+}
+
 async function syncMultiLightState(serial) {
-  if (!(settingsCaps && settingsCaps.white_light)) { reflectMultiLight(false); return; }
+  if (!(settingsCaps && settingsCaps.white_light)) { reflectMultiLight(false); setTileLight(false); return; }
   const data = await RtspApi.getLightState(serial);
-  reflectMultiLight(!!(data && data.state === 'on'));
+  const on = !!(data && data.state === 'on');
+  reflectMultiLight(on);
+  setTileLight(on);
 }
 
 async function applyMultiLight(on) {
@@ -922,40 +1061,131 @@ async function applyMultiLight(on) {
     return;
   }
   reflectMultiLight(on);
+  setTileLight(on);
 }
 
-// --- зум (только RTSP-камера в фокусе) ---
-function markMultiZoom(factor) {
-  document.querySelectorAll('#multiZoomLevels button[data-zoom]').forEach((b) => {
-    b.classList.toggle('active', Number(b.dataset.zoom) === factor);
-  });
-  const pan = document.getElementById('multiZoomPan');
-  if (pan) pan.hidden = factor <= 1;
+// ---------- зум областью (рамкой) в ячейке ----------
+let tileDrag = null; // { index, x0, y0, x1, y1 }
+
+function tileLayerXY(layer, event) {
+  const r = layer.getBoundingClientRect();
+  return { x: event.clientX - r.left, y: event.clientY - r.top };
 }
 
-function markMultiPan(px, py) {
-  document.querySelectorAll('#multiPanGrid button[data-px]').forEach((b) => {
-    b.classList.toggle('active', Number(b.dataset.px) === px && Number(b.dataset.py) === py);
-  });
+function updateTileMarqueeBox() {
+  if (!tileDrag) return;
+  const el = getTileEl(tileDrag.index);
+  const box = el && el.querySelector('[data-tile-marquee-box]');
+  if (!box) return;
+  const { x0, y0, x1, y1 } = tileDrag;
+  box.hidden = false;
+  box.style.left = Math.min(x0, x1) + 'px';
+  box.style.top = Math.min(y0, y1) + 'px';
+  box.style.width = Math.abs(x1 - x0) + 'px';
+  box.style.height = Math.abs(y1 - y0) + 'px';
 }
 
-async function applyMultiZoom(factor) {
-  const source = focusedSource();
-  if (!source || source.kind !== 'rtsp') return;
-  const data = await RtspApi.setZoom(source.serial, factor);
-  if (!data || data.error) return;
-  multiZoom = data.factor || factor;
-  markMultiZoom(multiZoom);
-  markMultiPan(0.5, 0.5);
+// видимый прямоугольник видео внутри <img> (object-fit: contain, с полями)
+function tileVideoRect(frame) {
+  const nw = frame.naturalWidth, nh = frame.naturalHeight;
+  const bw = frame.clientWidth, bh = frame.clientHeight;
+  if (!nw || !nh || !bw || !bh) return null;
+  const nr = nw / nh, br = bw / bh;
+  if (nr > br) { const dh = bw / nr; return { dw: bw, dh, ox: 0, oy: (bh - dh) / 2 }; }
+  const dw = bh * nr; return { dw, dh: bh, ox: (bw - dw) / 2, oy: 0 };
 }
 
-async function applyMultiPan(px, py) {
-  const source = focusedSource();
-  if (!source || source.kind !== 'rtsp' || multiZoom <= 1) return;
-  const data = await RtspApi.setZoomPan(source.serial, px, py);
-  if (!data || data.error) return;
-  markMultiPan(px, py);
+// кнопка (оранжевая при активности) и слой рамки в ячейке
+function applyTileRegionUI(index) {
+  const tile = state.tiles[index];
+  const el = getTileEl(index);
+  if (!tile || !el) return;
+  const source = getSource(tile.serial);
+  const isRtsp = source && source.kind === 'rtsp';
+  const btn = el.querySelector('[data-tile-region]');
+  const layer = el.querySelector('[data-tile-marquee]');
+  const box = el.querySelector('[data-tile-marquee-box]');
+  if (btn) {
+    btn.hidden = !(isRtsp && tile.connected);
+    btn.classList.toggle('is-region-active', !!tile.regionMode || Number(tile.zoomFactor) > 1);
+  }
+  if (layer) layer.hidden = !tile.regionMode;
+  if (box && !tile.regionMode) box.hidden = true;
 }
+
+function onTileRegionClick(index) {
+  const tile = state.tiles[index];
+  const source = tile && getSource(tile.serial);
+  if (!tile || !source || source.kind !== 'rtsp' || !tile.connected) return;
+  if (Number(tile.zoomFactor) > 1) {
+    resetTileZoom(index); // приближено → сброс на 1×
+  } else {
+    tile.regionMode = !tile.regionMode; // иначе — вход/выход из выделения
+    applyTileRegionUI(index);
+  }
+}
+
+async function resetTileZoom(index) {
+  const tile = state.tiles[index];
+  const source = tile && getSource(tile.serial);
+  if (!source) return;
+  await RtspApi.setZoom(source.serial, 1);
+  tile.zoomFactor = 1;
+  tile.regionMode = false;
+  renderTile(index);
+  applyTileRegionUI(index);
+}
+
+async function applyTileRegionZoom() {
+  const drag = tileDrag;
+  tileDrag = null;
+  if (!drag) return;
+  const index = drag.index;
+  const tile = state.tiles[index];
+  const el = getTileEl(index);
+  const source = tile && getSource(tile.serial);
+  const frame = el && el.querySelector('[data-tile-frame]');
+  const box = el && el.querySelector('[data-tile-marquee-box]');
+  if (box) box.hidden = true;
+  if (!tile || !source || source.kind !== 'rtsp' || !frame) return;
+  const rect = tileVideoRect(frame);
+  if (!rect) return;
+  if (Math.abs(drag.x1 - drag.x0) < 10 || Math.abs(drag.y1 - drag.y0) < 10) return;
+
+  const { dw, dh, ox, oy } = rect;
+  const cl = (v) => Math.max(0, Math.min(1, v));
+  const nx0 = cl((Math.min(drag.x0, drag.x1) - ox) / dw);
+  const ny0 = cl((Math.min(drag.y0, drag.y1) - oy) / dh);
+  const nx1 = cl((Math.max(drag.x0, drag.x1) - ox) / dw);
+  const ny1 = cl((Math.max(drag.y0, drag.y1) - oy) / dh);
+  const rw = Math.max(0.02, nx1 - nx0);
+  const rh = Math.max(0.02, ny1 - ny0);
+  const ncx = (nx0 + nx1) / 2, ncy = (ny0 + ny1) / 2;
+  let factor = Math.max(1, Math.min(4, Math.min(1 / rw, 1 / rh)));
+  const z = 1 / factor;
+  const px = factor > 1 ? cl((ncx - z / 2) / (1 - z)) : 0.5;
+  const py = factor > 1 ? cl((ncy - z / 2) / (1 - z)) : 0.5;
+
+  const data = await RtspApi.setZoomRegion(source.serial, factor, px, py);
+  if (data && !data.error) tile.zoomFactor = data.factor || factor;
+  tile.regionMode = false;
+  renderTile(index);
+  applyTileRegionUI(index);
+}
+
+// глобальные обработчики перетаскивания рамки в ячейке
+window.addEventListener('mousemove', (event) => {
+  if (!tileDrag) return;
+  const el = getTileEl(tileDrag.index);
+  const layer = el && el.querySelector('[data-tile-marquee]');
+  if (!layer) return;
+  const p = tileLayerXY(layer, event);
+  tileDrag.x1 = p.x; tileDrag.y1 = p.y;
+  updateTileMarqueeBox();
+});
+window.addEventListener('mouseup', () => {
+  if (tileDrag) applyTileRegionZoom();
+});
 
 // --- информация о камере ---
 async function openInfoModal(serial) {
@@ -1139,14 +1369,13 @@ function initModals() {
   document.getElementById('multiVideoOn')?.addEventListener('click', () => applyVideo(true));
   document.getElementById('multiVideoOff')?.addEventListener('click', () => applyVideo(false));
   document.getElementById('multiLightSwitch')?.addEventListener('change', (e) => applyMultiLight(e.target.checked));
-  document.getElementById('multiZoomLevels')?.addEventListener('click', (e) => {
-    const b = e.target.closest('button[data-zoom]');
-    if (b) applyMultiZoom(Number(b.dataset.zoom));
-  });
-  document.getElementById('multiPanGrid')?.addEventListener('click', (e) => {
-    const b = e.target.closest('button[data-px]');
-    if (b) applyMultiPan(Number(b.dataset.px), Number(b.dataset.py));
-  });
+
+  // настройки изображения: применяем сразу при изменении (ползунки — по отпусканию)
+  document.getElementById('multiImageWb')?.addEventListener('change', applyMultiWhiteBalance);
+  document.getElementById('multiImageDayNight')?.addEventListener('change', applyMultiDayNight);
+  document.getElementById('multiImageCompensation')?.addEventListener('change', (e) => applyMultiExposure('compensation', e.target.value));
+  document.getElementById('multiImageGainMin')?.addEventListener('change', (e) => applyMultiExposure('gain_min', e.target.value));
+  document.getElementById('multiImageGainMax')?.addEventListener('change', (e) => applyMultiExposure('gain_max', e.target.value));
 
   document.getElementById('multiInfoClose')?.addEventListener('click', () => closeModal('multiInfoModal'));
   document.getElementById('multiInfoCloseFooter')?.addEventListener('click', () => closeModal('multiInfoModal'));

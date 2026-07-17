@@ -957,7 +957,8 @@ input[type="range"] {
 .photo-card-popup,
 .video-card-popup,
 .light-card-popup,
-.zoom-card-popup {
+.zoom-card-popup,
+.image-card-popup {
   position: fixed;
   display: none;
   max-width: calc(100vw - 24px);
@@ -984,20 +985,32 @@ input[type="range"] {
   padding: 20px;
 }
 
+.image-card-popup {
+  width: 280px;
+  padding: 20px;
+}
+
 .photo-card-popup.show,
 .video-card-popup.show,
 .light-card-popup.show,
-.zoom-card-popup.show {
+.zoom-card-popup.show,
+.image-card-popup.show {
   display: block;
 }
 
 .photo-card-popup h2,
 .video-card-popup h2,
 .light-card-popup h2,
-.zoom-card-popup h2 {
+.zoom-card-popup h2,
+.image-card-popup h2 {
   margin-top: 0;
   margin-bottom: 14px;
 }
+
+/* настройки изображения: селекты/ползунки в столбик, ползунок тянется на всю ширину */
+.image-settings .field-row { margin-bottom: 12px; }
+.image-settings .field-row:last-child { margin-bottom: 0; }
+.image-settings .field-select { flex: 1; min-width: 0; }
 
 /* --- шапка карточки фичи (иконка + заголовок + кнопка обновления) --- */
 .feature-head {
@@ -1163,9 +1176,18 @@ input[type="range"] {
 
 .settings-zones {
   display: grid;
-  grid-template-columns: repeat(2, 1fr);
+  grid-template-columns: 1fr 1fr;
+  grid-template-areas:
+    "photo  camera"
+    "video  light";
   gap: 14px;
+  align-items: start;
 }
+
+.settings-zone[data-zone="photo"]  { grid-area: photo; }
+.settings-zone[data-zone="video"]  { grid-area: video; }
+.settings-zone[data-zone="light"]  { grid-area: light; }
+.settings-zone[data-zone="camera"] { grid-area: camera; }
 
 .settings-zone {
   border: 1px solid var(--border);
@@ -1184,7 +1206,8 @@ input[type="range"] {
 .settings-zone[hidden] { display: none; }
 
 @media (max-width: 560px) {
-  .settings-zones { grid-template-columns: 1fr; }
+  .settings-zones { grid-template-columns: 1fr; grid-template-areas: none; }
+  .settings-zone { grid-area: auto !important; }
 }
 
 /* --- зум --- */
@@ -1202,6 +1225,87 @@ input[type="range"] {
 
 .zoom-sub { display: block; font-size: 13px; color: var(--text-muted, #9aa); margin-bottom: 6px; }
 .zoom-hint { font-size: 12px; color: var(--text-muted, #888); margin: 4px 0 0; }
+
+/* --- зум выделением области в ячейке мультипоточности --- */
+.tile-region-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 1px solid var(--border-strong);
+  border-radius: 7px;
+  background: var(--surface-elevated);
+  color: var(--text-muted, #9aa);
+  cursor: pointer;
+  flex: none;
+}
+.tile-region-btn:hover { color: var(--text); }
+.tile-region-btn[hidden] { display: none; }
+
+.tile-marquee-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  cursor: crosshair;
+  user-select: none;
+}
+.tile-marquee-layer[hidden] { display: none; }
+
+.tile-marquee-box {
+  position: absolute;
+  border: 2px solid #ff3b3b;
+  background: rgba(255, 59, 59, 0.12);
+  box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.28);
+  pointer-events: none;
+}
+.tile-marquee-box[hidden] { display: none; }
+
+/* --- зум выделением области (рамкой) поверх видео --- */
+.zoom-marquee-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  cursor: crosshair;
+  user-select: none;
+}
+.zoom-marquee-layer[hidden] { display: none; }
+
+.zoom-marquee-box {
+  position: absolute;
+  border: 2px solid #ff3b3b;
+  background: rgba(255, 59, 59, 0.12);
+  box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.28);
+  pointer-events: none;
+}
+.zoom-marquee-box[hidden] { display: none; }
+
+.zoom-marquee-hint {
+  position: absolute;
+  top: 10px;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 5px 12px;
+  border-radius: 999px;
+  background: rgba(255, 59, 59, 0.85);
+  color: #fff;
+  font-size: 13px;
+  pointer-events: none;
+}
+
+/* кнопка «зум областью» активна — подсвечена оранжевым */
+.toolbar-btn.is-region-active,
+.tile-region-btn.is-region-active {
+  background: linear-gradient(135deg, #ffb300, #ff8f00);
+  color: #1a1a1a;
+  box-shadow: 0 0 0 1px rgba(255, 179, 0, 0.6), 0 0 16px rgba(255, 143, 0, 0.5);
+}
+
+/* плавное панорамирование зума — два ползунка (гориз./верт.) */
+.pan-row { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
+.pan-row .pan-ax { width: 18px; text-align: center; color: var(--text-muted, #9aa); font-size: 15px; flex: none; }
+.pan-row input[type="range"] { flex: 1; min-width: 0; accent-color: var(--accent, #3b82f6); }
 
 /* --- панорамирование зума: сетка 3×3 (центр / углы / края) --- */
 .zoom-pan { margin-bottom: 12px; }
@@ -2501,6 +2605,15 @@ body.modal-open {
   color: var(--success);
   opacity: 1;
 }
+
+/* лампа подсветки в ячейке — светится тёплым, когда включена */
+.rec-icon[data-rec-light].is-active {
+  color: #ffcf5c;
+  filter: drop-shadow(0 0 4px rgba(255, 207, 92, 0.7));
+}
+
+/* зум в ячейке — иконка загорается при активном зуме */
+.rec-icon[data-rec-zoom].is-active { color: var(--accent, #3b82f6); }
 
 .camera-chip__actions {
   display: flex;

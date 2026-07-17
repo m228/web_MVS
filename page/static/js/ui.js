@@ -92,9 +92,33 @@ function showSavePath(elementId, data) {
   }
 }
 
+// --- настройки изображения (общие для rtsp/multi): подписи режимов + заполнение select ---
+// русские подписи режимов (значение с камеры → подпись); неизвестное значение = как есть
+const IMAGE_WB_LABELS = {
+  Auto: 'Авто', Sunny: 'Дневной свет', Cloudy: 'Облачно', Home: 'Лампа накаливания',
+  Office: 'Люминесцентная', Night: 'Ночь', Outdoor: 'Улица',
+};
+const IMAGE_DAY_NIGHT_LABELS = { Color: 'Цвет', BlackWhite: 'Чёрно-белый' };
+
+// заполнить <select> вариантами value→подпись и выставить текущее значение
+function fillSelect(select, values, labels, current) {
+  if (!select) return;
+  select.innerHTML = '';
+  (values || []).forEach((value) => {
+    const opt = document.createElement('option');
+    opt.value = value;
+    opt.textContent = labels[value] || value;
+    select.appendChild(opt);
+  });
+  if (current != null) select.value = current;
+}
+
 window.UIHelpers = {
   getPositiveNumber,
   createPopupController,
   formatDuration,
-  showSavePath
+  showSavePath,
+  fillSelect,
+  IMAGE_WB_LABELS,
+  IMAGE_DAY_NIGHT_LABELS,
 };

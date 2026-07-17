@@ -87,12 +87,6 @@ const CameraApi = {
     return apiGet('/api/cams/detailed', 'Ошибка получения детального списка камер:');
   },
 
-  selectInterface(serial, interfaceId) {
-    const query = new URLSearchParams({ serial_number: serial, interface_id: interfaceId || '' });
-    return apiGet(`/api/camera/select_interface?${query.toString()}`,
-      'Ошибка выбора интерфейса камеры:');
-  },
-
   getIp(serial, interfaceId, deviceHandle) {
     const query = new URLSearchParams({ serial_number: serial });
     if (interfaceId) query.set('interface_id', interfaceId);
@@ -335,9 +329,40 @@ const RtspApi = {
     return apiGet(`/api/rtsp/zoom?${query.toString()}`, 'Ошибка смещения зума (RTSP):');
   },
 
+  // зум по выделенной области: кратность + центр одним запросом
+  setZoomRegion(serial, factor, px, py) {
+    const query = new URLSearchParams({ serial_number: serial, factor, px, py });
+    return apiGet(`/api/rtsp/zoom?${query.toString()}`, 'Ошибка зума по области (RTSP):');
+  },
+
   opticalZoom(serial, direction) {
     const query = new URLSearchParams({ serial_number: serial, direction });
     return apiGet(`/api/rtsp/optical_zoom?${query.toString()}`, 'Ошибка оптического зума (RTSP):');
+  },
+
+  // настройки изображения: экспозиция / баланс белого / день-ночь
+  getImageSettings(serial) {
+    return apiGet(`/api/rtsp/image?serial_number=${encodeURIComponent(serial)}`,
+      'Ошибка опроса настроек изображения (RTSP):',
+      { source: 'api.rtsp.image', logRequest: false, logSuccess: false });
+  },
+
+  setExposure(serial, fields) {
+    const query = new URLSearchParams({ serial_number: serial });
+    if (fields.compensation != null) query.set('compensation', fields.compensation);
+    if (fields.gain_min != null) query.set('gain_min', fields.gain_min);
+    if (fields.gain_max != null) query.set('gain_max', fields.gain_max);
+    return apiGet(`/api/rtsp/exposure?${query.toString()}`, 'Ошибка настройки экспозиции (RTSP):');
+  },
+
+  setWhiteBalance(serial, mode) {
+    const query = new URLSearchParams({ serial_number: serial, mode });
+    return apiGet(`/api/rtsp/white_balance?${query.toString()}`, 'Ошибка настройки баланса белого (RTSP):');
+  },
+
+  setDayNight(serial, mode) {
+    const query = new URLSearchParams({ serial_number: serial, mode });
+    return apiGet(`/api/rtsp/day_night?${query.toString()}`, 'Ошибка настройки день/ночь (RTSP):');
   },
 
   // мини-база сохранённых RTSP-камер

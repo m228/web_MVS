@@ -337,8 +337,6 @@ class BaseCameraWorker:
         self.save_photo = False
         self.photo_interval = None
         self.last_photo = None
-        # последний сохранённый файл фото (для показа во фронтенде)
-        self.last_photo_path = None
         # сколько фото сохранено за текущую сессию автосохранения
         self.photo_saved_count = 0
 
@@ -347,8 +345,6 @@ class BaseCameraWorker:
         self.video_duration = None
         self.video_start = None
         self.video_writer = None
-        # последний файл записи видео (для показа во фронтенде)
-        self.last_video_path = None
 
         self.metrics = {
             "fps": 0.0,
@@ -448,7 +444,6 @@ class BaseCameraWorker:
         filename = f"frame_{datetime.now().strftime('%d_%m_%Y_%H_%M_%S')}.jpg"
         path = os.path.join(folder, filename)
         cv2.imwrite(path, img)
-        self.last_photo_path = path
         self.photo_saved_count += 1
         return path
 
@@ -489,7 +484,6 @@ class BaseCameraWorker:
             fourcc = cv2.VideoWriter_fourcc(*"MJPG")
             writer_fps = fps if fps and fps > 0 else DEFAULT_VIDEO_FPS
             self.video_writer = cv2.VideoWriter(path, fourcc, writer_fps, (img.shape[1], img.shape[0]))
-            self.last_video_path = path
 
         self.video_writer.write(img)
 
@@ -1558,16 +1552,23 @@ class RtspCameraWorker(BaseCameraWorker):
         return dahua_control.parse_rtsp_credentials(self.rtsp_url)
 
     def get_capabilities(self, refresh=False):
-        """Возможности камеры (белый свет / оптический зум). Кэшируется на воркере."""
-        if self._caps is not None and not refresh:
-            return self._caps
-        host, user, password = self._dahua_creds()
-        caps = dahua_control.get_capabilities(host, user, password)
-        # цифровой зум делаем у себя — он доступен всегда
-        caps["digital_zoom"] = True
-        caps["zoom_factor"] = self.zoom_factor
-        self._caps = caps
-        return caps
+        """Возможности камеры (белый свет / оптический зум).
+
+        Статичная часть (свет/оптика/модель) кэшируется; динамическая (текущий зум и
+        положение окна) добавляется всегда свежей — иначе UI при переоткрытии видит
+        устаревшую кратность из кэша.
+        """
+        if self._caps is None or refresh:
+            host, user, password = self._dahua_creds()
+            caps = dahua_control.get_capabilities(host, user, password)
+            caps["digital_zoom"] = True  # цифровой зум делаем у себя — доступен всегда
+            self._caps = caps
+        # динамические поля — всегда актуальные, не из кэша
+        result = dict(self._caps)
+        result["zoom_factor"] = self.zoom_factor
+        result["zoom_pan_x"] = self.zoom_pan_x
+        result["zoom_pan_y"] = self.zoom_pan_y
+        return result
 
     def set_light(self, on, brightness=100):
         """Включить/выключить белый прожектор камеры."""
@@ -1591,6 +1592,37 @@ class RtspCameraWorker(BaseCameraWorker):
             return {"error": "no_host"}
         ok = dahua_control.optical_zoom(host, user, password, direction)
         return {"status": "ok" if ok else "failed", "direction": direction, "mode": "optical"}
+
+    # ---------- настройки изображения (экспозиция / баланс белого / день-ночь) ----------
+
+    def get_image_settings(self):
+        """Текущие настройки изображения камеры (экспозиция/ББ/день-ночь)."""
+        host, user, password = self._dahua_creds()
+        if not host:
+            return {"error": "no_host"}
+        return dahua_control.get_image_settings(host, user, password)
+
+    def set_exposure(self, compensation=None, gain_min=None, gain_max=None):
+        """Экспозиция (авто): компенсация и пределы усиления. Пишется во все профили."""
+        host, user, password = self._dahua_creds()
+        if not host:
+            return {"error": "no_host"}
+        return dahua_control.set_exposure(host, user, password,
+                                          compensation, gain_min, gain_max)
+
+    def set_white_balance(self, mode):
+        """Баланс белого: пресет (Auto/Sunny/…). Пишется во все профили."""
+        host, user, password = self._dahua_creds()
+        if not host:
+            return {"error": "no_host"}
+        return dahua_control.set_white_balance(host, user, password, mode)
+
+    def set_day_night(self, mode):
+        """Режим день/ночь: Color | BlackWhite. Пишется во все профили."""
+        host, user, password = self._dahua_creds()
+        if not host:
+            return {"error": "no_host"}
+        return dahua_control.set_day_night(host, user, password, mode)
 
 
 class CameraManager:
@@ -1618,18 +1650,6 @@ class CameraManager:
             if serial_number not in self.workers:
                 self.workers[serial_number] = CameraWorker(serial_number, self)
             return self.workers[serial_number]
-
-    # полный сброс Harvester (используется при GenTL -1020 resource exhausted)
-    def reset_harvester(self):
-        try:
-            self.harvester.reset()
-        except Exception as e:
-            log_event("camera_core.reset_harvester", "Ошибка сброса Harvester", "warn", {"error": str(e)})
-
-        self.harvester = Harvester()
-        self.driver_loaded = False
-        self.load_driver()
-        log_event("camera_core.reset_harvester", "Harvester пересоздан", "info")
 
     # создать acquirer по серийнику. Подбирает рабочий экземпляр устройства из всех дублей.
     # device_handle — уникальный ключ конкретной записи (приоритет № 1).

@@ -153,6 +153,10 @@ MVS_RUNTIME_DLL = "MvCameraControl.dll"
 # в них рядом с .cti лежит ВЕСЬ runtime (MvCameraControl.dll + genicam), поэтому
 # зависимости продюсера резолвятся из одного места (см. _register_driver_dll_dir).
 MVS_GENTL_DIRS = [
+    # актуальные версии MVS кладут ВЕСЬ runtime (.cti + genicam + MvCameraControl.dll)
+    # сюда — в Common Files, а env GENICAM_GENTL64_PATH указывает именно на этот путь.
+    r"C:\Program Files (x86)\Common Files\MVS\Runtime\Win64_x64",
+    r"C:\Program Files\Common Files\MVS\Runtime\Win64_x64",
     r"C:\Program Files (x86)\MVS\Runtime\Win64_x64",
     r"C:\Program Files\MVS\Runtime\Win64_x64",
     r"C:\Program Files (x86)\MVS\Runtime\Win64",

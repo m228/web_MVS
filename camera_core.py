@@ -1013,7 +1013,13 @@ class CameraWorker(BaseCameraWorker):
         # таймаутами. Если SDK доступен и по серийнику есть device_info — идём этим путём.
         device_info = _sdk_device_info(self.serial_number)
         if sdk_gige.available() and device_info is not None:
-            yield from self._generate_sdk(device_info, fps=fps)
+            settings = {
+                "width": width, "height": height,
+                "offset_x": offset_x, "offset_y": offset_y,
+                "fps": fps, "exposure_auto": exposure_auto,
+                "exposure_time": exposure_time, "pixel_format": pixel_format,
+            }
+            yield from self._generate_sdk(device_info, settings)
             return
 
         try:
@@ -1176,20 +1182,19 @@ class CameraWorker(BaseCameraWorker):
     # GigE-поток через MVS SDK (MvCameraControl.dll с resend). Отдаёт MJPEG теми же
     # чанками, что и harvesters-путь. Настройки (разрешение/выдержка/fps) пока не
     # применяем — берём текущие с камеры (фаза 1: стабильный поток на дефолте).
-    def _generate_sdk(self, device_info, fps=None):
+    def _generate_sdk(self, device_info, settings=None):
         stream = None
         last_frame_time = None
         last_frame_wall = time.time()  # для отсчёта простоя ПО ВРЕМЕНИ
+        fps = (settings or {}).get("fps")
         try:
             # ретрай открытия: сразу после остановки прошлого стрима камера ~секунду
             # ещё «занята» (control-канал отпускается по heartbeat) — не сдаёмся с первого раза
             open_err = None
             for attempt in range(6):
-                if not self.running and attempt > 0:
-                    return
                 try:
                     stream = sdk_gige.GigeSdkStream(device_info)
-                    stream.open()
+                    stream.open(settings)
                     open_err = None
                     break
                 except Exception as e:

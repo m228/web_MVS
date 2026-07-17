@@ -109,7 +109,7 @@ class GigeSdkStream:
         self._grabbing = False
         self._lock = threading.Lock()
 
-    def open(self):
+    def open(self, settings=None):
         c = self._cam
         r = c.MV_CC_CreateHandle(self._info)
         if r != 0:
@@ -120,6 +120,9 @@ class GigeSdkStream:
             # 0x80000203 = device busy/уже открыта другим клиентом (частая причина
             # «первый раз ок, потом не подключается» — предыдущий handle не отпущен)
             raise RuntimeError("MV_CC_OpenDevice ret=0x%x" % (r & 0xffffffff))
+        # настройки применяем ДО StartGrabbing (размер/формат нельзя менять на ходу)
+        if settings:
+            self._apply_settings(settings)
         # оптимальный размер пакета под текущий линк (как MVS). На путях без сквозного
         # jumbo (VPN/свитч) вернёт 1500 — надёжно; jumbo дал бы больше fps, но его роняет сеть.
         try:
@@ -143,6 +146,53 @@ class GigeSdkStream:
             self.close()
             raise RuntimeError("MV_CC_StartGrabbing failed")
         self._grabbing = True
+
+    def _apply_settings(self, s):
+        """Применить настройки камеры по SDK (до StartGrabbing). Порядок важен:
+        формат -> смещения в 0 -> размеры -> смещения. Ошибку каждого поля терпим
+        (несовместимые значения бывают) и логируем, чтобы поток всё равно поднялся."""
+        c = self._cam
+        res = {}
+
+        def si(name, val):
+            if val is None:
+                return
+            res[name] = c.MV_CC_SetIntValue(name, int(val)) & 0xffffffff
+
+        def sf(name, val):
+            if val is None:
+                return
+            res[name] = c.MV_CC_SetFloatValue(name, float(val)) & 0xffffffff
+
+        def se(name, val):
+            if not val:
+                return
+            res[name] = c.MV_CC_SetEnumValueByString(name, str(val)) & 0xffffffff
+
+        se("PixelFormat", s.get("pixel_format"))
+        # сбрасываем смещения, чтобы уменьшение размера не упёрлось в старый offset
+        c.MV_CC_SetIntValue("OffsetX", 0)
+        c.MV_CC_SetIntValue("OffsetY", 0)
+        si("Width", s.get("width"))
+        si("Height", s.get("height"))
+        si("OffsetX", s.get("offset_x"))
+        si("OffsetY", s.get("offset_y"))
+        se("ExposureAuto", s.get("exposure_auto"))
+        # выдержку задаём только при ручном режиме (в авто камера её игнорирует/отклонит)
+        if str(s.get("exposure_auto") or "").lower() in ("off", ""):
+            sf("ExposureTime", s.get("exposure_time"))
+        # частота кадров: включаем лимит и ставим значение
+        if s.get("fps"):
+            try:
+                c.MV_CC_SetBoolValue("AcquisitionFrameRateEnable", True)
+            except Exception:
+                pass
+            sf("AcquisitionFrameRate", s.get("fps"))
+
+        applied = [k for k, v in res.items() if v == 0]
+        failed = {k: "0x%x" % v for k, v in res.items() if v != 0}
+        log_event("sdk_gige", "Настройки камеры применены (SDK)", "info",
+                  {"applied": applied, "failed": failed})
 
     def grab(self, timeout_ms=1000):
         """Один кадр: (width, height, pixel_format_str, raw_uint8) или None по таймауту."""

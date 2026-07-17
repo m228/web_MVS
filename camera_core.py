@@ -89,6 +89,13 @@ GENTL_HINTS = {
 FRAME_FETCH_TIMEOUT = 10.0
 MAX_FRAME_TIMEOUTS = 60
 
+# SDK-путь GigE: короткий таймаут одной попытки захвата (мс), чтобы цикл ЧАСТО проверял
+# self.running и быстро отпускал камеру при остановке (иначе висел бы в GetImageBuffer до
+# 10 с, а новый стрим не мог открыться). Простой (нет кадров) считаем ПО ВРЕМЕНИ, а не по
+# числу попыток — на низком FPS между кадрами много «пустых» опросов, это норма.
+SDK_GRAB_TIMEOUT_MS = 300
+SDK_STREAM_STALL_SECONDS = 20.0
+
 # ПРИМЕЧАНИЕ про буферы приёма (num_buffers): НЕ переопределяем — оставляем дефолт
 # harvesters. Раздувание пула до 24 буферов (≈360 МБ для 5 МП RGB8) дестабилизировало
 # продюсер Hikrobot на одиночной камере (~5 кадров, затем сплошные -1011). Несколько
@@ -271,8 +278,10 @@ def _sdk_gige_warmup():
         return
     try:
         devices = sdk_gige.enum_gige()
+        # НЕ очищаем кэш: при активном SDK-стриме камера «занята» и повторный enum
+        # вернёт 0 — очистка выбила бы device_info, и следующий стрим ушёл бы в
+        # harvesters-путь (и упал). Держим последнее известное; open() сам проверит.
         with _sdk_devices_lock:
-            _sdk_devices.clear()
             for d in devices:
                 _sdk_devices[d["serial"]] = d["_info"]
         log_event("camera_core.sdk_warmup", "Прогрев MVS SDK (обход сетевых адаптеров)",
@@ -283,6 +292,17 @@ def _sdk_gige_warmup():
 
 
 def _sdk_device_info(serial_number):
+    with _sdk_devices_lock:
+        info = _sdk_devices.get(serial_number)
+    if info is not None:
+        return info
+    # нет в кэше — свежий enum (камера могла только что подключиться/освободиться)
+    try:
+        for d in sdk_gige.enum_gige():
+            with _sdk_devices_lock:
+                _sdk_devices[d["serial"]] = d["_info"]
+    except Exception:
+        pass
     with _sdk_devices_lock:
         return _sdk_devices.get(serial_number)
 
@@ -980,7 +1000,13 @@ class CameraWorker(BaseCameraWorker):
         if self.running:
             log_event("camera_core.generate_stream", "Старый поток открыт, принудительно закрытие", "warn")
             self.force_close()
-            time.sleep(0.3)
+
+        # ждём, пока прошлый сеанс ПОЛНОСТЬЮ отпустит камеру: его генератор закрывает
+        # SDK-поток на своём потоке в течение ~SDK_GRAB_TIMEOUT_MS. Без этого новый open
+        # упирается в «камера занята» (это и давало «первый раз ок, потом не подключается»).
+        _deadline = time.time() + 3.0
+        while time.time() < _deadline and (self._sdk_stream is not None or self.ia is not None):
+            time.sleep(0.1)
 
         # GigE-поток через MVS SDK (resend) — надёжнее harvesters на нагруженной сети:
         # harvesters/GenTL не переспрашивает потерянные пакеты и на кадре 15 МБ сыпет
@@ -1153,10 +1179,26 @@ class CameraWorker(BaseCameraWorker):
     def _generate_sdk(self, device_info, fps=None):
         stream = None
         last_frame_time = None
-        timeouts_in_a_row = 0
+        last_frame_wall = time.time()  # для отсчёта простоя ПО ВРЕМЕНИ
         try:
-            stream = sdk_gige.GigeSdkStream(device_info)
-            stream.open()
+            # ретрай открытия: сразу после остановки прошлого стрима камера ~секунду
+            # ещё «занята» (control-канал отпускается по heartbeat) — не сдаёмся с первого раза
+            open_err = None
+            for attempt in range(6):
+                if not self.running and attempt > 0:
+                    return
+                try:
+                    stream = sdk_gige.GigeSdkStream(device_info)
+                    stream.open()
+                    open_err = None
+                    break
+                except Exception as e:
+                    open_err = e
+                    stream = None
+                    time.sleep(0.5)
+            if stream is None:
+                raise RuntimeError("open не удался после ретраев: %r" % open_err)
+
             with self._ia_lock:
                 self._sdk_stream = stream
                 self.running = True
@@ -1168,22 +1210,20 @@ class CameraWorker(BaseCameraWorker):
             self.metrics["fps"] = 0.0
             self.metrics["bandwidth_mbps"] = 0.0
 
-            grab_timeout_ms = int(FRAME_FETCH_TIMEOUT * 1000)
-
             while self.running:
-                res = stream.grab(timeout_ms=grab_timeout_ms)
+                res = stream.grab(timeout_ms=SDK_GRAB_TIMEOUT_MS)
                 if res is None:
                     if not self.running:
                         break
-                    timeouts_in_a_row += 1
-                    if timeouts_in_a_row >= MAX_FRAME_TIMEOUTS:
+                    # нет кадра — норм на низком FPS; рвём поток только если тишина
+                    # дольше SDK_STREAM_STALL_SECONDS (реальная потеря связи)
+                    if time.time() - last_frame_wall >= SDK_STREAM_STALL_SECONDS:
                         log_event("camera_core.generate_stream",
-                                  "Поток прерван: подряд слишком много таймаутов получения кадра (SDK)", "error",
-                                  {"serial_number": self.serial_number,
-                                   "timeouts": timeouts_in_a_row, "hint": GENTL_HINTS[-1011]})
+                                  "Поток прерван: нет кадров дольше таймаута (SDK)", "error",
+                                  {"serial_number": self.serial_number, "hint": GENTL_HINTS[-1011]})
                         break
                     continue
-                timeouts_in_a_row = 0
+                last_frame_wall = time.time()
 
                 width, height, pixel_format, raw = res
                 img = _to_bgr(raw, width, height, pixel_format)
@@ -1215,10 +1255,12 @@ class CameraWorker(BaseCameraWorker):
                     b"Content-Type: image/jpeg\r\n\r\n" + frame + b"\r\n"
                 )
         except Exception as e:
-            if self.running:
-                self.metrics["errors"] += 1
-                log_event("camera_core.generate_stream", "Ошибка GigE-потока (SDK)", "error",
-                          {"serial_number": self.serial_number, "error": repr(e)})
+            # логируем ВСЕГДА, даже если running ещё не выставлен (падение на open):
+            # именно это давало «поток закрыт без ошибки» на 2-м запуске
+            self.metrics["errors"] += 1
+            log_event("camera_core.generate_stream", "Ошибка GigE-потока (SDK)", "error",
+                      {"serial_number": self.serial_number, "error": repr(e),
+                       "running": self.running})
         finally:
             log_event("camera_core.generate_stream", "Поток камеры закрыт (SDK)", "info",
                       {"serial_number": self.serial_number})
@@ -1234,14 +1276,12 @@ class CameraWorker(BaseCameraWorker):
             self._reset_save_state()
 
     def force_close(self):
-        # под тем же локом, что и старт в generate: снимаем acquirer/SDK-поток атомарно,
-        # чтобы не разойтись с `self.ia = ia; ia.start()` / `self._sdk_stream = stream`
+        # под тем же локом, что и старт в generate: снимаем acquirer атомарно,
+        # чтобы не разойтись с `self.ia = ia; ia.start()`
         with self._ia_lock:
             self.running = False
             ia = self.ia
             self.ia = None
-            sdk_stream = self._sdk_stream
-            self._sdk_stream = None
 
         if ia is not None:
             try:
@@ -1254,11 +1294,10 @@ class CameraWorker(BaseCameraWorker):
             except Exception as e:
                 log_event("camera_core.close_stream_force", "Ошибка force destroy", "warn", {"error": str(e)})
 
-        if sdk_stream is not None:
-            try:
-                sdk_stream.close()
-            except Exception as e:
-                log_event("camera_core.close_stream_force", "Ошибка force close (SDK)", "warn", {"error": str(e)})
+        # SDK-поток НЕ закрываем отсюда: его владелец — свой генератор, он проверяет
+        # self.running каждые ~SDK_GRAB_TIMEOUT_MS и закроет handle на СВОЁМ потоке.
+        # Рушить handle из чужого потока (пока тот в GetImageBuffer) оставляет SDK в
+        # кривом состоянии → следующий стрим не открывается. Мы лишь снимаем running=False.
 
         log_event("camera_core.close_stream_force", "Запрошена принудительная остановка потока", "warn")
         return {"status": "force_stopped"}

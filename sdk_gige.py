@@ -111,11 +111,15 @@ class GigeSdkStream:
 
     def open(self):
         c = self._cam
-        if c.MV_CC_CreateHandle(self._info) != 0:
-            raise RuntimeError("MV_CC_CreateHandle failed")
-        if c.MV_CC_OpenDevice() != 0:
+        r = c.MV_CC_CreateHandle(self._info)
+        if r != 0:
+            raise RuntimeError("MV_CC_CreateHandle ret=0x%x" % (r & 0xffffffff))
+        r = c.MV_CC_OpenDevice()
+        if r != 0:
             c.MV_CC_DestroyHandle()
-            raise RuntimeError("MV_CC_OpenDevice failed")
+            # 0x80000203 = device busy/уже открыта другим клиентом (частая причина
+            # «первый раз ок, потом не подключается» — предыдущий handle не отпущен)
+            raise RuntimeError("MV_CC_OpenDevice ret=0x%x" % (r & 0xffffffff))
         # оптимальный размер пакета под текущий линк (как MVS). На путях без сквозного
         # jumbo (VPN/свитч) вернёт 1500 — надёжно; jumbo дал бы больше fps, но его роняет сеть.
         try:

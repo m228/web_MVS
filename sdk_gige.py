@@ -20,6 +20,9 @@ from logger import log_event
 _sdk = None          # модуль mvsdk после успешной загрузки
 _init_done = False
 _pixel_names = {}    # enPixelType(int) -> строка формата для _to_bgr
+# сериализует MV_CC_EnumDevices: под мультикамерным режимом enum могут дёрнуть из
+# двух потоков (ленивый доопрос при одновременном старте) — не гоняем его параллельно
+_enum_lock = threading.Lock()
 
 
 def init(runtime_dir=None):
@@ -76,26 +79,28 @@ def enum_gige():
     """GigE-камеры через SDK: список {serial, model, ip, _info}. _info — для open()."""
     if _sdk is None:
         return []
-    dev_list = _sdk.MV_CC_DEVICE_INFO_LIST()
-    ret = _sdk.MvCamera.MV_CC_EnumDevices(_sdk.MV_GIGE_DEVICE, dev_list)
     result = []
-    if ret != 0:
-        return result
-    for i in range(dev_list.nDeviceNum):
-        info = _sdk.cast(dev_list.pDeviceInfo[i],
-                         _sdk.POINTER(_sdk.MV_CC_DEVICE_INFO)).contents
-        gige = info.SpecialInfo.stGigEInfo
-        ip = gige.nCurrentIp
-        # копируем структуру: указатели из dev_list живут только до следующего Enum
-        info_copy = _sdk.MV_CC_DEVICE_INFO()
-        _sdk.memmove(_sdk.byref(info_copy), _sdk.byref(info),
-                     _sdk.sizeof(_sdk.MV_CC_DEVICE_INFO))
-        result.append({
-            "serial": bytes(gige.chSerialNumber).split(b"\x00")[0].decode("ascii", "replace"),
-            "model": bytes(gige.chModelName).split(b"\x00")[0].decode("ascii", "replace"),
-            "ip": "%d.%d.%d.%d" % ((ip >> 24) & 255, (ip >> 16) & 255, (ip >> 8) & 255, ip & 255),
-            "_info": info_copy,
-        })
+    with _enum_lock:
+        dev_list = _sdk.MV_CC_DEVICE_INFO_LIST()
+        ret = _sdk.MvCamera.MV_CC_EnumDevices(_sdk.MV_GIGE_DEVICE, dev_list)
+        if ret != 0:
+            return result
+        # разбираем СРАЗУ под локом: указатели dev_list живут только до следующего Enum
+        for i in range(dev_list.nDeviceNum):
+            info = _sdk.cast(dev_list.pDeviceInfo[i],
+                             _sdk.POINTER(_sdk.MV_CC_DEVICE_INFO)).contents
+            gige = info.SpecialInfo.stGigEInfo
+            ip = gige.nCurrentIp
+            # копируем структуру: указатели из dev_list живут только до следующего Enum
+            info_copy = _sdk.MV_CC_DEVICE_INFO()
+            _sdk.memmove(_sdk.byref(info_copy), _sdk.byref(info),
+                         _sdk.sizeof(_sdk.MV_CC_DEVICE_INFO))
+            result.append({
+                "serial": bytes(gige.chSerialNumber).split(b"\x00")[0].decode("ascii", "replace"),
+                "model": bytes(gige.chModelName).split(b"\x00")[0].decode("ascii", "replace"),
+                "ip": "%d.%d.%d.%d" % ((ip >> 24) & 255, (ip >> 16) & 255, (ip >> 8) & 255, ip & 255),
+                "_info": info_copy,
+            })
     return result
 
 

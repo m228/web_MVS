@@ -1834,6 +1834,11 @@ class CameraManager:
         # камер стримятся одновременно) создание воркера сериализуем, чтобы два
         # запроса по одному серийнику не создали два конкурирующих объекта.
         self._registry_lock = threading.Lock()
+        # сериализует доступ к общему Harvester (load_driver/update/force_ip): под
+        # мультикамерным режимом два GigE-стрима стартуют из разных потоков uvicorn и
+        # одновременный harvester.update() из двух потоков — гонка. RLock: scan_cams и
+        # force_ip зовут load_driver, уже держа лок.
+        self._driver_lock = threading.RLock()
 
     # создать/получить GigE-камеру
     def get(self, serial_number) -> CameraWorker:
@@ -2189,6 +2194,7 @@ class CameraManager:
 
     # загрузка драйвера для работы
     def load_driver(self):
+      with self._driver_lock:
         try:
             # драйвер уже загружен — повторно .cti не добавляем (иначе производитель
             # регистрируется дублями и устройства задваиваются → "multiple devices found"),

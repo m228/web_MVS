@@ -15,6 +15,7 @@ import cv2
 from logger import log_event
 from paths import BUNDLE_DIR, DATA_DIR
 import dahua_control
+import sdk_gige
 
 import subprocess
 
@@ -249,39 +250,41 @@ def _find_mvs_runtime():
     return None
 
 
-# тип транспортного слоя GigE в MVS SDK (MV_GIGE_DEVICE)
-_MV_GIGE_DEVICE = 1
+# кэш GigE-устройств от MVS SDK: серийник -> MV_CC_DEVICE_INFO (для открытия стрима)
+_sdk_devices = {}
+_sdk_devices_lock = threading.Lock()
 
 
-# Прогрев сетевого слоя MVS SDK одним вызовом MV_CC_EnumDevices ДО discovery harvesters.
-# Зачем: GenTL-продюсер ищет камеры через limited-broadcast, который ОС отправляет в
-# интерфейс с наивысшим приоритетом. Когда в системе много адаптеров (VPN/Hyper-V/
-# VirtualBox/ZeroTier), broadcast уходит НЕ на тот NIC, где камера, и продюсер видит 0
-# устройств (хотя камера пингуется и отвечает на unicast/broadcast с нужного интерфейса).
-# MVS SDK (как настольный MVS) сам обходит ВСЕ NIC. После его MV_CC_EnumDevices тот же
-# MvCameraControl.dll отдаёт устройства и GenTL-продюсеру. Эффект держится на процесс
-# (проверено: один прогрев -> несколько update() harvesters видят камеру).
-# Работаем через ctypes прямо по MvCameraControl.dll (рядом с .cti) — Python-обёртка SDK
-# из установки MVS не нужна. Тихо пропускаем, если DLL/символа нет (не-Hikrobot окружение).
+# Прогрев сетевого слоя MVS SDK (MV_CC_EnumDevices) ДО discovery harvesters + кэш устройств.
+# Зачем прогрев: GenTL-продюсер ищет камеры через limited-broadcast, который ОС отправляет
+# в интерфейс с наивысшим приоритетом. При множестве адаптеров (VPN/Hyper-V/VirtualBox/
+# ZeroTier) broadcast уходит НЕ на тот NIC, и продюсер видит 0 устройств. MVS SDK (как
+# настольный MVS) сам обходит ВСЕ NIC; после его enum тот же MvCameraControl.dll отдаёт
+# устройства и GenTL-продюсеру (эффект на процесс). Заодно кэшируем device_info по
+# серийнику — по ним CameraWorker открывает поток через SDK (с resend). Тихо пропускаем,
+# если рантайма/обёртки нет (не-Hikrobot окружение) — тогда остаётся чистый harvesters-путь.
 def _sdk_gige_warmup():
     cti, _ = _discover_cti()
     if cti is None:
         return
-    dll_path = cti.parent / MVS_RUNTIME_DLL
-    if not dll_path.is_file():
+    if not sdk_gige.init(cti.parent):
         return
     try:
-        dll = ctypes.WinDLL(str(dll_path))
-        # MV_CC_DEVICE_INFO_LIST = { uint32 nDeviceNum; void* pDeviceInfo[256] }.
-        # Нам нужен побочный эффект (обход всех NIC), результат не парсим — хватает буфера.
-        buf = (ctypes.c_ubyte * 2064)()
-        ret = dll.MV_CC_EnumDevices(ctypes.c_uint(_MV_GIGE_DEVICE), ctypes.byref(buf))
-        count = ctypes.c_uint.from_buffer(buf).value
+        devices = sdk_gige.enum_gige()
+        with _sdk_devices_lock:
+            _sdk_devices.clear()
+            for d in devices:
+                _sdk_devices[d["serial"]] = d["_info"]
         log_event("camera_core.sdk_warmup", "Прогрев MVS SDK (обход сетевых адаптеров)",
-                  "info", {"ret": "0x%x" % (ret & 0xffffffff), "device_count": count})
+                  "info", {"device_count": len(devices)})
     except Exception as e:
         log_event("camera_core.sdk_warmup", "Прогрев MVS SDK не выполнен", "warn",
                   {"error": str(e)})
+
+
+def _sdk_device_info(serial_number):
+    with _sdk_devices_lock:
+        return _sdk_devices.get(serial_number)
 
 # fps по умолчанию для записи видео, когда камера не сообщила частоту кадров
 DEFAULT_VIDEO_FPS = 20.0
@@ -566,6 +569,8 @@ class CameraWorker(BaseCameraWorker):
         super().__init__(serial_number, manager)
 
         self.ia = None
+        # сеанс SDK-стрима (GigE через MvCameraControl.dll с resend), если активен
+        self._sdk_stream = None
         # защищает жизненный цикл self.ia: старт потока в generate() и
         # остановку в force_close() могут дёргать разные потоки uvicorn
         # (/stream и /force_close). Без него force_close мог уничтожить
@@ -977,6 +982,14 @@ class CameraWorker(BaseCameraWorker):
             self.force_close()
             time.sleep(0.3)
 
+        # GigE-поток через MVS SDK (resend) — надёжнее harvesters на нагруженной сети:
+        # harvesters/GenTL не переспрашивает потерянные пакеты и на кадре 15 МБ сыпет
+        # таймаутами. Если SDK доступен и по серийнику есть device_info — идём этим путём.
+        device_info = _sdk_device_info(self.serial_number)
+        if sdk_gige.available() and device_info is not None:
+            yield from self._generate_sdk(device_info, fps=fps)
+            return
+
         try:
             log_event(
                 "camera_core.generate_stream",
@@ -1134,13 +1147,101 @@ class CameraWorker(BaseCameraWorker):
 
             self._reset_save_state()
 
+    # GigE-поток через MVS SDK (MvCameraControl.dll с resend). Отдаёт MJPEG теми же
+    # чанками, что и harvesters-путь. Настройки (разрешение/выдержка/fps) пока не
+    # применяем — берём текущие с камеры (фаза 1: стабильный поток на дефолте).
+    def _generate_sdk(self, device_info, fps=None):
+        stream = None
+        last_frame_time = None
+        timeouts_in_a_row = 0
+        try:
+            stream = sdk_gige.GigeSdkStream(device_info)
+            stream.open()
+            with self._ia_lock:
+                self._sdk_stream = stream
+                self.running = True
+            log_event("camera_core.generate_stream", "Поток камеры запущен (SDK)", "success",
+                      {"serial_number": self.serial_number})
+
+            self.metrics["errors"] = 0
+            self.metrics["image_number"] = 0
+            self.metrics["fps"] = 0.0
+            self.metrics["bandwidth_mbps"] = 0.0
+
+            grab_timeout_ms = int(FRAME_FETCH_TIMEOUT * 1000)
+
+            while self.running:
+                res = stream.grab(timeout_ms=grab_timeout_ms)
+                if res is None:
+                    if not self.running:
+                        break
+                    timeouts_in_a_row += 1
+                    if timeouts_in_a_row >= MAX_FRAME_TIMEOUTS:
+                        log_event("camera_core.generate_stream",
+                                  "Поток прерван: подряд слишком много таймаутов получения кадра (SDK)", "error",
+                                  {"serial_number": self.serial_number,
+                                   "timeouts": timeouts_in_a_row, "hint": GENTL_HINTS[-1011]})
+                        break
+                    continue
+                timeouts_in_a_row = 0
+
+                width, height, pixel_format, raw = res
+                img = _to_bgr(raw, width, height, pixel_format)
+                if img is None:
+                    self.metrics["errors"] += 1
+                    continue
+                ok, encoded = cv2.imencode(".jpg", img)
+                if not ok:
+                    self.metrics["errors"] += 1
+                    continue
+                frame = encoded.tobytes()
+
+                now = time.time()
+                self.metrics["image_number"] += 1
+                self.metrics["width"] = img.shape[1]
+                self.metrics["height"] = img.shape[0]
+                if last_frame_time is not None:
+                    dt = now - last_frame_time
+                    if dt > 0:
+                        self.metrics["fps"] = 1.0 / dt
+                if self.metrics["fps"] > 0:
+                    self.metrics["bandwidth_mbps"] = (len(frame) * 8 * self.metrics["fps"]) / 1_000_000
+                last_frame_time = now
+
+                self._maybe_save(img, fps)
+
+                yield (
+                    b"--frame\r\n"
+                    b"Content-Type: image/jpeg\r\n\r\n" + frame + b"\r\n"
+                )
+        except Exception as e:
+            if self.running:
+                self.metrics["errors"] += 1
+                log_event("camera_core.generate_stream", "Ошибка GigE-потока (SDK)", "error",
+                          {"serial_number": self.serial_number, "error": repr(e)})
+        finally:
+            log_event("camera_core.generate_stream", "Поток камеры закрыт (SDK)", "info",
+                      {"serial_number": self.serial_number})
+            self.running = False
+            if stream is not None:
+                try:
+                    stream.close()
+                except Exception:
+                    pass
+            with self._ia_lock:
+                if self._sdk_stream is stream:
+                    self._sdk_stream = None
+            self._reset_save_state()
+
     def force_close(self):
-        # под тем же локом, что и старт в generate: снимаем acquirer атомарно,
-        # чтобы не разойтись с `self.ia = ia; ia.start()`
+        # под тем же локом, что и старт в generate: снимаем acquirer/SDK-поток атомарно,
+        # чтобы не разойтись с `self.ia = ia; ia.start()` / `self._sdk_stream = stream`
         with self._ia_lock:
             self.running = False
             ia = self.ia
             self.ia = None
+            sdk_stream = self._sdk_stream
+            self._sdk_stream = None
 
         if ia is not None:
             try:
@@ -1152,6 +1253,12 @@ class CameraWorker(BaseCameraWorker):
                 ia.destroy()
             except Exception as e:
                 log_event("camera_core.close_stream_force", "Ошибка force destroy", "warn", {"error": str(e)})
+
+        if sdk_stream is not None:
+            try:
+                sdk_stream.close()
+            except Exception as e:
+                log_event("camera_core.close_stream_force", "Ошибка force close (SDK)", "warn", {"error": str(e)})
 
         log_event("camera_core.close_stream_force", "Запрошена принудительная остановка потока", "warn")
         return {"status": "force_stopped"}

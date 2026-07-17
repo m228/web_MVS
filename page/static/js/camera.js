@@ -68,6 +68,10 @@ function initCameraPage() {
   let waitingSoftStop = false;
   let metricsTimer = null;
   let streamErrorHandled = false;
+  // сторож подключения: если первый кадр не пришёл за это время — авто-откат,
+  // чтобы UI не завис на «Подключить» (камера могла быть занята/недоступна)
+  let connectTimer = null;
+  const CONNECT_TIMEOUT_MS = 10000;
 
 
   const photoPopup = UIHelpers.createPopupController(photoCard, buttons.photo);
@@ -158,6 +162,8 @@ function initCameraPage() {
 
     if (isLoading) {
       state.start = { hidden: false, disabled: true };
+      // во время подключения показываем «Стоп» как отмену — чтобы не зависнуть
+      state.stop = { hidden: false, disabled: false };
       state.network_settings = { hidden: false, disabled: true };
       applyState(state);
       return;
@@ -511,6 +517,35 @@ function initCameraPage() {
     isLoading = true;
     updateToolbarState();
     cameraFrame.src = '/api/camera/stream?' + query.toString();
+
+    // сторож: не пришёл первый кадр за CONNECT_TIMEOUT_MS -> откат, чтобы не зависнуть
+    clearConnectTimer();
+    connectTimer = setTimeout(() => {
+      if (isLoading && !isConnected) {
+        log.warn('Первый кадр не пришёл за 10 c — откат подключения');
+        cancelConnect();
+      }
+    }, CONNECT_TIMEOUT_MS);
+  }
+
+  function clearConnectTimer() {
+    if (connectTimer) {
+      clearTimeout(connectTimer);
+      connectTimer = null;
+    }
+  }
+
+  // отмена/откат зависшего подключения: гасим поток на сервере и сбрасываем UI
+  async function cancelConnect() {
+    clearConnectTimer();
+    isStoppingStream = true;
+    streamErrorHandled = true;
+    cameraFrame.src = '';
+    try { await stopStreamForce(); } catch (e) { /* сервер мог ещё не открыть поток */ }
+    isLoading = false;
+    isConnected = false;
+    resetCameraUI();
+    log.info('Подключение отменено, можно попробовать снова');
   }
 
   async function stopStreamOnly() {
@@ -624,6 +659,13 @@ function initCameraPage() {
   }
 
   async function stopCamera() {
+    // если ещё идёт подключение (кадр не пришёл) — это отмена, а не мягкая остановка
+    if (isLoading && !isConnected) {
+      log.info('Отмена подключения по кнопке');
+      await cancelConnect();
+      return;
+    }
+
     log.info('Запрошена мягкая остановка потока');
 
     stopStatusPolling();
@@ -959,6 +1001,7 @@ function initCameraPage() {
     waitingSoftStop = false;
     isStoppingStream = false;
     streamErrorHandled = false;
+    clearConnectTimer();
     hideForceStopButton();
     clearForceStopTimer();
 
@@ -971,6 +1014,7 @@ function initCameraPage() {
   });
 
   cameraFrame.addEventListener('error', () => {
+  clearConnectTimer();
   if (isStoppingStream || waitingSoftStop || streamErrorHandled || !cameraFrame.src) {
     return;
   }

@@ -26,3 +26,6 @@ __pycache__/
 
 # --- локальная временная папка (планы, разовые пробы, кэш) ---
 /tmp
+CLAUDE.md
+tasks/todo.md
+tasks/todo.md

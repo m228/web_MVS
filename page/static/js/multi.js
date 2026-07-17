@@ -357,7 +357,7 @@ function createTileEl() {
       <span>Видео<strong data-metric="video_time">—</strong></span>
       <div class="multi-tile__rec">
         <span class="rec-icon" data-rec-light title="Подсветка">${LIGHT_SVG}</span>
-        <span class="rec-icon rec-icon--zoom" data-rec-zoom title="Зум"><span class="rec-zoom-x" data-rec-zoom-x></span>${ZOOM_SVG}</span>
+        <span class="rec-icon" data-rec-zoom title="Зум">${ZOOM_SVG}</span>
         <span class="rec-icon" data-rec-photo title="Сохранение фото">${PHOTO_SVG}</span>
         <span class="rec-icon" data-rec-video title="Запись видео">${VIDEO_SVG}</span>
       </div>
@@ -472,11 +472,9 @@ function renderTile(index) {
   const isRtsp = source && source.kind === 'rtsp';
   const recLight = el.querySelector('[data-rec-light]');
   const recZoom = el.querySelector('[data-rec-zoom]');
-  const recZoomX = el.querySelector('[data-rec-zoom-x]');
   const zoomOn = isRtsp && Number(tile.zoomFactor) > 1;
   if (recLight) recLight.classList.toggle('is-active', isRtsp && !!tile.light && tile.connected);
   if (recZoom) recZoom.classList.toggle('is-active', zoomOn && tile.connected);
-  if (recZoomX) recZoomX.textContent = zoomOn ? (Number(tile.zoomFactor) + '×') : '';
 
   if (!tile.connected) {
     if (frame) { frame.classList.add('hidden'); frame.src = ''; }
@@ -870,9 +868,10 @@ async function refreshSettingsCaps(serial) {
   const data = await RtspApi.getCapabilities(serial);
   settingsCaps = (data && !data.error)
     ? data
-    : { reachable: false, white_light: false, optical_zoom: false };
+    : { reachable: false, white_light: false, optical_zoom: false, image_settings: false };
   applySettingsCaps();
   syncMultiLightState(serial);
+  refreshMultiImageSettings(serial);
 }
 
 function applySettingsCaps() {
@@ -888,6 +887,99 @@ function applySettingsCaps() {
   if (lv) lv.disabled = !hasLight;
   if (!hasLight) reflectMultiLight(false);
   // зум делается рамкой прямо в ячейке (кнопка на плитке), в настройках его нет
+
+  // настройки изображения
+  const hasImage = !!caps.image_settings;
+  setCapLine(document.getElementById('multiImageCap'), hasImage,
+    'Настройки изображения доступны',
+    caps.reachable ? 'Настройки изображения не поддерживаются' : 'Камера не отвечает на управление');
+  setMultiImageControlsEnabled(hasImage);
+}
+
+// --- настройки изображения (экспозиция / баланс белого / день-ночь) ---
+function multiImageEls() {
+  return {
+    wb: document.getElementById('multiImageWb'),
+    dayNight: document.getElementById('multiImageDayNight'),
+    compensation: document.getElementById('multiImageCompensation'),
+    gainMin: document.getElementById('multiImageGainMin'),
+    gainMax: document.getElementById('multiImageGainMax'),
+    cap: document.getElementById('multiImageCap'),
+  };
+}
+
+function setMultiImageControlsEnabled(enabled) {
+  const e = multiImageEls();
+  [e.wb, e.dayNight, e.compensation, e.gainMin, e.gainMax].forEach((el) => {
+    if (el) el.disabled = !enabled;
+  });
+}
+
+function populateMultiImageUI(data) {
+  const e = multiImageEls();
+  UIHelpers.fillSelect(e.wb, data.wb_presets, UIHelpers.IMAGE_WB_LABELS,
+    data.white_balance && data.white_balance.mode);
+  UIHelpers.fillSelect(e.dayNight, data.day_night_modes, UIHelpers.IMAGE_DAY_NIGHT_LABELS,
+    data.day_night && data.day_night.mode);
+  const exp = data.exposure || {};
+  if (e.compensation && exp.compensation != null) e.compensation.value = exp.compensation;
+  if (e.gainMin && exp.gain_min != null) e.gainMin.value = exp.gain_min;
+  if (e.gainMax && exp.gain_max != null) e.gainMax.value = exp.gain_max;
+}
+
+async function refreshMultiImageSettings(serial) {
+  if (!(settingsCaps && settingsCaps.image_settings)) {
+    setMultiImageControlsEnabled(false);
+    return;
+  }
+  const data = await RtspApi.getImageSettings(serial);
+  if (!data || data.error || !data.reachable) {
+    setCapLine(multiImageEls().cap, false, '', 'Камера не отвечает на управление');
+    setMultiImageControlsEnabled(false);
+    log.warn('Не удалось получить настройки изображения', data);
+    return;
+  }
+  setCapLine(multiImageEls().cap, true, 'Настройки изображения доступны', '');
+  setMultiImageControlsEnabled(true);
+  populateMultiImageUI(data);
+}
+
+async function applyMultiWhiteBalance() {
+  const source = focusedSource();
+  const e = multiImageEls();
+  if (!source || source.kind !== 'rtsp' || !e.wb) return;
+  const data = await RtspApi.setWhiteBalance(source.serial, e.wb.value);
+  if (!data || data.error || data.ok === false) {
+    log.warn('Камера не подтвердила баланс белого', data);
+    refreshMultiImageSettings(source.serial);
+    return;
+  }
+  log.success('Баланс белого применён', { mode: e.wb.value });
+}
+
+async function applyMultiDayNight() {
+  const source = focusedSource();
+  const e = multiImageEls();
+  if (!source || source.kind !== 'rtsp' || !e.dayNight) return;
+  const data = await RtspApi.setDayNight(source.serial, e.dayNight.value);
+  if (!data || data.error || data.ok === false) {
+    log.warn('Камера не подтвердила режим день/ночь', data);
+    refreshMultiImageSettings(source.serial);
+    return;
+  }
+  log.success('Режим день/ночь применён', { mode: e.dayNight.value });
+}
+
+async function applyMultiExposure(field, value) {
+  const source = focusedSource();
+  if (!source || source.kind !== 'rtsp') return;
+  const data = await RtspApi.setExposure(source.serial, { [field]: Number(value) });
+  if (!data || data.error || data.ok === false) {
+    log.warn('Камера не подтвердила экспозицию', data);
+    refreshMultiImageSettings(source.serial);
+    return;
+  }
+  log.success('Экспозиция применена', { [field]: Number(value) });
 }
 
 // --- фото ---
@@ -1277,6 +1369,13 @@ function initModals() {
   document.getElementById('multiVideoOn')?.addEventListener('click', () => applyVideo(true));
   document.getElementById('multiVideoOff')?.addEventListener('click', () => applyVideo(false));
   document.getElementById('multiLightSwitch')?.addEventListener('change', (e) => applyMultiLight(e.target.checked));
+
+  // настройки изображения: применяем сразу при изменении (ползунки — по отпусканию)
+  document.getElementById('multiImageWb')?.addEventListener('change', applyMultiWhiteBalance);
+  document.getElementById('multiImageDayNight')?.addEventListener('change', applyMultiDayNight);
+  document.getElementById('multiImageCompensation')?.addEventListener('change', (e) => applyMultiExposure('compensation', e.target.value));
+  document.getElementById('multiImageGainMin')?.addEventListener('change', (e) => applyMultiExposure('gain_min', e.target.value));
+  document.getElementById('multiImageGainMax')?.addEventListener('change', (e) => applyMultiExposure('gain_max', e.target.value));
 
   document.getElementById('multiInfoClose')?.addEventListener('click', () => closeModal('multiInfoModal'));
   document.getElementById('multiInfoCloseFooter')?.addEventListener('click', () => closeModal('multiInfoModal'));

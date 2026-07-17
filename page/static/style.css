@@ -957,7 +957,8 @@ input[type="range"] {
 .photo-card-popup,
 .video-card-popup,
 .light-card-popup,
-.zoom-card-popup {
+.zoom-card-popup,
+.image-card-popup {
   position: fixed;
   display: none;
   max-width: calc(100vw - 24px);
@@ -984,20 +985,32 @@ input[type="range"] {
   padding: 20px;
 }
 
+.image-card-popup {
+  width: 280px;
+  padding: 20px;
+}
+
 .photo-card-popup.show,
 .video-card-popup.show,
 .light-card-popup.show,
-.zoom-card-popup.show {
+.zoom-card-popup.show,
+.image-card-popup.show {
   display: block;
 }
 
 .photo-card-popup h2,
 .video-card-popup h2,
 .light-card-popup h2,
-.zoom-card-popup h2 {
+.zoom-card-popup h2,
+.image-card-popup h2 {
   margin-top: 0;
   margin-bottom: 14px;
 }
+
+/* настройки изображения: селекты/ползунки в столбик, ползунок тянется на всю ширину */
+.image-settings .field-row { margin-bottom: 12px; }
+.image-settings .field-row:last-child { margin-bottom: 0; }
+.image-settings .field-select { flex: 1; min-width: 0; }
 
 /* --- шапка карточки фичи (иконка + заголовок + кнопка обновления) --- */
 .feature-head {
@@ -2599,14 +2612,8 @@ body.modal-open {
   filter: drop-shadow(0 0 4px rgba(255, 207, 92, 0.7));
 }
 
-/* зум в ячейке — иконка + подпись кратности («2×») */
-.rec-icon--zoom { gap: 2px; }
+/* зум в ячейке — иконка загорается при активном зуме */
 .rec-icon[data-rec-zoom].is-active { color: var(--accent, #3b82f6); }
-.rec-zoom-x {
-  font-size: 11px;
-  font-weight: 700;
-  line-height: 1;
-}
 
 .camera-chip__actions {
   display: flex;

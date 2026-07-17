@@ -337,8 +337,6 @@ class BaseCameraWorker:
         self.save_photo = False
         self.photo_interval = None
         self.last_photo = None
-        # последний сохранённый файл фото (для показа во фронтенде)
-        self.last_photo_path = None
         # сколько фото сохранено за текущую сессию автосохранения
         self.photo_saved_count = 0
 
@@ -347,8 +345,6 @@ class BaseCameraWorker:
         self.video_duration = None
         self.video_start = None
         self.video_writer = None
-        # последний файл записи видео (для показа во фронтенде)
-        self.last_video_path = None
 
         self.metrics = {
             "fps": 0.0,
@@ -448,7 +444,6 @@ class BaseCameraWorker:
         filename = f"frame_{datetime.now().strftime('%d_%m_%Y_%H_%M_%S')}.jpg"
         path = os.path.join(folder, filename)
         cv2.imwrite(path, img)
-        self.last_photo_path = path
         self.photo_saved_count += 1
         return path
 
@@ -489,7 +484,6 @@ class BaseCameraWorker:
             fourcc = cv2.VideoWriter_fourcc(*"MJPG")
             writer_fps = fps if fps and fps > 0 else DEFAULT_VIDEO_FPS
             self.video_writer = cv2.VideoWriter(path, fourcc, writer_fps, (img.shape[1], img.shape[0]))
-            self.last_video_path = path
 
         self.video_writer.write(img)
 
@@ -1625,18 +1619,6 @@ class CameraManager:
             if serial_number not in self.workers:
                 self.workers[serial_number] = CameraWorker(serial_number, self)
             return self.workers[serial_number]
-
-    # полный сброс Harvester (используется при GenTL -1020 resource exhausted)
-    def reset_harvester(self):
-        try:
-            self.harvester.reset()
-        except Exception as e:
-            log_event("camera_core.reset_harvester", "Ошибка сброса Harvester", "warn", {"error": str(e)})
-
-        self.harvester = Harvester()
-        self.driver_loaded = False
-        self.load_driver()
-        log_event("camera_core.reset_harvester", "Harvester пересоздан", "info")
 
     # создать acquirer по серийнику. Подбирает рабочий экземпляр устройства из всех дублей.
     # device_handle — уникальный ключ конкретной записи (приоритет № 1).

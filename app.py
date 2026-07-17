@@ -128,18 +128,6 @@ def api_cams_detailed():
     return manager.list_devices_grouped()
 
 
-# выбрать конкретную запись (handle) и/или интерфейс, через которые открывать камеру
-@app.get("/api/camera/select_interface")
-def select_interface(serial_number: str, interface_id: str = "", device_handle: str = ""):
-    api_log("api.camera.select_interface", "Запрошен выбор записи камеры",
-            payload={"serial_number": serial_number, "interface_id": interface_id, "device_handle": device_handle})
-    data = manager.get(serial_number).select_interface(
-        interface_id or None, device_handle or None)
-    api_log("api.camera.select_interface", "Выбрана запись камеры",
-            payload={"serial_number": serial_number, **data})
-    return data
-
-
 @app.get("/api/status")
 def api_status():
     try:

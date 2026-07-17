@@ -87,12 +87,6 @@ const CameraApi = {
     return apiGet('/api/cams/detailed', 'Ошибка получения детального списка камер:');
   },
 
-  selectInterface(serial, interfaceId) {
-    const query = new URLSearchParams({ serial_number: serial, interface_id: interfaceId || '' });
-    return apiGet(`/api/camera/select_interface?${query.toString()}`,
-      'Ошибка выбора интерфейса камеры:');
-  },
-
   getIp(serial, interfaceId, deviceHandle) {
     const query = new URLSearchParams({ serial_number: serial });
     if (interfaceId) query.set('interface_id', interfaceId);

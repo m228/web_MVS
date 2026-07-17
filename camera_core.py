@@ -1,4 +1,5 @@
 from datetime import datetime
+import ctypes
 import os
 import re
 import threading
@@ -246,6 +247,41 @@ def _find_mvs_runtime():
         except Exception:
             pass
     return None
+
+
+# тип транспортного слоя GigE в MVS SDK (MV_GIGE_DEVICE)
+_MV_GIGE_DEVICE = 1
+
+
+# Прогрев сетевого слоя MVS SDK одним вызовом MV_CC_EnumDevices ДО discovery harvesters.
+# Зачем: GenTL-продюсер ищет камеры через limited-broadcast, который ОС отправляет в
+# интерфейс с наивысшим приоритетом. Когда в системе много адаптеров (VPN/Hyper-V/
+# VirtualBox/ZeroTier), broadcast уходит НЕ на тот NIC, где камера, и продюсер видит 0
+# устройств (хотя камера пингуется и отвечает на unicast/broadcast с нужного интерфейса).
+# MVS SDK (как настольный MVS) сам обходит ВСЕ NIC. После его MV_CC_EnumDevices тот же
+# MvCameraControl.dll отдаёт устройства и GenTL-продюсеру. Эффект держится на процесс
+# (проверено: один прогрев -> несколько update() harvesters видят камеру).
+# Работаем через ctypes прямо по MvCameraControl.dll (рядом с .cti) — Python-обёртка SDK
+# из установки MVS не нужна. Тихо пропускаем, если DLL/символа нет (не-Hikrobot окружение).
+def _sdk_gige_warmup():
+    cti, _ = _discover_cti()
+    if cti is None:
+        return
+    dll_path = cti.parent / MVS_RUNTIME_DLL
+    if not dll_path.is_file():
+        return
+    try:
+        dll = ctypes.WinDLL(str(dll_path))
+        # MV_CC_DEVICE_INFO_LIST = { uint32 nDeviceNum; void* pDeviceInfo[256] }.
+        # Нам нужен побочный эффект (обход всех NIC), результат не парсим — хватает буфера.
+        buf = (ctypes.c_ubyte * 2064)()
+        ret = dll.MV_CC_EnumDevices(ctypes.c_uint(_MV_GIGE_DEVICE), ctypes.byref(buf))
+        count = ctypes.c_uint.from_buffer(buf).value
+        log_event("camera_core.sdk_warmup", "Прогрев MVS SDK (обход сетевых адаптеров)",
+                  "info", {"ret": "0x%x" % (ret & 0xffffffff), "device_count": count})
+    except Exception as e:
+        log_event("camera_core.sdk_warmup", "Прогрев MVS SDK не выполнен", "warn",
+                  {"error": str(e)})
 
 # fps по умолчанию для записи видео, когда камера не сообщила частоту кадров
 DEFAULT_VIDEO_FPS = 20.0
@@ -2007,6 +2043,11 @@ class CameraManager:
             # регистрируется дублями и устройства задваиваются → "multiple devices found"),
             # только обновляем список устройств
             if self.driver_loaded:
+                # если камер не видно — возможно, сетевой слой не «прогрет» SDK'ом
+                # (broadcast продюсера ушёл не в тот NIC при множестве адаптеров/VPN);
+                # прогреваем и повторяем, иначе список так и останется пустым
+                if not self.harvester.device_info_list:
+                    _sdk_gige_warmup()
                 self.harvester.update()
                 return
 
@@ -2018,6 +2059,9 @@ class CameraManager:
 
             cti_path = str(cti_path)
             self.harvester.add_file(cti_path)
+            # прогрев SDK ДО первого update: без него продюсер перечисляет 0 камер,
+            # когда broadcast-дискавери уходит не на тот сетевой интерфейс (см. _sdk_gige_warmup)
+            _sdk_gige_warmup()
             self.harvester.update()
             self.driver_loaded = True
             # в лог пишем, откуда взят продюсер и найден ли его runtime — удобно

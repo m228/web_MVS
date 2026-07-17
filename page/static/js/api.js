@@ -340,6 +340,31 @@ const RtspApi = {
     return apiGet(`/api/rtsp/optical_zoom?${query.toString()}`, 'Ошибка оптического зума (RTSP):');
   },
 
+  // настройки изображения: экспозиция / баланс белого / день-ночь
+  getImageSettings(serial) {
+    return apiGet(`/api/rtsp/image?serial_number=${encodeURIComponent(serial)}`,
+      'Ошибка опроса настроек изображения (RTSP):',
+      { source: 'api.rtsp.image', logRequest: false, logSuccess: false });
+  },
+
+  setExposure(serial, fields) {
+    const query = new URLSearchParams({ serial_number: serial });
+    if (fields.compensation != null) query.set('compensation', fields.compensation);
+    if (fields.gain_min != null) query.set('gain_min', fields.gain_min);
+    if (fields.gain_max != null) query.set('gain_max', fields.gain_max);
+    return apiGet(`/api/rtsp/exposure?${query.toString()}`, 'Ошибка настройки экспозиции (RTSP):');
+  },
+
+  setWhiteBalance(serial, mode) {
+    const query = new URLSearchParams({ serial_number: serial, mode });
+    return apiGet(`/api/rtsp/white_balance?${query.toString()}`, 'Ошибка настройки баланса белого (RTSP):');
+  },
+
+  setDayNight(serial, mode) {
+    const query = new URLSearchParams({ serial_number: serial, mode });
+    return apiGet(`/api/rtsp/day_night?${query.toString()}`, 'Ошибка настройки день/ночь (RTSP):');
+  },
+
   // мини-база сохранённых RTSP-камер
   listSaved() {
     return apiGet('/api/rtsp/saved', 'Ошибка загрузки сохранённых RTSP:',

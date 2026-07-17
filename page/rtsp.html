@@ -80,6 +80,10 @@
                 <span class="mode-indicator hidden" id="lightIndicator"></span>
               </button>
 
+              <button type="button" id="imageBtn" class="toolbar-btn toolbar-btn--neutral" title="Настройки изображения" aria-label="Настройки изображения">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="8.5" cy="9" r="1.5"/><path d="M21 16l-5-5-6 6"/></svg>
+              </button>
+
               <button type="button" id="regionZoomBtn" class="toolbar-btn toolbar-btn--neutral" title="Зум областью — выделите рамку на видео" aria-label="Зум областью">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8V5a2 2 0 0 1 2-2h3M16 3h3a2 2 0 0 1 2 2v3M21 16v3a2 2 0 0 1-2 2h-3M8 21H5a2 2 0 0 1-2-2v-3"/><path d="M8.5 12h7M12 8.5v7"/></svg>
               </button>
@@ -243,6 +247,42 @@
               <span class="switch-label" id="lightSwitchLabel">Выключено</span>
             </label>
             <input type="range" id="lightLevel" class="light-brightness" min="1" max="100" value="100" title="Яркость, %" />
+          </div>
+        </div>
+
+        <div class="card image-card-popup" id="imageCard">
+          <h2>Изображение</h2>
+
+          <p class="cap-line" id="imageCap" data-state="unknown"><span class="cap-dot"></span><span class="cap-text">Проверяю…</span></p>
+
+          <div class="image-settings">
+            <!-- баланс белого -->
+            <label class="field-row">
+              <span>Баланс белого</span>
+              <select class="field-select" id="imageWb"></select>
+            </label>
+
+            <!-- день / ночь -->
+            <label class="field-row">
+              <span>Режим день/ночь</span>
+              <select class="field-select" id="imageDayNight"></select>
+            </label>
+
+            <!-- экспозиция: компенсация -->
+            <label class="field-row">
+              <span>Экспокоррекция</span>
+              <input type="range" id="imageCompensation" class="light-brightness" min="0" max="100" value="50" title="Экспокоррекция" />
+            </label>
+
+            <!-- экспозиция: пределы усиления -->
+            <label class="field-row">
+              <span>Усиление, мин</span>
+              <input type="range" id="imageGainMin" class="light-brightness" min="0" max="100" value="0" title="Минимум усиления" />
+            </label>
+            <label class="field-row">
+              <span>Усиление, макс</span>
+              <input type="range" id="imageGainMax" class="light-brightness" min="0" max="100" value="50" title="Максимум усиления" />
+            </label>
           </div>
         </div>
 

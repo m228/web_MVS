@@ -609,3 +609,51 @@ def rtsp_optical_zoom(serial_number: str, direction: str):
     api_log("api.rtsp.optical_zoom", "Оптический зум RTSP",
             payload={"serial_number": serial_number, "direction": direction, "result": data})
     return data
+
+
+# ---------- настройки изображения RTSP (экспозиция / баланс белого / день-ночь) ----------
+@app.get("/api/rtsp/image")
+def rtsp_image(serial_number: str):
+    worker = manager.get_rtsp(serial_number)
+    if worker is None:
+        return {"error": "rtsp_not_connected"}
+    data = worker.get_image_settings()
+    api_log("api.rtsp.image", "Опрос настроек изображения RTSP",
+            payload={"serial_number": serial_number,
+                     "reachable": data.get("reachable"), "error": data.get("error")})
+    return data
+
+
+@app.get("/api/rtsp/exposure")
+def rtsp_exposure(serial_number: str, compensation: int | None = None,
+                  gain_min: int | None = None, gain_max: int | None = None):
+    worker = manager.get_rtsp(serial_number)
+    if worker is None:
+        return {"error": "rtsp_not_connected"}
+    data = worker.set_exposure(compensation, gain_min, gain_max)
+    api_log("api.rtsp.exposure", "Настройка экспозиции RTSP",
+            payload={"serial_number": serial_number, "compensation": compensation,
+                     "gain_min": gain_min, "gain_max": gain_max, "result": data})
+    return data
+
+
+@app.get("/api/rtsp/white_balance")
+def rtsp_white_balance(serial_number: str, mode: str):
+    worker = manager.get_rtsp(serial_number)
+    if worker is None:
+        return {"error": "rtsp_not_connected"}
+    data = worker.set_white_balance(mode)
+    api_log("api.rtsp.white_balance", "Настройка баланса белого RTSP",
+            payload={"serial_number": serial_number, "mode": mode, "result": data})
+    return data
+
+
+@app.get("/api/rtsp/day_night")
+def rtsp_day_night(serial_number: str, mode: str):
+    worker = manager.get_rtsp(serial_number)
+    if worker is None:
+        return {"error": "rtsp_not_connected"}
+    data = worker.set_day_night(mode)
+    api_log("api.rtsp.day_night", "Настройка день/ночь RTSP",
+            payload={"serial_number": serial_number, "mode": mode, "result": data})
+    return data

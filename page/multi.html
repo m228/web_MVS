@@ -205,6 +205,34 @@
             <p class="zoom-hint">Изменение перезапустит поток камеры.</p>
           </section>
 
+          <!-- зона: изображение (только RTSP) — экспозиция / баланс белого / день-ночь -->
+          <section class="settings-zone settings-zone--rtsp" data-zone="image">
+            <h3>Изображение</h3>
+            <p class="cap-line" id="multiImageCap" data-state="unknown"><span class="cap-dot"></span><span class="cap-text">Проверяю…</span></p>
+            <div class="image-settings">
+              <label class="field-row">
+                <span>Баланс белого</span>
+                <select class="field-select" id="multiImageWb"></select>
+              </label>
+              <label class="field-row">
+                <span>Режим день/ночь</span>
+                <select class="field-select" id="multiImageDayNight"></select>
+              </label>
+              <label class="field-row">
+                <span>Экспокоррекция</span>
+                <input type="range" id="multiImageCompensation" class="light-brightness" min="0" max="100" value="50" title="Экспокоррекция" />
+              </label>
+              <label class="field-row">
+                <span>Усиление, мин</span>
+                <input type="range" id="multiImageGainMin" class="light-brightness" min="0" max="100" value="0" title="Минимум усиления" />
+              </label>
+              <label class="field-row">
+                <span>Усиление, макс</span>
+                <input type="range" id="multiImageGainMax" class="light-brightness" min="0" max="100" value="50" title="Максимум усиления" />
+              </label>
+            </div>
+          </section>
+
         </div>
       </div>
     </div>

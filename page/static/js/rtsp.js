@@ -19,6 +19,7 @@ function initRtspPage() {
     video: document.getElementById('videoBtn'),
     light: document.getElementById('lightBtn'),
     zoom: document.getElementById('zoomBtn'),
+    image: document.getElementById('imageBtn'),
   };
 
   const photoCard = document.getElementById('photoCard');
@@ -48,6 +49,14 @@ function initRtspPage() {
   const panX = document.getElementById('panX');
   const panY = document.getElementById('panY');
 
+  const imageCard = document.getElementById('imageCard');
+  const imageCap = document.getElementById('imageCap');
+  const imageWb = document.getElementById('imageWb');
+  const imageDayNight = document.getElementById('imageDayNight');
+  const imageCompensation = document.getElementById('imageCompensation');
+  const imageGainMin = document.getElementById('imageGainMin');
+  const imageGainMax = document.getElementById('imageGainMax');
+
   if (!form || !rtspFrame || !rtspPlaceholder || !buttons.connect) {
     window.AppLog?.error('rtsp', 'Не найдены обязательные элементы RTSP-страницы');
     return;
@@ -76,6 +85,7 @@ function initRtspPage() {
   const videoPopup = UIHelpers.createPopupController(videoCard, buttons.video);
   const lightPopup = UIHelpers.createPopupController(lightCard, buttons.light);
   const zoomPopup = UIHelpers.createPopupController(zoomCard, buttons.zoom);
+  const imagePopup = UIHelpers.createPopupController(imageCard, buttons.image);
 
   // возможности камеры (заполняются после опроса) и текущая кратность цифрового зума
   let capabilities = null;
@@ -123,6 +133,7 @@ function initRtspPage() {
     buttons.video.disabled = !isConnected;
     if (buttons.light) buttons.light.disabled = !isConnected;
     if (buttons.zoom) buttons.zoom.disabled = !isConnected;
+    if (buttons.image) buttons.image.disabled = !isConnected;
     const regionBtn = document.getElementById('regionZoomBtn');
     if (regionBtn) regionBtn.disabled = !isConnected;
     buttons.connect.disabled = isLoading;
@@ -202,6 +213,7 @@ function initRtspPage() {
     videoPopup.close();
     lightPopup.close();
     zoomPopup.close();
+    imagePopup.close();
     setRegionMode(false);
     capabilities = null;
 
@@ -397,6 +409,12 @@ function initRtspPage() {
     setCapLine(zoomCap, true, 'Цифровой зум', 'Цифровой зум');
     if (opticalZoomControls) opticalZoomControls.hidden = !hasOptical;
     if (zoomOpticalHint) zoomOpticalHint.hidden = hasOptical;
+
+    // --- настройки изображения ---
+    const hasImage = !!caps.image_settings;
+    setCapLine(imageCap, hasImage, 'Настройки изображения доступны',
+      caps.reachable ? 'Настройки изображения не поддерживаются' : 'Камера не отвечает на управление');
+    setImageControlsEnabled(hasImage);
   }
 
   async function refreshCapabilities(force) {
@@ -406,11 +424,12 @@ function initRtspPage() {
       capabilities = data;
       log.info('Возможности камеры получены', data);
     } else {
-      capabilities = { reachable: false, white_light: false, optical_zoom: false };
+      capabilities = { reachable: false, white_light: false, optical_zoom: false, image_settings: false };
       log.warn('Не удалось опросить возможности камеры', data);
     }
     applyCapabilitiesUI();
     syncLightState();
+    refreshImageSettings();
     // восстановить UI зума из фактического состояния воркера (не из кэша)
     currentZoom = Number(capabilities.zoom_factor) || 1;
     markZoomLevel(currentZoom);
@@ -437,6 +456,79 @@ function initRtspPage() {
     }
     log.success(on ? 'Подсветка включена' : 'Подсветка выключена', data);
     reflectLightOn(on);
+  }
+
+  // ---------- настройки изображения (экспозиция / баланс белого / день-ночь) ----------
+
+  function populateImageUI(data) {
+    UIHelpers.fillSelect(imageWb, data.wb_presets, UIHelpers.IMAGE_WB_LABELS,
+      data.white_balance && data.white_balance.mode);
+    UIHelpers.fillSelect(imageDayNight, data.day_night_modes, UIHelpers.IMAGE_DAY_NIGHT_LABELS,
+      data.day_night && data.day_night.mode);
+    const exp = data.exposure || {};
+    if (imageCompensation && exp.compensation != null) imageCompensation.value = exp.compensation;
+    if (imageGainMin && exp.gain_min != null) imageGainMin.value = exp.gain_min;
+    if (imageGainMax && exp.gain_max != null) imageGainMax.value = exp.gain_max;
+  }
+
+  function setImageControlsEnabled(enabled) {
+    [imageWb, imageDayNight, imageCompensation, imageGainMin, imageGainMax].forEach((el) => {
+      if (el) el.disabled = !enabled;
+    });
+  }
+
+  async function refreshImageSettings() {
+    if (!isConnected || !serial || !(capabilities && capabilities.image_settings)) {
+      setImageControlsEnabled(false);
+      return;
+    }
+    const data = await RtspApi.getImageSettings(serial);
+    if (!data || data.error || !data.reachable) {
+      setCapLine(imageCap, false, '', 'Камера не отвечает на управление');
+      setImageControlsEnabled(false);
+      log.warn('Не удалось получить настройки изображения', data);
+      return;
+    }
+    setCapLine(imageCap, true, 'Настройки изображения доступны', '');
+    setImageControlsEnabled(true);
+    populateImageUI(data);
+    log.info('Настройки изображения получены', data);
+  }
+
+  async function applyWhiteBalance() {
+    if (!serial || !imageWb) return;
+    const mode = imageWb.value;
+    const data = await RtspApi.setWhiteBalance(serial, mode);
+    if (!data || data.error || data.ok === false) {
+      log.warn('Камера не подтвердила баланс белого', data);
+      refreshImageSettings(); // откат к фактическому
+      return;
+    }
+    log.success('Баланс белого применён', { mode });
+  }
+
+  async function applyDayNight() {
+    if (!serial || !imageDayNight) return;
+    const mode = imageDayNight.value;
+    const data = await RtspApi.setDayNight(serial, mode);
+    if (!data || data.error || data.ok === false) {
+      log.warn('Камера не подтвердила режим день/ночь', data);
+      refreshImageSettings();
+      return;
+    }
+    log.success('Режим день/ночь применён', { mode });
+  }
+
+  // применить одно поле экспозиции (компенсация / пределы усиления)
+  async function applyExposure(field, value) {
+    if (!serial) return;
+    const data = await RtspApi.setExposure(serial, { [field]: Number(value) });
+    if (!data || data.error || data.ok === false) {
+      log.warn('Камера не подтвердила экспозицию', data);
+      refreshImageSettings();
+      return;
+    }
+    log.success('Экспозиция применена', { [field]: Number(value) });
   }
 
   function markZoomLevel(factor) {
@@ -634,6 +726,10 @@ function initRtspPage() {
     event.stopPropagation();
     zoomPopup.toggle();
   });
+  if (buttons.image) buttons.image.addEventListener('click', (event) => {
+    event.stopPropagation();
+    imagePopup.toggle();
+  });
 
   if (photoOnBtn) photoOnBtn.addEventListener('click', startPhotoSaving);
   if (photoOffBtn) photoOffBtn.addEventListener('click', stopPhotoSaving);
@@ -641,6 +737,13 @@ function initRtspPage() {
   if (videoOffBtn) videoOffBtn.addEventListener('click', stopVideoSaving);
 
   if (lightSwitch) lightSwitch.addEventListener('change', () => setLight(lightSwitch.checked));
+
+  // настройки изображения: применяем сразу при изменении (ползунки — по отпусканию)
+  if (imageWb) imageWb.addEventListener('change', applyWhiteBalance);
+  if (imageDayNight) imageDayNight.addEventListener('change', applyDayNight);
+  if (imageCompensation) imageCompensation.addEventListener('change', () => applyExposure('compensation', imageCompensation.value));
+  if (imageGainMin) imageGainMin.addEventListener('change', () => applyExposure('gain_min', imageGainMin.value));
+  if (imageGainMax) imageGainMax.addEventListener('change', () => applyExposure('gain_max', imageGainMax.value));
 
   if (zoomLevels) zoomLevels.addEventListener('click', (event) => {
     const btn = event.target.closest('button[data-zoom]');
@@ -657,6 +760,7 @@ function initRtspPage() {
   if (videoCard) videoCard.addEventListener('click', (event) => event.stopPropagation());
   if (lightCard) lightCard.addEventListener('click', (event) => event.stopPropagation());
   if (zoomCard) zoomCard.addEventListener('click', (event) => event.stopPropagation());
+  if (imageCard) imageCard.addEventListener('click', (event) => event.stopPropagation());
 
   document.addEventListener('click', (event) => {
     const insidePhoto = photoCard && photoCard.contains(event.target);
@@ -667,11 +771,14 @@ function initRtspPage() {
     const onLightBtn = buttons.light && buttons.light.contains(event.target);
     const insideZoom = zoomCard && zoomCard.contains(event.target);
     const onZoomBtn = buttons.zoom && buttons.zoom.contains(event.target);
+    const insideImage = imageCard && imageCard.contains(event.target);
+    const onImageBtn = buttons.image && buttons.image.contains(event.target);
 
     if (!insidePhoto && !onPhotoBtn) photoPopup.close();
     if (!insideVideo && !onVideoBtn) videoPopup.close();
     if (!insideLight && !onLightBtn) lightPopup.close();
     if (!insideZoom && !onZoomBtn) zoomPopup.close();
+    if (!insideImage && !onImageBtn) imagePopup.close();
   });
 
   rtspFrame.addEventListener('load', () => {

@@ -1593,6 +1593,37 @@ class RtspCameraWorker(BaseCameraWorker):
         ok = dahua_control.optical_zoom(host, user, password, direction)
         return {"status": "ok" if ok else "failed", "direction": direction, "mode": "optical"}
 
+    # ---------- настройки изображения (экспозиция / баланс белого / день-ночь) ----------
+
+    def get_image_settings(self):
+        """Текущие настройки изображения камеры (экспозиция/ББ/день-ночь)."""
+        host, user, password = self._dahua_creds()
+        if not host:
+            return {"error": "no_host"}
+        return dahua_control.get_image_settings(host, user, password)
+
+    def set_exposure(self, compensation=None, gain_min=None, gain_max=None):
+        """Экспозиция (авто): компенсация и пределы усиления. Пишется во все профили."""
+        host, user, password = self._dahua_creds()
+        if not host:
+            return {"error": "no_host"}
+        return dahua_control.set_exposure(host, user, password,
+                                          compensation, gain_min, gain_max)
+
+    def set_white_balance(self, mode):
+        """Баланс белого: пресет (Auto/Sunny/…). Пишется во все профили."""
+        host, user, password = self._dahua_creds()
+        if not host:
+            return {"error": "no_host"}
+        return dahua_control.set_white_balance(host, user, password, mode)
+
+    def set_day_night(self, mode):
+        """Режим день/ночь: Color | BlackWhite. Пишется во все профили."""
+        host, user, password = self._dahua_creds()
+        if not host:
+            return {"error": "no_host"}
+        return dahua_control.set_day_night(host, user, password, mode)
+
 
 class CameraManager:
     """Управляет драйвером, сканированием сети и реестром камер."""

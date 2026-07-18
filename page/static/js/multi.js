@@ -584,18 +584,10 @@ function startStream(index) {
   const source = getSource(tile.serial);
   if (!source) return;
 
-  // Одновременно стабильно работает только одна GigE-камера (Hikrobot): продюсер/
-  // полоса не тянут два потока сразу — второй стартует, но кадров нет. Если уже
-  // есть активная GigE-ячейка, спрашиваем подтверждение и закрываем её.
-  if (source.kind === 'gige') {
-    const busyIndex = state.tiles.findIndex((t, i) =>
-      i !== index && t.connected && t.kind === 'gige');
-    if (busyIndex !== -1) {
-      askReplaceGige(busyIndex, index);
-      return;
-    }
-  }
-
+  // Мультикамерность: несколько GigE одновременно РАЗРЕШЕНЫ. На SDK у каждой камеры
+  // свой handle/поток/resend (как в MVS), поэтому потоки независимы и не конфликтуют.
+  // (Старое ограничение «одна GigE» было из-за нестабильности harvesters — снято.)
+  // Полоса — физика: две 5МП на одном линке делят канал; лечится разрешением/fps/Bayer.
   doStartStream(index);
 }
 

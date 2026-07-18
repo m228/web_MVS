@@ -16,8 +16,11 @@ from PyInstaller.utils.hooks import collect_all, collect_submodules
 
 datas = [('page', 'page'), ('Driver', 'Driver'), ('VERSION', '.')]
 binaries = []
-hiddenimports = ['app', 'camera_core', 'rtsp_store', 'net_tools', 'paths', 'logger', 'updater', 'diag']
+hiddenimports = ['app', 'camera_core', 'rtsp_store', 'net_tools', 'paths', 'logger', 'updater', 'diag',
+                 'dahua_control', 'sdk_gige']
 hiddenimports += collect_submodules('uvicorn')
+# вложенная обёртка MVS SDK (mvsdk/) — динамические импорты, тянем все подмодули
+hiddenimports += collect_submodules('mvsdk')
 
 for pkg in ('genicam', 'harvesters'):
     d, b, h = collect_all(pkg)

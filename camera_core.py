@@ -89,10 +89,9 @@ GENTL_HINTS = {
 FRAME_FETCH_TIMEOUT = 10.0
 MAX_FRAME_TIMEOUTS = 60
 
-# SDK-путь GigE: короткий таймаут одной попытки захвата (мс), чтобы цикл ЧАСТО проверял
-# self.running и быстро отпускал камеру при остановке (иначе висел бы в GetImageBuffer до
-# 10 с, а новый стрим не мог открыться). Простой (нет кадров) считаем ПО ВРЕМЕНИ, а не по
-# числу попыток — на низком FPS между кадрами много «пустых» опросов, это норма.
+# SDK-путь GigE: короткий таймаут одной попытки захвата — цикл часто проверяет running и
+# быстро отпускает камеру при стопе. Простой считаем ПО ВРЕМЕНИ (на низком FPS пустых
+# опросов много — это норма), а не по числу попыток.
 SDK_GRAB_TIMEOUT_MS = 300
 SDK_STREAM_STALL_SECONDS = 20.0
 
@@ -155,15 +154,11 @@ PROGRAM_DIR = BUNDLE_DIR
 CTI_FILENAME = "MvProducerGEV.cti"
 MVS_RUNTIME_DLL = "MvCameraControl.dll"
 
-# Стандартные папки установки MVS SDK, где лежит GenTL-продюсер и его runtime.
-# Нужны, потому что env GENICAM_GENTL64_PATH есть НЕ всегда: свежий процесс (двойной
-# клик по exe + UAC-элевейшн) может не унаследовать её из окружения, хотя из PyCharm
-# она видна. Тогда системный MVS ищем прямо по этим путям. Runtime-папки идут первыми:
-# в них рядом с .cti лежит ВЕСЬ runtime (MvCameraControl.dll + genicam), поэтому
-# зависимости продюсера резолвятся из одного места (см. _register_driver_dll_dir).
+# Папки установки MVS SDK с GenTL-продюсером и его runtime. env GENICAM_GENTL64_PATH есть
+# не всегда (exe от Explorer/UAC её не наследует), поэтому ищем системный MVS и по путям.
+# Common Files — первым: актуальные версии кладут ВЕСЬ runtime (.cti + genicam + DLL) туда,
+# туда же смотрит env; зависимости продюсера резолвятся из одного места.
 MVS_GENTL_DIRS = [
-    # актуальные версии MVS кладут ВЕСЬ runtime (.cti + genicam + MvCameraControl.dll)
-    # сюда — в Common Files, а env GENICAM_GENTL64_PATH указывает именно на этот путь.
     r"C:\Program Files (x86)\Common Files\MVS\Runtime\Win64_x64",
     r"C:\Program Files\Common Files\MVS\Runtime\Win64_x64",
     r"C:\Program Files (x86)\MVS\Runtime\Win64_x64",
@@ -263,13 +258,10 @@ _sdk_devices_lock = threading.Lock()
 
 
 # Прогрев сетевого слоя MVS SDK (MV_CC_EnumDevices) ДО discovery harvesters + кэш устройств.
-# Зачем прогрев: GenTL-продюсер ищет камеры через limited-broadcast, который ОС отправляет
-# в интерфейс с наивысшим приоритетом. При множестве адаптеров (VPN/Hyper-V/VirtualBox/
-# ZeroTier) broadcast уходит НЕ на тот NIC, и продюсер видит 0 устройств. MVS SDK (как
-# настольный MVS) сам обходит ВСЕ NIC; после его enum тот же MvCameraControl.dll отдаёт
-# устройства и GenTL-продюсеру (эффект на процесс). Заодно кэшируем device_info по
-# серийнику — по ним CameraWorker открывает поток через SDK (с resend). Тихо пропускаем,
-# если рантайма/обёртки нет (не-Hikrobot окружение) — тогда остаётся чистый harvesters-путь.
+# GenTL-продюсер ищет через limited-broadcast, который ОС шлёт в интерфейс с высшим
+# приоритетом; при множестве адаптеров/VPN он уходит не на тот NIC → 0 устройств. SDK (как
+# MVS) сам обходит все NIC — после его enum тот же MvCameraControl.dll отдаёт устройства и
+# продюсеру (эффект на процесс). Заодно кэшируем device_info по серийнику для SDK-стрима.
 def _sdk_gige_warmup():
     cti, _ = _discover_cti()
     if cti is None:
@@ -278,9 +270,8 @@ def _sdk_gige_warmup():
         return
     try:
         devices = sdk_gige.enum_gige()
-        # НЕ очищаем кэш: при активном SDK-стриме камера «занята» и повторный enum
-        # вернёт 0 — очистка выбила бы device_info, и следующий стрим ушёл бы в
-        # harvesters-путь (и упал). Держим последнее известное; open() сам проверит.
+        # кэш НЕ очищаем: при активном стриме камера занята и enum вернёт 0 — иначе выбили
+        # бы device_info и следующий стрим ушёл бы в harvesters-путь. Держим последнее известное.
         with _sdk_devices_lock:
             for d in devices:
                 _sdk_devices[d["serial"]] = d["_info"]
@@ -1001,16 +992,14 @@ class CameraWorker(BaseCameraWorker):
             log_event("camera_core.generate_stream", "Старый поток открыт, принудительно закрытие", "warn")
             self.force_close()
 
-        # ждём, пока прошлый сеанс ПОЛНОСТЬЮ отпустит камеру: его генератор закрывает
-        # SDK-поток на своём потоке в течение ~SDK_GRAB_TIMEOUT_MS. Без этого новый open
-        # упирается в «камера занята» (это и давало «первый раз ок, потом не подключается»).
+        # ждём, пока прошлый сеанс полностью отпустит камеру (его генератор закрывает
+        # поток на своём потоке за ~SDK_GRAB_TIMEOUT_MS), иначе новый open упрётся в «занято»
         _deadline = time.time() + 3.0
         while time.time() < _deadline and (self._sdk_stream is not None or self.ia is not None):
             time.sleep(0.1)
 
-        # GigE-поток через MVS SDK (resend) — надёжнее harvesters на нагруженной сети:
-        # harvesters/GenTL не переспрашивает потерянные пакеты и на кадре 15 МБ сыпет
-        # таймаутами. Если SDK доступен и по серийнику есть device_info — идём этим путём.
+        # GigE через MVS SDK (resend) — надёжнее harvesters на нагруженной сети. Если SDK
+        # доступен и по серийнику есть device_info — идём этим путём.
         device_info = _sdk_device_info(self.serial_number)
         if sdk_gige.available() and device_info is not None:
             settings = {
@@ -1179,9 +1168,8 @@ class CameraWorker(BaseCameraWorker):
 
             self._reset_save_state()
 
-    # GigE-поток через MVS SDK (MvCameraControl.dll с resend). Отдаёт MJPEG теми же
-    # чанками, что и harvesters-путь. Настройки (разрешение/выдержка/fps) пока не
-    # применяем — берём текущие с камеры (фаза 1: стабильный поток на дефолте).
+    # GigE-поток через MVS SDK (resend): применяет settings, отдаёт MJPEG теми же чанками,
+    # что и harvesters-путь.
     def _generate_sdk(self, device_info, settings=None):
         stream = None
         last_frame_time = None
@@ -1302,10 +1290,8 @@ class CameraWorker(BaseCameraWorker):
             except Exception as e:
                 log_event("camera_core.close_stream_force", "Ошибка force destroy", "warn", {"error": str(e)})
 
-        # SDK-поток НЕ закрываем отсюда: его владелец — свой генератор, он проверяет
-        # self.running каждые ~SDK_GRAB_TIMEOUT_MS и закроет handle на СВОЁМ потоке.
-        # Рушить handle из чужого потока (пока тот в GetImageBuffer) оставляет SDK в
-        # кривом состоянии → следующий стрим не открывается. Мы лишь снимаем running=False.
+        # SDK-поток отсюда НЕ закрываем: его закроет свой генератор (на своём потоке, по
+        # running). Рушить handle из чужого потока, пока тот в GetImageBuffer, ломает SDK.
 
         log_event("camera_core.close_stream_force", "Запрошена принудительная остановка потока", "warn")
         return {"status": "force_stopped"}
@@ -1837,10 +1823,8 @@ class CameraManager:
         # камер стримятся одновременно) создание воркера сериализуем, чтобы два
         # запроса по одному серийнику не создали два конкурирующих объекта.
         self._registry_lock = threading.Lock()
-        # сериализует доступ к общему Harvester (load_driver/update/force_ip): под
-        # мультикамерным режимом два GigE-стрима стартуют из разных потоков uvicorn и
-        # одновременный harvester.update() из двух потоков — гонка. RLock: scan_cams и
-        # force_ip зовут load_driver, уже держа лок.
+        # сериализует общий Harvester (load_driver/update): два GigE-стрима стартуют из
+        # разных потоков — одновременный update() гонка. RLock: scan_cams зовёт load_driver.
         self._driver_lock = threading.RLock()
 
     # создать/получить GigE-камеру
@@ -2203,9 +2187,8 @@ class CameraManager:
             # регистрируется дублями и устройства задваиваются → "multiple devices found"),
             # только обновляем список устройств
             if self.driver_loaded:
-                # если камер не видно — возможно, сетевой слой не «прогрет» SDK'ом
-                # (broadcast продюсера ушёл не в тот NIC при множестве адаптеров/VPN);
-                # прогреваем и повторяем, иначе список так и останется пустым
+                # камер не видно — возможно, слой не «прогрет» SDK'ом (broadcast ушёл не
+                # на тот NIC); прогреваем и повторяем
                 if not self.harvester.device_info_list:
                     _sdk_gige_warmup()
                 self.harvester.update()

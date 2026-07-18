@@ -238,32 +238,6 @@
     </div>
   </div>
 
-  <!-- модалка: подтверждение замены активной GigE-камеры -->
-  <div class="modal-backdrop modal-backdrop--small" id="multiGigeReplaceModal" aria-hidden="true">
-    <div class="confirm-modal__card" role="dialog" aria-modal="true">
-      <div class="network-modal__header">
-        <div class="network-modal__title-group">
-          <h2>Уже запущена GigE-камера</h2>
-        </div>
-        <button type="button" class="modal-close-btn" id="multiGigeReplaceClose" aria-label="Закрыть">×</button>
-      </div>
-      <div class="confirm-modal__body">
-        <p>
-          Одновременно стабильно работает только одна GigE-камера (Hikrobot).
-          Сейчас активна камера <strong id="multiGigeReplaceBusy">-</strong>.
-        </p>
-        <div class="confirm-modal__note">
-          Чтобы запустить <strong id="multiGigeReplaceNew">-</strong>, текущая камера будет
-          остановлена. Продолжить?
-        </div>
-      </div>
-      <div class="network-modal__footer">
-        <button type="button" class="btn-secondary" id="multiGigeReplaceCancel">Отмена</button>
-        <button type="button" class="btn-primary" id="multiGigeReplaceAccept">Закрыть и запустить</button>
-      </div>
-    </div>
-  </div>
-
   <!-- модалка: информация о камере (read-only) -->
   <div class="modal-backdrop" id="multiInfoModal" aria-hidden="true">
     <div class="network-modal__card" role="dialog" aria-modal="true">

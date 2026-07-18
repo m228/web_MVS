@@ -584,10 +584,8 @@ function startStream(index) {
   const source = getSource(tile.serial);
   if (!source) return;
 
-  // Мультикамерность: несколько GigE одновременно РАЗРЕШЕНЫ. На SDK у каждой камеры
-  // свой handle/поток/resend (как в MVS), поэтому потоки независимы и не конфликтуют.
-  // (Старое ограничение «одна GigE» было из-за нестабильности harvesters — снято.)
-  // Полоса — физика: две 5МП на одном линке делят канал; лечится разрешением/fps/Bayer.
+  // Несколько GigE одновременно разрешены: на SDK у каждой свой handle/поток/resend,
+  // потоки независимы (полоса — физика, лечится разрешением/fps/Bayer).
   doStartStream(index);
 }
 
@@ -610,38 +608,6 @@ function doStartStream(index) {
   renderTile(index);
   updateToolbar();
   log.success('Старт потока в ячейке', { tile: index, serial: tile.serial, kind: tile.kind });
-}
-
-// подтверждение замены активной GigE-камеры на другую
-let pendingGigeStart = null;
-
-function askReplaceGige(busyIndex, newIndex) {
-  const busyTile = state.tiles[busyIndex] || {};
-  const newTile = state.tiles[newIndex] || {};
-  const busySource = busyTile.serial ? getSource(busyTile.serial) : null;
-  const newSource = newTile.serial ? getSource(newTile.serial) : null;
-
-  const busyEl = document.getElementById('multiGigeReplaceBusy');
-  const newEl = document.getElementById('multiGigeReplaceNew');
-  if (busyEl) busyEl.textContent = busySource ? busySource.label : '—';
-  if (newEl) newEl.textContent = newSource ? newSource.label : '—';
-
-  pendingGigeStart = { busyIndex, newIndex };
-  openModal('multiGigeReplaceModal');
-}
-
-async function confirmReplaceGige() {
-  if (!pendingGigeStart) return;
-  const { busyIndex, newIndex } = pendingGigeStart;
-  pendingGigeStart = null;
-  closeModal('multiGigeReplaceModal');
-  await disconnectTile(busyIndex);
-  doStartStream(newIndex);
-}
-
-function cancelReplaceGige() {
-  pendingGigeStart = null;
-  closeModal('multiGigeReplaceModal');
 }
 
 async function stopStream(serial, kind) {
@@ -1374,10 +1340,6 @@ function initModals() {
 
   document.getElementById('multiConfigClose')?.addEventListener('click', () => closeModal('multiConfigModal'));
   document.getElementById('multiConfigCloseFooter')?.addEventListener('click', () => closeModal('multiConfigModal'));
-
-  document.getElementById('multiGigeReplaceClose')?.addEventListener('click', cancelReplaceGige);
-  document.getElementById('multiGigeReplaceCancel')?.addEventListener('click', cancelReplaceGige);
-  document.getElementById('multiGigeReplaceAccept')?.addEventListener('click', confirmReplaceGige);
 
   document.getElementById('multiAddRtspBtn')?.addEventListener('click', openRtspModal);
   document.getElementById('multiRtspClose')?.addEventListener('click', () => closeModal('multiRtspModal'));

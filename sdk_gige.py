@@ -1,14 +1,9 @@
-"""Захват кадров GigE через официальный MVS SDK (MvCameraControl.dll) — с resend.
+"""Захват кадров GigE через MVS SDK (MvCameraControl.dll) с resend.
 
-Зачем: harvesters/GenTL-продюсер не умеет переспрашивать потерянные UDP-пакеты
-(resend). Кадр 5МП RGB = ~15 МБ = ~10000 пакетов; на нагруженной сети теряется хоть
-один — и кадр не собирается (сплошные таймауты -1011). Настольный MVS работает, потому
-что включает MV_GIGE_SetResend. Здесь делаем так же: открываем камеру напрямую через
-SDK, включаем resend, оптимальный размер пакета, и берём кадры MV_CC_GetImageBuffer.
-
-Обёртка SDK вложена в проект (mvsdk/, чистый ctypes). Рантайм MVS (MvCameraControl.dll)
-обязателен — он и так нужен GenTL-продюсеру для .cti. Модуль тихо деградирует
-(available()==False), если рантайма/обёртки нет: тогда остаётся старый harvesters-путь.
+harvesters/GenTL не переспрашивает потерянные UDP-пакеты, поэтому кадр ~15 МБ на
+нагруженной сети не собирается (таймауты -1011). SDK (как настольный MVS) включает
+MV_GIGE_SetResend — так и делаем. Обёртка вложена в mvsdk/ (ctypes); рантайм MVS и так
+нужен GenTL-продюсеру. Если рантайма нет — available()==False, остаётся harvesters-путь.
 """
 import os
 import threading
@@ -20,16 +15,12 @@ from logger import log_event
 _sdk = None          # модуль mvsdk после успешной загрузки
 _init_done = False
 _pixel_names = {}    # enPixelType(int) -> строка формата для _to_bgr
-# сериализует MV_CC_EnumDevices: под мультикамерным режимом enum могут дёрнуть из
-# двух потоков (ленивый доопрос при одновременном старте) — не гоняем его параллельно
-_enum_lock = threading.Lock()
+_enum_lock = threading.Lock()  # MV_CC_EnumDevices не гоняем из двух потоков разом
 
 
 def init(runtime_dir=None):
-    """Один раз: добавить каталог рантайма в поиск DLL и импортировать mvsdk.
-
-    runtime_dir — папка с MvCameraControl.dll (обычно рядом с .cti). Возвращает True,
-    если SDK загрузился."""
+    """Один раз: добавить runtime_dir (папка с MvCameraControl.dll, рядом с .cti) в
+    поиск DLL и импортировать mvsdk. True, если SDK загрузился."""
     global _sdk, _init_done
     if _init_done:
         return _sdk is not None
@@ -85,13 +76,13 @@ def enum_gige():
         ret = _sdk.MvCamera.MV_CC_EnumDevices(_sdk.MV_GIGE_DEVICE, dev_list)
         if ret != 0:
             return result
-        # разбираем СРАЗУ под локом: указатели dev_list живут только до следующего Enum
+        # разбираем и копируем структуры под локом: указатели dev_list живут только до
+        # следующего Enum
         for i in range(dev_list.nDeviceNum):
             info = _sdk.cast(dev_list.pDeviceInfo[i],
                              _sdk.POINTER(_sdk.MV_CC_DEVICE_INFO)).contents
             gige = info.SpecialInfo.stGigEInfo
             ip = gige.nCurrentIp
-            # копируем структуру: указатели из dev_list живут только до следующего Enum
             info_copy = _sdk.MV_CC_DEVICE_INFO()
             _sdk.memmove(_sdk.byref(info_copy), _sdk.byref(info),
                          _sdk.sizeof(_sdk.MV_CC_DEVICE_INFO))
@@ -122,27 +113,24 @@ class GigeSdkStream:
         r = c.MV_CC_OpenDevice()
         if r != 0:
             c.MV_CC_DestroyHandle()
-            # 0x80000203 = device busy/уже открыта другим клиентом (частая причина
-            # «первый раз ок, потом не подключается» — предыдущий handle не отпущен)
+            # 0x80000203 = камера занята (предыдущий handle не отпущен)
             raise RuntimeError("MV_CC_OpenDevice ret=0x%x" % (r & 0xffffffff))
-        # настройки применяем ДО StartGrabbing (размер/формат нельзя менять на ходу)
+        # настройки — ДО StartGrabbing (размер/формат на ходу не менять)
         if settings:
             self._apply_settings(settings)
-        # оптимальный размер пакета под текущий линк (как MVS). На путях без сквозного
-        # jumbo (VPN/свитч) вернёт 1500 — надёжно; jumbo дал бы больше fps, но его роняет сеть.
+        # оптимальный пакет (как MVS): без сквозного jumbo вернёт 1500 — надёжно
         try:
             opt = c.MV_CC_GetOptimalPacketSize()
             if opt > 0:
                 c.MV_CC_SetIntValue("GevSCPSPacketSize", opt)
         except Exception:
             pass
-        # задержку между пакетами в 0 — максимальная скорость; потери добирает resend.
-        # (заодно сбрасываем возможное «наследие» большого GevSCPD, роняющего fps)
+        # GevSCPD=0 — макс. скорость (потери добирает resend); заодно сброс наследия
         try:
             c.MV_CC_SetIntValue("GevSCPD", 0)
         except Exception:
             pass
-        # КЛЮЧЕВОЕ: переспрос потерянных пакетов — иначе кадр 15 МБ не собирается
+        # resend — ключевое: без переспроса пакетов кадр 15 МБ не собирается
         try:
             c.MV_GIGE_SetResend(1, 10, 50)
         except Exception as e:
@@ -153,9 +141,8 @@ class GigeSdkStream:
         self._grabbing = True
 
     def _apply_settings(self, s):
-        """Применить настройки камеры по SDK (до StartGrabbing). Порядок важен:
-        формат -> смещения в 0 -> размеры -> смещения. Ошибку каждого поля терпим
-        (несовместимые значения бывают) и логируем, чтобы поток всё равно поднялся."""
+        """Настройки камеры по SDK (до StartGrabbing). Порядок: формат -> offset=0 ->
+        размеры -> offset. Ошибку каждого поля терпим и логируем — поток всё равно встанет."""
         c = self._cam
         res = {}
 

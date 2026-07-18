@@ -1250,7 +1250,10 @@ class CameraWorker(BaseCameraWorker):
                     if dt > 0:
                         self.metrics["fps"] = 1.0 / dt
                 if self.metrics["fps"] > 0:
-                    self.metrics["bandwidth_mbps"] = (len(frame) * 8 * self.metrics["fps"]) / 1_000_000
+                    # СЫРОЙ кадр (raw) = реальные байты на линке (GVSP), а не сжатый JPEG
+                    # в браузер. Так «Скорость потока» отражает загрузку канала камера↔ПК
+                    # (видно, когда упираемся в 100/1000 Мбит/с), а не крохи JPEG.
+                    self.metrics["bandwidth_mbps"] = (raw.size * 8 * self.metrics["fps"]) / 1_000_000
                 last_frame_time = now
 
                 self._maybe_save(img, fps)

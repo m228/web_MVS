@@ -136,23 +136,18 @@
 
       <div class="network-modal__body">
         <div class="settings-zones">
+          <!-- СТОЛБИК 1: автосохранение фото + запись видео -->
           <!-- зона: фото -->
           <section class="settings-zone" data-zone="photo">
             <h3>Автосохранение фото</h3>
-            <label class="field-row">
-              <span>Имя проекта</span>
-              <input class="field-input" type="text" id="multiPhotoProject" placeholder="напр. завод один" />
-            </label>
-            <label class="field-row">
-              <span>Интервал</span>
-              <span class="field-inline">
-                <input class="field-input field-input--sm" type="number" id="multiPhotoInterval" value="5" min="1" />
-                <select class="field-select" id="multiPhotoUnit">
-                  <option value="seconds" selected>сек</option>
-                  <option value="minutes">мин</option>
-                </select>
-              </span>
-            </label>
+            <div class="save-row">
+              <input class="field-input save-project" type="text" id="multiPhotoProject" placeholder="Имя проекта" />
+              <input class="field-input field-input--xs" type="number" id="multiPhotoInterval" value="5" min="1" title="Интервал" />
+              <select class="field-select field-select--xs" id="multiPhotoUnit" title="Единица интервала">
+                <option value="seconds" selected>сек</option>
+                <option value="minutes">мин</option>
+              </select>
+            </div>
             <div class="popup-actions">
               <button type="button" class="btn-primary" id="multiPhotoOn">Включить</button>
               <button type="button" class="btn-secondary" id="multiPhotoOff">Выключить</button>
@@ -163,20 +158,14 @@
           <!-- зона: видео -->
           <section class="settings-zone" data-zone="video">
             <h3>Запись видео</h3>
-            <label class="field-row">
-              <span>Имя проекта</span>
-              <input class="field-input" type="text" id="multiVideoProject" placeholder="напр. завод один" />
-            </label>
-            <label class="field-row">
-              <span>Длительность</span>
-              <span class="field-inline">
-                <input class="field-input field-input--sm" type="number" id="multiVideoDuration" value="10" min="1" />
-                <select class="field-select" id="multiVideoUnit">
-                  <option value="minutes" selected>мин</option>
-                  <option value="seconds">сек</option>
-                </select>
-              </span>
-            </label>
+            <div class="save-row">
+              <input class="field-input save-project" type="text" id="multiVideoProject" placeholder="Имя проекта" />
+              <input class="field-input field-input--xs" type="number" id="multiVideoDuration" value="10" min="1" title="Длительность" />
+              <select class="field-select field-select--xs" id="multiVideoUnit" title="Единица длительности">
+                <option value="minutes" selected>мин</option>
+                <option value="seconds">сек</option>
+              </select>
+            </div>
             <div class="popup-actions">
               <button type="button" class="btn-primary" id="multiVideoOn">Начать</button>
               <button type="button" class="btn-secondary" id="multiVideoOff">Остановить</button>
@@ -184,7 +173,34 @@
             <p class="record-path" id="multiVideoSavePath" hidden></p>
           </section>
 
-          <!-- зона: подсветка (только RTSP) -->
+          <!-- СТОЛБИК 2: изображение (высокое, на две строки) -->
+          <section class="settings-zone settings-zone--rtsp" data-zone="image">
+            <h3>Изображение</h3>
+            <p class="cap-line" id="multiImageCap" data-state="unknown"><span class="cap-dot"></span><span class="cap-text">Проверяю…</span></p>
+            <div class="image-settings">
+              <div class="img-pair">
+                <label class="img-field"><span>Баланс белого</span><select class="field-select" id="multiImageWb"></select></label>
+                <label class="img-field"><span>День/ночь</span><select class="field-select" id="multiImageDayNight"></select></label>
+              </div>
+              <label class="img-field"><span>Экспокоррекция</span><input type="range" id="multiImageCompensation" class="light-brightness" min="0" max="100" value="50" title="Экспокоррекция" /></label>
+              <div class="img-pair">
+                <label class="img-field"><span>Усиление, мин</span><input type="range" id="multiImageGainMin" class="light-brightness" min="0" max="100" value="0" title="Минимум усиления" /></label>
+                <label class="img-field"><span>Усиление, макс</span><input type="range" id="multiImageGainMax" class="light-brightness" min="0" max="100" value="50" title="Максимум усиления" /></label>
+              </div>
+            </div>
+          </section>
+
+          <!-- СТОЛБИК 3 (узкий): FPS камеры + подсветка -->
+          <section class="settings-zone settings-zone--rtsp" data-zone="camera">
+            <h3>Камера</h3>
+            <div class="save-row">
+              <span class="cam-fps-label">FPS</span>
+              <input class="field-input field-input--xs" type="number" id="multiFps" min="1" max="60" step="1" placeholder="авто" />
+              <button type="button" class="btn-secondary btn-xs" id="multiFpsApply">Применить</button>
+            </div>
+            <p class="zoom-hint">Перезапустит поток.</p>
+          </section>
+
           <section class="settings-zone settings-zone--rtsp" data-zone="light">
             <h3>Подсветка</h3>
             <p class="cap-line" id="multiLightCap" data-state="unknown"><span class="cap-dot"></span><span class="cap-text">Проверяю…</span></p>
@@ -197,47 +213,6 @@
                 <span class="switch-label" id="multiLightLabel">Выключено</span>
               </label>
               <input type="range" id="multiLightLevel" class="light-brightness" min="1" max="100" value="100" title="Яркость, %" />
-            </div>
-          </section>
-
-          <!-- зона: параметры камеры (RTSP: FPS) -->
-          <section class="settings-zone settings-zone--rtsp" data-zone="camera">
-            <h3>Камера</h3>
-            <label class="field-row">
-              <span>FPS</span>
-              <span class="field-inline">
-                <input class="field-input field-input--sm" type="number" id="multiFps" min="1" max="60" step="1" placeholder="авто" />
-                <button type="button" class="btn-secondary" id="multiFpsApply">Применить</button>
-              </span>
-            </label>
-            <p class="zoom-hint">Изменение перезапустит поток камеры.</p>
-          </section>
-
-          <!-- зона: изображение (только RTSP) — экспозиция / баланс белого / день-ночь -->
-          <section class="settings-zone settings-zone--rtsp" data-zone="image">
-            <h3>Изображение</h3>
-            <p class="cap-line" id="multiImageCap" data-state="unknown"><span class="cap-dot"></span><span class="cap-text">Проверяю…</span></p>
-            <div class="image-settings">
-              <label class="field-row">
-                <span>Баланс белого</span>
-                <select class="field-select" id="multiImageWb"></select>
-              </label>
-              <label class="field-row">
-                <span>Режим день/ночь</span>
-                <select class="field-select" id="multiImageDayNight"></select>
-              </label>
-              <label class="field-row">
-                <span>Экспокоррекция</span>
-                <input type="range" id="multiImageCompensation" class="light-brightness" min="0" max="100" value="50" title="Экспокоррекция" />
-              </label>
-              <label class="field-row">
-                <span>Усиление, мин</span>
-                <input type="range" id="multiImageGainMin" class="light-brightness" min="0" max="100" value="0" title="Минимум усиления" />
-              </label>
-              <label class="field-row">
-                <span>Усиление, макс</span>
-                <input type="range" id="multiImageGainMax" class="light-brightness" min="0" max="100" value="50" title="Максимум усиления" />
-              </label>
             </div>
           </section>
 

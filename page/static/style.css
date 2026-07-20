@@ -1171,42 +1171,108 @@ input[type="range"] {
 .popup-actions .btn-primary,
 .popup-actions .btn-secondary { flex: 1; }
 
-/* --- модалка «Настройки» (мультипоточность): всё зонами в одном окне --- */
-.settings-card { width: 640px; max-width: calc(100vw - 32px); }
+/* --- модалка «Настройки» (мультипоточность): 3 столбца, компактно --- */
+/* ширину перебиваем составным селектором: .network-modal__card идёт ниже и иначе выигрывает */
+.network-modal__card.settings-card { width: min(880px, calc(100vw - 32px)); }
 
 .settings-zones {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  /* столбцы: фото/видео | изображение | (узкий) камера/подсветка */
+  grid-template-columns: minmax(0, 1.1fr) minmax(0, 1.1fr) minmax(0, 0.78fr);
   grid-template-areas:
-    "photo  camera"
-    "video  light";
-  gap: 14px;
+    "photo image camera"
+    "video image light";
+  gap: 12px;
   align-items: start;
 }
 
 .settings-zone[data-zone="photo"]  { grid-area: photo; }
 .settings-zone[data-zone="video"]  { grid-area: video; }
-.settings-zone[data-zone="light"]  { grid-area: light; }
+.settings-zone[data-zone="image"]  { grid-area: image; }
 .settings-zone[data-zone="camera"] { grid-area: camera; }
+.settings-zone[data-zone="light"]  { grid-area: light; }
+
+/* GigE: RTSP-зон нет — остаётся один узкий столбик (фото+видео) */
+.settings-zones.is-gige {
+  grid-template-columns: minmax(0, 340px);
+  grid-template-areas: "photo" "video";
+  justify-content: start;
+}
 
 .settings-zone {
   border: 1px solid var(--border);
   border-radius: 14px;
-  padding: 14px 16px;
+  padding: 12px 14px;
   background: var(--surface-elevated);
 }
 
 .settings-zone h3 {
-  margin: 0 0 12px;
-  font-size: 14px;
+  margin: 0 0 10px;
+  font-size: 13px;
   font-weight: 600;
   color: var(--text);
+  text-align: left;
 }
 
 .settings-zone[hidden] { display: none; }
 
-@media (max-width: 560px) {
-  .settings-zones { grid-template-columns: 1fr; grid-template-areas: none; }
+/* строка автосохранения: имя (растягивается) + значение + единица — всё в одну линию слева */
+.save-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+.save-row .save-project { flex: 1 1 90px; width: auto; min-width: 0; }
+.field-input--xs { width: 48px; padding: 7px 6px; text-align: center; }
+.field-select--xs { padding: 7px 4px; }
+.cam-fps-label { font-size: 13px; color: var(--text-muted, #9aa); }
+.btn-xs { padding: 7px 10px; font-size: 12px; white-space: nowrap; }
+
+/* изображение: пары в одну строку, компактные ползунки, всё слева */
+.img-pair { display: flex; gap: 12px; }
+.img-pair > .img-field { flex: 1; min-width: 0; }
+.img-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--text-muted, #9aa);
+  margin-bottom: 10px;
+  text-align: left;
+}
+.img-field:last-child { margin-bottom: 0; }
+.img-field > span { text-align: left; }
+.image-settings .light-brightness { width: 100%; }
+.image-settings .field-select { width: 100%; }
+
+/* узкий 3-й столбик: подсветку в столбик (тумблер над ползунком) */
+.settings-zone[data-zone="light"] .light-controls {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 10px;
+}
+
+/* планшет: 2 столбца (изображение справа на 2 строки, низ — камера+подсветка) */
+@media (max-width: 760px) {
+  .settings-zones {
+    grid-template-columns: 1fr 1fr;
+    grid-template-areas:
+      "photo image"
+      "video image"
+      "camera light";
+  }
+}
+
+/* узкий экран: всё в один столбик */
+@media (max-width: 520px) {
+  .settings-zones,
+  .settings-zones.is-gige {
+    grid-template-columns: 1fr;
+    grid-template-areas: none;
+    justify-content: stretch;
+  }
   .settings-zone { grid-area: auto !important; }
 }
 

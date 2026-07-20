@@ -825,6 +825,8 @@ function openSettingsModal() {
   // зоны «Подсветка/Зум/Камера(FPS)» — только для RTSP (у GigE их нет)
   const isRtsp = source.kind === 'rtsp';
   document.querySelectorAll('#multiSettingsModal .settings-zone--rtsp').forEach((z) => { z.hidden = !isRtsp; });
+  // у GigE остаются только фото+видео — сворачиваем сетку в один узкий столбик
+  document.querySelector('#multiSettingsModal .settings-zones')?.classList.toggle('is-gige', !isRtsp);
 
   // подставить текущий FPS камеры
   const fpsInput = document.getElementById('multiFps');

@@ -20,6 +20,7 @@ __pycache__/
 /dataset
 /Videos
 /rtsp_cameras.json
+/save_settings.json
 
 # --- временная папка самообновления ---
 /.update

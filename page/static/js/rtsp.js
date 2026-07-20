@@ -299,8 +299,55 @@ function initRtspPage() {
   // показать путь сохранения (папка + шаблон имени файла) из ответа сервера
   // showSavePath вынесена в ui.js (общая для camera/multi/rtsp)
 
+  // прочитать имя проекта из поля; пустое -> предупреждение и null (имя обязательно)
+  function readProjectName(inputName) {
+    const el = document.querySelector(`input[name="${inputName}"]`);
+    const value = el ? el.value.trim() : '';
+    if (!value) {
+      log.warn('Не указано имя проекта');
+      alert('Укажите имя проекта');
+      return null;
+    }
+    return value;
+  }
+
+  // выставить число + единицу (сек/мин) по значению в секундах: кратное 60 показываем
+  // в минутах, но только если есть селектор единиц (иначе значение остаётся в секундах)
+  function setIntervalField(inputName, unitName, seconds) {
+    if (seconds == null || seconds === '') return;
+    const input = document.querySelector(`input[name="${inputName}"]`);
+    if (!input) return;
+    let value = Number(seconds);
+    const unitSel = unitName ? document.querySelector(`select[name="${unitName}"]`) : null;
+    if (unitSel && value >= 60 && value % 60 === 0) {
+      value = value / 60;
+      unitSel.value = 'minutes';
+    } else if (unitSel) {
+      unitSel.value = 'seconds';
+    }
+    input.value = value;
+  }
+
+  // подтянуть сохранённые настройки (имя проекта + интервал/длительность) в модалки
+  async function prefillSaveSettings() {
+    if (!serial) return;
+    const s = await RtspApi.getSaveSettings(serial);
+    if (!s || s.error) return;
+    const setVal = (name, val) => {
+      const el = document.querySelector(`input[name="${name}"]`);
+      if (el && val != null && val !== '') el.value = val;
+    };
+    setVal('photo_project', s.photo_project);
+    setVal('video_project', s.video_project);
+    setIntervalField('photo_interval', 'photo_interval_unit', s.photo_interval);
+    setIntervalField('video_duration', 'video_duration_unit', s.video_duration);
+  }
+
   async function startPhotoSaving() {
     if (!isConnected) return;
+
+    const project = readProjectName('photo_project');
+    if (project === null) return;
 
     const interval = UIHelpers.getPositiveNumber(
       'input[name="photo_interval"]',
@@ -313,7 +360,7 @@ function initRtspPage() {
     const unit = unitSelect ? unitSelect.value : 'seconds';
     const intervalInSeconds = unit === 'minutes' ? interval * 60 : interval;
 
-    const data = await RtspApi.startPhotoSaving(serial, intervalInSeconds);
+    const data = await RtspApi.startPhotoSaving(serial, intervalInSeconds, project);
     if (!data || data.error) {
       log.warn('Сервер не подтвердил запуск сохранения фото', data);
       return;
@@ -339,6 +386,9 @@ function initRtspPage() {
   async function startVideoSaving() {
     if (!isConnected) return;
 
+    const project = readProjectName('video_project');
+    if (project === null) return;
+
     const duration = UIHelpers.getPositiveNumber(
       'input[name="video_duration"]',
       'Не выбрана длительность записи'
@@ -349,7 +399,7 @@ function initRtspPage() {
     const unit = unitSelect ? unitSelect.value : 'minutes';
     const durationInSeconds = unit === 'minutes' ? duration * 60 : duration;
 
-    const data = await RtspApi.startVideoSaving(serial, durationInSeconds);
+    const data = await RtspApi.startVideoSaving(serial, durationInSeconds, project);
     if (!data || data.error) {
       log.warn('Сервер не подтвердил запуск записи видео', data);
       return;
@@ -800,6 +850,9 @@ function initRtspPage() {
     currentZoom = 1;
     markZoomLevel(1);
     refreshCapabilities(false);
+
+    // подтянуть сохранённые имя проекта / интервал в модалки
+    prefillSaveSettings();
   });
 
   rtspFrame.addEventListener('error', () => {

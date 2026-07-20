@@ -12,6 +12,7 @@ from logger import get_events, log_event
 
 from camera_core import manager, build_rtsp_url
 import rtsp_store
+import save_settings
 import net_tools
 import updater
 from paths import read_version, BUNDLE_DIR, DATA_DIR
@@ -368,9 +369,10 @@ def camera_info(serial_number: str, interface_id: str = "", device_handle: str =
 
 
 @app.get("/api/camera/on_save_photo")
-def on_save_photo(serial_number: str, interval: int):
-    data = manager.get(serial_number).on_photo(interval)
-    api_log("api.camera.on_save_photo", "Включено сохранение фото", payload={"interval": interval, "result": data})
+def on_save_photo(serial_number: str, interval: int, project: str = ""):
+    data = manager.get(serial_number).on_photo(interval, project)
+    api_log("api.camera.on_save_photo", "Включено сохранение фото",
+            payload={"interval": interval, "project": project, "result": data})
     return data
 
 
@@ -382,9 +384,10 @@ def off_save_photo(serial_number: str):
 
 
 @app.get("/api/camera/on_save_video")
-def on_save_video(serial_number: str, duration: int):
-    data = manager.get(serial_number).on_video(duration)
-    api_log("api.camera.on_save_video", "Включена запись видео", payload={"duration": duration, "result": data})
+def on_save_video(serial_number: str, duration: int, project: str = ""):
+    data = manager.get(serial_number).on_video(duration, project)
+    api_log("api.camera.on_save_video", "Включена запись видео",
+            payload={"duration": duration, "project": project, "result": data})
     return data
 
 
@@ -410,6 +413,13 @@ def status_video_photo(serial_number: str):
 @app.get("/api/camera/current_config")
 def camera_current_config(serial_number: str):
     return manager.get(serial_number).current_config or {}
+
+
+# сохранённые настройки автосохранения (имя проекта + интервал/длительность) для префилла
+# модалок. Общий для GigE и RTSP — ключ по серийнику. Читает JSON-стор save_settings.
+@app.get("/api/save_settings")
+def get_save_settings(serial_number: str):
+    return save_settings.get(serial_number)
 
 
 # ---------- RTSP-камера (просмотр / запись / снимки) ----------
@@ -510,12 +520,13 @@ def rtsp_metrics(serial_number: str):
 
 
 @app.get("/api/rtsp/on_save_photo")
-def rtsp_on_save_photo(serial_number: str, interval: int):
+def rtsp_on_save_photo(serial_number: str, interval: int, project: str = ""):
     worker = manager.get_rtsp(serial_number)
     if worker is None:
         return {"error": "rtsp_not_connected"}
-    data = worker.on_photo(interval)
-    api_log("api.rtsp.on_save_photo", "Включено автосохранение фото (RTSP)", payload={"interval": interval, "result": data})
+    data = worker.on_photo(interval, project)
+    api_log("api.rtsp.on_save_photo", "Включено автосохранение фото (RTSP)",
+            payload={"interval": interval, "project": project, "result": data})
     return data
 
 
@@ -530,12 +541,13 @@ def rtsp_off_save_photo(serial_number: str):
 
 
 @app.get("/api/rtsp/on_save_video")
-def rtsp_on_save_video(serial_number: str, duration: int):
+def rtsp_on_save_video(serial_number: str, duration: int, project: str = ""):
     worker = manager.get_rtsp(serial_number)
     if worker is None:
         return {"error": "rtsp_not_connected"}
-    data = worker.on_video(duration)
-    api_log("api.rtsp.on_save_video", "Включена запись видео (RTSP)", payload={"duration": duration, "result": data})
+    data = worker.on_video(duration, project)
+    api_log("api.rtsp.on_save_video", "Включена запись видео (RTSP)",
+            payload={"duration": duration, "project": project, "result": data})
     return data
 
 

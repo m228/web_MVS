@@ -762,9 +762,56 @@ function initCameraPage() {
     if (configPopup.isOpen()) await renderCurrentConfig();
   }
 
+  // прочитать имя проекта из поля; пустое -> предупреждение и null (имя обязательно)
+  function readProjectName(inputName) {
+    const el = document.querySelector(`input[name="${inputName}"]`);
+    const value = el ? el.value.trim() : '';
+    if (!value) {
+      log.warn('Не указано имя проекта');
+      alert('Укажите имя проекта');
+      return null;
+    }
+    return value;
+  }
+
+  // выставить число + единицу (сек/мин) по значению в секундах: минуты только если
+  // есть селектор единиц (у фото на этой странице его нет — значение в секундах)
+  function setIntervalField(inputName, unitName, seconds) {
+    if (seconds == null || seconds === '') return;
+    const input = document.querySelector(`input[name="${inputName}"]`);
+    if (!input) return;
+    let value = Number(seconds);
+    const unitSel = unitName ? document.querySelector(`select[name="${unitName}"]`) : null;
+    if (unitSel && value >= 60 && value % 60 === 0) {
+      value = value / 60;
+      unitSel.value = 'minutes';
+    } else if (unitSel) {
+      unitSel.value = 'seconds';
+    }
+    input.value = value;
+  }
+
+  // подтянуть сохранённые настройки (имя проекта + интервал/длительность) в модалки
+  async function prefillSaveSettings() {
+    if (!serialNumber) return;
+    const s = await CameraApi.getSaveSettings(serialNumber);
+    if (!s || s.error) return;
+    const setVal = (name, val) => {
+      const el = document.querySelector(`input[name="${name}"]`);
+      if (el && val != null && val !== '') el.value = val;
+    };
+    setVal('photo_project', s.photo_project);
+    setVal('video_project', s.video_project);
+    setIntervalField('photo_interval', null, s.photo_interval);
+    setIntervalField('video_duration', 'video_duration_unit', s.video_duration);
+  }
+
   // показать путь сохранения (папка + шаблон имени файла) из ответа сервера
   async function startPhotoSaving() {
     if (!isConnected) return;
+
+    const project = readProjectName('photo_project');
+    if (project === null) return;
 
     const interval = UIHelpers.getPositiveNumber(
       'input[name="photo_interval"]',
@@ -772,9 +819,9 @@ function initCameraPage() {
     );
     if (interval === null) return;
 
-    log.info('Запуск сохранения фото', { interval });
+    log.info('Запуск сохранения фото', { interval, project });
 
-    const data = await CameraApi.startPhotoSaving(serialNumber, interval);
+    const data = await CameraApi.startPhotoSaving(serialNumber, interval, project);
     if (!data) {
       log.warn('Сервер не подтвердил запуск сохранения фото');
       return;
@@ -802,6 +849,9 @@ function initCameraPage() {
   async function startVideoSaving() {
     if (!isConnected) return;
 
+    const project = readProjectName('video_project');
+    if (project === null) return;
+
     const duration = UIHelpers.getPositiveNumber(
       'input[name="video_duration"]',
       'Не выбрана длительность записи'
@@ -816,9 +866,10 @@ function initCameraPage() {
       duration,
       unit,
       durationInSeconds,
+      project,
     });
 
-    const data = await CameraApi.startVideoSaving(serialNumber, durationInSeconds);
+    const data = await CameraApi.startVideoSaving(serialNumber, durationInSeconds, project);
     if (!data) {
       log.warn('Сервер не подтвердил запуск записи видео');
       return;
@@ -1011,6 +1062,9 @@ function initCameraPage() {
     startStatusPolling();
     syncMetrics();
     startMetricsPolling();
+
+    // подтянуть сохранённые имя проекта / интервал в модалки
+    prefillSaveSettings();
   });
 
   cameraFrame.addEventListener('error', () => {

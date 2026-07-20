@@ -153,8 +153,9 @@ const CameraApi = {
     );
   },
 
-  startPhotoSaving(serial, interval) {
+  startPhotoSaving(serial, interval, project) {
     const query = new URLSearchParams({ serial_number: serial, interval });
+    if (project) query.set('project', project);
     return apiGet(
       `/api/camera/on_save_photo?${query.toString()}`,
       'Ошибка запуска сохранения фото:'
@@ -168,8 +169,9 @@ const CameraApi = {
     );
   },
 
-  startVideoSaving(serial, duration) {
+  startVideoSaving(serial, duration, project) {
     const query = new URLSearchParams({ serial_number: serial, duration });
+    if (project) query.set('project', project);
     return apiGet(
       `/api/camera/on_save_video?${query.toString()}`,
       'Ошибка запуска записи видео:'
@@ -200,6 +202,15 @@ const CameraApi = {
       `/api/camera/current_config?serial_number=${encodeURIComponent(serial)}`,
       'Ошибка получения текущего конфига камеры:',
       { source: 'api.current_config', logRequest: false, logSuccess: false }
+    );
+  },
+
+  // сохранённые настройки автосохранения (имя проекта + интервал/длительность) для префилла
+  getSaveSettings(serial) {
+    return apiGet(
+      `/api/save_settings?serial_number=${encodeURIComponent(serial)}`,
+      'Ошибка получения сохранённых настроек:',
+      { source: 'api.save_settings', logRequest: false, logSuccess: false }
     );
   }
 };
@@ -265,8 +276,9 @@ const RtspApi = {
     );
   },
 
-  startPhotoSaving(serial, interval) {
+  startPhotoSaving(serial, interval, project) {
     const query = new URLSearchParams({ serial_number: serial, interval });
+    if (project) query.set('project', project);
     return apiGet(`/api/rtsp/on_save_photo?${query.toString()}`, 'Ошибка запуска сохранения фото (RTSP):');
   },
 
@@ -277,8 +289,9 @@ const RtspApi = {
     );
   },
 
-  startVideoSaving(serial, duration) {
+  startVideoSaving(serial, duration, project) {
     const query = new URLSearchParams({ serial_number: serial, duration });
+    if (project) query.set('project', project);
     return apiGet(`/api/rtsp/on_save_video?${query.toString()}`, 'Ошибка запуска записи видео (RTSP):');
   },
 
@@ -384,6 +397,15 @@ const RtspApi = {
 
   removeSaved(url) {
     return apiGet(`/api/rtsp/remove_saved?url=${encodeURIComponent(url)}`, 'Ошибка удаления RTSP из базы:');
+  },
+
+  // сохранённые настройки автосохранения (имя проекта + интервал/длительность) для префилла
+  getSaveSettings(serial) {
+    return apiGet(
+      `/api/save_settings?serial_number=${encodeURIComponent(serial)}`,
+      'Ошибка получения сохранённых настроек:',
+      { source: 'api.save_settings', logRequest: false, logSuccess: false }
+    );
   },
 };
 

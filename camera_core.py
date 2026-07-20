@@ -298,6 +298,15 @@ def _sdk_device_info(serial_number):
     with _sdk_devices_lock:
         return _sdk_devices.get(serial_number)
 
+
+# Убрать серийник из SDK-кэша device_info. Нужно после смены IP: в кэше остаётся
+# device_info со СТАРЫМ адресом, и MV_CC_OpenDevice идёт на него → 0x80000206
+# (MV_E_GC_ACCESS, камера уже на новом IP). После сброса следующий _sdk_device_info()
+# промахнётся по кэшу и сделает свежий enum, подхватив новый адрес. См. bug.txt.
+def _sdk_invalidate_device(serial_number):
+    with _sdk_devices_lock:
+        _sdk_devices.pop(serial_number, None)
+
 # fps по умолчанию для записи видео, когда камера не сообщила частоту кадров
 DEFAULT_VIDEO_FPS = 20.0
 
@@ -1481,6 +1490,9 @@ class CameraWorker(BaseCameraWorker):
                 # сбрасываем "запомненный" handle/интерфейс — следующий scan/connect возьмёт новый
                 self.interface_id = None
                 self.device_handle = None
+                # и SDK-кэш device_info: там остался старый IP, иначе следующий SDK-стрим
+                # уйдёт открывать камеру по прежнему адресу и упрётся в 0x80000206
+                _sdk_invalidate_device(self.serial_number)
 
                 if ip_changed and self.advanced_settings and advanced_changed:
                     log_event("camera_core.change_ip", "Ip mask gateway успешно поменяны", "info")

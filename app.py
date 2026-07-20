@@ -117,20 +117,26 @@ def api_update_apply():
     return result
 
 
+# ВАЖНО (frozen): перечисление/control GenTL-продюсера Hikrobot работает только в
+# ГЛАВНОМ потоке (см. bug.txt / run._warmup). Синхронные (def) эндпоинты FastAPI
+# гонит в потоках пула → там продюсер отдаёт 0 устройств. Поэтому все эндпоинты,
+# трогающие продюсер (scan/list/ip/info/network/change_ip/force_ip), делаем async —
+# они выполняются на event-loop uvicorn, а это и есть главный поток. Стрим остаётся
+# синхронным: GigE идёт через MVS SDK (свой handle, кэш device_info), продюсер не нужен.
 @app.get("/api/cams")
-def api_cams():
+async def api_cams():
     return manager.scan_cams()
 
 
 # детальный список с разбивкой по сетевым интерфейсам (как в MVS)
 @app.get("/api/cams/detailed")
-def api_cams_detailed():
+async def api_cams_detailed():
     manager.scan_cams()
     return manager.list_devices_grouped()
 
 
 @app.get("/api/status")
-def api_status():
+async def api_status():
     try:
         return {"status": manager.check()}
     except Exception as error:
@@ -139,7 +145,7 @@ def api_status():
 
 
 @app.get("/api/ip")
-def get_ip(serial_number: str, interface_id: str = "", device_handle: str = ""):
+async def get_ip(serial_number: str, interface_id: str = "", device_handle: str = ""):
     # interface/handle передаём разово, не мутируя общее состояние воркера:
     # параллельные запросы фронта иначе перетирали бы выбор друг друга
     return manager.get(serial_number).get_ip(interface_id or None, device_handle or None)
@@ -151,7 +157,7 @@ def count_cams():
 
 
 @app.get("/api/get_network_settings")
-def network_settings(serial_number: str, interface_id: str = "", device_handle: str = ""):
+async def network_settings(serial_number: str, interface_id: str = "", device_handle: str = ""):
     worker = manager.get(serial_number)
     # interface/handle разово, без мутации общего состояния (см. /api/ip)
     ip, mask, gateway, dhcp = worker.get_network_settings(interface_id or None, device_handle or None)
@@ -185,7 +191,7 @@ def network_settings_advanced(serial_number: str):
 
 # ForceIP — задать IP камере, недоступной из-за чужой подсети (control не открыть)
 @app.get("/api/force_ip")
-def force_ip(serial_number: str, ip: str, mask: str = "", gateway: str = ""):
+async def force_ip(serial_number: str, ip: str, mask: str = "", gateway: str = ""):
     api_log("api.force_ip", "Запрошен ForceIP",
             payload={"serial_number": serial_number, "ip": ip, "mask": mask, "gateway": gateway})
     data = manager.force_ip(serial_number, ip, mask or None, gateway or None)
@@ -253,7 +259,7 @@ def net_disable_filter(adapter: str):
 
 
 @app.get("/api/change_ip")
-def change_ip(
+async def change_ip(
     serial_number: str,
     ip: str,
     mask: str = "",
@@ -356,7 +362,7 @@ def data_limit(serial_number: str):
 
 
 @app.get("/api/camera/info")
-def camera_info(serial_number: str, interface_id: str = "", device_handle: str = ""):
+async def camera_info(serial_number: str, interface_id: str = "", device_handle: str = ""):
     worker = manager.get(serial_number)
     # interface/handle разово, без мутации общего состояния (см. /api/ip)
     data = worker.get_info(interface_id or None, device_handle or None)

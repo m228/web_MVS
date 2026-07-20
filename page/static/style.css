@@ -1178,7 +1178,7 @@ input[type="range"] {
 .settings-zones {
   display: grid;
   /* столбцы: фото/видео | изображение | (узкий) камера/подсветка */
-  grid-template-columns: minmax(0, 1.1fr) minmax(0, 1.1fr) minmax(0, 0.78fr);
+  grid-template-columns: minmax(0, 1.1fr) minmax(0, 1.1fr) minmax(0, 0.85fr);
   grid-template-areas:
     "photo image camera"
     "video image light";
@@ -1216,23 +1216,36 @@ input[type="range"] {
 
 .settings-zone[hidden] { display: none; }
 
-/* строка автосохранения: имя (растягивается) + значение + единица — всё в одну линию слева */
+/* компактные поля в модалке: перебиваем глобальные input/select (min-height:48px,
+   width:100%, input[type=number]{width:100%}). Специфичность ≥ (0,2,0), чтобы выиграть. */
+.settings-zone .field-input,
+.settings-zone .field-select {
+  min-height: 0;
+  padding: 7px 9px;
+  border-radius: 8px;
+}
+
+/* строка автосохранения: имя (растягивается) + значение + единица — в одну линию слева */
 .save-row {
   display: flex;
   align-items: center;
   gap: 6px;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   margin-bottom: 12px;
 }
-.save-row .save-project { flex: 1 1 90px; width: auto; min-width: 0; }
-.field-input--xs { width: 48px; padding: 7px 6px; text-align: center; }
-.field-select--xs { padding: 7px 4px; }
+.save-row .save-project { flex: 1 1 auto; width: auto; min-width: 0; }
+/* число: 2 класса (0,2,0) бьют input[type="number"] (0,1,1) */
+.save-row .field-input--xs { flex: 0 0 54px; width: 54px; padding: 7px 6px; text-align: center; }
+/* единица (сек/мин): бьём select{width:100%} */
+.save-row .field-select--xs { flex: 0 0 auto; width: auto; padding: 7px 8px; }
+.save-row .cam-fps-label { flex: 0 0 auto; }
+.save-row .btn-xs { flex: 0 0 auto; width: auto; }
 .cam-fps-label { font-size: 13px; color: var(--text-muted, #9aa); }
-.btn-xs { padding: 7px 10px; font-size: 12px; white-space: nowrap; }
+.btn-xs { padding: 7px 12px; font-size: 12px; white-space: nowrap; min-height: 0; }
 
 /* изображение: пары в одну строку, компактные ползунки, всё слева */
 .img-pair { display: flex; gap: 12px; }
-.img-pair > .img-field { flex: 1; min-width: 0; }
+.img-pair > .img-field { flex: 1 1 0; min-width: 0; }
 .img-field {
   display: flex;
   flex-direction: column;
@@ -1244,15 +1257,16 @@ input[type="range"] {
 }
 .img-field:last-child { margin-bottom: 0; }
 .img-field > span { text-align: left; }
+.img-field .field-select { width: 100%; }
 .image-settings .light-brightness { width: 100%; }
-.image-settings .field-select { width: 100%; }
 
-/* узкий 3-й столбик: подсветку в столбик (тумблер над ползунком) */
+/* узкий 3-й столбик: подсветка — тумблер+надпись в строку, яркость снизу */
 .settings-zone[data-zone="light"] .light-controls {
   flex-direction: column;
-  align-items: stretch;
-  gap: 10px;
+  align-items: flex-start;
+  gap: 12px;
 }
+.settings-zone[data-zone="light"] .light-brightness { flex: none; width: 100%; }
 
 /* планшет: 2 столбца (изображение справа на 2 строки, низ — камера+подсветка) */
 @media (max-width: 760px) {

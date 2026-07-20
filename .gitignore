@@ -32,3 +32,9 @@ tasks/todo.md
 .idea/misc.xml
 .idea/web_MVS.iml
 bug.txt
+
+# --- материалы разработки (нужны только на этой машине, пользователю не раскрываем) ---
+/Docs
+/tasks
+/tools
+/task.txt

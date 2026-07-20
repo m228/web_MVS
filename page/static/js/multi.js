@@ -771,6 +771,49 @@ function setCapLine(el, supported, textYes, textNo) {
   if (textEl) textEl.textContent = supported ? textYes : textNo;
 }
 
+// прочитать имя проекта из поля модалки; пустое -> предупреждение и null (имя обязательно)
+function readMultiProjectName(inputId) {
+  const el = document.getElementById(inputId);
+  const value = el ? el.value.trim() : '';
+  if (!value) {
+    log.warn('Не указано имя проекта');
+    alert('Укажите имя проекта');
+    return null;
+  }
+  return value;
+}
+
+// выставить число + единицу (сек/мин) по значению в секундах: кратное 60 показываем в минутах
+function setMultiInterval(inputId, unitId, seconds) {
+  if (seconds == null || seconds === '') return;
+  const input = document.getElementById(inputId);
+  if (!input) return;
+  let value = Number(seconds);
+  const unitSel = document.getElementById(unitId);
+  if (unitSel && value >= 60 && value % 60 === 0) {
+    value = value / 60;
+    unitSel.value = 'minutes';
+  } else if (unitSel) {
+    unitSel.value = 'seconds';
+  }
+  input.value = value;
+}
+
+// подтянуть сохранённые настройки (имя проекта + интервал/длительность) в модалку настроек
+async function prefillMultiSaveSettings(serial, kind) {
+  if (!serial) return;
+  const s = await apiFor(kind).getSaveSettings(serial);
+  if (!s || s.error) return;
+  const setVal = (id, val) => {
+    const el = document.getElementById(id);
+    if (el && val != null && val !== '') el.value = val;
+  };
+  setVal('multiPhotoProject', s.photo_project);
+  setVal('multiVideoProject', s.video_project);
+  setMultiInterval('multiPhotoInterval', 'multiPhotoUnit', s.photo_interval);
+  setMultiInterval('multiVideoDuration', 'multiVideoUnit', s.video_duration);
+}
+
 function openSettingsModal() {
   const source = focusedSource();
   const tile = state.tiles[state.focused];
@@ -790,6 +833,9 @@ function openSettingsModal() {
   showSavePath('multiPhotoSavePath', null);
   showSavePath('multiVideoSavePath', null);
   openModal('multiSettingsModal');
+
+  // подтянуть сохранённые имя проекта / интервал для этой камеры
+  prefillMultiSaveSettings(source.serial, source.kind);
 
   settingsCaps = null;
   if (isRtsp) refreshSettingsCaps(source.serial);
@@ -947,10 +993,12 @@ async function applyPhoto(on) {
   if (!tile || !source) return;
   const api = apiFor(tile.kind);
   if (on) {
+    const project = readMultiProjectName('multiPhotoProject');
+    if (project === null) return;
     const amount = Number(document.getElementById('multiPhotoInterval')?.value) || 5;
     const unit = document.getElementById('multiPhotoUnit')?.value || 'seconds';
     const seconds = unit === 'minutes' ? amount * 60 : amount;
-    const data = await api.startPhotoSaving(source.serial, seconds);
+    const data = await api.startPhotoSaving(source.serial, seconds, project);
     tile.photo = true;
     renderTile(state.focused);
     updateToolbar();
@@ -971,10 +1019,12 @@ async function applyVideo(on) {
   if (!tile || !source) return;
   const api = apiFor(tile.kind);
   if (on) {
+    const project = readMultiProjectName('multiVideoProject');
+    if (project === null) return;
     const amount = Number(document.getElementById('multiVideoDuration')?.value) || 10;
     const unit = document.getElementById('multiVideoUnit')?.value || 'minutes';
     const seconds = unit === 'minutes' ? amount * 60 : amount;
-    const data = await api.startVideoSaving(source.serial, seconds);
+    const data = await api.startVideoSaving(source.serial, seconds, project);
     tile.video = true;
     renderTile(state.focused);
     updateToolbar();

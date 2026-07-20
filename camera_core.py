@@ -16,6 +16,7 @@ from logger import log_event
 from paths import BUNDLE_DIR, DATA_DIR
 import dahua_control
 import sdk_gige
+import save_settings
 
 import subprocess
 
@@ -297,6 +298,15 @@ def _sdk_device_info(serial_number):
     with _sdk_devices_lock:
         return _sdk_devices.get(serial_number)
 
+
+# Убрать серийник из SDK-кэша device_info. Нужно после смены IP: в кэше остаётся
+# device_info со СТАРЫМ адресом, и MV_CC_OpenDevice идёт на него → 0x80000206
+# (MV_E_GC_ACCESS, камера уже на новом IP). После сброса следующий _sdk_device_info()
+# промахнётся по кэшу и сделает свежий enum, подхватив новый адрес. См. bug.txt.
+def _sdk_invalidate_device(serial_number):
+    with _sdk_devices_lock:
+        _sdk_devices.pop(serial_number, None)
+
 # fps по умолчанию для записи видео, когда камера не сообщила частоту кадров
 DEFAULT_VIDEO_FPS = 20.0
 
@@ -391,12 +401,16 @@ class BaseCameraWorker:
         self.save_photo = False
         self.photo_interval = None
         self.last_photo = None
+        # имя проекта для фото: задаёт папку dataset/<проект>/<камера> и префикс имени файла
+        self.photo_project = None
         # сколько фото сохранено за текущую сессию автосохранения
         self.photo_saved_count = 0
 
         # 0 нет автосохранения видео / 1 идёт / 2 завершение
         self.save_video = 0
         self.video_duration = None
+        # имя проекта для видео (аналогично photo_project)
+        self.video_project = None
         self.video_start = None
         self.video_writer = None
 
@@ -430,22 +444,44 @@ class BaseCameraWorker:
         tag = re.sub(r"[^A-Za-z0-9_.-]+", "_", str(self.serial_number or "camera")).strip("_")
         return tag or "camera"
 
-    # папка сохранения фото: <данные>/dataset/<серийник> (своя на каждую камеру).
+    # безопасное имя проекта для путей/файлов (кириллица допустима, режем только опасное).
+    # Пустое имя -> None: тогда откат к прежнему поведению (без подпапки проекта).
+    @staticmethod
+    def _project_tag(name):
+        if not name:
+            return None
+        # убираем разделители путей и служебные символы, пробелы оставляем как есть
+        tag = re.sub(r'[\\/:*?"<>|]+', "_", str(name)).strip().strip(".")
+        return tag or None
+
+    # папка сохранения фото: <данные>/dataset/<проект>/<серийник> (проект задаёт группу).
+    # Без проекта — прежний путь <данные>/dataset/<серийник>.
     # DATA_DIR — каталог пользовательских данных, переживающий обновление (см. paths.py)
     def photo_dir(self):
-        return DATA_DIR / "dataset" / self._camera_tag()
+        project = self._project_tag(self.photo_project)
+        base = DATA_DIR / "dataset"
+        return base / project / self._camera_tag() if project else base / self._camera_tag()
 
-    # папка сохранения видео: <данные>/Videos/<серийник>
+    # папка сохранения видео: <данные>/Videos/<проект>/<серийник>
     def video_dir(self):
-        return DATA_DIR / "Videos" / self._camera_tag()
+        project = self._project_tag(self.video_project)
+        base = DATA_DIR / "Videos"
+        return base / project / self._camera_tag() if project else base / self._camera_tag()
+
+    # префикс имени файла: имя проекта, иначе прежнее значение по умолчанию
+    def _photo_prefix(self):
+        return self._project_tag(self.photo_project) or "frame"
+
+    def _video_prefix(self):
+        return self._project_tag(self.video_project) or "video"
 
     # папка и шаблон имени файлов фото — показываем во фронтенде
     def photo_save_info(self):
-        return {"dir": str(self.photo_dir().resolve()), "pattern": "frame_<дата>.jpg"}
+        return {"dir": str(self.photo_dir().resolve()), "pattern": f"{self._photo_prefix()}_<дата>.jpg"}
 
     # папка и шаблон имени файлов видео — показываем во фронтенде
     def video_save_info(self):
-        return {"dir": str(self.video_dir().resolve()), "pattern": "video_<дата>.avi"}
+        return {"dir": str(self.video_dir().resolve()), "pattern": f"{self._video_prefix()}_<дата>.avi"}
 
     # ---------- фото ----------
 
@@ -455,22 +491,30 @@ class BaseCameraWorker:
             return int(time.time() - self.video_start)
         return 0
 
-    def on_photo(self, interval):
+    def on_photo(self, interval, project=None):
         self.save_photo = True
         self.photo_interval = interval
+        # имя проекта задаёт папку/имя файла; пустое -> прежнее поведение
+        self.photo_project = project or None
         # новая сессия автосохранения — обнуляем счётчик
         self.photo_saved_count = 0
 
+        # запоминаем выбор, чтобы подтянуть при следующем открытии
+        save_settings.update(self.serial_number, photo_project=self.photo_project, photo_interval=interval)
+
         info = self.photo_save_info()
         log_event("camera_core.on_save", "Вкл. автосохранение фото c интервалом", "info",
-                  {"interval": interval, "save_dir": info["dir"], "file_pattern": info["pattern"]})
+                  {"interval": interval, "project": self.photo_project,
+                   "save_dir": info["dir"], "file_pattern": info["pattern"]})
         return {"status": "ok", "photo_enabled": True, "interval": self.photo_interval,
+                "project": self.photo_project,
                 "save_dir": info["dir"], "file_pattern": info["pattern"]}
 
     def off_photo(self):
         self.save_photo = False
         self.photo_interval = None
         self.last_photo = None
+        self.photo_project = None
 
         log_event("camera_core.off_save", "Выкл. автосохранение фото")
         return {"status": "ok", "photo_enabled": False}
@@ -491,11 +535,11 @@ class BaseCameraWorker:
 
         return False
 
-    # путь: dataset/<серийник>/frame_<дата-время>.jpg
+    # путь: dataset/<проект>/<серийник>/<проект>_<дата-время>.jpg
     def write_photo(self, img):
         folder = self.photo_dir()
         folder.mkdir(parents=True, exist_ok=True)
-        filename = f"frame_{datetime.now().strftime('%d_%m_%Y_%H_%M_%S')}.jpg"
+        filename = f"{self._photo_prefix()}_{datetime.now().strftime('%d_%m_%Y_%H_%M_%S')}.jpg"
         path = os.path.join(folder, filename)
         cv2.imwrite(path, img)
         self.photo_saved_count += 1
@@ -503,19 +547,26 @@ class BaseCameraWorker:
 
     # ---------- видео ----------
 
-    def on_video(self, duration):
+    def on_video(self, duration, project=None):
         if duration is None:
             self.video_duration = None
         elif self.save_video == 0:
             self.video_duration = duration
 
+        # имя проекта фиксируем только при старте новой записи (не посреди идущей)
         if self.save_video == 0:
+            self.video_project = project or None
             self.save_video = 1
             self.video_start = time.time()
+
+        # запоминаем выбор, чтобы подтянуть при следующем открытии
+        save_settings.update(self.serial_number, video_project=self.video_project, video_duration=duration)
+
         info = self.video_save_info()
         log_event("camera_core.on_video", "Вкл. автосохранение видео с длительностью: ", "info",
-                  {"video_duration": self.video_duration, "save_dir": info["dir"], "file_pattern": info["pattern"]})
-        return {"status": "ok", "video_enabled": True,
+                  {"video_duration": self.video_duration, "project": self.video_project,
+                   "save_dir": info["dir"], "file_pattern": info["pattern"]})
+        return {"status": "ok", "video_enabled": True, "project": self.video_project,
                 "save_dir": info["dir"], "file_pattern": info["pattern"]}
 
     def off_video(self):
@@ -533,7 +584,7 @@ class BaseCameraWorker:
         if self.video_writer is None:
             folder = self.video_dir()
             folder.mkdir(parents=True, exist_ok=True)
-            filename = f"video_{datetime.now().strftime('%d_%m_%Y_%H_%M_%S')}.avi"
+            filename = f"{self._video_prefix()}_{datetime.now().strftime('%d_%m_%Y_%H_%M_%S')}.avi"
             path = os.path.join(folder, filename)
             fourcc = cv2.VideoWriter_fourcc(*"MJPG")
             writer_fps = fps if fps and fps > 0 else DEFAULT_VIDEO_FPS
@@ -558,12 +609,14 @@ class BaseCameraWorker:
             self.save_video = 0
             self.video_duration = None
             self.video_start = None
+            self.video_project = None
 
     # сброс состояния сохранения при закрытии потока
     def _reset_save_state(self):
         self.save_photo = False
         self.photo_interval = None
         self.last_photo = None
+        self.photo_project = None
 
         if self.video_writer is not None:
             self.video_writer.release()
@@ -571,6 +624,7 @@ class BaseCameraWorker:
             self.save_video = 0
             self.video_duration = None
             self.video_start = None
+            self.video_project = None
 
 
 class CameraWorker(BaseCameraWorker):
@@ -1436,6 +1490,9 @@ class CameraWorker(BaseCameraWorker):
                 # сбрасываем "запомненный" handle/интерфейс — следующий scan/connect возьмёт новый
                 self.interface_id = None
                 self.device_handle = None
+                # и SDK-кэш device_info: там остался старый IP, иначе следующий SDK-стрим
+                # уйдёт открывать камеру по прежнему адресу и упрётся в 0x80000206
+                _sdk_invalidate_device(self.serial_number)
 
                 if ip_changed and self.advanced_settings and advanced_changed:
                     log_event("camera_core.change_ip", "Ip mask gateway успешно поменяны", "info")

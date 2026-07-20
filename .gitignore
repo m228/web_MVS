@@ -20,6 +20,7 @@ __pycache__/
 /dataset
 /Videos
 /rtsp_cameras.json
+/save_settings.json
 
 # --- временная папка самообновления ---
 /.update
@@ -30,3 +31,4 @@ CLAUDE.md
 tasks/todo.md
 .idea/misc.xml
 .idea/web_MVS.iml
+bug.txt

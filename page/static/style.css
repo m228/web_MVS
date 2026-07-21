@@ -1260,13 +1260,29 @@ input[type="range"] {
 .img-field .field-select { width: 100%; }
 .image-settings .light-brightness { width: 100%; }
 
-/* узкий 3-й столбик: подсветка — тумблер+надпись в строку, яркость снизу */
+/* подсветка компактно: тумблер (слева) + ползунок с подписью «Яркость» (справа) в строку */
 .settings-zone[data-zone="light"] .light-controls {
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 12px;
+  flex-direction: row;
+  align-items: center;
+  gap: 10px;
 }
-.settings-zone[data-zone="light"] .light-brightness { flex: none; width: 100%; }
+.settings-zone[data-zone="light"] .switch-toggle { gap: 6px; flex: none; }
+.switch-label--min { font-size: 11px; color: var(--text-muted, #9aa); }
+.light-bright {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  flex: 1;
+  min-width: 0;
+  font-size: 11px;
+  color: var(--text-muted, #9aa);
+  cursor: default;
+}
+.light-bright .light-brightness { flex: none; width: 100%; }
+/* мелкий текст «Белый прожектор поддерживается» */
+.cap-line--sm,
+.cap-line--sm .cap-text { font-size: 11px; }
+.cap-line--sm { margin-bottom: 10px; }
 
 /* планшет: 2 столбца (изображение справа на 2 строки, низ — камера+подсветка) */
 @media (max-width: 760px) {

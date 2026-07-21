@@ -1045,7 +1045,7 @@ function reflectMultiLight(on) {
   const sw = document.getElementById('multiLightSwitch');
   const label = document.getElementById('multiLightLabel');
   if (sw) sw.checked = on;
-  if (label) label.textContent = on ? 'Включено' : 'Выключено';
+  if (label) label.textContent = on ? 'Вкл' : 'Выкл';
 }
 
 function setTileLight(on) {

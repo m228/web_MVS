@@ -203,16 +203,19 @@
 
           <section class="settings-zone settings-zone--rtsp" data-zone="light">
             <h3>Подсветка</h3>
-            <p class="cap-line" id="multiLightCap" data-state="unknown"><span class="cap-dot"></span><span class="cap-text">Проверяю…</span></p>
+            <p class="cap-line cap-line--sm" id="multiLightCap" data-state="unknown"><span class="cap-dot"></span><span class="cap-text">Проверяю…</span></p>
             <div class="light-controls">
-              <label class="switch-toggle">
+              <label class="switch-toggle" title="Включить/выключить подсветку">
                 <span class="switch">
                   <input type="checkbox" id="multiLightSwitch" />
                   <span class="switch-track"></span>
                 </span>
-                <span class="switch-label" id="multiLightLabel">Выключено</span>
+                <span class="switch-label switch-label--min" id="multiLightLabel">Выкл</span>
               </label>
-              <input type="range" id="multiLightLevel" class="light-brightness" min="1" max="100" value="100" title="Яркость, %" />
+              <label class="light-bright">
+                <span>Яркость</span>
+                <input type="range" id="multiLightLevel" class="light-brightness" min="1" max="100" value="100" title="Яркость, %" />
+              </label>
             </div>
           </section>
 

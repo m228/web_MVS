@@ -1208,6 +1208,28 @@ input[type="range"] {
 .field-input { width: 84px; }
 .field-input--sm { width: 58px; }
 
+/* Сетка окна автосохранения: имя проекта слева, формат справа, интервал снизу.
+   Поля мелкие и подписи над ними — так окно не растёт в высоту и не «разъезжается». */
+.save-grid {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 10px 12px;
+  margin-bottom: 14px;
+}
+
+.save-grid__field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--text-muted, #9aa);
+}
+
+/* поле проекта тянется по ширине окна, мелкие (формат/интервал) — по содержимому */
+.save-grid__field .field-input { width: 100%; }
+.save-grid__field--narrow .field-select { width: auto; }
+.save-grid__field--narrow .field-input { width: 52px; }
+
 .popup-actions { display: flex; gap: 8px; }
 .popup-actions .btn-primary,
 .popup-actions .btn-secondary { flex: 1; }

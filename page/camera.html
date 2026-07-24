@@ -57,12 +57,8 @@
                 Применить
               </button>
 
-              <button type="button" id="roiBtn" class="toolbar-btn toolbar-btn--neutral" title="Выделить область на кадре — камера будет отдавать только её (аппаратный ROI)">
-                ROI мышкой
-              </button>
-
-              <button type="button" id="roiResetBtn" class="toolbar-btn toolbar-btn--neutral" title="Вернуть полный кадр сенсора">
-                Сбросить ROI
+              <button type="button" id="roiBtn" class="toolbar-btn toolbar-btn--neutral" title="ROI: клик — выделить область мышкой (камера будет отдавать только её, fps выше), повторный клик — вернуть полный кадр">
+                ROI
               </button>
 
               <button type="button" id="stopBtn" class="toolbar-btn toolbar-btn--danger hidden" title="Остановить поток">
@@ -209,9 +205,9 @@
             </label>
             <label class="one-line-label">
               Формат файла
-              <select name="photo_format" title="PNG — без потерь (крупнее), JPG — компактнее">
+              <select name="photo_format" title="JPG — сжатие с потерями, PNG — без потерь (файлы крупнее)">
                 <option value="jpg" selected>JPG</option>
-                <option value="png">PNG (без потерь)</option>
+                <option value="png">PNG</option>
               </select>
             </label>
             <p class="record-path" id="photoSavePath" hidden></p>

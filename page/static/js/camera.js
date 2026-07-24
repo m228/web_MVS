@@ -400,6 +400,9 @@ function initCameraPage() {
 
     setText('ExposureMin', data.exposure_time?.min);
     setText('ExposureMax', data.exposure_time?.max);
+
+    // лимиты пришли — теперь видно, обрезан ли кадр (подсветка кнопки ROI)
+    updateRoiBtn();
   }
 
   function buildQueryFromForm() {
@@ -434,11 +437,11 @@ function initCameraPage() {
   // ---------- ROI мышкой (аппаратная область интереса камеры) ----------
   // Отличие от «зума» RTSP: там мы кропаем картинку у себя, здесь камера физически
   // отдаёт меньше пикселей (Width/Height/OffsetX/OffsetY) — растёт fps и падают потери.
-  // ROI на лету не меняется, поэтому мы лишь заполняем поля формы, а применяет
-  // их кнопка «Применить» (она перезапускает поток).
+  // ROI на лету не меняется, поэтому после выделения поток перезапускается сам
+  // (как по кнопке «Применить») — пользователю достаточно одной кнопки «ROI»:
+  // клик — выделение, повторный клик (когда кадр уже обрезан) — полный кадр.
 
   const roiBtn = document.getElementById('roiBtn');
-  const roiResetBtn = document.getElementById('roiResetBtn');
   const roiLayer = document.getElementById('roiMarqueeLayer');
   const roiBox = document.getElementById('roiMarqueeBox');
   let roiMode = false;
@@ -449,7 +452,22 @@ function initCameraPage() {
     if (roiLayer) roiLayer.hidden = !roiMode;
     if (roiBox) roiBox.hidden = true;
     if (!roiMode) roiDrag = null;
-    if (roiBtn) roiBtn.classList.toggle('is-region-active', roiMode);
+    updateRoiBtn();
+  }
+
+  // кадр обрезан, если размер меньше сенсора или есть смещение
+  function isRoiCropped() {
+    const sensor = sensorSize();
+    if (!sensor.width || !sensor.height) return false;
+    return formNumber('width') < sensor.width
+      || formNumber('height') < sensor.height
+      || formNumber('offset_x') > 0
+      || formNumber('offset_y') > 0;
+  }
+
+  // кнопка горит, пока идёт выделение ИЛИ кадр обрезан (как «зум областью» в RTSP)
+  function updateRoiBtn() {
+    if (roiBtn) roiBtn.classList.toggle('is-region-active', roiMode || isRoiCropped());
   }
 
   // видимый прямоугольник кадра внутри <img> (object-fit: contain — по краям поля)
@@ -555,9 +573,12 @@ function initCameraPage() {
     setFieldValue('offset_x', offsetX);
     setFieldValue('offset_y', offsetY);
     markDirty();
-
-    log.success('ROI выделен — нажмите «Применить»', { width, height, offsetX, offsetY });
     setRoiMode(false);
+
+    log.success('ROI выделен, перезапускаю поток', { width, height, offsetX, offsetY });
+    // ROI задаётся только при старте потока, поэтому применяем сразу — как зум в RTSP:
+    // выделил и увидел результат, без второй кнопки
+    applySettings();
   }
 
   // полный кадр сенсора: размер по максимуму, смещения в нули
@@ -574,19 +595,22 @@ function initCameraPage() {
     setFieldValue('height', snapDown(sensor.height, limits.height?.step, limits.height?.min || 1));
     markDirty();
     setRoiMode(false);
-    log.info('ROI сброшен до полного кадра — нажмите «Применить»', sensor);
+    log.info('ROI сброшен до полного кадра, перезапускаю поток', sensor);
+    applySettings();
   }
 
+  // одна кнопка на всё, как «зум областью» у RTSP: кадр обрезан -> сброс,
+  // иначе -> вход/выход из режима выделения
   if (roiBtn) {
     roiBtn.addEventListener('click', () => {
       if (!isConnected) {
-        log.warn('ROI мышкой доступен только при запущенном потоке');
+        log.warn('ROI доступен только при запущенном потоке');
         return;
       }
-      setRoiMode(!roiMode);
+      if (isRoiCropped()) resetRoi();
+      else setRoiMode(!roiMode);
     });
   }
-  if (roiResetBtn) roiResetBtn.addEventListener('click', resetRoi);
 
   if (roiLayer) {
     roiLayer.addEventListener('mousedown', (event) => {
@@ -1267,6 +1291,8 @@ function initCameraPage() {
 
     // подтянуть сохранённые имя проекта / интервал в модалки
     prefillSaveSettings();
+    // кадр пришёл — обновим подсветку кнопки ROI под фактический размер
+    updateRoiBtn();
   });
 
   cameraFrame.addEventListener('error', () => {

@@ -57,6 +57,14 @@
                 Применить
               </button>
 
+              <button type="button" id="roiBtn" class="toolbar-btn toolbar-btn--neutral" title="Выделить область на кадре — камера будет отдавать только её (аппаратный ROI)">
+                ROI мышкой
+              </button>
+
+              <button type="button" id="roiResetBtn" class="toolbar-btn toolbar-btn--neutral" title="Вернуть полный кадр сенсора">
+                Сбросить ROI
+              </button>
+
               <button type="button" id="stopBtn" class="toolbar-btn toolbar-btn--danger hidden" title="Остановить поток">
                 Остановить
               </button>
@@ -88,6 +96,10 @@
             <div class="camera-screen card">
               <img id="cameraFrame" alt="Кадр камеры" class="camera-frame" />
               <div id="cameraPlaceholder" class="camera-placeholder">No video</div>
+              <div class="zoom-marquee-layer" id="roiMarqueeLayer" hidden>
+                <div class="zoom-marquee-box" id="roiMarqueeBox" hidden></div>
+                <div class="zoom-marquee-hint">Выделите область — станет новым ROI камеры</div>
+              </div>
             </div>
 
             <div class="camera-status-bar card" id="cameraStatusBar">
@@ -194,6 +206,13 @@
             <label class="one-line-label">
               Интервал (сек)
               <input class="photo-interval-input" type="number" name="photo_interval" value="5" min="1" />
+            </label>
+            <label class="one-line-label">
+              Формат файла
+              <select name="photo_format" title="PNG — без потерь (крупнее), JPG — компактнее">
+                <option value="jpg" selected>JPG</option>
+                <option value="png">PNG (без потерь)</option>
+              </select>
             </label>
             <p class="record-path" id="photoSavePath" hidden></p>
             <div class="record-actions">

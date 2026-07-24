@@ -97,6 +97,7 @@
             <div class="camera-screen card" id="cameraScreen">
               <img id="rtspFrame" alt="Кадр камеры" class="camera-frame" />
               <div id="rtspPlaceholder" class="camera-placeholder">No video</div>
+              <div class="stream-badge" id="rtspReconnectBadge" hidden>переподключение…</div>
               <div class="zoom-marquee-layer" id="zoomMarqueeLayer" hidden>
                 <div class="zoom-marquee-box" id="zoomMarqueeBox" hidden></div>
                 <div class="zoom-marquee-hint">Выделите область для приближения</div>
@@ -209,6 +210,7 @@
           </label>
 
           <p class="record-path" id="photoSavePath" hidden></p>
+          <p class="record-error" id="photoHealth" hidden></p>
 
           <div class="popup-actions">
             <button type="button" id="photoOn" class="btn-primary">Включить</button>

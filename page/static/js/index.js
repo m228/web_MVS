@@ -1150,6 +1150,56 @@ async function pollUntilBack(timeoutMs = 180000) {
   setUpdateStatus('Сервер долго не отвечает. Обновите страницу вручную позже.', 'status-chip--error');
 }
 
+// ---------- карточка «Автозапуск с Windows» ----------
+
+// автозапуск живёт в Планировщике задач (см. autostart.py) и доступен только в
+// собранной версии: из исходников запускать нечего (sys.executable — это python).
+function reflectAutostart(data) {
+  const box = document.getElementById('autostartSwitch');
+  const label = document.getElementById('autostartLabel');
+  const hint = document.getElementById('autostartHint');
+  if (!box) return;
+
+  const available = !!data?.available;
+  const enabled = !!data?.enabled;
+
+  box.disabled = !available;
+  box.checked = enabled;
+  if (label) label.textContent = available ? (enabled ? 'Включён' : 'Выключен') : 'Недоступен';
+  if (hint) {
+    hint.textContent = available
+      ? (data.stale_path ? 'Путь устарел — включите заново' : 'При входе в Windows')
+      : 'Только в собранной версии программы';
+  }
+}
+
+async function toggleAutostart() {
+  const box = document.getElementById('autostartSwitch');
+  if (!box) return;
+
+  const wanted = box.checked;
+  box.disabled = true;
+  const data = wanted ? await AutostartApi.enable() : await AutostartApi.disable();
+  box.disabled = false;
+
+  if (!data || !data.ok) {
+    box.checked = !wanted; // откат к фактическому состоянию
+    log.warn('Не удалось изменить автозапуск', { error: data?.error });
+    if (data?.error) alert(data.error);
+    return;
+  }
+
+  log.success(wanted ? 'Автозапуск с Windows включён' : 'Автозапуск с Windows выключен');
+  reflectAutostart(await AutostartApi.status());
+}
+
+function initAutostartCard() {
+  const box = document.getElementById('autostartSwitch');
+  if (!box) return;
+  box.addEventListener('change', toggleAutostart);
+  AutostartApi.status().then(reflectAutostart).catch(() => {});
+}
+
 function initUpdateCard() {
   const els = getUpdateEls();
   if (!els.card) return;
@@ -1176,6 +1226,7 @@ async function initIndexPage() {
   initNetworkSettingsModal();
   initCameraInfoModal();
   initUpdateCard();
+  initAutostartCard();
   await refreshCameras();
 
   const autoOpenSerial = getAutoOpenSerial();

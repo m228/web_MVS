@@ -816,6 +816,24 @@ input[type="range"] {
   display: block;
 }
 
+/* бейдж состояния поверх кадра (напр. «переподключение…») */
+.stream-badge {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  z-index: 6;
+  padding: 5px 12px;
+  border-radius: 999px;
+  background: rgba(234, 88, 12, 0.92);
+  color: #fff;
+  font-size: 13px;
+  font-weight: 600;
+  pointer-events: none;
+  animation: rec-error-pulse 1.4s ease-in-out infinite;
+}
+
+.stream-badge[hidden] { display: none; }
+
 .camera-placeholder {
   position: absolute;
   inset: 0;
@@ -912,6 +930,29 @@ input[type="range"] {
 }
 
 /* путь сохранения файлов (папка + шаблон имени) */
+/* причина, по которой автосохранение включено, но файлы не пишутся */
+.record-error {
+  margin: 0;
+  padding: 8px 12px;
+  border-radius: 12px;
+  background: var(--danger-soft);
+  border: 1px solid var(--danger);
+  color: var(--danger);
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.record-error[hidden] { display: none; }
+
+/* кнопка автосохранения фото, когда файлы не пишутся */
+.toolbar-btn.is-save-error {
+  box-shadow: 0 0 0 2px var(--danger);
+}
+
+.mode-indicator--error {
+  animation: rec-error-pulse 1.4s ease-in-out infinite;
+}
+
 .record-path {
   margin: 0;
   padding: 10px 12px;
@@ -2710,6 +2751,30 @@ body.modal-open {
 
 /* зум в ячейке — иконка загорается при активном зуме */
 .rec-icon[data-rec-zoom].is-active { color: var(--accent, #3b82f6); }
+
+/* автосохранение включено, но файлы не пишутся — значок краснеет (причина в подсказке) */
+.rec-icon.is-error {
+  color: var(--danger);
+  opacity: 1;
+  animation: rec-error-pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes rec-error-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+
+/* галочка «автоподключение при старте» в карточке источника */
+.chip-autostart {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 4px;
+  color: var(--text);
+  cursor: pointer;
+}
+
+.chip-autostart input { width: auto; margin: 0; }
 
 .camera-chip__actions {
   display: flex;

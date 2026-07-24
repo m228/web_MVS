@@ -391,8 +391,18 @@ const RtspApi = {
       ip: entry.ip || '',
       scale: entry.scale ?? 100,
       fps: entry.fps ?? 0,
+      // серийник фиксируем в базе: после перезапуска камера получит тот же ключ,
+      // а значит и свои настройки автосохранения (проект/интервал)
+      serial: entry.serial || '',
     });
     return apiGet(`/api/rtsp/save?${query.toString()}`, 'Ошибка сохранения RTSP в базу:');
+  },
+
+  // автоподключение камеры при старте приложения (галочка в списке источников)
+  setAutostart(url, enabled, serial) {
+    const query = new URLSearchParams({ url, enabled: enabled ? 1 : 0 });
+    if (serial) query.set('serial_number', serial);
+    return apiGet(`/api/rtsp/autostart?${query.toString()}`, 'Ошибка смены автоподключения RTSP:');
   },
 
   removeSaved(url) {
@@ -453,3 +463,19 @@ const UpdateApi = {
 };
 
 window.UpdateApi = UpdateApi;
+
+// автозапуск приложения вместе с Windows (задача планировщика; только в собранной версии)
+const AutostartApi = {
+  status() {
+    return apiGet('/api/autostart/status', 'Ошибка получения статуса автозапуска:',
+      { source: 'api.autostart', logRequest: false, logSuccess: false });
+  },
+  enable() {
+    return apiGet('/api/autostart/enable', 'Ошибка включения автозапуска:', { source: 'api.autostart' });
+  },
+  disable() {
+    return apiGet('/api/autostart/disable', 'Ошибка выключения автозапуска:', { source: 'api.autostart' });
+  },
+};
+
+window.AutostartApi = AutostartApi;

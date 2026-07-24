@@ -2,6 +2,7 @@ from datetime import datetime
 import ctypes
 import os
 import re
+import shutil
 import threading
 import time
 from pathlib import Path
@@ -17,6 +18,7 @@ from paths import BUNDLE_DIR, DATA_DIR
 import dahua_control
 import sdk_gige
 import save_settings
+import rtsp_store
 
 import subprocess
 
@@ -145,8 +147,15 @@ def _explain_error(error):
     return result
 
 
-# RTSP поверх TCP — стабильнее, меньше «рассыпающихся» кадров
-os.environ.setdefault("OPENCV_FFMPEG_CAPTURE_OPTIONS", "rtsp_transport;tcp")
+# RTSP поверх TCP — стабильнее, меньше «рассыпающихся» кадров.
+# timeout/stimeout (мкс) — сокетный таймаут FFmpeg: без него открытие камеры, которая
+# приняла TCP-соединение но не отвечает по RTSP, висит БЕЗ ОГРАНИЧЕНИЯ и вешает вместе
+# с собой весь цикл реконнекта. Имя опции менялось между версиями FFmpeg (stimeout ->
+# timeout), поэтому задаём оба: лишнюю FFmpeg просто игнорирует.
+os.environ.setdefault(
+    "OPENCV_FFMPEG_CAPTURE_OPTIONS",
+    "rtsp_transport;tcp|timeout;5000000|stimeout;5000000",
+)
 
 # Путь до директории программы и имена файлов драйвера. Поставка самодостаточна:
 # и продюсер (.cti), и его runtime (MvCameraControl.dll) лежат в папке Driver/.
@@ -310,6 +319,19 @@ def _sdk_invalidate_device(serial_number):
 # fps по умолчанию для записи видео, когда камера не сообщила частоту кадров
 DEFAULT_VIDEO_FPS = 20.0
 
+# --- надёжность RTSP ---
+# сколько секунд тишины (нет удачного кадра) считаем обрывом связи и идём на реконнект.
+# Кадры RTSP идут плотно (>=5 fps), поэтому 5 c простоя — это уже точно не «между кадрами».
+RTSP_STALL_SECONDS = 5.0
+# пауза перед попытками переподключения (сек); дальше повторяется последнее значение
+RTSP_RECONNECT_BACKOFF = (1.0, 2.0, 5.0, 10.0, 30.0)
+# логируем не каждую попытку реконнекта, а первую и далее каждую N-ю (не спамим журнал)
+RTSP_RECONNECT_LOG_EVERY = 5
+# порог свободного места на диске (МБ), ниже которого предупреждаем о риске остановки записи
+DISK_FREE_WARN_MB = 500
+# как часто перепроверять свободное место в фоне (сек)
+DISK_CHECK_PERIOD = 30.0
+
 
 # из ip в int для записи в камеру
 def ip_to_int(ip):
@@ -406,6 +428,18 @@ class BaseCameraWorker:
         # сколько фото сохранено за текущую сессию автосохранения
         self.photo_saved_count = 0
 
+        # --- здоровье автосохранения (см. photo_status): «включено, но не пишется» ---
+        # когда включили автосохранение и когда последний раз реально записали файл
+        self.photo_enabled_at = None
+        self.last_photo_saved_at = None
+        # текст последней ошибки записи (None — ошибок не было)
+        self.last_save_error = None
+        # предупреждение о свободном месте на диске (None — места достаточно)
+        self.disk_warning = None
+        self._disk_checked_at = 0.0
+        # последнее состояние здоровья — чтобы писать событие ОДИН раз на переход
+        self._photo_health_state = None
+
         # 0 нет автосохранения видео / 1 идёт / 2 завершение
         self.save_video = 0
         self.video_duration = None
@@ -496,28 +530,108 @@ class BaseCameraWorker:
         self.photo_interval = interval
         # имя проекта задаёт папку/имя файла; пустое -> прежнее поведение
         self.photo_project = project or None
-        # новая сессия автосохранения — обнуляем счётчик
+        # новая сессия автосохранения — обнуляем счётчик и состояние здоровья
         self.photo_saved_count = 0
+        self.photo_enabled_at = time.time()
+        self.last_photo_saved_at = None
+        self.last_save_error = None
+        self._photo_health_state = None
 
-        # запоминаем выбор, чтобы подтянуть при следующем открытии
-        save_settings.update(self.serial_number, photo_project=self.photo_project, photo_interval=interval)
+        # запоминаем выбор, чтобы подтянуть при следующем открытии.
+        # photo_autostart=True — чтобы после перезапуска приложения запись возобновилась сама
+        save_settings.update(self.serial_number, photo_project=self.photo_project,
+                             photo_interval=interval, photo_autostart=True)
+
+        # свободное место проверяем СРАЗУ при включении: бессмысленно узнавать о нехватке
+        # через час, когда датасет уже не пишется
+        disk = self.check_disk_space(force=True)
 
         info = self.photo_save_info()
         log_event("camera_core.on_save", "Вкл. автосохранение фото c интервалом", "info",
                   {"interval": interval, "project": self.photo_project,
-                   "save_dir": info["dir"], "file_pattern": info["pattern"]})
+                   "save_dir": info["dir"], "file_pattern": info["pattern"],
+                   "disk_free_mb": disk.get("free_mb"), "disk_warning": disk.get("warning")})
         return {"status": "ok", "photo_enabled": True, "interval": self.photo_interval,
                 "project": self.photo_project,
-                "save_dir": info["dir"], "file_pattern": info["pattern"]}
+                "save_dir": info["dir"], "file_pattern": info["pattern"],
+                "disk_free_mb": disk.get("free_mb"), "disk_warning": disk.get("warning")}
 
     def off_photo(self):
         self.save_photo = False
         self.photo_interval = None
         self.last_photo = None
         self.photo_project = None
+        self.photo_enabled_at = None
+        self._photo_health_state = None
+
+        # снимаем флаг возобновления: пользователь выключил запись осознанно,
+        # после перезапуска её поднимать не нужно
+        save_settings.update(self.serial_number, photo_autostart=False)
 
         log_event("camera_core.off_save", "Выкл. автосохранение фото")
         return {"status": "ok", "photo_enabled": False}
+
+    # ---------- здоровье автосохранения ----------
+
+    # свободное место в каталоге данных. Дёргаем не чаще DISK_CHECK_PERIOD (диск опрашивать
+    # на каждый кадр незачем), force — при включении автосохранения.
+    def check_disk_space(self, force=False):
+        now = time.time()
+        if not force and (now - self._disk_checked_at) < DISK_CHECK_PERIOD:
+            return {"free_mb": None, "warning": self.disk_warning}
+
+        self._disk_checked_at = now
+        try:
+            free_mb = int(shutil.disk_usage(DATA_DIR).free / (1024 * 1024))
+        except Exception as e:
+            self.disk_warning = None
+            return {"free_mb": None, "warning": None, "error": str(e)}
+
+        if free_mb < DISK_FREE_WARN_MB:
+            self.disk_warning = f"мало места на диске: свободно {free_mb} МБ"
+        else:
+            self.disk_warning = None
+        return {"free_mb": free_mb, "warning": self.disk_warning}
+
+    # статус автосохранения фото: off | ok | stalled (+ причина).
+    # stalled — «включено, но не пишется»: нового файла нет дольше двух интервалов.
+    def photo_status(self):
+        if not self.save_photo:
+            self._photo_health_state = None
+            return {"photo_health": "off", "photo_error": None}
+
+        self.check_disk_space()
+
+        interval = self.photo_interval or 0
+        # порог: два интервала, но не меньше интервал+5 c (короткие интервалы дают
+        # ложные срабатывания на старте: камера ещё подключается)
+        limit = max(2 * interval, interval + 5) if interval else 30
+        reference = self.last_photo_saved_at or self.photo_enabled_at or time.time()
+        overdue = (time.time() - reference) > limit
+
+        if not overdue:
+            health, reason = "ok", None
+        elif self.last_save_error:
+            health, reason = "stalled", f"ошибка записи: {self.last_save_error}"
+        elif self.disk_warning:
+            health, reason = "stalled", self.disk_warning
+        elif not self.running:
+            health, reason = "stalled", "поток не запущен — нет кадров"
+        else:
+            health, reason = "stalled", "нет кадров с камеры"
+
+        # событие пишем один раз на переход состояния, а не каждую секунду опроса
+        if health != self._photo_health_state:
+            self._photo_health_state = health
+            if health == "stalled":
+                log_event("camera_core.save_health", "Автосохранение фото включено, но файлы не пишутся",
+                          "error", {"serial_number": self.serial_number, "reason": reason,
+                                    "interval": interval, "photo_count": self.photo_saved_count})
+            else:
+                log_event("camera_core.save_health", "Автосохранение фото пишет нормально", "success",
+                          {"serial_number": self.serial_number, "photo_count": self.photo_saved_count})
+
+        return {"photo_health": health, "photo_error": reason}
 
     def _should_save_photo(self, interval):
         current_time = time.time()
@@ -536,13 +650,33 @@ class BaseCameraWorker:
         return False
 
     # путь: dataset/<проект>/<серийник>/<проект>_<дата-время>.jpg
+    # Ошибку записи (нет прав/нет места/битый путь) не роняем в цикл стрима, а
+    # запоминаем в last_save_error — её показывает индикатор здоровья (photo_status).
+    #
+    # ВАЖНО: пишем через cv2.imencode + Path.write_bytes, а НЕ cv2.imwrite.
+    # cv2.imwrite отдаёт путь в ОС байтами UTF-8, а Windows читает их в ANSI-кодировке
+    # (cp1251) -> на любом пути с кириллицей (а имя проекта у нас русское:
+    # dataset/завод один/...) файл молча НЕ создаётся, imwrite возвращает False.
+    # Именно из-за этого автосохранение «работало», но датасет оставался пустым.
     def write_photo(self, img):
         folder = self.photo_dir()
-        folder.mkdir(parents=True, exist_ok=True)
         filename = f"{self._photo_prefix()}_{datetime.now().strftime('%d_%m_%Y_%H_%M_%S')}.jpg"
         path = os.path.join(folder, filename)
-        cv2.imwrite(path, img)
+        try:
+            folder.mkdir(parents=True, exist_ok=True)
+            ok, encoded = cv2.imencode(".jpg", img)
+            if not ok:
+                raise OSError("не удалось закодировать кадр в JPEG")
+            Path(path).write_bytes(encoded.tobytes())
+        except Exception as e:
+            self.last_save_error = str(e)
+            log_event("camera_core.write_photo", "Не удалось сохранить фото", "error",
+                      {"serial_number": self.serial_number, "path": path, "error": str(e)})
+            return None
+
         self.photo_saved_count += 1
+        self.last_photo_saved_at = time.time()
+        self.last_save_error = None
         return path
 
     # ---------- видео ----------
@@ -583,14 +717,33 @@ class BaseCameraWorker:
     def _write_video(self, img, fps):
         if self.video_writer is None:
             folder = self.video_dir()
-            folder.mkdir(parents=True, exist_ok=True)
             filename = f"{self._video_prefix()}_{datetime.now().strftime('%d_%m_%Y_%H_%M_%S')}.avi"
             path = os.path.join(folder, filename)
-            fourcc = cv2.VideoWriter_fourcc(*"MJPG")
-            writer_fps = fps if fps and fps > 0 else DEFAULT_VIDEO_FPS
-            self.video_writer = cv2.VideoWriter(path, fourcc, writer_fps, (img.shape[1], img.shape[0]))
+            try:
+                folder.mkdir(parents=True, exist_ok=True)
+                fourcc = cv2.VideoWriter_fourcc(*"MJPG")
+                writer_fps = fps if fps and fps > 0 else DEFAULT_VIDEO_FPS
+                writer = cv2.VideoWriter(path, fourcc, writer_fps, (img.shape[1], img.shape[0]))
+                if not writer.isOpened():
+                    raise OSError("VideoWriter не открылся (кодек/путь/права)")
+            except Exception as e:
+                # запись видео не поднялась — гасим режим, иначе на каждый кадр будет
+                # новая попытка создать файл (и поток встанет на ошибках)
+                self.last_save_error = str(e)
+                self.save_video = 0
+                self.video_start = None
+                log_event("camera_core.write_video", "Не удалось начать запись видео", "error",
+                          {"serial_number": self.serial_number, "path": path, "error": str(e)})
+                return
 
-        self.video_writer.write(img)
+            self.video_writer = writer
+
+        try:
+            self.video_writer.write(img)
+        except Exception as e:
+            self.last_save_error = str(e)
+            log_event("camera_core.write_video", "Ошибка записи кадра видео", "error",
+                      {"serial_number": self.serial_number, "error": str(e)})
 
     # ---------- сохранение в цикле стрима ----------
 
@@ -1524,7 +1677,14 @@ class CameraWorker(BaseCameraWorker):
 
 
 class RtspCameraWorker(BaseCameraWorker):
-    """IP-камера по RTSP (например, Dahua). Просмотр, запись видео и снимки."""
+    """IP-камера по RTSP (например, Dahua). Просмотр, запись видео и снимки.
+
+    Захват РАЗВЯЗАН с отдачей MJPEG: кадры читает фоновый поток `_capture_loop`,
+    а `generate()` только раздаёт последний готовый JPEG подключённым зрителям.
+    Так автосохранение продолжает писать при закрытой вкладке браузера и может
+    подниматься само при старте приложения (autostart), а несколько зрителей одной
+    камеры используют ОДНО подключение к ней вместо своего на каждого.
+    """
 
     def __init__(self, serial_number, manager, rtsp_url):
         super().__init__(serial_number, manager)
@@ -1541,85 +1701,187 @@ class RtspCameraWorker(BaseCameraWorker):
         # кэш возможностей камеры (белый свет / оптический зум), заполняется по запросу
         self._caps = None
 
-    def _open_capture(self):
-        capture = cv2.VideoCapture(self.rtsp_url, cv2.CAP_FFMPEG)
-        try:
-            capture.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-        except Exception:
-            pass
-        return capture
+        # --- фоновый захват ---
+        self._capture_thread = None
+        # сигнал «остановиться немедленно» (force_close / выход приложения)
+        self._loop_stop = threading.Event()
+        # сериализует запуск/остановку фонового потока
+        self._loop_lock = threading.Lock()
+        # последний готовый JPEG + счётчик кадров: зрители ждут смены seq
+        self._frame_cond = threading.Condition()
+        self._latest_jpeg = None
+        self._latest_seq = 0
+        # сколько браузеров сейчас смотрит поток
+        self._viewers = 0
+        # пользователь нажал «Остановить» — просмотр больше не держит цикл
+        self._stop_requested = False
+        # поднимать камеру при старте приложения (галочка в списке сохранённых)
+        self.autostart = False
+        # идёт переподключение к камере (показываем бейджем в UI)
+        self.reconnecting = False
+        self.reconnect_attempts = 0
+        # параметры отдачи: масштаб кадра (%) и целевой fps — задаёт подключающийся зритель
+        self.stream_scale = 100
+        self.target_fps = None
 
-    def _capture_fps(self, capture):
-        try:
-            fps = capture.get(cv2.CAP_PROP_FPS)
-        except Exception:
-            fps = 0
-        return fps if fps and fps > 0 else DEFAULT_VIDEO_FPS
+    # ---------- фоновый захват ----------
 
-    # ---------- стрим ----------
+    # сколько браузеров смотрит поток прямо сейчас
+    def viewer_count(self):
+        return self._viewers
 
-    def generate(self, scale=100, target_fps=None):
+    # цикл нужен, пока есть зритель ИЛИ идёт автосохранение ИЛИ включён автостарт
+    def _should_capture(self):
+        if self._loop_stop.is_set():
+            return False
+        if self.save_photo or self.save_video == 1 or self.autostart:
+            return True
+        return self._viewers > 0 and not self._stop_requested
+
+    # поднять фоновый захват (если он ещё не идёт) и запомнить параметры отдачи
+    def ensure_capture(self, scale=None, target_fps=None):
+        if scale is not None:
+            try:
+                self.stream_scale = max(10, min(100, int(scale)))
+            except (TypeError, ValueError):
+                self.stream_scale = 100
+        if target_fps is not None:
+            try:
+                value = float(target_fps)
+                self.target_fps = value if value > 0 else None
+            except (TypeError, ValueError):
+                self.target_fps = None
+
+        with self._loop_lock:
+            self._stop_requested = False
+            self._loop_stop.clear()
+            thread = self._capture_thread
+            if thread is not None and thread.is_alive():
+                return False
+
+            self._capture_thread = threading.Thread(
+                target=self._capture_loop,
+                name=f"rtsp-capture-{self.serial_number}",
+                daemon=True,
+            )
+            self._capture_thread.start()
+            log_event("camera_core.rtsp_capture", "Запущен фоновый захват RTSP", "info",
+                      {"serial_number": self.serial_number, "rtsp_url": self.rtsp_url,
+                       "scale": self.stream_scale, "target_fps": self.target_fps,
+                       "autostart": self.autostart})
+            return True
+
+    # пауза «нарезанная»: реагируем на стоп/уход зрителей почти мгновенно
+    def _sleep_sliced(self, seconds):
+        deadline = time.time() + seconds
+        while time.time() < deadline:
+            if not self._should_capture():
+                return False
+            time.sleep(0.2)
+        return True
+
+    # выложить готовый кадр зрителям
+    def _publish(self, frame):
+        with self._frame_cond:
+            self._latest_jpeg = frame
+            self._latest_seq += 1
+            self._frame_cond.notify_all()
+
+    def _backoff_delay(self, attempt):
+        index = min(attempt, len(RTSP_RECONNECT_BACKOFF)) - 1
+        return RTSP_RECONNECT_BACKOFF[max(0, index)]
+
+    # основной цикл: подключение -> чтение кадров -> автосохранение -> публикация.
+    # Обрыв связи (нет кадров дольше RTSP_STALL_SECONDS) не убивает цикл: камера
+    # переоткрывается с нарастающей паузой, состояние автосохранения сохраняется.
+    def _capture_loop(self):
         capture = None
+        attempt = 0
+        last_ok = time.time()
         last_frame_time = None
         last_emit = 0.0
-
-        # масштаб кадра: 10..100 % от оригинала
-        try:
-            scale_factor = max(10, min(100, int(scale))) / 100.0
-        except (TypeError, ValueError):
-            scale_factor = 1.0
-
-        # ограничение частоты кадров (троттлинг по времени)
-        min_interval = (1.0 / target_fps) if (target_fps and target_fps > 0) else 0.0
-
-        if self.running:
-            log_event("camera_core.rtsp_stream", "Старый RTSP-поток открыт, принудительно закрытие", "warn")
-            self.force_close()
-            time.sleep(0.3)
+        source_fps = DEFAULT_VIDEO_FPS
 
         try:
-            log_event("camera_core.rtsp_stream", "Запрошен старт RTSP-потока", "info",
-                      {"serial_number": self.serial_number, "rtsp_url": self.rtsp_url,
-                       "scale": scale, "target_fps": target_fps})
+            while self._should_capture():
+                # --- (пере)подключение ---
+                if capture is None:
+                    self.reconnecting = attempt > 0
+                    capture = self._open_capture()
+                    if not capture.isOpened():
+                        try:
+                            capture.release()
+                        except Exception:
+                            pass
+                        capture = None
+                        attempt += 1
+                        self.reconnect_attempts = attempt
+                        if attempt == 1 or attempt % RTSP_RECONNECT_LOG_EVERY == 0:
+                            log_event("camera_core.rtsp_stream", "Не удалось подключиться к RTSP, пробуем снова",
+                                      "warn", {"serial_number": self.serial_number,
+                                               "rtsp_url": self.rtsp_url, "attempt": attempt,
+                                               "retry_in": self._backoff_delay(attempt)})
+                        self._sleep_sliced(self._backoff_delay(attempt))
+                        continue
 
-            capture = self._open_capture()
-            if not capture.isOpened():
-                log_event("camera_core.rtsp_stream", "Не удалось подключиться к RTSP", "error", {"rtsp_url": self.rtsp_url})
-                return
+                    self.capture = capture
+                    self.running = True
+                    source_fps = self._capture_fps(capture)
+                    last_ok = time.time()
+                    if attempt:
+                        log_event("camera_core.rtsp_stream", "RTSP-поток восстановлен после обрыва", "success",
+                                  {"serial_number": self.serial_number, "attempts": attempt})
+                    else:
+                        log_event("camera_core.rtsp_stream", "RTSP-поток запущен", "success",
+                                  {"serial_number": self.serial_number, "fps": source_fps})
+                    attempt = 0
+                    self.reconnect_attempts = 0
+                    self.reconnecting = False
 
-            self.capture = capture
-            self.running = True
-            source_fps = self._capture_fps(capture)
-            # fps для записи видео: целевой, если задан, иначе из камеры
-            video_fps = target_fps if (target_fps and target_fps > 0) else source_fps
-
-            log_event("camera_core.rtsp_stream", "RTSP-поток запущен", "success",
-                      {"serial_number": self.serial_number, "fps": source_fps})
-
-            while self.running:
+                # --- чтение кадра ---
                 ok, raw = capture.read()
 
                 if not ok or raw is None:
                     self.metrics["errors"] += 1
-                    if not self.running:
-                        break
-                    log_event("camera_core.rtsp_stream", "Кадр RTSP не получен", "warn")
-                    time.sleep(0.05)
+                    # тишина дольше порога = реальный обрыв -> переоткрываем камеру
+                    if time.time() - last_ok >= RTSP_STALL_SECONDS:
+                        attempt += 1
+                        self.reconnect_attempts = attempt
+                        self.reconnecting = True
+                        if attempt == 1 or attempt % RTSP_RECONNECT_LOG_EVERY == 0:
+                            log_event("camera_core.rtsp_stream", "Обрыв RTSP-потока, переподключение", "warn",
+                                      {"serial_number": self.serial_number, "attempt": attempt,
+                                       "retry_in": self._backoff_delay(attempt),
+                                       "stall_seconds": round(time.time() - last_ok, 1)})
+                        try:
+                            capture.release()
+                        except Exception:
+                            pass
+                        if self.capture is capture:
+                            self.capture = None
+                        capture = None
+                        self.running = False
+                        self._sleep_sliced(self._backoff_delay(attempt))
+                    else:
+                        time.sleep(0.05)
                     continue
 
+                last_ok = time.time()
                 # полноразмерный кадр держим для снимка
                 self.last_frame = raw
 
                 now = time.time()
-                # троттлинг: пропускаем кадр, если интервал ещё не прошёл
+                # троттлинг отдачи/записи: читаем всё (иначе растёт буфер), но
+                # кодируем и сохраняем не чаще целевого fps
+                min_interval = (1.0 / self.target_fps) if self.target_fps else 0.0
                 if min_interval and (now - last_emit) < min_interval:
                     continue
                 last_emit = now
 
-                # цифровой зум (кроп центра + растяжение), затем сетевой масштаб
+                # цифровой зум (кроп + растяжение), затем сетевой масштаб
                 zoomed = self._apply_digital_zoom(raw)
 
-                # масштабирование для снижения нагрузки на сеть
+                scale_factor = self.stream_scale / 100.0
                 if scale_factor < 1.0:
                     new_w = max(2, int(zoomed.shape[1] * scale_factor))
                     new_h = max(2, int(zoomed.shape[0] * scale_factor))
@@ -1648,40 +1910,120 @@ class RtspCameraWorker(BaseCameraWorker):
                 last_frame_time = now
 
                 # автофото + запись видео (тот же механизм, что и у GigE)
-                self._maybe_save(img, video_fps)
+                self._maybe_save(img, self.target_fps or source_fps)
 
-                yield (
-                    b"--frame\r\n"
-                    b"Content-Type: image/jpeg\r\n\r\n" + frame + b"\r\n"
-                )
+                self._publish(frame)
 
         except Exception as e:
-            if not self.running:
-                log_event("camera_core.rtsp_stream", "RTSP-поток остановлен", "error", {"error": repr(e)})
-            else:
-                log_event("camera_core.rtsp_stream", "Ошибка RTSP-потока", "error", {"error": repr(e)})
-                self.metrics["errors"] += 1
+            log_event("camera_core.rtsp_stream", "Ошибка фонового захвата RTSP", "error",
+                      {"serial_number": self.serial_number, "error": repr(e)})
+            self.metrics["errors"] += 1
 
         finally:
-            log_event("camera_core.rtsp_stream", "RTSP-поток закрыт", "info", {"serial_number": self.serial_number})
-
             self.running = False
+            self.reconnecting = False
 
-            # освобождаем ЛОКАЛЬНЫЙ capture этого сеанса независимо от self.capture:
-            # параллельный force_close мог уже обнулить self.capture, и тогда наш
-            # capture остался бы неосвобождённым (утечка сокета и потока FFmpeg).
-            # release идемпотентен, повторный вызов после force_close безопасен.
             if capture is not None:
                 try:
                     capture.release()
                 except Exception:
                     pass
-
-            # обнуляем ссылку, только если это всё ещё наш capture (не мешаем force_close)
             if self.capture is capture:
                 self.capture = None
 
-            self._reset_save_state()
+            with self._loop_lock:
+                if self._capture_thread is threading.current_thread():
+                    self._capture_thread = None
+
+            # будим зрителей, чтобы их генераторы вышли, а не висели на ожидании кадра
+            self._publish(None)
+
+            log_event("camera_core.rtsp_stream", "Фоновый захват RTSP остановлен", "info",
+                      {"serial_number": self.serial_number, "photo": self.save_photo,
+                       "video": self.save_video, "autostart": self.autostart})
+
+    def _open_capture(self):
+        capture = cv2.VideoCapture(self.rtsp_url, cv2.CAP_FFMPEG)
+        try:
+            capture.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+        except Exception:
+            pass
+        return capture
+
+    def _capture_fps(self, capture):
+        try:
+            fps = capture.get(cv2.CAP_PROP_FPS)
+        except Exception:
+            fps = 0
+        return fps if fps and fps > 0 else DEFAULT_VIDEO_FPS
+
+    # ---------- стрим ----------
+
+    # Отдача MJPEG. Камеру НЕ открывает: поднимает фоновый захват (если не идёт) и
+    # раздаёт последний готовый кадр, пока браузер подключён. Первый кадр ждём
+    # FIRST_FRAME_TIMEOUT — за это время камера успевает подключиться.
+    FIRST_FRAME_TIMEOUT = 15.0
+
+    def generate(self, scale=100, target_fps=None):
+        log_event("camera_core.rtsp_stream", "Запрошена отдача RTSP-потока", "info",
+                  {"serial_number": self.serial_number, "rtsp_url": self.rtsp_url,
+                   "scale": scale, "target_fps": target_fps})
+
+        with self._frame_cond:
+            self._viewers += 1
+            viewers = self._viewers
+        self.ensure_capture(scale=scale, target_fps=target_fps)
+
+        seen_seq = 0
+        got_first = False
+        deadline = time.time() + self.FIRST_FRAME_TIMEOUT
+
+        try:
+            while True:
+                with self._frame_cond:
+                    # ждём кадр НОВЕЕ отданного (иначе гоняли бы один и тот же по кругу)
+                    while self._latest_seq == seen_seq and self._latest_jpeg is not None:
+                        if not self._frame_cond.wait(timeout=1.0):
+                            break
+                    frame = self._latest_jpeg
+                    seen_seq = self._latest_seq
+
+                if frame is None:
+                    # захват ещё поднимается (или уже остановлен) — ждём первый кадр,
+                    # после потери связи держим соединение, пока цикл переподключается
+                    if not got_first and time.time() > deadline:
+                        log_event("camera_core.rtsp_stream", "Первый кадр RTSP не получен за таймаут", "error",
+                                  {"serial_number": self.serial_number, "rtsp_url": self.rtsp_url})
+                        return
+                    if got_first and not self._should_capture():
+                        return
+                    time.sleep(0.1)
+                    continue
+
+                got_first = True
+
+                yield (
+                    b"--frame\r\n"
+                    b"Content-Type: image/jpeg\r\n\r\n" + frame + b"\r\n"
+                )
+        finally:
+            with self._frame_cond:
+                self._viewers = max(0, self._viewers - 1)
+                left = self._viewers
+            log_event("camera_core.rtsp_stream", "Зритель RTSP отключился", "info",
+                      {"serial_number": self.serial_number, "viewers": left,
+                       "photo": self.save_photo, "video": self.save_video})
+            # состояние автосохранения НЕ сбрасываем: запись продолжается без зрителей
+            # (её глушит только off_photo/off_video или force_close)
+
+    # мягкая остановка: просмотр больше не держит захват. Если идёт автосохранение
+    # или включён автостарт — цикл продолжает работать (в этом весь смысл развязки).
+    def close(self):
+        self._stop_requested = True
+        keep = self.save_photo or self.save_video == 1 or self.autostart
+        log_event("camera_core.rtsp_stream", "Запрошена мягкая остановка RTSP-потока", "info",
+                  {"serial_number": self.serial_number, "keep_capture": bool(keep)})
+        return {"status": "kept_alive" if keep else "stopping", "capture_kept": bool(keep)}
 
     # ---------- снимок ----------
 
@@ -1720,7 +2062,13 @@ class RtspCameraWorker(BaseCameraWorker):
             if opened is not None:
                 opened.release()
 
+    # принудительная остановка: гасим фоновый захват целиком и снимаем автосохранение —
+    # это осознанное «выключить всё», в отличие от close() (просто ушёл зритель)
     def force_close(self):
+        # _loop_stop сильнее всех признаков в _should_capture (включая autostart);
+        # сам флаг autostart не трогаем — он живёт в базе сохранённых камер
+        self._loop_stop.set()
+        self._stop_requested = True
         self.running = False
 
         if self.capture is not None:
@@ -1731,8 +2079,25 @@ class RtspCameraWorker(BaseCameraWorker):
 
             self.capture = None
 
-        log_event("camera_core.rtsp_force", "Запрошена принудительная остановка RTSP-потока", "warn")
+        # будим зрителей: их генераторы должны выйти, а не висеть на ожидании кадра
+        self._publish(None)
+        self._reset_save_state()
+
+        log_event("camera_core.rtsp_force", "Запрошена принудительная остановка RTSP-потока", "warn",
+                  {"serial_number": self.serial_number})
         return {"status": "force_stopped"}
+
+    # состояние потока + признаки фонового захвата (для бейджа «переподключение…» в UI)
+    def stream_state(self):
+        return {
+            "serial_number": self.serial_number,
+            "running": self.running,
+            "closed": not self.running,
+            "capture_active": self._capture_thread is not None and self._capture_thread.is_alive(),
+            "reconnecting": self.reconnecting,
+            "viewers": self._viewers,
+            "autostart": self.autostart,
+        }
 
     # ---------- цифровой зум ----------
 
@@ -2172,6 +2537,54 @@ class CameraManager:
         for entry in self.list_devices():
             grouped.setdefault(entry["serial_number"], []).append(entry)
         return grouped
+
+    # ---------- автоподключение RTSP при старте приложения ----------
+
+    # серийник (ключ воркера и настроек сохранения) для записи из базы RTSP.
+    # Приоритет — сохранённый в базе; иначе строим как фронтенд: RTSP-<ip>.
+    @staticmethod
+    def _saved_rtsp_serial(entry):
+        serial = (entry.get("serial") or "").strip()
+        if serial:
+            return serial
+        ip = (entry.get("ip") or "").strip()
+        return f"RTSP-{ip}" if ip else "RTSP-custom"
+
+    # поднять камеры с галочкой «автоподключение» и возобновить их автосохранение.
+    # Зовётся из lifespan: после перезагрузки ПК съёмка продолжается сама, без браузера.
+    def resume_rtsp_autostart(self):
+        started = []
+        for entry in rtsp_store.load():
+            if not entry.get("autostart"):
+                continue
+            url = entry.get("url")
+            if not url:
+                continue
+
+            serial = self._saved_rtsp_serial(entry)
+            worker = self.get_rtsp(serial, url)
+            if worker is None:
+                continue
+            worker.autostart = True
+
+            # возобновляем автосохранение фото, если его не выключали осознанно
+            settings = save_settings.get(serial)
+            interval = settings.get("photo_interval")
+            if settings.get("photo_autostart") and interval:
+                try:
+                    worker.on_photo(int(interval), settings.get("photo_project"))
+                except Exception as e:
+                    log_event("camera_core.rtsp_autostart", "Не удалось возобновить автосохранение фото",
+                              "warn", {"serial_number": serial, "error": str(e)})
+
+            worker.ensure_capture(scale=entry.get("scale") or 100, target_fps=entry.get("fps") or None)
+            started.append({"serial_number": serial, "photo": worker.save_photo,
+                            "project": worker.photo_project})
+
+        if started:
+            log_event("camera_core.rtsp_autostart", "Автоподключение сохранённых RTSP-камер", "success",
+                      {"count": len(started), "cameras": started})
+        return {"started": started}
 
     # создать/получить RTSP-камеру (rtsp_url нужен при первом обращении)
     def get_rtsp(self, serial_number, rtsp_url=None):

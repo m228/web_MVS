@@ -192,29 +192,31 @@
         <div class="card photo-card-popup" id="photoCard">
           <h2>Автосохранение фото</h2>
 
-          <label class="field-row">
-            <span>Имя проекта</span>
-            <input class="field-input" type="text" name="photo_project" placeholder="напр. завод один" />
-          </label>
+          <div class="save-grid">
+            <label class="save-grid__field">
+              <span>Имя проекта</span>
+              <input class="field-input" type="text" name="photo_project" placeholder="напр. завод один" />
+            </label>
 
-          <label class="field-row">
-            <span>Интервал</span>
-            <span class="field-inline">
-              <input class="field-input field-input--sm" type="number" name="photo_interval" value="5" min="1" />
-              <select class="field-select" name="photo_interval_unit">
-                <option value="seconds" selected>сек</option>
-                <option value="minutes">мин</option>
+            <label class="save-grid__field save-grid__field--narrow">
+              <span>Формат</span>
+              <select class="field-select" name="photo_format" title="JPG — сжатие с потерями, PNG — без потерь (файлы крупнее)">
+                <option value="jpg" selected>JPG</option>
+                <option value="png">PNG</option>
               </select>
-            </span>
-          </label>
+            </label>
 
-          <label class="field-row">
-            <span>Формат</span>
-            <select class="field-select" name="photo_format" title="PNG — без потерь (крупнее), JPG — компактнее">
-              <option value="jpg" selected>JPG</option>
-              <option value="png">PNG (без потерь)</option>
-            </select>
-          </label>
+            <label class="save-grid__field save-grid__field--narrow">
+              <span>Интервал</span>
+              <span class="field-inline">
+                <input class="field-input field-input--sm" type="number" name="photo_interval" value="5" min="1" />
+                <select class="field-select" name="photo_interval_unit">
+                  <option value="seconds" selected>сек</option>
+                  <option value="minutes">мин</option>
+                </select>
+              </span>
+            </label>
+          </div>
 
           <p class="record-path" id="photoSavePath" hidden></p>
 

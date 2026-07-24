@@ -148,14 +148,14 @@ def _explain_error(error):
 
 
 # RTSP поверх TCP — стабильнее, меньше «рассыпающихся» кадров.
-# timeout/stimeout (мкс) — сокетный таймаут FFmpeg: без него открытие камеры, которая
-# приняла TCP-соединение но не отвечает по RTSP, висит БЕЗ ОГРАНИЧЕНИЯ и вешает вместе
-# с собой весь цикл реконнекта. Имя опции менялось между версиями FFmpeg (stimeout ->
-# timeout), поэтому задаём оба: лишнюю FFmpeg просто игнорирует.
-os.environ.setdefault(
-    "OPENCV_FFMPEG_CAPTURE_OPTIONS",
-    "rtsp_transport;tcp|timeout;5000000|stimeout;5000000",
-)
+#
+# ВАЖНО про таймауты: у OpenCV свой interrupt-колбэк на FFmpeg с ЖЁСТКИМИ 30 с на
+# открытие и на чтение. Проверено на «молчащем» порту (TCP принимает, RTSP не отвечает):
+# ни timeout/stimeout/rw_timeout в этих опциях, ни OPENCV_FFMPEG_OPEN_TIMEOUT/
+# _READ_TIMEOUT ничего не меняют — open/read всё равно возвращаются ровно через 30 с.
+# Поэтому сократить саму блокировку нельзя, и обрыв ЗАМЕЧАЕТ отдельный сторож
+# (_watchdog_loop): он не сидит в read() и сообщает о тишине через RTSP_STALL_SECONDS.
+os.environ.setdefault("OPENCV_FFMPEG_CAPTURE_OPTIONS", "rtsp_transport;tcp")
 
 # Путь до директории программы и имена файлов драйвера. Поставка самодостаточна:
 # и продюсер (.cti), и его runtime (MvCameraControl.dll) лежат в папке Driver/.
@@ -1720,6 +1720,10 @@ class RtspCameraWorker(BaseCameraWorker):
         # идёт переподключение к камере (показываем бейджем в UI)
         self.reconnecting = False
         self.reconnect_attempts = 0
+        # сторож простоя: поток, время последнего кадра и флаг «о тишине уже сообщили»
+        self._watchdog_thread = None
+        self._last_frame_at = time.time()
+        self._stall_reported = False
         # параметры отдачи: масштаб кадра (%) и целевой fps — задаёт подключающийся зритель
         self.stream_scale = 100
         self.target_fps = None
@@ -1771,6 +1775,43 @@ class RtspCameraWorker(BaseCameraWorker):
                        "autostart": self.autostart})
             return True
 
+    # Сторож простоя. Нужен отдельным потоком, потому что `capture.read()` в цикле
+    # захвата БЛОКИРУЕТСЯ внутри FFmpeg (на мёртвой камере — десятки секунд) и цикл
+    # физически не может ни заметить тишину, ни сообщить о ней. Сторож не читает
+    # кадры, поэтому видит обрыв ровно через RTSP_STALL_SECONDS и сразу поднимает
+    # флаг «переподключение» и событие в журнал — не дожидаясь возврата read().
+    def _start_watchdog(self):
+        thread = self._watchdog_thread
+        if thread is not None and thread.is_alive():
+            return
+        self._watchdog_thread = threading.Thread(
+            target=self._watchdog_loop,
+            name=f"rtsp-watchdog-{self.serial_number}",
+            daemon=True,
+        )
+        self._watchdog_thread.start()
+
+    def _watchdog_loop(self):
+        while self._should_capture():
+            time.sleep(0.5)
+            if not self.running:
+                continue  # цикл сам знает, что переподключается (пауза бэкоффа)
+
+            silence = time.time() - self._last_frame_at
+            if silence < RTSP_STALL_SECONDS or self._stall_reported:
+                continue
+
+            self._stall_reported = True
+            self.reconnecting = True
+            log_event("camera_core.rtsp_stream", "Нет кадров с RTSP — камера не отвечает", "warn",
+                      {"serial_number": self.serial_number, "rtsp_url": self.rtsp_url,
+                       "silence_seconds": round(silence, 1),
+                       "hint": "ждём таймаут чтения FFmpeg, затем переподключение"})
+
+        with self._loop_lock:
+            if self._watchdog_thread is threading.current_thread():
+                self._watchdog_thread = None
+
     # пауза «нарезанная»: реагируем на стоп/уход зрителей почти мгновенно
     def _sleep_sliced(self, seconds):
         deadline = time.time() + seconds
@@ -1797,10 +1838,11 @@ class RtspCameraWorker(BaseCameraWorker):
     def _capture_loop(self):
         capture = None
         attempt = 0
-        last_ok = time.time()
         last_frame_time = None
         last_emit = 0.0
         source_fps = DEFAULT_VIDEO_FPS
+        self._last_frame_at = time.time()
+        self._start_watchdog()
 
         try:
             while self._should_capture():
@@ -1827,7 +1869,8 @@ class RtspCameraWorker(BaseCameraWorker):
                     self.capture = capture
                     self.running = True
                     source_fps = self._capture_fps(capture)
-                    last_ok = time.time()
+                    self._last_frame_at = time.time()
+                    self._stall_reported = False
                     if attempt:
                         log_event("camera_core.rtsp_stream", "RTSP-поток восстановлен после обрыва", "success",
                                   {"serial_number": self.serial_number, "attempts": attempt})
@@ -1844,7 +1887,7 @@ class RtspCameraWorker(BaseCameraWorker):
                 if not ok or raw is None:
                     self.metrics["errors"] += 1
                     # тишина дольше порога = реальный обрыв -> переоткрываем камеру
-                    if time.time() - last_ok >= RTSP_STALL_SECONDS:
+                    if time.time() - self._last_frame_at >= RTSP_STALL_SECONDS:
                         attempt += 1
                         self.reconnect_attempts = attempt
                         self.reconnecting = True
@@ -1852,7 +1895,7 @@ class RtspCameraWorker(BaseCameraWorker):
                             log_event("camera_core.rtsp_stream", "Обрыв RTSP-потока, переподключение", "warn",
                                       {"serial_number": self.serial_number, "attempt": attempt,
                                        "retry_in": self._backoff_delay(attempt),
-                                       "stall_seconds": round(time.time() - last_ok, 1)})
+                                       "stall_seconds": round(time.time() - self._last_frame_at, 1)})
                         try:
                             capture.release()
                         except Exception:
@@ -1866,7 +1909,13 @@ class RtspCameraWorker(BaseCameraWorker):
                         time.sleep(0.05)
                     continue
 
-                last_ok = time.time()
+                self._last_frame_at = time.time()
+                # кадры снова пошли после «тишины» — гасим тревогу сторожа
+                if self._stall_reported:
+                    self._stall_reported = False
+                    self.reconnecting = False
+                    log_event("camera_core.rtsp_stream", "Кадры RTSP снова идут", "success",
+                              {"serial_number": self.serial_number})
                 # полноразмерный кадр держим для снимка
                 self.last_frame = raw
 
@@ -1922,6 +1971,7 @@ class RtspCameraWorker(BaseCameraWorker):
         finally:
             self.running = False
             self.reconnecting = False
+            self._stall_reported = False
 
             if capture is not None:
                 try:

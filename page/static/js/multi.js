@@ -253,9 +253,9 @@ function renderChipSettings(box, cam) {
       <div class="chip-rtsp-summary">
         <div>URL: <strong>${escapeHtml(c.url || '—')}</strong></div>
         <div>Масштаб: <strong>${escapeHtml(c.scale ?? 100)}%</strong>, FPS: <strong>${escapeHtml(c.fps || 'авто')}</strong></div>
-        <label class="chip-autostart" title="Подключать камеру при старте программы и продолжать автосохранение — браузер не нужен">
+        <label class="chip-autostart" title="Автостарт: камера поднимается при запуске программы и сама продолжает автосохранение — браузер открывать не нужно">
           <input type="checkbox" data-chip-autostart ${cam.autostart ? 'checked' : ''} ${c.url ? '' : 'disabled'} />
-          <span>Автоподключение при старте</span>
+          <span>Автостарт</span>
         </label>
       </div>
     `;

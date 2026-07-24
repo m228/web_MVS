@@ -310,6 +310,13 @@ def _sdk_invalidate_device(serial_number):
 # fps по умолчанию для записи видео, когда камера не сообщила частоту кадров
 DEFAULT_VIDEO_FPS = 20.0
 
+# форматы автосохранения фото: JPG (компактно, с потерями) и PNG (без потерь).
+# PNG нужен, когда датасет идёт в обучение/измерения и артефакты JPEG недопустимы.
+PHOTO_FORMATS = ("jpg", "png")
+# степень сжатия PNG: 0 — без сжатия (быстро, огромные файлы), 9 — максимум (медленно).
+# 3 — компромисс: файл вдвое меньше несжатого, кодирование не тормозит поток.
+PNG_COMPRESSION = 3
+
 
 # из ip в int для записи в камеру
 def ip_to_int(ip):
@@ -403,6 +410,8 @@ class BaseCameraWorker:
         self.last_photo = None
         # имя проекта для фото: задаёт папку dataset/<проект>/<камера> и префикс имени файла
         self.photo_project = None
+        # формат файлов фото: "jpg" (по умолчанию) или "png" (без потерь)
+        self.photo_format = "jpg"
         # сколько фото сохранено за текущую сессию автосохранения
         self.photo_saved_count = 0
 
@@ -475,9 +484,14 @@ class BaseCameraWorker:
     def _video_prefix(self):
         return self._project_tag(self.video_project) or "video"
 
+    # расширение файла фото по выбранному формату (всегда одно из PHOTO_FORMATS)
+    def _photo_ext(self):
+        return "png" if self.photo_format == "png" else "jpg"
+
     # папка и шаблон имени файлов фото — показываем во фронтенде
     def photo_save_info(self):
-        return {"dir": str(self.photo_dir().resolve()), "pattern": f"{self._photo_prefix()}_<дата>.jpg"}
+        return {"dir": str(self.photo_dir().resolve()),
+                "pattern": f"{self._photo_prefix()}_<дата>.{self._photo_ext()}"}
 
     # папка и шаблон имени файлов видео — показываем во фронтенде
     def video_save_info(self):
@@ -491,23 +505,28 @@ class BaseCameraWorker:
             return int(time.time() - self.video_start)
         return 0
 
-    def on_photo(self, interval, project=None):
+    def on_photo(self, interval, project=None, photo_format=None):
         self.save_photo = True
         self.photo_interval = interval
         # имя проекта задаёт папку/имя файла; пустое -> прежнее поведение
         self.photo_project = project or None
+        # формат кадра: неизвестное значение игнорируем (остаётся прежний)
+        if photo_format in PHOTO_FORMATS:
+            self.photo_format = photo_format
         # новая сессия автосохранения — обнуляем счётчик
         self.photo_saved_count = 0
 
         # запоминаем выбор, чтобы подтянуть при следующем открытии
-        save_settings.update(self.serial_number, photo_project=self.photo_project, photo_interval=interval)
+        save_settings.update(self.serial_number, photo_project=self.photo_project,
+                             photo_interval=interval, photo_format=self.photo_format)
 
         info = self.photo_save_info()
         log_event("camera_core.on_save", "Вкл. автосохранение фото c интервалом", "info",
                   {"interval": interval, "project": self.photo_project,
+                   "photo_format": self.photo_format,
                    "save_dir": info["dir"], "file_pattern": info["pattern"]})
         return {"status": "ok", "photo_enabled": True, "interval": self.photo_interval,
-                "project": self.photo_project,
+                "project": self.photo_project, "photo_format": self.photo_format,
                 "save_dir": info["dir"], "file_pattern": info["pattern"]}
 
     def off_photo(self):
@@ -535,13 +554,30 @@ class BaseCameraWorker:
 
         return False
 
-    # путь: dataset/<проект>/<серийник>/<проект>_<дата-время>.jpg
+    # путь: dataset/<проект>/<серийник>/<проект>_<дата-время>.<jpg|png>
+    #
+    # Пишем через cv2.imencode + Path.write_bytes, а НЕ cv2.imwrite: imwrite отдаёт
+    # путь в ОС байтами UTF-8, а Windows читает их в ANSI (cp1251), поэтому на пути
+    # с кириллицей (а имя проекта у нас русское: dataset/завод один/...) файл молча
+    # НЕ создаётся. Заодно так удобно передать параметры кодека (сжатие PNG).
     def write_photo(self, img):
         folder = self.photo_dir()
-        folder.mkdir(parents=True, exist_ok=True)
-        filename = f"{self._photo_prefix()}_{datetime.now().strftime('%d_%m_%Y_%H_%M_%S')}.jpg"
+        ext = self._photo_ext()
+        filename = f"{self._photo_prefix()}_{datetime.now().strftime('%d_%m_%Y_%H_%M_%S')}.{ext}"
         path = os.path.join(folder, filename)
-        cv2.imwrite(path, img)
+        params = [cv2.IMWRITE_PNG_COMPRESSION, PNG_COMPRESSION] if ext == "png" else []
+
+        try:
+            folder.mkdir(parents=True, exist_ok=True)
+            ok, encoded = cv2.imencode(f".{ext}", img, params)
+            if not ok:
+                raise OSError(f"не удалось закодировать кадр в {ext.upper()}")
+            Path(path).write_bytes(encoded.tobytes())
+        except Exception as e:
+            log_event("camera_core.write_photo", "Не удалось сохранить фото", "error",
+                      {"serial_number": self.serial_number, "path": path, "error": str(e)})
+            return None
+
         self.photo_saved_count += 1
         return path
 
@@ -744,15 +780,19 @@ class CameraWorker(BaseCameraWorker):
                 "max": node_map.Height.max,
                 "step": node_map.Height.inc,
             },
+            # step (inc) у смещений нужен для ROI мышкой: камера принимает только
+            # значения, кратные шагу, иначе запись узла отбрасывается или округляется
             "offset_x": {
                 "value": node_map.OffsetX.value,
                 "min": node_map.OffsetX.min,
                 "max": node_map.OffsetX.max,
+                "step": node_map.OffsetX.inc,
             },
             "offset_y": {
                 "value": node_map.OffsetY.value,
                 "min": node_map.OffsetY.min,
                 "max": node_map.OffsetY.max,
+                "step": node_map.OffsetY.inc,
             },
             "exposure_time": {
                 "value": node_map.ExposureTime.value,
@@ -764,6 +804,16 @@ class CameraWorker(BaseCameraWorker):
                 "options": node_map.ExposureAuto.symbolics,
             },
         }
+        # полный размер сенсора: Width.max/Height.max сужаются текущим смещением,
+        # а для ROI мышкой и кнопки «сбросить ROI» нужен именно предел матрицы
+        try:
+            data["sensor"] = {
+                "width_max": int(node_map.WidthMax.value),
+                "height_max": int(node_map.HeightMax.value),
+            }
+        except Exception:
+            pass
+
         # пиксельный формат (RGB8/Mono8/BayerRG8/...) — нужен, чтобы выбрать цвет;
         # набор у каждой камеры свой, поэтому через try
         try:

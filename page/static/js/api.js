@@ -153,9 +153,11 @@ const CameraApi = {
     );
   },
 
-  startPhotoSaving(serial, interval, project) {
+  startPhotoSaving(serial, interval, project, photoFormat) {
     const query = new URLSearchParams({ serial_number: serial, interval });
     if (project) query.set('project', project);
+    // формат файла: jpg (по умолчанию) или png — без потерь
+    if (photoFormat) query.set('photo_format', photoFormat);
     return apiGet(
       `/api/camera/on_save_photo?${query.toString()}`,
       'Ошибка запуска сохранения фото:'
@@ -276,9 +278,10 @@ const RtspApi = {
     );
   },
 
-  startPhotoSaving(serial, interval, project) {
+  startPhotoSaving(serial, interval, project, photoFormat) {
     const query = new URLSearchParams({ serial_number: serial, interval });
     if (project) query.set('project', project);
+    if (photoFormat) query.set('photo_format', photoFormat);
     return apiGet(`/api/rtsp/on_save_photo?${query.toString()}`, 'Ошибка запуска сохранения фото (RTSP):');
   },
 

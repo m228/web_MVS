@@ -72,6 +72,8 @@ function initCameraPage() {
   // чтобы UI не завис на «Подключить» (камера могла быть занята/недоступна)
   let connectTimer = null;
   const CONNECT_TIMEOUT_MS = 10000;
+  // лимиты камеры (ширина/высота/смещения + шаг и предел сенсора) — нужны для ROI
+  let cameraLimits = null;
 
 
   const photoPopup = UIHelpers.createPopupController(photoCard, buttons.photo);
@@ -126,6 +128,14 @@ function initCameraPage() {
 
     applyBtn.disabled = !isConnected || !isChange;
     applyBtn.classList.toggle('grey-btn', !isConnected || !isChange);
+
+    // выделять ROI можно только по живому кадру (элемент берём через DOM:
+    // функция вызывается и до инициализации const-ссылок ниже)
+    const roiSelectBtn = document.getElementById('roiBtn');
+    if (roiSelectBtn) {
+      roiSelectBtn.disabled = !isConnected;
+      roiSelectBtn.classList.toggle('grey-btn', !isConnected);
+    }
   }
 
   function applyState(state) {
@@ -279,6 +289,8 @@ function initCameraPage() {
     videoPopup.close();
     configPopup.close();
     removeActiveSlider();
+    // выделение ROI без кадра бессмысленно — выходим из режима
+    if (typeof setRoiMode === 'function') setRoiMode(false);
 
     updateToolbarState();
     stopMetricsPolling();
@@ -362,6 +374,9 @@ function initCameraPage() {
       return;
     }
 
+    // держим лимиты под рукой: по ним ROI мышкой округляет значения под шаг камеры
+    cameraLimits = data;
+
     log.debug('Ограничения камеры загружены', data);
 
     setFieldValue('width', data.width?.value);
@@ -414,6 +429,183 @@ function initCameraPage() {
     }
 
     return query;
+  }
+
+  // ---------- ROI мышкой (аппаратная область интереса камеры) ----------
+  // Отличие от «зума» RTSP: там мы кропаем картинку у себя, здесь камера физически
+  // отдаёт меньше пикселей (Width/Height/OffsetX/OffsetY) — растёт fps и падают потери.
+  // ROI на лету не меняется, поэтому мы лишь заполняем поля формы, а применяет
+  // их кнопка «Применить» (она перезапускает поток).
+
+  const roiBtn = document.getElementById('roiBtn');
+  const roiResetBtn = document.getElementById('roiResetBtn');
+  const roiLayer = document.getElementById('roiMarqueeLayer');
+  const roiBox = document.getElementById('roiMarqueeBox');
+  let roiMode = false;
+  let roiDrag = null;
+
+  function setRoiMode(on) {
+    roiMode = !!on && isConnected;
+    if (roiLayer) roiLayer.hidden = !roiMode;
+    if (roiBox) roiBox.hidden = true;
+    if (!roiMode) roiDrag = null;
+    if (roiBtn) roiBtn.classList.toggle('is-region-active', roiMode);
+  }
+
+  // видимый прямоугольник кадра внутри <img> (object-fit: contain — по краям поля)
+  function displayedFrameRect() {
+    const nw = cameraFrame.naturalWidth;
+    const nh = cameraFrame.naturalHeight;
+    const bw = cameraFrame.clientWidth;
+    const bh = cameraFrame.clientHeight;
+    if (!nw || !nh || !bw || !bh) return null;
+
+    const nr = nw / nh;
+    const br = bw / bh;
+    if (nr > br) {
+      const dh = bw / nr;
+      return { dw: bw, dh, ox: 0, oy: (bh - dh) / 2 };
+    }
+    const dw = bh * nr;
+    return { dw, dh: bh, ox: (bw - dw) / 2, oy: 0 };
+  }
+
+  function roiLayerXY(event) {
+    const rect = roiLayer.getBoundingClientRect();
+    return { x: event.clientX - rect.left, y: event.clientY - rect.top };
+  }
+
+  function updateRoiBox() {
+    if (!roiBox || !roiDrag) return;
+    const { x0, y0, x1, y1 } = roiDrag;
+    roiBox.hidden = false;
+    roiBox.style.left = Math.min(x0, x1) + 'px';
+    roiBox.style.top = Math.min(y0, y1) + 'px';
+    roiBox.style.width = Math.abs(x1 - x0) + 'px';
+    roiBox.style.height = Math.abs(y1 - y0) + 'px';
+  }
+
+  // округление под шаг камеры: значение, кратное step и не меньше min
+  function snapDown(value, step, min) {
+    const s = Number(step) > 0 ? Number(step) : 1;
+    const snapped = Math.floor(Number(value) / s) * s;
+    return Math.max(Number(min) || 0, snapped);
+  }
+
+  // предел сенсора: WidthMax/HeightMax (если камера их отдала), иначе — предел узла
+  function sensorSize() {
+    const limits = cameraLimits || {};
+    return {
+      width: Number(limits.sensor?.width_max) || Number(limits.width?.max) || 0,
+      height: Number(limits.sensor?.height_max) || Number(limits.height?.max) || 0,
+    };
+  }
+
+  function formNumber(name) {
+    const field = form.querySelector(`[name="${name}"]`);
+    return field ? Number(field.value) || 0 : 0;
+  }
+
+  // выделенная рамка -> новые Width/Height/OffsetX/OffsetY.
+  // ВАЖНО: на экране мы видим ТЕКУЩИЙ ROI, а не весь сенсор, поэтому
+  // новое_смещение = текущее_смещение + доля_рамки × текущий_размер.
+  function applyRoiSelection() {
+    const rect = displayedFrameRect();
+    if (!rect || !roiDrag) { setRoiMode(false); return; }
+
+    const { x0, y0, x1, y1 } = roiDrag;
+    if (Math.abs(x1 - x0) < 12 || Math.abs(y1 - y0) < 12) { setRoiMode(false); return; }
+
+    const { dw, dh, ox, oy } = rect;
+    const clamp01 = (v) => Math.max(0, Math.min(1, v));
+    const nx0 = clamp01((Math.min(x0, x1) - ox) / dw);
+    const ny0 = clamp01((Math.min(y0, y1) - oy) / dh);
+    const nx1 = clamp01((Math.max(x0, x1) - ox) / dw);
+    const ny1 = clamp01((Math.max(y0, y1) - oy) / dh);
+
+    // текущий ROI: размер берём из самого кадра (это ровно то, что отдаёт камера),
+    // смещение — из полей формы (они синхронны с камерой после «Применить»)
+    const curW = cameraFrame.naturalWidth;
+    const curH = cameraFrame.naturalHeight;
+    const curOx = formNumber('offset_x');
+    const curOy = formNumber('offset_y');
+
+    const limits = cameraLimits || {};
+    const sensor = sensorSize();
+
+    let width = snapDown((nx1 - nx0) * curW, limits.width?.step, limits.width?.min || 1);
+    let height = snapDown((ny1 - ny0) * curH, limits.height?.step, limits.height?.min || 1);
+    let offsetX = snapDown(curOx + nx0 * curW, limits.offset_x?.step, 0);
+    let offsetY = snapDown(curOy + ny0 * curH, limits.offset_y?.step, 0);
+
+    // не вылезаем за сенсор: сперва подрезаем смещение, затем размер
+    if (sensor.width) {
+      offsetX = Math.min(offsetX, Math.max(0, sensor.width - width));
+      offsetX = snapDown(offsetX, limits.offset_x?.step, 0);
+      width = snapDown(Math.min(width, sensor.width - offsetX), limits.width?.step, limits.width?.min || 1);
+    }
+    if (sensor.height) {
+      offsetY = Math.min(offsetY, Math.max(0, sensor.height - height));
+      offsetY = snapDown(offsetY, limits.offset_y?.step, 0);
+      height = snapDown(Math.min(height, sensor.height - offsetY), limits.height?.step, limits.height?.min || 1);
+    }
+
+    setFieldValue('width', width);
+    setFieldValue('height', height);
+    setFieldValue('offset_x', offsetX);
+    setFieldValue('offset_y', offsetY);
+    markDirty();
+
+    log.success('ROI выделен — нажмите «Применить»', { width, height, offsetX, offsetY });
+    setRoiMode(false);
+  }
+
+  // полный кадр сенсора: размер по максимуму, смещения в нули
+  function resetRoi() {
+    const sensor = sensorSize();
+    if (!sensor.width || !sensor.height) {
+      log.warn('Лимиты камеры неизвестны — подключитесь к камере, чтобы сбросить ROI');
+      return;
+    }
+    const limits = cameraLimits || {};
+    setFieldValue('offset_x', 0);
+    setFieldValue('offset_y', 0);
+    setFieldValue('width', snapDown(sensor.width, limits.width?.step, limits.width?.min || 1));
+    setFieldValue('height', snapDown(sensor.height, limits.height?.step, limits.height?.min || 1));
+    markDirty();
+    setRoiMode(false);
+    log.info('ROI сброшен до полного кадра — нажмите «Применить»', sensor);
+  }
+
+  if (roiBtn) {
+    roiBtn.addEventListener('click', () => {
+      if (!isConnected) {
+        log.warn('ROI мышкой доступен только при запущенном потоке');
+        return;
+      }
+      setRoiMode(!roiMode);
+    });
+  }
+  if (roiResetBtn) roiResetBtn.addEventListener('click', resetRoi);
+
+  if (roiLayer) {
+    roiLayer.addEventListener('mousedown', (event) => {
+      if (!roiMode) return;
+      event.preventDefault();
+      const p = roiLayerXY(event);
+      roiDrag = { x0: p.x, y0: p.y, x1: p.x, y1: p.y };
+      updateRoiBox();
+    });
+    window.addEventListener('mousemove', (event) => {
+      if (!roiDrag) return;
+      const p = roiLayerXY(event);
+      roiDrag.x1 = p.x;
+      roiDrag.y1 = p.y;
+      updateRoiBox();
+    });
+    window.addEventListener('mouseup', () => {
+      if (roiDrag) applyRoiSelection();
+    });
   }
 
   function removeActiveSlider() {
@@ -804,6 +996,15 @@ function initCameraPage() {
     setVal('video_project', s.video_project);
     setIntervalField('photo_interval', null, s.photo_interval);
     setIntervalField('video_duration', 'video_duration_unit', s.video_duration);
+    // формат фото (jpg/png) — тоже запоминаем между запусками
+    const formatSelect = document.querySelector('select[name="photo_format"]');
+    if (formatSelect && s.photo_format) formatSelect.value = s.photo_format;
+  }
+
+  // выбранный формат автосохранения фото (jpg по умолчанию)
+  function readPhotoFormat() {
+    const el = document.querySelector('select[name="photo_format"]');
+    return el ? el.value : 'jpg';
   }
 
   // показать путь сохранения (папка + шаблон имени файла) из ответа сервера
@@ -819,9 +1020,10 @@ function initCameraPage() {
     );
     if (interval === null) return;
 
-    log.info('Запуск сохранения фото', { interval, project });
+    const photoFormat = readPhotoFormat();
+    log.info('Запуск сохранения фото', { interval, project, photoFormat });
 
-    const data = await CameraApi.startPhotoSaving(serialNumber, interval, project);
+    const data = await CameraApi.startPhotoSaving(serialNumber, interval, project, photoFormat);
     if (!data) {
       log.warn('Сервер не подтвердил запуск сохранения фото');
       return;

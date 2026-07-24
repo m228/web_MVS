@@ -375,10 +375,11 @@ async def camera_info(serial_number: str, interface_id: str = "", device_handle:
 
 
 @app.get("/api/camera/on_save_photo")
-def on_save_photo(serial_number: str, interval: int, project: str = ""):
-    data = manager.get(serial_number).on_photo(interval, project)
+def on_save_photo(serial_number: str, interval: int, project: str = "", photo_format: str = ""):
+    data = manager.get(serial_number).on_photo(interval, project, photo_format or None)
     api_log("api.camera.on_save_photo", "Включено сохранение фото",
-            payload={"interval": interval, "project": project, "result": data})
+            payload={"interval": interval, "project": project,
+                     "photo_format": photo_format, "result": data})
     return data
 
 
@@ -526,13 +527,14 @@ def rtsp_metrics(serial_number: str):
 
 
 @app.get("/api/rtsp/on_save_photo")
-def rtsp_on_save_photo(serial_number: str, interval: int, project: str = ""):
+def rtsp_on_save_photo(serial_number: str, interval: int, project: str = "", photo_format: str = ""):
     worker = manager.get_rtsp(serial_number)
     if worker is None:
         return {"error": "rtsp_not_connected"}
-    data = worker.on_photo(interval, project)
+    data = worker.on_photo(interval, project, photo_format or None)
     api_log("api.rtsp.on_save_photo", "Включено автосохранение фото (RTSP)",
-            payload={"interval": interval, "project": project, "result": data})
+            payload={"interval": interval, "project": project,
+                     "photo_format": photo_format, "result": data})
     return data
 
 

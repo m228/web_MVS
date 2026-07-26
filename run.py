@@ -121,10 +121,14 @@ def main():
     # видят 0 камер (см. _warmup)
     _warmup()
     print(f"web_MVS {read_version()} -> http://localhost:{PORT}")
-    try:
-        webbrowser.open(f"http://localhost:{PORT}")
-    except Exception:
-        pass
+    # --no-browser: автозапуск при входе в Windows (задача планировщика, см. autostart.py)
+    # не должен открывать окно браузера каждый раз. Захват RTSP теперь фоновый,
+    # поэтому для записи браузер не нужен.
+    if "--no-browser" not in sys.argv and not os.environ.get("WEB_MVS_NO_BROWSER"):
+        try:
+            webbrowser.open(f"http://localhost:{PORT}")
+        except Exception:
+            pass
     uvicorn.run("app:app", host=HOST, port=PORT, log_level="info")
 
 

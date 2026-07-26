@@ -15,6 +15,7 @@ import rtsp_store
 import save_settings
 import net_tools
 import updater
+import autostart
 from paths import read_version, BUNDLE_DIR, DATA_DIR
 
 
@@ -38,6 +39,9 @@ async def lifespan(app: FastAPI):
     # даём продюсеру время на обнаружение камер, иначе первый опрос ловит ошибки
     await asyncio.sleep(2.0)
     manager.scan_cams()
+    # RTSP-камеры с галочкой «автоподключение» поднимаем сами: захват фоновый,
+    # поэтому съёмка/автосохранение идут без открытого браузера (см. camera_core)
+    manager.resume_rtsp_autostart()
     yield
     api_log("app", "Остановка приложения")
 
@@ -115,6 +119,27 @@ def api_update_apply():
         # заменяет файлы и снова запускает приложение
         threading.Timer(2.0, lambda: os._exit(0)).start()
     return result
+
+
+# --- автозапуск вместе с Windows (Планировщик задач, см. autostart.py) ---
+
+@app.get("/api/autostart/status")
+def api_autostart_status():
+    return autostart.status()
+
+
+@app.get("/api/autostart/enable")
+def api_autostart_enable():
+    data = autostart.enable()
+    api_log("api.autostart", "Включение автозапуска с Windows", payload=data)
+    return data
+
+
+@app.get("/api/autostart/disable")
+def api_autostart_disable():
+    data = autostart.disable()
+    api_log("api.autostart", "Выключение автозапуска с Windows", payload=data)
+    return data
 
 
 # ВАЖНО (frozen): перечисление/control GenTL-продюсера Hikrobot работает только в
@@ -206,15 +231,37 @@ def rtsp_saved():
 
 
 @app.get("/api/rtsp/save")
-def rtsp_save(url: str, label: str = "", ip: str = "", scale: int = 100, fps: float = 0):
+def rtsp_save(url: str, label: str = "", ip: str = "", scale: int = 100, fps: float = 0,
+              serial: str = "", autostart: int | None = None):
     # проверяем схему уже при сохранении, а не только при стриминге — иначе в базу
     # попадает мусор (напр. file://), который потом отклоняется при попытке смотреть
     if not _is_rtsp_scheme(url):
         api_log("api.rtsp.save", "Отклонён RTSP-URL с недопустимой схемой", "warn", {"url": url})
         return {"error": "invalid_rtsp_scheme"}
-    items = rtsp_store.save({"url": url, "label": label, "ip": ip, "scale": scale, "fps": fps})
+    entry = {"url": url, "label": label, "ip": ip, "scale": scale, "fps": fps, "serial": serial}
+    # autostart передаём ТОЛЬКО если он указан явно: обычное перезаписывание камеры
+    # (сменили масштаб/fps) не должно сбрасывать галочку автоподключения
+    if autostart is not None:
+        entry["autostart"] = bool(autostart)
+    items = rtsp_store.save(entry)
     api_log("api.rtsp.save", "RTSP-камера сохранена в базу", payload={"url": url, "count": len(items)})
     return {"items": items}
+
+
+@app.get("/api/rtsp/autostart")
+def rtsp_autostart(url: str, enabled: int, serial_number: str = ""):
+    items = rtsp_store.set_autostart(url, bool(enabled))
+    # синхронизируем живой воркер: снятая галочка не должна держать захват,
+    # поставленная — сразу поднимает камеру, не дожидаясь перезапуска
+    if serial_number:
+        worker = manager.get_rtsp(serial_number, url)
+        if worker is not None:
+            worker.autostart = bool(enabled)
+            if enabled:
+                worker.ensure_capture()
+    api_log("api.rtsp.autostart", "Автоподключение RTSP-камеры изменено",
+            payload={"url": url, "enabled": bool(enabled), "serial_number": serial_number})
+    return {"items": items, "autostart": bool(enabled)}
 
 
 @app.get("/api/rtsp/remove_saved")
@@ -375,10 +422,11 @@ async def camera_info(serial_number: str, interface_id: str = "", device_handle:
 
 
 @app.get("/api/camera/on_save_photo")
-def on_save_photo(serial_number: str, interval: int, project: str = ""):
-    data = manager.get(serial_number).on_photo(interval, project)
+def on_save_photo(serial_number: str, interval: int, project: str = "", photo_format: str = ""):
+    data = manager.get(serial_number).on_photo(interval, project, photo_format or None)
     api_log("api.camera.on_save_photo", "Включено сохранение фото",
-            payload={"interval": interval, "project": project, "result": data})
+            payload={"interval": interval, "project": project,
+                     "photo_format": photo_format, "result": data})
     return data
 
 
@@ -522,17 +570,23 @@ def rtsp_metrics(serial_number: str):
             "video": worker.save_video,
             "photo_count": worker.photo_saved_count,
             "video_elapsed": worker.video_elapsed(),
-            "zoom_factor": worker.zoom_factor}
+            "zoom_factor": worker.zoom_factor,
+            # состояние фонового захвата и здоровья автосохранения (см. camera_core)
+            "reconnecting": worker.reconnecting,
+            "autostart": worker.autostart,
+            "viewers": worker.viewer_count(),
+            **worker.photo_status()}
 
 
 @app.get("/api/rtsp/on_save_photo")
-def rtsp_on_save_photo(serial_number: str, interval: int, project: str = ""):
+def rtsp_on_save_photo(serial_number: str, interval: int, project: str = "", photo_format: str = ""):
     worker = manager.get_rtsp(serial_number)
     if worker is None:
         return {"error": "rtsp_not_connected"}
-    data = worker.on_photo(interval, project)
+    data = worker.on_photo(interval, project, photo_format or None)
     api_log("api.rtsp.on_save_photo", "Включено автосохранение фото (RTSP)",
-            payload={"interval": interval, "project": project, "result": data})
+            payload={"interval": interval, "project": project,
+                     "photo_format": photo_format, "result": data})
     return data
 
 
@@ -572,7 +626,14 @@ def rtsp_status_video_photo(serial_number: str):
     worker = manager.get_rtsp(serial_number)
     if worker is None:
         return {"video": 0, "photo": False}
-    return {"video": worker.save_video, "photo": worker.save_photo}
+    return {"video": worker.save_video,
+            "photo": worker.save_photo,
+            "photo_count": worker.photo_saved_count,
+            "video_elapsed": worker.video_elapsed(),
+            "reconnecting": worker.reconnecting,
+            "autostart": worker.autostart,
+            # «включено, но не пишется» + причина (см. BaseCameraWorker.photo_status)
+            **worker.photo_status()}
 
 
 @app.get("/api/rtsp/capabilities")

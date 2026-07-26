@@ -26,6 +26,10 @@ function initRtspPage() {
   const photoOnBtn = document.getElementById('photoOn');
   const photoOffBtn = document.getElementById('photoOff');
   const photoIndicator = document.getElementById('photoIndicator');
+  const photoHealthLine = document.getElementById('photoHealth');
+
+  // бейдж «переподключение…» поверх кадра (см. reflectReliability)
+  const reconnectBadge = document.getElementById('rtspReconnectBadge');
 
   const videoCard = document.getElementById('videoCard');
   const videoOnBtn = document.getElementById('videoOn');
@@ -198,6 +202,27 @@ function initRtspPage() {
     isSavePhoto = !!data.photo;
     isSaveVideo = Number(data.video) === 1;
     updateModeIndicators();
+    reflectReliability(data);
+  }
+
+  // надёжность: идёт ли переподключение и пишутся ли фото на самом деле.
+  // Бэкенд сам восстанавливает поток, UI лишь честно показывает, что происходит.
+  function reflectReliability(data) {
+    const reconnecting = !!data.reconnecting;
+    if (reconnectBadge) reconnectBadge.hidden = !reconnecting;
+
+    const bad = isSavePhoto && data.photo_health === 'stalled';
+    if (photoIndicator) photoIndicator.classList.toggle('mode-indicator--error', bad);
+    if (buttons.photo) {
+      buttons.photo.classList.toggle('is-save-error', bad);
+      buttons.photo.title = bad
+        ? `Фото не пишется: ${data.photo_error || 'причина неизвестна'}`
+        : 'Автосохранение фото';
+    }
+    if (photoHealthLine) {
+      photoHealthLine.hidden = !bad;
+      photoHealthLine.textContent = bad ? `Не пишется: ${data.photo_error || ''}` : '';
+    }
   }
 
   function resetUI() {
@@ -341,6 +366,9 @@ function initRtspPage() {
     setVal('video_project', s.video_project);
     setIntervalField('photo_interval', 'photo_interval_unit', s.photo_interval);
     setIntervalField('video_duration', 'video_duration_unit', s.video_duration);
+    // формат фото (jpg/png) — тоже запоминаем между запусками
+    const formatSelect = document.querySelector('select[name="photo_format"]');
+    if (formatSelect && s.photo_format) formatSelect.value = s.photo_format;
   }
 
   async function startPhotoSaving() {
@@ -360,7 +388,11 @@ function initRtspPage() {
     const unit = unitSelect ? unitSelect.value : 'seconds';
     const intervalInSeconds = unit === 'minutes' ? interval * 60 : interval;
 
-    const data = await RtspApi.startPhotoSaving(serial, intervalInSeconds, project);
+    // формат файла: jpg (компактно) или png (без потерь)
+    const formatSelect = document.querySelector('select[name="photo_format"]');
+    const photoFormat = formatSelect ? formatSelect.value : 'jpg';
+
+    const data = await RtspApi.startPhotoSaving(serial, intervalInSeconds, project, photoFormat);
     if (!data || data.error) {
       log.warn('Сервер не подтвердил запуск сохранения фото', data);
       return;

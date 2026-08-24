@@ -2928,3 +2928,15 @@ html {
   min-height: 38px;
   padding: 8px 14px;
 }
+
+/* --- Микроскоп варки --- */
+.btn-micro {
+  background: linear-gradient(135deg, #0ea5a5, #0f766e);
+  color: #ffffff;
+}
+.micro-telemetry { display: grid; gap: 8px; margin: 0; }
+.micro-telemetry > div { display: flex; justify-content: space-between; gap: 12px; align-items: baseline; }
+.micro-telemetry dt { color: var(--muted); }
+.micro-telemetry dd { margin: 0; font-weight: 600; font-variant-numeric: tabular-nums; }
+.micro-inline { display: flex; gap: 8px; align-items: center; margin-bottom: 14px; }
+.micro-inline input { flex: 1; }

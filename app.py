@@ -15,6 +15,7 @@ import rtsp_store
 import save_settings
 import net_tools
 import updater
+from microscope_service import micro
 from paths import read_version, BUNDLE_DIR, DATA_DIR
 
 
@@ -38,7 +39,10 @@ async def lifespan(app: FastAPI):
     # даём продюсеру время на обнаружение камер, иначе первый опрос ловит ошибки
     await asyncio.sleep(2.0)
     manager.scan_cams()
+    # плата микроскопа + автомат (пытается подключиться к плате; без неё — тихий реконнект)
+    micro.start()
     yield
+    micro.stop()
     api_log("app", "Остановка приложения")
 
 
@@ -73,6 +77,11 @@ def multi_page():
 @app.get("/network")
 def network_page():
     return FileResponse(str(PAGE_DIR / "network.html"))
+
+
+@app.get("/microscope")
+def microscope_page():
+    return FileResponse(str(PAGE_DIR / "microscope.html"))
 
 
 @app.get("/api/debug/logs")
@@ -115,6 +124,65 @@ def api_update_apply():
         # заменяет файлы и снова запускает приложение
         threading.Timer(2.0, lambda: os._exit(0)).start()
     return result
+
+
+# ---------- Микроскоп: плата micro (Modbus TCP) + автомат ----------
+# По соглашению проекта эндпоинты GET, «сеттеры» тоже GET, с log_event.
+
+@app.get("/api/micro/telemetry")
+def micro_telemetry():
+    # один опрос для страницы: связь + телеметрия платы + состояние автомата
+    return {"connection": micro.status(), "telemetry": micro.telemetry(), "fsm": micro.state()}
+
+
+@app.get("/api/micro/status")
+def micro_status():
+    return micro.status()
+
+
+@app.get("/api/micro/command")
+def micro_command(cmd: int):
+    micro.command(cmd)
+    api_log("api.micro.command", "Команда микроскопу", payload={"cmd": cmd})
+    return {"status": "ok", "cmd": cmd}
+
+
+@app.get("/api/micro/led")
+def micro_led(bright: int | None = None, on: int | None = None):
+    micro.set_led(bright, None if on is None else bool(on))
+    api_log("api.micro.led", "Подсветка микроскопа", payload={"bright": bright, "on": on})
+    return {"status": "ok"}
+
+
+@app.get("/api/micro/sv")
+def micro_sv(value: float):
+    micro.set_sv(value)
+    return {"status": "ok", "sv": value}
+
+
+@app.get("/api/micro/stage")
+def micro_stage(value: int):
+    micro.set_stage(value)
+    return {"status": "ok", "stage": value}
+
+
+@app.get("/api/micro/cyclic")
+def micro_cyclic(on: int):
+    micro.set_cyclic(bool(on))
+    api_log("api.micro.cyclic", "Циклический режим микроскопа", payload={"on": bool(on)})
+    return {"status": "ok", "cyclic": bool(on)}
+
+
+@app.get("/api/micro/stop")
+def micro_stop(on: int = 1):
+    micro.stop_movement(bool(on))
+    api_log("api.micro.stop", "Стоп движения микроскопа", "warn", {"on": bool(on)})
+    return {"status": "ok", "inhibit": bool(on)}
+
+
+@app.get("/api/micro/config")
+def micro_config():
+    return micro.config()
 
 
 # ВАЖНО (frozen): перечисление/control GenTL-продюсера Hikrobot работает только в

@@ -71,6 +71,7 @@ class MicroscopeFSM:
         self.sw1 = False      # движение LED назад к стеклу (флаг-защёлка)
         self.sw2 = False      # движение LED вперёд
         self.sw3 = False      # ЗАПРЕТ движения (наш «Стоп движения»)
+        self._halt = False    # запрос аварийной остановки (цель = текущая позиция)
         self.cw0 = False      # клапан промывки трубки
         self.cw1 = False      # клапан промывки стекла
         self.led_bright = int(config.get("led_bright", 0))
@@ -107,9 +108,12 @@ class MicroscopeFSM:
             self.sw0 = bool(on)
 
     def set_movement_inhibit(self, on):
-        """Наш «Стоп движения» = SW.3. При True не пишем cmd/SP в плату."""
+        """Наш «Стоп движения» = SW.3. При True запрещаем движение и требуем немедленной
+        остановки (цель моторов = текущая позиция), т.к. плата движется к последней уставке."""
         with self._lock:
             self.sw3 = bool(on)
+            if on:
+                self._halt = True
 
     # ---------- снимок состояния (для UI) ----------
 
@@ -283,15 +287,40 @@ class MicroscopeFSM:
                     self.cmd2 = 0
                     self.t2 = 0
 
-            # 7) запись выходов в плату (SW.3 запрещает движение)
+            # 7) сбор выходов; аварийный стоп срабатывает один раз по фронту SW.3
             out = self._collect_outputs()
+            halt = self._halt and self.sw3
+            if halt:
+                self._halt = False
 
-        # плату дёргаем ВНЕ лока (её методы сами потокобезопасны)
-        if not out["inhibit"]:
+        pos2 = telem.get("pos2")
+        connected = self.plate.status.get("connected", False)
+
+        # плату дёргаем ВНЕ лока (её методы потокобезопасны)
+        if halt:
+            # аварийный стоп: цель = текущая позиция, мотор встаёт где есть (плата
+            # держит последнюю уставку, поэтому «просто не слать» её не остановит)
+            if pos1 is not None:
+                self.plate.write_m1_sp(pos1)
+                self.plate.cmd1(CMD_SET_SP1)
+            if pos2 is not None:
+                self.plate.write_m2_sp(pos2)
+                self.plate.cmd2(CMD_SET_SP2)
+            with self._lock:
+                if pos1 is not None:
+                    self.m1_sp = pos1
+                    self.m1_sp_old = pos1
+                if pos2 is not None:
+                    self.m2_sp = pos2
+                    self.m2_sp_old = pos2
+        elif connected and not out["inhibit"]:
+            # движение обоих моторов — только при связи и снятом запрете
             self.plate.cmd1(out["cmd1"])
             self.plate.write_m1_sp(out["m1_sp"])
-        self.plate.cmd2(out["cmd2"])
-        self.plate.write_m2_sp(out["m2_sp"])
+            self.plate.cmd2(out["cmd2"])
+            self.plate.write_m2_sp(out["m2_sp"])
+
+        # подсветка и клапаны — не движение, пишем всегда
         self.plate.set_led(out["led_bright"], out["led_on"])
         self.plate.set_valve_tube(out["cw0"])
         self.plate.set_valve_glass(out["cw1"])

@@ -101,6 +101,10 @@
     $("btnCyclic").addEventListener("click", () => api("/api/micro/cyclic", { on: lastCyclic ? 0 : 1 }));
     $("btnStop").addEventListener("click", () => api("/api/micro/stop", { on: 1 }));
     $("btnRelease").addEventListener("click", () => api("/api/micro/stop", { on: 0 }));
+    $("btnReload").addEventListener("click", async () => {
+      await api("/api/micro/reload");
+      initCamera();  // конфиг мог поменять camera_serial / префиллы
+    });
 
     $("svApply").addEventListener("click", () => api("/api/micro/sv", { value: $("svInput").value }));
     $("stageSelect").addEventListener("change", () => api("/api/micro/stage", { value: $("stageSelect").value }));

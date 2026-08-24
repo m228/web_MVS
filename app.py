@@ -185,6 +185,14 @@ def micro_config():
     return micro.config()
 
 
+@app.get("/api/micro/reload")
+def micro_reload():
+    # применить правки plate_config.json (SP/SVSP/периоды/адреса) без перезапуска приложения
+    data = micro.reload()
+    api_log("api.micro.reload", "Перезагрузка конфига микроскопа", payload=data)
+    return data
+
+
 # ВАЖНО (frozen): перечисление/control GenTL-продюсера Hikrobot работает только в
 # ГЛАВНОМ потоке (см. bug.txt / run._warmup). Синхронные (def) эндпоинты FastAPI
 # гонит в потоках пула → там продюсер отдаёт 0 устройств. Поэтому все эндпоинты,

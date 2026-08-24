@@ -46,6 +46,15 @@ class MicroscopeService:
             self._started = False
             log_event("microscope_service", "Микроскоп остановлен", "info")
 
+    def reload(self):
+        """Перечитать plate_config.json и перезапустить плату+автомат с новыми настройками
+        (чтобы правки SP/SVSP/периодов/адресов применялись без перезапуска приложения)."""
+        was = self._started
+        self.stop()
+        if was:
+            self.start()   # start() сам вызывает plate_config.load()
+        return {"status": "reloaded", "host": self.cfg.get("host") if self.cfg else None}
+
     # ---------- чтение для эндпоинтов ----------
 
     def telemetry(self):

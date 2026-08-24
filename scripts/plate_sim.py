@@ -60,6 +60,9 @@ def sim_loop(ctx, period):
     # начальные значения входов
     pos1 = 0
     pos2 = 0
+    # цель защёлкивается по импульсу команды и держится, пока не доедем (как реальная плата)
+    target1 = 0
+    target2 = 0
     _write_word(ctx, READ_BASE + IN["pos1"]["off"], pos1)
     _write_word(ctx, READ_BASE + IN["pos2"]["off"], pos2)
     tick = 0
@@ -69,11 +72,13 @@ def sim_loop(ctx, period):
         m1_sp = _read_word(ctx, WRITE_BASE + OUT["m1_sp"])   # ед. 10 мкм
         m2_sp = _read_word(ctx, WRITE_BASE + OUT["m2_sp"])
 
-        # мотор реагирует на команду «установить SP» — едет к цели
+        # команда «установить SP» защёлкивает цель; едем к ней и после сброса cmd
         if cmd1 == CMD_SET_SP1:
-            pos1 = _move_toward(pos1, m1_sp, MOTOR_STEP)
+            target1 = m1_sp
         if cmd2 == CMD_SET_SP2:
-            pos2 = _move_toward(pos2, m2_sp, MOTOR_STEP)
+            target2 = m2_sp
+        pos1 = _move_toward(pos1, target1, MOTOR_STEP)
+        pos2 = _move_toward(pos2, target2, MOTOR_STEP)
 
         # обновляем входной блок IN (то, что читает клиент)
         _write_word(ctx, READ_BASE + IN["pos1"]["off"], pos1)

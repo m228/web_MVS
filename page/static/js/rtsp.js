@@ -20,6 +20,7 @@ function initRtspPage() {
     light: document.getElementById('lightBtn'),
     zoom: document.getElementById('zoomBtn'),
     image: document.getElementById('imageBtn'),
+    network: document.getElementById('networkBtn'),
   };
 
   const photoCard = document.getElementById('photoCard');
@@ -57,6 +58,19 @@ function initRtspPage() {
   const imageGainMin = document.getElementById('imageGainMin');
   const imageGainMax = document.getElementById('imageGainMax');
 
+  const networkCard = document.getElementById('networkCard');
+  const networkCap = document.getElementById('networkCap');
+  const networkCurrentBox = document.getElementById('networkCurrent');
+  const netCurIp = document.getElementById('netCurIp');
+  const netCurMask = document.getElementById('netCurMask');
+  const netCurGw = document.getElementById('netCurGw');
+  const networkDhcp = document.getElementById('networkDhcp');
+  const networkFields = document.getElementById('networkFields');
+  const networkIp = document.getElementById('networkIp');
+  const networkMask = document.getElementById('networkMask');
+  const networkGateway = document.getElementById('networkGateway');
+  const networkApplyBtn = document.getElementById('networkApplyBtn');
+
   if (!form || !rtspFrame || !rtspPlaceholder || !buttons.connect) {
     window.AppLog?.error('rtsp', 'Не найдены обязательные элементы RTSP-страницы');
     return;
@@ -86,6 +100,10 @@ function initRtspPage() {
   const lightPopup = UIHelpers.createPopupController(lightCard, buttons.light);
   const zoomPopup = UIHelpers.createPopupController(zoomCard, buttons.zoom);
   const imagePopup = UIHelpers.createPopupController(imageCard, buttons.image);
+  const networkPopup = UIHelpers.createPopupController(networkCard, buttons.network);
+
+  // последние прочитанные с камеры сетевые настройки (для diff-подтверждения)
+  let currentNetwork = null;
 
   // возможности камеры (заполняются после опроса) и текущая кратность цифрового зума
   let capabilities = null;
@@ -134,6 +152,7 @@ function initRtspPage() {
     if (buttons.light) buttons.light.disabled = !isConnected;
     if (buttons.zoom) buttons.zoom.disabled = !isConnected;
     if (buttons.image) buttons.image.disabled = !isConnected;
+    if (buttons.network) buttons.network.disabled = !isConnected;
     const regionBtn = document.getElementById('regionZoomBtn');
     if (regionBtn) regionBtn.disabled = !isConnected;
     buttons.connect.disabled = isLoading;
@@ -214,6 +233,7 @@ function initRtspPage() {
     lightPopup.close();
     zoomPopup.close();
     imagePopup.close();
+    networkPopup.close();
     setRegionMode(false);
     capabilities = null;
 
@@ -581,6 +601,142 @@ function initRtspPage() {
     log.success('Экспозиция применена', { [field]: Number(value) });
   }
 
+  // ---------- сеть (смена IP-адреса камеры) ----------
+
+  // простая проверка IPv4 (строгую валидность маски проверяет бэк через ipaddress)
+  function isValidIp(value) {
+    const m = String(value || '').trim().match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
+    return !!m && m.slice(1).every((o) => Number(o) >= 0 && Number(o) <= 255);
+  }
+
+  // код ошибки от бэка → человеческий текст
+  function describeNetErr(res) {
+    const map = {
+      bad_ip: 'некорректный IP', bad_mask: 'некорректная маска',
+      bad_gateway: 'некорректный шлюз', no_host: 'нет адреса камеры',
+      camera_rejected: 'камера отклонила запрос', rtsp_not_connected: 'камера не подключена',
+    };
+    const e = res && res.error;
+    return map[e] || e || 'нет связи с камерой';
+  }
+
+  function setNetworkControlsEnabled(enabled) {
+    [networkDhcp, networkIp, networkMask, networkGateway, networkApplyBtn].forEach((el) => {
+      if (el) el.disabled = !enabled;
+    });
+  }
+
+  // тумблер DHCP: при включённом DHCP поля статики скрываем (их выдаст сервер)
+  function reflectDhcp() {
+    if (networkFields) networkFields.classList.toggle('is-hidden', !!(networkDhcp && networkDhcp.checked));
+  }
+
+  async function loadNetwork() {
+    if (!isConnected || !serial) return;
+    if (networkCap) { networkCap.dataset.state = 'unknown'; }
+    setCapLine(networkCap, false, '', 'Проверяю…');
+
+    const data = await RtspApi.getNetwork(serial);
+    if (!data || data.error || !data.reachable) {
+      currentNetwork = null;
+      if (networkCurrentBox) networkCurrentBox.hidden = true;
+      setCapLine(networkCap, false, '',
+        data && data.error === 'no_host' ? 'Управление недоступно' : 'Камера не отвечает на управление');
+      setNetworkControlsEnabled(false);
+      log.warn('Не удалось получить сетевые настройки', data);
+      return;
+    }
+
+    currentNetwork = data;
+    setCapLine(networkCap, true, 'Камера отвечает' + (data.mac ? ' · ' + data.mac : ''), '');
+
+    if (netCurIp) netCurIp.textContent = data.ip || '—';
+    if (netCurMask) netCurMask.textContent = data.mask || '—';
+    if (netCurGw) netCurGw.textContent = data.gateway || '—';
+    if (networkCurrentBox) networkCurrentBox.hidden = false;
+
+    // предзаполняем поля текущими значениями камеры
+    if (networkIp) networkIp.value = data.ip || '';
+    if (networkMask) networkMask.value = data.mask || '';
+    if (networkGateway) networkGateway.value = data.gateway || '';
+    if (networkDhcp) networkDhcp.checked = !!data.dhcp;
+    reflectDhcp();
+    setNetworkControlsEnabled(true);
+    log.info('Сетевые настройки получены', data);
+  }
+
+  // подставить новый адрес в форму подключения (чтобы connect был готов к новому IP)
+  function applyNewAddressToForm(newIp, newUrl) {
+    const ipInput = form.querySelector('input[name="ip"]');
+    if (ipInput && newIp) ipInput.value = newIp;
+    const urlInput = form.querySelector('input[name="url"]');
+    if (urlInput && urlInput.value.trim() && newUrl) urlInput.value = newUrl;
+  }
+
+  async function applyNetworkDhcp() {
+    if (!confirm('Включить DHCP?\n\nКамера получит новый IP автоматически от роутера. '
+      + 'Текущий поток закроется — камеру нужно будет найти по новому адресу и подключить заново.')) return;
+
+    const res = await RtspApi.setNetwork(serial, { dhcp: true });
+    if (!res || res.error || !res.ok) {
+      log.warn('Камера не подтвердила включение DHCP', res);
+      alert('Не удалось включить DHCP: ' + describeNetErr(res));
+      return;
+    }
+    log.success('DHCP включён', res);
+    networkPopup.close();
+    alert('DHCP включён. Камера получит новый IP от роутера — найдите её по новому адресу и подключитесь заново.');
+    await stopCamera();
+  }
+
+  async function applyNetworkStatic() {
+    const ip = networkIp.value.trim();
+    const mask = networkMask.value.trim();
+    const gateway = networkGateway.value.trim();
+
+    if (!isValidIp(ip)) { alert('Некорректный IP-адрес'); networkIp.focus(); return; }
+    if (!isValidIp(mask)) { alert('Некорректная маска подсети'); networkMask.focus(); return; }
+    if (gateway && !isValidIp(gateway)) { alert('Некорректный шлюз'); networkGateway.focus(); return; }
+
+    // diff-подтверждение: показываем только реально меняющиеся строки
+    const cur = currentNetwork || {};
+    const lines = [`IP:    ${cur.ip || '—'} → ${ip}`];
+    if ((cur.mask || '') !== mask) lines.push(`Маска: ${cur.mask || '—'} → ${mask}`);
+    if ((cur.gateway || '') !== gateway) lines.push(`Шлюз:  ${cur.gateway || '—'} → ${gateway}`);
+    if (cur.dhcp) lines.push('DHCP:  вкл → выкл (статический адрес)');
+
+    const msg = 'Сменить сетевые настройки камеры?\n\n' + lines.join('\n')
+      + '\n\nПосле применения камера станет доступна по новому адресу. '
+      + 'Убедитесь, что этот адрес в вашей подсети, иначе камера пропадёт из сети.';
+    if (!confirm(msg)) return;
+
+    const res = await RtspApi.setNetwork(serial, { ip, mask, gateway, dhcp: false });
+    if (!res || res.error || !res.ok) {
+      log.warn('Камера не подтвердила смену сети', res);
+      alert('Не удалось сменить настройки: ' + describeNetErr(res));
+      return;
+    }
+
+    const newIp = res.new_ip || ip;
+    log.success('Сетевые настройки применены', res);
+    networkPopup.close();
+
+    // новый адрес — в форму, затем переподключаемся (даём камере применить смену)
+    applyNewAddressToForm(newIp, res.new_url);
+    await stopCamera();
+    alert('IP изменён на ' + newIp + '. Переподключаюсь через несколько секунд…');
+    setTimeout(() => { connectCamera(); }, 4000);
+  }
+
+  async function applyNetwork() {
+    if (!serial || !isConnected) return;
+    if (networkDhcp && networkDhcp.checked) {
+      await applyNetworkDhcp();
+    } else {
+      await applyNetworkStatic();
+    }
+  }
+
   function markZoomLevel(factor) {
     if (zoomLevels) {
       zoomLevels.querySelectorAll('button[data-zoom]').forEach((btn) => {
@@ -780,6 +936,12 @@ function initRtspPage() {
     event.stopPropagation();
     imagePopup.toggle();
   });
+  if (buttons.network) buttons.network.addEventListener('click', (event) => {
+    event.stopPropagation();
+    const willOpen = !networkPopup.isOpen();
+    networkPopup.toggle();
+    if (willOpen) loadNetwork();
+  });
 
   if (photoOnBtn) photoOnBtn.addEventListener('click', startPhotoSaving);
   if (photoOffBtn) photoOffBtn.addEventListener('click', stopPhotoSaving);
@@ -794,6 +956,9 @@ function initRtspPage() {
   if (imageCompensation) imageCompensation.addEventListener('change', () => applyExposure('compensation', imageCompensation.value));
   if (imageGainMin) imageGainMin.addEventListener('change', () => applyExposure('gain_min', imageGainMin.value));
   if (imageGainMax) imageGainMax.addEventListener('change', () => applyExposure('gain_max', imageGainMax.value));
+
+  if (networkDhcp) networkDhcp.addEventListener('change', reflectDhcp);
+  if (networkApplyBtn) networkApplyBtn.addEventListener('click', applyNetwork);
 
   if (zoomLevels) zoomLevels.addEventListener('click', (event) => {
     const btn = event.target.closest('button[data-zoom]');
@@ -811,6 +976,7 @@ function initRtspPage() {
   if (lightCard) lightCard.addEventListener('click', (event) => event.stopPropagation());
   if (zoomCard) zoomCard.addEventListener('click', (event) => event.stopPropagation());
   if (imageCard) imageCard.addEventListener('click', (event) => event.stopPropagation());
+  if (networkCard) networkCard.addEventListener('click', (event) => event.stopPropagation());
 
   document.addEventListener('click', (event) => {
     const insidePhoto = photoCard && photoCard.contains(event.target);
@@ -823,12 +989,15 @@ function initRtspPage() {
     const onZoomBtn = buttons.zoom && buttons.zoom.contains(event.target);
     const insideImage = imageCard && imageCard.contains(event.target);
     const onImageBtn = buttons.image && buttons.image.contains(event.target);
+    const insideNetwork = networkCard && networkCard.contains(event.target);
+    const onNetworkBtn = buttons.network && buttons.network.contains(event.target);
 
     if (!insidePhoto && !onPhotoBtn) photoPopup.close();
     if (!insideVideo && !onVideoBtn) videoPopup.close();
     if (!insideLight && !onLightBtn) lightPopup.close();
     if (!insideZoom && !onZoomBtn) zoomPopup.close();
     if (!insideImage && !onImageBtn) imagePopup.close();
+    if (!insideNetwork && !onNetworkBtn) networkPopup.close();
   });
 
   rtspFrame.addEventListener('load', () => {

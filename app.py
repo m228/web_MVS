@@ -10,7 +10,7 @@ from fastapi.staticfiles import StaticFiles
 
 from logger import get_events, log_event
 
-from camera_core import manager, build_rtsp_url
+from camera_core import manager, build_rtsp_url, replace_host_in_url
 import rtsp_store
 import save_settings
 import net_tools
@@ -778,3 +778,77 @@ def rtsp_day_night(serial_number: str, mode: str):
     api_log("api.rtsp.day_night", "Настройка день/ночь RTSP",
             payload={"serial_number": serial_number, "mode": mode, "result": data})
     return data
+
+
+# ---------- сеть RTSP-камеры (смена IP-адреса) ----------
+def _update_rtsp_store_url(old_url, new_url, new_ip):
+    """Перенести сохранённую запись камеры на новый url/ip после смены IP.
+
+    Только если запись со старым url уже есть в базе — новую не создаём (иначе
+    засоряли бы базу камерами, которые пользователь не сохранял).
+    """
+    if not old_url or old_url == new_url:
+        return
+    entry = next((i for i in rtsp_store.load() if i.get("url") == old_url), None)
+    if entry is None:
+        return
+    rtsp_store.remove(old_url)
+    rtsp_store.save({
+        "url": new_url,
+        "label": entry.get("label", ""),
+        "ip": new_ip,
+        "scale": entry.get("scale", 100),
+        "fps": entry.get("fps", 0),
+    })
+
+
+@app.get("/api/rtsp/network")
+def rtsp_network(serial_number: str):
+    worker = manager.get_rtsp(serial_number)
+    if worker is None:
+        return {"error": "rtsp_not_connected"}
+    data = worker.get_network()
+    api_log("api.rtsp.network", "Опрос сетевых настроек RTSP",
+            payload={"serial_number": serial_number,
+                     "reachable": data.get("reachable"), "ip": data.get("ip"),
+                     "error": data.get("error")})
+    return data
+
+
+@app.get("/api/rtsp/set_network")
+def rtsp_set_network(serial_number: str, ip: str = "", mask: str = "",
+                     gateway: str = "", dhcp: int = 0):
+    worker = manager.get_rtsp(serial_number)
+    if worker is None:
+        return {"error": "rtsp_not_connected"}
+
+    old_url = worker.rtsp_url
+    dhcp_on = bool(dhcp)
+    api_log("api.rtsp.set_network", "Запрошена смена сетевых настроек RTSP", "warn",
+            payload={"serial_number": serial_number, "ip": ip, "mask": mask,
+                     "gateway": gateway, "dhcp": dhcp_on})
+
+    result = worker.set_network(ip=ip, mask=mask, gateway=gateway, dhcp=dhcp_on)
+    if not result.get("ok"):
+        api_log("api.rtsp.set_network", "Смена сетевых настроек не удалась", "error",
+                payload={"serial_number": serial_number, "result": result})
+        return result
+
+    # DHCP: новый IP заранее неизвестен (его выдаст сервер) — базу и воркер не трогаем
+    if dhcp_on:
+        result["dhcp"] = True
+        api_log("api.rtsp.set_network", "Включён DHCP — новый IP выдаст сервер", "success",
+                payload={"serial_number": serial_number})
+        return result
+
+    # статический адрес применён: новый url, обновление базы, сброс старого воркера
+    new_ip = ip.strip()
+    new_url = replace_host_in_url(old_url, new_ip)
+    _update_rtsp_store_url(old_url, new_url, new_ip)
+    manager.drop_rtsp(serial_number)
+
+    result["new_ip"] = new_ip
+    result["new_url"] = new_url
+    api_log("api.rtsp.set_network", "Сетевые настройки применены, база обновлена", "success",
+            payload={"serial_number": serial_number, "new_ip": new_ip, "new_url": new_url})
+    return result

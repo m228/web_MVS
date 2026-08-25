@@ -333,6 +333,29 @@ def build_rtsp_url(ip, username="admin", password="", channel=1, subtype=0, port
     return f"rtsp://{credentials}{ip}:{port}/cam/realmonitor?channel={channel}&subtype={subtype}"
 
 
+# подменить хост (IP) в RTSP-ссылке, сохранив логин/пароль, порт, путь и query.
+# Нужно после смены IP камеры: старый url ведёт на старый адрес. Разбираем строкой,
+# а не urllib, чтобы не декодировать уже закодированные логин/пароль.
+def replace_host_in_url(url, new_host):
+    m = re.match(r"^(rtsps?://)(.*)$", url or "", re.IGNORECASE)
+    if not m:
+        return url
+    scheme, rest = m.group(1), m.group(2)
+    slash = rest.find("/")
+    authority = rest if slash < 0 else rest[:slash]
+    tail = "" if slash < 0 else rest[slash:]
+    if "@" in authority:
+        userinfo, hostport = authority.rsplit("@", 1)
+        userinfo += "@"
+    else:
+        userinfo, hostport = "", authority
+    port = ""
+    if ":" in hostport:
+        _, p = hostport.rsplit(":", 1)
+        port = ":" + p
+    return f"{scheme}{userinfo}{new_host}{port}{tail}"
+
+
 # GenICam Bayer-формат -> код дебайеринга OpenCV. ВНИМАНИЕ: OpenCV именует
 # Байер-паттерн от ВТОРОГО пикселя строки/столбца, поэтому имена «перевёрнуты»
 # относительно GenICam (GenICam BayerRG соответствует OpenCV BayerBG2BGR и т.д.).
@@ -1861,6 +1884,23 @@ class RtspCameraWorker(BaseCameraWorker):
             return {"error": "no_host"}
         return dahua_control.set_day_night(host, user, password, mode)
 
+    # ---------- сетевые настройки (смена IP камеры) ----------
+
+    def get_network(self):
+        """Текущие сетевые настройки камеры (IP/маска/шлюз/DHCP)."""
+        host, user, password = self._dahua_creds()
+        if not host:
+            return {"error": "no_host"}
+        return dahua_control.get_network(host, user, password)
+
+    def set_network(self, ip=None, mask=None, gateway=None, dhcp=None):
+        """Сменить сетевые настройки камеры. См. dahua_control.set_network."""
+        host, user, password = self._dahua_creds()
+        if not host:
+            return {"ok": False, "error": "no_host"}
+        return dahua_control.set_network(host, user, password,
+                                         ip=ip, mask=mask, gateway=gateway, dhcp=dhcp)
+
 
 class CameraManager:
     """Управляет драйвером, сканированием сети и реестром камер."""
@@ -2185,6 +2225,19 @@ class CameraManager:
             elif rtsp_url:
                 worker.rtsp_url = rtsp_url
             return worker
+
+    # убрать RTSP-воркер из реестра (напр. после смены IP: старый serial завязан на
+    # старый адрес). Останавливает поток и удаляет объект, чтобы не копить «висящие».
+    def drop_rtsp(self, serial_number):
+        with self._registry_lock:
+            worker = self.rtsp_workers.pop(serial_number, None)
+        if worker is not None:
+            try:
+                worker.force_close()
+            except Exception as e:
+                log_event("camera_core.rtsp", "Ошибка остановки RTSP при drop", "warn",
+                          {"serial_number": serial_number, "error": str(e)})
+        return worker is not None
 
     # статус доступа: для пары (serial, interface_id), либо лучший статус по серийнику
     def access_status(self, serial_number, interface_id=None):

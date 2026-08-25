@@ -38,7 +38,27 @@
           <div class="page-hero__content">
             <p class="page-hero__eyebrow">Управление устройством</p>
             <h1 class="page-hero__title">Микроскоп варки</h1>
-            <span class="serial-badge">Связь с платой: <strong id="microConn">…</strong></span>
+
+            <div class="micro-conn-bar">
+              <div class="micro-conn-row">
+                <span class="micro-conn-label">Камера</span>
+                <input type="text" id="cfgCamSerial" class="micro-conn-input" placeholder="серийник" title="Серийник камеры (нужен для стрима)" />
+                <span class="micro-conn-sub">IP</span>
+                <input type="text" id="cfgCamIp" class="micro-conn-input" placeholder="192.168.1.x" title="IP камеры (справочно)" />
+              </div>
+              <div class="micro-conn-row">
+                <span class="micro-conn-label">Плата</span>
+                <input type="text" id="cfgPlateHost" class="micro-conn-input" placeholder="192.168.1.153" title="IP платы микроскопа" />
+                <span class="micro-conn-sub">порт</span>
+                <input type="number" id="cfgPlatePort" class="micro-conn-input micro-conn-input--port" placeholder="502" />
+                <span class="micro-conn-sub">связь:</span>
+                <strong id="microConn">…</strong>
+              </div>
+              <div class="micro-conn-row">
+                <button type="button" id="cfgApply" class="btn-secondary">Применить</button>
+                <span class="micro-conn-hint" id="cfgHint"></span>
+              </div>
+            </div>
           </div>
 
           <div class="page-hero__actions">
@@ -95,6 +115,7 @@
                 </div>
               </div>
               <dl class="info-list micro-telemetry">
+                <div><dt>СВ (текущее)</dt><dd id="tSv">—</dd></div>
                 <div><dt>Позиция М1 (LED)</dt><dd id="tPos1">—</dd></div>
                 <div><dt>Позиция М2 (фокус)</dt><dd id="tPos2">—</dd></div>
                 <div><dt>Аналог. позиция</dt><dd id="tPos1ai">—</dd></div>
@@ -130,8 +151,8 @@
                 </select>
               </label>
 
-              <label class="one-line-label">Подсветка LED — яркость: <span id="ledBrightVal">0</span></label>
-              <input type="range" id="ledBright" min="0" max="255" value="0" />
+              <label class="one-line-label">Подсветка LED — яркость: <span id="ledBrightVal">0</span> %</label>
+              <input type="range" id="ledBright" min="0" max="100" value="0" />
               <label class="checkbox-line" for="ledOn">
                 <input type="checkbox" id="ledOn" />
                 <span>Подсветка включена</span>

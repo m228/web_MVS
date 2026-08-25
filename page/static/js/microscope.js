@@ -29,6 +29,11 @@
           $("ledBright").value = cfg.led_bright;
           $("ledBrightVal").textContent = cfg.led_bright;
         }
+        // поля связи (камера/плата)
+        $("cfgCamSerial").value = cfg.camera_serial || "";
+        $("cfgCamIp").value = cfg.camera_ip || "";
+        $("cfgPlateHost").value = cfg.host || "";
+        $("cfgPlatePort").value = cfg.port || "";
       }
     } catch (e) { /* конфиг недоступен — оставляем плейсхолдер */ }
 
@@ -72,6 +77,7 @@
       $("tTemp").textContent = (t.temp == null) ? "—" : (t.temp / 10).toFixed(1) + " °C";
       $("tU12v").textContent = (t.u12v == null) ? "—" : (t.u12v / 100).toFixed(2) + " В";
       $("tDi").textContent = (t.di == null) ? "—" : "0x" + Number(t.di).toString(16).padStart(4, "0");
+      $("tSv").textContent = (f.sv == null) ? "—" : Number(f.sv).toFixed(2);
 
       $("microStep").textContent = f.step || "—";
       $("microMode").textContent = (f.mode == null) ? "—" : f.mode;
@@ -104,6 +110,22 @@
     $("btnReload").addEventListener("click", async () => {
       await api("/api/micro/reload");
       initCamera();  // конфиг мог поменять camera_serial / префиллы
+    });
+
+    $("cfgApply").addEventListener("click", async () => {
+      const hint = $("cfgHint");
+      hint.textContent = "применяю…";
+      try {
+        const p = { camera_serial: $("cfgCamSerial").value, camera_ip: $("cfgCamIp").value };
+        if ($("cfgPlateHost").value) p.host = $("cfgPlateHost").value;
+        if ($("cfgPlatePort").value) p.port = $("cfgPlatePort").value;
+        await api("/api/micro/settings", p);
+        hint.textContent = "применено ✓";
+        initCamera();
+        setTimeout(() => { hint.textContent = ""; }, 2500);
+      } catch (e) {
+        hint.textContent = "ошибка: " + e.message;
+      }
     });
 
     $("svApply").addEventListener("click", () => api("/api/micro/sv", { value: $("svInput").value }));

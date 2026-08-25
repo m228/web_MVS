@@ -2940,3 +2940,10 @@ html {
 .micro-telemetry dd { margin: 0; font-weight: 600; font-variant-numeric: tabular-nums; }
 .micro-inline { display: flex; gap: 8px; align-items: center; margin-bottom: 14px; }
 .micro-inline input { flex: 1; }
+.micro-conn-bar { display: flex; flex-direction: column; gap: 6px; margin-top: 10px; }
+.micro-conn-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.micro-conn-label { min-width: 58px; font-weight: 600; color: var(--muted); }
+.micro-conn-sub { color: var(--muted); font-size: 0.9em; }
+.micro-conn-input { width: 150px; padding: 4px 8px; }
+.micro-conn-input--port { width: 72px; }
+.micro-conn-hint { color: var(--muted); font-size: 0.9em; }

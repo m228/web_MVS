@@ -63,6 +63,7 @@ def save(entry):
             log_event("rtsp_store", "Чтение базы перед сохранением не удалось — запись отменена",
                       "error", {"url": url, "error": str(e)})
             return load()
+        previous = next((i for i in existing if i.get("url") == url), {})
         items = [i for i in existing if i.get("url") != url]
         items.append({
             "url": url,
@@ -70,10 +71,40 @@ def save(entry):
             "ip": entry.get("ip") or "",
             "scale": entry.get("scale") or 100,
             "fps": entry.get("fps") or 0,
+            # серийник (ключ воркера и настроек автосохранения) фиксируем в базе:
+            # иначе после перезапуска камера получила бы новый ключ и потеряла проект
+            "serial": entry.get("serial") or previous.get("serial") or "",
+            # поднимать камеру при старте приложения (галочка в списке источников)
+            "autostart": bool(entry.get("autostart", previous.get("autostart", False))),
         })
         _write(items)
     log_event("rtsp_store", "RTSP-камера сохранена в базу", "info", {"url": url})
     return items
+
+
+def set_autostart(url, enabled):
+    """Включить/выключить автоподключение камеры при старте приложения."""
+    if not url:
+        return load()
+    with _lock:
+        try:
+            existing = _read_strict()
+        except Exception as e:
+            log_event("rtsp_store", "Чтение базы перед сменой автостарта не удалось — операция отменена",
+                      "error", {"url": url, "error": str(e)})
+            return load()
+        found = False
+        for item in existing:
+            if item.get("url") == url:
+                item["autostart"] = bool(enabled)
+                found = True
+        if not found:
+            log_event("rtsp_store", "Камера не найдена в базе для смены автостарта", "warn", {"url": url})
+            return existing
+        _write(existing)
+    log_event("rtsp_store", "Автостарт RTSP-камеры изменён", "info",
+              {"url": url, "autostart": bool(enabled)})
+    return existing
 
 
 def remove(url):

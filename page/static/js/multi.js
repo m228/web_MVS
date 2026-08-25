@@ -110,7 +110,9 @@ async function loadSavedRtsp() {
 
     state.rtspCounter += 1;
     state.cameras.push({
-      serial: `rtsp_${state.rtspCounter}`,
+      // серийник берём из базы: тогда камера сохраняет свой ключ между запусками
+      // (а с ним — проект/интервал автосохранения и автоподключение)
+      serial: it.serial || `rtsp_${state.rtspCounter}`,
       kind: 'rtsp',
       label: it.label || `RTSP ${it.ip || ''}`.trim(),
       model: 'RTSP',
@@ -119,6 +121,7 @@ async function loadSavedRtsp() {
       settings: null,
       connection: { url: it.url, scale: it.scale ?? 100, fps: it.fps || null },
       saved: true,
+      autostart: !!it.autostart,
     });
   });
 
@@ -250,8 +253,18 @@ function renderChipSettings(box, cam) {
       <div class="chip-rtsp-summary">
         <div>URL: <strong>${escapeHtml(c.url || '—')}</strong></div>
         <div>Масштаб: <strong>${escapeHtml(c.scale ?? 100)}%</strong>, FPS: <strong>${escapeHtml(c.fps || 'авто')}</strong></div>
+        <label class="chip-autostart" title="Автостарт: камера поднимается при запуске программы и сама продолжает автосохранение — браузер открывать не нужно">
+          <input type="checkbox" data-chip-autostart ${cam.autostart ? 'checked' : ''} ${c.url ? '' : 'disabled'} />
+          <span>Автостарт</span>
+        </label>
       </div>
     `;
+
+    const autostartBox = box.querySelector('[data-chip-autostart]');
+    if (autostartBox) {
+      autostartBox.addEventListener('click', (e) => e.stopPropagation());
+      autostartBox.addEventListener('change', () => toggleAutostart(cam, autostartBox));
+    }
     return;
   }
 
@@ -289,6 +302,33 @@ function renderChipSettings(box, cam) {
       log.debug('Настройка камеры изменена', { serial: cam.serial, [key]: input.value });
     });
   });
+}
+
+// автоподключение RTSP-камеры при старте программы (галочка в карточке источника).
+// Камера должна быть в мини-базе: автостарт живёт в ней, а не в памяти процесса.
+async function toggleAutostart(cam, checkbox) {
+  const url = cam.connection && cam.connection.url;
+  if (!url) return;
+  const enabled = checkbox.checked;
+
+  // не сохранённую камеру сперва кладём в базу, иначе автостарту нечего помечать
+  if (!cam.saved) {
+    await RtspApi.saveCam({
+      url, label: cam.label, ip: cam.ip, serial: cam.serial,
+      scale: cam.connection.scale, fps: cam.connection.fps,
+    });
+    cam.saved = true;
+  }
+
+  const data = await RtspApi.setAutostart(url, enabled, cam.serial);
+  if (!data || data.error) {
+    checkbox.checked = !enabled; // откат галочки к фактическому состоянию
+    log.warn('Не удалось изменить автоподключение', { serial: cam.serial, error: data?.error });
+    return;
+  }
+
+  cam.autostart = enabled;
+  log.success(enabled ? 'Автоподключение включено' : 'Автоподключение выключено', { serial: cam.serial });
 }
 
 // ---------- раскладка ----------
@@ -454,8 +494,10 @@ function renderTile(index) {
   if (select) select.value = tile.serial || '';
   const stalled = tile.connected && tile.live === false;
   if (badge) {
+    // «переподключение…» приоритетнее «нет кадров»: это не зависшая камера,
+    // а идущее восстановление связи (бэкенд сам переоткрывает поток)
     badge.textContent = tile.connected
-      ? (stalled ? '● нет кадров' : '● в эфире')
+      ? (tile.reconnecting ? '● переподключение…' : (stalled ? '● нет кадров' : '● в эфире'))
       : (source ? 'готова' : 'пусто');
   }
 
@@ -465,7 +507,13 @@ function renderTile(index) {
 
   const recPhoto = el.querySelector('[data-rec-photo]');
   const recVideo = el.querySelector('[data-rec-video]');
-  if (recPhoto) recPhoto.classList.toggle('is-active', !!tile.photo);
+  if (recPhoto) {
+    recPhoto.classList.toggle('is-active', !!tile.photo);
+    // фото включено, но файлы не пишутся — значок краснеет, причина в подсказке
+    const bad = !!tile.photo && tile.photoHealth === 'stalled';
+    recPhoto.classList.toggle('is-error', bad);
+    recPhoto.title = bad ? `Фото не пишется: ${tile.photoError || 'причина неизвестна'}` : 'Сохранение фото';
+  }
   if (recVideo) recVideo.classList.toggle('is-active', !!tile.video);
 
   // индикаторы подсветки и зума (только для RTSP-камеры в эфире)
@@ -696,6 +744,18 @@ function startMetricsPolling() {
         }
       }
 
+      // состояние надёжности RTSP: идёт ли переподключение и пишутся ли фото
+      if (metrics.reconnecting !== undefined || metrics.photo_health !== undefined) {
+        const reconnecting = !!metrics.reconnecting;
+        const health = metrics.photo_health ?? null;
+        if (reconnecting !== !!tile.reconnecting || health !== tile.photoHealth) {
+          tile.reconnecting = reconnecting;
+          tile.photoHealth = health;
+          tile.photoError = metrics.photo_error ?? null;
+          renderTile(i);
+        }
+      }
+
       // индикатор зума в ячейке: кратность приходит в метриках RTSP
       if (metrics.zoom_factor !== undefined) {
         const zf = Number(metrics.zoom_factor) || 1;
@@ -730,6 +790,7 @@ function saveRtspIfNeeded(serial) {
     url: src.connection.url,
     label: src.label,
     ip: src.ip,
+    serial: src.serial,
     scale: src.connection.scale,
     fps: src.connection.fps,
   });
@@ -812,6 +873,8 @@ async function prefillMultiSaveSettings(serial, kind) {
   setVal('multiVideoProject', s.video_project);
   setMultiInterval('multiPhotoInterval', 'multiPhotoUnit', s.photo_interval);
   setMultiInterval('multiVideoDuration', 'multiVideoUnit', s.video_duration);
+  // формат фото (jpg/png) — тоже запоминаем между запусками
+  setVal('multiPhotoFormat', s.photo_format);
 }
 
 function openSettingsModal() {
@@ -863,6 +926,7 @@ function applyMultiFps() {
   if (source.saved && source.connection.url) {
     RtspApi.saveCam({
       url: source.connection.url, label: source.label, ip: source.ip,
+      serial: source.serial,
       scale: source.connection.scale, fps: source.connection.fps,
     });
   }
@@ -1000,7 +1064,9 @@ async function applyPhoto(on) {
     const amount = Number(document.getElementById('multiPhotoInterval')?.value) || 5;
     const unit = document.getElementById('multiPhotoUnit')?.value || 'seconds';
     const seconds = unit === 'minutes' ? amount * 60 : amount;
-    const data = await api.startPhotoSaving(source.serial, seconds, project);
+    // формат файла: jpg (компактно) или png (без потерь)
+    const photoFormat = document.getElementById('multiPhotoFormat')?.value || 'jpg';
+    const data = await api.startPhotoSaving(source.serial, seconds, project, photoFormat);
     tile.photo = true;
     renderTile(state.focused);
     updateToolbar();

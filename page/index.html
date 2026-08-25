@@ -75,6 +75,18 @@
             <span class="metric-card__hint">Устройства, найденные в сети</span>
           </article>
 
+          <article class="card metric-card" id="autostartCard">
+            <span class="metric-card__label">Автозапуск</span>
+            <label class="switch-toggle" title="Запускать программу при входе в Windows (задача планировщика с правами администратора)">
+              <span class="switch">
+                <input type="checkbox" id="autostartSwitch" />
+                <span class="switch-track"></span>
+              </span>
+              <span class="switch-label" id="autostartLabel">Проверка…</span>
+            </label>
+            <span class="metric-card__hint" id="autostartHint">При входе в Windows</span>
+          </article>
+
           <article class="card metric-card metric-card--update" id="updateCard">
             <span class="metric-card__label">Версия</span>
             <strong class="metric-card__value" id="updateCurrent">—</strong>

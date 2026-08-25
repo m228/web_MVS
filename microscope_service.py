@@ -9,6 +9,7 @@ import threading
 import plate_config
 from microscope_plc import PlateClient
 from microscope_fsm import MicroscopeFSM
+from sv_source import SvSource
 from logger import log_event
 
 
@@ -17,6 +18,7 @@ class MicroscopeService:
         self.cfg = None
         self.plate = None
         self.fsm = None
+        self.sv_source = None
         self._started = False
         self._lock = threading.Lock()
 
@@ -29,20 +31,36 @@ class MicroscopeService:
             self.fsm = MicroscopeFSM(self.plate, self.cfg)
             self.plate.start()
             self.fsm.start()
+            # этап A: источник СВ/стадии из ПЛК (если включён в конфиге)
+            svc = self.cfg.get("sv_source", {}) or {}
+            if svc.get("enabled"):
+                self.sv_source = SvSource(svc, on_update=self._on_sv,
+                                          fallback_host=self.cfg.get("host", ""))
+                self.sv_source.start()
             self._started = True
             log_event("microscope_service", "Микроскоп запущен",
-                      "info", {"host": self.cfg.get("host"), "port": self.cfg.get("port")})
+                      "info", {"host": self.cfg.get("host"), "port": self.cfg.get("port"),
+                               "sv_source": bool(svc.get("enabled"))})
+
+    def _on_sv(self, sv, stage):
+        # СВ/стадия из ПЛК -> в автомат (заменяет ручной ввод, пока источник жив)
+        if self.fsm:
+            if sv is not None:
+                self.fsm.set_sv(sv)
+            if stage is not None:
+                self.fsm.set_stage(stage)
 
     def stop(self):
         with self._lock:
             if not self._started:
                 return
-            for obj in (self.fsm, self.plate):
+            for obj in (self.sv_source, self.fsm, self.plate):
                 try:
                     if obj is not None:
                         obj.stop()
                 except Exception:
                     pass
+            self.sv_source = None
             self._started = False
             log_event("microscope_service", "Микроскоп остановлен", "info")
 
@@ -68,6 +86,16 @@ class MicroscopeService:
 
     def config(self):
         return self.cfg or {}
+
+    def sv_status(self):
+        if self.sv_source:
+            return {"enabled": True, **self.sv_source.status()}
+        return {"enabled": False, "connected": False}
+
+    def apply_settings(self, patch):
+        """Сохранить правки (IP камеры/платы и т.п.) в plate_config.json и перезапуститься."""
+        plate_config.save(patch)
+        return self.reload()
 
     # ---------- команды от эндпоинтов ----------
 

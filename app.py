@@ -131,8 +131,9 @@ def api_update_apply():
 
 @app.get("/api/micro/telemetry")
 def micro_telemetry():
-    # один опрос для страницы: связь + телеметрия платы + состояние автомата
-    return {"connection": micro.status(), "telemetry": micro.telemetry(), "fsm": micro.state()}
+    # один опрос для страницы: связь с платой + телеметрия + автомат + источник СВ (ПЛК)
+    return {"connection": micro.status(), "telemetry": micro.telemetry(),
+            "fsm": micro.state(), "plc": micro.sv_status()}
 
 
 @app.get("/api/micro/status")
@@ -191,6 +192,32 @@ def micro_reload():
     data = micro.reload()
     api_log("api.micro.reload", "Перезагрузка конфига микроскопа", payload=data)
     return data
+
+
+@app.get("/api/micro/settings")
+def micro_settings(
+    camera_serial: str | None = None,
+    camera_ip: str | None = None,
+    host: str | None = None,
+    port: int | None = None,
+    unit: int | None = None,
+):
+    # правка IP камеры/платы прямо со страницы: сохраняем в plate_config.json и перезапускаем
+    patch = {}
+    if camera_serial is not None:
+        patch["camera_serial"] = camera_serial
+    if camera_ip is not None:
+        patch["camera_ip"] = camera_ip
+    if host is not None:
+        patch["host"] = host
+    if port is not None:
+        patch["port"] = port
+    if unit is not None:
+        patch["unit"] = unit
+    data = micro.apply_settings(patch)
+    api_log("api.micro.settings", "Изменены настройки микроскопа", payload={"patch": patch})
+    return {"status": "ok", "applied": patch,
+            "host": data.get("host"), "camera_serial": data.get("camera_serial")}
 
 
 # ВАЖНО (frozen): перечисление/control GenTL-продюсера Hikrobot работает только в

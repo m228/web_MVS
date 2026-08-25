@@ -22,7 +22,7 @@ DEFAULTS = {
     # связь с платой
     "host": "192.168.1.153",
     "port": 502,
-    "unit": 254,               # unit_id из запроса ПЛК; проверить на железе (254/255/1)
+    "unit": 255,               # Макс: плата отвечает на 255 и 1 (для прямого TCP неважно)
     "poll_interval_ms": 100,   # такт опроса и автомата (из таймеров ST: 1 такт = 100 мс)
     "timeout_s": 1.0,
 
@@ -53,12 +53,15 @@ DEFAULTS = {
         "pos2":    {"off": 5, "scale": 10},
     },
 
-    # уставки автомата (для этапа B1). SP в мкм.
-    # SP[0] — отвод от стекла (~40 мм); SP[1..49] — зазор по стадиям варки;
-    # SP[50] — время промывки стекла (мс). Ниже — ПЛЕЙСХОЛДЕРЫ.
-    "SP": [40000] + [2000] * 49 + [500],
-    # SVSP[1..49] — пороги СВ (Brix) для выбора SP[i]; 0 = не задано.
-    "SVSP": [0.0] * 51,
+    # уставки автомата. SP в мкм. SP[0] — отвод от стекла (40 мм); SP[1..49] — зазор
+    # (мин. расстояние до стекла) по порогам СВ; SP[50] — время промывки стекла (мс).
+    # Боевые значения из оригинальной программы MicroScope (скриншот Макса 2026-08-25):
+    #   СВ 75->100мкм, 81->600, 83->800, 85->900, 88->1000, 89->1100,
+    #   90->1200, 91->1300, 92->1400, 95->1600.
+    "SP": [40000, 100, 600, 800, 900, 1000, 1100, 1200, 1300, 1400, 1600] + [0] * 39 + [10000],
+    # SVSP[i] — порог СВ (Brix) для выбора SP[i]; берётся последний i, где SV>=SVSP[i]
+    # (массив по возрастанию!). 0 = не задано.
+    "SVSP": [0.0, 75.0, 81.0, 83.0, 85.0, 88.0, 89.0, 90.0, 91.0, 92.0, 95.0] + [0.0] * 40,
 
     # период цикла пробы по стадиям варки (сек); ключ — M[0,2].mode, "default" — по умолчанию
     "cycle_period_s": {"default": 120, "3": 120, "4": 90, "5": 90, "6": 90, "7": 60, "8": 60},
@@ -71,8 +74,10 @@ DEFAULTS = {
     "manual_stage": 0,
     "led_bright": 0,
 
-    # серийник камеры микроскопа (GigE) для картинки на странице; пусто -> плейсхолдер
+    # камера микроскопа (GigE) для картинки на странице.
+    # camera_serial — то, что нужно стриму; camera_ip — для показа/справки (пусто -> плейсхолдер)
     "camera_serial": "",
+    "camera_ip": "",
 
     # ЗАДЕЛ под этап A: источник СВ/стадии по Modbus (Макс пропишет адрес позже).
     # enabled=False -> СВ берётся из ручного ввода/дефолта, подвод по SP[1].
@@ -126,3 +131,26 @@ def load():
         log_event("plate_config", "Ошибка чтения plate_config.json — берём значения по умолчанию",
                   "warn", {"error": str(e)})
         return deepcopy(DEFAULTS)
+
+
+def save(patch):
+    """Слить patch в plate_config.json (поверх существующих правок) и записать атомарно.
+    Хранит только пользовательские правки; недостающее берётся из DEFAULTS в load().
+    Возвращает собранный конфиг (load())."""
+    try:
+        current = json.loads(CONFIG_PATH.read_text(encoding="utf-8")) if CONFIG_PATH.is_file() else {}
+        if not isinstance(current, dict):
+            current = {}
+    except Exception:
+        current = {}
+    merged = _deep_merge(current, patch or {})
+    try:
+        CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+        tmp = CONFIG_PATH.parent / (CONFIG_PATH.name + ".tmp")
+        tmp.write_text(json.dumps(merged, ensure_ascii=False, indent=2), encoding="utf-8")
+        os.replace(tmp, CONFIG_PATH)
+        log_event("plate_config", "plate_config.json обновлён со страницы", "info",
+                  {"keys": list((patch or {}).keys())})
+    except Exception as e:
+        log_event("plate_config", "Не удалось сохранить plate_config.json", "warn", {"error": str(e)})
+    return load()

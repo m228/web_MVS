@@ -10,11 +10,12 @@ from fastapi.staticfiles import StaticFiles
 
 from logger import get_events, log_event
 
-from camera_core import manager, build_rtsp_url
+from camera_core import manager, build_rtsp_url, replace_host_in_url
 import rtsp_store
 import save_settings
 import net_tools
 import updater
+from microscope_service import micro
 import autostart
 from paths import read_version, BUNDLE_DIR, DATA_DIR
 
@@ -39,10 +40,13 @@ async def lifespan(app: FastAPI):
     # даём продюсеру время на обнаружение камер, иначе первый опрос ловит ошибки
     await asyncio.sleep(2.0)
     manager.scan_cams()
+    # плата микроскопа + автомат (пытается подключиться к плате; без неё — тихий реконнект)
+    micro.start()
     # RTSP-камеры с галочкой «автоподключение» поднимаем сами: захват фоновый,
     # поэтому съёмка/автосохранение идут без открытого браузера (см. camera_core)
     manager.resume_rtsp_autostart()
     yield
+    micro.stop()
     api_log("app", "Остановка приложения")
 
 
@@ -77,6 +81,11 @@ def multi_page():
 @app.get("/network")
 def network_page():
     return FileResponse(str(PAGE_DIR / "network.html"))
+
+
+@app.get("/microscope")
+def microscope_page():
+    return FileResponse(str(PAGE_DIR / "microscope.html"))
 
 
 @app.get("/api/debug/logs")
@@ -121,6 +130,98 @@ def api_update_apply():
     return result
 
 
+# ---------- Микроскоп: плата micro (Modbus TCP) + автомат ----------
+# По соглашению проекта эндпоинты GET, «сеттеры» тоже GET, с log_event.
+
+@app.get("/api/micro/telemetry")
+def micro_telemetry():
+    # один опрос для страницы: связь с платой + телеметрия + автомат + источник СВ (ПЛК)
+    return {"connection": micro.status(), "telemetry": micro.telemetry(),
+            "fsm": micro.state(), "plc": micro.sv_status()}
+
+
+@app.get("/api/micro/status")
+def micro_status():
+    return micro.status()
+
+
+@app.get("/api/micro/command")
+def micro_command(cmd: int):
+    micro.command(cmd)
+    api_log("api.micro.command", "Команда микроскопу", payload={"cmd": cmd})
+    return {"status": "ok", "cmd": cmd}
+
+
+@app.get("/api/micro/led")
+def micro_led(bright: int | None = None, on: int | None = None):
+    micro.set_led(bright, None if on is None else bool(on))
+    api_log("api.micro.led", "Подсветка микроскопа", payload={"bright": bright, "on": on})
+    return {"status": "ok"}
+
+
+@app.get("/api/micro/sv")
+def micro_sv(value: float):
+    micro.set_sv(value)
+    return {"status": "ok", "sv": value}
+
+
+@app.get("/api/micro/stage")
+def micro_stage(value: int):
+    micro.set_stage(value)
+    return {"status": "ok", "stage": value}
+
+
+@app.get("/api/micro/cyclic")
+def micro_cyclic(on: int):
+    micro.set_cyclic(bool(on))
+    api_log("api.micro.cyclic", "Циклический режим микроскопа", payload={"on": bool(on)})
+    return {"status": "ok", "cyclic": bool(on)}
+
+
+@app.get("/api/micro/stop")
+def micro_stop(on: int = 1):
+    micro.stop_movement(bool(on))
+    api_log("api.micro.stop", "Стоп движения микроскопа", "warn", {"on": bool(on)})
+    return {"status": "ok", "inhibit": bool(on)}
+
+
+@app.get("/api/micro/config")
+def micro_config():
+    return micro.config()
+
+
+@app.get("/api/micro/reload")
+def micro_reload():
+    # применить правки plate_config.json (SP/SVSP/периоды/адреса) без перезапуска приложения
+    data = micro.reload()
+    api_log("api.micro.reload", "Перезагрузка конфига микроскопа", payload=data)
+    return data
+
+
+@app.get("/api/micro/settings")
+def micro_settings(
+    camera_serial: str | None = None,
+    camera_ip: str | None = None,
+    host: str | None = None,
+    port: int | None = None,
+    unit: int | None = None,
+):
+    # правка IP камеры/платы прямо со страницы: сохраняем в plate_config.json и перезапускаем
+    patch = {}
+    if camera_serial is not None:
+        patch["camera_serial"] = camera_serial
+    if camera_ip is not None:
+        patch["camera_ip"] = camera_ip
+    if host is not None:
+        patch["host"] = host
+    if port is not None:
+        patch["port"] = port
+    if unit is not None:
+        patch["unit"] = unit
+    data = micro.apply_settings(patch)
+    api_log("api.micro.settings", "Изменены настройки микроскопа", payload={"patch": patch})
+    return {"status": "ok", "applied": patch,
+            "host": data.get("host"), "camera_serial": data.get("camera_serial")}
 # --- автозапуск вместе с Windows (Планировщик задач, см. autostart.py) ---
 
 @app.get("/api/autostart/status")
@@ -736,3 +837,77 @@ def rtsp_day_night(serial_number: str, mode: str):
     api_log("api.rtsp.day_night", "Настройка день/ночь RTSP",
             payload={"serial_number": serial_number, "mode": mode, "result": data})
     return data
+
+
+# ---------- сеть RTSP-камеры (смена IP-адреса) ----------
+def _update_rtsp_store_url(old_url, new_url, new_ip):
+    """Перенести сохранённую запись камеры на новый url/ip после смены IP.
+
+    Только если запись со старым url уже есть в базе — новую не создаём (иначе
+    засоряли бы базу камерами, которые пользователь не сохранял).
+    """
+    if not old_url or old_url == new_url:
+        return
+    entry = next((i for i in rtsp_store.load() if i.get("url") == old_url), None)
+    if entry is None:
+        return
+    rtsp_store.remove(old_url)
+    rtsp_store.save({
+        "url": new_url,
+        "label": entry.get("label", ""),
+        "ip": new_ip,
+        "scale": entry.get("scale", 100),
+        "fps": entry.get("fps", 0),
+    })
+
+
+@app.get("/api/rtsp/network")
+def rtsp_network(serial_number: str):
+    worker = manager.get_rtsp(serial_number)
+    if worker is None:
+        return {"error": "rtsp_not_connected"}
+    data = worker.get_network()
+    api_log("api.rtsp.network", "Опрос сетевых настроек RTSP",
+            payload={"serial_number": serial_number,
+                     "reachable": data.get("reachable"), "ip": data.get("ip"),
+                     "error": data.get("error")})
+    return data
+
+
+@app.get("/api/rtsp/set_network")
+def rtsp_set_network(serial_number: str, ip: str = "", mask: str = "",
+                     gateway: str = "", dhcp: int = 0):
+    worker = manager.get_rtsp(serial_number)
+    if worker is None:
+        return {"error": "rtsp_not_connected"}
+
+    old_url = worker.rtsp_url
+    dhcp_on = bool(dhcp)
+    api_log("api.rtsp.set_network", "Запрошена смена сетевых настроек RTSP", "warn",
+            payload={"serial_number": serial_number, "ip": ip, "mask": mask,
+                     "gateway": gateway, "dhcp": dhcp_on})
+
+    result = worker.set_network(ip=ip, mask=mask, gateway=gateway, dhcp=dhcp_on)
+    if not result.get("ok"):
+        api_log("api.rtsp.set_network", "Смена сетевых настроек не удалась", "error",
+                payload={"serial_number": serial_number, "result": result})
+        return result
+
+    # DHCP: новый IP заранее неизвестен (его выдаст сервер) — базу и воркер не трогаем
+    if dhcp_on:
+        result["dhcp"] = True
+        api_log("api.rtsp.set_network", "Включён DHCP — новый IP выдаст сервер", "success",
+                payload={"serial_number": serial_number})
+        return result
+
+    # статический адрес применён: новый url, обновление базы, сброс старого воркера
+    new_ip = ip.strip()
+    new_url = replace_host_in_url(old_url, new_ip)
+    _update_rtsp_store_url(old_url, new_url, new_ip)
+    manager.drop_rtsp(serial_number)
+
+    result["new_ip"] = new_ip
+    result["new_url"] = new_url
+    api_log("api.rtsp.set_network", "Сетевые настройки применены, база обновлена", "success",
+            payload={"serial_number": serial_number, "new_ip": new_ip, "new_url": new_url})
+    return result

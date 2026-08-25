@@ -21,6 +21,7 @@ __pycache__/
 /Videos
 /rtsp_cameras.json
 /save_settings.json
+/plate_config.json
 
 # --- временная папка самообновления ---
 /.update

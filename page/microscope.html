@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Микроскоп варки</title>
+  <link rel="stylesheet" href="/static/style.css" />
+  <script src="/static/js/logger.js"></script>
+  <script src="/static/js/theme.js" defer></script>
+</head>
+<body>
+  <div class="layout">
+    <main class="content">
+      <div class="app-shell">
+        <header class="topbar">
+          <div class="theme-panel">
+            <span class="theme-panel__label">Тема интерфейса</span>
+            <div class="theme-switcher" data-theme-switcher></div>
+          </div>
+
+          <div class="brand-slot" aria-label="Логотип компании">
+            <div class="brand-slot__logo-wrap">
+              <a class="brand-link" href="https://max-automation.ru/" target="_blank" rel="noopener" title="Перейти на сайт Maximum Automation">
+                <img
+                  class="brand-logo"
+                  data-theme-logo
+                  data-logo-light="/static/icon/Logo_Black.png"
+                  data-logo-dark="/static/icon/Logo_White.png"
+                  src="/static/icon/Logo_Black.png"
+                  alt="MA logo"
+                />
+              </a>
+            </div>
+          </div>
+        </header>
+
+        <section class="card page-hero">
+          <div class="page-hero__content">
+            <p class="page-hero__eyebrow">Управление устройством</p>
+            <h1 class="page-hero__title">Микроскоп варки</h1>
+
+            <div class="micro-conn-bar">
+              <div class="micro-conn-row">
+                <span class="micro-conn-label">Камера</span>
+                <input type="text" id="cfgCamSerial" class="micro-conn-input" placeholder="серийник" title="Серийник камеры (нужен для стрима)" />
+                <span class="micro-conn-sub">IP</span>
+                <input type="text" id="cfgCamIp" class="micro-conn-input" placeholder="192.168.1.x" title="IP камеры (справочно)" />
+              </div>
+              <div class="micro-conn-row">
+                <span class="micro-conn-label">Плата</span>
+                <input type="text" id="cfgPlateHost" class="micro-conn-input" placeholder="192.168.1.153" title="IP платы микроскопа" />
+                <span class="micro-conn-sub">порт</span>
+                <input type="number" id="cfgPlatePort" class="micro-conn-input micro-conn-input--port" placeholder="502" />
+                <span class="micro-conn-sub">связь:</span>
+                <strong id="microConn">…</strong>
+              </div>
+              <div class="micro-conn-row">
+                <button type="button" id="cfgApply" class="btn-secondary">Применить</button>
+                <span class="micro-conn-hint" id="cfgHint"></span>
+              </div>
+            </div>
+          </div>
+
+          <div class="page-hero__actions">
+            <a href="/" class="btn btn-secondary">На главную</a>
+          </div>
+        </section>
+
+        <div class="camera-layout" id="microLayout">
+          <div class="camera-main">
+            <div class="camera-toolbar card">
+              <button type="button" id="cmdCycle" class="toolbar-btn toolbar-btn--primary" title="Произвести цикл пробы">
+                Цикл пробы
+              </button>
+              <button type="button" id="cmdRetract" class="toolbar-btn toolbar-btn--secondary" title="Отвести LED на 40 мм">
+                Отвод 40&nbsp;мм
+              </button>
+              <button type="button" id="cmdWashGlass" class="toolbar-btn toolbar-btn--accent" title="Промыть стекло">
+                Промыть стекло
+              </button>
+              <button type="button" id="btnCyclic" class="toolbar-btn toolbar-btn--neutral" title="Циклический режим">
+                Циклический: <span id="cyclicState">выкл</span>
+              </button>
+              <button type="button" id="btnStop" class="toolbar-btn toolbar-btn--danger" title="Запретить движение моторов">
+                СТОП движения
+              </button>
+              <button type="button" id="btnRelease" class="toolbar-btn toolbar-btn--success hidden" title="Снять запрет движения">
+                Снять стоп
+              </button>
+              <button type="button" id="btnReload" class="toolbar-btn toolbar-btn--neutral" title="Применить plate_config.json без перезапуска">
+                Перезагрузить конфиг
+              </button>
+            </div>
+
+            <div class="camera-screen card">
+              <img id="microFrame" alt="Кадр микроскопа" class="camera-frame" />
+              <div id="microPlaceholder" class="camera-placeholder">Камера микроскопа не задана</div>
+            </div>
+
+            <div class="camera-status-bar card" id="microStatusBar">
+              <span>Шаг автомата<strong id="microStep">—</strong></span>
+              <span>Режим (mode)<strong id="microMode">—</strong></span>
+              <span>Клапан трубки<strong id="valveTube">—</strong></span>
+              <span>Клапан стекла<strong id="valveGlass">—</strong></span>
+              <span>Команда М1<strong id="microCmd1">—</strong></span>
+            </div>
+          </div>
+
+          <aside class="camera-sidebar" id="microSidebar">
+            <div class="card">
+              <div class="camera-sidebar-header">
+                <div>
+                  <p class="section-subtitle">С платы micro</p>
+                  <h2>Телеметрия</h2>
+                </div>
+              </div>
+              <dl class="info-list micro-telemetry">
+                <div><dt>СВ (текущее)</dt><dd id="tSv">—</dd></div>
+                <div><dt>Позиция М1 (LED)</dt><dd id="tPos1">—</dd></div>
+                <div><dt>Позиция М2 (фокус)</dt><dd id="tPos2">—</dd></div>
+                <div><dt>Аналог. позиция</dt><dd id="tPos1ai">—</dd></div>
+                <div><dt>Температура</dt><dd id="tTemp">—</dd></div>
+                <div><dt>Питание 12В</dt><dd id="tU12v">—</dd></div>
+                <div><dt>Дискр. входы (DI)</dt><dd id="tDi">—</dd></div>
+              </dl>
+            </div>
+
+            <div class="card">
+              <div class="camera-sidebar-header">
+                <div>
+                  <p class="section-subtitle">Ручное управление</p>
+                  <h2>Параметры</h2>
+                </div>
+              </div>
+
+              <label class="one-line-label">СВ (Brix) — вручную, пока нет из ПЛК</label>
+              <div class="micro-inline">
+                <input type="number" step="0.1" id="svInput" value="0" />
+                <button type="button" id="svApply" class="btn-secondary">Задать</button>
+              </div>
+
+              <label>Стадия варки
+                <select id="stageSelect">
+                  <option value="0">— не задано —</option>
+                  <option value="3">3 · Сгущение</option>
+                  <option value="4">4 · Затравка</option>
+                  <option value="5">5 · Подкачка</option>
+                  <option value="6">6 · Стабилизация</option>
+                  <option value="7">7 · Рост</option>
+                  <option value="8">8 · Уваривание</option>
+                </select>
+              </label>
+
+              <label class="one-line-label">Подсветка LED — яркость: <span id="ledBrightVal">0</span> %</label>
+              <input type="range" id="ledBright" min="0" max="100" value="0" />
+              <label class="checkbox-line" for="ledOn">
+                <input type="checkbox" id="ledOn" />
+                <span>Подсветка включена</span>
+              </label>
+            </div>
+          </aside>
+        </div>
+      </div>
+
+      <script src="/static/js/microscope.js"></script>
+    </main>
+  </div>
+</body>
+</html>

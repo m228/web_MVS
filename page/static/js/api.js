@@ -381,6 +381,25 @@ const RtspApi = {
     return apiGet(`/api/rtsp/day_night?${query.toString()}`, 'Ошибка настройки день/ночь (RTSP):');
   },
 
+  // сеть: текущие настройки и смена IP-адреса камеры
+  getNetwork(serial) {
+    return apiGet(`/api/rtsp/network?serial_number=${encodeURIComponent(serial)}`,
+      'Ошибка опроса сетевых настроек (RTSP):',
+      { source: 'api.rtsp.network', logRequest: false, logSuccess: false });
+  },
+
+  setNetwork(serial, { ip = '', mask = '', gateway = '', dhcp = false } = {}) {
+    const query = new URLSearchParams({ serial_number: serial });
+    if (dhcp) {
+      query.set('dhcp', '1');
+    } else {
+      query.set('ip', ip);
+      query.set('mask', mask);
+      query.set('gateway', gateway);
+    }
+    return apiGet(`/api/rtsp/set_network?${query.toString()}`, 'Ошибка смены сетевых настроек (RTSP):');
+  },
+
   // мини-база сохранённых RTSP-камер
   listSaved() {
     return apiGet('/api/rtsp/saved', 'Ошибка загрузки сохранённых RTSP:',

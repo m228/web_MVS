@@ -11,6 +11,7 @@
 - оптического зума нет (фикс-объектив, ptz caps без Zoom);
 - coaxialControlIO — Not Implemented (это для аналоговых HDCVI).
 """
+import ipaddress
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -305,4 +306,95 @@ def set_day_night(host, user, password, mode):
     except Exception as e:
         log_event("dahua_control", "Ошибка настройки день/ночь", "error",
                   {"host": host, "mode": mode, "error": str(e)})
+        return {"ok": False, "error": str(e)}
+
+
+# ---------- сетевые настройки (смена IP-адреса камеры) ----------
+#
+# Конфиг сети Dahua лежит в table.Network.* (getConfig&name=Network). Активный
+# проводной интерфейс — table.Network.DefaultInterface (обычно eth0). Меняем IP/маску/
+# шлюз/DHCP через setConfig на этом интерфейсе. Камера применяет смену сразу (без
+# ребута) и переключает адрес — старое соединение после ответа 'OK' обрывается.
+
+
+def get_network(host, user, password):
+    """Текущие сетевые настройки камеры.
+
+    Возвращает dict: reachable, interface, ip, mask, gateway, dhcp(bool), mac, error.
+    """
+    result = {"reachable": False, "interface": "eth0", "ip": "", "mask": "",
+              "gateway": "", "dhcp": False, "mac": "", "error": None}
+    if not host:
+        result["error"] = "no_host"
+        return result
+    try:
+        kv = _parse_kv(_cgi(host, user, password,
+                            "configManager.cgi?action=getConfig&name=Network"))
+    except Exception as e:
+        result["error"] = str(e)
+        log_event("dahua_control", "Не удалось прочитать сетевые настройки", "warn",
+                  {"host": host, "error": str(e)})
+        return result
+
+    result["reachable"] = True
+    iface = kv.get("table.Network.DefaultInterface", "").strip() or "eth0"
+    base = f"table.Network.{iface}"
+    result["interface"] = iface
+    result["ip"] = kv.get(f"{base}.IPAddress", "")
+    result["mask"] = kv.get(f"{base}.SubnetMask", "")
+    result["gateway"] = kv.get(f"{base}.DefaultGateway", "")
+    result["dhcp"] = kv.get(f"{base}.DhcpEnable", "").strip().lower() == "true"
+    result["mac"] = kv.get(f"{base}.PhysicalAddress", "")
+    return result
+
+
+def set_network(host, user, password, ip=None, mask=None, gateway=None,
+                dhcp=None, interface=None):
+    """Сменить сетевые настройки камеры (IP/маска/шлюз или включить DHCP).
+
+    dhcp=True   → включаем DHCP (IP/маску/шлюз не задаём — их выдаст сервер);
+    dhcp=False  → статический адрес: обязательны корректные ip и mask, gateway опционален.
+
+    IP/маску/шлюз валидируем через ipaddress (стдлиб). Возвращает {ok, error}.
+    """
+    if not host:
+        return {"ok": False, "error": "no_host"}
+    iface = (interface or "eth0").strip() or "eth0"
+    parts = []
+
+    if dhcp:
+        parts.append(f"Network.{iface}.DhcpEnable=true")
+    else:
+        try:
+            ipaddress.ip_address((ip or "").strip())
+        except (ValueError, TypeError):
+            return {"ok": False, "error": "bad_ip"}
+        # проверяем IP и маску вместе: некорректная маска даст ValueError
+        try:
+            ipaddress.IPv4Network(f"{ip}/{mask}", strict=False)
+        except (ValueError, TypeError):
+            return {"ok": False, "error": "bad_mask"}
+
+        parts.append(f"Network.{iface}.DhcpEnable=false")
+        parts.append(f"Network.{iface}.IPAddress={ip.strip()}")
+        parts.append(f"Network.{iface}.SubnetMask={mask.strip()}")
+
+        gateway = (gateway or "").strip()
+        if gateway:
+            try:
+                ipaddress.ip_address(gateway)
+            except (ValueError, TypeError):
+                return {"ok": False, "error": "bad_gateway"}
+            parts.append(f"Network.{iface}.DefaultGateway={gateway}")
+
+    query = "configManager.cgi?action=setConfig&" + "&".join(parts)
+    try:
+        text = _cgi(host, user, password, query)
+        ok = "OK" in text
+        return {"ok": ok, "error": None if ok else "camera_rejected"}
+    except Exception as e:
+        # смена адреса могла оборвать соединение уже ПОСЛЕ применения — честно
+        # сообщаем об ошибке связи, пусть пользователь проверит переподключением
+        log_event("dahua_control", "Ошибка смены сетевых настроек", "error",
+                  {"host": host, "iface": iface, "dhcp": bool(dhcp), "error": str(e)})
         return {"ok": False, "error": str(e)}

@@ -999,7 +999,8 @@ input[type="range"] {
 .video-card-popup,
 .light-card-popup,
 .zoom-card-popup,
-.image-card-popup {
+.image-card-popup,
+.network-card-popup {
   position: fixed;
   display: none;
   max-width: calc(100vw - 24px);
@@ -1031,11 +1032,17 @@ input[type="range"] {
   padding: 20px;
 }
 
+.network-card-popup {
+  width: 290px;
+  padding: 20px;
+}
+
 .photo-card-popup.show,
 .video-card-popup.show,
 .light-card-popup.show,
 .zoom-card-popup.show,
-.image-card-popup.show {
+.image-card-popup.show,
+.network-card-popup.show {
   display: block;
 }
 
@@ -1043,9 +1050,38 @@ input[type="range"] {
 .video-card-popup h2,
 .light-card-popup h2,
 .zoom-card-popup h2,
-.image-card-popup h2 {
+.image-card-popup h2,
+.network-card-popup h2 {
   margin-top: 0;
   margin-bottom: 14px;
+}
+
+/* окно «Сеть»: текущие значения, поля нового адреса, подсказка */
+.net-current {
+  background: var(--surface-muted);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 8px 12px;
+  margin-bottom: 14px;
+}
+.net-current__row {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 13px;
+  line-height: 1.9;
+}
+.net-current__row span { color: var(--muted); }
+.net-current__row strong { font-weight: 600; font-variant-numeric: tabular-nums; }
+.net-dhcp { margin-bottom: 14px; }
+.net-fields { margin-bottom: 4px; }
+.net-fields input { margin-bottom: 10px; }
+.net-fields.is-hidden { display: none; }
+.net-hint {
+  margin: 10px 0 0;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--muted);
 }
 
 /* настройки изображения: селекты/ползунки в столбик, ползунок тянется на всю ширину */
@@ -3015,3 +3051,22 @@ html {
   min-height: 38px;
   padding: 8px 14px;
 }
+
+/* --- Микроскоп варки --- */
+.btn-micro {
+  background: linear-gradient(135deg, #0ea5a5, #0f766e);
+  color: #ffffff;
+}
+.micro-telemetry { display: grid; gap: 8px; margin: 0; }
+.micro-telemetry > div { display: flex; justify-content: space-between; gap: 12px; align-items: baseline; }
+.micro-telemetry dt { color: var(--muted); }
+.micro-telemetry dd { margin: 0; font-weight: 600; font-variant-numeric: tabular-nums; }
+.micro-inline { display: flex; gap: 8px; align-items: center; margin-bottom: 14px; }
+.micro-inline input { flex: 1; }
+.micro-conn-bar { display: flex; flex-direction: column; gap: 6px; margin-top: 10px; }
+.micro-conn-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.micro-conn-label { min-width: 58px; font-weight: 600; color: var(--muted); }
+.micro-conn-sub { color: var(--muted); font-size: 0.9em; }
+.micro-conn-input { width: 150px; padding: 4px 8px; }
+.micro-conn-input--port { width: 72px; }
+.micro-conn-hint { color: var(--muted); font-size: 0.9em; }

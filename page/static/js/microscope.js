@@ -15,6 +15,11 @@
     return res.json();
   }
 
+  function sentCmd(label) {
+    const el = $("lastCmd");
+    if (el) el.textContent = label + " · " + new Date().toLocaleTimeString("ru-RU");
+  }
+
   // ---- камера: MVS SDK сам находит камеры Hikrobot ----
   async function autoDiscoverCameras() {
     try {
@@ -46,6 +51,37 @@
     }
   }
 
+  function applyCamSerials(serials) {
+    const found = $("camFound"), sel = $("camSelect"), ipInp = $("camIp"), ipGo = $("camIpGo");
+    sel.hidden = true; ipInp.hidden = true; ipGo.hidden = true;
+    if (serials.length === 1) {            // одна — грузим сразу
+      found.textContent = serials[0];
+      loadCamIframe(serials[0]);
+      return true;
+    }
+    if (serials.length > 1) {              // несколько — список для выбора
+      found.textContent = "";
+      sel.hidden = false; sel.innerHTML = "";
+      serials.forEach((s) => {
+        const o = document.createElement("option"); o.value = s; o.textContent = s; sel.appendChild(o);
+      });
+      loadCamIframe(serials[0]);
+      return true;
+    }
+    found.textContent = "не найдена —";    // пока не нашлась — поле IP + продолжаем искать
+    ipInp.hidden = false; ipGo.hidden = false;
+    loadCamIframe("");
+    return false;
+  }
+
+  // скан камер (MVS/GenTL) не всегда готов на момент открытия страницы — повторяем поиск
+  async function discoverWithRetry(attempt) {
+    const ok = applyCamSerials(await autoDiscoverCameras());
+    if (!ok && attempt < 8) {
+      setTimeout(() => discoverWithRetry(attempt + 1), 2500);
+    }
+  }
+
   async function initCamera() {
     let cfgSerial = "";
     try {
@@ -63,32 +99,13 @@
       }
     } catch (e) { /* конфиг недоступен */ }
 
-    const found = $("camFound"), sel = $("camSelect"), ipInp = $("camIp"), ipGo = $("camIpGo");
-    sel.hidden = true; ipInp.hidden = true; ipGo.hidden = true;
-
     if (cfgSerial) {                       // явный override в конфиге
-      found.textContent = cfgSerial;
+      $("camSelect").hidden = true; $("camIp").hidden = true; $("camIpGo").hidden = true;
+      $("camFound").textContent = cfgSerial;
       loadCamIframe(cfgSerial);
       return;
     }
-
-    const serials = await autoDiscoverCameras();
-    if (serials.length === 1) {            // одна — грузим сразу
-      found.textContent = serials[0];
-      loadCamIframe(serials[0]);
-    } else if (serials.length > 1) {       // несколько — список для выбора
-      found.textContent = "";
-      sel.hidden = false;
-      sel.innerHTML = "";
-      serials.forEach((s) => {
-        const o = document.createElement("option"); o.value = s; o.textContent = s; sel.appendChild(o);
-      });
-      loadCamIframe(serials[0]);
-    } else {                               // не нашлась — даём указать IP
-      found.textContent = "не найдена —";
-      ipInp.hidden = false; ipGo.hidden = false;
-      loadCamIframe("");
-    }
+    discoverWithRetry(0);
   }
 
   // ---- опрос телеметрии ----
@@ -153,9 +170,9 @@
 
   // ---- кнопки ----
   function wire() {
-    $("cmdCycle").addEventListener("click", () => api("/api/micro/command", { cmd: 100 }));
-    $("cmdRetract").addEventListener("click", () => api("/api/micro/command", { cmd: 200 }));
-    $("cmdWashGlass").addEventListener("click", () => api("/api/micro/command", { cmd: 300 }));
+    $("cmdCycle").addEventListener("click", () => { api("/api/micro/command", { cmd: 100 }); sentCmd("Цикл пробы"); });
+    $("cmdRetract").addEventListener("click", () => { api("/api/micro/command", { cmd: 200 }); sentCmd("Отвод 40 мм"); });
+    $("cmdWashGlass").addEventListener("click", () => { api("/api/micro/command", { cmd: 300 }); sentCmd("Промыть стекло"); });
     $("btnCyclic").addEventListener("click", () => api("/api/micro/cyclic", { on: lastCyclic ? 0 : 1 }));
     $("btnStop").addEventListener("click", () => api("/api/micro/stop", { on: 1 }));
     $("btnRelease").addEventListener("click", () => api("/api/micro/stop", { on: 0 }));
@@ -195,9 +212,9 @@
     });
 
     // ручное движение моторов + аварийный стоп
-    $("m1Go").addEventListener("click", () => api("/api/micro/move", { m: 1, pos: $("m1Pos").value }));
-    $("m2Go").addEventListener("click", () => api("/api/micro/move", { m: 2, pos: $("m2Pos").value }));
-    $("estopBtn").addEventListener("click", () => api("/api/micro/estop"));
+    $("m1Go").addEventListener("click", () => { api("/api/micro/move", { m: 1, pos: $("m1Pos").value }); sentCmd("М1 → " + $("m1Pos").value + " мкм"); });
+    $("m2Go").addEventListener("click", () => { api("/api/micro/move", { m: 2, pos: $("m2Pos").value }); sentCmd("М2 → " + $("m2Pos").value + " мкм"); });
+    $("estopBtn").addEventListener("click", () => { api("/api/micro/estop"); sentCmd("АВАРИЙНЫЙ СТОП"); });
   }
 
   document.addEventListener("DOMContentLoaded", () => {

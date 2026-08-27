@@ -91,6 +91,11 @@
               <button type="button" id="btnReload" class="toolbar-btn toolbar-btn--neutral" title="Применить plate_config.json без перезапуска">
                 Перезагрузить конфиг
               </button>
+              <button type="button" id="logsBtn" class="toolbar-btn toolbar-btn--neutral toolbar-btn--logs" title="Открыть журнал (логи платы и команды)">
+                Логи
+                <span class="log-counter" id="logCounter">0</span>
+              </button>
+              <span class="micro-lastcmd">последняя команда: <strong id="lastCmd">—</strong></span>
             </div>
 
             <div class="camera-status-bar card" id="microStatusBar">
@@ -202,6 +207,21 @@
             Укажи серийник камеры в поле «Камера» выше и нажми «Применить».
           </div>
           <iframe id="camIframe" class="micro-cam-frame" title="Камера микроскопа" hidden></iframe>
+        </section>
+
+        <section class="card debug-console hidden" id="debugConsoleSection" aria-live="polite">
+          <div class="debug-console__header">
+            <div>
+              <p class="section-subtitle">Отладка</p>
+              <h2>История событий (плата, команды)</h2>
+            </div>
+            <div class="debug-console__actions">
+              <span class="debug-console__state">Микроскоп</span>
+              <button type="button" id="debugSaveBtn" class="btn-secondary">Сохранить логи</button>
+              <button type="button" id="debugClearBtn" class="btn-secondary">Очистить</button>
+            </div>
+          </div>
+          <div class="debug-console__list" id="debugConsoleList"></div>
         </section>
       </div>
 

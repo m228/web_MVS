@@ -165,6 +165,9 @@ class MicroscopeService:
             return {"error": "bad_op"}
         if op in ("goto", "steps", "shift") and value is None:
             return {"error": "no_value"}
+        # перед любым движением разрешаем мотор (best-effort: если оператор забыл «разрешён»)
+        if op in ("goto", "steps", "shift", "home_start", "home_end", "find_zero"):
+            p.motor_enable(m, True)
         fn()
         return {"status": "ok", "m": m, "op": op, "value": value}
 

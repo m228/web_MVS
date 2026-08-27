@@ -37,17 +37,16 @@
       }
     } catch (e) { /* конфиг недоступен — оставляем плейсхолдер */ }
 
-    const img = $("microFrame");
-    const placeholder = $("microPlaceholder");
+    // встраиваем полную камерную страницу (все настройки + поток) в компактном режиме
+    const frame = $("camIframe");
+    const placeholder = $("camPlaceholder");
     if (serial) {
-      img.onload = () => { placeholder.classList.add("hidden"); };
-      img.onerror = () => {
-        placeholder.textContent = "Нет потока с камеры микроскопа";
-        placeholder.classList.remove("hidden");
-      };
-      img.src = "/api/camera/stream?serial_number=" + encodeURIComponent(serial);
+      frame.src = "/camera?serial_number=" + encodeURIComponent(serial) + "&embed=1";
+      frame.hidden = false;
+      placeholder.classList.add("hidden");
     } else {
-      placeholder.textContent = "Камера микроскопа не задана (camera_serial в plate_config.json)";
+      frame.hidden = true;
+      frame.removeAttribute("src");
       placeholder.classList.remove("hidden");
     }
   }

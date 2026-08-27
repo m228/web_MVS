@@ -3070,3 +3070,12 @@ html {
 .micro-conn-input { width: 150px; padding: 4px 8px; }
 .micro-conn-input--port { width: 72px; }
 .micro-conn-hint { color: var(--muted); font-size: 0.9em; }
+/* встроенная камерная страница (iframe) в микроскопе */
+.micro-cam-card { margin-top: 4px; }
+.micro-cam-frame { width: 100%; min-height: 660px; border: 0; border-radius: 10px; background: #000; display: block; }
+.micro-cam-ph { min-height: 120px; display: flex; align-items: center; justify-content: center; }
+/* компактный режим камерной страницы при встраивании (?embed=1) */
+.embedded .topbar { display: none; }
+.embedded .page-hero { display: none; }
+.embedded .app-shell { padding: 0; gap: 12px; }
+.embedded body { background: transparent; }

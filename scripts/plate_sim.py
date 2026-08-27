@@ -65,6 +65,8 @@ def sim_loop(ctx, period):
     target2 = 0
     _write_word(ctx, READ_BASE + IN["pos1"]["off"], pos1)
     _write_word(ctx, READ_BASE + IN["pos2"]["off"], pos2)
+    _write_word(ctx, 1520, 6)      # версия софта (чтобы пробник нашёл unit)
+    _write_word(ctx, 1531, 65535)  # серийник
     tick = 0
     while True:
         cmd1 = _read_word(ctx, WRITE_BASE + OUT["cmd1"])
@@ -109,8 +111,8 @@ def main():
     ap.add_argument("--port", type=int, default=15020)
     args = ap.parse_args()
 
-    # блок holding-регистров 0..1299 (покрывает 1250..1279), zero_mode -> адрес == индекс
-    block = ModbusSequentialDataBlock(0, [0] * 1300)
+    # блок holding-регистров 0..1599 (покрывает и системные 1520..1545), zero_mode -> адрес == индекс
+    block = ModbusSequentialDataBlock(0, [0] * 1600)
     slave = ModbusSlaveContext(hr=block, zero_mode=True)
     ctx = ModbusServerContext(slaves=slave, single=True)
 

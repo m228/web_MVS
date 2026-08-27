@@ -96,6 +96,12 @@ def sim_loop(ctx, period):
         _write_word(ctx, 500, 8262 + random.randint(-3, 3))  # СВ ~82.62 Brix
         _write_word(ctx, 501, 5)                              # стадия варки (подкачка)
 
+        # доп. регистры платы для проверки расширенной телеметрии
+        _write_word(ctx, 1285, pos1)                         # энкодер ≈ позиция М1
+        _write_word(ctx, 1280, pos1 // 2)                    # шаги М1 (условно)
+        _write_word(ctx, 1528, 57)                           # время цикла платы (мкс)
+        _write_word(ctx, 1219, 1 if pos1 != target1 else 0)  # М1 включён, пока едет
+
         tick += 1
         if tick % 20 == 0:  # раз ~2 с печатаем состояние
             valves = _read_word(ctx, WRITE_BASE + OUT["valves"])

@@ -41,6 +41,13 @@ class PlateClient:
         self._telemetry = {}
         self._telemetry_lock = threading.Lock()
 
+        # расширенная телеметрия (родные регистры платы) — читаем реже основного блока
+        self._ext_reads = config.get("ext_reads", [])
+        self._ext_map = config.get("ext_map", {})
+        self._ext = {}
+        self._ext_lock = threading.Lock()
+        self._ext_counter = 0
+
         # здоровье связи
         self._connected = False
         self._reconnecting = False
@@ -126,6 +133,11 @@ class PlateClient:
             return dict(self._telemetry)
 
     @property
+    def ext(self):
+        with self._ext_lock:
+            return dict(self._ext)
+
+    @property
     def status(self):
         return {
             "connected": self._connected,
@@ -181,6 +193,25 @@ class PlateClient:
                 result[name] = regs[off] * scale
         return result
 
+    def _read_ext(self):
+        """Прочитать доп. регистры платы (блоками ext_reads) и разложить по ext_map."""
+        values = {}
+        for base, count in self._ext_reads:
+            try:
+                rr = self._client.read_holding_registers(int(base), count=int(count), slave=self._unit)
+                if not rr.isError():
+                    for i, v in enumerate(rr.registers):
+                        values[int(base) + i] = v
+            except Exception:
+                pass
+        ext = {}
+        for name, spec in self._ext_map.items():
+            reg = int(spec["reg"])
+            if reg in values:
+                raw = values[reg]
+                ext[name] = raw * spec.get("scale", 1) if spec.get("kind") in ("um", "num") else raw
+        return ext
+
     def _loop(self):
         backoff_i = 0
         while self._running:
@@ -216,6 +247,14 @@ class PlateClient:
                 self._poll_count += 1
                 backoff_i = 0
                 self._reconnecting = False
+
+                # расширенная телеметрия — реже основного такта (раз в ~5 циклов)
+                self._ext_counter += 1
+                if self._ext_reads and self._ext_counter >= 5:
+                    self._ext_counter = 0
+                    ext = self._read_ext()
+                    with self._ext_lock:
+                        self._ext = ext
 
             except Exception as e:
                 self._last_error = str(e)

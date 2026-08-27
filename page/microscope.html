@@ -42,9 +42,8 @@
             <div class="micro-conn-bar">
               <div class="micro-conn-row">
                 <span class="micro-conn-label">Камера</span>
-                <input type="text" id="cfgCamSerial" class="micro-conn-input" placeholder="серийник" title="Серийник камеры (нужен для стрима)" />
-                <span class="micro-conn-sub">IP</span>
-                <input type="text" id="cfgCamIp" class="micro-conn-input" placeholder="192.168.1.x" title="IP камеры (справочно)" />
+                <strong id="camFound">поиск…</strong>
+                <span class="micro-conn-sub">(находится автоматически)</span>
               </div>
               <div class="micro-conn-row">
                 <span class="micro-conn-label">Плата</span>
@@ -117,6 +116,15 @@
                 <div><dt>Температура</dt><dd id="tTemp">—</dd></div>
                 <div><dt>Питание 12В</dt><dd id="tU12v">—</dd></div>
                 <div><dt>Дискр. входы (DI)</dt><dd id="tDi">—</dd></div>
+                <div><dt>Мотор М1</dt><dd id="tM1en">—</dd></div>
+                <div><dt>Мотор М2</dt><dd id="tM2en">—</dd></div>
+                <div><dt>Позиция М1 (энкодер)</dt><dd id="tM1enc">—</dd></div>
+                <div><dt>Расхождение М1</dt><dd id="tM1slip">—</dd></div>
+                <div><dt>Яркость LED (плата)</dt><dd id="tLed">—</dd></div>
+                <div><dt>Клапаны (DQ)</dt><dd id="tDq">—</dd></div>
+                <div><dt>FAN1 / FAN2</dt><dd id="tFan">—</dd></div>
+                <div><dt>Время цикла платы</dt><dd id="tCycle">—</dd></div>
+                <div><dt>Версия ПО платы</dt><dd id="tVer">—</dd></div>
               </dl>
             </div>
 

@@ -137,7 +137,7 @@ def api_update_apply():
 def micro_telemetry():
     # один опрос для страницы: связь с платой + телеметрия + автомат + источник СВ (ПЛК)
     return {"connection": micro.status(), "telemetry": micro.telemetry(),
-            "fsm": micro.state(), "plc": micro.sv_status()}
+            "fsm": micro.state(), "plc": micro.sv_status(), "ext": micro.ext()}
 
 
 @app.get("/api/micro/status")

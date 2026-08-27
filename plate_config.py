@@ -63,6 +63,26 @@ DEFAULTS = {
     # (массив по возрастанию!). 0 = не задано.
     "SVSP": [0.0, 75.0, 81.0, 83.0, 85.0, 88.0, 89.0, 90.0, 91.0, 92.0, 95.0] + [0.0] * 40,
 
+    # доп. телеметрия с платы (родные регистры из конфигуратора «ПЧ Модуль») — для показа
+    # на странице. ext_reads: блоки [base, count] читаем одним запросом;
+    # ext_map: имя -> {reg(абс.адрес), scale, kind}. kind um/num -> raw*scale; bits/bool -> raw.
+    "ext_reads": [[1219, 82], [1520, 14]],
+    "ext_map": {
+        "m1_enable":  {"reg": 1219, "scale": 1,  "kind": "bool"},
+        "m2_enable":  {"reg": 1220, "scale": 1,  "kind": "bool"},
+        "dq":         {"reg": 1250, "scale": 1,  "kind": "bits"},
+        "led_bright": {"reg": 1257, "scale": 1,  "kind": "num"},
+        "m1_enc":     {"reg": 1285, "scale": 10, "kind": "um"},
+        "m1_steps":   {"reg": 1280, "scale": 1,  "kind": "num"},
+        "m1_slip":    {"reg": 1276, "scale": 10, "kind": "um"},
+        "fan1":       {"reg": 1282, "scale": 1,  "kind": "num"},
+        "fan2":       {"reg": 1283, "scale": 1,  "kind": "num"},
+        "m2_state":   {"reg": 1300, "scale": 1,  "kind": "num"},
+        "cycle_us":   {"reg": 1528, "scale": 1,  "kind": "num"},
+        "version":    {"reg": 1520, "scale": 1,  "kind": "num"},
+        "serial":     {"reg": 1531, "scale": 1,  "kind": "num"},
+    },
+
     # ЧАСТОТА ОТБОРА ПРОБЫ в циклическом режиме (как часто микроскоп сам делает снимок),
     # а НЕ длительность стадии! Сек, ключ — стадия M[0,2].mode, "default" — по умолчанию.
     # ПЛЕЙСХОЛДЕР: Макс уточнит реальный интервал снимка (стадии идут 20-30+ мин, отбирать

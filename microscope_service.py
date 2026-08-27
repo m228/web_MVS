@@ -78,6 +78,9 @@ class MicroscopeService:
     def telemetry(self):
         return self.plate.telemetry if self.plate else {}
 
+    def ext(self):
+        return self.plate.ext if self.plate else {}
+
     def status(self):
         return self.plate.status if self.plate else {"connected": False, "reconnecting": False}
 

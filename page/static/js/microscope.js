@@ -15,13 +15,25 @@
     return res.json();
   }
 
-  // ---- картинка микроскопа (переиспользуем GigE-стрим камеры) ----
+  // ---- камера: MVS SDK сам находит камеры Hikrobot, берём первую доступную ----
+  async function autoDiscoverCamera() {
+    try {
+      const data = await api("/api/cams/detailed");   // { серийник: [записи] }
+      if (data && typeof data === "object") {
+        for (const [serial, entries] of Object.entries(data)) {
+          if (Array.isArray(entries) && entries.some((e) => e && e.available)) return serial;
+        }
+        const serials = Object.keys(data);
+        if (serials.length) return serials[0];
+      }
+    } catch (e) { /* нет камер / нет драйвера */ }
+    return "";
+  }
+
   async function initCamera() {
     let serial = "";
     try {
       const cfg = await api("/api/micro/config");
-      serial = (cfg && cfg.camera_serial) || "";
-      // префилл ручных значений из конфига
       if (cfg) {
         if (cfg.manual_sv != null) $("svInput").value = cfg.manual_sv;
         if (cfg.manual_stage != null) $("stageSelect").value = String(cfg.manual_stage);
@@ -29,13 +41,15 @@
           $("ledBright").value = cfg.led_bright;
           $("ledBrightVal").textContent = cfg.led_bright;
         }
-        // поля связи (камера/плата)
-        $("cfgCamSerial").value = cfg.camera_serial || "";
-        $("cfgCamIp").value = cfg.camera_ip || "";
         $("cfgPlateHost").value = cfg.host || "";
         $("cfgPlatePort").value = cfg.port || "";
+        serial = cfg.camera_serial || "";   // ручной override из конфига, если задан
       }
-    } catch (e) { /* конфиг недоступен — оставляем плейсхолдер */ }
+    } catch (e) { /* конфиг недоступен */ }
+
+    // серийник в конфиге не задан — ищем сами через MVS SDK
+    if (!serial) serial = await autoDiscoverCamera();
+    $("camFound").textContent = serial || "не найдена";
 
     // встраиваем полную камерную страницу (все настройки + поток) в компактном режиме
     const frame = $("camIframe");
@@ -47,6 +61,7 @@
     } else {
       frame.hidden = true;
       frame.removeAttribute("src");
+      placeholder.textContent = "Камера не найдена (MVS ищет автоматически). Проверь подключение и драйвер.";
       placeholder.classList.remove("hidden");
     }
   }
@@ -84,6 +99,19 @@
       $("valveGlass").textContent = f.valve_glass ? "открыт" : "закрыт";
       $("microCmd1").textContent = (f.cmd1 == null) ? "—" : "0x" + Number(f.cmd1).toString(16).padStart(4, "0");
 
+      // расширенная телеметрия с платы (родные регистры)
+      const e = d.ext || {};
+      const onoff = (v) => (v == null ? "—" : (v ? "вкл" : "выкл"));
+      $("tM1en").textContent = onoff(e.m1_enable);
+      $("tM2en").textContent = onoff(e.m2_enable);
+      $("tM1enc").textContent = (e.m1_enc == null) ? "—" : e.m1_enc + " мкм";
+      $("tM1slip").textContent = (e.m1_slip == null) ? "—" : e.m1_slip + " мкм";
+      $("tLed").textContent = (e.led_bright == null) ? "—" : e.led_bright + " %";
+      $("tDq").textContent = (e.dq == null) ? "—" : "0b" + Number(e.dq).toString(2).padStart(3, "0");
+      $("tFan").textContent = (e.fan1 == null) ? "—" : (e.fan1 + " / " + (e.fan2 == null ? "—" : e.fan2));
+      $("tCycle").textContent = (e.cycle_us == null) ? "—" : e.cycle_us + " мкс";
+      $("tVer").textContent = (e.version == null) ? "—" : e.version;
+
       // циклический режим
       lastCyclic = !!f.cyclic;
       $("cyclicState").textContent = lastCyclic ? "вкл" : "выкл";
@@ -115,12 +143,11 @@
       const hint = $("cfgHint");
       hint.textContent = "применяю…";
       try {
-        const p = { camera_serial: $("cfgCamSerial").value, camera_ip: $("cfgCamIp").value };
+        const p = {};
         if ($("cfgPlateHost").value) p.host = $("cfgPlateHost").value;
         if ($("cfgPlatePort").value) p.port = $("cfgPlatePort").value;
         await api("/api/micro/settings", p);
         hint.textContent = "применено ✓";
-        initCamera();
         setTimeout(() => { hint.textContent = ""; }, 2500);
       } catch (e) {
         hint.textContent = "ошибка: " + e.message;

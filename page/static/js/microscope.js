@@ -74,8 +74,8 @@
       $("tPos1").textContent = fmt(t.pos1, "мкм");
       $("tPos2").textContent = fmt(t.pos2, "мкм");
       $("tPos1ai").textContent = fmt(t.pos1_ai, "мкм");
-      $("tTemp").textContent = (t.temp == null) ? "—" : (t.temp / 10).toFixed(1) + " °C";
-      $("tU12v").textContent = (t.u12v == null) ? "—" : (t.u12v / 100).toFixed(2) + " В";
+      $("tTemp").textContent = (t.temp == null) ? "—" : t.temp + " °C";        // raw = °C (плата, ×1)
+      $("tU12v").textContent = (t.u12v == null) ? "—" : (t.u12v / 1000).toFixed(2) + " В";  // raw в мВ
       $("tDi").textContent = (t.di == null) ? "—" : "0x" + Number(t.di).toString(16).padStart(4, "0");
       $("tSv").textContent = (f.sv == null) ? "—" : Number(f.sv).toFixed(2);
 

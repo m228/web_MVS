@@ -87,9 +87,9 @@ def sim_loop(ctx, period):
         _write_word(ctx, READ_BASE + IN["pos2"]["off"], pos2)
         # аналоговая позиция ~ позиция М1 (для логики «pos1_ai<20 = увидел стекло»)
         _write_word(ctx, READ_BASE + IN["pos1_ai"]["off"], pos1)
-        # температура ~25.0 °C и питание ~12.00 В с лёгким шумом
-        _write_word(ctx, READ_BASE + IN["temp"]["off"], 250 + random.randint(-2, 2))
-        _write_word(ctx, READ_BASE + IN["u12v"]["off"], 1200 + random.randint(-5, 5))
+        # как реальная плата: температура ~39 °C (×1), питание ~12030 мВ
+        _write_word(ctx, READ_BASE + IN["temp"]["off"], 39 + random.randint(-1, 1))
+        _write_word(ctx, READ_BASE + IN["u12v"]["off"], 12030 + random.randint(-10, 10))
         _write_word(ctx, READ_BASE + IN["di"]["off"], 0)
 
         # для отладки этапа A — имитируем ПЛК: СВ (×100) и стадия варки в отдельных регистрах

@@ -15,23 +15,39 @@
     return res.json();
   }
 
-  // ---- камера: MVS SDK сам находит камеры Hikrobot, берём первую доступную ----
-  async function autoDiscoverCamera() {
+  // ---- камера: MVS SDK сам находит камеры Hikrobot ----
+  async function autoDiscoverCameras() {
     try {
       const data = await api("/api/cams/detailed");   // { серийник: [записи] }
       if (data && typeof data === "object") {
+        const avail = [], all = [];
         for (const [serial, entries] of Object.entries(data)) {
-          if (Array.isArray(entries) && entries.some((e) => e && e.available)) return serial;
+          all.push(serial);
+          if (Array.isArray(entries) && entries.some((e) => e && e.available)) avail.push(serial);
         }
-        const serials = Object.keys(data);
-        if (serials.length) return serials[0];
+        return avail.length ? avail : all;
       }
     } catch (e) { /* нет камер / нет драйвера */ }
-    return "";
+    return [];
+  }
+
+  function loadCamIframe(serial) {
+    const frame = $("camIframe");
+    const ph = $("camPlaceholder");
+    if (serial) {
+      frame.src = "/camera?serial_number=" + encodeURIComponent(serial) + "&embed=1";
+      frame.hidden = false;
+      ph.classList.add("hidden");
+    } else {
+      frame.hidden = true;
+      frame.removeAttribute("src");
+      ph.textContent = "Камера не найдена. MVS ищет автоматически — проверь подключение/драйвер, либо укажи IP камеры выше.";
+      ph.classList.remove("hidden");
+    }
   }
 
   async function initCamera() {
-    let serial = "";
+    let cfgSerial = "";
     try {
       const cfg = await api("/api/micro/config");
       if (cfg) {
@@ -43,26 +59,35 @@
         }
         $("cfgPlateHost").value = cfg.host || "";
         $("cfgPlatePort").value = cfg.port || "";
-        serial = cfg.camera_serial || "";   // ручной override из конфига, если задан
+        cfgSerial = cfg.camera_serial || "";
       }
     } catch (e) { /* конфиг недоступен */ }
 
-    // серийник в конфиге не задан — ищем сами через MVS SDK
-    if (!serial) serial = await autoDiscoverCamera();
-    $("camFound").textContent = serial || "не найдена";
+    const found = $("camFound"), sel = $("camSelect"), ipInp = $("camIp"), ipGo = $("camIpGo");
+    sel.hidden = true; ipInp.hidden = true; ipGo.hidden = true;
 
-    // встраиваем полную камерную страницу (все настройки + поток) в компактном режиме
-    const frame = $("camIframe");
-    const placeholder = $("camPlaceholder");
-    if (serial) {
-      frame.src = "/camera?serial_number=" + encodeURIComponent(serial) + "&embed=1";
-      frame.hidden = false;
-      placeholder.classList.add("hidden");
-    } else {
-      frame.hidden = true;
-      frame.removeAttribute("src");
-      placeholder.textContent = "Камера не найдена (MVS ищет автоматически). Проверь подключение и драйвер.";
-      placeholder.classList.remove("hidden");
+    if (cfgSerial) {                       // явный override в конфиге
+      found.textContent = cfgSerial;
+      loadCamIframe(cfgSerial);
+      return;
+    }
+
+    const serials = await autoDiscoverCameras();
+    if (serials.length === 1) {            // одна — грузим сразу
+      found.textContent = serials[0];
+      loadCamIframe(serials[0]);
+    } else if (serials.length > 1) {       // несколько — список для выбора
+      found.textContent = "";
+      sel.hidden = false;
+      sel.innerHTML = "";
+      serials.forEach((s) => {
+        const o = document.createElement("option"); o.value = s; o.textContent = s; sel.appendChild(o);
+      });
+      loadCamIframe(serials[0]);
+    } else {                               // не нашлась — даём указать IP
+      found.textContent = "не найдена —";
+      ipInp.hidden = false; ipGo.hidden = false;
+      loadCamIframe("");
     }
   }
 
@@ -161,6 +186,18 @@
     led.addEventListener("input", () => { $("ledBrightVal").textContent = led.value; });
     led.addEventListener("change", () => api("/api/micro/led", { bright: led.value }));
     $("ledOn").addEventListener("change", () => api("/api/micro/led", { on: $("ledOn").checked ? 1 : 0 }));
+
+    // выбор камеры (список) / указание IP, если не нашлась
+    $("camSelect").addEventListener("change", () => loadCamIframe($("camSelect").value));
+    $("camIpGo").addEventListener("click", () => {
+      const ip = $("camIp").value.trim();
+      if (ip) loadCamIframe(ip);
+    });
+
+    // ручное движение моторов + аварийный стоп
+    $("m1Go").addEventListener("click", () => api("/api/micro/move", { m: 1, pos: $("m1Pos").value }));
+    $("m2Go").addEventListener("click", () => api("/api/micro/move", { m: 2, pos: $("m2Pos").value }));
+    $("estopBtn").addEventListener("click", () => api("/api/micro/estop"));
   }
 
   document.addEventListener("DOMContentLoaded", () => {

@@ -43,7 +43,9 @@
               <div class="micro-conn-row">
                 <span class="micro-conn-label">Камера</span>
                 <strong id="camFound">поиск…</strong>
-                <span class="micro-conn-sub">(находится автоматически)</span>
+                <select id="camSelect" class="micro-conn-input" hidden title="Выбор камеры (найдено несколько)"></select>
+                <input type="text" id="camIp" class="micro-conn-input" placeholder="IP камеры" hidden />
+                <button type="button" id="camIpGo" class="btn-secondary" hidden>Подключить</button>
               </div>
               <div class="micro-conn-row">
                 <span class="micro-conn-label">Плата</span>
@@ -160,6 +162,31 @@
                 <input type="checkbox" id="ledOn" />
                 <span>Подсветка включена</span>
               </label>
+            </div>
+
+            <div class="card">
+              <div class="camera-sidebar-header">
+                <div>
+                  <p class="section-subtitle">Ручное движение</p>
+                  <h2>Моторы</h2>
+                </div>
+              </div>
+
+              <label class="one-line-label">М1 (LED) — позиция, мкм</label>
+              <div class="micro-inline">
+                <input type="number" id="m1Pos" value="0" step="10" />
+                <button type="button" id="m1Go" class="btn-primary">Идти</button>
+              </div>
+
+              <label class="one-line-label">М2 (фокус) — позиция, мкм</label>
+              <div class="micro-inline">
+                <input type="number" id="m2Pos" value="0" step="10" />
+                <button type="button" id="m2Go" class="btn-primary">Идти</button>
+              </div>
+
+              <button type="button" id="estopBtn" class="toolbar-btn toolbar-btn--danger micro-estop">
+                АВАРИЙНЫЙ СТОП
+              </button>
             </div>
           </aside>
         </div>

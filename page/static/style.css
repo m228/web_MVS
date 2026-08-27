@@ -3074,6 +3074,7 @@ html {
 .micro-cam-card { margin-top: 4px; }
 .micro-cam-frame { width: 100%; min-height: 660px; border: 0; border-radius: 10px; background: #000; display: block; }
 .micro-cam-ph { min-height: 120px; display: flex; align-items: center; justify-content: center; }
+.micro-estop { width: 100%; margin-top: 12px; font-weight: 700; letter-spacing: 0.03em; }
 /* компактный режим камерной страницы при встраивании (?embed=1) */
 .embedded .topbar { display: none; }
 .embedded .page-hero { display: none; }

@@ -107,6 +107,15 @@ class MicroscopeFSM:
         with self._lock:
             self.sw0 = bool(on)
 
+    def set_m1_target(self, um):
+        """Ручная цель позиции М1 (мкм). Формирование команды в автомате доедет мотор туда."""
+        with self._lock:
+            self.m1_sp = int(um)
+
+    def set_m2_target(self, um):
+        with self._lock:
+            self.m2_sp = int(um)
+
     def set_movement_inhibit(self, on):
         """Наш «Стоп движения» = SW.3. При True запрещаем движение и требуем немедленной
         остановки (цель моторов = текущая позиция), т.к. плата движется к последней уставке."""

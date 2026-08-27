@@ -33,9 +33,16 @@ class PlateClient:
         self._thread = None
         self._running = False
 
-        # выходной буфер (OUT[0..9]) — пишется целиком каждый такт, как делал ПЛК
+        # выходной буфер (OUT[0..9]); пишем ТОЛЬКО изменившиеся регистры по одному (FC06),
+        # чтобы в простое записей не было и одна плохая запись не рвала связь
         self._out = [0] * self._block_len
+        self._out_last = [0] * self._block_len   # что реально записано в плату
         self._out_lock = threading.Lock()
+        self._last_write_warn = 0.0
+
+        # очередь одиночных записей вне OUT-блока (разрешение мотора #1219 и т.п.)
+        self._pending = []
+        self._pending_lock = threading.Lock()
 
         # снимок телеметрии (инженерные величины) + сырой блок IN
         self._telemetry = {}
@@ -212,6 +219,50 @@ class PlateClient:
                 ext[name] = raw * spec.get("scale", 1) if spec.get("kind") in ("um", "num") else raw
         return ext
 
+    def write_reg(self, addr, value):
+        """Одиночная запись регистра ВНЕ OUT-блока (напр. разрешение мотора #1219).
+        Ставится в очередь и выполняется в потоке опроса."""
+        with self._pending_lock:
+            self._pending.append((int(addr), int(value) & 0xFFFF))
+
+    def _warn_write(self, msg, payload):
+        now = time.time()
+        if now - self._last_write_warn > 2.0:   # не чаще раза в 2 с — чтобы не флудить лог
+            self._last_write_warn = now
+            log_event("microscope_plc", msg, "warn", payload)
+
+    def _write_changed_out(self):
+        with self._out_lock:
+            out = list(self._out)
+        for i, v in enumerate(out):
+            if v == self._out_last[i]:
+                continue
+            addr = self._write_base + i
+            try:
+                wr = self._client.write_register(addr, int(v) & 0xFFFF, slave=self._unit)
+                if wr.isError():
+                    raise IOError("isError")
+                self._out_last[i] = v
+            except Exception as e:
+                # помечаем как записанное, чтобы не долбить каждый такт (иначе флуд/стоп цикла);
+                # если запись реально нужна — команда изменит значение снова
+                self._out_last[i] = v
+                self._warn_write("Ошибка записи регистра платы (не критично)",
+                                 {"reg": addr, "value": v, "error": str(e)})
+
+    def _flush_pending(self):
+        with self._pending_lock:
+            pending = self._pending
+            self._pending = []
+        for addr, value in pending:
+            try:
+                wr = self._client.write_register(int(addr), value, slave=self._unit)
+                if wr.isError():
+                    raise IOError("isError")
+            except Exception as e:
+                self._warn_write("Ошибка одиночной записи регистра (не критично)",
+                                 {"reg": addr, "value": value, "error": str(e)})
+
     def _loop(self):
         backoff_i = 0
         while self._running:
@@ -227,19 +278,13 @@ class PlateClient:
                 continue
 
             cycle_start = time.time()
-            try:
-                # 1) пишем весь выходной блок (как ПЛК-сканер каждый скан)
-                with self._out_lock:
-                    out = list(self._out)
-                wr = self._client.write_registers(self._write_base, out, slave=self._unit)
-                if wr.isError():
-                    raise IOError("write_registers error: %r" % wr)
 
-                # 2) читаем входной блок
+            # 1) ЧТЕНИЕ телеметрии — первым и НЕЗАВИСИМО от записи. Связь/телеметрия не должны
+            #    падать из-за проблем с записью. Ошибка чтения = реальный обрыв -> реконнект.
+            try:
                 rr = self._client.read_holding_registers(self._read_base, count=self._block_len, slave=self._unit)
                 if rr.isError():
-                    raise IOError("read_holding_registers error: %r" % rr)
-
+                    raise IOError("read error: %r" % rr)
                 telem = self._parse_telemetry(rr.registers)
                 with self._telemetry_lock:
                     self._telemetry = telem
@@ -255,15 +300,19 @@ class PlateClient:
                     ext = self._read_ext()
                     with self._ext_lock:
                         self._ext = ext
-
             except Exception as e:
                 self._last_error = str(e)
-                log_event("microscope_plc", "Ошибка обмена с платой — переподключение", "warn",
-                          {"error": str(e)})
+                log_event("microscope_plc", "Ошибка чтения платы — переподключение", "warn", {"error": str(e)})
                 self._close_client()
                 continue
 
-            # выдержать такт (учитывая потраченное на обмен)
+            # 2) ЗАПИСЬ только изменившихся регистров OUT, по одному (FC06). В простое записей нет.
+            #    Ошибка записи логируется (не чаще раза в 2 с) и НЕ рвёт связь.
+            self._write_changed_out()
+            # 3) отложенные одиночные записи вне OUT-блока (разрешение мотора и т.п.)
+            self._flush_pending()
+
+            # выдержать такт
             elapsed = time.time() - cycle_start
             if elapsed < self._period:
                 time.sleep(self._period - elapsed)

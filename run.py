@@ -129,7 +129,9 @@ def main():
             webbrowser.open(f"http://localhost:{PORT}")
         except Exception:
             pass
-    uvicorn.run("app:app", host=HOST, port=PORT, log_level="info")
+    # ws="none": WebSocket не используем (стрим через MJPEG/HTTP) -> не грузим websockets,
+    # заодно уходит DeprecationWarning от uvicorn+websockets 14+
+    uvicorn.run("app:app", host=HOST, port=PORT, log_level="info", ws="none")
 
 
 if __name__ == "__main__":

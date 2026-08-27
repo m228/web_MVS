@@ -1,3 +1,8 @@
+import warnings
+# websockets не используем (стрим через MJPEG/HTTP); гасим DeprecationWarning от uvicorn+websockets 14+
+warnings.filterwarnings("ignore", message=r".*websockets\.legacy is deprecated.*")
+warnings.filterwarnings("ignore", message=r".*WebSocketServerProtocol is deprecated.*")
+
 import asyncio
 import os
 import threading
@@ -183,6 +188,28 @@ def micro_stop(on: int = 1):
     micro.stop_movement(bool(on))
     api_log("api.micro.stop", "Стоп движения микроскопа", "warn", {"on": bool(on)})
     return {"status": "ok", "inhibit": bool(on)}
+
+
+@app.get("/api/micro/move")
+def micro_move(m: int, pos: float):
+    # идти мотором m (1/2) в позицию pos (мкм) нативной командой платы
+    micro.move_motor(m, pos)
+    api_log("api.micro.move", "Движение мотора в позицию", payload={"m": m, "pos": pos})
+    return {"status": "ok", "m": m, "pos": pos}
+
+
+@app.get("/api/micro/enable")
+def micro_enable(m: int, on: int):
+    micro.enable_motor(m, bool(on))
+    api_log("api.micro.enable", "Разрешение мотора", payload={"m": m, "on": bool(on)})
+    return {"status": "ok", "m": m, "on": bool(on)}
+
+
+@app.get("/api/micro/estop")
+def micro_estop():
+    micro.estop()
+    api_log("api.micro.estop", "АВАРИЙНЫЙ СТОП микроскопа", "warn", {})
+    return {"status": "ok"}
 
 
 @app.get("/api/micro/config")

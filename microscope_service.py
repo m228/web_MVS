@@ -126,6 +126,35 @@ class MicroscopeService:
         if self.fsm:
             self.fsm.set_movement_inhibit(on)
 
+    # ---------- ручное движение моторов (нативные команды платы) ----------
+
+    def move_motor(self, m, um):
+        """Идти мотором m (1/2) в позицию um (мкм): снять стоп, разрешить мотор, задать цель.
+        Дальше формирование команды в автомате доведёт мотор до позиции (нативная 0x1006/0x2006)."""
+        if not self.fsm or not self.plate:
+            return
+        self.fsm.set_movement_inhibit(False)       # иначе автомат не пишет моторы
+        en = (self.cfg or {}).get("motor_enable", {}).get(str(m))
+        if en:
+            self.plate.write_reg(en, 1)            # разрешить мотор
+        if int(m) == 2:
+            self.fsm.set_m2_target(um)
+        else:
+            self.fsm.set_m1_target(um)
+
+    def enable_motor(self, m, on):
+        en = (self.cfg or {}).get("motor_enable", {}).get(str(m))
+        if en and self.plate:
+            self.plate.write_reg(en, 1 if on else 0)
+
+    def estop(self):
+        """Аварийный стоп: запрет движения (автомат встаёт) + обесточить оба мотора."""
+        if self.fsm:
+            self.fsm.set_movement_inhibit(True)
+        if self.plate:
+            for reg in (self.cfg or {}).get("motor_enable", {}).values():
+                self.plate.write_reg(reg, 0)
+
 
 # singleton, с которым работает app.py
 micro = MicroscopeService()

@@ -296,6 +296,11 @@
     document.querySelectorAll(".micro-motor [data-op]").forEach((b) => {
       b.addEventListener("click", () => runMotorOp(b.dataset.m, b.dataset.op));
     });
+    // Enter в поле ввода = нажать соответствующую кнопку
+    [["1", "goto"], ["1", "steps"], ["1", "shift"], ["2", "goto"], ["2", "steps"], ["2", "shift"]].forEach(([m, op]) => {
+      const inp = $("m" + m + (op === "goto" ? "GotoInp" : op === "steps" ? "StepsInp" : "ShiftInp"));
+      if (inp) inp.addEventListener("keydown", (ev) => { if (ev.key === "Enter") { ev.preventDefault(); runMotorOp(m, op); } });
+    });
     // бейджи разрешения/направления
     document.querySelectorAll(".micro-badge[data-en]").forEach((b) => {
       b.addEventListener("click", () => {

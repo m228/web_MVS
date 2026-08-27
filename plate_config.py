@@ -31,15 +31,46 @@ DEFAULTS = {
     "read_base": 1270,         # IN[0..9]
     "block_len": 10,
 
-    # смещения выходов внутри WRITE-блока (индекс OUT[])
+    # смещения выходов внутри WRITE-блока (индекс OUT[]). Пишутся по изменению (FC06).
+    # ВНИМАНИЕ: команды моторам идут НЕ сюда, а в нативные регистры 1248/1249 (см. "motor"):
+    # 1251/1252 из проекта ПЛК — НЕ командные (плата слушает 1248/1249, эталон — конфигуратор).
     "out": {
-        "valves": 0,           # OUT[0], биты: .0 промывка трубки (CW.0), .1 промывка стекла (CW.1)
-        "cmd1": 1,             # OUT[1] команда М1 (0x1006 = установить SP)
-        "cmd2": 2,             # OUT[2] команда М2 (0x2006 = установить SP)
-        "m1_sp": 3,            # OUT[3] = m1_SP/10 (ед. 10 мкм)
-        "m2_sp": 4,            # OUT[4] = m2_SP/10
-        "led_bright": 7,       # OUT[7]
-        "led_on": 8,           # OUT[8], бит .0
+        "valves": 0,           # OUT[0]=1250, биты DQ: .0 промывка трубки, .1 промывка стекла, .2 воздух
+        "m1_sp": 3,            # OUT[3]=1253 = m1_SP/10 (ед. 10 мкм)
+        "m2_sp": 4,            # OUT[4]=1254 = m2_SP/10
+        "led_bright": 7,       # OUT[7]=1257 яркость LED (%)
+        "led_on": 8,           # OUT[8]=1258, бит .0 — LED вкл
+    },
+
+    # НАТИВНАЯ карта управления платой (из родного конфигуратора; Docs/microscope_board_config.md).
+    # Команда мотору пишется в СВОЙ регистр (М1=1248, М2=1249) одиночной записью — так же, как это
+    # делает конфигуратор (кнопка = записать код в командный регистр). Значения (позиция/шаги/сдвиг)
+    # пишутся в свои регистры ДО команды.
+    "motor": {
+        "cmd_reg":  {"1": 1248, "2": 1249},   # командный регистр мотора
+        "pos_set":  {"1": 1253, "2": 1254},   # «установить позицию»: пишем мкм/10
+        "steps":    {"1": 1242, "2": 1243},   # «сделать шагов»: число шагов
+        "shift":    {"1": 1246, "2": 1247},   # «сдвинуть на X мкм»: пишем мкм/10
+        "dir":      {"1": 1240, "2": 1241},   # направление вперёд (бит .0)
+        "enable":   {"1": 1219, "2": 1220},   # разрешение мотора (бит .0)
+        "pos_read": {"1": 1274, "2": 1275},   # абс. позиция (raw*10 = мкм)
+        "um_div": 10,                          # позиция/сдвиг: значение регистра = мкм / um_div
+        # код команды = cmd_base[мотор] + cmd_op[операция] (М1=0x100X, М2=0x200X)
+        "cmd_base": {"1": 0x1000, "2": 0x2000},
+        "cmd_op": {
+            "find_zero": 0x0, "steps": 0x1, "home_start": 0x3, "home_end": 0x4,
+            "shift": 0x5, "goto": 0x6, "stop": 0x7, "set_zero": 0x8,
+        },
+    },
+
+    # LED-фара: яркость (%), частота импульсов (Гц 1000..5000), бит включения
+    "led": {"bright": 1257, "freq": 1202, "on_bit": 1258},
+
+    # дискретные выходы DQ (клапаны и пр.), битовое слово в регистре 1250 (6 бит)
+    "dq": {
+        "reg": 1250,
+        "labels": ["промывка трубки", "промывка стекла", "воздух охлаждения",
+                   "выход 4", "выход 5", "выход 6"],
     },
 
     # смещения входов внутри READ-блока (индекс IN[]) + масштаб в инженерную величину.
@@ -66,21 +97,66 @@ DEFAULTS = {
     # доп. телеметрия с платы (родные регистры из конфигуратора «ПЧ Модуль») — для показа
     # на странице. ext_reads: блоки [base, count] читаем одним запросом;
     # ext_map: имя -> {reg(абс.адрес), scale, kind}. kind um/num -> raw*scale; bits/bool -> raw.
-    "ext_reads": [[1219, 82], [1520, 14]],
+    # блоки читаем одним запросом FC03; ext_map раскладывает по имени.
+    # kind: um/num -> raw*scale (число); bits/bool -> raw (как есть).
+    "ext_reads": [[150, 1], [1200, 105], [1520, 14]],
     "ext_map": {
+        # --- моторы: состояние/позиции ---
         "m1_enable":  {"reg": 1219, "scale": 1,  "kind": "bool"},
         "m2_enable":  {"reg": 1220, "scale": 1,  "kind": "bool"},
-        "dq":         {"reg": 1250, "scale": 1,  "kind": "bits"},
-        "led_bright": {"reg": 1257, "scale": 1,  "kind": "num"},
-        "m1_enc":     {"reg": 1285, "scale": 10, "kind": "um"},
+        "m1_dir":     {"reg": 1240, "scale": 1,  "kind": "bool"},
+        "m2_dir":     {"reg": 1241, "scale": 1,  "kind": "bool"},
+        "m1_pos":     {"reg": 1274, "scale": 10, "kind": "um"},
+        "m2_pos":     {"reg": 1275, "scale": 10, "kind": "um"},
         "m1_steps":   {"reg": 1280, "scale": 1,  "kind": "num"},
+        "m2_steps":   {"reg": 1281, "scale": 1,  "kind": "num"},
+        "m1_enc":     {"reg": 1285, "scale": 10, "kind": "um"},
         "m1_slip":    {"reg": 1276, "scale": 10, "kind": "um"},
+        "m2_state":   {"reg": 1300, "scale": 1,  "kind": "num"},
+        "sensor":     {"reg": 1271, "scale": 10, "kind": "um"},   # датчик перемещения
+        # --- выходы/LED ---
+        "dq":         {"reg": 1250, "scale": 1,  "kind": "bits"},
+        "di":         {"reg": 150,  "scale": 1,  "kind": "bits"}, # дискретные входы (нативный)
+        "led_bright": {"reg": 1257, "scale": 1,  "kind": "num"},
+        "led_freq":   {"reg": 1202, "scale": 1,  "kind": "num"},
+        # --- питание/термо/вентиляторы ---
+        "u12v":       {"reg": 1272, "scale": 1,  "kind": "num"},  # мВ
+        "temp":       {"reg": 1273, "scale": 1,  "kind": "num"},  # °C
         "fan1":       {"reg": 1282, "scale": 1,  "kind": "num"},
         "fan2":       {"reg": 1283, "scale": 1,  "kind": "num"},
-        "m2_state":   {"reg": 1300, "scale": 1,  "kind": "num"},
-        "cycle_us":   {"reg": 1528, "scale": 1,  "kind": "num"},
-        "version":    {"reg": 1520, "scale": 1,  "kind": "num"},
-        "serial":     {"reg": 1531, "scale": 1,  "kind": "num"},
+        # --- система ---
+        "cycle_us":     {"reg": 1528, "scale": 1, "kind": "num"},
+        "cycle_peak_us":{"reg": 1529, "scale": 1, "kind": "num"},
+        "version":      {"reg": 1520, "scale": 1, "kind": "num"},
+        "module_ver":   {"reg": 1521, "scale": 1, "kind": "num"},  # 19=hw1.3, 32=hw2.0
+        "serial":       {"reg": 1531, "scale": 1, "kind": "num"},
+        "uptime_s":     {"reg": 1523, "scale": 1, "kind": "num"},
+        "init_status":  {"reg": 1532, "scale": 1, "kind": "bits"},
+        # --- настройки моторов (только чтение; отдельная вкладка на странице) ---
+        "m1_speed":     {"reg": 1205, "scale": 1, "kind": "num"},
+        "m2_speed":     {"reg": 1207, "scale": 1, "kind": "num"},
+        "m1_minspeed":  {"reg": 1206, "scale": 1, "kind": "num"},
+        "m2_minspeed":  {"reg": 1208, "scale": 1, "kind": "num"},
+        "m1_accel":     {"reg": 1209, "scale": 1, "kind": "num"},
+        "m2_accel":     {"reg": 1210, "scale": 1, "kind": "num"},
+        "m1_maxtravel": {"reg": 1231, "scale": 1, "kind": "num"},  # мм
+        "m2_maxtravel": {"reg": 1233, "scale": 1, "kind": "num"},
+        "m1_stop_sensor":{"reg": 1234,"scale": 1, "kind": "num"},  # мкм
+        "m1_slip_limit":{"reg": 1236, "scale": 1, "kind": "num"},  # мкм
+        "step_divider": {"reg": 1212, "scale": 1, "kind": "num"},  # 0..3,7
+        "m1_steps_rev": {"reg": 1214, "scale": 1, "kind": "num"},
+        "m2_steps_rev": {"reg": 1217, "scale": 1, "kind": "num"},
+        "m1_dist_rev":  {"reg": 1215, "scale": 1, "kind": "num"},  # мкм
+        "m2_dist_rev":  {"reg": 1218, "scale": 1, "kind": "num"},
+        "m1_k_steps_mm":{"reg": 1213, "scale": 1, "kind": "num"},
+        "m2_k_steps_mm":{"reg": 1216, "scale": 1, "kind": "num"},
+        # --- охлаждение (только чтение; отдельная вкладка) ---
+        "fan_on_temp":  {"reg": 1221, "scale": 1, "kind": "num"},
+        "fan_off_temp": {"reg": 1222, "scale": 1, "kind": "num"},
+        "air_on_temp":  {"reg": 1223, "scale": 1, "kind": "num"},
+        "air_off_temp": {"reg": 1224, "scale": 1, "kind": "num"},
+        "cam_on_temp":  {"reg": 1225, "scale": 1, "kind": "num"},
+        "cam_off_temp": {"reg": 1226, "scale": 1, "kind": "num"},
     },
 
     # регистры «разрешение мотора» (вне OUT-блока) — для ручного движения и аварийного стопа

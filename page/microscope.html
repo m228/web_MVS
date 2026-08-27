@@ -67,88 +67,107 @@
           </div>
         </section>
 
-        <div class="camera-layout" id="microLayout">
-          <div class="camera-main">
-            <div class="camera-toolbar card">
-              <button type="button" id="cmdCycle" class="toolbar-btn toolbar-btn--primary" title="Произвести цикл пробы">
-                Цикл пробы
-              </button>
-              <button type="button" id="cmdRetract" class="toolbar-btn toolbar-btn--secondary" title="Отвести LED на 40 мм">
-                Отвод 40&nbsp;мм
-              </button>
-              <button type="button" id="cmdWashGlass" class="toolbar-btn toolbar-btn--accent" title="Промыть стекло">
-                Промыть стекло
-              </button>
-              <button type="button" id="btnCyclic" class="toolbar-btn toolbar-btn--neutral" title="Циклический режим">
-                Циклический: <span id="cyclicState">выкл</span>
-              </button>
-              <button type="button" id="btnStop" class="toolbar-btn toolbar-btn--danger" title="Запретить движение моторов">
-                СТОП движения
-              </button>
-              <button type="button" id="btnRelease" class="toolbar-btn toolbar-btn--success hidden" title="Снять запрет движения">
-                Снять стоп
-              </button>
-              <button type="button" id="btnReload" class="toolbar-btn toolbar-btn--neutral" title="Применить plate_config.json без перезапуска">
-                Перезагрузить конфиг
-              </button>
-              <button type="button" id="logsBtn" class="toolbar-btn toolbar-btn--neutral toolbar-btn--logs" title="Открыть журнал (логи платы и команды)">
-                Логи
-                <span class="log-counter" id="logCounter">0</span>
-              </button>
-              <span class="micro-lastcmd">последняя команда: <strong id="lastCmd">—</strong></span>
-            </div>
+        <!-- Тулбар авто-цикла -->
+        <div class="camera-toolbar card">
+          <button type="button" id="cmdCycle" class="toolbar-btn toolbar-btn--primary" title="Произвести цикл пробы">
+            Цикл пробы
+          </button>
+          <button type="button" id="cmdRetract" class="toolbar-btn toolbar-btn--secondary" title="Отвести LED на 40 мм">
+            Отвод 40&nbsp;мм
+          </button>
+          <button type="button" id="cmdWashGlass" class="toolbar-btn toolbar-btn--accent" title="Промыть стекло">
+            Промыть стекло
+          </button>
+          <button type="button" id="btnCyclic" class="toolbar-btn toolbar-btn--neutral" title="Циклический режим">
+            Циклический: <span id="cyclicState">выкл</span>
+          </button>
+          <button type="button" id="btnStop" class="toolbar-btn toolbar-btn--danger" title="Запретить движение моторов">
+            СТОП движения
+          </button>
+          <button type="button" id="btnRelease" class="toolbar-btn toolbar-btn--success hidden" title="Снять запрет движения">
+            Снять стоп
+          </button>
+          <button type="button" id="btnReload" class="toolbar-btn toolbar-btn--neutral" title="Применить plate_config.json без перезапуска">
+            Перезагрузить конфиг
+          </button>
+          <button type="button" id="logsBtn" class="toolbar-btn toolbar-btn--neutral toolbar-btn--logs" title="Открыть журнал (логи платы и команды)">
+            Логи
+            <span class="log-counter" id="logCounter">0</span>
+          </button>
+          <span class="micro-lastcmd">последняя команда: <strong id="lastCmd">—</strong></span>
+        </div>
 
-            <div class="camera-status-bar card" id="microStatusBar">
-              <span>Шаг автомата<strong id="microStep">—</strong></span>
-              <span>Режим (mode)<strong id="microMode">—</strong></span>
-              <span>Клапан трубки<strong id="valveTube">—</strong></span>
-              <span>Клапан стекла<strong id="valveGlass">—</strong></span>
-              <span>Команда М1<strong id="microCmd1">—</strong></span>
-            </div>
-          </div>
-
-          <aside class="camera-sidebar" id="microSidebar">
-            <div class="card">
-              <div class="camera-sidebar-header">
-                <div>
-                  <p class="section-subtitle">С платы micro</p>
-                  <h2>Телеметрия</h2>
-                </div>
+        <!-- Камера (вверху) + вся телеметрия рядом -->
+        <div class="micro-top">
+          <section class="card micro-cam-card">
+            <div class="camera-sidebar-header">
+              <div>
+                <p class="section-subtitle">Изображение и настройки камеры</p>
+                <h2>Камера микроскопа</h2>
               </div>
-              <dl class="info-list micro-telemetry">
-                <div><dt>СВ (текущее)</dt><dd id="tSv">—</dd></div>
-                <div><dt>Позиция М1 (LED)</dt><dd id="tPos1">—</dd></div>
-                <div><dt>Позиция М2 (фокус)</dt><dd id="tPos2">—</dd></div>
-                <div><dt>Аналог. позиция</dt><dd id="tPos1ai">—</dd></div>
-                <div><dt>Температура</dt><dd id="tTemp">—</dd></div>
-                <div><dt>Питание 12В</dt><dd id="tU12v">—</dd></div>
-                <div><dt>Дискр. входы (DI)</dt><dd id="tDi">—</dd></div>
-                <div><dt>Мотор М1</dt><dd id="tM1en">—</dd></div>
-                <div><dt>Мотор М2</dt><dd id="tM2en">—</dd></div>
-                <div><dt>Позиция М1 (энкодер)</dt><dd id="tM1enc">—</dd></div>
-                <div><dt>Расхождение М1</dt><dd id="tM1slip">—</dd></div>
-                <div><dt>Яркость LED (плата)</dt><dd id="tLed">—</dd></div>
-                <div><dt>Клапаны (DQ)</dt><dd id="tDq">—</dd></div>
-                <div><dt>FAN1 / FAN2</dt><dd id="tFan">—</dd></div>
-                <div><dt>Время цикла платы</dt><dd id="tCycle">—</dd></div>
-                <div><dt>Версия ПО платы</dt><dd id="tVer">—</dd></div>
-              </dl>
+            </div>
+            <div id="camPlaceholder" class="camera-placeholder micro-cam-ph">
+              Укажи серийник камеры в поле «Камера» выше и нажми «Применить».
+            </div>
+            <iframe id="camIframe" class="micro-cam-frame" title="Камера микроскопа" hidden></iframe>
+          </section>
+
+          <aside class="card micro-tele-card">
+            <div class="camera-sidebar-header">
+              <div>
+                <p class="section-subtitle">С платы micro — всё</p>
+                <h2>Телеметрия</h2>
+              </div>
             </div>
 
-            <div class="card">
-              <div class="camera-sidebar-header">
-                <div>
-                  <p class="section-subtitle">Ручное управление</p>
-                  <h2>Параметры</h2>
-                </div>
-              </div>
+            <p class="micro-tele-group">Позиции</p>
+            <div class="micro-tiles">
+              <div class="micro-tile"><span>М1 · подвод/LED</span><b id="tPos1">—</b></div>
+              <div class="micro-tile"><span>М2 · фокус</span><b id="tPos2">—</b></div>
+              <div class="micro-tile"><span>Датчик перемещ.</span><b id="tSensor">—</b></div>
+              <div class="micro-tile"><span>Энкодер М1</span><b id="tEnc">—</b></div>
+              <div class="micro-tile"><span>Расхождение М1</span><b id="tSlip">—</b></div>
+              <div class="micro-tile"><span>Шаги М1 / М2</span><b id="tSteps">—</b></div>
+            </div>
 
-              <label class="one-line-label">СВ (Brix) — вручную, пока нет из ПЛК</label>
+            <p class="micro-tele-group">Питание · температура</p>
+            <div class="micro-tiles">
+              <div class="micro-tile"><span>Температура</span><b id="tTemp">—</b></div>
+              <div class="micro-tile"><span>Питание 12В</span><b id="tU12v">—</b></div>
+              <div class="micro-tile"><span>FAN1</span><b id="tFan1">—</b></div>
+              <div class="micro-tile"><span>FAN2</span><b id="tFan2">—</b></div>
+            </div>
+
+            <p class="micro-tele-group">Входы / выходы</p>
+            <div class="micro-tiles">
+              <div class="micro-tile"><span>Входы DI</span><b id="tDi">—</b></div>
+              <div class="micro-tile"><span>Выходы DQ</span><b id="tDq">—</b></div>
+            </div>
+
+            <p class="micro-tele-group">Автомат</p>
+            <div class="micro-tiles">
+              <div class="micro-tile"><span>СВ (Brix)</span><b id="tSv">—</b></div>
+              <div class="micro-tile"><span>Шаг</span><b id="microStep">—</b></div>
+              <div class="micro-tile"><span>Режим</span><b id="microMode">—</b></div>
+              <div class="micro-tile"><span>Клапан трубки</span><b id="valveTube">—</b></div>
+              <div class="micro-tile"><span>Клапан стекла</span><b id="valveGlass">—</b></div>
+            </div>
+
+            <p class="micro-tele-group">Система</p>
+            <div class="micro-tiles">
+              <div class="micro-tile"><span>Версия ПО</span><b id="tVer">—</b></div>
+              <div class="micro-tile"><span>Версия HW</span><b id="tModVer">—</b></div>
+              <div class="micro-tile"><span>Серийник</span><b id="tSerial">—</b></div>
+              <div class="micro-tile"><span>Цикл платы</span><b id="tCycle">—</b></div>
+              <div class="micro-tile"><span>Аптайм</span><b id="tUptime">—</b></div>
+            </div>
+
+            <div class="micro-naladka">
+              <label class="one-line-label">Наладка: СВ (Brix) вручную</label>
               <div class="micro-inline">
                 <input type="number" step="0.1" id="svInput" value="0" />
                 <button type="button" id="svApply" class="btn-secondary">Задать</button>
               </div>
-
               <label>Стадия варки
                 <select id="stageSelect">
                   <option value="0">— не задано —</option>
@@ -160,53 +179,170 @@
                   <option value="8">8 · Уваривание</option>
                 </select>
               </label>
-
-              <label class="one-line-label">Подсветка LED — яркость: <span id="ledBrightVal">0</span> %</label>
-              <input type="range" id="ledBright" min="0" max="100" value="0" />
-              <label class="checkbox-line" for="ledOn">
-                <input type="checkbox" id="ledOn" />
-                <span>Подсветка включена</span>
-              </label>
-            </div>
-
-            <div class="card">
-              <div class="camera-sidebar-header">
-                <div>
-                  <p class="section-subtitle">Ручное движение</p>
-                  <h2>Моторы</h2>
-                </div>
-              </div>
-
-              <label class="one-line-label">М1 (LED) — позиция, мкм</label>
-              <div class="micro-inline">
-                <input type="number" id="m1Pos" value="0" step="10" />
-                <button type="button" id="m1Go" class="btn-primary">Идти</button>
-              </div>
-
-              <label class="one-line-label">М2 (фокус) — позиция, мкм</label>
-              <div class="micro-inline">
-                <input type="number" id="m2Pos" value="0" step="10" />
-                <button type="button" id="m2Go" class="btn-primary">Идти</button>
-              </div>
-
-              <button type="button" id="estopBtn" class="toolbar-btn toolbar-btn--danger micro-estop">
-                АВАРИЙНЫЙ СТОП
-              </button>
             </div>
           </aside>
         </div>
 
-        <section class="card micro-cam-card">
-          <div class="camera-sidebar-header">
+        <!-- РУЧНОЙ ПУЛЬТ ПЛАТЫ -->
+        <section class="card micro-panel" id="microPanel">
+          <div class="micro-panel__head">
             <div>
-              <p class="section-subtitle">Изображение и настройки камеры</p>
-              <h2>Камера микроскопа</h2>
+              <p class="section-subtitle">Прямое управление платой (как родной конфигуратор)</p>
+              <h2>Ручной пульт</h2>
+            </div>
+            <label class="micro-switch" for="manualToggle" title="В ручном режиме авто-цикл остановлен">
+              <input type="checkbox" id="manualToggle" />
+              <span class="micro-switch__track"><span class="micro-switch__thumb"></span></span>
+              <span class="micro-switch__label">Ручной режим: <strong id="manualState">выкл</strong></span>
+            </label>
+          </div>
+
+          <p class="micro-panel__hint" id="manualHint">Включи «Ручной режим», чтобы управлять моторами и выходами. Пока выключено — рулит авто-цикл.</p>
+
+          <div class="micro-panel__body" id="manualBody">
+            <div class="micro-motors">
+              <!-- Мотор М1 -->
+              <div class="micro-motor" data-motor="1">
+                <div class="micro-motor__head">
+                  <span class="micro-motor__title">Мотор М1 · подвод / LED</span>
+                  <span class="micro-badges">
+                    <button type="button" class="micro-badge" data-en="1" title="Разрешение мотора">разрешён</button>
+                    <button type="button" class="micro-badge" data-dir="1" title="Направление">вперёд</button>
+                  </span>
+                </div>
+                <div class="micro-motor__pos">
+                  <span>позиция <b id="m1Pos">—</b></span>
+                  <span>датчик <b id="m1Sensor">—</b></span>
+                  <span>шаги <b id="m1Steps">—</b></span>
+                </div>
+                <div class="micro-row">
+                  <span class="micro-row__lab">Идти в</span>
+                  <input type="number" id="m1GotoInp" step="10" value="10000" />
+                  <span class="micro-row__unit">мкм</span>
+                  <button type="button" class="toolbar-btn toolbar-btn--primary" data-op="goto" data-m="1">Идти</button>
+                </div>
+                <div class="micro-row">
+                  <span class="micro-row__lab">Шаги</span>
+                  <input type="number" id="m1StepsInp" step="1" value="200" />
+                  <span class="micro-row__unit"></span>
+                  <button type="button" class="toolbar-btn toolbar-btn--neutral" data-op="steps" data-m="1">Выполнить</button>
+                </div>
+                <div class="micro-row">
+                  <span class="micro-row__lab">Сдвиг</span>
+                  <input type="number" id="m1ShiftInp" step="10" value="500" />
+                  <span class="micro-row__unit">мкм</span>
+                  <button type="button" class="toolbar-btn toolbar-btn--neutral" data-op="shift" data-m="1">Сдвинуть</button>
+                </div>
+                <div class="micro-actions">
+                  <button type="button" class="toolbar-btn toolbar-btn--neutral" data-op="home_start" data-m="1">◄ в начало</button>
+                  <button type="button" class="toolbar-btn toolbar-btn--neutral" data-op="home_end" data-m="1">в конец ►</button>
+                  <button type="button" class="toolbar-btn toolbar-btn--neutral" data-op="find_zero" data-m="1">поиск 0</button>
+                  <button type="button" class="toolbar-btn toolbar-btn--neutral" data-op="set_zero" data-m="1">уст. 0</button>
+                </div>
+                <button type="button" class="toolbar-btn toolbar-btn--danger micro-motor__stop" data-op="stop" data-m="1">СТОП М1</button>
+              </div>
+
+              <!-- Мотор М2 -->
+              <div class="micro-motor" data-motor="2">
+                <div class="micro-motor__head">
+                  <span class="micro-motor__title">Мотор М2 · фокус</span>
+                  <span class="micro-badges">
+                    <button type="button" class="micro-badge" data-en="2" title="Разрешение мотора">выключен</button>
+                    <button type="button" class="micro-badge" data-dir="2" title="Направление">вперёд</button>
+                  </span>
+                </div>
+                <div class="micro-motor__pos">
+                  <span>позиция <b id="m2Pos">—</b></span>
+                  <span>state <b id="m2State">—</b></span>
+                  <span>шаги <b id="m2Steps">—</b></span>
+                </div>
+                <div class="micro-row">
+                  <span class="micro-row__lab">Идти в</span>
+                  <input type="number" id="m2GotoInp" step="10" value="8000" />
+                  <span class="micro-row__unit">мкм</span>
+                  <button type="button" class="toolbar-btn toolbar-btn--primary" data-op="goto" data-m="2">Идти</button>
+                </div>
+                <div class="micro-row">
+                  <span class="micro-row__lab">Шаги</span>
+                  <input type="number" id="m2StepsInp" step="1" value="200" />
+                  <span class="micro-row__unit"></span>
+                  <button type="button" class="toolbar-btn toolbar-btn--neutral" data-op="steps" data-m="2">Выполнить</button>
+                </div>
+                <div class="micro-row">
+                  <span class="micro-row__lab">Сдвиг</span>
+                  <input type="number" id="m2ShiftInp" step="10" value="500" />
+                  <span class="micro-row__unit">мкм</span>
+                  <button type="button" class="toolbar-btn toolbar-btn--neutral" data-op="shift" data-m="2">Сдвинуть</button>
+                </div>
+                <div class="micro-actions">
+                  <button type="button" class="toolbar-btn toolbar-btn--neutral" data-op="home_start" data-m="2">◄ в начало</button>
+                  <button type="button" class="toolbar-btn toolbar-btn--neutral" data-op="home_end" data-m="2">в конец ►</button>
+                  <button type="button" class="toolbar-btn toolbar-btn--neutral" data-op="find_zero" data-m="2">поиск 0</button>
+                  <button type="button" class="toolbar-btn toolbar-btn--neutral" data-op="set_zero" data-m="2">уст. 0</button>
+                </div>
+                <button type="button" class="toolbar-btn toolbar-btn--danger micro-motor__stop" data-op="stop" data-m="2">СТОП М2</button>
+              </div>
+            </div>
+
+            <div class="micro-secondary">
+              <!-- LED -->
+              <div class="micro-sub">
+                <div class="micro-sub__title">Фара LED</div>
+                <label class="one-line-label">Яркость: <span id="ledBrightVal">0</span> %</label>
+                <input type="range" id="ledBright" min="0" max="100" value="0" />
+                <div class="micro-row">
+                  <span class="micro-row__lab">Частота</span>
+                  <input type="number" id="ledFreq" min="1000" max="5000" step="100" value="3000" />
+                  <span class="micro-row__unit">Гц</span>
+                  <label class="checkbox-line micro-led-on" for="ledOn">
+                    <input type="checkbox" id="ledOn" /><span>вкл</span>
+                  </label>
+                </div>
+              </div>
+
+              <!-- Клапаны DQ -->
+              <div class="micro-sub">
+                <div class="micro-sub__title">Клапаны / выходы DQ</div>
+                <div class="micro-dq" id="dqGrid"><!-- кнопки строятся в JS по конфигу --></div>
+              </div>
+            </div>
+
+            <button type="button" id="estopBtn" class="toolbar-btn toolbar-btn--danger micro-estop">
+              АВАРИЙНЫЙ СТОП — обесточить оба мотора
+            </button>
+          </div>
+        </section>
+
+        <!-- Углублённо: вкладки (только чтение) -->
+        <section class="card micro-tabs">
+          <div class="micro-tabs__bar">
+            <button type="button" class="micro-tab is-active" data-tab="settings">Настройки моторов</button>
+            <button type="button" class="micro-tab" data-tab="cooling">Охлаждение</button>
+            <span class="micro-tabs__note">только чтение — правится в родном конфигураторе платы</span>
+          </div>
+          <div class="micro-tab-pane" data-pane="settings">
+            <div class="micro-tiles micro-tiles--wide">
+              <div class="micro-tile"><span>Скорость М1 / М2</span><b id="sSpeed">—</b></div>
+              <div class="micro-tile"><span>Мин. скорость М1 / М2</span><b id="sMinSpeed">—</b></div>
+              <div class="micro-tile"><span>Ускорение М1 / М2</span><b id="sAccel">—</b></div>
+              <div class="micro-tile"><span>Макс. ход М1 / М2, мм</span><b id="sMaxTravel">—</b></div>
+              <div class="micro-tile"><span>Делитель шагов</span><b id="sDivider">—</b></div>
+              <div class="micro-tile"><span>Шагов/оборот М1 / М2</span><b id="sStepsRev">—</b></div>
+              <div class="micro-tile"><span>Расст./оборот М1 / М2, мкм</span><b id="sDistRev">—</b></div>
+              <div class="micro-tile"><span>K шагов/мм М1 / М2</span><b id="sKmm">—</b></div>
+              <div class="micro-tile"><span>Стоп М1 по датчику, мкм</span><b id="sStopSensor">—</b></div>
+              <div class="micro-tile"><span>Лимит проскальз. М1, мкм</span><b id="sSlipLimit">—</b></div>
             </div>
           </div>
-          <div id="camPlaceholder" class="camera-placeholder micro-cam-ph">
-            Укажи серийник камеры в поле «Камера» выше и нажми «Применить».
+          <div class="micro-tab-pane hidden" data-pane="cooling">
+            <div class="micro-tiles micro-tiles--wide">
+              <div class="micro-tile"><span>Температура сейчас</span><b id="cTemp">—</b></div>
+              <div class="micro-tile"><span>FAN1 / FAN2</span><b id="cFan">—</b></div>
+              <div class="micro-tile"><span>FAN вкл / откл, °C</span><b id="cFanTh">—</b></div>
+              <div class="micro-tile"><span>Воздух вкл / откл, °C</span><b id="cAirTh">—</b></div>
+              <div class="micro-tile"><span>Камера вкл / откл, °C</span><b id="cCamTh">—</b></div>
+            </div>
           </div>
-          <iframe id="camIframe" class="micro-cam-frame" title="Камера микроскопа" hidden></iframe>
         </section>
 
         <section class="card debug-console hidden" id="debugConsoleSection" aria-live="polite">

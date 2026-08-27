@@ -158,9 +158,9 @@ def micro_command(cmd: int):
 
 
 @app.get("/api/micro/led")
-def micro_led(bright: int | None = None, on: int | None = None):
-    micro.set_led(bright, None if on is None else bool(on))
-    api_log("api.micro.led", "Подсветка микроскопа", payload={"bright": bright, "on": on})
+def micro_led(bright: int | None = None, freq: int | None = None, on: int | None = None):
+    micro.led_native(bright, freq, None if on is None else bool(on))
+    api_log("api.micro.led", "Подсветка микроскопа", payload={"bright": bright, "freq": freq, "on": on})
     return {"status": "ok"}
 
 
@@ -210,6 +210,33 @@ def micro_estop():
     micro.estop()
     api_log("api.micro.estop", "АВАРИЙНЫЙ СТОП микроскопа", "warn", {})
     return {"status": "ok"}
+
+
+# --- Ручной пульт платы (прямое управление, как родной конфигуратор) ---
+
+@app.get("/api/micro/manual")
+def micro_manual(on: int):
+    data = micro.manual_mode(bool(on))
+    api_log("api.micro.manual", "Ручной режим микроскопа", payload={"on": bool(on)})
+    return {"status": "ok", **data}
+
+
+@app.get("/api/micro/motor")
+def micro_motor(m: int, op: str, value: float | None = None):
+    # ручная команда мотору: goto/steps/shift/stop/find_zero/set_zero/home_start/home_end/
+    # dir_fwd/dir_back/enable/disable — только в ручном режиме
+    res = micro.motor_op(m, op, value)
+    api_log("api.micro.motor", "Команда мотору (пульт)",
+            "warn" if op in ("goto", "steps", "shift", "home_start", "home_end") else "info",
+            {"m": m, "op": op, "value": value, "result": res})
+    return res
+
+
+@app.get("/api/micro/dq")
+def micro_dq(bit: int, on: int):
+    res = micro.dq_bit(bit, bool(on))
+    api_log("api.micro.dq", "Дискретный выход DQ (пульт)", payload={"bit": bit, "on": bool(on), "result": res})
+    return res
 
 
 @app.get("/api/micro/config")

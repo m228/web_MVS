@@ -71,7 +71,10 @@ class MicroscopeFSM:
         self.sw1 = False      # движение LED назад к стеклу (флаг-защёлка)
         self.sw2 = False      # движение LED вперёд
         self.sw3 = False      # ЗАПРЕТ движения (наш «Стоп движения»)
+        self.manual = False   # РУЧНОЙ РЕЖИМ: автомат не пишет плату вообще (пультом рулит человек)
         self._halt = False    # запрос аварийной остановки (цель = текущая позиция)
+        self._emit_cmd1 = False  # выставить команду М1 на плату один раз (по фронту формирования)
+        self._emit_cmd2 = False
         self.cw0 = False      # клапан промывки трубки
         self.cw1 = False      # клапан промывки стекла
         self.led_bright = int(config.get("led_bright", 0))
@@ -107,6 +110,14 @@ class MicroscopeFSM:
         with self._lock:
             self.sw0 = bool(on)
 
+    def set_manual(self, on):
+        """Ручной режим: при True автомат перестаёт писать плату (пультом управляет человек).
+        Также снимает циклический режим, чтобы авто-цикл не стартовал."""
+        with self._lock:
+            self.manual = bool(on)
+            if on:
+                self.sw0 = False
+
     def set_m1_target(self, um):
         """Ручная цель позиции М1 (мкм). Формирование команды в автомате доедет мотор туда."""
         with self._lock:
@@ -134,6 +145,7 @@ class MicroscopeFSM:
                 "step": STEP_NAMES.get(self.mode, str(self.mode)),
                 "cyclic": self.sw0,
                 "inhibit": self.sw3,
+                "manual": self.manual,
                 "valve_tube": self.cw0,
                 "valve_glass": self.cw1,
                 "cmd1": self.cmd1,
@@ -273,6 +285,7 @@ class MicroscopeFSM:
                 self.t1 += 1
                 if self.t1 > 2:                        # ждём 200мс, потом команда
                     self.cmd1 = CMD_SET_SP1
+                    self._emit_cmd1 = True             # послать команду на плату один раз
                     self.t1 = 0
                     self.m1_sp_old = self.m1_sp
             if self.cmd1 > 0:
@@ -288,6 +301,7 @@ class MicroscopeFSM:
                 self.t2 += 1
                 if self.t2 > 2:
                     self.cmd2 = CMD_SET_SP2
+                    self._emit_cmd2 = True
                     self.t2 = 0
                     self.m2_sp_old = self.m2_sp
             if self.cmd2 > 0:
@@ -301,20 +315,23 @@ class MicroscopeFSM:
             halt = self._halt and self.sw3
             if halt:
                 self._halt = False
+            manual = self.manual
+            emit_cmd1 = self._emit_cmd1; self._emit_cmd1 = False
+            emit_cmd2 = self._emit_cmd2; self._emit_cmd2 = False
 
         pos2 = telem.get("pos2")
         connected = self.plate.status.get("connected", False)
 
+        # РУЧНОЙ РЕЖИМ: автомат не трогает плату — всем (моторы/LED/клапаны) рулит пульт.
+        if manual:
+            return
+
         # плату дёргаем ВНЕ лока (её методы потокобезопасны)
         if halt:
-            # аварийный стоп: цель = текущая позиция, мотор встаёт где есть (плата
-            # держит последнюю уставку, поэтому «просто не слать» её не остановит)
-            if pos1 is not None:
-                self.plate.write_m1_sp(pos1)
-                self.plate.cmd1(CMD_SET_SP1)
-            if pos2 is not None:
-                self.plate.write_m2_sp(pos2)
-                self.plate.cmd2(CMD_SET_SP2)
+            # аварийный стоп: нативная команда СТОП + фиксируем цель на текущей позиции,
+            # чтобы после снятия запрета мотор не «доезжал» к старой уставке
+            self.plate.motor_stop(1)
+            self.plate.motor_stop(2)
             with self._lock:
                 if pos1 is not None:
                     self.m1_sp = pos1
@@ -323,13 +340,16 @@ class MicroscopeFSM:
                     self.m2_sp = pos2
                     self.m2_sp_old = pos2
         elif connected and not out["inhibit"]:
-            # движение обоих моторов — только при связи и снятом запрете
-            self.plate.cmd1(out["cmd1"])
+            # движение обоих моторов — только при связи и снятом запрете.
+            # позицию пишем всегда (OUT-блок дедуплицирует по изменению), команду — по фронту.
             self.plate.write_m1_sp(out["m1_sp"])
-            self.plate.cmd2(out["cmd2"])
             self.plate.write_m2_sp(out["m2_sp"])
+            if emit_cmd1:
+                self.plate.cmd1(CMD_SET_SP1)
+            if emit_cmd2:
+                self.plate.cmd2(CMD_SET_SP2)
 
-        # подсветка и клапаны — не движение, пишем всегда
+        # подсветка и клапаны — не движение, пишем всегда (кроме ручного режима — там return выше)
         self.plate.set_led(out["led_bright"], out["led_on"])
         self.plate.set_valve_tube(out["cw0"])
         self.plate.set_valve_glass(out["cw1"])

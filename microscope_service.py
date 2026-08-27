@@ -126,6 +126,66 @@ class MicroscopeService:
         if self.fsm:
             self.fsm.set_movement_inhibit(on)
 
+    # ---------- РУЧНОЙ ПУЛЬТ платы (прямое управление, как родной конфигуратор) ----------
+
+    def manual_mode(self, on):
+        """Ручной режим: автомат перестаёт писать плату, пультом рулит человек (и наоборот)."""
+        if self.fsm:
+            self.fsm.set_manual(bool(on))
+        return {"manual": bool(self.fsm.manual) if self.fsm else False}
+
+    def is_manual(self):
+        return bool(self.fsm.manual) if self.fsm else False
+
+    def motor_op(self, m, op, value=None):
+        """Ручная команда мотору m (1/2). Работает ТОЛЬКО в ручном режиме (иначе автомат
+        затрёт следующим тактом). op: goto/steps/shift/stop/find_zero/set_zero/
+        home_start/home_end/dir_fwd/dir_back/enable/disable."""
+        if not self.plate or not self.fsm:
+            return {"error": "not_started"}
+        if not self.fsm.manual:
+            return {"error": "not_manual"}
+        p, m = self.plate, int(m)
+        ops = {
+            "stop": lambda: p.motor_stop(m),
+            "find_zero": lambda: p.motor_find_zero(m),
+            "set_zero": lambda: p.motor_set_zero(m),
+            "home_start": lambda: p.motor_home(m, "start"),
+            "home_end": lambda: p.motor_home(m, "end"),
+            "dir_fwd": lambda: p.motor_direction(m, True),
+            "dir_back": lambda: p.motor_direction(m, False),
+            "enable": lambda: p.motor_enable(m, True),
+            "disable": lambda: p.motor_enable(m, False),
+            "goto": lambda: p.motor_goto(m, float(value)),
+            "steps": lambda: p.motor_steps(m, int(float(value))),
+            "shift": lambda: p.motor_shift(m, float(value)),
+        }
+        fn = ops.get(op)
+        if fn is None:
+            return {"error": "bad_op"}
+        if op in ("goto", "steps", "shift") and value is None:
+            return {"error": "no_value"}
+        fn()
+        return {"status": "ok", "m": m, "op": op, "value": value}
+
+    def led_native(self, bright=None, freq=None, on=None):
+        """LED-фара: яркость (%)/частота (Гц)/вкл. Работает и в авто (через FSM), и в ручном
+        (немедленной нативной записью). Частоту FSM не трогает — пишем всегда."""
+        if self.fsm:
+            self.fsm.set_led(bright, on)
+        if self.plate:
+            if self.is_manual():
+                self.plate.set_led_native(bright, freq, on)
+            elif freq is not None:
+                self.plate.set_led_native(freq=freq)
+
+    def dq_bit(self, bit, on):
+        """Дискретный выход DQ (клапан и пр.). Только в ручном режиме (в авто клапаны у автомата)."""
+        if not self.plate or not self.is_manual():
+            return {"error": "not_manual"}
+        self.plate.set_dq_bit(int(bit), bool(on))
+        return {"status": "ok", "bit": int(bit), "on": bool(on)}
+
     # ---------- ручное движение моторов (нативные команды платы) ----------
 
     def move_motor(self, m, um):
@@ -148,12 +208,14 @@ class MicroscopeService:
             self.plate.write_reg(en, 1 if on else 0)
 
     def estop(self):
-        """Аварийный стоп: запрет движения (автомат встаёт) + обесточить оба мотора."""
+        """Аварийный стоп (в любом режиме): нативная команда СТОП обоим моторам + запрет
+        движения автомата + обесточить оба мотора."""
         if self.fsm:
             self.fsm.set_movement_inhibit(True)
         if self.plate:
-            for reg in (self.cfg or {}).get("motor_enable", {}).values():
-                self.plate.write_reg(reg, 0)
+            for m in (1, 2):
+                self.plate.motor_stop(m)          # нативная команда СТОП (0x1007/0x2007)
+                self.plate.motor_enable(m, False)  # обесточить мотор
 
 
 # singleton, с которым работает app.py

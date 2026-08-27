@@ -28,6 +28,7 @@ class PlateClient:
         self._write_base = int(config["write_base"])
         self._block_len = int(config["block_len"])
         self._period = max(0.02, int(config["poll_interval_ms"]) / 1000.0)
+        self._motor = config.get("motor", {})   # нативная карта команд моторов (1248/1249 и т.д.)
 
         self._client = None
         self._thread = None
@@ -108,17 +109,87 @@ class PlateClient:
         return int(self.cfg["out"][name])
 
     def cmd1(self, value):
-        self.set_out(self._out_idx("cmd1"), value)
+        # команда мотору М1 идёт в НАТИВНЫЙ регистр (1248), одиночной записью, а не в OUT-блок
+        self._write_motor_cmd_reg("1", value)
 
     def cmd2(self, value):
-        self.set_out(self._out_idx("cmd2"), value)
+        self._write_motor_cmd_reg("2", value)
 
     def write_m1_sp(self, micrometers):
-        # плата хранит позицию в единицах 10 мкм: OUT[3] = m1_SP/10 (как в ПЛК)
+        # плата хранит позицию в единицах 10 мкм: OUT[3]=1253 = m1_SP/10 (как в ПЛК)
         self.set_out(self._out_idx("m1_sp"), int(micrometers) // 10)
 
     def write_m2_sp(self, micrometers):
         self.set_out(self._out_idx("m2_sp"), int(micrometers) // 10)
+
+    # --- нативное управление моторами (как родной конфигуратор: значение -> команда в 1248/1249) ---
+
+    def _write_motor_cmd_reg(self, m, value):
+        reg = (self._motor.get("cmd_reg") or {}).get(str(m))
+        if reg is not None:
+            self.write_reg(int(reg), int(value) & 0xFFFF)
+
+    def motor_code(self, m, op):
+        """Код команды: cmd_base[мотор] + cmd_op[операция] (напр. М1 goto = 0x1006)."""
+        base = (self._motor.get("cmd_base") or {}).get(str(m), 0)
+        off = (self._motor.get("cmd_op") or {}).get(op)
+        return None if off is None else (int(base) + int(off))
+
+    def _write_native(self, key, m, value):
+        reg = (self._motor.get(key) or {}).get(str(m))
+        if reg is not None:
+            self.write_reg(int(reg), int(value) & 0xFFFF)
+
+    def motor_cmd(self, m, op):
+        """Послать мотору m команду-операцию op (find_zero/steps/home_start/.../goto/stop/set_zero)."""
+        code = self.motor_code(m, op)
+        if code is not None:
+            self._write_motor_cmd_reg(m, code)
+
+    def motor_goto(self, m, micrometers):
+        div = int(self._motor.get("um_div", 10)) or 1
+        self._write_native("pos_set", m, int(micrometers) // div)   # значение позиции ...
+        self.motor_cmd(m, "goto")                                    # ... затем команда «идти»
+
+    def motor_steps(self, m, n):
+        self._write_native("steps", m, int(n))
+        self.motor_cmd(m, "steps")
+
+    def motor_shift(self, m, micrometers):
+        div = int(self._motor.get("um_div", 10)) or 1
+        self._write_native("shift", m, int(micrometers) // div)
+        self.motor_cmd(m, "shift")
+
+    def motor_stop(self, m):
+        self.motor_cmd(m, "stop")
+
+    def motor_find_zero(self, m):
+        self.motor_cmd(m, "find_zero")
+
+    def motor_set_zero(self, m):
+        self.motor_cmd(m, "set_zero")
+
+    def motor_home(self, m, which):
+        self.motor_cmd(m, "home_end" if which == "end" else "home_start")
+
+    def motor_direction(self, m, forward):
+        self._write_native("dir", m, 1 if forward else 0)
+
+    def motor_enable(self, m, on):
+        self._write_native("enable", m, 1 if on else 0)
+
+    def set_led_native(self, bright=None, freq=None, on=None):
+        led = self.cfg.get("led", {})
+        if bright is not None and led.get("bright") is not None:
+            self.write_reg(int(led["bright"]), int(bright))
+        if freq is not None and led.get("freq") is not None:
+            self.write_reg(int(led["freq"]), int(freq))
+        if on is not None and led.get("on_bit") is not None:
+            self.write_reg(int(led["on_bit"]), 1 if on else 0)
+
+    def set_dq_bit(self, bit, on):
+        """Установить/снять один бит DQ (регистр 1250) через OUT-блок (read-modify-write по буферу)."""
+        self.set_out_bit(self._out_idx("valves"), int(bit), bool(on))
 
     def set_led(self, bright=None, on=None):
         if bright is not None:

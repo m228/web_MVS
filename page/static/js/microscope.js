@@ -1,4 +1,4 @@
-// Страница микроскопа: опрос телеметрии/состояния автомата + команды на плату.
+// Страница микроскопа: телеметрия платы + авто-цикл + РУЧНОЙ ПУЛЬТ (прямое управление платой).
 // Работает поверх эндпоинтов /api/micro/* (см. app.py). Vanilla JS, без зависимостей.
 
 (function () {
@@ -7,6 +7,8 @@
   const $ = (id) => document.getElementById(id);
   const POLL_MS = 600;
   let lastCyclic = false;
+  let manualOn = false;
+  let cfg = null;
 
   async function api(path, params) {
     const q = params ? "?" + new URLSearchParams(params).toString() : "";
@@ -23,7 +25,7 @@
   // ---- камера: MVS SDK сам находит камеры Hikrobot ----
   async function autoDiscoverCameras() {
     try {
-      const data = await api("/api/cams/detailed");   // { серийник: [записи] }
+      const data = await api("/api/cams/detailed");
       if (data && typeof data === "object") {
         const avail = [], all = [];
         for (const [serial, entries] of Object.entries(data)) {
@@ -37,8 +39,7 @@
   }
 
   function loadCamIframe(serial) {
-    const frame = $("camIframe");
-    const ph = $("camPlaceholder");
+    const frame = $("camIframe"), ph = $("camPlaceholder");
     if (serial) {
       frame.src = "/camera?serial_number=" + encodeURIComponent(serial) + "&embed=1";
       frame.hidden = false;
@@ -54,52 +55,42 @@
   function applyCamSerials(serials) {
     const found = $("camFound"), sel = $("camSelect"), ipInp = $("camIp"), ipGo = $("camIpGo");
     sel.hidden = true; ipInp.hidden = true; ipGo.hidden = true;
-    if (serials.length === 1) {            // одна — грузим сразу
-      found.textContent = serials[0];
-      loadCamIframe(serials[0]);
-      return true;
-    }
-    if (serials.length > 1) {              // несколько — список для выбора
+    if (serials.length === 1) { found.textContent = serials[0]; loadCamIframe(serials[0]); return true; }
+    if (serials.length > 1) {
       found.textContent = "";
       sel.hidden = false; sel.innerHTML = "";
-      serials.forEach((s) => {
-        const o = document.createElement("option"); o.value = s; o.textContent = s; sel.appendChild(o);
-      });
+      serials.forEach((s) => { const o = document.createElement("option"); o.value = s; o.textContent = s; sel.appendChild(o); });
       loadCamIframe(serials[0]);
       return true;
     }
-    found.textContent = "не найдена —";    // пока не нашлась — поле IP + продолжаем искать
+    found.textContent = "не найдена —";
     ipInp.hidden = false; ipGo.hidden = false;
     loadCamIframe("");
     return false;
   }
 
-  // скан камер (MVS/GenTL) не всегда готов на момент открытия страницы — повторяем поиск
   async function discoverWithRetry(attempt) {
     const ok = applyCamSerials(await autoDiscoverCameras());
-    if (!ok && attempt < 8) {
-      setTimeout(() => discoverWithRetry(attempt + 1), 2500);
-    }
+    if (!ok && attempt < 8) setTimeout(() => discoverWithRetry(attempt + 1), 2500);
   }
 
   async function initCamera() {
     let cfgSerial = "";
     try {
-      const cfg = await api("/api/micro/config");
+      cfg = await api("/api/micro/config");
       if (cfg) {
         if (cfg.manual_sv != null) $("svInput").value = cfg.manual_sv;
         if (cfg.manual_stage != null) $("stageSelect").value = String(cfg.manual_stage);
-        if (cfg.led_bright != null) {
-          $("ledBright").value = cfg.led_bright;
-          $("ledBrightVal").textContent = cfg.led_bright;
-        }
+        if (cfg.led_bright != null) { $("ledBright").value = cfg.led_bright; $("ledBrightVal").textContent = cfg.led_bright; }
         $("cfgPlateHost").value = cfg.host || "";
         $("cfgPlatePort").value = cfg.port || "";
         cfgSerial = cfg.camera_serial || "";
       }
     } catch (e) { /* конфиг недоступен */ }
 
-    if (cfgSerial) {                       // явный override в конфиге
+    buildDqGrid();
+
+    if (cfgSerial) {
       $("camSelect").hidden = true; $("camIp").hidden = true; $("camIpGo").hidden = true;
       $("camFound").textContent = cfgSerial;
       loadCamIframe(cfgSerial);
@@ -108,7 +99,28 @@
     discoverWithRetry(0);
   }
 
-  // ---- опрос телеметрии ----
+  // ---- DQ-сетка: строим кнопки по меткам из конфига ----
+  function buildDqGrid() {
+    const grid = $("dqGrid");
+    if (!grid) return;
+    const labels = (cfg && cfg.dq && cfg.dq.labels) || ["трубка", "стекло", "воздух", "вых 4", "вых 5", "вых 6"];
+    grid.innerHTML = "";
+    labels.forEach((lab, bit) => {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = "toolbar-btn toolbar-btn--neutral micro-dq-btn";
+      b.dataset.bit = String(bit);
+      b.textContent = lab;
+      b.addEventListener("click", () => {
+        const on = !b.classList.contains("is-on");
+        api("/api/micro/dq", { bit, on: on ? 1 : 0 }).then(() => { }).catch(() => { });
+        sentCmd((on ? "DQ вкл: " : "DQ выкл: ") + lab);
+      });
+      grid.appendChild(b);
+    });
+  }
+
+  // ---- связь / формат ----
   function setConn(state) {
     const el = $("microConn");
     if (state.connected) { el.textContent = "есть"; el.style.color = "var(--success)"; }
@@ -116,56 +128,124 @@
     else { el.textContent = "нет"; el.style.color = "var(--danger)"; }
   }
 
-  function fmt(v, unit) {
-    return (v == null) ? "—" : (unit ? v + " " + unit : String(v));
+  const num = (v) => (v == null ? "—" : v);
+  const um = (v) => (v == null ? "—" : v + " мкм");
+  const pair = (a, b) => ((a == null && b == null) ? "—" : (num(a) + " / " + num(b)));
+  const set = (id, v) => { const el = $(id); if (el) el.textContent = v; };
+  const HW = { 19: "hw1.3", 32: "hw2.0" };
+
+  function bits6(v) { return (v == null) ? "—" : "0b" + Number(v).toString(2).padStart(6, "0"); }
+  function hex(v) { return (v == null) ? "—" : "0x" + Number(v).toString(16).padStart(4, "0"); }
+  function upt(s) {
+    if (s == null) return "—";
+    s = Number(s); const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60);
+    return h ? (h + "ч " + m + "м") : (m + "м " + (s % 60) + "с");
   }
 
+  // ---- опрос ----
   async function poll() {
     try {
       const d = await api("/api/micro/telemetry");
-      const t = d.telemetry || {};
-      const f = d.fsm || {};
+      const t = d.telemetry || {}, f = d.fsm || {}, e = d.ext || {};
       setConn(d.connection || {});
 
-      $("tPos1").textContent = fmt(t.pos1, "мкм");
-      $("tPos2").textContent = fmt(t.pos2, "мкм");
-      $("tPos1ai").textContent = fmt(t.pos1_ai, "мкм");
-      $("tTemp").textContent = (t.temp == null) ? "—" : t.temp + " °C";        // raw = °C (плата, ×1)
-      $("tU12v").textContent = (t.u12v == null) ? "—" : (t.u12v / 1000).toFixed(2) + " В";  // raw в мВ
-      $("tDi").textContent = (t.di == null) ? "—" : "0x" + Number(t.di).toString(16).padStart(4, "0");
-      $("tSv").textContent = (f.sv == null) ? "—" : Number(f.sv).toFixed(2);
+      // позиции (сверху и в пульте)
+      set("tPos1", um(t.pos1)); set("tPos2", um(t.pos2));
+      set("m1Pos", um(e.m1_pos != null ? e.m1_pos : t.pos1));
+      set("m2Pos", um(e.m2_pos != null ? e.m2_pos : t.pos2));
+      set("m1Sensor", um(e.sensor)); set("m1Steps", num(e.m1_steps));
+      set("m2Steps", num(e.m2_steps)); set("m2State", num(e.m2_state));
+      set("tSensor", um(e.sensor)); set("tEnc", um(e.m1_enc)); set("tSlip", um(e.m1_slip));
+      set("tSteps", pair(e.m1_steps, e.m2_steps));
 
-      $("microStep").textContent = f.step || "—";
-      $("microMode").textContent = (f.mode == null) ? "—" : f.mode;
-      $("valveTube").textContent = f.valve_tube ? "открыт" : "закрыт";
-      $("valveGlass").textContent = f.valve_glass ? "открыт" : "закрыт";
-      $("microCmd1").textContent = (f.cmd1 == null) ? "—" : "0x" + Number(f.cmd1).toString(16).padStart(4, "0");
+      // питание / термо
+      set("tTemp", t.temp == null ? "—" : t.temp + " °C");
+      set("tU12v", t.u12v == null ? "—" : (t.u12v / 1000).toFixed(2) + " В");
+      set("tFan1", num(e.fan1)); set("tFan2", num(e.fan2));
 
-      // расширенная телеметрия с платы (родные регистры)
-      const e = d.ext || {};
-      const onoff = (v) => (v == null ? "—" : (v ? "вкл" : "выкл"));
-      $("tM1en").textContent = onoff(e.m1_enable);
-      $("tM2en").textContent = onoff(e.m2_enable);
-      $("tM1enc").textContent = (e.m1_enc == null) ? "—" : e.m1_enc + " мкм";
-      $("tM1slip").textContent = (e.m1_slip == null) ? "—" : e.m1_slip + " мкм";
-      $("tLed").textContent = (e.led_bright == null) ? "—" : e.led_bright + " %";
-      $("tDq").textContent = (e.dq == null) ? "—" : "0b" + Number(e.dq).toString(2).padStart(3, "0");
-      $("tFan").textContent = (e.fan1 == null) ? "—" : (e.fan1 + " / " + (e.fan2 == null ? "—" : e.fan2));
-      $("tCycle").textContent = (e.cycle_us == null) ? "—" : e.cycle_us + " мкс";
-      $("tVer").textContent = (e.version == null) ? "—" : e.version;
+      // входы/выходы
+      set("tDi", e.di != null ? bits6(e.di) : hex(t.di));
+      set("tDq", bits6(e.dq));
 
-      // циклический режим
+      // автомат
+      set("tSv", f.sv == null ? "—" : Number(f.sv).toFixed(2));
+      set("microStep", f.step || "—");
+      set("microMode", f.mode == null ? "—" : f.mode);
+      set("valveTube", f.valve_tube ? "открыт" : "закрыт");
+      set("valveGlass", f.valve_glass ? "открыт" : "закрыт");
+
+      // система
+      set("tVer", num(e.version));
+      set("tModVer", e.module_ver == null ? "—" : (HW[e.module_ver] || e.module_ver));
+      set("tSerial", num(e.serial));
+      set("tCycle", (e.cycle_us == null) ? "—" : e.cycle_us + " / " + num(e.cycle_peak_us) + " мкс");
+      set("tUptime", upt(e.uptime_s));
+
+      // бейджи моторов (разрешение/направление)
+      motorBadge("1", e.m1_enable, e.m1_dir);
+      motorBadge("2", e.m2_enable, e.m2_dir);
+
+      // DQ-кнопки: подсветка активных битов
+      if (e.dq != null) {
+        document.querySelectorAll(".micro-dq-btn").forEach((b) => {
+          const on = (Number(e.dq) >> Number(b.dataset.bit)) & 1;
+          b.classList.toggle("is-on", !!on);
+        });
+      }
+
+      // вкладки: настройки моторов + охлаждение (read-only)
+      set("sSpeed", pair(e.m1_speed, e.m2_speed));
+      set("sMinSpeed", pair(e.m1_minspeed, e.m2_minspeed));
+      set("sAccel", pair(e.m1_accel, e.m2_accel));
+      set("sMaxTravel", pair(e.m1_maxtravel, e.m2_maxtravel));
+      set("sDivider", dividerLabel(e.step_divider));
+      set("sStepsRev", pair(e.m1_steps_rev, e.m2_steps_rev));
+      set("sDistRev", pair(e.m1_dist_rev, e.m2_dist_rev));
+      set("sKmm", pair(e.m1_k_steps_mm, e.m2_k_steps_mm));
+      set("sStopSensor", num(e.m1_stop_sensor));
+      set("sSlipLimit", num(e.m1_slip_limit));
+      set("cTemp", t.temp == null ? "—" : t.temp + " °C");
+      set("cFan", pair(e.fan1, e.fan2));
+      set("cFanTh", pair(e.fan_on_temp, e.fan_off_temp));
+      set("cAirTh", pair(e.air_on_temp, e.air_off_temp));
+      set("cCamTh", pair(e.cam_on_temp, e.cam_off_temp));
+
+      // циклический / стоп движения / ручной режим
       lastCyclic = !!f.cyclic;
       $("cyclicState").textContent = lastCyclic ? "вкл" : "выкл";
       $("btnCyclic").classList.toggle("toolbar-btn--primary", lastCyclic);
-
-      // стоп движения
       const inhibit = !!f.inhibit;
       $("btnStop").classList.toggle("hidden", inhibit);
       $("btnRelease").classList.toggle("hidden", !inhibit);
+      if (!!f.manual !== manualOn) syncManual(!!f.manual);
     } catch (e) {
       setConn({ connected: false, reconnecting: false });
     }
+  }
+
+  function dividerLabel(v) {
+    if (v == null) return "—";
+    return ({ 0: "1", 1: "1/2", 2: "1/4", 3: "1/8", 7: "1/16" })[v] || v;
+  }
+
+  function motorBadge(m, en, dir) {
+    const enB = document.querySelector('.micro-badge[data-en="' + m + '"]');
+    const dirB = document.querySelector('.micro-badge[data-dir="' + m + '"]');
+    if (enB && en != null) { enB.textContent = en ? "разрешён" : "выключен"; enB.classList.toggle("is-on", !!en); }
+    if (dirB && dir != null) { dirB.textContent = dir ? "вперёд" : "назад"; dirB.classList.toggle("is-rev", !dir); }
+  }
+
+  // ---- ручной режим ----
+  function syncManual(on) {
+    manualOn = on;
+    $("manualToggle").checked = on;
+    $("manualState").textContent = on ? "ВКЛ" : "выкл";
+    $("microPanel").classList.toggle("is-locked", !on);
+    $("manualHint").classList.toggle("hidden", on);
+    // авто-цикл в ручном режиме недоступен (иначе после выхода мотор дёрнется к уставке)
+    ["cmdCycle", "cmdRetract", "cmdWashGlass", "btnCyclic"].forEach((id) => {
+      const b = $(id); if (b) b.disabled = on;
+    });
   }
 
   // ---- кнопки ----
@@ -176,14 +256,10 @@
     $("btnCyclic").addEventListener("click", () => api("/api/micro/cyclic", { on: lastCyclic ? 0 : 1 }));
     $("btnStop").addEventListener("click", () => api("/api/micro/stop", { on: 1 }));
     $("btnRelease").addEventListener("click", () => api("/api/micro/stop", { on: 0 }));
-    $("btnReload").addEventListener("click", async () => {
-      await api("/api/micro/reload");
-      initCamera();  // конфиг мог поменять camera_serial / префиллы
-    });
+    $("btnReload").addEventListener("click", async () => { await api("/api/micro/reload"); initCamera(); });
 
     $("cfgApply").addEventListener("click", async () => {
-      const hint = $("cfgHint");
-      hint.textContent = "применяю…";
+      const hint = $("cfgHint"); hint.textContent = "применяю…";
       try {
         const p = {};
         if ($("cfgPlateHost").value) p.host = $("cfgPlateHost").value;
@@ -191,34 +267,91 @@
         await api("/api/micro/settings", p);
         hint.textContent = "применено ✓";
         setTimeout(() => { hint.textContent = ""; }, 2500);
-      } catch (e) {
-        hint.textContent = "ошибка: " + e.message;
-      }
+      } catch (e) { hint.textContent = "ошибка: " + e.message; }
     });
 
     $("svApply").addEventListener("click", () => api("/api/micro/sv", { value: $("svInput").value }));
     $("stageSelect").addEventListener("change", () => api("/api/micro/stage", { value: $("stageSelect").value }));
 
+    // LED
     const led = $("ledBright");
     led.addEventListener("input", () => { $("ledBrightVal").textContent = led.value; });
     led.addEventListener("change", () => api("/api/micro/led", { bright: led.value }));
+    $("ledFreq").addEventListener("change", () => api("/api/micro/led", { freq: $("ledFreq").value }));
     $("ledOn").addEventListener("change", () => api("/api/micro/led", { on: $("ledOn").checked ? 1 : 0 }));
 
-    // выбор камеры (список) / указание IP, если не нашлась
+    // камера
     $("camSelect").addEventListener("change", () => loadCamIframe($("camSelect").value));
-    $("camIpGo").addEventListener("click", () => {
-      const ip = $("camIp").value.trim();
-      if (ip) loadCamIframe(ip);
+    $("camIpGo").addEventListener("click", () => { const ip = $("camIp").value.trim(); if (ip) loadCamIframe(ip); });
+
+    // ручной режим
+    $("manualToggle").addEventListener("change", () => {
+      const on = $("manualToggle").checked;
+      syncManual(on);
+      api("/api/micro/manual", { on: on ? 1 : 0 }).then(() => { }).catch(() => { });
+      sentCmd(on ? "Ручной режим ВКЛ" : "Ручной режим выкл");
     });
 
-    // ручное движение моторов + аварийный стоп
-    $("m1Go").addEventListener("click", () => { api("/api/micro/move", { m: 1, pos: $("m1Pos").value }); sentCmd("М1 → " + $("m1Pos").value + " мкм"); });
-    $("m2Go").addEventListener("click", () => { api("/api/micro/move", { m: 2, pos: $("m2Pos").value }); sentCmd("М2 → " + $("m2Pos").value + " мкм"); });
+    // команды моторов (делегирование по [data-op][data-m])
+    document.querySelectorAll(".micro-motor [data-op]").forEach((b) => {
+      b.addEventListener("click", () => runMotorOp(b.dataset.m, b.dataset.op));
+    });
+    // бейджи разрешения/направления
+    document.querySelectorAll(".micro-badge[data-en]").forEach((b) => {
+      b.addEventListener("click", () => {
+        const on = !b.classList.contains("is-on");
+        api("/api/micro/motor", { m: b.dataset.en, op: on ? "enable" : "disable" });
+        sentCmd("М" + b.dataset.en + (on ? " разрешён" : " выключен"));
+      });
+    });
+    document.querySelectorAll(".micro-badge[data-dir]").forEach((b) => {
+      b.addEventListener("click", () => {
+        const fwd = b.classList.contains("is-rev");   // сейчас назад -> станет вперёд
+        api("/api/micro/motor", { m: b.dataset.dir, op: fwd ? "dir_fwd" : "dir_back" });
+        sentCmd("М" + b.dataset.dir + " направление " + (fwd ? "вперёд" : "назад"));
+      });
+    });
+
+    // аварийный стоп — работает в любом режиме
     $("estopBtn").addEventListener("click", () => { api("/api/micro/estop"); sentCmd("АВАРИЙНЫЙ СТОП"); });
+
+    // вкладки (настройки моторов / охлаждение)
+    document.querySelectorAll(".micro-tab").forEach((tab) => {
+      tab.addEventListener("click", () => {
+        document.querySelectorAll(".micro-tab").forEach((x) => x.classList.toggle("is-active", x === tab));
+        document.querySelectorAll(".micro-tab-pane").forEach((p) => p.classList.toggle("hidden", p.dataset.pane !== tab.dataset.tab));
+      });
+    });
+  }
+
+  const OP_LABEL = {
+    goto: "Идти в позицию", steps: "Выполнить шаги", shift: "Сдвинуть",
+    home_start: "В начало", home_end: "В конец", find_zero: "Поиск 0",
+    set_zero: "Установить 0", stop: "СТОП",
+  };
+  const CONFIRM_OPS = { goto: 1, home_end: 1 };  // рискованные — спросить
+
+  function runMotorOp(m, op) {
+    let value = null;
+    if (op === "goto") value = $("m" + m + "GotoInp").value;
+    else if (op === "steps") value = $("m" + m + "StepsInp").value;
+    else if (op === "shift") value = $("m" + m + "ShiftInp").value;
+
+    if (CONFIRM_OPS[op]) {
+      const what = op === "goto" ? ("М" + m + " → " + value + " мкм") : ("М" + m + " → в конец");
+      if (!window.confirm("Двигать мотор?\n" + what + "\n\nУбедись, что путь свободен (от стекла).")) return;
+    }
+    const params = { m, op };
+    if (value != null) params.value = value;
+    api("/api/micro/motor", params).then((r) => {
+      if (r && r.error) sentCmd("⚠ " + (OP_LABEL[op] || op) + ": " + r.error);
+    }).catch(() => { });
+    sentCmd("М" + m + " · " + (OP_LABEL[op] || op) + (value != null ? " " + value : ""));
   }
 
   document.addEventListener("DOMContentLoaded", () => {
     wire();
+    syncManual(false);
     initCamera();
     poll();
     setInterval(poll, POLL_MS);

@@ -998,10 +998,6 @@ class CameraWorker(BaseCameraWorker):
             log_event("camera_core.get_ip", "Ошибка получения ip камеры", "error", {"status_camera": str(status)})
             return None
 
-        # пробные данные(потом убрать)
-        if self.serial_number == "DA123123":
-            return {"ip": "192.168.2.10"}
-
         # кэш — если параллельно/недавно уже спрашивали, возвращаем без открытия control
         if self._cached_ip is not None and (time.time() - self._cache_ts) < self._cache_ttl:
             return self._cached_ip
@@ -1039,14 +1035,6 @@ class CameraWorker(BaseCameraWorker):
             log_event("camera_core.get_info", "Камера недоступна для запроса информации", "warn",
                       {"serial_number": self.serial_number, "status_camera": str(status)})
             return None
-
-        # пробные данные(потом убрать)
-        if self.serial_number == "DA123123":
-            return {"items": [
-                {"label": "Модель", "value": "Mock-камера"},
-                {"label": "Серийный номер", "value": "DA123123"},
-                {"label": "IP-адрес", "value": "192.168.2.10"},
-            ]}
 
         if not self.manager.check():
             return None
@@ -2650,17 +2638,7 @@ class CameraManager:
 
     # сгруппированный список: {серийник: [записи по интерфейсам]}
     def list_devices_grouped(self):
-        grouped = {"DA123123": [{
-            "device_index": -1,
-            "device_handle": "mock#DA123123",
-            "serial_number": "DA123123",
-            "access_status": 1,
-            "available": True,
-            "model": "Mock-камера",
-            "interface_id": "mock",
-            "interface_name": "Mock-интерфейс",
-            "interface_ip": "192.168.2.10",
-        }]}
+        grouped = {[{}]}
         for entry in self.list_devices():
             grouped.setdefault(entry["serial_number"], []).append(entry)
         return grouped
@@ -2846,7 +2824,7 @@ class CameraManager:
     # сканирование всех сетевых камер.
     # обновляет devices (по парам serial+interface) и cam_online (агрегированный статус)
     def scan_cams(self):
-        self.cam_online = {"DA123123": 1}  # пробные данные(потом убрать)
+        self.cam_online = {}
         self.devices = {}
 
         # load_driver сам обновит список устройств (и при первом вызове добавит .cti)

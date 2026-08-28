@@ -3234,9 +3234,9 @@ html {
 /* --- LED в одну строку (пульт узкий, поэтому подписи и слайдер компактные) --- */
 .micro-led-row { display: flex; align-items: center; gap: 6px; flex-wrap: nowrap; margin-top: 6px; }
 .micro-led-row .micro-row__lab { width: auto; white-space: nowrap; }
-.micro-led-range { flex: 1 1 60px; min-width: 50px; }
+#ledBright.micro-led-range { flex: 1 1 auto; width: auto; min-width: 140px; }
 .micro-led-val { font-variant-numeric: tabular-nums; min-width: 30px; text-align: right; }
-.micro-led-freq { width: 56px; }
+#ledFreq.micro-led-freq { width: 64px; flex: 0 0 64px; min-width: 0; }
 .micro-led-lab2 { margin-left: 4px; }
 
 /* --- плитки данных с ПЛК --- */

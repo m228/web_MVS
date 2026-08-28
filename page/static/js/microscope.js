@@ -96,8 +96,6 @@
     try {
       cfg = await api("/api/micro/config");
       if (cfg) {
-        if (cfg.manual_sv != null) $("svInput").value = cfg.manual_sv;
-        if (cfg.manual_stage != null) $("stageSelect").value = String(cfg.manual_stage);
         if (cfg.led_bright != null) { $("ledBright").value = cfg.led_bright; $("ledBrightVal").textContent = cfg.led_bright; }
         $("cfgPlateHost").value = cfg.host || "";
         $("cfgPlatePort").value = cfg.port || "";
@@ -140,10 +138,12 @@
 
   // ---- связь / формат ----
   function setConn(state) {
-    const el = $("microConn");
-    if (state.connected) { el.textContent = "есть"; el.style.color = "var(--success)"; }
-    else if (state.reconnecting) { el.textContent = "переподключение…"; el.style.color = "var(--warning)"; }
-    else { el.textContent = "нет"; el.style.color = "var(--danger)"; }
+    const wrap = $("microConnWrap"), el = $("microConn");
+    if (!wrap) return;
+    wrap.classList.remove("is-on", "is-warn", "is-off");
+    if (state.connected) { wrap.classList.add("is-on"); if (el) el.textContent = "подключено"; }
+    else if (state.reconnecting) { wrap.classList.add("is-warn"); if (el) el.textContent = "переподключение…"; }
+    else { wrap.classList.add("is-off"); if (el) el.textContent = "нет связи"; }
   }
 
   const num = (v) => (v == null ? "—" : v);
@@ -198,6 +198,19 @@
       set("tSerial", num(e.serial));
       set("tCycle", (e.cycle_us == null) ? "—" : e.cycle_us + " / " + num(e.cycle_peak_us) + " мкс");
       set("tUptime", upt(e.uptime_s));
+
+      // данные с контроллера (ПЛК) — источник аппарата по Modbus (sv_source). Пока нет данных -> «(—)».
+      const plc = d.plc || {}, pv = plc.values || {};
+      set("pcSv", pv.sv == null ? "(—)" : Number(pv.sv).toFixed(2));
+      set("pcStage", pv.stage == null ? "(—)" : pv.stage);
+      set("pcTemp", pv.temp_app == null ? "(—)" : pv.temp_app + " °C");
+      set("pcVacuum", pv.vacuum == null ? "(—)" : pv.vacuum);
+      const pb = $("plcBadge");
+      if (pb) {
+        if (!plc.enabled) { pb.textContent = "выключено"; pb.className = "micro-plc-badge"; }
+        else if (plc.connected) { pb.textContent = "есть связь"; pb.className = "micro-plc-badge is-on"; }
+        else { pb.textContent = "нет связи"; pb.className = "micro-plc-badge is-off"; }
+      }
 
       // бейджи моторов (разрешение/направление)
       motorBadge("1", e.m1_enable, e.m1_dir);
@@ -273,15 +286,11 @@
       } catch (e) { hint.textContent = "ошибка: " + e.message; }
     });
 
-    $("svApply").addEventListener("click", () => api("/api/micro/sv", { value: $("svInput").value }));
-    $("stageSelect").addEventListener("change", () => api("/api/micro/stage", { value: $("stageSelect").value }));
-
-    // LED
+    // LED — включение подразумевается яркостью (>0 = вкл), отдельной кнопки нет
     const led = $("ledBright");
     led.addEventListener("input", () => { $("ledBrightVal").textContent = led.value; });
-    led.addEventListener("change", () => api("/api/micro/led", { bright: led.value }));
+    led.addEventListener("change", () => api("/api/micro/led", { bright: led.value, on: Number(led.value) > 0 ? 1 : 0 }));
     $("ledFreq").addEventListener("change", () => api("/api/micro/led", { freq: $("ledFreq").value }));
-    $("ledOn").addEventListener("change", () => api("/api/micro/led", { on: $("ledOn").checked ? 1 : 0 }));
 
     // камера
     $("camSelect").addEventListener("change", () => loadCamIframe($("camSelect").value));
@@ -319,9 +328,6 @@
         sentCmd("М" + b.dataset.dir + " направление " + (fwd ? "вперёд" : "назад"));
       });
     });
-
-    // аварийный стоп — работает в любом режиме
-    $("estopBtn").addEventListener("click", () => { api("/api/micro/estop"); sentCmd("АВАРИЙНЫЙ СТОП"); });
 
     // иконки-вкладки пульта (М1/М2/LED/DQ/охлаждение/настройки/камера)
     document.querySelectorAll(".micro-ptab").forEach((tab) => {

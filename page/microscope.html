@@ -34,10 +34,17 @@
           </div>
         </header>
 
-        <!-- Компактная шапка: название + камера + плата (порт/unit маленькие) + связь -->
+        <!-- Компактная шапка: заголовок + связь-коннектор + «На главную»; ниже — камера/плата -->
         <section class="card micro-hero">
-          <div class="micro-hero__row">
+          <div class="micro-hero__top">
             <h1 class="micro-hero__title">Микроскоп варки</h1>
+            <span class="micro-hero__conn is-off" id="microConnWrap" title="Связь с платой">
+              <svg class="micro-conn-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 2v5M15 2v5M7 7h10v4a5 5 0 0 1-10 0V7zM12 16v6"/></svg>
+              <span id="microConn" class="micro-conn-txt">…</span>
+            </span>
+            <a href="/" class="btn btn-secondary micro-hero__home">На главную</a>
+          </div>
+          <div class="micro-hero__row">
             <span class="micro-hero__grp">
               <span class="micro-conn-sub">Камера</span>
               <strong id="camFound">поиск…</strong>
@@ -53,8 +60,6 @@
               <button type="button" id="cfgApply" class="btn-secondary">Применить</button>
               <span class="micro-conn-hint" id="cfgHint"></span>
             </span>
-            <span class="micro-hero__conn">связь: <strong id="microConn">…</strong></span>
-            <a href="/" class="btn btn-secondary micro-hero__home">На главную</a>
           </div>
         </section>
 
@@ -208,16 +213,14 @@
 
               <!-- LED -->
               <div class="micro-ppane micro-gated hidden" data-ppane="led">
-                <div class="micro-sub__title">Фара LED</div>
-                <label class="one-line-label">Яркость: <span id="ledBrightVal">0</span> %</label>
-                <input type="range" id="ledBright" min="0" max="100" value="0" />
-                <div class="micro-row">
-                  <span class="micro-row__lab">Частота</span>
-                  <input type="number" id="ledFreq" min="1000" max="5000" step="100" value="3000" />
+                <div class="micro-sub__title">LED</div>
+                <div class="micro-led-row">
+                  <span class="micro-row__lab">Яркость</span>
+                  <input type="range" id="ledBright" min="0" max="100" value="0" class="micro-led-range" />
+                  <span class="micro-led-val"><span id="ledBrightVal">0</span>%</span>
+                  <span class="micro-row__lab micro-led-lab2">Частота</span>
+                  <input type="number" id="ledFreq" min="1000" max="5000" step="100" value="3000" class="micro-led-freq" />
                   <span class="micro-row__unit">Гц</span>
-                  <label class="checkbox-line micro-led-on" for="ledOn">
-                    <input type="checkbox" id="ledOn" /><span>вкл</span>
-                  </label>
                 </div>
               </div>
 
@@ -264,9 +267,6 @@
               </div>
             </div>
 
-            <button type="button" id="estopBtn" class="toolbar-btn toolbar-btn--danger micro-estop">
-              АВАРИЙНЫЙ СТОП — обесточить оба мотора
-            </button>
           </section>
         </div>
 
@@ -274,20 +274,6 @@
         <section class="card micro-tele-strip">
           <div class="micro-tele-strip__head">
             <span class="micro-tele-strip__title">Телеметрия платы</span>
-            <div class="micro-naladka">
-              <span class="micro-conn-sub">Наладка СВ</span>
-              <input type="number" step="0.1" id="svInput" value="0" class="micro-conn-input micro-conn-input--port" />
-              <button type="button" id="svApply" class="btn-secondary">Задать</button>
-              <select id="stageSelect" class="micro-conn-input">
-                <option value="0">стадия: —</option>
-                <option value="3">3 · Сгущение</option>
-                <option value="4">4 · Затравка</option>
-                <option value="5">5 · Подкачка</option>
-                <option value="6">6 · Стабилизация</option>
-                <option value="7">7 · Рост</option>
-                <option value="8">8 · Уваривание</option>
-              </select>
-            </div>
           </div>
           <div class="micro-tele-cols">
             <div class="micro-tele-col">
@@ -334,6 +320,16 @@
                 <div class="micro-tile"><span>Цикл платы</span><b id="tCycle">—</b></div>
                 <div class="micro-tile"><span>Аптайм</span><b id="tUptime">—</b></div>
               </div>
+            </div>
+            <div class="micro-tele-col">
+              <p class="micro-tele-group">С контроллера (ПЛК) <span class="micro-plc-badge" id="plcBadge" title="Источник данных аппарата по Modbus">нет данных</span></p>
+              <div class="micro-tiles">
+                <div class="micro-tile"><span>СВ (Brix)</span><b id="pcSv">(—)</b></div>
+                <div class="micro-tile"><span>Стадия варки</span><b id="pcStage">(—)</b></div>
+                <div class="micro-tile"><span>Температура аппарата</span><b id="pcTemp">(—)</b></div>
+                <div class="micro-tile"><span>Разрежение</span><b id="pcVacuum">(—)</b></div>
+              </div>
+              <p class="micro-plc-note">адреса Modbus контроллера задаются в <code>plate_config.json → sv_source</code></p>
             </div>
           </div>
         </section>

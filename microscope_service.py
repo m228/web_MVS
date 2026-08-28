@@ -93,7 +93,7 @@ class MicroscopeService:
     def sv_status(self):
         if self.sv_source:
             return {"enabled": True, **self.sv_source.status()}
-        return {"enabled": False, "connected": False}
+        return {"enabled": False, "connected": False, "values": {}}
 
     def apply_settings(self, patch):
         """Сохранить правки (IP камеры/платы и т.п.) в plate_config.json и перезапуститься."""

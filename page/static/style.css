@@ -3219,3 +3219,29 @@ html {
 .embed-cam-settings #photoBtn,
 .embed-cam-settings #videoBtn,
 .embed-cam-settings #logsBtn { display: none !important; }
+
+/* --- шапка: заголовок + коннектор + На главную --- */
+.micro-hero__top { display: flex; align-items: center; gap: 14px; margin-bottom: 8px; }
+.micro-hero__top .micro-hero__title { margin: 0; }
+.micro-hero__home { margin-left: auto; }
+.micro-hero__conn { display: inline-flex; align-items: center; gap: 6px; font-size: 0.85em; }
+.micro-conn-ico { width: 20px; height: 20px; }
+.micro-hero__conn.is-on { color: var(--success); }
+.micro-hero__conn.is-warn { color: var(--warning); }
+.micro-hero__conn.is-off { color: var(--muted); }
+.micro-conn-txt { color: inherit; }
+
+/* --- LED в одну строку (пульт узкий, поэтому подписи и слайдер компактные) --- */
+.micro-led-row { display: flex; align-items: center; gap: 6px; flex-wrap: nowrap; margin-top: 6px; }
+.micro-led-row .micro-row__lab { width: auto; white-space: nowrap; }
+.micro-led-range { flex: 1 1 60px; min-width: 50px; }
+.micro-led-val { font-variant-numeric: tabular-nums; min-width: 30px; text-align: right; }
+.micro-led-freq { width: 56px; }
+.micro-led-lab2 { margin-left: 4px; }
+
+/* --- плитки данных с ПЛК --- */
+.micro-plc-badge { font-size: 0.7em; font-weight: 400; text-transform: none; letter-spacing: 0; padding: 1px 8px; border-radius: 20px; border: 1px solid var(--border-strong); color: var(--muted); margin-left: 6px; }
+.micro-plc-badge.is-on { background: var(--success-soft); border-color: var(--success); color: var(--success); }
+.micro-plc-badge.is-off { background: var(--danger-soft); border-color: var(--danger); color: var(--danger); }
+.micro-plc-note { font-size: 0.75em; color: var(--muted); margin: 6px 0 0; }
+.micro-plc-note code { font-size: 0.95em; }

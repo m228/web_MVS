@@ -28,10 +28,18 @@ class SvSource:
         self.host = (cfg.get("host") or fallback_host or "").strip()
         self.port = int(cfg.get("port", 502))
         self.unit = int(cfg.get("unit", 255))
-        self.sv_register = int(cfg.get("sv_register", 0))
-        self.sv_scale = float(cfg.get("sv_scale", 100)) or 1.0
-        self.stage_register = int(cfg.get("stage_register", 0))
         self.period = float(cfg.get("period_s", 1.0))
+
+        # карта полей аппарата: name -> (reg, scale). Из fields{} + совместимость sv/stage.
+        self.fields = {}
+        for name, spec in (cfg.get("fields") or {}).items():
+            reg = int((spec or {}).get("reg", 0) or 0)
+            if reg > 0:
+                self.fields[name] = (reg, float((spec or {}).get("scale", 1)) or 1.0)
+        if "sv" not in self.fields and int(cfg.get("sv_register", 0) or 0) > 0:
+            self.fields["sv"] = (int(cfg["sv_register"]), float(cfg.get("sv_scale", 100)) or 1.0)
+        if "stage" not in self.fields and int(cfg.get("stage_register", 0) or 0) > 0:
+            self.fields["stage"] = (int(cfg["stage_register"]), 1.0)
 
         self._client = None
         self._thread = None
@@ -39,20 +47,19 @@ class SvSource:
 
         self._connected = False
         self._last_error = None
-        self._sv = None
-        self._stage = None
+        self._values = {}
 
     # ---------- жизненный цикл ----------
 
     def start(self):
-        if self._running or not self.host:
+        # без адресов полей стартовать незачем (нечего читать) — на странице будут «(—)»
+        if self._running or not self.host or not self.fields:
             return
         self._running = True
         self._thread = threading.Thread(target=self._loop, name="sv-source", daemon=True)
         self._thread.start()
-        log_event("sv_source", "Источник СВ запущен", "info",
-                  {"host": self.host, "port": self.port, "sv_register": self.sv_register,
-                   "stage_register": self.stage_register})
+        log_event("sv_source", "Источник данных аппарата (ПЛК) запущен", "info",
+                  {"host": self.host, "port": self.port, "fields": list(self.fields.keys())})
 
     def stop(self):
         self._running = False
@@ -64,8 +71,9 @@ class SvSource:
     def status(self):
         return {
             "connected": self._connected,
-            "sv": self._sv,
-            "stage": self._stage,
+            "values": dict(self._values),          # {sv, stage, temp_app, vacuum, ...}
+            "sv": self._values.get("sv"),
+            "stage": self._values.get("stage"),
             "host": self.host,
             "error": self._last_error,
         }
@@ -116,16 +124,17 @@ class SvSource:
                     waited += 0.2
                 continue
             try:
-                sv = self._read_reg(self.sv_register) / self.sv_scale if self.sv_register else None
-                stage = self._read_reg(self.stage_register) if self.stage_register else None
-                self._sv = sv
-                self._stage = stage
+                values = {}
+                for name, (reg, scale) in self.fields.items():
+                    raw = self._read_reg(reg)
+                    values[name] = raw if scale == 1 else raw / scale   # scale=1 -> целое (стадия)
+                self._values = values
                 if self.on_update is not None:
-                    self.on_update(sv, stage)
+                    self.on_update(values.get("sv"), values.get("stage"))
                 backoff_i = 0
             except Exception as e:
                 self._last_error = str(e)
-                log_event("sv_source", "Ошибка чтения СВ — переподключение", "warn", {"error": str(e)})
+                log_event("sv_source", "Ошибка чтения контроллера — переподключение", "warn", {"error": str(e)})
                 self._close()
                 continue
             time.sleep(self.period)

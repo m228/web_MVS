@@ -40,6 +40,7 @@ class PlateClient:
         self._out_last = [0] * self._block_len   # что реально записано в плату
         self._out_lock = threading.Lock()
         self._last_write_warn = 0.0
+        self._last_read_warn = 0.0
 
         # очередь одиночных записей вне OUT-блока (разрешение мотора #1219 и т.п.)
         self._pending = []
@@ -302,6 +303,12 @@ class PlateClient:
             self._last_write_warn = now
             log_event("microscope_plc", msg, "warn", payload)
 
+    def _warn_read(self, msg, payload):
+        now = time.time()
+        if now - self._last_read_warn > 3.0:    # не чаще раза в 3 с — иначе лог тонет во флуде
+            self._last_read_warn = now
+            log_event("microscope_plc", msg, "warn", payload)
+
     def _write_changed_out(self):
         with self._out_lock:
             out = list(self._out)
@@ -336,9 +343,10 @@ class PlateClient:
 
     def _loop(self):
         backoff_i = 0
+        read_fails = 0
         while self._running:
             if not self._ensure_connected():
-                # не смогли подключиться — бэкофф, нарезанный по 0.2 с для быстрого стопа
+                # не смогли ПОДКЛЮЧИТЬСЯ (TCP) — бэкофф, нарезанный по 0.2 с для быстрого стопа
                 self._reconnecting = True
                 delay = _RECONNECT_BACKOFF[min(backoff_i, len(_RECONNECT_BACKOFF) - 1)]
                 backoff_i += 1
@@ -350,8 +358,11 @@ class PlateClient:
 
             cycle_start = time.time()
 
-            # 1) ЧТЕНИЕ телеметрии — первым и НЕЗАВИСИМО от записи. Связь/телеметрия не должны
-            #    падать из-за проблем с записью. Ошибка чтения = реальный обрыв -> реконнект.
+            # 1) ЧТЕНИЕ телеметрии. ВАЖНО: сбой чтения НЕ рвёт связь сразу и НЕ блокирует запись
+            #    команд. Раньше на ошибке чтения делался `continue` до записи — и если плата молчит
+            #    на чтении (напр. занята вторым мастером/неверный unit), КОМАНДЫ ВООБЩЕ НЕ УХОДИЛИ.
+            #    Теперь: читаем, при неудаче — троттлим лог; всё равно шлём команды; реконнект только
+            #    после нескольких неудач подряд (сокет реально мёртв). Флуд «WARN/SUCCESS» устранён.
             try:
                 rr = self._client.read_holding_registers(self._read_base, count=self._block_len, slave=self._unit)
                 if rr.isError():
@@ -362,7 +373,9 @@ class PlateClient:
                 self._last_ok = time.time()
                 self._poll_count += 1
                 backoff_i = 0
+                read_fails = 0
                 self._reconnecting = False
+                self._last_error = None
 
                 # расширенная телеметрия — реже основного такта (раз в ~5 циклов)
                 self._ext_counter += 1
@@ -372,18 +385,21 @@ class PlateClient:
                     with self._ext_lock:
                         self._ext = ext
             except Exception as e:
+                read_fails += 1
                 self._last_error = str(e)
-                log_event("microscope_plc", "Ошибка чтения платы — переподключение", "warn", {"error": str(e)})
-                self._close_client()
-                continue
+                self._warn_read("Ошибка чтения платы (команды всё равно шлём; проверь unit/второй мастер)",
+                                {"error": str(e), "fails_in_row": read_fails, "unit": self._unit})
 
-            # 2) ЗАПИСЬ только изменившихся регистров OUT, по одному (FC06). В простое записей нет.
-            #    Ошибка записи логируется (не чаще раза в 2 с) и НЕ рвёт связь.
+            # 2) ЗАПИСЬ команд/выходов — ВСЕГДА, даже если чтение не прошло (кнопки должны работать).
             self._write_changed_out()
-            # 3) отложенные одиночные записи вне OUT-блока (разрешение мотора и т.п.)
             self._flush_pending()
 
-            # выдержать такт
+            # 3) сокет мёртв (много неудач чтения подряд) -> пересоздать соединение
+            if read_fails >= 5:
+                self._reconnecting = True
+                self._close_client()
+                read_fails = 0
+
             elapsed = time.time() - cycle_start
             if elapsed < self._period:
                 time.sleep(self._period - elapsed)

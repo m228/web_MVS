@@ -49,9 +49,11 @@
               </div>
               <div class="micro-conn-row">
                 <span class="micro-conn-label">Плата</span>
-                <input type="text" id="cfgPlateHost" class="micro-conn-input" placeholder="192.168.1.153" title="IP платы микроскопа" />
+                <input type="text" id="cfgPlateHost" class="micro-conn-input" placeholder="192.168.1.128" title="IP платы микроскопа" />
                 <span class="micro-conn-sub">порт</span>
                 <input type="number" id="cfgPlatePort" class="micro-conn-input micro-conn-input--port" placeholder="502" />
+                <span class="micro-conn-sub">unit</span>
+                <input type="number" id="cfgPlateUnit" class="micro-conn-input micro-conn-input--port" placeholder="254" title="Modbus unit id (адрес платы; пробуй 254/255/1)" />
                 <span class="micro-conn-sub">связь:</span>
                 <strong id="microConn">…</strong>
               </div>

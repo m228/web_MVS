@@ -84,6 +84,7 @@
         if (cfg.led_bright != null) { $("ledBright").value = cfg.led_bright; $("ledBrightVal").textContent = cfg.led_bright; }
         $("cfgPlateHost").value = cfg.host || "";
         $("cfgPlatePort").value = cfg.port || "";
+        $("cfgPlateUnit").value = cfg.unit != null ? cfg.unit : "";
         cfgSerial = cfg.camera_serial || "";
       }
     } catch (e) { /* конфиг недоступен */ }
@@ -264,6 +265,7 @@
         const p = {};
         if ($("cfgPlateHost").value) p.host = $("cfgPlateHost").value;
         if ($("cfgPlatePort").value) p.port = $("cfgPlatePort").value;
+        if ($("cfgPlateUnit").value) p.unit = $("cfgPlateUnit").value;
         await api("/api/micro/settings", p);
         hint.textContent = "применено ✓";
         setTimeout(() => { hint.textContent = ""; }, 2500);

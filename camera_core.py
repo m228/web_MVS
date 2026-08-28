@@ -2638,7 +2638,7 @@ class CameraManager:
 
     # сгруппированный список: {серийник: [записи по интерфейсам]}
     def list_devices_grouped(self):
-        grouped = {[{}]}
+        grouped = {}
         for entry in self.list_devices():
             grouped.setdefault(entry["serial_number"], []).append(entry)
         return grouped

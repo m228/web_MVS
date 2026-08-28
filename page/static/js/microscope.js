@@ -218,7 +218,9 @@
       set("pcSv", pv.sv == null ? "(—)" : Number(pv.sv).toFixed(2));
       set("pcStage", stageLabel(pv.stage));
       set("pcTemp", pv.temp_app == null ? "(—)" : pv.temp_app + " °C");
-      set("pcVacuum", pv.vacuum == null ? "(—)" : pv.vacuum);
+      // разрежение теперь в press_top (с фолбэком на старое поле vacuum) — как на мнемосхеме
+      { const vac = pv.press_top != null ? pv.press_top : pv.vacuum;
+        set("pcVacuum", vac == null ? "(—)" : vac); }
       const pb = $("plcBadge");
       if (pb) {
         if (!plc.enabled) { pb.textContent = "выключено"; pb.className = "micro-plc-badge"; }

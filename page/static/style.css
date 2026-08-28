@@ -3201,6 +3201,29 @@ html {
 .micro-cam-ip { font-size: 0.78em; color: var(--muted); font-variant-numeric: tabular-nums; }
 .micro-conn-ip { font-variant-numeric: tabular-nums; }
 
+/* шапка: компактные кнопки «Перезагрузить конфиг»/«Логи» + «На главную» справа */
+.micro-hero__utils { margin-left: auto; display: inline-flex; gap: 8px; flex-wrap: wrap; }
+.micro-hero__util { padding: 6px 12px; min-width: 0; font-size: 0.85em; }
+.micro-hero__home { margin-left: 8px; }
+
+/* тулбар: кнопка + поле (интервал фото / длительность видео) */
+.micro-cam-save { display: inline-flex; align-items: center; gap: 4px; }
+.micro-cam-num { width: 58px; padding: 4px 6px; }
+.micro-cam-unit { color: var(--muted); font-size: 0.85em; }
+
+/* разделитель-заголовок внутри объединённой вкладки (LED/DQ, Настр+Охл, Аппарат) */
+.micro-sub__title--sep { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--border); }
+
+/* таблица подвода: СВ (Brix) -> зазор (мкм) */
+.micro-svsp { width: 100%; border-collapse: collapse; margin-top: 8px; }
+.micro-svsp th { text-align: left; font-size: 0.75em; color: var(--muted); font-weight: 500; padding: 2px 6px; }
+.micro-svsp td { padding: 2px 6px; }
+.micro-svsp input { width: 100%; padding: 4px 6px; }
+.micro-svsp td:last-child { width: 34px; text-align: center; }
+.svsp-del { background: transparent; border: 0; color: var(--muted); cursor: pointer; padding: 2px 6px; }
+.svsp-del:hover { color: var(--danger, #e24b4a); }
+.micro-svsp-actions { display: flex; align-items: center; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
+
 /* пульт */
 .micro-pult__head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 10px; flex-wrap: wrap; }
 .micro-pult__title { font-weight: 600; font-size: 1.05em; }

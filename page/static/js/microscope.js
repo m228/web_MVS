@@ -75,7 +75,7 @@
   function setCamSerial(serial) {
     camSerial = serial || "";
     const has = !!serial;
-    ["camConnectBtn", "camPhotoBtn", "camVideoBtn", "camApplyBtn"].forEach((id) => {
+    ["camConnectBtn", "camPhotoBtn", "camVideoBtn", "camApplyBtn", "camPhotoInterval", "camVideoDuration"].forEach((id) => {
       const b = $(id); if (b) b.disabled = !has;
     });
     const info = $("camParamInfo"); if (info) info.textContent = has ? serial : "камера не найдена";
@@ -163,7 +163,10 @@
   async function camPhotoToggle() {
     if (!camSerial || !CAM()) return;
     try {
-      if (!camPhotoOn) { await CAM().startPhotoSaving(camSerial, 5, "microscope", "jpg"); camPhotoOn = true; }
+      if (!camPhotoOn) {
+        const iv = Math.max(1, parseInt($("camPhotoInterval") && $("camPhotoInterval").value, 10) || 5);
+        await CAM().startPhotoSaving(camSerial, iv, "microscope", "jpg"); camPhotoOn = true;
+      }
       else { await CAM().stopPhotoSaving(camSerial); camPhotoOn = false; }
     } catch (e) { camPhotoOn = false; }
     const b = $("camPhotoBtn"); if (b) b.classList.toggle("is-on", camPhotoOn);
@@ -174,7 +177,10 @@
   async function camVideoToggle() {
     if (!camSerial || !CAM()) return;
     try {
-      if (!camVideoOn) { await CAM().startVideoSaving(camSerial, 0, "microscope"); camVideoOn = true; }
+      if (!camVideoOn) {
+        const dur = Math.max(0, parseInt($("camVideoDuration") && $("camVideoDuration").value, 10) || 0);
+        await CAM().startVideoSaving(camSerial, dur, "microscope"); camVideoOn = true;
+      }
       else { await CAM().stopVideoSaving(camSerial); camVideoOn = false; }
     } catch (e) { camVideoOn = false; }
     const b = $("camVideoBtn"); if (b) b.classList.toggle("is-on", camVideoOn);
@@ -243,6 +249,7 @@
     } catch (e) { /* конфиг недоступен */ }
 
     buildDqGrid();
+    buildSvspTable();
 
     if (cfgSerial) {
       $("camSelect").hidden = true; $("camIp").hidden = true; $("camIpGo").hidden = true;
@@ -273,6 +280,46 @@
       });
       grid.appendChild(b);
     });
+  }
+
+  // ---- таблица подвода: СВ (Brix) -> зазор (мкм), кривая SP[1..]/SVSP[1..] ----
+  function buildSvspTable() {
+    const body = $("svspBody");
+    if (!body || !cfg) return;
+    body.innerHTML = "";
+    const SVSP = cfg.SVSP || [], SP = cfg.SP || [];
+    for (let i = 1; i < SVSP.length && i < 50; i++) {
+      if (Number(SVSP[i]) > 0) addSvspRow(SVSP[i], SP[i]);
+    }
+    if (!body.children.length) addSvspRow("", "");
+  }
+
+  function addSvspRow(brix, gap) {
+    const body = $("svspBody"); if (!body) return;
+    const tr = document.createElement("tr");
+    tr.innerHTML =
+      '<td><input type="number" step="0.1" class="svsp-brix" value="' + (brix === "" ? "" : brix) + '" /></td>' +
+      '<td><input type="number" step="10" class="svsp-gap" value="' + (gap === "" ? "" : gap) + '" /></td>' +
+      '<td><button type="button" class="svsp-del" title="удалить строку" aria-label="удалить">✕</button></td>';
+    tr.querySelector(".svsp-del").addEventListener("click", () => tr.remove());
+    body.appendChild(tr);
+  }
+
+  async function saveSvsp() {
+    const hint = $("svspHint"); if (hint) hint.textContent = "сохраняю…";
+    const rows = [...document.querySelectorAll("#svspBody tr")].map((tr) => ({
+      brix: parseFloat(tr.querySelector(".svsp-brix").value),
+      gap: parseInt(tr.querySelector(".svsp-gap").value, 10),
+    })).filter((r) => !isNaN(r.brix) && !isNaN(r.gap) && r.brix > 0)
+       .sort((a, b) => a.brix - b.brix);   // FSM требует пороги СВ по возрастанию
+    const SP = (cfg.SP || []).slice(), SVSP = (cfg.SVSP || []).slice();
+    for (let i = 1; i < 50; i++) SVSP[i] = 0;         // очистить старую кривую (SP[0]/[50] сохраняем)
+    rows.forEach((r, k) => { const i = k + 1; SVSP[i] = r.brix; SP[i] = r.gap; });
+    try {
+      await api("/api/micro/recipe", { sp: JSON.stringify(SP), svsp: JSON.stringify(SVSP) });
+      cfg.SP = SP; cfg.SVSP = SVSP;
+      if (hint) { hint.textContent = "сохранено ✓ (" + rows.length + " строк)"; setTimeout(() => { hint.textContent = ""; }, 2500); }
+    } catch (e) { if (hint) hint.textContent = "ошибка сохранения"; }
   }
 
   // ---- связь / формат ----
@@ -462,6 +509,10 @@
     $("camApplyBtn").addEventListener("click", camApply);
     const camImg = $("microCamStream");
     if (camImg) camImg.addEventListener("error", () => { if (camConnected) camStop(); });
+
+    // таблица подвода СВ->зазор (вкладка «Аппарат»)
+    if ($("svspAdd")) $("svspAdd").addEventListener("click", () => addSvspRow("", ""));
+    if ($("svspSave")) $("svspSave").addEventListener("click", saveSvsp);
 
     // ручной режим
     $("manualToggle").addEventListener("change", () => {

@@ -46,6 +46,10 @@
               <svg class="micro-conn-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="6" rx="1.5"/><rect x="3" y="14" width="18" height="6" rx="1.5"/><path d="M7 7h.01M7 17h.01"/></svg>
               <span id="plcConn" class="micro-conn-txt">ПЛК…</span>
             </span>
+            <span class="micro-hero__utils">
+              <button type="button" id="btnReload" class="toolbar-btn toolbar-btn--neutral micro-hero__util" title="Применить plate_config.json без перезапуска">Перезагрузить конфиг</button>
+              <button type="button" id="logsBtn" class="toolbar-btn toolbar-btn--neutral toolbar-btn--logs micro-hero__util" title="Открыть журнал (логи платы и команды)">Логи <span class="log-counter" id="logCounter">0</span></button>
+            </span>
             <a href="/" class="btn btn-secondary micro-hero__home">На главную</a>
           </div>
           <div class="micro-hero__row">
@@ -66,20 +70,19 @@
           </div>
         </section>
 
-        <!-- Слим-тулбар (утилиты) -->
+        <!-- Слим-тулбар: управление камерой (конфиг/логи переехали в шапку) -->
         <div class="micro-utilbar">
-          <button type="button" id="btnReload" class="toolbar-btn toolbar-btn--neutral" title="Применить plate_config.json без перезапуска">
-            Перезагрузить конфиг
-          </button>
-          <button type="button" id="logsBtn" class="toolbar-btn toolbar-btn--neutral toolbar-btn--logs" title="Открыть журнал (логи платы и команды)">
-            Логи <span class="log-counter" id="logCounter">0</span>
-          </button>
-
-          <span class="micro-utilbar__sep" aria-hidden="true"></span>
-
           <button type="button" id="camConnectBtn" class="toolbar-btn toolbar-btn--primary" title="Подключить/остановить видео камеры" disabled>Подключить</button>
-          <button type="button" id="camPhotoBtn" class="toolbar-btn toolbar-btn--neutral" title="Сохранение фото (клик — вкл/выкл)" disabled>Фото</button>
-          <button type="button" id="camVideoBtn" class="toolbar-btn toolbar-btn--neutral" title="Запись видео (клик — вкл/выкл)" disabled>Видео</button>
+          <span class="micro-cam-save">
+            <button type="button" id="camPhotoBtn" class="toolbar-btn toolbar-btn--neutral" title="Сохранение фото (клик — вкл/выкл)" disabled>Фото</button>
+            <input type="number" id="camPhotoInterval" class="micro-cam-num" min="1" step="1" value="5" title="интервал между снимками, сек" disabled />
+            <span class="micro-cam-unit">с</span>
+          </span>
+          <span class="micro-cam-save">
+            <button type="button" id="camVideoBtn" class="toolbar-btn toolbar-btn--neutral" title="Запись видео (клик — вкл/выкл)" disabled>Видео</button>
+            <input type="number" id="camVideoDuration" class="micro-cam-num" min="0" step="1" value="60" title="длительность ролика, сек (0 = писать пока не выключишь)" disabled />
+            <span class="micro-cam-unit">с</span>
+          </span>
 
           <span class="micro-lastcmd">последняя команда: <strong id="lastCmd">—</strong></span>
         </div>
@@ -129,19 +132,11 @@
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/></svg>
                 <span>М2</span>
               </button>
-              <button type="button" class="micro-ptab" data-ptab="led" title="Фара LED" aria-label="Фара LED">
+              <button type="button" class="micro-ptab" data-ptab="led" title="LED · клапаны/выходы DQ" aria-label="LED и DQ">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 18h6M10 21h4M12 3a6 6 0 0 1 4 10.5c-.7.7-1 1.5-1 2.5H9c0-1-.3-1.8-1-2.5A6 6 0 0 1 12 3z"/></svg>
-                <span>LED</span>
+                <span>LED/DQ</span>
               </button>
-              <button type="button" class="micro-ptab" data-ptab="dq" title="Клапаны / выходы DQ" aria-label="Клапаны DQ">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3s6 6.5 6 10.5a6 6 0 0 1-12 0C6 9.5 12 3 12 3z"/></svg>
-                <span>DQ</span>
-              </button>
-              <button type="button" class="micro-ptab" data-ptab="cooling" title="Охлаждение" aria-label="Охлаждение">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 2v20M2 12h20M5 5l14 14M19 5L5 19"/></svg>
-                <span>Охл</span>
-              </button>
-              <button type="button" class="micro-ptab" data-ptab="settings" title="Настройки моторов (чтение)" aria-label="Настройки моторов">
+              <button type="button" class="micro-ptab" data-ptab="settings" title="Настройки моторов + охлаждение (чтение)" aria-label="Настройки и охлаждение">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M18.4 5.6l-2.1 2.1M7.7 16.3l-2.1 2.1"/></svg>
                 <span>Настр</span>
               </button>
@@ -240,7 +235,7 @@
                 </div>
               </div>
 
-              <!-- LED -->
+              <!-- LED / DQ (объединены) -->
               <div class="micro-ppane micro-gated hidden" data-ppane="led">
                 <div class="micro-sub__title">LED</div>
                 <div class="micro-led-row">
@@ -251,11 +246,7 @@
                   <input type="number" id="ledFreq" min="1000" max="5000" step="100" value="3000" class="micro-led-freq" />
                   <span class="micro-row__unit">Гц</span>
                 </div>
-              </div>
-
-              <!-- Клапаны DQ -->
-              <div class="micro-ppane micro-gated hidden" data-ppane="dq">
-                <div class="micro-sub__title">Клапаны / выходы DQ</div>
+                <div class="micro-sub__title micro-sub__title--sep">Клапаны / выходы DQ</div>
                 <div class="micro-dq" id="dqGrid"><!-- кнопки строятся в JS по конфигу (3 выхода) --></div>
                 <div class="micro-dq-io">
                   <div class="micro-tile"><span>Входы DI</span><b id="tDi2">—</b></div>
@@ -263,19 +254,7 @@
                 </div>
               </div>
 
-              <!-- Охлаждение (только чтение) -->
-              <div class="micro-ppane hidden" data-ppane="cooling">
-                <div class="micro-sub__title">Охлаждение <span class="micro-ro">только чтение</span></div>
-                <div class="micro-tiles micro-tiles--wide">
-                  <div class="micro-tile"><span>Температура сейчас</span><b id="cTemp">—</b></div>
-                  <div class="micro-tile"><span>FAN1 / FAN2</span><b id="cFan">—</b></div>
-                  <div class="micro-tile"><span>FAN вкл / откл, °C</span><b id="cFanTh">—</b></div>
-                  <div class="micro-tile"><span>Воздух вкл / откл, °C</span><b id="cAirTh">—</b></div>
-                  <div class="micro-tile"><span>Камера вкл / откл, °C</span><b id="cCamTh">—</b></div>
-                </div>
-              </div>
-
-              <!-- Настройки моторов (только чтение) -->
+              <!-- Настройки моторов + охлаждение (объединены; только чтение) -->
               <div class="micro-ppane hidden" data-ppane="settings">
                 <div class="micro-sub__title">Настройки моторов <span class="micro-ro">только чтение — в родном конфигураторе</span></div>
                 <div class="micro-tiles micro-tiles--wide">
@@ -289,6 +268,14 @@
                   <div class="micro-tile"><span>K шагов/мм М1 / М2</span><b id="sKmm">—</b></div>
                   <div class="micro-tile"><span>Стоп М1 по датчику, мкм</span><b id="sStopSensor">—</b></div>
                   <div class="micro-tile"><span>Лимит проскальз. М1, мкм</span><b id="sSlipLimit">—</b></div>
+                </div>
+                <div class="micro-sub__title micro-sub__title--sep">Охлаждение</div>
+                <div class="micro-tiles micro-tiles--wide">
+                  <div class="micro-tile"><span>Температура сейчас</span><b id="cTemp">—</b></div>
+                  <div class="micro-tile"><span>FAN1 / FAN2</span><b id="cFan">—</b></div>
+                  <div class="micro-tile"><span>FAN вкл / откл, °C</span><b id="cFanTh">—</b></div>
+                  <div class="micro-tile"><span>Воздух вкл / откл, °C</span><b id="cAirTh">—</b></div>
+                  <div class="micro-tile"><span>Камера вкл / откл, °C</span><b id="cCamTh">—</b></div>
                 </div>
               </div>
 
@@ -316,6 +303,20 @@
                   </div>
                 </div>
                 <p class="micro-plc-note">данные с контроллера (ПЛК); адреса — в <code>plate_config.json → sv_source</code></p>
+
+                <div class="micro-sub__title micro-sub__title--sep">Таблица подвода: СВ → зазор
+                  <span class="micro-ro">чем гуще (Brix), тем ближе к стеклу</span>
+                </div>
+                <table class="micro-svsp">
+                  <thead><tr><th>СВ (Brix)</th><th>Зазор, мкм</th><th></th></tr></thead>
+                  <tbody id="svspBody"><!-- строки строятся в JS из SP/SVSP --></tbody>
+                </table>
+                <div class="micro-svsp-actions">
+                  <button type="button" id="svspAdd" class="toolbar-btn toolbar-btn--neutral">+ строка</button>
+                  <button type="button" id="svspSave" class="toolbar-btn toolbar-btn--primary">Сохранить таблицу</button>
+                  <span class="micro-conn-hint" id="svspHint"></span>
+                </div>
+                <p class="micro-plc-note">SP[0]=отвод и SP[50]=промывка правятся в <code>plate_config.json</code>; тут — кривая подвода SP[1..] по порогам СВ.</p>
               </div>
 
               <!-- Параметры камеры (нативно; поток/кнопки — вверху, телеметрия — под видео) -->

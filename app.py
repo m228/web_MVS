@@ -4,6 +4,7 @@ warnings.filterwarnings("ignore", message=r".*websockets\.legacy is deprecated.*
 warnings.filterwarnings("ignore", message=r".*WebSocketServerProtocol is deprecated.*")
 
 import asyncio
+import json
 import os
 import threading
 from contextlib import asynccontextmanager
@@ -276,6 +277,25 @@ def micro_settings(
     api_log("api.micro.settings", "Изменены настройки микроскопа", payload={"patch": patch})
     return {"status": "ok", "applied": patch,
             "host": data.get("host"), "camera_serial": data.get("camera_serial")}
+
+
+@app.get("/api/micro/recipe")
+def micro_recipe(sp: str | None = None, svsp: str | None = None):
+    # сохранить таблицу подвода (кривая СВ->зазор): SP/SVSP приходят JSON-массивами со страницы.
+    # Сохраняем в plate_config.json и горячо перезапускаем автомат (как «Перезагрузить конфиг»).
+    patch = {}
+    try:
+        if sp is not None:
+            patch["SP"] = [int(round(float(x))) for x in json.loads(sp)]
+        if svsp is not None:
+            patch["SVSP"] = [float(x) for x in json.loads(svsp)]
+    except Exception as e:
+        api_log("api.micro.recipe", "Ошибка разбора таблицы SP/SVSP", "warn", {"error": str(e)})
+        return {"status": "error", "error": str(e)}
+    micro.apply_settings(patch)
+    api_log("api.micro.recipe", "Сохранена таблица подвода (SP/SVSP)",
+            payload={"rows": len(patch.get("SVSP", []))})
+    return {"status": "ok", "sp_len": len(patch.get("SP", [])), "svsp_len": len(patch.get("SVSP", []))}
 # --- автозапуск вместе с Windows (Планировщик задач, см. autostart.py) ---
 
 @app.get("/api/autostart/status")

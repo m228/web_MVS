@@ -3154,3 +3154,68 @@ html {
 .embedded .page-hero { display: none; }
 .embedded .app-shell { padding: 0; gap: 12px; }
 .embedded body { background: transparent; }
+
+/* ================= Микроскоп: редизайн (компактная шапка + иконочные вкладки) ================= */
+.micro-hero { padding: 10px 16px; }
+.micro-hero__row { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+.micro-hero__title { font-size: 1.3rem; margin: 0; }
+.micro-hero__grp { display: inline-flex; align-items: center; gap: 6px; }
+.micro-hero__conn { font-size: 0.9em; color: var(--muted); }
+.micro-hero__home { margin-left: auto; }
+.micro-conn-input--host { width: 128px; padding: 4px 8px; }
+
+.micro-utilbar { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin: 12px 0; }
+.micro-utilbar .toolbar-btn { min-width: 0; padding: 8px 14px; }
+
+/* рабочая зона: камера-видео слева + пульт справа */
+.micro-work { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(360px, 1fr); gap: 16px; align-items: start; }
+@media (max-width: 1100px) { .micro-work { grid-template-columns: 1fr; } }
+.micro-cam-card { padding: 8px; }
+.micro-cam-frame { width: 100%; min-height: 480px; border: 0; border-radius: 10px; background: #000; display: block; }
+.micro-cam-ph { min-height: 300px; display: flex; align-items: center; justify-content: center; }
+
+/* пульт */
+.micro-pult__head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 10px; flex-wrap: wrap; }
+.micro-pult__title { font-weight: 600; font-size: 1.05em; }
+
+/* иконки-вкладки */
+.micro-ptabs { display: flex; gap: 6px; flex-wrap: wrap; border-bottom: 1px solid var(--border); padding-bottom: 10px; margin-bottom: 12px; }
+.micro-ptab { display: flex; flex-direction: column; align-items: center; gap: 2px; width: 58px; padding: 7px 4px; border: 1px solid transparent; border-radius: 10px; background: var(--surface-muted); color: var(--muted); cursor: pointer; font: inherit; }
+.micro-ptab svg { width: 22px; height: 22px; }
+.micro-ptab span { font-size: 10px; line-height: 1; }
+.micro-ptab:hover { color: var(--text); border-color: var(--border-strong); }
+.micro-ptab.is-active { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); }
+
+.micro-pult.is-locked .micro-gated { opacity: .5; pointer-events: none; filter: grayscale(.3); }
+.micro-ro { font-size: 0.8em; color: var(--muted); font-weight: 400; margin-left: 6px; }
+.micro-ppane .micro-motor { background: transparent; border: 0; padding: 0; }
+.micro-camset-frame { width: 100%; min-height: 520px; border: 0; border-radius: 10px; background: var(--surface-muted); display: block; }
+
+/* телеметрия — компактной полосой снизу */
+.micro-tele-strip { margin-top: 16px; }
+.micro-tele-strip__head { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-bottom: 10px; }
+.micro-tele-strip__title { font-weight: 600; }
+.micro-tele-strip .micro-naladka { display: flex; align-items: center; gap: 8px; margin: 0; padding: 0; border: 0; }
+.micro-tele-cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 16px; }
+.micro-tele-col { min-width: 0; }
+.micro-tele-col .micro-tele-group:first-child { margin-top: 0; }
+.micro-tile--hidden { display: none; }
+
+/* --- камерная страница во встраивании: только видео / только настройки --- */
+.embed-cam-video .camera-sidebar,
+.embed-cam-video .camera-status-bar,
+.embed-cam-video .debug-console { display: none !important; }
+.embed-cam-video .camera-layout,
+.embed-cam-settings .camera-layout { grid-template-columns: 1fr !important; }
+.embed-cam-video .camera-screen { min-height: 420px; }
+
+.embed-cam-settings .camera-screen,
+.embed-cam-settings .camera-status-bar,
+.embed-cam-settings .debug-console,
+.embed-cam-settings #startBtn,
+.embed-cam-settings #stopBtn,
+.embed-cam-settings #forceStopBtn,
+.embed-cam-settings #roiBtn,
+.embed-cam-settings #photoBtn,
+.embed-cam-settings #videoBtn,
+.embed-cam-settings #logsBtn { display: none !important; }

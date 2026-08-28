@@ -6,9 +6,10 @@
 
   const $ = (id) => document.getElementById(id);
   const POLL_MS = 600;
-  let lastCyclic = false;
   let manualOn = false;
   let cfg = null;
+  let camSerial = "";
+  let camSettingsLoaded = false;
 
   async function api(path, params) {
     const q = params ? "?" + new URLSearchParams(params).toString() : "";
@@ -40,8 +41,13 @@
 
   function loadCamIframe(serial) {
     const frame = $("camIframe"), ph = $("camPlaceholder");
+    camSerial = serial || "";
+    // при смене камеры сбросить lazy-загруженные настройки (перезагрузятся с новым серийником)
+    const sf = $("camSettingsIframe");
+    if (sf) { sf.removeAttribute("src"); sf.hidden = true; }
+    camSettingsLoaded = false;
     if (serial) {
-      frame.src = "/camera?serial_number=" + encodeURIComponent(serial) + "&embed=1";
+      frame.src = "/camera?serial_number=" + encodeURIComponent(serial) + "&embed=1&cam=video";
       frame.hidden = false;
       ph.classList.add("hidden");
     } else {
@@ -50,6 +56,17 @@
       ph.textContent = "Камера не найдена. MVS ищет автоматически — проверь подключение/драйвер, либо укажи IP камеры выше.";
       ph.classList.remove("hidden");
     }
+  }
+
+  // Настройки камеры (вкладка 📷): грузим ЛЕНИВО и БЕЗ видео (cam=settings), чтобы не было
+  // второго потока к одной GigE-камере (стабильно работает только один поток).
+  function loadCamSettings() {
+    const sf = $("camSettingsIframe"), ph = $("camSettingsPh");
+    if (camSettingsLoaded || !camSerial || !sf) return;
+    sf.src = "/camera?serial_number=" + encodeURIComponent(camSerial) + "&embed=1&cam=settings";
+    sf.hidden = false;
+    if (ph) ph.classList.add("hidden");
+    camSettingsLoaded = true;
   }
 
   function applyCamSerials(serials) {
@@ -211,13 +228,7 @@
       set("cAirTh", pair(e.air_on_temp, e.air_off_temp));
       set("cCamTh", pair(e.cam_on_temp, e.cam_off_temp));
 
-      // циклический / стоп движения / ручной режим
-      lastCyclic = !!f.cyclic;
-      $("cyclicState").textContent = lastCyclic ? "вкл" : "выкл";
-      $("btnCyclic").classList.toggle("toolbar-btn--primary", lastCyclic);
-      const inhibit = !!f.inhibit;
-      $("btnStop").classList.toggle("hidden", inhibit);
-      $("btnRelease").classList.toggle("hidden", !inhibit);
+      // ручной режим (синхронизируем UI с состоянием автомата)
       if (!!f.manual !== manualOn) syncManual(!!f.manual);
     } catch (e) {
       setConn({ connected: false, reconnecting: false });
@@ -241,22 +252,12 @@
     manualOn = on;
     $("manualToggle").checked = on;
     $("manualState").textContent = on ? "ВКЛ" : "выкл";
-    $("microPanel").classList.toggle("is-locked", !on);
+    $("microPult").classList.toggle("is-locked", !on);   // гейт панелей М1/М2/LED/DQ
     $("manualHint").classList.toggle("hidden", on);
-    // авто-цикл в ручном режиме недоступен (иначе после выхода мотор дёрнется к уставке)
-    ["cmdCycle", "cmdRetract", "cmdWashGlass", "btnCyclic"].forEach((id) => {
-      const b = $(id); if (b) b.disabled = on;
-    });
   }
 
   // ---- кнопки ----
   function wire() {
-    $("cmdCycle").addEventListener("click", () => { api("/api/micro/command", { cmd: 100 }); sentCmd("Цикл пробы"); });
-    $("cmdRetract").addEventListener("click", () => { api("/api/micro/command", { cmd: 200 }); sentCmd("Отвод 40 мм"); });
-    $("cmdWashGlass").addEventListener("click", () => { api("/api/micro/command", { cmd: 300 }); sentCmd("Промыть стекло"); });
-    $("btnCyclic").addEventListener("click", () => api("/api/micro/cyclic", { on: lastCyclic ? 0 : 1 }));
-    $("btnStop").addEventListener("click", () => api("/api/micro/stop", { on: 1 }));
-    $("btnRelease").addEventListener("click", () => api("/api/micro/stop", { on: 0 }));
     $("btnReload").addEventListener("click", async () => { await api("/api/micro/reload"); initCamera(); });
 
     $("cfgApply").addEventListener("click", async () => {
@@ -322,11 +323,13 @@
     // аварийный стоп — работает в любом режиме
     $("estopBtn").addEventListener("click", () => { api("/api/micro/estop"); sentCmd("АВАРИЙНЫЙ СТОП"); });
 
-    // вкладки (настройки моторов / охлаждение)
-    document.querySelectorAll(".micro-tab").forEach((tab) => {
+    // иконки-вкладки пульта (М1/М2/LED/DQ/охлаждение/настройки/камера)
+    document.querySelectorAll(".micro-ptab").forEach((tab) => {
       tab.addEventListener("click", () => {
-        document.querySelectorAll(".micro-tab").forEach((x) => x.classList.toggle("is-active", x === tab));
-        document.querySelectorAll(".micro-tab-pane").forEach((p) => p.classList.toggle("hidden", p.dataset.pane !== tab.dataset.tab));
+        const key = tab.dataset.ptab;
+        document.querySelectorAll(".micro-ptab").forEach((x) => x.classList.toggle("is-active", x === tab));
+        document.querySelectorAll(".micro-ppane").forEach((p) => p.classList.toggle("hidden", p.dataset.ppane !== key));
+        if (key === "cam") loadCamSettings();   // настройки камеры грузим лениво
       });
     });
   }

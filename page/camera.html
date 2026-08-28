@@ -8,10 +8,17 @@
   <script src="/static/js/logger.js"></script>
   <script src="/static/js/theme.js" defer></script>
   <script>
-    // компактный режим для встраивания в страницу микроскопа (iframe): прячем шапку и навигацию
-    if (new URLSearchParams(location.search).get('embed') === '1') {
-      document.documentElement.classList.add('embedded');
-    }
+    // компактный режим для встраивания в страницу микроскопа (iframe): прячем шапку и навигацию.
+    // Под-режимы: cam=video — только видео + слим-тулбар (для главной области микроскопа);
+    // cam=settings — только форма «Параметры камеры» (без видео -> без второго потока к камере).
+    (function () {
+      var p = new URLSearchParams(location.search);
+      var root = document.documentElement;
+      if (p.get('embed') === '1') root.classList.add('embedded');
+      var cam = p.get('cam');
+      if (cam === 'video') root.classList.add('embed-cam-video');
+      else if (cam === 'settings') root.classList.add('embed-cam-settings');
+    })();
   </script>
 </head>
 <body>

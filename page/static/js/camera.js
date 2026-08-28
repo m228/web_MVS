@@ -1313,6 +1313,10 @@ function initCameraPage() {
 
   loadDataLimitToForm().then(() => {
     initFieldSliders();
+    // авто-старт потока для встроенного видео-режима микроскопа (?cam=video&autostart=1):
+    // левое окно микроскопа = только картинка, кнопка «Подключить» живёт в пульте
+    const autostart = new URLSearchParams(location.search).get('autostart') === '1';
+    if (autostart && serialNumber) connectCamera();
   });
 
   showNoVideo();

@@ -3190,6 +3190,8 @@ html {
 .micro-ro { font-size: 0.8em; color: var(--muted); font-weight: 400; margin-left: 6px; }
 .micro-ppane .micro-motor { background: transparent; border: 0; padding: 0; }
 .micro-camset-frame { width: 100%; min-height: 520px; border: 0; border-radius: 10px; background: var(--surface-muted); display: block; }
+.micro-cam-btns { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 10px; }
+.micro-cam-btns .toolbar-btn { min-width: 0; padding: 8px 16px; }
 
 /* телеметрия — компактной полосой снизу */
 .micro-tele-strip { margin-top: 16px; }
@@ -3202,23 +3204,26 @@ html {
 .micro-tile--hidden { display: none; }
 
 /* --- камерная страница во встраивании: только видео / только настройки --- */
+/* Левое окно микроскопа (cam=video) = ТОЛЬКО картинка: прячем тулбар/сайдбар/статус/логи. */
 .embed-cam-video .camera-sidebar,
+.embed-cam-video .camera-toolbar,
 .embed-cam-video .camera-status-bar,
 .embed-cam-video .debug-console { display: none !important; }
 .embed-cam-video .camera-layout,
 .embed-cam-settings .camera-layout { grid-template-columns: 1fr !important; }
 .embed-cam-video .camera-screen { min-height: 420px; }
 
+/* Вкладка «Камера» в пульте (cam=settings) = ТОЛЬКО параметры (в 2 столбика). Кнопки живут
+   родными в пульте (Подключить/Стоп), т.к. кнопки камеры завязаны на поток своего iframe. */
 .embed-cam-settings .camera-screen,
+.embed-cam-settings .camera-toolbar,
 .embed-cam-settings .camera-status-bar,
-.embed-cam-settings .debug-console,
-.embed-cam-settings #startBtn,
-.embed-cam-settings #stopBtn,
-.embed-cam-settings #forceStopBtn,
-.embed-cam-settings #roiBtn,
-.embed-cam-settings #photoBtn,
-.embed-cam-settings #videoBtn,
-.embed-cam-settings #logsBtn { display: none !important; }
+.embed-cam-settings .debug-console { display: none !important; }
+.embed-cam-settings #settingsForm { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 12px; }
+
+/* пара «подпись+поле» — колонка; на обычной странице камеры выглядит как раньше */
+.cam-field { display: flex; flex-direction: column; gap: 4px; }
+.cam-field > label { margin: 0; }
 
 /* --- шапка: заголовок + коннектор + На главную --- */
 .micro-hero__top { display: flex; align-items: center; gap: 14px; margin-bottom: 8px; }

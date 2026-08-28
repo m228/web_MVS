@@ -53,23 +53,46 @@
     return [];
   }
 
-  function loadCamIframe(serial) {
-    const frame = $("camIframe"), ph = $("camPlaceholder");
+  // Запомнить камеру (серийник/IP), но НЕ стартовать видео — картинка идёт по кнопке «Подключить».
+  // Параметры (форму) грузим сразу, т.к. вкладка «Камера» активна по умолчанию.
+  function setCamSerial(serial) {
     camSerial = serial || "";
-    // при смене камеры сбросить lazy-загруженные настройки (перезагрузятся с новым серийником)
     const sf = $("camSettingsIframe");
     if (sf) { sf.removeAttribute("src"); sf.hidden = true; }
     camSettingsLoaded = false;
+    const info = $("camSubInfo"), connBtn = $("camConnectBtn");
     if (serial) {
-      frame.src = "/camera?serial_number=" + encodeURIComponent(serial) + "&embed=1&cam=video";
-      frame.hidden = false;
-      ph.classList.add("hidden");
+      if (info) info.textContent = serial;
+      if (connBtn) connBtn.disabled = false;
+      loadCamSettings();
+      stopCamVideo();   // левое окно = плейсхолдер с подсказкой, пока не нажали «Подключить»
     } else {
-      frame.hidden = true;
-      frame.removeAttribute("src");
-      ph.textContent = "Камера не найдена. MVS ищет автоматически — проверь подключение/драйвер, либо укажи IP камеры выше.";
+      if (info) info.textContent = "не найдена";
+      if (connBtn) connBtn.disabled = true;
+      stopCamVideo();
+    }
+  }
+
+  // Старт живого видео в левом окне (только картинка; тулбар камеры спрятан CSS).
+  function startCamVideo() {
+    const frame = $("camIframe"), ph = $("camPlaceholder");
+    if (!camSerial || !frame) return;
+    frame.src = "/camera?serial_number=" + encodeURIComponent(camSerial) + "&embed=1&cam=video&autostart=1";
+    frame.hidden = false;
+    if (ph) ph.classList.add("hidden");
+    const stopBtn = $("camStopBtn"); if (stopBtn) stopBtn.disabled = false;
+  }
+
+  // Стоп видео: выгружаем iframe (поток закрывается при unload камерной страницы).
+  function stopCamVideo() {
+    const frame = $("camIframe"), ph = $("camPlaceholder");
+    if (frame) { frame.hidden = true; frame.removeAttribute("src"); }
+    if (ph) {
+      ph.textContent = camSerial ? "Нажми «Подключить» во вкладке «Камера» — пойдёт видео."
+                                 : "Камера не найдена. MVS ищет автоматически — проверь подключение/драйвер, либо укажи IP камеры.";
       ph.classList.remove("hidden");
     }
+    const stopBtn = $("camStopBtn"); if (stopBtn) stopBtn.disabled = true;
   }
 
   // Настройки камеры (вкладка 📷): грузим ЛЕНИВО и БЕЗ видео (cam=settings), чтобы не было
@@ -86,17 +109,17 @@
   function applyCamSerials(serials) {
     const found = $("camFound"), sel = $("camSelect"), ipInp = $("camIp"), ipGo = $("camIpGo");
     sel.hidden = true; ipInp.hidden = true; ipGo.hidden = true;
-    if (serials.length === 1) { found.textContent = serials[0]; loadCamIframe(serials[0]); return true; }
+    if (serials.length === 1) { found.textContent = serials[0]; setCamSerial(serials[0]); return true; }
     if (serials.length > 1) {
       found.textContent = "";
       sel.hidden = false; sel.innerHTML = "";
       serials.forEach((s) => { const o = document.createElement("option"); o.value = s; o.textContent = s; sel.appendChild(o); });
-      loadCamIframe(serials[0]);
+      setCamSerial(serials[0]);
       return true;
     }
     found.textContent = "не найдена —";
     ipInp.hidden = false; ipGo.hidden = false;
-    loadCamIframe("");
+    setCamSerial("");
     return false;
   }
 
@@ -123,7 +146,7 @@
     if (cfgSerial) {
       $("camSelect").hidden = true; $("camIp").hidden = true; $("camIpGo").hidden = true;
       $("camFound").textContent = cfgSerial;
-      loadCamIframe(cfgSerial);
+      setCamSerial(cfgSerial);
       return;
     }
     discoverWithRetry(0);
@@ -155,9 +178,19 @@
     const wrap = $("microConnWrap"), el = $("microConn");
     if (!wrap) return;
     wrap.classList.remove("is-on", "is-warn", "is-off");
-    if (state.connected) { wrap.classList.add("is-on"); if (el) el.textContent = "подключено"; }
-    else if (state.reconnecting) { wrap.classList.add("is-warn"); if (el) el.textContent = "переподключение…"; }
-    else { wrap.classList.add("is-off"); if (el) el.textContent = "нет связи"; }
+    if (state.connected) { wrap.classList.add("is-on"); if (el) el.textContent = "плата: связь"; }
+    else if (state.reconnecting) { wrap.classList.add("is-warn"); if (el) el.textContent = "плата: переподключение…"; }
+    else { wrap.classList.add("is-off"); if (el) el.textContent = "плата: нет связи"; }
+  }
+
+  // индикатор связи с ПЛК аппарата (источник данных варки по Modbus)
+  function setPlcConn(plc) {
+    const wrap = $("plcConnWrap"), el = $("plcConn");
+    if (!wrap) return;
+    wrap.classList.remove("is-on", "is-warn", "is-off");
+    if (!plc || !plc.enabled) { wrap.classList.add("is-off"); if (el) el.textContent = "ПЛК: выкл"; }
+    else if (plc.connected) { wrap.classList.add("is-on"); if (el) el.textContent = "ПЛК: обмен"; }
+    else { wrap.classList.add("is-warn"); if (el) el.textContent = "ПЛК: нет связи"; }
   }
 
   const num = (v) => (v == null ? "—" : v);
@@ -215,6 +248,7 @@
 
       // данные с контроллера (ПЛК) — источник аппарата по Modbus (sv_source). Пока нет данных -> «(—)».
       const plc = d.plc || {}, pv = plc.values || {};
+      setPlcConn(plc);
       set("pcSv", pv.sv == null ? "(—)" : Number(pv.sv).toFixed(2));
       set("pcStage", stageLabel(pv.stage));
       set("pcTemp", pv.temp_app == null ? "(—)" : pv.temp_app + " °C");
@@ -328,8 +362,10 @@
     $("ledFreq").addEventListener("change", () => api("/api/micro/led", { freq: $("ledFreq").value }));
 
     // камера
-    $("camSelect").addEventListener("change", () => loadCamIframe($("camSelect").value));
-    $("camIpGo").addEventListener("click", () => { const ip = $("camIp").value.trim(); if (ip) loadCamIframe(ip); });
+    $("camSelect").addEventListener("change", () => { stopCamVideo(); setCamSerial($("camSelect").value); });
+    $("camIpGo").addEventListener("click", () => { const ip = $("camIp").value.trim(); if (ip) setCamSerial(ip); });
+    $("camConnectBtn").addEventListener("click", () => { startCamVideo(); sentCmd("Камера: подключение"); });
+    $("camStopBtn").addEventListener("click", () => { stopCamVideo(); sentCmd("Камера: стоп видео"); });
 
     // ручной режим
     $("manualToggle").addEventListener("change", () => {

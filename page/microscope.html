@@ -75,6 +75,13 @@
           <button type="button" id="logsBtn" class="toolbar-btn toolbar-btn--neutral toolbar-btn--logs" title="Открыть журнал (логи платы и команды)">
             Логи <span class="log-counter" id="logCounter">0</span>
           </button>
+
+          <span class="micro-utilbar__sep" aria-hidden="true"></span>
+
+          <button type="button" id="camConnectBtn" class="toolbar-btn toolbar-btn--primary" title="Подключить/остановить видео камеры" disabled>Подключить</button>
+          <button type="button" id="camPhotoBtn" class="toolbar-btn toolbar-btn--neutral" title="Сохранение фото (клик — вкл/выкл)" disabled>Фото</button>
+          <button type="button" id="camVideoBtn" class="toolbar-btn toolbar-btn--neutral" title="Запись видео (клик — вкл/выкл)" disabled>Видео</button>
+
           <span class="micro-lastcmd">последняя команда: <strong id="lastCmd">—</strong></span>
         </div>
 
@@ -82,7 +89,7 @@
         <div class="micro-work">
           <section class="card micro-cam-card">
             <div id="camPlaceholder" class="camera-placeholder micro-cam-ph">Поиск камеры…</div>
-            <iframe id="camIframe" class="micro-cam-frame" title="Камера микроскопа" hidden></iframe>
+            <img id="microCamStream" class="micro-cam-frame" alt="Видео камеры" hidden />
           </section>
 
           <section class="card micro-pult" id="microPult">
@@ -123,6 +130,10 @@
               <button type="button" class="micro-ptab" data-ptab="app" title="Вакуум-аппарат (данные с ПЛК)" aria-label="Вакуум-аппарат">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 4h10v14a3 3 0 0 1-3 3h-4a3 3 0 0 1-3-3V4zM7 4a2 2 0 0 1 0-2h10a2 2 0 0 1 0 2M7 15h10"/></svg>
                 <span>Аппарат</span>
+              </button>
+              <button type="button" class="micro-ptab" data-ptab="cam" title="Параметры камеры" aria-label="Параметры камеры">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 8h3l1.5-2h5L14 8h3v9H3z"/><circle cx="10" cy="12.5" r="2.4"/><circle cx="19.5" cy="6.5" r="2.2"/><path d="M19.5 3.6v1M19.5 8.4v1M16.9 6.5h1M21.1 6.5h1"/></svg>
+                <span>Камера</span>
               </button>
             </div>
 
@@ -289,6 +300,46 @@
                 <p class="micro-plc-note">данные с контроллера (ПЛК); адреса — в <code>plate_config.json → sv_source</code></p>
               </div>
 
+              <!-- Параметры камеры (нативно; поток/кнопки — вверху, телеметрия — снизу) -->
+              <div class="micro-ppane hidden" data-ppane="cam">
+                <div class="micro-sub__title">Параметры камеры <span class="micro-ro" id="camParamInfo">камера не найдена</span></div>
+                <div class="micro-cam-params" id="camParams">
+                  <div class="cam-field">
+                    <label for="camWidth">Ширина <span class="micro-ro" id="camWidthLim"></span></label>
+                    <input type="number" id="camWidth" step="1" />
+                  </div>
+                  <div class="cam-field">
+                    <label for="camHeight">Высота <span class="micro-ro" id="camHeightLim"></span></label>
+                    <input type="number" id="camHeight" step="1" />
+                  </div>
+                  <div class="cam-field">
+                    <label for="camOffX">Смещение X</label>
+                    <input type="number" id="camOffX" step="1" value="0" />
+                  </div>
+                  <div class="cam-field">
+                    <label for="camOffY">Смещение Y</label>
+                    <input type="number" id="camOffY" step="1" value="0" />
+                  </div>
+                  <div class="cam-field">
+                    <label for="camFps">FPS</label>
+                    <input type="number" id="camFps" step="0.1" value="1" />
+                  </div>
+                  <div class="cam-field">
+                    <label for="camExpTime">Экспозиция, мкс <span class="micro-ro" id="camExpLim"></span></label>
+                    <input type="number" id="camExpTime" step="1" value="10000" />
+                  </div>
+                  <div class="cam-field">
+                    <label for="camExpAuto">Автоэкспозиция</label>
+                    <select id="camExpAuto"><option value="Off">Off</option><option value="Once">Once</option><option value="Continuous">Continuous</option></select>
+                  </div>
+                  <div class="cam-field">
+                    <label for="camPixFmt">Формат пикселей</label>
+                    <select id="camPixFmt"><option value="">— как есть —</option></select>
+                  </div>
+                </div>
+                <button type="button" id="camApplyBtn" class="toolbar-btn toolbar-btn--primary micro-cam-apply" disabled>Применить</button>
+              </div>
+
             </div>
 
           </section>
@@ -358,6 +409,21 @@
           </div>
         </section>
 
+        <!-- Телеметрия камеры — полосой под телеметрией платы -->
+        <section class="card micro-tele-strip" id="camTeleStrip">
+          <div class="micro-tele-strip__head">
+            <span class="micro-tele-strip__title">Телеметрия камеры</span>
+            <span class="micro-plc-badge" id="camStreamBadge">поток выкл</span>
+          </div>
+          <div class="micro-tiles">
+            <div class="micro-tile"><span>Частота кадров</span><b id="camFps_v">—</b></div>
+            <div class="micro-tile"><span>Количество кадров</span><b id="camImg_v">—</b></div>
+            <div class="micro-tile"><span>Разрешение</span><b id="camRes_v">—</b></div>
+            <div class="micro-tile"><span>Скорость потока</span><b id="camBw_v">—</b></div>
+            <div class="micro-tile"><span>Ошибки</span><b id="camErr_v">—</b></div>
+          </div>
+        </section>
+
         <section class="card debug-console hidden" id="debugConsoleSection" aria-live="polite">
           <div class="debug-console__header">
             <div>
@@ -374,6 +440,7 @@
         </section>
       </div>
 
+      <script src="/static/js/api.js"></script>
       <script src="/static/js/microscope.js"></script>
     </main>
   </div>

@@ -3171,8 +3171,15 @@ html {
 .micro-work { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(360px, 1fr); gap: 16px; align-items: start; }
 @media (max-width: 1100px) { .micro-work { grid-template-columns: 1fr; } }
 .micro-cam-card { padding: 8px; }
-.micro-cam-frame { width: 100%; min-height: 620px; border: 0; border-radius: 10px; background: #000; display: block; }
-.micro-cam-ph { min-height: 300px; display: flex; align-items: center; justify-content: center; }
+.micro-cam-frame { width: 100%; height: auto; max-height: 72vh; border: 0; border-radius: 10px; background: #000; display: block; object-fit: contain; }
+.micro-cam-ph { min-height: 420px; display: flex; align-items: center; justify-content: center; text-align: center; padding: 0 16px; }
+
+/* тулбар: разделитель между утилитами платы и кнопками камеры */
+.micro-utilbar__sep { width: 1px; height: 22px; background: var(--border-strong); margin: 0 4px; }
+
+/* параметры камеры — в 2 столбика (вкладка «Камера») */
+.micro-cam-params { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 12px; }
+.micro-cam-apply { margin-top: 12px; }
 
 /* пульт */
 .micro-pult__head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 10px; flex-wrap: wrap; }

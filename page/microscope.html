@@ -49,20 +49,19 @@
             <a href="/" class="btn btn-secondary micro-hero__home">На главную</a>
           </div>
           <div class="micro-hero__row">
-            <span class="micro-hero__grp">
+            <span class="micro-hero__grp micro-hero__grp--cam">
               <span class="micro-conn-sub">Камера</span>
-              <strong id="camFound">поиск…</strong>
+              <span class="micro-cam-id">
+                <strong id="camFound">поиск…</strong>
+                <span class="micro-cam-ip" id="camIpInfo"></span>
+              </span>
               <select id="camSelect" class="micro-conn-input" hidden title="Выбор камеры (найдено несколько)"></select>
               <input type="text" id="camIp" class="micro-conn-input" placeholder="IP камеры" hidden />
               <button type="button" id="camIpGo" class="btn-secondary" hidden>Подключить</button>
             </span>
             <span class="micro-hero__grp">
               <span class="micro-conn-sub">Плата</span>
-              <input type="text" id="cfgPlateHost" class="micro-conn-input micro-conn-input--host" placeholder="192.168.1.128" title="IP платы" />
-              <input type="number" id="cfgPlatePort" class="micro-conn-input micro-conn-input--port" placeholder="502" title="порт" />
-              <input type="number" id="cfgPlateUnit" class="micro-conn-input micro-conn-input--port" placeholder="unit" title="Modbus unit id (254)" />
-              <button type="button" id="cfgApply" class="btn-secondary">Применить</button>
-              <span class="micro-conn-hint" id="cfgHint"></span>
+              <span class="micro-conn-ip" id="plateInfo" title="Адрес платы задаётся в plate_config.json">—</span>
             </span>
           </div>
         </section>
@@ -90,6 +89,21 @@
           <section class="card micro-cam-card">
             <div id="camPlaceholder" class="camera-placeholder micro-cam-ph">Поиск камеры…</div>
             <img id="microCamStream" class="micro-cam-frame" alt="Видео камеры" hidden />
+            <div class="micro-cam-tele" id="camTele">
+              <div class="micro-cam-tile"><span>Кадры/с</span><b id="camFps_v">—</b></div>
+              <div class="micro-cam-tile"><span>Кадров</span><b id="camImg_v">—</b></div>
+              <div class="micro-cam-tile"><span>Разрешение</span><b id="camRes_v">—</b></div>
+              <div class="micro-cam-tile"><span>Поток</span><b id="camBw_v">—</b></div>
+              <div class="micro-cam-tile"><span>Ошибки</span><b id="camErr_v">—</b></div>
+              <span class="micro-cam-flags">
+                <span class="micro-cam-flag" id="camPhotoFlag" title="Сохранение фото">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 8h3l1.5-2h9L18 8h3v11H3z"/><circle cx="12" cy="13" r="3.2"/></svg>
+                </span>
+                <span class="micro-cam-flag" id="camVideoFlag" title="Запись видео">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="6" width="12" height="12" rx="2"/><path d="M15 10l6-3v10l-6-3z"/></svg>
+                </span>
+              </span>
+            </div>
           </section>
 
           <section class="card micro-pult" id="microPult">
@@ -103,7 +117,11 @@
             </div>
 
             <div class="micro-ptabs" role="tablist">
-              <button type="button" class="micro-ptab is-active" data-ptab="m1" title="Мотор М1 · подвод / LED" aria-label="Мотор М1">
+              <button type="button" class="micro-ptab is-active" data-ptab="cam" title="Параметры камеры" aria-label="Параметры камеры">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 8h3l1.5-2h5L14 8h3v9H3z"/><circle cx="10" cy="12.5" r="2.4"/><circle cx="19.5" cy="6.5" r="2.2"/><path d="M19.5 3.6v1M19.5 8.4v1M16.9 6.5h1M21.1 6.5h1"/></svg>
+                <span>Камера</span>
+              </button>
+              <button type="button" class="micro-ptab" data-ptab="m1" title="Мотор М1 · подвод / LED" aria-label="Мотор М1">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4v16M7 9l5-5 5 5M7 15l5 5 5-5"/></svg>
                 <span>М1</span>
               </button>
@@ -131,17 +149,13 @@
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 4h10v14a3 3 0 0 1-3 3h-4a3 3 0 0 1-3-3V4zM7 4a2 2 0 0 1 0-2h10a2 2 0 0 1 0 2M7 15h10"/></svg>
                 <span>Аппарат</span>
               </button>
-              <button type="button" class="micro-ptab" data-ptab="cam" title="Параметры камеры" aria-label="Параметры камеры">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 8h3l1.5-2h5L14 8h3v9H3z"/><circle cx="10" cy="12.5" r="2.4"/><circle cx="19.5" cy="6.5" r="2.2"/><path d="M19.5 3.6v1M19.5 8.4v1M16.9 6.5h1M21.1 6.5h1"/></svg>
-                <span>Камера</span>
-              </button>
             </div>
 
             <p class="micro-panel__hint" id="manualHint">Включи «Ручной режим», чтобы управлять моторами и выходами.</p>
 
             <div class="micro-ppanes">
               <!-- Мотор М1 -->
-              <div class="micro-ppane micro-gated" data-ppane="m1">
+              <div class="micro-ppane micro-gated hidden" data-ppane="m1">
                 <div class="micro-motor" data-motor="1">
                   <div class="micro-motor__head">
                     <span class="micro-motor__title">Мотор М1 · подвод / LED</span>
@@ -242,7 +256,11 @@
               <!-- Клапаны DQ -->
               <div class="micro-ppane micro-gated hidden" data-ppane="dq">
                 <div class="micro-sub__title">Клапаны / выходы DQ</div>
-                <div class="micro-dq" id="dqGrid"><!-- кнопки строятся в JS по конфигу --></div>
+                <div class="micro-dq" id="dqGrid"><!-- кнопки строятся в JS по конфигу (3 выхода) --></div>
+                <div class="micro-dq-io">
+                  <div class="micro-tile"><span>Входы DI</span><b id="tDi2">—</b></div>
+                  <div class="micro-tile"><span>Выходы DQ</span><b id="tDq2">—</b></div>
+                </div>
               </div>
 
               <!-- Охлаждение (только чтение) -->
@@ -300,8 +318,8 @@
                 <p class="micro-plc-note">данные с контроллера (ПЛК); адреса — в <code>plate_config.json → sv_source</code></p>
               </div>
 
-              <!-- Параметры камеры (нативно; поток/кнопки — вверху, телеметрия — снизу) -->
-              <div class="micro-ppane hidden" data-ppane="cam">
+              <!-- Параметры камеры (нативно; поток/кнопки — вверху, телеметрия — под видео) -->
+              <div class="micro-ppane" data-ppane="cam">
                 <div class="micro-sub__title">Параметры камеры <span class="micro-ro" id="camParamInfo">камера не найдена</span></div>
                 <div class="micro-cam-params" id="camParams">
                   <div class="cam-field">
@@ -406,21 +424,6 @@
               </div>
               <p class="micro-plc-note">адреса Modbus контроллера задаются в <code>plate_config.json → sv_source</code></p>
             </div>
-          </div>
-        </section>
-
-        <!-- Телеметрия камеры — полосой под телеметрией платы -->
-        <section class="card micro-tele-strip" id="camTeleStrip">
-          <div class="micro-tele-strip__head">
-            <span class="micro-tele-strip__title">Телеметрия камеры</span>
-            <span class="micro-plc-badge" id="camStreamBadge">поток выкл</span>
-          </div>
-          <div class="micro-tiles">
-            <div class="micro-tile"><span>Частота кадров</span><b id="camFps_v">—</b></div>
-            <div class="micro-tile"><span>Количество кадров</span><b id="camImg_v">—</b></div>
-            <div class="micro-tile"><span>Разрешение</span><b id="camRes_v">—</b></div>
-            <div class="micro-tile"><span>Скорость потока</span><b id="camBw_v">—</b></div>
-            <div class="micro-tile"><span>Ошибки</span><b id="camErr_v">—</b></div>
           </div>
         </section>
 

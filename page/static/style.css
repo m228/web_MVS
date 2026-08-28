@@ -3140,8 +3140,11 @@ html {
 .micro-sub__title { font-weight: 600; margin-bottom: 10px; }
 .micro-led-on { margin-left: auto; }
 .micro-dq { display: flex; flex-wrap: wrap; gap: 6px; }
-.micro-dq-btn { min-width: 0; flex: 1 1 auto; padding: 8px 10px; font-size: 0.85em; }
+.micro-dq-btn { min-width: 0; flex: 0 0 auto; padding: 6px 12px; font-size: 0.8em; }
 .micro-dq-btn.is-on { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); }
+/* дубль входов/выходов во вкладке DQ (как внизу в телеметрии) */
+.micro-dq-io { display: flex; gap: 10px; margin-top: 12px; }
+.micro-dq-io .micro-tile { flex: 1 1 0; }
 
 /* вкладки (настройки моторов / охлаждение) */
 .micro-tabs__bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 14px; border-bottom: 1px solid var(--border); }
@@ -3180,6 +3183,23 @@ html {
 /* параметры камеры — в 2 столбика (вкладка «Камера») */
 .micro-cam-params { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 12px; }
 .micro-cam-apply { margin-top: 12px; }
+
+/* телеметрия камеры — компактной строкой ПОД видео (5 ячеек + значки фото/видео) */
+.micro-cam-tele { display: flex; flex-wrap: wrap; align-items: stretch; gap: 6px; margin-top: 8px; }
+.micro-cam-tele .micro-cam-tile { flex: 1 1 0; min-width: 76px; background: var(--surface-muted); border-radius: 8px; padding: 5px 8px; display: flex; flex-direction: column; gap: 1px; }
+.micro-cam-tile span { font-size: 0.68em; color: var(--muted); white-space: nowrap; }
+.micro-cam-tile b { font-size: 0.9em; font-variant-numeric: tabular-nums; }
+.micro-cam-flags { display: flex; align-items: center; gap: 6px; }
+.micro-cam-flag { width: 30px; height: 30px; display: inline-flex; align-items: center; justify-content: center; border-radius: 8px; background: var(--surface-muted); color: var(--muted); }
+.micro-cam-flag svg { width: 18px; height: 18px; }
+.micro-cam-flag.is-on { background: var(--accent-soft); color: var(--accent); }
+/* Фото/Видео в тулбаре — подсветка активного состояния */
+#camPhotoBtn.is-on, #camVideoBtn.is-on { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); }
+
+/* шапка: серийник камеры + её IP в столбик; плата — read-only инфо */
+.micro-cam-id { display: inline-flex; flex-direction: column; line-height: 1.15; }
+.micro-cam-ip { font-size: 0.78em; color: var(--muted); font-variant-numeric: tabular-nums; }
+.micro-conn-ip { font-variant-numeric: tabular-nums; }
 
 /* пульт */
 .micro-pult__head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 10px; flex-wrap: wrap; }
@@ -3252,9 +3272,9 @@ html {
 /* --- LED в одну строку (пульт узкий, поэтому подписи и слайдер компактные) --- */
 .micro-led-row { display: flex; align-items: center; gap: 6px; flex-wrap: nowrap; margin-top: 6px; }
 .micro-led-row .micro-row__lab { width: auto; white-space: nowrap; }
-#ledBright.micro-led-range { flex: 1 1 auto; width: auto; min-width: 140px; }
+#ledBright.micro-led-range { flex: 0 1 auto; width: auto; min-width: 90px; }
 .micro-led-val { font-variant-numeric: tabular-nums; min-width: 30px; text-align: right; }
-#ledFreq.micro-led-freq { width: 64px; flex: 0 0 64px; min-width: 0; }
+#ledFreq.micro-led-freq { width: 128px; flex: 0 0 128px; min-width: 0; }
 .micro-led-lab2 { margin-left: 4px; }
 
 /* --- плитки данных с ПЛК --- */

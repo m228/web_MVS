@@ -24,6 +24,13 @@
   let cfg = null;
   let camSerial = "";
 
+  // авто-доводка мотора «Идти в позицию»: плата за одно нажатие делает лишь ОДИН шаг к цели,
+  // поэтому программа сама повторяет команду и следит за позицией, останавливаясь у цели.
+  const lastPos = { 1: null, 2: null };
+  const autoDrive = { 1: null, 2: null };     // {target, timer, lastSeen, stale}
+  const DRIVE_STOP_UM = 20;                    // ближе этого к цели — стоп (мкм)
+  const DRIVE_TICK_MS = 700;
+
   async function api(path, params) {
     const q = params ? "?" + new URLSearchParams(params).toString() : "";
     const res = await fetch(path + q);
@@ -59,6 +66,11 @@
   let camMetricsTimer = null;
   const CAM = () => window.CameraApi;
 
+  function setCamIp(ip) {
+    const el = $("camIpInfo");
+    if (el) el.textContent = ip ? ip : "";
+  }
+
   // выбрать камеру (серийник/IP): включить кнопки, подтянуть диапазоны параметров. Видео НЕ стартуем.
   function setCamSerial(serial) {
     camSerial = serial || "";
@@ -68,7 +80,13 @@
     });
     const info = $("camParamInfo"); if (info) info.textContent = has ? serial : "камера не найдена";
     camStop();  // на всякий: остановить прошлый поток, показать плейсхолдер
-    if (has) loadCamParams();
+    if (has) {
+      loadCamParams();
+      // IP камеры (разово, до старта потока — контрол-канал не занят стримом)
+      api("/api/ip", { serial_number: serial }).then((r) => {
+        if (r && r.ip && !/[a-z_]/i.test(String(r.ip))) setCamIp(r.ip);
+      }).catch(() => {});
+    } else setCamIp("");
   }
 
   async function loadCamParams() {
@@ -149,6 +167,7 @@
       else { await CAM().stopPhotoSaving(camSerial); camPhotoOn = false; }
     } catch (e) { camPhotoOn = false; }
     const b = $("camPhotoBtn"); if (b) b.classList.toggle("is-on", camPhotoOn);
+    const f = $("camPhotoFlag"); if (f) f.classList.toggle("is-on", camPhotoOn);
     sentCmd(camPhotoOn ? "Камера: фото ВКЛ" : "Камера: фото выкл");
   }
 
@@ -159,6 +178,7 @@
       else { await CAM().stopVideoSaving(camSerial); camVideoOn = false; }
     } catch (e) { camVideoOn = false; }
     const b = $("camVideoBtn"); if (b) b.classList.toggle("is-on", camVideoOn);
+    const f = $("camVideoFlag"); if (f) f.classList.toggle("is-on", camVideoOn);
     sentCmd(camVideoOn ? "Камера: запись ВКЛ" : "Камера: запись выкл");
   }
 
@@ -214,9 +234,10 @@
       cfg = await api("/api/micro/config");
       if (cfg) {
         if (cfg.led_bright != null) { $("ledBright").value = cfg.led_bright; $("ledBrightVal").textContent = cfg.led_bright; }
-        $("cfgPlateHost").value = cfg.host || "";
-        $("cfgPlatePort").value = cfg.port || "";
-        $("cfgPlateUnit").value = cfg.unit != null ? cfg.unit : "";
+        // плата — только для инфо (адрес/порт/unit задаются в plate_config.json)
+        const pInfo = $("plateInfo");
+        if (pInfo) pInfo.textContent = (cfg.host || "—") + " · " + (cfg.port || 502) + " · unit " + (cfg.unit != null ? cfg.unit : 254);
+        if (cfg.camera_ip) setCamIp(cfg.camera_ip);
         cfgSerial = cfg.camera_serial || "";
       }
     } catch (e) { /* конфиг недоступен */ }
@@ -236,7 +257,8 @@
   function buildDqGrid() {
     const grid = $("dqGrid");
     if (!grid) return;
-    const labels = (cfg && cfg.dq && cfg.dq.labels) || ["трубка", "стекло", "воздух", "вых 4", "вых 5", "вых 6"];
+    const all = (cfg && cfg.dq && cfg.dq.labels) || ["трубка", "стекло", "воздух", "вых 4", "вых 5", "вых 6"];
+    const labels = all.slice(0, 3);   // только 3 выхода (трубка/стекло/воздух); 4-6 не нужны
     grid.innerHTML = "";
     labels.forEach((lab, bit) => {
       const b = document.createElement("button");
@@ -296,8 +318,10 @@
 
       // позиции (сверху и в пульте)
       set("tPos1", um(t.pos1)); set("tPos2", um(t.pos2));
-      set("m1Pos", um(e.m1_pos != null ? e.m1_pos : t.pos1));
-      set("m2Pos", um(e.m2_pos != null ? e.m2_pos : t.pos2));
+      lastPos[1] = e.m1_pos != null ? e.m1_pos : t.pos1;
+      lastPos[2] = e.m2_pos != null ? e.m2_pos : t.pos2;
+      set("m1Pos", um(lastPos[1]));
+      set("m2Pos", um(lastPos[2]));
       set("m1Sensor", um(e.sensor)); set("m1Steps", num(e.m1_steps));
       set("m2Steps", num(e.m2_steps)); set("m2State", num(e.m2_state));
       set("tSensor", um(e.sensor)); set("tEnc", um(e.m1_enc)); set("tSlip", um(e.m1_slip));
@@ -309,8 +333,9 @@
       set("tFan1", num(e.fan1)); set("tFan2", num(e.fan2));
 
       // входы/выходы
-      set("tDi", e.di != null ? bits6(e.di) : hex(t.di));
-      set("tDq", bits6(e.dq));
+      const diTxt = e.di != null ? bits6(e.di) : hex(t.di), dqTxt = bits6(e.dq);
+      set("tDi", diTxt); set("tDq", dqTxt);
+      set("tDi2", diTxt); set("tDq2", dqTxt);   // дубль во вкладке DQ (не всегда смотришь вниз)
 
       // автомат
       set("tSv", f.sv == null ? "—" : Number(f.sv).toFixed(2));
@@ -422,19 +447,6 @@
   function wire() {
     $("btnReload").addEventListener("click", async () => { await api("/api/micro/reload"); initCamera(); });
 
-    $("cfgApply").addEventListener("click", async () => {
-      const hint = $("cfgHint"); hint.textContent = "применяю…";
-      try {
-        const p = {};
-        if ($("cfgPlateHost").value) p.host = $("cfgPlateHost").value;
-        if ($("cfgPlatePort").value) p.port = $("cfgPlatePort").value;
-        if ($("cfgPlateUnit").value) p.unit = $("cfgPlateUnit").value;
-        await api("/api/micro/settings", p);
-        hint.textContent = "применено ✓";
-        setTimeout(() => { hint.textContent = ""; }, 2500);
-      } catch (e) { hint.textContent = "ошибка: " + e.message; }
-    });
-
     // LED — включение подразумевается яркостью (>0 = вкл), отдельной кнопки нет
     const led = $("ledBright");
     led.addEventListener("input", () => { $("ledBrightVal").textContent = led.value; });
@@ -501,21 +513,64 @@
   };
   const CONFIRM_OPS = { goto: 1, home_end: 1 };  // рискованные — спросить
 
+  function sendMotor(m, op, value) {
+    const params = { m, op };
+    if (value != null) params.value = value;
+    return api("/api/micro/motor", params).then((r) => {
+      if (r && r.error) sentCmd("⚠ " + (OP_LABEL[op] || op) + ": " + r.error);
+      return r;
+    }).catch(() => { });
+  }
+
+  function stopAutoDrive(m) {
+    const st = autoDrive[m];
+    if (st && st.timer) clearInterval(st.timer);
+    autoDrive[m] = null;
+  }
+
+  // авто-доводка: повторяем goto к цели, пока |позиция-цель| не станет < DRIVE_STOP_UM
+  function startAutoDrive(m, target) {
+    stopAutoDrive(m);
+    sendMotor(m, "goto", target);   // первый импульс сразу
+    const st = { target, lastSeen: lastPos[m], stale: 0, timer: null };
+    autoDrive[m] = st;
+    st.timer = setInterval(() => {
+      const pos = lastPos[m];
+      if (pos != null) {
+        if (Math.abs(pos - target) < DRIVE_STOP_UM) {   // доехали к цели
+          stopAutoDrive(m); sentCmd("М" + m + " · доведён к " + target); return;
+        }
+        if (st.lastSeen != null && Math.abs(pos - st.lastSeen) < 1) {
+          if (++st.stale >= 6) {   // ~4 c без движения -> считаем, что дальше не идёт
+            stopAutoDrive(m); sentCmd("М" + m + " · остановлен (нет движения)"); return;
+          }
+        } else st.stale = 0;
+        st.lastSeen = pos;
+      }
+      sendMotor(m, "goto", target);   // следующий импульс к цели
+    }, DRIVE_TICK_MS);
+  }
+
   function runMotorOp(m, op) {
     let value = null;
     if (op === "goto") value = $("m" + m + "GotoInp").value;
     else if (op === "steps") value = $("m" + m + "StepsInp").value;
     else if (op === "shift") value = $("m" + m + "ShiftInp").value;
 
+    if (op === "stop") stopAutoDrive(m);       // ручной СТОП гасит и авто-доводку
+
     if (CONFIRM_OPS[op]) {
       const what = op === "goto" ? ("М" + m + " → " + value + " мкм") : ("М" + m + " → в конец");
       if (!window.confirm("Двигать мотор?\n" + what + "\n\nУбедись, что путь свободен (от стекла).")) return;
     }
-    const params = { m, op };
-    if (value != null) params.value = value;
-    api("/api/micro/motor", params).then((r) => {
-      if (r && r.error) sentCmd("⚠ " + (OP_LABEL[op] || op) + ": " + r.error);
-    }).catch(() => { });
+
+    if (op === "goto" && value !== "" && value != null) {   // авто-доводка вместо одиночного импульса
+      startAutoDrive(m, Number(value));
+      sentCmd("М" + m + " · авто-доводка → " + value);
+      return;
+    }
+
+    sendMotor(m, op, value);
     sentCmd("М" + m + " · " + (OP_LABEL[op] || op) + (value != null ? " " + value : ""));
   }
 

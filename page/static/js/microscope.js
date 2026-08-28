@@ -212,6 +212,25 @@
         else { pb.textContent = "нет связи"; pb.className = "micro-plc-badge is-off"; }
       }
 
+      // мнемосхема вакуум-аппарата (те же PLC-данные)
+      const bar = (v) => (v == null ? "—" : Number(v).toFixed(3) + " бар");
+      set("maBrix", pv.sv == null ? "—" : Number(pv.sv).toFixed(1));
+      set("maTemp", pv.temp_app == null ? "—" : pv.temp_app + " °C");
+      set("maPtop", bar(pv.press_top != null ? pv.press_top : pv.vacuum));
+      set("maPbot", bar(pv.press_bot));
+      set("maCurrent", pv.current == null ? "—" : Number(pv.current).toFixed(1) + " A");
+      set("maLevel", pv.level == null ? "—" : Number(pv.level).toFixed(2) + " %");
+      set("maStage", pv.stage == null ? "—" : pv.stage);
+      const fill = document.getElementById("maFill");
+      if (fill) {
+        const lv = pv.level == null ? 0 : Math.max(0, Math.min(100, Number(pv.level)));
+        const H = 176, base = 206, h = Math.max(4, H * lv / 100);  // тело 30..206
+        fill.setAttribute("y", base - h);
+        fill.setAttribute("height", h);
+      }
+      const mab = $("maBadge");
+      if (mab) { mab.textContent = pb ? pb.textContent : ""; mab.className = pb ? pb.className : "micro-plc-badge"; }
+
       // бейджи моторов (разрешение/направление)
       motorBadge("1", e.m1_enable, e.m1_dir);
       motorBadge("2", e.m2_enable, e.m2_dir);

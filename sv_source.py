@@ -30,16 +30,20 @@ class SvSource:
         self.unit = int(cfg.get("unit", 255))
         self.period = float(cfg.get("period_s", 1.0))
 
-        # карта полей аппарата: name -> (reg, scale). Из fields{} + совместимость sv/stage.
+        # карта полей аппарата: name -> (reg, scale, signed). Из fields{} + совместимость sv/stage.
+        # signed=true -> регистр читается как знаковый int16 (для разрежения/давления, которые
+        # после REAL_TO_INT в ПЛК могут быть отрицательными и приходят в доп. коде).
         self.fields = {}
         for name, spec in (cfg.get("fields") or {}).items():
             reg = int((spec or {}).get("reg", 0) or 0)
             if reg > 0:
-                self.fields[name] = (reg, float((spec or {}).get("scale", 1)) or 1.0)
+                scale = float((spec or {}).get("scale", 1)) or 1.0
+                signed = bool((spec or {}).get("signed", False))
+                self.fields[name] = (reg, scale, signed)
         if "sv" not in self.fields and int(cfg.get("sv_register", 0) or 0) > 0:
-            self.fields["sv"] = (int(cfg["sv_register"]), float(cfg.get("sv_scale", 100)) or 1.0)
+            self.fields["sv"] = (int(cfg["sv_register"]), float(cfg.get("sv_scale", 100)) or 1.0, False)
         if "stage" not in self.fields and int(cfg.get("stage_register", 0) or 0) > 0:
-            self.fields["stage"] = (int(cfg["stage_register"]), 1.0)
+            self.fields["stage"] = (int(cfg["stage_register"]), 1.0, False)
 
         self._client = None
         self._thread = None
@@ -125,8 +129,10 @@ class SvSource:
                 continue
             try:
                 values = {}
-                for name, (reg, scale) in self.fields.items():
+                for name, (reg, scale, signed) in self.fields.items():
                     raw = self._read_reg(reg)
+                    if signed and raw >= 0x8000:        # int16 в доп. коде -> отрицательное
+                        raw -= 0x10000
                     values[name] = raw if scale == 1 else raw / scale   # scale=1 -> целое (стадия)
                 self._values = values
                 if self.on_update is not None:

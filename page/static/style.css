@@ -3245,3 +3245,8 @@ html {
 .micro-plc-badge.is-off { background: var(--danger-soft); border-color: var(--danger); color: var(--danger); }
 .micro-plc-note { font-size: 0.75em; color: var(--muted); margin: 6px 0 0; }
 .micro-plc-note code { font-size: 0.95em; }
+
+/* --- мнемосхема вакуум-аппарата (вкладка 📊) --- */
+.micro-app { display: flex; flex-direction: column; align-items: center; gap: 12px; margin-top: 6px; }
+.micro-app-svg { width: 170px; max-width: 60%; height: auto; }
+.micro-app-tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 8px; width: 100%; }

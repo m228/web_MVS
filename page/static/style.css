@@ -3171,7 +3171,7 @@ html {
 .micro-work { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(360px, 1fr); gap: 16px; align-items: start; }
 @media (max-width: 1100px) { .micro-work { grid-template-columns: 1fr; } }
 .micro-cam-card { padding: 8px; }
-.micro-cam-frame { width: 100%; min-height: 480px; border: 0; border-radius: 10px; background: #000; display: block; }
+.micro-cam-frame { width: 100%; min-height: 620px; border: 0; border-radius: 10px; background: #000; display: block; }
 .micro-cam-ph { min-height: 300px; display: flex; align-items: center; justify-content: center; }
 
 /* пульт */
@@ -3202,6 +3202,12 @@ html {
 .micro-tele-col { min-width: 0; }
 .micro-tele-col .micro-tele-group:first-child { margin-top: 0; }
 .micro-tile--hidden { display: none; }
+
+/* Встроенная камера в микроскопе = ОДНО окно: видео + тулбар + параметры В СТОЛБИК
+   (чтобы влезало в колонку и видео было крупным). «Сетевые настройки» прячем — их кнопка
+   уводит iframe на главную; сеть настраивается на отдельной странице камеры. */
+.embedded .camera-layout { grid-template-columns: 1fr !important; }
+.embedded #networkSettingsBtn { display: none !important; }
 
 /* --- камерная страница во встраивании: только видео / только настройки --- */
 /* Левое окно микроскопа (cam=video) = ТОЛЬКО картинка: прячем тулбар/сайдбар/статус/логи. */

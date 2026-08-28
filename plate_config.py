@@ -125,7 +125,7 @@ DEFAULTS = {
         "led_freq":   {"reg": 1202, "scale": 1,  "kind": "num"},
         # --- питание/термо/вентиляторы ---
         "u12v":       {"reg": 1272, "scale": 1,  "kind": "num"},  # мВ
-        "temp":       {"reg": 1273, "scale": 1,  "kind": "num"},  # °C
+        "temp":       {"reg": 1273, "scale": 1,  "kind": "num", "signed": True},  # °C (знаковый int16)
         "fan1":       {"reg": 1282, "scale": 1,  "kind": "num"},
         "fan2":       {"reg": 1283, "scale": 1,  "kind": "num"},
         # --- система ---

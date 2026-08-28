@@ -288,6 +288,8 @@ class PlateClient:
             reg = int(spec["reg"])
             if reg in values:
                 raw = values[reg]
+                if spec.get("signed") and raw >= 0x8000:   # знаковый int16 (напр. температура ниже 0)
+                    raw -= 0x10000
                 ext[name] = raw * spec.get("scale", 1) if spec.get("kind") in ("um", "num") else raw
         return ext
 

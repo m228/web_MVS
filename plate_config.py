@@ -236,16 +236,37 @@ def _deep_merge(base, override):
 
 
 def _write_default_file():
-    """Создать plate_config.json с дефолтами при первом запуске (чтобы было что править)."""
+    """Создать ПУСТОЙ plate_config.json при первом запуске (хранит только правки пользователя).
+    Раньше сюда писался полный слепок DEFAULTS — из-за этого правки DEFAULTS в коде «затирались»
+    старым файлом (напр. sv_source не включался). Теперь база всегда из DEFAULTS, файл — оверрайды."""
     try:
         CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
         tmp = CONFIG_PATH.parent / (CONFIG_PATH.name + ".tmp")
-        tmp.write_text(json.dumps(DEFAULTS, ensure_ascii=False, indent=2), encoding="utf-8")
+        tmp.write_text("{}", encoding="utf-8")
         os.replace(tmp, CONFIG_PATH)
-        log_event("plate_config", "Создан plate_config.json с настройками по умолчанию", "info",
+        log_event("plate_config", "Создан пустой plate_config.json (правки поверх DEFAULTS)", "info",
                   {"path": str(CONFIG_PATH)})
     except Exception as e:
         log_event("plate_config", "Не удалось создать plate_config.json", "warn", {"error": str(e)})
+
+
+def _drop_stale_sv_source(user):
+    """Само-исцеление: старый полный слепок DEFAULTS в файле мог перекрыть новые адреса ПЛК
+    (все fields.reg=0, enabled=false). Если sv_source в файле — такой плейсхолдер (нет ни одного
+    ненулевого reg), выкидываем его из оверрайдов, чтобы применился свежий sv_source из DEFAULTS."""
+    if not isinstance(user, dict):
+        return user
+    sv = user.get("sv_source")
+    if not isinstance(sv, dict):
+        return user
+    fields = sv.get("fields") or {}
+    regs = [int((f or {}).get("reg", 0) or 0) for f in fields.values() if isinstance(f, dict)]
+    if not any(regs) and int(sv.get("sv_register", 0) or 0) == 0:
+        user = dict(user)
+        user.pop("sv_source", None)
+        log_event("plate_config", "Старый sv_source в plate_config.json проигнорирован — "
+                  "берём адреса ПЛК из DEFAULTS", "info")
+    return user
 
 
 def load():
@@ -255,7 +276,7 @@ def load():
         return deepcopy(DEFAULTS)
     try:
         user = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
-        return _deep_merge(DEFAULTS, user)
+        return _deep_merge(DEFAULTS, _drop_stale_sv_source(user))
     except Exception as e:
         log_event("plate_config", "Ошибка чтения plate_config.json — берём значения по умолчанию",
                   "warn", {"error": str(e)})

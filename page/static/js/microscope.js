@@ -6,6 +6,20 @@
 
   const $ = (id) => document.getElementById(id);
   const POLL_MS = 600;
+
+  // Стадии варки (M.mode) — расшифровка для показа "2 (Набор)". SubMode показываем числом как есть.
+  const STAGE_NAMES = {
+    1: "Остановлен", 2: "Набор", 3: "Сгущение", 4: "Затравка", 5: "Подкачка",
+    6: "Стабилизация", 7: "Рост", 8: "Уваривание", 9: "Готовность", 10: "Выгрузка",
+    11: "Пропарка", 12: "Надвыгрузка", 13: "Собрать аппарат", 14: "Термоудар",
+    20: "УНВ", 21: "Пауза",
+  };
+  const stageLabel = (m) => {
+    if (m == null || m === "") return "(—)";
+    const n = STAGE_NAMES[Number(m)];
+    return n ? `${m} (${n})` : String(m);
+  };
+
   let manualOn = false;
   let cfg = null;
   let camSerial = "";
@@ -202,7 +216,7 @@
       // данные с контроллера (ПЛК) — источник аппарата по Modbus (sv_source). Пока нет данных -> «(—)».
       const plc = d.plc || {}, pv = plc.values || {};
       set("pcSv", pv.sv == null ? "(—)" : Number(pv.sv).toFixed(2));
-      set("pcStage", pv.stage == null ? "(—)" : pv.stage);
+      set("pcStage", stageLabel(pv.stage));
       set("pcTemp", pv.temp_app == null ? "(—)" : pv.temp_app + " °C");
       set("pcVacuum", pv.vacuum == null ? "(—)" : pv.vacuum);
       const pb = $("plcBadge");
@@ -220,7 +234,7 @@
       set("maPbot", bar(pv.press_bot));
       set("maCurrent", pv.current == null ? "—" : Number(pv.current).toFixed(1) + " A");
       set("maLevel", pv.level == null ? "—" : Number(pv.level).toFixed(2) + " %");
-      set("maStage", pv.stage == null ? "—" : pv.stage);
+      set("maStage", pv.stage == null ? "—" : stageLabel(pv.stage));
       const fill = document.getElementById("maFill");
       if (fill) {
         const lv = pv.level == null ? 0 : Math.max(0, Math.min(100, Number(pv.level)));

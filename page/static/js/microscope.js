@@ -75,7 +75,7 @@
   // фото/видео появляются ТОЛЬКО после подключения потока (до этого их нельзя жать)
   function showCamSave(show) {
     document.querySelectorAll(".micro-cam-save").forEach((el) => { el.hidden = !show; });
-    ["camPhotoBtn", "camVideoBtn", "camPhotoInterval", "camVideoDuration"].forEach((id) => {
+    ["camPhotoBtn", "camVideoBtn", "camPhotoInterval", "camVideoDuration", "camSnapBtn"].forEach((id) => {
       const b = $(id); if (b) b.disabled = !show;
     });
   }
@@ -255,6 +255,7 @@
         const pInfo = $("plateInfo");
         if (pInfo) pInfo.textContent = (cfg.host || "—") + " · " + (cfg.port || 502) + " · unit " + (cfg.unit != null ? cfg.unit : 254);
         if (cfg.camera_ip) setCamIp(cfg.camera_ip);
+        if (cfg.camera_mode && $("camMode")) $("camMode").value = cfg.camera_mode;
         cfgSerial = cfg.camera_serial || "";
       }
     } catch (e) { /* конфиг недоступен */ }
@@ -521,9 +522,20 @@
     const camImg = $("microCamStream");
     if (camImg) camImg.addEventListener("error", () => { if (camConnected) camStop(); });
 
-    // таблица подвода СВ->зазор (вкладка «Аппарат»)
+    // таблица подвода СВ->зазор (вкладка «СВ/МКМ»)
     if ($("svspAdd")) $("svspAdd").addEventListener("click", () => addSvspRow("", ""));
     if ($("svspSave")) $("svspSave").addEventListener("click", saveSvsp);
+
+    // режим съёмки камеры (поток / авто-триггер) + одиночный снимок
+    if ($("camMode")) $("camMode").addEventListener("change", () => {
+      api("/api/micro/settings", { camera_mode: $("camMode").value }).catch(() => {});
+      sentCmd("Камера: режим " + ($("camMode").value === "trigger" ? "авто-триггер" : "поток"));
+    });
+    if ($("camSnapBtn")) $("camSnapBtn").addEventListener("click", () => {
+      if (!camSerial) return;
+      api("/api/camera/snap", { serial_number: camSerial, project: "microscope" }).catch(() => {});
+      sentCmd("Камера: снимок по триггеру");
+    });
 
     // ручной режим
     $("manualToggle").addEventListener("change", () => {

@@ -3183,6 +3183,9 @@ html {
 /* параметры камеры — в 2 столбика (вкладка «Камера») */
 .micro-cam-params { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 12px; }
 .micro-cam-apply { margin-top: 12px; }
+.micro-cam-mode { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 6px; }
+.micro-cam-mode select { flex: 1 1 auto; min-width: 160px; }
+.micro-cam-mode-note { margin: 0 0 12px; font-size: 0.8em; }
 
 /* телеметрия камеры — компактной строкой ПОД видео (5 ячеек + значки фото/видео) */
 .micro-cam-tele { display: flex; flex-wrap: wrap; align-items: stretch; gap: 6px; margin-top: 8px; }

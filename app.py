@@ -257,6 +257,7 @@ def micro_reload():
 def micro_settings(
     camera_serial: str | None = None,
     camera_ip: str | None = None,
+    camera_mode: str | None = None,
     host: str | None = None,
     port: int | None = None,
     unit: int | None = None,
@@ -267,6 +268,8 @@ def micro_settings(
         patch["camera_serial"] = camera_serial
     if camera_ip is not None:
         patch["camera_ip"] = camera_ip
+    if camera_mode is not None:
+        patch["camera_mode"] = camera_mode   # "stream" | "trigger" (режим съёмки; авто-цикл прочитает)
     if host is not None:
         patch["host"] = host
     if port is not None:
@@ -609,6 +612,15 @@ def on_save_photo(serial_number: str, interval: int, project: str = "", photo_fo
 def off_save_photo(serial_number: str):
     data = manager.get(serial_number).off_photo()
     api_log("api.camera.off_save_photo", "Выключено сохранение фото", payload=data)
+    return data
+
+
+@app.get("/api/camera/snap")
+def camera_snap(serial_number: str, project: str = ""):
+    # одиночный снимок по триггеру (soft-trigger): сохранить следующий кадр как фото.
+    # Это примитив, который авто-цикл микроскопа будет дёргать в нужный момент пробы.
+    data = manager.get(serial_number).snap(project or None)
+    api_log("api.camera.snap", "Снимок по триггеру", payload={"serial_number": serial_number, "result": data})
     return data
 
 

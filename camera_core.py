@@ -453,6 +453,9 @@ class BaseCameraWorker:
         self.save_photo = False
         self.photo_interval = None
         self.last_photo = None
+        # snap_once — «одиночный снимок по триггеру»: сохранить СЛЕДУЮЩИЙ кадр как фото и сбросить
+        # флаг (не трогая интервальное автосохранение). Это soft-триггер для авто-цикла микроскопа.
+        self.snap_once = False
         # имя проекта для фото: задаёт папку dataset/<проект>/<камера> и префикс имени файла
         self.photo_project = None
         # формат файлов фото: "jpg" (по умолчанию) или "png" (без потерь)
@@ -793,8 +796,21 @@ class BaseCameraWorker:
 
     # ---------- сохранение в цикле стрима ----------
 
+    # одиночный снимок по триггеру (soft-trigger): сохранить следующий кадр как фото.
+    # project — необязательная папка (по умолчанию — текущий photo_project или «trigger»).
+    def snap(self, project=None):
+        if project:
+            self.photo_project = project
+        elif not self.photo_project:
+            self.photo_project = "trigger"
+        self.snap_once = True
+        return {"status": "ok", "streaming": bool(self.running)}
+
     # вызывается на каждый кадр: автофото + запись видео
     def _maybe_save(self, img, fps):
+        if self.snap_once:                 # одиночный снимок по триггеру (soft-trigger)
+            self.snap_once = False
+            self.write_photo(img)
         if self.save_photo and self._should_save_photo(self.photo_interval):
             self.write_photo(img)
 

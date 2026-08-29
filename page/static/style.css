@@ -3208,7 +3208,8 @@ html {
 
 /* тулбар: кнопка + поле (интервал фото / длительность видео) */
 .micro-cam-save { display: inline-flex; align-items: center; gap: 4px; }
-.micro-cam-num { width: 58px; padding: 4px 6px; }
+.micro-cam-num { width: 44px; padding: 4px 5px; text-align: center; -moz-appearance: textfield; }
+.micro-cam-num::-webkit-outer-spin-button, .micro-cam-num::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
 .micro-cam-unit { color: var(--muted); font-size: 0.85em; }
 
 /* разделитель-заголовок внутри объединённой вкладки (LED/DQ, Настр+Охл, Аппарат) */

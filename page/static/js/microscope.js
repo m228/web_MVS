@@ -72,12 +72,21 @@
   }
 
   // выбрать камеру (серийник/IP): включить кнопки, подтянуть диапазоны параметров. Видео НЕ стартуем.
+  // фото/видео появляются ТОЛЬКО после подключения потока (до этого их нельзя жать)
+  function showCamSave(show) {
+    document.querySelectorAll(".micro-cam-save").forEach((el) => { el.hidden = !show; });
+    ["camPhotoBtn", "camVideoBtn", "camPhotoInterval", "camVideoDuration"].forEach((id) => {
+      const b = $(id); if (b) b.disabled = !show;
+    });
+  }
+
   function setCamSerial(serial) {
     camSerial = serial || "";
     const has = !!serial;
-    ["camConnectBtn", "camPhotoBtn", "camVideoBtn", "camApplyBtn", "camPhotoInterval", "camVideoDuration"].forEach((id) => {
+    ["camConnectBtn", "camApplyBtn"].forEach((id) => {
       const b = $(id); if (b) b.disabled = !has;
     });
+    showCamSave(false);   // фото/видео скрыты, пока не подключимся
     const info = $("camParamInfo"); if (info) info.textContent = has ? serial : "камера не найдена";
     camStop();  // на всякий: остановить прошлый поток, показать плейсхолдер
     if (has) {
@@ -138,6 +147,7 @@
     if (ph) ph.classList.add("hidden");
     camConnected = true;
     const b = $("camConnectBtn"); if (b) { b.textContent = "Остановить"; b.classList.add("toolbar-btn--danger"); b.classList.remove("toolbar-btn--primary"); }
+    showCamSave(true);   // поток пошёл — показать фото/видео
     camSetStreamBadge();
     camStartMetrics();
     sentCmd("Камера: подключение");
@@ -150,6 +160,7 @@
     if (img) { img.hidden = true; img.removeAttribute("src"); }
     if (ph) { ph.textContent = camSerial ? "Нажми «Подключить» вверху — пойдёт видео." : "Камера не найдена. MVS ищет автоматически — проверь подключение/драйвер, либо укажи IP камеры."; ph.classList.remove("hidden"); }
     const b = $("camConnectBtn"); if (b) { b.textContent = "Подключить"; b.classList.add("toolbar-btn--primary"); b.classList.remove("toolbar-btn--danger"); }
+    showCamSave(false);   // поток остановлен — фото/видео снова скрыть
     camStopMetrics();
     camSetStreamBadge();
   }

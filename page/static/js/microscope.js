@@ -75,7 +75,7 @@
   // фото/видео появляются ТОЛЬКО после подключения потока (до этого их нельзя жать)
   function showCamSave(show) {
     document.querySelectorAll(".micro-cam-save").forEach((el) => { el.hidden = !show; });
-    ["camPhotoBtn", "camVideoBtn", "camPhotoInterval", "camVideoDuration", "camSnapBtn"].forEach((id) => {
+    ["camPhotoBtn", "camVideoBtn", "camPhotoInterval", "camVideoDuration"].forEach((id) => {
       const b = $(id); if (b) b.disabled = !show;
     });
   }
@@ -255,7 +255,11 @@
         const pInfo = $("plateInfo");
         if (pInfo) pInfo.textContent = (cfg.host || "—") + " · " + (cfg.port || 502) + " · unit " + (cfg.unit != null ? cfg.unit : 254);
         if (cfg.camera_ip) setCamIp(cfg.camera_ip);
-        if (cfg.camera_mode && $("camMode")) $("camMode").value = cfg.camera_mode;
+        if ($("camModeToggle")) {
+          const auto = cfg.camera_mode === "auto" || cfg.camera_mode === "trigger";
+          $("camModeToggle").checked = auto;
+          const st = $("camModeState"); if (st) st.textContent = auto ? "автомат" : "поток";
+        }
         cfgSerial = cfg.camera_serial || "";
       }
     } catch (e) { /* конфиг недоступен */ }
@@ -526,15 +530,13 @@
     if ($("svspAdd")) $("svspAdd").addEventListener("click", () => addSvspRow("", ""));
     if ($("svspSave")) $("svspSave").addEventListener("click", saveSvsp);
 
-    // режим съёмки камеры (поток / авто-триггер) + одиночный снимок
-    if ($("camMode")) $("camMode").addEventListener("change", () => {
-      api("/api/micro/settings", { camera_mode: $("camMode").value }).catch(() => {});
-      sentCmd("Камера: режим " + ($("camMode").value === "trigger" ? "авто-триггер" : "поток"));
-    });
-    if ($("camSnapBtn")) $("camSnapBtn").addEventListener("click", () => {
-      if (!camSerial) return;
-      api("/api/camera/snap", { serial_number: camSerial, project: "microscope" }).catch(() => {});
-      sentCmd("Камера: снимок по триггеру");
+    // режим съёмки камеры — галочка (слева поток / справа автомат)
+    const camModeT = $("camModeToggle");
+    if (camModeT) camModeT.addEventListener("change", () => {
+      const mode = camModeT.checked ? "auto" : "stream";
+      const st = $("camModeState"); if (st) st.textContent = camModeT.checked ? "автомат" : "поток";
+      api("/api/micro/settings", { camera_mode: mode }).catch(() => {});
+      sentCmd("Камера: режим " + (camModeT.checked ? "автомат" : "поток"));
     });
 
     // ручной режим

@@ -331,14 +331,12 @@
                 <div class="micro-sub__title">Параметры камеры <span class="micro-ro" id="camParamInfo">камера не найдена</span></div>
 
                 <div class="micro-cam-mode">
-                  <span class="micro-row__lab">Режим съёмки</span>
-                  <select id="camMode" title="Поток — видео постоянно; Авто — кадр по триггеру авто-цикла">
-                    <option value="stream">Поток (постоянно)</option>
-                    <option value="trigger">Авто — по триггеру цикла</option>
-                  </select>
-                  <button type="button" id="camSnapBtn" class="toolbar-btn toolbar-btn--neutral" title="Снять один кадр сейчас (тест триггера)" disabled>Снимок</button>
+                  <label class="micro-switch" for="camModeToggle" title="Поток — видео постоянно; Автомат — камера снимает по сигналу авто-цикла">
+                    <input type="checkbox" id="camModeToggle" />
+                    <span class="micro-switch__track"><span class="micro-switch__thumb"></span></span>
+                    <span class="micro-switch__label">Режим: <strong id="camModeState">поток</strong></span>
+                  </label>
                 </div>
-                <p class="micro-ro micro-cam-mode-note" id="camModeNote">Поток: видео идёт постоянно, фото — по интервалу. Авто: кадр снимается по сигналу авто-цикла (soft-триггер, /api/camera/snap).</p>
 
                 <div class="micro-cam-params" id="camParams">
                   <div class="cam-field">

@@ -3228,6 +3228,10 @@ html {
 .svsp-del:hover { color: var(--danger, #e24b4a); }
 .micro-svsp-actions { display: flex; align-items: center; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
 
+/* галочка (ежечасная промывка и пр.) */
+.micro-check { display: flex; align-items: center; gap: 8px; cursor: pointer; }
+.micro-check input { width: auto; margin: 0; flex: 0 0 auto; }
+
 /* пульт */
 .micro-pult__head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 10px; flex-wrap: wrap; }
 .micro-pult__title { font-weight: 600; font-size: 1.05em; }

@@ -260,6 +260,7 @@
           $("camModeToggle").checked = auto;
           const st = $("camModeState"); if (st) st.textContent = auto ? "автомат" : "поток";
         }
+        if (cfg.hourly_wash && $("hourlyWashToggle")) $("hourlyWashToggle").checked = cfg.hourly_wash.enabled !== false;
         cfgSerial = cfg.camera_serial || "";
       }
     } catch (e) { /* конфиг недоступен */ }
@@ -537,6 +538,13 @@
       const st = $("camModeState"); if (st) st.textContent = camModeT.checked ? "автомат" : "поток";
       api("/api/micro/settings", { camera_mode: mode }).catch(() => {});
       sentCmd("Камера: режим " + (camModeT.checked ? "автомат" : "поток"));
+    });
+
+    // ежечасная промывка (всегда доступна; идёт в простое раз в час)
+    const hwT = $("hourlyWashToggle");
+    if (hwT) hwT.addEventListener("change", () => {
+      api("/api/micro/settings", { hourly_wash: hwT.checked ? 1 : 0 }).catch(() => {});
+      sentCmd("Ежечасная промывка: " + (hwT.checked ? "вкл" : "выкл"));
     });
 
     // ручной режим

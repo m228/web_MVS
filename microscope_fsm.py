@@ -29,8 +29,8 @@ from logger import log_event
 CMD_SET_SP1 = 0x1006   # команда мотору М1 «установить SP»
 CMD_SET_SP2 = 0x2006   # команда мотору М2 «установить SP»
 
-STEP_NAMES = {0: "ожидание", 10: "отвод от стекла", 11: "промывка трубки",
-              12: "подвод к стеклу", 13: "резерв"}
+STEP_NAMES = {0: "ожидание", 10: "отвод от стекла",
+              12: "подвод к стеклу", 13: "промывка после пробы"}
 
 
 class MicroscopeFSM:
@@ -77,8 +77,14 @@ class MicroscopeFSM:
         self._emit_cmd2 = False
         self.cw0 = False      # клапан промывки трубки
         self.cw1 = False      # клапан промывки стекла
+        self.wash_t = 0       # обратный отсчёт промывки ПОСЛЕ пробы (mode 13)
         self.led_bright = int(config.get("led_bright", 0))
         self.led_on = False
+
+        # колбэк «снять фото» — вызывается один раз, когда подвели к стеклу (mode 12 -> 13).
+        # Ставит его microscope_service; он сам решает снимать ли (по режиму камеры auto).
+        self.on_photo = None
+        self._photo_request = False
 
         self._lock = threading.Lock()
         self._thread = None
@@ -224,13 +230,14 @@ class MicroscopeFSM:
             if self.u == 1:
                 self.cw1 = False
 
-            # 3) почасовая промывка от засахаривания (временный приём из ST, отключаемый)
-            if self._hw_enabled:
+            # 3) ЕЖЕЧАСНАЯ промывка от засахаривания (всегда активна; только в простое mode 0,
+            # чтобы не мешать пробе). Раз в час на минуте hw_minute: открыть ОБА клапана на ~5 с.
+            if self._hw_enabled and self.mode == 0:
                 now = datetime.now()
-                if now.minute == self._hw_minute and now.second >= self._hw_on:
+                if now.minute == self._hw_minute and self._hw_on <= now.second < self._hw_off:
                     self.cw0 = True
                     self.cw1 = True
-                if now.minute == self._hw_minute and now.second >= self._hw_off:
+                elif now.minute == self._hw_minute and now.second >= self._hw_off:
                     self.cw0 = False
                     self.cw1 = False
 
@@ -252,43 +259,38 @@ class MicroscopeFSM:
             if self.mode == 0:
                 pass
             elif self.mode == 10:
-                # отвод на позицию SP[0]
+                # отвод на позицию SP[0]; далее СРАЗУ подвод (промывки ПЕРЕД пробой больше нет)
                 self.m1_sp = self.SP[0]
                 self.t += 1
-                if self.t > 100:                       # застрял -> след. шаг
-                    self.t = 5
-                    self.mode += 1
-                if pos1 is not None and pos1 == self.SP[0]:  # приехал -> след. шаг
-                    self.t = 5
-                    self.mode += 1
-            elif self.mode == 11:
-                # пауза 500 мс + вкл клапан промывки трубки
-                self.t -= 1
-                self.cw0 = True
-                self.sw2 = False
-                if self.t < 1:
-                    self.mode += 1
+                reached = pos1 is not None and pos1 == self.SP[0]
+                if self.t > 100 or reached:            # приехал или таймаут -> подвод
+                    self.t = 0
+                    self.mode = 12
             elif self.mode == 12:
-                # подвод в SP[i] по СВ, затем выкл клапана
+                # подвод в SP[i] по СВ (таблица СВ->зазор); мотор едет сам, плавно на плате
                 self.m1_sp = self.SP[1]                # по умолчанию SP[1]
-                self.t += 1
                 for i in range(1, 50):
                     if self.sv >= self.SVSP[i] and self.SVSP[i] > 0.0:
                         self.m1_sp = self.SP[i]
-                if self.t > 100:                       # застрял -> стоп
-                    self.cw0 = False
-                    self.sw1 = False
-                    self.mode = 0
-                    self.t = 0
+                self.t += 1
                 arrived = pos1 is not None and pos1 == self.m1_sp
                 saw_glass = pos1_ai is not None and pos1_ai < 20
-                if arrived or saw_glass:
-                    self.cw0 = False
-                    self.sw1 = False
-                    self.sw2 = False
-                    self.mode = 0
+                if self.t > 100 or arrived or saw_glass:
+                    # у стекла: ФОТО (в авто-режиме) + уходим на промывку ПОСЛЕ пробы
+                    self._photo_request = True
+                    self.wash_t = self._wash_ticks()
+                    self.t = 0
+                    self.mode = 13
             elif self.mode == 13:
-                pass
+                # промывка ПОСЛЕ пробы: обе (трубка + стекло) на время SP[50]
+                self.cw0 = True
+                self.cw1 = True
+                self.wash_t -= 1
+                if self.wash_t <= 0:
+                    self.cw0 = False
+                    self.cw1 = False
+                    self.mode = 0
+                    self.t = 0
 
             # 6) формирование команды мотору М1 (тайминги как ST: 200мс -> 3с)
             if self.m1_sp != self.m1_sp_old and self.cmd1 == 0 and not self.sw1 and not self.sw2:
@@ -330,6 +332,7 @@ class MicroscopeFSM:
             manual = self.manual
             emit_cmd1 = self._emit_cmd1; self._emit_cmd1 = False
             emit_cmd2 = self._emit_cmd2; self._emit_cmd2 = False
+            photo_request = self._photo_request; self._photo_request = False
 
         pos2 = telem.get("pos2")
         connected = self.plate.status.get("connected", False)
@@ -337,6 +340,13 @@ class MicroscopeFSM:
         # РУЧНОЙ РЕЖИМ: автомат не трогает плату — всем (моторы/LED/клапаны) рулит пульт.
         if manual:
             return
+
+        # фото по триггеру: подвели к стеклу -> дёрнуть камеру (колбэк сам решает по режиму auto)
+        if photo_request and self.on_photo:
+            try:
+                self.on_photo()
+            except Exception as e:
+                log_event("microscope_fsm", "Ошибка колбэка фото", "warn", {"error": str(e)})
 
         # плату дёргаем ВНЕ лока (её методы потокобезопасны)
         if halt:
@@ -378,3 +388,10 @@ class MicroscopeFSM:
     def _cycle_threshold_ticks(self):
         sec = self.cycle_period.get(str(self.stage), self.cycle_period.get("default", 120))
         return int(sec) * 10   # секунды -> такты по 100 мс
+
+    def _wash_ticks(self):
+        # длительность промывки ПОСЛЕ пробы (обе). Берём SP[50] (мс) -> такты по 100 мс.
+        try:
+            return max(1, int(self.SP[50]) // 100)
+        except Exception:
+            return 30   # ~3 с по умолчанию

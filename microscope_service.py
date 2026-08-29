@@ -29,8 +29,12 @@ class MicroscopeService:
             self.cfg = plate_config.load()
             self.plate = PlateClient(self.cfg)
             self.fsm = MicroscopeFSM(self.plate, self.cfg)
+            self.fsm.on_photo = self._auto_photo   # автомат дёрнет камеру у стекла (см. _auto_photo)
             self.plate.start()
             self.fsm.start()
+            # режим «Автомат» (галочка камеры) = мастер авто-цикла: включаем циклический режим
+            if self.cfg.get("camera_mode") in ("auto", "trigger"):
+                self.fsm.set_cyclic(True)
             # этап A: источник СВ/стадии из ПЛК (если включён в конфиге)
             svc = self.cfg.get("sv_source", {}) or {}
             if svc.get("enabled"):
@@ -41,6 +45,24 @@ class MicroscopeService:
             log_event("microscope_service", "Микроскоп запущен",
                       "info", {"host": self.cfg.get("host"), "port": self.cfg.get("port"),
                                "sv_source": bool(svc.get("enabled"))})
+
+    def _auto_photo(self):
+        """Колбэк автомата: подвели к стеклу -> снять кадр камерой (soft-триггер).
+        Снимаем ТОЛЬКО в режиме «Автомат» (camera_mode) и если известен серийник камеры.
+        Камера должна стримить (страница открыта/поток идёт) — snap сохранит следующий кадр."""
+        cfg = self.cfg or {}
+        if cfg.get("camera_mode") not in ("auto", "trigger"):
+            return
+        serial = (cfg.get("camera_serial") or "").strip()
+        if not serial:
+            log_event("microscope_service", "Авто-фото пропущено: не задан camera_serial", "warn")
+            return
+        try:
+            from camera_core import manager as cam_manager
+            cam_manager.get(serial).snap("microscope")
+            log_event("microscope_service", "Авто-фото по триггеру цикла", "info", {"serial": serial})
+        except Exception as e:
+            log_event("microscope_service", "Ошибка авто-фото", "warn", {"error": str(e)})
 
     def _on_sv(self, sv, stage):
         # СВ/стадия из ПЛК -> в автомат (заменяет ручной ввод, пока источник жив)

@@ -2392,11 +2392,19 @@ class CameraManager:
     # interface_id  — id GenTL-интерфейса (приоритет № 2, если он различает дубли).
     # Без параметров — просто пробует все доступные подряд.
     def create_acquirer(self, serial_number, interface_id=None, device_handle=None):
-        # перечитываем список — даём шанс продюсеру актуализировать дубли
-        try:
-            self.harvester.update()
-        except Exception:
-            pass
+        # ВАЖНО (регрессия рефактора, коммит 02f71aa): лишний harvester.update()
+        # прямо перед create() на долгоживущем Harvester дестабилизирует
+        # Hikrobot-продюсер — create() падает с -1006/-1003 и "мусором из памяти"
+        # (не-UTF8, decode_error). Рабочая версия делала create() БЕЗ update() здесь.
+        # Поэтому переобновляем список ТОЛЬКО если камеры в нём ещё нет (горячее
+        # подключение); если камера уже известна после scan — open сразу.
+        known = any(getattr(d, "serial_number", None) == serial_number
+                    for d in self.harvester.device_info_list)
+        if not known:
+            try:
+                self.harvester.update()
+            except Exception:
+                pass
 
         devices = self.harvester.device_info_list
 

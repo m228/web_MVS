@@ -73,54 +73,22 @@ def run_diag():
 
 
 def _warmup():
-    """Прогрев GenTL-продюсера в главном потоке ДО старта uvicorn.
+    """Построить список камер в ГЛАВНОМ потоке ДО старта uvicorn (frozen: 0 камер).
 
-    Симптом (только в собранном exe, из PyCharm никогда не всплывал): продюсер
-    Hikrobot без раннего прогрева в главном потоке инициализируется так, что из
-    рабочих потоков uvicorn (обработчик /api/cams) перечисляет 0 камер, хотя из
-    главного потока (режим --diag) видит все. Один update() свежего Harvester в
-    главном потоке до старта uvicorn проводит одноразовую глобальную инициализацию
-    продюсера — после этого сканирование из любых потоков работает.
-
-    Эффект глобальный (на процесс), поэтому Harvester здесь одноразовый: создаём,
-    перечисляем, сбрасываем. Реальный список камер потом строит приложение."""
-    try:
-        import threading
-        from logger import log_event
-        from camera_core import _discover_cti
-        from harvesters.core import Harvester
-
-        cti, _ = _discover_cti()
-        if cti is None:
-            return
-        h = Harvester()
-        h.add_file(str(cti))
-        h.update()
-        count = len(h.device_info_list)
-        try:
-            h.reset()
-        except Exception:
-            pass
-        log_event("run.warmup", "Прогрев продюсера в главном потоке", "info",
-                  {"thread": threading.current_thread().name, "device_count": count})
-    except Exception as exc:
-        try:
-            from logger import log_event
-            log_event("run.warmup", "Прогрев не выполнен", "warn", {"error": str(exc)})
-        except Exception:
-            pass
-
-    # КЛЮЧЕВОЕ (frozen: приложение видит 0 камер): построить список камер ИМЕННО в главном
-    # потоке ДО старта uvicorn. load_driver сам делает _sdk_gige_warmup (обход всех NIC через
-    # MVS SDK) + enum — из рабочих потоков uvicorn это даёт 0, а здесь (как в --diag) находит.
-    # Фикс load_driver затем не даёт рабочим потокам затереть уже построенный список.
+    ВАЖНО (2026-08-30): раньше здесь создавался ОТДЕЛЬНЫЙ временный Harvester с
+    update()+reset() «для прогрева». Оказалось, что reset() Hikrobot-продюсера портит
+    его на ВЕСЬ процесс — после этого manager.load_driver в том же процессе перечисляет
+    0 камер, хотя diag (отдельный процесс, без этого reset) находит камеру ОДНИМ enum.
+    Поэтому временный Harvester убран: делаем РОВНО ОДИН enum через manager (как diag
+    STAGE 1 — свежий Harvester, один update), и список сохраняется (фикс load_driver
+    не даёт рабочим потокам uvicorn его затереть)."""
     try:
         import threading as _th
         from logger import log_event as _le
         from camera_core import manager as _cam
         _cam.load_driver()
         _cam.scan_cams()
-        _le("run.warmup", "Camera manager прогрет в главном потоке (список построен здесь)",
+        _le("run.warmup", "Camera manager прогрет в главном потоке (один enum, как diag)",
             "info", {"thread": _th.current_thread().name, "cams": len(_cam.cam_online)})
     except Exception as exc:
         try:

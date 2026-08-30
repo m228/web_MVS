@@ -2844,8 +2844,10 @@ class CameraManager:
                 # переподхватить после обрыва) — тогда прогреваем SDK и обновляем. Если
                 # камеры уже перечислены — НЕ трогаем, иначе список «мигает» в 0.
                 if not self.harvester.device_info_list:
-                    _sdk_gige_warmup()
-                    self.harvester.update()
+                    self.harvester.update()                 # GenTL enum сперва (как diag)
+                    if not self.harvester.device_info_list:  # не нашёл — разбудить NIC через SDK
+                        _sdk_gige_warmup()
+                        self.harvester.update()
                 return
 
             cti_path, cti_source = _discover_cti()
@@ -2858,10 +2860,14 @@ class CameraManager:
             self.harvester.add_file(cti_path)
             # явная загрузка runtime-DLL продюсера (как diag) — иначе enum GigE даёт 0
             _preload_runtime_dlls()
-            # прогрев SDK ДО первого update: без него продюсер перечисляет 0 камер,
-            # когда broadcast-дискавери уходит не на тот сетевой интерфейс (см. _sdk_gige_warmup)
-            _sdk_gige_warmup()
+            # GenTL enum ПЕРВЫМ — ровно как diag STAGE 1 (свежий Harvester → update находит
+            # камеру). ВАЖНО: _sdk_gige_warmup (MVS SDK EnumDevices) до GenTL-update
+            # инициализирует GigE-стек так, что harvester перечисляет 0 (diag без него находит).
+            # Поэтому SDK-прогрев теперь ПОСЛЕ и только если GenTL никого не нашёл.
             self.harvester.update()
+            if not self.harvester.device_info_list:
+                _sdk_gige_warmup()
+                self.harvester.update()
             self.driver_loaded = True
             # в лог пишем, откуда взят продюсер и найден ли его runtime — удобно
             # для диагностики самодостаточной поставки (всё из папки Driver/)

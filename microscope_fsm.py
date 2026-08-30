@@ -29,6 +29,11 @@ from logger import log_event
 CMD_SET_SP1 = 0x1006   # команда мотору М1 «установить SP»
 CMD_SET_SP2 = 0x2006   # команда мотору М2 «установить SP»
 
+# допуск «мотор доехал» (мкм). Реальная плата почти никогда не встаёт РОВНО в цель
+# (энкодер даёт 39990 вместо 40000) — точное pos==цель почти не срабатывает, и шаг
+# цикла ждал полный таймаут 10 с. Считаем «доехал», если в пределах допуска.
+ARRIVE_TOL_UM = 50
+
 STEP_NAMES = {0: "ожидание", 10: "отвод от стекла",
               12: "подвод к стеклу", 13: "промывка после пробы"}
 
@@ -265,8 +270,8 @@ class MicroscopeFSM:
                 # отвод на позицию SP[0]; далее СРАЗУ подвод (промывки ПЕРЕД пробой больше нет)
                 self.m1_sp = self.SP[0]
                 self.t += 1
-                reached = pos1 is not None and pos1 == self.SP[0]
-                if self.t > 100 or reached:            # приехал или таймаут -> подвод
+                reached = pos1 is not None and abs(pos1 - self.SP[0]) <= ARRIVE_TOL_UM
+                if self.t > 100 or reached:            # приехал (±допуск) или таймаут -> подвод
                     self.t = 0
                     self.mode = 12
             elif self.mode == 12:
@@ -276,7 +281,7 @@ class MicroscopeFSM:
                     if self.sv >= self.SVSP[i] and self.SVSP[i] > 0.0:
                         self.m1_sp = self.SP[i]
                 self.t += 1
-                arrived = pos1 is not None and pos1 == self.m1_sp
+                arrived = pos1 is not None and abs(pos1 - self.m1_sp) <= ARRIVE_TOL_UM
                 saw_glass = pos1_ai is not None and pos1_ai < 20
                 if self.t > 100 or arrived or saw_glass:
                     # у стекла: ФОТО (в авто-режиме) + уходим на промывку ПОСЛЕ пробы

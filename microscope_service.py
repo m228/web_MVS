@@ -21,6 +21,9 @@ class MicroscopeService:
         self.sv_source = None
         self._started = False
         self._lock = threading.Lock()
+        # DEBUG (убрать после отладки цикла): перехват ПЛК — при True данные СВ/стадии
+        # из sv_source игнорируются, работает ручной ввод со страницы (см. sv_override).
+        self._sv_override = False
 
     def start(self):
         with self._lock:
@@ -66,6 +69,9 @@ class MicroscopeService:
 
     def _on_sv(self, sv, stage):
         # СВ/стадия из ПЛК -> в автомат (заменяет ручной ввод, пока источник жив)
+        # DEBUG: при перехвате ПЛК не затираем ручной ввод со страницы
+        if self._sv_override:
+            return
         if self.fsm:
             if sv is not None:
                 self.fsm.set_sv(sv)
@@ -143,6 +149,12 @@ class MicroscopeService:
     def set_cyclic(self, on):
         if self.fsm:
             self.fsm.set_cyclic(on)
+
+    def sv_override(self, on):
+        """DEBUG (убрать после отладки): перехват ПЛК. При True sv_source перестаёт
+        затирать ручной СВ/стадию со страницы — можно вбивать значения и смотреть цикл."""
+        self._sv_override = bool(on)
+        return {"sv_override": self._sv_override}
 
     def stop_movement(self, on):
         if self.fsm:

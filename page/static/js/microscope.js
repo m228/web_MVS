@@ -533,6 +533,26 @@
     if ($("svspAdd")) $("svspAdd").addEventListener("click", () => addSvspRow("", ""));
     if ($("svspSave")) $("svspSave").addEventListener("click", saveSvsp);
 
+    // DEBUG: ручной ввод СВ/стадии для отладки цикла (убрать после отладки)
+    const svOv = $("svOverrideToggle");
+    if (svOv) svOv.addEventListener("change", async () => {
+      try {
+        await api("/api/micro/sv_override", { on: svOv.checked ? 1 : 0 });
+        const h = $("svDebugHint");
+        if (h) h.textContent = svOv.checked ? "ПЛК перехвачен — ручной СВ держится" : "ПЛК ведёт СВ";
+        sentCmd("DEBUG перехват ПЛК: " + (svOv.checked ? "вкл" : "выкл"));
+      } catch (e) { const h = $("svDebugHint"); if (h) h.textContent = "ошибка: " + e.message; }
+    });
+    if ($("svManualApply")) $("svManualApply").addEventListener("click", async () => {
+      const sv = $("svManualInp").value, stage = $("stageManualInp").value;
+      try {
+        await api("/api/micro/sv", { value: sv });
+        await api("/api/micro/stage", { value: stage });
+        const h = $("svDebugHint"); if (h) h.textContent = "применено: СВ " + sv + ", стадия " + stage;
+        sentCmd("DEBUG СВ " + sv + " / стадия " + stage);
+      } catch (e) { const h = $("svDebugHint"); if (h) h.textContent = "ошибка: " + e.message; }
+    });
+
     // режим съёмки камеры — галочка (слева поток / справа автомат)
     const camModeT = $("camModeToggle");
     if (camModeT) camModeT.addEventListener("change", () => {

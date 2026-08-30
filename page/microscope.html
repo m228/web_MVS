@@ -330,6 +330,26 @@
                   <span class="micro-conn-hint" id="svspHint"></span>
                 </div>
                 <p class="micro-plc-note">SP[0]=отвод и SP[50]=промывка правятся в <code>plate_config.json</code>; тут — кривая подвода SP[1..] по порогам СВ.</p>
+
+                <!-- DEBUG: ручной ввод СВ/стадии для отладки цикла. УБРАТЬ после отладки. -->
+                <div class="micro-debug" id="svDebug">
+                  <div class="micro-debug__head">
+                    <span class="micro-debug__tag">DEBUG</span>
+                    <span class="micro-debug__title">Ручной ввод СВ — проверка цикла</span>
+                  </div>
+                  <label class="micro-check micro-debug__grab" title="При включении данные с ПЛК аппарата НЕ затирают ручной СВ. Нужно для теста на сервере.">
+                    <input type="checkbox" id="svOverrideToggle" />
+                    <span class="micro-check__text">Перехватить ПЛК <span class="micro-ro">(держать ручной СВ)</span></span>
+                  </label>
+                  <div class="micro-debug__row">
+                    <label class="micro-debug__f"><span>СВ (Brix)</span>
+                      <input type="number" id="svManualInp" step="0.1" min="0" max="100" value="82" /></label>
+                    <label class="micro-debug__f"><span>Стадия</span>
+                      <input type="number" id="stageManualInp" step="1" min="0" value="5" /></label>
+                    <button type="button" id="svManualApply" class="toolbar-btn toolbar-btn--primary">Применить</button>
+                  </div>
+                  <span class="micro-conn-hint" id="svDebugHint"></span>
+                </div>
               </div>
 
               <!-- Параметры камеры (нативно; поток/кнопки — вверху, телеметрия — под видео) -->

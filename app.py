@@ -184,6 +184,14 @@ def micro_cyclic(on: int):
     return {"status": "ok", "cyclic": bool(on)}
 
 
+@app.get("/api/micro/sv_override")
+def micro_sv_override(on: int):
+    # DEBUG (убрать после отладки цикла): перехват ПЛК — ручной СВ не затирается sv_source
+    res = micro.sv_override(bool(on))
+    api_log("api.micro.sv_override", "DEBUG: перехват ПЛК (ручной СВ)", payload={"on": bool(on)})
+    return {"status": "ok", **res}
+
+
 @app.get("/api/micro/stop")
 def micro_stop(on: int = 1):
     micro.stop_movement(bool(on))

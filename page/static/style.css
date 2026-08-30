@@ -3254,6 +3254,13 @@ html {
 .micro-debug__live { display: flex; flex-wrap: wrap; gap: 8px 18px; margin-top: 12px; padding-top: 10px; border-top: 1px dashed var(--border-strong); font-size: .9em; }
 .micro-debug__live b { color: var(--text); font-variant-numeric: tabular-nums; }
 
+/* вкладка «Инфо»: справка по циклу */
+.micro-info__lead { margin: 6px 0 14px; color: var(--text); line-height: 1.5; }
+.micro-info__steps { margin: 0 0 14px; padding-left: 22px; display: flex; flex-direction: column; gap: 8px; line-height: 1.45; }
+.micro-info__steps li { color: var(--muted); }
+.micro-info__steps b { color: var(--text); }
+.micro-info__note { margin: 8px 0; padding: 8px 12px; border-left: 3px solid var(--border-strong); background: var(--surface-muted); border-radius: 6px; color: var(--muted); line-height: 1.45; font-size: .92em; }
+
 /* пульт */
 .micro-pult__head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 10px; flex-wrap: wrap; }
 .micro-pult__title { font-weight: 600; font-size: 1.05em; }

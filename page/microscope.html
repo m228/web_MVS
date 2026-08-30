@@ -148,6 +148,10 @@
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 4h16v16H4zM4 10h16M4 15h16M10 10v10"/></svg>
                 <span>СВ/МКМ</span>
               </button>
+              <button type="button" class="micro-ptab" data-ptab="info" title="Как работает цикл пробы + отладка" aria-label="Информация и отладка">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/></svg>
+                <span>Инфо</span>
+              </button>
             </div>
 
             <p class="micro-panel__hint" id="manualHint">Включи «Ручной режим», чтобы управлять моторами и выходами.</p>
@@ -330,33 +334,6 @@
                   <span class="micro-conn-hint" id="svspHint"></span>
                 </div>
                 <p class="micro-plc-note">SP[0]=отвод и SP[50]=промывка правятся в <code>plate_config.json</code>; тут — кривая подвода SP[1..] по порогам СВ.</p>
-
-                <!-- DEBUG: ручной ввод СВ/стадии для отладки цикла. УБРАТЬ после отладки. -->
-                <div class="micro-debug" id="svDebug">
-                  <div class="micro-debug__head">
-                    <span class="micro-debug__tag">DEBUG</span>
-                    <span class="micro-debug__title">Ручной ввод СВ — проверка цикла</span>
-                  </div>
-                  <label class="micro-check micro-debug__grab" title="При включении данные с ПЛК аппарата НЕ затирают ручной СВ. Нужно для теста на сервере.">
-                    <input type="checkbox" id="svOverrideToggle" />
-                    <span class="micro-check__text">Перехватить ПЛК <span class="micro-ro">(держать ручной СВ)</span></span>
-                  </label>
-                  <div class="micro-debug__row">
-                    <label class="micro-debug__f"><span>СВ (Brix)</span>
-                      <input type="number" id="svManualInp" step="0.1" min="0" max="100" value="82" /></label>
-                    <label class="micro-debug__f"><span>Стадия</span>
-                      <input type="number" id="stageManualInp" step="1" min="0" value="5" /></label>
-                    <button type="button" id="svManualApply" class="toolbar-btn toolbar-btn--primary">Применить</button>
-                    <button type="button" id="svCycleNow" class="toolbar-btn toolbar-btn--neutral" title="Произвести цикл немедленно (отвод → подвод по СВ), не ждя таймера">Запустить цикл сейчас</button>
-                  </div>
-                  <span class="micro-conn-hint" id="svDebugHint"></span>
-                  <div class="micro-debug__live">
-                    <span>Шаг: <b id="dbgStep">—</b></span>
-                    <span>СВ автомата: <b id="dbgSv">—</b></span>
-                    <span>Зазор SP: <b id="dbgSp">—</b></span>
-                    <span>Позиция М1: <b id="dbgPos">—</b></span>
-                  </div>
-                </div>
               </div>
 
               <!-- Параметры камеры (нативно; поток/кнопки — вверху, телеметрия — под видео) -->
@@ -406,6 +383,48 @@
                   </div>
                 </div>
                 <button type="button" id="camApplyBtn" class="toolbar-btn toolbar-btn--primary micro-cam-apply" disabled>Применить</button>
+              </div>
+
+              <!-- Инфо: как работает цикл пробы + отладка -->
+              <div class="micro-ppane hidden" data-ppane="info">
+                <div class="micro-sub__title">Как работает цикл пробы</div>
+                <p class="micro-info__lead">Микроскоп сам берёт пробу по кругу: отводит объектив от стекла, подводит обратно на нужный зазор (тем ближе, чем гуще утфель по СВ), снимает кадр и промывает. Ниже — шаги автомата (нумерация 1:1 с программой ПЛК, поэтому с «дырами»).</p>
+                <ol class="micro-info__steps">
+                  <li><b>Шаг 0 — Ожидание.</b> Простой между пробами. Цикл стартует по таймеру (в режиме «Автомат») или по кнопке «Запустить цикл сейчас».</li>
+                  <li><b>Шаг 10 — Отвод от стекла.</b> Мотор М1 отходит на SP[0] (~40 мм), освобождая стекло.</li>
+                  <li><b>Шаг 12 — Подвод к стеклу.</b> М1 подходит на зазор SP[i], выбранный по СВ (таблица во вкладке «СВ/МКМ»): чем выше СВ (Brix), тем ближе к стеклу. У стекла снимается кадр.</li>
+                  <li><b>Шаг 13 — Промывка.</b> Обе промывки (трубка + стекло) на ~3–5 с, затем возврат в Ожидание (0).</li>
+                </ol>
+                <p class="micro-info__note"><b>Важно:</b> сама по себе СВ платформу не двигает — она лишь задаёт зазор на шаге подвода. Чтобы увидеть движение, нужно запустить цикл. Период авто-цикла: стадия 5 — 5 с, стадия 7 — 10 с, иначе 30 с.</p>
+                <p class="micro-info__note">Ежечасная промывка (вкладка «LED/DQ») открывает обе промывки ~5 с раз в час — только в простое, от засахаривания.</p>
+
+                <!-- DEBUG: ручной ввод СВ/стадии для отладки цикла. УБРАТЬ после отладки. -->
+                <div class="micro-debug" id="svDebug">
+                  <div class="micro-debug__head">
+                    <span class="micro-debug__tag">DEBUG</span>
+                    <span class="micro-debug__title">Ручной ввод СВ — проверка цикла</span>
+                  </div>
+                  <p class="micro-info__note">Порядок: 1) плата на связи; 2) режим «Автомат»; 3) «Перехватить ПЛК»; 4) вбей СВ/стадию → «Применить»; 5) «Запустить цикл сейчас». Ниже видно шаг и куда едет М1.</p>
+                  <label class="micro-check micro-debug__grab" title="При включении данные с ПЛК аппарата НЕ затирают ручной СВ. Нужно для теста на сервере.">
+                    <input type="checkbox" id="svOverrideToggle" />
+                    <span class="micro-check__text">Перехватить ПЛК <span class="micro-ro">(держать ручной СВ)</span></span>
+                  </label>
+                  <div class="micro-debug__row">
+                    <label class="micro-debug__f"><span>СВ (Brix)</span>
+                      <input type="number" id="svManualInp" step="0.1" min="0" max="100" value="82" /></label>
+                    <label class="micro-debug__f"><span>Стадия</span>
+                      <input type="number" id="stageManualInp" step="1" min="0" value="5" /></label>
+                    <button type="button" id="svManualApply" class="toolbar-btn toolbar-btn--primary">Применить</button>
+                    <button type="button" id="svCycleNow" class="toolbar-btn toolbar-btn--neutral" title="Произвести цикл немедленно (отвод → подвод по СВ), не ждя таймера">Запустить цикл сейчас</button>
+                  </div>
+                  <span class="micro-conn-hint" id="svDebugHint"></span>
+                  <div class="micro-debug__live">
+                    <span>Шаг: <b id="dbgStep">—</b></span>
+                    <span>СВ автомата: <b id="dbgSv">—</b></span>
+                    <span>Зазор SP: <b id="dbgSp">—</b></span>
+                    <span>Позиция М1: <b id="dbgPos">—</b></span>
+                  </div>
+                </div>
               </div>
 
             </div>

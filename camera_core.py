@@ -247,6 +247,45 @@ def _register_driver_dll_dir():
 _register_driver_dll_dir()
 
 
+# Явная загрузка runtime-DLL продюсера через ctypes ДО первого enum. КЛЮЧЕВОЕ отличие
+# приложения от diag: diag грузит эти DLL (в т.ч. MVGigEVisionSDK.dll — GigE-транспорт)
+# через ctypes.WinDLL и НАХОДИТ камеру, а приложение полагалось только на harvester и
+# видело 0 устройств. Явная предзагрузка в главном потоке инициализирует сетевой стек
+# SDK — после неё enum перечисляет GigE-камеру (воспроизводим рабочий путь diag).
+_runtime_preloaded = False
+
+
+def _preload_runtime_dlls():
+    global _runtime_preloaded
+    if _runtime_preloaded:
+        return
+    cti, _ = _discover_cti()
+    if cti is None:
+        return
+    cti_dir = cti.parent
+    try:
+        if hasattr(os, "add_dll_directory") and cti_dir.is_dir():
+            os.add_dll_directory(str(cti_dir))
+    except Exception:
+        pass
+    patterns = ["MvCameraControl.dll", "GenApi_*.dll", "GCBase_*.dll", "Log_*.dll",
+                "MvRender*.dll", "MVGigEVisionSDK*.dll", "MvProducerGEV.cti"]
+    loaded, seen = [], set()
+    for pat in patterns:
+        for dll in sorted(cti_dir.glob(pat)):
+            if dll.name in seen:
+                continue
+            seen.add(dll.name)
+            try:
+                ctypes.WinDLL(str(dll))
+                loaded.append(dll.name)
+            except Exception:
+                pass
+    _runtime_preloaded = True
+    log_event("camera_core.driver", "Runtime-DLL продюсера предзагружены (как в diag)",
+              "info", {"loaded": loaded})
+
+
 # Путь к runtime-DLL продюсера (рядом с .cti или в PATH), либо None.
 def _find_mvs_runtime():
     cti, _ = _discover_cti()
@@ -2817,6 +2856,8 @@ class CameraManager:
 
             cti_path = str(cti_path)
             self.harvester.add_file(cti_path)
+            # явная загрузка runtime-DLL продюсера (как diag) — иначе enum GigE даёт 0
+            _preload_runtime_dlls()
             # прогрев SDK ДО первого update: без него продюсер перечисляет 0 камер,
             # когда broadcast-дискавери уходит не на тот сетевой интерфейс (см. _sdk_gige_warmup)
             _sdk_gige_warmup()

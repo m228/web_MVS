@@ -347,8 +347,15 @@
                     <label class="micro-debug__f"><span>Стадия</span>
                       <input type="number" id="stageManualInp" step="1" min="0" value="5" /></label>
                     <button type="button" id="svManualApply" class="toolbar-btn toolbar-btn--primary">Применить</button>
+                    <button type="button" id="svCycleNow" class="toolbar-btn toolbar-btn--neutral" title="Произвести цикл немедленно (отвод → подвод по СВ), не ждя таймера">Запустить цикл сейчас</button>
                   </div>
                   <span class="micro-conn-hint" id="svDebugHint"></span>
+                  <div class="micro-debug__live">
+                    <span>Шаг: <b id="dbgStep">—</b></span>
+                    <span>СВ автомата: <b id="dbgSv">—</b></span>
+                    <span>Зазор SP: <b id="dbgSp">—</b></span>
+                    <span>Позиция М1: <b id="dbgPos">—</b></span>
+                  </div>
                 </div>
               </div>
 

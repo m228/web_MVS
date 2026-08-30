@@ -3251,6 +3251,8 @@ html {
 .micro-debug__row { display: flex; align-items: flex-end; gap: 12px; flex-wrap: wrap; }
 .micro-debug__f { display: flex; flex-direction: column; gap: 4px; font-size: .88em; }
 .micro-debug__f input { width: 100px; }
+.micro-debug__live { display: flex; flex-wrap: wrap; gap: 8px 18px; margin-top: 12px; padding-top: 10px; border-top: 1px dashed var(--border-strong); font-size: .9em; }
+.micro-debug__live b { color: var(--text); font-variant-numeric: tabular-nums; }
 
 /* пульт */
 .micro-pult__head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 10px; flex-wrap: wrap; }

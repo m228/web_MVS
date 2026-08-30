@@ -408,6 +408,12 @@
       set("valveTube", f.valve_tube ? "открыт" : "закрыт");
       set("valveGlass", f.valve_glass ? "открыт" : "закрыт");
 
+      // DEBUG live-строка (обратная связь ручного ввода СВ): шаг/СВ/зазор/позиция
+      set("dbgStep", f.step == null ? "—" : f.step + " (" + f.mode + ")");
+      set("dbgSv", f.sv == null ? "—" : Number(f.sv).toFixed(2));
+      set("dbgSp", f.m1_sp == null ? "—" : um(f.m1_sp));
+      set("dbgPos", um(t.pos1));
+
       // система
       set("tVer", num(e.version));
       set("tModVer", e.module_ver == null ? "—" : (HW[e.module_ver] || e.module_ver));
@@ -550,6 +556,14 @@
         await api("/api/micro/stage", { value: stage });
         const h = $("svDebugHint"); if (h) h.textContent = "применено: СВ " + sv + ", стадия " + stage;
         sentCmd("DEBUG СВ " + sv + " / стадия " + stage);
+      } catch (e) { const h = $("svDebugHint"); if (h) h.textContent = "ошибка: " + e.message; }
+    });
+    // DEBUG: запустить цикл немедленно (cmd=100 -> отвод SP[0] -> подвод по СВ)
+    if ($("svCycleNow")) $("svCycleNow").addEventListener("click", async () => {
+      try {
+        await api("/api/micro/command", { cmd: 100 });
+        const h = $("svDebugHint"); if (h) h.textContent = "цикл запущен — смотри «Шаг» ниже (10→12→13)";
+        sentCmd("DEBUG запуск цикла (cmd 100)");
       } catch (e) { const h = $("svDebugHint"); if (h) h.textContent = "ошибка: " + e.message; }
     });
 

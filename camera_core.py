@@ -2799,11 +2799,14 @@ class CameraManager:
             # регистрируется дублями и устройства задваиваются → "multiple devices found"),
             # только обновляем список устройств
             if self.driver_loaded:
-                # камер не видно — возможно, слой не «прогрет» SDK'ом (broadcast ушёл не
-                # на тот NIC); прогреваем и повторяем
+                # ВАЖНО: повторный update() на живом Harvester дестабилизирует
+                # Hikrobot-продюсер (та же болезнь, что в create_acquirer: -1006/пустой
+                # список). Поэтому update ТОЛЬКО когда камер НЕ видно (надо найти или
+                # переподхватить после обрыва) — тогда прогреваем SDK и обновляем. Если
+                # камеры уже перечислены — НЕ трогаем, иначе список «мигает» в 0.
                 if not self.harvester.device_info_list:
                     _sdk_gige_warmup()
-                self.harvester.update()
+                    self.harvester.update()
                 return
 
             cti_path, cti_source = _discover_cti()

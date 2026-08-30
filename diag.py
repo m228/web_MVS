@@ -207,8 +207,15 @@ def main():
         from camera_core import manager
         manager.load_driver()
         manager.scan_cams()
-        worker = manager.get("DA5896461")
-        worker.select_interface(device_handle="Hikrobot MV-CS050-10GC (DA5896461)#0")
+        # берём РЕАЛЬНО найденную камеру (не хардкод старого серийника)
+        serials = list(manager.cam_online.keys())
+        if not serials:
+            print("  STAGE 3: камер не найдено при scan_cams — пропуск")
+            print("\nГотово. Пришли мне весь вывод этого скрипта.")
+            return
+        serial = serials[0]
+        print("  открываю камеру:", serial)
+        worker = manager.get(serial)
         node_map, ia = worker.open_node_map()
         if node_map is not None:
             print("  open_node_map(): OK ->",

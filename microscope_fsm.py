@@ -241,7 +241,9 @@ class MicroscopeFSM:
                     self.cw0 = False
                     self.cw1 = False
 
-            # 4) команда с ВУ (по фронту cmd<>cmd_old)
+            # 4) команда с ВУ (по фронту cmd<>cmd_old). ИМПУЛЬСНАЯ: после обработки
+            # сбрасываем cmd/cmd_old в 0, иначе повторная та же команда (напр. cmd=100
+            # «запустить цикл») не даёт фронта и не срабатывает второй раз.
             if self.cmd != self.cmd_old:
                 c = self.cmd // 100
                 if c == 1:
@@ -253,7 +255,8 @@ class MicroscopeFSM:
                     self.u = int(self.SP[50]) // 100
                 elif c == 4:
                     self.sw0 = not self.sw0            # переключить циклический режим
-                self.cmd_old = self.cmd
+                self.cmd = 0                           # команда потреблена
+                self.cmd_old = 0
 
             # 5) движение (case mode, 1:1 с ST)
             if self.mode == 0:

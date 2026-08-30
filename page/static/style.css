@@ -3105,13 +3105,21 @@ html {
 .micro-panel.is-locked .micro-secondary { opacity: .5; pointer-events: none; filter: grayscale(.3); }
 
 /* переключатель ручного режима */
-.micro-switch { display: inline-flex; align-items: center; gap: 10px; cursor: pointer; user-select: none; }
+.micro-switch { display: inline-flex; flex-direction: row; align-items: center; gap: 10px; cursor: pointer; user-select: none; }
 .micro-switch input { position: absolute; opacity: 0; width: 0; height: 0; }
 .micro-switch__track { width: 44px; height: 24px; border-radius: 999px; background: var(--surface-muted); border: 1px solid var(--border-strong); position: relative; transition: background .15s; }
 .micro-switch__thumb { position: absolute; top: 2px; left: 2px; width: 18px; height: 18px; border-radius: 50%; background: var(--muted); transition: transform .15s, background .15s; }
 .micro-switch input:checked + .micro-switch__track { background: var(--success-soft); border-color: var(--success); }
 .micro-switch input:checked + .micro-switch__track .micro-switch__thumb { transform: translateX(20px); background: var(--success); }
 .micro-switch__label { font-size: 0.92em; }
+
+/* режимный переключатель: слева — Автомат (зелёный), справа — Ручной режим (жёлтый) */
+.micro-switch--manual .micro-switch__track { background: var(--success-soft); border-color: var(--success); }
+.micro-switch--manual .micro-switch__thumb { background: var(--success); }
+.micro-switch--manual input:checked + .micro-switch__track { background: var(--warning-soft); border-color: var(--warning); }
+.micro-switch--manual input:checked + .micro-switch__track .micro-switch__thumb { transform: translateX(20px); background: var(--warning); }
+.micro-switch--manual .micro-switch__label { font-weight: 700; color: var(--success); }
+.micro-switch--manual.is-manual .micro-switch__label { color: var(--warning); }
 
 .micro-panel__body { margin-top: 14px; }
 .micro-motors { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
@@ -3228,9 +3236,11 @@ html {
 .svsp-del:hover { color: var(--danger, #e24b4a); }
 .micro-svsp-actions { display: flex; align-items: center; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
 
-/* галочка (ежечасная промывка и пр.) */
-.micro-check { display: flex; align-items: center; gap: 8px; cursor: pointer; }
-.micro-check input { width: auto; margin: 0; flex: 0 0 auto; }
+/* галочка (ежечасная промывка и пр.): чекбокс слева, надпись справа — одной строкой */
+.micro-check { display: inline-flex; flex-direction: row; align-items: center; justify-content: flex-start; gap: 10px; cursor: pointer; text-align: left; color: var(--text); }
+.micro-check input { width: auto; height: auto; min-height: 0; margin: 0; padding: 0; flex: 0 0 auto; }
+.micro-check__text { line-height: 1.25; }
+.micro-wash { display: flex; }
 
 /* пульт */
 .micro-pult__head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 10px; flex-wrap: wrap; }

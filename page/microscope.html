@@ -49,7 +49,7 @@
             <span class="micro-hero__utils">
               <button type="button" id="btnReload" class="toolbar-btn toolbar-btn--neutral micro-hero__util" title="Применить plate_config.json без перезапуска">Перезагрузить конфиг</button>
               <button type="button" id="logsBtn" class="toolbar-btn toolbar-btn--neutral toolbar-btn--logs micro-hero__util" title="Открыть журнал (логи платы и команды)">Логи <span class="log-counter" id="logCounter">0</span></button>
-              <a href="/" class="btn btn-secondary micro-hero__util">На главную</a>
+              <a href="/" class="toolbar-btn toolbar-btn--neutral micro-hero__util">На главную</a>
             </span>
           </div>
           <div class="micro-hero__row">
@@ -112,10 +112,10 @@
           <section class="card micro-pult" id="microPult">
             <div class="micro-pult__head">
               <span class="micro-pult__title">Пульт платы</span>
-              <label class="micro-switch" for="manualToggle" title="В ручном режиме моторами рулит пульт (авто-цикл стоит)">
+              <label class="micro-switch micro-switch--manual" for="manualToggle" title="Слева — Автомат (идёт авто-цикл пробы). Справа — Ручной режим (моторами рулит пульт, авто-цикл стоит).">
                 <input type="checkbox" id="manualToggle" />
                 <span class="micro-switch__track"><span class="micro-switch__thumb"></span></span>
-                <span class="micro-switch__label">Ручной режим: <strong id="manualState">выкл</strong></span>
+                <span class="micro-switch__label" id="manualState">Автомат</span>
               </label>
             </div>
 
@@ -256,10 +256,12 @@
                   <div class="micro-tile"><span>Входы DI</span><b id="tDi2">—</b></div>
                   <div class="micro-tile"><span>Выходы DQ</span><b id="tDq2">—</b></div>
                 </div>
-                <label class="micro-check micro-sub__title--sep" title="Раз в час открыть обе промывки на ~5 с (от засахаривания). Идёт только в простое.">
-                  <input type="checkbox" id="hourlyWashToggle" checked />
-                  <span>Ежечасная промывка <span class="micro-ro">(обе, ~5 с, авто раз в час)</span></span>
-                </label>
+                <div class="micro-wash micro-sub__title--sep">
+                  <label class="micro-check" title="Раз в час открыть обе промывки на ~5 с (от засахаривания). Идёт только в простое.">
+                    <input type="checkbox" id="hourlyWashToggle" checked />
+                    <span class="micro-check__text">Ежечасная промывка <span class="micro-ro">(обе, ~5 с, авто раз в час)</span></span>
+                  </label>
+                </div>
               </div>
 
               <!-- Настройки моторов + охлаждение (объединены; только чтение) -->

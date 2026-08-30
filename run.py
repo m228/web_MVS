@@ -110,6 +110,25 @@ def _warmup():
         except Exception:
             pass
 
+    # КЛЮЧЕВОЕ (frozen: приложение видит 0 камер): построить список камер ИМЕННО в главном
+    # потоке ДО старта uvicorn. load_driver сам делает _sdk_gige_warmup (обход всех NIC через
+    # MVS SDK) + enum — из рабочих потоков uvicorn это даёт 0, а здесь (как в --diag) находит.
+    # Фикс load_driver затем не даёт рабочим потокам затереть уже построенный список.
+    try:
+        import threading as _th
+        from logger import log_event as _le
+        from camera_core import manager as _cam
+        _cam.load_driver()
+        _cam.scan_cams()
+        _le("run.warmup", "Camera manager прогрет в главном потоке (список построен здесь)",
+            "info", {"thread": _th.current_thread().name, "cams": len(_cam.cam_online)})
+    except Exception as exc:
+        try:
+            from logger import log_event as _le
+            _le("run.warmup", "Прогрев camera manager не выполнен", "warn", {"error": str(exc)})
+        except Exception:
+            pass
+
 
 def main():
     if "--diag" in sys.argv or os.environ.get("WEB_MVS_DIAG"):

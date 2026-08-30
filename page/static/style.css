@@ -3219,7 +3219,9 @@ html {
 
 /* тулбар: кнопка + поле (интервал фото / длительность видео) */
 .micro-cam-save { display: inline-flex; align-items: center; gap: 4px; }
-.micro-cam-num { width: 44px; padding: 4px 5px; text-align: center; -moz-appearance: textfield; }
+/* input.micro-cam-num — селектор с element+class, чтобы перебить глобальный
+   input[type=number]{width:100%} (иначе поля Фото/Видео растягиваются на всю ширину) */
+input.micro-cam-num { width: 56px; min-width: 0; flex: 0 0 auto; padding: 4px 5px; text-align: center; -moz-appearance: textfield; }
 .micro-cam-num::-webkit-outer-spin-button, .micro-cam-num::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
 .micro-cam-unit { color: var(--muted); font-size: 0.85em; }
 

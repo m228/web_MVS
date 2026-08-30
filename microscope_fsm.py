@@ -52,6 +52,9 @@ class MicroscopeFSM:
         self._hw_off = int(hw.get("sec_off", 59))
 
         self._period = max(0.02, int(config["poll_interval_ms"]) / 1000.0)
+        # предохранитель шага цикла (тики по 100мс): нормальный выход — «доехал», а это
+        # защита от зависания. Большой, т.к. реальная плата едет медленно (см. step_timeout_s).
+        self._step_timeout_ticks = max(1, int(config.get("step_timeout_s", 300)) * 10)
 
         # входы (задаются извне; на этапе A заменятся чтением из ПЛК)
         self.sv = float(config.get("manual_sv", 0.0))
@@ -271,7 +274,7 @@ class MicroscopeFSM:
                 self.m1_sp = self.SP[0]
                 self.t += 1
                 reached = pos1 is not None and abs(pos1 - self.SP[0]) <= ARRIVE_TOL_UM
-                if self.t > 100 or reached:            # приехал (±допуск) или таймаут -> подвод
+                if reached or self.t > self._step_timeout_ticks:   # доехал (±допуск) или предохранитель -> подвод
                     self.t = 0
                     self.mode = 12
             elif self.mode == 12:
@@ -283,7 +286,7 @@ class MicroscopeFSM:
                 self.t += 1
                 arrived = pos1 is not None and abs(pos1 - self.m1_sp) <= ARRIVE_TOL_UM
                 saw_glass = pos1_ai is not None and pos1_ai < 20
-                if self.t > 100 or arrived or saw_glass:
+                if arrived or saw_glass or self.t > self._step_timeout_ticks:
                     # у стекла: ФОТО (в авто-режиме) + уходим на промывку ПОСЛЕ пробы
                     self._photo_request = True
                     self.wash_t = self._wash_ticks()

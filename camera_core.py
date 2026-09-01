@@ -2340,21 +2340,36 @@ class RtspCameraWorker(BaseCameraWorker):
             return {"error": "no_host"}
         return {"state": dahua_control.get_white_light(host, user, password)}
 
-    def optical_zoom(self, direction):
-        """Оптический зум камеры (если поддерживается). direction: tele|wide|stop."""
+    def optical_zoom(self, direction, speed=1):
+        """Оптический зум камеры (если поддерживается). direction: tele|wide|stop; speed 1..8."""
         host, user, password = self._dahua_creds()
         if not host:
             return {"error": "no_host"}
-        ok = dahua_control.optical_zoom(host, user, password, direction)
+        ok = dahua_control.optical_zoom(host, user, password, direction, speed)
         return {"status": "ok" if ok else "failed", "direction": direction, "mode": "optical"}
 
     def focus(self, direction):
-        """Ручной фокус камеры (если поддерживается). direction: near|far|stop."""
+        """Ручной фокус камеры (относительно). direction: near|far|stop."""
         host, user, password = self._dahua_creds()
         if not host:
             return {"error": "no_host"}
         ok = dahua_control.focus(host, user, password, direction)
         return {"status": "ok" if ok else "failed", "direction": direction}
+
+    def set_focus_abs(self, value):
+        """Абсолютный фокус (0.0..1.0) — для ползунка."""
+        host, user, password = self._dahua_creds()
+        if not host:
+            return {"error": "no_host"}
+        ok = dahua_control.set_focus_abs(host, user, password, value)
+        return {"status": "ok" if ok else "failed", "focus": value}
+
+    def lens_status(self):
+        """Текущие позиции зума/фокуса (0..1) — для инициализации ползунков."""
+        host, user, password = self._dahua_creds()
+        if not host:
+            return {"error": "no_host"}
+        return dahua_control.get_lens_status(host, user, password)
 
     def auto_focus(self):
         """Разовый автофокус (наведение резкости)."""

@@ -252,40 +252,29 @@
     </div>
   </div>
 
-  <!-- модалка: оптика (оптический зум + фокус + автофокус) -->
-  <div class="modal-backdrop" id="multiOpticModal" aria-hidden="true">
-    <div class="network-modal__card" role="dialog" aria-modal="true">
-      <div class="network-modal__header">
-        <div class="network-modal__title-group">
-          <h2>Оптика: зум и фокус</h2>
-          <span class="network-modal__serial">Камера: <strong id="multiOpticSerial">-</strong></span>
-        </div>
-        <button type="button" class="modal-close-btn" id="multiOpticClose" aria-label="Закрыть">×</button>
-      </div>
-      <div class="network-modal__body">
-        <p class="cap-line" id="multiOpticCap" data-state="unknown"><span class="cap-dot"></span><span class="cap-text">Проверяю…</span></p>
-        <p class="optic-hint" id="multiOpticHint" hidden>Оптический зум/фокус этой камерой не поддерживается.</p>
+  <!-- popup оптики (под иконкой): оптический зум-jog + фокус-ползунок + автофокус -->
+  <div class="card zoom-card-popup" id="multiOpticCard">
+    <h2>Оптика: зум и фокус</h2>
+    <p class="cap-line" id="multiOpticCap" data-state="unknown"><span class="cap-dot"></span><span class="cap-text">Проверяю…</span></p>
+    <p class="optic-hint" id="multiOpticHint" hidden>Оптический зум/фокус этой камерой не поддерживается.</p>
 
-        <div class="optic-group" id="multiOpticalZoomControls" hidden>
-          <span class="optic-group__lab">Зум</span>
-          <div class="optic-row">
-            <button type="button" class="toolbar-btn toolbar-btn--neutral optic-hold" data-optical="wide" title="Уменьшить (Wide) — удерживай">Wide −</button>
-            <button type="button" class="toolbar-btn toolbar-btn--neutral optic-hold" data-optical="tele" title="Приблизить (Tele) — удерживай">+ Tele</button>
-          </div>
-        </div>
+    <div class="optic-group" id="multiOpticalZoomControls" hidden>
+      <div class="optic-group__head">
+        <span class="optic-group__lab">Зум</span>
+        <label class="optic-step">шаг
+          <select id="multiZoomStep"><option value="1">1</option><option value="2">2</option><option value="4" selected>4</option><option value="6">6</option><option value="8">8</option></select>
+        </label>
+      </div>
+      <input type="range" class="optic-slider optic-slider--jog" id="multiZoomSlider" min="-100" max="100" value="0" step="1" title="Тяни — зум едет (Wide ← → Tele), отпусти — стоп" />
+    </div>
 
-        <div class="optic-group" id="multiFocusControls" hidden>
-          <span class="optic-group__lab">Фокус</span>
-          <div class="optic-row">
-            <button type="button" class="toolbar-btn toolbar-btn--neutral optic-hold" data-focus="near" title="Ближе — удерживай">Ближе −</button>
-            <button type="button" class="toolbar-btn toolbar-btn--neutral optic-hold" data-focus="far" title="Дальше — удерживай">+ Дальше</button>
-          </div>
-          <button type="button" id="multiAutoFocusBtn" class="toolbar-btn toolbar-btn--primary optic-af">Автофокус</button>
-        </div>
+    <div class="optic-group" id="multiFocusControls" hidden>
+      <div class="optic-group__head">
+        <span class="optic-group__lab">Фокус</span>
+        <b class="optic-val" id="multiFocusVal">—</b>
       </div>
-      <div class="network-modal__footer">
-        <button type="button" class="btn-secondary" id="multiOpticCloseFooter">Закрыть</button>
-      </div>
+      <input type="range" class="optic-slider" id="multiFocusSlider" min="0" max="100" value="50" step="1" title="Позиция фокуса" />
+      <button type="button" id="multiAutoFocusBtn" class="toolbar-btn toolbar-btn--primary optic-af">Автофокус</button>
     </div>
   </div>
 

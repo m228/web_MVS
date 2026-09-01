@@ -287,19 +287,21 @@
           <p class="optic-hint" id="zoomOpticalHint" hidden>Оптический зум/фокус этой камерой не поддерживается.</p>
 
           <div class="optic-group" id="opticalZoomControls" hidden>
-            <span class="optic-group__lab">Зум</span>
-            <div class="optic-row">
-              <button type="button" class="toolbar-btn toolbar-btn--neutral optic-hold" data-optical="wide" title="Уменьшить (Wide) — удерживай">Wide −</button>
-              <button type="button" class="toolbar-btn toolbar-btn--neutral optic-hold" data-optical="tele" title="Приблизить (Tele) — удерживай">+ Tele</button>
+            <div class="optic-group__head">
+              <span class="optic-group__lab">Зум</span>
+              <label class="optic-step">шаг
+                <select id="zoomStep"><option value="1">1</option><option value="2">2</option><option value="4" selected>4</option><option value="6">6</option><option value="8">8</option></select>
+              </label>
             </div>
+            <input type="range" class="optic-slider optic-slider--jog" id="zoomSlider" min="-100" max="100" value="0" step="1" title="Тяни — зум едет (Wide ← → Tele), отпусти — стоп" />
           </div>
 
           <div class="optic-group" id="focusControls" hidden>
-            <span class="optic-group__lab">Фокус</span>
-            <div class="optic-row">
-              <button type="button" class="toolbar-btn toolbar-btn--neutral optic-hold" data-focus="near" title="Ближе — удерживай">Ближе −</button>
-              <button type="button" class="toolbar-btn toolbar-btn--neutral optic-hold" data-focus="far" title="Дальше — удерживай">+ Дальше</button>
+            <div class="optic-group__head">
+              <span class="optic-group__lab">Фокус</span>
+              <b class="optic-val" id="focusVal">—</b>
             </div>
+            <input type="range" class="optic-slider" id="focusSlider" min="0" max="100" value="50" step="1" title="Позиция фокуса" />
             <button type="button" id="autoFocusBtn" class="toolbar-btn toolbar-btn--primary optic-af">Автофокус</button>
           </div>
         </div>

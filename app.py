@@ -915,14 +915,22 @@ def rtsp_zoom(serial_number: str, factor: float | None = None,
 
 
 @app.get("/api/rtsp/optical_zoom")
-def rtsp_optical_zoom(serial_number: str, direction: str):
+def rtsp_optical_zoom(serial_number: str, direction: str, speed: int = 1):
     worker = manager.get_rtsp(serial_number)
     if worker is None:
         return {"error": "rtsp_not_connected"}
-    data = worker.optical_zoom(direction)
+    data = worker.optical_zoom(direction, speed)
     api_log("api.rtsp.optical_zoom", "Оптический зум RTSP",
-            payload={"serial_number": serial_number, "direction": direction, "result": data})
+            payload={"serial_number": serial_number, "direction": direction, "speed": speed, "result": data})
     return data
+
+
+@app.get("/api/rtsp/lens_status")
+def rtsp_lens_status(serial_number: str):
+    worker = manager.get_rtsp(serial_number)
+    if worker is None:
+        return {"error": "rtsp_not_connected"}
+    return worker.lens_status()
 
 
 @app.get("/api/rtsp/focus")
@@ -933,6 +941,17 @@ def rtsp_focus(serial_number: str, direction: str):
     data = worker.focus(direction)
     api_log("api.rtsp.focus", "Ручной фокус RTSP",
             payload={"serial_number": serial_number, "direction": direction, "result": data})
+    return data
+
+
+@app.get("/api/rtsp/focus_abs")
+def rtsp_focus_abs(serial_number: str, value: float):
+    worker = manager.get_rtsp(serial_number)
+    if worker is None:
+        return {"error": "rtsp_not_connected"}
+    data = worker.set_focus_abs(value)
+    api_log("api.rtsp.focus_abs", "Абсолютный фокус RTSP",
+            payload={"serial_number": serial_number, "value": value, "result": data})
     return data
 
 

@@ -162,15 +162,59 @@ def set_white_light(host, user, password, on, brightness=100):
         return False
 
 
-def optical_zoom(host, user, password, direction):
+def get_lens_status(host, user, password):
+    """Текущие позиции объектива: zoom и focus (0.0..1.0). Из devVideoInput.cgi
+    getFocusStatus. Нужно для ползунков и для абсолютного фокуса (adjustFocus требует
+    передать И zoom, И focus одновременно)."""
+    try:
+        kv = _parse_kv(_cgi(host, user, password, "devVideoInput.cgi?action=getFocusStatus&channel=0"))
+    except Exception as e:
+        log_event("dahua_control", "Не удалось прочитать статус объектива", "warn",
+                  {"host": host, "error": str(e)})
+        return {"reachable": False, "zoom": None, "focus": None}
+    def _f(key):
+        try:
+            return float(kv.get(key, ""))
+        except (TypeError, ValueError):
+            return None
+    return {"reachable": True, "zoom": _f("status.Zoom"), "focus": _f("status.Focus")}
+
+
+def set_focus_abs(host, user, password, focus_val):
+    """Абсолютный фокус (0.0..1.0) через devVideoInput.cgi adjustFocus. Протестировано на
+    живой DH-IPC-HFW: focus=X ставит фокус точно. adjustFocus требует ОБА параметра, поэтому
+    zoom берём текущий из getFocusStatus (зум абсолютно эта камера не позиционирует)."""
+    try:
+        focus_val = max(0.0, min(1.0, float(focus_val)))
+    except (TypeError, ValueError):
+        return False
+    st = get_lens_status(host, user, password)
+    zoom = st.get("zoom")
+    if zoom is None:
+        zoom = 0.0
+    try:
+        text = _cgi(host, user, password,
+                    f"devVideoInput.cgi?action=adjustFocus&focus={focus_val:.4f}&zoom={zoom:.4f}")
+        return "OK" in text
+    except Exception as e:
+        log_event("dahua_control", "Ошибка абсолютного фокуса", "error",
+                  {"host": host, "focus": focus_val, "error": str(e)})
+        return False
+
+
+def optical_zoom(host, user, password, direction, speed=1):
     """Оптический (моторный) зум через ptz.cgi. direction: 'tele'|'wide'|'stop'.
+    speed 1..8 — скорость мотора (arg2), «шаг» ползунка-jog.
 
     Протестировано на живой камере DH-IPC-HFW (motorized lens, не PTZ): ptz.cgi
     ZoomTele/ZoomWide реально двигают оптику (Zoom 0.0<->0.99 по getFocusStatus).
-    caps.Zoom=true отдаёт ptz.cgi getCurrentProtocolCaps. Показывается в UI только
-    если get_capabilities вернул optical_zoom=True (а он работает лишь когда CGI не
-    висит на прокси — см. ProxyHandler({}) в _cgi).
+    Абсолютное позиционирование зума эта камера НЕ поддерживает (adjustFocus zoom не
+    двигает) — поэтому зум только относительный (jog), фокус — абсолютный (set_focus_abs).
     """
+    try:
+        speed = max(1, min(8, int(speed)))
+    except (TypeError, ValueError):
+        speed = 1
     code = {"tele": "ZoomTele", "wide": "ZoomWide"}.get(direction)
     if direction == "stop":
         action, code = "stop", "ZoomTele"
@@ -179,7 +223,7 @@ def optical_zoom(host, user, password, direction):
     else:
         return False
     query = (f"ptz.cgi?action={action}&channel=0&code={code}"
-             f"&arg1=0&arg2=1&arg3=0")
+             f"&arg1=0&arg2={speed}&arg3=0")
     try:
         text = _cgi(host, user, password, query)
         return "OK" in text

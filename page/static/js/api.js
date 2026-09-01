@@ -351,14 +351,24 @@ const RtspApi = {
     return apiGet(`/api/rtsp/zoom?${query.toString()}`, 'Ошибка зума по области (RTSP):');
   },
 
-  opticalZoom(serial, direction) {
-    const query = new URLSearchParams({ serial_number: serial, direction });
+  opticalZoom(serial, direction, speed = 1) {
+    const query = new URLSearchParams({ serial_number: serial, direction, speed });
     return apiGet(`/api/rtsp/optical_zoom?${query.toString()}`, 'Ошибка оптического зума (RTSP):');
   },
 
   focus(serial, direction) {
     const query = new URLSearchParams({ serial_number: serial, direction });
     return apiGet(`/api/rtsp/focus?${query.toString()}`, 'Ошибка фокуса (RTSP):');
+  },
+
+  focusAbs(serial, value) {
+    const query = new URLSearchParams({ serial_number: serial, value });
+    return apiGet(`/api/rtsp/focus_abs?${query.toString()}`, 'Ошибка фокуса (RTSP):');
+  },
+
+  lensStatus(serial) {
+    const query = new URLSearchParams({ serial_number: serial });
+    return apiGet(`/api/rtsp/lens_status?${query.toString()}`, 'Ошибка статуса объектива (RTSP):');
   },
 
   autoFocus(serial) {

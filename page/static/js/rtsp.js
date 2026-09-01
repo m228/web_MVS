@@ -927,53 +927,51 @@ function initRtspPage() {
     });
   }
 
-  async function opticalZoom(direction) {
-    if (!serial || !(capabilities && capabilities.optical_zoom)) return;
-    const data = await RtspApi.opticalZoom(serial, direction);
-    if (!data || data.error || data.status === 'failed') {
-      log.warn('Камера не подтвердила оптический зум', data);
-      return;
+  // текущая позиция объектива (0..1) — для инициализации ползунка фокуса
+  async function initLens() {
+    if (!serial || !(capabilities && (capabilities.focus || capabilities.optical_zoom))) return;
+    const st = await RtspApi.lensStatus(serial);
+    if (st && !st.error && st.focus != null) {
+      const fs = document.getElementById('focusSlider');
+      const fv = document.getElementById('focusVal');
+      if (fs) fs.value = Math.round(st.focus * 100);
+      if (fv) fv.textContent = Math.round(st.focus * 100) + '%';
     }
-    log.success('Оптический зум: ' + direction, data);
   }
 
-  async function focusMove(direction) {
+  // зум — ползунок-jog: тянешь от центра → мотор едет (tele/wide) со скоростью «шаг»,
+  // отпустил → стоп и ползунок в центр. Абсолютно эта камера зум не позиционирует.
+  let zoomJogDir = null;
+  async function zoomJog(sliderVal) {
+    if (!serial || !(capabilities && capabilities.optical_zoom)) return;
+    const speed = Number(document.getElementById('zoomStep')?.value) || 4;
+    const dir = sliderVal > 5 ? 'tele' : (sliderVal < -5 ? 'wide' : 'stop');
+    if (dir === zoomJogDir) return;
+    zoomJogDir = dir;
+    await RtspApi.opticalZoom(serial, dir, speed);
+  }
+  async function zoomJogStop() {
+    const sl = document.getElementById('zoomSlider');
+    if (sl) sl.value = 0;
+    if (zoomJogDir && zoomJogDir !== 'stop') { zoomJogDir = 'stop'; await RtspApi.opticalZoom(serial, 'stop'); }
+    else zoomJogDir = null;
+  }
+
+  // фокус — абсолютный ползунок (0..100 → 0..1)
+  async function focusSet(sliderVal) {
     if (!serial || !(capabilities && capabilities.focus)) return;
-    const data = await RtspApi.focus(serial, direction);
-    if (!data || data.error || data.status === 'failed') {
-      log.warn('Камера не подтвердила фокус', data);
-      return;
-    }
-    log.success('Фокус: ' + direction, data);
+    const fv = document.getElementById('focusVal');
+    if (fv) fv.textContent = sliderVal + '%';
+    const data = await RtspApi.focusAbs(serial, (sliderVal / 100).toFixed(4));
+    if (!data || data.error || data.status === 'failed') log.warn('Камера не подтвердила фокус', data);
   }
 
   async function autoFocusOnce() {
     if (!serial || !(capabilities && capabilities.auto_focus)) return;
     const data = await RtspApi.autoFocus(serial);
-    if (!data || data.error || data.status === 'failed') {
-      log.warn('Камера не подтвердила автофокус', data);
-      return;
-    }
+    if (!data || data.error || data.status === 'failed') { log.warn('Камера не подтвердила автофокус', data); return; }
     log.success('Автофокус выполнен', data);
-  }
-
-  // кнопки зума/фокуса — «удержание»: старт по нажатию, стоп по отпусканию.
-  // sendStart(startDir) шлёт tele/wide|near/far; sendStop('stop') останавливает мотор.
-  function bindHold(container, attr, send) {
-    if (!container) return;
-    let active = null;
-    const start = (e) => {
-      const btn = e.target.closest('button[' + attr + ']');
-      if (!btn) return;
-      e.preventDefault();
-      active = btn.getAttribute(attr);
-      send(active);
-    };
-    const stop = () => { if (active) { send('stop'); active = null; } };
-    container.addEventListener('pointerdown', start);
-    container.addEventListener('pointerup', stop);
-    container.addEventListener('pointerleave', stop);
-    container.addEventListener('pointercancel', stop);
+    initLens();   // фокус изменился — подтянуть ползунок
   }
 
   function handlePageLeave() {
@@ -1010,6 +1008,7 @@ function initRtspPage() {
   if (buttons.zoom) buttons.zoom.addEventListener('click', (event) => {
     event.stopPropagation();
     zoomPopup.toggle();
+    initLens();   // подтянуть текущую позицию фокуса в ползунок
   });
   if (buttons.image) buttons.image.addEventListener('click', (event) => {
     event.stopPropagation();
@@ -1045,9 +1044,21 @@ function initRtspPage() {
   });
   if (panX) panX.addEventListener('input', applyZoomPan);
   if (panY) panY.addEventListener('input', applyZoomPan);
-  // оптический зум и фокус — «удержание» кнопки (start→stop); автофокус — разовый клик
-  bindHold(opticalZoomControls, 'data-optical', opticalZoom);
-  bindHold(focusControls, 'data-focus', focusMove);
+  // зум — ползунок-jog (input двигает мотор, отпускание останавливает и центрирует)
+  const zoomSlider = document.getElementById('zoomSlider');
+  if (zoomSlider) {
+    zoomSlider.addEventListener('input', () => zoomJog(Number(zoomSlider.value)));
+    ['pointerup', 'pointercancel', 'pointerleave', 'change'].forEach((ev) =>
+      zoomSlider.addEventListener(ev, zoomJogStop));
+  }
+  // фокус — абсолютный ползунок (по отпусканию/изменению)
+  const focusSlider = document.getElementById('focusSlider');
+  if (focusSlider) {
+    focusSlider.addEventListener('input', () => {
+      const fv = document.getElementById('focusVal'); if (fv) fv.textContent = focusSlider.value + '%';
+    });
+    focusSlider.addEventListener('change', () => focusSet(Number(focusSlider.value)));
+  }
   if (autoFocusBtn) autoFocusBtn.addEventListener('click', autoFocusOnce);
 
   if (photoCard) photoCard.addEventListener('click', (event) => event.stopPropagation());

@@ -1027,13 +1027,20 @@ input[type="range"] {
   padding: 20px;
 }
 
-/* карточка оптики: зум/фокус */
+/* карточка оптики: зум/фокус (ползунки) */
 .optic-group { margin-top: 14px; }
-.optic-group__lab { display: block; font-size: .8em; color: var(--muted); margin-bottom: 6px; text-transform: uppercase; letter-spacing: .04em; }
+.optic-group__lab { font-size: .8em; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+.optic-group__head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; gap: 8px; }
+.optic-step { font-size: .76em; color: var(--muted); display: inline-flex; align-items: center; gap: 4px; text-transform: none; letter-spacing: 0; }
+.optic-step select { padding: 2px 4px; min-height: 0; width: auto; }
+.optic-val { font-variant-numeric: tabular-nums; color: var(--text); font-size: .85em; }
+.optic-slider { width: 100%; accent-color: var(--accent, #6b8afd); cursor: pointer; touch-action: none; }
+.optic-slider--jog { accent-color: var(--warning, #d97706); }
+.optic-af { width: 100%; margin-top: 8px; padding: 6px 10px; font-size: .9em; min-height: 0; }
+.optic-hint { color: var(--muted); font-size: .88em; margin: 8px 0 0; line-height: 1.4; }
+/* старые кнопки-hold (если где-то остались) */
 .optic-row { display: flex; gap: 8px; }
 .optic-row .optic-hold { flex: 1; user-select: none; touch-action: none; }
-.optic-af { width: 100%; margin-top: 10px; }
-.optic-hint { color: var(--muted); font-size: .88em; margin: 8px 0 0; line-height: 1.4; }
 
 .image-card-popup {
   width: 280px;

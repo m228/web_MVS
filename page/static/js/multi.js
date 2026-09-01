@@ -908,27 +908,29 @@ function openSettingsModal() {
   if (isRtsp) refreshSettingsCaps(source.serial);
 }
 
-// ---------- Оптика: оптический зум + фокус + автофокус (RTSP-камера в фокусе) ----------
+// ---------- Оптика: зум-jog + фокус-ползунок + автофокус (RTSP-камера в фокусе) ----------
 // см. память rtsp-multi-sync — те же функции, что на RTSP-странице (rtsp.js).
-function openOpticModal() {
+let multiOpticPopup = null;   // createPopupController, создаётся в init
+let multiOpticCaps = null;
+
+function openOpticPopup() {
   const source = focusedSource();
-  if (!source || source.kind !== 'rtsp') return;
-  const serialEl = document.getElementById('multiOpticSerial');
-  if (serialEl) serialEl.textContent = source.label;
+  if (!source || source.kind !== 'rtsp' || !multiOpticPopup) return;
   ['multiOpticalZoomControls', 'multiFocusControls'].forEach((id) => {
     const e = document.getElementById(id); if (e) e.hidden = true;
   });
   const af = document.getElementById('multiAutoFocusBtn'); if (af) af.hidden = true;
   const hint = document.getElementById('multiOpticHint'); if (hint) hint.hidden = true;
   setCapLine(document.getElementById('multiOpticCap'), false, '', 'Проверяю…');
-  openModal('multiOpticModal');
-  refreshOpticCaps(source.serial);
+  multiOpticPopup.toggle();
+  if (multiOpticPopup.isOpen()) { refreshOpticCaps(source.serial); }
 }
 
 async function refreshOpticCaps(serial) {
   const data = await RtspApi.getCapabilities(serial);
   const caps = (data && !data.error)
     ? data : { reachable: false, optical_zoom: false, focus: false, auto_focus: false };
+  multiOpticCaps = caps;
   const hasOptical = !!caps.optical_zoom, hasFocus = !!caps.focus, hasAuto = !!caps.auto_focus;
   setCapLine(document.getElementById('multiOpticCap'), hasOptical || hasFocus,
     'Оптический зум/фокус поддерживается',
@@ -937,19 +939,46 @@ async function refreshOpticCaps(serial) {
   const f = document.getElementById('multiFocusControls'); if (f) f.hidden = !hasFocus;
   const af = document.getElementById('multiAutoFocusBtn'); if (af) af.hidden = !hasAuto;
   const hint = document.getElementById('multiOpticHint'); if (hint) hint.hidden = hasOptical || hasFocus;
+  initMultiLens(serial);
 }
 
-async function multiOpticalZoom(direction) {
-  const source = focusedSource();
-  if (!source || source.kind !== 'rtsp') return;
-  const data = await RtspApi.opticalZoom(source.serial, direction);
-  if (!data || data.error || data.status === 'failed') log.warn('Камера не подтвердила оптический зум', data);
+// подтянуть текущую позицию фокуса в ползунок
+async function initMultiLens(serial) {
+  if (!(multiOpticCaps && (multiOpticCaps.focus || multiOpticCaps.optical_zoom))) return;
+  const st = await RtspApi.lensStatus(serial);
+  if (st && !st.error && st.focus != null) {
+    const fs = document.getElementById('multiFocusSlider');
+    const fv = document.getElementById('multiFocusVal');
+    if (fs) fs.value = Math.round(st.focus * 100);
+    if (fv) fv.textContent = Math.round(st.focus * 100) + '%';
+  }
 }
 
-async function multiFocusMove(direction) {
+// зум — ползунок-jog (тянешь → tele/wide со скоростью «шаг», отпустил → стоп/центр)
+let multiZoomJogDir = null;
+async function multiZoomJog(val) {
   const source = focusedSource();
-  if (!source || source.kind !== 'rtsp') return;
-  const data = await RtspApi.focus(source.serial, direction);
+  if (!source || source.kind !== 'rtsp' || !(multiOpticCaps && multiOpticCaps.optical_zoom)) return;
+  const speed = Number(document.getElementById('multiZoomStep')?.value) || 4;
+  const dir = val > 5 ? 'tele' : (val < -5 ? 'wide' : 'stop');
+  if (dir === multiZoomJogDir) return;
+  multiZoomJogDir = dir;
+  await RtspApi.opticalZoom(source.serial, dir, speed);
+}
+async function multiZoomJogStop() {
+  const source = focusedSource();
+  const sl = document.getElementById('multiZoomSlider'); if (sl) sl.value = 0;
+  if (source && multiZoomJogDir && multiZoomJogDir !== 'stop') {
+    multiZoomJogDir = 'stop'; await RtspApi.opticalZoom(source.serial, 'stop');
+  } else { multiZoomJogDir = null; }
+}
+
+// фокус — абсолютный ползунок (0..100 → 0..1)
+async function multiFocusSet(val) {
+  const source = focusedSource();
+  if (!source || source.kind !== 'rtsp' || !(multiOpticCaps && multiOpticCaps.focus)) return;
+  const fv = document.getElementById('multiFocusVal'); if (fv) fv.textContent = val + '%';
+  const data = await RtspApi.focusAbs(source.serial, (val / 100).toFixed(4));
   if (!data || data.error || data.status === 'failed') log.warn('Камера не подтвердила фокус', data);
 }
 
@@ -958,24 +987,7 @@ async function multiAutoFocus() {
   if (!source || source.kind !== 'rtsp') return;
   const data = await RtspApi.autoFocus(source.serial);
   if (!data || data.error || data.status === 'failed') log.warn('Камера не подтвердила автофокус', data);
-  else log.success('Автофокус выполнен', data);
-}
-
-// «удержание» кнопки зума/фокуса: старт по нажатию, стоп по отпусканию
-function bindHoldMulti(container, attr, send) {
-  if (!container) return;
-  let active = null;
-  container.addEventListener('pointerdown', (e) => {
-    const b = e.target.closest('button[' + attr + ']');
-    if (!b) return;
-    e.preventDefault();
-    active = b.getAttribute(attr);
-    send(active);
-  });
-  const stop = () => { if (active) { send('stop'); active = null; } };
-  container.addEventListener('pointerup', stop);
-  container.addEventListener('pointerleave', stop);
-  container.addEventListener('pointercancel', stop);
+  else { log.success('Автофокус выполнен', data); initMultiLens(source.serial); }
 }
 
 // изменить FPS RTSP-камеры в фокусе (перезапуск потока с новым ограничением)
@@ -1505,15 +1517,36 @@ function initToolbar() {
   document.getElementById('multiConnectBtn')?.addEventListener('click', () => startStream(state.focused));
   document.getElementById('multiDisconnectBtn')?.addEventListener('click', () => disconnectTile(state.focused));
   document.getElementById('multiSettingsBtn')?.addEventListener('click', openSettingsModal);
-  document.getElementById('multiOpticBtn')?.addEventListener('click', openOpticModal);
   document.getElementById('multiConfigBtn')?.addEventListener('click', openConfigModal);
 
-  // оптика: зум/фокус на удержание, автофокус — клик, закрытие модалки
-  bindHoldMulti(document.getElementById('multiOpticalZoomControls'), 'data-optical', multiOpticalZoom);
-  bindHoldMulti(document.getElementById('multiFocusControls'), 'data-focus', multiFocusMove);
+  // оптика: popup под иконкой + ползунки (зум-jog, фокус-абс), автофокус — клик
+  multiOpticPopup = UIHelpers.createPopupController(
+    document.getElementById('multiOpticCard'), document.getElementById('multiOpticBtn'));
+  document.getElementById('multiOpticBtn')?.addEventListener('click', (e) => {
+    e.stopPropagation(); openOpticPopup();
+  });
+  const mzs = document.getElementById('multiZoomSlider');
+  if (mzs) {
+    mzs.addEventListener('input', () => multiZoomJog(Number(mzs.value)));
+    ['pointerup', 'pointercancel', 'pointerleave', 'change'].forEach((ev) =>
+      mzs.addEventListener(ev, multiZoomJogStop));
+  }
+  const mfs = document.getElementById('multiFocusSlider');
+  if (mfs) {
+    mfs.addEventListener('input', () => {
+      const fv = document.getElementById('multiFocusVal'); if (fv) fv.textContent = mfs.value + '%';
+    });
+    mfs.addEventListener('change', () => multiFocusSet(Number(mfs.value)));
+  }
   document.getElementById('multiAutoFocusBtn')?.addEventListener('click', multiAutoFocus);
-  document.getElementById('multiOpticClose')?.addEventListener('click', () => closeModal('multiOpticModal'));
-  document.getElementById('multiOpticCloseFooter')?.addEventListener('click', () => closeModal('multiOpticModal'));
+  document.getElementById('multiOpticCard')?.addEventListener('click', (e) => e.stopPropagation());
+  // закрыть popup оптики по клику вне него и вне кнопки
+  document.addEventListener('click', (e) => {
+    if (!multiOpticPopup || !multiOpticPopup.isOpen()) return;
+    const card = document.getElementById('multiOpticCard');
+    const btn = document.getElementById('multiOpticBtn');
+    if (card && !card.contains(e.target) && btn && !btn.contains(e.target)) multiOpticPopup.close();
+  });
 }
 
 function initModals() {

@@ -925,6 +925,28 @@ def rtsp_optical_zoom(serial_number: str, direction: str):
     return data
 
 
+@app.get("/api/rtsp/focus")
+def rtsp_focus(serial_number: str, direction: str):
+    worker = manager.get_rtsp(serial_number)
+    if worker is None:
+        return {"error": "rtsp_not_connected"}
+    data = worker.focus(direction)
+    api_log("api.rtsp.focus", "Ручной фокус RTSP",
+            payload={"serial_number": serial_number, "direction": direction, "result": data})
+    return data
+
+
+@app.get("/api/rtsp/autofocus")
+def rtsp_autofocus(serial_number: str):
+    worker = manager.get_rtsp(serial_number)
+    if worker is None:
+        return {"error": "rtsp_not_connected"}
+    data = worker.auto_focus()
+    api_log("api.rtsp.autofocus", "Автофокус RTSP",
+            payload={"serial_number": serial_number, "result": data})
+    return data
+
+
 # ---------- настройки изображения RTSP (экспозиция / баланс белого / день-ночь) ----------
 @app.get("/api/rtsp/image")
 def rtsp_image(serial_number: str):

@@ -2348,6 +2348,22 @@ class RtspCameraWorker(BaseCameraWorker):
         ok = dahua_control.optical_zoom(host, user, password, direction)
         return {"status": "ok" if ok else "failed", "direction": direction, "mode": "optical"}
 
+    def focus(self, direction):
+        """Ручной фокус камеры (если поддерживается). direction: near|far|stop."""
+        host, user, password = self._dahua_creds()
+        if not host:
+            return {"error": "no_host"}
+        ok = dahua_control.focus(host, user, password, direction)
+        return {"status": "ok" if ok else "failed", "direction": direction}
+
+    def auto_focus(self):
+        """Разовый автофокус (наведение резкости)."""
+        host, user, password = self._dahua_creds()
+        if not host:
+            return {"error": "no_host"}
+        ok = dahua_control.auto_focus(host, user, password)
+        return {"status": "ok" if ok else "failed"}
+
     # ---------- настройки изображения (экспозиция / баланс белого / день-ночь) ----------
 
     def get_image_settings(self):

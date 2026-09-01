@@ -1027,6 +1027,14 @@ input[type="range"] {
   padding: 20px;
 }
 
+/* карточка оптики: зум/фокус */
+.optic-group { margin-top: 14px; }
+.optic-group__lab { display: block; font-size: .8em; color: var(--muted); margin-bottom: 6px; text-transform: uppercase; letter-spacing: .04em; }
+.optic-row { display: flex; gap: 8px; }
+.optic-row .optic-hold { flex: 1; user-select: none; touch-action: none; }
+.optic-af { width: 100%; margin-top: 10px; }
+.optic-hint { color: var(--muted); font-size: .88em; margin: 8px 0 0; line-height: 1.4; }
+
 .image-card-popup {
   width: 280px;
   padding: 20px;

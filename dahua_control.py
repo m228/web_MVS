@@ -84,7 +84,8 @@ def get_capabilities(host, user, password):
     Цифровой зум сюда не входит — он делается у нас и есть всегда.
     """
     caps = {"reachable": False, "model": "", "white_light": False,
-            "optical_zoom": False, "image_settings": False, "error": None}
+            "optical_zoom": False, "focus": False, "auto_focus": False,
+            "image_settings": False, "error": None}
     if not host:
         caps["error"] = "no_host"
         return caps
@@ -118,6 +119,16 @@ def get_capabilities(host, user, password):
                              "ptz.cgi?action=getCurrentProtocolCaps&channel=0"))
         caps["optical_zoom"] = any(
             "Zoom" in key and value.strip().lower() == "true"
+            for key, value in ptz.items()
+        )
+        # моторный фокус (caps.Focus) и автофокус (caps.AutoFocus). «AutoFocus» тоже
+        # содержит «Focus», поэтому для ручного фокуса исключаем ключи с AutoFocus.
+        caps["focus"] = any(
+            "Focus" in key and "AutoFocus" not in key and value.strip().lower() == "true"
+            for key, value in ptz.items()
+        )
+        caps["auto_focus"] = any(
+            "AutoFocus" in key and value.strip().lower() == "true"
             for key, value in ptz.items()
         )
     except Exception:
@@ -175,6 +186,42 @@ def optical_zoom(host, user, password, direction):
     except Exception as e:
         log_event("dahua_control", "Ошибка оптического зума", "error",
                   {"host": host, "direction": direction, "error": str(e)})
+        return False
+
+
+def focus(host, user, password, direction):
+    """Ручной фокус через ptz.cgi. direction: 'near'|'far'|'stop'.
+
+    Протестировано на живой DH-IPC-HFW: ptz.cgi FocusNear/FocusFar двигают фокус
+    (Focus 0.85<->0.99 по getFocusStatus). Показывается в UI, если caps.focus=true.
+    """
+    code = {"near": "FocusNear", "far": "FocusFar"}.get(direction)
+    if direction == "stop":
+        action, code = "stop", "FocusNear"
+    elif code:
+        action = "start"
+    else:
+        return False
+    query = (f"ptz.cgi?action={action}&channel=0&code={code}"
+             f"&arg1=0&arg2=1&arg3=0")
+    try:
+        text = _cgi(host, user, password, query)
+        return "OK" in text
+    except Exception as e:
+        log_event("dahua_control", "Ошибка фокуса", "error",
+                  {"host": host, "direction": direction, "error": str(e)})
+        return False
+
+
+def auto_focus(host, user, password):
+    """Разовый автофокус (наведение резкости). Протестировано на живой DH-IPC-HFW:
+    devVideoInput.cgi?action=autoFocus наводит резкость."""
+    try:
+        text = _cgi(host, user, password, "devVideoInput.cgi?action=autoFocus")
+        return "OK" in text
+    except Exception as e:
+        log_event("dahua_control", "Ошибка автофокуса", "error",
+                  {"host": host, "error": str(e)})
         return False
 
 

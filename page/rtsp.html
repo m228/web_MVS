@@ -88,6 +88,10 @@
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9.2"/><path d="M12 2.8a14 14 0 0 1 0 18.4a14 14 0 0 1 0-18.4z"/><path d="M3.4 8.7h17.2M3.4 15.3h17.2"/></svg>
               </button>
 
+              <button type="button" id="zoomBtn" class="toolbar-btn toolbar-btn--neutral" title="Оптика — зум и фокус камеры" aria-label="Оптика: зум и фокус">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3M8 11h6M11 8v6"/></svg>
+              </button>
+
               <button type="button" id="regionZoomBtn" class="toolbar-btn toolbar-btn--neutral" title="Зум областью — выделите рамку на видео" aria-label="Зум областью">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8V5a2 2 0 0 1 2-2h3M16 3h3a2 2 0 0 1 2 2v3M21 16v3a2 2 0 0 1-2 2h-3M8 21H5a2 2 0 0 1-2-2v-3"/><path d="M8.5 12h7M12 8.5v7"/></svg>
               </button>
@@ -273,6 +277,30 @@
               <span class="switch-label" id="lightSwitchLabel">Выключено</span>
             </label>
             <input type="range" id="lightLevel" class="light-brightness" min="1" max="100" value="100" title="Яркость, %" />
+          </div>
+        </div>
+
+        <div class="card zoom-card-popup" id="zoomCard">
+          <h2>Оптика: зум и фокус</h2>
+
+          <p class="cap-line" id="zoomCap" data-state="unknown"><span class="cap-dot"></span><span class="cap-text">Проверяю…</span></p>
+          <p class="optic-hint" id="zoomOpticalHint" hidden>Оптический зум/фокус этой камерой не поддерживается.</p>
+
+          <div class="optic-group" id="opticalZoomControls" hidden>
+            <span class="optic-group__lab">Зум</span>
+            <div class="optic-row">
+              <button type="button" class="toolbar-btn toolbar-btn--neutral optic-hold" data-optical="wide" title="Уменьшить (Wide) — удерживай">Wide −</button>
+              <button type="button" class="toolbar-btn toolbar-btn--neutral optic-hold" data-optical="tele" title="Приблизить (Tele) — удерживай">+ Tele</button>
+            </div>
+          </div>
+
+          <div class="optic-group" id="focusControls" hidden>
+            <span class="optic-group__lab">Фокус</span>
+            <div class="optic-row">
+              <button type="button" class="toolbar-btn toolbar-btn--neutral optic-hold" data-focus="near" title="Ближе — удерживай">Ближе −</button>
+              <button type="button" class="toolbar-btn toolbar-btn--neutral optic-hold" data-focus="far" title="Дальше — удерживай">+ Дальше</button>
+            </div>
+            <button type="button" id="autoFocusBtn" class="toolbar-btn toolbar-btn--primary optic-af">Автофокус</button>
           </div>
         </div>
 

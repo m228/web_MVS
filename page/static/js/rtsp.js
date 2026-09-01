@@ -50,6 +50,8 @@ function initRtspPage() {
   const zoomIndicator = document.getElementById('zoomIndicator');
   const opticalZoomControls = document.getElementById('opticalZoomControls');
   const zoomOpticalHint = document.getElementById('zoomOpticalHint');
+  const focusControls = document.getElementById('focusControls');
+  const autoFocusBtn = document.getElementById('autoFocusBtn');
   const zoomPan = document.getElementById('zoomPan');
   const panX = document.getElementById('panX');
   const panY = document.getElementById('panY');
@@ -507,10 +509,16 @@ function initRtspPage() {
     if (lightLevel) lightLevel.disabled = !hasLight;
     if (!hasLight) reflectLightOn(false);
 
-    // --- зум ---
-    setCapLine(zoomCap, true, 'Цифровой зум', 'Цифровой зум');
+    // --- зум / фокус (оптика) ---
+    const hasFocus = !!caps.focus;
+    const hasAutoFocus = !!caps.auto_focus;
+    setCapLine(zoomCap, hasOptical || hasFocus,
+      'Оптический зум/фокус поддерживается',
+      caps.reachable ? 'Оптика не поддерживается' : 'Камера не отвечает на управление');
     if (opticalZoomControls) opticalZoomControls.hidden = !hasOptical;
-    if (zoomOpticalHint) zoomOpticalHint.hidden = hasOptical;
+    if (focusControls) focusControls.hidden = !hasFocus;
+    if (autoFocusBtn) autoFocusBtn.hidden = !hasAutoFocus;
+    if (zoomOpticalHint) zoomOpticalHint.hidden = hasOptical || hasFocus;
 
     // --- настройки изображения ---
     const hasImage = !!caps.image_settings;
@@ -526,7 +534,7 @@ function initRtspPage() {
       capabilities = data;
       log.info('Возможности камеры получены', data);
     } else {
-      capabilities = { reachable: false, white_light: false, optical_zoom: false, image_settings: false };
+      capabilities = { reachable: false, white_light: false, optical_zoom: false, focus: false, auto_focus: false, image_settings: false };
       log.warn('Не удалось опросить возможности камеры', data);
     }
     applyCapabilitiesUI();
@@ -929,6 +937,45 @@ function initRtspPage() {
     log.success('Оптический зум: ' + direction, data);
   }
 
+  async function focusMove(direction) {
+    if (!serial || !(capabilities && capabilities.focus)) return;
+    const data = await RtspApi.focus(serial, direction);
+    if (!data || data.error || data.status === 'failed') {
+      log.warn('Камера не подтвердила фокус', data);
+      return;
+    }
+    log.success('Фокус: ' + direction, data);
+  }
+
+  async function autoFocusOnce() {
+    if (!serial || !(capabilities && capabilities.auto_focus)) return;
+    const data = await RtspApi.autoFocus(serial);
+    if (!data || data.error || data.status === 'failed') {
+      log.warn('Камера не подтвердила автофокус', data);
+      return;
+    }
+    log.success('Автофокус выполнен', data);
+  }
+
+  // кнопки зума/фокуса — «удержание»: старт по нажатию, стоп по отпусканию.
+  // sendStart(startDir) шлёт tele/wide|near/far; sendStop('stop') останавливает мотор.
+  function bindHold(container, attr, send) {
+    if (!container) return;
+    let active = null;
+    const start = (e) => {
+      const btn = e.target.closest('button[' + attr + ']');
+      if (!btn) return;
+      e.preventDefault();
+      active = btn.getAttribute(attr);
+      send(active);
+    };
+    const stop = () => { if (active) { send('stop'); active = null; } };
+    container.addEventListener('pointerdown', start);
+    container.addEventListener('pointerup', stop);
+    container.addEventListener('pointerleave', stop);
+    container.addEventListener('pointercancel', stop);
+  }
+
   function handlePageLeave() {
     if (isLeavingPage || !serial) return;
     isLeavingPage = true;
@@ -998,10 +1045,10 @@ function initRtspPage() {
   });
   if (panX) panX.addEventListener('input', applyZoomPan);
   if (panY) panY.addEventListener('input', applyZoomPan);
-  if (opticalZoomControls) opticalZoomControls.addEventListener('click', (event) => {
-    const btn = event.target.closest('button[data-optical]');
-    if (btn) opticalZoom(btn.dataset.optical);
-  });
+  // оптический зум и фокус — «удержание» кнопки (start→stop); автофокус — разовый клик
+  bindHold(opticalZoomControls, 'data-optical', opticalZoom);
+  bindHold(focusControls, 'data-focus', focusMove);
+  if (autoFocusBtn) autoFocusBtn.addEventListener('click', autoFocusOnce);
 
   if (photoCard) photoCard.addEventListener('click', (event) => event.stopPropagation());
   if (videoCard) videoCard.addEventListener('click', (event) => event.stopPropagation());

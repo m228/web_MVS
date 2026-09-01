@@ -356,6 +356,16 @@ const RtspApi = {
     return apiGet(`/api/rtsp/optical_zoom?${query.toString()}`, 'Ошибка оптического зума (RTSP):');
   },
 
+  focus(serial, direction) {
+    const query = new URLSearchParams({ serial_number: serial, direction });
+    return apiGet(`/api/rtsp/focus?${query.toString()}`, 'Ошибка фокуса (RTSP):');
+  },
+
+  autoFocus(serial) {
+    const query = new URLSearchParams({ serial_number: serial });
+    return apiGet(`/api/rtsp/autofocus?${query.toString()}`, 'Ошибка автофокуса (RTSP):');
+  },
+
   // настройки изображения: экспозиция / баланс белого / день-ночь
   getImageSettings(serial) {
     return apiGet(`/api/rtsp/image?serial_number=${encodeURIComponent(serial)}`,

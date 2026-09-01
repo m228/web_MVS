@@ -595,6 +595,8 @@ function updateToolbar() {
   setDisabled('multiDisconnectBtn', !hasSource || !tile.connected);
   // настройки (фото/видео/подсветка/зум) — когда камера в фокусе подключена
   setDisabled('multiSettingsBtn', !hasSource || !tile.connected);
+  // оптика (зум/фокус) — только для подключённой RTSP-камеры (CGI-управление)
+  setDisabled('multiOpticBtn', !hasSource || !tile.connected || !source || source.kind !== 'rtsp');
   // конфиг — только для GigE (у RTSP его нет); доступен и после остановки
   setDisabled('multiConfigBtn', !hasSource || source.kind !== 'gige');
 
@@ -904,6 +906,76 @@ function openSettingsModal() {
 
   settingsCaps = null;
   if (isRtsp) refreshSettingsCaps(source.serial);
+}
+
+// ---------- Оптика: оптический зум + фокус + автофокус (RTSP-камера в фокусе) ----------
+// см. память rtsp-multi-sync — те же функции, что на RTSP-странице (rtsp.js).
+function openOpticModal() {
+  const source = focusedSource();
+  if (!source || source.kind !== 'rtsp') return;
+  const serialEl = document.getElementById('multiOpticSerial');
+  if (serialEl) serialEl.textContent = source.label;
+  ['multiOpticalZoomControls', 'multiFocusControls'].forEach((id) => {
+    const e = document.getElementById(id); if (e) e.hidden = true;
+  });
+  const af = document.getElementById('multiAutoFocusBtn'); if (af) af.hidden = true;
+  const hint = document.getElementById('multiOpticHint'); if (hint) hint.hidden = true;
+  setCapLine(document.getElementById('multiOpticCap'), false, '', 'Проверяю…');
+  openModal('multiOpticModal');
+  refreshOpticCaps(source.serial);
+}
+
+async function refreshOpticCaps(serial) {
+  const data = await RtspApi.getCapabilities(serial);
+  const caps = (data && !data.error)
+    ? data : { reachable: false, optical_zoom: false, focus: false, auto_focus: false };
+  const hasOptical = !!caps.optical_zoom, hasFocus = !!caps.focus, hasAuto = !!caps.auto_focus;
+  setCapLine(document.getElementById('multiOpticCap'), hasOptical || hasFocus,
+    'Оптический зум/фокус поддерживается',
+    caps.reachable ? 'Оптика не поддерживается' : 'Камера не отвечает на управление');
+  const z = document.getElementById('multiOpticalZoomControls'); if (z) z.hidden = !hasOptical;
+  const f = document.getElementById('multiFocusControls'); if (f) f.hidden = !hasFocus;
+  const af = document.getElementById('multiAutoFocusBtn'); if (af) af.hidden = !hasAuto;
+  const hint = document.getElementById('multiOpticHint'); if (hint) hint.hidden = hasOptical || hasFocus;
+}
+
+async function multiOpticalZoom(direction) {
+  const source = focusedSource();
+  if (!source || source.kind !== 'rtsp') return;
+  const data = await RtspApi.opticalZoom(source.serial, direction);
+  if (!data || data.error || data.status === 'failed') log.warn('Камера не подтвердила оптический зум', data);
+}
+
+async function multiFocusMove(direction) {
+  const source = focusedSource();
+  if (!source || source.kind !== 'rtsp') return;
+  const data = await RtspApi.focus(source.serial, direction);
+  if (!data || data.error || data.status === 'failed') log.warn('Камера не подтвердила фокус', data);
+}
+
+async function multiAutoFocus() {
+  const source = focusedSource();
+  if (!source || source.kind !== 'rtsp') return;
+  const data = await RtspApi.autoFocus(source.serial);
+  if (!data || data.error || data.status === 'failed') log.warn('Камера не подтвердила автофокус', data);
+  else log.success('Автофокус выполнен', data);
+}
+
+// «удержание» кнопки зума/фокуса: старт по нажатию, стоп по отпусканию
+function bindHoldMulti(container, attr, send) {
+  if (!container) return;
+  let active = null;
+  container.addEventListener('pointerdown', (e) => {
+    const b = e.target.closest('button[' + attr + ']');
+    if (!b) return;
+    e.preventDefault();
+    active = b.getAttribute(attr);
+    send(active);
+  });
+  const stop = () => { if (active) { send('stop'); active = null; } };
+  container.addEventListener('pointerup', stop);
+  container.addEventListener('pointerleave', stop);
+  container.addEventListener('pointercancel', stop);
 }
 
 // изменить FPS RTSP-камеры в фокусе (перезапуск потока с новым ограничением)
@@ -1433,7 +1505,15 @@ function initToolbar() {
   document.getElementById('multiConnectBtn')?.addEventListener('click', () => startStream(state.focused));
   document.getElementById('multiDisconnectBtn')?.addEventListener('click', () => disconnectTile(state.focused));
   document.getElementById('multiSettingsBtn')?.addEventListener('click', openSettingsModal);
+  document.getElementById('multiOpticBtn')?.addEventListener('click', openOpticModal);
   document.getElementById('multiConfigBtn')?.addEventListener('click', openConfigModal);
+
+  // оптика: зум/фокус на удержание, автофокус — клик, закрытие модалки
+  bindHoldMulti(document.getElementById('multiOpticalZoomControls'), 'data-optical', multiOpticalZoom);
+  bindHoldMulti(document.getElementById('multiFocusControls'), 'data-focus', multiFocusMove);
+  document.getElementById('multiAutoFocusBtn')?.addEventListener('click', multiAutoFocus);
+  document.getElementById('multiOpticClose')?.addEventListener('click', () => closeModal('multiOpticModal'));
+  document.getElementById('multiOpticCloseFooter')?.addEventListener('click', () => closeModal('multiOpticModal'));
 }
 
 function initModals() {

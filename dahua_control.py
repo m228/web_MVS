@@ -154,9 +154,11 @@ def set_white_light(host, user, password, on, brightness=100):
 def optical_zoom(host, user, password, direction):
     """Оптический (моторный) зум через ptz.cgi. direction: 'tele'|'wide'|'stop'.
 
-    ВНИМАНИЕ: не протестировано на живой камере — под рукой только фикс-объектив.
-    Используется документированный интерфейс Dahua PTZ (ZoomTele/ZoomWide).
-    Показывается в UI только если get_capabilities вернул optical_zoom=True.
+    Протестировано на живой камере DH-IPC-HFW (motorized lens, не PTZ): ptz.cgi
+    ZoomTele/ZoomWide реально двигают оптику (Zoom 0.0<->0.99 по getFocusStatus).
+    caps.Zoom=true отдаёт ptz.cgi getCurrentProtocolCaps. Показывается в UI только
+    если get_capabilities вернул optical_zoom=True (а он работает лишь когда CGI не
+    висит на прокси — см. ProxyHandler({}) в _cgi).
     """
     code = {"tele": "ZoomTele", "wide": "ZoomWide"}.get(direction)
     if direction == "stop":

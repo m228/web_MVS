@@ -53,7 +53,16 @@ def _cgi(host, user, password, query):
     url = f"http://{host}/cgi-bin/{query}"
     pw_mgr = urllib.request.HTTPPasswordMgrWithDefaultRealm()
     pw_mgr.add_password(None, f"http://{host}", user, password)
-    opener = urllib.request.build_opener(urllib.request.HTTPDigestAuthHandler(pw_mgr))
+    # ProxyHandler({}) — НЕ идти через системный прокси: камера в локальной сети, а на
+    # рабочем сервере настроен прокси для интернета. Без этого urllib гонит CGI-запрос к
+    # локальной камере через прокси, тот её не достаёт → запрос ВИСНЕТ до таймаута
+    # («не отвечает на управление»/таймаут), хотя TCP до камеры есть. RTSP не страдает —
+    # у него свой сокет мимо прокси. build_opener по умолчанию добавляет ProxyHandler из
+    # системных настроек, поэтому переопределяем его пустым.
+    opener = urllib.request.build_opener(
+        urllib.request.ProxyHandler({}),
+        urllib.request.HTTPDigestAuthHandler(pw_mgr),
+    )
     with opener.open(url, timeout=CGI_TIMEOUT) as resp:
         return resp.read().decode("utf-8", errors="replace")
 

@@ -1200,6 +1200,42 @@ function initAutostartCard() {
   AutostartApi.status().then(reflectAutostart).catch(() => {});
 }
 
+// --- Галочка «Микроскоп вкл/выкл» рядом с кнопкой «Микроскоп» ---
+function reflectMicroEnabled(enabled) {
+  const chk = document.getElementById('microEnabledChk');
+  const btn = document.getElementById('microBtn');
+  if (chk) chk.checked = enabled;
+  if (btn) btn.classList.toggle('is-disabled', !enabled);   // выкл -> серая, не кликается
+}
+
+async function toggleMicroEnabled() {
+  const chk = document.getElementById('microEnabledChk');
+  const on = chk.checked ? 1 : 0;
+  try {
+    const res = await fetch('/api/micro/enabled?on=' + on, { method: 'POST' });
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const data = await res.json();
+    reflectMicroEnabled(!!data.enabled);
+    log.success(data.enabled ? 'Микроскоп включён' : 'Микроскоп выключен (плата/ПЛК отключены)');
+  } catch (error) {
+    log.error('Не удалось переключить микроскоп', { error: error?.message ?? String(error) });
+    reflectMicroEnabled(!chk.checked);   // откат галочки
+  }
+}
+
+function initMicroGate() {
+  const chk = document.getElementById('microEnabledChk');
+  if (!chk) return;
+  chk.addEventListener('change', toggleMicroEnabled);
+  // не давать перейти по серой кнопке
+  const btn = document.getElementById('microBtn');
+  if (btn) btn.addEventListener('click', (e) => {
+    if (btn.classList.contains('is-disabled')) e.preventDefault();
+  });
+  fetch('/api/micro/enabled').then((r) => r.json())
+    .then((d) => reflectMicroEnabled(!!d.enabled)).catch(() => {});
+}
+
 function initUpdateCard() {
   const els = getUpdateEls();
   if (!els.card) return;
@@ -1227,6 +1263,7 @@ async function initIndexPage() {
   initCameraInfoModal();
   initUpdateCard();
   initAutostartCard();
+  initMicroGate();
   await refreshCameras();
 
   const autoOpenSerial = getAutoOpenSerial();

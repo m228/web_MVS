@@ -46,7 +46,13 @@
 
           <div class="page-hero__actions page-hero__actions--grid">
             <a href="/multi" class="btn btn-multi" title="Мультипросмотр камер">Мульти</a>
-            <a href="/microscope" class="btn btn-micro" title="Микроскоп варки">Микроскоп</a>
+            <span class="micro-gate">
+              <label class="micro-gate__chk" title="Включить/выключить микроскоп (плата, ПЛК, автоцикл). Выкл — приложение не связывается с платой микроскопа.">
+                <input type="checkbox" id="microEnabledChk" />
+                <span class="micro-gate__box"></span>
+              </label>
+              <a href="/microscope" id="microBtn" class="btn btn-micro" title="Микроскоп варки">Микроскоп</a>
+            </span>
             <a href="/rtsp" class="btn btn-rtsp" title="Открыть просмотр RTSP-камеры">RTSP-камера</a>
             <a href="/network" class="btn btn-net" title="Оптимизация сети для нескольких GigE-камер">Сеть камер</a>
             <button type="button" id="logsBtn" class="btn toolbar-btn--logs" title="Открыть журнал">

@@ -11,12 +11,13 @@ from contextlib import asynccontextmanager
 from urllib.parse import urlparse
 
 from fastapi import FastAPI, Query
-from fastapi.responses import FileResponse, StreamingResponse, Response
+from fastapi.responses import FileResponse, StreamingResponse, Response, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 
 from logger import get_events, log_event
 
 from camera_core import manager, build_rtsp_url, replace_host_in_url
+import plate_config
 import rtsp_store
 import save_settings
 import net_tools
@@ -46,8 +47,12 @@ async def lifespan(app: FastAPI):
     # даём продюсеру время на обнаружение камер, иначе первый опрос ловит ошибки
     await asyncio.sleep(2.0)
     manager.scan_cams()
-    # плата микроскопа + автомат (пытается подключиться к плате; без неё — тихий реконнект)
-    micro.start()
+    # плата микроскопа + автомат (пытается подключиться к плате; без неё — тихий реконнект).
+    # Поднимаем ТОЛЬКО если микроскоп включён галочкой на главной (micro_enabled).
+    if plate_config.load().get("micro_enabled", True):
+        micro.start()
+    else:
+        api_log("app", "Микроскоп выключен галочкой — плата/ПЛК не поднимаются")
     # RTSP-камеры с галочкой «автоподключение» поднимаем сами: захват фоновый,
     # поэтому съёмка/автосохранение идут без открытого браузера (см. camera_core)
     manager.resume_rtsp_autostart()
@@ -91,7 +96,39 @@ def network_page():
 
 @app.get("/microscope")
 def microscope_page():
+    # если микроскоп выключен галочкой на главной — заглушка вместо страницы
+    if not plate_config.load().get("micro_enabled", True):
+        return HTMLResponse(
+            "<!doctype html><html lang=ru><head><meta charset=utf-8>"
+            "<meta name=viewport content='width=device-width,initial-scale=1'>"
+            "<title>Микроскоп выключен</title>"
+            "<style>body{margin:0;min-height:100vh;display:flex;align-items:center;"
+            "justify-content:center;background:#0f1117;color:#e6e8ee;"
+            "font-family:system-ui,Segoe UI,Arial,sans-serif}.b{text-align:center;"
+            "padding:32px}.b h1{font-size:1.5rem;margin:0 0 10px}.b p{color:#9aa0ad;"
+            "margin:0 0 22px}.b a{display:inline-block;padding:10px 20px;border-radius:10px;"
+            "background:#3b5bdb;color:#fff;text-decoration:none;font-weight:600}</style>"
+            "</head><body><div class=b><h1>Микроскоп выключен</h1>"
+            "<p>Включите его галочкой на главной странице.</p>"
+            "<a href='/'>На главную</a></div></body></html>")
     return FileResponse(str(PAGE_DIR / "microscope.html"))
+
+
+@app.get("/api/micro/enabled")
+def micro_enabled_get():
+    return {"enabled": bool(plate_config.load().get("micro_enabled", True))}
+
+
+@app.post("/api/micro/enabled")
+def micro_enabled_set(on: int):
+    enabled = bool(on)
+    plate_config.save({"micro_enabled": enabled})
+    if enabled:
+        micro.start()      # поднять плату/ПЛК/автомат на лету
+    else:
+        micro.stop()       # разорвать связь с платой/ПЛК немедленно
+    api_log("api.micro.enabled", "Микроскоп включён/выключен галочкой", payload={"enabled": enabled})
+    return {"enabled": enabled}
 
 
 @app.get("/api/debug/logs")

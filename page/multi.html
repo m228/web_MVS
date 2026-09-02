@@ -67,9 +67,16 @@
             <button type="button" id="multiDisconnectBtn" class="toolbar-btn toolbar-btn--danger" disabled title="Отключиться" aria-label="Отключиться">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>
             </button>
-            <button type="button" id="multiSettingsBtn" class="toolbar-btn toolbar-btn--accent" disabled title="Настройки: фото, видео, подсветка, зум" aria-label="Настройки">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><line x1="4" y1="7" x2="20" y2="7"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="17" x2="20" y2="17"/><circle cx="9" cy="7" r="2" fill="var(--surface-strong)"/><circle cx="15" cy="12" r="2" fill="var(--surface-strong)"/><circle cx="8" cy="17" r="2" fill="var(--surface-strong)"/></svg>
-              <span class="mode-indicator hidden" id="multiRecIndicator"></span>
+            <button type="button" id="multiPhotoBtn" class="toolbar-btn toolbar-btn--photo" disabled title="Автосохранение фото" aria-label="Автосохранение фото">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h3l2-2h6l2 2h3v12H4z"/><circle cx="12" cy="13" r="3.2"/></svg>
+              <span class="mode-indicator hidden" id="multiPhotoIndicator"></span>
+            </button>
+            <button type="button" id="multiVideoBtn" class="toolbar-btn toolbar-btn--accent" disabled title="Запись видео" aria-label="Запись видео">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="6" width="13" height="12" rx="2"/><path d="M16 10l5-3v10l-5-3z"/></svg>
+              <span class="mode-indicator hidden" id="multiVideoIndicator"></span>
+            </button>
+            <button type="button" id="multiSettingsBtn" class="toolbar-btn toolbar-btn--secondary" disabled title="Камера · FPS" aria-label="FPS камеры">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.6 1.6 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.6 1.6 0 0 0-1.8-.3 1.6 1.6 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.6 1.6 0 0 0-1-1.5 1.6 1.6 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.6 1.6 0 0 0 .3-1.8 1.6 1.6 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.6 1.6 0 0 0 1.5-1 1.6 1.6 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.6 1.6 0 0 0 1.8.3H9a1.6 1.6 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.6 1.6 0 0 0 1 1.5 1.6 1.6 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.6 1.6 0 0 0-.3 1.8V9a1.6 1.6 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.6 1.6 0 0 0-1.5 1z"/></svg>
             </button>
             <button type="button" id="multiOpticBtn" class="toolbar-btn toolbar-btn--neutral" disabled title="Оптика — зум и фокус камеры" aria-label="Оптика: зум и фокус">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3M8 11h6M11 8v6"/></svg>
@@ -140,69 +147,60 @@
     <div class="network-modal__card settings-card" role="dialog" aria-modal="true">
       <div class="network-modal__header">
         <div class="network-modal__title-group">
-          <h2>Настройки</h2>
+          <h2>Камера · FPS</h2>
           <span class="network-modal__serial">Камера: <strong id="multiSettingsSerial">-</strong></span>
         </div>
         <button type="button" class="modal-close-btn" id="multiSettingsClose" aria-label="Закрыть">×</button>
       </div>
 
       <div class="network-modal__body">
-        <div class="settings-zones">
-          <!-- СТОЛБИК 1: автосохранение фото + запись видео -->
-          <!-- зона: фото -->
-          <section class="settings-zone" data-zone="photo">
-            <h3>Автосохранение фото</h3>
-            <div class="save-row">
-              <input class="field-input save-project" type="text" id="multiPhotoProject" placeholder="Имя проекта" />
-              <input class="field-input field-input--xs" type="number" id="multiPhotoInterval" value="5" min="1" title="Интервал" />
-              <select class="field-select field-select--xs" id="multiPhotoUnit" title="Единица интервала">
-                <option value="seconds" selected>сек</option>
-                <option value="minutes">мин</option>
-              </select>
-              <select class="field-select field-select--xs" id="multiPhotoFormat" title="Формат файла: PNG без потерь, JPG компактнее">
-                <option value="jpg" selected>JPG</option>
-                <option value="png">PNG</option>
-              </select>
-            </div>
-            <div class="popup-actions">
-              <button type="button" class="btn-primary" id="multiPhotoOn">Включить</button>
-              <button type="button" class="btn-secondary" id="multiPhotoOff">Выключить</button>
-            </div>
-            <p class="record-path" id="multiPhotoSavePath" hidden></p>
-          </section>
-
-          <!-- зона: видео -->
-          <section class="settings-zone" data-zone="video">
-            <h3>Запись видео</h3>
-            <div class="save-row">
-              <input class="field-input save-project" type="text" id="multiVideoProject" placeholder="Имя проекта" />
-              <input class="field-input field-input--xs" type="number" id="multiVideoDuration" value="10" min="1" title="Длительность" />
-              <select class="field-select field-select--xs" id="multiVideoUnit" title="Единица длительности">
-                <option value="minutes" selected>мин</option>
-                <option value="seconds">сек</option>
-              </select>
-            </div>
-            <div class="popup-actions">
-              <button type="button" class="btn-primary" id="multiVideoOn">Начать</button>
-              <button type="button" class="btn-secondary" id="multiVideoOff">Остановить</button>
-            </div>
-            <p class="record-path" id="multiVideoSavePath" hidden></p>
-          </section>
-
-          <!-- СТОЛБИК 3 (узкий): FPS камеры -->
-          <section class="settings-zone settings-zone--rtsp" data-zone="camera">
-            <h3>Камера</h3>
-            <div class="save-row">
-              <span class="cam-fps-label">FPS</span>
-              <input class="field-input field-input--xs" type="number" id="multiFps" min="1" max="60" step="1" placeholder="авто" />
-              <button type="button" class="btn-secondary btn-xs" id="multiFpsApply">Применить</button>
-            </div>
-            <p class="zoom-hint">Перезапустит поток.</p>
-          </section>
-
-        </div>
+        <section class="settings-zone settings-zone--rtsp" data-zone="camera">
+          <div class="save-row">
+            <span class="cam-fps-label">FPS</span>
+            <input class="field-input field-input--xs" type="number" id="multiFps" min="1" max="60" step="1" placeholder="авто" />
+            <button type="button" class="btn-secondary btn-xs" id="multiFpsApply">Применить</button>
+          </div>
+          <p class="zoom-hint">Перезапустит поток с новым ограничением FPS.</p>
+        </section>
       </div>
     </div>
+  </div>
+
+  <!-- popup фото (под иконкой) -->
+  <div class="card photo-card-popup" id="multiPhotoCard">
+    <h2>Автосохранение фото</h2>
+    <div class="save-row">
+      <input class="field-input save-project" type="text" id="multiPhotoProject" placeholder="Имя проекта" />
+      <input class="field-input field-input--xs" type="number" id="multiPhotoInterval" value="5" min="1" title="Интервал" />
+      <select class="field-select field-select--xs" id="multiPhotoUnit" title="Единица интервала">
+        <option value="seconds" selected>сек</option><option value="minutes">мин</option>
+      </select>
+      <select class="field-select field-select--xs" id="multiPhotoFormat" title="Формат файла">
+        <option value="jpg" selected>JPG</option><option value="png">PNG</option>
+      </select>
+    </div>
+    <div class="popup-actions">
+      <button type="button" class="btn-primary" id="multiPhotoOn">Включить</button>
+      <button type="button" class="btn-secondary" id="multiPhotoOff">Выключить</button>
+    </div>
+    <p class="record-path" id="multiPhotoSavePath" hidden></p>
+  </div>
+
+  <!-- popup видео (под иконкой) -->
+  <div class="card video-card-popup" id="multiVideoCard">
+    <h2>Запись видео</h2>
+    <div class="save-row">
+      <input class="field-input save-project" type="text" id="multiVideoProject" placeholder="Имя проекта" />
+      <input class="field-input field-input--xs" type="number" id="multiVideoDuration" value="10" min="1" title="Длительность" />
+      <select class="field-select field-select--xs" id="multiVideoUnit" title="Единица длительности">
+        <option value="minutes" selected>мин</option><option value="seconds">сек</option>
+      </select>
+    </div>
+    <div class="popup-actions">
+      <button type="button" class="btn-primary" id="multiVideoOn">Начать</button>
+      <button type="button" class="btn-secondary" id="multiVideoOff">Остановить</button>
+    </div>
+    <p class="record-path" id="multiVideoSavePath" hidden></p>
   </div>
 
   <!-- popup подсветки (под иконкой) -->

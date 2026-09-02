@@ -607,22 +607,25 @@ function updateToolbar() {
   if (focusEl) focusEl.textContent = source ? source.label : '— не выбрана —';
 
   const hasSource = !!source;
+  const connected = hasSource && tile.connected;
   setDisabled('multiConnectBtn', !hasSource || tile.connected);
-  setDisabled('multiDisconnectBtn', !hasSource || !tile.connected);
-  // настройки (фото/видео/подсветка/зум) — когда камера в фокусе подключена
-  setDisabled('multiSettingsBtn', !hasSource || !tile.connected);
+  setDisabled('multiDisconnectBtn', !connected);
+  // фото/видео — для любой подключённой камеры; FPS — только RTSP
+  setDisabled('multiPhotoBtn', !connected);
+  setDisabled('multiVideoBtn', !connected);
+  setDisabled('multiSettingsBtn', !connected || !source || source.kind !== 'rtsp');
   // оптика (зум/фокус) — только для подключённой RTSP-камеры (CGI-управление)
-  setDisabled('multiOpticBtn', !hasSource || !tile.connected || !source || source.kind !== 'rtsp');
-  // подсветка / изображение / сеть — для подключённой RTSP-камеры (CGI-управление)
-  const rtspOn = hasSource && tile.connected && source && source.kind === 'rtsp';
+  const rtspOn = connected && source && source.kind === 'rtsp';
+  setDisabled('multiOpticBtn', !rtspOn);
   setDisabled('multiLightBtn', !rtspOn);
   setDisabled('multiImageBtn', !rtspOn);
   setDisabled('multiNetworkBtn', !rtspOn);
   // конфиг — только для GigE (у RTSP его нет); доступен и после остановки
   setDisabled('multiConfigBtn', !hasSource || source.kind !== 'gige');
 
-  // индикатор записи на кнопке настроек: активно фото или видео
-  toggleIndicator('multiRecIndicator', tile.photo || tile.video);
+  // индикаторы записи на своих иконках
+  toggleIndicator('multiPhotoIndicator', tile.photo);
+  toggleIndicator('multiVideoIndicator', tile.video);
 }
 
 function setDisabled(id, disabled) {
@@ -1142,6 +1145,21 @@ function openImagePopup() {
   setCapLine(document.getElementById('multiImageCap'), false, '', 'Проверяю…');
   multiImagePopup.toggle();
   if (multiImagePopup.isOpen()) { settingsCaps = null; refreshSettingsCaps(source.serial); }
+}
+
+let multiPhotoPopup = null;
+let multiVideoPopup = null;
+function openPhotoPopup() {
+  const source = focusedSource();
+  if (!source || !multiPhotoPopup) return;
+  multiPhotoPopup.toggle();
+  if (multiPhotoPopup.isOpen()) { showSavePath('multiPhotoSavePath', null); prefillMultiSaveSettings(source.serial, source.kind); }
+}
+function openVideoPopup() {
+  const source = focusedSource();
+  if (!source || !multiVideoPopup) return;
+  multiVideoPopup.toggle();
+  if (multiVideoPopup.isOpen()) { showSavePath('multiVideoSavePath', null); prefillMultiSaveSettings(source.serial, source.kind); }
 }
 
 // изменить FPS RTSP-камеры в фокусе (перезапуск потока с новым ограничением)
@@ -1699,6 +1717,24 @@ function initToolbar() {
   }
   document.getElementById('multiAutoFocusBtn')?.addEventListener('click', multiAutoFocus);
   document.getElementById('multiOpticCard')?.addEventListener('click', (e) => e.stopPropagation());
+
+  // фото / видео: popup под иконкой
+  multiPhotoPopup = UIHelpers.createPopupController(
+    document.getElementById('multiPhotoCard'), document.getElementById('multiPhotoBtn'));
+  multiVideoPopup = UIHelpers.createPopupController(
+    document.getElementById('multiVideoCard'), document.getElementById('multiVideoBtn'));
+  document.getElementById('multiPhotoBtn')?.addEventListener('click', (e) => { e.stopPropagation(); openPhotoPopup(); });
+  document.getElementById('multiVideoBtn')?.addEventListener('click', (e) => { e.stopPropagation(); openVideoPopup(); });
+  document.getElementById('multiPhotoCard')?.addEventListener('click', (e) => e.stopPropagation());
+  document.getElementById('multiVideoCard')?.addEventListener('click', (e) => e.stopPropagation());
+  document.addEventListener('click', (e) => {
+    [[multiPhotoPopup, 'multiPhotoCard', 'multiPhotoBtn'], [multiVideoPopup, 'multiVideoCard', 'multiVideoBtn']]
+      .forEach(([p, cardId, btnId]) => {
+        if (!p || !p.isOpen()) return;
+        const card = document.getElementById(cardId), btn = document.getElementById(btnId);
+        if (card && !card.contains(e.target) && btn && !btn.contains(e.target)) p.close();
+      });
+  });
 
   // подсветка / изображение: popup под иконкой
   multiLightPopup = UIHelpers.createPopupController(

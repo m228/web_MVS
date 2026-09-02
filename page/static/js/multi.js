@@ -613,8 +613,11 @@ function updateToolbar() {
   setDisabled('multiSettingsBtn', !hasSource || !tile.connected);
   // оптика (зум/фокус) — только для подключённой RTSP-камеры (CGI-управление)
   setDisabled('multiOpticBtn', !hasSource || !tile.connected || !source || source.kind !== 'rtsp');
-  // сеть (смена IP) — для подключённой RTSP-камеры
-  setDisabled('multiNetworkBtn', !hasSource || !tile.connected || !source || source.kind !== 'rtsp');
+  // подсветка / изображение / сеть — для подключённой RTSP-камеры (CGI-управление)
+  const rtspOn = hasSource && tile.connected && source && source.kind === 'rtsp';
+  setDisabled('multiLightBtn', !rtspOn);
+  setDisabled('multiImageBtn', !rtspOn);
+  setDisabled('multiNetworkBtn', !rtspOn);
   // конфиг — только для GigE (у RTSP его нет); доступен и после остановки
   setDisabled('multiConfigBtn', !hasSource || source.kind !== 'gige');
 
@@ -922,8 +925,7 @@ function openSettingsModal() {
   // подтянуть сохранённые имя проекта / интервал для этой камеры
   prefillMultiSaveSettings(source.serial, source.kind);
 
-  settingsCaps = null;
-  if (isRtsp) refreshSettingsCaps(source.serial);
+  // подсветка/изображение переехали в свои popup (иконки) — здесь только фото/видео/FPS
 }
 
 // ---------- Оптика: зум-jog + фокус-ползунок + автофокус (RTSP-камера в фокусе) ----------
@@ -1120,6 +1122,26 @@ async function applyMultiNetwork() {
   disconnectTile(state.focused);
   alert('IP изменён на ' + newIp + '. Переподключаюсь через несколько секунд…');
   setTimeout(() => startStream(state.focused), 4000);
+}
+
+// ---------- Подсветка / Изображение по иконкам (popup под иконкой) ----------
+let multiLightPopup = null;
+let multiImagePopup = null;
+
+function openLightPopup() {
+  const source = focusedSource();
+  if (!source || source.kind !== 'rtsp' || !multiLightPopup) return;
+  setCapLine(document.getElementById('multiLightCap'), false, '', 'Проверяю…');
+  multiLightPopup.toggle();
+  if (multiLightPopup.isOpen()) { settingsCaps = null; refreshSettingsCaps(source.serial); }
+}
+
+function openImagePopup() {
+  const source = focusedSource();
+  if (!source || source.kind !== 'rtsp' || !multiImagePopup) return;
+  setCapLine(document.getElementById('multiImageCap'), false, '', 'Проверяю…');
+  multiImagePopup.toggle();
+  if (multiImagePopup.isOpen()) { settingsCaps = null; refreshSettingsCaps(source.serial); }
 }
 
 // изменить FPS RTSP-камеры в фокусе (перезапуск потока с новым ограничением)
@@ -1677,6 +1699,24 @@ function initToolbar() {
   }
   document.getElementById('multiAutoFocusBtn')?.addEventListener('click', multiAutoFocus);
   document.getElementById('multiOpticCard')?.addEventListener('click', (e) => e.stopPropagation());
+
+  // подсветка / изображение: popup под иконкой
+  multiLightPopup = UIHelpers.createPopupController(
+    document.getElementById('multiLightCard'), document.getElementById('multiLightBtn'));
+  multiImagePopup = UIHelpers.createPopupController(
+    document.getElementById('multiImageCard'), document.getElementById('multiImageBtn'));
+  document.getElementById('multiLightBtn')?.addEventListener('click', (e) => { e.stopPropagation(); openLightPopup(); });
+  document.getElementById('multiImageBtn')?.addEventListener('click', (e) => { e.stopPropagation(); openImagePopup(); });
+  document.getElementById('multiLightCard')?.addEventListener('click', (e) => e.stopPropagation());
+  document.getElementById('multiImageCard')?.addEventListener('click', (e) => e.stopPropagation());
+  document.addEventListener('click', (e) => {
+    [[multiLightPopup, 'multiLightCard', 'multiLightBtn'], [multiImagePopup, 'multiImageCard', 'multiImageBtn']]
+      .forEach(([p, cardId, btnId]) => {
+        if (!p || !p.isOpen()) return;
+        const card = document.getElementById(cardId), btn = document.getElementById(btnId);
+        if (card && !card.contains(e.target) && btn && !btn.contains(e.target)) p.close();
+      });
+  });
 
   // сеть: popup под иконкой + смена IP
   multiNetworkPopup = UIHelpers.createPopupController(

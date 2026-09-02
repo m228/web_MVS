@@ -251,7 +251,12 @@ function renderChipSettings(box, cam) {
     const c = cam.connection || {};
     box.innerHTML = `
       <div class="chip-rtsp-summary">
-        <div>URL: <strong>${escapeHtml(c.url || '—')}</strong></div>
+        <div class="chip-url-row">
+          <span class="chip-url">URL: <strong>${escapeHtml(c.url || '—')}</strong></span>
+          <button type="button" class="chip-copy" data-chip-copy title="Скопировать URL" aria-label="Скопировать URL" ${c.url ? '' : 'disabled'}>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>
+          </button>
+        </div>
         <div>Масштаб: <strong>${escapeHtml(c.scale ?? 100)}%</strong>, FPS: <strong>${escapeHtml(c.fps || 'авто')}</strong></div>
         <label class="chip-autostart" title="Автостарт: камера поднимается при запуске программы и сама продолжает автосохранение — браузер открывать не нужно">
           <input type="checkbox" data-chip-autostart ${cam.autostart ? 'checked' : ''} ${c.url ? '' : 'disabled'} />
@@ -264,6 +269,17 @@ function renderChipSettings(box, cam) {
     if (autostartBox) {
       autostartBox.addEventListener('click', (e) => e.stopPropagation());
       autostartBox.addEventListener('change', () => toggleAutostart(cam, autostartBox));
+    }
+    const copyBtn = box.querySelector('[data-chip-copy]');
+    if (copyBtn) {
+      copyBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const url = c.url || '';
+        if (!url) return;
+        navigator.clipboard?.writeText(url)
+          .then(() => { copyBtn.classList.add('is-copied'); setTimeout(() => copyBtn.classList.remove('is-copied'), 1200); log.success('URL скопирован'); })
+          .catch(() => log.warn('Не удалось скопировать URL'));
+      });
     }
     return;
   }
@@ -1100,6 +1116,7 @@ async function applyMultiNetwork() {
     RtspApi.saveCam({ url: source.connection.url, label: source.label, ip: newIp, serial: source.serial,
       scale: source.connection.scale, fps: source.connection.fps });
   }
+  renderDrawer();   // обновить карточку источника — новый IP/URL сразу видны
   disconnectTile(state.focused);
   alert('IP изменён на ' + newIp + '. Переподключаюсь через несколько секунд…');
   setTimeout(() => startStream(state.focused), 4000);

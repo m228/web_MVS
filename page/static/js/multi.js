@@ -942,11 +942,22 @@ async function refreshOpticCaps(serial) {
   initMultiLens(serial);
 }
 
-// подтянуть текущую позицию фокуса в ползунок
+function setMultiZoomUI(zoom01) {
+  if (zoom01 == null) return;
+  const pct = Math.round(zoom01 * 100);
+  const fill = document.getElementById('multiZoomBarFill');
+  const val = document.getElementById('multiZoomVal');
+  if (fill) fill.style.width = pct + '%';
+  if (val) val.textContent = pct + '%';
+}
+
+// подтянуть реальные позиции зума/фокуса (обратка)
 async function initMultiLens(serial) {
   if (!(multiOpticCaps && (multiOpticCaps.focus || multiOpticCaps.optical_zoom))) return;
   const st = await RtspApi.lensStatus(serial);
-  if (st && !st.error && st.focus != null) {
+  if (!st || st.error) return;
+  if (st.zoom != null) setMultiZoomUI(st.zoom);
+  if (st.focus != null) {
     const fs = document.getElementById('multiFocusSlider');
     const fv = document.getElementById('multiFocusVal');
     if (fs) fs.value = Math.round(st.focus * 100);
@@ -954,23 +965,25 @@ async function initMultiLens(serial) {
   }
 }
 
-// зум — ползунок-jog (тянешь → tele/wide со скоростью «шаг», отпустил → стоп/центр)
-let multiZoomJogDir = null;
-async function multiZoomJog(val) {
+// зум — кнопки −/+ на удержание с живой обраткой (реальный zoom с камеры)
+let multiZoomHoldTimer = null;
+async function multiZoomHoldStart(dir) {
   const source = focusedSource();
   if (!source || source.kind !== 'rtsp' || !(multiOpticCaps && multiOpticCaps.optical_zoom)) return;
-  const speed = Number(document.getElementById('multiZoomStep')?.value) || 4;
-  const dir = val > 5 ? 'tele' : (val < -5 ? 'wide' : 'stop');
-  if (dir === multiZoomJogDir) return;
-  multiZoomJogDir = dir;
-  await RtspApi.opticalZoom(source.serial, dir, speed);
+  await RtspApi.opticalZoom(source.serial, dir, 3);
+  if (multiZoomHoldTimer) clearInterval(multiZoomHoldTimer);
+  multiZoomHoldTimer = setInterval(async () => {
+    const st = await RtspApi.lensStatus(source.serial);
+    if (st && !st.error && st.zoom != null) setMultiZoomUI(st.zoom);
+  }, 250);
 }
-async function multiZoomJogStop() {
+async function multiZoomHoldStop() {
+  if (multiZoomHoldTimer) { clearInterval(multiZoomHoldTimer); multiZoomHoldTimer = null; }
   const source = focusedSource();
-  const sl = document.getElementById('multiZoomSlider'); if (sl) sl.value = 0;
-  if (source && multiZoomJogDir && multiZoomJogDir !== 'stop') {
-    multiZoomJogDir = 'stop'; await RtspApi.opticalZoom(source.serial, 'stop');
-  } else { multiZoomJogDir = null; }
+  if (!source || source.kind !== 'rtsp') return;
+  await RtspApi.opticalZoom(source.serial, 'stop');
+  const st = await RtspApi.lensStatus(source.serial);
+  if (st && !st.error && st.zoom != null) setMultiZoomUI(st.zoom);
 }
 
 // фокус — абсолютный ползунок (0..100 → 0..1)
@@ -1525,11 +1538,16 @@ function initToolbar() {
   document.getElementById('multiOpticBtn')?.addEventListener('click', (e) => {
     e.stopPropagation(); openOpticPopup();
   });
-  const mzs = document.getElementById('multiZoomSlider');
-  if (mzs) {
-    mzs.addEventListener('input', () => multiZoomJog(Number(mzs.value)));
-    ['pointerup', 'pointercancel', 'pointerleave', 'change'].forEach((ev) =>
-      mzs.addEventListener(ev, multiZoomJogStop));
+  const mZoomJog = document.querySelector('#multiOpticalZoomControls .optic-jog');
+  if (mZoomJog) {
+    mZoomJog.addEventListener('pointerdown', (e) => {
+      const b = e.target.closest('button[data-zoom]');
+      if (!b) return;
+      e.preventDefault();
+      multiZoomHoldStart(b.getAttribute('data-zoom'));
+    });
+    ['pointerup', 'pointercancel', 'pointerleave'].forEach((ev) =>
+      mZoomJog.addEventListener(ev, multiZoomHoldStop));
   }
   const mfs = document.getElementById('multiFocusSlider');
   if (mfs) {

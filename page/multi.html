@@ -261,11 +261,13 @@
     <div class="optic-group" id="multiOpticalZoomControls" hidden>
       <div class="optic-group__head">
         <span class="optic-group__lab">Зум</span>
-        <label class="optic-step">шаг
-          <select id="multiZoomStep"><option value="1">1</option><option value="2">2</option><option value="4" selected>4</option><option value="6">6</option><option value="8">8</option></select>
-        </label>
+        <b class="optic-val" id="multiZoomVal">—</b>
       </div>
-      <input type="range" class="optic-slider optic-slider--jog" id="multiZoomSlider" min="-100" max="100" value="0" step="1" title="Тяни — зум едет (Wide ← → Tele), отпусти — стоп" />
+      <div class="optic-jog">
+        <button type="button" class="toolbar-btn toolbar-btn--neutral optic-jbtn" data-zoom="wide" title="Отдалить (Wide) — удерживай">−</button>
+        <div class="optic-bar"><span class="optic-bar__fill" id="multiZoomBarFill"></span></div>
+        <button type="button" class="toolbar-btn toolbar-btn--neutral optic-jbtn" data-zoom="tele" title="Приблизить (Tele) — удерживай">+</button>
+      </div>
     </div>
 
     <div class="optic-group" id="multiFocusControls" hidden>

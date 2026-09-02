@@ -927,11 +927,23 @@ function initRtspPage() {
     });
   }
 
-  // текущая позиция объектива (0..1) — для инициализации ползунка фокуса
+  // показать реальную позицию зума (0..1) на индикаторе
+  function setZoomUI(zoom01) {
+    if (zoom01 == null) return;
+    const pct = Math.round(zoom01 * 100);
+    const fill = document.getElementById('zoomBarFill');
+    const val = document.getElementById('zoomVal');
+    if (fill) fill.style.width = pct + '%';
+    if (val) val.textContent = pct + '%';
+  }
+
+  // текущая позиция объектива (0..1) — обратка для индикатора зума и ползунка фокуса
   async function initLens() {
     if (!serial || !(capabilities && (capabilities.focus || capabilities.optical_zoom))) return;
     const st = await RtspApi.lensStatus(serial);
-    if (st && !st.error && st.focus != null) {
+    if (!st || st.error) return;
+    if (st.zoom != null) setZoomUI(st.zoom);
+    if (st.focus != null) {
       const fs = document.getElementById('focusSlider');
       const fv = document.getElementById('focusVal');
       if (fs) fs.value = Math.round(st.focus * 100);
@@ -939,22 +951,24 @@ function initRtspPage() {
     }
   }
 
-  // зум — ползунок-jog: тянешь от центра → мотор едет (tele/wide) со скоростью «шаг»,
-  // отпустил → стоп и ползунок в центр. Абсолютно эта камера зум не позиционирует.
-  let zoomJogDir = null;
-  async function zoomJog(sliderVal) {
+  // зум — кнопки −/+ на удержание (Wide/Tele) с ЖИВОЙ обраткой: пока держишь, мотор
+  // едет и индикатор обновляется реальным zoom с камеры (абсолютно зум не позиционируется).
+  let zoomHoldTimer = null;
+  async function zoomHoldStart(dir) {
     if (!serial || !(capabilities && capabilities.optical_zoom)) return;
-    const speed = Number(document.getElementById('zoomStep')?.value) || 4;
-    const dir = sliderVal > 5 ? 'tele' : (sliderVal < -5 ? 'wide' : 'stop');
-    if (dir === zoomJogDir) return;
-    zoomJogDir = dir;
-    await RtspApi.opticalZoom(serial, dir, speed);
+    await RtspApi.opticalZoom(serial, dir, 3);
+    if (zoomHoldTimer) clearInterval(zoomHoldTimer);
+    zoomHoldTimer = setInterval(async () => {
+      const st = await RtspApi.lensStatus(serial);
+      if (st && !st.error && st.zoom != null) setZoomUI(st.zoom);
+    }, 250);
   }
-  async function zoomJogStop() {
-    const sl = document.getElementById('zoomSlider');
-    if (sl) sl.value = 0;
-    if (zoomJogDir && zoomJogDir !== 'stop') { zoomJogDir = 'stop'; await RtspApi.opticalZoom(serial, 'stop'); }
-    else zoomJogDir = null;
+  async function zoomHoldStop() {
+    if (zoomHoldTimer) { clearInterval(zoomHoldTimer); zoomHoldTimer = null; }
+    if (!serial) return;
+    await RtspApi.opticalZoom(serial, 'stop');
+    const st = await RtspApi.lensStatus(serial);
+    if (st && !st.error && st.zoom != null) setZoomUI(st.zoom);
   }
 
   // фокус — абсолютный ползунок (0..100 → 0..1)
@@ -1044,12 +1058,17 @@ function initRtspPage() {
   });
   if (panX) panX.addEventListener('input', applyZoomPan);
   if (panY) panY.addEventListener('input', applyZoomPan);
-  // зум — ползунок-jog (input двигает мотор, отпускание останавливает и центрирует)
-  const zoomSlider = document.getElementById('zoomSlider');
-  if (zoomSlider) {
-    zoomSlider.addEventListener('input', () => zoomJog(Number(zoomSlider.value)));
-    ['pointerup', 'pointercancel', 'pointerleave', 'change'].forEach((ev) =>
-      zoomSlider.addEventListener(ev, zoomJogStop));
+  // зум — кнопки −/+ на удержание, индикатор показывает реальный zoom
+  const zoomJogRow = document.querySelector('#opticalZoomControls .optic-jog');
+  if (zoomJogRow) {
+    zoomJogRow.addEventListener('pointerdown', (e) => {
+      const b = e.target.closest('button[data-zoom]');
+      if (!b) return;
+      e.preventDefault();
+      zoomHoldStart(b.getAttribute('data-zoom'));
+    });
+    ['pointerup', 'pointercancel', 'pointerleave'].forEach((ev) =>
+      zoomJogRow.addEventListener(ev, zoomHoldStop));
   }
   // фокус — абсолютный ползунок (по отпусканию/изменению)
   const focusSlider = document.getElementById('focusSlider');

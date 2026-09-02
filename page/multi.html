@@ -74,6 +74,9 @@
             <button type="button" id="multiOpticBtn" class="toolbar-btn toolbar-btn--neutral" disabled title="Оптика — зум и фокус камеры" aria-label="Оптика: зум и фокус">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3M8 11h6M11 8v6"/></svg>
             </button>
+            <button type="button" id="multiNetworkBtn" class="toolbar-btn toolbar-btn--neutral" disabled title="Сеть — сменить IP камеры" aria-label="Сеть — сменить IP камеры">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9.2"/><path d="M12 2.8a14 14 0 0 1 0 18.4a14 14 0 0 1 0-18.4z"/><path d="M3.4 8.7h17.2M3.4 15.3h17.2"/></svg>
+            </button>
             <button type="button" id="multiConfigBtn" class="toolbar-btn toolbar-btn--secondary" disabled title="Конфиг запуска камеры (GigE)" aria-label="Конфиг">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><path d="M14 3v6h6M8 13h8M8 17h5"/></svg>
             </button>
@@ -278,6 +281,33 @@
       <input type="range" class="optic-slider" id="multiFocusSlider" min="0" max="100" value="50" step="1" title="Позиция фокуса" />
       <button type="button" id="multiAutoFocusBtn" class="toolbar-btn toolbar-btn--primary optic-af">Автофокус</button>
     </div>
+  </div>
+
+  <!-- popup сети (под иконкой): смена IP камеры в фокусе -->
+  <div class="card network-card-popup" id="multiNetworkCard">
+    <h2>Сеть</h2>
+    <p class="cap-line" id="multiNetworkCap" data-state="unknown"><span class="cap-dot"></span><span class="cap-text">Проверяю…</span></p>
+    <div class="net-current" id="multiNetworkCurrent" hidden>
+      <div class="net-current__row"><span>Текущий IP</span><strong id="multiNetCurIp">—</strong></div>
+      <div class="net-current__row"><span>Маска</span><strong id="multiNetCurMask">—</strong></div>
+      <div class="net-current__row"><span>Шлюз</span><strong id="multiNetCurGw">—</strong></div>
+    </div>
+    <label class="switch-toggle net-dhcp">
+      <span class="switch"><input type="checkbox" id="multiNetworkDhcp" /><span class="switch-track"></span></span>
+      <span class="switch-label">DHCP (получать IP автоматически)</span>
+    </label>
+    <div class="net-fields" id="multiNetworkFields">
+      <label class="one-line-label">Новый IP-адрес</label>
+      <input type="text" id="multiNetworkIp" placeholder="192.168.1.200" autocomplete="off" spellcheck="false" />
+      <label class="one-line-label">Маска подсети</label>
+      <input type="text" id="multiNetworkMask" placeholder="255.255.255.0" autocomplete="off" spellcheck="false" />
+      <label class="one-line-label">Шлюз</label>
+      <input type="text" id="multiNetworkGateway" placeholder="192.168.1.1" autocomplete="off" spellcheck="false" />
+    </div>
+    <div class="popup-actions">
+      <button type="button" id="multiNetworkApplyBtn" class="btn-primary">Применить</button>
+    </div>
+    <p class="net-hint">После смены камера уедет на новый адрес: IP в базе обновится, поток переподключится.</p>
   </div>
 
   <!-- модалка: текущий конфиг запуска камеры (read-only) -->

@@ -1036,8 +1036,8 @@ input[type="range"] {
 .optic-val { font-variant-numeric: tabular-nums; color: var(--text); font-size: .85em; }
 .optic-slider { width: 100%; accent-color: var(--accent, #6b8afd); cursor: pointer; touch-action: none; }
 /* зум: кнопки −/+ на удержание + индикатор реальной позиции */
-.optic-jog { display: flex; align-items: center; gap: 8px; }
-.optic-jbtn { flex: 0 0 auto; width: 40px; padding: 6px 0; font-size: 1.15em; line-height: 1; user-select: none; touch-action: none; }
+.optic-jog { display: flex; align-items: center; gap: 6px; }
+.optic-jbtn { flex: 0 0 auto; width: 34px; min-width: 0; min-height: 0; padding: 4px 0; font-size: 1em; line-height: 1; user-select: none; touch-action: none; }
 .optic-bar { flex: 1; height: 8px; border-radius: 5px; background: var(--surface-muted, #2a2f3a); overflow: hidden; }
 .optic-bar__fill { display: block; height: 100%; width: 0%; background: var(--accent, #6b8afd); transition: width .15s ease; }
 .optic-af { width: 100%; margin-top: 8px; padding: 6px 10px; font-size: .9em; min-height: 0; }

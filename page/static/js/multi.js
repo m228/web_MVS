@@ -923,7 +923,7 @@ function openOpticPopup() {
   const hint = document.getElementById('multiOpticHint'); if (hint) hint.hidden = true;
   setCapLine(document.getElementById('multiOpticCap'), false, '', 'Проверяю…');
   multiOpticPopup.toggle();
-  if (multiOpticPopup.isOpen()) { refreshOpticCaps(source.serial); }
+  if (multiOpticPopup.isOpen()) { refreshOpticCaps(source.serial); initMultiLens(source.serial); }
 }
 
 async function refreshOpticCaps(serial) {
@@ -951,9 +951,10 @@ function setMultiZoomUI(zoom01) {
   if (val) val.textContent = pct + '%';
 }
 
-// подтянуть реальные позиции зума/фокуса (обратка)
+// подтянуть реальные позиции зума/фокуса (обратка). НЕ зависим от caps — дёргаем сразу
+// по serial, иначе фокус «залипает» на 0 до первого движения.
 async function initMultiLens(serial) {
-  if (!(multiOpticCaps && (multiOpticCaps.focus || multiOpticCaps.optical_zoom))) return;
+  if (!serial) return;
   const st = await RtspApi.lensStatus(serial);
   if (!st || st.error) return;
   if (st.zoom != null) setMultiZoomUI(st.zoom);
@@ -970,7 +971,7 @@ let multiZoomHoldTimer = null;
 async function multiZoomHoldStart(dir) {
   const source = focusedSource();
   if (!source || source.kind !== 'rtsp' || !(multiOpticCaps && multiOpticCaps.optical_zoom)) return;
-  await RtspApi.opticalZoom(source.serial, dir, 3);
+  await RtspApi.opticalZoom(source.serial, dir, 5);
   if (multiZoomHoldTimer) clearInterval(multiZoomHoldTimer);
   multiZoomHoldTimer = setInterval(async () => {
     const st = await RtspApi.lensStatus(source.serial);

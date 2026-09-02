@@ -937,9 +937,11 @@ function initRtspPage() {
     if (val) val.textContent = pct + '%';
   }
 
-  // текущая позиция объектива (0..1) — обратка для индикатора зума и ползунка фокуса
+  // текущая позиция объектива (0..1) — обратка для индикатора зума и ползунка фокуса.
+  // НЕ зависим от capabilities: дёргаем сразу по serial, иначе фокус «залипает» на 0,
+  // пока не подтянутся возможности / не будет первого движения.
   async function initLens() {
-    if (!serial || !(capabilities && (capabilities.focus || capabilities.optical_zoom))) return;
+    if (!serial) return;
     const st = await RtspApi.lensStatus(serial);
     if (!st || st.error) return;
     if (st.zoom != null) setZoomUI(st.zoom);
@@ -956,7 +958,7 @@ function initRtspPage() {
   let zoomHoldTimer = null;
   async function zoomHoldStart(dir) {
     if (!serial || !(capabilities && capabilities.optical_zoom)) return;
-    await RtspApi.opticalZoom(serial, dir, 3);
+    await RtspApi.opticalZoom(serial, dir, 5);
     if (zoomHoldTimer) clearInterval(zoomHoldTimer);
     zoomHoldTimer = setInterval(async () => {
       const st = await RtspApi.lensStatus(serial);

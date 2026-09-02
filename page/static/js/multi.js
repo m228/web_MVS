@@ -243,6 +243,53 @@ function removeSource(serial) {
   log.info('Источник удалён', { serial });
 }
 
+// применить FPS/масштаб RTSP-камеры прямо из карточки (перезапуск потока при эфире)
+function applyChipParam(cam, param, value) {
+  const c = cam.connection || (cam.connection = {});
+  if (param === 'fps') c.fps = (value && +value > 0) ? +value : null;
+  else if (param === 'scale') c.scale = (value && +value > 0) ? Math.min(100, Math.max(1, +value)) : 100;
+  const idx = state.tiles.findIndex((t) => t.serial === cam.serial);
+  if (idx >= 0 && state.tiles[idx].connected) {
+    const el = getTileEl(idx);
+    const frame = el?.querySelector('[data-tile-frame]');
+    if (frame) frame.src = buildStreamUrl(cam);
+  }
+  if (cam.saved && c.url) {
+    RtspApi.saveCam({ url: c.url, label: cam.label, ip: cam.ip, serial: cam.serial, scale: c.scale, fps: c.fps });
+  }
+  log.info(param + ' изменён', { serial: cam.serial, [param]: param === 'fps' ? c.fps : c.scale });
+  renderDrawer();
+}
+
+// inline-редактор FPS/масштаба в карточке: клик по значению -> поле + авто/✓/✗
+function bindChipParamEditor(box, cam) {
+  const editor = box.querySelector('[data-editor]');
+  const lab = box.querySelector('[data-editor-lab]');
+  const inp = box.querySelector('[data-editor-inp]');
+  const auto = box.querySelector('[data-editor-auto]');
+  const ok = box.querySelector('[data-editor-ok]');
+  const cancel = box.querySelector('[data-editor-cancel]');
+  if (!editor) return;
+  let curParam = null;
+  [editor, inp, auto, ok, cancel].forEach((el) => el && el.addEventListener('click', (e) => e.stopPropagation()));
+
+  box.querySelectorAll('[data-edit]').forEach((btn) => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      curParam = btn.dataset.edit;
+      const c = cam.connection || {};
+      lab.textContent = curParam === 'fps' ? 'FPS' : 'Масштаб %';
+      inp.value = curParam === 'fps' ? (c.fps || '') : (c.scale ?? 100);
+      if (auto) auto.hidden = curParam !== 'fps';   // «авто» только для FPS
+      editor.hidden = false;
+      inp.focus();
+    });
+  });
+  if (ok) ok.addEventListener('click', (e) => { e.stopPropagation(); applyChipParam(cam, curParam, inp.value); });
+  if (cancel) cancel.addEventListener('click', (e) => { e.stopPropagation(); editor.hidden = true; });
+  if (auto) auto.addEventListener('click', (e) => { e.stopPropagation(); applyChipParam(cam, curParam, ''); });
+}
+
 // форма настроек внутри карточки источника (GigE — параметры камеры; RTSP — сводка)
 function renderChipSettings(box, cam) {
   if (!box) return;
@@ -257,7 +304,17 @@ function renderChipSettings(box, cam) {
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>
           </button>
         </div>
-        <div>Масштаб: <strong>${escapeHtml(c.scale ?? 100)}%</strong>, FPS: <strong>${escapeHtml(c.fps || 'авто')}</strong></div>
+        <div class="chip-params">
+          <button type="button" class="chip-param" data-edit="scale" title="Изменить масштаб потока">Масштаб: <strong>${escapeHtml(c.scale ?? 100)}%</strong></button>
+          <button type="button" class="chip-param" data-edit="fps" title="Изменить FPS">FPS: <strong>${escapeHtml(c.fps || 'авто')}</strong></button>
+        </div>
+        <div class="chip-editor" data-editor hidden>
+          <span class="chip-editor__lab" data-editor-lab></span>
+          <input type="number" class="chip-editor__inp" data-editor-inp min="1" />
+          <button type="button" class="chip-editor__auto" data-editor-auto title="Авто">авто</button>
+          <button type="button" class="chip-editor__ok" data-editor-ok title="Применить">✓</button>
+          <button type="button" class="chip-editor__cancel" data-editor-cancel title="Отмена">✗</button>
+        </div>
         <label class="chip-autostart" title="Автостарт: камера поднимается при запуске программы и сама продолжает автосохранение — браузер открывать не нужно">
           <input type="checkbox" data-chip-autostart ${cam.autostart ? 'checked' : ''} ${c.url ? '' : 'disabled'} />
           <span>Автостарт</span>
@@ -270,6 +327,7 @@ function renderChipSettings(box, cam) {
       autostartBox.addEventListener('click', (e) => e.stopPropagation());
       autostartBox.addEventListener('change', () => toggleAutostart(cam, autostartBox));
     }
+    bindChipParamEditor(box, cam);
     const copyBtn = box.querySelector('[data-chip-copy]');
     if (copyBtn) {
       copyBtn.addEventListener('click', (e) => {
@@ -610,10 +668,9 @@ function updateToolbar() {
   const connected = hasSource && tile.connected;
   setDisabled('multiConnectBtn', !hasSource || tile.connected);
   setDisabled('multiDisconnectBtn', !connected);
-  // фото/видео — для любой подключённой камеры; FPS — только RTSP
+  // фото/видео — для любой подключённой камеры (FPS/масштаб теперь в карточке источника)
   setDisabled('multiPhotoBtn', !connected);
   setDisabled('multiVideoBtn', !connected);
-  setDisabled('multiSettingsBtn', !connected || !source || source.kind !== 'rtsp');
   // оптика (зум/фокус) — только для подключённой RTSP-камеры (CGI-управление)
   const rtspOn = connected && source && source.kind === 'rtsp';
   setDisabled('multiOpticBtn', !rtspOn);
@@ -903,33 +960,6 @@ async function prefillMultiSaveSettings(serial, kind) {
   setVal('multiPhotoFormat', s.photo_format);
 }
 
-function openSettingsModal() {
-  const source = focusedSource();
-  const tile = state.tiles[state.focused];
-  if (!source || !tile) return;
-
-  const serialEl = document.getElementById('multiSettingsSerial');
-  if (serialEl) serialEl.textContent = source.label;
-
-  // зоны «Подсветка/Зум/Камера(FPS)» — только для RTSP (у GigE их нет)
-  const isRtsp = source.kind === 'rtsp';
-  document.querySelectorAll('#multiSettingsModal .settings-zone--rtsp').forEach((z) => { z.hidden = !isRtsp; });
-  // у GigE остаются только фото+видео — сворачиваем сетку в один узкий столбик
-  document.querySelector('#multiSettingsModal .settings-zones')?.classList.toggle('is-gige', !isRtsp);
-
-  // подставить текущий FPS камеры
-  const fpsInput = document.getElementById('multiFps');
-  if (fpsInput) fpsInput.value = (source.connection && source.connection.fps) || '';
-
-  showSavePath('multiPhotoSavePath', null);
-  showSavePath('multiVideoSavePath', null);
-  openModal('multiSettingsModal');
-
-  // подтянуть сохранённые имя проекта / интервал для этой камеры
-  prefillMultiSaveSettings(source.serial, source.kind);
-
-  // подсветка/изображение переехали в свои popup (иконки) — здесь только фото/видео/FPS
-}
 
 // ---------- Оптика: зум-jog + фокус-ползунок + автофокус (RTSP-камера в фокусе) ----------
 // см. память rtsp-multi-sync — те же функции, что на RTSP-странице (rtsp.js).
@@ -1163,32 +1193,6 @@ function openVideoPopup() {
 }
 
 // изменить FPS RTSP-камеры в фокусе (перезапуск потока с новым ограничением)
-function applyMultiFps() {
-  const tile = state.tiles[state.focused];
-  const source = focusedSource();
-  if (!tile || !source || source.kind !== 'rtsp' || !source.connection) return;
-
-  const val = Number(document.getElementById('multiFps')?.value);
-  source.connection.fps = (val && val > 0) ? val : null;
-
-  // перезапускаем поток с новым FPS, если камера в эфире
-  if (tile.connected) {
-    const el = getTileEl(state.focused);
-    const frame = el?.querySelector('[data-tile-frame]');
-    if (frame) frame.src = buildStreamUrl(source);
-  }
-
-  // обновляем сохранённую запись в мини-базе, чтобы FPS пережил перезапуск
-  if (source.saved && source.connection.url) {
-    RtspApi.saveCam({
-      url: source.connection.url, label: source.label, ip: source.ip,
-      serial: source.serial,
-      scale: source.connection.scale, fps: source.connection.fps,
-    });
-  }
-
-  log.info('FPS изменён', { serial: source.serial, fps: source.connection.fps });
-}
 
 async function refreshSettingsCaps(serial) {
   const data = await RtspApi.getCapabilities(serial);
@@ -1688,7 +1692,6 @@ function initLayoutButtons() {
 function initToolbar() {
   document.getElementById('multiConnectBtn')?.addEventListener('click', () => startStream(state.focused));
   document.getElementById('multiDisconnectBtn')?.addEventListener('click', () => disconnectTile(state.focused));
-  document.getElementById('multiSettingsBtn')?.addEventListener('click', openSettingsModal);
   document.getElementById('multiConfigBtn')?.addEventListener('click', openConfigModal);
 
   // оптика: popup под иконкой + ползунки (зум-jog, фокус-абс), автофокус — клик
@@ -1779,8 +1782,6 @@ function initToolbar() {
 
 function initModals() {
   // единая модалка настроек: зоны + управление
-  document.getElementById('multiSettingsClose')?.addEventListener('click', () => closeModal('multiSettingsModal'));
-  document.getElementById('multiFpsApply')?.addEventListener('click', applyMultiFps);
   document.getElementById('multiPhotoOn')?.addEventListener('click', () => applyPhoto(true));
   document.getElementById('multiPhotoOff')?.addEventListener('click', () => applyPhoto(false));
   document.getElementById('multiVideoOn')?.addEventListener('click', () => applyVideo(true));

@@ -75,9 +75,6 @@
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="6" width="13" height="12" rx="2"/><path d="M16 10l5-3v10l-5-3z"/></svg>
               <span class="mode-indicator hidden" id="multiVideoIndicator"></span>
             </button>
-            <button type="button" id="multiSettingsBtn" class="toolbar-btn toolbar-btn--secondary" disabled title="Камера · FPS" aria-label="FPS камеры">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.6 1.6 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.6 1.6 0 0 0-1.8-.3 1.6 1.6 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.6 1.6 0 0 0-1-1.5 1.6 1.6 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.6 1.6 0 0 0 .3-1.8 1.6 1.6 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.6 1.6 0 0 0 1.5-1 1.6 1.6 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.6 1.6 0 0 0 1.8.3H9a1.6 1.6 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.6 1.6 0 0 0 1 1.5 1.6 1.6 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.6 1.6 0 0 0-.3 1.8V9a1.6 1.6 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.6 1.6 0 0 0-1.5 1z"/></svg>
-            </button>
             <button type="button" id="multiOpticBtn" class="toolbar-btn toolbar-btn--neutral" disabled title="Оптика — зум и фокус камеры" aria-label="Оптика: зум и фокус">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3M8 11h6M11 8v6"/></svg>
             </button>
@@ -140,30 +137,6 @@
         </section>
       </div>
     </main>
-  </div>
-
-  <!-- модалка: настройки камеры в фокусе (всё в одном окне, зонами) -->
-  <div class="modal-backdrop" id="multiSettingsModal" aria-hidden="true">
-    <div class="network-modal__card settings-card" role="dialog" aria-modal="true">
-      <div class="network-modal__header">
-        <div class="network-modal__title-group">
-          <h2>Камера · FPS</h2>
-          <span class="network-modal__serial">Камера: <strong id="multiSettingsSerial">-</strong></span>
-        </div>
-        <button type="button" class="modal-close-btn" id="multiSettingsClose" aria-label="Закрыть">×</button>
-      </div>
-
-      <div class="network-modal__body">
-        <section class="settings-zone settings-zone--rtsp" data-zone="camera">
-          <div class="save-row">
-            <span class="cam-fps-label">FPS</span>
-            <input class="field-input field-input--xs" type="number" id="multiFps" min="1" max="60" step="1" placeholder="авто" />
-            <button type="button" class="btn-secondary btn-xs" id="multiFpsApply">Применить</button>
-          </div>
-          <p class="zoom-hint">Перезапустит поток с новым ограничением FPS.</p>
-        </section>
-      </div>
-    </div>
   </div>
 
   <!-- popup фото (под иконкой) -->

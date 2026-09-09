@@ -165,6 +165,30 @@
     camSetStreamBadge();
   }
 
+  // Разворот карточки камеры на весь экран + скрытие телеметрии (только в fullscreen)
+  function wireCamFullscreen() {
+    const card = document.querySelector(".micro-cam-card");
+    const fullBtn = $("camFullBtn"), teleBtn = $("camTeleHideBtn");
+    if (!card || !fullBtn) return;
+    const fsEl = () => document.fullscreenElement || document.webkitFullscreenElement || null;
+    fullBtn.addEventListener("click", () => {
+      if (fsEl()) {
+        (document.exitFullscreen || document.webkitExitFullscreen).call(document);
+      } else {
+        (card.requestFullscreen || card.webkitRequestFullscreen).call(card);
+      }
+    });
+    if (teleBtn) teleBtn.addEventListener("click", () => card.classList.toggle("tele-hidden"));
+    const onFsChange = () => {
+      const on = fsEl() === card;
+      fullBtn.classList.toggle("is-full", on);
+      fullBtn.title = on ? "Свернуть" : "Развернуть на весь экран";
+      if (!on) card.classList.remove("tele-hidden"); // при выходе — телеметрию вернуть
+    };
+    document.addEventListener("fullscreenchange", onFsChange);
+    document.addEventListener("webkitfullscreenchange", onFsChange);
+  }
+
   function camApply() {
     if (!camSerial) return;
     if (camConnected) camConnect();   // перезапуск потока с новыми параметрами
@@ -534,6 +558,7 @@
     $("camApplyBtn").addEventListener("click", camApply);
     const camImg = $("microCamStream");
     if (camImg) camImg.addEventListener("error", () => { if (camConnected) camStop(); });
+    wireCamFullscreen();
 
     // таблица подвода СВ->зазор (вкладка «СВ/МКМ»)
     if ($("svspAdd")) $("svspAdd").addEventListener("click", () => addSvspRow("", ""));

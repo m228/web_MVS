@@ -366,6 +366,26 @@ select {
 .action-btn:hover,
 .modal-close-btn:hover {
   transform: translateY(-1px);
+  filter: brightness(1.05);
+}
+
+/* нейтральные/вторичные (со своим бордером) — подсветить бордер и лёгкая тень */
+.btn-secondary:hover,
+.toolbar-btn--neutral:hover,
+.toolbar-btn--secondary:hover {
+  border-color: var(--accent);
+  box-shadow: 0 6px 16px var(--accent-soft);
+}
+
+/* видимый фокус с клавиатуры (не мешает кликам мышью) */
+.btn:focus-visible,
+.btn-primary:focus-visible,
+.btn-secondary:focus-visible,
+.toolbar-btn:focus-visible,
+.action-btn:focus-visible,
+.modal-close-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }
 
 .btn-primary,
@@ -3259,6 +3279,33 @@ html {
 .micro-cam-flag.is-on { background: var(--accent-soft); color: var(--accent); }
 /* Фото/Видео в тулбаре — подсветка активного состояния */
 #camPhotoBtn.is-on, #camVideoBtn.is-on { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); }
+
+/* Кнопки-действия поверх видео: развернуть на весь экран + скрыть телеметрию */
+.micro-cam-card { position: relative; }
+.micro-cam-actions { position: absolute; top: 14px; right: 14px; display: inline-flex; gap: 6px; z-index: 3; }
+.micro-cam-act { width: 32px; height: 32px; display: inline-flex; align-items: center; justify-content: center; border-radius: 8px; background: var(--surface-elevated); border: 1px solid var(--border-strong); color: var(--muted); cursor: pointer; box-shadow: var(--shadow-soft); transition: color .18s ease, border-color .18s ease, background .18s ease; }
+.micro-cam-act:hover { color: var(--accent); border-color: var(--accent); }
+.micro-cam-act svg { width: 18px; height: 18px; }
+/* переключение иконок разворот/сворот и глаз/зачёркнутый глаз */
+.micro-cam-act .ico-compress, .micro-cam-act .ico-eyeoff { display: none; }
+#camFullBtn.is-full .ico-expand { display: none; }
+#camFullBtn.is-full .ico-compress { display: inline-flex; }
+.micro-cam-card.tele-hidden #camTeleHideBtn .ico-eye { display: none; }
+.micro-cam-card.tele-hidden #camTeleHideBtn .ico-eyeoff { display: inline-flex; }
+/* глазик-скрытие телеметрии нужен только в полноэкранном режиме */
+.micro-cam-act--tele { display: none; }
+.micro-cam-card:fullscreen .micro-cam-act--tele,
+.micro-cam-card:-webkit-full-screen .micro-cam-act--tele { display: inline-flex; }
+
+/* полноэкранный режим карточки камеры */
+.micro-cam-card:fullscreen,
+.micro-cam-card:-webkit-full-screen { display: flex; flex-direction: column; width: 100vw; height: 100vh; margin: 0; padding: 10px; box-sizing: border-box; background: #000; border-radius: 0; }
+.micro-cam-card:fullscreen #microCamStream,
+.micro-cam-card:-webkit-full-screen #microCamStream { flex: 1 1 auto; min-height: 0; height: auto; max-height: none; width: 100%; object-fit: contain; }
+.micro-cam-card:fullscreen .micro-cam-tele,
+.micro-cam-card:-webkit-full-screen .micro-cam-tele { flex: 0 0 auto; margin-top: 8px; }
+.micro-cam-card:fullscreen.tele-hidden .micro-cam-tele,
+.micro-cam-card:-webkit-full-screen.tele-hidden .micro-cam-tele { display: none; }
 
 /* шапка: серийник камеры + её IP в столбик; плата — read-only инфо */
 .micro-cam-id { display: inline-flex; flex-direction: column; line-height: 1.15; }

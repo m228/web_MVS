@@ -115,12 +115,21 @@
     } catch (e) { /* камера ещё не запускалась — диапазоны появятся после старта */ }
   }
 
-  function fillOpts(id, options) {
+  // spec: либо массив вариантов, либо объект {value, options} (как отдаёт бэкенд для
+  // pixel_format/exposure_auto). Раньше принимался только массив -> список форматов
+  // пикселей не заполнялся, оставалось лишь «— как есть —» и кадр не декодировался.
+  function fillOpts(id, spec) {
     const sel = $(id);
-    if (!sel || !Array.isArray(options) || !options.length) return;
-    const cur = sel.value;
-    sel.innerHTML = "";
-    options.forEach((o) => {
+    if (!sel) return;
+    const list = Array.isArray(spec) ? spec : (spec && Array.isArray(spec.options) ? spec.options : null);
+    if (!list || !list.length) return;
+    // текущее значение камеры (spec.value) — приоритетнее ранее выбранного в UI
+    const specVal = (spec && !Array.isArray(spec) && spec.value != null) ? String(spec.value) : "";
+    const cur = specVal || sel.value;
+    // сохранить ведущий плейсхолдер «— как есть —» (value=""), если он был
+    const ph = sel.querySelector('option[value=""]');
+    sel.innerHTML = ph ? ph.outerHTML : "";
+    list.forEach((o) => {
       const v = (o && typeof o === "object") ? (o.value != null ? o.value : o.name) : o;
       const opt = document.createElement("option");
       opt.value = v; opt.textContent = v; sel.appendChild(opt);

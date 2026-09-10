@@ -914,11 +914,14 @@ class CameraWorker(BaseCameraWorker):
         # который берёт этот же лок повторно — с нереентрантным Lock это дедлок.
         self._control_lock = threading.RLock()
 
-        # кэш последних "сетевых" данных, чтобы не дёргать control повторно
+        # кэш последних "сетевых"/info данных, чтобы не дёргать control повторно.
+        # Каждый control-probe = полный GigE open/close (heartbeat+stream-канал);
+        # частые опросы (UI ~10 с) на коротком TTL плодили GVCP-таймауты между коннектами.
         self._cached_ip = None              # {"ip": "..."} | None
         self._cached_network = None         # (ip, mask, gateway, dhcp) | None
+        self._cached_info = None            # {"items": [...]} | None
         self._cache_ts = 0.0
-        self._cache_ttl = 10.0              # сек — кэш живёт между refresh-цикл UI
+        self._cache_ttl = 30.0              # сек — кэш живёт между refresh-цикл UI
 
     # запомнить выбранную пользователем запись (handle) и/или интерфейс
     def select_interface(self, interface_id=None, device_handle=None):
@@ -933,6 +936,7 @@ class CameraWorker(BaseCameraWorker):
         # при смене записи кэш мог относиться к другой — инвалидируем
         self._cached_ip = None
         self._cached_network = None
+        self._cached_info = None
         log_event("camera_core.select_interface", "Выбрана запись камеры", "info",
                   {"serial_number": self.serial_number,
                    "interface_id": self.interface_id, "device_handle": self.device_handle})
@@ -1057,6 +1061,11 @@ class CameraWorker(BaseCameraWorker):
         if self._cached_ip is not None and (time.time() - self._cache_ts) < self._cache_ttl:
             return self._cached_ip
 
+        # идёт видеопоток — НЕ открываем второй control-канал (иначе GVCP-коллизия/таймаут):
+        # отдаём последний известный IP, даже если кэш формально протух
+        if self.running:
+            return self._cached_ip
+
         if not self.manager.check():
             return None
 
@@ -1064,6 +1073,8 @@ class CameraWorker(BaseCameraWorker):
         with self._control_lock:
             # пока ждали лок, кто-то другой мог уже получить ответ — используем его
             if self._cached_ip is not None and (time.time() - self._cache_ts) < self._cache_ttl:
+                return self._cached_ip
+            if self.running:                     # стрим стартовал, пока ждали лок
                 return self._cached_ip
 
             ia = None
@@ -1084,7 +1095,16 @@ class CameraWorker(BaseCameraWorker):
 
     # полная read-only информация о камере (для модалки «инфо»).
     # Как и get_ip: открываем control, читаем доступные узлы, отдаём список.
+    # Кэшируем (TTL) и НЕ открываем control во время стрима — чтобы повторные
+    # запросы страницы не плодили open/close камеры (GVCP-таймауты между коннектами).
     def get_info(self, interface_id=None, device_handle=None):
+        # свежий кэш — отдаём без открытия control
+        if self._cached_info is not None and (time.time() - self._cache_ts) < self._cache_ttl:
+            return self._cached_info
+        # идёт видеопоток — второй control-канал не открываем, отдаём что есть
+        if self.running:
+            return self._cached_info
+
         status = self.manager.access_status(self.serial_number)
         if status != 1:
             log_event("camera_core.get_info", "Камера недоступна для запроса информации", "warn",
@@ -1096,12 +1116,19 @@ class CameraWorker(BaseCameraWorker):
 
         # control-операция — сериализуем (один control-канал на камеру)
         with self._control_lock:
+            # пока ждали лок — кэш мог заполниться, или стартовал стрим
+            if self._cached_info is not None and (time.time() - self._cache_ts) < self._cache_ttl:
+                return self._cached_info
+            if self.running:
+                return self._cached_info
             ia = None
             try:
                 node_map, ia = self.open_node_map(interface_id, device_handle)
                 if node_map is None:
                     return None
-                return {"items": self._collect_info(node_map)}
+                self._cached_info = {"items": self._collect_info(node_map)}
+                self._cache_ts = time.time()
+                return self._cached_info
             finally:
                 if ia is not None:
                     try:
@@ -1664,6 +1691,7 @@ class CameraWorker(BaseCameraWorker):
         # инвалидируем кэш до старта — после ребута камеры он точно устарел
         self._cached_ip = None
         self._cached_network = None
+        self._cached_info = None
 
         # сериализуем с остальными control-операциями
         with self._control_lock:

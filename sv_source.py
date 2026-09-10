@@ -49,7 +49,10 @@ class SvSource:
         self._thread = None
         self._running = False
 
+        # _sock_up — TCP-сокет поднят; _connected — реальная связь (подтверждена чтением).
+        # В pymodbus 3.x connect() к мёртвому IP возвращает True, поэтому одного connect() мало.
         self._connected = False
+        self._sock_up = False
         self._last_error = None
         self._values = {}
 
@@ -92,22 +95,24 @@ class SvSource:
                 pass
             self._client = None
         self._connected = False
+        self._sock_up = False
 
     def _connect(self):
-        if self._client is not None and self._connected:
+        # гвард по сокету, а не по _connected: connect() врёт (True к мёртвому IP)
+        if self._client is not None and self._sock_up:
             return True
         self._close()
         client = ModbusTcpClient(self.host, port=self.port, timeout=1.0)
         if client.connect():
             self._client = client
-            self._connected = True
+            self._sock_up = True   # сокет есть; _connected подтвердит успешное чтение в _loop
             self._last_error = None
-            log_event("sv_source", "Связь с источником СВ установлена", "success", {"host": self.host})
             return True
         try:
             client.close()
         except Exception:
             pass
+        self._sock_up = False
         return False
 
     def _read_reg(self, addr):
@@ -138,6 +143,9 @@ class SvSource:
                 if self.on_update is not None:
                     self.on_update(values.get("sv"), values.get("stage"))
                 backoff_i = 0
+                if not self._connected:   # живой ПЛК подтверждён чтением (не connect())
+                    self._connected = True
+                    log_event("sv_source", "Связь с источником СВ установлена", "success", {"host": self.host})
             except Exception as e:
                 self._last_error = str(e)
                 log_event("sv_source", "Ошибка чтения контроллера — переподключение", "warn", {"error": str(e)})

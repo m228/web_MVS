@@ -58,7 +58,11 @@ class PlateClient:
         self._ext_counter = 0
 
         # здоровье связи
+        # _sock_up  — TCP-сокет поднят (connect() ок). НЕ доказывает живое устройство:
+        #             в pymodbus 3.x connect() к мёртвому IP возвращает True.
+        # _connected — реальная связь: подтверждается ТОЛЬКО успешным чтением регистров.
         self._connected = False
+        self._sock_up = False
         self._reconnecting = False
         self._last_ok = None
         self._last_error = None
@@ -239,9 +243,12 @@ class PlateClient:
                 pass
             self._client = None
         self._connected = False
+        self._sock_up = False
 
     def _ensure_connected(self):
-        if self._client is not None and self._connected:
+        # гвард — по факту наличия сокета (_sock_up), а НЕ по _connected: connect() в
+        # pymodbus 3.x врёт (True к мёртвому IP), поэтому «связь» подтверждает только чтение.
+        if self._client is not None and self._sock_up:
             return True
         self._close_client()
         client = ModbusTcpClient(
@@ -249,16 +256,16 @@ class PlateClient:
         )
         if client.connect():
             self._client = client
-            self._connected = True
-            self._reconnecting = False
+            self._sock_up = True   # сокет есть; _connected выставит успешное чтение в _loop
             self._last_error = None
-            log_event("microscope_plc", "Связь с платой установлена", "success",
+            log_event("microscope_plc", "TCP-сокет платы открыт (ждём ответ на чтение)", "info",
                       {"host": self.cfg["host"], "port": self.cfg["port"]})
             return True
         try:
             client.close()
         except Exception:
             pass
+        self._sock_up = False
         self._connected = False
         return False
 
@@ -378,6 +385,10 @@ class PlateClient:
                 read_fails = 0
                 self._reconnecting = False
                 self._last_error = None
+                if not self._connected:   # реальное подтверждение живого устройства (не connect())
+                    self._connected = True
+                    log_event("microscope_plc", "Связь с платой установлена", "success",
+                              {"host": self.cfg["host"], "port": self.cfg["port"]})
 
                 # расширенная телеметрия — реже основного такта (раз в ~5 циклов)
                 self._ext_counter += 1

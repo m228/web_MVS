@@ -63,6 +63,7 @@
   //      параметры — во вкладке пульта, телеметрия — полосой снизу. Всё через CameraApi. ----
   let camConnected = false;
   let camPhotoOn = false, camVideoOn = false;
+  let hwMinute = 3, hwSecOn = 0;   // минута/секунда старта ежечасной промывки (из конфига)
   let camMetricsTimer = null;
   const CAM = () => window.CameraApi;
 
@@ -317,7 +318,12 @@
           $("camModeToggle").checked = auto;
           const st = $("camModeState"); if (st) st.textContent = auto ? "автомат" : "поток";
         }
-        if (cfg.hourly_wash && $("hourlyWashToggle")) $("hourlyWashToggle").checked = cfg.hourly_wash.enabled !== false;
+        if (cfg.hourly_wash && $("hourlyWashToggle")) {
+          $("hourlyWashToggle").checked = cfg.hourly_wash.enabled !== false;
+          if (cfg.hourly_wash.minute != null) hwMinute = Number(cfg.hourly_wash.minute);
+          if (cfg.hourly_wash.sec_on != null) hwSecOn = Number(cfg.hourly_wash.sec_on);
+        }
+        updateHourlyWashTimer();
         cfgSerial = cfg.camera_serial || "";
       }
     } catch (e) { /* конфиг недоступен */ }
@@ -639,6 +645,7 @@
     if (hwT) hwT.addEventListener("change", () => {
       api("/api/micro/settings", { hourly_wash: hwT.checked ? 1 : 0 }).catch(() => {});
       sentCmd("Ежечасная промывка: " + (hwT.checked ? "вкл" : "выкл"));
+      updateHourlyWashTimer();
     });
 
     // ручной режим
@@ -752,11 +759,26 @@
     sentCmd("М" + m + " · " + (OP_LABEL[op] || op) + (value != null ? " " + value : ""));
   }
 
+  // обратный отсчёт до следующей ежечасной промывки (раз в час на минуте hwMinute:hwSecOn)
+  function updateHourlyWashTimer() {
+    const el = $("hourlyWashLeft"); if (!el) return;
+    const hwT = $("hourlyWashToggle");
+    if (hwT && !hwT.checked) { el.textContent = "выкл"; return; }
+    const now = new Date();
+    const next = new Date(now);
+    next.setMinutes(hwMinute, hwSecOn, 0);
+    if (next <= now) next.setHours(next.getHours() + 1);   // уже прошло в этом часу -> следующий час
+    const s = Math.max(0, Math.round((next - now) / 1000));
+    el.textContent = String(Math.floor(s / 60)).padStart(2, "0") + ":" + String(s % 60).padStart(2, "0");
+  }
+
   document.addEventListener("DOMContentLoaded", () => {
     wire();
     syncManual(false);
     initCamera();
     poll();
     setInterval(poll, POLL_MS);
+    updateHourlyWashTimer();
+    setInterval(updateHourlyWashTimer, 1000);
   });
 })();

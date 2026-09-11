@@ -3342,7 +3342,9 @@ input.micro-cam-num { width: 56px; min-width: 0; flex: 0 0 auto; padding: 4px 5p
 .micro-check { display: inline-flex; flex-direction: row; align-items: center; justify-content: flex-start; gap: 10px; cursor: pointer; text-align: left; color: var(--text); }
 .micro-check input { width: auto; height: auto; min-height: 0; margin: 0; padding: 0; flex: 0 0 auto; }
 .micro-check__text { line-height: 1.25; }
-.micro-wash { display: flex; }
+.micro-wash { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.micro-wash-timer { font-size: 0.82em; color: var(--muted); white-space: nowrap; }
+.micro-wash-timer b { color: var(--text); font-variant-numeric: tabular-nums; }
 
 /* DEBUG-блок ручного ввода СВ (убрать после отладки цикла) */
 .micro-debug { margin-top: 16px; padding: 12px 14px; border: 1px dashed var(--warning, #d97706); border-radius: 10px; background: var(--warning-soft, rgba(217,119,6,.06)); }

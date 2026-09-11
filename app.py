@@ -306,6 +306,22 @@ def micro_take_sample():
     return res
 
 
+@app.get("/api/micro/cycle_reset")
+def micro_cycle_reset():
+    """Кнопка «Сброс»: прервать цикл — в Ожидание, закрыть клапаны."""
+    res = micro.cycle_reset()
+    api_log("api.micro.cycle_reset", "Сброс цикла пробы", payload=res)
+    return res
+
+
+@app.get("/api/micro/cycle_skip")
+def micro_cycle_skip():
+    """Кнопка «Вперёд»: перепрыгнуть на следующий шаг цикла."""
+    res = micro.cycle_skip()
+    api_log("api.micro.cycle_skip", "Перепрыг шага цикла", payload=res)
+    return res
+
+
 @app.get("/api/micro/settings")
 def micro_settings(
     camera_serial: str | None = None,

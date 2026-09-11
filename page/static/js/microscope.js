@@ -55,6 +55,16 @@
           r.status === "busy" ? "цикл уже идёт" : (r.hint || "заблокировано");
       } catch (e) { const h = $("cycHint"); if (h) h.textContent = "ошибка: " + e.message; }
     });
+    const skip = $("cycSkipBtn");
+    if (skip) skip.addEventListener("click", async () => {
+      try { const r = await api("/api/micro/cycle_skip"); sentCmd("Цикл: вперёд → шаг " + (r.mode ?? "")); }
+      catch (e) { const h = $("cycHint"); if (h) h.textContent = "ошибка: " + e.message; }
+    });
+    const reset = $("cycResetBtn");
+    if (reset) reset.addEventListener("click", async () => {
+      try { await api("/api/micro/cycle_reset"); sentCmd("Цикл: сброс"); const h = $("cycHint"); if (h) h.textContent = "цикл сброшен"; }
+      catch (e) { const h = $("cycHint"); if (h) h.textContent = "ошибка: " + e.message; }
+    });
     const save = $("pcSave");
     if (save) save.addEventListener("click", async () => {
       const p = {

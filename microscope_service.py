@@ -174,6 +174,18 @@ class MicroscopeService:
             return self.fsm.start_sample()
         return {"status": "no_fsm"}
 
+    def cycle_reset(self):
+        """Кнопка «Сброс»: прервать цикл, в Ожидание."""
+        if self.fsm:
+            return self.fsm.reset_cycle()
+        return {"status": "no_fsm"}
+
+    def cycle_skip(self):
+        """Кнопка «Вперёд»: перепрыгнуть на следующий шаг цикла."""
+        if self.fsm:
+            return self.fsm.skip_step()
+        return {"status": "no_fsm"}
+
     def sv_override(self, on):
         """DEBUG (убрать после отладки): перехват ПЛК. При True sv_source перестаёт
         затирать ручной СВ/стадию со страницы — можно вбивать значения и смотреть цикл."""

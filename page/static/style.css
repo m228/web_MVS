@@ -3361,7 +3361,9 @@ input.micro-cam-num { width: 56px; min-width: 0; flex: 0 0 auto; padding: 4px 5p
 .micro-wash-timer b { color: var(--text); font-variant-numeric: tabular-nums; }
 
 /* вкладка «Цикл» */
-.micro-cycle-take { width: 100%; margin: 6px 0 10px; }
+.micro-cycle-btns { display: flex; gap: 8px; margin: 6px 0 10px; flex-wrap: wrap; }
+.micro-cycle-take { flex: 1 1 auto; }
+.micro-cycle-btns .toolbar-btn { min-width: 0; }
 .micro-cycle-live { background: var(--surface-muted); border-radius: 10px; padding: 10px 12px; }
 .micro-cycle-step { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .micro-cycle-badge { font-size: 0.72em; font-weight: 700; letter-spacing: .02em; text-transform: uppercase; color: var(--accent); background: var(--accent-soft); border-radius: 6px; padding: 3px 8px; white-space: nowrap; }

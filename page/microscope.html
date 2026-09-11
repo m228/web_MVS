@@ -178,7 +178,11 @@
               <!-- Цикл пробы «Взять пробу»: живой шаг + параметры -->
               <div class="micro-ppane hidden" data-ppane="cycle">
                 <div class="micro-sub__title">Цикл пробы</div>
-                <button type="button" id="takeSampleBtn" class="toolbar-btn toolbar-btn--primary micro-cycle-take">Взять пробу</button>
+                <div class="micro-cycle-btns">
+                  <button type="button" id="takeSampleBtn" class="toolbar-btn toolbar-btn--primary micro-cycle-take">Взять пробу</button>
+                  <button type="button" id="cycSkipBtn" class="toolbar-btn toolbar-btn--neutral" title="Перепрыгнуть на следующий шаг цикла">Вперёд ▶</button>
+                  <button type="button" id="cycResetBtn" class="toolbar-btn toolbar-btn--danger" title="Прервать цикл — в Ожидание">Сброс</button>
+                </div>
 
                 <div class="micro-cycle-live">
                   <div class="micro-cycle-step">

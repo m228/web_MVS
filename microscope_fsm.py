@@ -34,6 +34,11 @@ CMD_SET_SP2 = 0x2006   # команда мотору М2 «установить 
 # цикла ждал полный таймаут 10 с. Считаем «доехал», если в пределах допуска.
 ARRIVE_TOL_UM = 50
 
+# Повтор команды «идти» в цикле: плата за ОДИН goto делает лишь шаг к цели (как ручная
+# кнопка «Идти»), поэтому в шагах движения цикла повторяем импульс каждые REDRIVE_TICKS
+# тиков (≈0.7 с) до доезда — иначе мотор делает один шаг и стоит («не идёт по заданию»).
+REDRIVE_TICKS = 7
+
 # Новый цикл пробы «Взять пробу»: отвод -> промывка -> подвод -> выдержка(скрины+видео) -> возврат.
 STEP_NAMES = {0: "ожидание", 20: "отвод", 21: "промывка перед пробой",
               22: "подвод к стеклу", 23: "проба · выдержка", 24: "возврат"}
@@ -106,6 +111,7 @@ class MicroscopeFSM:
         # состояние выдержки пробы (mode 23)
         self._dwell_left = 0           # осталось тиков выдержки
         self._shot_t = 0              # тики с прошлого скрина
+        self._redrive = 0             # тики с прошлого повтора goto в шаге движения
 
         self._lock = threading.Lock()
         self._thread = None
@@ -160,6 +166,43 @@ class MicroscopeFSM:
         if pos_ai is not None and pos_enc is not None:
             return ok_ai and ok_enc
         return ok_ai or ok_enc
+
+    def _redrive_goto(self):
+        # повтор импульса «идти» к текущей m1_sp каждые REDRIVE_TICKS тиков (вызывается под локом).
+        # Первый импульс даёт блок 6 по смене m1_sp; дальше держим темп, как ручная авто-доводка.
+        # Позицию блок 7 пишет каждый тик, здесь только просим повторную команду goto.
+        self._redrive += 1
+        if self._redrive >= REDRIVE_TICKS:
+            self._redrive = 0
+            self._emit_cmd1 = True
+
+    def reset_cycle(self):
+        """Кнопка «Сброс»: прервать цикл — в Ожидание, закрыть клапаны, погасить повтор
+        (мотор перестаёт получать goto и останавливается). Ручной режим/запрет не трогаем."""
+        with self._lock:
+            self.mode = 0
+            self.t = 0
+            self.cycle_t = 0
+            self._redrive = 0
+            self._dwell_left = 0
+            self.cw0 = False
+            self.cw1 = False
+        return {"status": "reset"}
+
+    def skip_step(self):
+        """Кнопка «Вперёд»: перепрыгнуть на следующий шаг цикла (отладка).
+        В ручном режиме/запрете — игнор."""
+        with self._lock:
+            if self.manual or self.sw3:
+                return {"status": "blocked"}
+            nxt = {0: 20, 20: 21, 21: 22, 22: 23, 23: 24, 24: 0}.get(self.mode, 20)
+            self.mode = nxt
+            self.t = 0
+            self._redrive = 0
+            self._shot_t = 0
+            if nxt == 23:
+                self._dwell_left = self._dwell_sec * 10
+            return {"status": "skipped", "mode": nxt}
 
     def set_manual(self, on):
         """Ручной режим: при True автомат перестаёт писать плату (пультом управляет человек).
@@ -331,16 +374,18 @@ class MicroscopeFSM:
 
             # 5) НОВЫЙ цикл пробы (шаги 20→21→22→23→24). Доезд — ПО АНАЛОГУ pos1_ai.
             if self.mode == 0:
-                pass
+                self._redrive = 0
             elif self.mode == 20:
                 # отвод в retract_pos (напр. 20000 мкм)
                 self.m1_sp = self._retract_pos
+                self._redrive_goto()               # повторяем goto до доезда (как ручная «Идти»)
                 self.t += 1
                 if self._arrived(pos1_ai, pos1, self._retract_pos) or self.t > self._step_timeout_ticks:
                     self.t = 0
                     self.mode = 21
             elif self.mode == 21:
                 # промывка стекла + трубки перед пробой (pre_wash_sec)
+                self._redrive = 0
                 self.cw0 = True
                 self.cw1 = True
                 self.t += 1
@@ -356,6 +401,7 @@ class MicroscopeFSM:
                     if self.sv >= self.SVSP[i] and self.SVSP[i] > 0.0:
                         self.m1_sp = self.SP[i]
                 self.cw0 = True                        # промывка трубки открыта на подводе
+                self._redrive_goto()                   # повторяем goto до доезда
                 self.t += 1
                 if self._arrived(pos1_ai, pos1, self.m1_sp) or self.t > self._step_timeout_ticks:
                     self.cw0 = False                   # по приходу к стеклу — закрыть трубку
@@ -367,6 +413,7 @@ class MicroscopeFSM:
                     self.mode = 23
             elif self.mode == 23:
                 # выдержка пробы: серия скринов каждые shot_interval_sec + пишется видео
+                self._redrive = 0
                 self.t += 1
                 self._shot_t += 1
                 if self._shot_t >= self._shot_interval_sec * 10:
@@ -379,6 +426,7 @@ class MicroscopeFSM:
             elif self.mode == 24:
                 # возврат в retract_pos
                 self.m1_sp = self._retract_pos
+                self._redrive_goto()                   # повторяем goto до доезда
                 self.t += 1
                 if self._arrived(pos1_ai, pos1, self._retract_pos) or self.t > self._step_timeout_ticks:
                     self.t = 0
@@ -397,7 +445,9 @@ class MicroscopeFSM:
             if self.cmd1 > 0:
                 self.t1 += 1
                 if self.t1 > 30:                       # 3с -> сброс cmd и выкл клапан
-                    if self.cmd1 == CMD_SET_SP1:
+                    # НО в подводе (mode 22) трубка должна оставаться открытой до приезда —
+                    # её закрывает сам шаг 22 по доезду; здесь не гасим, иначе мигает.
+                    if self.cmd1 == CMD_SET_SP1 and self.mode != 22:
                         self.cw0 = False
                     self.cmd1 = 0
                     self.t1 = 0

@@ -85,6 +85,13 @@ GENTL_HINTS = {
     -1020: "исчерпаны ресурсы драйвера, требуется сброс",
 }
 
+# Сколько раз ПОВТОРИТЬ create() при флаки-ошибке открытия (genicam 1.5.1 иногда не может
+# декодировать не-UTF-8 url_info продюсера -> UnicodeDecodeError/-1006/-1020). Декод
+# недетерминирован, повтор обычно попадает в удачный. Настоящее лечение — выровнять версии.
+# По логам с живой камеры удачный декод редок (~единицы %), поэтому повторов много:
+# каждый create() — новый порт (новые «мусорные» байты), рано или поздно попадаем в валидный.
+_OPEN_FLAKY_RETRIES = 20
+
 # таймаут на один кадр (сек) и сколько таймаутов подряд можно стерпеть до выхода.
 # Значения с запасом: камера долго «раскачивается» на старте (особенно 5 МП и при
 # 2 камерах), а -1011 между кадрами на низком FPS — норма. Меньшие значения рвут
@@ -2634,26 +2641,40 @@ class CameraManager:
             # чтобы продюсер успел освободить control-канал после неудачи
             if attempt_index > 0:
                 time.sleep(0.15)
-            try:
-                # защита от гонки: список мог сократиться между update() и create()
-                if index >= len(self.harvester.device_info_list):
-                    continue
-                acquirer = self.harvester.create(index)
-                if device_handle and m["device_handle"] != device_handle:
-                    log_event("camera_core.create_acquirer",
-                              "Выбранная запись не открылась, подключено через резервную",
-                              "warn", {"serial_number": serial_number,
-                                       "preferred_handle": device_handle,
-                                       "used_handle": m["device_handle"]})
-                else:
-                    log_event("camera_core.create_acquirer", "Подключение к камере открыто", "info",
-                              {"serial_number": serial_number,
-                               "device_handle": m["device_handle"],
-                               "interface_id": m["interface_id"]})
-                return acquirer
-            except Exception as e:
-                last_error = e
-                tried.append({"handle": m["device_handle"], "error": _gentl_code(repr(e)) or "n/a"})
+            # ФЛАКИ genicam 1.5.1: продюсер иногда отдаёт не-UTF-8 url_info -> UnicodeDecodeError
+            # и коды -1020/-1006/-1003. Ошибка НЕ детерминирована (мусорные байты меняются от раза
+            # к разу), поэтому ПОВТОРЯЕМ create() несколько раз — обычно попадаем в «удачный» декод.
+            for retry in range(_OPEN_FLAKY_RETRIES + 1):
+                try:
+                    # защита от гонки: список мог сократиться между update() и create()
+                    if index >= len(self.harvester.device_info_list):
+                        break
+                    acquirer = self.harvester.create(index)
+                    if retry > 0:
+                        log_event("camera_core.create_acquirer",
+                                  "Камера открыта после повтора (флаки genicam-декод)", "info",
+                                  {"serial_number": serial_number, "retry": retry})
+                    if device_handle and m["device_handle"] != device_handle:
+                        log_event("camera_core.create_acquirer",
+                                  "Выбранная запись не открылась, подключено через резервную",
+                                  "warn", {"serial_number": serial_number,
+                                           "preferred_handle": device_handle,
+                                           "used_handle": m["device_handle"]})
+                    else:
+                        log_event("camera_core.create_acquirer", "Подключение к камере открыто", "info",
+                                  {"serial_number": serial_number,
+                                   "device_handle": m["device_handle"],
+                                   "interface_id": m["interface_id"]})
+                    return acquirer
+                except Exception as e:
+                    last_error = e
+                    code = _gentl_code(repr(e))
+                    flaky = isinstance(e, UnicodeDecodeError) or code in (-1020, -1006, -1003)
+                    if flaky and retry < _OPEN_FLAKY_RETRIES:
+                        time.sleep(0.1)
+                        continue               # тот же record — повтор (новый порт, новый декод)
+                    tried.append({"handle": m["device_handle"], "error": code or "n/a"})
+                    break
 
         raise last_error if last_error is not None else ValueError(
             f"не удалось открыть устройство: {serial_number} (пробовали: {tried})")

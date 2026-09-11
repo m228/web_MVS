@@ -93,7 +93,6 @@ class MicroscopeFSM:
         self._emit_cmd2 = False
         self.cw0 = False      # клапан промывки трубки
         self.cw1 = False      # клапан промывки стекла
-        self.wash_t = 0       # обратный отсчёт промывки ПОСЛЕ пробы (mode 13)
         self.led_bright = int(config.get("led_bright", 0))
         self.led_on = False
 
@@ -153,10 +152,14 @@ class MicroscopeFSM:
             return {"status": "started"}
 
     def _arrived(self, pos_ai, pos_enc, target):
-        # ДОЕЗД ПО АНАЛОГУ pos1_ai (мкм). Энкодер — только если аналога нет (None);
-        # общий предохранитель от зависания — step_timeout в самом шаге.
-        ref = pos_ai if pos_ai is not None else pos_enc
-        return ref is not None and abs(ref - target) <= ARRIVE_TOL_UM
+        # ДОЕЗД — по ОБОИМ датчикам: аналог pos1_ai И энкодер pos1 у цели (±допуск).
+        # Одиночный датчик «шатает» (дрожит у порога) — согласие двух гасит дрожь.
+        # Если один датчик недоступен (None) — считаем по другому. step_timeout — страховка.
+        ok_ai = pos_ai is not None and abs(pos_ai - target) <= ARRIVE_TOL_UM
+        ok_enc = pos_enc is not None and abs(pos_enc - target) <= ARRIVE_TOL_UM
+        if pos_ai is not None and pos_enc is not None:
+            return ok_ai and ok_enc
+        return ok_ai or ok_enc
 
     def set_manual(self, on):
         """Ручной режим: при True автомат перестаёт писать плату (пультом управляет человек).
@@ -485,10 +488,3 @@ class MicroscopeFSM:
     def _cycle_threshold_ticks(self):
         sec = self.cycle_period.get(str(self.stage), self.cycle_period.get("default", 120))
         return int(sec) * 10   # секунды -> такты по 100 мс
-
-    def _wash_ticks(self):
-        # длительность промывки ПОСЛЕ пробы (обе). Берём SP[50] (мс) -> такты по 100 мс.
-        try:
-            return max(1, int(self.SP[50]) // 100)
-        except Exception:
-            return 30   # ~3 с по умолчанию

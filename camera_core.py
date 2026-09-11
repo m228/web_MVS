@@ -88,7 +88,9 @@ GENTL_HINTS = {
 # Сколько раз ПОВТОРИТЬ create() при флаки-ошибке открытия (genicam 1.5.1 иногда не может
 # декодировать не-UTF-8 url_info продюсера -> UnicodeDecodeError/-1006/-1020). Декод
 # недетерминирован, повтор обычно попадает в удачный. Настоящее лечение — выровнять версии.
-_OPEN_FLAKY_RETRIES = 5
+# По логам с живой камеры удачный декод редок (~единицы %), поэтому повторов много:
+# каждый create() — новый порт (новые «мусорные» байты), рано или поздно попадаем в валидный.
+_OPEN_FLAKY_RETRIES = 20
 
 # таймаут на один кадр (сек) и сколько таймаутов подряд можно стерпеть до выхода.
 # Значения с запасом: камера долго «раскачивается» на старте (особенно 5 МП и при
@@ -2669,8 +2671,8 @@ class CameraManager:
                     code = _gentl_code(repr(e))
                     flaky = isinstance(e, UnicodeDecodeError) or code in (-1020, -1006, -1003)
                     if flaky and retry < _OPEN_FLAKY_RETRIES:
-                        time.sleep(0.25)
-                        continue               # тот же record — повтор (декод недетерминирован)
+                        time.sleep(0.1)
+                        continue               # тот же record — повтор (новый порт, новый декод)
                     tried.append({"handle": m["device_handle"], "error": code or "n/a"})
                     break
 

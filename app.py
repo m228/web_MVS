@@ -650,7 +650,11 @@ def metrics(serial_number: str):
 
 @app.get("/api/camera/data_limit")
 def data_limit(serial_number: str):
-    return manager.get(serial_number).data_limit
+    worker = manager.get(serial_number)
+    # если ещё не читали (обычно так на старте) — читаем по SDK, без genicam (−1020)
+    if not getattr(worker, "data_limit", None) and hasattr(worker, "sdk_read_data_limit"):
+        worker.sdk_read_data_limit()
+    return worker.data_limit
 
 
 @app.get("/api/camera/info")

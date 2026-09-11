@@ -34,8 +34,9 @@ CMD_SET_SP2 = 0x2006   # команда мотору М2 «установить 
 # цикла ждал полный таймаут 10 с. Считаем «доехал», если в пределах допуска.
 ARRIVE_TOL_UM = 50
 
-STEP_NAMES = {0: "ожидание", 10: "отвод от стекла",
-              12: "подвод к стеклу", 13: "промывка после пробы"}
+# Новый цикл пробы «Взять пробу»: отвод -> промывка -> подвод -> выдержка(скрины+видео) -> возврат.
+STEP_NAMES = {0: "ожидание", 20: "отвод", 21: "промывка перед пробой",
+              22: "подвод к стеклу", 23: "проба · выдержка", 24: "возврат"}
 
 
 class MicroscopeFSM:
@@ -50,6 +51,13 @@ class MicroscopeFSM:
         self._hw_minute = int(hw.get("minute", 3))
         self._hw_on = int(hw.get("sec_on", 30))
         self._hw_off = int(hw.get("sec_off", 59))
+
+        # параметры нового цикла пробы (правятся на вкладке «Цикл», persist в plate_config)
+        pc = config.get("probe_cycle", {})
+        self._retract_pos = int(pc.get("retract_pos", 20000))       # отвод/возврат, мкм
+        self._pre_wash_sec = int(pc.get("pre_wash_sec", 4))         # промывка перед подводом, с
+        self._dwell_sec = int(pc.get("dwell_sec", 15))             # выдержка пробы, с
+        self._shot_interval_sec = max(1, int(pc.get("shot_interval_sec", 3)))  # период скринов, с
 
         self._period = max(0.02, int(config["poll_interval_ms"]) / 1000.0)
         # предохранитель шага цикла (тики по 100мс): нормальный выход — «доехал», а это
@@ -89,10 +97,16 @@ class MicroscopeFSM:
         self.led_bright = int(config.get("led_bright", 0))
         self.led_on = False
 
-        # колбэк «снять фото» — вызывается один раз, когда подвели к стеклу (mode 12 -> 13).
+        # колбэк «снять фото» — дёргается в выдержке (mode 23) КАЖДЫЕ shot_interval_sec (серия).
         # Ставит его microscope_service; он сам решает снимать ли (по режиму камеры auto).
         self.on_photo = None
         self._photo_request = False
+        # колбэк «писать видео пробы» — дёргается один раз на входе в выдержку (dwell_sec).
+        self.on_video = None
+        self._video_request = 0        # длительность видео (сек) при запросе, иначе 0
+        # состояние выдержки пробы (mode 23)
+        self._dwell_left = 0           # осталось тиков выдержки
+        self._shot_t = 0              # тики с прошлого скрина
 
         self._lock = threading.Lock()
         self._thread = None
@@ -123,6 +137,26 @@ class MicroscopeFSM:
     def set_cyclic(self, on):
         with self._lock:
             self.sw0 = bool(on)
+
+    def start_sample(self):
+        """Кнопка «Взять пробу»: запустить последовательность (отвод→промывка→подвод→
+        выдержка→возврат) с шага 20. В ручном режиме и при аварийном запрете — игнор."""
+        with self._lock:
+            if self.manual or self.sw3:
+                return {"status": "blocked",
+                        "hint": "снимите Ручной режим / Стоп движения"}
+            if self.mode != 0:
+                return {"status": "busy", "mode": self.mode}
+            self.mode = 20
+            self.t = 0
+            self.cycle_t = 0
+            return {"status": "started"}
+
+    def _arrived(self, pos_ai, pos_enc, target):
+        # ДОЕЗД ПО АНАЛОГУ pos1_ai (мкм). Энкодер — только если аналога нет (None);
+        # общий предохранитель от зависания — step_timeout в самом шаге.
+        ref = pos_ai if pos_ai is not None else pos_enc
+        return ref is not None and abs(ref - target) <= ARRIVE_TOL_UM
 
     def set_manual(self, on):
         """Ручной режим: при True автомат перестаёт писать плату (пультом управляет человек).
@@ -166,9 +200,29 @@ class MicroscopeFSM:
     @property
     def state(self):
         with self._lock:
+            m = self.mode
+            # человекочитаемая подпись текущего действия (для вкладки «Цикл»)
+            if m == 20:
+                label = "Отвожу в %d мкм" % self._retract_pos
+            elif m == 21:
+                left = max(0, self._pre_wash_sec * 10 - self.t) // 10
+                label = "Промывка стекла+трубки: осталось %d с" % left
+            elif m == 22:
+                label = "Подвожу к %d мкм (по СВ %.1f)" % (self.m1_sp, self.sv)
+            elif m == 23:
+                label = "Проба · выдержка: осталось %d с (скрин каждые %d с)" % (
+                    max(0, self._dwell_left) // 10, self._shot_interval_sec)
+            elif m == 24:
+                label = "Возврат в %d мкм" % self._retract_pos
+            else:
+                label = "Ожидание"
             return {
-                "mode": self.mode,
-                "step": STEP_NAMES.get(self.mode, str(self.mode)),
+                "mode": m,
+                "step": STEP_NAMES.get(m, str(m)),
+                "label": label,
+                "target": self.m1_sp if m in (20, 22, 24) else None,
+                "pre_wash_left_s": max(0, self._pre_wash_sec * 10 - self.t) // 10 if m == 21 else None,
+                "dwell_left_s": max(0, self._dwell_left) // 10 if m == 23 else None,
                 "cyclic": self.sw0,
                 "inhibit": self.sw3,
                 "manual": self.manual,
@@ -183,6 +237,12 @@ class MicroscopeFSM:
                 "sv": self.sv,
                 "stage": self.stage,
                 "u": self.u,
+                "cycle_params": {
+                    "retract_pos": self._retract_pos,
+                    "pre_wash_sec": self._pre_wash_sec,
+                    "dwell_sec": self._dwell_sec,
+                    "shot_interval_sec": self._shot_interval_sec,
+                },
             }
 
     # ---------- жизненный цикл ----------
@@ -226,7 +286,7 @@ class MicroscopeFSM:
                 if self.mode == 0:
                     self.cycle_t += 1
                     if self.cycle_t > self._cycle_threshold_ticks():
-                        self.mode = 10
+                        self.mode = 20               # авто-цикл гонит ту же последовательность пробы
                         self.t = 0
                         self.cycle_t = 0
             else:
@@ -255,7 +315,7 @@ class MicroscopeFSM:
             if self.cmd != self.cmd_old:
                 c = self.cmd // 100
                 if c == 1:
-                    self.mode = 10                     # произвести цикл отвода М1
+                    self.mode = 20                     # «Взять пробу» / произвести цикл
                 elif c == 2:
                     self.m1_sp = self.SP[0]            # отвести на 40 мм
                 elif c == 3:
@@ -266,42 +326,60 @@ class MicroscopeFSM:
                 self.cmd = 0                           # команда потреблена
                 self.cmd_old = 0
 
-            # 5) движение (case mode, 1:1 с ST)
+            # 5) НОВЫЙ цикл пробы (шаги 20→21→22→23→24). Доезд — ПО АНАЛОГУ pos1_ai.
             if self.mode == 0:
                 pass
-            elif self.mode == 10:
-                # отвод на позицию SP[0]; далее СРАЗУ подвод (промывки ПЕРЕД пробой больше нет)
-                self.m1_sp = self.SP[0]
+            elif self.mode == 20:
+                # отвод в retract_pos (напр. 20000 мкм)
+                self.m1_sp = self._retract_pos
                 self.t += 1
-                reached = pos1 is not None and abs(pos1 - self.SP[0]) <= ARRIVE_TOL_UM
-                if reached or self.t > self._step_timeout_ticks:   # доехал (±допуск) или предохранитель -> подвод
+                if self._arrived(pos1_ai, pos1, self._retract_pos) or self.t > self._step_timeout_ticks:
                     self.t = 0
-                    self.mode = 12
-            elif self.mode == 12:
-                # подвод в SP[i] по СВ (таблица СВ->зазор); мотор едет сам, плавно на плате
+                    self.mode = 21
+            elif self.mode == 21:
+                # промывка стекла + трубки перед пробой (pre_wash_sec)
+                self.cw0 = True
+                self.cw1 = True
+                self.t += 1
+                if self.t > self._pre_wash_sec * 10:
+                    self.cw0 = False
+                    self.cw1 = False
+                    self.t = 0
+                    self.mode = 22
+            elif self.mode == 22:
+                # подвод к зазору по СВ (таблица SVSP); клапан трубки ОТКРЫТ на подводе
                 self.m1_sp = self.SP[1]                # по умолчанию SP[1]
                 for i in range(1, 50):
                     if self.sv >= self.SVSP[i] and self.SVSP[i] > 0.0:
                         self.m1_sp = self.SP[i]
+                self.cw0 = True                        # промывка трубки открыта на подводе
                 self.t += 1
-                arrived = pos1 is not None and abs(pos1 - self.m1_sp) <= ARRIVE_TOL_UM
-                saw_glass = pos1_ai is not None and pos1_ai < 20
-                if arrived or saw_glass or self.t > self._step_timeout_ticks:
-                    # у стекла: ФОТО (в авто-режиме) + уходим на промывку ПОСЛЕ пробы
+                if self._arrived(pos1_ai, pos1, self.m1_sp) or self.t > self._step_timeout_ticks:
+                    self.cw0 = False                   # по приходу к стеклу — закрыть трубку
+                    self.t = 0
+                    self._dwell_left = self._dwell_sec * 10
+                    self._shot_t = 0
+                    self._photo_request = True         # первый скрин сразу у стекла
+                    self._video_request = self._dwell_sec   # писать видео пробы всю выдержку
+                    self.mode = 23
+            elif self.mode == 23:
+                # выдержка пробы: серия скринов каждые shot_interval_sec + пишется видео
+                self.t += 1
+                self._shot_t += 1
+                if self._shot_t >= self._shot_interval_sec * 10:
+                    self._shot_t = 0
                     self._photo_request = True
-                    self.wash_t = self._wash_ticks()
+                self._dwell_left -= 1
+                if self._dwell_left <= 0:
                     self.t = 0
-                    self.mode = 13
-            elif self.mode == 13:
-                # промывка ПОСЛЕ пробы: обе (трубка + стекло) на время SP[50]
-                self.cw0 = True
-                self.cw1 = True
-                self.wash_t -= 1
-                if self.wash_t <= 0:
-                    self.cw0 = False
-                    self.cw1 = False
+                    self.mode = 24
+            elif self.mode == 24:
+                # возврат в retract_pos
+                self.m1_sp = self._retract_pos
+                self.t += 1
+                if self._arrived(pos1_ai, pos1, self._retract_pos) or self.t > self._step_timeout_ticks:
+                    self.t = 0
                     self.mode = 0
-                    self.t = 0
 
             # 6) формирование команды мотору М1 (тайминги как ST: 200мс -> 3с)
             if self.m1_sp != self.m1_sp_old and self.cmd1 == 0 and not self.sw1 and not self.sw2:
@@ -344,6 +422,7 @@ class MicroscopeFSM:
             emit_cmd1 = self._emit_cmd1; self._emit_cmd1 = False
             emit_cmd2 = self._emit_cmd2; self._emit_cmd2 = False
             photo_request = self._photo_request; self._photo_request = False
+            video_request = self._video_request; self._video_request = 0
 
         pos2 = telem.get("pos2")
         connected = self.plate.status.get("connected", False)
@@ -352,7 +431,14 @@ class MicroscopeFSM:
         if manual:
             return
 
-        # фото по триггеру: подвели к стеклу -> дёрнуть камеру (колбэк сам решает по режиму auto)
+        # видео пробы по триггеру: на входе в выдержку — начать запись на dwell сек (авто-финиш)
+        if video_request and self.on_video:
+            try:
+                self.on_video(video_request)
+            except Exception as e:
+                log_event("microscope_fsm", "Ошибка колбэка видео", "warn", {"error": str(e)})
+
+        # фото по триггеру: серия скринов в выдержке (колбэк сам решает по режиму auto)
         if photo_request and self.on_photo:
             try:
                 self.on_photo()

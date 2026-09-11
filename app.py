@@ -298,12 +298,24 @@ def micro_reload():
     return data
 
 
+@app.get("/api/micro/take_sample")
+def micro_take_sample():
+    """Кнопка «Взять пробу»: запустить цикл пробы (отвод→промывка→подвод→выдержка→возврат)."""
+    res = micro.take_sample()
+    api_log("api.micro.take_sample", "Запуск цикла пробы «Взять пробу»", payload=res)
+    return res
+
+
 @app.get("/api/micro/settings")
 def micro_settings(
     camera_serial: str | None = None,
     camera_ip: str | None = None,
     camera_mode: str | None = None,
     hourly_wash: int | None = None,
+    retract_pos: int | None = None,
+    pre_wash_sec: int | None = None,
+    dwell_sec: int | None = None,
+    shot_interval_sec: int | None = None,
     host: str | None = None,
     port: int | None = None,
     unit: int | None = None,
@@ -318,6 +330,13 @@ def micro_settings(
         patch["camera_mode"] = camera_mode   # "stream" | "auto" (режим съёмки; авто-цикл прочитает)
     if hourly_wash is not None:
         patch["hourly_wash"] = {"enabled": bool(hourly_wash)}   # ежечасная промывка вкл/выкл
+    pc = {}
+    if retract_pos is not None: pc["retract_pos"] = retract_pos
+    if pre_wash_sec is not None: pc["pre_wash_sec"] = pre_wash_sec
+    if dwell_sec is not None: pc["dwell_sec"] = dwell_sec
+    if shot_interval_sec is not None: pc["shot_interval_sec"] = shot_interval_sec
+    if pc:
+        patch["probe_cycle"] = pc            # параметры цикла пробы (вкладка «Цикл»)
     if host is not None:
         patch["host"] = host
     if port is not None:

@@ -32,7 +32,8 @@ class MicroscopeService:
             self.cfg = plate_config.load()
             self.plate = PlateClient(self.cfg)
             self.fsm = MicroscopeFSM(self.plate, self.cfg)
-            self.fsm.on_photo = self._auto_photo   # автомат дёрнет камеру у стекла (см. _auto_photo)
+            self.fsm.on_photo = self._auto_photo   # серия скринов в выдержке (см. _auto_photo)
+            self.fsm.on_video = self._auto_video   # запись видео пробы на выдержку (см. _auto_video)
             self.plate.start()
             self.fsm.start()
             # режим «Автомат» (галочка камеры) = мастер авто-цикла: включаем циклический режим
@@ -66,6 +67,23 @@ class MicroscopeService:
             log_event("microscope_service", "Авто-фото по триггеру цикла", "info", {"serial": serial})
         except Exception as e:
             log_event("microscope_service", "Ошибка авто-фото", "warn", {"error": str(e)})
+
+    def _auto_video(self, duration):
+        """Колбэк автомата: на входе в выдержку — писать видео пробы на duration сек (авто-финиш).
+        Только в режиме «Автомат» и если известен серийник; камера должна стримить."""
+        cfg = self.cfg or {}
+        if cfg.get("camera_mode") not in ("auto", "trigger"):
+            return
+        serial = (cfg.get("camera_serial") or "").strip()
+        if not serial:
+            return
+        try:
+            from camera_core import manager as cam_manager
+            cam_manager.get(serial).on_video(int(duration), "microscope")
+            log_event("microscope_service", "Видео пробы: старт записи", "info",
+                      {"serial": serial, "duration": int(duration)})
+        except Exception as e:
+            log_event("microscope_service", "Ошибка авто-видео", "warn", {"error": str(e)})
 
     def _on_sv(self, sv, stage):
         # СВ/стадия из ПЛК -> в автомат (заменяет ручной ввод, пока источник жив)
@@ -149,6 +167,12 @@ class MicroscopeService:
     def set_cyclic(self, on):
         if self.fsm:
             self.fsm.set_cyclic(on)
+
+    def take_sample(self):
+        """Кнопка «Взять пробу»: запустить цикл пробы (шаги 20→24)."""
+        if self.fsm:
+            return self.fsm.start_sample()
+        return {"status": "no_fsm"}
 
     def sv_override(self, on):
         """DEBUG (убрать после отладки): перехват ПЛК. При True sv_source перестаёт

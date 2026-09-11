@@ -43,6 +43,32 @@
     if (el) el.textContent = label + " · " + new Date().toLocaleTimeString("ru-RU");
   }
 
+  // вкладка «Цикл»: кнопка «Взять пробу» + сохранение параметров цикла
+  function wireCycle() {
+    const take = $("takeSampleBtn");
+    if (take) take.addEventListener("click", async () => {
+      try {
+        const r = await api("/api/micro/take_sample");
+        sentCmd("Взять пробу: " + (r.status || ""));
+        const h = $("cycHint");
+        if (h) h.textContent = r.status === "started" ? "цикл запущен" :
+          r.status === "busy" ? "цикл уже идёт" : (r.hint || "заблокировано");
+      } catch (e) { const h = $("cycHint"); if (h) h.textContent = "ошибка: " + e.message; }
+    });
+    const save = $("pcSave");
+    if (save) save.addEventListener("click", async () => {
+      const p = {
+        retract_pos: $("pcRetract").value, pre_wash_sec: $("pcPreWash").value,
+        dwell_sec: $("pcDwell").value, shot_interval_sec: $("pcShotInterval").value,
+      };
+      try {
+        await api("/api/micro/settings", p);
+        const h = $("pcHint"); if (h) h.textContent = "сохранено, автомат перезапущен";
+        sentCmd("Параметры цикла сохранены");
+      } catch (e) { const h = $("pcHint"); if (h) h.textContent = "ошибка: " + e.message; }
+    });
+  }
+
   // ---- камера: MVS SDK сам находит камеры Hikrobot ----
   async function autoDiscoverCameras() {
     try {
@@ -324,6 +350,11 @@
           if (cfg.hourly_wash.sec_on != null) hwSecOn = Number(cfg.hourly_wash.sec_on);
         }
         updateHourlyWashTimer();
+        if (cfg.probe_cycle) {
+          const pc = cfg.probe_cycle, sv = (id, v) => { const e = $(id); if (e && v != null) e.value = v; };
+          sv("pcRetract", pc.retract_pos); sv("pcPreWash", pc.pre_wash_sec);
+          sv("pcDwell", pc.dwell_sec); sv("pcShotInterval", pc.shot_interval_sec);
+        }
         cfgSerial = cfg.camera_serial || "";
       }
     } catch (e) { /* конфиг недоступен */ }
@@ -471,6 +502,16 @@
       set("valveTube", f.valve_tube ? "открыт" : "закрыт");
       set("valveGlass", f.valve_glass ? "открыт" : "закрыт");
 
+      // вкладка «Цикл»: живой шаг + таймеры
+      const cb = $("cycStepBadge"); if (cb) cb.textContent = f.step || "—";
+      set("cycLabel", f.label || "—");
+      set("cycSv", f.sv == null ? "—" : Number(f.sv).toFixed(1));
+      set("cycTarget", f.target == null ? "—" : f.target + " мкм");
+      set("cycPos", um(t.pos1));
+      set("cycTube", f.valve_tube ? "открыт" : "закрыт");
+      set("cycGlass", f.valve_glass ? "открыт" : "закрыт");
+      set("cycDwell", f.dwell_left_s == null ? "—" : f.dwell_left_s + " с");
+
       // DEBUG live-строка (обратная связь ручного ввода СВ): шаг/СВ/зазор/позиция
       set("dbgStep", f.step == null ? "—" : f.step + " (" + f.mode + ")");
       set("dbgSv", f.sv == null ? "—" : Number(f.sv).toFixed(2));
@@ -587,6 +628,8 @@
     led.addEventListener("input", () => { $("ledBrightVal").textContent = led.value; });
     led.addEventListener("change", () => api("/api/micro/led", { bright: led.value, on: Number(led.value) > 0 ? 1 : 0 }));
     $("ledFreq").addEventListener("change", () => api("/api/micro/led", { freq: $("ledFreq").value }));
+
+    wireCycle();
 
     // камера (нативно): видео слева, кнопки тут, параметры во вкладке, телеметрия снизу
     $("camSelect").addEventListener("change", () => setCamSerial($("camSelect").value));

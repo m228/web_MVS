@@ -3268,6 +3268,20 @@ html {
 .micro-cam-mode select { flex: 1 1 auto; min-width: 160px; }
 .micro-cam-mode-note { margin: 0 0 12px; font-size: 0.8em; }
 
+/* вкладка «Цвет»: компактные ползунки/поля цветокоррекции */
+.micro-color-grid { display: flex; flex-direction: column; gap: 6px; margin-top: 4px; }
+.micro-color-f { display: grid; grid-template-columns: 68px 1fr 46px; align-items: center; gap: 8px; font-size: 0.85em; }
+.micro-color-f span { color: var(--muted); }
+.micro-color-f input[type="range"] { width: 100%; }
+.micro-color-f b { text-align: right; font-variant-numeric: tabular-nums; }
+.micro-color-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-top: 4px; }
+.micro-color-row select { flex: 1 1 auto; min-width: 140px; }
+.micro-ccm { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; margin-top: 8px; max-width: 260px; }
+.micro-ccm input { width: 100%; padding: 4px 6px; text-align: center; -moz-appearance: textfield; }
+.micro-ccm input::-webkit-outer-spin-button, .micro-ccm input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+.micro-color-actions { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.is-disabled { opacity: 0.4; pointer-events: none; }
+
 /* телеметрия камеры — компактной строкой ПОД видео (5 ячеек + значки фото/видео) */
 .micro-cam-tele { display: flex; flex-wrap: wrap; align-items: stretch; gap: 6px; margin-top: 8px; }
 .micro-cam-tele .micro-cam-tile { flex: 1 1 0; min-width: 76px; background: var(--surface-muted); border-radius: 8px; padding: 5px 8px; display: flex; flex-direction: column; gap: 1px; }

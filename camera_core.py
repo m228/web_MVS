@@ -480,6 +480,87 @@ def _to_bgr(data, width, height, pixel_format=None):
     return None
 
 
+# ---- Хостовая цветокоррекция (гибрид «как в MVS»): гамма/насыщенность/оттенок/
+# контраст/яркость/CCM/псевдоцвет над BGR-кадром ПОСЛЕ дебайера. Баланс белого/Gain/
+# BlackLevel делает камера (GenICam) — они в Bayer работают, тут их нет. ----
+_GAMMA_LUT_CACHE = {}
+
+def _gamma_lut(g):
+    key = round(float(g), 3)
+    lut = _GAMMA_LUT_CACHE.get(key)
+    if lut is None:
+        inv = 1.0 / max(0.01, key)
+        lut = np.clip((np.arange(256) / 255.0) ** inv * 255.0, 0, 255).astype(np.uint8)
+        _GAMMA_LUT_CACHE[key] = lut
+    return lut
+
+# доступные псевдоцвет-палитры (имя из UI -> COLORMAP OpenCV)
+_COLORMAPS = {
+    "jet": cv2.COLORMAP_JET, "hot": cv2.COLORMAP_HOT, "turbo": cv2.COLORMAP_TURBO,
+    "viridis": cv2.COLORMAP_VIRIDIS, "magma": cv2.COLORMAP_MAGMA, "bone": cv2.COLORMAP_BONE,
+    "ocean": cv2.COLORMAP_OCEAN, "hsv": cv2.COLORMAP_HSV, "rainbow": cv2.COLORMAP_RAINBOW,
+}
+
+
+def _apply_color(img, c):
+    """Применить цветокоррекцию к BGR-кадру. c — dict; пустой/None = без изменений.
+    Порядок: контраст/яркость -> гамма -> CCM -> насыщенность/оттенок -> палитра."""
+    if not c or img is None:
+        return img
+    try:
+        def _f(v, d):   # None-безопасно: 0.0 — валидное значение (напр. saturation=0), не путать с «нет»
+            return d if v is None else float(v)
+        gamma = _f(c.get("gamma"), 1.0)
+        sat = _f(c.get("saturation"), 1.0)
+        hue = _f(c.get("hue"), 0.0)
+        contrast = _f(c.get("contrast"), 1.0)
+        bright = _f(c.get("brightness"), 0.0)
+        ccm = c.get("ccm")
+        palette = c.get("palette") or ""
+        wb = c.get("wb")   # {"auto":1} | {"r":g,"g":g,"b":g} (гейны каналов)
+
+        # баланс белого (на хосте): авто «серый мир» ИЛИ ручные гейны R/G/B.
+        # img в BGR-порядке каналов (0=B,1=G,2=R).
+        if wb:
+            if wb.get("auto"):
+                means = img.reshape(-1, 3).mean(axis=0) + 1e-6
+                gray = float(means.mean())
+                gains = gray / means   # [gB, gG, gR]
+                img = np.clip(img.astype(np.float32) * gains, 0, 255).astype(np.uint8)
+            else:
+                gains = np.array([float(wb.get("b", 1.0)),
+                                  float(wb.get("g", 1.0)),
+                                  float(wb.get("r", 1.0))], dtype=np.float32)
+                if np.any(np.abs(gains - 1.0) > 1e-3):
+                    img = np.clip(img.astype(np.float32) * gains, 0, 255).astype(np.uint8)
+
+        if abs(contrast - 1.0) > 1e-3 or abs(bright) > 1e-3:
+            img = cv2.convertScaleAbs(img, alpha=contrast, beta=bright)
+        if abs(gamma - 1.0) > 1e-3:
+            img = cv2.LUT(img, _gamma_lut(gamma))
+        if ccm:
+            try:
+                M = np.asarray(ccm, dtype=np.float32).reshape(3, 3)
+                img = cv2.transform(img, M)
+            except Exception:
+                pass
+        if abs(sat - 1.0) > 1e-3 or abs(hue) > 1e-3:
+            hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV).astype(np.float32)
+            if abs(hue) > 1e-3:
+                hsv[..., 0] = (hsv[..., 0] + hue / 2.0) % 180.0   # OpenCV H: 0..179
+            if abs(sat - 1.0) > 1e-3:
+                hsv[..., 1] = np.clip(hsv[..., 1] * sat, 0, 255)
+            img = cv2.cvtColor(hsv.astype(np.uint8), cv2.COLOR_HSV2BGR)
+        if palette:
+            cm = _COLORMAPS.get(palette)
+            if cm is not None:
+                gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+                img = cv2.applyColorMap(gray, cm)
+        return img
+    except Exception:
+        return img
+
+
 class BaseCameraWorker:
     """Общее состояние и механизмы сохранения (фото/видео) для всех типов камер."""
 
@@ -513,6 +594,10 @@ class BaseCameraWorker:
         self._disk_checked_at = 0.0
         # последнее состояние здоровья — чтобы писать событие ОДИН раз на переход
         self._photo_health_state = None
+
+        # хостовая цветокоррекция (гамма/насыщ/оттенок/контраст/яркость/CCM/палитра).
+        # пусто = без изменений; применяется в get_frame после _to_bgr (см. _apply_color)
+        self.color = {}
 
         # 0 нет автосохранения видео / 1 идёт / 2 завершение
         self.save_video = 0
@@ -1279,6 +1364,9 @@ class CameraWorker(BaseCameraWorker):
                                "hint": "выберите подходящий пиксельный формат (RGB/Mono)"})
                     return None, None
 
+                if self.color:
+                    img = _apply_color(img, self.color)
+
                 ok, encoded = cv2.imencode(".jpg", img)
 
                 if not ok:
@@ -1560,6 +1648,8 @@ class CameraWorker(BaseCameraWorker):
                 if img is None:
                     self.metrics["errors"] += 1
                     continue
+                if self.color:
+                    img = _apply_color(img, self.color)
                 ok, encoded = cv2.imencode(".jpg", img)
                 if not ok:
                     self.metrics["errors"] += 1

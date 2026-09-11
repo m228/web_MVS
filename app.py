@@ -717,6 +717,61 @@ def status_video_photo(serial_number: str):
     }
 
 
+# хостовая цветокоррекция кадра (гибрид «как в MVS»): гамма/насыщ/оттенок/контраст/
+# яркость/CCM/палитра — применяются к потоку ЖИВЬЁМ, без перезапуска (см. camera_core._apply_color).
+@app.get("/api/camera/color")
+def camera_color(
+    serial_number: str,
+    gamma: float | None = None,
+    saturation: float | None = None,
+    hue: float | None = None,
+    contrast: float | None = None,
+    brightness: float | None = None,
+    ccm: str | None = None,        # 9 чисел через запятую (BGR 3x3) или "" — снять CCM
+    palette: str | None = None,    # имя палитры или "" — без псевдоцвета
+    wb_auto: int | None = None,    # 1 — авто баланс белого (серый мир), 0 — снять
+    wb_r: float | None = None,     # ручные гейны каналов (при wb_auto=0)
+    wb_g: float | None = None,
+    wb_b: float | None = None,
+    reset: int | None = None,      # 1 — сбросить всю цветокоррекцию
+):
+    worker = manager.get(serial_number)
+    if reset:
+        worker.color = {}
+        return {"color": worker.color}
+    patch = {}
+    if wb_auto is not None or wb_r is not None or wb_g is not None or wb_b is not None:
+        if wb_auto:
+            patch["wb"] = {"auto": 1}
+        else:
+            wb = {k: v for k, v in (("r", wb_r), ("g", wb_g), ("b", wb_b)) if v is not None}
+            # добираем недостающие гейны из текущих, чтобы правка одного канала не сбросила прочие
+            cur = worker.color.get("wb") or {}
+            for k in ("r", "g", "b"):
+                patch_k = wb.get(k, cur.get(k))
+                if patch_k is not None:
+                    wb[k] = patch_k
+            patch["wb"] = wb or None
+    if gamma is not None: patch["gamma"] = gamma
+    if saturation is not None: patch["saturation"] = saturation
+    if hue is not None: patch["hue"] = hue
+    if contrast is not None: patch["contrast"] = contrast
+    if brightness is not None: patch["brightness"] = brightness
+    if ccm is not None:
+        s = ccm.strip()
+        if s:
+            try:
+                patch["ccm"] = [float(x) for x in s.split(",")][:9]
+            except ValueError:
+                patch["ccm"] = None
+        else:
+            patch["ccm"] = None
+    if palette is not None:
+        patch["palette"] = palette.strip()
+    worker.color.update(patch)
+    return {"color": worker.color}
+
+
 # текущий конфиг запуска камеры (фактические значения с камеры) — для значка «инфо»
 @app.get("/api/camera/current_config")
 def camera_current_config(serial_number: str):

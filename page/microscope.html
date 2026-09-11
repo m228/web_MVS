@@ -138,6 +138,10 @@
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a9 9 0 1 1-2.64-6.36M21 4v5h-5"/></svg>
                 <span>Цикл</span>
               </button>
+              <button type="button" class="micro-ptab" data-ptab="color" title="Цвет / изображение: баланс белого, гамма, палитра" aria-label="Цвет и изображение">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3a9 9 0 1 0 0 18 2.5 2.5 0 0 0 2-4 2.5 2.5 0 0 1 2-4h1a4 4 0 0 0 4-4 9 9 0 0 0-9-6z"/><circle cx="7.5" cy="10.5" r="1"/><circle cx="12" cy="7.5" r="1"/><circle cx="16.5" cy="10.5" r="1"/></svg>
+                <span>Цвет</span>
+              </button>
               <button type="button" class="micro-ptab" data-ptab="m1" title="Мотор М1 · подвод / LED" aria-label="Мотор М1">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4v16M7 9l5-5 5 5M7 15l5 5 5-5"/></svg>
                 <span>М1</span>
@@ -433,6 +437,64 @@
                   </div>
                 </div>
                 <button type="button" id="camApplyBtn" class="toolbar-btn toolbar-btn--primary micro-cam-apply" disabled>Применить</button>
+              </div>
+
+              <!-- Цвет / изображение: цветокоррекция (гибрид «как в MVS»), живьё над потоком -->
+              <div class="micro-ppane hidden" data-ppane="color">
+                <div class="micro-sub__title">Цвет / изображение <span class="micro-ro">правки применяются к потоку сразу</span></div>
+
+                <div class="micro-sub__title micro-sub__title--sep">Баланс белого</div>
+                <label class="micro-check"><input type="checkbox" id="wbAuto" /><span class="micro-check__text">Авто (серый мир)</span></label>
+                <div class="micro-color-grid" id="wbManual">
+                  <label class="micro-color-f"><span>R</span><input type="range" id="wbR" min="0.5" max="2" step="0.01" value="1" /><b id="wbR_v">1.00</b></label>
+                  <label class="micro-color-f"><span>G</span><input type="range" id="wbG" min="0.5" max="2" step="0.01" value="1" /><b id="wbG_v">1.00</b></label>
+                  <label class="micro-color-f"><span>B</span><input type="range" id="wbB" min="0.5" max="2" step="0.01" value="1" /><b id="wbB_v">1.00</b></label>
+                </div>
+
+                <div class="micro-sub__title micro-sub__title--sep">Тон и свет</div>
+                <div class="micro-color-grid">
+                  <label class="micro-color-f"><span>Гамма</span><input type="range" id="clrGamma" min="0.1" max="4" step="0.05" value="1" /><b id="clrGamma_v">1.00</b></label>
+                  <label class="micro-color-f"><span>Контраст</span><input type="range" id="clrContrast" min="0.5" max="3" step="0.05" value="1" /><b id="clrContrast_v">1.00</b></label>
+                  <label class="micro-color-f"><span>Яркость</span><input type="range" id="clrBrightness" min="-100" max="100" step="1" value="0" /><b id="clrBrightness_v">0</b></label>
+                  <label class="micro-color-f"><span>Насыщ.</span><input type="range" id="clrSat" min="0" max="2" step="0.05" value="1" /><b id="clrSat_v">1.00</b></label>
+                  <label class="micro-color-f"><span>Оттенок</span><input type="range" id="clrHue" min="-180" max="180" step="1" value="0" /><b id="clrHue_v">0</b></label>
+                </div>
+
+                <div class="micro-sub__title micro-sub__title--sep">Цветовой профиль (CCM 3×3)</div>
+                <div class="micro-color-row">
+                  <label class="micro-check"><input type="checkbox" id="ccmEnable" /><span class="micro-check__text">Включить CCM</span></label>
+                  <select id="ccmPreset" class="micro-conn-input" title="Пресет заполняет матрицу — дальше можно править числа вручную">
+                    <option value="neutral">Нейтральный</option>
+                    <option value="warm">Тёплый</option>
+                    <option value="cold">Холодный</option>
+                    <option value="boost">Насыщенный</option>
+                  </select>
+                </div>
+                <div class="micro-ccm" id="ccmGrid">
+                  <!-- 9 полей 3x3 (порядок BGR), строятся/правятся -->
+                  <input type="number" step="0.01" data-ccm="0" value="1" /><input type="number" step="0.01" data-ccm="1" value="0" /><input type="number" step="0.01" data-ccm="2" value="0" />
+                  <input type="number" step="0.01" data-ccm="3" value="0" /><input type="number" step="0.01" data-ccm="4" value="1" /><input type="number" step="0.01" data-ccm="5" value="0" />
+                  <input type="number" step="0.01" data-ccm="6" value="0" /><input type="number" step="0.01" data-ccm="7" value="0" /><input type="number" step="0.01" data-ccm="8" value="1" />
+                </div>
+
+                <div class="micro-sub__title micro-sub__title--sep">Псевдоцвет-палитра</div>
+                <select id="clrPalette" class="micro-conn-input" title="Раскрасить яркость палитрой (как в тепловизоре)">
+                  <option value="">— нет (обычный цвет) —</option>
+                  <option value="jet">Jet</option>
+                  <option value="hot">Hot</option>
+                  <option value="turbo">Turbo</option>
+                  <option value="viridis">Viridis</option>
+                  <option value="magma">Magma</option>
+                  <option value="bone">Bone</option>
+                  <option value="ocean">Ocean</option>
+                  <option value="rainbow">Rainbow</option>
+                  <option value="hsv">HSV</option>
+                </select>
+
+                <div class="micro-color-actions micro-sub__title--sep">
+                  <button type="button" id="clrReset" class="toolbar-btn toolbar-btn--neutral">Сбросить всё</button>
+                  <span class="micro-ro">баланс белого/гамма/палитра — всё на хосте, поток не перезапускается</span>
+                </div>
               </div>
 
               <!-- Инфо: как работает цикл пробы + отладка -->

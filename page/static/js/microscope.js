@@ -225,6 +225,71 @@
     document.addEventListener("webkitfullscreenchange", onFsChange);
   }
 
+  // Вкладка «Цвет»: цветокоррекция ЖИВЬЁМ через /api/camera/color (worker.color на хосте).
+  // WB/гамма/палитра/CCM — всё постобработкой, поток НЕ перезапускается.
+  const CCM_PRESETS = {
+    neutral: [1, 0, 0, 0, 1, 0, 0, 0, 1],
+    warm:    [0.90, 0, 0.10, 0, 1, 0, 0.15, 0, 0.95],   // порядок BGR: чуть больше R, меньше B
+    cold:    [1.05, 0, -0.05, 0, 1, 0, -0.10, 0, 0.95],
+    boost:   [1.20, -0.10, -0.10, -0.10, 1.20, -0.10, -0.10, -0.10, 1.20],
+  };
+  function wireColor() {
+    if (!$("clrGamma")) return;
+    let t = null;
+    const debounce = (fn) => { clearTimeout(t); t = setTimeout(fn, 120); };
+    const send = (params) => { if (camSerial) api("/api/camera/color", Object.assign({ serial_number: camSerial }, params)).catch(() => {}); };
+    const ccmInputs = () => Array.from(document.querySelectorAll("#ccmGrid input"));
+
+    // ползунки тон/свет
+    [["clrGamma", "gamma", 2], ["clrContrast", "contrast", 2], ["clrBrightness", "brightness", 0],
+     ["clrSat", "saturation", 2], ["clrHue", "hue", 0]].forEach(([id, key, dp]) => {
+      const el = $(id); if (!el) return;
+      el.addEventListener("input", () => {
+        const v = Number(el.value);
+        const lab = $(id + "_v"); if (lab) lab.textContent = dp ? v.toFixed(dp) : String(v);
+        debounce(() => send({ [key]: v }));
+      });
+    });
+
+    // баланс белого
+    const wbSend = () => {
+      if ($("wbAuto").checked) send({ wb_auto: 1 });
+      else send({ wb_auto: 0, wb_r: Number($("wbR").value), wb_g: Number($("wbG").value), wb_b: Number($("wbB").value) });
+    };
+    $("wbAuto").addEventListener("change", () => { $("wbManual").classList.toggle("is-disabled", $("wbAuto").checked); wbSend(); });
+    ["wbR", "wbG", "wbB"].forEach((id) => {
+      $(id).addEventListener("input", () => {
+        const lab = $(id + "_v"); if (lab) lab.textContent = Number($(id).value).toFixed(2);
+        debounce(wbSend);
+      });
+    });
+
+    // CCM: пресет заполняет матрицу, дальше правится вручную
+    const ccmSend = () => send({ ccm: $("ccmEnable").checked ? ccmInputs().map((i) => Number(i.value)).join(",") : "" });
+    $("ccmPreset").addEventListener("change", () => {
+      const p = CCM_PRESETS[$("ccmPreset").value] || CCM_PRESETS.neutral;
+      ccmInputs().forEach((inp) => { inp.value = p[Number(inp.dataset.ccm)]; });
+      if ($("ccmEnable").checked) ccmSend();
+    });
+    $("ccmEnable").addEventListener("change", ccmSend);
+    ccmInputs().forEach((inp) => inp.addEventListener("input", () => { if ($("ccmEnable").checked) debounce(ccmSend); }));
+
+    // псевдоцвет-палитра
+    $("clrPalette").addEventListener("change", () => send({ palette: $("clrPalette").value }));
+
+    // сброс всего
+    $("clrReset").addEventListener("click", () => {
+      const set = (id, v, dp) => { const e = $(id); if (e) { e.value = v; const l = $(id + "_v"); if (l) l.textContent = dp ? Number(v).toFixed(dp) : String(v); } };
+      set("clrGamma", 1, 2); set("clrContrast", 1, 2); set("clrBrightness", 0, 0); set("clrSat", 1, 2); set("clrHue", 0, 0);
+      set("wbR", 1, 2); set("wbG", 1, 2); set("wbB", 1, 2);
+      $("wbAuto").checked = false; $("wbManual").classList.remove("is-disabled");
+      $("ccmEnable").checked = false; $("ccmPreset").value = "neutral";
+      ccmInputs().forEach((inp) => { inp.value = CCM_PRESETS.neutral[Number(inp.dataset.ccm)]; });
+      $("clrPalette").value = "";
+      send({ reset: 1 });
+    });
+  }
+
   function camApply() {
     if (!camSerial) return;
     if (camConnected) camConnect();   // перезапуск потока с новыми параметрами
@@ -641,6 +706,7 @@
     const camImg = $("microCamStream");
     if (camImg) camImg.addEventListener("error", () => { if (camConnected) camStop(); });
     wireCamFullscreen();
+    wireColor();
 
     // таблица подвода СВ->зазор (вкладка «СВ/МКМ»)
     if ($("svspAdd")) $("svspAdd").addEventListener("click", () => addSvspRow("", ""));

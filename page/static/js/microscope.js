@@ -204,32 +204,45 @@
     sentCmd("Камера: применены параметры");
   }
 
+  // единые сеттеры UI фото/видео (кнопка + флажок телеметрии + флаг состояния),
+  // чтобы и тумблер, и авто-синк со статусом сервера меняли всё согласованно
+  function setPhotoUI(on) {
+    camPhotoOn = on;
+    const b = $("camPhotoBtn"); if (b) b.classList.toggle("is-on", on);
+    const f = $("camPhotoFlag"); if (f) f.classList.toggle("is-on", on);
+  }
+  function setVideoUI(on) {
+    camVideoOn = on;
+    const b = $("camVideoBtn"); if (b) b.classList.toggle("is-on", on);
+    const f = $("camVideoFlag"); if (f) f.classList.toggle("is-on", on);
+  }
+
   async function camPhotoToggle() {
     if (!camSerial || !CAM()) return;
+    let on = camPhotoOn;
     try {
       if (!camPhotoOn) {
         const iv = Math.max(1, parseInt($("camPhotoInterval") && $("camPhotoInterval").value, 10) || 5);
-        await CAM().startPhotoSaving(camSerial, iv, "microscope", "jpg"); camPhotoOn = true;
+        await CAM().startPhotoSaving(camSerial, iv, "microscope", "jpg"); on = true;
       }
-      else { await CAM().stopPhotoSaving(camSerial); camPhotoOn = false; }
-    } catch (e) { camPhotoOn = false; }
-    const b = $("camPhotoBtn"); if (b) b.classList.toggle("is-on", camPhotoOn);
-    const f = $("camPhotoFlag"); if (f) f.classList.toggle("is-on", camPhotoOn);
-    sentCmd(camPhotoOn ? "Камера: фото ВКЛ" : "Камера: фото выкл");
+      else { await CAM().stopPhotoSaving(camSerial); on = false; }
+    } catch (e) { on = false; }
+    setPhotoUI(on);
+    sentCmd(on ? "Камера: фото ВКЛ" : "Камера: фото выкл");
   }
 
   async function camVideoToggle() {
     if (!camSerial || !CAM()) return;
+    let on = camVideoOn;
     try {
       if (!camVideoOn) {
         const dur = Math.max(0, parseInt($("camVideoDuration") && $("camVideoDuration").value, 10) || 0);
-        await CAM().startVideoSaving(camSerial, dur, "microscope"); camVideoOn = true;
+        await CAM().startVideoSaving(camSerial, dur, "microscope"); on = true;
       }
-      else { await CAM().stopVideoSaving(camSerial); camVideoOn = false; }
-    } catch (e) { camVideoOn = false; }
-    const b = $("camVideoBtn"); if (b) b.classList.toggle("is-on", camVideoOn);
-    const f = $("camVideoFlag"); if (f) f.classList.toggle("is-on", camVideoOn);
-    sentCmd(camVideoOn ? "Камера: запись ВКЛ" : "Камера: запись выкл");
+      else { await CAM().stopVideoSaving(camSerial); on = false; }
+    } catch (e) { on = false; }
+    setVideoUI(on);
+    sentCmd(on ? "Камера: запись ВКЛ" : "Камера: запись выкл");
   }
 
   function camStartMetrics() {
@@ -237,6 +250,17 @@
     camMetricsTimer = setInterval(async () => {
       if (!camConnected || !camSerial || !CAM()) return;
       try { const d = await CAM().getMetrics(camSerial); if (d) camUpdateMetrics(d); } catch (e) {}
+      // синк статуса записи/фото с сервера: авто-завершение видео по длительности
+      // само гасит кнопку «Видео» и флажок (раньше кнопка залипала «включённой»)
+      try {
+        const s = await CAM().getVideoPhotoStatus(camSerial);
+        if (s) {
+          const rec = Number(s.video) === 1;
+          if (rec !== camVideoOn) setVideoUI(rec);
+          const ph = !!s.photo;
+          if (ph !== camPhotoOn) setPhotoUI(ph);
+        }
+      } catch (e) {}
     }, 1000);
   }
   function camStopMetrics() { if (camMetricsTimer) { clearInterval(camMetricsTimer); camMetricsTimer = null; } }

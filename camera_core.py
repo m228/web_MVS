@@ -310,7 +310,14 @@ def _find_mvs_runtime():
 
 # кэш GigE-устройств от MVS SDK: серийник -> MV_CC_DEVICE_INFO (для открытия стрима)
 _sdk_devices = {}
+_sdk_ips = {}                 # серийник -> IP (из SDK-enum, без открытия камеры)
 _sdk_devices_lock = threading.Lock()
+
+
+def _sdk_ip(serial_number):
+    """IP камеры из кэша SDK-enum (обход genicam-open). None, если SDK не нашёл."""
+    with _sdk_devices_lock:
+        return _sdk_ips.get(serial_number)
 
 
 # Прогрев сетевого слоя MVS SDK (MV_CC_EnumDevices) ДО discovery harvesters + кэш устройств.
@@ -331,6 +338,8 @@ def _sdk_gige_warmup():
         with _sdk_devices_lock:
             for d in devices:
                 _sdk_devices[d["serial"]] = d["_info"]
+                if d.get("ip"):
+                    _sdk_ips[d["serial"]] = d["ip"]
         log_event("camera_core.sdk_warmup", "Прогрев MVS SDK (обход сетевых адаптеров)",
                   "info", {"device_count": len(devices)})
     except Exception as e:
@@ -348,6 +357,8 @@ def _sdk_device_info(serial_number):
         for d in sdk_gige.enum_gige():
             with _sdk_devices_lock:
                 _sdk_devices[d["serial"]] = d["_info"]
+                if d.get("ip"):
+                    _sdk_ips[d["serial"]] = d["ip"]
     except Exception:
         pass
     with _sdk_devices_lock:
@@ -1143,7 +1154,32 @@ class CameraWorker(BaseCameraWorker):
 
     # получение айпи камеры по серийнику.
     # interface_id/device_handle — разовые (из параметров запроса), состояние не мутируем
+    def sdk_read_data_limit(self):
+        """Заполнить self.data_limit по SDK (диапазоны/форматы, БЕЗ genicam), если ещё пусто
+        и не идёт стрим. Даёт вкладке «Камера» ранги и список форматов в обход −1020/−1006."""
+        if self.data_limit or self.running:
+            return self.data_limit
+        try:
+            info = _sdk_device_info(self.serial_number)
+            if sdk_gige.available() and info is not None:
+                d = sdk_gige.read_ranges(info)
+                if d:
+                    self.data_limit = d
+                    log_event("camera_core.data_limit", "Параметры камеры прочитаны по SDK (без genicam)",
+                              "info", {"serial_number": self.serial_number})
+        except Exception as e:
+            log_event("camera_core.data_limit", "SDK-чтение параметров не удалось", "warn", {"error": str(e)})
+        return self.data_limit
+
     def get_ip(self, interface_id=None, device_handle=None):
+        # СНАЧАЛА — IP из SDK-enum (без открытия камеры и БЕЗ genicam): убирает стартовый
+        # −1020 при чтении IP, когда SDK-путь доступен.
+        sdk_ip = _sdk_ip(self.serial_number)
+        if sdk_ip:
+            self._cached_ip = {"ip": sdk_ip}
+            self._cache_ts = time.time()
+            return self._cached_ip
+
         status = self.manager.access_status(self.serial_number)
         if status != 1:
             log_event("camera_core.get_ip", "Ошибка получения ip камеры", "error", {"status_camera": str(status)})
@@ -1430,10 +1466,17 @@ class CameraWorker(BaseCameraWorker):
         while time.time() < _deadline and (self._sdk_stream is not None or self.ia is not None):
             time.sleep(0.1)
 
-        # GigE через MVS SDK (resend) — надёжнее harvesters на нагруженной сети. Если SDK
-        # доступен и по серийнику есть device_info — идём этим путём.
+        # GigE через MVS SDK (resend) — надёжнее harvesters на нагруженной сети И в обход
+        # genicam-декод-бага (−1020/−1006). Если SDK доступен и по серийнику есть device_info —
+        # идём этим путём (как MVS). Иначе — harvesters (с ретраем на флаки-декод).
         device_info = _sdk_device_info(self.serial_number)
-        if sdk_gige.available() and device_info is not None:
+        sdk_ok = sdk_gige.available() and device_info is not None
+        log_event("camera_core.generate_stream",
+                  "Путь стрима: %s" % ("SDK (нативный, как MVS)" if sdk_ok else "harvesters+genicam (SDK недоступен)"),
+                  "info" if sdk_ok else "warn",
+                  {"serial_number": self.serial_number, "sdk": sdk_gige.available(),
+                   "device_info": device_info is not None})
+        if sdk_ok:
             settings = {
                 "width": width, "height": height,
                 "offset_x": offset_x, "offset_y": offset_y,
@@ -3038,7 +3081,17 @@ class CameraManager:
             if not self.harvester.device_info_list:
                 _sdk_gige_warmup()
                 self.harvester.update()
+            else:
+                # harvester нашёл камеру — но SDK всё равно инициализируем (ПОСЛЕ update,
+                # чтобы не сбить harvester-enum): стрим пойдёт нативным SDK-путём (как MVS),
+                # в обход genicam с его −1020/−1006. Без этого SDK молчал, если harvester
+                # видел камеру, и всё падало в harvesters+genicam.
+                _sdk_gige_warmup()
             self.driver_loaded = True
+            log_event("camera_core.load_driver", "MVS SDK для стрима: %s" %
+                      ("доступен" if sdk_gige.available() else "НЕ доступен (стрим пойдёт через harvesters)"),
+                      "info" if sdk_gige.available() else "warn",
+                      {"sdk_available": sdk_gige.available()})
             # в лог пишем, откуда взят продюсер и найден ли его runtime — удобно
             # для диагностики самодостаточной поставки (всё из папки Driver/)
             runtime = _find_mvs_runtime()

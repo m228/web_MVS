@@ -220,3 +220,81 @@ class GigeSdkStream:
                 self._cam.MV_CC_DestroyHandle()
             except Exception:
                 pass
+
+
+def read_ranges(device_info):
+    """Прочитать параметры камеры по SDK (без genicam): диапазоны Width/Height/Offset/
+    ExposureTime + текущие/список PixelFormat и ExposureAuto. Открывает короткий хэндл и
+    закрывает. Возвращает dict в формате data_limit (как read_settings) или None.
+    Всё защищено try/except — что не прочиталось, того просто нет в ответе."""
+    if _sdk is None or device_info is None:
+        return None
+    c = _sdk.MvCamera()
+    if c.MV_CC_CreateHandle(device_info) != 0:
+        return None
+    if c.MV_CC_OpenDevice() != 0:
+        try:
+            c.MV_CC_DestroyHandle()
+        except Exception:
+            pass
+        return None
+    data = {}
+    try:
+        def int_range(key):
+            v = _sdk.MVCC_INTVALUE_EX()
+            _sdk.memset(_sdk.byref(v), 0, _sdk.sizeof(v))
+            if c.MV_CC_GetIntValueEx(key, v) == 0:
+                return {"value": int(v.nCurValue), "min": int(v.nMin),
+                        "max": int(v.nMax), "step": int(v.nInc)}
+            return None
+
+        def float_range(key):
+            v = _sdk.MVCC_FLOATVALUE()
+            _sdk.memset(_sdk.byref(v), 0, _sdk.sizeof(v))
+            if c.MV_CC_GetFloatValue(key, v) == 0:
+                return {"value": float(v.fCurValue), "min": float(v.fMin), "max": float(v.fMax)}
+            return None
+
+        def enum_field(key):
+            v = _sdk.MVCC_ENUMVALUE()
+            _sdk.memset(_sdk.byref(v), 0, _sdk.sizeof(v))
+            if c.MV_CC_GetEnumValue(key, v) != 0:
+                return None
+            def sym(code):
+                e = _sdk.MVCC_ENUMENTRY()
+                _sdk.memset(_sdk.byref(e), 0, _sdk.sizeof(e))
+                e.nValue = int(code)
+                if c.MV_CC_GetEnumEntrySymbolic(key, e) == 0:
+                    return bytes(e.chSymbolic).split(b"\x00")[0].decode("ascii", "replace")
+                return None
+            options = []
+            for i in range(int(v.nSupportedNum)):
+                s = sym(v.nSupportValue[i])
+                if s:
+                    options.append(s)
+            return {"value": sym(v.nCurValue), "options": options}
+
+        for key, name in (("Width", "width"), ("Height", "height"),
+                          ("OffsetX", "offset_x"), ("OffsetY", "offset_y")):
+            r = int_range(key)
+            if r is not None:
+                data[name] = r
+        r = float_range("ExposureTime")
+        if r is not None:
+            data["exposure_time"] = r
+        for key, name in (("ExposureAuto", "exposure_auto"), ("PixelFormat", "pixel_format")):
+            r = enum_field(key)
+            if r is not None:
+                data[name] = r
+    except Exception as e:
+        log_event("sdk_gige", "read_ranges: частично не прочитано", "warn", {"error": str(e)})
+    finally:
+        try:
+            c.MV_CC_CloseDevice()
+        except Exception:
+            pass
+        try:
+            c.MV_CC_DestroyHandle()
+        except Exception:
+            pass
+    return data or None

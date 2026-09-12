@@ -956,8 +956,6 @@ async function prefillMultiSaveSettings(serial, kind) {
   setVal('multiVideoProject', s.video_project);
   setMultiInterval('multiPhotoInterval', 'multiPhotoUnit', s.photo_interval);
   setMultiInterval('multiVideoDuration', 'multiVideoUnit', s.video_duration);
-  // формат фото (jpg/png) — тоже запоминаем между запусками
-  setVal('multiPhotoFormat', s.photo_format);
 }
 
 
@@ -1324,9 +1322,7 @@ async function applyPhoto(on) {
     const amount = Number(document.getElementById('multiPhotoInterval')?.value) || 5;
     const unit = document.getElementById('multiPhotoUnit')?.value || 'seconds';
     const seconds = unit === 'minutes' ? amount * 60 : amount;
-    // формат файла: jpg (компактно) или png (без потерь)
-    const photoFormat = document.getElementById('multiPhotoFormat')?.value || 'jpg';
-    const data = await api.startPhotoSaving(source.serial, seconds, project, photoFormat);
+    const data = await api.startPhotoSaving(source.serial, seconds, project);
     tile.photo = true;
     renderTile(state.focused);
     updateToolbar();

@@ -32,13 +32,7 @@ CMD_SET_SP2 = 0x2006   # команда мотору М2 «установить 
 # допуск «мотор доехал» (мкм). Реальная плата почти никогда не встаёт РОВНО в цель
 # (энкодер даёт 39990 вместо 40000) — точное pos==цель почти не срабатывает, и шаг
 # цикла ждал полный таймаут 10 с. Считаем «доехал», если в пределах допуска.
-ARRIVE_TOL_UM = 50
-
-# «мотор остановился»: позиция (энкодер) не меняется больше SETTLE_TOL_UM мкм в течение
-# SETTLE_TICKS тиков подряд. Доезд = у цели И остановился — это гасит дрожь у порога и не
-# застревает (в отличие от старого «аналог И энкодер == цель», где аналог не в шкале зазора).
-SETTLE_TOL_UM = 15
-SETTLE_TICKS = 5      # ~0.5 с неподвижности
+ARRIVE_TOL_UM = 50   # доезд: энкодер в пределах ±50 мкм от цели
 GLASS_AI = 20        # pos1_ai < GLASS_AI = аналог «у стекла» (страховка на подводе)
 
 # Повтор команды «идти» в цикле: плата за ОДИН goto делает лишь шаг к цели (как ручная
@@ -119,8 +113,6 @@ class MicroscopeFSM:
         self._dwell_left = 0           # осталось тиков выдержки
         self._shot_t = 0              # тики с прошлого скрина
         self._redrive = 0             # тики с прошлого повтора goto в шаге движения
-        self._last_pos = None         # прошлая позиция М1 (для детекта «мотор остановился»)
-        self._settle = 0              # тиков подряд без движения М1
 
         self._lock = threading.Lock()
         self._thread = None
@@ -167,20 +159,12 @@ class MicroscopeFSM:
             return {"status": "started"}
 
     def _arrived(self, pos_ai, pos_enc, target):
-        # ДОЕЗД: мотор ДОШЁЛ до цели по энкодеру (pos1 в тех же мкм, что и цель) И ОСТАНОВИЛСЯ
-        # (позиция не меняется SETTLE_TICKS тиков) — «остановился» гасит дрожь и премату​рный
-        # переход. pos1_ai (аналог) НЕ в шкале зазора (мал только у стекла), поэтому его с целью
-        # НЕ сравниваем — берём лишь как страховку «у стекла» на подводе. step_timeout — общий сейф.
-        if pos_enc is not None:
-            if self._last_pos is not None and abs(pos_enc - self._last_pos) <= SETTLE_TOL_UM:
-                self._settle += 1
-            else:
-                self._settle = 0
-            self._last_pos = pos_enc
+        # ДОЕЗД: энкодер pos1 в диапазоне ±ARRIVE_TOL_UM (±50 мкм) от цели — та же шкала мкм.
+        # pos1_ai (аналог) НЕ в шкале зазора (мал только у стекла), с целью НЕ сравниваем —
+        # берём лишь как страховку «у стекла» на подводе. step_timeout — общий предохранитель.
         near = pos_enc is not None and abs(pos_enc - target) <= ARRIVE_TOL_UM
-        settled = self._settle >= SETTLE_TICKS
         at_glass = pos_ai is not None and pos_ai < GLASS_AI
-        return (near and settled) or at_glass
+        return near or at_glass
 
     def _redrive_goto(self):
         # повтор импульса «идти» к текущей m1_sp каждые REDRIVE_TICKS тиков (вызывается под локом).
@@ -390,7 +374,6 @@ class MicroscopeFSM:
             # 5) НОВЫЙ цикл пробы (шаги 20→21→22→23→24). Доезд = энкодер у цели + мотор остановился.
             if self.mode == 0:
                 self._redrive = 0
-                self._settle = 0; self._last_pos = None
             elif self.mode == 20:
                 # отвод в retract_pos (напр. 20000 мкм)
                 self.m1_sp = self._retract_pos
@@ -402,7 +385,6 @@ class MicroscopeFSM:
             elif self.mode == 21:
                 # промывка стекла + трубки перед пробой (pre_wash_sec)
                 self._redrive = 0
-                self._settle = 0; self._last_pos = None
                 self.cw0 = True
                 self.cw1 = True
                 self.t += 1
@@ -431,7 +413,6 @@ class MicroscopeFSM:
             elif self.mode == 23:
                 # выдержка пробы: серия скринов каждые shot_interval_sec + пишется видео
                 self._redrive = 0
-                self._settle = 0; self._last_pos = None
                 self.t += 1
                 self._shot_t += 1
                 if self._shot_t >= self._shot_interval_sec * 10:

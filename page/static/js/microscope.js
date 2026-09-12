@@ -70,6 +70,7 @@
       const p = {
         retract_pos: $("pcRetract").value, pre_wash_sec: $("pcPreWash").value,
         dwell_sec: $("pcDwell").value, shot_interval_sec: $("pcShotInterval").value,
+        pause_sec: $("pcPause").value,
       };
       try {
         await api("/api/micro/settings", p);
@@ -429,6 +430,7 @@
           const pc = cfg.probe_cycle, sv = (id, v) => { const e = $(id); if (e && v != null) e.value = v; };
           sv("pcRetract", pc.retract_pos); sv("pcPreWash", pc.pre_wash_sec);
           sv("pcDwell", pc.dwell_sec); sv("pcShotInterval", pc.shot_interval_sec);
+          sv("pcPause", pc.pause_sec);
         }
         cfgSerial = cfg.camera_serial || "";
       }

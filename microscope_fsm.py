@@ -45,6 +45,12 @@ REDRIVE_TICKS = 7
 STEP_NAMES = {0: "ожидание", 20: "отвод", 21: "промывка перед пробой",
               22: "подвод к стеклу", 23: "проба · выдержка", 24: "возврат"}
 
+# Диапазон стадий варки (M.mode), в котором авто-цикл пробы разрешён:
+# 3 Сгущение … 9 Готовность. Вне диапазона (1 Остановлен, 2 Набор, 10+ Выгрузка и т.д.)
+# новый цикл не стартует. Уже идущий цикл доводится до конца (проб не рвём — безопасность).
+CYCLE_STAGE_MIN = 3
+CYCLE_STAGE_MAX = 9
+
 
 class MicroscopeFSM:
     def __init__(self, plate, config):
@@ -52,7 +58,6 @@ class MicroscopeFSM:
         self.cfg = config
         self.SP = list(config["SP"])
         self.SVSP = list(config["SVSP"])
-        self.cycle_period = config.get("cycle_period_s", {"default": 120})
         hw = config.get("hourly_wash", {})
         self._hw_enabled = bool(hw.get("enabled", True))
         self._hw_minute = int(hw.get("minute", 3))
@@ -65,6 +70,7 @@ class MicroscopeFSM:
         self._pre_wash_sec = int(pc.get("pre_wash_sec", 4))         # промывка перед подводом, с
         self._dwell_sec = int(pc.get("dwell_sec", 15))             # выдержка пробы, с
         self._shot_interval_sec = max(1, int(pc.get("shot_interval_sec", 3)))  # период скринов, с
+        self._pause_sec = max(0, int(pc.get("pause_sec", 60)))     # пауза между пробами в авто-цикле, с
 
         self._period = max(0.02, int(config["poll_interval_ms"]) / 1000.0)
         # предохранитель шага цикла (тики по 100мс): нормальный выход — «доехал», а это
@@ -293,11 +299,14 @@ class MicroscopeFSM:
                 "sv": self.sv,
                 "stage": self.stage,
                 "u": self.u,
+                # авто-цикл разрешён по стадии варки (3..9). Для подсказки на вкладке «Цикл».
+                "stage_ok": CYCLE_STAGE_MIN <= self.stage <= CYCLE_STAGE_MAX,
                 "cycle_params": {
                     "retract_pos": self._retract_pos,
                     "pre_wash_sec": self._pre_wash_sec,
                     "dwell_sec": self._dwell_sec,
                     "shot_interval_sec": self._shot_interval_sec,
+                    "pause_sec": self._pause_sec,
                 },
             }
 
@@ -337,11 +346,13 @@ class MicroscopeFSM:
         pos1_ai = telem.get("pos1_ai")
 
         with self._lock:
-            # 1) циклический режим: период по стадии варки (наш cycle_t в простое)
-            if self.sw0:
+            # 1) авто-цикл: гоняем пробу, пока включён «Автомат» (sw0) И стадия варки в
+            # рабочем диапазоне 3..9. Пауза между пробами — _pause_sec (капает только в простое).
+            # Стадия вне диапазона -> пауза не капает, новый цикл не стартует (уже идущий доводим).
+            if self.sw0 and CYCLE_STAGE_MIN <= self.stage <= CYCLE_STAGE_MAX:
                 if self.mode == 0:
                     self.cycle_t += 1
-                    if self.cycle_t > self._cycle_threshold_ticks():
+                    if self.cycle_t > self._pause_sec * 10:
                         self.mode = 20               # авто-цикл гонит ту же последовательность пробы
                         self.t = 0
                         self.cycle_t = 0
@@ -544,7 +555,3 @@ class MicroscopeFSM:
             "led_bright": self.led_bright, "led_on": self.led_on,
             "cw0": self.cw0, "cw1": self.cw1,
         }
-
-    def _cycle_threshold_ticks(self):
-        sec = self.cycle_period.get(str(self.stage), self.cycle_period.get("default", 120))
-        return int(sec) * 10   # секунды -> такты по 100 мс

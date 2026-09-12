@@ -51,39 +51,47 @@ class MicroscopeService:
                                "sv_source": bool(svc.get("enabled"))})
 
     def _auto_photo(self):
-        """Колбэк автомата: подвели к стеклу -> снять кадр камерой (soft-триггер).
-        Снимаем ТОЛЬКО в режиме «Автомат» (camera_mode) и если известен серийник камеры.
-        Камера должна стримить (страница открыта/поток идёт) — snap сохранит следующий кадр."""
+        """Колбэк автомата: в выдержке пробы -> снять кадр камерой (soft-триггер).
+        Скрин пробы делается ВСЕГДА, когда цикл дошёл до выдержки (не зависит от camera_mode:
+        camera_mode рулит лишь авто-СТАРТОМ цикла по стадии). Нужен серийник и живой стрим —
+        snap сохранит следующий кадр. Все причины пропуска пишем в лог, чтобы было видно почему."""
         cfg = self.cfg or {}
-        if cfg.get("camera_mode") not in ("auto", "trigger"):
-            return
         serial = (cfg.get("camera_serial") or "").strip()
         if not serial:
-            log_event("microscope_service", "Авто-фото пропущено: не задан camera_serial", "warn")
+            log_event("microscope_service", "Скрин пробы пропущен: не задан camera_serial", "warn")
             return
         try:
             from camera_core import manager as cam_manager
-            cam_manager.get(serial).snap("microscope")
-            log_event("microscope_service", "Авто-фото по триггеру цикла", "info", {"serial": serial})
+            worker = cam_manager.get(serial)
+            if not worker.running:
+                log_event("microscope_service",
+                          "Скрин пробы пропущен: камера не стримит (открой страницу/поток камеры)",
+                          "warn", {"serial": serial})
+                return
+            worker.snap("microscope")
+            log_event("microscope_service", "Скрин пробы: запрошен снимок", "info", {"serial": serial})
         except Exception as e:
-            log_event("microscope_service", "Ошибка авто-фото", "warn", {"error": str(e)})
+            log_event("microscope_service", "Ошибка скрина пробы", "warn", {"error": str(e)})
 
     def _auto_video(self, duration):
         """Колбэк автомата: на входе в выдержку — писать видео пробы на duration сек (авто-финиш).
-        Только в режиме «Автомат» и если известен серийник; камера должна стримить."""
+        Как и скрин, делается всегда при пробе (не зависит от camera_mode); нужен серийник и стрим."""
         cfg = self.cfg or {}
-        if cfg.get("camera_mode") not in ("auto", "trigger"):
-            return
         serial = (cfg.get("camera_serial") or "").strip()
         if not serial:
             return
         try:
             from camera_core import manager as cam_manager
-            cam_manager.get(serial).on_video(int(duration), "microscope")
+            worker = cam_manager.get(serial)
+            if not worker.running:
+                log_event("microscope_service",
+                          "Видео пробы пропущено: камера не стримит", "warn", {"serial": serial})
+                return
+            worker.on_video(int(duration), "microscope")
             log_event("microscope_service", "Видео пробы: старт записи", "info",
                       {"serial": serial, "duration": int(duration)})
         except Exception as e:
-            log_event("microscope_service", "Ошибка авто-видео", "warn", {"error": str(e)})
+            log_event("microscope_service", "Ошибка видео пробы", "warn", {"error": str(e)})
 
     def _on_sv(self, sv, stage):
         # СВ/стадия из ПЛК -> в автомат (заменяет ручной ввод, пока источник жив)

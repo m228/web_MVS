@@ -232,6 +232,13 @@
               Интервал (сек)
               <input class="photo-interval-input" type="number" name="photo_interval" value="5" min="1" />
             </label>
+            <label class="one-line-label">
+              Формат файла
+              <select name="photo_format" title="PNG — без потерь (файлы крупнее), JPG — сжатие с потерями">
+                <option value="png" selected>PNG</option>
+                <option value="jpg">JPG</option>
+              </select>
+            </label>
             <p class="record-path" id="photoSavePath" hidden></p>
             <div class="record-actions">
               <button type="button" id="photoOn" class="btn-primary">Включить</button>

@@ -1020,6 +1020,15 @@ function initCameraPage() {
     setVal('video_project', s.video_project);
     setIntervalField('photo_interval', null, s.photo_interval);
     setIntervalField('video_duration', 'video_duration_unit', s.video_duration);
+    // формат фото (png/jpg) — запоминаем между запусками
+    const formatSelect = document.querySelector('select[name="photo_format"]');
+    if (formatSelect && s.photo_format) formatSelect.value = s.photo_format;
+  }
+
+  // выбранный формат автосохранения фото (png по умолчанию)
+  function readPhotoFormat() {
+    const el = document.querySelector('select[name="photo_format"]');
+    return el ? el.value : 'png';
   }
 
   // показать путь сохранения (папка + шаблон имени файла) из ответа сервера
@@ -1035,9 +1044,10 @@ function initCameraPage() {
     );
     if (interval === null) return;
 
-    log.info('Запуск сохранения фото', { interval, project });
+    const photoFormat = readPhotoFormat();
+    log.info('Запуск сохранения фото', { interval, project, photoFormat });
 
-    const data = await CameraApi.startPhotoSaving(serialNumber, interval, project);
+    const data = await CameraApi.startPhotoSaving(serialNumber, interval, project, photoFormat);
     if (!data) {
       log.warn('Сервер не подтвердил запуск сохранения фото');
       return;

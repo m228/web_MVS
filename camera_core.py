@@ -389,9 +389,8 @@ DISK_FREE_WARN_MB = 500
 # как часто перепроверять свободное место в фоне (сек)
 DISK_CHECK_PERIOD = 30.0
 
-# все фото сохраняем ТОЛЬКО в PNG без сжатия (по слову Макса): датасет/скрины идут в
-# анализ кристаллов, где артефакты JPEG и потери недопустимы. jpg оставлен в списке лишь
-# для обратной совместимости со старыми настройками, но _photo_ext() всегда отдаёт png.
+# форматы автосохранения фото: PNG (по умолчанию, без потерь — для анализа кристаллов)
+# и JPG (компактно, с потерями). Формат выбирается в UI; дефолт — png.
 PHOTO_FORMATS = ("png", "jpg")
 # степень сжатия PNG: 0 — БЕЗ сжатия (макс. размер, но lossless и без нагрузки на CPU).
 PNG_COMPRESSION = 0
@@ -692,9 +691,9 @@ class BaseCameraWorker:
     def _video_prefix(self):
         return self._project_tag(self.video_project) or "video"
 
-    # все фото — PNG без сжатия (по слову Макса), формат не выбирается
+    # расширение файла фото по выбранному формату (png по умолчанию, всегда одно из PHOTO_FORMATS)
     def _photo_ext(self):
-        return "png"
+        return "jpg" if self.photo_format == "jpg" else "png"
 
     # папка и шаблон имени файлов фото — показываем во фронтенде
     def photo_save_info(self):
@@ -952,11 +951,14 @@ class BaseCameraWorker:
 
     # одиночный снимок по триггеру (soft-trigger): сохранить следующий кадр как фото.
     # project — необязательная папка (по умолчанию — текущий photo_project или «trigger»).
-    def snap(self, project=None):
+    def snap(self, project=None, photo_format=None):
         if project:
             self.photo_project = project
         elif not self.photo_project:
             self.photo_project = "trigger"
+        # формат одиночного снимка (напр. скрина пробы); неизвестное значение игнорируем
+        if photo_format in PHOTO_FORMATS:
+            self.photo_format = photo_format
         self.snap_once = True
         return {"status": "ok", "streaming": bool(self.running)}
 

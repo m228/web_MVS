@@ -207,6 +207,12 @@
                   <label class="micro-cycle-f"><span>Выдержка пробы, с</span><input type="number" id="pcDwell" step="1" min="1" value="15" /></label>
                   <label class="micro-cycle-f"><span>Скрин каждые, с</span><input type="number" id="pcShotInterval" step="1" min="1" value="3" /></label>
                   <label class="micro-cycle-f"><span>Пауза между пробами, с</span><input type="number" id="pcPause" step="1" min="0" value="60" /></label>
+                  <label class="micro-cycle-f"><span>Формат скринов</span>
+                    <select id="pcFormat" title="PNG — без потерь (для анализа кристаллов), JPG — компактно">
+                      <option value="png" selected>PNG (без сжатия)</option>
+                      <option value="jpg">JPG</option>
+                    </select>
+                  </label>
                 </div>
                 <div class="micro-cycle-actions">
                   <button type="button" id="pcSave" class="toolbar-btn toolbar-btn--primary">Сохранить параметры</button>

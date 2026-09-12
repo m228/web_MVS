@@ -214,6 +214,12 @@ def micro_stage(value: int):
     return {"status": "ok", "stage": value}
 
 
+@app.get("/api/micro/camera_serial")
+def micro_camera_serial(serial: str):
+    # запомнить серийник камеры микроскопа для скринов/видео пробы (без перезапуска платы)
+    return micro.set_camera_serial(serial)
+
+
 @app.get("/api/micro/cyclic")
 def micro_cyclic(on: int):
     micro.set_cyclic(bool(on))
@@ -333,6 +339,7 @@ def micro_settings(
     dwell_sec: int | None = None,
     shot_interval_sec: int | None = None,
     pause_sec: int | None = None,
+    photo_format: str | None = None,
     host: str | None = None,
     port: int | None = None,
     unit: int | None = None,
@@ -353,6 +360,7 @@ def micro_settings(
     if dwell_sec is not None: pc["dwell_sec"] = dwell_sec
     if shot_interval_sec is not None: pc["shot_interval_sec"] = shot_interval_sec
     if pause_sec is not None: pc["pause_sec"] = pause_sec
+    if photo_format is not None: pc["photo_format"] = photo_format
     if pc:
         patch["probe_cycle"] = pc            # параметры цикла пробы (вкладка «Цикл»)
     if host is not None:

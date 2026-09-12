@@ -68,8 +68,10 @@ class MicroscopeService:
                           "Скрин пробы пропущен: камера не стримит (открой страницу/поток камеры)",
                           "warn", {"serial": serial})
                 return
-            worker.snap("microscope")
-            log_event("microscope_service", "Скрин пробы: запрошен снимок", "info", {"serial": serial})
+            fmt = (cfg.get("probe_cycle") or {}).get("photo_format", "png")
+            worker.snap("microscope", fmt)
+            log_event("microscope_service", "Скрин пробы: запрошен снимок", "info",
+                      {"serial": serial, "format": fmt})
         except Exception as e:
             log_event("microscope_service", "Ошибка скрина пробы", "warn", {"error": str(e)})
 
@@ -153,6 +155,23 @@ class MicroscopeService:
         """Сохранить правки (IP камеры/платы и т.п.) в plate_config.json и перезапуститься."""
         plate_config.save(patch)
         return self.reload()
+
+    def set_camera_serial(self, serial):
+        """Запомнить серийник камеры микроскопа в конфиг БЕЗ перезапуска платы/автомата.
+        Нужен для скринов/видео пробы (_auto_photo читает cfg['camera_serial']). Камера
+        находится автоматически в UI, но серверу её серийник надо знать явно. reload не
+        делаем — просто пишем в JSON и обновляем кэш cfg на лету, чтобы не рвать цикл."""
+        serial = (serial or "").strip()
+        if not serial:
+            return {"status": "empty"}
+        if self.cfg is not None and self.cfg.get("camera_serial") == serial:
+            return {"status": "unchanged", "camera_serial": serial}
+        plate_config.save({"camera_serial": serial})
+        if self.cfg is not None:
+            self.cfg["camera_serial"] = serial   # чтобы _auto_photo увидел сразу, без reload
+        log_event("microscope_service", "Серийник камеры сохранён в конфиг", "info",
+                  {"camera_serial": serial})
+        return {"status": "ok", "camera_serial": serial}
 
     # ---------- команды от эндпоинтов ----------
 

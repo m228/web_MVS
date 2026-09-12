@@ -73,7 +73,7 @@
       const p = {
         retract_pos: $("pcRetract").value, pre_wash_sec: $("pcPreWash").value,
         dwell_sec: $("pcDwell").value, shot_interval_sec: $("pcShotInterval").value,
-        pause_sec: $("pcPause").value,
+        pause_sec: $("pcPause").value, photo_format: $("pcFormat").value,
       };
       try {
         await api("/api/micro/settings", p);
@@ -124,6 +124,12 @@
   function setCamSerial(serial) {
     camSerial = serial || "";
     const has = !!serial;
+    // запомнить серийник в конфиг микроскопа (для скринов/видео пробы на сервере),
+    // если он отличается от уже сохранённого — без перезапуска платы
+    if (has && cfg && cfg.camera_serial !== serial) {
+      cfg.camera_serial = serial;
+      api("/api/micro/camera_serial", { serial }).catch(() => {});
+    }
     ["camConnectBtn", "camApplyBtn"].forEach((id) => {
       const b = $(id); if (b) b.disabled = !has;
     });
@@ -329,7 +335,8 @@
     try {
       if (!camPhotoOn) {
         const iv = Math.max(1, parseInt($("camPhotoInterval") && $("camPhotoInterval").value, 10) || 5);
-        await CAM().startPhotoSaving(camSerial, iv, "microscope", "jpg"); on = true;
+        const fmt = ($("pcFormat") && $("pcFormat").value) || "png";
+        await CAM().startPhotoSaving(camSerial, iv, "microscope", fmt); on = true;
       }
       else { await CAM().stopPhotoSaving(camSerial); on = false; }
     } catch (e) { on = false; }
@@ -433,7 +440,7 @@
           const pc = cfg.probe_cycle, sv = (id, v) => { const e = $(id); if (e && v != null) e.value = v; };
           sv("pcRetract", pc.retract_pos); sv("pcPreWash", pc.pre_wash_sec);
           sv("pcDwell", pc.dwell_sec); sv("pcShotInterval", pc.shot_interval_sec);
-          sv("pcPause", pc.pause_sec);
+          sv("pcPause", pc.pause_sec); sv("pcFormat", pc.photo_format);
         }
         cfgSerial = cfg.camera_serial || "";
       }

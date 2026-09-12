@@ -388,6 +388,9 @@ function initRtspPage() {
     setVal('video_project', s.video_project);
     setIntervalField('photo_interval', 'photo_interval_unit', s.photo_interval);
     setIntervalField('video_duration', 'video_duration_unit', s.video_duration);
+    // формат фото (png/jpg) — запоминаем между запусками
+    const formatSelect = document.querySelector('select[name="photo_format"]');
+    if (formatSelect && s.photo_format) formatSelect.value = s.photo_format;
   }
 
   async function startPhotoSaving() {
@@ -407,7 +410,11 @@ function initRtspPage() {
     const unit = unitSelect ? unitSelect.value : 'seconds';
     const intervalInSeconds = unit === 'minutes' ? interval * 60 : interval;
 
-    const data = await RtspApi.startPhotoSaving(serial, intervalInSeconds, project);
+    // формат файла: png (без потерь) или jpg
+    const formatSelect = document.querySelector('select[name="photo_format"]');
+    const photoFormat = formatSelect ? formatSelect.value : 'png';
+
+    const data = await RtspApi.startPhotoSaving(serial, intervalInSeconds, project, photoFormat);
     if (!data || data.error) {
       log.warn('Сервер не подтвердил запуск сохранения фото', data);
       return;

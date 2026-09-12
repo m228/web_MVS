@@ -852,7 +852,10 @@ class BaseCameraWorker:
     # dataset/завод один/...) файл молча НЕ создаётся, imwrite возвращает False.
     # Именно из-за этого автосохранение «работало», но датасет оставался пустым.
     # Заодно так удобно передать параметры кодека (сжатие PNG).
-    def write_photo(self, img):
+    # log_name=True — записать в лог имя сохранённого файла («скрин сохранён: …»).
+    # Для одиночных/триггерных скринов (snap) True; для потокового автосохранения
+    # датасета — False (иначе лог спамится каждым интервалом; у него свой health-мониторинг).
+    def write_photo(self, img, log_name=False):
         folder = self.photo_dir()
         ext = self._photo_ext()
         filename = f"{self._photo_prefix()}_{datetime.now().strftime('%d_%m_%Y_%H_%M_%S')}.{ext}"
@@ -874,6 +877,9 @@ class BaseCameraWorker:
         self.photo_saved_count += 1
         self.last_photo_saved_at = time.time()
         self.last_save_error = None
+        if log_name:
+            log_event("camera_core.write_photo", f"Скрин сохранён: {filename}", "success",
+                      {"serial_number": self.serial_number, "file": filename, "path": path})
         return path
 
     # ---------- видео ----------
@@ -958,9 +964,9 @@ class BaseCameraWorker:
     def _maybe_save(self, img, fps):
         if self.snap_once:                 # одиночный снимок по триггеру (soft-trigger)
             self.snap_once = False
-            self.write_photo(img)
+            self.write_photo(img, log_name=True)   # имя скрина — в лог программы
         if self.save_photo and self._should_save_photo(self.photo_interval):
-            self.write_photo(img)
+            self.write_photo(img)              # потоковый датасет: без лога имени (анти-спам)
 
         self._check_video_finished()
         if self.save_video == 1:

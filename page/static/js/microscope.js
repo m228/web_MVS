@@ -50,8 +50,11 @@
       try {
         const r = await api("/api/micro/take_sample");
         sentCmd("Взять пробу: " + (r.status || ""));
+        // если проба сняла ручной режим — синхронизируем тумблер в UI
+        if (r.was_manual) { const mt = $("manualToggle"); if (mt) mt.checked = false; }
         const h = $("cycHint");
-        if (h) h.textContent = r.status === "started" ? "цикл запущен" :
+        if (h) h.textContent = r.status === "started" ?
+          (r.was_manual ? "ручной снят, цикл запущен" : "цикл запущен") :
           r.status === "busy" ? "цикл уже идёт" : (r.hint || "заблокировано");
       } catch (e) { const h = $("cycHint"); if (h) h.textContent = "ошибка: " + e.message; }
     });

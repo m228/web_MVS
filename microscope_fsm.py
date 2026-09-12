@@ -154,17 +154,35 @@ class MicroscopeFSM:
 
     def start_sample(self):
         """Кнопка «Взять пробу»: запустить последовательность (отвод→промывка→подвод→
-        выдержка→возврат) с шага 20. В ручном режиме и при аварийном запрете — игнор."""
+        выдержка→возврат) с шага 20. Если стоит Ручной режим — снимаем его безопасно и
+        запускаем (переводим в Автомат). «Стоп движения» (sw3) остаётся защитой — при нём игнор."""
         with self._lock:
-            if self.manual or self.sw3:
-                return {"status": "blocked",
-                        "hint": "снимите Ручной режим / Стоп движения"}
+            if self.sw3:
+                return {"status": "blocked", "hint": "снимите «Стоп движения»"}
             if self.mode != 0:
                 return {"status": "busy", "mode": self.mode}
+            was_manual = self.manual
+            if self.manual:
+                self._drop_manual_locked()   # снять ручной безопасно (зеркало set_manual(True))
             self.mode = 20
             self.t = 0
             self.cycle_t = 0
-            return {"status": "started"}
+            return {"status": "started", "was_manual": was_manual}
+
+    def _drop_manual_locked(self):
+        """Безопасно выйти из ручного режима (вызывается ПОД локом). Зеркало очистки из
+        set_manual(True): гасим залипшие команды ВУ/моторов и клапаны, фиксируем уставки на
+        текущих, чтобы автомат не рванул к старой цели до задания новой (mode 20)."""
+        self.manual = False
+        self.cmd = self.cmd_old       # погасить возможный фронт команды ВУ
+        self.cmd1 = 0
+        self.cmd2 = 0
+        self._emit_cmd1 = False
+        self._emit_cmd2 = False
+        self.cw0 = False
+        self.cw1 = False
+        self.m1_sp_old = self.m1_sp
+        self.m2_sp_old = self.m2_sp
 
     def _arrived(self, pos_ai, pos_enc, target):
         # ДОЕЗД: энкодер pos1 в диапазоне ±ARRIVE_TOL_UM (±50 мкм) от цели — та же шкала мкм.

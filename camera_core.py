@@ -533,6 +533,7 @@ def _apply_color(img, c):
         hue = _f(c.get("hue"), 0.0)
         contrast = _f(c.get("contrast"), 1.0)
         bright = _f(c.get("brightness"), 0.0)
+        sharpness = _f(c.get("sharpness"), 0.0)   # 0 = без резкости; 0..2 сила unsharp mask
         ccm = c.get("ccm")
         palette = c.get("palette") or ""
         wb = c.get("wb")   # {"auto":1} | {"r":g,"g":g,"b":g} (гейны каналов)
@@ -569,6 +570,11 @@ def _apply_color(img, c):
             if abs(sat - 1.0) > 1e-3:
                 hsv[..., 1] = np.clip(hsv[..., 1] * sat, 0, 255)
             img = cv2.cvtColor(hsv.astype(np.uint8), cv2.COLOR_HSV2BGR)
+        # резкость (unsharp mask): img + amount*(img - размытие). Ставим до палитры,
+        # чтобы контуры подчёркивались на реальном кадре, а не на псевдоцвете.
+        if sharpness > 0.01:
+            blur = cv2.GaussianBlur(img, (0, 0), 3)
+            img = cv2.addWeighted(img, 1.0 + sharpness, blur, -sharpness, 0)
         if palette:
             cm = _COLORMAPS.get(palette)
             if cm is not None:

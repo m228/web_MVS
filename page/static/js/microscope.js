@@ -575,7 +575,7 @@
       // питание / термо
       set("tTemp", t.temp == null ? "—" : t.temp + " °C");
       set("tU12v", t.u12v == null ? "—" : (t.u12v / 1000).toFixed(2) + " В");
-      set("tFan1", num(e.fan1)); set("tFan2", num(e.fan2));
+      set("tFanPair", pair(e.fan1, e.fan2));
 
       // входы/выходы
       const diTxt = e.di != null ? bits6(e.di) : hex(t.di), dqTxt = bits6(e.dq);
@@ -593,6 +593,8 @@
       const cb = $("cycStepBadge"); if (cb) cb.textContent = f.step || "—";
       set("cycLabel", f.label || "—");
       set("cycSv", f.sv == null ? "—" : Number(f.sv).toFixed(1));
+      // СВ рядом с видео камеры (телеметрия камеры) — чтобы было видно при просмотре потока
+      set("camSv_v", f.sv == null ? "—" : Number(f.sv).toFixed(1));
       set("cycTarget", f.target == null ? "—" : f.target + " мкм");
       set("cycPos", um(t.pos1));
       set("cycTube", f.valve_tube ? "открыт" : "закрыт");

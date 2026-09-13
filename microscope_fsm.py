@@ -334,13 +334,12 @@ class MicroscopeFSM:
                 elif not stage_in:
                     label = "Ожидание — варка не идёт (стадия %d, нужно 3–9)" % self.stage
                 elif self._trigger_mode == "sv":
-                    cur = int(self.sv)
-                    nxt = cur + 1 if (self._last_sv_shot is not None and cur >= self._last_sv_shot) \
-                        else max(cur, int(self._sv_from))
-                    if nxt > self._sv_to:
-                        label = "Ожидание — СВ прошло диапазон (до %g)" % self._sv_to
+                    if self._last_sv_shot is None:
+                        label = "Ожидание — жду СВ в диапазоне %g–%g (сейчас %.1f)" % (
+                            self._sv_from, self._sv_to, self.sv)
                     else:
-                        label = "Ожидание — жду СВ %d (сейчас %.1f)" % (nxt, self.sv)
+                        label = "Ожидание — жду смену СВ на ±1 от %d (сейчас %.1f)" % (
+                            self._last_sv_shot, self.sv)
                 else:
                     left = max(0, self._pause_sec * 10 - self.cycle_t) // 10
                     label = "Ожидание — след. проба через %d с" % left
@@ -437,9 +436,11 @@ class MicroscopeFSM:
                 if self.mode == 0:
                     if self._trigger_mode == "sv":
                         cur = int(self.sv)   # текущее ЦЕЛОЕ СВ (floor для sv>=0)
+                        # проба на каждом НОВОМ целом СВ в диапазоне — и при росте, и при падении
+                        # (СВ может снижаться при расчистке, это тоже надо снять). Порог = ±1 целое.
                         if (self._sv_from <= cur <= self._sv_to
-                                and (self._last_sv_shot is None or cur > self._last_sv_shot)):
-                            self._last_sv_shot = cur     # на этом целом СВ пробу уже возьмём
+                                and (self._last_sv_shot is None or cur != self._last_sv_shot)):
+                            self._last_sv_shot = cur     # на этом целом СВ пробу уже взяли
                             self.mode = 20
                             self.t = 0
                             self.cycle_t = 0

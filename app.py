@@ -232,6 +232,12 @@ def micro_trigger_mode(mode: str):
     return micro.set_trigger_mode(mode)
 
 
+@app.get("/api/micro/ignore_stage")
+def micro_ignore_stage(on: int):
+    # галочка «Варить без стадии» — авто-цикл без гейта стадии 3..9 (ручная варка)
+    return micro.set_ignore_stage(bool(on))
+
+
 @app.get("/api/micro/cyclic")
 def micro_cyclic(on: int):
     micro.set_cyclic(bool(on))

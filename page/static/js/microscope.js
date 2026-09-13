@@ -93,6 +93,11 @@
       api("/api/micro/trigger_mode", { mode }).catch(() => {});   // применяется сразу
       sentCmd("Триггер пробы: " + (trig.checked ? "по СВ" : "по времени"));
     });
+    const ign = $("ignoreStageToggle");
+    if (ign) ign.addEventListener("change", () => {
+      api("/api/micro/ignore_stage", { on: ign.checked ? 1 : 0 }).catch(() => {});   // сразу
+      sentCmd("Варить без стадии: " + (ign.checked ? "вкл" : "выкл"));
+    });
     const fmt = $("pcFormatSw");
     if (fmt) fmt.addEventListener("change", () => {
       const st = $("pcFormatState"); if (st) st.textContent = fmt.checked ? "JPG" : "PNG";
@@ -545,6 +550,7 @@
           const trSw = $("pcTriggerSw"); if (trSw) trSw.checked = (pc.trigger_mode === "sv");
           const fmSw = $("pcFormatSw"); if (fmSw) fmSw.checked = (pc.photo_format === "jpg");
           const fmSt = $("pcFormatState"); if (fmSt) fmSt.textContent = (pc.photo_format === "jpg") ? "JPG" : "PNG";
+          const ignT = $("ignoreStageToggle"); if (ignT) ignT.checked = !!pc.ignore_stage;
           updateTriggerFields();
         }
         const ca = $("cycleAutostartToggle"); if (ca) ca.checked = !!cfg.cycle_autostart;

@@ -75,6 +75,9 @@ class MicroscopeFSM:
         self._trigger_mode = "sv" if str(pc.get("trigger_mode", "time")) == "sv" else "time"
         self._sv_from = float(pc.get("sv_from", 84))
         self._sv_to = float(pc.get("sv_to", 92))
+        # «варить без стадии»: при ручной варке ПЛК не двигает стадию (стоит), а СВ растёт —
+        # тогда авто-цикл гоняем БЕЗ проверки стадии 3..9 (только по триггеру время/СВ).
+        self._ignore_stage = bool(pc.get("ignore_stage", False))
         self._last_sv_shot = None    # последнее целое СВ, на котором взяли пробу (режим "sv")
         # подтверждение выхода из ручного при старте варки: если стадия ВХОДИТ в рабочую зону
         # (3..9), а мы в ручном — поднимаем флаг, UI спрашивает оператора «перейти в Автомат?».
@@ -169,6 +172,14 @@ class MicroscopeFSM:
             self.cycle_t = 0
             self._last_sv_shot = None
             return {"trigger_mode": self._trigger_mode}
+
+    def set_ignore_stage(self, on):
+        """«Варить без стадии»: при True авто-цикл не проверяет стадию варки 3..9
+        (ручная варка — стадия стоит, двигается только СВ). Сбрасываем точку СВ."""
+        with self._lock:
+            self._ignore_stage = bool(on)
+            self._last_sv_shot = None
+            return {"ignore_stage": self._ignore_stage}
 
     def start_sample(self):
         """Кнопка «Взять пробу»: запустить последовательность (отвод→промывка→подвод→
@@ -335,7 +346,7 @@ class MicroscopeFSM:
                 label = "Возврат в %d мкм" % self._retract_pos
             else:
                 # Ожидание — поясняем ЧЕГО ждём (чтобы было видно, продолжится ли авто-цикл)
-                stage_in = CYCLE_STAGE_MIN <= self.stage <= CYCLE_STAGE_MAX
+                stage_in = self._ignore_stage or (CYCLE_STAGE_MIN <= self.stage <= CYCLE_STAGE_MAX)
                 if self.manual:
                     label = "Ручной режим — авто-цикл не идёт"
                 elif not self.sw0:
@@ -373,8 +384,8 @@ class MicroscopeFSM:
                 "sv": self.sv,
                 "stage": self.stage,
                 "u": self.u,
-                # авто-цикл разрешён по стадии варки (3..9). Для подсказки на вкладке «Цикл».
-                "stage_ok": CYCLE_STAGE_MIN <= self.stage <= CYCLE_STAGE_MAX,
+                # авто-цикл разрешён по стадии (3..9) ИЛИ включено «варить без стадии».
+                "stage_ok": self._ignore_stage or (CYCLE_STAGE_MIN <= self.stage <= CYCLE_STAGE_MAX),
                 "last_sv_shot": self._last_sv_shot,   # на каком целом СВ взяли последнюю пробу (режим sv)
                 "manual_confirm": self._manual_confirm,   # варка началась, а мы в ручном — спросить оператора
                 "cycle_params": {
@@ -386,6 +397,7 @@ class MicroscopeFSM:
                     "trigger_mode": self._trigger_mode,
                     "sv_from": self._sv_from,
                     "sv_to": self._sv_to,
+                    "ignore_stage": self._ignore_stage,
                 },
             }
 
@@ -441,7 +453,8 @@ class MicroscopeFSM:
             #   "sv"   — новая проба на каждом ЦЕЛОМ СВ в [sv_from..sv_to] по мере роста СВ.
             # Стадия вне диапазона -> ничего не капает, новый цикл не стартует (уже идущий доводим),
             # счётчик СВ сбрасываем (новая варка снимет заново с sv_from).
-            if self.sw0 and CYCLE_STAGE_MIN <= self.stage <= CYCLE_STAGE_MAX:
+            stage_ok = self._ignore_stage or (CYCLE_STAGE_MIN <= self.stage <= CYCLE_STAGE_MAX)
+            if self.sw0 and stage_ok:
                 if self.mode == 0:
                     if self._trigger_mode == "sv":
                         # запоминаем ТОЧНОЕ СВ на старте цикла и снимаем следующую пробу, когда

@@ -229,11 +229,15 @@
                     <label class="micro-cycle-f" id="pcPauseWrap"><span>Пауза между пробами, с</span><input type="number" id="pcPause" step="1" min="0" value="60" /></label>
                   </div>
                 </div>
+                <label class="micro-check micro-cycle-ignore" title="Ручная варка: ПЛК не двигает стадию (стоит), а СВ растёт. С галочкой авто-цикл идёт без проверки стадии 3–9 — только по триггеру (время/СВ).">
+                  <input type="checkbox" id="ignoreStageToggle" />
+                  <span class="micro-check__text">Варить без стадии (ручная варка)</span>
+                </label>
                 <div class="micro-cycle-actions">
                   <button type="button" id="pcSave" class="toolbar-btn toolbar-btn--primary">Сохранить параметры</button>
                   <span class="micro-conn-hint" id="pcHint"></span>
                 </div>
-                <p class="micro-plc-note">Подвод к стеклу — по таблице «СВ/МКМ». Доезд — по обоим датчикам (аналог + энкодер). Сохранение перезапускает автомат. <b>Авто-циклы</b> идут при включённом «Автомат» и стадии варки 3–9 (Сгущение…Готовность), с паузой между пробами.</p>
+                <p class="micro-plc-note">Подвод к стеклу — по таблице «СВ/МКМ». Доезд — по обоим датчикам (аналог + энкодер). Сохранение перезапускает автомат. <b>Авто-циклы</b> идут при включённом «Автомат» и стадии варки 3–9 (Сгущение…Готовность); при «Варить без стадии» — по СВ/времени независимо от стадии.</p>
               </div>
 
               <!-- Мотор М1 -->

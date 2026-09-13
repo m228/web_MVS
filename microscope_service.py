@@ -166,6 +166,17 @@ class MicroscopeService:
         log_event("microscope_service", "Триггер пробы: " + mode, "info", {"trigger_mode": mode})
         return res
 
+    def set_ignore_stage(self, on):
+        """«Варить без стадии» — авто-цикл без проверки стадии 3..9. Сразу, без reload."""
+        on = bool(on)
+        res = self.fsm.set_ignore_stage(on) if self.fsm else {"ignore_stage": on}
+        plate_config.save({"probe_cycle": {"ignore_stage": on}})
+        if self.cfg is not None:
+            self.cfg.setdefault("probe_cycle", {})["ignore_stage"] = on
+        log_event("microscope_service", "Варить без стадии: " + ("вкл" if on else "выкл"),
+                  "info", {"ignore_stage": on})
+        return res
+
     def set_cycle_autostart(self, on):
         """Запомнить галочку «Автостарт цикла» в конфиг БЕЗ перезапуска платы."""
         on = bool(on)

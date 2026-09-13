@@ -3197,9 +3197,8 @@ html {
 .micro-panel__body { margin-top: 14px; }
 .micro-motors { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
 @media (max-width: 860px) { .micro-motors { grid-template-columns: 1fr; } }
-/* М1 и М2 рядом — два столбика (на узком экране схлопываются в один) */
+/* М1 и М2 рядом — жёстко два столбика */
 .micro-motors-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; }
-@media (max-width: 720px) { .micro-motors-grid { grid-template-columns: 1fr; } }
 .micro-motor { background: var(--surface-muted); border: 1px solid var(--border); border-radius: 12px; padding: 14px; }
 .micro-motor__head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
 .micro-motor__title { font-weight: 600; }
@@ -3376,8 +3375,8 @@ input.micro-cam-num { width: 56px; min-width: 0; flex: 0 0 auto; padding: 4px 5p
 .micro-cycle-tiles { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; margin-top: 10px; }
 .micro-cycle-tiles .micro-tile { background: var(--surface-elevated); }
 .micro-cycle-hint { margin: 10px 0 0; font-size: 0.82em; color: var(--muted); }
-/* компактно: параметры цикла в 2-3 колонки по ширине панели */
-.micro-cycle-params { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 8px 16px; }
+/* компактно: параметры цикла жёстко в 2 столбика */
+.micro-cycle-params { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px 16px; }
 .micro-cycle-f--wide { grid-column: 1 / -1; }
 .micro-cycle-f { display: grid; grid-template-columns: 1fr 88px; align-items: center; gap: 8px; font-size: 0.88em; }
 .micro-cycle-f span { color: var(--muted); }

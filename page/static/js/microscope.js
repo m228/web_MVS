@@ -309,11 +309,12 @@
       ccmInputs().forEach((inp) => { inp.value = p[Number(inp.dataset.ccm)]; });
       if ($("ccmEnable").checked) ccmSend();
     });
-    $("ccmEnable").addEventListener("change", ccmSend);
+    $("ccmEnable").addEventListener("change", () => { ccmSend(); updateColorDim(); });
     ccmInputs().forEach((inp) => inp.addEventListener("input", () => { if ($("ccmEnable").checked) debounce(ccmSend); }));
 
     // псевдоцвет-палитра
-    $("clrPalette").addEventListener("change", () => send({ palette: $("clrPalette").value }));
+    $("clrPalette").addEventListener("change", () => { send({ palette: $("clrPalette").value }); updateColorDim(); });
+    updateColorDim();   // начальное приглушение неактивных параметров
 
     // сброс всего
     $("clrReset").addEventListener("click", () => {
@@ -325,7 +326,16 @@
       ccmInputs().forEach((inp) => { inp.value = CCM_PRESETS.neutral[Number(inp.dataset.ccm)]; });
       $("clrPalette").value = "";
       send({ reset: 1 });
+      updateColorDim();
     });
+  }
+
+  // приглушить неактивные параметры цвета: матрицу CCM (когда CCM выключен) и
+  // палитру (когда «нет»). Клики не блокируем — только визуальный намёк неактивности.
+  function updateColorDim() {
+    const ccmG = $("ccmGrid"), ccmEn = $("ccmEnable"), pal = $("clrPalette");
+    if (ccmG && ccmEn) ccmG.classList.toggle("micro-dim", !ccmEn.checked);
+    if (pal) pal.classList.toggle("micro-dim", !pal.value);
   }
 
   function camApply() {

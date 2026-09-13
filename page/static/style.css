@@ -3285,6 +3285,11 @@ html {
 .micro-ccm input::-webkit-outer-spin-button, .micro-ccm input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
 .micro-color-actions { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
 .is-disabled { opacity: 0.4; pointer-events: none; }
+/* CCM и палитра — рядом в 2 столбика, разделены линией */
+.micro-color-two { display: grid; grid-template-columns: 1fr 1fr; gap: 0 16px; align-items: start; }
+.micro-color-two .micro-color-col + .micro-color-col { border-left: 1px solid var(--border); padding-left: 16px; }
+/* приглушение неактивного параметра (визуально, клики не блокирует) */
+.micro-dim { opacity: 0.45; transition: opacity 0.15s ease; }
 
 /* телеметрия камеры — компактной строкой ПОД видео (5 ячеек + значки фото/видео) */
 .micro-cam-tele { display: flex; flex-wrap: wrap; align-items: stretch; gap: 6px; margin-top: 8px; }

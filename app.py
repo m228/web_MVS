@@ -220,6 +220,12 @@ def micro_camera_serial(serial: str):
     return micro.set_camera_serial(serial)
 
 
+@app.get("/api/micro/cycle_autostart")
+def micro_cycle_autostart(on: int):
+    # галочка «Автостарт цикла после перезапуска» (без перезапуска платы)
+    return micro.set_cycle_autostart(bool(on))
+
+
 @app.get("/api/micro/cyclic")
 def micro_cyclic(on: int):
     micro.set_cyclic(bool(on))

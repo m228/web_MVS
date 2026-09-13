@@ -156,6 +156,16 @@ class MicroscopeService:
         plate_config.save(patch)
         return self.reload()
 
+    def set_cycle_autostart(self, on):
+        """Запомнить галочку «Автостарт цикла» в конфиг БЕЗ перезапуска платы."""
+        on = bool(on)
+        plate_config.save({"cycle_autostart": on})
+        if self.cfg is not None:
+            self.cfg["cycle_autostart"] = on
+        log_event("microscope_service", "Автостарт цикла после перезапуска: " + ("вкл" if on else "выкл"),
+                  "info", {"cycle_autostart": on})
+        return {"status": "ok", "cycle_autostart": on}
+
     def set_camera_serial(self, serial):
         """Запомнить серийник камеры микроскопа в конфиг БЕЗ перезапуска платы/автомата.
         Нужен для скринов/видео пробы (_auto_photo читает cfg['camera_serial']). Камера

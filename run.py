@@ -108,10 +108,24 @@ def main():
     # видят 0 камер (см. _warmup)
     _warmup()
     print(f"web_MVS {read_version()} -> http://localhost:{PORT}")
+    # автостарт цикла: если галочка включена — открываем ВКЛАДКУ МИКРОСКОПА даже при
+    # --no-browser (страница сама подключит камеру и включит «Автомат», см. microscope.js),
+    # т.к. GigE-камера стримит только при открытой странице.
+    cycle_autostart = False
+    try:
+        import plate_config
+        cycle_autostart = bool(plate_config.load().get("cycle_autostart", False))
+    except Exception:
+        cycle_autostart = False
+    no_browser = "--no-browser" in sys.argv or bool(os.environ.get("WEB_MVS_NO_BROWSER"))
     # --no-browser: автозапуск при входе в Windows (задача планировщика, см. autostart.py)
-    # не должен открывать окно браузера каждый раз. Захват RTSP теперь фоновый,
-    # поэтому для записи браузер не нужен.
-    if "--no-browser" not in sys.argv and not os.environ.get("WEB_MVS_NO_BROWSER"):
+    # не должен открывать окно каждый раз — КРОМЕ случая автостарта цикла.
+    if cycle_autostart:
+        try:
+            webbrowser.open(f"http://localhost:{PORT}/microscope")
+        except Exception:
+            pass
+    elif not no_browser:
         try:
             webbrowser.open(f"http://localhost:{PORT}")
         except Exception:

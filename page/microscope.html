@@ -47,6 +47,10 @@
               <span id="plcConn" class="micro-conn-txt">ПЛК…</span>
             </span>
             <span class="micro-hero__utils">
+              <label class="micro-check micro-hero__util" title="После перезапуска ПК приложение само откроет микроскоп, подключит камеру и включит «Автомат» (цикл продолжится).">
+                <input type="checkbox" id="cycleAutostartToggle" />
+                <span class="micro-check__text">Автостарт цикла</span>
+              </label>
               <button type="button" id="btnReload" class="toolbar-btn toolbar-btn--neutral micro-hero__util" title="Применить plate_config.json без перезапуска">Перезагрузить конфиг</button>
               <button type="button" id="logsBtn" class="toolbar-btn toolbar-btn--neutral toolbar-btn--logs micro-hero__util" title="Открыть журнал (логи платы и команды)">Логи <span class="log-counter" id="logCounter">0</span></button>
               <a href="/" class="toolbar-btn toolbar-btn--neutral micro-hero__util">На главную</a>

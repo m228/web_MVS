@@ -24,6 +24,7 @@
   let cfg = null;
   let camSerial = "";
   let manualConfirmShown = false;   // показан ли диалог «варка началась, выйти из ручного?»
+  let autostartDone = false;        // автосеквенция «автостарт цикла» уже запущена?
 
   // авто-доводка мотора «Идти в позицию»: плата за одно нажатие делает лишь ОДИН шаг к цели,
   // поэтому программа сама повторяет команду и следит за позицией, останавливаясь у цели.
@@ -541,6 +542,7 @@
           const fmSt = $("pcFormatState"); if (fmSt) fmSt.textContent = (pc.photo_format === "jpg") ? "JPG" : "PNG";
           updateTriggerFields();
         }
+        const ca = $("cycleAutostartToggle"); if (ca) ca.checked = !!cfg.cycle_autostart;
         cfgSerial = cfg.camera_serial || "";
       }
     } catch (e) { /* конфиг недоступен */ }
@@ -552,9 +554,30 @@
       $("camSelect").hidden = true; $("camIp").hidden = true; $("camIpGo").hidden = true;
       $("camFound").textContent = cfgSerial;
       setCamSerial(cfgSerial);
+      maybeAutostartCycle();
       return;
     }
     discoverWithRetry(0);
+    maybeAutostartCycle();
+  }
+
+  // автостарт цикла после перезапуска: подключить камеру (когда найдена), пауза,
+  // включить «Автомат». Работает только если галочка cycle_autostart включена.
+  function maybeAutostartCycle() {
+    if (!cfg || !cfg.cycle_autostart || autostartDone) return;
+    autostartDone = true;
+    const enableAuto = () => {
+      syncManual(false);
+      api("/api/micro/manual", { on: 0 }).catch(() => {});
+      sentCmd("Автостарт: «Автомат» включён");
+    };
+    const tryConnect = (n) => {
+      if (camConnected) { enableAuto(); return; }
+      if (camSerial) { camConnect(); setTimeout(enableAuto, 2000); return; }
+      if (n < 20) { setTimeout(() => tryConnect(n + 1), 1000); return; }
+      enableAuto();   // камера не нашлась — всё равно включаем автомат (мотор/клапаны пойдут)
+    };
+    setTimeout(() => tryConnect(0), 1500);
   }
 
   // ---- DQ-сетка: строим кнопки по меткам из конфига ----
@@ -813,6 +836,13 @@
   // ---- кнопки ----
   function wire() {
     $("btnReload").addEventListener("click", async () => { await api("/api/micro/reload"); initCamera(); });
+
+    const caT = $("cycleAutostartToggle");
+    if (caT) caT.addEventListener("change", () => {
+      api("/api/micro/cycle_autostart", { on: caT.checked ? 1 : 0 }).catch(() => {});
+      if (cfg) cfg.cycle_autostart = caT.checked;
+      sentCmd("Автостарт цикла: " + (caT.checked ? "вкл" : "выкл"));
+    });
 
     // LED — включение подразумевается яркостью (>0 = вкл), отдельной кнопки нет
     const led = $("ledBright");

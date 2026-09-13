@@ -70,7 +70,16 @@ class MicroscopeFSM:
         self._pre_wash_sec = int(pc.get("pre_wash_sec", 4))         # промывка перед подводом, с
         self._dwell_sec = int(pc.get("dwell_sec", 15))             # выдержка пробы, с
         self._shot_interval_sec = max(1, int(pc.get("shot_interval_sec", 3)))  # период скринов, с
-        self._pause_sec = max(0, int(pc.get("pause_sec", 60)))     # пауза между пробами в авто-цикле, с
+        self._pause_sec = max(0, int(pc.get("pause_sec", 60)))     # пауза между пробами (режим "time"), с
+        # режим повтора пробы внутри цикла: "time" (по паузе) или "sv" (по целому СВ в [from..to])
+        self._trigger_mode = "sv" if str(pc.get("trigger_mode", "time")) == "sv" else "time"
+        self._sv_from = float(pc.get("sv_from", 84))
+        self._sv_to = float(pc.get("sv_to", 92))
+        self._last_sv_shot = None    # последнее целое СВ, на котором взяли пробу (режим "sv")
+        # подтверждение выхода из ручного при старте варки: если стадия ВХОДИТ в рабочую зону
+        # (3..9), а мы в ручном — поднимаем флаг, UI спрашивает оператора «перейти в Автомат?».
+        self._manual_confirm = False
+        self._stage_prev_in = False   # была ли стадия в рабочей зоне на прошлом такте (для фронта)
 
         self._period = max(0.02, int(config["poll_interval_ms"]) / 1000.0)
         # предохранитель шага цикла (тики по 100мс): нормальный выход — «доехал», а это
@@ -168,6 +177,23 @@ class MicroscopeFSM:
             self.t = 0
             self.cycle_t = 0
             return {"status": "started", "was_manual": was_manual}
+
+    def confirm_auto(self):
+        """Оператор подтвердил переход в Автомат при старте варки: снять ручной, включить
+        авто-цикл (sw0). Дальше авто-цикл сам пойдёт по стадии/режиму."""
+        with self._lock:
+            self._manual_confirm = False
+            if self.manual:
+                self._drop_manual_locked()
+            self.sw0 = True
+            return {"status": "auto_on"}
+
+    def decline_auto(self):
+        """Оператор отклонил переход: остаёмся в ручном. Не переспрашиваем, пока стадия не
+        выйдет из рабочей зоны и не вернётся (фронт)."""
+        with self._lock:
+            self._manual_confirm = False
+            return {"status": "stay_manual"}
 
     def _drop_manual_locked(self):
         """Безопасно выйти из ручного режима (вызывается ПОД локом). Зеркало очистки из
@@ -323,12 +349,17 @@ class MicroscopeFSM:
                 "u": self.u,
                 # авто-цикл разрешён по стадии варки (3..9). Для подсказки на вкладке «Цикл».
                 "stage_ok": CYCLE_STAGE_MIN <= self.stage <= CYCLE_STAGE_MAX,
+                "last_sv_shot": self._last_sv_shot,   # на каком целом СВ взяли последнюю пробу (режим sv)
+                "manual_confirm": self._manual_confirm,   # варка началась, а мы в ручном — спросить оператора
                 "cycle_params": {
                     "retract_pos": self._retract_pos,
                     "pre_wash_sec": self._pre_wash_sec,
                     "dwell_sec": self._dwell_sec,
                     "shot_interval_sec": self._shot_interval_sec,
                     "pause_sec": self._pause_sec,
+                    "trigger_mode": self._trigger_mode,
+                    "sv_from": self._sv_from,
+                    "sv_to": self._sv_to,
                 },
             }
 
@@ -368,18 +399,41 @@ class MicroscopeFSM:
         pos1_ai = telem.get("pos1_ai")
 
         with self._lock:
-            # 1) авто-цикл: гоняем пробу, пока включён «Автомат» (sw0) И стадия варки в
-            # рабочем диапазоне 3..9. Пауза между пробами — _pause_sec (капает только в простое).
-            # Стадия вне диапазона -> пауза не капает, новый цикл не стартует (уже идущий доводим).
+            # 0) подтверждение перехода из ручного: фронт входа стадии в рабочую зону (3..9),
+            # пока стоит Ручной режим -> просим оператора подтвердить переход в Автомат.
+            # Флаг держится, пока не подтвердят/отклонят или стадия не выйдет из зоны.
+            stage_in = CYCLE_STAGE_MIN <= self.stage <= CYCLE_STAGE_MAX
+            if stage_in and not self._stage_prev_in and self.manual:
+                self._manual_confirm = True
+            if not stage_in:
+                self._manual_confirm = False
+            self._stage_prev_in = stage_in
+
+            # 1) авто-цикл: гоняем пробу, пока включён «Автомат» (sw0) И стадия варки в рабочем
+            # диапазоне 3..9 (общее разрешение). ВНУТРИ — повторяемость по trigger_mode:
+            #   "time" — новая проба через _pause_sec (cycle_t капает только в простое);
+            #   "sv"   — новая проба на каждом ЦЕЛОМ СВ в [sv_from..sv_to] по мере роста СВ.
+            # Стадия вне диапазона -> ничего не капает, новый цикл не стартует (уже идущий доводим),
+            # счётчик СВ сбрасываем (новая варка снимет заново с sv_from).
             if self.sw0 and CYCLE_STAGE_MIN <= self.stage <= CYCLE_STAGE_MAX:
                 if self.mode == 0:
-                    self.cycle_t += 1
-                    if self.cycle_t > self._pause_sec * 10:
-                        self.mode = 20               # авто-цикл гонит ту же последовательность пробы
-                        self.t = 0
-                        self.cycle_t = 0
+                    if self._trigger_mode == "sv":
+                        cur = int(self.sv)   # текущее ЦЕЛОЕ СВ (floor для sv>=0)
+                        if (self._sv_from <= cur <= self._sv_to
+                                and (self._last_sv_shot is None or cur > self._last_sv_shot)):
+                            self._last_sv_shot = cur     # на этом целом СВ пробу уже возьмём
+                            self.mode = 20
+                            self.t = 0
+                            self.cycle_t = 0
+                    else:
+                        self.cycle_t += 1
+                        if self.cycle_t > self._pause_sec * 10:
+                            self.mode = 20               # авто-цикл гонит последовательность пробы
+                            self.t = 0
+                            self.cycle_t = 0
             else:
                 self.cycle_t = 0
+                self._last_sv_shot = None
 
             # 2) обратный отсчёт промывки стекла (как ST)
             if self.u > 0:

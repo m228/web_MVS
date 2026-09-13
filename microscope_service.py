@@ -207,6 +207,18 @@ class MicroscopeService:
             return self.fsm.reset_cycle()
         return {"status": "no_fsm"}
 
+    def confirm_auto(self):
+        """Подтверждение перехода в Автомат при старте варки (из диалога UI)."""
+        if self.fsm:
+            return self.fsm.confirm_auto()
+        return {"status": "no_fsm"}
+
+    def decline_auto(self):
+        """Отклонение перехода — остаёмся в ручном."""
+        if self.fsm:
+            return self.fsm.decline_auto()
+        return {"status": "no_fsm"}
+
     def cycle_skip(self):
         """Кнопка «Вперёд»: перепрыгнуть на следующий шаг цикла."""
         if self.fsm:

@@ -208,6 +208,14 @@
                   <label class="micro-cycle-f"><span>Выдержка пробы, с</span><input type="number" id="pcDwell" step="1" min="1" value="15" /></label>
                   <label class="micro-cycle-f"><span>Скрин каждые, с</span><input type="number" id="pcShotInterval" step="1" min="1" value="3" /></label>
                   <label class="micro-cycle-f"><span>Пауза между пробами, с</span><input type="number" id="pcPause" step="1" min="0" value="60" /></label>
+                  <label class="micro-cycle-f micro-cycle-f--wide"><span>Триггер пробы</span>
+                    <select id="pcTrigger" title="По времени — проба каждые N секунд. По СВ — проба на каждом целом значении СВ в диапазоне.">
+                      <option value="time" selected>По времени (пауза)</option>
+                      <option value="sv">По СВ (на каждом целом)</option>
+                    </select>
+                  </label>
+                  <label class="micro-cycle-f" id="pcSvFromWrap" hidden><span>СВ от</span><input type="number" id="pcSvFrom" step="1" value="84" /></label>
+                  <label class="micro-cycle-f" id="pcSvToWrap" hidden><span>СВ до</span><input type="number" id="pcSvTo" step="1" value="92" /></label>
                   <label class="micro-cycle-f"><span>Формат скринов</span>
                     <select id="pcFormat" title="PNG — без потерь (для анализа кристаллов), JPG — компактно">
                       <option value="png" selected>PNG (без сжатия)</option>

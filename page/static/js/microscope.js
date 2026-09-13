@@ -23,6 +23,7 @@
   let manualOn = false;
   let cfg = null;
   let camSerial = "";
+  let manualConfirmShown = false;   // показан ли диалог «варка началась, выйти из ручного?»
 
   // авто-доводка мотора «Идти в позицию»: плата за одно нажатие делает лишь ОДИН шаг к цели,
   // поэтому программа сама повторяет команду и следит за позицией, останавливаясь у цели.
@@ -74,6 +75,8 @@
         retract_pos: $("pcRetract").value, pre_wash_sec: $("pcPreWash").value,
         dwell_sec: $("pcDwell").value, shot_interval_sec: $("pcShotInterval").value,
         pause_sec: $("pcPause").value, photo_format: $("pcFormat").value,
+        trigger_mode: $("pcTrigger").value,
+        sv_from: $("pcSvFrom").value, sv_to: $("pcSvTo").value,
       };
       try {
         await api("/api/micro/settings", p);
@@ -81,6 +84,20 @@
         sentCmd("Параметры цикла сохранены");
       } catch (e) { const h = $("pcHint"); if (h) h.textContent = "ошибка: " + e.message; }
     });
+    const trig = $("pcTrigger");
+    if (trig) trig.addEventListener("change", updateTriggerFields);
+    updateTriggerFields();
+  }
+
+  // показать поля под выбранный триггер: «по СВ» -> от/до СВ; «по времени» -> пауза
+  function updateTriggerFields() {
+    const sel = $("pcTrigger"); if (!sel) return;
+    const sv = sel.value === "sv";
+    const fromW = $("pcSvFromWrap"), toW = $("pcSvToWrap"), pause = $("pcPause");
+    if (fromW) fromW.hidden = !sv;
+    if (toW) toW.hidden = !sv;
+    const pauseLabel = pause && pause.closest("label");
+    if (pauseLabel) pauseLabel.hidden = sv;   // пауза не нужна в режиме «по СВ»
   }
 
   // ---- камера: MVS SDK сам находит камеры Hikrobot ----
@@ -441,6 +458,8 @@
           sv("pcRetract", pc.retract_pos); sv("pcPreWash", pc.pre_wash_sec);
           sv("pcDwell", pc.dwell_sec); sv("pcShotInterval", pc.shot_interval_sec);
           sv("pcPause", pc.pause_sec); sv("pcFormat", pc.photo_format);
+          sv("pcTrigger", pc.trigger_mode); sv("pcSvFrom", pc.sv_from); sv("pcSvTo", pc.sv_to);
+          updateTriggerFields();
         }
         cfgSerial = cfg.camera_serial || "";
       }
@@ -560,6 +579,17 @@
       const d = await api("/api/micro/telemetry");
       const t = d.telemetry || {}, f = d.fsm || {}, e = d.ext || {};
       setConn(d.connection || {});
+
+      // подтверждение перехода в Автомат: варка вошла в стадию 3, а мы в ручном
+      if (f.manual_confirm && !manualConfirmShown) {
+        manualConfirmShown = true;
+        const yes = confirm("Началась варка (стадия " + (f.stage != null ? f.stage : 3) +
+          "). Выйти из ручного режима и запустить авто-цикл?");
+        api("/api/micro/" + (yes ? "confirm_auto" : "decline_auto")).then(() => {
+          if (yes) { const mt = $("manualToggle"); if (mt) mt.checked = false; }
+        }).catch(() => {});
+      }
+      if (!f.manual_confirm) manualConfirmShown = false;
 
       // позиции (сверху и в пульте)
       set("tPos1", um(t.pos1)); set("tPos2", um(t.pos2));

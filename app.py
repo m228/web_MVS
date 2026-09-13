@@ -328,6 +328,22 @@ def micro_cycle_skip():
     return res
 
 
+@app.get("/api/micro/confirm_auto")
+def micro_confirm_auto():
+    """Оператор подтвердил переход в Автомат при старте варки (варка вошла в стадию 3, был ручной)."""
+    res = micro.confirm_auto()
+    api_log("api.micro.confirm_auto", "Подтверждён переход в Автомат при старте варки", payload=res)
+    return res
+
+
+@app.get("/api/micro/decline_auto")
+def micro_decline_auto():
+    """Оператор отклонил переход — остаёмся в ручном режиме."""
+    res = micro.decline_auto()
+    api_log("api.micro.decline_auto", "Отклонён переход в Автомат — остаёмся в ручном", payload=res)
+    return res
+
+
 @app.get("/api/micro/settings")
 def micro_settings(
     camera_serial: str | None = None,
@@ -340,6 +356,9 @@ def micro_settings(
     shot_interval_sec: int | None = None,
     pause_sec: int | None = None,
     photo_format: str | None = None,
+    trigger_mode: str | None = None,
+    sv_from: float | None = None,
+    sv_to: float | None = None,
     host: str | None = None,
     port: int | None = None,
     unit: int | None = None,
@@ -361,6 +380,9 @@ def micro_settings(
     if shot_interval_sec is not None: pc["shot_interval_sec"] = shot_interval_sec
     if pause_sec is not None: pc["pause_sec"] = pause_sec
     if photo_format is not None: pc["photo_format"] = photo_format
+    if trigger_mode is not None: pc["trigger_mode"] = trigger_mode
+    if sv_from is not None: pc["sv_from"] = sv_from
+    if sv_to is not None: pc["sv_to"] = sv_to
     if pc:
         patch["probe_cycle"] = pc            # параметры цикла пробы (вкладка «Цикл»)
     if host is not None:

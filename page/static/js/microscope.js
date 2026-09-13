@@ -74,8 +74,9 @@
       const p = {
         retract_pos: $("pcRetract").value, pre_wash_sec: $("pcPreWash").value,
         dwell_sec: $("pcDwell").value, shot_interval_sec: $("pcShotInterval").value,
-        pause_sec: $("pcPause").value, photo_format: $("pcFormat").value,
-        trigger_mode: $("pcTrigger").value,
+        pause_sec: $("pcPause").value,
+        photo_format: $("pcFormatSw").checked ? "jpg" : "png",
+        trigger_mode: $("pcTriggerSw").checked ? "sv" : "time",
         sv_from: $("pcSvFrom").value, sv_to: $("pcSvTo").value,
       };
       try {
@@ -84,20 +85,25 @@
         sentCmd("Параметры цикла сохранены");
       } catch (e) { const h = $("pcHint"); if (h) h.textContent = "ошибка: " + e.message; }
     });
-    const trig = $("pcTrigger");
+    const trig = $("pcTriggerSw");
     if (trig) trig.addEventListener("change", updateTriggerFields);
+    const fmt = $("pcFormatSw");
+    if (fmt) fmt.addEventListener("change", () => {
+      const st = $("pcFormatState"); if (st) st.textContent = fmt.checked ? "JPG" : "PNG";
+    });
     updateTriggerFields();
   }
 
-  // показать поля под выбранный триггер: «по СВ» -> от/до СВ; «по времени» -> пауза
+  // приглушить неактуальные поля под выбранный триггер (не скрываем — видно, что неактивно):
+  // «по времени» -> СВ от/до приглушены; «по СВ» -> пауза приглушена.
   function updateTriggerFields() {
-    const sel = $("pcTrigger"); if (!sel) return;
-    const sv = sel.value === "sv";
-    const fromW = $("pcSvFromWrap"), toW = $("pcSvToWrap"), pause = $("pcPause");
-    if (fromW) fromW.hidden = !sv;
-    if (toW) toW.hidden = !sv;
-    const pauseLabel = pause && pause.closest("label");
-    if (pauseLabel) pauseLabel.hidden = sv;   // пауза не нужна в режиме «по СВ»
+    const sw = $("pcTriggerSw"); if (!sw) return;
+    const sv = sw.checked;
+    const st = $("pcTriggerState"); if (st) st.textContent = sv ? "по СВ" : "по времени";
+    const fromW = $("pcSvFromWrap"), toW = $("pcSvToWrap"), pauseW = $("pcPauseWrap");
+    if (fromW) fromW.classList.toggle("micro-dim", !sv);
+    if (toW) toW.classList.toggle("micro-dim", !sv);
+    if (pauseW) pauseW.classList.toggle("micro-dim", sv);
   }
 
   // ---- камера: MVS SDK сам находит камеры Hikrobot ----
@@ -363,7 +369,7 @@
     try {
       if (!camPhotoOn) {
         const iv = Math.max(1, parseInt($("camPhotoInterval") && $("camPhotoInterval").value, 10) || 5);
-        const fmt = ($("pcFormat") && $("pcFormat").value) || "png";
+        const fmt = ($("pcFormatSw") && $("pcFormatSw").checked) ? "jpg" : "png";
         await CAM().startPhotoSaving(camSerial, iv, "microscope", fmt); on = true;
       }
       else { await CAM().stopPhotoSaving(camSerial); on = false; }
@@ -468,8 +474,10 @@
           const pc = cfg.probe_cycle, sv = (id, v) => { const e = $(id); if (e && v != null) e.value = v; };
           sv("pcRetract", pc.retract_pos); sv("pcPreWash", pc.pre_wash_sec);
           sv("pcDwell", pc.dwell_sec); sv("pcShotInterval", pc.shot_interval_sec);
-          sv("pcPause", pc.pause_sec); sv("pcFormat", pc.photo_format);
-          sv("pcTrigger", pc.trigger_mode); sv("pcSvFrom", pc.sv_from); sv("pcSvTo", pc.sv_to);
+          sv("pcPause", pc.pause_sec); sv("pcSvFrom", pc.sv_from); sv("pcSvTo", pc.sv_to);
+          const trSw = $("pcTriggerSw"); if (trSw) trSw.checked = (pc.trigger_mode === "sv");
+          const fmSw = $("pcFormatSw"); if (fmSw) fmSw.checked = (pc.photo_format === "jpg");
+          const fmSt = $("pcFormatState"); if (fmSt) fmSt.textContent = (pc.photo_format === "jpg") ? "JPG" : "PNG";
           updateTriggerFields();
         }
         cfgSerial = cfg.camera_serial || "";

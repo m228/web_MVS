@@ -3380,10 +3380,14 @@ input.micro-cam-num { width: 56px; min-width: 0; flex: 0 0 auto; padding: 4px 5p
 .micro-cycle-tiles { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; margin-top: 10px; }
 .micro-cycle-tiles .micro-tile { background: var(--surface-elevated); }
 .micro-cycle-hint { margin: 10px 0 0; font-size: 0.82em; color: var(--muted); }
-/* компактно: параметры цикла жёстко в 2 столбика */
-.micro-cycle-params { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px 16px; }
-.micro-cycle-f--wide { grid-column: 1 / -1; }
+/* заголовок «Параметры цикла» + переключатель триггера справа */
+.micro-cycle-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+/* два явных столбика параметров цикла */
+.micro-cycle-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 0 16px; align-items: start; margin-top: 4px; }
+.micro-cycle-col { display: flex; flex-direction: column; gap: 8px; }
 .micro-cycle-f { display: grid; grid-template-columns: 1fr 88px; align-items: center; gap: 8px; font-size: 0.88em; }
+/* строка «Формат скринов» с тумблером справа */
+.micro-cycle-fmt { display: flex; align-items: center; justify-content: space-between; }
 .micro-cycle-f span { color: var(--muted); }
 .micro-cycle-f input { width: 100%; padding: 5px 7px; text-align: right; -moz-appearance: textfield; }
 .micro-cycle-f input::-webkit-outer-spin-button, .micro-cycle-f input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }

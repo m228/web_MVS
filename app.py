@@ -10,7 +10,7 @@ import threading
 from contextlib import asynccontextmanager
 from urllib.parse import urlparse
 
-from fastapi import FastAPI, Query
+from fastapi import FastAPI, Query, Body
 from fastapi.responses import FileResponse, StreamingResponse, Response, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -326,6 +326,25 @@ def micro_cycle_skip():
     res = micro.cycle_skip()
     api_log("api.micro.cycle_skip", "Перепрыг шага цикла", payload=res)
     return res
+
+
+@app.get("/api/micro/config_dump")
+def micro_config_dump():
+    """Текущий полный конфиг платы (для просмотра/скачивания дампа)."""
+    return plate_config.load()
+
+
+@app.post("/api/micro/config_import")
+def micro_config_import(payload: dict = Body(...)):
+    """Импорт дампа: перезаписать конфиг целиком (с backup «before-import») и перезапустить автомат."""
+    try:
+        plate_config.replace_all(payload)
+    except Exception as e:
+        api_log("api.micro.config_import", "Ошибка импорта дампа", "warn", {"error": str(e)})
+        return {"status": "error", "error": str(e)}
+    data = micro.reload()
+    api_log("api.micro.config_import", "Импортирован дамп настроек", payload={"keys": list(payload.keys())})
+    return {"status": "ok", "host": data.get("host") if data else None}
 
 
 @app.get("/api/micro/confirm_auto")

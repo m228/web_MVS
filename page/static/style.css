@@ -3303,6 +3303,10 @@ html {
 .micro-color-two .micro-color-col + .micro-color-col { border-left: 1px solid var(--border); padding-left: 16px; }
 /* приглушение неактивного параметра (визуально, клики не блокирует) */
 .micro-dim { opacity: 0.45; transition: opacity 0.15s ease; }
+/* просмотр дампа настроек */
+.micro-dump-view { margin-top: 10px; max-height: 340px; overflow: auto; background: var(--surface-muted);
+  border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; font-size: 0.82em;
+  font-family: ui-monospace, "Cascadia Code", Consolas, monospace; white-space: pre; color: var(--text); }
 
 /* телеметрия камеры — компактной строкой ПОД видео (5 ячеек + значки фото/видео) */
 .micro-cam-tele { display: flex; flex-wrap: wrap; align-items: stretch; gap: 6px; margin-top: 8px; }

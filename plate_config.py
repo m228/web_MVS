@@ -16,6 +16,7 @@ from logger import log_event
 from paths import DATA_DIR
 
 CONFIG_PATH = DATA_DIR / "plate_config.json"
+BACKUP_PATH = DATA_DIR / "plate_config.backup.json"   # копия «before-import» перед загрузкой дампа
 
 # --- значения по умолчанию (ПЛЕЙСХОЛДЕРЫ для SP/SVSP — Макс подставит боевые) ---
 DEFAULTS = {
@@ -324,4 +325,30 @@ def save(patch):
                   {"keys": list((patch or {}).keys())})
     except Exception as e:
         log_event("plate_config", "Не удалось сохранить plate_config.json", "warn", {"error": str(e)})
+    return load()
+
+
+def backup():
+    """Сохранить копию текущего plate_config.json в plate_config.backup.json (before-import)."""
+    try:
+        if CONFIG_PATH.is_file():
+            BACKUP_PATH.write_text(CONFIG_PATH.read_text(encoding="utf-8"), encoding="utf-8")
+            return True
+    except Exception as e:
+        log_event("plate_config", "Не удалось сохранить backup конфига", "warn", {"error": str(e)})
+    return False
+
+
+def replace_all(new_config):
+    """Перезаписать конфиг ЦЕЛИКОМ (импорт дампа) — не merge. Перед записью делает backup().
+    Пишет атомарно. Возвращает собранный конфиг (load())."""
+    if not isinstance(new_config, dict) or not new_config:
+        raise ValueError("дамп должен быть непустым JSON-объектом")
+    backup()
+    CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    tmp = CONFIG_PATH.parent / (CONFIG_PATH.name + ".tmp")
+    tmp.write_text(json.dumps(new_config, ensure_ascii=False, indent=2), encoding="utf-8")
+    os.replace(tmp, CONFIG_PATH)
+    log_event("plate_config", "Импортирован дамп настроек (backup сохранён)", "info",
+              {"keys": list(new_config.keys())})
     return load()

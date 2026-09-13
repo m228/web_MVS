@@ -163,6 +163,10 @@
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/></svg>
                 <span>Инфо</span>
               </button>
+              <button type="button" class="micro-ptab" data-ptab="dump" title="Дамп настроек: сохранить/загрузить/посмотреть весь конфиг платы" aria-label="Дамп настроек">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12M8 11l4 4 4-4M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/></svg>
+                <span>Дамп</span>
+              </button>
             </div>
 
             <p class="micro-panel__hint" id="manualHint">Включи «Ручной режим», чтобы управлять моторами и выходами.</p>
@@ -517,6 +521,21 @@
                     <span>Позиция М1: <b id="dbgPos">—</b></span>
                   </div>
                 </div>
+              </div>
+
+              <!-- Дамп настроек: сохранить/загрузить/посмотреть конфиг платы -->
+              <div class="micro-ppane hidden" data-ppane="dump">
+                <div class="micro-sub__title">Дамп настроек платы</div>
+                <p class="micro-info__lead">Полный конфиг платы (цикл, СВ-таблица, адреса, моторы). Скачай перед экспериментами — потом сможешь откатиться, загрузив файл обратно.</p>
+                <div class="micro-cycle-btns">
+                  <button type="button" id="dumpShow" class="toolbar-btn toolbar-btn--neutral">Показать текущий</button>
+                  <button type="button" id="dumpDownload" class="toolbar-btn toolbar-btn--primary">Скачать .json</button>
+                  <button type="button" id="dumpLoadBtn" class="toolbar-btn toolbar-btn--neutral">Загрузить .json</button>
+                  <input type="file" id="dumpFile" accept="application/json,.json" hidden />
+                </div>
+                <span class="micro-conn-hint" id="dumpHint"></span>
+                <pre class="micro-dump-view" id="dumpView" hidden></pre>
+                <p class="micro-plc-note">Перед загрузкой текущий конфиг автоматически сохраняется рядом в <code>plate_config.backup.json</code>. Загрузка перезапускает автомат.</p>
               </div>
 
             </div>

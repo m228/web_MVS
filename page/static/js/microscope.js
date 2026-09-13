@@ -345,6 +345,66 @@
     if (pal) pal.classList.toggle("micro-dim", !pal.value);
   }
 
+  // вкладка «Дамп»: показать/скачать/загрузить полный конфиг платы
+  function wireDump() {
+    if (!$("dumpShow")) return;
+    const hint = (t) => { const h = $("dumpHint"); if (h) h.textContent = t || ""; };
+
+    $("dumpShow").addEventListener("click", async () => {
+      try {
+        const cfg = await api("/api/micro/config_dump");
+        const view = $("dumpView");
+        if (view) { view.textContent = JSON.stringify(cfg, null, 2); view.hidden = false; }
+        hint("текущий конфиг показан ниже");
+      } catch (e) { hint("ошибка: " + e.message); }
+    });
+
+    $("dumpDownload").addEventListener("click", async () => {
+      try {
+        const cfg = await api("/api/micro/config_dump");
+        const blob = new Blob([JSON.stringify(cfg, null, 2)], { type: "application/json" });
+        const url = URL.createObjectURL(blob);
+        const now = new Date();
+        const p = (n) => String(n).padStart(2, "0");
+        const stamp = now.getFullYear() + p(now.getMonth() + 1) + p(now.getDate()) + "_" + p(now.getHours()) + p(now.getMinutes());
+        const a = document.createElement("a");
+        a.href = url; a.download = "plate_config_" + stamp + ".json";
+        document.body.appendChild(a); a.click(); a.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
+        hint("файл скачан: plate_config_" + stamp + ".json");
+        sentCmd("Дамп настроек скачан");
+      } catch (e) { hint("ошибка: " + e.message); }
+    });
+
+    $("dumpLoadBtn").addEventListener("click", () => $("dumpFile").click());
+    $("dumpFile").addEventListener("change", async (ev) => {
+      const file = ev.target.files && ev.target.files[0];
+      if (!file) return;
+      try {
+        const text = await file.text();
+        const data = JSON.parse(text);   // упадёт, если файл не JSON
+        if (!data || typeof data !== "object" || Array.isArray(data)) throw new Error("файл не похож на конфиг");
+        if (!window.confirm("Загрузить настройки из «" + file.name + "»?\n\nТекущие будут перезаписаны (копия сохранится в plate_config.backup.json), автомат перезапустится.")) {
+          ev.target.value = ""; return;
+        }
+        const res = await fetch("/api/micro/config_import", {
+          method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(data),
+        }).then((r) => r.json());
+        if (res && res.status === "ok") {
+          hint("дамп загружен, автомат перезапущен");
+          sentCmd("Дамп настроек загружен: " + file.name);
+          const view = $("dumpView"); if (view) { view.textContent = JSON.stringify(data, null, 2); view.hidden = false; }
+        } else {
+          hint("ошибка импорта: " + ((res && res.error) || "неизвестно"));
+        }
+      } catch (e) {
+        hint("ошибка чтения файла: " + e.message);
+      } finally {
+        ev.target.value = "";   // чтобы повторный выбор того же файла срабатывал
+      }
+    });
+  }
+
   function camApply() {
     if (!camSerial) return;
     if (camConnected) camConnect();   // перезапуск потока с новыми параметрами
@@ -774,6 +834,7 @@
     if (camImg) camImg.addEventListener("error", () => { if (camConnected) camStop(); });
     wireCamFullscreen();
     wireColor();
+    wireDump();
 
     // таблица подвода СВ->зазор (вкладка «СВ/МКМ»)
     if ($("svspAdd")) $("svspAdd").addEventListener("click", () => addSvspRow("", ""));

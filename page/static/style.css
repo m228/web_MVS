@@ -3192,6 +3192,8 @@ html {
 .micro-switch--trigger input:checked + .micro-switch__track { background: var(--success-soft); border-color: var(--success); }
 .micro-switch--trigger input:checked + .micro-switch__track .micro-switch__thumb { background: var(--success); }
 .micro-switch--trigger.is-sv .micro-switch__label { color: var(--success); }
+/* текст слева, тумблер справа (в one-flex через order) — тумблер не «прыгает» при смене подписи */
+.micro-switch--trigger .micro-switch__label { order: -1; }
 
 /* режимный переключатель: слева — Автомат (зелёный), справа — Ручной режим (жёлтый) */
 .micro-switch--manual .micro-switch__track { background: var(--success-soft); border-color: var(--success); }

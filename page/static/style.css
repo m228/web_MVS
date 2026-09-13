@@ -3269,8 +3269,10 @@ html {
 .micro-cam-mode-note { margin: 0 0 12px; font-size: 0.8em; }
 
 /* вкладка «Цвет»: компактные ползунки/поля цветокоррекции */
-.micro-color-grid { display: flex; flex-direction: column; gap: 6px; margin-top: 4px; }
-.micro-color-f { display: grid; grid-template-columns: 68px 1fr 46px; align-items: center; gap: 8px; font-size: 0.85em; }
+/* компактно: тон/свет в 2 колонки, баланс белого — в 3 */
+.micro-color-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 6px 14px; margin-top: 4px; }
+#wbManual.micro-color-grid { grid-template-columns: repeat(3, 1fr); }
+.micro-color-f { display: grid; grid-template-columns: 58px 1fr 42px; align-items: center; gap: 6px; font-size: 0.85em; }
 .micro-color-f span { color: var(--muted); }
 .micro-color-f input[type="range"] { width: 100%; }
 .micro-color-f b { text-align: right; font-variant-numeric: tabular-nums; }

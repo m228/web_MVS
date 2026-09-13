@@ -338,7 +338,7 @@ class MicroscopeFSM:
                         label = "Ожидание — жду СВ в диапазоне %g–%g (сейчас %.1f)" % (
                             self._sv_from, self._sv_to, self.sv)
                     else:
-                        label = "Ожидание — жду смену СВ на ±1 от %d (сейчас %.1f)" % (
+                        label = "Ожидание — жду ±1 от %.1f (сейчас %.1f)" % (
                             self._last_sv_shot, self.sv)
                 else:
                     left = max(0, self._pause_sec * 10 - self.cycle_t) // 10
@@ -435,12 +435,13 @@ class MicroscopeFSM:
             if self.sw0 and CYCLE_STAGE_MIN <= self.stage <= CYCLE_STAGE_MAX:
                 if self.mode == 0:
                     if self._trigger_mode == "sv":
-                        cur = int(self.sv)   # текущее ЦЕЛОЕ СВ (floor для sv>=0)
-                        # проба на каждом НОВОМ целом СВ в диапазоне — и при росте, и при падении
-                        # (СВ может снижаться при расчистке, это тоже надо снять). Порог = ±1 целое.
-                        if (self._sv_from <= cur <= self._sv_to
-                                and (self._last_sv_shot is None or cur != self._last_sv_shot)):
-                            self._last_sv_shot = cur     # на этом целом СВ пробу уже взяли
+                        # запоминаем ТОЧНОЕ СВ на старте цикла и снимаем следующую пробу, когда
+                        # СВ отклонилось от него на >=1 в ЛЮБУЮ сторону (рост или падение —
+                        # напр. 87.0 -> 86.0). Не по целым: разница считается от точки запуска.
+                        if (self._sv_from <= self.sv <= self._sv_to
+                                and (self._last_sv_shot is None
+                                     or abs(self.sv - self._last_sv_shot) >= 1.0)):
+                            self._last_sv_shot = self.sv   # точка отсчёта = СВ на старте пробы
                             self.mode = 20
                             self.t = 0
                             self.cycle_t = 0

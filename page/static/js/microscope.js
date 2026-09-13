@@ -808,7 +808,6 @@
     const sw = document.querySelector(".micro-switch--manual");
     if (sw) sw.classList.toggle("is-manual", on);
     $("microPult").classList.toggle("is-locked", !on);   // гейт панелей М1/М2/LED/DQ
-    $("manualHint").classList.toggle("hidden", on);
   }
 
   // ---- кнопки ----

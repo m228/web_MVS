@@ -325,7 +325,25 @@ class MicroscopeFSM:
             elif m == 24:
                 label = "Возврат в %d мкм" % self._retract_pos
             else:
-                label = "Ожидание"
+                # Ожидание — поясняем ЧЕГО ждём (чтобы было видно, продолжится ли авто-цикл)
+                stage_in = CYCLE_STAGE_MIN <= self.stage <= CYCLE_STAGE_MAX
+                if self.manual:
+                    label = "Ручной режим — авто-цикл не идёт"
+                elif not self.sw0:
+                    label = "Ожидание — «Автомат» выключен"
+                elif not stage_in:
+                    label = "Ожидание — варка не идёт (стадия %d, нужно 3–9)" % self.stage
+                elif self._trigger_mode == "sv":
+                    cur = int(self.sv)
+                    nxt = cur + 1 if (self._last_sv_shot is not None and cur >= self._last_sv_shot) \
+                        else max(cur, int(self._sv_from))
+                    if nxt > self._sv_to:
+                        label = "Ожидание — СВ прошло диапазон (до %g)" % self._sv_to
+                    else:
+                        label = "Ожидание — жду СВ %d (сейчас %.1f)" % (nxt, self.sv)
+                else:
+                    left = max(0, self._pause_sec * 10 - self.cycle_t) // 10
+                    label = "Ожидание — след. проба через %d с" % left
             return {
                 "mode": m,
                 "step": STEP_NAMES.get(m, str(m)),

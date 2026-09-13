@@ -789,7 +789,7 @@
     if ($("svCycleNow")) $("svCycleNow").addEventListener("click", async () => {
       try {
         await api("/api/micro/command", { cmd: 100 });
-        const h = $("svDebugHint"); if (h) h.textContent = "цикл запущен — смотри «Шаг» ниже (10→12→13)";
+        const h = $("svDebugHint"); if (h) h.textContent = "цикл запущен — смотри «Шаг» ниже (20→21→22→23→24)";
         sentCmd("DEBUG запуск цикла (cmd 100)");
       } catch (e) { const h = $("svDebugHint"); if (h) h.textContent = "ошибка: " + e.message; }
     });

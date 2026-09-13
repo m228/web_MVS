@@ -619,8 +619,7 @@
       set("m2Pos", um(lastPos[2]));
       set("m1Sensor", um(e.sensor)); set("m1Steps", num(e.m1_steps));
       set("m2Steps", num(e.m2_steps)); set("m2State", num(e.m2_state));
-      set("tSensor", um(e.sensor)); set("tEnc", um(e.m1_enc)); set("tSlip", um(e.m1_slip));
-      set("tSteps", pair(e.m1_steps, e.m2_steps));
+      set("tSensor", um(e.sensor));
 
       // питание / термо
       set("tTemp", t.temp == null ? "—" : t.temp + " °C");
@@ -658,10 +657,7 @@
       set("dbgPos", um(t.pos1));
 
       // система
-      set("tVer", num(e.version));
-      set("tModVer", e.module_ver == null ? "—" : (HW[e.module_ver] || e.module_ver));
       set("tSerial", num(e.serial));
-      set("tCycle", (e.cycle_us == null) ? "—" : e.cycle_us + " / " + num(e.cycle_peak_us) + " мкс");
       set("tUptime", upt(e.uptime_s));
 
       // данные с контроллера (ПЛК) — источник аппарата по Modbus (sv_source). Пока нет данных -> «(—)».
@@ -688,7 +684,6 @@
       set("maPbot", bar(pv.press_bot));
       set("maCurrent", pv.current == null ? "—" : Number(pv.current).toFixed(1) + " A");
       set("maLevel", pv.level == null ? "—" : Number(pv.level).toFixed(2) + " %");
-      set("maStage", pv.stage == null ? "—" : stageLabel(pv.stage));
       const fill = document.getElementById("maFill");
       if (fill) {
         const lv = pv.level == null ? 0 : Math.max(0, Math.min(100, Number(pv.level)));
@@ -696,8 +691,6 @@
         fill.setAttribute("y", base - h);
         fill.setAttribute("height", h);
       }
-      const mab = $("maBadge");
-      if (mab) { mab.textContent = pb ? pb.textContent : ""; mab.className = pb ? pb.className : "micro-plc-badge"; }
 
       // бейджи моторов (разрешение/направление)
       motorBadge("1", e.m1_enable, e.m1_dir);

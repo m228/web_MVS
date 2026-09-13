@@ -155,10 +155,6 @@
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M18.4 5.6l-2.1 2.1M7.7 16.3l-2.1 2.1"/></svg>
                 <span>Настр</span>
               </button>
-              <button type="button" class="micro-ptab" data-ptab="app" title="Вакуум-аппарат (данные с ПЛК)" aria-label="Вакуум-аппарат">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 4h10v14a3 3 0 0 1-3 3h-4a3 3 0 0 1-3-3V4zM7 4a2 2 0 0 1 0-2h10a2 2 0 0 1 0 2M7 15h10"/></svg>
-                <span>Аппарат</span>
-              </button>
               <button type="button" class="micro-ptab" data-ptab="svsp" title="Таблица подвода: СВ → зазор" aria-label="Таблица СВ/МКМ">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 4h16v16H4zM4 10h16M4 15h16M10 10v10"/></svg>
                 <span>СВ/МКМ</span>
@@ -347,31 +343,6 @@
               </div>
 
               <!-- Мнемосхема вакуум-аппарата (данные с ПЛК) -->
-              <div class="micro-ppane hidden" data-ppane="app">
-                <div class="micro-sub__title">Вакуум-аппарат <span class="micro-plc-badge" id="maBadge">нет данных</span></div>
-                <div class="micro-app">
-                  <svg class="micro-app-svg" viewBox="0 0 180 240" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Вакуум-аппарат">
-                    <ellipse cx="90" cy="210" rx="70" ry="16" fill="#9aa2ad"/>
-                    <rect x="20" y="30" width="140" height="180" fill="#b4bcc6"/>
-                    <rect id="maFill" x="20" y="200" width="140" height="10" fill="#d89b34"/>
-                    <ellipse cx="90" cy="30" rx="70" ry="16" fill="#cdd3db" stroke="#9aa2ad" stroke-width="1.5"/>
-                    <rect x="27" y="40" width="86" height="20" rx="4" fill="rgba(0,0,0,0.32)"/>
-                    <text id="maPtop" x="70" y="54" text-anchor="middle" font-size="12" font-weight="600" fill="#e7eefb">—</text>
-                    <rect x="27" y="188" width="86" height="20" rx="4" fill="rgba(0,0,0,0.32)"/>
-                    <text id="maPbot" x="70" y="202" text-anchor="middle" font-size="12" font-weight="600" fill="#e7eefb">—</text>
-                    <text id="maBrix" x="90" y="115" text-anchor="middle" font-size="30" font-weight="700" fill="#1d9e75">—</text>
-                    <text x="90" y="133" text-anchor="middle" font-size="13" fill="#0f6e56">brix</text>
-                    <text id="maTemp" x="90" y="160" text-anchor="middle" font-size="18" font-weight="600" fill="#ba7517">—</text>
-                  </svg>
-                  <div class="micro-app-tiles">
-                    <div class="micro-tile"><span>Ток циркулятора</span><b id="maCurrent">—</b></div>
-                    <div class="micro-tile"><span>Уровень</span><b id="maLevel">—</b></div>
-                    <div class="micro-tile"><span>Стадия варки</span><b id="maStage">—</b></div>
-                  </div>
-                </div>
-                <p class="micro-plc-note">данные с контроллера (ПЛК); адреса — в <code>plate_config.json → sv_source</code></p>
-              </div>
-
               <!-- Таблица подвода СВ → зазор (отдельная вкладка) -->
               <div class="micro-ppane hidden" data-ppane="svsp">
                 <div class="micro-sub__title">Таблица подвода: СВ → зазор
@@ -561,57 +532,63 @@
           <div class="micro-tele-cols">
             <div class="micro-tele-col">
               <p class="micro-tele-group">Позиции</p>
-              <div class="micro-tiles">
+              <div class="micro-tiles micro-tiles--one">
                 <div class="micro-tile"><span>М1 · подвод/LED</span><b id="tPos1">—</b></div>
                 <div class="micro-tile"><span>М2 · фокус</span><b id="tPos2">—</b></div>
                 <div class="micro-tile"><span>Датчик перемещ.</span><b id="tSensor">—</b></div>
-                <div class="micro-tile"><span>Энкодер М1</span><b id="tEnc">—</b></div>
-                <div class="micro-tile"><span>Расхождение М1</span><b id="tSlip">—</b></div>
-                <div class="micro-tile"><span>Шаги М1 / М2</span><b id="tSteps">—</b></div>
-              </div>
-            </div>
-            <div class="micro-tele-col">
-              <p class="micro-tele-group">Питание · температура</p>
-              <div class="micro-tiles">
-                <div class="micro-tile"><span>Температура</span><b id="tTemp">—</b></div>
-                <div class="micro-tile"><span>Питание 12В</span><b id="tU12v">—</b></div>
-                <div class="micro-tile"><span>Об. FAN1 / FAN2</span><b id="tFanPair">—</b></div>
-              </div>
-              <p class="micro-tele-group">Входы / выходы</p>
-              <div class="micro-tiles">
-                <div class="micro-tile"><span>Входы DI</span><b id="tDi">—</b></div>
-                <div class="micro-tile"><span>Выходы DQ</span><b id="tDq">—</b></div>
               </div>
             </div>
             <div class="micro-tele-col">
               <p class="micro-tele-group">Автомат</p>
-              <div class="micro-tiles">
+              <div class="micro-tiles micro-tiles--one">
                 <div class="micro-tile"><span>СВ (Brix)</span><b id="tSv">—</b></div>
                 <div class="micro-tile"><span>Шаг</span><b id="microStep">—</b></div>
                 <div class="micro-tile"><span>Клапан трубки</span><b id="valveTube">—</b></div>
                 <div class="micro-tile"><span>Клапан стекла</span><b id="valveGlass">—</b></div>
+                <div class="micro-tile"><span>Входы DI</span><b id="tDi">—</b></div>
+                <div class="micro-tile"><span>Выходы DQ</span><b id="tDq">—</b></div>
                 <div class="micro-tile micro-tile--hidden"><span>Режим</span><b id="microMode">—</b></div>
               </div>
             </div>
             <div class="micro-tele-col">
               <p class="micro-tele-group">Система</p>
-              <div class="micro-tiles">
-                <div class="micro-tile"><span>Версия ПО</span><b id="tVer">—</b></div>
-                <div class="micro-tile"><span>Версия HW</span><b id="tModVer">—</b></div>
+              <div class="micro-tiles micro-tiles--one">
                 <div class="micro-tile"><span>Серийник</span><b id="tSerial">—</b></div>
-                <div class="micro-tile"><span>Цикл платы</span><b id="tCycle">—</b></div>
                 <div class="micro-tile"><span>Аптайм</span><b id="tUptime">—</b></div>
+                <div class="micro-tile"><span>Температура</span><b id="tTemp">—</b></div>
+                <div class="micro-tile"><span>Питание 12В</span><b id="tU12v">—</b></div>
+                <div class="micro-tile"><span>Об. FAN1 / FAN2</span><b id="tFanPair">—</b></div>
               </div>
             </div>
             <div class="micro-tele-col">
-              <p class="micro-tele-group">С контроллера (ПЛК) <span class="micro-plc-badge" id="plcBadge" title="Источник данных аппарата по Modbus">нет данных</span></p>
-              <div class="micro-tiles">
+              <p class="micro-tele-group">Вакуум-аппарат (ПЛК) <span class="micro-plc-badge" id="plcBadge" title="Источник данных аппарата по Modbus">нет данных</span></p>
+              <div class="micro-tiles micro-tiles--one">
                 <div class="micro-tile"><span>СВ (Brix)</span><b id="pcSv">(—)</b></div>
                 <div class="micro-tile"><span>Стадия варки</span><b id="pcStage">(—)</b></div>
                 <div class="micro-tile"><span>Температура аппарата</span><b id="pcTemp">(—)</b></div>
                 <div class="micro-tile"><span>Разрежение</span><b id="pcVacuum">(—)</b></div>
+                <div class="micro-tile"><span>Ток циркулятора</span><b id="maCurrent">—</b></div>
+                <div class="micro-tile"><span>Уровень</span><b id="maLevel">—</b></div>
               </div>
-              <p class="micro-plc-note">адреса Modbus контроллера задаются в <code>plate_config.json → sv_source</code></p>
+              <p class="micro-plc-note">адреса Modbus в <code>plate_config.json → sv_source</code></p>
+            </div>
+            <div class="micro-tele-col micro-tele-col--app">
+              <p class="micro-tele-group">Вакуум-аппарат</p>
+              <div class="micro-app micro-app--tele">
+                <svg class="micro-app-svg" viewBox="0 0 180 240" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Вакуум-аппарат">
+                  <ellipse cx="90" cy="210" rx="70" ry="16" fill="#9aa2ad"/>
+                  <rect x="20" y="30" width="140" height="180" fill="#b4bcc6"/>
+                  <rect id="maFill" x="20" y="200" width="140" height="10" fill="#d89b34"/>
+                  <ellipse cx="90" cy="30" rx="70" ry="16" fill="#cdd3db" stroke="#9aa2ad" stroke-width="1.5"/>
+                  <rect x="27" y="40" width="86" height="20" rx="4" fill="rgba(0,0,0,0.32)"/>
+                  <text id="maPtop" x="70" y="54" text-anchor="middle" font-size="12" font-weight="600" fill="#e7eefb">—</text>
+                  <rect x="27" y="188" width="86" height="20" rx="4" fill="rgba(0,0,0,0.32)"/>
+                  <text id="maPbot" x="70" y="202" text-anchor="middle" font-size="12" font-weight="600" fill="#e7eefb">—</text>
+                  <text id="maBrix" x="90" y="115" text-anchor="middle" font-size="30" font-weight="700" fill="#1d9e75">—</text>
+                  <text x="90" y="133" text-anchor="middle" font-size="13" fill="#0f6e56">brix</text>
+                  <text id="maTemp" x="90" y="160" text-anchor="middle" font-size="18" font-weight="600" fill="#ba7517">—</text>
+                </svg>
+              </div>
             </div>
           </div>
         </section>

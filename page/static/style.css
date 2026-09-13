@@ -3165,6 +3165,10 @@ html {
 .micro-tele-group:first-of-type { margin-top: 6px; }
 .micro-tiles { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
 .micro-tiles--wide { grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); }
+.micro-tiles--one { grid-template-columns: 1fr; }   /* телеметрия: плитки в один столбик */
+/* колонка с рисунком вакуум-аппарата в телеметрии */
+.micro-tele-col--app .micro-app--tele { align-items: flex-start; margin-top: 0; }
+.micro-tele-col--app .micro-app-svg { width: 150px; max-width: 100%; }
 .micro-tile { background: var(--surface-muted); border-radius: 8px; padding: 8px 10px; display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .micro-tile span { color: var(--muted); font-size: 0.78em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .micro-tile b { font-weight: 600; font-variant-numeric: tabular-nums; }
@@ -3506,4 +3510,3 @@ input.micro-cam-num { width: 56px; min-width: 0; flex: 0 0 auto; padding: 4px 5p
 /* --- мнемосхема вакуум-аппарата (вкладка 📊) --- */
 .micro-app { display: flex; flex-direction: column; align-items: center; gap: 12px; margin-top: 6px; }
 .micro-app-svg { width: 170px; max-width: 60%; height: auto; }
-.micro-app-tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 8px; width: 100%; }

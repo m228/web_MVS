@@ -100,6 +100,7 @@
     const sw = $("pcTriggerSw"); if (!sw) return;
     const sv = sw.checked;
     const st = $("pcTriggerState"); if (st) st.textContent = sv ? "по СВ" : "по времени";
+    const swLabel = sw.closest(".micro-switch"); if (swLabel) swLabel.classList.toggle("is-sv", sv);
     const fromW = $("pcSvFromWrap"), toW = $("pcSvToWrap"), pauseW = $("pcPauseWrap");
     if (fromW) fromW.classList.toggle("micro-dim", !sv);
     if (toW) toW.classList.toggle("micro-dim", !sv);

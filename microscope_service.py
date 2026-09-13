@@ -156,6 +156,16 @@ class MicroscopeService:
         plate_config.save(patch)
         return self.reload()
 
+    def set_trigger_mode(self, mode):
+        """Сменить триггер пробы (time/sv) сразу, без перезапуска платы, и запомнить в конфиг."""
+        mode = "sv" if str(mode) == "sv" else "time"
+        res = self.fsm.set_trigger_mode(mode) if self.fsm else {"trigger_mode": mode}
+        plate_config.save({"probe_cycle": {"trigger_mode": mode}})
+        if self.cfg is not None:
+            self.cfg.setdefault("probe_cycle", {})["trigger_mode"] = mode
+        log_event("microscope_service", "Триггер пробы: " + mode, "info", {"trigger_mode": mode})
+        return res
+
     def set_cycle_autostart(self, on):
         """Запомнить галочку «Автостарт цикла» в конфиг БЕЗ перезапуска платы."""
         on = bool(on)

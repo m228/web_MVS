@@ -87,7 +87,12 @@
       } catch (e) { const h = $("pcHint"); if (h) h.textContent = "ошибка: " + e.message; }
     });
     const trig = $("pcTriggerSw");
-    if (trig) trig.addEventListener("change", updateTriggerFields);
+    if (trig) trig.addEventListener("change", () => {
+      updateTriggerFields();
+      const mode = trig.checked ? "sv" : "time";
+      api("/api/micro/trigger_mode", { mode }).catch(() => {});   // применяется сразу
+      sentCmd("Триггер пробы: " + (trig.checked ? "по СВ" : "по времени"));
+    });
     const fmt = $("pcFormatSw");
     if (fmt) fmt.addEventListener("change", () => {
       const st = $("pcFormatState"); if (st) st.textContent = fmt.checked ? "JPG" : "PNG";

@@ -226,6 +226,12 @@ def micro_cycle_autostart(on: int):
     return micro.set_cycle_autostart(bool(on))
 
 
+@app.get("/api/micro/trigger_mode")
+def micro_trigger_mode(mode: str):
+    # переключатель триггера пробы time/sv — применяется сразу (без перезапуска платы)
+    return micro.set_trigger_mode(mode)
+
+
 @app.get("/api/micro/cyclic")
 def micro_cyclic(on: int):
     micro.set_cyclic(bool(on))

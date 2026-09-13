@@ -161,6 +161,15 @@ class MicroscopeFSM:
         with self._lock:
             self.sw0 = bool(on)
 
+    def set_trigger_mode(self, mode):
+        """Сменить триггер пробы на лету: "time" или "sv". Сбрасываем счётчики отсчёта
+        (пауза и точку СВ), чтобы новый режим начал считать заново, а не «держал» старое."""
+        with self._lock:
+            self._trigger_mode = "sv" if str(mode) == "sv" else "time"
+            self.cycle_t = 0
+            self._last_sv_shot = None
+            return {"trigger_mode": self._trigger_mode}
+
     def start_sample(self):
         """Кнопка «Взять пробу»: запустить последовательность (отвод→промывка→подвод→
         выдержка→возврат) с шага 20. Если стоит Ручной режим — снимаем его безопасно и

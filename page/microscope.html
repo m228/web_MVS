@@ -143,13 +143,9 @@
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3a9 9 0 1 0 0 18 2.5 2.5 0 0 0 2-4 2.5 2.5 0 0 1 2-4h1a4 4 0 0 0 4-4 9 9 0 0 0-9-6z"/><circle cx="7.5" cy="10.5" r="1"/><circle cx="12" cy="7.5" r="1"/><circle cx="16.5" cy="10.5" r="1"/></svg>
                 <span>Цвет</span>
               </button>
-              <button type="button" class="micro-ptab" data-ptab="m1" title="Мотор М1 · подвод / LED" aria-label="Мотор М1">
+              <button type="button" class="micro-ptab" data-ptab="motors" title="Моторы М1 (подвод) и М2 (фокус)" aria-label="Моторы">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4v16M7 9l5-5 5 5M7 15l5 5 5-5"/></svg>
-                <span>М1</span>
-              </button>
-              <button type="button" class="micro-ptab" data-ptab="m2" title="Мотор М2 · фокус" aria-label="Мотор М2">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/></svg>
-                <span>М2</span>
+                <span>Моторы</span>
               </button>
               <button type="button" class="micro-ptab" data-ptab="led" title="LED · клапаны/выходы DQ" aria-label="LED и DQ">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 18h6M10 21h4M12 3a6 6 0 0 1 4 10.5c-.7.7-1 1.5-1 2.5H9c0-1-.3-1.8-1-2.5A6 6 0 0 1 12 3z"/></svg>
@@ -231,88 +227,64 @@
               </div>
 
               <!-- Мотор М1 -->
-              <div class="micro-ppane micro-gated hidden" data-ppane="m1">
-                <div class="micro-motor" data-motor="1">
-                  <div class="micro-motor__head">
-                    <span class="micro-motor__title">Мотор М1 · подвод / LED</span>
-                    <span class="micro-badges">
-                      <button type="button" class="micro-badge" data-en="1" title="Разрешение мотора">разрешён</button>
-                      <button type="button" class="micro-badge" data-dir="1" title="Направление">вперёд</button>
-                    </span>
+              <!-- Моторы М1 и М2 — два блока в 2 столбика -->
+              <div class="micro-ppane micro-gated hidden" data-ppane="motors">
+                <div class="micro-motors-grid">
+                  <div class="micro-motor" data-motor="1">
+                    <div class="micro-motor__head">
+                      <span class="micro-motor__title">Мотор М1 · подвод / LED</span>
+                      <span class="micro-badges">
+                        <button type="button" class="micro-badge" data-en="1" title="Разрешение мотора">разрешён</button>
+                        <button type="button" class="micro-badge" data-dir="1" title="Направление">вперёд</button>
+                      </span>
+                    </div>
+                    <div class="micro-motor__pos">
+                      <span>позиция <b id="m1Pos">—</b></span>
+                      <span>датчик <b id="m1Sensor">—</b></span>
+                      <span>шаги <b id="m1Steps">—</b></span>
+                    </div>
+                    <div class="micro-row">
+                      <span class="micro-row__lab">Идти в</span>
+                      <input type="number" id="m1GotoInp" step="10" value="10000" />
+                      <span class="micro-row__unit">мкм</span>
+                      <button type="button" class="toolbar-btn toolbar-btn--primary" data-op="goto" data-m="1">Идти</button>
+                    </div>
+                    <div class="micro-row">
+                      <span class="micro-row__lab">Шаги</span>
+                      <input type="number" id="m1StepsInp" step="1" value="200" />
+                      <span class="micro-row__unit"></span>
+                      <button type="button" class="toolbar-btn toolbar-btn--neutral" data-op="steps" data-m="1">Выполнить</button>
+                    </div>
+                    <button type="button" class="toolbar-btn toolbar-btn--danger micro-motor__stop" data-op="stop" data-m="1">СТОП М1</button>
                   </div>
-                  <div class="micro-motor__pos">
-                    <span>позиция <b id="m1Pos">—</b></span>
-                    <span>датчик <b id="m1Sensor">—</b></span>
-                    <span>шаги <b id="m1Steps">—</b></span>
-                  </div>
-                  <div class="micro-row">
-                    <span class="micro-row__lab">Идти в</span>
-                    <input type="number" id="m1GotoInp" step="10" value="10000" />
-                    <span class="micro-row__unit">мкм</span>
-                    <button type="button" class="toolbar-btn toolbar-btn--primary" data-op="goto" data-m="1">Идти</button>
-                  </div>
-                  <div class="micro-row">
-                    <span class="micro-row__lab">Шаги</span>
-                    <input type="number" id="m1StepsInp" step="1" value="200" />
-                    <span class="micro-row__unit"></span>
-                    <button type="button" class="toolbar-btn toolbar-btn--neutral" data-op="steps" data-m="1">Выполнить</button>
-                  </div>
-                  <div class="micro-row">
-                    <span class="micro-row__lab">Сдвиг</span>
-                    <input type="number" id="m1ShiftInp" step="10" value="500" />
-                    <span class="micro-row__unit">мкм</span>
-                    <button type="button" class="toolbar-btn toolbar-btn--neutral" data-op="shift" data-m="1">Сдвинуть</button>
-                  </div>
-                  <div class="micro-actions">
-                    <button type="button" class="toolbar-btn toolbar-btn--neutral" data-op="home_start" data-m="1">◄ в начало</button>
-                    <button type="button" class="toolbar-btn toolbar-btn--neutral" data-op="home_end" data-m="1">в конец ►</button>
-                    <button type="button" class="toolbar-btn toolbar-btn--neutral" data-op="find_zero" data-m="1">поиск 0</button>
-                    <button type="button" class="toolbar-btn toolbar-btn--neutral" data-op="set_zero" data-m="1">уст. 0</button>
-                  </div>
-                  <button type="button" class="toolbar-btn toolbar-btn--danger micro-motor__stop" data-op="stop" data-m="1">СТОП М1</button>
-                </div>
-              </div>
 
-              <!-- Мотор М2 -->
-              <div class="micro-ppane micro-gated hidden" data-ppane="m2">
-                <div class="micro-motor" data-motor="2">
-                  <div class="micro-motor__head">
-                    <span class="micro-motor__title">Мотор М2 · фокус</span>
-                    <span class="micro-badges">
-                      <button type="button" class="micro-badge" data-en="2" title="Разрешение мотора">выключен</button>
-                      <button type="button" class="micro-badge" data-dir="2" title="Направление">вперёд</button>
-                    </span>
+                  <div class="micro-motor" data-motor="2">
+                    <div class="micro-motor__head">
+                      <span class="micro-motor__title">Мотор М2 · фокус</span>
+                      <span class="micro-badges">
+                        <button type="button" class="micro-badge" data-en="2" title="Разрешение мотора">выключен</button>
+                        <button type="button" class="micro-badge" data-dir="2" title="Направление">вперёд</button>
+                      </span>
+                    </div>
+                    <div class="micro-motor__pos">
+                      <span>позиция <b id="m2Pos">—</b></span>
+                      <span>state <b id="m2State">—</b></span>
+                      <span>шаги <b id="m2Steps">—</b></span>
+                    </div>
+                    <div class="micro-row">
+                      <span class="micro-row__lab">Идти в</span>
+                      <input type="number" id="m2GotoInp" step="10" value="8000" />
+                      <span class="micro-row__unit">мкм</span>
+                      <button type="button" class="toolbar-btn toolbar-btn--primary" data-op="goto" data-m="2">Идти</button>
+                    </div>
+                    <div class="micro-row">
+                      <span class="micro-row__lab">Шаги</span>
+                      <input type="number" id="m2StepsInp" step="1" value="200" />
+                      <span class="micro-row__unit"></span>
+                      <button type="button" class="toolbar-btn toolbar-btn--neutral" data-op="steps" data-m="2">Выполнить</button>
+                    </div>
+                    <button type="button" class="toolbar-btn toolbar-btn--danger micro-motor__stop" data-op="stop" data-m="2">СТОП М2</button>
                   </div>
-                  <div class="micro-motor__pos">
-                    <span>позиция <b id="m2Pos">—</b></span>
-                    <span>state <b id="m2State">—</b></span>
-                    <span>шаги <b id="m2Steps">—</b></span>
-                  </div>
-                  <div class="micro-row">
-                    <span class="micro-row__lab">Идти в</span>
-                    <input type="number" id="m2GotoInp" step="10" value="8000" />
-                    <span class="micro-row__unit">мкм</span>
-                    <button type="button" class="toolbar-btn toolbar-btn--primary" data-op="goto" data-m="2">Идти</button>
-                  </div>
-                  <div class="micro-row">
-                    <span class="micro-row__lab">Шаги</span>
-                    <input type="number" id="m2StepsInp" step="1" value="200" />
-                    <span class="micro-row__unit"></span>
-                    <button type="button" class="toolbar-btn toolbar-btn--neutral" data-op="steps" data-m="2">Выполнить</button>
-                  </div>
-                  <div class="micro-row">
-                    <span class="micro-row__lab">Сдвиг</span>
-                    <input type="number" id="m2ShiftInp" step="10" value="500" />
-                    <span class="micro-row__unit">мкм</span>
-                    <button type="button" class="toolbar-btn toolbar-btn--neutral" data-op="shift" data-m="2">Сдвинуть</button>
-                  </div>
-                  <div class="micro-actions">
-                    <button type="button" class="toolbar-btn toolbar-btn--neutral" data-op="home_start" data-m="2">◄ в начало</button>
-                    <button type="button" class="toolbar-btn toolbar-btn--neutral" data-op="home_end" data-m="2">в конец ►</button>
-                    <button type="button" class="toolbar-btn toolbar-btn--neutral" data-op="find_zero" data-m="2">поиск 0</button>
-                    <button type="button" class="toolbar-btn toolbar-btn--neutral" data-op="set_zero" data-m="2">уст. 0</button>
-                  </div>
-                  <button type="button" class="toolbar-btn toolbar-btn--danger micro-motor__stop" data-op="stop" data-m="2">СТОП М2</button>
                 </div>
               </div>
 

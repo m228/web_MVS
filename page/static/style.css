@@ -3197,6 +3197,9 @@ html {
 .micro-panel__body { margin-top: 14px; }
 .micro-motors { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
 @media (max-width: 860px) { .micro-motors { grid-template-columns: 1fr; } }
+/* М1 и М2 рядом — два столбика (на узком экране схлопываются в один) */
+.micro-motors-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; }
+@media (max-width: 720px) { .micro-motors-grid { grid-template-columns: 1fr; } }
 .micro-motor { background: var(--surface-muted); border: 1px solid var(--border); border-radius: 12px; padding: 14px; }
 .micro-motor__head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
 .micro-motor__title { font-weight: 600; }
@@ -3415,7 +3418,6 @@ input.micro-cam-num { width: 56px; min-width: 0; flex: 0 0 auto; padding: 4px 5p
 
 .micro-pult.is-locked .micro-gated { opacity: .5; pointer-events: none; filter: grayscale(.3); }
 .micro-ro { font-size: 0.8em; color: var(--muted); font-weight: 400; margin-left: 6px; }
-.micro-ppane .micro-motor { background: transparent; border: 0; padding: 0; }
 .micro-camset-frame { width: 100%; min-height: 520px; border: 0; border-radius: 10px; background: var(--surface-muted); display: block; }
 .micro-cam-btns { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 10px; }
 .micro-cam-btns .toolbar-btn { min-width: 0; padding: 8px 16px; }

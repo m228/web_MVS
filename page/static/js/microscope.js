@@ -825,8 +825,8 @@
       b.addEventListener("click", () => runMotorOp(b.dataset.m, b.dataset.op));
     });
     // Enter в поле ввода = нажать соответствующую кнопку
-    [["1", "goto"], ["1", "steps"], ["1", "shift"], ["2", "goto"], ["2", "steps"], ["2", "shift"]].forEach(([m, op]) => {
-      const inp = $("m" + m + (op === "goto" ? "GotoInp" : op === "steps" ? "StepsInp" : "ShiftInp"));
+    [["1", "goto"], ["1", "steps"], ["2", "goto"], ["2", "steps"]].forEach(([m, op]) => {
+      const inp = $("m" + m + (op === "goto" ? "GotoInp" : "StepsInp"));
       if (inp) inp.addEventListener("keydown", (ev) => { if (ev.key === "Enter") { ev.preventDefault(); runMotorOp(m, op); } });
     });
     // бейджи разрешения/направления
@@ -904,7 +904,6 @@
     let value = null;
     if (op === "goto") value = $("m" + m + "GotoInp").value;
     else if (op === "steps") value = $("m" + m + "StepsInp").value;
-    else if (op === "shift") value = $("m" + m + "ShiftInp").value;
 
     if (op === "stop") stopAutoDrive(m);       // ручной СТОП гасит и авто-доводку
 

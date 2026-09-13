@@ -3371,8 +3371,10 @@ input.micro-cam-num { width: 56px; min-width: 0; flex: 0 0 auto; padding: 4px 5p
 .micro-cycle-tiles { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; margin-top: 10px; }
 .micro-cycle-tiles .micro-tile { background: var(--surface-elevated); }
 .micro-cycle-hint { margin: 10px 0 0; font-size: 0.82em; color: var(--muted); }
-.micro-cycle-params { display: flex; flex-direction: column; gap: 8px; }
-.micro-cycle-f { display: grid; grid-template-columns: 1fr 96px; align-items: center; gap: 10px; font-size: 0.88em; }
+/* компактно: параметры цикла в 2-3 колонки по ширине панели */
+.micro-cycle-params { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 8px 16px; }
+.micro-cycle-f--wide { grid-column: 1 / -1; }
+.micro-cycle-f { display: grid; grid-template-columns: 1fr 88px; align-items: center; gap: 8px; font-size: 0.88em; }
 .micro-cycle-f span { color: var(--muted); }
 .micro-cycle-f input { width: 100%; padding: 5px 7px; text-align: right; -moz-appearance: textfield; }
 .micro-cycle-f input::-webkit-outer-spin-button, .micro-cycle-f input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }

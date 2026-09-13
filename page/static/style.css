@@ -3456,7 +3456,7 @@ input.micro-cam-num { width: 56px; min-width: 0; flex: 0 0 auto; padding: 4px 5p
 
 /* пара «подпись+поле» — колонка; на обычной странице камеры выглядит как раньше */
 .cam-field { display: flex; flex-direction: column; gap: 4px; }
-.cam-field > label { margin: 0; }
+.cam-field > label { margin: 0; white-space: nowrap; }
 
 /* --- шапка: заголовок + коннектор + На главную --- */
 .micro-hero__top { display: flex; align-items: center; gap: 14px; margin-bottom: 8px; }

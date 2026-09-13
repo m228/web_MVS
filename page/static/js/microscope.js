@@ -169,7 +169,8 @@
       if (!d) return;
       const setV = (id, v) => { const el = $(id); if (el && v != null) el.value = v; };
       const lim = (id, c) => { const el = $(id); if (el && c) { if (c.min != null) el.min = c.min; if (c.max != null) el.max = c.max; } };
-      const txt = (id, c) => { const el = $(id); if (el && c) el.textContent = "(мин " + (c.min ?? "?") + ", макс " + (c.max ?? "?") + ")"; };
+      // компактный диапазон в скобках, чтобы подпись поля влезала в одну строку: (0–2448)
+      const txt = (id, c) => { const el = $(id); if (el && c) el.textContent = "(" + (c.min ?? "?") + "–" + (c.max ?? "?") + ")"; };
       setV("camWidth", d.width && d.width.value); lim("camWidth", d.width); txt("camWidthLim", d.width);
       setV("camHeight", d.height && d.height.value); lim("camHeight", d.height); txt("camHeightLim", d.height);
       lim("camOffX", d.offset_x); lim("camOffY", d.offset_y);

@@ -5,6 +5,7 @@
 принять команды. app.py дёргает только `micro`.
 """
 import threading
+import time
 
 import plate_config
 from microscope_plc import PlateClient
@@ -24,6 +25,10 @@ class MicroscopeService:
         # DEBUG (убрать после отладки цикла): перехват ПЛК — при True данные СВ/стадии
         # из sv_source игнорируются, работает ручной ввод со страницы (см. sv_override).
         self._sv_override = False
+        # автофокус М2 (поиск фокуса по резкости) — фоновый поток + статус/результат
+        self._af_thread = None
+        self._af_running = False
+        self._af_status = {"running": False, "phase": "idle", "table": [], "best": None, "message": ""}
 
     def start(self):
         with self._lock:
@@ -176,6 +181,134 @@ class MicroscopeService:
         log_event("microscope_service", "Варить без стадии: " + ("вкл" if on else "выкл"),
                   "info", {"ignore_stage": on})
         return res
+
+    # ---------- автофокус М2 (поиск фокуса по резкости) ----------
+
+    def autofocus(self, start, end, coarse, fine):
+        """Запустить двухпроходный автофокус М2 в фоне. Только в РУЧНОМ режиме (автомат не
+        должен перетирать фокус). Грубый свип шагом coarse -> пик -> точный шагом fine вокруг."""
+        if not self.fsm or not self.plate:
+            return {"status": "error", "error": "микроскоп не запущен"}
+        if not self.fsm.manual:
+            return {"status": "error", "error": "включите Ручной режим"}
+        if self._af_running:
+            return {"status": "error", "error": "автофокус уже идёт"}
+        serial = (self.cfg or {}).get("camera_serial", "")
+        try:
+            from camera_core import manager as cam_manager
+            cam = cam_manager.get(serial) if serial else None
+        except Exception:
+            cam = None
+        if not cam or not getattr(cam, "running", False):
+            return {"status": "error", "error": "камера не стримит (подключите видео)"}
+        start = max(0, int(start)); end = max(start, int(end))
+        coarse = max(10, int(coarse)); fine = max(1, int(fine))
+        self._af_running = True
+        self._af_status = {"running": True, "phase": "coarse", "table": [], "best": None, "message": "старт"}
+        self._af_thread = threading.Thread(target=self._autofocus_run, name="autofocus",
+                                           args=(cam, start, end, coarse, fine), daemon=True)
+        self._af_thread.start()
+        log_event("microscope_service", "Автофокус запущен", "info",
+                  {"start": start, "end": end, "coarse": coarse, "fine": fine})
+        return {"status": "started"}
+
+    def autofocus_stop(self):
+        self._af_running = False
+        return {"status": "stopping"}
+
+    def autofocus_status(self):
+        return dict(self._af_status)
+
+    def _goto_m2_settle(self, pos, tol=50, stuck_s=5.0, max_s=25.0):
+        """Довести М2 до pos повтором goto (плата за импульс делает лишь шаг). Возврат:
+        'arrived' — доехал (|pos2-pos|<=tol); 'stuck' — 5 с без движения (упор/приехал);
+        'timeout'/'abort'. Упор безопасен (спец. проход), детектим по отсутствию движения."""
+        p = self.plate
+        last = None
+        no_move_since = time.time()
+        t0 = time.time()
+        while self._af_running and (time.time() - t0) < max_s:
+            p.motor_goto(2, pos)                        # импульс к цели (redrive)
+            time.sleep(0.35)
+            cur = (p.telemetry or {}).get("pos2")
+            if cur is None:
+                continue
+            if abs(cur - pos) <= tol:
+                return "arrived"
+            if last is not None and abs(cur - last) < 5:   # позиция не меняется
+                if (time.time() - no_move_since) >= stuck_s:
+                    return "stuck"
+            else:
+                no_move_since = time.time()               # было движение — сбрасываем таймер упора
+            last = cur
+        return "abort" if not self._af_running else "timeout"
+
+    def _measure(self, cam):
+        """Замер резкости: дать кадру успокоиться и усреднить пару замеров."""
+        time.sleep(0.4)
+        vals = []
+        for _ in range(3):
+            s = cam.sharpness()
+            if s is not None:
+                vals.append(s)
+            time.sleep(0.12)
+        return round(sum(vals) / len(vals), 1) if vals else None
+
+    def _autofocus_run(self, cam, start, end, coarse, fine):
+        try:
+            table = []
+            # 1) грубый свип
+            pos = start
+            while self._af_running and pos <= end:
+                st = self._goto_m2_settle(pos)
+                sh = self._measure(cam)
+                if sh is not None:
+                    table.append({"pos": pos, "sharp": sh})
+                self._af_status = {"running": True, "phase": "coarse", "table": list(table),
+                                   "best": None, "message": "грубо: %d мкм" % pos}
+                if st == "stuck":
+                    break                                 # упор — дальше некуда
+                pos += coarse
+            if not self._af_running:
+                self._finish_af(table, None, "остановлено")
+                return
+            if not table:
+                self._finish_af(table, None, "нет данных (камера не даёт кадры)")
+                return
+            # 2) пик грубого прохода -> точный свип вокруг ±coarse
+            best = max(table, key=lambda r: r["sharp"])["pos"]
+            lo = max(start, best - coarse)
+            hi = min(end, best + coarse)
+            pos = lo
+            while self._af_running and pos <= hi:
+                if not any(r["pos"] == pos for r in table):
+                    st = self._goto_m2_settle(pos)
+                    sh = self._measure(cam)
+                    if sh is not None:
+                        table.append({"pos": pos, "sharp": sh})
+                    self._af_status = {"running": True, "phase": "fine", "table": sorted(table, key=lambda r: r["pos"]),
+                                       "best": None, "message": "точно: %d мкм" % pos}
+                    if st == "stuck" and pos > best:
+                        break
+                pos += fine
+            # 3) лучшая точка -> переезжаем туда
+            best_row = max(table, key=lambda r: r["sharp"])
+            if self._af_running:
+                self._goto_m2_settle(best_row["pos"])
+            self._finish_af(table, best_row, "готово")
+        except Exception as e:
+            log_event("microscope_service", "Ошибка автофокуса", "error", {"error": str(e)})
+            self._finish_af([], None, "ошибка: %s" % e)
+
+    def _finish_af(self, table, best_row, message):
+        self._af_running = False
+        self._af_status = {
+            "running": False, "phase": "done",
+            "table": sorted(table, key=lambda r: r["pos"]),
+            "best": best_row, "message": message,
+        }
+        log_event("microscope_service", "Автофокус завершён", "info",
+                  {"best": best_row, "points": len(table), "message": message})
 
     def set_cycle_autostart(self, on):
         """Запомнить галочку «Автостарт цикла» в конфиг БЕЗ перезапуска платы."""

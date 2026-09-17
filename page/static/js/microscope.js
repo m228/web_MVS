@@ -439,6 +439,48 @@
         ev.target.value = "";   // чтобы повторный выбор того же файла срабатывал
       }
     });
+
+    wireAutofocus();
+  }
+
+  // ---- автофокус М2: запуск, опрос статуса, таблица чёткости ----
+  let afTimer = null;
+  function wireAutofocus() {
+    if (!$("afStart2")) return;
+    const hint = (t) => { const h = $("afHint"); if (h) h.textContent = t || ""; };
+    $("afStart2").addEventListener("click", async () => {
+      const p = { start: $("afStart").value, end: $("afEnd").value, coarse: $("afCoarse").value, fine: $("afFine").value };
+      try {
+        const r = await api("/api/micro/autofocus", p);
+        if (r && r.status === "started") { hint("идёт поиск фокуса…"); sentCmd("Автофокус запущен"); afPoll(); }
+        else hint("не запущен: " + ((r && r.error) || "?"));
+      } catch (e) { hint("ошибка: " + e.message); }
+    });
+    $("afStop").addEventListener("click", () => { api("/api/micro/autofocus/stop").catch(() => {}); hint("остановка…"); });
+  }
+
+  function afPoll() {
+    if (afTimer) clearInterval(afTimer);
+    const render = (s) => {
+      const hint = $("afHint");
+      if (hint) hint.textContent = s.message || (s.running ? "идёт…" : "");
+      const wrap = $("afResult"); if (wrap) wrap.hidden = !(s.table && s.table.length);
+      const body = $("afTableBody");
+      if (body && s.table) {
+        const bestPos = s.best ? s.best.pos : null;
+        body.innerHTML = s.table.map((r) =>
+          "<tr" + (r.pos === bestPos ? ' class="is-best"' : "") + "><td>" + r.pos + "</td><td>" + r.sharp + "</td></tr>").join("");
+      }
+      const best = $("afBest");
+      if (best) best.textContent = s.best ? ("Лучший фокус: " + s.best.pos + " мкм (резкость " + s.best.sharp + ")") : "";
+    };
+    afTimer = setInterval(async () => {
+      try {
+        const s = await api("/api/micro/autofocus/status");
+        render(s);
+        if (!s.running) { clearInterval(afTimer); afTimer = null; }
+      } catch (e) { clearInterval(afTimer); afTimer = null; }
+    }, 800);
   }
 
   function camApply() {
@@ -1001,7 +1043,6 @@
     home_start: "В начало", home_end: "В конец", find_zero: "Поиск 0",
     set_zero: "Установить 0", stop: "СТОП",
   };
-  const CONFIRM_OPS = { goto: 1, home_end: 1 };  // рискованные — спросить
 
   function sendMotor(m, op, value) {
     const params = { m, op };
@@ -1048,10 +1089,7 @@
 
     if (op === "stop") stopAutoDrive(m);       // ручной СТОП гасит и авто-доводку
 
-    if (CONFIRM_OPS[op]) {
-      const what = op === "goto" ? ("М" + m + " → " + value + " мкм") : ("М" + m + " → в конец");
-      if (!window.confirm("Двигать мотор?\n" + what + "\n\nУбедись, что путь свободен (от стекла).")) return;
-    }
+    // подтверждение убрано: у моторов безопасный ход по всему диапазону (спец. проход, упор не бьёт)
 
     if (op === "goto" && value !== "" && value != null) {   // авто-доводка вместо одиночного импульса
       startAutoDrive(m, Number(value));

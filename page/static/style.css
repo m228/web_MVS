@@ -3303,6 +3303,10 @@ html {
 .micro-color-two .micro-color-col + .micro-color-col { border-left: 1px solid var(--border); padding-left: 16px; }
 /* приглушение неактивного параметра (визуально, клики не блокирует) */
 .micro-dim { opacity: 0.45; transition: opacity 0.15s ease; }
+/* автофокус: таблица чёткости + подсветка лучшей строки */
+.micro-af-result { margin-top: 8px; max-height: 260px; overflow: auto; }
+.micro-af-best { font-weight: 700; color: var(--success); margin: 6px 0; }
+.micro-af-table .is-best { background: var(--success-soft); font-weight: 700; }
 /* просмотр дампа настроек */
 .micro-dump-view { margin-top: 10px; max-height: 340px; overflow: auto; background: var(--surface-muted);
   border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; font-size: 0.82em;

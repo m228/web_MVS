@@ -640,6 +640,8 @@ class BaseCameraWorker:
         # Хранится в plate_config.camera_color (входит в «Дамп»), применяется к микроскопной
         # камере (serial == camera_serial). После перезапуска картинка сразу та же.
         self.color = {}
+        # последний СЫРОЙ BGR-кадр (до цветокоррекции) — для метрики резкости автофокуса
+        self._last_bgr = None
         try:
             pcfg = plate_config.load()
             if serial_number and serial_number == pcfg.get("camera_serial"):
@@ -1008,6 +1010,18 @@ class BaseCameraWorker:
             self.video_duration = None
             self.video_start = None
             self.video_project = None
+
+    # метрика резкости последнего кадра (дисперсия лапласиана) — для автофокуса.
+    # Чем выше — тем резче. None, если кадра ещё нет (камера не стримит).
+    def sharpness(self):
+        img = self._last_bgr
+        if img is None:
+            return None
+        try:
+            gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+            return float(cv2.Laplacian(gray, cv2.CV_64F).var())
+        except Exception:
+            return None
 
     # сброс состояния сохранения при закрытии потока
     def _reset_save_state(self):
@@ -1739,6 +1753,7 @@ class CameraWorker(BaseCameraWorker):
                 if img is None:
                     self.metrics["errors"] += 1
                     continue
+                self._last_bgr = img               # сырой кадр (до цветокоррекции) — для автофокуса
                 if self.color:
                     img = _apply_color(img, self.color)
                 ok, encoded = cv2.imencode(".jpg", img)

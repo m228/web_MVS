@@ -545,6 +545,31 @@
                 <span class="micro-conn-hint" id="dumpHint"></span>
                 <pre class="micro-dump-view" id="dumpView" hidden></pre>
                 <p class="micro-plc-note">Перед загрузкой текущий конфиг автоматически сохраняется рядом в <code>plate_config.backup.json</code>. Загрузка перезапускает автомат.</p>
+
+                <div class="micro-sub__title micro-sub__title--sep">Автофокус М2 (поиск фокуса)</div>
+                <p class="micro-info__lead">Гоняет М2 по диапазону и ищет самый резкий кадр (метрика Laplacian). Двухпроходно: грубый шаг → пик → точный шаг вокруг. <b>Только в Ручном режиме</b>, камера должна стримить.</p>
+                <div class="micro-cycle-cols">
+                  <div class="micro-cycle-col">
+                    <label class="micro-cycle-f"><span>От, мкм</span><input type="number" id="afStart" step="100" value="0" /></label>
+                    <label class="micro-cycle-f"><span>Грубый шаг, мкм</span><input type="number" id="afCoarse" step="50" value="500" /></label>
+                  </div>
+                  <div class="micro-cycle-col">
+                    <label class="micro-cycle-f"><span>До, мкм</span><input type="number" id="afEnd" step="100" value="80000" /></label>
+                    <label class="micro-cycle-f"><span>Точный шаг, мкм</span><input type="number" id="afFine" step="10" value="100" /></label>
+                  </div>
+                </div>
+                <div class="micro-cycle-btns">
+                  <button type="button" id="afStart2" class="toolbar-btn toolbar-btn--primary">Найти фокус</button>
+                  <button type="button" id="afStop" class="toolbar-btn toolbar-btn--danger">Стоп</button>
+                  <span class="micro-conn-hint" id="afHint"></span>
+                </div>
+                <div class="micro-af-result" id="afResult" hidden>
+                  <p class="micro-af-best" id="afBest">—</p>
+                  <table class="micro-svsp micro-af-table">
+                    <thead><tr><th>Фокус М2, мкм</th><th>Резкость</th></tr></thead>
+                    <tbody id="afTableBody"></tbody>
+                  </table>
+                </div>
               </div>
 
             </div>

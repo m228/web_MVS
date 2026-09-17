@@ -238,6 +238,25 @@ def micro_ignore_stage(on: int):
     return micro.set_ignore_stage(bool(on))
 
 
+@app.get("/api/micro/autofocus")
+def micro_autofocus(start: int = 0, end: int = 80000, coarse: int = 500, fine: int = 100):
+    # запустить автофокус М2 (двухпроходный поиск по резкости), только в ручном режиме
+    res = micro.autofocus(start, end, coarse, fine)
+    api_log("api.micro.autofocus", "Автофокус", payload={"start": start, "end": end,
+            "coarse": coarse, "fine": fine, "res": res})
+    return res
+
+
+@app.get("/api/micro/autofocus/status")
+def micro_autofocus_status():
+    return micro.autofocus_status()
+
+
+@app.get("/api/micro/autofocus/stop")
+def micro_autofocus_stop():
+    return micro.autofocus_stop()
+
+
 @app.get("/api/micro/cyclic")
 def micro_cyclic(on: int):
     micro.set_cyclic(bool(on))

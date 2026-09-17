@@ -58,6 +58,10 @@ class MicroscopeFSM:
         self.cfg = config
         self.SP = list(config["SP"])
         self.SVSP = list(config["SVSP"])
+        # FOCUS[i] — позиция фокуса М2 (мкм) по тому же индексу СВ, что и SP/SVSP.
+        # 0 = не двигать фокус на этом пороге. Длину выравниваем под SP (старые конфиги без FOCUS).
+        focus = config.get("FOCUS") or []
+        self.FOCUS = [int(focus[i]) if i < len(focus) else 0 for i in range(len(self.SP))]
         hw = config.get("hourly_wash", {})
         self._hw_enabled = bool(hw.get("enabled", True))
         self._hw_minute = int(hw.get("minute", 3))
@@ -535,11 +539,16 @@ class MicroscopeFSM:
                     self.t = 0
                     self.mode = 22
             elif self.mode == 22:
-                # подвод к зазору по СВ (таблица SVSP); клапан трубки ОТКРЫТ на подводе
+                # подвод к зазору по СВ (таблица SVSP); клапан трубки ОТКРЫТ на подводе.
+                # По той же строке выбираем фокус М2 (FOCUS[i]) — на разных СВ фокус сбит.
                 self.m1_sp = self.SP[1]                # по умолчанию SP[1]
+                focus = 0
                 for i in range(1, 50):
                     if self.sv >= self.SVSP[i] and self.SVSP[i] > 0.0:
                         self.m1_sp = self.SP[i]
+                        focus = self.FOCUS[i] if i < len(self.FOCUS) else 0
+                if focus > 0:
+                    self.m2_sp = focus                 # фокус М2 по таблице (0 = не трогать)
                 self.cw0 = True                        # промывка трубки открыта на подводе
                 self._redrive_goto()                   # повторяем goto до доезда
                 self.t += 1

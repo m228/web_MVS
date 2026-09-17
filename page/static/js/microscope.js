@@ -644,19 +644,20 @@
     const body = $("svspBody");
     if (!body || !cfg) return;
     body.innerHTML = "";
-    const SVSP = cfg.SVSP || [], SP = cfg.SP || [];
+    const SVSP = cfg.SVSP || [], SP = cfg.SP || [], FOCUS = cfg.FOCUS || [];
     for (let i = 1; i < SVSP.length && i < 50; i++) {
-      if (Number(SVSP[i]) > 0) addSvspRow(SVSP[i], SP[i]);
+      if (Number(SVSP[i]) > 0) addSvspRow(SVSP[i], SP[i], FOCUS[i]);
     }
-    if (!body.children.length) addSvspRow("", "");
+    if (!body.children.length) addSvspRow("", "", "");
   }
 
-  function addSvspRow(brix, gap) {
+  function addSvspRow(brix, gap, focus) {
     const body = $("svspBody"); if (!body) return;
     const tr = document.createElement("tr");
     tr.innerHTML =
       '<td><input type="number" step="0.1" class="svsp-brix" value="' + (brix === "" ? "" : brix) + '" /></td>' +
       '<td><input type="number" step="10" class="svsp-gap" value="' + (gap === "" ? "" : gap) + '" /></td>' +
+      '<td><input type="number" step="10" class="svsp-focus" title="0 = не двигать фокус" value="' + (focus === "" || focus == null ? "" : focus) + '" /></td>' +
       '<td><button type="button" class="svsp-del" title="удалить строку" aria-label="удалить">✕</button></td>';
     tr.querySelector(".svsp-del").addEventListener("click", () => tr.remove());
     body.appendChild(tr);
@@ -667,14 +668,15 @@
     const rows = [...document.querySelectorAll("#svspBody tr")].map((tr) => ({
       brix: parseFloat(tr.querySelector(".svsp-brix").value),
       gap: parseInt(tr.querySelector(".svsp-gap").value, 10),
+      focus: parseInt(tr.querySelector(".svsp-focus").value, 10),
     })).filter((r) => !isNaN(r.brix) && !isNaN(r.gap) && r.brix > 0)
        .sort((a, b) => a.brix - b.brix);   // FSM требует пороги СВ по возрастанию
-    const SP = (cfg.SP || []).slice(), SVSP = (cfg.SVSP || []).slice();
-    for (let i = 1; i < 50; i++) SVSP[i] = 0;         // очистить старую кривую (SP[0]/[50] сохраняем)
-    rows.forEach((r, k) => { const i = k + 1; SVSP[i] = r.brix; SP[i] = r.gap; });
+    const SP = (cfg.SP || []).slice(), SVSP = (cfg.SVSP || []).slice(), FOCUS = (cfg.FOCUS || []).slice();
+    for (let i = 1; i < 50; i++) { SVSP[i] = 0; FOCUS[i] = 0; }   // очистить кривую (SP[0]/[50] сохраняем)
+    rows.forEach((r, k) => { const i = k + 1; SVSP[i] = r.brix; SP[i] = r.gap; FOCUS[i] = isNaN(r.focus) ? 0 : r.focus; });
     try {
-      await api("/api/micro/recipe", { sp: JSON.stringify(SP), svsp: JSON.stringify(SVSP) });
-      cfg.SP = SP; cfg.SVSP = SVSP;
+      await api("/api/micro/recipe", { sp: JSON.stringify(SP), svsp: JSON.stringify(SVSP), focus: JSON.stringify(FOCUS) });
+      cfg.SP = SP; cfg.SVSP = SVSP; cfg.FOCUS = FOCUS;
       if (hint) { hint.textContent = "сохранено ✓ (" + rows.length + " строк)"; setTimeout(() => { hint.textContent = ""; }, 2500); }
     } catch (e) { if (hint) hint.textContent = "ошибка сохранения"; }
   }

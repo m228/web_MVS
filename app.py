@@ -435,8 +435,8 @@ def micro_settings(
 
 
 @app.get("/api/micro/recipe")
-def micro_recipe(sp: str | None = None, svsp: str | None = None):
-    # сохранить таблицу подвода (кривая СВ->зазор): SP/SVSP приходят JSON-массивами со страницы.
+def micro_recipe(sp: str | None = None, svsp: str | None = None, focus: str | None = None):
+    # сохранить таблицу подвода (кривая СВ->зазор->фокус): SP/SVSP/FOCUS приходят JSON-массивами.
     # Сохраняем в plate_config.json и горячо перезапускаем автомат (как «Перезагрузить конфиг»).
     patch = {}
     try:
@@ -444,11 +444,13 @@ def micro_recipe(sp: str | None = None, svsp: str | None = None):
             patch["SP"] = [int(round(float(x))) for x in json.loads(sp)]
         if svsp is not None:
             patch["SVSP"] = [float(x) for x in json.loads(svsp)]
+        if focus is not None:
+            patch["FOCUS"] = [int(round(float(x))) for x in json.loads(focus)]
     except Exception as e:
-        api_log("api.micro.recipe", "Ошибка разбора таблицы SP/SVSP", "warn", {"error": str(e)})
+        api_log("api.micro.recipe", "Ошибка разбора таблицы SP/SVSP/FOCUS", "warn", {"error": str(e)})
         return {"status": "error", "error": str(e)}
     micro.apply_settings(patch)
-    api_log("api.micro.recipe", "Сохранена таблица подвода (SP/SVSP)",
+    api_log("api.micro.recipe", "Сохранена таблица подвода (SP/SVSP/FOCUS)",
             payload={"rows": len(patch.get("SVSP", []))})
     return {"status": "ok", "sp_len": len(patch.get("SP", [])), "svsp_len": len(patch.get("SVSP", []))}
 # --- автозапуск вместе с Windows (Планировщик задач, см. autostart.py) ---

@@ -317,7 +317,8 @@ class MicroscopeService:
 
     def led_native(self, bright=None, freq=None, on=None):
         """LED-фара: яркость (%)/частота (Гц)/вкл. Работает и в авто (через FSM), и в ручном
-        (немедленной нативной записью). Частоту FSM не трогает — пишем всегда."""
+        (немедленной нативной записью). Частоту FSM не трогает — пишем всегда.
+        Значения persist в plate_config (без reload), чтобы после перезапуска LED был тем же."""
         if self.fsm:
             self.fsm.set_led(bright, on)
         if self.plate:
@@ -325,6 +326,19 @@ class MicroscopeService:
                 self.plate.set_led_native(bright, freq, on)
             elif freq is not None:
                 self.plate.set_led_native(freq=freq)
+        # запомнить в конфиг: яркость (+ led_on по яркости) и частоту
+        patch = {}
+        if bright is not None:
+            patch["led_bright"] = int(bright)
+            patch["led_on"] = bool(on) if on is not None else int(bright) > 0
+        elif on is not None:
+            patch["led_on"] = bool(on)
+        if freq is not None:
+            patch["led_freq"] = int(freq)
+        if patch:
+            plate_config.save(patch)
+            if self.cfg is not None:
+                self.cfg.update(patch)
 
     def dq_bit(self, bit, on):
         """Дискретный выход DQ (клапан и пр.). Только в ручном режиме (в авто клапаны у автомата)."""

@@ -552,6 +552,7 @@
       cfg = await api("/api/micro/config");
       if (cfg) {
         if (cfg.led_bright != null) { $("ledBright").value = cfg.led_bright; $("ledBrightVal").textContent = cfg.led_bright; }
+        if (cfg.led_freq != null && $("ledFreq")) $("ledFreq").value = cfg.led_freq;
         // плата — только для инфо (адрес/порт/unit задаются в plate_config.json)
         const pInfo = $("plateInfo");
         if (pInfo) pInfo.textContent = (cfg.host || "—") + " · " + (cfg.port || 502) + " · unit " + (cfg.unit != null ? cfg.unit : 254);

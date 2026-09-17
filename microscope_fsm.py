@@ -119,7 +119,8 @@ class MicroscopeFSM:
         self.cw0 = False      # клапан промывки трубки
         self.cw1 = False      # клапан промывки стекла
         self.led_bright = int(config.get("led_bright", 0))
-        self.led_on = False
+        # восстановить состояние LED из конфига: если сохранена яркость > 0 — включён
+        self.led_on = bool(config.get("led_on", self.led_bright > 0))
 
         # колбэк «снять фото» — дёргается в выдержке (mode 23) КАЖДЫЕ shot_interval_sec (серия).
         # Ставит его microscope_service; он сам решает снимать ли (по режиму камеры auto).

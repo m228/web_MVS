@@ -618,9 +618,11 @@ class BaseCameraWorker:
         # последнее состояние здоровья — чтобы писать событие ОДИН раз на переход
         self._photo_health_state = None
 
-        # хостовая цветокоррекция (гамма/насыщ/оттенок/контраст/яркость/CCM/палитра).
-        # пусто = без изменений; применяется в get_frame после _to_bgr (см. _apply_color)
-        self.color = {}
+        # хостовая цветокоррекция (гамма/насыщ/оттенок/контраст/яркость/резкость/CCM/палитра).
+        # пусто = без изменений; применяется в get_frame после _to_bgr (см. _apply_color).
+        # Загружаем сохранённую по серийнику — чтобы после перезапуска картинка была та же.
+        saved_color = save_settings.get(serial_number).get("color")
+        self.color = dict(saved_color) if isinstance(saved_color, dict) else {}
 
         # 0 нет автосохранения видео / 1 идёт / 2 завершение
         self.save_video = 0

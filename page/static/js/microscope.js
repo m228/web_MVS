@@ -173,11 +173,34 @@
     camStop();  // на всякий: остановить прошлый поток, показать плейсхолдер
     if (has) {
       loadCamParams();
+      loadSavedColor();   // подтянуть сохранённую цветокоррекцию в ползунки вкладки «Цвет»
       // IP камеры (разово, до старта потока — контрол-канал не занят стримом)
       api("/api/ip", { serial_number: serial }).then((r) => {
         if (r && r.ip && !/[a-z_]/i.test(String(r.ip))) setCamIp(r.ip);
       }).catch(() => {});
     } else setCamIp("");
+  }
+
+  // подтянуть сохранённую цветокоррекцию (worker.color) в ползунки вкладки «Цвет»,
+  // чтобы UI показывал те же значения, что уже применены к потоку после перезапуска.
+  async function loadSavedColor() {
+    if (!camSerial || !$("clrGamma")) return;
+    try {
+      const r = await api("/api/camera/color", { serial_number: camSerial });
+      const c = (r && r.color) || {};
+      const setR = (id, v, dp) => { const e = $(id); if (e && v != null) { e.value = v; const l = $(id + "_v"); if (l) l.textContent = dp ? Number(v).toFixed(dp) : String(v); } };
+      setR("clrGamma", c.gamma, 2); setR("clrContrast", c.contrast, 2); setR("clrBrightness", c.brightness, 0);
+      setR("clrSat", c.saturation, 2); setR("clrHue", c.hue, 0); setR("clrSharp", c.sharpness, 2);
+      const wb = c.wb || {};
+      if ($("wbAuto")) { $("wbAuto").checked = !!wb.auto; $("wbManual").classList.toggle("is-disabled", !!wb.auto); }
+      setR("wbR", wb.r, 2); setR("wbG", wb.g, 2); setR("wbB", wb.b, 2);
+      if (Array.isArray(c.ccm) && $("ccmEnable")) {
+        $("ccmEnable").checked = true;
+        document.querySelectorAll("#ccmGrid input").forEach((inp, i) => { if (c.ccm[i] != null) inp.value = c.ccm[i]; });
+      } else if ($("ccmEnable")) { $("ccmEnable").checked = false; }
+      if ($("clrPalette")) $("clrPalette").value = c.palette || "";
+      if (typeof updateColorDim === "function") updateColorDim();
+    } catch (e) { /* цвет не критичен */ }
   }
 
   async function loadCamParams() {

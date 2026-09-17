@@ -191,6 +191,7 @@
       const setR = (id, v, dp) => { const e = $(id); if (e && v != null) { e.value = v; const l = $(id + "_v"); if (l) l.textContent = dp ? Number(v).toFixed(dp) : String(v); } };
       setR("clrGamma", c.gamma, 2); setR("clrContrast", c.contrast, 2); setR("clrBrightness", c.brightness, 0);
       setR("clrSat", c.saturation, 2); setR("clrHue", c.hue, 0); setR("clrSharp", c.sharpness, 2);
+      setR("clrClarity", c.clarity, 1); setR("clrDenoise", c.denoise, 0);
       const wb = c.wb || {};
       if ($("wbAuto")) { $("wbAuto").checked = !!wb.auto; $("wbManual").classList.toggle("is-disabled", !!wb.auto); }
       setR("wbR", wb.r, 2); setR("wbG", wb.g, 2); setR("wbB", wb.b, 2);
@@ -321,7 +322,8 @@
 
     // ползунки тон/свет
     [["clrGamma", "gamma", 2], ["clrContrast", "contrast", 2], ["clrBrightness", "brightness", 0],
-     ["clrSat", "saturation", 2], ["clrHue", "hue", 0], ["clrSharp", "sharpness", 2]].forEach(([id, key, dp]) => {
+     ["clrSat", "saturation", 2], ["clrHue", "hue", 0], ["clrSharp", "sharpness", 2],
+     ["clrClarity", "clarity", 1], ["clrDenoise", "denoise", 0]].forEach(([id, key, dp]) => {
       const el = $(id); if (!el) return;
       el.addEventListener("input", () => {
         const v = Number(el.value);
@@ -360,7 +362,7 @@
     // сброс всего
     $("clrReset").addEventListener("click", () => {
       const set = (id, v, dp) => { const e = $(id); if (e) { e.value = v; const l = $(id + "_v"); if (l) l.textContent = dp ? Number(v).toFixed(dp) : String(v); } };
-      set("clrGamma", 1, 2); set("clrContrast", 1, 2); set("clrBrightness", 0, 0); set("clrSat", 1, 2); set("clrHue", 0, 0); set("clrSharp", 0, 2);
+      set("clrGamma", 1, 2); set("clrContrast", 1, 2); set("clrBrightness", 0, 0); set("clrSat", 1, 2); set("clrHue", 0, 0); set("clrSharp", 0, 2); set("clrClarity", 0, 1); set("clrDenoise", 0, 0);
       set("wbR", 1, 2); set("wbG", 1, 2); set("wbB", 1, 2);
       $("wbAuto").checked = false; $("wbManual").classList.remove("is-disabled");
       $("ccmEnable").checked = false; $("ccmPreset").value = "neutral";

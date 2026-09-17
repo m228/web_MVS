@@ -817,6 +817,8 @@ def camera_color(
     contrast: float | None = None,
     brightness: float | None = None,
     sharpness: float | None = None,   # 0 — без резкости; 0..2 — сила unsharp mask
+    clarity: float | None = None,     # 0 — выкл; локальный контраст (CLAHE)
+    denoise: float | None = None,     # 0 — выкл; шумоподавление (bilateral)
     ccm: str | None = None,        # 9 чисел через запятую (BGR 3x3) или "" — снять CCM
     palette: str | None = None,    # имя палитры или "" — без псевдоцвета
     wb_auto: int | None = None,    # 1 — авто баланс белого (серый мир), 0 — снять
@@ -849,6 +851,8 @@ def camera_color(
     if contrast is not None: patch["contrast"] = contrast
     if brightness is not None: patch["brightness"] = brightness
     if sharpness is not None: patch["sharpness"] = sharpness
+    if clarity is not None: patch["clarity"] = clarity
+    if denoise is not None: patch["denoise"] = denoise
     if ccm is not None:
         s = ccm.strip()
         if s:

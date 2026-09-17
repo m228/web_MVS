@@ -533,9 +533,17 @@ def _apply_color(img, c):
         contrast = _f(c.get("contrast"), 1.0)
         bright = _f(c.get("brightness"), 0.0)
         sharpness = _f(c.get("sharpness"), 0.0)   # 0 = без резкости; 0..2 сила unsharp mask
+        clarity = _f(c.get("clarity"), 0.0)       # 0 = выкл; локальный контраст (CLAHE clipLimit)
+        denoise = _f(c.get("denoise"), 0.0)       # 0 = выкл; сила шумоподавления (bilateral)
         ccm = c.get("ccm")
         palette = c.get("palette") or ""
         wb = c.get("wb")   # {"auto":1} | {"r":g,"g":g,"b":g} (гейны каналов)
+
+        # шумоподавление ПЕРВЫМ (чистим зерно до усиления контраста/резкости, иначе шум усилится).
+        # bilateral сохраняет грани; сила 0..10 -> sigmaColor/Space.
+        if denoise > 0.5:
+            s = float(denoise) * 12.0
+            img = cv2.bilateralFilter(img, d=5, sigmaColor=s, sigmaSpace=s)
 
         # баланс белого (на хосте): авто «серый мир» ИЛИ ручные гейны R/G/B.
         # img в BGR-порядке каналов (0=B,1=G,2=R).
@@ -574,6 +582,14 @@ def _apply_color(img, c):
         if sharpness > 0.01:
             blur = cv2.GaussianBlur(img, (0, 0), 3)
             img = cv2.addWeighted(img, 1.0 + sharpness, blur, -sharpness, 0)
+        # локальный контраст (CLAHE) по L-каналу LAB — «проявляет» структуру/грани кристаллов
+        # без ореолов unsharp. clarity = clipLimit; до палитры.
+        if clarity > 0.05:
+            lab = cv2.cvtColor(img, cv2.COLOR_BGR2LAB)
+            l, a, b = cv2.split(lab)
+            clahe = cv2.createCLAHE(clipLimit=float(clarity), tileGridSize=(8, 8))
+            l = clahe.apply(l)
+            img = cv2.cvtColor(cv2.merge((l, a, b)), cv2.COLOR_LAB2BGR)
         if palette:
             cm = _COLORMAPS.get(palette)
             if cm is not None:

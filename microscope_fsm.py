@@ -235,18 +235,20 @@ class MicroscopeFSM:
         self.m1_sp_old = self.m1_sp
         self.m2_sp_old = self.m2_sp
 
-    def _arrived(self, pos_ai, pos_enc, target):
-        # ДОЕЗД: энкодер pos1 в диапазоне ±ARRIVE_TOL_UM (±50 мкм) от цели — та же шкала мкм.
-        # pos1_ai (аналог) НЕ в шкале зазора (мал только у стекла), с целью НЕ сравниваем —
-        # берём лишь как страховку «у стекла» на подводе. step_timeout — общий предохранитель.
+    def _arrived(self, pos_ai, pos_enc, target, prefer_ai=False):
+        # ДОЕЗД. prefer_ai=True (подвод) — ориентир по АНАЛОГОВОМУ датчику pos1_ai (рег. 1271,
+        # «абсолютная позиция по датчику»): он точнее энкодера. Сравниваем |pos1_ai - target|.
+        # Иначе (отвод/возврат) — по энкодеру pos1 ±ARRIVE_TOL_UM, аналог лишь страховка «у стекла».
+        if prefer_ai and pos_ai is not None:
+            return abs(pos_ai - target) <= ARRIVE_TOL_UM
         near = pos_enc is not None and abs(pos_enc - target) <= ARRIVE_TOL_UM
         at_glass = pos_ai is not None and pos_ai < GLASS_AI
         return near or at_glass
 
-    def _reached_hold(self, pos_ai, pos_enc, target):
-        # доезд с выдержкой: в диапазоне ±50 держим ARRIVE_HOLD_TICKS (2 с), потом переход.
+    def _reached_hold(self, pos_ai, pos_enc, target, prefer_ai=False):
+        # доезд с выдержкой: в диапазоне держим ARRIVE_HOLD_TICKS (2 с), потом переход.
         # Считаем, что попал (пауза перед следующим шагом); вышел из диапазона — счётчик сброс.
-        if self._arrived(pos_ai, pos_enc, target):
+        if self._arrived(pos_ai, pos_enc, target, prefer_ai):
             self._in_range += 1
         else:
             self._in_range = 0
@@ -552,7 +554,8 @@ class MicroscopeFSM:
                 self.cw0 = True                        # промывка трубки открыта на подводе
                 self._redrive_goto()                   # повторяем goto до доезда
                 self.t += 1
-                if self._reached_hold(pos1_ai, pos1, self.m1_sp) or self.t > self._step_timeout_ticks:
+                # доезд подвода — по АНАЛОГОВОМУ датчику (рег. 1271), он точнее энкодера
+                if self._reached_hold(pos1_ai, pos1, self.m1_sp, prefer_ai=True) or self.t > self._step_timeout_ticks:
                     self.cw0 = False                   # по приходу к стеклу — закрыть трубку
                     self.t = 0
                     self._dwell_left = self._dwell_sec * 10

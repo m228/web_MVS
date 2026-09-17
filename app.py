@@ -830,7 +830,7 @@ def camera_color(
     worker = manager.get(serial_number)
     if reset:
         worker.color = {}
-        save_settings.update(serial_number, color={})   # запомнить сброс
+        plate_config.save({"camera_color": {}})   # запомнить сброс (в конфиг, входит в «Дамп»)
         return {"color": worker.color}
     patch = {}
     if wb_auto is not None or wb_r is not None or wb_g is not None or wb_b is not None:
@@ -865,7 +865,7 @@ def camera_color(
     if palette is not None:
         patch["palette"] = palette.strip()
     worker.color.update(patch)
-    save_settings.update(serial_number, color=worker.color)   # persist: применится и после перезапуска
+    plate_config.save({"camera_color": worker.color})   # persist в конфиг (входит в «Дамп»)
     return {"color": worker.color}
 
 

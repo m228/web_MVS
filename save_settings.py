@@ -18,7 +18,7 @@ STORE = DATA_DIR / "save_settings.json"
 # photo_autostart — возобновлять ли автосохранение фото при старте приложения
 # photo_format — формат автосохранения фото: "jpg" или "png" (без потерь)
 _FIELDS = ("photo_project", "photo_interval", "video_project", "video_duration",
-           "photo_autostart", "photo_format", "color")
+           "photo_autostart", "photo_format")
 
 # сериализуем read-modify-write: фронт может дублировать запросы параллельно,
 # и без лока один запрос затрёт результат другого

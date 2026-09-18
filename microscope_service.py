@@ -244,14 +244,32 @@ class MicroscopeService:
         return "abort" if not self._af_running else "timeout"
 
     def _measure(self, cam):
-        """Замер резкости: дать кадру успокоиться и усреднить пару замеров."""
-        time.sleep(0.4)
+        """Замер резкости ПОСЛЕ перемещения. Камера медленная (~1 fps), поэтому сначала ждём
+        СВЕЖИЙ кадр в новой позиции (по счётчику image_number), иначе замерим старый кадр (до
+        движения). Затем небольшой запас и усредняем пару замеров."""
+        def frame_n():
+            try:
+                return cam.metrics.get("image_number")
+            except Exception:
+                return None
+        start_n = frame_n()
+        t0 = time.time()
+        # ждём новый кадр (до 3 с — с запасом на 1 fps); если счётчика нет — просто пауза 1.2 с
+        while self._af_running and (time.time() - t0) < 3.0:
+            n = frame_n()
+            if start_n is None:
+                if (time.time() - t0) >= 1.2:
+                    break
+            elif n is not None and n != start_n:
+                break
+            time.sleep(0.1)
+        time.sleep(0.4)   # дать свежему кадру осесть
         vals = []
-        for _ in range(3):
+        for _ in range(2):
             s = cam.sharpness()
             if s is not None:
                 vals.append(s)
-            time.sleep(0.12)
+            time.sleep(0.15)
         return round(sum(vals) / len(vals), 1) if vals else None
 
     def _autofocus_run(self, cam, start, end, coarse, fine):

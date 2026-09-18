@@ -368,6 +368,10 @@
                 <div class="micro-sub__title">Таблица подвода: СВ → зазор
                   <span class="micro-ro">чем гуще (Brix), тем ближе к стеклу</span>
                 </div>
+                <label class="micro-check" title="Если включено — М2 не двигается по таблице (столбец «Фокус» игнорируется). Снимите, чтобы фокус ехал по таблице (значение 0 — тоже позиция).">
+                  <input type="checkbox" id="ignoreFocusToggle" />
+                  <span class="micro-check__text">Не использовать фокус <span class="micro-ro">(М2 по таблице не двигать)</span></span>
+                </label>
                 <table class="micro-svsp">
                   <thead><tr><th>СВ (Brix)</th><th>Зазор, мкм</th><th>Фокус, мкм</th><th></th></tr></thead>
                   <tbody id="svspBody"><!-- строки строятся в JS из SP/SVSP --></tbody>

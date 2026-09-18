@@ -62,6 +62,9 @@ class MicroscopeFSM:
         # 0 = не двигать фокус на этом пороге. Длину выравниваем под SP (старые конфиги без FOCUS).
         focus = config.get("FOCUS") or []
         self.FOCUS = [int(focus[i]) if i < len(focus) else 0 for i in range(len(self.SP))]
+        # использовать ли фокус М2 по таблице СВ. По умолчанию НЕ используем (безопасно для
+        # старых конфигов). Галочка «Не использовать фокус» на вкладке «СВ/МКМ».
+        self._ignore_focus = bool(config.get("probe_cycle", {}).get("ignore_focus", True))
         hw = config.get("hourly_wash", {})
         self._hw_enabled = bool(hw.get("enabled", True))
         self._hw_minute = int(hw.get("minute", 3))
@@ -177,6 +180,12 @@ class MicroscopeFSM:
             self.cycle_t = 0
             self._last_sv_shot = None
             return {"trigger_mode": self._trigger_mode}
+
+    def set_ignore_focus(self, on):
+        """Галочка «Не использовать фокус»: при True М2 не двигается по таблице СВ."""
+        with self._lock:
+            self._ignore_focus = bool(on)
+            return {"ignore_focus": self._ignore_focus}
 
     def set_ignore_stage(self, on):
         """«Варить без стадии»: при True авто-цикл не проверяет стадию варки 3..9
@@ -549,8 +558,10 @@ class MicroscopeFSM:
                     if self.sv >= self.SVSP[i] and self.SVSP[i] > 0.0:
                         self.m1_sp = self.SP[i]
                         focus = self.FOCUS[i] if i < len(self.FOCUS) else 0
-                if focus > 0:
-                    self.m2_sp = focus                 # фокус М2 по таблице (0 = не трогать)
+                # фокус применяем, если он ВКЛЮЧЁН галочкой. Значение 0 — валидная позиция
+                # (новый ноль после set_zero): М2 притянется к 0, а не «не трогать».
+                if not self._ignore_focus:
+                    self.m2_sp = focus
                 self.cw0 = True                        # промывка трубки открыта на подводе
                 self._redrive_goto()                   # повторяем goto до доезда
                 self.t += 1

@@ -193,7 +193,8 @@ DEFAULTS = {
     # когда ПЛК не двигает стадию, а СВ растёт). По умолчанию False (гейт стадии активен).
     "probe_cycle": {"retract_pos": 20000, "pre_wash_sec": 4, "dwell_sec": 15,
                     "shot_interval_sec": 3, "pause_sec": 60, "photo_format": "png",
-                    "trigger_mode": "time", "sv_from": 84, "sv_to": 92, "ignore_stage": False},
+                    "trigger_mode": "time", "sv_from": 84, "sv_to": 92, "ignore_stage": False,
+                    "ignore_focus": True},
 
     # микроскоп включён? False -> приложение не поднимает плату/ПЛК/автоцикл (галочка на
     # главной). По умолчанию True — поведение как раньше. Меняется со страницы на лету.

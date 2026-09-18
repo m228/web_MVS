@@ -238,6 +238,12 @@ def micro_ignore_stage(on: int):
     return micro.set_ignore_stage(bool(on))
 
 
+@app.get("/api/micro/ignore_focus")
+def micro_ignore_focus(on: int):
+    # галочка «Не использовать фокус» — М2 не двигается по таблице СВ (0 тоже валиден)
+    return micro.set_ignore_focus(bool(on))
+
+
 @app.get("/api/micro/m1_stop_sensor")
 def micro_m1_stop_sensor(value: float):
     # порог аппаратной блокировки «Стоп М1 при положении аналог. датчика» (рег. 1234, мкм)

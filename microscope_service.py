@@ -328,6 +328,17 @@ class MicroscopeService:
         log_event("microscope_service", "Автофокус завершён", "info",
                   {"best": best_row, "points": len(table), "message": message})
 
+    def set_ignore_focus(self, on):
+        """Галочка «Не использовать фокус» (вкладка СВ/МКМ) — сразу, persist в конфиг."""
+        on = bool(on)
+        res = self.fsm.set_ignore_focus(on) if self.fsm else {"ignore_focus": on}
+        plate_config.save({"probe_cycle": {"ignore_focus": on}})
+        if self.cfg is not None:
+            self.cfg.setdefault("probe_cycle", {})["ignore_focus"] = on
+        log_event("microscope_service", "Фокус по таблице: " + ("выкл" if on else "вкл"),
+                  "info", {"ignore_focus": on})
+        return res
+
     def set_m1_stop_sensor(self, value):
         """Записать порог аппаратной блокировки «Стоп М1 при положении аналог. датчика» в
         регистр прошивки (1234, m1_stop_sensor, мкм). Прошивка сама стопит М1 у предела."""

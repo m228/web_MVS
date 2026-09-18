@@ -619,6 +619,7 @@
           const fmSw = $("pcFormatSw"); if (fmSw) fmSw.checked = (pc.photo_format === "jpg");
           const fmSt = $("pcFormatState"); if (fmSt) fmSt.textContent = (pc.photo_format === "jpg") ? "JPG" : "PNG";
           const ignT = $("ignoreStageToggle"); if (ignT) ignT.checked = !!pc.ignore_stage;
+          const ifT = $("ignoreFocusToggle"); if (ifT) ifT.checked = pc.ignore_focus !== false;
           updateTriggerFields();
         }
         const ca = $("cycleAutostartToggle"); if (ca) ca.checked = !!cfg.cycle_autostart;
@@ -960,6 +961,11 @@
     // таблица подвода СВ->зазор (вкладка «СВ/МКМ»)
     if ($("svspAdd")) $("svspAdd").addEventListener("click", () => addSvspRow("", ""));
     if ($("svspSave")) $("svspSave").addEventListener("click", saveSvsp);
+    const ifT = $("ignoreFocusToggle");
+    if (ifT) ifT.addEventListener("change", () => {
+      api("/api/micro/ignore_focus", { on: ifT.checked ? 1 : 0 }).catch(() => {});
+      sentCmd("Фокус по таблице: " + (ifT.checked ? "не использовать" : "использовать"));
+    });
 
     // DEBUG: ручной ввод СВ/стадии для отладки цикла (убрать после отладки)
     const svOv = $("svOverrideToggle");

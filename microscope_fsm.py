@@ -83,6 +83,13 @@ class MicroscopeFSM:
         # тогда авто-цикл гоняем БЕЗ проверки стадии 3..9 (только по триггеру время/СВ).
         self._ignore_stage = bool(pc.get("ignore_stage", False))
         self._last_sv_shot = None    # последнее целое СВ, на котором взяли пробу (режим "sv")
+        # блокировка хода М1 по аналоговому датчику 1271 (защита трубки от ухода за предел):
+        # при pos1_ai >= max_um — СТОП М1 (кроме движения назад, от предела).
+        lim = config.get("m1_sensor_limit", {})
+        self._m1_limit_on = bool(lim.get("enabled", False))
+        self._m1_limit_um = float(lim.get("max_um", 9000))
+        self._m1_blocked = False       # сейчас блокировка активна (для лога по фронту и UI)
+        self._prev_pos_ai = None       # прошлое pos1_ai — определить направление (отъезд назад)
         # подтверждение выхода из ручного при старте варки: если стадия ВХОДИТ в рабочую зону
         # (3..9), а мы в ручном — поднимаем флаг, UI спрашивает оператора «перейти в Автомат?».
         self._manual_confirm = False
@@ -185,6 +192,15 @@ class MicroscopeFSM:
             self._ignore_stage = bool(on)
             self._last_sv_shot = None
             return {"ignore_stage": self._ignore_stage}
+
+    def set_m1_limit(self, on=None, max_um=None):
+        """Блокировка хода М1 по датчику 1271: вкл/выкл и порог (мкм)."""
+        with self._lock:
+            if on is not None:
+                self._m1_limit_on = bool(on)
+            if max_um is not None:
+                self._m1_limit_um = float(max_um)
+            return {"enabled": self._m1_limit_on, "max_um": self._m1_limit_um}
 
     def start_sample(self):
         """Кнопка «Взять пробу»: запустить последовательность (отвод→промывка→подвод→
@@ -395,6 +411,9 @@ class MicroscopeFSM:
                 "stage_ok": self._ignore_stage or (CYCLE_STAGE_MIN <= self.stage <= CYCLE_STAGE_MAX),
                 "last_sv_shot": self._last_sv_shot,   # на каком целом СВ взяли последнюю пробу (режим sv)
                 "manual_confirm": self._manual_confirm,   # варка началась, а мы в ручном — спросить оператора
+                "m1_limit_on": self._m1_limit_on,     # блокировка хода М1 по датчику 1271
+                "m1_limit_um": self._m1_limit_um,
+                "m1_blocked": self._m1_blocked,       # блокировка сейчас активна (М1 остановлен)
                 "cycle_params": {
                     "retract_pos": self._retract_pos,
                     "pre_wash_sec": self._pre_wash_sec,
@@ -632,7 +651,30 @@ class MicroscopeFSM:
         pos2 = telem.get("pos2")
         connected = self.plate.status.get("connected", False)
 
+        # БЛОКИРОВКА хода М1 по датчику 1271 (защита трубки): при pos1_ai >= предела — СТОП М1.
+        # Работает в ЛЮБОМ режиме (в т.ч. ручном). Движение НАЗАД (от предела) разрешаем, иначе
+        # мотор застрянет за пределом. Лог — один раз по фронту срабатывания.
+        blocked = False
+        if self._m1_limit_on and pos1_ai is not None and pos1_ai >= self._m1_limit_um:
+            going_back = self._prev_pos_ai is not None and pos1_ai < self._prev_pos_ai - 2
+            if not going_back:
+                blocked = True
+                if connected:
+                    self.plate.motor_stop(1)
+                if not self._m1_blocked:
+                    self._m1_blocked = True
+                    log_event("microscope_fsm",
+                              "Блокировка М1: датчик 1271 = %.0f >= предел %.0f мкм — СТОП" % (
+                                  pos1_ai, self._m1_limit_um),
+                              "warn", {"pos1_ai": pos1_ai, "limit_um": self._m1_limit_um})
+            elif self._m1_blocked:
+                self._m1_blocked = False   # отъезжает назад — снять блокировку
+        elif self._m1_blocked:
+            self._m1_blocked = False       # ушёл из зоны предела
+        self._prev_pos_ai = pos1_ai
+
         # РУЧНОЙ РЕЖИМ: автомат не трогает плату — всем (моторы/LED/клапаны) рулит пульт.
+        # (блокировка выше уже дала СТОП М1, если нужно)
         if manual:
             return
 
@@ -666,10 +708,12 @@ class MicroscopeFSM:
         elif connected and not out["inhibit"]:
             # движение обоих моторов — только при связи и снятом запрете.
             # позицию пишем всегда (OUT-блок дедуплицирует по изменению), команду — по фронту.
-            self.plate.write_m1_sp(out["m1_sp"])
+            # М1 не двигаем, если сработала блокировка по датчику (защита трубки).
+            if not blocked:
+                self.plate.write_m1_sp(out["m1_sp"])
+                if emit_cmd1:
+                    self.plate.cmd1(CMD_SET_SP1)
             self.plate.write_m2_sp(out["m2_sp"])
-            if emit_cmd1:
-                self.plate.cmd1(CMD_SET_SP1)
             if emit_cmd2:
                 self.plate.cmd2(CMD_SET_SP2)
 

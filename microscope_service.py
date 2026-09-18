@@ -328,6 +328,21 @@ class MicroscopeService:
         log_event("microscope_service", "Автофокус завершён", "info",
                   {"best": best_row, "points": len(table), "message": message})
 
+    def set_m1_limit(self, on=None, max_um=None):
+        """Блокировка хода М1 по датчику 1271 (вкл/порог) — сразу, без reload, persist в конфиг."""
+        res = self.fsm.set_m1_limit(on, max_um) if self.fsm else {}
+        patch = {"m1_sensor_limit": {}}
+        if on is not None:
+            patch["m1_sensor_limit"]["enabled"] = bool(on)
+        if max_um is not None:
+            patch["m1_sensor_limit"]["max_um"] = float(max_um)
+        if patch["m1_sensor_limit"]:
+            plate_config.save(patch)
+            if self.cfg is not None:
+                self.cfg.setdefault("m1_sensor_limit", {}).update(patch["m1_sensor_limit"])
+        log_event("microscope_service", "Блокировка хода М1 по датчику изменена", "info", patch["m1_sensor_limit"])
+        return res
+
     def set_cycle_autostart(self, on):
         """Запомнить галочку «Автостарт цикла» в конфиг БЕЗ перезапуска платы."""
         on = bool(on)

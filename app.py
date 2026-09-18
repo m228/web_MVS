@@ -238,6 +238,12 @@ def micro_ignore_stage(on: int):
     return micro.set_ignore_stage(bool(on))
 
 
+@app.get("/api/micro/m1_limit")
+def micro_m1_limit(on: int | None = None, max_um: float | None = None):
+    # блокировка хода М1 по датчику 1271 (защита трубки): вкл/выкл + порог
+    return micro.set_m1_limit(None if on is None else bool(on), max_um)
+
+
 @app.get("/api/micro/autofocus")
 def micro_autofocus(start: int = 0, end: int = 80000, coarse: int = 500, fine: int = 100):
     # запустить автофокус М2 (двухпроходный поиск по резкости), только в ручном режиме

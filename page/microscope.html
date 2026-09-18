@@ -351,6 +351,16 @@
                   <div class="micro-tile"><span>Воздух вкл / откл, °C</span><b id="cAirTh">—</b></div>
                   <div class="micro-tile"><span>Камера вкл / откл, °C</span><b id="cCamTh">—</b></div>
                 </div>
+
+                <div class="micro-sub__title micro-sub__title--sep">Блокировка хода М1 (защита трубки)</div>
+                <label class="micro-check" title="При достижении датчиком 1271 порога автомат жмёт СТОП М1 (движение назад разрешено), чтобы трубка не ушла за предел.">
+                  <input type="checkbox" id="m1LimitToggle" />
+                  <span class="micro-check__text">Стоп М1 по датчику 1271 при пределе</span>
+                </label>
+                <div class="micro-cycle-f" style="max-width:320px">
+                  <span>Порог, мкм</span><input type="number" id="m1LimitUm" step="100" value="9000" />
+                </div>
+                <p class="micro-plc-note">Датчик 1271 (абс. позиция) сейчас: <b id="m1LimitNow">—</b> · состояние: <b id="m1LimitState">норма</b>. Отъезд назад (от предела) разрешён.</p>
               </div>
 
               <!-- Мнемосхема вакуум-аппарата (данные с ПЛК) -->

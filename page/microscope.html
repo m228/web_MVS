@@ -340,7 +340,6 @@
                   <div class="micro-tile"><span>Шагов/оборот М1 / М2</span><b id="sStepsRev">—</b></div>
                   <div class="micro-tile"><span>Расст./оборот М1 / М2, мкм</span><b id="sDistRev">—</b></div>
                   <div class="micro-tile"><span>K шагов/мм М1 / М2</span><b id="sKmm">—</b></div>
-                  <div class="micro-tile"><span>Стоп М1 по датчику, мкм</span><b id="sStopSensor">—</b></div>
                   <div class="micro-tile"><span>Лимит проскальз. М1, мкм</span><b id="sSlipLimit">—</b></div>
                 </div>
                 <div class="micro-sub__title micro-sub__title--sep">Охлаждение</div>
@@ -352,15 +351,15 @@
                   <div class="micro-tile"><span>Камера вкл / откл, °C</span><b id="cCamTh">—</b></div>
                 </div>
 
-                <div class="micro-sub__title micro-sub__title--sep">Блокировка хода М1 (защита трубки)</div>
-                <label class="micro-check" title="При достижении датчиком 1271 порога автомат жмёт СТОП М1 (движение назад разрешено), чтобы трубка не ушла за предел.">
-                  <input type="checkbox" id="m1LimitToggle" />
-                  <span class="micro-check__text">Стоп М1 по датчику 1271 при пределе</span>
-                </label>
-                <div class="micro-cycle-f" style="max-width:320px">
-                  <span>Порог, мкм</span><input type="number" id="m1LimitUm" step="100" value="9000" />
+                <div class="micro-sub__title micro-sub__title--sep">Стоп М1 при положении аналог. датчика (защита трубки)</div>
+                <div class="micro-cycle-f" style="max-width:360px">
+                  <span>Порог (рег. 1234), мкм</span><input type="number" id="m1StopSensorInp" step="100" value="9000" />
                 </div>
-                <p class="micro-plc-note">Датчик 1271 (абс. позиция) сейчас: <b id="m1LimitNow">—</b> · состояние: <b id="m1LimitState">норма</b>. Отъезд назад (от предела) разрешён.</p>
+                <div class="micro-svsp-actions">
+                  <button type="button" id="m1StopSensorSave" class="toolbar-btn toolbar-btn--primary">Записать в плату</button>
+                  <span class="micro-conn-hint" id="m1StopSensorHint"></span>
+                </div>
+                <p class="micro-plc-note">Аппаратная блокировка прошивки: при достижении датчиком порога плата сама останавливает М1. Текущее в плате: <b id="sStopSensor">—</b> мкм.</p>
               </div>
 
               <!-- Мнемосхема вакуум-аппарата (данные с ПЛК) -->

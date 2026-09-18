@@ -328,20 +328,17 @@ class MicroscopeService:
         log_event("microscope_service", "Автофокус завершён", "info",
                   {"best": best_row, "points": len(table), "message": message})
 
-    def set_m1_limit(self, on=None, max_um=None):
-        """Блокировка хода М1 по датчику 1271 (вкл/порог) — сразу, без reload, persist в конфиг."""
-        res = self.fsm.set_m1_limit(on, max_um) if self.fsm else {}
-        patch = {"m1_sensor_limit": {}}
-        if on is not None:
-            patch["m1_sensor_limit"]["enabled"] = bool(on)
-        if max_um is not None:
-            patch["m1_sensor_limit"]["max_um"] = float(max_um)
-        if patch["m1_sensor_limit"]:
-            plate_config.save(patch)
-            if self.cfg is not None:
-                self.cfg.setdefault("m1_sensor_limit", {}).update(patch["m1_sensor_limit"])
-        log_event("microscope_service", "Блокировка хода М1 по датчику изменена", "info", patch["m1_sensor_limit"])
-        return res
+    def set_m1_stop_sensor(self, value):
+        """Записать порог аппаратной блокировки «Стоп М1 при положении аналог. датчика» в
+        регистр прошивки (1234, m1_stop_sensor, мкм). Прошивка сама стопит М1 у предела."""
+        if not self.plate:
+            return {"error": "not_started"}
+        reg = int(((self.cfg or {}).get("ext_map", {}).get("m1_stop_sensor", {})).get("reg", 1234))
+        val = int(round(float(value)))
+        self.plate.write_reg(reg, val)
+        log_event("microscope_service", "Стоп М1 по датчику (рег. %d) = %d мкм" % (reg, val),
+                  "info", {"reg": reg, "value": val})
+        return {"status": "ok", "reg": reg, "value": val}
 
     def set_cycle_autostart(self, on):
         """Запомнить галочку «Автостарт цикла» в конфиг БЕЗ перезапуска платы."""

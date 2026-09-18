@@ -622,9 +622,6 @@
           updateTriggerFields();
         }
         const ca = $("cycleAutostartToggle"); if (ca) ca.checked = !!cfg.cycle_autostart;
-        const ml = cfg.m1_sensor_limit || {};
-        if ($("m1LimitToggle")) $("m1LimitToggle").checked = !!ml.enabled;
-        if ($("m1LimitUm") && ml.max_um != null) $("m1LimitUm").value = ml.max_um;
         cfgSerial = cfg.camera_serial || "";
       }
     } catch (e) { /* конфиг недоступен */ }
@@ -812,13 +809,6 @@
       // СВ рядом с видео камеры (телеметрия камеры) — чтобы было видно при просмотре потока
       set("camSv_v", f.sv == null ? "—" : Number(f.sv).toFixed(1));
 
-      // блокировка М1 по датчику 1271: текущее значение + состояние
-      set("m1LimitNow", t.pos1_ai == null ? "—" : t.pos1_ai + " мкм");
-      const mlState = $("m1LimitState");
-      if (mlState) {
-        mlState.textContent = f.m1_blocked ? "БЛОКИРОВКА — М1 стоп" : "норма";
-        mlState.style.color = f.m1_blocked ? "var(--danger, #d33)" : "";
-      }
       set("cycTarget", f.target == null ? "—" : f.target + " мкм");
       set("cycPos", um(t.pos1));
       set("cycTube", f.valve_tube ? "открыт" : "закрыт");
@@ -929,15 +919,14 @@
   function wire() {
     $("btnReload").addEventListener("click", async () => { await api("/api/micro/reload"); initCamera(); });
 
-    const m1lT = $("m1LimitToggle");
-    if (m1lT) m1lT.addEventListener("change", () => {
-      api("/api/micro/m1_limit", { on: m1lT.checked ? 1 : 0 }).catch(() => {});
-      sentCmd("Блокировка М1 по датчику: " + (m1lT.checked ? "вкл" : "выкл"));
-    });
-    const m1lU = $("m1LimitUm");
-    if (m1lU) m1lU.addEventListener("change", () => {
-      api("/api/micro/m1_limit", { max_um: m1lU.value }).catch(() => {});
-      sentCmd("Порог блокировки М1: " + m1lU.value + " мкм");
+    const m1ssSave = $("m1StopSensorSave");
+    if (m1ssSave) m1ssSave.addEventListener("click", async () => {
+      const h = $("m1StopSensorHint");
+      try {
+        await api("/api/micro/m1_stop_sensor", { value: $("m1StopSensorInp").value });
+        if (h) { h.textContent = "записано в плату"; setTimeout(() => { h.textContent = ""; }, 2500); }
+        sentCmd("Стоп М1 по датчику: " + $("m1StopSensorInp").value + " мкм");
+      } catch (e) { if (h) h.textContent = "ошибка: " + e.message; }
     });
 
     const caT = $("cycleAutostartToggle");

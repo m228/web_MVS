@@ -326,7 +326,7 @@ class MicroscopeFSM:
             self._raise_fault("подгон по датчику не сошёлся за %d попыток (Δ=%d мкм)"
                               % (self._fa_max_retry, diff))
             return False
-        self._fa_shift_req = pos_ai - self.m1_sp         # сдвиг = Датчик−Задание (Задание>Датчик → назад)
+        self._fa_shift_req = self.m1_sp - pos_ai         # сдвиг = Задание−Датчик (знак по факту железа: гнало от цели)
         self._fa_retry += 1
         self._fa_wait = max(1, int(round(self._fa_pause_sec / self._period)))
         return False
@@ -817,7 +817,7 @@ class MicroscopeFSM:
         elif connected and not out["inhibit"]:
             # движение обоих моторов — только при связи и снятом запрете.
             if shift_req is not None:
-                # точный подгон по датчику: нативный сдвиг на разницу (Датчик−Задание).
+                # точный подгон по датчику: нативный сдвиг на разницу (Задание−Датчик).
                 # знак -> направление (>=0 вперёд), модуль -> величина shift. goto к m1_sp в этом
                 # тике НЕ шлём, чтобы не конфликтовать со сдвигом.
                 self.plate.motor_enable(1, True)

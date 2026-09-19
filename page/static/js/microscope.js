@@ -629,6 +629,12 @@
         const sfS = $("sensorFilterSec");
         if (sfS) { if (sf.avg_sec != null) sfS.value = sf.avg_sec; sfS.disabled = !(sfT && sfT.checked); }
         const sds = $("sensorDisplayScale"); if (sds && cfg.sensor_display_scale != null) sds.value = cfg.sensor_display_scale;
+        // довод по абсолютнику (гибридный доезд подвода): галочка + допуски/повторы/пауза
+        const fa = cfg.fine_approach || {};
+        const faT = $("fineApproachToggle"); if (faT) faT.checked = !!fa.enabled;
+        const faSet = (id, v) => { const e = $(id); if (e && v != null) e.value = v; };
+        faSet("faCoarse", fa.coarse_tol_um); faSet("faFine", fa.fine_tol_um);
+        faSet("faRetry", fa.max_retry); faSet("faPause", fa.pause_sec);
         cfgSerial = cfg.camera_serial || "";
       }
     } catch (e) { /* конфиг недоступен */ }
@@ -815,6 +821,9 @@
       // вкладка «Цикл»: живой шаг + таймеры
       const cb = $("cycStepBadge"); if (cb) cb.textContent = f.step || "—";
       set("cycLabel", f.label || "—");
+      // авария (подгон не сошёлся и т.п.): показать кнопку сброса, подсветить статус
+      const faCF = $("faClearFault"); if (faCF) faCF.hidden = !f.fault;
+      const cl = $("cycLabel"); if (cl) cl.classList.toggle("is-fault", !!f.fault);
       set("cycSv", f.sv == null ? "—" : Number(f.sv).toFixed(1));
       // СВ рядом с видео камеры (телеметрия камеры) — чтобы было видно при просмотре потока
       set("camSv_v", f.sv == null ? "—" : Number(f.sv).toFixed(1));
@@ -966,6 +975,27 @@
         if (h) { h.textContent = "сохранено"; setTimeout(() => { h.textContent = ""; }, 2500); }
         sentCmd("Фильтр датчика сохранён");
       } catch (e) { if (h) h.textContent = "ошибка: " + e.message; }
+    });
+
+    // довод по абсолютнику: галочка + поля (каждое по change шлёт настройку) + сброс аварии
+    const faT = $("fineApproachToggle");
+    if (faT) faT.addEventListener("change", () => {
+      api("/api/micro/fine_approach", { enabled: faT.checked ? 1 : 0 }).catch(() => {});
+      if (cfg) (cfg.fine_approach = cfg.fine_approach || {}).enabled = faT.checked;
+      sentCmd("Довод по абсолютнику: " + (faT.checked ? "вкл" : "выкл"));
+    });
+    [["faCoarse", "coarse_tol_um"], ["faFine", "fine_tol_um"], ["faRetry", "max_retry"], ["faPause", "pause_sec"]]
+      .forEach(([id, key]) => {
+        const el = $(id);
+        if (el) el.addEventListener("change", () => {
+          const p = {}; p[key] = el.value;
+          api("/api/micro/fine_approach", p).catch(() => {});
+          if (cfg) (cfg.fine_approach = cfg.fine_approach || {})[key] = Number(el.value);
+        });
+      });
+    const faCF = $("faClearFault");
+    if (faCF) faCF.addEventListener("click", () => {
+      api("/api/micro/clear_fault").then(() => sentCmd("Авария сброшена")).catch(() => {});
     });
 
     const caT = $("cycleAutostartToggle");

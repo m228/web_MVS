@@ -91,6 +91,15 @@ class MicroscopeFSM:
         self._manual_confirm = False
         self._stage_prev_in = False   # была ли стадия в рабочей зоне на прошлом такте (для фронта)
 
+        # довод подвода по абсолютнику (гибридный доезд mode 22): грубо по расчётной абс.позиции
+        # 1274, точно по датчику 1271. Параметры правятся на вкладке «Цикл».
+        fa = config.get("fine_approach", {}) or {}
+        self._fa_enabled = bool(fa.get("enabled", False))
+        self._fa_coarse_tol = int(fa.get("coarse_tol_um", 100))
+        self._fa_fine_tol = int(fa.get("fine_tol_um", 20))
+        self._fa_max_retry = int(fa.get("max_retry", 3))
+        self._fa_pause_sec = max(0.5, float(fa.get("pause_sec", 3)))
+
         self._period = max(0.02, int(config["poll_interval_ms"]) / 1000.0)
         # предохранитель шага цикла (тики по 100мс): нормальный выход — «доехал», а это
         # защита от зависания. Большой, т.к. реальная плата едет медленно (см. step_timeout_s).
@@ -141,6 +150,14 @@ class MicroscopeFSM:
         self._shot_t = 0              # тики с прошлого скрина
         self._redrive = 0             # тики с прошлого повтора goto в шаге движения
         self._in_range = 0            # тиков подряд в диапазоне ±50 у цели (выдержка перед переходом)
+        # состояние гибридного доезда подвода (mode 22)
+        self._fa_phase = None         # None / 'coarse' (грубо по 1274) / 'fine' (подгон по 1271)
+        self._fa_retry = 0            # сделано подгонов по датчику
+        self._fa_wait = 0             # тиков паузы между сдвигами (устаканиться)
+        self._fa_shift_req = None     # знаковый сдвиг (мкм) на плату в этом тике (иначе None)
+        # авария (подгон не сошёлся / watchdog): цикл стоп, видно в UI
+        self._fault = False
+        self._fault_msg = ""
 
         self._lock = threading.Lock()
         self._thread = None
@@ -272,6 +289,82 @@ class MicroscopeFSM:
             self._redrive = 0
             self._emit_cmd1 = True
 
+    def _approach_step(self, pos_enc, pos_ai):
+        """Гибридный доезд подвода (mode 22), вызывается ПОД локом. Возврат True = доехали.
+        Фаза 'coarse': ведём мотор к заданию по РАСЧЁТНОЙ абс.позиции 1274 (pos_enc) — НЕ по
+        энкодеру 1285 (врёт) — до ±coarse_tol, чтобы не перелететь (кристалл). Фаза 'fine':
+        подгон по ДАТЧИКУ 1271 (pos_ai): diff=Задание−Датчик; сдвиг мотора=(Датчик−Задание)
+        [Задание>Датчик → назад]; пауза pause_sec; замер; повтор, пока |diff|≤fine_tol.
+        Не сошлось за max_retry → авария."""
+        if pos_enc is None:
+            return False
+        if self._fa_phase is None:
+            self._fa_phase = "coarse"
+            self._fa_retry = 0
+            self._fa_wait = 0
+        if self._fa_phase == "coarse":
+            self._redrive_goto()                         # ведём к заданию (m1_sp) по расчётной 1274
+            if abs(pos_enc - self.m1_sp) <= self._fa_coarse_tol:
+                self._fa_phase = "fine"
+                self._fa_wait = 0
+                self._redrive = 0
+            return False
+        # fine — подгон по датчику
+        if pos_ai is None:
+            return False
+        if self._fa_wait > 0:                            # ждём, пока сдвиг доедет и датчик осядет
+            self._fa_wait -= 1
+            return False
+        diff = self.m1_sp - pos_ai                       # Задание − Датчик
+        if abs(diff) <= self._fa_fine_tol:
+            return True                                  # датчик у задания — доехали
+        if self._fa_retry >= self._fa_max_retry:
+            self._raise_fault("подгон по датчику не сошёлся за %d попыток (Δ=%d мкм)"
+                              % (self._fa_max_retry, diff))
+            return False
+        self._fa_shift_req = pos_ai - self.m1_sp         # сдвиг = Датчик−Задание (Задание>Датчик → назад)
+        self._fa_retry += 1
+        self._fa_wait = max(1, int(round(self._fa_pause_sec / self._period)))
+        return False
+
+    def _raise_fault(self, msg):
+        """Авария (вызывается ПОД локом): стоп цикла + авто-цикла + аварийный стоп моторов.
+        Держится, пока оператор не снимет (clear_fault). Видно в UI (label)."""
+        self._fault = True
+        self._fault_msg = msg
+        self.mode = 0
+        self.sw0 = False
+        self._fa_phase = None
+        self._halt = True
+        self.sw3 = True
+        log_event("microscope_fsm", "АВАРИЯ: " + msg, "error", {"msg": msg})
+
+    def clear_fault(self):
+        """Сброс аварии оператором: снять запрет движения, погасить флаг."""
+        with self._lock:
+            self._fault = False
+            self._fault_msg = ""
+            self.sw3 = False
+        return {"status": "cleared"}
+
+    def set_fine_approach(self, enabled=None, coarse_tol_um=None, fine_tol_um=None,
+                          max_retry=None, pause_sec=None):
+        """Настройка гибридного доезда на лету (без reload)."""
+        with self._lock:
+            if enabled is not None:
+                self._fa_enabled = bool(enabled)
+            if coarse_tol_um is not None:
+                self._fa_coarse_tol = int(coarse_tol_um)
+            if fine_tol_um is not None:
+                self._fa_fine_tol = int(fine_tol_um)
+            if max_retry is not None:
+                self._fa_max_retry = int(max_retry)
+            if pause_sec is not None:
+                self._fa_pause_sec = max(0.5, float(pause_sec))
+            return {"enabled": self._fa_enabled, "coarse_tol_um": self._fa_coarse_tol,
+                    "fine_tol_um": self._fa_fine_tol, "max_retry": self._fa_max_retry,
+                    "pause_sec": self._fa_pause_sec}
+
     def reset_cycle(self):
         """Кнопка «Сброс»: прервать цикл — в Ожидание, закрыть клапаны, погасить повтор
         (мотор перестаёт получать goto и останавливается). Ручной режим/запрет не трогаем."""
@@ -281,6 +374,9 @@ class MicroscopeFSM:
             self.cycle_t = 0
             self._redrive = 0
             self._dwell_left = 0
+            self._fa_phase = None
+            self._fa_retry = 0
+            self._fa_wait = 0
             self.cw0 = False
             self.cw1 = False
         return {"status": "reset"}
@@ -347,14 +443,23 @@ class MicroscopeFSM:
     def state(self):
         with self._lock:
             m = self.mode
+            # сколько секунд до таймаута текущего шага движения (чтобы было видно: идёт отсчёт,
+            # а не зависло). Только для шагов, где крутится таймер шага self.t.
+            step_left = (max(0, self._step_timeout_ticks - self.t) // 10) if m in (20, 22, 24) else None
             # человекочитаемая подпись текущего действия (для вкладки «Цикл»)
-            if m == 20:
-                label = "Отвожу в %d мкм" % self._retract_pos
+            if self._fault:
+                label = "⚠ АВАРИЯ: %s — снимите на вкладке «Настр»" % self._fault_msg
+            elif m == 20:
+                label = "Отвожу в %d мкм · таймаут %d с" % (self._retract_pos, step_left)
             elif m == 21:
                 left = max(0, self._pre_wash_sec * 10 - self.t) // 10
                 label = "Промывка стекла+трубки: осталось %d с" % left
             elif m == 22:
-                label = "Подвожу к %d мкм (по СВ %.1f)" % (self.m1_sp, self.sv)
+                if self._fa_enabled and self._fa_phase == "fine":
+                    label = "Подгон по датчику к %d мкм (попытка %d/%d) · таймаут %d с" % (
+                        self.m1_sp, self._fa_retry, self._fa_max_retry, step_left)
+                else:
+                    label = "Подвожу к %d мкм (по СВ %.1f) · таймаут %d с" % (self.m1_sp, self.sv, step_left)
             elif m == 23:
                 label = "Проба · выдержка: осталось %d с (скрин каждые %d с)" % (
                     max(0, self._dwell_left) // 10, self._shot_interval_sec)
@@ -386,6 +491,17 @@ class MicroscopeFSM:
                 "target": self.m1_sp if m in (20, 22, 24) else None,
                 "pre_wash_left_s": max(0, self._pre_wash_sec * 10 - self.t) // 10 if m == 21 else None,
                 "dwell_left_s": max(0, self._dwell_left) // 10 if m == 23 else None,
+                "step_timeout_left_s": step_left,   # тикающий отсчёт до таймаута шага движения
+                "fault": self._fault,
+                "fault_msg": self._fault_msg,
+                "fa_phase": self._fa_phase,   # None/'coarse'/'fine' — фаза гибридного доезда
+                "fine_approach": {
+                    "enabled": self._fa_enabled,
+                    "coarse_tol_um": self._fa_coarse_tol,
+                    "fine_tol_um": self._fa_fine_tol,
+                    "max_retry": self._fa_max_retry,
+                    "pause_sec": self._fa_pause_sec,
+                },
                 "cyclic": self.sw0,
                 "inhibit": self.sw3,
                 "manual": self.manual,
@@ -530,6 +646,7 @@ class MicroscopeFSM:
             # 5) НОВЫЙ цикл пробы (шаги 20→21→22→23→24). Доезд = энкодер у цели + мотор остановился.
             if self.mode == 0:
                 self._redrive = 0; self._in_range = 0
+                self._fa_phase = None; self._fa_retry = 0; self._fa_wait = 0
             elif self.mode == 20:
                 # отвод в retract_pos (напр. 20000 мкм)
                 self.m1_sp = self._retract_pos
@@ -563,12 +680,19 @@ class MicroscopeFSM:
                 if not self._ignore_focus:
                     self.m2_sp = focus
                 self.cw0 = True                        # промывка трубки открыта на подводе
-                self._redrive_goto()                   # повторяем goto до доезда
                 self.t += 1
-                # доезд подвода — по АНАЛОГОВОМУ датчику (рег. 1271), он точнее энкодера
-                if self._reached_hold(pos1_ai, pos1, self.m1_sp, prefer_ai=True) or self.t > self._step_timeout_ticks:
+                # доезд подвода. Галочка «Довод по абсолютнику»: грубо по расчётной 1274,
+                # потом точный подгон по датчику 1271 (см. _approach_step). Иначе — старое
+                # поведение: доезд по датчику с выдержкой (_reached_hold prefer_ai).
+                if self._fa_enabled:
+                    arrived = self._approach_step(pos1, pos1_ai)
+                else:
+                    self._redrive_goto()
+                    arrived = self._reached_hold(pos1_ai, pos1, self.m1_sp, prefer_ai=True)
+                if arrived or self.t > self._step_timeout_ticks:
                     self.cw0 = False                   # по приходу к стеклу — закрыть трубку
                     self.t = 0
+                    self._fa_phase = None; self._fa_retry = 0; self._fa_wait = 0
                     self._dwell_left = self._dwell_sec * 10
                     self._shot_t = 0
                     self._photo_request = True         # первый скрин сразу у стекла
@@ -639,6 +763,7 @@ class MicroscopeFSM:
             emit_cmd2 = self._emit_cmd2; self._emit_cmd2 = False
             photo_request = self._photo_request; self._photo_request = False
             video_request = self._video_request; self._video_request = 0
+            shift_req = self._fa_shift_req; self._fa_shift_req = None   # знаковый сдвиг подгона (мкм)
 
         pos2 = telem.get("pos2")
         connected = self.plate.status.get("connected", False)
@@ -677,10 +802,18 @@ class MicroscopeFSM:
                     self.m2_sp_old = pos2
         elif connected and not out["inhibit"]:
             # движение обоих моторов — только при связи и снятом запрете.
-            # позицию пишем всегда (OUT-блок дедуплицирует по изменению), команду — по фронту.
-            self.plate.write_m1_sp(out["m1_sp"])
-            if emit_cmd1:
-                self.plate.cmd1(CMD_SET_SP1)
+            if shift_req is not None:
+                # точный подгон по датчику: нативный сдвиг на разницу (Датчик−Задание).
+                # знак -> направление (>=0 вперёд), модуль -> величина shift. goto к m1_sp в этом
+                # тике НЕ шлём, чтобы не конфликтовать со сдвигом.
+                self.plate.motor_enable(1, True)
+                self.plate.motor_direction(1, shift_req >= 0)
+                self.plate.motor_shift(1, abs(int(shift_req)))
+            else:
+                # позицию пишем всегда (OUT-блок дедуплицирует по изменению), команду — по фронту.
+                self.plate.write_m1_sp(out["m1_sp"])
+                if emit_cmd1:
+                    self.plate.cmd1(CMD_SET_SP1)
             self.plate.write_m2_sp(out["m2_sp"])
             if emit_cmd2:
                 self.plate.cmd2(CMD_SET_SP2)

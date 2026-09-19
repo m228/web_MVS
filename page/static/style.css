@@ -3518,3 +3518,9 @@ input.micro-cam-num { width: 56px; min-width: 0; flex: 0 0 auto; padding: 4px 5p
 /* --- мнемосхема вакуум-аппарата (вкладка 📊) --- */
 .micro-app { display: flex; flex-direction: column; align-items: center; gap: 12px; margin-top: 6px; }
 .micro-app-svg { width: 170px; max-width: 60%; height: auto; }
+
+/* авария микроскопа (подгон не сошёлся и т.п.) — заметный красный статус на вкладке «Цикл» */
+.is-fault {
+  color: var(--danger);
+  font-weight: 700;
+}

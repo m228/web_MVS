@@ -237,8 +237,22 @@
                   <input type="checkbox" id="ignoreStageToggle" />
                   <span class="micro-check__text">Варить без стадии (ручная варка)</span>
                 </label>
+
+                <div class="micro-sub__title micro-sub__title--sep">Довод подвода по абсолютнику</div>
+                <label class="micro-check" title="Грубо подъезжаем по расчётной позиции (рег.1274) до допуска, потом точный подгон по датчику 1271: считаем разницу «задание − датчик», сдвигаем на неё, ждём, повторяем. Не сошлось за N попыток → авария.">
+                  <input type="checkbox" id="fineApproachToggle" />
+                  <span class="micro-check__text">Довод по абсолютнику <span class="micro-ro">(грубо по расчётной → точно по датчику 1271)</span></span>
+                </label>
+                <div class="micro-cycle-fields">
+                  <label class="micro-cycle-f"><span>Грубо, допуск ±мкм</span><input type="number" id="faCoarse" step="10" min="0" value="100" /></label>
+                  <label class="micro-cycle-f"><span>Точно, допуск ±мкм</span><input type="number" id="faFine" step="5" min="1" value="20" /></label>
+                  <label class="micro-cycle-f"><span>Попыток подгона</span><input type="number" id="faRetry" step="1" min="1" value="3" /></label>
+                  <label class="micro-cycle-f"><span>Пауза между сдвигами, с</span><input type="number" id="faPause" step="0.5" min="0.5" value="3" /></label>
+                </div>
+
                 <div class="micro-cycle-actions">
                   <button type="button" id="pcSave" class="toolbar-btn toolbar-btn--primary">Сохранить параметры</button>
+                  <button type="button" id="faClearFault" class="toolbar-btn toolbar-btn--neutral" hidden>Сбросить аварию</button>
                   <span class="micro-conn-hint" id="pcHint"></span>
                 </div>
                 <p class="micro-plc-note">Подвод к стеклу — по таблице «СВ/МКМ». Доезд — по обоим датчикам (аналог + энкодер). Сохранение перезапускает автомат. <b>Авто-циклы</b> идут при включённом «Автомат» и стадии варки 3–9 (Сгущение…Готовность); при «Варить без стадии» — по СВ/времени независимо от стадии.</p>

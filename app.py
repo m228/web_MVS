@@ -244,6 +244,26 @@ def micro_ignore_focus(on: int):
     return micro.set_ignore_focus(bool(on))
 
 
+@app.get("/api/micro/fine_approach")
+def micro_fine_approach(enabled: int | None = None, coarse_tol_um: int | None = None,
+                        fine_tol_um: int | None = None, max_retry: int | None = None,
+                        pause_sec: float | None = None):
+    # гибридный доезд подвода: грубо по расчётной 1274 → точный подгон по датчику 1271
+    res = micro.set_fine_approach(
+        None if enabled is None else bool(enabled),
+        coarse_tol_um, fine_tol_um, max_retry, pause_sec)
+    api_log("api.micro.fine_approach", "Довод по абсолютнику", payload=res)
+    return res
+
+
+@app.get("/api/micro/clear_fault")
+def micro_clear_fault():
+    # сброс аварии (подгон по датчику не сошёлся и т.п.)
+    res = micro.clear_fault()
+    api_log("api.micro.clear_fault", "Сброс аварии микроскопа", payload=res)
+    return res
+
+
 @app.get("/api/micro/sensor_filter")
 def micro_sensor_filter(enabled: int | None = None, avg_sec: float | None = None):
     # фильтр аналогового датчика перемещения 1271 (сглаживание дрожания): вкл/выкл + окно, сек

@@ -356,6 +356,35 @@ class MicroscopeService:
         log_event("microscope_service", "Фильтр датчика 1271", "info", patch)
         return {"status": "ok", **patch}
 
+    def set_fine_approach(self, enabled=None, coarse_tol_um=None, fine_tol_um=None,
+                          max_retry=None, pause_sec=None):
+        """Гибридный доезд подвода (грубо по 1274 → точно по датчику 1271): вкл/выкл + допуски/
+        повторы/пауза. Сразу, без reload; persist в конфиг."""
+        patch = {}
+        if enabled is not None:
+            patch["enabled"] = bool(enabled)
+        if coarse_tol_um is not None:
+            patch["coarse_tol_um"] = int(coarse_tol_um)
+        if fine_tol_um is not None:
+            patch["fine_tol_um"] = int(fine_tol_um)
+        if max_retry is not None:
+            patch["max_retry"] = int(max_retry)
+        if pause_sec is not None:
+            patch["pause_sec"] = max(0.5, float(pause_sec))
+        res = self.fsm.set_fine_approach(**patch) if self.fsm else patch
+        if patch:
+            plate_config.save({"fine_approach": patch})
+            if self.cfg is not None:
+                self.cfg.setdefault("fine_approach", {}).update(patch)
+        log_event("microscope_service", "Довод по абсолютнику", "info", patch)
+        return {"status": "ok", **res}
+
+    def clear_fault(self):
+        """Сброс аварии оператором (подгон не сошёлся и т.п.): снять запрет, погасить флаг."""
+        if self.fsm:
+            return self.fsm.clear_fault()
+        return {"status": "no_fsm"}
+
     def set_sensor_display_scale(self, value):
         """Множитель ТОЛЬКО показа датчика на странице (свести датчик с позицией). Логику
         доезда не трогаем — plate не дёргаем, пишем только в конфиг для страницы."""

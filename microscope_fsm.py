@@ -110,15 +110,20 @@ class MicroscopeFSM:
         self._ac_every_n = max(1, int(ac.get("every_n", 3)))
         self._ac_sensor_lo = int(ac.get("sensor_lo", 0))
         self._ac_sensor_hi = int(ac.get("sensor_hi", 30))
-        self._ac_timeout_ticks = max(1, int(ac.get("timeout_sec", 60)) * 10)
+        self._ac_step_um = int(ac.get("step_um", 1000))              # шаг назад к нулю, мкм
+        self._ac_step_pause_ticks = max(1, int(ac.get("step_pause_sec", 3)) * 10)
+        self._ac_timeout_ticks = max(1, int(ac.get("timeout_sec", 180)) * 10)
         self._varka_count = int(ac.get("count", 0))   # счётчик варок (persist через колбэк)
         self._stage11_prev = False   # был ли на прошлом такте на стадии 11 (для фронта)
         # состояние процедуры калибровки
         self._cal_active = False
-        self._cal_phase = None       # None / 'find_zero' / 'wait_sensor'
+        self._cal_phase = None       # None / 'find_zero' / 'drive'
         self._cal_retry = 0
-        self._cal_wait = 0
+        self._cal_wait = 0           # тики паузы между шагами назад
+        self._cal_timeout = 0        # общий предел процедуры (тики)
         self._cal_emit_findzero = False
+        self._cal_emit_goto0 = False
+        self._cal_emit_shift = 0     # шаг назад к нулю (мкм), 0 = нет
         self._cal_emit_setzero = False
         # колбэк persist счётчика варок (ставит microscope_service): on_varka_count(count)
         self.on_varka_count = None
@@ -674,12 +679,15 @@ class MicroscopeFSM:
 
             if self._cal_active:
                 if self._cal_phase == "find_zero":
-                    self._cal_emit_findzero = True        # Поиск 0 (послать один раз)
-                    self._cal_phase = "wait_sensor"
-                    self._cal_wait = self._ac_timeout_ticks
-                elif self._cal_phase == "wait_sensor":
+                    # прожать всё: Поиск 0 + идти в позицию 0 (дальше дожимаем шагами назад)
+                    self._cal_emit_findzero = True
+                    self._cal_emit_goto0 = True
+                    self._cal_phase = "drive"
+                    self._cal_wait = self._ac_step_pause_ticks
+                    self._cal_timeout = self._ac_timeout_ticks
+                elif self._cal_phase == "drive":
                     if pos1_ai is not None and self._ac_sensor_lo <= pos1_ai <= self._ac_sensor_hi:
-                        self._cal_emit_setzero = True     # датчик у нуля -> обнулить (set_zero)
+                        self._cal_emit_setzero = True     # датчик в зоне нуля -> обнулить (set_zero)
                         self._cal_active = False
                         self._cal_phase = None
                         self._varka_count = 0
@@ -687,12 +695,17 @@ class MicroscopeFSM:
                         log_event("microscope_fsm", "Автокалибровка: ноль установлен", "success",
                                   {"sensor": round(pos1_ai, 1)})
                     else:
+                        # шагаем НАЗАД к нулю по step_um каждые step_pause (пока датчик не в зоне)
                         self._cal_wait -= 1
                         if self._cal_wait <= 0:
+                            self._cal_emit_shift = self._ac_step_um
+                            self._cal_wait = self._ac_step_pause_ticks
+                        self._cal_timeout -= 1
+                        if self._cal_timeout <= 0:
                             if self._cal_retry < 1:
                                 self._cal_retry += 1
                                 self._cal_phase = "find_zero"   # повтор один раз
-                                log_event("microscope_fsm", "Автокалибровка: повтор Поиска 0", "warn")
+                                log_event("microscope_fsm", "Автокалибровка: повтор (Поиск 0 заново)", "warn")
                             else:
                                 self._cal_active = False
                                 self._cal_phase = None
@@ -886,6 +899,8 @@ class MicroscopeFSM:
             shift_req = self._fa_shift_req; self._fa_shift_req = None   # знаковый сдвиг подгона (мкм)
             cal_active = self._cal_active
             cal_findzero = self._cal_emit_findzero; self._cal_emit_findzero = False
+            cal_goto0 = self._cal_emit_goto0; self._cal_emit_goto0 = False
+            cal_shift = self._cal_emit_shift; self._cal_emit_shift = 0
             cal_setzero = self._cal_emit_setzero; self._cal_emit_setzero = False
 
         pos2 = telem.get("pos2")
@@ -931,10 +946,18 @@ class MicroscopeFSM:
                     self.m2_sp = pos2
                     self.m2_sp_old = pos2
         elif connected and cal_active:
-            # автокалибровка рулит М1 сама (Поиск 0 / установить ноль) — обычное движение не пишем
+            # автокалибровка рулит М1 сама — обычное движение не пишем. Прожимаем всё, чтобы поехал в 0:
+            # Поиск 0 + идти в позицию 0, затем шаги НАЗАД по step_um до входа датчика в зону -> set_zero.
             if cal_findzero:
                 self.plate.motor_enable(1, True)
                 self.plate.motor_find_zero(1)
+            if cal_goto0:
+                self.plate.motor_enable(1, True)
+                self.plate.motor_goto(1, 0)               # идти в позицию 0
+            if cal_shift:
+                self.plate.motor_enable(1, True)
+                self.plate.motor_direction(1, False)      # назад к нулю
+                self.plate.motor_shift(1, int(cal_shift))
             if cal_setzero:
                 self.plate.motor_set_zero(1)
         elif connected and not out["inhibit"]:

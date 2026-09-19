@@ -835,7 +835,7 @@
       set("acCount", ac.count == null ? "—" : ac.count);
       set("acEveryNShow", ac.every_n == null ? "—" : ac.every_n);
       const acStatusTxt = ac.active
-        ? (ac.phase === "find_zero" ? "поиск 0" : ac.phase === "wait_sensor" ? "жду датчик в зоне нуля" : "идёт")
+        ? (ac.phase === "find_zero" ? "поиск 0" : ac.phase === "drive" ? "еду назад в 0 (2–3 мин)" : "идёт")
         : (f.fault ? "авария" : "ждёт пропарки");
       set("acStatus", acStatusTxt);
       set("cycSv", f.sv == null ? "—" : Number(f.sv).toFixed(1));

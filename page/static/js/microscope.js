@@ -818,6 +818,14 @@
       set("cycSv", f.sv == null ? "—" : Number(f.sv).toFixed(1));
       // СВ рядом с видео камеры (телеметрия камеры) — чтобы было видно при просмотре потока
       set("camSv_v", f.sv == null ? "—" : Number(f.sv).toFixed(1));
+      // датчик абсолютный (рядом с СВ) + стадия цикла (подвод/отвод/проба); в пробе — сколько с осталось.
+      // всё под видео = видно в полноэкранном, не выходя из него.
+      set("camSensor_v", sensorShown == null ? "—" : sensorShown);
+      let camStepTxt = f.step || "—";
+      if (f.mode === 23 && f.dwell_left_s != null) camStepTxt += " · " + f.dwell_left_s + " с";
+      set("camStep_v", camStepTxt);
+      // до следующей пробы: в цикле — «идёт проба», в ожидании — суть статуса (таймер / жду СВ)
+      set("camNext_v", f.mode !== 0 ? "идёт проба" : (f.label || "—").replace(/^Ожидание\s*[—-]\s*/, ""));
 
       set("cycTarget", f.target == null ? "—" : f.target + " мкм");
       set("cycPos", um(t.pos1));

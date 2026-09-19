@@ -3537,10 +3537,10 @@ input.micro-cam-num { width: 56px; min-width: 0; flex: 0 0 auto; padding: 4px 5p
   gap: 6px 14px;
   margin-top: 6px;
 }
-@media (min-width: 620px) { .micro-lock__fields { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+@media (min-width: 560px) { .micro-lock__fields { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
 .micro-lock__fields label {
-  display: flex; align-items: center; justify-content: space-between; gap: 8px;
-  font-size: 0.84em; color: var(--muted, #8a94a6);
+  display: flex; align-items: center; justify-content: space-between; gap: 6px;
+  font-size: 0.82em; color: var(--muted, #8a94a6);
 }
-.micro-lock__fields input[type="number"] { width: 78px; }
+.micro-lock__fields input[type="number"] { width: 68px; min-width: 0; }
 .micro-lock__stat { margin-top: 6px; font-size: 0.84em; color: var(--muted, #8a94a6); }

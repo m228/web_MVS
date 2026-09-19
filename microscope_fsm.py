@@ -104,6 +104,25 @@ class MicroscopeFSM:
         # расчётной позиции, иначе дельта «задание−датчик» огромная (тысячи) и подгон не сходится.
         self._sensor_scale = float(config.get("sensor_display_scale", 1.0) or 1.0)
 
+        # автокалибровка нуля М1 (раз в every_n варок на пропарке — стадия 11)
+        ac = config.get("autocal", {}) or {}
+        self._ac_enabled = bool(ac.get("enabled", False))
+        self._ac_every_n = max(1, int(ac.get("every_n", 3)))
+        self._ac_sensor_lo = int(ac.get("sensor_lo", 0))
+        self._ac_sensor_hi = int(ac.get("sensor_hi", 30))
+        self._ac_timeout_ticks = max(1, int(ac.get("timeout_sec", 60)) * 10)
+        self._varka_count = int(ac.get("count", 0))   # счётчик варок (persist через колбэк)
+        self._stage11_prev = False   # был ли на прошлом такте на стадии 11 (для фронта)
+        # состояние процедуры калибровки
+        self._cal_active = False
+        self._cal_phase = None       # None / 'find_zero' / 'wait_sensor'
+        self._cal_retry = 0
+        self._cal_wait = 0
+        self._cal_emit_findzero = False
+        self._cal_emit_setzero = False
+        # колбэк persist счётчика варок (ставит microscope_service): on_varka_count(count)
+        self.on_varka_count = None
+
         self._period = max(0.02, int(config["poll_interval_ms"]) / 1000.0)
         # предохранитель шага цикла (тики по 100мс): нормальный выход — «доехал», а это
         # защита от зависания. Большой, т.к. реальная плата едет медленно (см. step_timeout_s).
@@ -357,6 +376,39 @@ class MicroscopeFSM:
             self._sensor_scale = float(value or 1.0)
             return {"sensor_scale": self._sensor_scale}
 
+    def set_autocal(self, enabled=None, every_n=None, sensor_lo=None, sensor_hi=None,
+                    timeout_sec=None, count=None):
+        """Настройка автокалибровки нуля М1 на лету (без reload)."""
+        with self._lock:
+            if enabled is not None:
+                self._ac_enabled = bool(enabled)
+            if every_n is not None:
+                self._ac_every_n = max(1, int(every_n))
+            if sensor_lo is not None:
+                self._ac_sensor_lo = int(sensor_lo)
+            if sensor_hi is not None:
+                self._ac_sensor_hi = int(sensor_hi)
+            if timeout_sec is not None:
+                self._ac_timeout_ticks = max(1, int(timeout_sec) * 10)
+            if count is not None:
+                self._varka_count = max(0, int(count))
+            return {"enabled": self._ac_enabled, "every_n": self._ac_every_n,
+                    "sensor_lo": self._ac_sensor_lo, "sensor_hi": self._ac_sensor_hi,
+                    "timeout_sec": self._ac_timeout_ticks // 10, "count": self._varka_count}
+
+    def start_autocal(self):
+        """Ручной запуск автокалибровки (кнопка). Только когда цикл в простое."""
+        with self._lock:
+            if self._cal_active:
+                return {"status": "busy"}
+            if self.mode != 0:
+                return {"status": "busy_cycle", "mode": self.mode}
+            self._cal_active = True
+            self._cal_phase = "find_zero"
+            self._cal_retry = 0
+            self._cal_wait = 0
+            return {"status": "started"}
+
     def set_fine_approach(self, enabled=None, coarse_tol_um=None, fine_tol_um=None,
                           max_retry=None, pause_sec=None):
         """Настройка гибридного доезда на лету (без reload)."""
@@ -512,6 +564,16 @@ class MicroscopeFSM:
                     "max_retry": self._fa_max_retry,
                     "pause_sec": self._fa_pause_sec,
                 },
+                "autocal": {
+                    "enabled": self._ac_enabled,
+                    "every_n": self._ac_every_n,
+                    "sensor_lo": self._ac_sensor_lo,
+                    "sensor_hi": self._ac_sensor_hi,
+                    "timeout_sec": self._ac_timeout_ticks // 10,
+                    "count": self._varka_count,
+                    "active": self._cal_active,
+                    "phase": self._cal_phase,
+                },
                 "cyclic": self.sw0,
                 "inhibit": self.sw3,
                 "manual": self.manual,
@@ -593,6 +655,50 @@ class MicroscopeFSM:
                 self._manual_confirm = False
             self._stage_prev_in = stage_in
 
+            # 0.5) АВТОКАЛИБРОВКА нуля М1: фронт входа в стадию 11 (пропарка) -> счётчик варок +1;
+            # дошёл до every_n -> на этой пропарке Поиск 0 -> ждём датчик в [lo..hi] -> set_zero
+            # (обнулить датчик+энкодер). Не вошёл за таймаут -> повтор 1 раз -> авария.
+            varka_persist = None   # не None -> сохранить счётчик варок (вне лока, через колбэк)
+            stage11 = (self.stage == 11)
+            if stage11 and not self._stage11_prev:
+                self._varka_count += 1
+                varka_persist = self._varka_count
+                if self._ac_enabled and not self._cal_active and self._varka_count >= self._ac_every_n:
+                    self._cal_active = True
+                    self._cal_phase = "find_zero"
+                    self._cal_retry = 0
+                    self._cal_wait = 0
+                    log_event("microscope_fsm", "Автокалибровка: старт (варок %d/%d)" %
+                              (self._varka_count, self._ac_every_n), "info")
+            self._stage11_prev = stage11
+
+            if self._cal_active:
+                if self._cal_phase == "find_zero":
+                    self._cal_emit_findzero = True        # Поиск 0 (послать один раз)
+                    self._cal_phase = "wait_sensor"
+                    self._cal_wait = self._ac_timeout_ticks
+                elif self._cal_phase == "wait_sensor":
+                    if pos1_ai is not None and self._ac_sensor_lo <= pos1_ai <= self._ac_sensor_hi:
+                        self._cal_emit_setzero = True     # датчик у нуля -> обнулить (set_zero)
+                        self._cal_active = False
+                        self._cal_phase = None
+                        self._varka_count = 0
+                        varka_persist = 0
+                        log_event("microscope_fsm", "Автокалибровка: ноль установлен", "success",
+                                  {"sensor": round(pos1_ai, 1)})
+                    else:
+                        self._cal_wait -= 1
+                        if self._cal_wait <= 0:
+                            if self._cal_retry < 1:
+                                self._cal_retry += 1
+                                self._cal_phase = "find_zero"   # повтор один раз
+                                log_event("microscope_fsm", "Автокалибровка: повтор Поиска 0", "warn")
+                            else:
+                                self._cal_active = False
+                                self._cal_phase = None
+                                self._raise_fault("автокалибровка: датчик не вошёл в %d..%d за таймаут"
+                                                  % (self._ac_sensor_lo, self._ac_sensor_hi))
+
             # 1) авто-цикл: гоняем пробу, пока включён «Автомат» (sw0) И стадия варки в рабочем
             # диапазоне 3..9 (общее разрешение). ВНУТРИ — повторяемость по trigger_mode:
             #   "time" — новая проба через _pause_sec (cycle_t капает только в простое);
@@ -600,7 +706,7 @@ class MicroscopeFSM:
             # Стадия вне диапазона -> ничего не капает, новый цикл не стартует (уже идущий доводим),
             # счётчик СВ сбрасываем (новая варка снимет заново с sv_from).
             stage_ok = self._ignore_stage or (CYCLE_STAGE_MIN <= self.stage <= CYCLE_STAGE_MAX)
-            if self.sw0 and stage_ok:
+            if self.sw0 and stage_ok and not self._cal_active:   # идёт калибровка — цикл не стартуем
                 if self.mode == 0:
                     if self._trigger_mode == "sv":
                         # запоминаем ТОЧНОЕ СВ на старте цикла и снимаем следующую пробу, когда
@@ -778,6 +884,9 @@ class MicroscopeFSM:
             photo_request = self._photo_request; self._photo_request = False
             video_request = self._video_request; self._video_request = 0
             shift_req = self._fa_shift_req; self._fa_shift_req = None   # знаковый сдвиг подгона (мкм)
+            cal_active = self._cal_active
+            cal_findzero = self._cal_emit_findzero; self._cal_emit_findzero = False
+            cal_setzero = self._cal_emit_setzero; self._cal_emit_setzero = False
 
         pos2 = telem.get("pos2")
         connected = self.plate.status.get("connected", False)
@@ -801,6 +910,13 @@ class MicroscopeFSM:
             except Exception as e:
                 log_event("microscope_fsm", "Ошибка колбэка фото", "warn", {"error": str(e)})
 
+        # persist счётчика варок (изменился на этом такте) — через колбэк сервиса
+        if varka_persist is not None and self.on_varka_count:
+            try:
+                self.on_varka_count(varka_persist)
+            except Exception as e:
+                log_event("microscope_fsm", "Ошибка persist счётчика варок", "warn", {"error": str(e)})
+
         # плату дёргаем ВНЕ лока (её методы потокобезопасны)
         if halt:
             # аварийный стоп: нативная команда СТОП + фиксируем цель на текущей позиции,
@@ -814,6 +930,13 @@ class MicroscopeFSM:
                 if pos2 is not None:
                     self.m2_sp = pos2
                     self.m2_sp_old = pos2
+        elif connected and cal_active:
+            # автокалибровка рулит М1 сама (Поиск 0 / установить ноль) — обычное движение не пишем
+            if cal_findzero:
+                self.plate.motor_enable(1, True)
+                self.plate.motor_find_zero(1)
+            if cal_setzero:
+                self.plate.motor_set_zero(1)
         elif connected and not out["inhibit"]:
             # движение обоих моторов — только при связи и снятом запрете.
             if shift_req is not None:

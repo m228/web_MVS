@@ -264,6 +264,34 @@ def micro_clear_fault():
     return res
 
 
+@app.get("/api/micro/autocal")
+def micro_autocal(enabled: int | None = None, every_n: int | None = None,
+                  sensor_lo: int | None = None, sensor_hi: int | None = None,
+                  timeout_sec: int | None = None):
+    # автокалибровка нуля М1 (раз в N варок на пропарке — стадия 11)
+    res = micro.set_autocal(
+        None if enabled is None else bool(enabled),
+        every_n, sensor_lo, sensor_hi, timeout_sec)
+    api_log("api.micro.autocal", "Автокалибровка нуля", payload=res)
+    return res
+
+
+@app.get("/api/micro/autocal/start")
+def micro_autocal_start():
+    # ручной запуск автокалибровки
+    res = micro.start_autocal()
+    api_log("api.micro.autocal.start", "Автокалибровка: ручной старт", payload=res)
+    return res
+
+
+@app.get("/api/micro/autocal/reset")
+def micro_autocal_reset():
+    # сброс счётчика варок в 0
+    res = micro.reset_varka_count()
+    api_log("api.micro.autocal.reset", "Сброс счётчика варок", payload=res)
+    return res
+
+
 @app.get("/api/micro/sensor_filter")
 def micro_sensor_filter(enabled: int | None = None, avg_sec: float | None = None):
     # фильтр аналогового датчика перемещения 1271 (сглаживание дрожания): вкл/выкл + окно, сек

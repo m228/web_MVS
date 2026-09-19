@@ -635,6 +635,11 @@
         const faSet = (id, v) => { const e = $(id); if (e && v != null) e.value = v; };
         faSet("faCoarse", fa.coarse_tol_um); faSet("faFine", fa.fine_tol_um);
         faSet("faRetry", fa.max_retry); faSet("faPause", fa.pause_sec);
+        // автокалибровка нуля М1
+        const ac = cfg.autocal || {};
+        const acT = $("autocalToggle"); if (acT) acT.checked = !!ac.enabled;
+        faSet("acEveryN", ac.every_n); faSet("acLo", ac.sensor_lo);
+        faSet("acHi", ac.sensor_hi); faSet("acTimeout", ac.timeout_sec);
         cfgSerial = cfg.camera_serial || "";
       }
     } catch (e) { /* конфиг недоступен */ }
@@ -824,6 +829,15 @@
       // авария (подгон не сошёлся и т.п.): показать кнопку сброса, подсветить статус
       const faCF = $("faClearFault"); if (faCF) faCF.hidden = !f.fault;
       const cl = $("cycLabel"); if (cl) cl.classList.toggle("is-fault", !!f.fault);
+
+      // автокалибровка: счётчик варок + статус (простой/поиск 0/жду датчик)
+      const ac = f.autocal || {};
+      set("acCount", ac.count == null ? "—" : ac.count);
+      set("acEveryNShow", ac.every_n == null ? "—" : ac.every_n);
+      const acStatusTxt = ac.active
+        ? (ac.phase === "find_zero" ? "поиск 0" : ac.phase === "wait_sensor" ? "жду датчик в зоне нуля" : "идёт")
+        : (f.fault ? "авария" : "ждёт пропарки");
+      set("acStatus", acStatusTxt);
       set("cycSv", f.sv == null ? "—" : Number(f.sv).toFixed(1));
       // СВ рядом с видео камеры (телеметрия камеры) — чтобы было видно при просмотре потока
       set("camSv_v", f.sv == null ? "—" : Number(f.sv).toFixed(1));
@@ -1008,6 +1022,34 @@
     const faCF = $("faClearFault");
     if (faCF) faCF.addEventListener("click", () => {
       api("/api/micro/clear_fault").then(() => sentCmd("Авария сброшена")).catch(() => {});
+    });
+
+    // автокалибровка нуля М1: галочка + поля + ручной старт + сброс счётчика
+    const acT = $("autocalToggle");
+    if (acT) acT.addEventListener("change", () => {
+      api("/api/micro/autocal", { enabled: acT.checked ? 1 : 0 }).catch(() => {});
+      if (cfg) (cfg.autocal = cfg.autocal || {}).enabled = acT.checked;
+      sentCmd("Автокалибровка: " + (acT.checked ? "вкл" : "выкл"));
+    });
+    [["acEveryN", "every_n"], ["acLo", "sensor_lo"], ["acHi", "sensor_hi"], ["acTimeout", "timeout_sec"]]
+      .forEach(([id, key]) => {
+        const el = $(id);
+        if (el) el.addEventListener("change", () => {
+          const p = {}; p[key] = el.value;
+          api("/api/micro/autocal", p).catch(() => {});
+          if (cfg) (cfg.autocal = cfg.autocal || {})[key] = Number(el.value);
+        });
+      });
+    const acStart = $("acStart");
+    if (acStart) acStart.addEventListener("click", () => {
+      api("/api/micro/autocal/start").then((r) => {
+        const h = $("acHint");
+        if (h) { h.textContent = r && r.status === "started" ? "калибровка запущена" : "занято (" + (r && r.status) + ")"; setTimeout(() => { h.textContent = ""; }, 3000); }
+      }).catch(() => {});
+    });
+    const acReset = $("acReset");
+    if (acReset) acReset.addEventListener("click", () => {
+      api("/api/micro/autocal/reset").then(() => sentCmd("Счётчик варок сброшен")).catch(() => {});
     });
 
     const caT = $("cycleAutostartToggle");

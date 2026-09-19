@@ -39,6 +39,7 @@ class MicroscopeService:
             self.fsm = MicroscopeFSM(self.plate, self.cfg)
             self.fsm.on_photo = self._auto_photo   # серия скринов в выдержке (см. _auto_photo)
             self.fsm.on_video = self._auto_video   # запись видео пробы на выдержку (см. _auto_video)
+            self.fsm.on_varka_count = self._persist_varka   # persist счётчика варок (автокалибровка)
             self.plate.start()
             self.fsm.start()
             # режим «Автомат» (галочка камеры) = мастер авто-цикла: включаем циклический режим
@@ -384,6 +385,47 @@ class MicroscopeService:
         if self.fsm:
             return self.fsm.clear_fault()
         return {"status": "no_fsm"}
+
+    def _persist_varka(self, count):
+        """Колбэк FSM: сохранить счётчик варок в конфиг (переживает перезапуск)."""
+        plate_config.save({"autocal": {"count": int(count)}})
+        if self.cfg is not None:
+            self.cfg.setdefault("autocal", {})["count"] = int(count)
+
+    def set_autocal(self, enabled=None, every_n=None, sensor_lo=None, sensor_hi=None, timeout_sec=None):
+        """Автокалибровка нуля М1: вкл/выкл + через сколько варок + пороги датчика + таймаут.
+        Сразу, без reload; persist в конфиг."""
+        patch = {}
+        if enabled is not None:
+            patch["enabled"] = bool(enabled)
+        if every_n is not None:
+            patch["every_n"] = max(1, int(every_n))
+        if sensor_lo is not None:
+            patch["sensor_lo"] = int(sensor_lo)
+        if sensor_hi is not None:
+            patch["sensor_hi"] = int(sensor_hi)
+        if timeout_sec is not None:
+            patch["timeout_sec"] = max(1, int(timeout_sec))
+        res = self.fsm.set_autocal(**patch) if self.fsm else patch
+        if patch:
+            plate_config.save({"autocal": patch})
+            if self.cfg is not None:
+                self.cfg.setdefault("autocal", {}).update(patch)
+        log_event("microscope_service", "Автокалибровка нуля", "info", patch)
+        return {"status": "ok", **(res or patch)}
+
+    def start_autocal(self):
+        """Ручной запуск автокалибровки (кнопка)."""
+        if self.fsm:
+            return self.fsm.start_autocal()
+        return {"status": "no_fsm"}
+
+    def reset_varka_count(self):
+        """Сбросить счётчик варок в 0 (кнопка)."""
+        if self.fsm:
+            self.fsm.set_autocal(count=0)
+        self._persist_varka(0)
+        return {"status": "ok", "count": 0}
 
     def set_sensor_display_scale(self, value):
         """Масштаб датчика 1271: и показ на странице, И логика доезда (FSM), чтобы датчик был

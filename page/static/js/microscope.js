@@ -849,7 +849,8 @@
 
       set("cycTarget", f.target == null ? "—" : f.target + " мкм");
       set("cycPos", um(t.pos1));
-      set("cycSensor", um(t.pos1_ai));   // абсолютный датчик 1271 — по нему идёт доезд подвода
+      // абсолютный датчик 1271 (по нему идёт доезд) — тем же масштабом показа, что и в телеметрии
+      set("cycSensor", um(t.pos1_ai == null ? null : Math.round(t.pos1_ai * dScale)));
       set("cycTube", f.valve_tube ? "открыт" : "закрыт");
       set("cycGlass", f.valve_glass ? "открыт" : "закрыт");
       set("cycDwell", f.dwell_left_s == null ? "—" : f.dwell_left_s + " с");

@@ -3277,7 +3277,7 @@ html {
 .micro-utilbar__sep { width: 1px; height: 22px; background: var(--border-strong); margin: 0 4px; }
 
 /* параметры камеры — в 2 столбика (вкладка «Камера») */
-.micro-cam-params { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 12px; }
+.micro-cam-params { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 8px 12px; align-items: end; }
 .micro-cam-apply { margin-top: 12px; }
 .micro-cam-mode { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 6px; }
 .micro-cam-mode select { flex: 1 1 auto; min-width: 160px; }
@@ -3487,7 +3487,8 @@ input.micro-cam-num { width: 56px; min-width: 0; flex: 0 0 auto; padding: 4px 5p
 
 /* пара «подпись+поле» — колонка; на обычной странице камеры выглядит как раньше */
 .cam-field { display: flex; flex-direction: column; gap: 4px; }
-.cam-field > label { margin: 0; white-space: nowrap; }
+.cam-field > label { margin: 0; white-space: nowrap; min-height: 1.25em; overflow: hidden; text-overflow: ellipsis; }
+.cam-field > input, .cam-field > select { width: 100%; box-sizing: border-box; }
 
 /* --- шапка: заголовок + коннектор + На главную --- */
 .micro-hero__top { display: flex; align-items: center; gap: 14px; margin-bottom: 8px; }

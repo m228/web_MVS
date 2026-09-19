@@ -185,7 +185,7 @@ class MicroscopeFSM:
         self._fa_phase = None         # None / 'coarse' (грубо по 1274) / 'fine' (подгон по 1271)
         self._fa_retry = 0            # сделано подгонов по датчику
         self._fa_wait = 0             # тиков паузы между сдвигами (устаканиться)
-        self._fa_shift_req = None     # знаковый сдвиг (мкм) на плату в этом тике (иначе None)
+        self._fa_goto_target = None   # рабочая цель мотора для подгона (мкм), goto за один раз
         # авария (подгон не сошёлся / watchdog): цикл стоп, видно в UI
         self._fault = False
         self._fault_msg = ""
@@ -324,9 +324,9 @@ class MicroscopeFSM:
         """Гибридный доезд подвода (mode 22), вызывается ПОД локом. Возврат True = доехали.
         Фаза 'coarse': ведём мотор к заданию по РАСЧЁТНОЙ абс.позиции 1274 (pos_enc) — НЕ по
         энкодеру 1285 (врёт) — до ±coarse_tol, чтобы не перелететь (кристалл). Фаза 'fine':
-        подгон по ДАТЧИКУ 1271 (pos_ai): diff=Задание−Датчик; сдвиг мотора=(Датчик−Задание)
-        [Задание>Датчик → назад]; пауза pause_sec; замер; повтор, пока |diff|≤fine_tol.
-        Не сошлось за max_retry → авария."""
+        подгон по ДАТЧИКУ 1271 (pos_ai) ЗА ОДИН РАЗ: diff=Задание−Датчик; цель мотора =
+        pos_enc+diff → goto туда (вся разность сразу, не мелкими шагами); пауза pause_sec;
+        замер; повтор, пока |diff|≤fine_tol (граница). Не сошлось за max_retry → лог + след. этап."""
         if pos_enc is None:
             return False
         if self._fa_phase is None:
@@ -357,7 +357,10 @@ class MicroscopeFSM:
             log_event("microscope_fsm", "Довод по датчику не сошёлся — идём дальше (отдельный лог)",
                       "warn", self._fa_approach_fail)
             return True                                  # следующий этап (выдержка), без аварии
-        self._fa_shift_req = self.m1_sp - pos_ai         # сдвиг = Задание−Датчик (знак по факту железа: гнало от цели)
+        # ЗА ОДИН РАЗ: переставляем цель мотора на всю разность (не мелкими шагами). Новая
+        # рабочая позиция = текущая расчётная + (Задание−Датчик): мотор едет туда одним goto,
+        # чтобы аналоговый датчик встал на задание. m1_sp (цель по СВ / показ) не трогаем.
+        self._fa_goto_target = max(0, int(round(pos_enc + diff)))
         self._fa_retry += 1
         self._fa_wait = max(1, int(round(self._fa_pause_sec / self._period)))
         return False
@@ -907,7 +910,7 @@ class MicroscopeFSM:
             emit_cmd2 = self._emit_cmd2; self._emit_cmd2 = False
             photo_request = self._photo_request; self._photo_request = False
             video_request = self._video_request; self._video_request = 0
-            shift_req = self._fa_shift_req; self._fa_shift_req = None   # знаковый сдвиг подгона (мкм)
+            goto_target = self._fa_goto_target; self._fa_goto_target = None   # цель подгона (goto за раз)
             approach_fail = self._fa_approach_fail; self._fa_approach_fail = None
             cal_active = self._cal_active
             cal_findzero = self._cal_emit_findzero; self._cal_emit_findzero = False
@@ -981,13 +984,12 @@ class MicroscopeFSM:
                 self.plate.motor_set_zero(1)
         elif connected and not out["inhibit"]:
             # движение обоих моторов — только при связи и снятом запрете.
-            if shift_req is not None:
-                # точный подгон по датчику: нативный сдвиг на разницу (Задание−Датчик).
-                # знак -> направление (>=0 вперёд), модуль -> величина shift. goto к m1_sp в этом
-                # тике НЕ шлём, чтобы не конфликтовать со сдвигом.
+            if goto_target is not None:
+                # точный подгон по датчику ЗА ОДИН РАЗ: goto в скорректированную абсолютную
+                # позицию (цель мотора = расчётная + разность датчика). goto к m1_sp в этом
+                # тике НЕ шлём, чтобы не конфликтовать с подгоном.
                 self.plate.motor_enable(1, True)
-                self.plate.motor_direction(1, shift_req >= 0)
-                self.plate.motor_shift(1, abs(int(shift_req)))
+                self.plate.motor_goto(1, goto_target)
             else:
                 # позицию пишем всегда (OUT-блок дедуплицирует по изменению), команду — по фронту.
                 self.plate.write_m1_sp(out["m1_sp"])

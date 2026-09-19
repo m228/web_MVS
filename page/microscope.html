@@ -360,6 +360,23 @@
                   <span class="micro-conn-hint" id="m1StopSensorHint"></span>
                 </div>
                 <p class="micro-plc-note">Аппаратная блокировка прошивки: при достижении датчиком порога плата сама останавливает М1. Текущее в плате: <b id="sStopSensor">—</b> мкм.</p>
+
+                <div class="micro-sub__title micro-sub__title--sep">Фильтр датчика перемещения (1271)</div>
+                <label class="micro-check" title="Сглаживание дрожания аналогового датчика (спокойно скачет 0/−50/70). Отфильтрованное значение используется и на экране, и в логике подвода/защит.">
+                  <input type="checkbox" id="sensorFilterToggle" />
+                  <span class="micro-check__text">Фильтровать датчик <span class="micro-ro">(скользящее среднее)</span></span>
+                </label>
+                <div class="micro-cycle-f" style="max-width:360px">
+                  <span>Усреднять, сек</span><input type="number" id="sensorFilterSec" step="0.5" min="0.1" value="2" disabled />
+                </div>
+                <div class="micro-cycle-f" style="max-width:360px">
+                  <span>Масштаб показа датчика</span><input type="number" id="sensorDisplayScale" step="0.1" value="1" />
+                </div>
+                <div class="micro-svsp-actions">
+                  <button type="button" id="sensorFilterSave" class="toolbar-btn toolbar-btn--primary">Записать</button>
+                  <span class="micro-conn-hint" id="sensorFilterHint"></span>
+                </div>
+                <p class="micro-plc-note">Датчик 1271 шумит (прыгает 0/−50/70) — фильтр сглаживает. «Масштаб показа» сводит датчик и позицию к одному виду на экране (логику подвода не меняет).</p>
               </div>
 
               <!-- Мнемосхема вакуум-аппарата (данные с ПЛК) -->

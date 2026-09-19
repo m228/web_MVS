@@ -244,6 +244,20 @@ def micro_ignore_focus(on: int):
     return micro.set_ignore_focus(bool(on))
 
 
+@app.get("/api/micro/sensor_filter")
+def micro_sensor_filter(enabled: int | None = None, avg_sec: float | None = None):
+    # фильтр аналогового датчика перемещения 1271 (сглаживание дрожания): вкл/выкл + окно, сек
+    res = micro.set_sensor_filter(None if enabled is None else bool(enabled), avg_sec)
+    api_log("api.micro.sensor_filter", "Фильтр датчика 1271", payload=res)
+    return res
+
+
+@app.get("/api/micro/sensor_display_scale")
+def micro_sensor_display_scale(value: float):
+    # множитель ТОЛЬКО показа датчика на странице (свести датчик с позицией)
+    return micro.set_sensor_display_scale(value)
+
+
 @app.get("/api/micro/m1_stop_sensor")
 def micro_m1_stop_sensor(value: float):
     # порог аппаратной блокировки «Стоп М1 при положении аналог. датчика» (рег. 1234, мкм)

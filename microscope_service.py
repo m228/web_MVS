@@ -339,6 +339,34 @@ class MicroscopeService:
                   "info", {"ignore_focus": on})
         return res
 
+    def set_sensor_filter(self, enabled=None, avg_sec=None):
+        """Фильтр датчика перемещения (1271): вкл/выкл + окно усреднения (сек). Сразу, без reload.
+        Отфильтрованное значение идёт и в показ, и в логику доезда/watchdog. Persist в конфиг."""
+        patch = {}
+        if enabled is not None:
+            patch["enabled"] = bool(enabled)
+        if avg_sec is not None:
+            patch["avg_sec"] = max(0.1, float(avg_sec))
+        if self.plate:
+            self.plate.set_sensor_filter(patch.get("enabled"), patch.get("avg_sec"))
+        if patch:
+            plate_config.save({"sensor_filter": patch})
+            if self.cfg is not None:
+                self.cfg.setdefault("sensor_filter", {}).update(patch)
+        log_event("microscope_service", "Фильтр датчика 1271", "info", patch)
+        return {"status": "ok", **patch}
+
+    def set_sensor_display_scale(self, value):
+        """Множитель ТОЛЬКО показа датчика на странице (свести датчик с позицией). Логику
+        доезда не трогаем — plate не дёргаем, пишем только в конфиг для страницы."""
+        v = float(value)
+        plate_config.save({"sensor_display_scale": v})
+        if self.cfg is not None:
+            self.cfg["sensor_display_scale"] = v
+        log_event("microscope_service", "Масштаб показа датчика 1271 = %s" % v, "info",
+                  {"sensor_display_scale": v})
+        return {"status": "ok", "sensor_display_scale": v}
+
     def set_m1_stop_sensor(self, value):
         """Записать порог аппаратной блокировки «Стоп М1 при положении аналог. датчика» в
         регистр прошивки (1234, m1_stop_sensor, мкм). Прошивка сама стопит М1 у предела."""
@@ -446,9 +474,19 @@ class MicroscopeService:
         """Верхний тумблер «Автомат/Ручной». Ручной — автомат не трогает плату (рулит пульт).
         Автомат (on=False) — сразу включаем авто-цикл (sw0), чтобы верхний тумблер был
         единственным выключателем автоматики (раньше sw0 включался отдельно на вкладке камеры)."""
+        on = bool(on)
         if self.fsm:
-            self.fsm.set_manual(bool(on))
-            if not on:
+            self.fsm.set_manual(on)
+            if on:
+                # При входе в РУЧНОЙ физически гасим все DQ (клапаны) на плате. FSM в ручном
+                # плату не трогает (ранний return в tick), поэтому cw0/cw1 закрываются только
+                # ВНУТРИ объекта, а слово выходов 1250 висело бы в последнем состоянии — из-за
+                # этого промывка трубки оставалась открытой. Обнуляем слово клапанов явно:
+                # буфер OUT[valves] станет 0, поток опроса платы запишет 0 следующим тактом.
+                if self.plate:
+                    idx = int((self.cfg or {}).get("out", {}).get("valves", 0))
+                    self.plate.set_out(idx, 0)
+            else:
                 self.fsm.set_cyclic(True)   # «Автомат» = авто-цикл включён
         return {"manual": bool(self.fsm.manual) if self.fsm else False}
 

@@ -9,6 +9,7 @@
 Здесь только транспорт (читать/писать регистры, здоровье связи, реконнект). Логика
 автомата (перенос ST) — отдельно, в microscope_fsm.py (этап B1), поверх этого клиента.
 """
+import collections
 import threading
 import time
 
@@ -49,6 +50,16 @@ class PlateClient:
         # снимок телеметрии (инженерные величины) + сырой блок IN
         self._telemetry = {}
         self._telemetry_lock = threading.Lock()
+
+        # фильтр аналогового датчика перемещения (рег.1271): сглаживание дрожания (0/-50/70).
+        # Фильтруем СЫРОЕ значение в ОДНОЙ точке; отфильтрованное инж.значение идёт и в
+        # pos1_ai (телеметрия + доезд FSM + watchdog), и в ext.sensor (показ) — единый источник.
+        sf = config.get("sensor_filter", {}) or {}
+        self._sensor_filter_on = bool(sf.get("enabled", False))
+        self._sensor_avg_sec = max(0.1, float(sf.get("avg_sec", 2)))
+        self._sensor_eng = None   # последнее инж.значение датчика (signed*scale, при вкл — сглаженное)
+        self._sensor_lock = threading.Lock()
+        self._sensor_buf = collections.deque(maxlen=self._sensor_buf_len())
 
         # расширенная телеметрия (родные регистры платы) — читаем реже основного блока
         self._ext_reads = config.get("ext_reads", [])
@@ -269,6 +280,39 @@ class PlateClient:
         self._connected = False
         return False
 
+    # ---------- фильтр датчика перемещения (1271) ----------
+
+    def _sensor_buf_len(self):
+        """Длина буфера скользящего среднего = окно avg_sec в тактах опроса (>=1)."""
+        return max(1, int(round(self._sensor_avg_sec / self._period)))
+
+    def set_sensor_filter(self, enabled=None, avg_sec=None):
+        """Настройка фильтра датчика 1271 на лету (без reload). enabled — вкл/выкл сглаживания,
+        avg_sec — окно усреднения (сек). Пересобирает буфер под новое окно."""
+        with self._sensor_lock:
+            if avg_sec is not None:
+                self._sensor_avg_sec = max(0.1, float(avg_sec))
+            if enabled is not None:
+                self._sensor_filter_on = bool(enabled)
+            self._sensor_buf = collections.deque(self._sensor_buf, maxlen=self._sensor_buf_len())
+            if not self._sensor_filter_on:
+                self._sensor_buf.clear()
+
+    def _sensor_process(self, raw, scale):
+        """Сырое слово 1271 -> инж.мкм: signed int16 + (опц.) скользящее среднее за avg_sec.
+        ЕДИНАЯ точка: результат идёт и в pos1_ai (доезд/watchdog), и в ext.sensor (показ).
+        signed: шум у нуля уходит в минус (а не в ~65500), иначе среднее и доезд ловят ложный скачок."""
+        val = int(raw)
+        if val >= 0x8000:
+            val -= 0x10000
+        eng = val * scale
+        with self._sensor_lock:
+            if self._sensor_filter_on:
+                self._sensor_buf.append(eng)
+                eng = sum(self._sensor_buf) / len(self._sensor_buf)
+            self._sensor_eng = int(round(eng))
+            return self._sensor_eng
+
     def _parse_telemetry(self, regs):
         """Сырой блок IN -> инженерные величины по карте in{off,scale} из конфига."""
         result = {"_raw": list(regs)}
@@ -277,6 +321,12 @@ class PlateClient:
             scale = spec.get("scale", 1)
             if 0 <= off < len(regs):
                 result[name] = regs[off] * scale
+        # датчик перемещения 1271 (pos1_ai): signed + фильтр в одной точке (перекрывает сырой расчёт выше)
+        ai_spec = self.cfg["in"].get("pos1_ai")
+        if ai_spec is not None:
+            off = int(ai_spec["off"])
+            if 0 <= off < len(regs):
+                result["pos1_ai"] = self._sensor_process(regs[off], ai_spec.get("scale", 1))
         return result
 
     def _read_ext(self):
@@ -298,6 +348,9 @@ class PlateClient:
                 if spec.get("signed") and raw >= 0x8000:   # знаковый int16 (напр. температура ниже 0)
                     raw -= 0x10000
                 ext[name] = raw * spec.get("scale", 1) if spec.get("kind") in ("um", "num") else raw
+        # датчик перемещения (1271) — из ЕДИНОЙ фильтрованной точки, согласовано с pos1_ai
+        if self._sensor_eng is not None:
+            ext["sensor"] = self._sensor_eng
         return ext
 
     def write_reg(self, addr, value):

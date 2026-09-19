@@ -623,6 +623,12 @@
           updateTriggerFields();
         }
         const ca = $("cycleAutostartToggle"); if (ca) ca.checked = !!cfg.cycle_autostart;
+        // фильтр датчика перемещения (1271): галочка + окно сек (серое/disabled при снятой галочке) + масштаб показа
+        const sf = cfg.sensor_filter || {};
+        const sfT = $("sensorFilterToggle"); if (sfT) sfT.checked = !!sf.enabled;
+        const sfS = $("sensorFilterSec");
+        if (sfS) { if (sf.avg_sec != null) sfS.value = sf.avg_sec; sfS.disabled = !(sfT && sfT.checked); }
+        const sds = $("sensorDisplayScale"); if (sds && cfg.sensor_display_scale != null) sds.value = cfg.sensor_display_scale;
         cfgSerial = cfg.camera_serial || "";
       }
     } catch (e) { /* конфиг недоступен */ }
@@ -782,9 +788,12 @@
       lastPos[2] = e.m2_pos != null ? e.m2_pos : t.pos2;
       set("m1Pos", um(lastPos[1]));
       set("m2Pos", um(lastPos[2]));
-      set("m1Sensor", um(e.sensor)); set("m1Steps", num(e.m1_steps));
+      // датчик перемещения: показ с множителем sensor_display_scale (свести с позицией; логику не трогает)
+      const dScale = (cfg && cfg.sensor_display_scale != null) ? Number(cfg.sensor_display_scale) : 1;
+      const sensorShown = e.sensor == null ? null : Math.round(e.sensor * dScale);
+      set("m1Sensor", um(sensorShown)); set("m1Steps", num(e.m1_steps));
       set("m2Steps", num(e.m2_steps)); set("m2State", num(e.m2_state));
-      set("tSensor", um(e.sensor));
+      set("tSensor", um(sensorShown));
 
       // питание / термо
       set("tTemp", t.temp == null ? "—" : t.temp + " °C");
@@ -927,6 +936,26 @@
         await api("/api/micro/m1_stop_sensor", { value: $("m1StopSensorInp").value });
         if (h) { h.textContent = "записано в плату"; setTimeout(() => { h.textContent = ""; }, 2500); }
         sentCmd("Стоп М1 по датчику: " + $("m1StopSensorInp").value + " мкм");
+      } catch (e) { if (h) h.textContent = "ошибка: " + e.message; }
+    });
+
+    // фильтр датчика перемещения (1271): галочка гасит/зажигает поле «сек»; «Записать» шлёт оба + масштаб
+    const sfT = $("sensorFilterToggle"), sfS = $("sensorFilterSec"), sdsInp = $("sensorDisplayScale");
+    if (sfT) sfT.addEventListener("change", () => {
+      if (sfS) sfS.disabled = !sfT.checked;
+      api("/api/micro/sensor_filter", { enabled: sfT.checked ? 1 : 0 }).catch(() => {});
+      if (cfg) (cfg.sensor_filter = cfg.sensor_filter || {}).enabled = sfT.checked;
+      sentCmd("Фильтр датчика: " + (sfT.checked ? "вкл" : "выкл"));
+    });
+    const sfSave = $("sensorFilterSave");
+    if (sfSave) sfSave.addEventListener("click", async () => {
+      const h = $("sensorFilterHint");
+      try {
+        await api("/api/micro/sensor_filter", { enabled: (sfT && sfT.checked) ? 1 : 0, avg_sec: sfS ? sfS.value : 2 });
+        if (sdsInp) { await api("/api/micro/sensor_display_scale", { value: sdsInp.value }); if (cfg) cfg.sensor_display_scale = Number(sdsInp.value); }
+        if (cfg) { cfg.sensor_filter = cfg.sensor_filter || {}; cfg.sensor_filter.enabled = !!(sfT && sfT.checked); if (sfS) cfg.sensor_filter.avg_sec = Number(sfS.value); }
+        if (h) { h.textContent = "сохранено"; setTimeout(() => { h.textContent = ""; }, 2500); }
+        sentCmd("Фильтр датчика сохранён");
       } catch (e) { if (h) h.textContent = "ошибка: " + e.message; }
     });
 

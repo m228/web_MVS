@@ -516,6 +516,10 @@ class MicroscopeFSM:
             # человекочитаемая подпись текущего действия (для вкладки «Цикл»)
             if self._fault:
                 label = "⚠ АВАРИЯ: %s — снимите на вкладке «Настр»" % self._fault_msg
+            elif self._cal_active:
+                # калибровка идёт в автомате (mode=0) — показываем на табло, что делает алгоритм
+                label = "Автокалибровка нуля: %s" % (
+                    "Поиск 0" if self._cal_phase == "find_zero" else "еду назад в 0 (2–3 мин)")
             elif m == 20:
                 label = "Отвожу в %d мкм · таймаут %d с" % (self._retract_pos, step_left)
             elif m == 21:

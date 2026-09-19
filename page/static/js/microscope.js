@@ -850,6 +850,7 @@
       // до следующей пробы — очень коротко (плитка под видео): авария/ручной/идёт/таймер/жду СВ
       let camNext;
       if (f.fault) camNext = "АВАРИЯ";
+      else if (f.autocal && f.autocal.active) camNext = "калибр.";
       else if (f.manual) camNext = "ручн.";
       else if (f.mode !== 0) camNext = "идёт";
       else if (!f.cyclic) camNext = "авто выкл";

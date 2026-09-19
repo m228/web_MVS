@@ -40,6 +40,7 @@ class MicroscopeService:
             self.fsm.on_photo = self._auto_photo   # серия скринов в выдержке (см. _auto_photo)
             self.fsm.on_video = self._auto_video   # запись видео пробы на выдержку (см. _auto_video)
             self.fsm.on_varka_count = self._persist_varka   # persist счётчика варок (автокалибровка)
+            self.fsm.on_approach_fail = self._log_approach_fail   # «довод не сошёлся» -> отдельный лог
             self.plate.start()
             self.fsm.start()
             # режим «Автомат» (галочка камеры) = мастер авто-цикла: включаем циклический режим
@@ -391,6 +392,23 @@ class MicroscopeService:
         plate_config.save({"autocal": {"count": int(count)}})
         if self.cfg is not None:
             self.cfg.setdefault("autocal", {})["count"] = int(count)
+
+    def _log_approach_fail(self, info):
+        """Колбэк FSM: подгон по датчику не сошёлся — пошли на след. этап. Пишем момент в
+        ОТДЕЛЬНЫЙ файл (approach_fails.log в каталоге данных), чтобы разобрать/починить потом."""
+        from datetime import datetime
+        from paths import DATA_DIR
+        try:
+            line = "%s\ttarget=%s\tsensor=%s\tdelta=%s\tretry=%s\tsv=%s\n" % (
+                datetime.now().isoformat(timespec="seconds"),
+                info.get("target"), info.get("sensor"), info.get("delta"),
+                info.get("retry"), info.get("sv"))
+            path = DATA_DIR / "approach_fails.log"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with open(path, "a", encoding="utf-8") as f:
+                f.write(line)
+        except Exception as e:
+            log_event("microscope_service", "Не удалось записать лог довода", "warn", {"error": str(e)})
 
     def set_autocal(self, enabled=None, every_n=None, sensor_lo=None, sensor_hi=None, timeout_sec=None):
         """Автокалибровка нуля М1: вкл/выкл + через сколько варок + пороги датчика + таймаут.

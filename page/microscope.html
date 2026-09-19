@@ -154,6 +154,10 @@
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4v16M7 9l5-5 5 5M7 15l5 5 5-5"/></svg>
                 <span>Моторы</span>
               </button>
+              <button type="button" class="micro-ptab" data-ptab="guard" title="Блокировки и защиты" aria-label="Защита">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l7 3v5c0 4.6-3 7.8-7 9-4-1.2-7-4.4-7-9V6z"/><path d="M9 12l2 2 4-4"/></svg>
+                <span>Защита</span>
+              </button>
               <button type="button" class="micro-ptab" data-ptab="led" title="LED · клапаны/выходы DQ" aria-label="LED и DQ">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 18h6M10 21h4M12 3a6 6 0 0 1 4 10.5c-.7.7-1 1.5-1 2.5H9c0-1-.3-1.8-1-2.5A6 6 0 0 1 12 3z"/></svg>
                 <span>LED/DQ</span>
@@ -304,7 +308,11 @@
                   </div>
                 </div>
 
-                <div class="micro-sub__title micro-sub__title--sep">Блокировки и защиты</div>
+              </div>
+
+              <!-- Защита: все блокировки/защиты в одном месте -->
+              <div class="micro-ppane micro-gated hidden" data-ppane="guard">
+                <div class="micro-sub__title">Блокировки и защиты</div>
 
                 <div class="micro-lock">
                   <div class="micro-lock__head">

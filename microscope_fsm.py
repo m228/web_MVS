@@ -127,6 +127,9 @@ class MicroscopeFSM:
         self._cal_emit_setzero = False
         # колбэк persist счётчика варок (ставит microscope_service): on_varka_count(count)
         self.on_varka_count = None
+        # колбэк «довод не сошёлся» -> запись в отдельный лог-файл (ставит microscope_service)
+        self.on_approach_fail = None
+        self._fa_approach_fail = None
 
         self._period = max(0.02, int(config["poll_interval_ms"]) / 1000.0)
         # предохранитель шага цикла (тики по 100мс): нормальный выход — «доехал», а это
@@ -347,9 +350,13 @@ class MicroscopeFSM:
         if abs(diff) <= self._fa_fine_tol:
             return True                                  # датчик у задания — доехали
         if self._fa_retry >= self._fa_max_retry:
-            self._raise_fault("подгон по датчику не сошёлся за %d попыток (Δ=%d мкм)"
-                              % (self._fa_max_retry, diff))
-            return False
+            # не смогли точечно подвести за N попыток -> НЕ авария, идём на СЛЕДУЮЩИЙ этап,
+            # но пишем момент в ОТДЕЛЬНЫЙ лог (разобрать/починить потом)
+            self._fa_approach_fail = {"target": int(self.m1_sp), "sensor": round(pos_ai, 1),
+                                      "delta": round(diff, 1), "retry": self._fa_retry, "sv": self.sv}
+            log_event("microscope_fsm", "Довод по датчику не сошёлся — идём дальше (отдельный лог)",
+                      "warn", self._fa_approach_fail)
+            return True                                  # следующий этап (выдержка), без аварии
         self._fa_shift_req = self.m1_sp - pos_ai         # сдвиг = Задание−Датчик (знак по факту железа: гнало от цели)
         self._fa_retry += 1
         self._fa_wait = max(1, int(round(self._fa_pause_sec / self._period)))
@@ -901,6 +908,7 @@ class MicroscopeFSM:
             photo_request = self._photo_request; self._photo_request = False
             video_request = self._video_request; self._video_request = 0
             shift_req = self._fa_shift_req; self._fa_shift_req = None   # знаковый сдвиг подгона (мкм)
+            approach_fail = self._fa_approach_fail; self._fa_approach_fail = None
             cal_active = self._cal_active
             cal_findzero = self._cal_emit_findzero; self._cal_emit_findzero = False
             cal_goto0 = self._cal_emit_goto0; self._cal_emit_goto0 = False
@@ -935,6 +943,13 @@ class MicroscopeFSM:
                 self.on_varka_count(varka_persist)
             except Exception as e:
                 log_event("microscope_fsm", "Ошибка persist счётчика варок", "warn", {"error": str(e)})
+
+        # «довод не сошёлся» — в отдельный лог-файл (для разбора/починки потом)
+        if approach_fail is not None and self.on_approach_fail:
+            try:
+                self.on_approach_fail(approach_fail)
+            except Exception as e:
+                log_event("microscope_fsm", "Ошибка записи лога довода", "warn", {"error": str(e)})
 
         # плату дёргаем ВНЕ лока (её методы потокобезопасны)
         if halt:

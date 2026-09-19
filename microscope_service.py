@@ -386,13 +386,15 @@ class MicroscopeService:
         return {"status": "no_fsm"}
 
     def set_sensor_display_scale(self, value):
-        """Множитель ТОЛЬКО показа датчика на странице (свести датчик с позицией). Логику
-        доезда не трогаем — plate не дёргаем, пишем только в конфиг для страницы."""
+        """Масштаб датчика 1271: и показ на странице, И логика доезда (FSM), чтобы датчик был
+        в масштабе задания — иначе дельта «задание−датчик» огромная и подгон не сходится."""
         v = float(value)
         plate_config.save({"sensor_display_scale": v})
         if self.cfg is not None:
             self.cfg["sensor_display_scale"] = v
-        log_event("microscope_service", "Масштаб показа датчика 1271 = %s" % v, "info",
+        if self.fsm:
+            self.fsm.set_sensor_scale(v)   # тот же коэффициент в логику доезда
+        log_event("microscope_service", "Масштаб датчика 1271 = %s (показ+доезд)" % v, "info",
                   {"sensor_display_scale": v})
         return {"status": "ok", "sensor_display_scale": v}
 

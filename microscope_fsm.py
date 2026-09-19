@@ -99,6 +99,10 @@ class MicroscopeFSM:
         self._fa_fine_tol = int(fa.get("fine_tol_um", 20))
         self._fa_max_retry = int(fa.get("max_retry", 3))
         self._fa_pause_sec = max(0.5, float(fa.get("pause_sec", 3)))
+        # масштаб датчика 1271 для ЛОГИКИ доезда (тот же коэффициент, что и показ на странице):
+        # датчик отдаёт значение в ~10 раз крупнее реальных мкм — приводим к масштабу задания/
+        # расчётной позиции, иначе дельта «задание−датчик» огромная (тысячи) и подгон не сходится.
+        self._sensor_scale = float(config.get("sensor_display_scale", 1.0) or 1.0)
 
         self._period = max(0.02, int(config["poll_interval_ms"]) / 1000.0)
         # предохранитель шага цикла (тики по 100мс): нормальный выход — «доехал», а это
@@ -347,6 +351,12 @@ class MicroscopeFSM:
             self.sw3 = False
         return {"status": "cleared"}
 
+    def set_sensor_scale(self, value):
+        """Масштаб датчика 1271 для ЛОГИКИ доезда (на лету). Тот же коэффициент, что показ."""
+        with self._lock:
+            self._sensor_scale = float(value or 1.0)
+            return {"sensor_scale": self._sensor_scale}
+
     def set_fine_approach(self, enabled=None, coarse_tol_um=None, fine_tol_um=None,
                           max_retry=None, pause_sec=None):
         """Настройка гибридного доезда на лету (без reload)."""
@@ -567,6 +577,10 @@ class MicroscopeFSM:
         telem = self.plate.telemetry
         pos1 = telem.get("pos1")
         pos1_ai = telem.get("pos1_ai")
+        # датчик для ЛОГИКИ доезда — в масштабе задания/расчётной позиции (телеметрию для показа
+        # не трогаем, JS сам умножает). Одна точка: дальше по tick pos1_ai уже приведён.
+        if pos1_ai is not None:
+            pos1_ai = pos1_ai * self._sensor_scale
 
         with self._lock:
             # 0) подтверждение перехода из ручного: фронт входа стадии в рабочую зону (3..9),

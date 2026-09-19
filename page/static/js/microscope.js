@@ -833,8 +833,19 @@
       let camStepTxt = f.step || "—";
       if (f.mode === 23 && f.dwell_left_s != null) camStepTxt += " · " + f.dwell_left_s + " с";
       set("camStep_v", camStepTxt);
-      // до следующей пробы: в цикле — «идёт проба», в ожидании — суть статуса (таймер / жду СВ)
-      set("camNext_v", f.mode !== 0 ? "идёт проба" : (f.label || "—").replace(/^Ожидание\s*[—-]\s*/, ""));
+      // до следующей пробы — очень коротко (плитка под видео): авария/ручной/идёт/таймер/жду СВ
+      let camNext;
+      if (f.fault) camNext = "АВАРИЯ";
+      else if (f.manual) camNext = "ручн.";
+      else if (f.mode !== 0) camNext = "идёт";
+      else if (!f.cyclic) camNext = "авто выкл";
+      else if (!f.stage_ok) camNext = "нет варки";
+      else {
+        const lab = f.label || "";
+        const mm = lab.match(/(\d+)\s*с/);
+        camNext = /жду СВ|жду ±/.test(lab) ? "жду СВ" : (mm ? mm[1] + " с" : "—");
+      }
+      set("camNext_v", camNext);
 
       set("cycTarget", f.target == null ? "—" : f.target + " мкм");
       set("cycPos", um(t.pos1));

@@ -3524,3 +3524,23 @@ input.micro-cam-num { width: 56px; min-width: 0; flex: 0 0 auto; padding: 4px 5p
   color: var(--danger);
   font-weight: 700;
 }
+
+/* Блокировки и защиты (вкладка «Моторы») — компактно: 1 блокировка = строка-шапка + поля в столбики */
+.micro-lock { margin-top: 12px; }
+.micro-lock__head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.micro-lock__name { font-weight: 600; font-size: 0.92em; }
+.micro-lock__head input[type="number"] { width: 96px; }
+.micro-lock__head .toolbar-btn { padding: 4px 12px; }
+.micro-lock__fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px 14px;
+  margin-top: 6px;
+}
+@media (min-width: 620px) { .micro-lock__fields { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+.micro-lock__fields label {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  font-size: 0.84em; color: var(--muted, #8a94a6);
+}
+.micro-lock__fields input[type="number"] { width: 78px; }
+.micro-lock__stat { margin-top: 6px; font-size: 0.84em; color: var(--muted, #8a94a6); }

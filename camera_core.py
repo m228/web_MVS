@@ -618,6 +618,8 @@ class BaseCameraWorker:
         self.snap_once = False
         # имя проекта для фото: задаёт папку dataset/<проект>/<камера> и префикс имени файла
         self.photo_project = None
+        # суффикс в конец имени скрина (напр. стадия варки «_st11»); ставит microscope_service
+        self.photo_suffix = ""
         # формат файлов фото: всегда PNG без сжатия (см. _photo_ext / PNG_COMPRESSION)
         self.photo_format = "png"
         # сколько фото сохранено за текущую сессию автосохранения
@@ -886,7 +888,8 @@ class BaseCameraWorker:
     def write_photo(self, img, log_name=False):
         folder = self.photo_dir()
         ext = self._photo_ext()
-        filename = f"{self._photo_prefix()}_{datetime.now().strftime('%d_%m_%Y_%H_%M_%S')}.{ext}"
+        suffix = ("_" + str(self.photo_suffix)) if self.photo_suffix else ""
+        filename = f"{self._photo_prefix()}_{datetime.now().strftime('%d_%m_%Y_%H_%M_%S')}{suffix}.{ext}"
         path = os.path.join(folder, filename)
         params = [cv2.IMWRITE_PNG_COMPRESSION, PNG_COMPRESSION] if ext == "png" else []
 

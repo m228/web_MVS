@@ -76,6 +76,10 @@ class MicroscopeService:
                           "warn", {"serial": serial})
                 return
             fmt = (cfg.get("probe_cycle") or {}).get("photo_format", "png")
+            # суффикс стадии варки в конец имени скрина (напр. «_st11»), чтобы по имени было
+            # видно, на какой стадии (подкачка/сгущение/…) снят кадр
+            stage = self.fsm.stage if self.fsm else None
+            worker.photo_suffix = ("st%d" % int(stage)) if stage is not None else ""
             worker.snap("microscope", fmt)
             log_event("microscope_service", "Скрин пробы: запрошен снимок", "info",
                       {"serial": serial, "format": fmt})

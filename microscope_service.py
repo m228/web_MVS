@@ -41,10 +41,9 @@ class MicroscopeService:
             self.fsm.on_video = self._auto_video   # запись видео пробы на выдержку (см. _auto_video)
             self.fsm.on_varka_count = self._persist_varka   # persist счётчика варок (автокалибровка)
             self.fsm.on_approach_fail = self._log_approach_fail   # «довод не сошёлся» -> отдельный лог
-            # довод по абсолютнику и автокалибровка ВРЕМЕННО отключены (уходят в прошивку) —
-            # доезд цикла идёт по энкодеру. Гасим в рантайме, конфиг не перезаписываем.
+            # довод по абсолютнику ушёл в прошивку — гасим в рантайме (конфиг не перезаписываем),
+            # доезд цикла идёт по энкодеру. Автокалибровка нуля работает в ПК (см. set_autocal).
             self.fsm.set_fine_approach(enabled=False)
-            self.fsm.set_autocal(enabled=False)
             self.plate.start()
             self.fsm.start()
             # режим «Автомат» (галочка камеры) = мастер авто-цикла: включаем циклический режим

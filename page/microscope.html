@@ -336,34 +336,7 @@
                   </div>
                 </div>
 
-                <div class="micro-lock">
-                  <div class="micro-lock__head">
-                    <label class="micro-check"><input type="checkbox" id="fineApproachToggle" /><span class="micro-check__text">Довод по абсолютнику</span></label>
-                    <button type="button" id="faClearFault" class="toolbar-btn toolbar-btn--danger" hidden>Сброс аварии</button>
-                  </div>
-                  <div class="micro-lock__fields">
-                    <label><span>Грубо ±мкм</span><input type="number" id="faCoarse" step="10" min="0" value="100" /></label>
-                    <label><span>Точно ±мкм</span><input type="number" id="faFine" step="5" min="1" value="20" /></label>
-                    <label><span>Попыток</span><input type="number" id="faRetry" step="1" min="1" value="3" /></label>
-                    <label><span>Пауза, с</span><input type="number" id="faPause" step="0.5" min="0.5" value="3" /></label>
-                  </div>
-                </div>
-
-                <div class="micro-lock">
-                  <div class="micro-lock__head">
-                    <label class="micro-check"><input type="checkbox" id="autocalToggle" /><span class="micro-check__text">Автокалибровка на пропарке</span></label>
-                    <button type="button" id="acStart" class="toolbar-btn toolbar-btn--neutral">Калибровать</button>
-                    <button type="button" id="acReset" class="toolbar-btn toolbar-btn--neutral">Сброс сч.</button>
-                    <span class="micro-conn-hint" id="acHint"></span>
-                  </div>
-                  <div class="micro-lock__fields">
-                    <label><span>Через N варок</span><input type="number" id="acEveryN" step="1" min="1" value="3" /></label>
-                    <label><span>Зона 0: от</span><input type="number" id="acLo" step="1" value="0" /></label>
-                    <label><span>Зона 0: до</span><input type="number" id="acHi" step="1" value="30" /></label>
-                    <label><span>Таймаут, с</span><input type="number" id="acTimeout" step="10" min="1" value="180" /></label>
-                  </div>
-                  <div class="micro-lock__stat">варок <b id="acCount">—</b>/<b id="acEveryNShow">—</b> · <b id="acStatus">—</b></div>
-                </div>
+                <p class="micro-plc-note">Довод по абсолютнику и автокалибровка нуля переносятся в прошивку платы — переделаем позже.</p>
               </div>
 
               <!-- LED / DQ (объединены) -->

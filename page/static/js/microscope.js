@@ -802,7 +802,7 @@
       // датчик перемещения: показ с множителем sensor_display_scale (свести с позицией; логику не трогает)
       const dScale = (cfg && cfg.sensor_display_scale != null) ? Number(cfg.sensor_display_scale) : 1;
       const sensorShown = e.sensor == null ? null : Math.round(e.sensor * dScale);
-      set("m1Sensor", um(sensorShown)); set("m1Steps", num(e.m1_steps));
+      set("m1Sensor", um(sensorShown)); set("m1Enc", um(e.m1_enc)); set("m1Steps", num(e.m1_steps));
       set("m2Steps", num(e.m2_steps)); set("m2State", num(e.m2_state));
       set("tSensor", um(sensorShown));
 
@@ -866,9 +866,9 @@
       set("cycPos", um(t.pos1));
       // абсолютный датчик 1271 (по нему идёт доезд) — тем же масштабом показа, что и в телеметрии
       set("cycSensor", um(t.pos1_ai == null ? null : Math.round(t.pos1_ai * dScale)));
+      set("cycEnc", um(t.pos1_enc));   // энкодер М1 (1285) — по нему доезд цикла
       set("cycTube", f.valve_tube ? "открыт" : "закрыт");
       set("cycGlass", f.valve_glass ? "открыт" : "закрыт");
-      set("cycDwell", f.dwell_left_s == null ? "—" : f.dwell_left_s + " с");
 
       // DEBUG live-строка (обратная связь ручного ввода СВ): шаг/СВ/зазор/позиция
       set("dbgStep", f.step == null ? "—" : f.step + " (" + f.mode + ")");

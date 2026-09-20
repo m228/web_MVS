@@ -181,6 +181,7 @@ class MicroscopeFSM:
         self._shot_t = 0              # тики с прошлого скрина
         self._redrive = 0             # тики с прошлого повтора goto в шаге движения
         self._in_range = 0            # тиков подряд в диапазоне ±50 у цели (выдержка перед переходом)
+        self._step_start = None       # позиция энкодера на входе в шаг движения (для доезда отвода)
         # состояние гибридного доезда подвода (mode 22)
         self._fa_phase = None         # None / 'coarse' (грубо по 1274) / 'fine' (подгон по 1271)
         self._fa_retry = 0            # сделано подгонов по датчику
@@ -310,6 +311,18 @@ class MicroscopeFSM:
         else:
             self._in_range = 0
         return self._in_range >= ARRIVE_HOLD_TICKS
+
+    def _reached_retract(self, pos_enc, target):
+        """Доезд отвода/возврата: стоп СРАЗУ, как энкодер достиг/ПЕРЕШЁЛ черту (по направлению
+        движения от старта шага) — без выдержки, чтобы быстрый ход не проскакивал цель."""
+        if pos_enc is None:
+            return False
+        start = self._step_start
+        if start is None:
+            return abs(pos_enc - target) <= ARRIVE_TOL_UM
+        if target >= start:                              # движемся к бОльшим значениям
+            return pos_enc >= target - ARRIVE_TOL_UM
+        return pos_enc <= target + ARRIVE_TOL_UM         # к меньшим
 
     def _redrive_goto(self):
         # повтор импульса «идти» к текущей m1_sp каждые REDRIVE_TICKS тиков (вызывается под локом).
@@ -658,6 +671,11 @@ class MicroscopeFSM:
         telem = self.plate.telemetry
         pos1 = telem.get("pos1")
         pos1_ai = telem.get("pos1_ai")
+        # ЭНКОДЕР (рег.1285) — после доработки прошивки он надёжный, доезд цикла ведём по нему,
+        # а не по расчётной 1274 (pos1). Fallback на расчётную, если энкодер не пришёл.
+        pos_enc = telem.get("pos1_enc")
+        if pos_enc is None:
+            pos_enc = pos1
         # датчик для ЛОГИКИ доезда — в масштабе задания/расчётной позиции (телеметрию для показа
         # не трогаем, JS сам умножает). Одна точка: дальше по tick pos1_ai уже приведён.
         if pos1_ai is not None:
@@ -797,9 +815,12 @@ class MicroscopeFSM:
             elif self.mode == 20:
                 # отвод в retract_pos (напр. 20000 мкм)
                 self.m1_sp = self._retract_pos
+                if self.t == 0:
+                    self._step_start = pos_enc     # запомнить старт шага (направление отвода)
                 self._redrive_goto()               # повторяем goto до доезда (как ручная «Идти»)
                 self.t += 1
-                if self._reached_hold(pos1_ai, pos1, self._retract_pos) or self.t > self._step_timeout_ticks:
+                # отвод: стоп СРАЗУ, как энкодер перешёл черту retract_pos (не ждём выдержки)
+                if self._reached_retract(pos_enc, self._retract_pos) or self.t > self._step_timeout_ticks:
                     self.t = 0
                     self.mode = 21
             elif self.mode == 21:
@@ -832,10 +853,10 @@ class MicroscopeFSM:
                 # потом точный подгон по датчику 1271 (см. _approach_step). Иначе — старое
                 # поведение: доезд по датчику с выдержкой (_reached_hold prefer_ai).
                 if self._fa_enabled:
-                    arrived = self._approach_step(pos1, pos1_ai)
+                    arrived = self._approach_step(pos_enc, pos1_ai)   # грубо по энкодеру, точно по датчику
                 else:
                     self._redrive_goto()
-                    arrived = self._reached_hold(pos1_ai, pos1, self.m1_sp, prefer_ai=True)
+                    arrived = self._reached_hold(pos1_ai, pos_enc, self.m1_sp)   # доезд по ЭНКОДЕРУ
                 if arrived or self.t > self._step_timeout_ticks:
                     self.cw0 = False                   # по приходу к стеклу — закрыть трубку
                     self.t = 0
@@ -860,9 +881,12 @@ class MicroscopeFSM:
             elif self.mode == 24:
                 # возврат в retract_pos
                 self.m1_sp = self._retract_pos
+                if self.t == 0:
+                    self._step_start = pos_enc     # запомнить старт шага (направление возврата)
                 self._redrive_goto()                   # повторяем goto до доезда
                 self.t += 1
-                if self._reached_hold(pos1_ai, pos1, self._retract_pos) or self.t > self._step_timeout_ticks:
+                # возврат: стоп СРАЗУ, как энкодер перешёл черту retract_pos
+                if self._reached_retract(pos_enc, self._retract_pos) or self.t > self._step_timeout_ticks:
                     self.t = 0
                     self.mode = 0
 

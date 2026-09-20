@@ -27,7 +27,8 @@ class PlateClient:
         self._unit = int(config["unit"])
         self._read_base = int(config["read_base"])
         self._write_base = int(config["write_base"])
-        self._block_len = int(config["block_len"])
+        self._block_len = int(config["block_len"])           # длина OUT-блока записи (1250..)
+        self._read_len = int(config.get("read_len", config["block_len"]))   # длина блока чтения (может быть > OUT)
         self._period = max(0.02, int(config["poll_interval_ms"]) / 1000.0)
         self._motor = config.get("motor", {})   # нативная карта команд моторов (1248/1249 и т.д.)
 
@@ -426,7 +427,7 @@ class PlateClient:
             #    Теперь: читаем, при неудаче — троттлим лог; всё равно шлём команды; реконнект только
             #    после нескольких неудач подряд (сокет реально мёртв). Флуд «WARN/SUCCESS» устранён.
             try:
-                rr = self._client.read_holding_registers(self._read_base, count=self._block_len, slave=self._unit)
+                rr = self._client.read_holding_registers(self._read_base, count=self._read_len, slave=self._unit)
                 if rr.isError():
                     raise IOError("read error: %r" % rr)
                 telem = self._parse_telemetry(rr.registers)

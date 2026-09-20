@@ -78,6 +78,7 @@ class MicroscopeFSM:
         self._dwell_sec = int(pc.get("dwell_sec", 15))             # выдержка пробы, с
         self._shot_interval_sec = max(1, int(pc.get("shot_interval_sec", 3)))  # период скринов, с
         self._pause_sec = max(0, int(pc.get("pause_sec", 60)))     # пауза между пробами (режим "time"), с
+        self._settle_sec = max(0, int(pc.get("settle_sec", 2)))    # пауза после доезда движения (осадка датчика), с
         # режим повтора пробы внутри цикла: "time" (по паузе) или "sv" (по целому СВ в [from..to])
         self._trigger_mode = "sv" if str(pc.get("trigger_mode", "time")) == "sv" else "time"
         self._sv_from = float(pc.get("sv_from", 84))
@@ -182,6 +183,8 @@ class MicroscopeFSM:
         self._redrive = 0             # тики с прошлого повтора goto в шаге движения
         self._in_range = 0            # тиков подряд в диапазоне ±50 у цели (выдержка перед переходом)
         self._step_start = None       # позиция энкодера на входе в шаг движения (для доезда отвода)
+        self._settle = 0              # тиков паузы после доезда (осадка датчика перед переходом)
+        self._settle_ticks = max(0, self._settle_sec * 10)
         # состояние гибридного доезда подвода (mode 22)
         self._fa_phase = None         # None / 'coarse' (грубо по 1274) / 'fine' (подгон по 1271)
         self._fa_retry = 0            # сделано подгонов по датчику
@@ -311,6 +314,15 @@ class MicroscopeFSM:
         else:
             self._in_range = 0
         return self._in_range >= ARRIVE_HOLD_TICKS
+
+    def _settle_wait(self):
+        """Пауза ПОСЛЕ доезда движения (мотор стоит, датчик оседает — сравнить с энкодером).
+        Возврат True = пауза истекла, можно переходить к следующему шагу."""
+        if self._settle >= self._settle_ticks:
+            self._settle = 0
+            return True
+        self._settle += 1
+        return False
 
     def _reached_retract(self, pos_enc, target):
         """Доезд отвода/возврата: стоп СРАЗУ, как энкодер достиг/ПЕРЕШЁЛ черту (по направлению
@@ -543,6 +555,10 @@ class MicroscopeFSM:
                 # калибровка идёт в автомате (mode=0) — показываем на табло, что делает алгоритм
                 label = "Автокалибровка нуля: %s" % (
                     "Поиск 0" if self._cal_phase == "find_zero" else "еду назад в 0 (2–3 мин)")
+            elif m in (20, 22, 24) and self._settle > 0:
+                # приехал, идёт пауза осадки датчика (сравнить энкодер/аналог в статике)
+                left = (max(0, self._settle_ticks - self._settle) + 9) // 10
+                label = "Приехал — жду %d с (осадка датчика)" % max(1, left)
             elif m == 20:
                 label = "Отвожу в %d мкм · таймаут %d с" % (self._retract_pos, step_left)
             elif m == 21:
@@ -817,12 +833,15 @@ class MicroscopeFSM:
                 self.m1_sp = self._retract_pos
                 if self.t == 0:
                     self._step_start = pos_enc     # запомнить старт шага (направление отвода)
-                self._redrive_goto()               # повторяем goto до доезда (как ручная «Идти»)
+                    self._settle = 0
                 self.t += 1
                 # отвод: стоп СРАЗУ, как энкодер перешёл черту retract_pos (не ждём выдержки)
                 if self._reached_retract(pos_enc, self._retract_pos) or self.t > self._step_timeout_ticks:
-                    self.t = 0
-                    self.mode = 21
+                    if self._settle_wait():        # приехал → пауза settle (осадка датчика) → дальше
+                        self.t = 0
+                        self.mode = 21
+                else:
+                    self._redrive_goto()           # повторяем goto до доезда (как ручная «Идти»)
             elif self.mode == 21:
                 # промывка стекла + трубки перед пробой (pre_wash_sec)
                 self._redrive = 0; self._in_range = 0
@@ -848,24 +867,26 @@ class MicroscopeFSM:
                 if not self._ignore_focus:
                     self.m2_sp = focus
                 self.cw0 = True                        # промывка трубки открыта на подводе
+                if self.t == 0:
+                    self._settle = 0
                 self.t += 1
-                # доезд подвода. Галочка «Довод по абсолютнику»: грубо по расчётной 1274,
-                # потом точный подгон по датчику 1271 (см. _approach_step). Иначе — старое
-                # поведение: доезд по датчику с выдержкой (_reached_hold prefer_ai).
+                # доезд подвода по ЭНКОДЕРУ (довод в прошивке; галочка _fa_enabled выключена).
                 if self._fa_enabled:
                     arrived = self._approach_step(pos_enc, pos1_ai)   # грубо по энкодеру, точно по датчику
                 else:
-                    self._redrive_goto()
                     arrived = self._reached_hold(pos1_ai, pos_enc, self.m1_sp)   # доезд по ЭНКОДЕРУ
                 if arrived or self.t > self._step_timeout_ticks:
                     self.cw0 = False                   # по приходу к стеклу — закрыть трубку
-                    self.t = 0
-                    self._fa_phase = None; self._fa_retry = 0; self._fa_wait = 0
-                    self._dwell_left = self._dwell_sec * 10
-                    self._shot_t = 0
-                    self._photo_request = True         # первый скрин сразу у стекла
-                    self._video_request = self._dwell_sec   # писать видео пробы всю выдержку
-                    self.mode = 23
+                    if self._settle_wait():            # приехал → пауза settle (осадка датчика) → выдержка
+                        self.t = 0
+                        self._fa_phase = None; self._fa_retry = 0; self._fa_wait = 0
+                        self._dwell_left = self._dwell_sec * 10
+                        self._shot_t = 0
+                        self._photo_request = True     # первый скрин сразу у стекла
+                        self._video_request = self._dwell_sec   # писать видео пробы всю выдержку
+                        self.mode = 23
+                elif not self._fa_enabled:
+                    self._redrive_goto()               # повторяем goto до доезда
             elif self.mode == 23:
                 # выдержка пробы: серия скринов каждые shot_interval_sec + пишется видео
                 self._redrive = 0; self._in_range = 0
@@ -883,12 +904,15 @@ class MicroscopeFSM:
                 self.m1_sp = self._retract_pos
                 if self.t == 0:
                     self._step_start = pos_enc     # запомнить старт шага (направление возврата)
-                self._redrive_goto()                   # повторяем goto до доезда
+                    self._settle = 0
                 self.t += 1
                 # возврат: стоп СРАЗУ, как энкодер перешёл черту retract_pos
                 if self._reached_retract(pos_enc, self._retract_pos) or self.t > self._step_timeout_ticks:
-                    self.t = 0
-                    self.mode = 0
+                    if self._settle_wait():        # приехал → пауза settle (осадка датчика) → дальше
+                        self.t = 0
+                        self.mode = 0
+                else:
+                    self._redrive_goto()               # повторяем goto до доезда
 
             # 6) формирование команды мотору М1 (тайминги как ST: 200мс -> 3с)
             if self.m1_sp != self.m1_sp_old and self.cmd1 == 0 and not self.sw1 and not self.sw2:

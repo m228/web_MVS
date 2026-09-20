@@ -154,10 +154,6 @@
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4v16M7 9l5-5 5 5M7 15l5 5 5-5"/></svg>
                 <span>Моторы</span>
               </button>
-              <button type="button" class="micro-ptab" data-ptab="guard" title="Блокировки и защиты" aria-label="Защита">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l7 3v5c0 4.6-3 7.8-7 9-4-1.2-7-4.4-7-9V6z"/><path d="M9 12l2 2 4-4"/></svg>
-                <span>Защита</span>
-              </button>
               <button type="button" class="micro-ptab" data-ptab="led" title="LED · клапаны/выходы DQ" aria-label="LED и DQ">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 18h6M10 21h4M12 3a6 6 0 0 1 4 10.5c-.7.7-1 1.5-1 2.5H9c0-1-.3-1.8-1-2.5A6 6 0 0 1 12 3z"/></svg>
                 <span>LED/DQ</span>
@@ -312,33 +308,6 @@
               </div>
 
               <!-- Защита: все блокировки/защиты в одном месте -->
-              <div class="micro-ppane micro-gated hidden" data-ppane="guard">
-                <div class="micro-sub__title">Блокировки и защиты</div>
-
-                <div class="micro-lock">
-                  <div class="micro-lock__head">
-                    <span class="micro-lock__name">Стоп М1 у датчика (рег.1234), мкм</span>
-                    <input type="number" id="m1StopSensorInp" step="100" value="9000" />
-                    <button type="button" id="m1StopSensorSave" class="toolbar-btn toolbar-btn--primary">Записать</button>
-                    <span class="micro-conn-hint" id="m1StopSensorHint"></span>
-                  </div>
-                </div>
-
-                <div class="micro-lock">
-                  <div class="micro-lock__head">
-                    <label class="micro-check"><input type="checkbox" id="sensorFilterToggle" /><span class="micro-check__text">Фильтр датчика</span></label>
-                    <button type="button" id="sensorFilterSave" class="toolbar-btn toolbar-btn--primary">Записать</button>
-                    <span class="micro-conn-hint" id="sensorFilterHint"></span>
-                  </div>
-                  <div class="micro-lock__fields">
-                    <label><span>Усреднять, с</span><input type="number" id="sensorFilterSec" step="0.5" min="0.1" value="2" disabled /></label>
-                    <label><span>Масштаб датчика</span><input type="number" id="sensorDisplayScale" step="0.1" value="1" /></label>
-                  </div>
-                </div>
-
-                <p class="micro-plc-note">Довод по абсолютнику и автокалибровка нуля переносятся в прошивку платы — переделаем позже.</p>
-              </div>
-
               <!-- LED / DQ (объединены) -->
               <div class="micro-ppane micro-gated hidden" data-ppane="led">
                 <div class="micro-sub__title">LED</div>
@@ -388,7 +357,7 @@
                   <div class="micro-tile"><span>Камера вкл / откл, °C</span><b id="cCamTh">—</b></div>
                 </div>
 
-                <p class="micro-plc-note">Стоп М1 у датчика (рег.1234), фильтр датчика, довод по абсолютнику и автокалибровка — на вкладке «Моторы» (блок «Блокировки и защиты»). Текущий порог Стоп М1 в плате: <b id="sStopSensor">—</b> мкм.</p>
+                <p class="micro-plc-note">Блокировки/защиты (стоп М1, фильтр датчика, довод, автокалибровка) реализованы в прошивке платы. Текущий порог Стоп М1 в плате: <b id="sStopSensor">—</b> мкм.</p>
               </div>
 
               <!-- Мнемосхема вакуум-аппарата (данные с ПЛК) -->

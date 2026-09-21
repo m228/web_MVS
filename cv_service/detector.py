@@ -154,17 +154,67 @@ class ClassicDetector(Detector):
                 "note": "классика (временно), заменится YOLO-seg"}
 
 
+class UltralyticsDetector(Detector):
+    """YOLO через ultralytics (.pt/.onnx). ОСНОВНОЙ бэкенд для прода (GPU).
+
+    Готов к работе, но включается только когда положена обученная модель и стоит ultralytics
+    (+torch-cuda) — см. cv_service/README.md. Для seg-модели берём полигоны масок (точный
+    размер, разделяет слипшиеся кристаллы); для detect-модели — боксы. Тайлинг снаружи
+    (sahi_tiler) вызывает infer() на каждом тайле, поэтому тут прогоняем как есть.
+    """
+
+    def __init__(self, model_path: str, device: Optional[str] = None, imgsz: int = 640):
+        from ultralytics import YOLO   # тяжёлый импорт — только когда реально нужен
+        self.model_path = model_path
+        self.model = YOLO(model_path)
+        self.imgsz = imgsz
+        self._device = device or self._auto_device()
+        self.name = "yolo:" + model_path.rsplit("/", 1)[-1].rsplit("\\", 1)[-1]
+        # seg-модель, если у неё есть маски (task=segment)
+        self.is_seg = getattr(self.model, "task", "") == "segment"
+
+    @staticmethod
+    def _auto_device():
+        try:
+            import torch
+            return "0" if torch.cuda.is_available() else "cpu"
+        except Exception:
+            return "cpu"
+
+    def infer(self, image: np.ndarray, conf: float = 0.25) -> list[Detection]:
+        res = self.model.predict(image, conf=conf, imgsz=self.imgsz, device=self._device,
+                                 verbose=False)[0]
+        dets: list[Detection] = []
+        boxes = getattr(res, "boxes", None)
+        masks = getattr(res, "masks", None)
+        n = len(boxes) if boxes is not None else 0
+        polys = masks.xy if (masks is not None) else None
+        for i in range(n):
+            xy = boxes.xyxy[i].tolist()
+            c = float(boxes.conf[i]) if boxes.conf is not None else conf
+            poly = None
+            if polys is not None and i < len(polys):
+                p = polys[i]
+                if p is not None and len(p) >= 3:
+                    poly = [[float(px), float(py)] for px, py in p]
+            dets.append(Detection(bbox=(xy[0], xy[1], xy[2], xy[3]), conf=c, polygon=poly))
+        return dets
+
+    def info(self) -> dict:
+        return {"name": self.name, "seg": self.is_seg, "device": str(self._device)}
+
+
 def build_detector(model_path: Optional[str] = None, avg_count: int = 40) -> Detector:
     """Фабрика бэкендов.
 
     * model_path пусто → StubDetector (фейковые круги, для сквозной проверки без картинок).
-    * model_path == 'classic' → ClassicDetector (реальная классика на настоящих кадрах).
-    * .pt/.onnx → реальная YOLO (Фаза 8, пока не подключено).
+    * model_path == 'classic' → ClassicDetector (реальная классика на настоящих кадрах до YOLO).
+    * .pt/.onnx → UltralyticsDetector (YOLO-seg на GPU) — основной прод-бэкенд.
     """
     if not model_path:
         return StubDetector(avg_count=avg_count)
     if model_path.lower() == "classic":
         return ClassicDetector()
-    raise NotImplementedError(
-        "Бэкенды .pt/.onnx подключаются в Фазе 8. Сейчас доступны: '' (заглушка), 'classic'."
-    )
+    if model_path.lower().endswith((".pt", ".onnx", ".engine")):
+        return UltralyticsDetector(model_path)
+    raise ValueError("Неизвестная модель: %s (ожидается '', 'classic' или путь к .pt/.onnx)" % model_path)

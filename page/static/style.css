@@ -3623,3 +3623,14 @@ input.micro-cam-num { width: 56px; min-width: 0; flex: 0 0 auto; padding: 4px 5p
 .micro-cv-series label:hover { opacity: .8; }
 .micro-cv-series label:has(input:checked) { opacity: 1; background: var(--chip-bg, var(--surface-muted, #f4f8fc));
   border-color: var(--border-strong, rgba(118,142,178,.45)); }
+
+/* Переключатель низа: шире + не переносить текст */
+.micro-tele-seg { max-width: 460px; }
+.micro-tele-seg .micro-win-btn { white-space: nowrap; }
+
+/* Превью кадра пробы в секции «Распознавание» (клик по галерее показывает фото тут) */
+.micro-cv-preview { position: relative; background: #0e1726; border-radius: 10px; overflow: hidden;
+  min-height: 200px; display: flex; align-items: center; justify-content: center; margin-bottom: 8px; }
+.micro-cv-preview img { width: 100%; max-height: 340px; object-fit: contain; display: block; }
+.micro-cv-preview-ph { color: var(--muted, #8a94a6); font-size: 0.85em; padding: 24px; }
+#cvGalPreview[hidden], #cvGalPreviewPh[hidden] { display: none !important; }

@@ -1448,7 +1448,12 @@
       cvGalIdx = Math.max(0, Math.min(cvGalIdx, frames.length - 1));
       ts = cvLastResult.ts; idx = cvGalIdx; label = "кадр " + (cvGalIdx + 1) + "/" + frames.length;
     }
-    ov.src = cvOverlaySrc(ts, idx);
+    const src = cvOverlaySrc(ts, idx);
+    ov.src = src;
+    // нижнее превью галереи (чтобы видеть кадр прямо в секции «Распознавание»)
+    const prev = $("cvGalPreview"), prevPh = $("cvGalPreviewPh");
+    if (prev) { prev.src = src; prev.hidden = false; }
+    if (prevPh) prevPh.hidden = true;
     if (posEl) posEl.textContent = label + (cvLastResult && cvLastResult.stage != null ? " · st" + cvLastResult.stage : "");
     document.querySelectorAll("#cvThumbs .micro-cv-thumb").forEach((t, i) => {
       const frames = (cvLastResult && cvLastResult.frames) || [];

@@ -123,7 +123,6 @@
               <div class="micro-cam-tile"><span>Кадров</span><b id="camImg_v">—</b></div>
               <div class="micro-cam-tile"><span>Разрешение</span><b id="camRes_v">—</b></div>
               <div class="micro-cam-tile"><span>Поток</span><b id="camBw_v">—</b></div>
-              <div class="micro-cam-tile"><span>Ошибки</span><b id="camErr_v">—</b></div>
               <span class="micro-cam-flags">
                 <span class="micro-cam-flag" id="camPhotoFlag" title="Сохранение фото">
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 8h3l1.5-2h9L18 8h3v11H3z"/><circle cx="12" cy="13" r="3.2"/></svg>
@@ -759,12 +758,9 @@
                   <div class="micro-cv-row" data-g="reject"><span>Брак</span><div class="micro-cv-bar"><i></i></div><b>—</b><em>—</em></div>
                 </div>
                 <div class="micro-cv-stats">
-                  <div class="micro-tile"><span>Средний</span><b id="cvMean">—</b></div>
+                  <div class="micro-tile"><span>Общая</span><b id="cvMean">—</b></div>
                   <div class="micro-tile"><span>Медиана</span><b id="cvMedian">—</b></div>
                   <div class="micro-tile"><span>Δ к прошлой</span><b id="cvDelta">—</b></div>
-                  <div class="micro-tile"><span>Плотность</span><b id="cvDensity">—</b></div>
-                  <div class="micro-tile"><span>Разброс CV%</span><b id="cvCvpct">—</b></div>
-                  <div class="micro-tile"><span>Качество</span><b id="cvQuality">—</b></div>
                 </div>
               </div>
             </div>
@@ -779,12 +775,16 @@
                   <label><input type="checkbox" value="medium" checked /><span class="dot" style="background:#378add"></span>средняя</label>
                   <label><input type="checkbox" value="large" checked /><span class="dot" style="background:#ba7517"></span>большая</label>
                   <label><input type="checkbox" value="reject" /><span class="dot" style="background:#e24b4a"></span>брак</label>
-                  <label><input type="checkbox" value="mean" checked /><span class="dot" style="background:#7f77dd"></span>средний размер</label>
+                  <label><input type="checkbox" value="mean" checked /><span class="dot" style="background:#7f77dd"></span>общая</label>
                 </div>
                 <canvas id="cvTrend" class="micro-cv-trend" width="620" height="200"></canvas>
               </div>
               <div class="micro-cv-block">
                 <div class="micro-cv-block__title">Кадры пробы <span class="micro-cv-n" id="cvGalPos">—</span></div>
+                <div class="micro-cv-preview">
+                  <img id="cvGalPreview" alt="Кадр пробы с распознаванием" hidden />
+                  <div id="cvGalPreviewPh" class="micro-cv-preview-ph">Нет разбора пробы</div>
+                </div>
                 <div class="micro-cv-gal">
                   <button type="button" id="cvGalPrev" class="toolbar-btn toolbar-btn--neutral micro-cv-gal-nav">‹</button>
                   <div class="micro-cv-thumbs" id="cvThumbs"></div>

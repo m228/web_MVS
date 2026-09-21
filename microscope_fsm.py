@@ -75,6 +75,7 @@ class MicroscopeFSM:
         pc = config.get("probe_cycle", {})
         self._retract_pos = int(pc.get("retract_pos", 20000))       # отвод/возврат, мкм
         self._pre_wash_sec = int(pc.get("pre_wash_sec", 4))         # промывка перед подводом, с
+        self._post_wash_pause_sec = int(pc.get("post_wash_pause_sec", 2))  # пауза после промывки перед подводом, с
         self._dwell_sec = int(pc.get("dwell_sec", 15))             # выдержка пробы, с
         self._shot_interval_sec = max(1, int(pc.get("shot_interval_sec", 3)))  # период скринов, с
         self._pause_sec = max(0, int(pc.get("pause_sec", 60)))     # пауза между пробами (режим "time"), с
@@ -561,8 +562,12 @@ class MicroscopeFSM:
             elif m == 20:
                 label = "Отвожу в %d мкм · таймаут %d с" % (self._retract_pos, step_left)
             elif m == 21:
-                left = max(0, self._pre_wash_sec * 10 - self.t) // 10
-                label = "Промывка стекла+трубки: осталось %d с" % left
+                if self.t <= self._pre_wash_sec * 10:
+                    left = max(0, self._pre_wash_sec * 10 - self.t) // 10
+                    label = "Промывка стекла+трубки: осталось %d с" % left
+                else:
+                    left = max(0, (self._pre_wash_sec + self._post_wash_pause_sec) * 10 - self.t + 9) // 10
+                    label = "Пауза после промывки: %d с" % max(1, left)
             elif m == 22:
                 if self._fa_enabled and self._fa_phase == "fine":
                     label = "Подгон по датчику к %d мкм (попытка %d/%d) · таймаут %d с" % (
@@ -854,14 +859,17 @@ class MicroscopeFSM:
                 else:
                     self._redrive_goto()           # повторяем goto до доезда (как ручная «Идти»)
             elif self.mode == 21:
-                # промывка стекла + трубки перед пробой (pre_wash_sec)
+                # промывка стекла + трубки перед пробой (pre_wash_sec), затем ПАУЗА
+                # post_wash_pause_sec с закрытыми клапанами (стекло стекло/успокоилось) -> подвод
                 self._redrive = 0; self._in_range = 0
-                self.cw0 = True
-                self.cw1 = True
                 self.t += 1
-                if self.t > self._pre_wash_sec * 10:
-                    self.cw0 = False
+                if self.t <= self._pre_wash_sec * 10:
+                    self.cw0 = True                    # идёт промывка (оба клапана)
+                    self.cw1 = True
+                else:
+                    self.cw0 = False                   # промывка кончилась — пауза перед подводом
                     self.cw1 = False
+                if self.t > (self._pre_wash_sec + self._post_wash_pause_sec) * 10:
                     self.t = 0
                     self.mode = 22
             elif self.mode == 22:

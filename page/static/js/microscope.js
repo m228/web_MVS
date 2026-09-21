@@ -1175,6 +1175,7 @@
         const key = tab.dataset.ptab;
         document.querySelectorAll(".micro-ptab").forEach((x) => x.classList.toggle("is-active", x === tab));
         document.querySelectorAll(".micro-ppane").forEach((p) => p.classList.toggle("hidden", p.dataset.ppane !== key));
+        if (key === "cv") { cvRefresh(); setTimeout(cvDrawTrend, 30); }   // канвас рисуем, когда пане видима
       });
     });
   }
@@ -1255,6 +1256,335 @@
     el.textContent = String(Math.floor(s / 60)).padStart(2, "0") + ":" + String(s % 60).padStart(2, "0");
   }
 
+  // ================= Компьютерное зрение (CV) =================
+  // Вкладка «CV» + переключатель окна камера/распознавание. Данные с /api/cv/*.
+  const CV_GROUPS = ["small", "medium", "large", "reject"];
+  const CV_SERIES_COLOR = { small: "#1d9e75", medium: "#378add", large: "#ba7517", reject: "#e24b4a", mean: "#7f77dd" };
+  let cvWinOn = false;          // окно показывает CV (true) или камеру (false)
+  let cvLastResult = null;      // последняя проба (result.json)
+  let cvPrevResult = null;      // предыдущая проба (для Δ и слота сравнения)
+  let cvGalIdx = 0;             // индекс кадра в галерее (< frames.length — текущая проба; == prev)
+  let cvTrendData = null;       // {ts, stage, series}
+  let cvTrendView = null;       // {start, end} видимый диапазон индексов (для пан/зум)
+  let cvTrendUserZoomed = false; // пользователь сам двигал/зумил тренд — не сбрасывать авто-фитом
+  let cvLastModel = null;        // имя детектора из /api/cv/health (для телеметрии)
+
+  function cvSerialQ() { return camSerial ? "serial=" + encodeURIComponent(camSerial) : ""; }
+
+  // --- переключатель окна ---
+  function applyWinMode() {
+    const seg = document.querySelector(".micro-win-seg");
+    if (seg) seg.classList.toggle("cv", cvWinOn);
+    const card = document.querySelector(".micro-cam-card");
+    if (card) card.classList.toggle("cv-win", cvWinOn);   // CSS прячет камеру/плейсхолдер в режиме CV
+    const camBtn = $("winCamBtn"), cvBtn = $("winCvBtn");
+    if (camBtn) camBtn.classList.toggle("is-active", !cvWinOn);
+    if (cvBtn) cvBtn.classList.toggle("is-active", cvWinOn);
+    const stream = $("microCamStream"), ov = $("cvOverlay"), ph = $("camPlaceholder"), ovph = $("cvOverlayPh");
+    if (cvWinOn) {
+      const hasOv = ov && ov.getAttribute("src");
+      if (ov) ov.hidden = !hasOv;
+      if (ovph) ovph.hidden = !!hasOv;
+    } else {
+      if (ov) ov.hidden = true;
+      if (ovph) ovph.hidden = true;
+      // вернуть камеру: показать стрим, если он запущен, иначе плейсхолдер
+      if (stream && stream.getAttribute("src")) { stream.hidden = false; if (ph) ph.hidden = true; }
+      else if (ph) ph.hidden = false;
+    }
+  }
+  function wireWindow() {
+    const camBtn = $("winCamBtn"), cvBtn = $("winCvBtn");
+    if (camBtn) camBtn.addEventListener("click", () => { cvWinOn = false; applyWinMode(); });
+    if (cvBtn) cvBtn.addEventListener("click", () => { cvWinOn = true; applyWinMode(); cvRefresh(); });
+  }
+
+  // --- настройки CV ---
+  function cvFillSettings(cv) {
+    if (!cv) return;
+    const g = cv.groups || {}, sh = cv.shape || {};
+    const set = (id, v) => { const e = $(id); if (e != null && v != null) e.value = v; };
+    if ($("cvEnable")) $("cvEnable").checked = !!cv.enabled;
+    set("cvSmallMax", g.small_max_um); set("cvMediumMax", g.medium_max_um);
+    set("cvUmPerPx", cv.um_per_px); set("cvTiles", cv.tiles);
+    set("cvMinCirc", sh.min_circularity); set("cvMinSol", sh.min_solidity);
+    set("cvMaxAspect", sh.max_aspect); set("cvConf", cv.conf);
+  }
+  function cvCollectPatch() {
+    const num = (id) => { const e = $(id); return e && e.value !== "" ? parseFloat(e.value) : undefined; };
+    return {
+      groups: { small_max_um: num("cvSmallMax"), medium_max_um: num("cvMediumMax") },
+      shape: { min_circularity: num("cvMinCirc"), min_solidity: num("cvMinSol"), max_aspect: num("cvMaxAspect") },
+      um_per_px: num("cvUmPerPx"), tiles: num("cvTiles"), conf: num("cvConf"),
+    };
+  }
+  async function cvPostSettings(patch) {
+    try {
+      await fetch("/api/cv/settings", {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(patch),
+      });
+    } catch (e) { /* CV необязателен */ }
+  }
+
+  async function cvHealth() {
+    const el = $("cvStatus"); if (!el) return;
+    try {
+      const h = await api("/api/cv/health");
+      if (!h.enabled) { el.textContent = "сервис: выключен"; el.className = "micro-cv-status off"; return; }
+      if (h.online) {
+        const d = (h.service && h.service.detector) || {};
+        cvLastModel = d.name || null;
+        el.textContent = "сервис: онлайн · " + (d.name || "?");
+        el.className = "micro-cv-status ok";
+      } else { el.textContent = "сервис: НЕ отвечает (" + (h.service_url || "") + ")"; el.className = "micro-cv-status off"; }
+    } catch (e) { el.textContent = "сервис: —"; el.className = "micro-cv-status"; }
+  }
+
+  // --- рассев + статистика ---
+  function cvRenderScatter() {
+    const r = cvLastResult, s = r && r.summary;
+    const cnt = $("cvCount");
+    // телеметрия распознавания (тайминги сайдкара + модель)
+    const setTe = (id, v) => { const e = $(id); if (e) e.textContent = v; };
+    const tm = (r && r.timing) || {};
+    setTe("cvTimeTotal", tm.total_ms != null ? (Math.round(tm.total_ms) + " мс") : "—");
+    setTe("cvTilesN", tm.tiles != null ? (tm.tiles + (tm.grid ? " (" + tm.grid + ")" : "")) : "—");
+    setTe("cvInferNms", tm.infer_ms != null ? (Math.round(tm.infer_ms) + " / " + Math.round(tm.nms_ms || 0) + " мс") : "—");
+    setTe("cvCountTele", s ? Math.round(s.count || 0) : "—");
+    setTe("cvFramesN", r && r.frames ? r.frames.length : "—");
+    setTe("cvModel", (s && s.model) || (cvLastModel || "—"));
+    if (!s) { if (cnt) cnt.textContent = "нет пробы"; return; }
+    if (cnt) cnt.textContent = "N=" + Math.round(s.count || 0);
+    const groups = s.groups || {}, pct = s.groups_pct || {};
+    const total = CV_GROUPS.reduce((a, g) => a + (groups[g] || 0), 0) || 1;
+    document.querySelectorAll("#cvBars .micro-cv-row").forEach((row) => {
+      const g = row.dataset.g;
+      const i = row.querySelector("i"), b = row.querySelector("b"), em = row.querySelector("em");
+      const v = Math.round(groups[g] || 0), p = pct[g] != null ? pct[g] : Math.round(100 * v / total);
+      if (i) i.style.width = Math.max(0, Math.min(100, (100 * v / total))) + "%";
+      if (b) b.textContent = v;
+      if (em) em.textContent = p + "%";
+    });
+    const sz = s.size_um || {};
+    const setT = (id, v) => { const e = $(id); if (e) e.textContent = v; };
+    setT("cvMean", sz.mean != null ? sz.mean + " мкм" : "—");
+    setT("cvMedian", sz.median != null ? sz.median + " мкм" : "—");
+    setT("cvDensity", s.density_per_mm2 != null ? s.density_per_mm2 + " /мм²" : "—");
+    setT("cvCvpct", sz.cv_pct != null ? sz.cv_pct + " %" : "—");
+    setT("cvQuality", s.quality === "low" ? "низкое" : (s.quality || "—"));
+    // Δ к прошлой пробе по среднему размеру
+    const prevMean = cvPrevResult && cvPrevResult.summary && cvPrevResult.summary.size_um
+      ? cvPrevResult.summary.size_um.mean : null;
+    const dEl = $("cvDelta");
+    if (dEl) {
+      if (prevMean != null && sz.mean != null) {
+        const d = Math.round((sz.mean - prevMean) * 10) / 10;
+        dEl.textContent = (d > 0 ? "+" : "") + d + " мкм";
+        dEl.style.color = d > 0 ? "var(--success)" : (d < 0 ? "var(--danger)" : "");
+      } else { dEl.textContent = "—"; dEl.style.color = ""; }
+    }
+  }
+
+  // --- галерея кадров пробы (+ прошлая проба последним слотом) ---
+  function cvOverlaySrc(ts, idx) {
+    const q = [cvSerialQ(), "ts=" + encodeURIComponent(ts), "idx=" + idx, "_=" + Date.now()].filter(Boolean).join("&");
+    return "/api/cv/overlay?" + q;
+  }
+  function cvRenderGallery() {
+    const wrap = $("cvThumbs"); if (!wrap) return;
+    wrap.innerHTML = "";
+    const frames = (cvLastResult && cvLastResult.frames) || [];
+    const ts = cvLastResult && cvLastResult.ts;
+    frames.forEach((fr, i) => {
+      if (!fr.overlay) return;
+      const im = document.createElement("img");
+      im.className = "micro-cv-thumb" + (i === cvGalIdx ? " is-active" : "");
+      im.src = cvOverlaySrc(ts, i);
+      im.title = "кадр " + (i + 1);
+      im.addEventListener("click", () => { cvGalIdx = i; cvShowFrame(); });
+      wrap.appendChild(im);
+    });
+    // слот прошлой пробы
+    if (cvPrevResult && cvPrevResult.ts && (cvPrevResult.frames || []).some((f) => f.overlay)) {
+      const im = document.createElement("img");
+      im.className = "micro-cv-thumb is-prev" + (cvGalIdx === -1 ? " is-active" : "");
+      im.src = cvOverlaySrc(cvPrevResult.ts, 0);
+      im.title = "предыдущая проба";
+      im.addEventListener("click", () => { cvGalIdx = -1; cvShowFrame(); });
+      wrap.appendChild(im);
+    }
+    cvShowFrame();
+  }
+  function cvShowFrame() {
+    const ov = $("cvOverlay"); if (!ov) return;
+    const posEl = $("cvGalPos");
+    let ts, idx, label;
+    if (cvGalIdx === -1 && cvPrevResult) { ts = cvPrevResult.ts; idx = 0; label = "прошлая проба"; }
+    else {
+      const frames = (cvLastResult && cvLastResult.frames) || [];
+      if (!frames.length) { if (posEl) posEl.textContent = "нет кадров"; return; }
+      cvGalIdx = Math.max(0, Math.min(cvGalIdx, frames.length - 1));
+      ts = cvLastResult.ts; idx = cvGalIdx; label = "кадр " + (cvGalIdx + 1) + "/" + frames.length;
+    }
+    ov.src = cvOverlaySrc(ts, idx);
+    if (posEl) posEl.textContent = label + (cvLastResult && cvLastResult.stage != null ? " · st" + cvLastResult.stage : "");
+    document.querySelectorAll("#cvThumbs .micro-cv-thumb").forEach((t, i) => {
+      const frames = (cvLastResult && cvLastResult.frames) || [];
+      const isPrev = i >= frames.filter((f) => f.overlay).length;
+      t.classList.toggle("is-active", (cvGalIdx === -1 && isPrev) || (cvGalIdx !== -1 && i === cvGalIdx));
+    });
+    if (cvWinOn) applyWinMode();
+  }
+  function wireGallery() {
+    const prev = $("cvGalPrev"), next = $("cvGalNext");
+    if (prev) prev.addEventListener("click", () => { if (cvGalIdx > 0) { cvGalIdx--; cvShowFrame(); } });
+    if (next) next.addEventListener("click", () => {
+      const n = ((cvLastResult && cvLastResult.frames) || []).length;
+      if (cvGalIdx < n - 1) { cvGalIdx++; cvShowFrame(); }
+    });
+  }
+
+  // --- интерактивный тренд (canvas, выбор серий, пан/зум по времени) ---
+  function cvSelectedSeries() {
+    return [...document.querySelectorAll("#cvSeries input:checked")].map((c) => c.value);
+  }
+  async function cvLoadTrend() {
+    try {
+      const sel = cvSelectedSeries();
+      const q = [cvSerialQ(), "series=" + sel.join(","), "limit=200"].filter(Boolean).join("&");
+      cvTrendData = await api("/api/cv/trend?" + q);
+      const n = (cvTrendData.ts || []).length;
+      // авто-фит на весь диапазон, пока пользователь сам не двигал/зумил тренд
+      if (!cvTrendUserZoomed || !cvTrendView) cvTrendView = { start: 0, end: Math.max(1, n) };
+      else if (cvTrendView.end > n) cvTrendView = { start: Math.max(0, cvTrendView.start), end: n };
+      cvDrawTrend();
+    } catch (e) { /* нет данных */ }
+  }
+  function cvDrawTrend() {
+    const cv = $("cvTrend"); if (!cv || !cvTrendData) return;
+    const ctx = cv.getContext("2d");
+    const W = cv.width = cv.clientWidth || 620, H = cv.height;
+    ctx.clearRect(0, 0, W, H);
+    const ts = cvTrendData.ts || [], series = cvTrendData.series || {};
+    const n = ts.length;
+    if (!n) { ctx.fillStyle = getCss("--muted", "#8a94a6"); ctx.font = "12px sans-serif"; ctx.fillText("нет проб для тренда", 12, H / 2); return; }
+    const v = cvTrendView || { start: 0, end: n };
+    const i0 = Math.max(0, Math.floor(v.start)), i1 = Math.min(n, Math.ceil(v.end));
+    const pad = { l: 34, r: 8, t: 10, b: 20 };
+    const plotW = W - pad.l - pad.r, plotH = H - pad.t - pad.b;
+    const sel = cvSelectedSeries();
+    // раздельные шкалы: проценты (0..100) и размер мкм — нормируем каждую серию к своей.
+    const pctSeries = sel.filter((s) => s !== "mean");
+    const drawSeries = (name, color, scaleMax) => {
+      const arr = series[name]; if (!arr) return;
+      ctx.strokeStyle = color; ctx.lineWidth = 2; ctx.beginPath();
+      let started = false;
+      for (let i = i0; i < i1; i++) {
+        const val = arr[i]; if (val == null) { started = false; continue; }
+        const x = pad.l + plotW * (i1 - i0 <= 1 ? 0.5 : (i - i0) / (i1 - i0 - 1));
+        const y = pad.t + plotH * (1 - Math.max(0, Math.min(1, val / scaleMax)));
+        if (!started) { ctx.moveTo(x, y); started = true; } else ctx.lineTo(x, y);
+      }
+      ctx.stroke();
+    };
+    // сетка
+    ctx.strokeStyle = getCss("--border", "rgba(131,151,179,.28)"); ctx.lineWidth = 1;
+    for (let k = 0; k <= 4; k++) { const y = pad.t + plotH * k / 4; ctx.beginPath(); ctx.moveTo(pad.l, y); ctx.lineTo(W - pad.r, y); ctx.stroke(); }
+    // проценты
+    pctSeries.forEach((s) => drawSeries(s, CV_SERIES_COLOR[s] || "#888", 100));
+    // средний размер — своя шкала (макс по видимому окну)
+    if (sel.includes("mean") && series.mean) {
+      let mx = 10; for (let i = i0; i < i1; i++) if (series.mean[i] != null) mx = Math.max(mx, series.mean[i]);
+      drawSeries("mean", CV_SERIES_COLOR.mean, mx * 1.1);
+    }
+    // подписи оси X (первая/последняя видимая проба, время HH:MM)
+    ctx.fillStyle = getCss("--muted", "#8a94a6"); ctx.font = "10px monospace";
+    const lbl = (i) => { const t = ts[i] || ""; const m = t.match(/_(\d{2})_(\d{2})_\d{2}$/); return m ? m[1] + ":" + m[2] : t.slice(-8); };
+    if (i1 > i0) { ctx.fillText(lbl(i0), pad.l, H - 6); const last = lbl(i1 - 1); ctx.fillText(last, W - pad.r - ctx.measureText(last).width, H - 6); }
+    ctx.fillText("%", 6, pad.t + 8);
+  }
+  function getCss(name, fallback) {
+    try { const v = getComputedStyle(document.documentElement).getPropertyValue(name); return v ? v.trim() : fallback; }
+    catch (e) { return fallback; }
+  }
+  function wireTrend() {
+    document.querySelectorAll("#cvSeries input").forEach((c) => c.addEventListener("change", cvLoadTrend));
+    const cv = $("cvTrend"); if (!cv) return;
+    let drag = null;
+    cv.addEventListener("pointerdown", (e) => { drag = { x: e.clientX, view: Object.assign({}, cvTrendView) }; cv.setPointerCapture(e.pointerId); });
+    cv.addEventListener("pointermove", (e) => {
+      if (!drag || !cvTrendData) return;
+      const n = (cvTrendData.ts || []).length; if (!n) return;
+      const span = drag.view.end - drag.view.start;
+      const dx = (e.clientX - drag.x) / (cv.clientWidth || 620) * span;
+      let s = drag.view.start - dx, en = drag.view.end - dx;
+      if (s < 0) { en -= s; s = 0; } if (en > n) { s -= (en - n); en = n; } s = Math.max(0, s);
+      cvTrendUserZoomed = true;
+      cvTrendView = { start: s, end: en }; cvDrawTrend();
+    });
+    cv.addEventListener("pointerup", () => { drag = null; });
+    cv.addEventListener("wheel", (e) => {
+      if (!cvTrendData) return; e.preventDefault();
+      const n = (cvTrendData.ts || []).length; if (!n) return;
+      const v = cvTrendView || { start: 0, end: n };
+      const rect = cv.getBoundingClientRect();
+      const frac = (e.clientX - rect.left) / rect.width;
+      const span = v.end - v.start, center = v.start + frac * span;
+      const k = e.deltaY > 0 ? 1.2 : 0.8;
+      let ns = center - (center - v.start) * k, ne = center + (v.end - center) * k;
+      ns = Math.max(0, ns); ne = Math.min(n, ne);
+      if (ne - ns >= 1.5) { cvTrendUserZoomed = true; cvTrendView = { start: ns, end: ne }; cvDrawTrend(); }
+    }, { passive: false });
+    // двойной клик — сброс зума на весь диапазон
+    cv.addEventListener("dblclick", () => { cvTrendUserZoomed = false; cvLoadTrend(); });
+  }
+
+  // --- общий рефреш данных CV ---
+  async function cvRefresh() {
+    try {
+      const q = cvSerialQ() ? "?" + cvSerialQ() : "";
+      const [last, prev] = await Promise.all([
+        api("/api/cv/last" + q).catch(() => null),
+        api("/api/cv/prev" + q).catch(() => null),
+      ]);
+      cvLastResult = last && !last.empty ? last : null;
+      cvPrevResult = prev && !prev.empty ? prev : null;
+      if (cvGalIdx == null) cvGalIdx = 0;
+      cvRenderScatter();
+      cvRenderGallery();
+      cvLoadTrend();
+    } catch (e) { /* CV необязателен */ }
+  }
+
+  function wireCV() {
+    wireWindow();
+    wireGallery();
+    wireTrend();
+    const en = $("cvEnable");
+    if (en) en.addEventListener("change", () => { cvPostSettings({ enabled: en.checked }).then(cvHealth); });
+    const save = $("cvSaveBtn");
+    if (save) save.addEventListener("click", async () => {
+      await cvPostSettings(cvCollectPatch());
+      const h = $("cvSaveHint"); if (h) { h.textContent = "сохранено"; setTimeout(() => (h.textContent = ""), 1500); }
+      cvRenderScatter();
+    });
+    const an = $("cvAnalyzeBtn");
+    if (an) an.addEventListener("click", async () => {
+      an.disabled = true;
+      try { await api("/api/cv/analyze"); } catch (e) { }
+      setTimeout(() => { cvRefresh(); an.disabled = false; }, 2500);
+    });
+    // подтянуть настройки + первичные данные
+    api("/api/cv/settings").then(cvFillSettings).catch(() => { });
+    cvHealth();
+    cvRefresh();
+    setInterval(() => { cvHealth(); if (cvWinOn || isCvPaneVisible()) cvRefresh(); }, 5000);
+  }
+  function isCvPaneVisible() {
+    const p = document.querySelector('.micro-ppane[data-ppane="cv"]');
+    return p && !p.classList.contains("hidden");
+  }
+
   document.addEventListener("DOMContentLoaded", () => {
     wire();
     syncManual(false);
@@ -1263,5 +1593,6 @@
     setInterval(poll, POLL_MS);
     updateHourlyWashTimer();
     setInterval(updateHourlyWashTimer, 1000);
+    wireCV();
   });
 })();

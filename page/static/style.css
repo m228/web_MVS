@@ -3545,3 +3545,63 @@ input.micro-cam-num { width: 56px; min-width: 0; flex: 0 0 auto; padding: 4px 5p
 }
 .micro-lock__fields input[type="number"] { width: 68px; min-width: 0; }
 .micro-lock__stat { margin-top: 6px; font-size: 0.84em; color: var(--muted, #8a94a6); }
+
+/* ===== Компьютерное зрение (CV): переключатель окна + вкладка CV ===== */
+/* Переключатель окна камера/CV над видео (скользящая «таблетка») */
+.micro-win-seg { position: relative; display: grid; grid-template-columns: 1fr 1fr; gap: 0;
+  background: var(--surface-muted, #f4f8fc); border: 1px solid var(--border, rgba(131,151,179,.28));
+  border-radius: 9px; padding: 3px; margin: 0 0 8px; }
+.micro-win-pill { position: absolute; top: 3px; left: 3px; width: calc(50% - 3px); height: calc(100% - 6px);
+  background: var(--accent, #2563eb); border-radius: 7px; transition: left .2s cubic-bezier(.4,0,.2,1); }
+.micro-win-seg.cv .micro-win-pill { left: 50%; }
+.micro-win-btn { position: relative; z-index: 1; border: 0; background: transparent; cursor: pointer;
+  padding: 7px 0; font-size: 0.9em; font-weight: 500; color: var(--muted, #5b6b81); border-radius: 7px; }
+.micro-win-btn.is-active { color: var(--accent-contrast, #fff); }
+
+/* Вкладка CV */
+.micro-cv-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 10px; }
+.micro-cv-status { font-size: 0.82em; color: var(--muted, #5b6b81); }
+.micro-cv-status.ok { color: var(--success, #16a34a); }
+.micro-cv-status.off { color: var(--danger, #dc2626); }
+.micro-cv-analyze { margin-left: auto; }
+.micro-cv-block { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--border, rgba(131,151,179,.28)); }
+.micro-cv-block__title { font-size: 0.9em; font-weight: 600; margin-bottom: 8px; display: flex; align-items: center; gap: 8px; }
+.micro-cv-n { color: var(--muted, #5b6b81); font-weight: 400; }
+.micro-cv-hint { margin-left: auto; font-size: 0.76em; color: var(--muted, #8a94a6); font-weight: 400; }
+.micro-cv-group-lbl { font-size: 0.8em; color: var(--muted, #5b6b81); margin: 8px 0 4px; }
+
+/* Рассев — полоски групп */
+.micro-cv-row { display: grid; grid-template-columns: 62px 1fr 26px 40px; align-items: center; gap: 8px; margin-bottom: 7px; font-size: 0.85em; }
+.micro-cv-row > span { color: var(--muted, #5b6b81); }
+.micro-cv-bar { background: var(--surface-muted, #eef2f7); border-radius: 6px; height: 11px; overflow: hidden; }
+.micro-cv-bar > i { display: block; height: 100%; width: 0; border-radius: 6px; transition: width .3s ease; }
+.micro-cv-row[data-g="small"]  .micro-cv-bar > i { background: #1d9e75; }
+.micro-cv-row[data-g="medium"] .micro-cv-bar > i { background: #378add; }
+.micro-cv-row[data-g="large"]  .micro-cv-bar > i { background: #ba7517; }
+.micro-cv-row[data-g="reject"] .micro-cv-bar > i { background: #e24b4a; }
+.micro-cv-row > b { text-align: right; font-weight: 600; }
+.micro-cv-row > em { text-align: right; font-style: normal; color: var(--muted, #8a94a6); font-size: 0.9em; }
+.micro-cv-stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; margin-top: 8px; }
+
+/* Тренд */
+.micro-cv-series { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 8px; }
+.micro-cv-series label { display: inline-flex; align-items: center; gap: 5px; font-size: 0.8em; color: var(--muted, #5b6b81); cursor: pointer; }
+.micro-cv-series .dot { width: 9px; height: 9px; border-radius: 50%; display: inline-block; }
+.micro-cv-trend { width: 100%; height: 180px; background: var(--surface-muted, #f4f8fc);
+  border: 1px solid var(--border, rgba(131,151,179,.28)); border-radius: 8px; touch-action: none; cursor: grab; }
+.micro-cv-trend:active { cursor: grabbing; }
+
+/* Галерея */
+.micro-cv-gal { display: flex; align-items: center; gap: 8px; }
+.micro-cv-gal-nav { width: 32px; padding: 6px 0; font-size: 1.1em; line-height: 1; }
+.micro-cv-thumbs { display: flex; gap: 6px; flex: 1; overflow-x: auto; padding: 2px; }
+.micro-cv-thumb { width: 46px; height: 38px; flex: 0 0 auto; border-radius: 6px; border: 1px solid var(--border, rgba(131,151,179,.28));
+  object-fit: cover; background: #0e1726; cursor: pointer; }
+.micro-cv-thumb.is-active { border-color: var(--accent, #2563eb); border-width: 2px; }
+.micro-cv-thumb.is-prev { outline: 1px dashed var(--muted, #8a94a6); }
+
+/* режим окна «Комп. зрение»: прячем камеру и её плейсхолдер, показываем overlay CV */
+.micro-cam-card.cv-win #microCamStream,
+.micro-cam-card.cv-win #camPlaceholder { display: none !important; }
+#cvOverlay[hidden], #cvOverlayPh[hidden] { display: none !important; }
+.micro-cv-tele { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; margin-bottom: 4px; }

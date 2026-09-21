@@ -3605,3 +3605,12 @@ input.micro-cam-num { width: 56px; min-width: 0; flex: 0 0 auto; padding: 4px 5p
 .micro-cam-card.cv-win #camPlaceholder { display: none !important; }
 #cvOverlay[hidden], #cvOverlayPh[hidden] { display: none !important; }
 .micro-cv-tele { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; margin-bottom: 4px; }
+
+/* Нижняя секция: переключатель Плата/Распознавание + широкая раскладка распознавания */
+.micro-tele-seg { max-width: 400px; margin: 0; }
+.micro-tele-cv { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; align-items: start; }
+.micro-tele-cv__col { min-width: 0; }
+.micro-tele-cv .micro-cv-block:first-child { margin-top: 0; padding-top: 0; border-top: 0; }
+.micro-tele-cv .micro-cv-trend { height: 200px; }
+@media (max-width: 900px) { .micro-tele-cv { grid-template-columns: 1fr; } }
+#teleStripPlate[hidden], #teleStripCv[hidden] { display: none !important; }

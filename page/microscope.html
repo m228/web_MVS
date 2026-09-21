@@ -626,59 +626,7 @@
                 </div>
 
                 <!-- Телеметрия распознавания -->
-                <div class="micro-cv-tele">
-                  <div class="micro-tile"><span>Время распозн.</span><b id="cvTimeTotal">—</b></div>
-                  <div class="micro-tile"><span>Тайлов SAHI</span><b id="cvTilesN">—</b></div>
-                  <div class="micro-tile"><span>Infer / NMS</span><b id="cvInferNms">—</b></div>
-                  <div class="micro-tile"><span>Кристаллов</span><b id="cvCountTele">—</b></div>
-                  <div class="micro-tile"><span>Кадров</span><b id="cvFramesN">—</b></div>
-                  <div class="micro-tile"><span>Модель</span><b id="cvModel">—</b></div>
-                </div>
-
-                <!-- Рассев -->
-                <div class="micro-cv-block">
-                  <div class="micro-cv-block__title">Рассев кристаллов <span class="micro-cv-n" id="cvCount">—</span></div>
-                  <div class="micro-cv-bars" id="cvBars">
-                    <div class="micro-cv-row" data-g="small"><span>Малая</span><div class="micro-cv-bar"><i></i></div><b>—</b><em>—</em></div>
-                    <div class="micro-cv-row" data-g="medium"><span>Средняя</span><div class="micro-cv-bar"><i></i></div><b>—</b><em>—</em></div>
-                    <div class="micro-cv-row" data-g="large"><span>Большая</span><div class="micro-cv-bar"><i></i></div><b>—</b><em>—</em></div>
-                    <div class="micro-cv-row" data-g="reject"><span>Брак</span><div class="micro-cv-bar"><i></i></div><b>—</b><em>—</em></div>
-                  </div>
-                  <div class="micro-cv-stats">
-                    <div class="micro-tile"><span>Средний</span><b id="cvMean">—</b></div>
-                    <div class="micro-tile"><span>Медиана</span><b id="cvMedian">—</b></div>
-                    <div class="micro-tile"><span>Δ к прошлой</span><b id="cvDelta">—</b></div>
-                    <div class="micro-tile"><span>Плотность</span><b id="cvDensity">—</b></div>
-                    <div class="micro-tile"><span>Разброс CV%</span><b id="cvCvpct">—</b></div>
-                    <div class="micro-tile"><span>Качество</span><b id="cvQuality">—</b></div>
-                  </div>
-                </div>
-
-                <!-- Тренд (интерактивный: выбор серий + пан/зум по времени) -->
-                <div class="micro-cv-block">
-                  <div class="micro-cv-block__title">Тренд по пробам
-                    <span class="micro-cv-hint">тащи — сдвиг, колесо — зум</span>
-                  </div>
-                  <div class="micro-cv-series" id="cvSeries">
-                    <label><input type="checkbox" value="small" checked /><span class="dot" style="background:#1d9e75"></span>малая</label>
-                    <label><input type="checkbox" value="medium" checked /><span class="dot" style="background:#378add"></span>средняя</label>
-                    <label><input type="checkbox" value="large" checked /><span class="dot" style="background:#ba7517"></span>большая</label>
-                    <label><input type="checkbox" value="reject" /><span class="dot" style="background:#e24b4a"></span>брак</label>
-                    <label><input type="checkbox" value="mean" checked /><span class="dot" style="background:#7f77dd"></span>средний размер</label>
-                  </div>
-                  <canvas id="cvTrend" class="micro-cv-trend" width="620" height="180"></canvas>
-                </div>
-
-                <!-- Галерея кадров пробы -->
-                <div class="micro-cv-block">
-                  <div class="micro-cv-block__title">Кадры пробы <span class="micro-cv-n" id="cvGalPos">—</span></div>
-                  <div class="micro-cv-gal">
-                    <button type="button" id="cvGalPrev" class="toolbar-btn toolbar-btn--neutral micro-cv-gal-nav">‹</button>
-                    <div class="micro-cv-thumbs" id="cvThumbs"></div>
-                    <button type="button" id="cvGalNext" class="toolbar-btn toolbar-btn--neutral micro-cv-gal-nav">›</button>
-                  </div>
-                  <p class="micro-plc-note">последний слот — предыдущая проба для сравнения</p>
-                </div>
+                <p class="micro-plc-note">Рассев, тренд и кадры пробы — внизу страницы: телеметрия → «Распознавание».</p>
 
                 <!-- Пороги: правятся живьём, применяются к следующей пробе -->
                 <div class="micro-cv-block">
@@ -721,9 +669,14 @@
         <!-- Телеметрия — компактной полосой снизу (вся) -->
         <section class="card micro-tele-strip">
           <div class="micro-tele-strip__head">
-            <span class="micro-tele-strip__title">Телеметрия платы</span>
+            <div class="micro-win-seg micro-tele-seg" role="tablist" aria-label="Телеметрия">
+              <span class="micro-win-pill" id="telePill" aria-hidden="true"></span>
+              <button type="button" class="micro-win-btn is-active" id="telePlateBtn" data-tele="plate">Телеметрия платы</button>
+              <button type="button" class="micro-win-btn" id="teleCvBtn" data-tele="cv">Распознавание</button>
+            </div>
+            <span class="micro-cv-status" id="cvStatus2" style="margin-left:auto"></span>
           </div>
-          <div class="micro-tele-cols">
+          <div class="micro-tele-cols" id="teleStripPlate">
             <div class="micro-tele-col">
               <p class="micro-tele-group">Позиции</p>
               <div class="micro-tiles micro-tiles--one">
@@ -782,6 +735,62 @@
                   <text x="90" y="133" text-anchor="middle" font-size="13" fill="#0f6e56">brix</text>
                   <text id="maTemp" x="90" y="160" text-anchor="middle" font-size="18" font-weight="600" fill="#ba7517">—</text>
                 </svg>
+              </div>
+            </div>
+          </div>
+
+          <!-- Распознавание кристаллов (переключается с телеметрией платы) -->
+          <div class="micro-tele-cv" id="teleStripCv" hidden>
+            <div class="micro-tele-cv__col">
+              <div class="micro-cv-tele">
+                <div class="micro-tile"><span>Время распозн.</span><b id="cvTimeTotal">—</b></div>
+                <div class="micro-tile"><span>Тайлов SAHI</span><b id="cvTilesN">—</b></div>
+                <div class="micro-tile"><span>Infer / NMS</span><b id="cvInferNms">—</b></div>
+                <div class="micro-tile"><span>Кристаллов</span><b id="cvCountTele">—</b></div>
+                <div class="micro-tile"><span>Кадров</span><b id="cvFramesN">—</b></div>
+                <div class="micro-tile"><span>Модель</span><b id="cvModel">—</b></div>
+              </div>
+              <div class="micro-cv-block">
+                <div class="micro-cv-block__title">Рассев кристаллов <span class="micro-cv-n" id="cvCount">—</span></div>
+                <div class="micro-cv-bars" id="cvBars">
+                  <div class="micro-cv-row" data-g="small"><span>Малая</span><div class="micro-cv-bar"><i></i></div><b>—</b><em>—</em></div>
+                  <div class="micro-cv-row" data-g="medium"><span>Средняя</span><div class="micro-cv-bar"><i></i></div><b>—</b><em>—</em></div>
+                  <div class="micro-cv-row" data-g="large"><span>Большая</span><div class="micro-cv-bar"><i></i></div><b>—</b><em>—</em></div>
+                  <div class="micro-cv-row" data-g="reject"><span>Брак</span><div class="micro-cv-bar"><i></i></div><b>—</b><em>—</em></div>
+                </div>
+                <div class="micro-cv-stats">
+                  <div class="micro-tile"><span>Средний</span><b id="cvMean">—</b></div>
+                  <div class="micro-tile"><span>Медиана</span><b id="cvMedian">—</b></div>
+                  <div class="micro-tile"><span>Δ к прошлой</span><b id="cvDelta">—</b></div>
+                  <div class="micro-tile"><span>Плотность</span><b id="cvDensity">—</b></div>
+                  <div class="micro-tile"><span>Разброс CV%</span><b id="cvCvpct">—</b></div>
+                  <div class="micro-tile"><span>Качество</span><b id="cvQuality">—</b></div>
+                </div>
+              </div>
+            </div>
+
+            <div class="micro-tele-cv__col">
+              <div class="micro-cv-block">
+                <div class="micro-cv-block__title">Тренд по пробам
+                  <span class="micro-cv-hint">тащи — сдвиг, колесо — зум, 2× — сброс</span>
+                </div>
+                <div class="micro-cv-series" id="cvSeries">
+                  <label><input type="checkbox" value="small" checked /><span class="dot" style="background:#1d9e75"></span>малая</label>
+                  <label><input type="checkbox" value="medium" checked /><span class="dot" style="background:#378add"></span>средняя</label>
+                  <label><input type="checkbox" value="large" checked /><span class="dot" style="background:#ba7517"></span>большая</label>
+                  <label><input type="checkbox" value="reject" /><span class="dot" style="background:#e24b4a"></span>брак</label>
+                  <label><input type="checkbox" value="mean" checked /><span class="dot" style="background:#7f77dd"></span>средний размер</label>
+                </div>
+                <canvas id="cvTrend" class="micro-cv-trend" width="620" height="200"></canvas>
+              </div>
+              <div class="micro-cv-block">
+                <div class="micro-cv-block__title">Кадры пробы <span class="micro-cv-n" id="cvGalPos">—</span></div>
+                <div class="micro-cv-gal">
+                  <button type="button" id="cvGalPrev" class="toolbar-btn toolbar-btn--neutral micro-cv-gal-nav">‹</button>
+                  <div class="micro-cv-thumbs" id="cvThumbs"></div>
+                  <button type="button" id="cvGalNext" class="toolbar-btn toolbar-btn--neutral micro-cv-gal-nav">›</button>
+                </div>
+                <p class="micro-plc-note">последний слот — предыдущая проба для сравнения</p>
               </div>
             </div>
           </div>

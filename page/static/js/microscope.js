@@ -1326,19 +1326,41 @@
     } catch (e) { /* CV необязателен */ }
   }
 
+  function cvSetStatus(text, cls) {
+    ["cvStatus", "cvStatus2"].forEach((id) => {
+      const el = $(id); if (el) { el.textContent = text; el.className = "micro-cv-status" + (cls ? " " + cls : ""); }
+    });
+  }
   async function cvHealth() {
-    const el = $("cvStatus"); if (!el) return;
     try {
       const h = await api("/api/cv/health");
-      if (!h.enabled) { el.textContent = "сервис: выключен"; el.className = "micro-cv-status off"; return; }
+      if (!h.enabled) { cvSetStatus("сервис: выключен", "off"); return; }
       if (h.online) {
         const d = (h.service && h.service.detector) || {};
         cvLastModel = d.name || null;
-        el.textContent = "сервис: онлайн · " + (d.name || "?");
-        el.className = "micro-cv-status ok";
-      } else { el.textContent = "сервис: НЕ отвечает (" + (h.service_url || "") + ")"; el.className = "micro-cv-status off"; }
-    } catch (e) { el.textContent = "сервис: —"; el.className = "micro-cv-status"; }
+        cvSetStatus("сервис: онлайн · " + (d.name || "?"), "ok");
+      } else { cvSetStatus("сервис: НЕ отвечает (" + (h.service_url || "") + ")", "off"); }
+    } catch (e) { cvSetStatus("сервис: —", ""); }
   }
+
+  // переключатель нижней секции: телеметрия платы ↔ распознавание
+  function wireTeleToggle() {
+    const seg = document.querySelector(".micro-tele-seg");
+    const plateBtn = $("telePlateBtn"), cvBtn = $("teleCvBtn");
+    const plate = $("teleStripPlate"), cvv = $("teleStripCv");
+    if (!plateBtn || !cvBtn) return;
+    function set(showCv) {
+      if (seg) seg.classList.toggle("cv", showCv);
+      plateBtn.classList.toggle("is-active", !showCv);
+      cvBtn.classList.toggle("is-active", showCv);
+      if (plate) plate.hidden = showCv;
+      if (cvv) cvv.hidden = !showCv;
+      if (showCv) { cvRefresh(); setTimeout(cvDrawTrend, 30); }
+    }
+    plateBtn.addEventListener("click", () => set(false));
+    cvBtn.addEventListener("click", () => set(true));
+  }
+  function isTeleCvVisible() { const e = $("teleStripCv"); return e && !e.hidden; }
 
   // --- рассев + статистика ---
   function cvRenderScatter() {
@@ -1558,6 +1580,7 @@
 
   function wireCV() {
     wireWindow();
+    wireTeleToggle();
     wireGallery();
     wireTrend();
     const en = $("cvEnable");
@@ -1578,7 +1601,7 @@
     api("/api/cv/settings").then(cvFillSettings).catch(() => { });
     cvHealth();
     cvRefresh();
-    setInterval(() => { cvHealth(); if (cvWinOn || isCvPaneVisible()) cvRefresh(); }, 5000);
+    setInterval(() => { cvHealth(); if (cvWinOn || isCvPaneVisible() || isTeleCvVisible()) cvRefresh(); }, 5000);
   }
   function isCvPaneVisible() {
     const p = document.querySelector('.micro-ppane[data-ppane="cv"]');

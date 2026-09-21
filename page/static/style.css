@@ -3595,8 +3595,9 @@ input.micro-cam-num { width: 56px; min-width: 0; flex: 0 0 auto; padding: 4px 5p
 .micro-cv-gal { display: flex; align-items: center; gap: 8px; }
 .micro-cv-gal-nav { width: 32px; padding: 6px 0; font-size: 1.1em; line-height: 1; }
 .micro-cv-thumbs { display: flex; gap: 6px; flex: 1; overflow-x: auto; padding: 2px; }
-.micro-cv-thumb { width: 46px; height: 38px; flex: 0 0 auto; border-radius: 6px; border: 1px solid var(--border, rgba(131,151,179,.28));
-  object-fit: cover; background: #0e1726; cursor: pointer; }
+.micro-cv-thumb { width: 92px; height: 76px; flex: 0 0 auto; border-radius: 6px; border: 1px solid var(--border, rgba(131,151,179,.28));
+  object-fit: cover; background: #0e1726; cursor: pointer; transition: border-color .15s ease; }
+.micro-cv-thumb:hover { border-color: var(--accent, #2563eb); }
 .micro-cv-thumb.is-active { border-color: var(--accent, #2563eb); border-width: 2px; }
 .micro-cv-thumb.is-prev { outline: 1px dashed var(--muted, #8a94a6); }
 
@@ -3628,9 +3629,4 @@ input.micro-cam-num { width: 56px; min-width: 0; flex: 0 0 auto; padding: 4px 5p
 .micro-tele-seg { max-width: 460px; }
 .micro-tele-seg .micro-win-btn { white-space: nowrap; }
 
-/* Превью кадра пробы в секции «Распознавание» (клик по галерее показывает фото тут) */
-.micro-cv-preview { position: relative; background: #0e1726; border-radius: 10px; overflow: hidden;
-  min-height: 200px; display: flex; align-items: center; justify-content: center; margin-bottom: 8px; }
-.micro-cv-preview img { width: 100%; max-height: 340px; object-fit: contain; display: block; }
-.micro-cv-preview-ph { color: var(--muted, #8a94a6); font-size: 0.85em; padding: 24px; }
-#cvGalPreview[hidden], #cvGalPreviewPh[hidden] { display: none !important; }
+/* (превью галереи убрано — основной просмотр в окне камеры) */

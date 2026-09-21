@@ -1423,7 +1423,7 @@
       im.className = "micro-cv-thumb" + (i === cvGalIdx ? " is-active" : "");
       im.src = cvOverlaySrc(ts, i);
       im.title = "кадр " + (i + 1);
-      im.addEventListener("click", () => { cvGalIdx = i; cvShowFrame(); });
+      im.addEventListener("click", () => cvViewFrame(i));
       wrap.appendChild(im);
     });
     // слот прошлой пробы
@@ -1432,7 +1432,7 @@
       im.className = "micro-cv-thumb is-prev" + (cvGalIdx === -1 ? " is-active" : "");
       im.src = cvOverlaySrc(cvPrevResult.ts, 0);
       im.title = "предыдущая проба";
-      im.addEventListener("click", () => { cvGalIdx = -1; cvShowFrame(); });
+      im.addEventListener("click", () => cvViewFrame(-1));
       wrap.appendChild(im);
     }
     cvShowFrame();
@@ -1448,12 +1448,7 @@
       cvGalIdx = Math.max(0, Math.min(cvGalIdx, frames.length - 1));
       ts = cvLastResult.ts; idx = cvGalIdx; label = "кадр " + (cvGalIdx + 1) + "/" + frames.length;
     }
-    const src = cvOverlaySrc(ts, idx);
-    ov.src = src;
-    // нижнее превью галереи (чтобы видеть кадр прямо в секции «Распознавание»)
-    const prev = $("cvGalPreview"), prevPh = $("cvGalPreviewPh");
-    if (prev) { prev.src = src; prev.hidden = false; }
-    if (prevPh) prevPh.hidden = true;
+    ov.src = cvOverlaySrc(ts, idx);
     if (posEl) posEl.textContent = label + (cvLastResult && cvLastResult.stage != null ? " · st" + cvLastResult.stage : "");
     document.querySelectorAll("#cvThumbs .micro-cv-thumb").forEach((t, i) => {
       const frames = (cvLastResult && cvLastResult.frames) || [];
@@ -1462,12 +1457,18 @@
     });
     if (cvWinOn) applyWinMode();
   }
+  // выбрать кадр галереи → показать в ОКНЕ камеры (основной просмотр там)
+  function cvViewFrame(idx) {
+    cvGalIdx = idx;
+    cvWinOn = true;                 // переключаем верхнее окно в «Комп. зрение»
+    cvShowFrame();                  // ставит overlay.src и (т.к. cvWinOn) applyWinMode
+  }
   function wireGallery() {
     const prev = $("cvGalPrev"), next = $("cvGalNext");
-    if (prev) prev.addEventListener("click", () => { if (cvGalIdx > 0) { cvGalIdx--; cvShowFrame(); } });
+    if (prev) prev.addEventListener("click", () => { if (cvGalIdx > 0) cvViewFrame(cvGalIdx - 1); });
     if (next) next.addEventListener("click", () => {
       const n = ((cvLastResult && cvLastResult.frames) || []).length;
-      if (cvGalIdx < n - 1) { cvGalIdx++; cvShowFrame(); }
+      if (cvGalIdx < n - 1) cvViewFrame(cvGalIdx + 1);
     });
   }
 

@@ -495,10 +495,9 @@ class MicroscopeFSM:
             self._shot_t = 0
             if nxt == 23:
                 # вход в выдержку через «Вперёд» — как обычный вход mode 22->23:
-                # взводим выдержку, первый скрин сразу и запрос видео на всю выдержку
+                # взводим выдержку и первый скрин сразу (видео при пробе не пишем — только фото)
                 self._dwell_left = self._dwell_sec * 10
                 self._photo_request = True
-                self._video_request = self._dwell_sec
             return {"status": "skipped", "mode": nxt}
 
     def set_manual(self, on):
@@ -894,8 +893,7 @@ class MicroscopeFSM:
                         self._fa_phase = None; self._fa_retry = 0; self._fa_wait = 0
                         self._dwell_left = self._dwell_sec * 10
                         self._shot_t = 0
-                        self._photo_request = True     # первый скрин сразу у стекла
-                        self._video_request = self._dwell_sec   # писать видео пробы всю выдержку
+                        self._photo_request = True     # первый скрин сразу у стекла (видео не пишем)
                         self.mode = 23
                 elif not self._fa_enabled:
                     self._redrive_goto()               # повторяем goto до доезда

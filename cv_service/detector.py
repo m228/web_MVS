@@ -17,6 +17,7 @@ import random
 from dataclasses import dataclass, field
 from typing import Optional
 
+import cv2
 import numpy as np
 
 
@@ -92,14 +93,78 @@ class StubDetector(Detector):
         return dets
 
 
-def build_detector(model_path: Optional[str] = None, avg_count: int = 40) -> Detector:
-    """Фабрика. Пока модели нет (Фаза 1) — всегда StubDetector.
+class ClassicDetector(Detector):
+    """Классический OpenCV-детектор кристаллов (без нейросети) — временный, для теста на
+    РЕАЛЬНЫХ кадрах до готовой YOLO-модели. Даёт настоящий рассев, чтобы обкатать
+    измерения/группы/overlay. НЕ финальное качество: слипшиеся кристаллы не разделяет,
+    может ловить пыль. Заменяется на YOLO-seg в Фазе 8.
 
-    В Фазе 8: по расширению model_path выбирать UltralyticsDetector(.pt) / OnnxDetector(.onnx).
+    Конвейер под подсветку на просвет (кристалл = тёмный контур + светлая середина, виньетка):
+      gray → нормализация фона (деление на сильно размытый фон, убирает виньетку)
+           → CLAHE → adaptive threshold по тёмным краям → morph close + fill
+           → контуры → фильтр по площади/заполненности.
+    """
+
+    name = "classic"
+    is_seg = True
+
+    def __init__(self, min_area_px: int = 90, max_area_frac: float = 0.05):
+        self.min_area_px = min_area_px          # мельче — считаем пылью
+        self.max_area_frac = max_area_frac      # крупнее доли кадра — мусор/пятно света
+
+    def infer(self, image: np.ndarray, conf: float = 0.25) -> list[Detection]:
+        h, w = image.shape[:2]
+        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY) if image.ndim == 3 else image
+        # 1) убрать виньетку: поделить на сильно размытый фон
+        k = max(31, (min(h, w) // 8) | 1)
+        bg = cv2.GaussianBlur(gray, (k, k), 0)
+        norm = cv2.divide(gray, bg, scale=128).astype(np.uint8)
+        # 2) поднять локальный контраст
+        norm = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8)).apply(norm)
+        # 3) тёмные края кристаллов -> бинарь (инверсно: тёмное = передний план)
+        thr = cv2.adaptiveThreshold(norm, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+                                    cv2.THRESH_BINARY_INV, 21, 7)
+        # 4) сомкнуть контур кристалла и залить нутро
+        ksz = max(3, (min(h, w) // 300) | 1)
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (ksz, ksz))
+        closed = cv2.morphologyEx(thr, cv2.MORPH_CLOSE, kernel, iterations=2)
+        closed = cv2.morphologyEx(closed, cv2.MORPH_OPEN, kernel, iterations=1)
+        cnts, _ = cv2.findContours(closed, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+        max_area = self.max_area_frac * h * w
+        dets: list[Detection] = []
+        for c in cnts:
+            area = cv2.contourArea(c)
+            if area < self.min_area_px or area > max_area:
+                continue
+            x, y, ww, hh = cv2.boundingRect(c)
+            approx = c.reshape(-1, 2)
+            # прореживаем контур, чтобы полигон был компактным
+            eps = 0.01 * cv2.arcLength(c, True)
+            poly = cv2.approxPolyDP(c, eps, True).reshape(-1, 2).tolist()
+            dets.append(Detection(
+                bbox=(x, y, x + ww, y + hh),
+                conf=0.5,
+                polygon=[[float(px), float(py)] for px, py in poly],
+            ))
+        return dets
+
+    def info(self) -> dict:
+        return {"name": self.name, "seg": self.is_seg, "device": "cpu",
+                "note": "классика (временно), заменится YOLO-seg"}
+
+
+def build_detector(model_path: Optional[str] = None, avg_count: int = 40) -> Detector:
+    """Фабрика бэкендов.
+
+    * model_path пусто → StubDetector (фейковые круги, для сквозной проверки без картинок).
+    * model_path == 'classic' → ClassicDetector (реальная классика на настоящих кадрах).
+    * .pt/.onnx → реальная YOLO (Фаза 8, пока не подключено).
     """
     if not model_path:
         return StubDetector(avg_count=avg_count)
-    # заготовка на будущее — реальные бэкенды подключим с готовой моделью
+    if model_path.lower() == "classic":
+        return ClassicDetector()
     raise NotImplementedError(
-        "Реальные бэкенды (.pt/.onnx) подключаются в Фазе 8. Сейчас работает только заглушка."
+        "Бэкенды .pt/.onnx подключаются в Фазе 8. Сейчас доступны: '' (заглушка), 'classic'."
     )

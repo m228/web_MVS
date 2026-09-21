@@ -19,7 +19,7 @@ import time
 
 import cv2
 import numpy as np
-from fastapi import FastAPI, File, UploadFile
+from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
 from detector import build_detector
@@ -50,9 +50,12 @@ def model():
 
 
 @app.post("/infer")
-async def infer(image: UploadFile = File(...), tiles: int = 6, conf: float = 0.25,
+async def infer(request: Request, tiles: int = 6, conf: float = 0.25,
                 iou: float = 0.45, overlap: float = 0.15):
-    raw = await image.read()
+    # тело запроса — сырые байты изображения (png/jpg). Так проще клиенту (urllib без multipart).
+    raw = await request.body()
+    if not raw:
+        return JSONResponse({"error": "empty_body"}, status_code=400)
     buf = np.frombuffer(raw, dtype=np.uint8)
     img = cv2.imdecode(buf, cv2.IMREAD_COLOR)
     if img is None:

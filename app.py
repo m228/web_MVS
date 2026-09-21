@@ -23,6 +23,8 @@ import save_settings
 import net_tools
 import updater
 from microscope_service import micro
+import cv_client
+import cv_store
 import autostart
 from paths import read_version, BUNDLE_DIR, DATA_DIR
 
@@ -548,6 +550,72 @@ def micro_recipe(sp: str | None = None, svsp: str | None = None, focus: str | No
     api_log("api.micro.recipe", "Сохранена таблица подвода (SP/SVSP/FOCUS)",
             payload={"rows": len(patch.get("SVSP", []))})
     return {"status": "ok", "sp_len": len(patch.get("SP", [])), "svsp_len": len(patch.get("SVSP", []))}
+# --- компьютерное зрение (CV): рассев кристаллов по скринам пробы (см. cv_service/) ---
+
+def _cv_serial(serial: str | None) -> str:
+    """Серийник камеры: из запроса или из конфига микроскопа (camera_serial)."""
+    if serial:
+        return serial
+    return (micro.config() or {}).get("camera_serial", "") or ""
+
+
+@app.get("/api/cv/health")
+def cv_health():
+    cv = micro.cv_config()
+    url = cv.get("service_url", "http://127.0.0.1:8765")
+    h = cv_client.health(url) if cv.get("enabled") else None
+    return {"enabled": bool(cv.get("enabled")), "service_url": url,
+            "online": h is not None, "service": h}
+
+
+@app.get("/api/cv/settings")
+def cv_settings_get():
+    return micro.cv_config()
+
+
+@app.post("/api/cv/settings")
+def cv_settings_set(patch: dict = Body(...)):
+    data = micro.set_cv(patch or {})
+    api_log("api.cv.settings", "Изменены настройки CV", payload={"patch": patch})
+    return {"status": "ok", "cv": data}
+
+
+@app.get("/api/cv/last")
+def cv_last(serial: str | None = None):
+    return cv_store.get_last(_cv_serial(serial)) or {"empty": True}
+
+
+@app.get("/api/cv/prev")
+def cv_prev(serial: str | None = None):
+    return cv_store.get_prev(_cv_serial(serial)) or {"empty": True}
+
+
+@app.get("/api/cv/samples")
+def cv_samples(serial: str | None = None, limit: int = 50):
+    return {"samples": cv_store.list_samples(_cv_serial(serial), limit=limit)}
+
+
+@app.get("/api/cv/trend")
+def cv_trend(serial: str | None = None, series: str | None = None, limit: int = 200):
+    ser = [s.strip() for s in series.split(",")] if series else None
+    return cv_store.trend(_cv_serial(serial), series=ser, limit=limit)
+
+
+@app.get("/api/cv/overlay")
+def cv_overlay(serial: str | None = None, ts: str = "", idx: int = 0):
+    p = cv_store.overlay_path(_cv_serial(serial), ts, idx)
+    if not p:
+        return Response(status_code=404)
+    return FileResponse(str(p), media_type="image/png")
+
+
+@app.get("/api/cv/analyze")
+def cv_analyze():
+    res = micro.analyze_last_probe()
+    api_log("api.cv.analyze", "Ручной запуск CV-анализа пробы", payload=res)
+    return res
+
+
 # --- автозапуск вместе с Windows (Планировщик задач, см. autostart.py) ---
 
 @app.get("/api/autostart/status")

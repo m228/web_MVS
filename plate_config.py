@@ -229,6 +229,22 @@ DEFAULTS = {
     "autocal": {"enabled": False, "every_n": 3, "sensor_lo": 0, "sensor_hi": 30,
                 "timeout_sec": 60, "count": 0},
 
+    # КОМПЬЮТЕРНОЕ ЗРЕНИЕ (CV): распознавание кристаллов по скринам пробы через сайдкар-сервис.
+    # enabled — мастер-тумблер (вкладка «CV»); при False пробы не анализируются. service_url —
+    # адрес сайдкара (см. cv_service/). um_per_px — масштаб (613.8 px/mm → 1.629 мкм/px). tiles/
+    # conf/iou — параметры SAHI/детектора. groups — границы групп по размеру (мкм, эквив.диаметр).
+    # shape — пороги «брака»/уродливой формы. min_size_um — отсечка пыли. blur_min — порог
+    # смазанного кадра. keep_last — сколько последних проб хранить. Всё правится на вкладке «CV».
+    "cv": {
+        "enabled": False,
+        "service_url": "http://127.0.0.1:8765",
+        "um_per_px": 1.629,
+        "tiles": 6, "conf": 0.25, "iou": 0.45, "overlap": 0.15,
+        "groups": {"small_max_um": 300.0, "medium_max_um": 600.0},
+        "shape": {"min_circularity": 0.55, "max_aspect": 2.8, "min_solidity": 0.82},
+        "min_size_um": 20.0, "blur_min": 8.0, "keep_last": 50,
+    },
+
     # микроскоп включён? False -> приложение не поднимает плату/ПЛК/автоцикл (галочка на
     # главной). По умолчанию True — поведение как раньше. Меняется со страницы на лету.
     "micro_enabled": True,

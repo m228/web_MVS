@@ -39,6 +39,7 @@ class MicroscopeService:
             self.fsm = MicroscopeFSM(self.plate, self.cfg)
             self.fsm.on_photo = self._auto_photo   # серия скринов в выдержке (см. _auto_photo)
             self.fsm.on_video = self._auto_video   # запись видео пробы на выдержку (см. _auto_video)
+            self.fsm.on_sample_done = self._auto_cv_analyze   # CV-анализ пробы (см. _auto_cv_analyze)
             self.fsm.on_varka_count = self._persist_varka   # persist счётчика варок (автокалибровка)
             self.fsm.on_approach_fail = self._log_approach_fail   # «довод не сошёлся» -> отдельный лог
             # довод по абсолютнику ушёл в прошивку — гасим в рантайме (конфиг не перезаписываем),
@@ -109,6 +110,96 @@ class MicroscopeService:
         except Exception as e:
             log_event("microscope_service", "Ошибка видео пробы", "warn", {"error": str(e)})
 
+    # ---------- CV: анализ пробы (компьютерное зрение) ----------
+
+    def _auto_cv_analyze(self):
+        """Колбэк «проба завершена»: запустить CV-анализ серии скринов в ФОНЕ (не блокируем FSM).
+        Тихо выходит, если CV выключен в конфиге — тогда цикл работает как раньше."""
+        cfg = self.cfg or {}
+        cv = cfg.get("cv") or {}
+        if not cv.get("enabled"):
+            return
+        stage = self.fsm.stage if self.fsm else None
+        threading.Thread(target=self._cv_analyze_worker, args=(stage,), daemon=True).start()
+
+    def analyze_last_probe(self):
+        """Ручной запуск анализа последней серии скринов (эндпоинт /api/cv/analyze)."""
+        stage = self.fsm.stage if self.fsm else None
+        threading.Thread(target=self._cv_analyze_worker, args=(stage,), daemon=True).start()
+        return {"status": "started"}
+
+    def _collect_probe_frames(self, worker, cfg) -> list:
+        """Пути скринов последней пробы: свежие png из папки фото за окно выдержки."""
+        import glob
+        import os
+        pc = cfg.get("probe_cycle") or {}
+        window = int(pc.get("dwell_sec", 15)) + int(pc.get("shot_interval_sec", 3)) + 20
+        folder = worker.photo_dir()
+        try:
+            files = glob.glob(os.path.join(str(folder), "*.png")) + \
+                    glob.glob(os.path.join(str(folder), "*.jpg"))
+        except Exception:
+            return []
+        now = time.time()
+        recent = [f for f in files if (now - os.path.getmtime(f)) <= window]
+        recent.sort(key=lambda f: os.path.getmtime(f))
+        return recent[-12:]   # не больше 12 кадров на пробу
+
+    def _cv_analyze_worker(self, stage):
+        """Фон: собрать кадры пробы → сайдкар (детекции) → cv_analyzer (измерения) → cv_store."""
+        cfg = self.cfg or {}
+        cv = cfg.get("cv") or {}
+        serial = (cfg.get("camera_serial") or "").strip()
+        if not serial:
+            return
+        try:
+            import cv2
+            import cv_analyzer
+            import cv_client
+            import cv_store
+            from camera_core import manager as cam_manager
+
+            worker = cam_manager.get(serial)
+            url = cv.get("service_url", "http://127.0.0.1:8765")
+            if cv_client.health(url) is None:
+                log_event("microscope_service", "CV пропущен: сайдкар недоступен", "warn",
+                          {"url": url})
+                return
+            frames = self._collect_probe_frames(worker, cfg)
+            if not frames:
+                log_event("microscope_service", "CV: кадры пробы не найдены", "warn",
+                          {"serial": serial})
+                return
+
+            frame_recs, overlays, last_timing = [], [], {}
+            import os
+            for f in frames:
+                img = cv2.imread(f)
+                if img is None:
+                    continue
+                ok, enc = cv2.imencode(".png", img)
+                if not ok:
+                    continue
+                resp = cv_client.infer(
+                    url, enc.tobytes(), tiles=int(cv.get("tiles", 6)),
+                    conf=float(cv.get("conf", 0.25)), iou=float(cv.get("iou", 0.45)),
+                    overlap=float(cv.get("overlap", 0.15)))
+                if not resp:
+                    continue
+                last_timing = resp.get("timing", {})
+                res = cv_analyzer.analyze(img, resp.get("objects", []), cv_cfg=cv, with_overlay=True)
+                overlays.append(res.pop("_overlay", None))
+                frame_recs.append({"file": os.path.basename(f),
+                                   "summary": res["summary"], "objects": res["objects"]})
+
+            if not frame_recs:
+                log_event("microscope_service", "CV: ни один кадр не распознан", "warn")
+                return
+            cv_store.save_sample(serial, stage, frame_recs, overlays, last_timing,
+                                 keep_last=int(cv.get("keep_last", 50)))
+        except Exception as e:
+            log_event("microscope_service", "Ошибка CV-анализа пробы", "error", {"error": str(e)})
+
     def _on_sv(self, sv, stage):
         # СВ/стадия из ПЛК -> в автомат (заменяет ручной ввод, пока источник жив)
         # DEBUG: при перехвате ПЛК не затираем ручной ввод со страницы
@@ -169,6 +260,24 @@ class MicroscopeService:
         """Сохранить правки (IP камеры/платы и т.п.) в plate_config.json и перезапуститься."""
         plate_config.save(patch)
         return self.reload()
+
+    def cv_config(self):
+        """Текущий блок CV из конфига (вкладка «CV»)."""
+        return (self.cfg or {}).get("cv", {}) if self.cfg else {}
+
+    def set_cv(self, patch):
+        """Живое обновление настроек CV (тумблер/пороги/масштаб) — БЕЗ reload платы,
+        чтобы не прерывать цикл. Пороги читаются на каждый анализ, так что применяются сразу."""
+        plate_config.save({"cv": patch})
+        if self.cfg is not None:
+            cur = self.cfg.setdefault("cv", {})
+            for k, v in patch.items():
+                if isinstance(v, dict) and isinstance(cur.get(k), dict):
+                    cur[k].update(v)
+                else:
+                    cur[k] = v
+        log_event("microscope_service", "Настройки CV обновлены", "info", {"patch": patch})
+        return self.cv_config()
 
     def set_trigger_mode(self, mode):
         """Сменить триггер пробы (time/sv) сразу, без перезапуска платы, и запомнить в конфиг."""

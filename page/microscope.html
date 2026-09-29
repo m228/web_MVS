@@ -185,6 +185,10 @@
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="14" rx="2"/><path d="M3 9h18M8 4v14"/><circle cx="14" cy="12" r="2.2"/></svg>
                 <span>CV</span>
               </button>
+              <button type="button" class="micro-ptab" data-ptab="frac" title="Разломы кристаллов: детект, статистика, тренд, автоподвод" aria-label="Разломы">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7l5 3-2 4 6 1 1 5 3-4 4 1-2-5 3-4-6-2 1-4-5 3-3-3z"/></svg>
+                <span>Разломы</span>
+              </button>
             </div>
 
 
@@ -657,6 +661,86 @@
                     <span class="micro-conn-hint" id="cvSaveHint"></span>
                   </div>
                   <p class="micro-plc-note">Масштаб 613.8 px/mm → 1.629 мкм/px. Детект/размер уточнятся, когда подключим обученную модель YOLO-seg.</p>
+                </div>
+              </div>
+
+              <!-- Разломы кристаллов (отдельная подсистема CV, без YOLO) -->
+              <div class="micro-ppane hidden" data-ppane="frac">
+                <div class="micro-cv-head">
+                  <span class="micro-cv-block__title" style="margin:0">Разломы кристаллов</span>
+                  <span class="micro-cv-status" id="fracStatus">—</span>
+                </div>
+                <p class="micro-plc-note">Лопнутые/раздавленные кристаллы (тёмное+хаос). Красный контур — на кадре в окне «Комп. зрение» и в галерее. Подтверждение по серии кадров убирает фейки.</p>
+
+                <!-- Статистика последней пробы: узкие колонки -->
+                <div class="micro-cv-block">
+                  <div class="micro-cv-block__title">Последняя проба</div>
+                  <div class="micro-cv-stats micro-frac-stats">
+                    <div class="micro-tile"><span>Зон разлома</span><b id="fracZones">—</b></div>
+                    <div class="micro-tile"><span>Площадь</span><b id="fracArea">—</b></div>
+                    <div class="micro-tile"><span>Ср. увер.</span><b id="fracConf">—</b></div>
+                    <div class="micro-tile"><span>Кандидатов</span><b id="fracCand">—</b></div>
+                    <div class="micro-tile"><span>Подтв. кадров</span><b id="fracFrames">—</b></div>
+                    <div class="micro-tile"><span>Вердикт</span><b id="fracVerdict">—</b></div>
+                  </div>
+                </div>
+
+                <!-- Тренд разломов -->
+                <div class="micro-cv-block">
+                  <div class="micro-cv-block__title">Тренд разломов по пробам</div>
+                  <div class="micro-cv-series" id="fracSeries">
+                    <label><input type="checkbox" value="frac_zones" checked /><span class="dot" style="background:#e24b4a"></span>зоны</label>
+                    <label><input type="checkbox" value="frac_pct" checked /><span class="dot" style="background:#ba7517"></span>% площади</label>
+                  </div>
+                  <canvas id="fracTrend" class="micro-cv-trend" width="620" height="150"></canvas>
+                </div>
+
+                <!-- Пороги детекта разломов: узкие колонки -->
+                <div class="micro-cv-block">
+                  <div class="micro-cv-block__title">Пороги детекта (правятся на лету)</div>
+                  <div class="micro-cycle-cols">
+                    <div class="micro-cycle-col">
+                      <label class="micro-cycle-f"><span>Порог увер. C</span><input type="number" id="fracConfThr" step="0.05" min="0" max="1" /></label>
+                      <label class="micro-cycle-f"><span>Вес тёмности D</span><input type="number" id="fracWDark" step="0.05" min="0" max="1" /></label>
+                      <label class="micro-cycle-f"><span>Порог тёмного</span><input type="number" id="fracDarkThr" step="1" /></label>
+                    </div>
+                    <div class="micro-cycle-col">
+                      <label class="micro-cycle-f"><span>Кадров подтв.</span><input type="number" id="fracConfirm" step="1" min="1" /></label>
+                      <label class="micro-cycle-f"><span>Вес текстуры T</span><input type="number" id="fracWTex" step="0.05" min="0" max="1" /></label>
+                      <label class="micro-cycle-f"><span>Мин. площадь</span><input type="number" id="fracMinArea" step="0.0005" /></label>
+                    </div>
+                  </div>
+                  <div class="micro-cycle-btns">
+                    <button type="button" id="fracSaveBtn" class="toolbar-btn toolbar-btn--primary">Сохранить пороги</button>
+                    <span class="micro-conn-hint" id="fracSaveHint"></span>
+                  </div>
+                </div>
+
+                <!-- Часть C: автоподвод по разломам (ВЫКЛ по умолчанию) -->
+                <div class="micro-cv-block">
+                  <div class="micro-cv-block__title">Автоподвод по разломам
+                    <span class="micro-cv-hint">осторожно — двигает подвод</span>
+                  </div>
+                  <label class="micro-switch" for="apEnable" title="При подтверждённом разломе отодвигать подвод чуть назад (по энкодеру)">
+                    <input type="checkbox" id="apEnable" />
+                    <span class="micro-switch__track"><span class="micro-switch__thumb"></span></span>
+                    <span class="micro-switch__label">Коррекция подвода</span>
+                  </label>
+                  <div class="micro-cycle-cols" style="margin-top:8px">
+                    <div class="micro-cycle-col">
+                      <label class="micro-cycle-f"><span>Шаг назад, мкм</span><input type="number" id="apStep" step="10" /></label>
+                      <label class="micro-cycle-f"><span>Реагировать от зон</span><input type="number" id="apMinZones" step="1" min="1" /></label>
+                    </div>
+                    <div class="micro-cycle-col">
+                      <label class="micro-cycle-f"><span>Макс. суммарно, мкм</span><input type="number" id="apMaxTotal" step="100" /></label>
+                      <label class="micro-cycle-f"><span>Коррекций сделано</span><input type="number" id="apCount" disabled /></label>
+                    </div>
+                  </div>
+                  <div class="micro-cycle-btns">
+                    <button type="button" id="apSaveBtn" class="toolbar-btn toolbar-btn--primary">Сохранить</button>
+                    <span class="micro-conn-hint" id="apSaveHint"></span>
+                  </div>
+                  <p class="micro-plc-note">Двигаем по ЭНКОДЕРУ (СВ-таблица), аналоговый датчик — только в лог коррекций (он врёт ~100мкм). Перебор пробы при разломе — позже.</p>
                 </div>
               </div>
 

@@ -580,6 +580,31 @@ def cv_settings_set(patch: dict = Body(...)):
     return {"status": "ok", "cv": data}
 
 
+# --- разломы (Часть B) + автоподвод (Часть C) ---
+@app.get("/api/cv/fracture/settings")
+def cv_fracture_get():
+    return micro.fracture_config()
+
+
+@app.post("/api/cv/fracture/settings")
+def cv_fracture_set(patch: dict = Body(...)):
+    data = micro.set_fracture(patch or {})
+    api_log("api.cv.fracture", "Изменены настройки разломов", payload={"patch": patch})
+    return {"status": "ok", "fracture": data}
+
+
+@app.get("/api/cv/approach/settings")
+def cv_approach_get():
+    return micro.approach_config()
+
+
+@app.post("/api/cv/approach/settings")
+def cv_approach_set(patch: dict = Body(...)):
+    data = micro.set_approach(patch or {})
+    api_log("api.cv.approach", "Изменены настройки автоподвода", payload={"patch": patch})
+    return {"status": "ok", "approach": data}
+
+
 @app.get("/api/cv/last")
 def cv_last(serial: str | None = None):
     return cv_store.get_last(_cv_serial(serial)) or {"empty": True}

@@ -57,7 +57,8 @@ def _aggregate(frames: list[dict]) -> dict:
 
 
 def save_sample(serial: str, stage, frames: list[dict], overlays: list, timing: dict,
-                keep_last: int = 50, ts: Optional[str] = None) -> Optional[dict]:
+                keep_last: int = 50, ts: Optional[str] = None,
+                fracture: Optional[dict] = None) -> Optional[dict]:
     """Сохранить пробу. frames — список {file, summary, objects}. overlays — numpy BGR по кадрам.
 
     Возвращает {ts, dir, summary} или None при ошибке.
@@ -86,6 +87,8 @@ def save_sample(serial: str, stage, frames: list[dict], overlays: list, timing: 
             "timing": timing,
             "summary": summary,
             "frames": frame_recs,
+            "fracture": fracture or {"summary": {"zones": 0, "has_fracture": False, "area_pct": 0.0},
+                                     "zones": []},
         }
         (d / "result.json").write_text(
             json.dumps(result, ensure_ascii=False, indent=1), encoding="utf-8")
@@ -118,7 +121,8 @@ def list_samples(serial: str, limit: int = 50) -> list[dict]:
         try:
             r = json.loads((p / "result.json").read_text(encoding="utf-8"))
             out.append({"ts": r["ts"], "stage": r.get("stage"),
-                        "summary": r.get("summary"), "frames": len(r.get("frames", []))})
+                        "summary": r.get("summary"), "frames": len(r.get("frames", [])),
+                        "fracture": (r.get("fracture") or {}).get("summary")})
         except Exception:
             continue
     return out
@@ -161,9 +165,14 @@ def trend(serial: str, series: Optional[list[str]] = None, limit: int = 200) -> 
         summ = smp.get("summary") or {}
         ts_list.append(smp["ts"])
         stage_list.append(smp.get("stage"))
+        frs = smp.get("fracture") or {}
         for s in series:
             if s == "mean":
                 data[s].append((summ.get("size_um") or {}).get("mean"))
+            elif s == "frac_zones":
+                data[s].append(frs.get("zones"))
+            elif s == "frac_pct":
+                data[s].append(frs.get("area_pct"))
             else:
                 data[s].append((summ.get("groups_pct") or {}).get(s))
     return {"ts": ts_list, "stage": stage_list, "series": data}

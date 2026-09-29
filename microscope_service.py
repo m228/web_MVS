@@ -153,50 +153,74 @@ class MicroscopeService:
         if not serial:
             return
         try:
+            import os
             import cv2
             import cv_analyzer
             import cv_client
+            import cv_fracture
             import cv_store
             from camera_core import manager as cam_manager
 
             worker = cam_manager.get(serial)
             url = cv.get("service_url", "http://127.0.0.1:8765")
-            if cv_client.health(url) is None:
-                log_event("microscope_service", "CV пропущен: сайдкар недоступен", "warn",
-                          {"url": url})
-                return
+            sidecar_ok = cv_client.health(url) is not None    # кристаллы (YOLO) — опционально
             frames = self._collect_probe_frames(worker, cfg)
             if not frames:
                 log_event("microscope_service", "CV: кадры пробы не найдены", "warn",
                           {"serial": serial})
                 return
 
+            fr_cfg = cfg.get("fracture") or {}
+            fr_on = fr_cfg.get("enabled", True)
+
             frame_recs, overlays, last_timing = [], [], {}
-            import os
+            frac_zone_lists, imgs = [], []
             for f in frames:
                 img = cv2.imread(f)
                 if img is None:
                     continue
-                ok, enc = cv2.imencode(".png", img)
-                if not ok:
-                    continue
-                resp = cv_client.infer(
-                    url, enc.tobytes(), tiles=int(cv.get("tiles", 6)),
-                    conf=float(cv.get("conf", 0.25)), iou=float(cv.get("iou", 0.45)),
-                    overlap=float(cv.get("overlap", 0.15)))
-                if not resp:
-                    continue
-                last_timing = resp.get("timing", {})
-                res = cv_analyzer.analyze(img, resp.get("objects", []), cv_cfg=cv, with_overlay=True)
-                overlays.append(res.pop("_overlay", None))
-                frame_recs.append({"file": os.path.basename(f),
-                                   "summary": res["summary"], "objects": res["objects"]})
+                imgs.append(img)
+                # --- кристаллы (сайдкар YOLO), если он поднят ---
+                summary, objects, overlay = None, [], None
+                if sidecar_ok:
+                    ok, enc = cv2.imencode(".png", img)
+                    resp = cv_client.infer(
+                        url, enc.tobytes(), tiles=int(cv.get("tiles", 6)),
+                        conf=float(cv.get("conf", 0.25)), iou=float(cv.get("iou", 0.45)),
+                        overlap=float(cv.get("overlap", 0.15))) if ok else None
+                    if resp:
+                        last_timing = resp.get("timing", {})
+                        res = cv_analyzer.analyze(img, resp.get("objects", []), cv_cfg=cv, with_overlay=True)
+                        summary, objects, overlay = res["summary"], res["objects"], res.pop("_overlay", None)
+                if overlay is None:
+                    overlay = img.copy()   # нет кристаллов-overlay → рисуем разломы поверх кадра
+                # --- разломы (чистый OpenCV, всегда) ---
+                zones = cv_fracture.detect_zones(img, fr_cfg) if fr_on else []
+                frac_zone_lists.append(zones)
+                overlays.append(overlay)
+                frame_recs.append({"file": os.path.basename(f), "summary": summary, "objects": objects})
 
             if not frame_recs:
-                log_event("microscope_service", "CV: ни один кадр не распознан", "warn")
+                log_event("microscope_service", "CV: кадры не прочитаны", "warn")
                 return
+
+            # подтверждение разломов по серии кадров + отрисовка на всех overlay
+            fracture = None
+            if fr_on:
+                confirmed, fr_summary = cv_fracture.confirm(frac_zone_lists, fr_cfg)
+                shape = imgs[0].shape if imgs else (1, 1)
+                fr_summary["area_pct"] = cv_fracture.area_pct(confirmed, shape)
+                for ov in overlays:
+                    cv_fracture.draw(ov, confirmed, confirmed=True)
+                fracture = {"summary": fr_summary, "zones": confirmed}
+                if fr_summary["has_fracture"]:
+                    log_event("microscope_service",
+                              "Разлом обнаружен: %d зон (%.1f%% кадра)" % (
+                                  fr_summary["zones"], fr_summary["area_pct"]),
+                              "warn", {"serial": serial, "zones": fr_summary["zones"]})
+
             cv_store.save_sample(serial, stage, frame_recs, overlays, last_timing,
-                                 keep_last=int(cv.get("keep_last", 50)))
+                                 keep_last=int(cv.get("keep_last", 50)), fracture=fracture)
         except Exception as e:
             log_event("microscope_service", "Ошибка CV-анализа пробы", "error", {"error": str(e)})
 
@@ -278,6 +302,38 @@ class MicroscopeService:
                     cur[k] = v
         log_event("microscope_service", "Настройки CV обновлены", "info", {"patch": patch})
         return self.cv_config()
+
+    def _live_patch(self, key, patch):
+        """Живое обновление вложенного блока конфига (без reload платы)."""
+        plate_config.save({key: patch})
+        if self.cfg is not None:
+            cur = self.cfg.setdefault(key, {})
+            for k, v in patch.items():
+                if isinstance(v, dict) and isinstance(cur.get(k), dict):
+                    cur[k].update(v)
+                else:
+                    cur[k] = v
+        return (self.cfg or {}).get(key, {})
+
+    def fracture_config(self):
+        """Блок настроек разломов (вкладка «Разломы», Часть B)."""
+        return (self.cfg or {}).get("fracture", {}) if self.cfg else {}
+
+    def set_fracture(self, patch):
+        """Живое обновление порогов разломов — применяется к следующей пробе."""
+        res = self._live_patch("fracture", patch)
+        log_event("microscope_service", "Настройки разломов обновлены", "info", {"patch": patch})
+        return res
+
+    def approach_config(self):
+        """Блок автоподвода по разломам (Часть C, по умолчанию выкл)."""
+        return (self.cfg or {}).get("approach_correction", {}) if self.cfg else {}
+
+    def set_approach(self, patch):
+        """Живое обновление настроек автоподвода (галочка/шаг мкм/пороги)."""
+        res = self._live_patch("approach_correction", patch)
+        log_event("microscope_service", "Настройки автоподвода обновлены", "info", {"patch": patch})
+        return res
 
     def set_trigger_mode(self, mode):
         """Сменить триггер пробы (time/sv) сразу, без перезапуска платы, и запомнить в конфиг."""

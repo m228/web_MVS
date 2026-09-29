@@ -1176,6 +1176,7 @@
         document.querySelectorAll(".micro-ptab").forEach((x) => x.classList.toggle("is-active", x === tab));
         document.querySelectorAll(".micro-ppane").forEach((p) => p.classList.toggle("hidden", p.dataset.ppane !== key));
         if (key === "cv") { cvRefresh(); setTimeout(cvDrawTrend, 30); }   // канвас рисуем, когда пане видима
+        if (key === "frac") { fracRefresh(); }
       });
     });
   }
@@ -1614,6 +1615,98 @@
     return p && !p.classList.contains("hidden");
   }
 
+  // ================= Разломы (отдельная подсистема CV) =================
+  function fracFill(fr, ap) {
+    const set = (id, v) => { const e = $(id); if (e != null && v != null) e.value = v; };
+    if (fr) {
+      set("fracConfThr", fr.conf_thr); set("fracWDark", fr.w_dark); set("fracWTex", fr.w_tex);
+      set("fracDarkThr", fr.dark_thr); set("fracConfirm", fr.confirm_frames); set("fracMinArea", fr.min_area_frac);
+      const st = $("fracStatus"); if (st) { st.textContent = fr.enabled === false ? "детект выключен" : "детект включён"; st.className = "micro-cv-status " + (fr.enabled === false ? "off" : "ok"); }
+    }
+    if (ap) {
+      if ($("apEnable")) $("apEnable").checked = !!ap.enabled;
+      set("apStep", ap.step_um); set("apMinZones", ap.min_zones); set("apMaxTotal", ap.max_total_um); set("apCount", ap.count);
+    }
+  }
+  function fracRender() {
+    const q = cvSerialQ() ? "?" + cvSerialQ() : "";
+    api("/api/cv/last" + q).then((r) => {
+      const fr = (r && r.fracture && r.fracture.summary) || null;
+      const setT = (id, v) => { const e = $(id); if (e) e.textContent = v; };
+      if (!fr) { ["fracZones", "fracArea", "fracConf", "fracCand", "fracFrames", "fracVerdict"].forEach((i) => setT(i, "—")); return; }
+      setT("fracZones", fr.zones != null ? fr.zones : "—");
+      setT("fracArea", fr.area_pct != null ? fr.area_pct + " %" : "—");
+      setT("fracConf", fr.mean_conf != null ? fr.mean_conf : "—");
+      setT("fracCand", fr.candidates != null ? fr.candidates : "—");
+      setT("fracFrames", fr.confirm_frames != null ? "≥" + fr.confirm_frames : "—");
+      const v = $("fracVerdict");
+      if (v) { v.textContent = fr.has_fracture ? "ЕСТЬ РАЗЛОМ" : "чисто"; v.style.color = fr.has_fracture ? "var(--danger)" : "var(--success)"; }
+    }).catch(() => {});
+  }
+  function fracDrawTrend() {
+    const cv = $("fracTrend"); if (!cv) return;
+    const sel = [...document.querySelectorAll("#fracSeries input:checked")].map((c) => c.value);
+    const q = [cvSerialQ(), "series=" + (sel.join(",") || "frac_zones"), "limit=100"].filter(Boolean).join("&");
+    api("/api/cv/trend?" + q).then((t) => {
+      const ctx = cv.getContext("2d");
+      const W = cv.width = cv.clientWidth || 620, H = cv.height;
+      ctx.clearRect(0, 0, W, H);
+      const ts = t.ts || [], n = ts.length;
+      if (!n) { ctx.fillStyle = getCss("--muted", "#8a94a6"); ctx.font = "12px sans-serif"; ctx.fillText("нет проб", 12, H / 2); return; }
+      const pad = { l: 30, r: 8, t: 10, b: 18 }, pw = W - pad.l - pad.r, ph = H - pad.t - pad.b;
+      ctx.strokeStyle = getCss("--border", "rgba(131,151,179,.28)"); ctx.lineWidth = 1;
+      for (let k = 0; k <= 3; k++) { const y = pad.t + ph * k / 3; ctx.beginPath(); ctx.moveTo(pad.l, y); ctx.lineTo(W - pad.r, y); ctx.stroke(); }
+      const colors = { frac_zones: "#e24b4a", frac_pct: "#ba7517" };
+      sel.forEach((name) => {
+        const arr = (t.series || {})[name]; if (!arr) return;
+        let mx = 1; arr.forEach((v) => { if (v != null) mx = Math.max(mx, v); });
+        ctx.strokeStyle = colors[name] || "#888"; ctx.lineWidth = 2; ctx.beginPath();
+        let started = false;
+        arr.forEach((v, i) => {
+          if (v == null) { started = false; return; }
+          const x = pad.l + pw * (n <= 1 ? 0.5 : i / (n - 1));
+          const y = pad.t + ph * (1 - v / (mx * 1.1));
+          if (!started) { ctx.moveTo(x, y); started = true; } else ctx.lineTo(x, y);
+        });
+        ctx.stroke();
+      });
+      ctx.fillStyle = getCss("--muted", "#8a94a6"); ctx.font = "10px monospace";
+      const lbl = (i) => { const m = (ts[i] || "").match(/_(\d{2})_(\d{2})_\d{2}$/); return m ? m[1] + ":" + m[2] : ""; };
+      ctx.fillText(lbl(0), pad.l, H - 5); const last = lbl(n - 1); ctx.fillText(last, W - pad.r - ctx.measureText(last).width, H - 5);
+    }).catch(() => {});
+  }
+  function fracRefresh() { fracRender(); setTimeout(fracDrawTrend, 30); }
+  function isFracPaneVisible() {
+    const p = document.querySelector('.micro-ppane[data-ppane="frac"]');
+    return p && !p.classList.contains("hidden");
+  }
+  function wireFrac() {
+    Promise.all([api("/api/cv/fracture/settings").catch(() => null),
+                 api("/api/cv/approach/settings").catch(() => null)]).then(([fr, ap]) => fracFill(fr, ap));
+    document.querySelectorAll("#fracSeries input").forEach((c) => c.addEventListener("change", fracDrawTrend));
+    const num = (id) => { const e = $(id); return e && e.value !== "" ? parseFloat(e.value) : undefined; };
+    const fs = $("fracSaveBtn");
+    if (fs) fs.addEventListener("click", async () => {
+      await fetch("/api/cv/fracture/settings", { method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ conf_thr: num("fracConfThr"), w_dark: num("fracWDark"), w_tex: num("fracWTex"),
+          dark_thr: num("fracDarkThr"), confirm_frames: num("fracConfirm"), min_area_frac: num("fracMinArea") }) }).catch(() => {});
+      const h = $("fracSaveHint"); if (h) { h.textContent = "сохранено"; setTimeout(() => (h.textContent = ""), 1500); }
+    });
+    const enAp = $("apEnable");
+    if (enAp) enAp.addEventListener("change", () => {
+      fetch("/api/cv/approach/settings", { method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ enabled: enAp.checked }) }).catch(() => {});
+    });
+    const aps = $("apSaveBtn");
+    if (aps) aps.addEventListener("click", async () => {
+      await fetch("/api/cv/approach/settings", { method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ step_um: num("apStep"), min_zones: num("apMinZones"), max_total_um: num("apMaxTotal") }) }).catch(() => {});
+      const h = $("apSaveHint"); if (h) { h.textContent = "сохранено"; setTimeout(() => (h.textContent = ""), 1500); }
+    });
+    fracRefresh();
+    setInterval(() => { if (isFracPaneVisible()) fracRefresh(); }, 6000);
+  }
+
   document.addEventListener("DOMContentLoaded", () => {
     wire();
     syncManual(false);
@@ -1623,5 +1716,6 @@
     updateHourlyWashTimer();
     setInterval(updateHourlyWashTimer, 1000);
     wireCV();
+    wireFrac();
   });
 })();

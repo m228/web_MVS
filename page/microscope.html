@@ -202,10 +202,10 @@
                   <button type="button" id="cycSkipBtn" class="toolbar-btn toolbar-btn--neutral" title="Перепрыгнуть на следующий шаг цикла">Вперёд ▶</button>
                   <button type="button" id="cycResetBtn" class="toolbar-btn toolbar-btn--danger" title="Прервать цикл — в Ожидание">Сброс</button>
                 </div>
-                <label class="micro-switch micro-switch--photo" for="photoEnableSw" title="Вкл — цикл делает серию скринов пробы (нужно для CV/модели). Выкл — цикл работает, но без фото.">
-                  <input type="checkbox" id="photoEnableSw" checked />
+                <label class="micro-switch micro-switch--photo" for="photoEnableSw" title="Вкл — кадры пробы дополнительно сохраняются сырыми файлами в датасет (для дообучения модели). Выкл — кадр идёт в CV из памяти, на диск ложится только распознанный кадр (JPEG).">
+                  <input type="checkbox" id="photoEnableSw" />
                   <span class="micro-switch__track"><span class="micro-switch__thumb"></span></span>
-                  <span class="micro-switch__label">Фото в пробе: <strong id="photoEnableState">вкл</strong></span>
+                  <span class="micro-switch__label">Сырые фото: <strong id="photoEnableState">выкл</strong></span>
                 </label>
 
                 <div class="micro-cycle-live">

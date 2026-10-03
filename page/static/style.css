@@ -3272,6 +3272,12 @@ html {
 .micro-cam-card { padding: 8px; }
 .micro-cam-frame { width: 100%; height: auto; max-height: 72vh; border: 0; border-radius: 10px; background: #000; display: block; object-fit: contain; }
 .micro-cam-ph { min-height: 420px; display: flex; align-items: center; justify-content: center; text-align: center; padding: 0 16px; }
+/* плейсхолдеры — в потоке карточки: базовый .camera-placeholder абсолютный (inset:0, z-index:1)
+   и ложился поверх переключателя окна Камера/Комп. зрение → кнопки не кликались */
+.micro-cam-card .micro-cam-ph { position: relative; inset: auto; background: #000; border-radius: 10px; }
+/* скрытый <img> стрима реально убираем: display:block у .micro-cam-frame перебивал атрибут hidden,
+   и пустой кадр занимал место под плейсхолдером */
+#microCamStream[hidden] { display: none !important; }
 
 /* тулбар: разделитель между утилитами платы и кнопками камеры */
 .micro-utilbar__sep { width: 1px; height: 22px; background: var(--border-strong); margin: 0 4px; }
@@ -3438,10 +3444,11 @@ input.micro-cam-num { width: 56px; min-width: 0; flex: 0 0 auto; padding: 4px 5p
 .micro-pult__title { font-weight: 600; font-size: 1.05em; }
 
 /* иконки-вкладки */
-.micro-ptabs { display: flex; gap: 6px; flex-wrap: wrap; border-bottom: 1px solid var(--border); padding-bottom: 10px; margin-bottom: 12px; }
-.micro-ptab { display: flex; flex-direction: column; align-items: center; gap: 2px; width: 58px; padding: 7px 4px; border: 1px solid transparent; border-radius: 10px; background: var(--surface-muted); color: var(--muted); cursor: pointer; font: inherit; }
-.micro-ptab svg { width: 22px; height: 22px; }
-.micro-ptab span { font-size: 10px; line-height: 1; }
+/* вкладки резиновые (44–58px), чтобы все влезали в один ряд; перенос — только на совсем узком пульте */
+.micro-ptabs { display: flex; gap: 4px; flex-wrap: wrap; border-bottom: 1px solid var(--border); padding-bottom: 10px; margin-bottom: 12px; }
+.micro-ptab { display: flex; flex-direction: column; align-items: center; gap: 2px; flex: 1 1 0; min-width: 44px; max-width: 58px; padding: 6px 2px; border: 1px solid transparent; border-radius: 10px; background: var(--surface-muted); color: var(--muted); cursor: pointer; font: inherit; }
+.micro-ptab svg { width: 20px; height: 20px; }
+.micro-ptab span { font-size: 9.5px; line-height: 1; white-space: nowrap; }
 .micro-ptab:hover { color: var(--text); border-color: var(--border-strong); }
 .micro-ptab.is-active { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); }
 
@@ -3564,6 +3571,8 @@ input.micro-cam-num { width: 56px; min-width: 0; flex: 0 0 auto; padding: 4px 5p
 .micro-cv-status.ok { color: var(--success, #16a34a); }
 .micro-cv-status.off { color: var(--danger, #dc2626); }
 .micro-cv-analyze { margin-left: auto; }
+/* статус (сервис + итог разбора) может быть длинным — переносится в своей ячейке, кнопка остаётся справа */
+.micro-cv-head .micro-cv-status { flex: 1 1 0; min-width: 0; }
 .micro-cv-block { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--border, rgba(131,151,179,.28)); }
 .micro-cv-block__title { font-size: 0.9em; font-weight: 600; margin-bottom: 8px; display: flex; align-items: center; gap: 8px; }
 .micro-cv-n { color: var(--muted, #5b6b81); font-weight: 400; }

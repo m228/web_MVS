@@ -196,11 +196,14 @@ DEFAULTS = {
     # settle_sec — пауза (сек) ПОСЛЕ доезда каждого движения (отвод/подвод/возврат), пока мотор
     # стоит: аналоговый датчик устаканивается, можно сравнить его с энкодером в статике.
     # post_wash_pause_sec — пауза (сек) после промывки стекла перед подводом (клапаны закрыты).
+    # photo_enabled — тумблер «Сырые фото»: True → кадры пробы ДОПОЛНИТЕЛЬНО пишутся файлами в
+    # датасет (для дообучения модели). По умолчанию False: кадр идёт в CV из памяти, на диск
+    # ложится только распознанный overlay (JPEG, см. cv_store).
     "probe_cycle": {"retract_pos": 20000, "pre_wash_sec": 4, "dwell_sec": 15,
                     "shot_interval_sec": 3, "pause_sec": 60, "photo_format": "png",
                     "trigger_mode": "time", "sv_from": 84, "sv_to": 92, "ignore_stage": False,
                     "ignore_focus": True, "settle_sec": 2,
-                    "post_wash_pause_sec": 2, "photo_enabled": True},
+                    "post_wash_pause_sec": 2, "photo_enabled": False},
 
     # фильтр аналогового датчика перемещения (рег.1271): сглаживание дрожания (0/-50/70).
     # enabled — вкл скользящее среднее; avg_sec — окно усреднения (сек). Отфильтрованное
@@ -236,7 +239,8 @@ DEFAULTS = {
     # адрес сайдкара (см. cv_service/). um_per_px — масштаб (613.8 px/mm → 1.629 мкм/px). tiles/
     # conf/iou — параметры SAHI/детектора. groups — границы групп по размеру (мкм, эквив.диаметр).
     # shape — пороги «брака»/уродливой формы. min_size_um — отсечка пыли. blur_min — порог
-    # смазанного кадра. keep_last — сколько последних проб хранить. Всё правится на вкладке «CV».
+    # смазанного кадра. keep_last — сколько последних проб хранить. overlay_jpeg_quality — качество
+    # JPEG распознанного кадра пробы (сырой кадр не хранится). Всё правится на вкладке «CV».
     "cv": {
         "enabled": False,
         "service_url": "http://127.0.0.1:8765",
@@ -245,6 +249,7 @@ DEFAULTS = {
         "groups": {"small_max_um": 300.0, "medium_max_um": 600.0},
         "shape": {"min_circularity": 0.55, "max_aspect": 2.8, "min_solidity": 0.82},
         "min_size_um": 20.0, "blur_min": 8.0, "keep_last": 50,
+        "overlay_jpeg_quality": 85,
     },
 
     # РАЗЛОМЫ (Часть B) — детект лопнутых/раздавленных кристаллов на OpenCV (без YOLO).

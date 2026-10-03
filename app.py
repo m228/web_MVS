@@ -236,7 +236,7 @@ def micro_trigger_mode(mode: str):
 
 @app.get("/api/micro/photo_enabled")
 def micro_photo_enabled(on: int):
-    # тумблер «Фото в пробе»: вкл/выкл скрины в цикле (без перезапуска платы)
+    # тумблер «Сырые фото»: вкл — кадры пробы дополнительно пишутся в датасет (без перезапуска платы)
     return micro.set_photo_enabled(bool(on))
 
 
@@ -571,7 +571,8 @@ def cv_health():
     url = cv.get("service_url", "http://127.0.0.1:8765")
     h = cv_client.health(url) if cv.get("enabled") else None
     return {"enabled": bool(cv.get("enabled")), "service_url": url,
-            "online": h is not None, "service": h}
+            "online": h is not None, "service": h,
+            "analysis": micro.cv_status()}   # статус последнего разбора (для строки статуса)
 
 
 @app.get("/api/cv/settings")
@@ -673,7 +674,7 @@ def cv_overlay(serial: str | None = None, ts: str = "", idx: int = 0):
     p = cv_store.overlay_path(_cv_serial(serial), ts, idx)
     if not p:
         return Response(status_code=404)
-    return FileResponse(str(p), media_type="image/png")
+    return FileResponse(str(p), media_type="image/jpeg" if p.suffix == ".jpg" else "image/png")
 
 
 @app.get("/api/cv/analyze")

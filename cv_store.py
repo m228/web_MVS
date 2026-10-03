@@ -3,7 +3,8 @@
 Раскладка (в DATA_DIR, переживает обновление, см. paths.py):
     <DATA_DIR>/cv_results/<serial>/<ts>/
         result.json        — сводка пробы + по-кадровые данные
-        overlay_0.png ...   — кадры с обводкой кристаллов
+        overlay_0.jpg ...   — кадры с обводкой кристаллов (JPEG; старые пробы — .png)
+        objects_0.json ...  — объекты кадра (для наведения в UI)
 
 Ротация: держим последние keep_last проб на серийник (старые удаляем).
 """
@@ -58,9 +59,10 @@ def _aggregate(frames: list[dict]) -> dict:
 
 def save_sample(serial: str, stage, frames: list[dict], overlays: list, timing: dict,
                 keep_last: int = 50, ts: Optional[str] = None,
-                fracture: Optional[dict] = None) -> Optional[dict]:
+                fracture: Optional[dict] = None, jpeg_quality: int = 85) -> Optional[dict]:
     """Сохранить пробу. frames — список {file, summary, objects}. overlays — numpy BGR по кадрам.
 
+    Overlay пишется в JPEG (jpeg_quality) — в разы легче PNG; сырой кадр не хранится.
     Возвращает {ts, dir, summary} или None при ошибке.
     """
     ts = ts or time.strftime("%Y-%m-%d_%H_%M_%S")
@@ -71,8 +73,13 @@ def save_sample(serial: str, stage, frames: list[dict], overlays: list, timing: 
         for i, fr in enumerate(frames):
             ov_name = None
             if i < len(overlays) and overlays[i] is not None:
-                ov_name = "overlay_%d.png" % i
-                cv2.imwrite(str(d / ov_name), overlays[i])
+                ov_name = "overlay_%d.jpg" % i
+                # imencode + write_bytes, а не cv2.imwrite: тот ломается на путях с кириллицей
+                ok, enc = cv2.imencode(".jpg", overlays[i],
+                                       [cv2.IMWRITE_JPEG_QUALITY, int(jpeg_quality)])
+                if not ok:
+                    raise OSError("не удалось закодировать overlay в JPEG")
+                (d / ov_name).write_bytes(enc.tobytes())
             # объекты кадра — в отдельный файл (для наведения в UI), чтобы result.json был лёгким
             objs = fr.get("objects") or []
             if objs:
@@ -152,8 +159,12 @@ def get_prev(serial: str) -> Optional[dict]:
 
 
 def overlay_path(serial: str, ts: str, idx: int = 0) -> Optional[Path]:
-    p = _serial_dir(serial) / ts / ("overlay_%d.png" % idx)
-    return p if p.exists() else None
+    # .jpg — текущий формат; .png — пробы, сохранённые до перехода на JPEG
+    for ext in ("jpg", "png"):
+        p = _serial_dir(serial) / ts / ("overlay_%d.%s" % (idx, ext))
+        if p.exists():
+            return p
+    return None
 
 
 def get_objects(serial: str, ts: str, idx: int = 0) -> list:

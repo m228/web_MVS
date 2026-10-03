@@ -102,7 +102,7 @@
     if (pe) pe.addEventListener("change", () => {
       const st = $("photoEnableState"); if (st) st.textContent = pe.checked ? "вкл" : "выкл";
       api("/api/micro/photo_enabled", { on: pe.checked ? 1 : 0 }).catch(() => {});   // сразу
-      sentCmd("Фото в пробе: " + (pe.checked ? "вкл" : "выкл"));
+      sentCmd("Сырые фото пробы: " + (pe.checked ? "вкл" : "выкл"));
     });
     const fmt = $("pcFormatSw");
     if (fmt) fmt.addEventListener("change", () => {
@@ -624,8 +624,8 @@
           const trSw = $("pcTriggerSw"); if (trSw) trSw.checked = (pc.trigger_mode === "sv");
           const fmSw = $("pcFormatSw"); if (fmSw) fmSw.checked = (pc.photo_format === "jpg");
           const fmSt = $("pcFormatState"); if (fmSt) fmSt.textContent = (pc.photo_format === "jpg") ? "JPG" : "PNG";
-          const peSw = $("photoEnableSw"); if (peSw) peSw.checked = (pc.photo_enabled !== false);
-          const peSt = $("photoEnableState"); if (peSt) peSt.textContent = (pc.photo_enabled !== false) ? "вкл" : "выкл";
+          const peSw = $("photoEnableSw"); if (peSw) peSw.checked = (pc.photo_enabled === true);
+          const peSt = $("photoEnableState"); if (peSt) peSt.textContent = (pc.photo_enabled === true) ? "вкл" : "выкл";
           const ignT = $("ignoreStageToggle"); if (ignT) ignT.checked = !!pc.ignore_stage;
           const ifT = $("ignoreFocusToggle"); if (ifT) ifT.checked = pc.ignore_focus !== false;
           updateTriggerFields();
@@ -1341,16 +1341,23 @@
       const el = $(id); if (el) { el.textContent = text; el.className = "micro-cv-status" + (cls ? " " + cls : ""); }
     });
   }
+  // статус сервиса + статус последнего разбора (чтобы отказ был виден, а не молчал).
+  // Возвращает состояние разбора (running/ok/…): по нему кнопка «Разобрать пробу» ждёт конца.
+  const CV_FAIL = ["no_camera", "no_frames", "sidecar_offline", "error"];
   async function cvHealth() {
     try {
       const h = await api("/api/cv/health");
-      if (!h.enabled) { cvSetStatus("сервис: выключен", "off"); return; }
+      const a = h.analysis || {};
+      const tail = a.message ? " · " + a.message + (a.ts && a.state !== "running" ? " (" + a.ts + ")" : "") : "";
+      const failed = CV_FAIL.includes(a.state);
+      if (!h.enabled) { cvSetStatus("сервис: выключен" + tail, "off"); return a.state; }
       if (h.online) {
         const d = (h.service && h.service.detector) || {};
         cvLastModel = d.name || null;
-        cvSetStatus("сервис: онлайн · " + (d.name || "?"), "ok");
-      } else { cvSetStatus("сервис: НЕ отвечает (" + (h.service_url || "") + ")", "off"); }
-    } catch (e) { cvSetStatus("сервис: —", ""); }
+        cvSetStatus("сервис: онлайн · " + (d.name || "?") + tail, failed ? "off" : "ok");
+      } else { cvSetStatus("сервис: НЕ отвечает (" + (h.service_url || "") + ")" + tail, "off"); }
+      return a.state;
+    } catch (e) { cvSetStatus("сервис: —", ""); return null; }
   }
 
   // переключатель нижней секции: телеметрия платы ↔ распознавание
@@ -1678,7 +1685,14 @@
     if (an) an.addEventListener("click", async () => {
       an.disabled = true;
       try { await api("/api/cv/analyze"); } catch (e) { }
-      setTimeout(() => { cvRefresh(); an.disabled = false; }, 2500);
+      // ждём конца разбора по статусу (а не вслепую): пока running — опрашиваем, максимум 60 с
+      const t0 = Date.now();
+      const tick = async () => {
+        const st = await cvHealth();
+        if (st === "running" && Date.now() - t0 < 60000) { setTimeout(tick, 700); return; }
+        cvRefresh(); an.disabled = false;
+      };
+      setTimeout(tick, 300);
     });
     // подтянуть настройки + первичные данные
     api("/api/cv/settings").then(cvFillSettings).catch(() => { });

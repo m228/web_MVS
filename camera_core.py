@@ -616,6 +616,10 @@ class BaseCameraWorker:
         # snap_once — «одиночный снимок по триггеру»: сохранить СЛЕДУЮЩИЙ кадр как фото и сбросить
         # флаг (не трогая интервальное автосохранение). Это soft-триггер для авто-цикла микроскопа.
         self.snap_once = False
+        # куда уходит снимок snap_once: на диск (_snap_save) и/или в колбэк _snap_sink(img) —
+        # кадр в память без файла (проба CV: кадр идёт в модель, сырой файл не пишем)
+        self._snap_save = True
+        self._snap_sink = None
         # имя проекта для фото: задаёт папку dataset/<проект>/<камера> и префикс имени файла
         self.photo_project = None
         # суффикс в конец имени скрина (напр. стадия варки «_st11»); ставит microscope_service
@@ -983,14 +987,19 @@ class BaseCameraWorker:
 
     # одиночный снимок по триггеру (soft-trigger): сохранить следующий кадр как фото.
     # project — необязательная папка (по умолчанию — текущий photo_project или «trigger»).
-    def snap(self, project=None, photo_format=None):
-        if project:
-            self.photo_project = project
-        elif not self.photo_project:
-            self.photo_project = "trigger"
-        # формат одиночного снимка (напр. скрина пробы); неизвестное значение игнорируем
-        if photo_format in PHOTO_FORMATS:
-            self.photo_format = photo_format
+    # save=False — файл не пишем (проект/формат фото не трогаем); sink — колбэк(img), получит
+    # копию следующего кадра в память (тот же кадр, что пошёл бы в файл).
+    def snap(self, project=None, photo_format=None, save=True, sink=None):
+        if save:
+            if project:
+                self.photo_project = project
+            elif not self.photo_project:
+                self.photo_project = "trigger"
+            # формат одиночного снимка (напр. скрина пробы); неизвестное значение игнорируем
+            if photo_format in PHOTO_FORMATS:
+                self.photo_format = photo_format
+        self._snap_save = bool(save)
+        self._snap_sink = sink
         self.snap_once = True
         return {"status": "ok", "streaming": bool(self.running)}
 
@@ -998,7 +1007,15 @@ class BaseCameraWorker:
     def _maybe_save(self, img, fps):
         if self.snap_once:                 # одиночный снимок по триггеру (soft-trigger)
             self.snap_once = False
-            self.write_photo(img, log_name=True)   # имя скрина — в лог программы
+            sink, self._snap_sink = self._snap_sink, None
+            if sink is not None:
+                try:
+                    sink(img.copy())
+                except Exception as e:
+                    log_event("camera_core.snap", "Ошибка колбэка снимка", "warn",
+                              {"serial_number": self.serial_number, "error": str(e)})
+            if self._snap_save:
+                self.write_photo(img, log_name=True)   # имя скрина — в лог программы
         if self.save_photo and self._should_save_photo(self.photo_interval):
             self.write_photo(img)              # потоковый датасет: без лога имени (анти-спам)
 

@@ -3567,7 +3567,11 @@ input.micro-cam-num { width: 56px; min-width: 0; flex: 0 0 auto; padding: 4px 5p
 .micro-cv-status { font-size: 0.82em; color: var(--muted, #5b6b81); }
 .micro-cv-status.ok { color: var(--success, #16a34a); }
 .micro-cv-status.off { color: var(--danger, #dc2626); }
-.micro-cv-analyze { margin-left: auto; }
+/* строка «Модель …» под шапкой и нижний ряд компактных кнопок вкладки CV */
+.micro-cv-model { font-size: 0.88em; font-weight: 600; }
+.micro-cv-foot { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
+.micro-cv-foot .toolbar-btn { min-width: 0; padding: 6px 12px; font-size: 0.85em; }
+.micro-cv-foot__right { margin-left: auto; }
 /* статус (сервис + итог разбора) может быть длинным — переносится в своей ячейке, кнопка остаётся справа */
 .micro-cv-head .micro-cv-status { flex: 1 1 0; min-width: 0; }
 .micro-cv-block { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--border, rgba(131,151,179,.28)); }
@@ -3595,17 +3599,39 @@ input.micro-cam-num { width: 56px; min-width: 0; flex: 0 0 auto; padding: 4px 5p
 .micro-cv-series .dot { width: 9px; height: 9px; border-radius: 50%; display: inline-block; }
 .micro-cv-trend { width: 100%; height: 180px; background: var(--surface-muted, #f4f8fc);
   border: 1px solid var(--border, rgba(131,151,179,.28)); border-radius: 8px; touch-action: none; cursor: grab; }
+.micro-cv-trend { cursor: crosshair; }
 .micro-cv-trend:active { cursor: grabbing; }
 
-/* Галерея */
-.micro-cv-gal { display: flex; align-items: center; gap: 8px; }
-.micro-cv-gal-nav { width: 32px; padding: 6px 0; font-size: 1.1em; line-height: 1; }
-.micro-cv-thumbs { display: flex; gap: 6px; flex: 1; overflow-x: auto; padding: 2px; }
-.micro-cv-thumb { width: 92px; height: 76px; flex: 0 0 auto; border-radius: 6px; border: 1px solid var(--border, rgba(131,151,179,.28));
-  object-fit: cover; background: #0e1726; cursor: pointer; transition: border-color .15s ease; }
-.micro-cv-thumb:hover { border-color: var(--accent, #2563eb); }
-.micro-cv-thumb.is-active { border-color: var(--accent, #2563eb); border-width: 2px; }
-.micro-cv-thumb.is-prev { outline: 1px dashed var(--muted, #8a94a6); }
+/* Лента проб: строкой под окном, а на широком экране — столбиком в свободном поле слева от окна
+   (новая проба сверху) */
+.micro-cv-strip { display: flex; gap: 8px; margin-top: 8px; padding: 2px; overflow-x: auto; scrollbar-width: thin; }
+.micro-cv-strip[hidden] { display: none; }
+.micro-cv-strip__item { flex: 0 0 auto; width: 112px; padding: 0; display: flex; flex-direction: column; overflow: hidden;
+  border: 1px solid var(--border, rgba(131,151,179,.28)); border-radius: 8px; background: var(--surface-muted, #f4f8fc);
+  color: var(--muted, #5b6b81); cursor: pointer; font: inherit; transition: border-color .15s ease, color .15s ease; }
+.micro-cv-strip__item img { display: block; width: 100%; aspect-ratio: 6 / 5; object-fit: cover; background: #0e1726; }
+.micro-cv-strip__item span { font-size: 10px; line-height: 1; padding: 4px 2px; text-align: center; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.micro-cv-strip__item:hover { border-color: var(--accent, #2563eb); color: var(--text); }
+.micro-cv-strip__item.is-active { border-color: var(--accent, #2563eb); box-shadow: 0 0 0 1px var(--accent, #2563eb); color: var(--accent, #2563eb); }
+@media (min-width: 1820px) {
+  .micro-cv-strip { position: absolute; top: 0; bottom: 0; right: calc(100% + 12px); width: 124px; margin: 0;
+    flex-direction: column; overflow-x: hidden; overflow-y: auto; }
+  .micro-cv-strip__item { width: auto; }
+}
+.micro-cam-card:fullscreen .micro-cv-strip,
+.micro-cam-card:-webkit-full-screen .micro-cv-strip { display: none; }
+
+/* Листалка кадров пробы поверх окна «Комп. зрение» (слева, напротив кнопки fullscreen) */
+.micro-cv-pager { position: absolute; top: 58px; left: 14px; z-index: 3; display: inline-flex; align-items: center; gap: 2px;
+  padding: 2px 4px; border-radius: 8px; background: rgba(8,23,38,0.78); color: #e7eefb; font-size: 12px; font-variant-numeric: tabular-nums; }
+.micro-cv-pager[hidden], .micro-cam-card:not(.cv-win) .micro-cv-pager { display: none; }
+.micro-cv-pager__btn { border: 0; background: transparent; color: inherit; cursor: pointer; font-size: 16px; line-height: 1; padding: 2px 8px; border-radius: 6px; }
+.micro-cv-pager__btn:hover { background: rgba(255,255,255,0.14); }
+
+/* Тренд: обёртка для тултипа линии-курсора */
+.micro-cv-trendwrap { position: relative; }
+.micro-cv-trendwrap .micro-cv-tip { transform: none; }
+.micro-cv-tip .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 4px; }
 
 /* режим окна «Комп. зрение»: прячем камеру и её плейсхолдер, показываем overlay CV */
 .micro-cam-card.cv-win #microCamStream,
@@ -3642,4 +3668,5 @@ input.micro-cam-num { width: 56px; min-width: 0; flex: 0 0 auto; padding: 4px 5p
   color: #e7eefb; font-size: 12px; line-height: 1.35; padding: 6px 9px; border-radius: 7px;
   border: 1px solid rgba(131,170,227,0.3); white-space: nowrap; transform: translate(10px, 10px); }
 .micro-cv-tip b { color: #7ee0bf; font-weight: 600; }
+.micro-cv-tip .is-bad { color: #ff8a80; font-weight: 600; }   /* метрика формы за порогом брака */
 .micro-cam-card #cvOverlay { cursor: crosshair; }

@@ -5,18 +5,21 @@
         result.json        — сводка пробы + по-кадровые данные
         overlay_0.jpg ...   — кадры с обводкой кристаллов (JPEG; старые пробы — .png)
         objects_0.json ...  — объекты кадра (для наведения в UI)
+        thumb.jpg          — миниатюра кадра 0 (лента проб в UI)
 
 Ротация: держим последние keep_last проб на серийник (старые удаляем).
 """
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import time
 from pathlib import Path
 from typing import Optional
 
 import cv2
+import numpy as np
 
 from logger import log_event
 from paths import DATA_DIR
@@ -24,11 +27,28 @@ from paths import DATA_DIR
 BASE = DATA_DIR / "cv_results"
 
 GROUP_ORDER = ["small", "medium", "large", "reject"]
+THUMB_W = 240      # ширина миниатюры пробы, px
 
 
 def _serial_dir(serial: str) -> Path:
     tag = "".join(c for c in str(serial) if c.isalnum() or c in "-_.") or "camera"
     return BASE / tag
+
+
+def _probe_dir(serial: str, ts: str) -> Optional[Path]:
+    """Папка пробы по метке времени. ts приходит из запроса — пускаем только «цифры/_/-»,
+    чтобы через него нельзя было выйти из каталога проб."""
+    if not re.fullmatch(r"[0-9_-]+", str(ts or "")):
+        return None
+    return _serial_dir(serial) / ts
+
+
+def _encode_thumb(img) -> Optional[bytes]:
+    h, w = img.shape[:2]
+    if w > THUMB_W:
+        img = cv2.resize(img, (THUMB_W, max(1, int(h * THUMB_W / w))), interpolation=cv2.INTER_AREA)
+    ok, enc = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, 80])
+    return enc.tobytes() if ok else None
 
 
 def _aggregate(frames: list[dict]) -> dict:
@@ -80,6 +100,10 @@ def save_sample(serial: str, stage, frames: list[dict], overlays: list, timing: 
                 if not ok:
                     raise OSError("не удалось закодировать overlay в JPEG")
                 (d / ov_name).write_bytes(enc.tobytes())
+                if i == 0:
+                    thumb = _encode_thumb(overlays[i])
+                    if thumb:
+                        (d / "thumb.jpg").write_bytes(thumb)
             # объекты кадра — в отдельный файл (для наведения в UI), чтобы result.json был лёгким
             objs = fr.get("objects") or []
             if objs:
@@ -142,8 +166,11 @@ def list_samples(serial: str, limit: int = 50) -> list[dict]:
 
 
 def get_result(serial: str, ts: str) -> Optional[dict]:
+    d = _probe_dir(serial, ts)
+    if d is None:
+        return None
     try:
-        return json.loads((_serial_dir(serial) / ts / "result.json").read_text(encoding="utf-8"))
+        return json.loads((d / "result.json").read_text(encoding="utf-8"))
     except Exception:
         return None
 
@@ -159,18 +186,47 @@ def get_prev(serial: str) -> Optional[dict]:
 
 
 def overlay_path(serial: str, ts: str, idx: int = 0) -> Optional[Path]:
+    d = _probe_dir(serial, ts)
+    if d is None:
+        return None
     # .jpg — текущий формат; .png — пробы, сохранённые до перехода на JPEG
     for ext in ("jpg", "png"):
-        p = _serial_dir(serial) / ts / ("overlay_%d.%s" % (idx, ext))
+        p = d / ("overlay_%d.%s" % (int(idx), ext))
         if p.exists():
             return p
     return None
 
 
+def thumb_path(serial: str, ts: str) -> Optional[Path]:
+    """Миниатюра пробы (кадр 0) для ленты проб. У проб, сохранённых до появления ленты, её
+    нет — делаем из overlay при первом запросе и кладём рядом."""
+    d = _probe_dir(serial, ts)
+    if d is None:
+        return None
+    p = d / "thumb.jpg"
+    if p.exists():
+        return p
+    src = overlay_path(serial, ts, 0)
+    if not src:
+        return None
+    try:
+        img = cv2.imdecode(np.frombuffer(src.read_bytes(), dtype=np.uint8), cv2.IMREAD_COLOR)
+        data = _encode_thumb(img) if img is not None else None
+        if not data:
+            return None
+        p.write_bytes(data)
+        return p
+    except Exception:
+        return None
+
+
 def get_objects(serial: str, ts: str, idx: int = 0) -> list:
     """Объекты (кристаллы) кадра пробы — для наведения в UI (bbox/size_um/area_um2)."""
+    d = _probe_dir(serial, ts)
+    if d is None:
+        return []
     try:
-        return json.loads((_serial_dir(serial) / ts / ("objects_%d.json" % idx)).read_text(encoding="utf-8"))
+        return json.loads((d / ("objects_%d.json" % int(idx))).read_text(encoding="utf-8"))
     except Exception:
         return []
 
@@ -178,7 +234,8 @@ def get_objects(serial: str, ts: str, idx: int = 0) -> list:
 def trend(serial: str, series: Optional[list[str]] = None, limit: int = 200) -> dict:
     """Серии для интерактивного тренда: точки во времени по выбранным метрикам.
 
-    series — какие линии вернуть: подмножество групп + 'mean' (средний размер).
+    series — какие линии вернуть: подмножество групп + 'mean' (средний размер) + 'count'
+    (число кристаллов).
     Возвращает {ts:[...], stage:[...], series:{name:[values]}}.
     """
     series = series or ["small", "medium", "large", "reject", "mean"]
@@ -194,6 +251,8 @@ def trend(serial: str, series: Optional[list[str]] = None, limit: int = 200) -> 
         for s in series:
             if s == "mean":
                 data[s].append((summ.get("size_um") or {}).get("mean"))
+            elif s == "count":
+                data[s].append(summ.get("count"))
             elif s == "frac_zones":
                 data[s].append(frs.get("zones"))
             elif s == "frac_pct":

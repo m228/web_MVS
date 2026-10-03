@@ -1296,12 +1296,17 @@
   const CV_SERIES_COLOR = { small: "#1d9e75", medium: "#378add", large: "#ba7517", reject: "#e24b4a", mean: "#7f77dd" };
   let cvWinOn = false;          // окно показывает CV (true) или камеру (false)
   let cvLastResult = null;      // последняя проба (result.json)
-  let cvPrevResult = null;      // предыдущая проба (для Δ и слота сравнения)
-  let cvGalIdx = 0;             // индекс кадра в галерее (< frames.length — текущая проба; == prev)
+  let cvPrevResult = null;      // предыдущая проба (для Δ к прошлой)
+  let cvSamples = [];           // лента проб (новые сверху): [{ts, stage, summary, frames, fracture}]
+  let cvView = null;            // проба, показанная в окне CV (по умолчанию — последняя)
+  let cvViewPinned = false;     // выбрана старая проба из ленты — окно не прыгает на свежую
+  let cvGalIdx = 0;             // индекс кадра показанной пробы
   let cvCurObjects = [];        // объекты текущего кадра окна CV (для наведения: bbox/size/area)
   let cvTrendData = null;       // {ts, stage, series}
   let cvTrendView = null;       // {start, end} видимый диапазон индексов (для пан/зум)
   let cvTrendUserZoomed = false; // пользователь сам двигал/зумил тренд — не сбрасывать авто-фитом
+  let cvTrendHover = null;       // индекс пробы под линией-курсором тренда
+  let cvTrendGeom = null;        // геометрия последней отрисовки тренда (для привязки курсора)
   let cvLastModel = null;        // имя детектора из /api/cv/health (для телеметрии)
 
   function cvSerialQ() { return camSerial ? "serial=" + encodeURIComponent(camSerial) : ""; }
@@ -1408,7 +1413,7 @@
 
   // --- рассев + статистика ---
   function cvRenderScatter() {
-    const r = cvLastResult, s = r && r.summary;
+    const r = cvView || cvLastResult, s = r && r.summary;   // рассев — по пробе, показанной в окне
     const cnt = $("cvCount");
     // телеметрия распознавания (тайминги сайдкара + модель)
     const setTe = (id, v) => { const e = $(id); if (e) e.textContent = v; };
@@ -1439,7 +1444,7 @@
     setT("cvCvpct", sz.cv_pct != null ? sz.cv_pct + " %" : "—");
     setT("cvQuality", s.quality === "low" ? "низкое" : (s.quality || "—"));
     // Δ к прошлой пробе по среднему размеру
-    const prevMean = cvPrevResult && cvPrevResult.summary && cvPrevResult.summary.size_um
+    const prevMean = !cvViewPinned && cvPrevResult && cvPrevResult.summary && cvPrevResult.summary.size_um
       ? cvPrevResult.summary.size_um.mean : null;
     const dEl = $("cvDelta");
     if (dEl) {
@@ -1451,55 +1456,84 @@
     }
   }
 
-  // --- галерея кадров пробы (+ прошлая проба последним слотом) ---
+  // --- лента проб слева от окна (новая сверху) + кадры выбранной пробы ---
   function cvOverlaySrc(ts, idx) {
-    const q = [cvSerialQ(), "ts=" + encodeURIComponent(ts), "idx=" + idx, "_=" + Date.now()].filter(Boolean).join("&");
-    return "/api/cv/overlay?" + q;
+    // проба неизменна → без анти-кэша: браузер кэширует, картинка не перегружается каждые 5 с
+    return "/api/cv/overlay?" + [cvSerialQ(), "ts=" + encodeURIComponent(ts), "idx=" + idx].filter(Boolean).join("&");
   }
-  function cvRenderGallery() {
-    const wrap = $("cvThumbs"); if (!wrap) return;
-    wrap.innerHTML = "";
-    const frames = (cvLastResult && cvLastResult.frames) || [];
-    const ts = cvLastResult && cvLastResult.ts;
-    frames.forEach((fr, i) => {
-      if (!fr.overlay) return;
-      const im = document.createElement("img");
-      im.className = "micro-cv-thumb" + (i === cvGalIdx ? " is-active" : "");
-      im.src = cvOverlaySrc(ts, i);
-      im.title = "кадр " + (i + 1);
-      im.addEventListener("click", () => cvViewFrame(i));
-      wrap.appendChild(im);
-    });
-    // слот прошлой пробы
-    if (cvPrevResult && cvPrevResult.ts && (cvPrevResult.frames || []).some((f) => f.overlay)) {
-      const im = document.createElement("img");
-      im.className = "micro-cv-thumb is-prev" + (cvGalIdx === -1 ? " is-active" : "");
-      im.src = cvOverlaySrc(cvPrevResult.ts, 0);
-      im.title = "предыдущая проба";
-      im.addEventListener("click", () => cvViewFrame(-1));
-      wrap.appendChild(im);
+  function cvThumbSrc(ts) {
+    return "/api/cv/thumb?" + [cvSerialQ(), "ts=" + encodeURIComponent(ts)].filter(Boolean).join("&");
+  }
+  // «2026-10-03_22_47_43» → «22:47:43» (withDate: «03.10 22:47:43»)
+  function cvTsLabel(ts, withDate) {
+    const m = String(ts || "").match(/^(\d{4})-(\d{2})-(\d{2})_(\d{2})_(\d{2})_(\d{2})$/);
+    if (!m) return String(ts || "");
+    const t = m[4] + ":" + m[5] + ":" + m[6];
+    return withDate ? m[3] + "." + m[2] + " " + t : t;
+  }
+  // подпись пробы при наведении: когда, стадия варки, сколько кристаллов, средний размер
+  function cvSampleTitle(s) {
+    const sm = s.summary || {}, sz = sm.size_um || {}, fr = s.fracture || {};
+    const parts = [cvTsLabel(s.ts, true)];
+    if (s.stage != null) parts.push("стадия " + s.stage);
+    if (sm.count != null) parts.push(Math.round(sm.count) + " крист.");
+    if (sz.mean != null) parts.push("ср. " + sz.mean + " мкм");
+    if (s.frames) parts.push("кадров " + s.frames);
+    if (fr.has_fracture) parts.push("разлом");
+    return parts.join(" · ");
+  }
+  function cvRenderStrip() {
+    const wrap = $("cvStrip"); if (!wrap) return;
+    const key = cvSamples.map((s) => s.ts).join("|");
+    if (wrap.dataset.key !== key) {            // перестраиваем, только когда список проб изменился
+      wrap.dataset.key = key;
+      wrap.innerHTML = "";
+      cvSamples.forEach((s) => {
+        const b = document.createElement("button");
+        b.type = "button"; b.className = "micro-cv-strip__item"; b.dataset.ts = s.ts;
+        b.title = cvSampleTitle(s);
+        const im = document.createElement("img"); im.alt = ""; im.src = cvThumbSrc(s.ts);
+        const cap = document.createElement("span");
+        cap.textContent = cvTsLabel(s.ts).slice(0, 5) + (s.stage != null ? " · ст." + s.stage : "");
+        b.appendChild(im); b.appendChild(cap);
+        b.addEventListener("click", () => cvSelectProbe(s.ts));
+        wrap.appendChild(b);
+      });
     }
-    cvShowFrame();
+    wrap.hidden = !cvSamples.length;
+    const cur = cvView && cvView.ts;
+    wrap.querySelectorAll(".micro-cv-strip__item").forEach((b) => b.classList.toggle("is-active", b.dataset.ts === cur));
   }
+  // выбрать пробу из ленты → показать её в окне «Комп. зрение». Клик по самой новой — окно
+  // снова следует за свежими пробами; по старой — держится на ней, пока не выберут другую.
+  async function cvSelectProbe(ts) {
+    const latest = cvLastResult && cvLastResult.ts;
+    let r = (ts === latest) ? cvLastResult : null;
+    if (!r) {
+      try { r = await api("/api/cv/result?" + [cvSerialQ(), "ts=" + encodeURIComponent(ts)].filter(Boolean).join("&")); }
+      catch (e) { r = null; }
+    }
+    if (!r || r.empty) return;
+    cvView = r; cvViewPinned = (ts !== latest);
+    cvGalIdx = 0; cvWinOn = true;              // переключаем верхнее окно в «Комп. зрение»
+    cvRenderScatter(); cvRenderStrip(); cvShowFrame();
+  }
+  function cvViewFrames() { return ((cvView && cvView.frames) || []).filter((f) => f.overlay); }
   function cvShowFrame() {
     const ov = $("cvOverlay"); if (!ov) return;
-    const posEl = $("cvGalPos");
-    let ts, idx, label;
-    if (cvGalIdx === -1 && cvPrevResult) { ts = cvPrevResult.ts; idx = 0; label = "прошлая проба"; }
-    else {
-      const frames = (cvLastResult && cvLastResult.frames) || [];
-      if (!frames.length) { if (posEl) posEl.textContent = "нет кадров"; return; }
-      cvGalIdx = Math.max(0, Math.min(cvGalIdx, frames.length - 1));
-      ts = cvLastResult.ts; idx = cvGalIdx; label = "кадр " + (cvGalIdx + 1) + "/" + frames.length;
+    const pager = $("cvPager"), posEl = $("cvGalPos");
+    const frames = cvViewFrames();
+    if (!frames.length) { if (pager) pager.hidden = true; if (cvWinOn) applyWinMode(); return; }
+    cvGalIdx = Math.max(0, Math.min(cvGalIdx, frames.length - 1));
+    const ts = cvView.ts, idx = frames[cvGalIdx].idx != null ? frames[cvGalIdx].idx : cvGalIdx;
+    const key = ts + "#" + idx;
+    if (ov.dataset.key !== key) {              // кадр сменился — грузим; иначе картинку не дёргаем
+      ov.dataset.key = key;
+      ov.src = cvOverlaySrc(ts, idx);
+      cvLoadObjects(ts, idx);                  // объекты кадра для наведения (размер/форма)
     }
-    ov.src = cvOverlaySrc(ts, idx);
-    cvLoadObjects(ts, idx);   // объекты кадра для наведения (размер/площадь)
-    if (posEl) posEl.textContent = label + (cvLastResult && cvLastResult.stage != null ? " · st" + cvLastResult.stage : "");
-    document.querySelectorAll("#cvThumbs .micro-cv-thumb").forEach((t, i) => {
-      const frames = (cvLastResult && cvLastResult.frames) || [];
-      const isPrev = i >= frames.filter((f) => f.overlay).length;
-      t.classList.toggle("is-active", (cvGalIdx === -1 && isPrev) || (cvGalIdx !== -1 && i === cvGalIdx));
-    });
+    if (posEl) posEl.textContent = cvTsLabel(ts) + " · " + (cvGalIdx + 1) + "/" + frames.length;
+    if (pager) pager.hidden = false;
     if (cvWinOn) applyWinMode();
   }
   // объекты кадра для наведения (bbox/size_um/area_um2)
@@ -1528,8 +1562,16 @@
       }
       if (!best) { tip.hidden = true; return; }
       const gr = { small: "малая", medium: "средняя", large: "большая", reject: "брак" }[best.group] || best.group;
+      // форма: округлость / выпуклость / вытянутость; значение за текущим порогом (поля вкладки
+      // «CV») подсвечиваем — видно, из-за чего кристалл ушёл в брак и куда двигать порог
+      const thr = (id) => { const e = $(id); return e && e.value !== "" ? parseFloat(e.value) : null; };
+      const mark = (v, bad) => bad ? '<span class="is-bad">' + v + "</span>" : v;
+      const tC = thr("cvMinCirc"), tS = thr("cvMinSol"), tA = thr("cvMaxAspect");
+      const shape = best.circularity == null ? "" : "<br>округл. " + mark(best.circularity.toFixed(2), tC != null && best.circularity < tC) +
+        " · выпукл. " + mark(best.solidity.toFixed(2), tS != null && best.solidity < tS) +
+        " · вытянут. " + mark(best.aspect.toFixed(1), tA != null && best.aspect > tA);
       tip.innerHTML = "Ø <b>" + best.size_um + " мкм</b> · S <b>" + Math.round(best.area_um2) + " мкм²</b><br>" +
-        best.length_um + "×" + best.width_um + " мкм · " + gr;
+        best.length_um + "×" + best.width_um + " мкм · " + gr + shape;
       const cardR = card.getBoundingClientRect();
       tip.style.left = (e.clientX - cardR.left) + "px";
       tip.style.top = (e.clientY - cardR.top) + "px";
@@ -1537,29 +1579,27 @@
     });
     ov.addEventListener("mouseleave", () => { tip.hidden = true; });
   }
-  // выбрать кадр галереи → показать в ОКНЕ камеры (основной просмотр там)
+  // листалка кадров выбранной пробы (‹ › поверх окна «Комп. зрение»)
   function cvViewFrame(idx) {
     cvGalIdx = idx;
-    cvWinOn = true;                 // переключаем верхнее окно в «Комп. зрение»
+    cvWinOn = true;
     cvShowFrame();                  // ставит overlay.src и (т.к. cvWinOn) applyWinMode
   }
   function wireGallery() {
     const prev = $("cvGalPrev"), next = $("cvGalNext");
     if (prev) prev.addEventListener("click", () => { if (cvGalIdx > 0) cvViewFrame(cvGalIdx - 1); });
-    if (next) next.addEventListener("click", () => {
-      const n = ((cvLastResult && cvLastResult.frames) || []).length;
-      if (cvGalIdx < n - 1) cvViewFrame(cvGalIdx + 1);
-    });
+    if (next) next.addEventListener("click", () => { if (cvGalIdx < cvViewFrames().length - 1) cvViewFrame(cvGalIdx + 1); });
   }
 
-  // --- интерактивный тренд (canvas, выбор серий, пан/зум по времени) ---
+  // --- интерактивный тренд (canvas, выбор серий, пан/зум по времени, линия-курсор по пробам) ---
+  const CV_TREND_ALL = ["small", "medium", "large", "reject", "mean", "count"];
   function cvSelectedSeries() {
     return [...document.querySelectorAll("#cvSeries input:checked")].map((c) => c.value);
   }
   async function cvLoadTrend() {
     try {
-      const sel = cvSelectedSeries();
-      const q = [cvSerialQ(), "series=" + sel.join(","), "limit=200"].filter(Boolean).join("&");
+      // тянем ВСЕ серии (рисуем выбранные): тултип курсора показывает полный рассев пробы
+      const q = [cvSerialQ(), "series=" + CV_TREND_ALL.join(","), "limit=200"].filter(Boolean).join("&");
       cvTrendData = await api("/api/cv/trend?" + q);
       const n = (cvTrendData.ts || []).length;
       // авто-фит на весь диапазон, пока пользователь сам не двигал/зумил тренд
@@ -1575,22 +1615,30 @@
     ctx.clearRect(0, 0, W, H);
     const ts = cvTrendData.ts || [], series = cvTrendData.series || {};
     const n = ts.length;
+    cvTrendGeom = null;
     if (!n) { ctx.fillStyle = getCss("--muted", "#8a94a6"); ctx.font = "12px sans-serif"; ctx.fillText("нет проб для тренда", 12, H / 2); return; }
     const v = cvTrendView || { start: 0, end: n };
     const i0 = Math.max(0, Math.floor(v.start)), i1 = Math.min(n, Math.ceil(v.end));
     const pad = { l: 34, r: 8, t: 10, b: 20 };
     const plotW = W - pad.l - pad.r, plotH = H - pad.t - pad.b;
     const sel = cvSelectedSeries();
+    const xAt = (i) => pad.l + plotW * (i1 - i0 <= 1 ? 0.5 : (i - i0) / (i1 - i0 - 1));
+    const yAt = (val, scaleMax) => pad.t + plotH * (1 - Math.max(0, Math.min(1, val / scaleMax)));
+    cvTrendGeom = { i0, i1, padL: pad.l, plotW };     // для привязки курсора к ближайшей пробе
     // раздельные шкалы: проценты (0..100) и размер мкм — нормируем каждую серию к своей.
     const pctSeries = sel.filter((s) => s !== "mean");
-    const drawSeries = (name, color, scaleMax) => {
+    // средний размер — своя шкала (макс по видимому окну)
+    let meanMax = 10;
+    if (series.mean) for (let i = i0; i < i1; i++) if (series.mean[i] != null) meanMax = Math.max(meanMax, series.mean[i]);
+    meanMax *= 1.1;
+    const scaleOf = (name) => (name === "mean" ? meanMax : 100);
+    const drawSeries = (name) => {
       const arr = series[name]; if (!arr) return;
-      ctx.strokeStyle = color; ctx.lineWidth = 2; ctx.beginPath();
+      ctx.strokeStyle = CV_SERIES_COLOR[name] || "#888"; ctx.lineWidth = 2; ctx.beginPath();
       let started = false;
       for (let i = i0; i < i1; i++) {
         const val = arr[i]; if (val == null) { started = false; continue; }
-        const x = pad.l + plotW * (i1 - i0 <= 1 ? 0.5 : (i - i0) / (i1 - i0 - 1));
-        const y = pad.t + plotH * (1 - Math.max(0, Math.min(1, val / scaleMax)));
+        const x = xAt(i), y = yAt(val, scaleOf(name));
         if (!started) { ctx.moveTo(x, y); started = true; } else ctx.lineTo(x, y);
       }
       ctx.stroke();
@@ -1598,16 +1646,23 @@
     // сетка
     ctx.strokeStyle = getCss("--border", "rgba(131,151,179,.28)"); ctx.lineWidth = 1;
     for (let k = 0; k <= 4; k++) { const y = pad.t + plotH * k / 4; ctx.beginPath(); ctx.moveTo(pad.l, y); ctx.lineTo(W - pad.r, y); ctx.stroke(); }
-    // проценты
-    pctSeries.forEach((s) => drawSeries(s, CV_SERIES_COLOR[s] || "#888", 100));
-    // средний размер — своя шкала (макс по видимому окну)
-    if (sel.includes("mean") && series.mean) {
-      let mx = 10; for (let i = i0; i < i1; i++) if (series.mean[i] != null) mx = Math.max(mx, series.mean[i]);
-      drawSeries("mean", CV_SERIES_COLOR.mean, mx * 1.1);
+    pctSeries.forEach(drawSeries);
+    if (sel.includes("mean")) drawSeries("mean");
+    // линия-курсор: стоит на ближайшей к мышке пробе, точки — на выбранных сериях
+    const hi = cvTrendHover;
+    if (hi != null && hi >= i0 && hi < i1) {
+      const x = xAt(hi);
+      ctx.strokeStyle = getCss("--muted", "#8a94a6"); ctx.lineWidth = 1; ctx.setLineDash([4, 3]);
+      ctx.beginPath(); ctx.moveTo(x, pad.t); ctx.lineTo(x, pad.t + plotH); ctx.stroke(); ctx.setLineDash([]);
+      sel.forEach((name) => {
+        const val = series[name] && series[name][hi]; if (val == null) return;
+        ctx.fillStyle = CV_SERIES_COLOR[name] || "#888";
+        ctx.beginPath(); ctx.arc(x, yAt(val, scaleOf(name)), 3.5, 0, Math.PI * 2); ctx.fill();
+      });
     }
     // подписи оси X (первая/последняя видимая проба, время HH:MM)
     ctx.fillStyle = getCss("--muted", "#8a94a6"); ctx.font = "10px monospace";
-    const lbl = (i) => { const t = ts[i] || ""; const m = t.match(/_(\d{2})_(\d{2})_\d{2}$/); return m ? m[1] + ":" + m[2] : t.slice(-8); };
+    const lbl = (i) => cvTsLabel(ts[i]).slice(0, 5);
     if (i1 > i0) { ctx.fillText(lbl(i0), pad.l, H - 6); const last = lbl(i1 - 1); ctx.fillText(last, W - pad.r - ctx.measureText(last).width, H - 6); }
     ctx.fillText("%", 6, pad.t + 8);
   }
@@ -1615,14 +1670,46 @@
     try { const v = getComputedStyle(document.documentElement).getPropertyValue(name); return v ? v.trim() : fallback; }
     catch (e) { return fallback; }
   }
+  // тултип линии-курсора: время пробы, стадия варки, число кристаллов, средний размер, рассев
+  function cvTrendTipShow(i, x) {
+    const tip = $("cvTrendTip"), cv = $("cvTrend"); if (!tip || !cv || !cvTrendData) return;
+    const d = cvTrendData, s = d.series || {};
+    const val = (name) => (s[name] && s[name][i] != null ? s[name][i] : null);
+    const stage = d.stage && d.stage[i];
+    const head = "<b>" + cvTsLabel(d.ts[i]) + "</b>" + (stage != null ? " · стадия " + stage : "");
+    const cnt = val("count"), mean = val("mean");
+    const line2 = [cnt != null ? Math.round(cnt) + " крист." : null, mean != null ? "ср. " + mean + " мкм" : null].filter(Boolean).join(" · ");
+    const names = { small: "малая", medium: "средняя", large: "большая", reject: "брак" };
+    const groups = CV_GROUPS.map((g) => val(g) == null ? "" :
+      '<span class="dot" style="background:' + CV_SERIES_COLOR[g] + '"></span>' + names[g] + " " + val(g) + "%").filter(Boolean).join("<br>");
+    tip.innerHTML = head + (line2 ? "<br>" + line2 : "") + (groups ? "<br>" + groups : "");
+    tip.hidden = false;
+    // справа от линии; у правого края — слева, чтобы не вылезать за график
+    const w = tip.offsetWidth, W = cv.clientWidth;
+    tip.style.left = (x + 12 + w > W ? Math.max(0, x - 12 - w) : x + 12) + "px";
+    tip.style.top = "8px";
+  }
   function wireTrend() {
-    document.querySelectorAll("#cvSeries input").forEach((c) => c.addEventListener("change", cvLoadTrend));
+    document.querySelectorAll("#cvSeries input").forEach((c) => c.addEventListener("change", cvDrawTrend));
     const cv = $("cvTrend"); if (!cv) return;
+    const tip = $("cvTrendTip");
     let drag = null;
-    cv.addEventListener("pointerdown", (e) => { drag = { x: e.clientX, view: Object.assign({}, cvTrendView) }; cv.setPointerCapture(e.pointerId); });
+    const hoverOff = () => { if (cvTrendHover != null) { cvTrendHover = null; cvDrawTrend(); } if (tip) tip.hidden = true; };
+    cv.addEventListener("pointerdown", (e) => { drag = { x: e.clientX, view: Object.assign({}, cvTrendView) }; cv.setPointerCapture(e.pointerId); hoverOff(); });
     cv.addEventListener("pointermove", (e) => {
-      if (!drag || !cvTrendData) return;
+      if (!cvTrendData) return;
       const n = (cvTrendData.ts || []).length; if (!n) return;
+      if (!drag) {
+        // наведение: линия «притягивается» к ближайшей пробе
+        const g = cvTrendGeom; if (!g) return;
+        const span = g.i1 - g.i0; if (span <= 0) return;
+        const px = e.clientX - cv.getBoundingClientRect().left;
+        const frac = span <= 1 ? 0 : (px - g.padL) / g.plotW;
+        const i = Math.max(g.i0, Math.min(g.i1 - 1, g.i0 + Math.round(frac * (span - 1))));
+        if (i !== cvTrendHover) { cvTrendHover = i; cvDrawTrend(); }
+        cvTrendTipShow(i, g.padL + g.plotW * (span <= 1 ? 0.5 : (i - g.i0) / (span - 1)));
+        return;
+      }
       const span = drag.view.end - drag.view.start;
       const dx = (e.clientX - drag.x) / (cv.clientWidth || 620) * span;
       let s = drag.view.start - dx, en = drag.view.end - dx;
@@ -1631,6 +1718,7 @@
       cvTrendView = { start: s, end: en }; cvDrawTrend();
     });
     cv.addEventListener("pointerup", () => { drag = null; });
+    cv.addEventListener("pointerleave", () => { if (!drag) hoverOff(); });
     cv.addEventListener("wheel", (e) => {
       if (!cvTrendData) return; e.preventDefault();
       const n = (cvTrendData.ts || []).length; if (!n) return;
@@ -1651,15 +1739,22 @@
   async function cvRefresh() {
     try {
       const q = cvSerialQ() ? "?" + cvSerialQ() : "";
-      const [last, prev] = await Promise.all([
+      const [last, prev, smp] = await Promise.all([
         api("/api/cv/last" + q).catch(() => null),
         api("/api/cv/prev" + q).catch(() => null),
+        api("/api/cv/samples" + (q ? q + "&" : "?") + "limit=20").catch(() => null),
       ]);
       cvLastResult = last && !last.empty ? last : null;
       cvPrevResult = prev && !prev.empty ? prev : null;
-      if (cvGalIdx == null) cvGalIdx = 0;
+      cvSamples = (smp && smp.samples) || [];
+      // старая проба не закреплена → окно следует за самой свежей
+      if (!cvViewPinned || !cvView) {
+        if (!cvView || !cvLastResult || cvView.ts !== cvLastResult.ts) cvGalIdx = 0;
+        cvView = cvLastResult; cvViewPinned = false;
+      }
       cvRenderScatter();
-      cvRenderGallery();
+      cvRenderStrip();
+      cvShowFrame();
       cvLoadTrend();
     } catch (e) { /* CV необязателен */ }
   }

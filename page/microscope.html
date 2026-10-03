@@ -115,6 +115,12 @@
             <img id="cvOverlay" class="micro-cam-frame" alt="Комп. зрение: распознанные кристаллы" hidden />
             <div id="cvOverlayPh" class="camera-placeholder micro-cam-ph" hidden>Нет разбора пробы. Включите CV и возьмите пробу.</div>
             <div id="cvHoverTip" class="micro-cv-tip" hidden></div>
+            <!-- листалка кадров выбранной пробы (только в режиме «Комп. зрение») -->
+            <div class="micro-cv-pager" id="cvPager" hidden>
+              <button type="button" id="cvGalPrev" class="micro-cv-pager__btn" title="Предыдущий кадр пробы">‹</button>
+              <span id="cvGalPos">—</span>
+              <button type="button" id="cvGalNext" class="micro-cv-pager__btn" title="Следующий кадр пробы">›</button>
+            </div>
             <div class="micro-cam-tele" id="camTele">
               <div class="micro-cam-tile"><span>СВ (Brix)</span><b id="camSv_v">—</b></div>
               <div class="micro-cam-tile"><span>Датчик, мкм</span><b id="camSensor_v">—</b></div>
@@ -133,6 +139,8 @@
                 </span>
               </span>
             </div>
+            <!-- лента проб CV: новая сверху; наведение — что за проба, клик — показать в окне -->
+            <div class="micro-cv-strip" id="cvStrip" hidden></div>
           </section>
 
           <section class="card micro-pult" id="microPult">
@@ -634,53 +642,43 @@
                     <span class="micro-switch__label">CV</span>
                   </label>
                   <span class="micro-cv-status" id="cvStatus">сервис: —</span>
-                  <button type="button" id="cvAnalyzeBtn" class="toolbar-btn toolbar-btn--neutral micro-cv-analyze">Разобрать пробу</button>
                 </div>
-
-                <!-- Модель: инфо + загрузка .pt (train локально → залить на Буи/Кир) -->
-                <div class="micro-cv-block" style="margin-top:0">
-                  <div class="micro-cv-block__title">Модель <span class="micro-cv-n" id="cvModelInfo">—</span></div>
-                  <div class="micro-cycle-btns">
-                    <button type="button" id="cvModelBtn" class="toolbar-btn toolbar-btn--primary">Загрузить модель (.pt)</button>
-                    <input type="file" id="cvModelFile" accept=".pt,.onnx,.engine" hidden />
-                    <span class="micro-conn-hint" id="cvModelHint"></span>
-                  </div>
-                  <p class="micro-plc-note">Файл заливается на сайдкар и подхватывается горячо (без перезапуска). На Буи/Кир — своя модель.</p>
-                </div>
-
-                <!-- Телеметрия распознавания -->
-                <p class="micro-plc-note">Рассев, тренд и кадры пробы — внизу страницы: телеметрия → «Распознавание».</p>
+                <!-- Модель: только инфо; кнопка загрузки — в нижнем ряду -->
+                <div class="micro-cv-model">Модель <span class="micro-cv-n" id="cvModelInfo">—</span></div>
 
                 <!-- Пороги: правятся живьём, применяются к следующей пробе -->
                 <div class="micro-cv-block">
-                  <div class="micro-cv-block__title">Пороги (правятся на лету)</div>
+                  <div class="micro-cv-block__title">Пороги</div>
                   <p class="micro-cv-group-lbl">Группы по размеру, мкм (эквив. диаметр)</p>
                   <div class="micro-cycle-cols">
                     <div class="micro-cycle-col">
-                      <label class="micro-cycle-f"><span>Малая &lt;, мкм</span><input type="number" id="cvSmallMax" step="10" /></label>
-                      <label class="micro-cycle-f"><span>Масштаб, мкм/px</span><input type="number" id="cvUmPerPx" step="0.001" /></label>
+                      <label class="micro-cycle-f" title="Кристалл мельче этого размера (эквивалентный диаметр, мкм) идёт в группу «малая»."><span>Малая &lt;, мкм</span><input type="number" id="cvSmallMax" step="10" /></label>
+                      <label class="micro-cycle-f" title="Сколько микрон в одном пикселе кадра. От него зависят все размеры в мкм."><span>Масштаб, мкм/px</span><input type="number" id="cvUmPerPx" step="0.001" /></label>
                     </div>
                     <div class="micro-cycle-col">
-                      <label class="micro-cycle-f"><span>Средняя &lt;, мкм</span><input type="number" id="cvMediumMax" step="10" /></label>
-                      <label class="micro-cycle-f"><span>Тайлов SAHI</span><input type="number" id="cvTiles" step="1" min="1" max="9" /></label>
+                      <label class="micro-cycle-f" title="Кристалл мельче этого размера (и не «малая») идёт в группу «средняя»; крупнее — «большая»."><span>Средняя &lt;, мкм</span><input type="number" id="cvMediumMax" step="10" /></label>
+                      <label class="micro-cycle-f" title="На сколько частей резать кадр перед распознаванием. Больше частей — лучше видна мелочь, но дольше и больше кристаллов попадает на швы. 1 — без нарезки."><span>Частей нарезки кадра</span><input type="number" id="cvTiles" step="1" min="1" max="9" /></label>
                     </div>
                   </div>
-                  <p class="micro-cv-group-lbl">Брак / уродливая форма</p>
+                  <p class="micro-cv-group-lbl" title="Кристалл уходит в «брак», если нарушен хотя бы один из порогов формы.">Брак по форме</p>
                   <div class="micro-cycle-cols">
                     <div class="micro-cycle-col">
-                      <label class="micro-cycle-f"><span>Мин. округлость</span><input type="number" id="cvMinCirc" step="0.05" /></label>
-                      <label class="micro-cycle-f"><span>Мин. solidity</span><input type="number" id="cvMinSol" step="0.05" /></label>
+                      <label class="micro-cycle-f" title="Округлость 0…1: насколько контур компактный. Круг = 1, квадрат ≈ 0.79, прямоугольник 2:1 ≈ 0.70, 3:1 ≈ 0.59; рваный или игольчатый контур — ниже. Меньше порога — брак. Поднять порог — строже."><span>Мин. округлость</span><input type="number" id="cvMinCirc" step="0.05" /></label>
+                      <label class="micro-cycle-f" title="Выпуклость 0…1: доля площади кристалла от его выпуклой оболочки. Целый гранёный кристалл ≈ 0.95–1. Сростки, сколы и вмятины дают впадины в контуре — значение падает. Меньше порога — брак. Поднять порог — строже."><span>Мин. выпуклость</span><input type="number" id="cvMinSol" step="0.05" /></label>
                     </div>
                     <div class="micro-cycle-col">
-                      <label class="micro-cycle-f"><span>Макс. вытянутость</span><input type="number" id="cvMaxAspect" step="0.1" /></label>
-                      <label class="micro-cycle-f"><span>Порог conf</span><input type="number" id="cvConf" step="0.05" min="0" max="1" /></label>
+                      <label class="micro-cycle-f" title="Вытянутость: длина, делённая на ширину. Квадратный кристалл = 1, вдвое длиннее ширины = 2. Больше порога (иглы, пластинки на ребре, обрезки) — брак. Опустить порог — строже."><span>Макс. вытянутость</span><input type="number" id="cvMaxAspect" step="0.1" /></label>
+                      <label class="micro-cycle-f" title="Уверенность модели 0…1, что найденный объект — кристалл. Всё, что ниже порога, отбрасывается. Выше порог — меньше мусора, но теряется мелочь и нерезкие кристаллы; ниже — находит больше, но больше ложных."><span>Порог уверенности</span><input type="number" id="cvConf" step="0.05" min="0" max="1" /></label>
                     </div>
                   </div>
-                  <div class="micro-cycle-btns">
-                    <button type="button" id="cvSaveBtn" class="toolbar-btn toolbar-btn--primary">Сохранить пороги</button>
-                    <span class="micro-conn-hint" id="cvSaveHint"></span>
-                  </div>
-                  <p class="micro-plc-note">Масштаб 613.8 px/mm → 1.629 мкм/px. Детект/размер уточнятся, когда подключим обученную модель YOLO-seg.</p>
+                </div>
+                <div class="micro-cv-foot">
+                  <button type="button" id="cvSaveBtn" class="toolbar-btn toolbar-btn--primary" title="Сохранить пороги — применятся к следующему разбору">Сохранить пороги</button>
+                  <span class="micro-conn-hint" id="cvSaveHint"></span>
+                  <span class="micro-conn-hint" id="cvModelHint"></span>
+                  <button type="button" id="cvAnalyzeBtn" class="toolbar-btn toolbar-btn--neutral micro-cv-foot__right" title="Снять живой кадр с камеры и разобрать его сейчас">Разобрать пробу</button>
+                  <button type="button" id="cvModelBtn" class="toolbar-btn toolbar-btn--neutral" title="Залить файл модели (.pt) — сервис подхватит его без перезапуска">Загрузить модель</button>
+                  <input type="file" id="cvModelFile" accept=".pt,.onnx,.engine" hidden />
                 </div>
               </div>
 
@@ -847,7 +845,7 @@
             <div class="micro-tele-cv__col">
               <div class="micro-cv-tele">
                 <div class="micro-tile"><span>Время распозн.</span><b id="cvTimeTotal">—</b></div>
-                <div class="micro-tile"><span>Тайлов SAHI</span><b id="cvTilesN">—</b></div>
+                <div class="micro-tile"><span>Частей нарезки</span><b id="cvTilesN">—</b></div>
                 <div class="micro-tile"><span>Infer / NMS</span><b id="cvInferNms">—</b></div>
                 <div class="micro-tile"><span>Кристаллов</span><b id="cvCountTele">—</b></div>
                 <div class="micro-tile"><span>Кадров</span><b id="cvFramesN">—</b></div>
@@ -872,7 +870,7 @@
             <div class="micro-tele-cv__col">
               <div class="micro-cv-block">
                 <div class="micro-cv-block__title">Тренд по пробам
-                  <span class="micro-cv-hint">тащи — сдвиг, колесо — зум, 2× — сброс</span>
+                  <span class="micro-cv-hint">наведи — проба, тащи — сдвиг, колесо — зум, 2× — сброс</span>
                 </div>
                 <div class="micro-cv-series" id="cvSeries">
                   <label><input type="checkbox" value="small" checked /><span class="dot" style="background:#1d9e75"></span>малая</label>
@@ -881,18 +879,10 @@
                   <label><input type="checkbox" value="reject" /><span class="dot" style="background:#e24b4a"></span>брак</label>
                   <label><input type="checkbox" value="mean" checked /><span class="dot" style="background:#7f77dd"></span>общая</label>
                 </div>
-                <canvas id="cvTrend" class="micro-cv-trend" width="620" height="200"></canvas>
-              </div>
-              <div class="micro-cv-block">
-                <div class="micro-cv-block__title">Кадры пробы <span class="micro-cv-n" id="cvGalPos">—</span>
-                  <span class="micro-cv-hint">клик — показать в окне камеры</span>
+                <div class="micro-cv-trendwrap">
+                  <canvas id="cvTrend" class="micro-cv-trend" width="620" height="200"></canvas>
+                  <div id="cvTrendTip" class="micro-cv-tip" hidden></div>
                 </div>
-                <div class="micro-cv-gal">
-                  <button type="button" id="cvGalPrev" class="toolbar-btn toolbar-btn--neutral micro-cv-gal-nav">‹</button>
-                  <div class="micro-cv-thumbs" id="cvThumbs"></div>
-                  <button type="button" id="cvGalNext" class="toolbar-btn toolbar-btn--neutral micro-cv-gal-nav">›</button>
-                </div>
-                <p class="micro-plc-note">последний слот — предыдущая проба для сравнения</p>
               </div>
             </div>
           </div>

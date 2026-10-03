@@ -657,6 +657,21 @@ def cv_samples(serial: str | None = None, limit: int = 50):
     return {"samples": cv_store.list_samples(_cv_serial(serial), limit=limit)}
 
 
+@app.get("/api/cv/result")
+def cv_result(serial: str | None = None, ts: str = ""):
+    """Проба по метке времени — лента проб показывает выбранную пробу в окне CV."""
+    return cv_store.get_result(_cv_serial(serial), ts) or {"empty": True}
+
+
+@app.get("/api/cv/thumb")
+def cv_thumb(serial: str | None = None, ts: str = ""):
+    """Миниатюра пробы (кадр 0) для ленты проб."""
+    p = cv_store.thumb_path(_cv_serial(serial), ts)
+    if not p:
+        return Response(status_code=404)
+    return FileResponse(str(p), media_type="image/jpeg")
+
+
 @app.get("/api/cv/trend")
 def cv_trend(serial: str | None = None, series: str | None = None, limit: int = 200):
     ser = [s.strip() for s in series.split(",")] if series else None

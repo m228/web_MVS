@@ -19,14 +19,21 @@ set /p VER=<VERSION
 echo [build] Building web_MVS %VER% ...
 pyinstaller --noconfirm web_MVS.spec || (echo [build] BUILD FAILED & exit /b 1)
 
-echo [build] Adding run.bat to the bundle ...
+echo [build] Adding run.bat + UpdaterCV to the bundle ...
 copy /Y run.bat "dist\web_MVS\" >nul
+copy /Y UpdaterCV.bat "dist\web_MVS\" >nul
+copy /Y UpdaterCV.ps1 "dist\web_MVS\" >nul
 
-echo [build] Packing archive ...
+echo [build] Packing main archive ...
 powershell -NoProfile -Command "Compress-Archive -Path 'dist\web_MVS\*' -DestinationPath 'dist\web_MVS_v%VER%.zip' -Force" || exit /b 1
 
+echo [build] Packing CV add-on (cv_service, code only) ...
+powershell -NoProfile -Command "$f=Get-ChildItem 'cv_service' -Recurse -File | Where-Object { $_.FullName -notmatch '\\\.venv\\' -and $_.FullName -notmatch '\\model\\' -and $_.FullName -notmatch '__pycache__' }; Compress-Archive -Path $f.FullName -DestinationPath 'dist\cv_service_v%VER%.zip' -Force" || exit /b 1
+
 echo.
-echo [build] Done: dist\web_MVS_v%VER%.zip
-echo [build] Publish release:
-echo         gh release create v%VER% dist\web_MVS_v%VER%.zip -t v%VER% --generate-notes
+echo [build] Done:
+echo         dist\web_MVS_v%VER%.zip      (основное приложение, для всех)
+echo         dist\cv_service_v%VER%.zip   (CV-модуль, докачивается UpdaterCV.bat на микроскопных машинах)
+echo [build] Publish release (ОБА ассета в один релиз):
+echo         gh release create v%VER% dist\web_MVS_v%VER%.zip dist\cv_service_v%VER%.zip -t v%VER% --generate-notes
 endlocal

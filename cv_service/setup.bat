@@ -31,13 +31,13 @@ python -m pip install --upgrade pip
 pip install -r requirements.txt
 if errorlevel 1 ( echo ERROR: base deps failed ^(see above^). If it is a proxy/SSL error, check the proxy. & pause & exit /b 1 )
 
-echo [3/4] torch + CUDA (cu124) ...
-pip install torch --index-url https://download.pytorch.org/whl/cu124
-if errorlevel 1 ( echo ERROR: torch install failed ^(see above^). & pause & exit /b 1 )
-
-echo [4/4] ultralytics ...
+echo [3/4] ultralytics ...
 pip install ultralytics
 if errorlevel 1 ( echo ERROR: ultralytics install failed ^(see above^). & pause & exit /b 1 )
+
+echo [4/4] torch + CUDA (cu124) - LAST, so ultralytics does not replace it with the CPU build ...
+pip install --force-reinstall torch torchvision --index-url https://download.pytorch.org/whl/cu124
+if errorlevel 1 ( echo ERROR: torch install failed ^(see above^). & pause & exit /b 1 )
 
 echo.
 echo === GPU check ===

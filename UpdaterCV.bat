@@ -1,27 +1,26 @@
 @echo off
-REM ==== Update CV — докачать/обновить модуль компьютерного зрения (микроскоп) ====
-REM Запускаешь руками. Качает cv_service из последнего релиза GitHub, при первом разе
-REM ставит torch+ultralytics (setup.bat). Для камер/RTSP без микроскопа — НЕ нужен.
-chcp 65001 >nul
+REM ==== Update CV - download/update the computer-vision module (microscope) ====
+REM Run manually. Downloads cv_service from the latest GitHub release; first run also
+REM installs torch + ultralytics (setup.bat). Not needed for camera/RTSP-only machines.
 cd /d "%~dp0"
 
 powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0UpdaterCV.ps1"
 if errorlevel 1 (
   echo.
-  echo ОШИБКА: не удалось обновить CV-модуль. Проверь интернет/доступ к GitHub.
+  echo ERROR: CV update failed. Check internet / GitHub access from this machine.
   pause & exit /b 1
 )
 
 if not exist "cv_service\.venv\Scripts\python.exe" (
   echo.
-  echo Первичная установка CV ^(venv + torch-CUDA + ultralytics^)...
+  echo First-time CV install ^(venv + torch-CUDA + ultralytics^)...
   call "cv_service\setup.bat"
 ) else (
   echo.
-  echo venv уже есть. Если менялись зависимости — запусти cv_service\setup.bat вручную.
+  echo venv already present. If dependencies changed, run cv_service\setup.bat manually.
 )
 
 echo.
-echo === Готово. Запуск CV: cv_service\run.bat ===
-echo Модель положи в cv_service\model\best.pt или залей кнопкой «Загрузить модель» в UI.
+echo === Done. Start CV: cv_service\run.bat ===
+echo Put model into cv_service\model\best.pt or upload it via the "Load model" button in UI.
 pause

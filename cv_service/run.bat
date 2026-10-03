@@ -1,20 +1,19 @@
 @echo off
-REM ==== Запуск CV-сайдкара (распознавание кристаллов) ====
-REM Порт 8765 (localhost). Модель: model\best.pt если есть, иначе classic (без GPU).
-chcp 65001 >nul
+REM ==== Start CV sidecar (crystal recognition) ====
+REM Port 8765 (localhost). Model: model\best.pt if present, else classic (no GPU).
 cd /d "%~dp0"
 
 if not exist ".venv\Scripts\python.exe" (
-  echo venv не найден. Сначала запусти setup.bat
+  echo venv not found. Run setup.bat first.
   pause & exit /b 1
 )
 
 if exist "model\best.pt" (
   set "CV_MODEL=model\best.pt"
-  echo Модель: model\best.pt
+  echo Model: model\best.pt
 ) else (
   set "CV_MODEL=classic"
-  echo Модель не найдена -^> режим classic ^(без GPU^). Залей .pt через кнопку в UI или положи в model\best.pt
+  echo No model found -^> classic mode ^(no GPU^). Upload a .pt via UI or put it in model\best.pt
 )
 
 set "CV_PORT=8765"

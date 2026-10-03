@@ -662,6 +662,12 @@ def cv_trend(serial: str | None = None, series: str | None = None, limit: int = 
     return cv_store.trend(_cv_serial(serial), series=ser, limit=limit)
 
 
+@app.get("/api/cv/objects")
+def cv_objects(serial: str | None = None, ts: str = "", idx: int = 0):
+    """Объекты кадра (кристаллы) для наведения: bbox/size_um/area_um2/group."""
+    return {"objects": cv_store.get_objects(_cv_serial(serial), ts, idx)}
+
+
 @app.get("/api/cv/overlay")
 def cv_overlay(serial: str | None = None, ts: str = "", idx: int = 0):
     p = cv_store.overlay_path(_cv_serial(serial), ts, idx)

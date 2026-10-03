@@ -73,11 +73,17 @@ def save_sample(serial: str, stage, frames: list[dict], overlays: list, timing: 
             if i < len(overlays) and overlays[i] is not None:
                 ov_name = "overlay_%d.png" % i
                 cv2.imwrite(str(d / ov_name), overlays[i])
+            # объекты кадра — в отдельный файл (для наведения в UI), чтобы result.json был лёгким
+            objs = fr.get("objects") or []
+            if objs:
+                (d / ("objects_%d.json" % i)).write_text(
+                    json.dumps(objs, ensure_ascii=False), encoding="utf-8")
             frame_recs.append({
                 "idx": i,
                 "src": fr.get("file"),
                 "overlay": ov_name,
                 "summary": fr.get("summary"),
+                "objects_n": len(objs),
             })
         summary = _aggregate(frames)
         result = {
@@ -148,6 +154,14 @@ def get_prev(serial: str) -> Optional[dict]:
 def overlay_path(serial: str, ts: str, idx: int = 0) -> Optional[Path]:
     p = _serial_dir(serial) / ts / ("overlay_%d.png" % idx)
     return p if p.exists() else None
+
+
+def get_objects(serial: str, ts: str, idx: int = 0) -> list:
+    """Объекты (кристаллы) кадра пробы — для наведения в UI (bbox/size_um/area_um2)."""
+    try:
+        return json.loads((_serial_dir(serial) / ts / ("objects_%d.json" % idx)).read_text(encoding="utf-8"))
+    except Exception:
+        return []
 
 
 def trend(serial: str, series: Optional[list[str]] = None, limit: int = 200) -> dict:

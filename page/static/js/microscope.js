@@ -1273,6 +1273,7 @@
   let cvLastResult = null;      // последняя проба (result.json)
   let cvPrevResult = null;      // предыдущая проба (для Δ и слота сравнения)
   let cvGalIdx = 0;             // индекс кадра в галерее (< frames.length — текущая проба; == prev)
+  let cvCurObjects = [];        // объекты текущего кадра окна CV (для наведения: bbox/size/area)
   let cvTrendData = null;       // {ts, stage, series}
   let cvTrendView = null;       // {start, end} видимый диапазон индексов (для пан/зум)
   let cvTrendUserZoomed = false; // пользователь сам двигал/зумил тренд — не сбрасывать авто-фитом
@@ -1458,6 +1459,7 @@
       ts = cvLastResult.ts; idx = cvGalIdx; label = "кадр " + (cvGalIdx + 1) + "/" + frames.length;
     }
     ov.src = cvOverlaySrc(ts, idx);
+    cvLoadObjects(ts, idx);   // объекты кадра для наведения (размер/площадь)
     if (posEl) posEl.textContent = label + (cvLastResult && cvLastResult.stage != null ? " · st" + cvLastResult.stage : "");
     document.querySelectorAll("#cvThumbs .micro-cv-thumb").forEach((t, i) => {
       const frames = (cvLastResult && cvLastResult.frames) || [];
@@ -1465,6 +1467,41 @@
       t.classList.toggle("is-active", (cvGalIdx === -1 && isPrev) || (cvGalIdx !== -1 && i === cvGalIdx));
     });
     if (cvWinOn) applyWinMode();
+  }
+  // объекты кадра для наведения (bbox/size_um/area_um2)
+  function cvLoadObjects(ts, idx) {
+    cvCurObjects = [];
+    const q = [cvSerialQ(), "ts=" + encodeURIComponent(ts), "idx=" + idx].filter(Boolean).join("&");
+    api("/api/cv/objects?" + q).then((r) => { cvCurObjects = (r && r.objects) || []; }).catch(() => {});
+  }
+  // наведение на кристалл в окне CV → тултип с размером/площадью
+  function wireHoverTip() {
+    const ov = $("cvOverlay"), tip = $("cvHoverTip"), card = document.querySelector(".micro-cam-card");
+    if (!ov || !tip || !card) return;
+    ov.addEventListener("mousemove", (e) => {
+      if (!cvWinOn || !cvCurObjects.length || !ov.naturalWidth) { tip.hidden = true; return; }
+      const r = ov.getBoundingClientRect();
+      const ix = (e.clientX - r.left) / r.width * ov.naturalWidth;
+      const iy = (e.clientY - r.top) / r.height * ov.naturalHeight;
+      // ищем самый маленький bbox, накрывающий курсор (кристаллы могут перекрываться)
+      let best = null, bestArea = Infinity;
+      for (const o of cvCurObjects) {
+        const b = o.bbox; if (!b) continue;
+        if (ix >= b[0] && ix <= b[0] + b[2] && iy >= b[1] && iy <= b[1] + b[3]) {
+          const a = b[2] * b[3];
+          if (a < bestArea) { bestArea = a; best = o; }
+        }
+      }
+      if (!best) { tip.hidden = true; return; }
+      const gr = { small: "малая", medium: "средняя", large: "большая", reject: "брак" }[best.group] || best.group;
+      tip.innerHTML = "Ø <b>" + best.size_um + " мкм</b> · S <b>" + Math.round(best.area_um2) + " мкм²</b><br>" +
+        best.length_um + "×" + best.width_um + " мкм · " + gr;
+      const cardR = card.getBoundingClientRect();
+      tip.style.left = (e.clientX - cardR.left) + "px";
+      tip.style.top = (e.clientY - cardR.top) + "px";
+      tip.hidden = false;
+    });
+    ov.addEventListener("mouseleave", () => { tip.hidden = true; });
   }
   // выбрать кадр галереи → показать в ОКНЕ камеры (основной просмотр там)
   function cvViewFrame(idx) {
@@ -1627,6 +1664,7 @@
     wireGallery();
     wireTrend();
     wireModelUpload();
+    wireHoverTip();
     cvModelRefresh();
     const en = $("cvEnable");
     if (en) en.addEventListener("change", () => { cvPostSettings({ enabled: en.checked }).then(cvHealth); });

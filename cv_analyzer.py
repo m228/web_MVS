@@ -195,14 +195,22 @@ def analyze(image: np.ndarray, objects: list[dict], cv_cfg: Optional[dict] = Non
     measures = measure_objects(objects, cv_cfg)
     blur = blur_score(image)
     summary = summarize(measures, image.shape, cv_cfg, blur=blur)
-    result = {"summary": summary,
-              "objects": [{
-                  "cx": round(m.cx, 1), "cy": round(m.cy, 1),
-                  "size_um": round(m.size_um, 1), "length_um": round(m.length_um, 1),
-                  "width_um": round(m.width_um, 1), "circularity": round(m.circularity, 3),
-                  "aspect": round(m.aspect, 2), "solidity": round(m.solidity, 3),
-                  "group": m.group, "conf": round(m.conf, 3),
-              } for m in measures]}
+    def _obj(m):
+        # bbox для наведения (hit-test в UI); площадь — по эквив.диаметру (= площадь маски), мкм²
+        if m.contour is not None:
+            x, y, w, h = cv2.boundingRect(m.contour)
+        else:
+            x = y = w = h = 0
+        area_um2 = round(math.pi * (m.size_um / 2.0) ** 2, 0)
+        return {
+            "cx": round(m.cx, 1), "cy": round(m.cy, 1),
+            "bbox": [int(x), int(y), int(w), int(h)],
+            "size_um": round(m.size_um, 1), "area_um2": area_um2,
+            "length_um": round(m.length_um, 1), "width_um": round(m.width_um, 1),
+            "circularity": round(m.circularity, 3), "aspect": round(m.aspect, 2),
+            "solidity": round(m.solidity, 3), "group": m.group, "conf": round(m.conf, 3),
+        }
+    result = {"summary": summary, "objects": [_obj(m) for m in measures]}
     if with_overlay:
         result["_overlay"] = draw_overlay(image, measures)   # numpy BGR, кодирует вызывающий
     return result

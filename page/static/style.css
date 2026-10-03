@@ -3630,3 +3630,10 @@ input.micro-cam-num { width: 56px; min-width: 0; flex: 0 0 auto; padding: 4px 5p
 .micro-tele-seg .micro-win-btn { white-space: nowrap; }
 
 /* (превью галереи убрано — основной просмотр в окне камеры) */
+
+/* Тултип наведения на кристалл (окно CV): размер/площадь в мкм */
+.micro-cv-tip { position: absolute; z-index: 5; pointer-events: none; background: rgba(8,23,38,0.92);
+  color: #e7eefb; font-size: 12px; line-height: 1.35; padding: 6px 9px; border-radius: 7px;
+  border: 1px solid rgba(131,170,227,0.3); white-space: nowrap; transform: translate(10px, 10px); }
+.micro-cv-tip b { color: #7ee0bf; font-weight: 600; }
+.micro-cam-card #cvOverlay { cursor: crosshair; }

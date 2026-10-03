@@ -42,6 +42,12 @@ if errorlevel 1 ( echo ERROR: ultralytics install failed ^(see above^). & pause 
 echo.
 echo === GPU check ===
 python -c "import torch; print('CUDA:', torch.cuda.is_available(), (torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'NO GPU'))"
+if errorlevel 1 (
+  echo.
+  echo NOTE: if torch failed with "c10.dll ... WinError 1114", install Microsoft
+  echo       Visual C++ Redistributable x64: https://aka.ms/vs/17/release/vc_redist.x64.exe
+  echo       Then re-run the GPU check. torch is already installed, no reinstall needed.
+)
 echo.
 echo Done. Put model into model\best.pt (or upload via UI) and run run.bat
 endlocal

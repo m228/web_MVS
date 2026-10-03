@@ -98,6 +98,12 @@
       api("/api/micro/ignore_stage", { on: ign.checked ? 1 : 0 }).catch(() => {});   // сразу
       sentCmd("Варить без стадии: " + (ign.checked ? "вкл" : "выкл"));
     });
+    const pe = $("photoEnableSw");
+    if (pe) pe.addEventListener("change", () => {
+      const st = $("photoEnableState"); if (st) st.textContent = pe.checked ? "вкл" : "выкл";
+      api("/api/micro/photo_enabled", { on: pe.checked ? 1 : 0 }).catch(() => {});   // сразу
+      sentCmd("Фото в пробе: " + (pe.checked ? "вкл" : "выкл"));
+    });
     const fmt = $("pcFormatSw");
     if (fmt) fmt.addEventListener("change", () => {
       const st = $("pcFormatState"); if (st) st.textContent = fmt.checked ? "JPG" : "PNG";
@@ -618,6 +624,8 @@
           const trSw = $("pcTriggerSw"); if (trSw) trSw.checked = (pc.trigger_mode === "sv");
           const fmSw = $("pcFormatSw"); if (fmSw) fmSw.checked = (pc.photo_format === "jpg");
           const fmSt = $("pcFormatState"); if (fmSt) fmSt.textContent = (pc.photo_format === "jpg") ? "JPG" : "PNG";
+          const peSw = $("photoEnableSw"); if (peSw) peSw.checked = (pc.photo_enabled !== false);
+          const peSt = $("photoEnableState"); if (peSt) peSt.textContent = (pc.photo_enabled !== false) ? "вкл" : "выкл";
           const ignT = $("ignoreStageToggle"); if (ignT) ignT.checked = !!pc.ignore_stage;
           const ifT = $("ignoreFocusToggle"); if (ifT) ifT.checked = pc.ignore_focus !== false;
           updateTriggerFields();
@@ -1585,11 +1593,41 @@
     } catch (e) { /* CV необязателен */ }
   }
 
+  function cvModelRefresh() {
+    const el = $("cvModelInfo"); if (!el) return;
+    api("/api/cv/model").then((m) => {
+      if (!m || m.error) { el.textContent = "сервис офлайн"; return; }
+      const names = m.names ? Object.values(m.names).join(",") : "";
+      el.textContent = (m.name || "—") + (m.seg ? " · seg" : "") + " · " + (m.device === "cpu" ? "CPU" : "GPU") + (names ? " · [" + names + "]" : "");
+    }).catch(() => { el.textContent = "—"; });
+  }
+  function wireModelUpload() {
+    const btn = $("cvModelBtn"), file = $("cvModelFile"), hint = $("cvModelHint");
+    if (!btn || !file) return;
+    btn.addEventListener("click", () => file.click());
+    file.addEventListener("change", async () => {
+      const f = file.files && file.files[0]; if (!f) return;
+      if (hint) hint.textContent = "загрузка " + f.name + " (" + Math.round(f.size / 1e6) + "МБ)…";
+      try {
+        const buf = await f.arrayBuffer();
+        const r = await fetch("/api/cv/model/upload?name=" + encodeURIComponent(f.name),
+          { method: "POST", headers: { "Content-Type": "application/octet-stream" }, body: buf });
+        const j = await r.json();
+        if (j && j.detector) { if (hint) hint.textContent = "загружена: " + (j.detector.name || "ok"); cvModelRefresh(); cvHealth(); }
+        else if (hint) hint.textContent = "ошибка: " + ((j && j.error) || "не удалось");
+      } catch (e) { if (hint) hint.textContent = "ошибка загрузки"; }
+      file.value = "";
+      setTimeout(() => { if (hint) hint.textContent = ""; }, 6000);
+    });
+  }
+
   function wireCV() {
     wireWindow();
     wireTeleToggle();
     wireGallery();
     wireTrend();
+    wireModelUpload();
+    cvModelRefresh();
     const en = $("cvEnable");
     if (en) en.addEventListener("change", () => { cvPostSettings({ enabled: en.checked }).then(cvHealth); });
     const save = $("cvSaveBtn");

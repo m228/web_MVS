@@ -201,6 +201,11 @@
                   <button type="button" id="cycSkipBtn" class="toolbar-btn toolbar-btn--neutral" title="Перепрыгнуть на следующий шаг цикла">Вперёд ▶</button>
                   <button type="button" id="cycResetBtn" class="toolbar-btn toolbar-btn--danger" title="Прервать цикл — в Ожидание">Сброс</button>
                 </div>
+                <label class="micro-switch micro-switch--photo" for="photoEnableSw" title="Вкл — цикл делает серию скринов пробы (нужно для CV/модели). Выкл — цикл работает, но без фото.">
+                  <input type="checkbox" id="photoEnableSw" checked />
+                  <span class="micro-switch__track"><span class="micro-switch__thumb"></span></span>
+                  <span class="micro-switch__label">Фото в пробе: <strong id="photoEnableState">вкл</strong></span>
+                </label>
 
                 <div class="micro-cycle-live">
                   <div class="micro-cycle-step">
@@ -626,6 +631,17 @@
                   </label>
                   <span class="micro-cv-status" id="cvStatus">сервис: —</span>
                   <button type="button" id="cvAnalyzeBtn" class="toolbar-btn toolbar-btn--neutral micro-cv-analyze">Разобрать пробу</button>
+                </div>
+
+                <!-- Модель: инфо + загрузка .pt (train локально → залить на Буи/Кир) -->
+                <div class="micro-cv-block" style="margin-top:0">
+                  <div class="micro-cv-block__title">Модель <span class="micro-cv-n" id="cvModelInfo">—</span></div>
+                  <div class="micro-cycle-btns">
+                    <button type="button" id="cvModelBtn" class="toolbar-btn toolbar-btn--primary">Загрузить модель (.pt)</button>
+                    <input type="file" id="cvModelFile" accept=".pt,.onnx,.engine" hidden />
+                    <span class="micro-conn-hint" id="cvModelHint"></span>
+                  </div>
+                  <p class="micro-plc-note">Файл заливается на сайдкар и подхватывается горячо (без перезапуска). На Буи/Кир — своя модель.</p>
                 </div>
 
                 <!-- Телеметрия распознавания -->

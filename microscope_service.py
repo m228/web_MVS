@@ -67,6 +67,9 @@ class MicroscopeService:
         camera_mode рулит лишь авто-СТАРТОМ цикла по стадии). Нужен серийник и живой стрим —
         snap сохранит следующий кадр. Все причины пропуска пишем в лог, чтобы было видно почему."""
         cfg = self.cfg or {}
+        # тумблер «Фото в пробе» (вкладка «Цикл»): выкл → цикл идёт, но скрины не делаем
+        if not (cfg.get("probe_cycle") or {}).get("photo_enabled", True):
+            return
         serial = (cfg.get("camera_serial") or "").strip()
         if not serial:
             log_event("microscope_service", "Скрин пробы пропущен: не задан camera_serial", "warn")
@@ -334,6 +337,16 @@ class MicroscopeService:
         res = self._live_patch("approach_correction", patch)
         log_event("microscope_service", "Настройки автоподвода обновлены", "info", {"patch": patch})
         return res
+
+    def set_photo_enabled(self, on):
+        """Тумблер «Фото в пробе» (вкладка «Цикл»): вкл/выкл скрины в цикле. Без reload платы."""
+        on = bool(on)
+        plate_config.save({"probe_cycle": {"photo_enabled": on}})
+        if self.cfg is not None:
+            self.cfg.setdefault("probe_cycle", {})["photo_enabled"] = on
+        log_event("microscope_service", "Фото в пробе: " + ("вкл" if on else "выкл"),
+                  "info", {"photo_enabled": on})
+        return {"photo_enabled": on}
 
     def set_trigger_mode(self, mode):
         """Сменить триггер пробы (time/sv) сразу, без перезапуска платы, и запомнить в конфиг."""

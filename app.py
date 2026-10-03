@@ -10,7 +10,7 @@ import threading
 from contextlib import asynccontextmanager
 from urllib.parse import urlparse
 
-from fastapi import FastAPI, Query, Body
+from fastapi import FastAPI, Query, Body, Request
 from fastapi.responses import FileResponse, StreamingResponse, Response, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -232,6 +232,12 @@ def micro_cycle_autostart(on: int):
 def micro_trigger_mode(mode: str):
     # переключатель триггера пробы time/sv — применяется сразу (без перезапуска платы)
     return micro.set_trigger_mode(mode)
+
+
+@app.get("/api/micro/photo_enabled")
+def micro_photo_enabled(on: int):
+    # тумблер «Фото в пробе»: вкл/выкл скрины в цикле (без перезапуска платы)
+    return micro.set_photo_enabled(bool(on))
 
 
 @app.get("/api/micro/ignore_stage")
@@ -591,6 +597,36 @@ def cv_fracture_set(patch: dict = Body(...)):
     data = micro.set_fracture(patch or {})
     api_log("api.cv.fracture", "Изменены настройки разломов", payload={"patch": patch})
     return {"status": "ok", "fracture": data}
+
+
+@app.get("/api/cv/model")
+def cv_model_get():
+    """Инфо о текущей модели сайдкара (имя/seg/устройство/классы)."""
+    cv = micro.cv_config()
+    url = cv.get("service_url", "http://127.0.0.1:8765")
+    return cv_client.model_info(url) or {"error": "offline"}
+
+
+@app.post("/api/cv/model/upload")
+async def cv_model_upload(request: Request, name: str = "best.pt"):
+    """Залить .pt из браузера → сайдкар сохранит и горячо загрузит (train локально → на Буи)."""
+    cv = micro.cv_config()
+    url = cv.get("service_url", "http://127.0.0.1:8765")
+    raw = await request.body()
+    res = cv_client.model_upload(url, raw, name=name)
+    api_log("api.cv.model.upload", "Загрузка модели в сайдкар",
+            payload={"name": name, "size": len(raw) if raw else 0, "ok": bool(res)})
+    return res or {"error": "upload_failed"}
+
+
+@app.get("/api/cv/model/load")
+def cv_model_load(path: str):
+    """Загрузить модель на сайдкаре по пути на его диске (горячо)."""
+    cv = micro.cv_config()
+    url = cv.get("service_url", "http://127.0.0.1:8765")
+    res = cv_client.model_load(url, path)
+    api_log("api.cv.model.load", "Загрузка модели по пути", payload={"path": path, "ok": bool(res)})
+    return res or {"error": "load_failed"}
 
 
 @app.get("/api/cv/approach/settings")

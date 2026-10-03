@@ -198,7 +198,7 @@ DEFAULTS = {
     "probe_cycle": {"retract_pos": 20000, "pre_wash_sec": 4, "dwell_sec": 15,
                     "shot_interval_sec": 3, "pause_sec": 60, "photo_format": "png",
                     "trigger_mode": "time", "sv_from": 84, "sv_to": 92, "ignore_stage": False,
-                    "ignore_focus": True, "settle_sec": 2},
+                    "ignore_focus": True, "settle_sec": 2, "photo_enabled": True},
 
     # фильтр аналогового датчика перемещения (рег.1271): сглаживание дрожания (0/-50/70).
     # enabled — вкл скользящее среднее; avg_sec — окно усреднения (сек). Отфильтрованное

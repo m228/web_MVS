@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import json
+import urllib.parse
 import urllib.request
 from typing import Optional
 
@@ -47,4 +48,41 @@ def infer(service_url: str, image_bytes: bytes, tiles: int = 6, conf: float = 0.
     except Exception as e:
         log_event("cv_client", "Ошибка запроса к CV-сайдкару", "warn",
                   {"url": _base(service_url), "error": str(e)})
+        return None
+
+
+def model_info(service_url: str, timeout: float = 2.0) -> Optional[dict]:
+    """Метаданные текущей модели сайдкара (имя/seg/устройство/классы/путь)."""
+    try:
+        req = urllib.request.Request(_base(service_url) + "/model", method="GET")
+        with _opener.open(req, timeout=timeout) as r:
+            return json.loads(r.read().decode("utf-8"))
+    except Exception:
+        return None
+
+
+def model_upload(service_url: str, data: bytes, name: str = "best.pt",
+                 timeout: float = 120.0) -> Optional[dict]:
+    """Залить .pt (сырые байты) на сайдкар — сохранит в model/ и горячо загрузит."""
+    url = _base(service_url) + "/model/upload?name=" + urllib.parse.quote(name)
+    try:
+        req = urllib.request.Request(url, data=data, method="POST",
+                                     headers={"Content-Type": "application/octet-stream"})
+        with _opener.open(req, timeout=timeout) as r:
+            return json.loads(r.read().decode("utf-8"))
+    except Exception as e:
+        log_event("cv_client", "Ошибка загрузки модели в сайдкар", "warn", {"error": str(e)})
+        return None
+
+
+def model_load(service_url: str, path: str, timeout: float = 60.0) -> Optional[dict]:
+    """Загрузить модель на сайдкаре по пути на его диске (горячо)."""
+    try:
+        body = json.dumps({"path": path}).encode("utf-8")
+        req = urllib.request.Request(_base(service_url) + "/model/load", data=body,
+                                     method="POST", headers={"Content-Type": "application/json"})
+        with _opener.open(req, timeout=timeout) as r:
+            return json.loads(r.read().decode("utf-8"))
+    except Exception as e:
+        log_event("cv_client", "Ошибка загрузки модели по пути", "warn", {"error": str(e)})
         return None

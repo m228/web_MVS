@@ -174,6 +174,10 @@ class MicroscopeFSM:
         # колбэк «писать видео пробы» — дёргается один раз на входе в выдержку (dwell_sec).
         self.on_video = None
         self._video_request = 0        # длительность видео (сек) при запросе, иначе 0
+        # колбэк «проба завершена» — дёргается один раз при выходе из выдержки (mode 23→24),
+        # когда вся серия скринов снята. Ставит microscope_service (для CV-анализа пробы).
+        self.on_sample_done = None
+        self._sample_done_request = False
         # состояние выдержки пробы (mode 23)
         self._dwell_left = 0           # осталось тиков выдержки
         self._shot_t = 0              # тики с прошлого скрина
@@ -917,6 +921,7 @@ class MicroscopeFSM:
                 if self._dwell_left <= 0:
                     self.t = 0
                     self.mode = 24
+                    self._sample_done_request = True   # серия скринов снята → сигнал CV-анализа
             elif self.mode == 24:
                 # возврат в retract_pos
                 self.m1_sp = self._retract_pos
@@ -976,6 +981,7 @@ class MicroscopeFSM:
             emit_cmd2 = self._emit_cmd2; self._emit_cmd2 = False
             photo_request = self._photo_request; self._photo_request = False
             video_request = self._video_request; self._video_request = 0
+            sample_done = self._sample_done_request; self._sample_done_request = False
             goto_target = self._fa_goto_target; self._fa_goto_target = None   # цель подгона (goto за раз)
             approach_fail = self._fa_approach_fail; self._fa_approach_fail = None
             cal_active = self._cal_active
@@ -1003,6 +1009,13 @@ class MicroscopeFSM:
                 self.on_photo()
             except Exception as e:
                 log_event("microscope_fsm", "Ошибка колбэка фото", "warn", {"error": str(e)})
+
+        # проба завершена: вся серия скринов снята — запустить CV-анализ пробы (в сервисе, в потоке)
+        if sample_done and self.on_sample_done:
+            try:
+                self.on_sample_done()
+            except Exception as e:
+                log_event("microscope_fsm", "Ошибка колбэка «проба завершена»", "warn", {"error": str(e)})
 
         # persist счётчика варок (изменился на этом такте) — через колбэк сервиса
         if varka_persist is not None and self.on_varka_count:

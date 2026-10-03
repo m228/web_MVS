@@ -39,6 +39,7 @@ class MicroscopeService:
             self.fsm = MicroscopeFSM(self.plate, self.cfg)
             self.fsm.on_photo = self._auto_photo   # серия скринов в выдержке (см. _auto_photo)
             self.fsm.on_video = self._auto_video   # запись видео пробы на выдержку (см. _auto_video)
+            self.fsm.on_sample_done = self._auto_cv_analyze   # CV-анализ пробы (см. _auto_cv_analyze)
             self.fsm.on_varka_count = self._persist_varka   # persist счётчика варок (автокалибровка)
             self.fsm.on_approach_fail = self._log_approach_fail   # «довод не сошёлся» -> отдельный лог
             # довод по абсолютнику ушёл в прошивку — гасим в рантайме (конфиг не перезаписываем),
@@ -66,6 +67,9 @@ class MicroscopeService:
         camera_mode рулит лишь авто-СТАРТОМ цикла по стадии). Нужен серийник и живой стрим —
         snap сохранит следующий кадр. Все причины пропуска пишем в лог, чтобы было видно почему."""
         cfg = self.cfg or {}
+        # тумблер «Фото в пробе» (вкладка «Цикл»): выкл → цикл идёт, но скрины не делаем
+        if not (cfg.get("probe_cycle") or {}).get("photo_enabled", True):
+            return
         serial = (cfg.get("camera_serial") or "").strip()
         if not serial:
             log_event("microscope_service", "Скрин пробы пропущен: не задан camera_serial", "warn")
@@ -115,6 +119,120 @@ class MicroscopeService:
                       {"serial": serial, "duration": int(duration)})
         except Exception as e:
             log_event("microscope_service", "Ошибка видео пробы", "warn", {"error": str(e)})
+
+    # ---------- CV: анализ пробы (компьютерное зрение) ----------
+
+    def _auto_cv_analyze(self):
+        """Колбэк «проба завершена»: запустить CV-анализ серии скринов в ФОНЕ (не блокируем FSM).
+        Тихо выходит, если CV выключен в конфиге — тогда цикл работает как раньше."""
+        cfg = self.cfg or {}
+        cv = cfg.get("cv") or {}
+        if not cv.get("enabled"):
+            return
+        stage = self.fsm.stage if self.fsm else None
+        threading.Thread(target=self._cv_analyze_worker, args=(stage,), daemon=True).start()
+
+    def analyze_last_probe(self):
+        """Ручной запуск анализа последней серии скринов (эндпоинт /api/cv/analyze)."""
+        stage = self.fsm.stage if self.fsm else None
+        threading.Thread(target=self._cv_analyze_worker, args=(stage,), daemon=True).start()
+        return {"status": "started"}
+
+    def _collect_probe_frames(self, worker, cfg) -> list:
+        """Пути скринов последней пробы: свежие png из папки фото за окно выдержки."""
+        import glob
+        import os
+        pc = cfg.get("probe_cycle") or {}
+        window = int(pc.get("dwell_sec", 15)) + int(pc.get("shot_interval_sec", 3)) + 20
+        folder = worker.photo_dir()
+        try:
+            files = glob.glob(os.path.join(str(folder), "*.png")) + \
+                    glob.glob(os.path.join(str(folder), "*.jpg"))
+        except Exception:
+            return []
+        now = time.time()
+        recent = [f for f in files if (now - os.path.getmtime(f)) <= window]
+        recent.sort(key=lambda f: os.path.getmtime(f))
+        return recent[-12:]   # не больше 12 кадров на пробу
+
+    def _cv_analyze_worker(self, stage):
+        """Фон: собрать кадры пробы → сайдкар (детекции) → cv_analyzer (измерения) → cv_store."""
+        cfg = self.cfg or {}
+        cv = cfg.get("cv") or {}
+        serial = (cfg.get("camera_serial") or "").strip()
+        if not serial:
+            return
+        try:
+            import os
+            import cv2
+            import cv_analyzer
+            import cv_client
+            import cv_fracture
+            import cv_store
+            from camera_core import manager as cam_manager
+
+            worker = cam_manager.get(serial)
+            url = cv.get("service_url", "http://127.0.0.1:8765")
+            sidecar_ok = cv_client.health(url) is not None    # кристаллы (YOLO) — опционально
+            frames = self._collect_probe_frames(worker, cfg)
+            if not frames:
+                log_event("microscope_service", "CV: кадры пробы не найдены", "warn",
+                          {"serial": serial})
+                return
+
+            fr_cfg = cfg.get("fracture") or {}
+            fr_on = fr_cfg.get("enabled", True)
+
+            frame_recs, overlays, last_timing = [], [], {}
+            frac_zone_lists, imgs = [], []
+            for f in frames:
+                img = cv2.imread(f)
+                if img is None:
+                    continue
+                imgs.append(img)
+                # --- кристаллы (сайдкар YOLO), если он поднят ---
+                summary, objects, overlay = None, [], None
+                if sidecar_ok:
+                    ok, enc = cv2.imencode(".png", img)
+                    resp = cv_client.infer(
+                        url, enc.tobytes(), tiles=int(cv.get("tiles", 6)),
+                        conf=float(cv.get("conf", 0.25)), iou=float(cv.get("iou", 0.45)),
+                        overlap=float(cv.get("overlap", 0.15))) if ok else None
+                    if resp:
+                        last_timing = resp.get("timing", {})
+                        res = cv_analyzer.analyze(img, resp.get("objects", []), cv_cfg=cv, with_overlay=True)
+                        summary, objects, overlay = res["summary"], res["objects"], res.pop("_overlay", None)
+                if overlay is None:
+                    overlay = img.copy()   # нет кристаллов-overlay → рисуем разломы поверх кадра
+                # --- разломы (чистый OpenCV, всегда) ---
+                zones = cv_fracture.detect_zones(img, fr_cfg) if fr_on else []
+                frac_zone_lists.append(zones)
+                overlays.append(overlay)
+                frame_recs.append({"file": os.path.basename(f), "summary": summary, "objects": objects})
+
+            if not frame_recs:
+                log_event("microscope_service", "CV: кадры не прочитаны", "warn")
+                return
+
+            # подтверждение разломов по серии кадров + отрисовка на всех overlay
+            fracture = None
+            if fr_on:
+                confirmed, fr_summary = cv_fracture.confirm(frac_zone_lists, fr_cfg)
+                shape = imgs[0].shape if imgs else (1, 1)
+                fr_summary["area_pct"] = cv_fracture.area_pct(confirmed, shape)
+                for ov in overlays:
+                    cv_fracture.draw(ov, confirmed, confirmed=True)
+                fracture = {"summary": fr_summary, "zones": confirmed}
+                if fr_summary["has_fracture"]:
+                    log_event("microscope_service",
+                              "Разлом обнаружен: %d зон (%.1f%% кадра)" % (
+                                  fr_summary["zones"], fr_summary["area_pct"]),
+                              "warn", {"serial": serial, "zones": fr_summary["zones"]})
+
+            cv_store.save_sample(serial, stage, frame_recs, overlays, last_timing,
+                                 keep_last=int(cv.get("keep_last", 50)), fracture=fracture)
+        except Exception as e:
+            log_event("microscope_service", "Ошибка CV-анализа пробы", "error", {"error": str(e)})
 
     def _on_sv(self, sv, stage):
         # СВ/стадия из ПЛК -> в автомат (заменяет ручной ввод, пока источник жив)
@@ -176,6 +294,66 @@ class MicroscopeService:
         """Сохранить правки (IP камеры/платы и т.п.) в plate_config.json и перезапуститься."""
         plate_config.save(patch)
         return self.reload()
+
+    def cv_config(self):
+        """Текущий блок CV из конфига (вкладка «CV»)."""
+        return (self.cfg or {}).get("cv", {}) if self.cfg else {}
+
+    def set_cv(self, patch):
+        """Живое обновление настроек CV (тумблер/пороги/масштаб) — БЕЗ reload платы,
+        чтобы не прерывать цикл. Пороги читаются на каждый анализ, так что применяются сразу."""
+        plate_config.save({"cv": patch})
+        if self.cfg is not None:
+            cur = self.cfg.setdefault("cv", {})
+            for k, v in patch.items():
+                if isinstance(v, dict) and isinstance(cur.get(k), dict):
+                    cur[k].update(v)
+                else:
+                    cur[k] = v
+        log_event("microscope_service", "Настройки CV обновлены", "info", {"patch": patch})
+        return self.cv_config()
+
+    def _live_patch(self, key, patch):
+        """Живое обновление вложенного блока конфига (без reload платы)."""
+        plate_config.save({key: patch})
+        if self.cfg is not None:
+            cur = self.cfg.setdefault(key, {})
+            for k, v in patch.items():
+                if isinstance(v, dict) and isinstance(cur.get(k), dict):
+                    cur[k].update(v)
+                else:
+                    cur[k] = v
+        return (self.cfg or {}).get(key, {})
+
+    def fracture_config(self):
+        """Блок настроек разломов (вкладка «Разломы», Часть B)."""
+        return (self.cfg or {}).get("fracture", {}) if self.cfg else {}
+
+    def set_fracture(self, patch):
+        """Живое обновление порогов разломов — применяется к следующей пробе."""
+        res = self._live_patch("fracture", patch)
+        log_event("microscope_service", "Настройки разломов обновлены", "info", {"patch": patch})
+        return res
+
+    def approach_config(self):
+        """Блок автоподвода по разломам (Часть C, по умолчанию выкл)."""
+        return (self.cfg or {}).get("approach_correction", {}) if self.cfg else {}
+
+    def set_approach(self, patch):
+        """Живое обновление настроек автоподвода (галочка/шаг мкм/пороги)."""
+        res = self._live_patch("approach_correction", patch)
+        log_event("microscope_service", "Настройки автоподвода обновлены", "info", {"patch": patch})
+        return res
+
+    def set_photo_enabled(self, on):
+        """Тумблер «Фото в пробе» (вкладка «Цикл»): вкл/выкл скрины в цикле. Без reload платы."""
+        on = bool(on)
+        plate_config.save({"probe_cycle": {"photo_enabled": on}})
+        if self.cfg is not None:
+            self.cfg.setdefault("probe_cycle", {})["photo_enabled"] = on
+        log_event("microscope_service", "Фото в пробе: " + ("вкл" if on else "выкл"),
+                  "info", {"photo_enabled": on})
+        return {"photo_enabled": on}
 
     def set_trigger_mode(self, mode):
         """Сменить триггер пробы (time/sv) сразу, без перезапуска платы, и запомнить в конфиг."""

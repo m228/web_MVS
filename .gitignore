@@ -19,6 +19,7 @@ __pycache__/
 # --- пользовательские данные (создаются в работе приложения) ---
 /dataset
 /Videos
+/cv_results
 /rtsp_cameras.json
 /save_settings.json
 /plate_config.json

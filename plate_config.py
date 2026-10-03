@@ -199,7 +199,8 @@ DEFAULTS = {
     "probe_cycle": {"retract_pos": 20000, "pre_wash_sec": 4, "dwell_sec": 15,
                     "shot_interval_sec": 3, "pause_sec": 60, "photo_format": "png",
                     "trigger_mode": "time", "sv_from": 84, "sv_to": 92, "ignore_stage": False,
-                    "ignore_focus": True, "settle_sec": 2, "post_wash_pause_sec": 2},
+                    "ignore_focus": True, "settle_sec": 2,
+                    "post_wash_pause_sec": 2, "photo_enabled": True},
 
     # фильтр аналогового датчика перемещения (рег.1271): сглаживание дрожания (0/-50/70).
     # enabled — вкл скользящее среднее; avg_sec — окно усреднения (сек). Отфильтрованное
@@ -229,6 +230,39 @@ DEFAULTS = {
     # ноль не трогаем. count — счётчик варок (persist).
     "autocal": {"enabled": False, "every_n": 3, "sensor_lo": 0, "sensor_hi": 30,
                 "timeout_sec": 60, "count": 0},
+
+    # КОМПЬЮТЕРНОЕ ЗРЕНИЕ (CV): распознавание кристаллов по скринам пробы через сайдкар-сервис.
+    # enabled — мастер-тумблер (вкладка «CV»); при False пробы не анализируются. service_url —
+    # адрес сайдкара (см. cv_service/). um_per_px — масштаб (613.8 px/mm → 1.629 мкм/px). tiles/
+    # conf/iou — параметры SAHI/детектора. groups — границы групп по размеру (мкм, эквив.диаметр).
+    # shape — пороги «брака»/уродливой формы. min_size_um — отсечка пыли. blur_min — порог
+    # смазанного кадра. keep_last — сколько последних проб хранить. Всё правится на вкладке «CV».
+    "cv": {
+        "enabled": False,
+        "service_url": "http://127.0.0.1:8765",
+        "um_per_px": 1.629,
+        "tiles": 6, "conf": 0.25, "iou": 0.45, "overlap": 0.15,
+        "groups": {"small_max_um": 300.0, "medium_max_um": 600.0},
+        "shape": {"min_circularity": 0.55, "max_aspect": 2.8, "min_solidity": 0.82},
+        "min_size_um": 20.0, "blur_min": 8.0, "keep_last": 50,
+    },
+
+    # РАЗЛОМЫ (Часть B) — детект лопнутых/раздавленных кристаллов на OpenCV (без YOLO).
+    # Работает всегда, пока включён CV. conf_thr — порог «это разлом» (тёмность+текстура),
+    # confirm_frames — на скольких кадрах серии зона должна держаться, чтобы подтвердиться
+    # (разлом прижат и не двигается → стоит на месте; фейки/дрейф отсекаются). Правится на вкладке «Разломы».
+    "fracture": {
+        "enabled": True, "conf_thr": 0.6, "w_dark": 0.6, "w_tex": 0.4,
+        "dark_thr": 30, "min_area_frac": 0.0018, "confirm_frames": 3, "iou": 0.3,
+    },
+
+    # АВТОПОДВОД по разломам (Часть C) — ВЫКЛ по умолчанию. При подтверждённом разломе
+    # отодвинуть подвод чуть назад ПО ЭНКОДЕРУ (аналог только в лог, он врёт ~100мкм) и
+    # подвинуть эталон СВ-таблицы. step_um — на сколько отодвигать за раз; min_zones — со скольких
+    # зон реагировать; count — счётчик сделанных коррекций (persist). Логика в microscope_service.
+    "approach_correction": {
+        "enabled": False, "step_um": 100, "min_zones": 1, "max_total_um": 2000, "count": 0,
+    },
 
     # микроскоп включён? False -> приложение не поднимает плату/ПЛК/автоцикл (галочка на
     # главной). По умолчанию True — поведение как раньше. Меняется со страницы на лету.

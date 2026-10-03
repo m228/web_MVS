@@ -1,12 +1,13 @@
 # CV-сайдкар. Ставится в ОТДЕЛЬНЫЙ venv на машине распознавания (не в exe web_MVS).
-# Фаза 1 (заглушка) — хватает базового набора без GPU:
-fastapi==0.135.2
-uvicorn==0.42.0
-python-multipart==0.0.22
-opencv-python==4.13.0.92
-numpy==2.4.6
+# Версии НЕ жёсткие (>=), чтобы вставало на Python 3.10 / 3.11 / 3.12 (на 3.10 numpy 2.4 нет).
+fastapi>=0.110
+uvicorn>=0.27
+python-multipart>=0.0.9
+opencv-python>=4.8,<5
+numpy>=1.24,<3
 
 # Фаза 8 (реальная модель, GPU GTX 1050 Ti, драйвер 581 / CUDA 13):
-#   pip install ultralytics
 #   pip install torch --index-url https://download.pytorch.org/whl/cu124
+#   pip install ultralytics
 # (CUDA Toolkit ставить НЕ нужно — колёса torch тащат свои cuda-длл; нужен лишь драйвер NVIDIA)
+# Рекомендуется Python 3.11+ (как на тренировочной машине), но 3.10 тоже работает.

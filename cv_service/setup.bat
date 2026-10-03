@@ -10,7 +10,8 @@ cd /d "%~dp0"
 
 echo [0/4] Detecting system proxy ...
 set "PX="
-for /f "usebackq delims=" %%p in (`powershell -NoProfile -Command "$s=Get-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings' -ErrorAction SilentlyContinue; if($s.ProxyEnable -eq 1 -and $s.ProxyServer){ $ps=$s.ProxyServer; if($ps -match 'https?=([^;]+)'){$ps=$matches[1]}; $ps=$ps -replace '^https?://',''; 'http://'+$ps } else {''}"`) do set "PX=%%p"
+REM Find proxy: WinINET registry (browser) -> env vars; always normalize scheme to http://
+for /f "usebackq delims=" %%p in (`powershell -NoProfile -Command "$p=''; $s=Get-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings' -ErrorAction SilentlyContinue; if($s.ProxyEnable -eq 1 -and $s.ProxyServer){$p=$s.ProxyServer; if($p -match 'https?=([^;]+)'){$p=$matches[1]}}; if(-not $p){foreach($v in @($env:HTTPS_PROXY,$env:HTTP_PROXY,[Environment]::GetEnvironmentVariable('HTTPS_PROXY','Machine'),[Environment]::GetEnvironmentVariable('HTTP_PROXY','Machine'))){if($v){$p=$v;break}}}; if($p){$p=$p -replace '^https?://',''; 'http://'+$p}else{''}"`) do set "PX=%%p"
 if defined PX (
   echo Using system proxy: %PX%
   set "HTTP_PROXY=%PX%"

@@ -77,21 +77,27 @@
         dwell_sec: $("pcDwell").value, shot_interval_sec: $("pcShotInterval").value,
         pause_sec: $("pcPause").value,
         photo_format: $("pcFormatSw").checked ? "jpg" : "png",
-        trigger_mode: $("pcTriggerSw").checked ? "sv" : "time",
+        trigger_mode: pcTrigMode,
         sv_from: $("pcSvFrom").value, sv_to: $("pcSvTo").value,
       };
       try {
+        await cvPostCycleFields();          // кадров на пробу / пауза CV — до перезапуска автомата
         await api("/api/micro/settings", p);
         const h = $("pcHint"); if (h) h.textContent = "сохранено, автомат перезапущен";
         sentCmd("Параметры цикла сохранены");
       } catch (e) { const h = $("pcHint"); if (h) h.textContent = "ошибка: " + e.message; }
     });
-    const trig = $("pcTriggerSw");
-    if (trig) trig.addEventListener("change", () => {
-      updateTriggerFields();
-      const mode = trig.checked ? "sv" : "time";
-      api("/api/micro/trigger_mode", { mode }).catch(() => {});   // применяется сразу
-      sentCmd("Триггер пробы: " + (trig.checked ? "по СВ" : "по времени"));
+    document.querySelectorAll("#pcTrigger .micro-trig__btn").forEach((b) => {
+      b.addEventListener("click", () => {
+        const mode = b.dataset.trig;
+        setTrigMode(mode);
+        api("/api/micro/trigger_mode", { mode }).catch(() => {});   // применяется сразу
+        sentCmd("Триггер пробы: " + TRIG_NAMES[mode]);
+      });
+    });
+    // кадров на пробу / пауза после разбора — настройки CV, применяются сразу (без перезапуска)
+    ["pcCvFrames", "pcCvGap"].forEach((id) => {
+      const e = $(id); if (e) e.addEventListener("change", () => { cvPostCycleFields(); });
     });
     const ign = $("ignoreStageToggle");
     if (ign) ign.addEventListener("change", () => {
@@ -111,17 +117,36 @@
     updateTriggerFields();
   }
 
-  // приглушить неактуальные поля под выбранный триггер (не скрываем — видно, что неактивно):
-  // «по времени» -> СВ от/до приглушены; «по СВ» -> пауза приглушена.
+  // триггер пробы: time / sv / cv (три кнопки на вкладке «Цикл»)
+  const TRIG_NAMES = { time: "по времени", sv: "по СВ", cv: "по CV" };
+  let pcTrigMode = "time";
+  function setTrigMode(mode) {
+    pcTrigMode = TRIG_NAMES[mode] ? mode : "time";
+    document.querySelectorAll("#pcTrigger .micro-trig__btn").forEach((b) => {
+      b.classList.toggle("is-active", b.dataset.trig === pcTrigMode);
+    });
+    updateTriggerFields();
+  }
+  // кадров на пробу / защитная пауза — лежат в настройках CV, шлём туда (применяется сразу)
+  function cvPostCycleFields() {
+    const num = (id) => { const e = $(id); return e && e.value !== "" ? parseInt(e.value, 10) : undefined; };
+    return cvPostSettings({ frames_per_probe: num("pcCvFrames"), gap_sec: num("pcCvGap") });
+  }
+
+  // приглушить неактуальные поля под выбранный триггер и режим CV (не скрываем — видно, что
+  // неактивно): СВ от/до — только «по СВ»; пауза между пробами — «по времени» (и «по CV» при
+  // выключенном CV); пауза после разбора — только «по CV»; выдержка/период скринов в секундах —
+  // только при выключенном CV; кадров на пробу — только при включённом.
   function updateTriggerFields() {
-    const sw = $("pcTriggerSw"); if (!sw) return;
-    const sv = sw.checked;
-    const st = $("pcTriggerState"); if (st) st.textContent = sv ? "по СВ" : "по времени";
-    const swLabel = sw.closest(".micro-switch"); if (swLabel) swLabel.classList.toggle("is-sv", sv);
-    const fromW = $("pcSvFromWrap"), toW = $("pcSvToWrap"), pauseW = $("pcPauseWrap");
-    if (fromW) fromW.classList.toggle("micro-dim", !sv);
-    if (toW) toW.classList.toggle("micro-dim", !sv);
-    if (pauseW) pauseW.classList.toggle("micro-dim", sv);
+    const dim = (id, on) => { const e = $(id); if (e) e.classList.toggle("micro-dim", on); };
+    const cvOn = !!($("cvEnable") && $("cvEnable").checked);
+    dim("pcSvFromWrap", pcTrigMode !== "sv");
+    dim("pcSvToWrap", pcTrigMode !== "sv");
+    dim("pcPauseWrap", pcTrigMode === "sv" || (pcTrigMode === "cv" && cvOn));
+    dim("pcCvGapWrap", !(pcTrigMode === "cv" && cvOn));
+    dim("pcCvFramesWrap", !cvOn);
+    dim("pcDwellWrap", cvOn);
+    dim("pcShotWrap", cvOn);
   }
 
   // ---- камера: MVS SDK сам находит камеры Hikrobot ----
@@ -621,7 +646,7 @@
           sv("pcRetract", pc.retract_pos); sv("pcPreWash", pc.pre_wash_sec);
           sv("pcDwell", pc.dwell_sec); sv("pcShotInterval", pc.shot_interval_sec);
           sv("pcPause", pc.pause_sec); sv("pcSvFrom", pc.sv_from); sv("pcSvTo", pc.sv_to);
-          const trSw = $("pcTriggerSw"); if (trSw) trSw.checked = (pc.trigger_mode === "sv");
+          setTrigMode(pc.trigger_mode);
           const fmSw = $("pcFormatSw"); if (fmSw) fmSw.checked = (pc.photo_format === "jpg");
           const fmSt = $("pcFormatState"); if (fmSt) fmSt.textContent = (pc.photo_format === "jpg") ? "JPG" : "PNG";
           const peSw = $("photoEnableSw"); if (peSw) peSw.checked = (pc.photo_enabled === true);
@@ -1319,6 +1344,8 @@
     set("cvUmPerPx", cv.um_per_px); set("cvTiles", cv.tiles);
     set("cvMinCirc", sh.min_circularity); set("cvMinSol", sh.min_solidity);
     set("cvMaxAspect", sh.max_aspect); set("cvConf", cv.conf);
+    set("pcCvFrames", cv.frames_per_probe); set("pcCvGap", cv.gap_sec);   // поля на вкладке «Цикл»
+    updateTriggerFields();
   }
   function cvCollectPatch() {
     const num = (id) => { const e = $(id); return e && e.value !== "" ? parseFloat(e.value) : undefined; };
@@ -1674,7 +1701,7 @@
     wireHoverTip();
     cvModelRefresh();
     const en = $("cvEnable");
-    if (en) en.addEventListener("change", () => { cvPostSettings({ enabled: en.checked }).then(cvHealth); });
+    if (en) en.addEventListener("change", () => { updateTriggerFields(); cvPostSettings({ enabled: en.checked }).then(cvHealth); });
     const save = $("cvSaveBtn");
     if (save) save.addEventListener("click", async () => {
       await cvPostSettings(cvCollectPatch());

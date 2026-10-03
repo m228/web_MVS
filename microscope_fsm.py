@@ -80,8 +80,21 @@ class MicroscopeFSM:
         self._shot_interval_sec = max(1, int(pc.get("shot_interval_sec", 3)))  # период скринов, с
         self._pause_sec = max(0, int(pc.get("pause_sec", 60)))     # пауза между пробами (режим "time"), с
         self._settle_sec = max(0, int(pc.get("settle_sec", 2)))    # пауза после доезда движения (осадка датчика), с
-        # режим повтора пробы внутри цикла: "time" (по паузе) или "sv" (по целому СВ в [from..to])
-        self._trigger_mode = "sv" if str(pc.get("trigger_mode", "time")) == "sv" else "time"
+        # режим повтора пробы внутри цикла: "time" (по паузе), "sv" (по целому СВ в [from..to])
+        # или "cv" (по готовности CV: прошлая проба разобрана → следующая, см. set_cv_dwell)
+        self._trigger_mode = self._norm_trigger(pc.get("trigger_mode", "time"))
+        # ВЫДЕРЖКА «ПО CV» (включает microscope_service, когда включён CV): у стекла стоим не
+        # dwell_sec, а пока сервис не разберёт _cv_frames кадров (кадр → разбор → следующий) и не
+        # даст cv_release. _cv_timeout_sec — страховка, если CV завис. _cv_gap_sec — защитная пауза
+        # между пробами в триггере "cv". При выключенном CV всё работает как раньше (по секундам).
+        self._cv_dwell = False
+        self._cv_frames = 3
+        self._cv_gap_sec = 10
+        self._cv_timeout_sec = 60
+        self._cv_done = 0             # разобрано кадров в текущей выдержке (для подписи шага)
+        self._cv_release = False      # сервис: кадры набраны/отказ → можно отводить
+        self._cv_busy = False         # сервис ещё разбирает/сохраняет пробу (триггер "cv" ждёт)
+        self._cv_last_ok = True       # прошлая проба по CV удалась (иначе ждём обычную паузу)
         self._sv_from = float(pc.get("sv_from", 84))
         self._sv_to = float(pc.get("sv_to", 92))
         # «варить без стадии»: при ручной варке ПЛК не двигает стадию (стоит), а СВ растёт —
@@ -226,13 +239,53 @@ class MicroscopeFSM:
             self.sw0 = bool(on)
 
     def set_trigger_mode(self, mode):
-        """Сменить триггер пробы на лету: "time" или "sv". Сбрасываем счётчики отсчёта
+        """Сменить триггер пробы на лету: "time", "sv" или "cv". Сбрасываем счётчики отсчёта
         (пауза и точку СВ), чтобы новый режим начал считать заново, а не «держал» старое."""
         with self._lock:
-            self._trigger_mode = "sv" if str(mode) == "sv" else "time"
+            self._trigger_mode = self._norm_trigger(mode)
             self.cycle_t = 0
             self._last_sv_shot = None
             return {"trigger_mode": self._trigger_mode}
+
+    @staticmethod
+    def _norm_trigger(mode):
+        mode = str(mode)
+        return mode if mode in ("time", "sv", "cv") else "time"
+
+    # ---------- выдержка «по CV» (дёргает microscope_service) ----------
+
+    def set_cv_dwell(self, on, frames=None, gap_sec=None, timeout_sec=None):
+        """Вкл/выкл выдержку по CV и её параметры (на лету, из настроек CV)."""
+        with self._lock:
+            self._cv_dwell = bool(on)
+            if frames is not None:
+                self._cv_frames = max(1, int(frames))
+            if gap_sec is not None:
+                self._cv_gap_sec = max(0, int(gap_sec))
+            if timeout_sec is not None:
+                self._cv_timeout_sec = max(10, int(timeout_sec))
+
+    def cv_begin(self):
+        """Сервис начал разбор пробы (сессия кадров запущена)."""
+        with self._lock:
+            self._cv_busy = True
+            self._cv_done = 0
+
+    def cv_progress(self, done):
+        """Сколько кадров пробы уже разобрано (для подписи шага)."""
+        with self._lock:
+            self._cv_done = int(done)
+
+    def cv_release(self, ok=True):
+        """Кадры пробы набраны (ok) либо разбор невозможен (нет камеры/кадров) → можно отводить."""
+        with self._lock:
+            self._cv_release = True
+            self._cv_last_ok = bool(ok)
+
+    def cv_end(self):
+        """Проба разобрана и сохранена — CV готов к следующей (для триггера "cv")."""
+        with self._lock:
+            self._cv_busy = False
 
     def set_ignore_focus(self, on):
         """Галочка «Не использовать фокус»: при True М2 не двигается по таблице СВ."""
@@ -502,6 +555,7 @@ class MicroscopeFSM:
                 # вход в выдержку через «Вперёд» — как обычный вход mode 22->23:
                 # взводим выдержку и первый скрин сразу (видео при пробе не пишем — только фото)
                 self._dwell_left = self._dwell_sec * 10
+                self._cv_release = False; self._cv_done = 0
                 self._photo_request = True
             return {"status": "skipped", "mode": nxt}
 
@@ -578,6 +632,10 @@ class MicroscopeFSM:
                         self.m1_sp, self._fa_retry, self._fa_max_retry, step_left)
                 else:
                     label = "Подвожу к %d мкм (по СВ %.1f) · таймаут %d с" % (self.m1_sp, self.sv, step_left)
+            elif m == 23 and self._cv_dwell:
+                label = "Проба · CV: разобрано кадров %d из %d (страховка %d с)" % (
+                    self._cv_done, self._cv_frames,
+                    max(0, self._cv_timeout_sec * 10 - self.t) // 10)
             elif m == 23:
                 label = "Проба · выдержка: осталось %d с (скрин каждые %d с)" % (
                     max(0, self._dwell_left) // 10, self._shot_interval_sec)
@@ -599,6 +657,13 @@ class MicroscopeFSM:
                     else:
                         label = "Ожидание — жду ±1 от %.1f (сейчас %.1f)" % (
                             self._last_sv_shot, self.sv)
+                elif self._trigger_mode == "cv" and self._cv_dwell:
+                    if self._cv_busy:
+                        label = "Ожидание — CV разбирает прошлую пробу"
+                    else:
+                        wait = self._cv_gap_sec if self._cv_last_ok else self._pause_sec
+                        left = max(0, wait * 10 - self.cycle_t) // 10
+                        label = "Ожидание — CV готов, след. проба через %d с" % left
                 else:
                     left = max(0, self._pause_sec * 10 - self.cycle_t) // 10
                     label = "Ожидание — след. проба через %d с" % left
@@ -660,6 +725,9 @@ class MicroscopeFSM:
                     "sv_from": self._sv_from,
                     "sv_to": self._sv_to,
                     "ignore_stage": self._ignore_stage,
+                    "cv_dwell": self._cv_dwell,
+                    "cv_frames": self._cv_frames,
+                    "cv_gap_sec": self._cv_gap_sec,
                 },
             }
 
@@ -784,6 +852,7 @@ class MicroscopeFSM:
             # диапазоне 3..9 (общее разрешение). ВНУТРИ — повторяемость по trigger_mode:
             #   "time" — новая проба через _pause_sec (cycle_t капает только в простое);
             #   "sv"   — новая проба на каждом ЦЕЛОМ СВ в [sv_from..sv_to] по мере роста СВ.
+            #   "cv"   — новая проба, как только CV разобрал и сохранил прошлую (+ защитная пауза).
             # Стадия вне диапазона -> ничего не капает, новый цикл не стартует (уже идущий доводим),
             # счётчик СВ сбрасываем (новая варка снимет заново с sv_from).
             stage_ok = self._ignore_stage or (CYCLE_STAGE_MIN <= self.stage <= CYCLE_STAGE_MAX)
@@ -800,6 +869,18 @@ class MicroscopeFSM:
                             self.mode = 20
                             self.t = 0
                             self.cycle_t = 0
+                    elif self._trigger_mode == "cv" and self._cv_dwell:
+                        # по готовности CV: ждём, пока сервис разберёт и сохранит прошлую пробу
+                        # (_cv_busy), затем защитную паузу _cv_gap_sec. Прошлая проба не удалась
+                        # (нет кадров/таймаут) → обычная пауза pause_sec, чтобы не гонять механику
+                        # впустую. CV выключен → ветка ниже (как "time").
+                        if not self._cv_busy:
+                            self.cycle_t += 1
+                            wait = self._cv_gap_sec if self._cv_last_ok else self._pause_sec
+                            if self.cycle_t > wait * 10:
+                                self.mode = 20
+                                self.t = 0
+                                self.cycle_t = 0
                     else:
                         self.cycle_t += 1
                         if self.cycle_t > self._pause_sec * 10:
@@ -905,10 +986,26 @@ class MicroscopeFSM:
                         self._fa_phase = None; self._fa_retry = 0; self._fa_wait = 0
                         self._dwell_left = self._dwell_sec * 10
                         self._shot_t = 0
+                        self._cv_release = False; self._cv_done = 0
                         self._photo_request = True     # первый скрин сразу у стекла (видео не пишем)
                         self.mode = 23
                 elif not self._fa_enabled:
                     self._redrive_goto()               # повторяем goto до доезда
+            elif self.mode == 23 and self._cv_dwell:
+                # выдержка ПО CV: кадры берёт сервис по готовности обработки (кадр → разбор →
+                # следующий); отводим, когда он разобрал нужное число кадров (cv_release), либо
+                # по страховочному таймауту, если CV завис. Скрины по таймеру тут не запрашиваем.
+                self._redrive = 0; self._in_range = 0
+                self.t += 1
+                timed_out = self.t > self._cv_timeout_sec * 10
+                if self._cv_release or timed_out:
+                    if not self._cv_release:
+                        self._cv_last_ok = False
+                        log_event("microscope_fsm", "Проба по CV: таймаут выдержки — отвод без "
+                                  "сигнала от CV", "warn",
+                                  {"timeout_sec": self._cv_timeout_sec, "frames_done": self._cv_done})
+                    self.t = 0
+                    self.mode = 24
             elif self.mode == 23:
                 # выдержка пробы: серия скринов каждые shot_interval_sec + пишется видео
                 self._redrive = 0; self._in_range = 0

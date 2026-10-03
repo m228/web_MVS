@@ -226,16 +226,17 @@
 
                 <div class="micro-cycle-head micro-sub__title--sep">
                   <span class="micro-sub__title">Параметры цикла</span>
-                  <label class="micro-switch micro-switch--trigger" for="pcTriggerSw" title="Слева — проба по времени (пауза, синий). Справа — проба по СВ (на каждом целом, зелёный).">
-                    <input type="checkbox" id="pcTriggerSw" />
-                    <span class="micro-switch__track"><span class="micro-switch__thumb"></span></span>
-                    <span class="micro-switch__label">Триггер: <strong id="pcTriggerState">по времени</strong></span>
-                  </label>
+                  <div class="micro-trig" id="pcTrigger" role="tablist" title="Когда брать следующую пробу: по времени (пауза между пробами), по СВ (на каждом целом СВ) или по CV (как только прошлая проба разобрана).">
+                    <span class="micro-trig__lbl">Триггер</span>
+                    <button type="button" class="micro-trig__btn is-active" data-trig="time">время</button>
+                    <button type="button" class="micro-trig__btn" data-trig="sv">СВ</button>
+                    <button type="button" class="micro-trig__btn" data-trig="cv">CV</button>
+                  </div>
                 </div>
                 <div class="micro-cycle-cols">
                   <div class="micro-cycle-col">
                     <label class="micro-cycle-f"><span>Отвод/возврат, мкм</span><input type="number" id="pcRetract" step="100" value="20000" /></label>
-                    <label class="micro-cycle-f"><span>Выдержка пробы, с</span><input type="number" id="pcDwell" step="1" min="1" value="15" /></label>
+                    <label class="micro-cycle-f" id="pcDwellWrap" title="Сколько стоять у стекла, когда CV выключен. При включённом CV стоим до нужного числа разобранных кадров."><span>Выдержка пробы, с</span><input type="number" id="pcDwell" step="1" min="1" value="15" /></label>
                     <label class="micro-cycle-f" id="pcSvFromWrap"><span>СВ от</span><input type="number" id="pcSvFrom" step="1" value="84" /></label>
                     <label class="micro-cycle-f" id="pcSvToWrap"><span>СВ до</span><input type="number" id="pcSvTo" step="1" value="92" /></label>
                     <div class="micro-cycle-f micro-cycle-fmt">
@@ -249,8 +250,10 @@
                   </div>
                   <div class="micro-cycle-col">
                     <label class="micro-cycle-f"><span>Промывка перед пробой, с</span><input type="number" id="pcPreWash" step="1" min="0" value="4" /></label>
-                    <label class="micro-cycle-f"><span>Скрин каждые, с</span><input type="number" id="pcShotInterval" step="1" min="1" value="3" /></label>
+                    <label class="micro-cycle-f" id="pcShotWrap" title="Период сырых скринов, когда CV выключен. При включённом CV кадры идут подряд: разобран — берём следующий."><span>Скрин каждые, с</span><input type="number" id="pcShotInterval" step="1" min="1" value="3" /></label>
                     <label class="micro-cycle-f" id="pcPauseWrap"><span>Пауза между пробами, с</span><input type="number" id="pcPause" step="1" min="0" value="60" /></label>
+                    <label class="micro-cycle-f" id="pcCvFramesWrap" title="CV включён: у стекла стоим, пока не разобрано столько кадров (кадр → разбор → следующий), потом отвод. Применяется сразу."><span>Кадров на пробу (CV)</span><input type="number" id="pcCvFrames" step="1" min="1" max="12" value="3" /></label>
+                    <label class="micro-cycle-f" id="pcCvGapWrap" title="Триггер «CV»: защитная пауза после того, как проба разобрана и сохранена, перед следующей пробой. 0 — без паузы. Применяется сразу."><span>Пауза после разбора (CV), с</span><input type="number" id="pcCvGap" step="1" min="0" value="10" /></label>
                   </div>
                 </div>
                 <label class="micro-check micro-cycle-ignore" title="Ручная варка: ПЛК не двигает стадию (стоит), а СВ растёт. С галочкой авто-цикл идёт без проверки стадии 3–9 — только по триггеру (время/СВ).">

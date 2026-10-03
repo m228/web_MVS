@@ -10,6 +10,7 @@
 """
 import json
 import os
+import threading
 from copy import deepcopy
 
 from logger import log_event
@@ -190,6 +191,8 @@ DEFAULTS = {
     # ВНУТРИ этого — повторяемость пробы задаёт trigger_mode:
     #   "time" — следующая проба через pause_sec секунд;
     #   "sv"   — проба на каждом ЦЕЛОМ значении СВ в диапазоне [sv_from..sv_to] по мере роста.
+    #   "cv"   — следующая проба, как только CV разобрал и сохранил прошлую (+ cv.gap_sec).
+    # При включённом CV dwell_sec/shot_interval_sec не действуют: выдержка = cv.frames_per_probe.
     # photo_format — формат скринов/датасета микроскопа: "png" (без сжатия) или "jpg".
     # ignore_stage — «варить без стадии»: авто-цикл без проверки стадии 3..9 (ручная варка,
     # когда ПЛК не двигает стадию, а СВ растёт). По умолчанию False (гейт стадии активен).
@@ -250,6 +253,10 @@ DEFAULTS = {
         "shape": {"min_circularity": 0.55, "max_aspect": 2.8, "min_solidity": 0.82},
         "min_size_um": 20.0, "blur_min": 8.0, "keep_last": 50,
         "overlay_jpeg_quality": 85,
+        # проба «по CV»: у стекла стоим, пока не разобрано frames_per_probe кадров (кадр → разбор
+        # → следующий), потом отвод; dwell_timeout_sec — страховка, если CV завис. gap_sec —
+        # защитная пауза перед следующей пробой в триггере "cv" (probe_cycle.trigger_mode).
+        "frames_per_probe": 3, "gap_sec": 10, "dwell_timeout_sec": 60,
     },
 
     # РАЗЛОМЫ (Часть B) — детект лопнутых/раздавленных кристаллов на OpenCV (без YOLO).
@@ -396,26 +403,32 @@ def load():
         return deepcopy(DEFAULTS)
 
 
+_SAVE_LOCK = threading.Lock()
+
+
 def save(patch):
     """Слить patch в plate_config.json (поверх существующих правок) и записать атомарно.
     Хранит только пользовательские правки; недостающее берётся из DEFAULTS в load().
     Возвращает собранный конфиг (load())."""
-    try:
-        current = json.loads(CONFIG_PATH.read_text(encoding="utf-8")) if CONFIG_PATH.is_file() else {}
-        if not isinstance(current, dict):
+    # под локом: «прочитать → слить → записать» из двух запросов сразу (напр. триггер и настройки
+    # CV) иначе затирают правки друг друга — второй пишет свою устаревшую копию файла
+    with _SAVE_LOCK:
+        try:
+            current = json.loads(CONFIG_PATH.read_text(encoding="utf-8")) if CONFIG_PATH.is_file() else {}
+            if not isinstance(current, dict):
+                current = {}
+        except Exception:
             current = {}
-    except Exception:
-        current = {}
-    merged = _deep_merge(current, patch or {})
-    try:
-        CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
-        tmp = CONFIG_PATH.parent / (CONFIG_PATH.name + ".tmp")
-        tmp.write_text(json.dumps(merged, ensure_ascii=False, indent=2), encoding="utf-8")
-        os.replace(tmp, CONFIG_PATH)
-        log_event("plate_config", "plate_config.json обновлён со страницы", "info",
-                  {"keys": list((patch or {}).keys())})
-    except Exception as e:
-        log_event("plate_config", "Не удалось сохранить plate_config.json", "warn", {"error": str(e)})
+        merged = _deep_merge(current, patch or {})
+        try:
+            CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+            tmp = CONFIG_PATH.parent / (CONFIG_PATH.name + ".tmp")
+            tmp.write_text(json.dumps(merged, ensure_ascii=False, indent=2), encoding="utf-8")
+            os.replace(tmp, CONFIG_PATH)
+            log_event("plate_config", "plate_config.json обновлён со страницы", "info",
+                      {"keys": list((patch or {}).keys())})
+        except Exception as e:
+            log_event("plate_config", "Не удалось сохранить plate_config.json", "warn", {"error": str(e)})
     return load()
 
 

@@ -25,9 +25,8 @@ class MicroscopeService:
         # DEBUG (убрать после отладки цикла): перехват ПЛК — при True данные СВ/стадии
         # из sv_source игнорируются, работает ручной ввод со страницы (см. sv_override).
         self._sv_override = False
-        # CV: кадры текущей пробы в ПАМЯТИ [(время, BGR)] — сырые файлы на диск не пишем
-        self._probe_frames = []
-        self._probe_lock = threading.Lock()
+        # CV: сессия пробы — фоновый поток «кадр → разбор → следующий» на время выдержки
+        self._probe_collecting = False            # сессия сейчас набирает кадры у стекла
         self._cv_run_lock = threading.Lock()      # один разбор за раз
         # статус последнего разбора — показывается в UI (вместо тихих отказов)
         self._cv_status = {"state": "idle", "message": "", "ts": None}
@@ -43,14 +42,14 @@ class MicroscopeService:
             self.cfg = plate_config.load()
             self.plate = PlateClient(self.cfg)
             self.fsm = MicroscopeFSM(self.plate, self.cfg)
-            self.fsm.on_photo = self._auto_photo   # серия скринов в выдержке (см. _auto_photo)
+            self.fsm.on_photo = self._auto_photo   # кадры пробы в выдержке (см. _auto_photo)
             self.fsm.on_video = self._auto_video   # запись видео пробы на выдержку (см. _auto_video)
-            self.fsm.on_sample_done = self._auto_cv_analyze   # CV-анализ пробы (см. _auto_cv_analyze)
             self.fsm.on_varka_count = self._persist_varka   # persist счётчика варок (автокалибровка)
             self.fsm.on_approach_fail = self._log_approach_fail   # «довод не сошёлся» -> отдельный лог
             # довод по абсолютнику ушёл в прошивку — гасим в рантайме (конфиг не перезаписываем),
             # доезд цикла идёт по энкодеру. Автокалибровка нуля работает в ПК (см. set_autocal).
             self.fsm.set_fine_approach(enabled=False)
+            self._sync_cv_fsm()                    # выдержка «по CV» (N кадров), если CV включён
             self.plate.start()
             self.fsm.start()
             # режим «Автомат» (галочка камеры) = мастер авто-цикла: включаем циклический режим
@@ -67,17 +66,32 @@ class MicroscopeService:
                       "info", {"host": self.cfg.get("host"), "port": self.cfg.get("port"),
                                "sv_source": bool(svc.get("enabled"))})
 
+    def _photo_suffix(self):
+        """Суффикс в конец имени сырого скрина: стадия варки + СВ (напр. «st7_SV82_2» = стадия 7,
+        СВ 82.2), чтобы по имени было видно, на какой стадии и при каком СВ снят кадр.
+        Точку в СВ меняем на «_» (в имени файла точка нежелательна)."""
+        stage = self.fsm.stage if self.fsm else None
+        sv = self.fsm.sv if self.fsm else None
+        parts = []
+        if stage is not None:
+            parts.append("st%d" % int(stage))
+        if sv is not None:
+            parts.append("SV" + ("%.1f" % float(sv)).replace(".", "_"))
+        return "_".join(parts)
+
     def _auto_photo(self):
-        """Колбэк автомата: в выдержке пробы -> снять кадр камерой (soft-триггер).
-        Кадр берётся, когда цикл дошёл до выдержки (не зависит от camera_mode: camera_mode рулит
-        лишь авто-СТАРТОМ цикла по стадии). Куда он идёт:
-          * CV включён → в ПАМЯТЬ (буфер пробы), оттуда в модель; сырой файл не пишется;
-          * тумблер «Сырые фото» (вкладка «Цикл») → дополнительно на диск в датасет (png/jpg).
+        """Колбэк автомата: дёргается на входе в выдержку пробы и далее каждые shot_interval_sec
+        (не зависит от camera_mode: camera_mode рулит лишь авто-СТАРТОМ цикла по стадии).
+          * CV включён → на первом вызове стартует СЕССИЯ ПРОБЫ (см. _cv_probe_session): кадры
+            берутся подряд по готовности обработки, а не по этому таймеру; повторные вызовы — no-op;
+          * CV выключен, тумблер «Сырые фото» (вкладка «Цикл») включён → по таймеру пишем сырой
+            файл в датасет (png/jpg), как раньше.
         Нужен серийник и живой стрим. Все причины пропуска пишем в лог, чтобы было видно почему."""
         cfg = self.cfg or {}
-        save_raw = bool((cfg.get("probe_cycle") or {}).get("photo_enabled", False))
-        cv_on = bool((cfg.get("cv") or {}).get("enabled"))
-        if not save_raw and not cv_on:
+        if (cfg.get("cv") or {}).get("enabled"):
+            self._start_probe_session()
+            return
+        if not (cfg.get("probe_cycle") or {}).get("photo_enabled", False):
             return
         serial = (cfg.get("camera_serial") or "").strip()
         if not serial:
@@ -92,22 +106,10 @@ class MicroscopeService:
                           "warn", {"serial": serial})
                 return
             fmt = (cfg.get("probe_cycle") or {}).get("photo_format", "png")
-            if save_raw:
-                # суффикс в конец имени скрина: стадия варки + СВ (напр. «st7_SV82_2» = стадия 7,
-                # СВ 82.2), чтобы по имени было видно, на какой стадии и при каком СВ снят кадр.
-                # Точку в СВ меняем на «_» (в имени файла точка нежелательна).
-                stage = self.fsm.stage if self.fsm else None
-                sv = self.fsm.sv if self.fsm else None
-                parts = []
-                if stage is not None:
-                    parts.append("st%d" % int(stage))
-                if sv is not None:
-                    parts.append("SV" + ("%.1f" % float(sv)).replace(".", "_"))
-                worker.photo_suffix = "_".join(parts)
-            worker.snap("microscope", fmt, save=save_raw,
-                        sink=self._probe_sink if cv_on else None)
+            worker.photo_suffix = self._photo_suffix()
+            worker.snap("microscope", fmt)
             log_event("microscope_service", "Скрин пробы: запрошен снимок", "info",
-                      {"serial": serial, "raw_file": save_raw, "cv": cv_on})
+                      {"serial": serial, "format": fmt})
         except Exception as e:
             log_event("microscope_service", "Ошибка скрина пробы", "warn", {"error": str(e)})
 
@@ -132,10 +134,14 @@ class MicroscopeService:
             log_event("microscope_service", "Ошибка видео пробы", "warn", {"error": str(e)})
 
     # ---------- CV: анализ пробы (компьютерное зрение) ----------
-    # Кадры пробы живут в ПАМЯТИ: камера → буфер → модель. На диск идёт только распознанный
-    # overlay (JPEG) + result.json. Сырые файлы пишутся лишь при тумблере «Сырые фото».
+    # Кадры пробы живут в ПАМЯТИ: камера → модель. На диск идёт только распознанный overlay
+    # (JPEG) + result.json. Сырые файлы пишутся лишь при тумблере «Сырые фото».
+    # Темп кадров задаёт сама обработка: кадр разобран → берём следующий. У стекла стоим не по
+    # секундам, а до frames_per_probe разобранных кадров — потом сервис даёт автомату «отводи»
+    # (fsm.cv_release). Триггер "cv" запускает следующую пробу, когда эта сохранена (fsm.cv_end).
 
-    PROBE_MAX_FRAMES = 12      # не больше кадров на пробу (каждый ~15 МБ в памяти)
+    PROBE_MAX_FRAMES = 12      # потолок кадров на пробу (overlay каждого ~15 МБ в памяти)
+    PROBE_MODE_DWELL = 23      # режим автомата «выдержка у стекла» (см. microscope_fsm)
 
     def _set_cv_status(self, state, message=""):
         """Статус разбора для UI: idle / running / ok / no_camera / no_frames /
@@ -145,57 +151,120 @@ class MicroscopeService:
     def cv_status(self):
         return dict(self._cv_status)
 
-    def _probe_sink(self, img):
-        """Колбэк камеры: кадр пробы → в буфер в памяти (см. _auto_photo)."""
-        with self._probe_lock:
-            self._probe_frames.append((time.time(), img))
-            del self._probe_frames[:-self.PROBE_MAX_FRAMES]
+    def _cv_frames_per_probe(self, cv):
+        return max(1, min(self.PROBE_MAX_FRAMES, int(cv.get("frames_per_probe", 3))))
 
-    def _take_probe_frames(self, cfg) -> list:
-        """Забрать кадры текущей пробы из буфера (и очистить его). Кадры старше окна выдержки
-        отбрасываем — это хвост прерванной пробы (сброс цикла посреди выдержки)."""
-        pc = cfg.get("probe_cycle") or {}
-        window = int(pc.get("dwell_sec", 15)) + int(pc.get("shot_interval_sec", 3)) + 30
-        with self._probe_lock:
-            frames, self._probe_frames = self._probe_frames, []
-        now = time.time()
-        return [img for ts, img in frames if now - ts <= window]
+    def _sync_cv_fsm(self):
+        """Передать автомату настройки выдержки «по CV» (вкл / кадров / защитная пауза /
+        страховка) — на старте и при каждой правке настроек CV."""
+        if not self.fsm:
+            return
+        cv = (self.cfg or {}).get("cv") or {}
+        self.fsm.set_cv_dwell(bool(cv.get("enabled")),
+                              frames=self._cv_frames_per_probe(cv),
+                              gap_sec=cv.get("gap_sec", 10),
+                              timeout_sec=cv.get("dwell_timeout_sec", 60))
 
-    def _auto_cv_analyze(self):
-        """Колбэк «проба завершена»: запустить CV-анализ серии кадров в ФОНЕ (не блокируем FSM).
-        Тихо выходит, если CV выключен в конфиге — тогда цикл работает как раньше."""
+    def _probe_at_glass(self):
+        """Автомат стоит в выдержке у стекла — кадры пробы можно брать."""
+        return self.fsm is not None and self.fsm.mode == self.PROBE_MODE_DWELL
+
+    def _start_probe_session(self):
+        """Запустить сессию пробы в фоне (не блокируем FSM); уже набирает кадры — ничего не делаем."""
+        if self._probe_collecting:
+            return
+        self._probe_collecting = True
+        threading.Thread(target=self._cv_probe_session, daemon=True).start()
+
+    def _grab_frame(self, worker, save_raw=False, fmt=None, timeout=5.0):
+        """Следующий кадр стрима → в память (при save_raw — ещё и сырым файлом в датасет).
+        None — камера не отдала кадр за timeout."""
+        got = threading.Event()
+        box = []
+
+        def sink(img):
+            box.append(img)
+            got.set()
+
+        if save_raw:
+            worker.photo_suffix = self._photo_suffix()
+        worker.snap("microscope" if save_raw else None, fmt, save=save_raw, sink=sink)
+        if got.wait(timeout):
+            return box[0]
+        worker.snap_once = False     # кадра нет — снять запрос, чтобы он не сработал позже
+        return None
+
+    def _cv_probe_session(self):
+        """Сессия пробы (фон): у стекла «снять кадр → разобрать → следующий», пока не разобрано
+        frames_per_probe кадров. Затем автомату — «отводи» (cv_release), а проба досохраняется
+        (разломы по серии + overlay JPEG). В конце cv_end: CV готов к следующей пробе.
+        Любой отказ (нет камеры/кадров) тоже отпускает автомат — у стекла он не зависает."""
         cfg = self.cfg or {}
         cv = cfg.get("cv") or {}
-        if not cv.get("enabled"):
-            return
-        stage = self.fsm.stage if self.fsm else None
-        threading.Thread(target=self._cv_probe_worker, args=(stage,), daemon=True).start()
-
-    def _cv_probe_worker(self, stage):
-        """Фон: дождаться последнего кадра серии, забрать буфер пробы и разобрать."""
-        cfg = self.cfg or {}
         serial = (cfg.get("camera_serial") or "").strip()
-        reason = "камера не выбрана" if not serial else "камера не стримит"
+        fsm = self.fsm
+        released = False
+        locked = False
+        if fsm:
+            fsm.cv_begin()
         try:
-            if serial:
-                from camera_core import manager as cam_manager
-                worker = cam_manager.get(serial)
-                # последний кадр серии запрошен в том же тике, что и «проба завершена» —
-                # ждём, пока камера отдаст его в буфер (следующий кадр стрима)
-                t_end = time.time() + 3.0
-                while worker.running and worker.snap_once and time.time() < t_end:
-                    time.sleep(0.05)
-                time.sleep(0.1)
+            if not serial:
+                self._set_cv_status("no_camera", "проба не разобрана: камера не выбрана")
+                log_event("microscope_service", "CV: проба пропущена — не задан camera_serial", "warn")
+                return
+            from camera_core import manager as cam_manager
+            worker = cam_manager.get(serial)
+            if not worker.running:
+                self._set_cv_status("no_camera", "проба не разобрана: камера не стримит")
+                log_event("microscope_service",
+                          "CV: проба пропущена — камера не стримит (открой страницу/поток камеры)",
+                          "warn", {"serial": serial})
+                return
+            # прошлая проба ещё досохраняется / идёт ручной разбор — ждём, но недолго
+            locked = self._cv_run_lock.acquire(timeout=10)
+            if not locked:
+                self._set_cv_status("error", "проба не разобрана: CV занят прошлым разбором")
+                log_event("microscope_service", "CV: проба пропущена — CV занят более 10 с", "warn")
+                return
+            pc = cfg.get("probe_cycle") or {}
+            save_raw = bool(pc.get("photo_enabled", False))
+            fmt = pc.get("photo_format", "png")
+            stage = fsm.stage if fsm else None
+            need = self._cv_frames_per_probe(cv)
+            deadline = time.time() + max(10, int(cv.get("dwell_timeout_sec", 60)))   # страховка
+            run = self._cv_begin(cfg)
+            while (self._probe_at_glass() and len(run["overlays"]) < need
+                   and time.time() < deadline):
+                img = self._grab_frame(worker, save_raw, fmt)
+                if img is None or not self._probe_at_glass():
+                    break      # камера молчит / кадр пришёл уже после начала отвода (в движении)
+                self._cv_analyze_one(run, img)
+                done = len(run["overlays"])
+                if fsm:
+                    fsm.cv_progress(done)
+                self._set_cv_status("running", "проба: разобрано кадров %d из %d" % (done, need))
+            self._probe_collecting = False
+            done = len(run["overlays"])
+            if fsm:
+                fsm.cv_release(ok=done > 0)     # кадры набраны → отвод; сохранение идёт параллельно
+            released = True
+            if done:
+                self._cv_finish(run, stage, serial)
+            else:
+                self._set_cv_status("no_frames", "нет кадров пробы: камера не отдала кадр")
+                log_event("microscope_service", "CV: кадры пробы не получены", "warn",
+                          {"serial": serial})
         except Exception as e:
-            log_event("microscope_service", "CV: ошибка ожидания кадра пробы", "warn", {"error": str(e)})
-        frames = self._take_probe_frames(cfg)
-        if not frames:
-            self._set_cv_status("no_frames", "нет кадров пробы: " + reason)
-            log_event("microscope_service", "CV: кадры пробы не получены (" + reason + ")", "warn",
-                      {"serial": serial})
-            return
-        with self._cv_run_lock:
-            self._cv_analyze_frames(stage, frames)
+            self._set_cv_status("error", "ошибка разбора: %s" % e)
+            log_event("microscope_service", "Ошибка CV-анализа пробы", "error", {"error": str(e)})
+        finally:
+            self._probe_collecting = False
+            if locked:
+                self._cv_run_lock.release()
+            if fsm:
+                if not released:
+                    fsm.cv_release(ok=False)
+                fsm.cv_end()
 
     def analyze_last_probe(self):
         """Ручной разбор (кнопка «Разобрать пробу», /api/cv/analyze): взять ЖИВОЙ кадр с камеры
@@ -214,105 +283,107 @@ class MicroscopeService:
             return {"status": "busy"}
         stage = self.fsm.stage if self.fsm else None
         self._set_cv_status("running", "разбор…")
-        threading.Thread(target=self._cv_live_worker, args=(stage, worker), daemon=True).start()
+        threading.Thread(target=self._cv_live_worker, args=(stage, worker, serial), daemon=True).start()
         return {"status": "started"}
 
-    def _cv_live_worker(self, stage, worker):
+    def _cv_live_worker(self, stage, worker, serial):
         """Фон: снять один живой кадр в память и разобрать."""
-        got = threading.Event()
-        box = []
-
-        def sink(img):
-            box.append(img)
-            got.set()
-
-        t_end = time.time() + 2.0
-        while worker.snap_once and time.time() < t_end:    # не перебить кадр идущей пробы
-            time.sleep(0.05)
-        worker.snap(save=False, sink=sink)
-        if not got.wait(5.0):
-            self._set_cv_status("no_frames", "камера не отдала кадр за 5 с")
-            log_event("microscope_service", "CV: живой кадр не получен за 5 с", "warn")
+        if not self._cv_run_lock.acquire(blocking=False):
             return
-        with self._cv_run_lock:
-            self._cv_analyze_frames(stage, box)
-
-    def _cv_analyze_frames(self, stage, imgs):
-        """Кадры (BGR, из памяти) → сайдкар (детекции) → cv_analyzer (измерения) → cv_store
-        (overlay в JPEG + result.json). Сырые кадры здесь на диск не пишутся."""
-        cfg = self.cfg or {}
-        cv = cfg.get("cv") or {}
-        serial = (cfg.get("camera_serial") or "").strip()
-        self._set_cv_status("running", "разбор…")
         try:
-            import cv2
-            import cv_analyzer
-            import cv_client
-            import cv_fracture
-            import cv_store
-
-            url = cv.get("service_url", "http://127.0.0.1:8765")
-            sidecar_ok = cv_client.health(url) is not None    # кристаллы (YOLO) — опционально
-
-            fr_cfg = cfg.get("fracture") or {}
-            fr_on = fr_cfg.get("enabled", True)
-
-            frame_recs, overlays, last_timing = [], [], {}
-            frac_zone_lists = []
-            answered = 0
-            for i, img in enumerate(imgs):
-                # --- кристаллы (сайдкар YOLO), если он поднят ---
-                summary, objects, overlay = None, [], None
-                if sidecar_ok:
-                    ok, enc = cv2.imencode(".png", img)
-                    resp = cv_client.infer(
-                        url, enc.tobytes(), tiles=int(cv.get("tiles", 6)),
-                        conf=float(cv.get("conf", 0.25)), iou=float(cv.get("iou", 0.45)),
-                        overlap=float(cv.get("overlap", 0.15))) if ok else None
-                    if resp:
-                        answered += 1
-                        last_timing = resp.get("timing", {})
-                        res = cv_analyzer.analyze(img, resp.get("objects", []), cv_cfg=cv, with_overlay=True)
-                        summary, objects, overlay = res["summary"], res["objects"], res.pop("_overlay", None)
-                if overlay is None:
-                    overlay = img.copy()   # нет кристаллов-overlay → рисуем разломы поверх кадра
-                # --- разломы (чистый OpenCV, всегда) ---
-                zones = cv_fracture.detect_zones(img, fr_cfg) if fr_on else []
-                frac_zone_lists.append(zones)
-                overlays.append(overlay)
-                frame_recs.append({"file": "frame_%d" % i, "summary": summary, "objects": objects})
-
-            # подтверждение разломов по серии кадров + отрисовка на всех overlay
-            fracture = None
-            if fr_on:
-                confirmed, fr_summary = cv_fracture.confirm(frac_zone_lists, fr_cfg)
-                fr_summary["area_pct"] = cv_fracture.area_pct(confirmed, imgs[0].shape)
-                for ov in overlays:
-                    cv_fracture.draw(ov, confirmed, confirmed=True)
-                fracture = {"summary": fr_summary, "zones": confirmed}
-                if fr_summary["has_fracture"]:
-                    log_event("microscope_service",
-                              "Разлом обнаружен: %d зон (%.1f%% кадра)" % (
-                                  fr_summary["zones"], fr_summary["area_pct"]),
-                              "warn", {"serial": serial, "zones": fr_summary["zones"]})
-
-            saved = cv_store.save_sample(serial, stage, frame_recs, overlays, last_timing,
-                                         keep_last=int(cv.get("keep_last", 50)), fracture=fracture,
-                                         jpeg_quality=int(cv.get("overlay_jpeg_quality", 85)))
-            if not saved:
-                self._set_cv_status("error", "не удалось сохранить пробу (см. лог)")
-            elif not sidecar_ok:
-                self._set_cv_status("sidecar_offline", "сайдкар не отвечает — кристаллы не посчитаны")
-                log_event("microscope_service", "CV: сайдкар не отвечает, кристаллы не посчитаны",
-                          "warn", {"url": url})
-            elif answered == 0:
-                self._set_cv_status("sidecar_offline", "сайдкар не вернул детекции (см. лог)")
-            else:
-                self._set_cv_status("ok", "разбор готов: %d крист., кадров %d" % (
-                    round(saved["summary"].get("count") or 0), len(imgs)))
+            img = self._grab_frame(worker)
+            if img is None:
+                self._set_cv_status("no_frames", "камера не отдала кадр за 5 с")
+                log_event("microscope_service", "CV: живой кадр не получен за 5 с", "warn")
+                return
+            run = self._cv_begin(self.cfg or {})
+            self._cv_analyze_one(run, img)
+            self._cv_finish(run, stage, serial)
         except Exception as e:
             self._set_cv_status("error", "ошибка разбора: %s" % e)
-            log_event("microscope_service", "Ошибка CV-анализа пробы", "error", {"error": str(e)})
+            log_event("microscope_service", "Ошибка CV-анализа кадра", "error", {"error": str(e)})
+        finally:
+            self._cv_run_lock.release()
+
+    def _cv_begin(self, cfg):
+        """Начать разбор: настройки + проверка сайдкара. Возвращает накопитель кадров серии."""
+        import cv_client
+        cv = cfg.get("cv") or {}
+        fr_cfg = cfg.get("fracture") or {}
+        url = cv.get("service_url", "http://127.0.0.1:8765")
+        self._set_cv_status("running", "разбор…")
+        return {
+            "cv": cv, "url": url,
+            "sidecar_ok": cv_client.health(url) is not None,    # кристаллы (YOLO) — опционально
+            "fr_cfg": fr_cfg, "fr_on": fr_cfg.get("enabled", True),
+            "frame_recs": [], "overlays": [], "zones": [], "timing": {}, "answered": 0, "shape": None,
+        }
+
+    def _cv_analyze_one(self, run, img):
+        """Один кадр (BGR, из памяти) → сайдкар (детекции) → cv_analyzer (измерения) + зоны
+        разломов. Результат копится в run; сырой кадр нигде не сохраняется."""
+        import cv2
+        import cv_analyzer
+        import cv_client
+        import cv_fracture
+        cv = run["cv"]
+        # --- кристаллы (сайдкар YOLO), если он поднят ---
+        summary, objects, overlay = None, [], None
+        if run["sidecar_ok"]:
+            ok, enc = cv2.imencode(".png", img)
+            resp = cv_client.infer(
+                run["url"], enc.tobytes(), tiles=int(cv.get("tiles", 6)),
+                conf=float(cv.get("conf", 0.25)), iou=float(cv.get("iou", 0.45)),
+                overlap=float(cv.get("overlap", 0.15))) if ok else None
+            if resp:
+                run["answered"] += 1
+                run["timing"] = resp.get("timing", {})
+                res = cv_analyzer.analyze(img, resp.get("objects", []), cv_cfg=cv, with_overlay=True)
+                summary, objects, overlay = res["summary"], res["objects"], res.pop("_overlay", None)
+        if overlay is None:
+            overlay = img.copy()   # нет кристаллов-overlay → рисуем разломы поверх кадра
+        # --- разломы (чистый OpenCV, всегда) ---
+        run["zones"].append(cv_fracture.detect_zones(img, run["fr_cfg"]) if run["fr_on"] else [])
+        run["frame_recs"].append({"file": "frame_%d" % len(run["overlays"]),
+                                  "summary": summary, "objects": objects})
+        run["overlays"].append(overlay)
+        run["shape"] = img.shape
+
+    def _cv_finish(self, run, stage, serial):
+        """Закрыть разбор: подтвердить разломы по серии кадров, сохранить пробу (overlay в JPEG +
+        result.json), выставить итоговый статус."""
+        import cv_fracture
+        import cv_store
+        cv = run["cv"]
+        overlays = run["overlays"]
+        # подтверждение разломов по серии кадров + отрисовка на всех overlay
+        fracture = None
+        if run["fr_on"]:
+            confirmed, fr_summary = cv_fracture.confirm(run["zones"], run["fr_cfg"])
+            fr_summary["area_pct"] = cv_fracture.area_pct(confirmed, run["shape"])
+            for ov in overlays:
+                cv_fracture.draw(ov, confirmed, confirmed=True)
+            fracture = {"summary": fr_summary, "zones": confirmed}
+            if fr_summary["has_fracture"]:
+                log_event("microscope_service",
+                          "Разлом обнаружен: %d зон (%.1f%% кадра)" % (
+                              fr_summary["zones"], fr_summary["area_pct"]),
+                          "warn", {"serial": serial, "zones": fr_summary["zones"]})
+
+        saved = cv_store.save_sample(serial, stage, run["frame_recs"], overlays, run["timing"],
+                                     keep_last=int(cv.get("keep_last", 50)), fracture=fracture,
+                                     jpeg_quality=int(cv.get("overlay_jpeg_quality", 85)))
+        if not saved:
+            self._set_cv_status("error", "не удалось сохранить пробу (см. лог)")
+        elif not run["sidecar_ok"]:
+            self._set_cv_status("sidecar_offline", "сайдкар не отвечает — кристаллы не посчитаны")
+            log_event("microscope_service", "CV: сайдкар не отвечает, кристаллы не посчитаны",
+                      "warn", {"url": run["url"]})
+        elif run["answered"] == 0:
+            self._set_cv_status("sidecar_offline", "сайдкар не вернул детекции (см. лог)")
+        else:
+            self._set_cv_status("ok", "разбор готов: %d крист., кадров %d" % (
+                round(saved["summary"].get("count") or 0), len(overlays)))
 
     def _on_sv(self, sv, stage):
         # СВ/стадия из ПЛК -> в автомат (заменяет ручной ввод, пока источник жив)
@@ -390,6 +461,7 @@ class MicroscopeService:
                     cur[k].update(v)
                 else:
                     cur[k] = v
+        self._sync_cv_fsm()     # вкл/кадров/пауза — сразу в автомат (выдержка «по CV»)
         log_event("microscope_service", "Настройки CV обновлены", "info", {"patch": patch})
         return self.cv_config()
 
@@ -437,8 +509,8 @@ class MicroscopeService:
         return {"photo_enabled": on}
 
     def set_trigger_mode(self, mode):
-        """Сменить триггер пробы (time/sv) сразу, без перезапуска платы, и запомнить в конфиг."""
-        mode = "sv" if str(mode) == "sv" else "time"
+        """Сменить триггер пробы (time/sv/cv) сразу, без перезапуска платы, и запомнить в конфиг."""
+        mode = str(mode) if str(mode) in ("time", "sv", "cv") else "time"
         res = self.fsm.set_trigger_mode(mode) if self.fsm else {"trigger_mode": mode}
         plate_config.save({"probe_cycle": {"trigger_mode": mode}})
         if self.cfg is not None:

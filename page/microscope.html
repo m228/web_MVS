@@ -751,6 +751,40 @@
                 </div>
                 <p class="micro-plc-note">Лопнутые/раздавленные кристаллы (тёмное+хаос). Красный контур — на кадре в окне «Комп. зрение» и в галерее. Подтверждение по серии кадров убирает фейки.</p>
 
+                <!-- Калибровка по своим кадрам: ломаешь кристаллы, снимаешь, двигаешь пороги ниже и видишь зоны -->
+                <label class="micro-switch" for="fracLabToggle" title="Режим калибровки: свои кадры (сломанные и целые кристаллы), метки и подбор порогов. Боевую пробу не трогает.">
+                  <input type="checkbox" id="fracLabToggle" />
+                  <span class="micro-switch__track"><span class="micro-switch__thumb"></span></span>
+                  <span class="micro-switch__label">Режим калибровки <span class="micro-ro">(свои кадры)</span></span>
+                </label>
+                <div class="micro-cv-block frac-lab" id="fracLab" hidden>
+                  <div class="micro-cv-block__title">Калибровка разломов</div>
+                  <p class="micro-plc-note">Ручной режим → сломай кристаллы стеклом → «Снять как РАЗЛОМ». Целые снимай «как НОРМА». Выбери кадр: красным — зоны, которые детектор считает разломом при текущих порогах (ниже), серым — отброшенные (число = уверенность). Двигай пороги — картинка и счётчик меняются сразу. «Подобрать» ищет веса и порог по всем размеченным кадрам.</p>
+                  <div class="micro-cycle-btns">
+                    <button type="button" id="fracLabSnapBad" class="toolbar-btn toolbar-btn--danger" title="Снять живой кадр с камеры и сохранить с меткой «разлом»">Снять как РАЗЛОМ</button>
+                    <button type="button" id="fracLabSnapOk" class="toolbar-btn toolbar-btn--primary" title="Снять живой кадр с камеры и сохранить с меткой «норма»">Снять как НОРМА</button>
+                    <span class="micro-conn-hint" id="fracLabHint"></span>
+                  </div>
+                  <div class="frac-lab-list" id="fracLabList"></div>
+                  <div class="frac-lab-view" id="fracLabViewWrap" hidden>
+                    <img id="fracLabImg" alt="кадр калибровки" />
+                    <canvas id="fracLabCanvas"></canvas>
+                  </div>
+                  <div class="micro-cycle-btns" id="fracLabLblRow" hidden>
+                    <span class="micro-conn-hint">метка кадра:</span>
+                    <button type="button" class="toolbar-btn toolbar-btn--neutral" data-lbl="fracture">разлом</button>
+                    <button type="button" class="toolbar-btn toolbar-btn--neutral" data-lbl="ok">норма</button>
+                    <button type="button" class="toolbar-btn toolbar-btn--neutral" data-lbl="unknown">не знаю</button>
+                    <button type="button" class="toolbar-btn toolbar-btn--neutral" id="fracLabDel" title="Удалить кадр">удалить</button>
+                  </div>
+                  <div class="frac-lab-eval" id="fracLabEval">—</div>
+                  <div class="micro-cycle-btns">
+                    <button type="button" id="fracLabSuggest" class="toolbar-btn toolbar-btn--neutral" title="Перебор веса тёмности и порога уверенности по всем размеченным кадрам (покадрово)">Подобрать веса и порог</button>
+                    <button type="button" id="fracLabApply" class="toolbar-btn toolbar-btn--primary" disabled title="Подставить найденные значения в поля ниже и сохранить">Применить</button>
+                    <span class="micro-conn-hint" id="fracLabSug"></span>
+                  </div>
+                </div>
+
                 <!-- Статистика последней пробы: узкие колонки -->
                 <div class="micro-cv-block">
                   <div class="micro-cv-block__title">Последняя проба</div>
@@ -951,6 +985,7 @@
                     <label class="micro-srow" data-unit="%"><input type="checkbox" value="large" checked /><i style="background:#ba7517"></i><span>большая</span><b>—</b></label>
                     <label class="micro-srow" data-unit="%"><input type="checkbox" value="reject" /><i style="background:#e24b4a"></i><span>брак</span><b>—</b></label>
                     <label class="micro-srow" data-unit="мкм" title="Среднее: сумма размеров / число кристаллов"><input type="checkbox" value="mean" checked /><i style="background:#7f77dd"></i><span>общая</span><b>—</b></label>
+                    <label class="micro-srow" data-unit="" title="СВ (сухие вещества, Brix, %) на момент пробы — на той же шкале 0–100, что и доли групп"><input type="checkbox" value="sv" checked /><i style="background:#f2c94c"></i><span>СВ</span><b>—</b></label>
                     <label class="micro-srow" data-unit="" title="Стадия варки (номер) на момент пробы: белая ступенчатая линия с цифрами на каждом переходе"><input type="checkbox" value="stage" checked /><i style="background:var(--text)"></i><span>стадия</span><b>—</b></label>
                     <label class="micro-srow" data-unit="мкм" title="Медиана: половина кристаллов мельче, половина крупнее"><input type="checkbox" value="median" /><i style="background:#d16fb8"></i><span>медиана</span><b>—</b></label>
                   </div>

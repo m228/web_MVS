@@ -280,6 +280,25 @@ class MicroscopeService:
                     fsm.cv_release(ok=False)
                 fsm.cv_end()
 
+    def lab_snap(self, label):
+        """Калибровка разломов: снять ЖИВОЙ кадр с камеры и сохранить его чистым PNG с меткой
+        (fracture / ok / unknown) в fracture_lab/. Не мешает пробе: во время набора кадров пробы отказ."""
+        import fracture_lab
+        cfg = self.cfg or {}
+        serial = (cfg.get("camera_serial") or "").strip()
+        if not serial:
+            return {"error": "no_camera", "hint": "камера не выбрана"}
+        from camera_core import manager as cam_manager
+        worker = cam_manager.get(serial)
+        if not worker.running:
+            return {"error": "no_camera", "hint": "камера не стримит — подключи поток"}
+        if self._probe_collecting or self._cv_run_lock.locked():
+            return {"error": "busy", "hint": "идёт проба/разбор — подожди"}
+        img = self._grab_frame(worker)
+        if img is None:
+            return {"error": "no_frame", "hint": "камера не отдала кадр за 5 с"}
+        return {"status": "ok", "name": fracture_lab.save_frame(img, label)}
+
     def analyze_last_probe(self):
         """Ручной разбор (кнопка «Разобрать пробу», /api/cv/analyze): взять ЖИВОЙ кадр с камеры
         и разобрать его. Сырых файлов на диске нет, поэтому разбираем то, что камера видит сейчас."""

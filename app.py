@@ -24,6 +24,7 @@ import net_tools
 import updater
 from microscope_service import micro
 import cv_client
+import fracture_lab
 import cv_store
 import autostart
 from paths import read_version, BUNDLE_DIR, DATA_DIR
@@ -682,6 +683,59 @@ def cv_approach_set(patch: dict = Body(...)):
     data = micro.set_approach(patch or {})
     api_log("api.cv.approach", "Изменены настройки автоподвода", payload={"patch": patch})
     return {"status": "ok", "approach": data}
+
+
+# --- калибровка разломов по своим кадрам (см. fracture_lab.py) ---
+@app.get("/api/cv/fracture/lab/snap")
+def cv_lab_snap(label: str = "unknown"):
+    res = micro.lab_snap(label)
+    api_log("api.cv.fracture.lab", "Кадр калибровки разломов", payload={"label": label, "result": res})
+    return res
+
+
+@app.get("/api/cv/fracture/lab/list")
+def cv_lab_list():
+    return {"frames": fracture_lab.list_frames()}
+
+
+@app.get("/api/cv/fracture/lab/image")
+def cv_lab_image(name: str):
+    try:
+        return Response(content=fracture_lab.jpeg(name), media_type="image/jpeg")
+    except Exception:
+        return Response(status_code=404)
+
+
+@app.get("/api/cv/fracture/lab/label")
+def cv_lab_label(name: str, label: str):
+    try:
+        return {"status": "ok", **fracture_lab.set_label(name, label)}
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@app.get("/api/cv/fracture/lab/delete")
+def cv_lab_delete(name: str):
+    try:
+        fracture_lab.delete(name)
+        return {"status": "ok"}
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@app.get("/api/cv/fracture/lab/zones")
+def cv_lab_zones(name: str, dark_thr: float = 30.0, min_area_frac: float = 0.0018):
+    """Зоны-кандидаты на кадре (с контуром) при данных dark_thr / min_area_frac."""
+    try:
+        return {"zones": fracture_lab.zones(name, dark_thr, min_area_frac)}
+    except Exception as e:
+        return {"error": str(e), "zones": []}
+
+
+@app.get("/api/cv/fracture/lab/all")
+def cv_lab_all(dark_thr: float = 30.0, min_area_frac: float = 0.0018):
+    """Зоны (только D/T/площадь) по всем размеченным кадрам — для оценки и подбора порогов."""
+    return {"frames": fracture_lab.all_zones(dark_thr, min_area_frac)}
 
 
 @app.get("/api/cv/last")

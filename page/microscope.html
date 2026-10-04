@@ -250,6 +250,7 @@
 
                 <div class="micro-cycle-head micro-sub__title--sep">
                   <span class="micro-sub__title">Параметры цикла</span>
+                  <div class="micro-cycle-ctls">
                   <div class="micro-trig" id="pcArrive" role="tablist" title="По какому датчику автомат решает, что мотор приехал (отвод, подвод, возврат): энкодер 1285, расчётная абсолютная позиция 1274 или аналоговый датчик 1271. Применяется сразу.">
                     <span class="micro-trig__lbl">Приход по</span>
                     <button type="button" class="micro-trig__btn is-active" data-arr="enc" title="Энкодер (рег. 1285)">энкодер</button>
@@ -261,6 +262,7 @@
                     <button type="button" class="micro-trig__btn is-active" data-trig="time">время</button>
                     <button type="button" class="micro-trig__btn" data-trig="sv">СВ</button>
                     <button type="button" class="micro-trig__btn" data-trig="cv">CV</button>
+                  </div>
                   </div>
                 </div>
                 <div class="micro-cycle-cols">
@@ -710,6 +712,14 @@
                     </div>
                     <div class="micro-cycle-col">
                       <label class="micro-cycle-f" title="Брак идёт в рассев и тренд, только когда СВ не ниже этого значения: пока кристаллы мелкие и растут, дефекты формы только подписываются. Для спуска на 90 ставят около 88."><span>Брак считать с СВ</span><input type="number" id="cvRejectSv" step="0.5" /></label>
+                    </div>
+                  </div>
+                  <div class="micro-cycle-cols">
+                    <div class="micro-cycle-col">
+                      <label class="micro-cycle-f" title="Маски кристаллов с зазором не больше этого (px) считаются срослись и склеиваются в ОДИН сросток; маска, лежащая внутри другой, убирается как лишнее обнаружение. 0 — не склеивать. Применяется со следующего разбора."><span>Сросток: зазор, px</span><input type="number" id="cvClusterGap" step="1" min="0" /></label>
+                    </div>
+                    <div class="micro-cycle-col">
+                      <label class="micro-cycle-f" title="Кристалл ближе этого расстояния (px) к краю кадра считается обрезанным (серый слой, в рассев не идёт). Увеличь, если на краях остаются обрубки. 0 — выкл. Применяется со следующего разбора."><span>Край кадра, px</span><input type="number" id="cvEdgeMargin" step="2" min="0" /></label>
                     </div>
                   </div>
                   <label class="micro-check micro-cv-always" title="Включено — брак идёт в рассев и тренд на любом СВ, без порога. Для сравнения «с порогом» и «без».">

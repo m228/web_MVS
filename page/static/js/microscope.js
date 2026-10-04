@@ -1479,6 +1479,7 @@
     set("cvMinCirc", sh.min_circularity); set("cvMinSol", sh.min_solidity);
     set("cvMaxAspect", sh.max_aspect); set("cvConf", cv.conf);
     set("cvSuspect", sh.suspect_aspect); set("cvRejectSv", cv.reject_from_sv);
+    set("cvClusterGap", cv.cluster_gap_px); set("cvEdgeMargin", cv.edge_margin_px);
     if ($("cvRejectAlways")) $("cvRejectAlways").checked = !!cv.reject_always;
     set("pcCvFrames", cv.frames_per_probe); set("pcCvGap", cv.gap_sec);   // поля на вкладке «Цикл»
     updateTriggerFields();
@@ -1489,7 +1490,7 @@
       groups: { small_max_um: num("cvSmallMax"), medium_max_um: num("cvMediumMax") },
       shape: { min_circularity: num("cvMinCirc"), min_solidity: num("cvMinSol"), max_aspect: num("cvMaxAspect"), suspect_aspect: num("cvSuspect") },
       um_per_px: num("cvUmPerPx"), tiles: num("cvTiles"), conf: num("cvConf"),
-      reject_from_sv: num("cvRejectSv"), reject_always: $("cvRejectAlways") ? $("cvRejectAlways").checked : undefined,
+      reject_from_sv: num("cvRejectSv"), cluster_gap_px: num("cvClusterGap"), edge_margin_px: num("cvEdgeMargin"), reject_always: $("cvRejectAlways") ? $("cvRejectAlways").checked : undefined,
     };
   }
   async function cvPostSettings(patch) {
@@ -1620,6 +1621,7 @@
   const CV_NOTCH_MAX = 5;
   function cvClassify(o) {
     if (o.group === "cut") return { layer: "cut", reason: null };
+    if (o.members > 1) return { layer: "reject", reason: "aggregate" };   // склеен из нескольких масок
     const thr = (id) => { const e = $(id); return e && e.value !== "" ? parseFloat(e.value) : null; };
     const tC = thr("cvMinCirc"), tS = thr("cvMinSol"), tA = thr("cvMaxAspect"), tU = thr("cvSuspect"), gS = thr("cvSmallMax"), gM = thr("cvMediumMax");
     if (o.circularity == null || [tC, tS, tA, gS, gM].some((v) => v == null || isNaN(v)))
@@ -1869,6 +1871,7 @@
       if (!best) { tip.hidden = true; return; }
       const cls = cvClassify(best), gr = CV_GROUP_NAMES[cls.layer] || best.group;
       const rs = cls.reason && CV_REASONS[cls.reason];
+      const grp = best.members > 1 ? " · сросток из " + best.members + " кристаллов (маски соприкасаются)" : "";
       const why = rs ? '<span class="why"><b>' + rs.name + '</b> — ' + rs.cause + '.<br>Что делать: ' + rs.todo + '.</span>'
         : (cls.layer === "suspect" ? '<span class="why">Вытянутый, но не игла. Следи за долей таких: рост — сигнал про глюкозу/раффинозу.</span>' : "");
       // форма: округлость / выпуклость / вытянутость; значение за текущим порогом (поля вкладки
@@ -1881,7 +1884,7 @@
         " · вытянут. " + mark(best.aspect.toFixed(1), tA != null && best.aspect > tA) +
         (best.conf != null ? "<br>уверенность модели (conf) " + mark(best.conf.toFixed(2), best.conf < 0.5) : "");
       tip.innerHTML = "Ø <b>" + best.size_um + " мкм</b> · S <b>" + Math.round(best.area_um2) + " мкм²</b><br>" +
-        best.length_um + "×" + best.width_um + " мкм · " + gr + shape + why;
+        best.length_um + "×" + best.width_um + " мкм · " + gr + grp + shape + why;
       const cardR = card.getBoundingClientRect();
       tip.style.left = (e.clientX - cardR.left) + "px";
       tip.style.top = (e.clientY - cardR.top) + "px";

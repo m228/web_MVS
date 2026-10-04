@@ -1,10 +1,12 @@
 """selfcheck — проверка, что КАЖДЫЙ модуль web_MVS живой и откликается (без железа).
 
-Запуск из ИСХОДНИКОВ:   python selfcheck.py
+Запуск из ИСХОДНИКОВ:   python3 selfcheck.py
 Запуск из СОБРАННОГО:   SelfCheck.exe        (лежит рядом с web_MVS.exe, тот же бандл и _internal)
 Ключи:
     --hw         дополнительно «живые» проверки железа (GigE-камеры, плата, ПЛК, CV-сервис, RTSP-камеры):
                  только чтение/опрос, ничего не меняют. Без железа эти пункты — SKIP.
+    --force      с --hw: опрашивать плату/ПЛК, даже если web_MVS запущен (по умолчанию пропускается,
+                 чтобы второй Modbus-клиент не мешал работающей варке)
     --no-pause   не ждать Enter в конце (для скриптов)
     --keep       не удалять временную песочницу
 Результат: таблица OK / SKIP / FAIL по модулям, отчёт дублируется в selfcheck_output.txt рядом с exe.
@@ -43,6 +45,37 @@ try:
     sys.stdout.reconfigure(encoding="utf-8")
 except Exception:
     pass
+
+# --- предохранитель сети: без --hw ЛЮБОЕ подключение за пределы localhost блокируется и записывается.
+# Гарантирует обещание «железо не трогается» (плата/ПЛК/камеры/CV-сервис по сети): даже если какой-то
+# модуль возьмёт боевой адрес из конфига по умолчанию, соединение не уйдёт, а проверка станет FAIL.
+_NET_GUARD = {"on": True}
+_NET_VIOLATIONS = []
+_orig_connect = socket.socket.connect
+_orig_connect_ex = socket.socket.connect_ex
+
+
+def _is_local(address):
+    host = address[0] if isinstance(address, tuple) and address else None
+    return not isinstance(host, str) or host in ("localhost", "::1", "0.0.0.0", "") or host.startswith("127.")
+
+
+def _guarded_connect(self, address):
+    if _NET_GUARD["on"] and not _is_local(address):
+        _NET_VIOLATIONS.append("%s:%s" % (address[0], address[1] if len(address) > 1 else "?"))
+        raise ConnectionRefusedError("selfcheck: сеть вне localhost запрещена без --hw (%s)" % (address,))
+    return _orig_connect(self, address)
+
+
+def _guarded_connect_ex(self, address):
+    if _NET_GUARD["on"] and not _is_local(address):
+        _NET_VIOLATIONS.append("%s:%s" % (address[0], address[1] if len(address) > 1 else "?"))
+        return 10061   # WSAECONNREFUSED
+    return _orig_connect_ex(self, address)
+
+
+socket.socket.connect = _guarded_connect
+socket.socket.connect_ex = _guarded_connect_ex
 
 
 class Skip(Exception):
@@ -696,18 +729,24 @@ def _micro_service():
     import plate_config
     from microscope_service import micro
     fake = fake_modbus()
-    plate_config.save({"host": "127.0.0.1", "port": fake.port, "poll_interval_ms": 50,
-                       "sv_source": {"host": "127.0.0.1", "port": fake.port, "period_s": 0.2}})
+    # sv_source — ПОЛНАЯ копия с регистрами: «пустой» sv_source plate_config считает старым слепком и
+    # выбрасывает (_drop_stale_sv_source), после чего сервис пошёл бы на боевой ПЛК из DEFAULTS
+    sv = json.loads(json.dumps(plate_config.load()["sv_source"]))
+    sv.update({"enabled": True, "host": "127.0.0.1", "port": fake.port, "period_s": 0.2})
+    fake.regs[int(sv["fields"]["sv"]["reg"])] = 4100
+    plate_config.save({"host": "127.0.0.1", "port": fake.port, "poll_interval_ms": 50, "sv_source": sv})
+    assert plate_config.load()["sv_source"]["host"] == "127.0.0.1", "sv_source не удержался в песочнице"
     micro.start()
     try:
         assert _wait(lambda: micro.status().get("connected"), 6), "сервис не связался: %s" % micro.status()
+        assert _wait(lambda: (micro.sv_status() or {}).get("connected"), 6), "СВ из ПЛК-эмулятора не читается: %s" % micro.sv_status()
         assert isinstance(micro.telemetry(), dict)
         assert isinstance(micro.state(), dict)
         assert isinstance(micro.config(), dict)
         assert isinstance(micro.cv_config(), dict)
     finally:
         micro.stop()
-    return "связь есть"
+    return "плата и ПЛК (эмулятор): связь есть"
 
 
 # =====================================================================================
@@ -847,6 +886,14 @@ def _logger():
     return "ok"
 
 
+@check("Служебные", "сеть: ни одного обращения за пределы localhost (без --hw)")
+def _no_outbound():
+    if not _NET_GUARD["on"]:
+        raise Skip("--hw: сеть разрешена")
+    assert not _NET_VIOLATIONS, "проверка пыталась выйти в сеть (боевые адреса из конфига?): %s" % sorted(set(_NET_VIOLATIONS))
+    return "0 обращений"
+
+
 # =====================================================================================
 # 8. Железо (только с --hw): опрос, без изменений
 # =====================================================================================
@@ -861,6 +908,15 @@ def _real_cfg():
         except Exception:
             pass
     return cfg
+
+
+def _app_running():
+    """web_MVS уже слушает порт 8000 на этой машине (держит соединения с платой/ПЛК/камерами)."""
+    return _tcp("127.0.0.1", 8000, 0.3)
+
+
+_APP_RUNNING_MSG = ("web_MVS запущен (порт 8000): второй Modbus-клиент к плате/ПЛК не открываю, "
+                    "чтобы не мешать варке. Закрой web_MVS или запусти SelfCheck.exe --hw --force")
 
 
 def _tcp(host, port, timeout=2.0):
@@ -889,6 +945,8 @@ def _hw_gige():
 @check("Железо", "плата микроскопа: TCP и чтение регистров (боевой конфиг, только чтение)", hw=True)
 def _hw_plate():
     from pymodbus.client import ModbusTcpClient
+    if _app_running() and "--force" not in sys.argv:
+        raise Skip(_APP_RUNNING_MSG)
     cfg = _real_cfg()
     if not _tcp(cfg["host"], cfg["port"]):
         raise Skip("плата %s:%s недоступна" % (cfg["host"], cfg["port"]))
@@ -905,6 +963,8 @@ def _hw_plate():
 @check("Железо", "ПЛК аппарата: СВ и стадия читаются (боевой конфиг, только чтение)", hw=True)
 def _hw_plc():
     from pymodbus.client import ModbusTcpClient
+    if _app_running() and "--force" not in sys.argv:
+        raise Skip(_APP_RUNNING_MSG)
     sv = _real_cfg().get("sv_source") or {}
     if not sv.get("host") or not _tcp(sv["host"], sv.get("port", 502)):
         raise Skip("ПЛК %s недоступен" % sv.get("host"))
@@ -1004,6 +1064,7 @@ def run(with_hw):
 def main():
     argv = sys.argv[1:]
     with_hw = "--hw" in argv
+    _NET_GUARD["on"] = not with_hw
     out_path = REAL_DATA_DIR / "selfcheck_output.txt"
     f = None
     orig = sys.stdout

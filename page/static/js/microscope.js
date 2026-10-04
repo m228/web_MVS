@@ -134,14 +134,14 @@
   }
 
   // приглушить неактуальные поля под выбранный триггер и режим CV (не скрываем — видно, что
-  // неактивно): СВ от/до — только «по СВ»; пауза между пробами — «по времени» (и «по CV» при
+  // неактивно): СВ от/до — «по СВ» и «по CV»; пауза между пробами — «по времени» (и «по CV» при
   // выключенном CV); пауза после разбора — только «по CV»; выдержка/период скринов в секундах —
   // только при выключенном CV; кадров на пробу — только при включённом.
   function updateTriggerFields() {
     const dim = (id, on) => { const e = $(id); if (e) e.classList.toggle("micro-dim", on); };
     const cvOn = !!($("cvEnable") && $("cvEnable").checked);
-    dim("pcSvFromWrap", pcTrigMode !== "sv");
-    dim("pcSvToWrap", pcTrigMode !== "sv");
+    dim("pcSvFromWrap", pcTrigMode === "time");     // диапазон СВ работает в «по СВ» и «по CV»
+    dim("pcSvToWrap", pcTrigMode === "time");
     dim("pcPauseWrap", pcTrigMode === "sv" || (pcTrigMode === "cv" && cvOn));
     dim("pcCvGapWrap", !(pcTrigMode === "cv" && cvOn));
     dim("pcCvFramesWrap", !cvOn);

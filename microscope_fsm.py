@@ -660,6 +660,9 @@ class MicroscopeFSM:
                 elif self._trigger_mode == "cv" and self._cv_dwell:
                     if self._cv_busy:
                         label = "Ожидание — CV разбирает прошлую пробу"
+                    elif not (self._sv_from <= self.sv <= self._sv_to):
+                        label = "Ожидание — CV: жду СВ в диапазоне %g–%g (сейчас %.1f)" % (
+                            self._sv_from, self._sv_to, self.sv)
                     else:
                         wait = self._cv_gap_sec if self._cv_last_ok else self._pause_sec
                         left = max(0, wait * 10 - self.cycle_t) // 10
@@ -852,7 +855,8 @@ class MicroscopeFSM:
             # диапазоне 3..9 (общее разрешение). ВНУТРИ — повторяемость по trigger_mode:
             #   "time" — новая проба через _pause_sec (cycle_t капает только в простое);
             #   "sv"   — новая проба на каждом ЦЕЛОМ СВ в [sv_from..sv_to] по мере роста СВ.
-            #   "cv"   — новая проба, как только CV разобрал и сохранил прошлую (+ защитная пауза).
+            #   "cv"   — новая проба, как только CV разобрал и сохранил прошлую (+ защитная пауза),
+            #            и только при СВ в [sv_from..sv_to].
             # Стадия вне диапазона -> ничего не капает, новый цикл не стартует (уже идущий доводим),
             # счётчик СВ сбрасываем (новая варка снимет заново с sv_from).
             stage_ok = self._ignore_stage or (CYCLE_STAGE_MIN <= self.stage <= CYCLE_STAGE_MAX)
@@ -874,7 +878,9 @@ class MicroscopeFSM:
                         # (_cv_busy), затем защитную паузу _cv_gap_sec. Прошлая проба не удалась
                         # (нет кадров/таймаут) → обычная пауза pause_sec, чтобы не гонять механику
                         # впустую. CV выключен → ветка ниже (как "time").
-                        if not self._cv_busy:
+                        # + диапазон СВ [sv_from..sv_to]: пока СВ ниже (кристаллов ещё нет) или выше —
+                        # проб не берём, отсчёт паузы не идёт (как в триггере «по СВ»)
+                        if not self._cv_busy and self._sv_from <= self.sv <= self._sv_to:
                             self.cycle_t += 1
                             wait = self._cv_gap_sec if self._cv_last_ok else self._pause_sec
                             if self.cycle_t > wait * 10:

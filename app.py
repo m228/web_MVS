@@ -405,6 +405,15 @@ def micro_motor(m: int, op: str, value: float | None = None):
     return res
 
 
+@app.get("/api/micro/lock")
+def micro_lock(bit: int, disabled: int):
+    # блокировки прошивки (рег. 1535): disabled=1 → отключить блокировку, 0 → включить обратно
+    res = micro.set_lock_bit(bit, bool(disabled))
+    api_log("api.micro.lock", "Блокировка прошивки (пульт)", "warn",
+            {"bit": bit, "disabled": bool(disabled), "result": res})
+    return res
+
+
 @app.get("/api/micro/dq")
 def micro_dq(bit: int, on: int):
     res = micro.dq_bit(bit, bool(on))

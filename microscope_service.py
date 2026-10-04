@@ -817,6 +817,30 @@ class MicroscopeService:
                   "info", {"reg": reg, "value": val})
         return {"status": "ok", "reg": reg, "value": val}
 
+    def set_lock_bit(self, bit, disabled):
+        """Блокировки прошивки (рег. 1535): бит=1 → блокировка ОТКЛЮЧЕНА. Меняем один бит по
+        последнему прочитанному значению; не прочитали (нет связи) — не пишем вслепую."""
+        if not self.plate:
+            return {"error": "not_started"}
+        bit = int(bit)
+        if not 0 <= bit <= 15:
+            return {"error": "bad_bit"}
+        spec = (self.cfg or {}).get("ext_map", {}).get("locks") or {}
+        reg = int(spec.get("reg", 1535))
+        cur = (self.plate.ext or {}).get("locks")
+        if cur is None:
+            return {"error": "no_value", "hint": "регистр блокировок ещё не прочитан"}
+        cur = int(cur) & 0xFFFF
+        new = (cur | (1 << bit)) if disabled else (cur & ~(1 << bit) & 0xFFFF)
+        if new == cur:
+            return {"status": "unchanged", "reg": reg, "value": cur}
+        self.plate.write_reg(reg, new)
+        log_event("microscope_service",
+                  "Блокировка бит %d (рег. %d): %s, маска %s → %s" % (
+                      bit, reg, "ОТКЛЮЧЕНА" if disabled else "включена", format(cur, "016b"), format(new, "016b")),
+                  "warn", {"reg": reg, "bit": bit, "disabled": bool(disabled), "old": cur, "new": new})
+        return {"status": "ok", "reg": reg, "value": new}
+
     def set_cycle_autostart(self, on):
         """Запомнить галочку «Автостарт цикла» в конфиг БЕЗ перезапуска платы."""
         on = bool(on)

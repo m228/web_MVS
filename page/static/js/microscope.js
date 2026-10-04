@@ -149,6 +149,62 @@
     dim("pcShotWrap", cvOn);
   }
 
+  // ---- блокировки прошивки (рег. 1535): бит=1 → блокировка ОТКЛЮЧЕНА (квадратик закрашен) ----
+  const LOCK_NAMES = {
+    0: "блокирует калибровку по дельте 100 мкм, если AI0 1000 мкм",
+    1: "блокирует низкую скорость при положении < 1 мм",
+    2: "блокирует условие AI0 < ai0_min — датчик Home для M1",
+    3: "блокирует условие m1_alert — датчик от контроллера для M1",
+    4: "блокирует датчик Home для M2",
+    5: "блокирует для M1: если позиция по энкодеру < 0, то обнуляем её и абсолютную тоже",
+    6: "блокирует для M1 отслеживание ошибок движения",
+  };
+  // после клика держим подтверждённое значение 4 с: опрос страницы может принести старый снимок,
+  // и квадратик «откатился» бы назад, хотя плата уже приняла запись
+  let lockHold = null;   // {value, until}
+  function renderLocks(value) {
+    const row = $("locksRow"); if (!row) return;
+    if (lockHold) {
+      if (Date.now() > lockHold.until || Number(value) === lockHold.value) lockHold = null;
+      else value = lockHold.value;
+    }
+    if (!row.children.length) {
+      for (let bit = 15; bit >= 0; bit--) {
+        const b = document.createElement("button");
+        b.type = "button"; b.dataset.bit = bit;
+        b.className = "micro-lock-bit" + (bit in LOCK_NAMES ? "" : " is-free");
+        b.innerHTML = "<span>" + bit + "</span><i></i>";
+        b.addEventListener("click", () => toggleLock(bit));
+        row.appendChild(b);
+      }
+    }
+    const known = value != null && !isNaN(Number(value));
+    row.querySelectorAll(".micro-lock-bit").forEach((b) => {
+      const bit = Number(b.dataset.bit), off = known && ((Number(value) >> bit) & 1) === 1;
+      b.classList.toggle("is-off", off);
+      b.classList.toggle("is-unknown", !known);
+      const name = LOCK_NAMES[bit] || "нет описания (не используется)";
+      b.title = "Бит " + bit + " — " + name + "\n" +
+        (known ? (off ? "сейчас: блокировка ОТКЛЮЧЕНА" : "сейчас: блокировка включена") : "значение не прочитано");
+    });
+  }
+  async function toggleLock(bit) {
+    if (!(bit in LOCK_NAMES)) return;                 // биты без описания не трогаем
+    const b = document.querySelector('.micro-lock-bit[data-bit="' + bit + '"]'); if (!b) return;
+    if (b.classList.contains("is-unknown")) return;   // не знаем текущего значения — не пишем вслепую
+    const wasOff = b.classList.contains("is-off");
+    const msg = wasOff
+      ? "Включить блокировку (бит " + bit + ") обратно?\n\n" + LOCK_NAMES[bit]
+      : "ОТКЛЮЧИТЬ блокировку (бит " + bit + ")?\n\n" + LOCK_NAMES[bit] +
+        "\n\nЭто запись в плату: защита хода М1 у стекла станет слабее.";
+    if (!confirm(msg)) return;
+    try {
+      const r = await api("/api/micro/lock", { bit, disabled: wasOff ? 0 : 1 });
+      if (r && r.value != null && !r.error) { lockHold = { value: Number(r.value), until: Date.now() + 4000 }; renderLocks(r.value); }
+      sentCmd("Блокировка бит " + bit + ": " + (wasOff ? "включена" : "ОТКЛЮЧЕНА") + (r && r.error ? " — ошибка " + r.error : ""));
+    } catch (e) { sentCmd("Блокировка бит " + bit + ": ошибка " + e.message); }
+  }
+
   // ---- камера: MVS SDK сам находит камеры Hikrobot ----
   async function autoDiscoverCameras() {
     try {
@@ -968,6 +1024,7 @@
       set("sDistRev", pair(e.m1_dist_rev, e.m2_dist_rev));
       set("sKmm", pair(e.m1_k_steps_mm, e.m2_k_steps_mm));
       set("sStopSensor", num(e.m1_stop_sensor));
+      renderLocks(e.locks);
       set("sSlipLimit", num(e.m1_slip_limit));
       set("cTemp", t.temp == null ? "—" : t.temp + " °C");
       set("cFan", pair(e.fan1, e.fan2));

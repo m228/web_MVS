@@ -1604,7 +1604,7 @@
   const CV_GROUP_NAMES = { small: "малая", medium: "средняя", large: "большая", reject: "брак", suspect: "вытянутый (не брак)", cut: "обрезан краем — не в рассеве" };
   const CV_GROUP_COLOR = { small: "#1d9e75", medium: "#378add", large: "#ba7517", reject: "#e24b4a", suspect: "#6ad1f5", cut: "#9aa3ad" };
   const CV_LAYERS_KEY = "microCvLayers";
-  let cvLayers = { small: true, medium: true, large: true, reject: true, suspect: true, cut: true, sizes: false, conf: false, frac: true };
+  let cvLayers = { small: true, medium: true, large: true, reject: true, suspect: true, cut: true, sizes: false, conf: false, frac: true, detail: true };
   // порог уверенности из поля вкладки CV: кристаллы с conf ниже него скрываем (живой предпросмотр «а если поднять?»)
   function cvConfThr() { const e = $("cvConf"); const v = e && e.value !== "" ? parseFloat(e.value) : NaN; return isNaN(v) ? 0 : v; }
   let cvCurClean = false;       // текущий кадр чистый (контуры рисуем сами); false — старая проба с «впечёнными»
@@ -1894,8 +1894,10 @@
         " · выпукл. " + mark(best.solidity.toFixed(2), tS != null && best.solidity < tS) +
         " · вытянут. " + mark(best.aspect.toFixed(1), tA != null && best.aspect > tA) +
         (best.conf != null ? "<br>уверенность модели (conf) " + mark(best.conf.toFixed(2), best.conf < 0.5) : "");
-      tip.innerHTML = "Ø <b>" + best.size_um + " мкм</b> · S <b>" + Math.round(best.area_um2) + " мкм²</b><br>" +
-        best.length_um + "×" + best.width_um + " мкм · " + gr + grp + shape + why;
+      const head = "Ø <b>" + best.size_um + " мкм</b> · S <b>" + Math.round(best.area_um2) + " мкм²</b>";
+      // «подробно» выключено — коротко: только размер и площадь; включено — форма, причина, что делать, уверенность
+      tip.innerHTML = cvLayers.detail === false ? head
+        : head + "<br>" + best.length_um + "×" + best.width_um + " мкм · " + gr + grp + shape + why;
       const cardR = card.getBoundingClientRect();
       tip.style.left = (e.clientX - cardR.left) + "px";
       tip.style.top = (e.clientY - cardR.top) + "px";

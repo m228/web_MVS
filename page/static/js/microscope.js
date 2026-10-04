@@ -2436,7 +2436,7 @@
 
   document.addEventListener("DOMContentLoaded", () => {
     lockSaves(true);          // пока настройки не загружены с сервера, сохранять нельзя
-    api("/api/version").then((v) => { const e = $("verApp"); if (e) { e.textContent = "программа v" + v.app; e.classList.add("is-ok"); } }).catch(() => {});
+    api("/api/version").then((v) => { const e = $("verApp"); if (e) { e.textContent = "WebMVS v" + v.app; e.classList.add("is-ok"); } }).catch(() => {});
     wire();
     syncManual(false);
     initCamera();

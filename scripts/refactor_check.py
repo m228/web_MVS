@@ -34,6 +34,12 @@ TARGETS = {
 }
 
 
+# строки эталона, которые при рефакторинге ОСОЗНАННО убираются (оболочки, а не логика)
+ALLOW_LOST = {
+    "microscope": {"(function () {", "})();"},     # IIFE снят: файлы делят общую глобальную область
+}
+
+
 def git_show(ref, path):
     out = subprocess.run(["git", "show", "%s:%s" % (ref, path)], cwd=ROOT, capture_output=True)
     if out.returncode != 0:
@@ -111,6 +117,9 @@ def check_target(name, ref):
     # 1. строки
     a, b = sig_lines(old_text), sig_lines(new_text)
     lost = a - b
+    for ln in ALLOW_LOST.get(name, ()):
+        if ln in lost:
+            print("  (разрешено убрать оболочку: %s ×%d)" % (ln, lost.pop(ln)))
     added = b - a
     print("  файлов: %d, строк: было %d → стало %d" % (len(new_files), sum(a.values()), sum(b.values())))
     if lost:

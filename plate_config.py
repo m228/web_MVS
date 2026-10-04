@@ -12,6 +12,7 @@ import json
 import os
 import shutil
 import threading
+import time
 from copy import deepcopy
 
 from logger import log_event
@@ -21,6 +22,9 @@ CONFIG_PATH = DATA_DIR / "plate_config.json"
 BACKUP_PATH = DATA_DIR / "plate_config.backup.json"   # копия «before-import» перед загрузкой дампа
 LAST_GOOD_PATH = DATA_DIR / "plate_config.last_good.json"   # последняя УДАЧНО записанная копия (на случай битого файла)
 CORRUPT_PATH = DATA_DIR / "plate_config.corrupt.json"       # что осталось от битого файла (для разбора вручную)
+SNAP_DIR = DATA_DIR / "config_backups"                      # автокопии настроек с датой (откат на вкладке «Дамп»)
+SNAP_KEEP = 60                                              # сколько последних копий хранить
+SNAP_MIN_GAP_S = 60                                         # не чаще одной копии в минуту
 
 # --- значения по умолчанию (ПЛЕЙСХОЛДЕРЫ для SP/SVSP — Макс подставит боевые) ---
 DEFAULTS = {
@@ -221,7 +225,10 @@ DEFAULTS = {
     # display_scale — множитель ТОЛЬКО показа датчика на странице (свести датчик с позицией;
     # логику доезда НЕ меняет). Правится на вкладке «Настройки моторов».
     "sensor_filter": {"enabled": False, "avg_sec": 2},
-    "sensor_display_scale": 1.0,
+    # ЗАШИТО по умолчанию 0,1: на нашем железе регистр 1271 приходит в мкм, а базовый множитель ×10 завышал
+    # датчик в 10 раз (25000 вместо 2500 мкм). Раньше 0,1 надо было выставлять руками, и после потери
+    # конфига датчик снова врал. Своё значение (вкладка «Настр») по-прежнему сохраняется поверх.
+    "sensor_display_scale": 0.1,
 
     # ДОВОД ПОДВОДА ПО АБСОЛЮТНИКУ (гибридный доезд mode 22): грубо по расчётной абс.позиции
     # (рег.1274, pos1 — НЕ энкодер 1285, он врёт) до ±coarse_tol_um, чтобы не перелететь и не
@@ -415,6 +422,46 @@ def _atomic_write(path, text):
     os.replace(tmp, path)
 
 
+def _snapshot(text):
+    """Автокопия настроек с датой в config_backups/: только если содержимое изменилось и с прошлой
+    копии прошло ≥ минуты; хранится SNAP_KEEP последних. Чтобы можно было откатиться на любой момент."""
+    try:
+        SNAP_DIR.mkdir(parents=True, exist_ok=True)
+        snaps = sorted(SNAP_DIR.glob("plate_config_*.json"))
+        if snaps:
+            last = snaps[-1]
+            if time.time() - last.stat().st_mtime < SNAP_MIN_GAP_S:
+                return
+            if last.read_text(encoding="utf-8") == text:
+                return
+        _atomic_write(SNAP_DIR / time.strftime("plate_config_%Y%m%d_%H%M%S.json"), text)
+        for old in sorted(SNAP_DIR.glob("plate_config_*.json"))[:-SNAP_KEEP]:
+            old.unlink()
+    except Exception as e:
+        log_event("plate_config", "Не удалось сохранить автокопию настроек", "warn", {"error": str(e)})
+
+
+def list_snapshots():
+    """Автокопии настроек, новые сверху: [{name, ts, size}]."""
+    out = []
+    if SNAP_DIR.exists():
+        for p in sorted(SNAP_DIR.glob("plate_config_*.json"), reverse=True):
+            st = p.stat()
+            out.append({"name": p.name, "ts": st.st_mtime, "size": st.st_size})
+    return out
+
+
+def read_snapshot(name):
+    """Содержимое автокопии (dict) по имени; имя строго проверяется — выйти из папки нельзя."""
+    import re
+    if not re.fullmatch(r"plate_config_\d{8}_\d{6}\.json", str(name or "")):
+        raise ValueError("недопустимое имя копии")
+    d = json.loads((SNAP_DIR / name).read_text(encoding="utf-8"))
+    if not isinstance(d, dict) or not d:
+        raise ValueError("копия пустая или повреждена")
+    return d
+
+
 def _read_user():
     """Правки пользователя из plate_config.json (dict). Файл пустой/битый (резкое закрытие) — НЕ
     теряем всё молча: битый файл сохраняем рядом (plate_config.corrupt.json), восстанавливаем из
@@ -473,6 +520,7 @@ def save(patch):
                 _atomic_write(LAST_GOOD_PATH, text)      # копия для восстановления, если файл потом побьётся
             except Exception:
                 pass
+            _snapshot(text)
             log_event("plate_config", "plate_config.json обновлён со страницы", "info",
                       {"keys": list((patch or {}).keys())})
         except Exception as e:

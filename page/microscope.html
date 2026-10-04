@@ -133,6 +133,7 @@
               <button type="button" id="cvGalPrev" class="micro-cv-pager__btn" title="Предыдущий кадр пробы">‹</button>
               <span id="cvGalPos">—</span>
               <button type="button" id="cvGalNext" class="micro-cv-pager__btn" title="Следующий кадр пробы">›</button>
+              <button type="button" id="cvFollowBtn" class="micro-cv-pager__btn micro-cv-pager__btn--follow" title="Автопереход на самую свежую пробу: включён — окно само показывает новые пробы; выключен — остаётся на той, что ты смотришь (новые просто добавляются в ленту сверху)">авто</button>
             </div>
             <div class="micro-cam-tele" id="camTele">
               <div class="micro-cam-tile"><span>СВ (Brix)</span><b id="camSv_v">—</b></div>
@@ -629,6 +630,12 @@
                 </div>
                 <span class="micro-conn-hint" id="dumpHint"></span>
                 <pre class="micro-dump-view" id="dumpView" hidden></pre>
+                <div class="micro-sub__title micro-sub__title--sep">Автокопии настроек</div>
+                <p class="micro-info__lead">Программа сама сохраняет копию настроек при каждом изменении (не чаще раза в минуту, последние 60) в папку <code>config_backups</code>. Выбери момент и откатись.</p>
+                <div class="micro-cycle-btns">
+                  <select id="dumpSnapSel" class="micro-dump-sel"></select>
+                  <button type="button" id="dumpSnapRestore" class="toolbar-btn toolbar-btn--neutral">Восстановить</button>
+                </div>
                 <p class="micro-plc-note">Перед загрузкой текущий конфиг автоматически сохраняется рядом в <code>plate_config.backup.json</code>. Загрузка перезапускает автомат.</p>
 
                 <div class="micro-sub__title micro-sub__title--sep">Автофокус М2 (поиск фокуса)</div>

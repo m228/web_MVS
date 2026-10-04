@@ -470,6 +470,25 @@ def micro_config_dump():
     return plate_config.load()
 
 
+@app.get("/api/micro/config_snapshots")
+def micro_config_snapshots():
+    """Автокопии настроек (с датой) для отката на вкладке «Дамп»."""
+    return {"snapshots": plate_config.list_snapshots()}
+
+
+@app.get("/api/micro/config_restore")
+def micro_config_restore(name: str):
+    """Откат настроек на автокопию: текущие сохраняются в plate_config.backup.json, автомат перезапускается."""
+    try:
+        plate_config.replace_all(plate_config.read_snapshot(name))
+    except Exception as e:
+        api_log("api.micro.config_restore", "Ошибка отката настроек", "warn", {"name": name, "error": str(e)})
+        return {"status": "error", "error": str(e)}
+    data = micro.reload()
+    api_log("api.micro.config_restore", "Настройки восстановлены из автокопии", payload={"name": name})
+    return {"status": "ok", "host": data.get("host") if data else None}
+
+
 @app.post("/api/micro/config_import")
 def micro_config_import(payload: dict = Body(...)):
     """Импорт дампа: перезаписать конфиг целиком (с backup «before-import») и перезапустить автомат."""

@@ -72,6 +72,7 @@
     });
     const save = $("pcSave");
     if (save) save.addEventListener("click", async () => {
+      if (!cfgLoaded) { loadHint("настройки ещё не загружены — подожди"); return; }
       const p = {
         retract_pos: $("pcRetract").value, pre_wash_sec: $("pcPreWash").value,
         dwell_sec: $("pcDwell").value, shot_interval_sec: $("pcShotInterval").value,
@@ -516,6 +517,36 @@
       } catch (e) { hint("ошибка: " + e.message); }
     });
 
+    // автокопии настроек: список по датам + откат
+    const snapSel = $("dumpSnapSel");
+    const loadSnaps = async () => {
+      if (!snapSel) return;
+      try {
+        const r = await api("/api/micro/config_snapshots");
+        const list = r.snapshots || [];
+        snapSel.innerHTML = "";
+        if (!list.length) { const o = document.createElement("option"); o.textContent = "копий пока нет"; o.value = ""; snapSel.appendChild(o); return; }
+        list.forEach((s) => {
+          const o = document.createElement("option"); o.value = s.name;
+          const d = new Date(s.ts * 1000);
+          o.textContent = d.toLocaleString("ru-RU") + " · " + Math.round(s.size / 1024 * 10) / 10 + " КБ";
+          snapSel.appendChild(o);
+        });
+      } catch (e) { /* список недоступен */ }
+    };
+    loadSnaps();
+    document.querySelector('.micro-ptab[data-ptab="dump"]')?.addEventListener("click", loadSnaps);
+    const snapBtn = $("dumpSnapRestore");
+    if (snapBtn) snapBtn.addEventListener("click", async () => {
+      const name = snapSel && snapSel.value; if (!name) return;
+      if (!window.confirm("Откатить настройки на копию от " + snapSel.options[snapSel.selectedIndex].textContent + "?\n\nТекущие сохранятся в plate_config.backup.json, автомат перезапустится.")) return;
+      try {
+        const res = await api("/api/micro/config_restore", { name });
+        if (res && res.status === "ok") { hint("настройки восстановлены, автомат перезапущен — перезагрузи страницу"); sentCmd("Настройки восстановлены из автокопии"); }
+        else hint("ошибка отката: " + ((res && res.error) || "неизвестно"));
+      } catch (e) { hint("ошибка отката: " + e.message); }
+    });
+
     $("dumpLoadBtn").addEventListener("click", () => $("dumpFile").click());
     $("dumpFile").addEventListener("change", async (ev) => {
       const file = ev.target.files && ev.target.files[0];
@@ -692,11 +723,25 @@
     if (!ok && attempt < 8) setTimeout(() => discoverWithRetry(attempt + 1), 2500);
   }
 
+  // Настройки читаются с сервера при открытии страницы. Сервер мог ещё не подняться (перезапуск, плата
+  // переподключилась) — тогда поля остаются пустыми/заводскими, а «Сохранить» затёрло бы настоящие значения.
+  // Поэтому: повторяем загрузку, пока не получится, а кнопки сохранения заблокированы до успеха.
+  let cfgLoaded = false, cfgTries = 0, cvSettingsLoaded = false, cvLoadTries = 0;
+  const SAVE_GUARD_IDS = ["pcSave", "svspSave", "cvSaveBtn", "cvEnable"];
+  function lockSaves(on) {
+    SAVE_GUARD_IDS.forEach((id) => {
+      const b = $(id); if (!b) return;
+      if (id === "cvSaveBtn" || id === "cvEnable") b.disabled = on || !cvSettingsLoaded;
+      else b.disabled = on || !cfgLoaded;
+    });
+  }
+  function loadHint(text) { const h = $("pcHint"); if (h) h.textContent = text || ""; }
   async function initCamera() {
     let cfgSerial = "";
+    let loadedOk = false;
     try {
       cfg = await api("/api/micro/config");
-      if (cfg) {
+      if (cfg && cfg.probe_cycle) {
         if (cfg.led_bright != null) { $("ledBright").value = cfg.led_bright; $("ledBrightVal").textContent = cfg.led_bright; }
         if (cfg.led_freq != null && $("ledFreq")) $("ledFreq").value = cfg.led_freq;
         // плата — только для инфо (адрес/порт/unit задаются в plate_config.json)
@@ -748,8 +793,17 @@
         faSet("acEveryN", ac.every_n); faSet("acLo", ac.sensor_lo);
         faSet("acHi", ac.sensor_hi); faSet("acTimeout", ac.timeout_sec);
         cfgSerial = cfg.camera_serial || "";
+        loadedOk = true;
       }
     } catch (e) { /* конфиг недоступен */ }
+    if (!loadedOk) {
+      cfgLoaded = false; lockSaves(true);
+      loadHint("загрузка настроек с сервера… (попытка " + (cfgTries + 1) + ")");
+      if (++cfgTries < 90) setTimeout(initCamera, 2000);
+      else loadHint("не удалось загрузить настройки — перезагрузи страницу");
+      return;
+    }
+    cfgLoaded = true; cfgTries = 0; lockSaves(false); loadHint("");
 
     buildDqGrid();
     buildSvspTable();
@@ -907,7 +961,7 @@
       set("m1Pos", um(lastPos[1]));
       set("m2Pos", um(lastPos[2]));
       // датчик перемещения: показ с множителем sensor_display_scale (свести с позицией; логику не трогает)
-      const dScale = (cfg && cfg.sensor_display_scale != null) ? Number(cfg.sensor_display_scale) : 1;
+      const dScale = (cfg && cfg.sensor_display_scale != null) ? Number(cfg.sensor_display_scale) : 0.1;
       const sensorShown = e.sensor == null ? null : Math.round(e.sensor * dScale);
       set("m1Sensor", um(sensorShown)); set("m1Enc", um(e.m1_enc)); set("m1Steps", num(e.m1_steps));
       set("m2Steps", num(e.m2_steps)); set("m2State", num(e.m2_state));
@@ -1708,12 +1762,17 @@
   }
   function cvRenderStrip() {
     const wrap = $("cvStrip"); if (!wrap) return;
-    const key = cvSamples.map((s) => s.ts).join("|");
-    if (wrap.dataset.key !== key) {            // перестраиваем, только когда список проб изменился
-      wrap.dataset.key = key;
-      wrap.innerHTML = "";
-      cvSamples.forEach((s) => {
-        const b = document.createElement("button");
+    // НЕ перестраиваем ленту целиком: новые пробы вставляются сверху, исчезнувшие (ротация) убираются,
+    // остальные элементы остаются на месте — браузер сохраняет позицию прокрутки, и то, что ты
+    // рассматриваешь, просто сдвигается ниже, а не «улетает».
+    const have = new Map([...wrap.querySelectorAll(".micro-cv-strip__item")].map((b) => [b.dataset.ts, b]));
+    const want = new Set(cvSamples.map((s) => s.ts));
+    have.forEach((b, ts) => { if (!want.has(ts)) { b.remove(); have.delete(ts); } });
+    let prevEl = null;                         // вставляем по порядку: новая проба — над предыдущей
+    cvSamples.forEach((s) => {
+      let b = have.get(s.ts);
+      if (!b) {
+        b = document.createElement("button");
         b.type = "button"; b.className = "micro-cv-strip__item"; b.dataset.ts = s.ts;
         b.title = cvSampleTitle(s);
         const im = document.createElement("img"); im.alt = ""; im.src = cvThumbSrc(s.ts);
@@ -1721,15 +1780,16 @@
         cap.textContent = cvTsLabel(s.ts).slice(0, 5) + (s.stage != null ? " · ст." + s.stage : "");
         b.appendChild(im); b.appendChild(cap);
         b.addEventListener("click", () => cvSelectProbe(s.ts));
-        wrap.appendChild(b);
-      });
-    }
+        wrap.insertBefore(b, prevEl ? prevEl.nextSibling : wrap.firstChild);
+      }
+      prevEl = b;
+    });
     wrap.hidden = !cvSamples.length;
     const cur = cvView && cvView.ts;
     wrap.querySelectorAll(".micro-cv-strip__item").forEach((b) => b.classList.toggle("is-active", b.dataset.ts === cur));
   }
-  // выбрать пробу из ленты → показать её в окне «Комп. зрение». Клик по самой новой — окно
-  // снова следует за свежими пробами; по старой — держится на ней, пока не выберут другую.
+  // выбрать пробу из ленты → показать её в окне «Комп. зрение». Выбранная проба ЗАКРЕПЛЯЕТСЯ: новые
+  // пробы в окно сами не прыгают (они появляются в ленте сверху). Вернуть слежение — кнопка «авто».
   async function cvSelectProbe(ts) {
     const latest = cvLastResult && cvLastResult.ts;
     let r = (ts === latest) ? cvLastResult : null;
@@ -1738,7 +1798,7 @@
       catch (e) { r = null; }
     }
     if (!r || r.empty) return;
-    cvView = r; cvViewPinned = (ts !== latest);
+    cvView = r; cvViewPinned = true;
     cvGalIdx = 0; cvWinOn = true;              // переключаем верхнее окно в «Комп. зрение»
     cvRenderScatter(); cvRenderStrip(); cvShowFrame();
   }
@@ -1759,6 +1819,7 @@
     }
     if (posEl) posEl.textContent = cvTsLabel(ts) + " · " + (cvGalIdx + 1) + "/" + frames.length;
     if (pager) pager.hidden = false;
+    cvSyncFollowBtn();
     if (cvWinOn) applyWinMode();
     cvDrawOverlay();
   }
@@ -1819,10 +1880,23 @@
   // листалка кадров выбранной пробы (‹ › поверх окна «Комп. зрение»)
   function cvViewFrame(idx) {
     cvGalIdx = idx;
+    cvViewPinned = true;            // смотрю кадры этой пробы — не уводить на свежую
     cvWinOn = true;
     cvShowFrame();                  // ставит overlay.src и (т.к. cvWinOn) applyWinMode
   }
+  function cvSyncFollowBtn() {
+    const b = $("cvFollowBtn"); if (b) b.classList.toggle("is-on", !cvViewPinned);
+  }
   function wireGallery() {
+    const fb = $("cvFollowBtn");
+    if (fb) fb.addEventListener("click", () => {
+      cvViewPinned = !cvViewPinned;
+      if (!cvViewPinned && cvLastResult) {         // включили слежение — сразу к самой свежей пробе
+        cvView = cvLastResult; cvGalIdx = 0;
+        cvRenderScatter(); cvRenderStrip(); cvShowFrame();
+      }
+      cvSyncFollowBtn();
+    });
     const prev = $("cvGalPrev"), next = $("cvGalNext");
     if (prev) prev.addEventListener("click", () => { if (cvGalIdx > 0) cvViewFrame(cvGalIdx - 1); });
     if (next) next.addEventListener("click", () => { if (cvGalIdx < cvViewFrames().length - 1) cvViewFrame(cvGalIdx + 1); });
@@ -2184,6 +2258,16 @@
     });
   }
 
+  // настройки CV: повторяем, пока сервер не отдаст (иначе поля пустые, а «Сохранить пороги» ломает конфиг)
+  function cvLoadSettings() {
+    api("/api/cv/settings").then((c) => {
+      if (!c || !c.groups) throw new Error("настройки CV ещё не готовы");
+      cvFillSettings(c); cvSettingsLoaded = true; cvLoadTries = 0; lockSaves(false);
+    }).catch(() => {
+      cvSettingsLoaded = false; lockSaves(true);
+      if (++cvLoadTries < 90) setTimeout(cvLoadSettings, 2000);
+    });
+  }
   function wireCV() {
     wireWindow();
     wireTeleToggle();
@@ -2197,6 +2281,7 @@
     if (en) en.addEventListener("change", () => { updateTriggerFields(); cvPostSettings({ enabled: en.checked }).then(cvHealth); });
     const save = $("cvSaveBtn");
     if (save) save.addEventListener("click", async () => {
+      if (!cvSettingsLoaded) return;
       await cvPostSettings(cvCollectPatch());
       const h = $("cvSaveHint"); if (h) { h.textContent = "сохранено"; setTimeout(() => (h.textContent = ""), 1500); }
       cvRenderScatter();
@@ -2215,10 +2300,14 @@
       setTimeout(tick, 300);
     });
     // подтянуть настройки + первичные данные
-    api("/api/cv/settings").then(cvFillSettings).catch(() => { });
+    cvLoadSettings();
     cvHealth();
     cvRefresh();
-    setInterval(() => { cvHealth(); if (cvWinOn || isCvPaneVisible() || isTeleCvVisible()) cvRefresh(); }, 5000);
+    setInterval(() => {
+      cvHealth(); if (cvWinOn || isCvPaneVisible() || isTeleCvVisible()) cvRefresh();
+      const mi = $("cvModelInfo");                       // модель не подтянулась при старте — пробуем снова
+      if (mi && (mi.textContent === "—" || mi.textContent === "сервис офлайн")) cvModelRefresh();
+    }, 5000);
   }
   function isCvPaneVisible() {
     const p = document.querySelector('.micro-ppane[data-ppane="cv"]');
@@ -2318,6 +2407,7 @@
   }
 
   document.addEventListener("DOMContentLoaded", () => {
+    lockSaves(true);          // пока настройки не загружены с сервера, сохранять нельзя
     wire();
     syncManual(false);
     initCamera();

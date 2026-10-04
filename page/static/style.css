@@ -3311,6 +3311,8 @@ html {
 .micro-af-best { font-weight: 700; color: var(--success); margin: 6px 0; }
 .micro-af-table .is-best { background: var(--success-soft); font-weight: 700; }
 /* просмотр дампа настроек */
+.micro-dump-sel { min-width: 0; flex: 1 1 auto; padding: 6px 8px; border-radius: 8px; border: 1px solid var(--border, rgba(131,151,179,.28)); background: var(--surface-muted, #f4f8fc); color: var(--text); font: inherit; font-size: 0.88em; }
+.toolbar-btn:disabled { opacity: .5; cursor: not-allowed; }
 .micro-dump-view { margin-top: 10px; max-height: 340px; overflow: auto; background: var(--surface-muted);
   border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; font-size: 0.82em;
   font-family: ui-monospace, "Cascadia Code", Consolas, monospace; white-space: pre; color: var(--text); }
@@ -3663,6 +3665,8 @@ input.micro-cam-num { width: 56px; min-width: 0; flex: 0 0 auto; padding: 4px 5p
 .micro-cv-pager[hidden], .micro-cam-card:not(.cv-win) .micro-cv-pager { display: none; }
 .micro-cv-pager__btn { border: 0; background: transparent; color: inherit; cursor: pointer; font-size: 16px; line-height: 1; padding: 2px 8px; border-radius: 6px; }
 .micro-cv-pager__btn:hover { background: rgba(255,255,255,0.14); }
+.micro-cv-pager__btn--follow { font-size: 11px; padding: 2px 8px; margin-left: 4px; border: 1px solid rgba(255,255,255,0.28); opacity: .75; }
+.micro-cv-pager__btn--follow.is-on { background: var(--accent, #2563eb); border-color: transparent; opacity: 1; }
 
 /* Тренд: строка даты, столбик серий слева, график справа */
 .micro-trend__bar { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-bottom: 8px; }

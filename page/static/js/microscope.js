@@ -1350,7 +1350,7 @@
   // ================= Компьютерное зрение (CV) =================
   // Вкладка «CV» + переключатель окна камера/распознавание. Данные с /api/cv/*.
   const CV_GROUPS = ["small", "medium", "large", "reject"];
-  const CV_SERIES_COLOR = { small: "#1d9e75", medium: "#378add", large: "#ba7517", reject: "#e24b4a", mean: "#7f77dd" };
+  const CV_SERIES_COLOR = { small: "#1d9e75", medium: "#378add", large: "#ba7517", reject: "#e24b4a", mean: "#7f77dd", median: "#d16fb8" };
   let cvWinOn = false;          // окно показывает CV (true) или камеру (false)
   let cvLastResult = null;      // последняя проба (result.json)
   let cvPrevResult = null;      // предыдущая проба (для Δ к прошлой)
@@ -1359,9 +1359,8 @@
   let cvViewPinned = false;     // выбрана старая проба из ленты — окно не прыгает на свежую
   let cvGalIdx = 0;             // индекс кадра показанной пробы
   let cvCurObjects = [];        // объекты текущего кадра окна CV (для наведения: bbox/size/area)
-  let cvTrendData = null;       // {ts, stage, series}
-  let cvTrendView = null;       // {start, end} видимый диапазон индексов (для пан/зум)
-  let cvTrendUserZoomed = false; // пользователь сам двигал/зумил тренд — не сбрасывать авто-фитом
+  let cvTrendData = null;       // {from, to, t[], ts[], stage[], series} — загруженный участок журнала
+  let cvTrendView = null;       // {start, end} видимое окно, epoch-секунды
   let cvTrendHover = null;       // индекс пробы под линией-курсором тренда
   let cvTrendGeom = null;        // геометрия последней отрисовки тренда (для привязки курсора)
   let cvLastModel = null;        // имя детектора из /api/cv/health (для телеметрии)
@@ -1767,148 +1766,302 @@
     if (next) next.addEventListener("click", () => { if (cvGalIdx < cvViewFrames().length - 1) cvViewFrame(cvGalIdx + 1); });
   }
 
-  // --- интерактивный тренд (canvas, выбор серий, пан/зум по времени, линия-курсор по пробам) ---
-  const CV_TREND_ALL = ["small", "medium", "large", "reject", "mean", "count"];
+  // --- тренд по РЕАЛЬНОМУ времени (как в SCADA): выбор даты, сдвиг за пределы загруженного, масштаб ---
+  // Данные берутся из журнала проб по дням (cv_history) — он не стирается ротацией кадров.
+  const CV_TREND_KEY = "microCvTrendSeries";
+  const CV_PCT_SERIES = ["small", "medium", "large", "reject"];   // шкала слева, %
+  const CV_UM_SERIES = ["mean", "median"];                        // шкала справа, мкм
+  const CV_MAX_SPAN = 400 * 86400, CV_MIN_SPAN = 60;
+  let cvTrendDay = null;         // выбранная дата «YYYY-MM-DD»
+  let cvTrendDays = [];          // дни, за которые есть пробы
+  let cvTrendFollow = true;      // вид сам подгоняется под выбранный день (пока не двигали/масштабировали)
+  let cvTrendFetchTimer = null;
+  let cvTrendSeq = 0;
+
   function cvSelectedSeries() {
     return [...document.querySelectorAll("#cvSeries input:checked")].map((c) => c.value);
   }
-  async function cvLoadTrend() {
+  const cvPad2 = (n) => String(n).padStart(2, "0");
+  function cvDayStr(d) { return d.getFullYear() + "-" + cvPad2(d.getMonth() + 1) + "-" + cvPad2(d.getDate()); }
+  function cvDayRange(day) {                     // «2026-10-04» → [epoch 00:00, epoch 24:00) в местном времени
+    const p = day.split("-").map(Number), a = new Date(p[0], p[1] - 1, p[2], 0, 0, 0).getTime() / 1000;
+    return [a, a + 86400];
+  }
+  function cvFmtT(t, withSec) {                  // epoch → «04.10 07:44[:55]»
+    const d = new Date(t * 1000);
+    return cvPad2(d.getDate()) + "." + cvPad2(d.getMonth() + 1) + " " + cvPad2(d.getHours()) + ":" + cvPad2(d.getMinutes()) +
+      (withSec ? ":" + cvPad2(d.getSeconds()) : "");
+  }
+  async function cvTrendFetch(a, b) {            // загрузить пробы [a,b] (epoch, сек)
+    const seq = ++cvTrendSeq;
+    const q = [cvSerialQ(), "series=small,medium,large,reject,mean,median,count", "from=" + Math.floor(a), "to=" + Math.ceil(b), "limit=5000"].filter(Boolean).join("&");
+    const d = await api("/api/cv/trend?" + q);
+    if (seq !== cvTrendSeq) return false;        // пока грузили, запросили другое — это устарело
+    cvTrendData = d; return true;
+  }
+  // подгон вида под выбранный день: от первой до последней пробы, с полями
+  function cvTrendFit() {
+    const d = cvTrendData; if (!d || !d.t || !d.t.length) { const r = cvDayRange(cvTrendDay); cvTrendView = { start: r[0], end: r[1] }; return; }
+    const lo = d.t[0], hi = d.t[d.t.length - 1];
+    const pad = Math.max(120, (hi - lo) * 0.04);
+    cvTrendView = { start: lo - pad, end: hi + pad };
+  }
+  async function cvLoadTrend(refreshDays) {
     try {
-      // тянем ВСЕ серии (рисуем выбранные): тултип курсора показывает полный рассев пробы
-      const q = [cvSerialQ(), "series=" + CV_TREND_ALL.join(","), "limit=200"].filter(Boolean).join("&");
-      cvTrendData = await api("/api/cv/trend?" + q);
-      const n = (cvTrendData.ts || []).length;
-      // авто-фит на весь диапазон, пока пользователь сам не двигал/зумил тренд
-      if (!cvTrendUserZoomed || !cvTrendView) cvTrendView = { start: 0, end: Math.max(1, n) };
-      else if (cvTrendView.end > n) cvTrendView = { start: Math.max(0, cvTrendView.start), end: n };
-      cvDrawTrend();
+      // список дней — только при плановом обновлении; при смене даты он не нужен (быстрее отклик)
+      if (refreshDays !== false || !cvTrendDays.length) {
+        const days = ((await api("/api/cv/trend/days" + (cvSerialQ() ? "?" + cvSerialQ() : ""))).days) || [];
+        cvTrendDays = days.map((x) => x.date);
+      }
+      if (!cvTrendDay) cvTrendDay = cvTrendDays.length ? cvTrendDays[cvTrendDays.length - 1] : cvDayStr(new Date());
+      const di = $("cvTrendDate"); if (di && di.value !== cvTrendDay) di.value = cvTrendDay;
+      if (cvTrendFollow) {
+        const r = cvDayRange(cvTrendDay);
+        if (await cvTrendFetch(r[0], r[1])) { cvTrendFit(); cvDrawTrend(); }
+      } else cvTrendEnsure(0);
     } catch (e) { /* нет данных */ }
   }
+  // загружен ли нужный участок; нет — подгрузить с запасом в один экран по бокам
+  function cvTrendEnsure(delay) {
+    clearTimeout(cvTrendFetchTimer);
+    cvTrendFetchTimer = setTimeout(async () => {
+      if (cvTrendFollow) return;           // «вся дата»: данные ведёт cvLoadTrend, отложенную подгрузку не шлём
+      const v = cvTrendView, d = cvTrendData; if (!v) return;
+      if (d && d.from != null && d.from <= v.start && d.to >= v.end) return;
+      const span = v.end - v.start;
+      try { if (await cvTrendFetch(v.start - span, v.end + span) && !cvTrendFollow) cvDrawTrend(); } catch (e) { }
+    }, delay);
+  }
+  function cvTrendSetDay(day, fit) {
+    cvTrendDay = day; cvTrendFollow = true; cvTrendHover = null;
+    clearTimeout(cvTrendFetchTimer);
+    const di = $("cvTrendDate"); if (di) di.value = day;
+    cvLoadTrend(false);
+  }
+  function cvNiceStep(span) {                    // шаг подписей оси времени ≈ 6–8 меток на экран
+    const steps = [60, 120, 300, 600, 900, 1800, 3600, 7200, 10800, 21600, 43200, 86400, 172800, 604800, 2592000];
+    return steps.find((s) => span / s <= 8) || steps[steps.length - 1];
+  }
+  function cvNiceMax(v) {
+    const p = Math.pow(10, Math.floor(Math.log10(Math.max(v, 1)))), m = [1, 2, 2.5, 5, 10].find((x) => x * p >= v) || 10;
+    return m * p;
+  }
   function cvDrawTrend() {
-    const cv = $("cvTrend"); if (!cv || !cvTrendData) return;
+    const cv = $("cvTrend"); if (!cv) return;
     const ctx = cv.getContext("2d");
     const W = cv.width = cv.clientWidth || 620, H = cv.height;
     ctx.clearRect(0, 0, W, H);
-    const ts = cvTrendData.ts || [], series = cvTrendData.series || {};
-    const n = ts.length;
+    const muted = getCss("--muted", "#8a94a6"), border = getCss("--border", "rgba(131,151,179,.28)");
+    const d = cvTrendData, v = cvTrendView;
     cvTrendGeom = null;
-    if (!n) { ctx.fillStyle = getCss("--muted", "#8a94a6"); ctx.font = "12px sans-serif"; ctx.fillText("нет проб для тренда", 12, H / 2); return; }
-    const v = cvTrendView || { start: 0, end: n };
-    const i0 = Math.max(0, Math.floor(v.start)), i1 = Math.min(n, Math.ceil(v.end));
-    const pad = { l: 34, r: 8, t: 10, b: 20 };
-    const plotW = W - pad.l - pad.r, plotH = H - pad.t - pad.b;
+    if (!d || !v) return;
+    const t = d.t || [], series = d.series || {};
+    const span = v.end - v.start;
     const sel = cvSelectedSeries();
-    const xAt = (i) => pad.l + plotW * (i1 - i0 <= 1 ? 0.5 : (i - i0) / (i1 - i0 - 1));
-    const yAt = (val, scaleMax) => pad.t + plotH * (1 - Math.max(0, Math.min(1, val / scaleMax)));
-    cvTrendGeom = { i0, i1, padL: pad.l, plotW };     // для привязки курсора к ближайшей пробе
-    // раздельные шкалы: проценты (0..100) и размер мкм — нормируем каждую серию к своей.
-    const pctSeries = sel.filter((s) => s !== "mean");
-    // средний размер — своя шкала (макс по видимому окну)
-    let meanMax = 10;
-    if (series.mean) for (let i = i0; i < i1; i++) if (series.mean[i] != null) meanMax = Math.max(meanMax, series.mean[i]);
-    meanMax *= 1.1;
-    const scaleOf = (name) => (name === "mean" ? meanMax : 100);
+    const showUm = sel.some((s) => CV_UM_SERIES.includes(s));
+    const pad = { l: 34, r: showUm ? 42 : 10, t: 12, b: 34 };
+    const plotW = W - pad.l - pad.r, plotH = H - pad.t - pad.b;
+    const xAt = (tt) => pad.l + plotW * (tt - v.start) / span;
+    cvTrendGeom = { padL: pad.l, plotW, start: v.start, span };
+    // видимые точки (с запасом на одну соседнюю — линия уходит за край)
+    let i0 = 0, i1 = t.length;
+    while (i0 < t.length && t[i0] < v.start) i0++;
+    while (i1 > i0 && t[i1 - 1] > v.end) i1--;
+    const a = Math.max(0, i0 - 1), b = Math.min(t.length, i1 + 1);
+    // шкала мкм справа — по видимым точкам выбранных серий
+    let umMax = 10;
+    for (let i = i0; i < i1; i++) for (const s of CV_UM_SERIES) if (sel.includes(s) && series[s] && series[s][i] != null) umMax = Math.max(umMax, series[s][i]);
+    umMax = cvNiceMax(umMax * 1.05);
+    const scaleOf = (name) => (CV_UM_SERIES.includes(name) ? umMax : 100);
+    const yAt = (val, mx) => pad.t + plotH * (1 - Math.max(0, Math.min(1, val / mx)));
+    // сетка: горизонтали + подписи слева (%) и справа (мкм)
+    ctx.font = "10px monospace"; ctx.lineWidth = 1;
+    for (let k = 0; k <= 4; k++) {
+      const y = pad.t + plotH * k / 4;
+      ctx.strokeStyle = border; ctx.beginPath(); ctx.moveTo(pad.l, y); ctx.lineTo(W - pad.r, y); ctx.stroke();
+      ctx.fillStyle = muted; ctx.textAlign = "right"; ctx.fillText(String(100 - k * 25), pad.l - 4, y + 3);
+      if (showUm) { ctx.textAlign = "left"; ctx.fillText(String(Math.round(umMax * (4 - k) / 4)), W - pad.r + 4, y + 3); }
+    }
+    ctx.textAlign = "left"; ctx.fillStyle = muted;
+    ctx.fillText("%", 4, pad.t + 4); if (showUm) ctx.fillText("мкм", W - pad.r + 4, pad.t - 2);
+    // ось времени: вертикальные линии и подписи «ЧЧ:ММ», при смене суток — ещё и дата
+    const step = cvNiceStep(span);
+    const off = new Date(v.start * 1000).getTimezoneOffset() * 60;           // метки по МЕСТНОМУ времени
+    let tick = Math.ceil((v.start - off) / step) * step + off, lastDay = null;
+    ctx.textAlign = "center";
+    for (; tick <= v.end; tick += step) {
+      const x = xAt(tick), dt = new Date(tick * 1000), day = cvDayStr(dt);
+      ctx.strokeStyle = border; ctx.beginPath(); ctx.moveTo(x, pad.t); ctx.lineTo(x, pad.t + plotH); ctx.stroke();
+      ctx.fillStyle = muted;
+      ctx.fillText(cvPad2(dt.getHours()) + ":" + cvPad2(dt.getMinutes()), x, H - pad.b + 13);
+      if (day !== lastDay) { ctx.fillText(cvPad2(dt.getDate()) + "." + cvPad2(dt.getMonth() + 1), x, H - pad.b + 25); lastDay = day; }
+    }
+    if (!t.length || i1 <= i0) {
+      ctx.fillStyle = muted; ctx.font = "12px sans-serif"; ctx.textAlign = "center";
+      ctx.fillText("нет проб за этот период", pad.l + plotW / 2, pad.t + plotH / 2);
+    }
+    // линии: разрыв, если между пробами пауза (между варками) — не соединяем часы тишины
+    const dts = []; for (let i = a + 1; i < b; i++) dts.push(t[i] - t[i - 1]);
+    dts.sort((x, y) => x - y);
+    const gap = Math.max(900, (dts.length ? dts[Math.floor(dts.length / 2)] : 0) * 5);
     const drawSeries = (name) => {
       const arr = series[name]; if (!arr) return;
-      ctx.strokeStyle = CV_SERIES_COLOR[name] || "#888"; ctx.lineWidth = 2; ctx.beginPath();
-      let started = false;
-      for (let i = i0; i < i1; i++) {
-        const val = arr[i]; if (val == null) { started = false; continue; }
-        const x = xAt(i), y = yAt(val, scaleOf(name));
-        if (!started) { ctx.moveTo(x, y); started = true; } else ctx.lineTo(x, y);
+      const col = CV_SERIES_COLOR[name] || "#888"; const mx = scaleOf(name);
+      ctx.strokeStyle = col; ctx.fillStyle = col; ctx.lineWidth = 2; ctx.beginPath();
+      let prev = null;
+      for (let i = a; i < b; i++) {
+        const val = arr[i]; if (val == null) { prev = null; continue; }
+        const x = xAt(t[i]), y = yAt(val, mx);
+        if (prev != null && t[i] - prev <= gap) ctx.lineTo(x, y); else ctx.moveTo(x, y);
+        prev = t[i];
       }
       ctx.stroke();
+      if (i1 - i0 <= 120) for (let i = i0; i < i1; i++) {          // точки-пробы, пока их немного
+        const val = arr[i]; if (val == null) continue;
+        ctx.beginPath(); ctx.arc(xAt(t[i]), yAt(val, mx), 2.2, 0, Math.PI * 2); ctx.fill();
+      }
     };
-    // сетка
-    ctx.strokeStyle = getCss("--border", "rgba(131,151,179,.28)"); ctx.lineWidth = 1;
-    for (let k = 0; k <= 4; k++) { const y = pad.t + plotH * k / 4; ctx.beginPath(); ctx.moveTo(pad.l, y); ctx.lineTo(W - pad.r, y); ctx.stroke(); }
-    pctSeries.forEach(drawSeries);
-    if (sel.includes("mean")) drawSeries("mean");
-    // линия-курсор: стоит на ближайшей к мышке пробе, точки — на выбранных сериях
+    ctx.save(); ctx.beginPath(); ctx.rect(pad.l, pad.t - 2, plotW, plotH + 4); ctx.clip();
+    sel.filter((s) => CV_PCT_SERIES.includes(s)).forEach(drawSeries);
+    sel.filter((s) => CV_UM_SERIES.includes(s)).forEach(drawSeries);
+    // линия-курсор: стоит на ближайшей к мышке пробе
     const hi = cvTrendHover;
-    if (hi != null && hi >= i0 && hi < i1) {
-      const x = xAt(hi);
-      ctx.strokeStyle = getCss("--muted", "#8a94a6"); ctx.lineWidth = 1; ctx.setLineDash([4, 3]);
+    if (hi != null && hi >= 0 && hi < t.length && t[hi] >= v.start && t[hi] <= v.end) {
+      const x = xAt(t[hi]);
+      ctx.strokeStyle = muted; ctx.lineWidth = 1; ctx.setLineDash([4, 3]);
       ctx.beginPath(); ctx.moveTo(x, pad.t); ctx.lineTo(x, pad.t + plotH); ctx.stroke(); ctx.setLineDash([]);
       sel.forEach((name) => {
         const val = series[name] && series[name][hi]; if (val == null) return;
         ctx.fillStyle = CV_SERIES_COLOR[name] || "#888";
-        ctx.beginPath(); ctx.arc(x, yAt(val, scaleOf(name)), 3.5, 0, Math.PI * 2); ctx.fill();
+        ctx.beginPath(); ctx.arc(x, yAt(val, scaleOf(name)), 4, 0, Math.PI * 2); ctx.fill();
       });
     }
-    // подписи оси X (первая/последняя видимая проба, время HH:MM)
-    ctx.fillStyle = getCss("--muted", "#8a94a6"); ctx.font = "10px monospace";
-    const lbl = (i) => cvTsLabel(ts[i]).slice(0, 5);
-    if (i1 > i0) { ctx.fillText(lbl(i0), pad.l, H - 6); const last = lbl(i1 - 1); ctx.fillText(last, W - pad.r - ctx.measureText(last).width, H - 6); }
-    ctx.fillText("%", 6, pad.t + 8);
+    ctx.restore();
+    cvTrendUpdateRows(); cvTrendUpdateSpan();
+  }
+  // значения в строках серий: под курсором, а без него — по последней видимой пробе
+  function cvTrendUpdateRows() {
+    const d = cvTrendData, v = cvTrendView; if (!d || !v) return;
+    let i = cvTrendHover;
+    if (i == null) { i = d.t.length - 1; while (i >= 0 && d.t[i] > v.end) i--; if (i >= 0 && d.t[i] < v.start) i = -1; }
+    document.querySelectorAll("#cvSeries .micro-srow").forEach((row) => {
+      const name = row.querySelector("input").value, val = i >= 0 && d.series[name] ? d.series[name][i] : null;
+      const unit = row.dataset.unit || "";
+      row.querySelector("b").textContent = val == null ? "—" : (Math.round(val * 10) / 10) + (unit === "%" ? "%" : " " + unit);
+    });
+  }
+  function cvTrendUpdateSpan() {
+    const el = $("cvTrendSpan"), v = cvTrendView, d = cvTrendData; if (!el || !v) return;
+    const s = v.end - v.start;
+    const len = s >= 86400 * 2 ? Math.round(s / 86400) + " дн" : (s >= 3600 ? (Math.round(s / 360) / 10) + " ч" : Math.round(s / 60) + " мин");
+    const n = d && d.t ? d.t.filter((x) => x >= v.start && x <= v.end).length : 0;
+    el.textContent = cvFmtT(v.start) + " — " + cvFmtT(v.end) + " · " + len + " · проб " + n;
   }
   function getCss(name, fallback) {
     try { const v = getComputedStyle(document.documentElement).getPropertyValue(name); return v ? v.trim() : fallback; }
     catch (e) { return fallback; }
   }
-  // тултип линии-курсора: время пробы, стадия варки, число кристаллов, средний размер, рассев
-  function cvTrendTipShow(i, x) {
+  // тултип линии-курсора: дата и время пробы, стадия варки, число кристаллов, рассев
+  function cvTrendTipShow(i, x, msg) {
     const tip = $("cvTrendTip"), cv = $("cvTrend"); if (!tip || !cv || !cvTrendData) return;
     const d = cvTrendData, s = d.series || {};
-    const val = (name) => (s[name] && s[name][i] != null ? s[name][i] : null);
+    const val = (name) => (s[name] && s[name][i] != null ? Math.round(s[name][i] * 10) / 10 : null);
     const stage = d.stage && d.stage[i];
-    const head = "<b>" + cvTsLabel(d.ts[i]) + "</b>" + (stage != null ? " · стадия " + stage : "");
-    const cnt = val("count"), mean = val("mean");
-    const line2 = [cnt != null ? Math.round(cnt) + " крист." : null, mean != null ? "ср. " + mean + " мкм" : null].filter(Boolean).join(" · ");
+    const head = "<b>" + cvFmtT(d.t[i], true) + "</b>" + (stage != null ? " · стадия " + stage : "");
+    const cnt = val("count"), mean = val("mean"), med = val("median");
+    const line2 = [cnt != null ? Math.round(cnt) + " крист." : null, mean != null ? "общая " + mean + " мкм" : null, med != null ? "медиана " + med + " мкм" : null].filter(Boolean).join(" · ");
     const names = { small: "малая", medium: "средняя", large: "большая", reject: "брак" };
     const groups = CV_GROUPS.map((g) => val(g) == null ? "" :
       '<span class="dot" style="background:' + CV_SERIES_COLOR[g] + '"></span>' + names[g] + " " + val(g) + "%").filter(Boolean).join("<br>");
-    tip.innerHTML = head + (line2 ? "<br>" + line2 : "") + (groups ? "<br>" + groups : "");
+    tip.innerHTML = head + (line2 ? "<br>" + line2 : "") + (groups ? "<br>" + groups : "") + (msg ? "<br><i>" + msg + "</i>" : "");
     tip.hidden = false;
-    // справа от линии; у правого края — слева, чтобы не вылезать за график
     const w = tip.offsetWidth, W = cv.clientWidth;
     tip.style.left = (x + 12 + w > W ? Math.max(0, x - 12 - w) : x + 12) + "px";
     tip.style.top = "8px";
   }
   function wireTrend() {
-    document.querySelectorAll("#cvSeries input").forEach((c) => c.addEventListener("change", cvDrawTrend));
+    // выбранные серии запоминаем в браузере
+    try { const saved = JSON.parse(localStorage.getItem(CV_TREND_KEY) || "null");
+      if (Array.isArray(saved)) document.querySelectorAll("#cvSeries input").forEach((c) => { c.checked = saved.includes(c.value); }); } catch (e) { }
+    document.querySelectorAll("#cvSeries input").forEach((c) => c.addEventListener("change", () => {
+      try { localStorage.setItem(CV_TREND_KEY, JSON.stringify(cvSelectedSeries())); } catch (e) { }
+      cvDrawTrend();
+    }));
+    // дата: поле, «‹ ›» по дням с пробами, «Сегодня»
+    const di = $("cvTrendDate");
+    if (di) di.addEventListener("change", () => { if (di.value) cvTrendSetDay(di.value); });
+    const stepDay = (dir) => {
+      const cur = cvTrendDay || cvDayStr(new Date());
+      const cand = dir < 0 ? cvTrendDays.filter((x) => x < cur).pop() : cvTrendDays.find((x) => x > cur);
+      if (cand) cvTrendSetDay(cand);
+    };
+    const prev = $("cvTrendPrev"), next = $("cvTrendNext"), today = $("cvTrendToday");
+    if (prev) prev.addEventListener("click", () => stepDay(-1));
+    if (next) next.addEventListener("click", () => stepDay(1));
+    if (today) today.addEventListener("click", () => cvTrendSetDay(cvTrendDays.length ? cvTrendDays[cvTrendDays.length - 1] : cvDayStr(new Date())));
+
     const cv = $("cvTrend"); if (!cv) return;
     const tip = $("cvTrendTip");
     let drag = null;
     const hoverOff = () => { if (cvTrendHover != null) { cvTrendHover = null; cvDrawTrend(); } if (tip) tip.hidden = true; };
-    cv.addEventListener("pointerdown", (e) => { drag = { x: e.clientX, view: Object.assign({}, cvTrendView) }; cv.setPointerCapture(e.pointerId); hoverOff(); });
+    const nearest = (clientX) => {                       // ближайшая по X проба; -1 — нет проб в окне
+      const d = cvTrendData, g = cvTrendGeom; if (!d || !g || !d.t.length) return -1;
+      const tt = g.start + (clientX - cv.getBoundingClientRect().left - g.padL) / g.plotW * g.span;
+      let lo = 0, hi = d.t.length - 1;
+      while (hi - lo > 1) { const m = (lo + hi) >> 1; if (d.t[m] < tt) lo = m; else hi = m; }
+      const i = Math.abs(d.t[lo] - tt) <= Math.abs(d.t[hi] - tt) ? lo : hi;
+      // липнем только к пробе рядом с мышкой (≤ 40 px): в паузе между варками тултип не показываем
+      const px = Math.abs(d.t[i] - tt) / g.span * g.plotW;
+      return d.t[i] >= g.start && d.t[i] <= g.start + g.span && px <= 40 ? i : -1;
+    };
+    const xOf = (i) => cvTrendGeom.padL + cvTrendGeom.plotW * (cvTrendData.t[i] - cvTrendGeom.start) / cvTrendGeom.span;
+    cv.addEventListener("pointerdown", (e) => { drag = { x: e.clientX, view: Object.assign({}, cvTrendView), moved: false }; cv.setPointerCapture(e.pointerId); });
     cv.addEventListener("pointermove", (e) => {
-      if (!cvTrendData) return;
-      const n = (cvTrendData.ts || []).length; if (!n) return;
-      if (!drag) {
-        // наведение: линия «притягивается» к ближайшей пробе
-        const g = cvTrendGeom; if (!g) return;
-        const span = g.i1 - g.i0; if (span <= 0) return;
-        const px = e.clientX - cv.getBoundingClientRect().left;
-        const frac = span <= 1 ? 0 : (px - g.padL) / g.plotW;
-        const i = Math.max(g.i0, Math.min(g.i1 - 1, g.i0 + Math.round(frac * (span - 1))));
+      if (!cvTrendData || !cvTrendGeom) return;
+      if (!drag) {                                       // наведение: линия «притягивается» к ближайшей пробе
+        const i = nearest(e.clientX);
+        if (i < 0) { hoverOff(); return; }
         if (i !== cvTrendHover) { cvTrendHover = i; cvDrawTrend(); }
-        cvTrendTipShow(i, g.padL + g.plotW * (span <= 1 ? 0.5 : (i - g.i0) / (span - 1)));
+        cvTrendTipShow(i, xOf(i));
         return;
       }
+      if (Math.abs(e.clientX - drag.x) > 3) drag.moved = true;
+      if (!drag.moved) return;
+      if (tip) tip.hidden = true;
+      // сдвиг по времени — без ограничений: можно уйти в любые даты
       const span = drag.view.end - drag.view.start;
-      const dx = (e.clientX - drag.x) / (cv.clientWidth || 620) * span;
-      let s = drag.view.start - dx, en = drag.view.end - dx;
-      if (s < 0) { en -= s; s = 0; } if (en > n) { s -= (en - n); en = n; } s = Math.max(0, s);
-      cvTrendUserZoomed = true;
-      cvTrendView = { start: s, end: en }; cvDrawTrend();
+      const dt = (e.clientX - drag.x) / cvTrendGeom.plotW * span;
+      cvTrendFollow = false; cvTrendHover = null;
+      cvTrendView = { start: drag.view.start - dt, end: drag.view.end - dt };
+      cvDrawTrend(); cvTrendEnsure(150);
     });
-    cv.addEventListener("pointerup", () => { drag = null; });
+    cv.addEventListener("pointerup", async (e) => {
+      const d0 = drag; drag = null;
+      if (!d0) return;
+      if (d0.moved) { cvTrendEnsure(0); return; }
+      // клик без сдвига по пробе → открыть её в окне CV (если кадры ещё не стёрты ротацией)
+      const i = nearest(e.clientX); if (i < 0) return;
+      const ts = cvTrendData.ts[i];
+      try {
+        const r = await api("/api/cv/result?" + [cvSerialQ(), "ts=" + encodeURIComponent(ts)].filter(Boolean).join("&"));
+        if (r && !r.empty) cvSelectProbe(ts);
+        else cvTrendTipShow(i, xOf(i), "кадры этой пробы уже стёрты (хранятся последние 50)");
+      } catch (err) { }
+    });
     cv.addEventListener("pointerleave", () => { if (!drag) hoverOff(); });
     cv.addEventListener("wheel", (e) => {
-      if (!cvTrendData) return; e.preventDefault();
-      const n = (cvTrendData.ts || []).length; if (!n) return;
-      const v = cvTrendView || { start: 0, end: n };
-      const rect = cv.getBoundingClientRect();
-      const frac = (e.clientX - rect.left) / rect.width;
-      const span = v.end - v.start, center = v.start + frac * span;
-      const k = e.deltaY > 0 ? 1.2 : 0.8;
-      let ns = center - (center - v.start) * k, ne = center + (v.end - center) * k;
-      ns = Math.max(0, ns); ne = Math.min(n, ne);
-      if (ne - ns >= 1.5) { cvTrendUserZoomed = true; cvTrendView = { start: ns, end: ne }; cvDrawTrend(); }
+      const v = cvTrendView, g = cvTrendGeom; if (!v || !g) return; e.preventDefault();
+      const frac = (e.clientX - cv.getBoundingClientRect().left - g.padL) / g.plotW;
+      const span = v.end - v.start, center = v.start + Math.max(0, Math.min(1, frac)) * span;
+      const k = e.deltaY > 0 ? 1.25 : 0.8;
+      const ns = Math.max(CV_MIN_SPAN, Math.min(CV_MAX_SPAN, span * k));
+      cvTrendFollow = false; cvTrendHover = null;
+      cvTrendView = { start: center - (center - v.start) * ns / span, end: center + (v.end - center) * ns / span };
+      cvDrawTrend(); cvTrendEnsure(200);
     }, { passive: false });
-    // двойной клик — сброс зума на весь диапазон
-    cv.addEventListener("dblclick", () => { cvTrendUserZoomed = false; cvLoadTrend(); });
+    // двойной клик — вся выбранная дата
+    cv.addEventListener("dblclick", () => cvTrendSetDay(cvTrendDay || cvDayStr(new Date())));
+    window.addEventListener("resize", cvDrawTrend);
   }
 
   // --- общий рефреш данных CV ---

@@ -885,20 +885,32 @@
             </div>
 
             <div class="micro-tele-cv__col">
-              <div class="micro-cv-block">
+              <div class="micro-cv-block micro-trend">
                 <div class="micro-cv-block__title">Тренд по пробам
-                  <span class="micro-cv-hint">наведи — проба, тащи — сдвиг, колесо — зум, 2× — сброс</span>
+                  <span class="micro-cv-hint">наведи — проба, тащи — сдвиг по времени, колесо — масштаб, 2× — вся дата, клик — открыть пробу</span>
                 </div>
-                <div class="micro-cv-series" id="cvSeries">
-                  <label><input type="checkbox" value="small" checked /><span class="dot" style="background:#1d9e75"></span>малая</label>
-                  <label><input type="checkbox" value="medium" checked /><span class="dot" style="background:#378add"></span>средняя</label>
-                  <label><input type="checkbox" value="large" checked /><span class="dot" style="background:#ba7517"></span>большая</label>
-                  <label><input type="checkbox" value="reject" /><span class="dot" style="background:#e24b4a"></span>брак</label>
-                  <label><input type="checkbox" value="mean" checked /><span class="dot" style="background:#7f77dd"></span>общая</label>
+                <!-- выбор даты / листание по дням -->
+                <div class="micro-trend__bar">
+                  <button type="button" class="micro-trend__btn" id="cvTrendPrev" title="Предыдущий день с пробами">‹</button>
+                  <input type="date" id="cvTrendDate" class="micro-trend__date" title="Дата тренда" />
+                  <button type="button" class="micro-trend__btn" id="cvTrendNext" title="Следующий день с пробами">›</button>
+                  <button type="button" class="micro-trend__btn micro-trend__btn--text" id="cvTrendToday" title="Последний день с пробами">Сегодня</button>
+                  <span class="micro-trend__span" id="cvTrendSpan">—</span>
                 </div>
-                <div class="micro-cv-trendwrap">
-                  <canvas id="cvTrend" class="micro-cv-trend" width="620" height="200"></canvas>
-                  <div id="cvTrendTip" class="micro-cv-tip" hidden></div>
+                <div class="micro-trend__row">
+                  <!-- серии столбиком: строка = серия; включена — подсвечена; справа значение под курсором -->
+                  <div class="micro-trend__rows" id="cvSeries">
+                    <label class="micro-srow" data-unit="%"><input type="checkbox" value="small" checked /><i style="background:#1d9e75"></i><span>малая</span><b>—</b></label>
+                    <label class="micro-srow" data-unit="%"><input type="checkbox" value="medium" checked /><i style="background:#378add"></i><span>средняя</span><b>—</b></label>
+                    <label class="micro-srow" data-unit="%"><input type="checkbox" value="large" checked /><i style="background:#ba7517"></i><span>большая</span><b>—</b></label>
+                    <label class="micro-srow" data-unit="%"><input type="checkbox" value="reject" /><i style="background:#e24b4a"></i><span>брак</span><b>—</b></label>
+                    <label class="micro-srow" data-unit="мкм" title="Среднее: сумма размеров / число кристаллов"><input type="checkbox" value="mean" checked /><i style="background:#7f77dd"></i><span>общая</span><b>—</b></label>
+                    <label class="micro-srow" data-unit="мкм" title="Медиана: половина кристаллов мельче, половина крупнее"><input type="checkbox" value="median" /><i style="background:#d16fb8"></i><span>медиана</span><b>—</b></label>
+                  </div>
+                  <div class="micro-cv-trendwrap">
+                    <canvas id="cvTrend" class="micro-cv-trend" width="620" height="360"></canvas>
+                    <div id="cvTrendTip" class="micro-cv-tip" hidden></div>
+                  </div>
                 </div>
               </div>
             </div>

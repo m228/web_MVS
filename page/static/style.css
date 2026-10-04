@@ -3654,6 +3654,26 @@ input.micro-cam-num { width: 56px; min-width: 0; flex: 0 0 auto; padding: 4px 5p
 .micro-cv-pager__btn { border: 0; background: transparent; color: inherit; cursor: pointer; font-size: 16px; line-height: 1; padding: 2px 8px; border-radius: 6px; }
 .micro-cv-pager__btn:hover { background: rgba(255,255,255,0.14); }
 
+/* Тренд: строка даты, столбик серий слева, график справа */
+.micro-trend__bar { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-bottom: 8px; }
+.micro-trend__btn { border: 1px solid var(--border, rgba(131,151,179,.28)); background: var(--surface-muted, #f4f8fc); color: var(--text); cursor: pointer; border-radius: 8px; padding: 4px 10px; font: inherit; font-size: 0.9em; line-height: 1.2; }
+.micro-trend__btn:hover { border-color: var(--accent, #2563eb); color: var(--accent, #2563eb); }
+.micro-trend__btn--text { font-size: 0.82em; }
+.micro-trend__date { flex: 0 0 auto; width: 148px; border: 1px solid var(--border, rgba(131,151,179,.28)); background: var(--surface-muted, #f4f8fc); color: var(--text); border-radius: 8px; padding: 4px 8px; font: inherit; font-size: 0.88em; color-scheme: light dark; }
+.micro-trend__span { margin-left: auto; font-size: 0.78em; color: var(--muted, #8a94a6); }
+.micro-trend__row { display: grid; grid-template-columns: 150px minmax(0, 1fr); gap: 10px; align-items: stretch; }
+@media (max-width: 700px) { .micro-trend__row { grid-template-columns: 1fr; } }
+.micro-trend__rows { display: flex; flex-direction: column; gap: 6px; }
+.micro-srow { position: relative; display: grid; grid-template-columns: 10px 1fr auto; align-items: center; gap: 8px; padding: 9px 10px; border-radius: 8px;
+  border: 1px solid var(--border, rgba(131,151,179,.28)); background: transparent; cursor: pointer; user-select: none;
+  font-size: 0.86em; color: var(--muted, #5b6b81); opacity: .55; transition: opacity .15s ease, background .15s ease, border-color .15s ease; }
+.micro-srow input { display: none; }
+.micro-srow i { width: 10px; height: 10px; border-radius: 50%; }
+.micro-srow b { font-variant-numeric: tabular-nums; font-weight: 600; font-size: 0.95em; }
+.micro-srow:hover { opacity: .85; }
+.micro-srow:has(input:checked) { opacity: 1; color: var(--text); background: var(--chip-bg, var(--surface-muted, #f4f8fc)); border-color: var(--border-strong, rgba(118,142,178,.45)); }
+.micro-srow:has(input:checked)::before { content: ""; position: absolute; left: 0; top: 6px; bottom: 6px; width: 3px; border-radius: 2px; background: currentColor; opacity: 0; }
+
 /* Тренд: обёртка для тултипа линии-курсора */
 .micro-cv-trendwrap { position: relative; }
 .micro-cv-trendwrap .micro-cv-tip { transform: none; }
@@ -3670,7 +3690,7 @@ input.micro-cam-num { width: 56px; min-width: 0; flex: 0 0 auto; padding: 4px 5p
 .micro-tele-cv { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; align-items: start; }
 .micro-tele-cv__col { min-width: 0; }
 .micro-tele-cv .micro-cv-block:first-child { margin-top: 0; padding-top: 0; border-top: 0; }
-.micro-tele-cv .micro-cv-trend { height: 200px; }
+.micro-tele-cv .micro-cv-trend { height: 360px; }
 @media (max-width: 900px) { .micro-tele-cv { grid-template-columns: 1fr; } }
 #teleStripPlate[hidden], #teleStripCv[hidden] { display: none !important; }
 

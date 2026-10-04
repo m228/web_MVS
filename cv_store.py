@@ -16,6 +16,7 @@ from __future__ import annotations
 import json
 import re
 import shutil
+import threading
 import time
 from pathlib import Path
 from typing import Optional
@@ -27,6 +28,10 @@ from logger import log_event
 from paths import DATA_DIR
 
 BASE = DATA_DIR / "cv_results"
+HISTORY = DATA_DIR / "cv_history"      # лёгкий журнал проб по дням — НЕ чистится ротацией кадров
+_HIST_LOCK = threading.Lock()
+_HIST_FILLED = set()                   # серийники, для которых журнал уже дополнен из cv_results
+TS_FMT = "%Y-%m-%d_%H_%M_%S"
 
 GROUP_ORDER = ["small", "medium", "large", "reject"]
 THUMB_W = 240      # ширина миниатюры пробы, px
@@ -35,6 +40,129 @@ THUMB_W = 240      # ширина миниатюры пробы, px
 def _serial_dir(serial: str) -> Path:
     tag = "".join(c for c in str(serial) if c.isalnum() or c in "-_.") or "camera"
     return BASE / tag
+
+
+def _hist_dir(serial: str) -> Path:
+    return HISTORY / _serial_dir(serial).name
+
+
+def _ts_epoch(ts: str) -> Optional[float]:
+    try:
+        return time.mktime(time.strptime(ts, TS_FMT))
+    except Exception:
+        return None
+
+
+def _hist_row(result: dict) -> Optional[dict]:
+    """Одна строка журнала из result.json пробы: только числа для тренда (без кадров и объектов)."""
+    t = _ts_epoch(result.get("ts", ""))
+    if t is None:
+        return None
+    s = result.get("summary") or {}
+    sz = s.get("size_um") or {}
+    pct = s.get("groups_pct") or {}
+    fr = (result.get("fracture") or {}).get("summary") or {}
+    return {
+        "ts": result["ts"], "t": t, "stage": result.get("stage"),
+        "count": s.get("count"), "mean": sz.get("mean"), "median": sz.get("median"),
+        "small": pct.get("small"), "medium": pct.get("medium"),
+        "large": pct.get("large"), "reject": pct.get("reject"),
+        "frac_zones": fr.get("zones"), "frac_pct": fr.get("area_pct"),
+        "frames": len(result.get("frames") or []),
+    }
+
+
+def _hist_file(serial: str, ts: str) -> Path:
+    return _hist_dir(serial) / (ts[:10] + ".jsonl")      # «2026-10-04»
+
+
+def _hist_append(serial: str, result: dict):
+    row = _hist_row(result)
+    if row is None:
+        return
+    with _HIST_LOCK:
+        f = _hist_file(serial, row["ts"])
+        f.parent.mkdir(parents=True, exist_ok=True)
+        with open(f, "a", encoding="utf-8") as fh:
+            fh.write(json.dumps(row, ensure_ascii=False) + "\n")
+
+
+def _hist_read(serial: str, day: str) -> list[dict]:
+    f = _hist_dir(serial) / (day + ".jsonl")
+    rows = []
+    try:
+        for line in f.read_text(encoding="utf-8").splitlines():
+            try:
+                rows.append(json.loads(line))
+            except Exception:
+                continue            # битая строка (обрыв записи) не рушит весь день
+    except Exception:
+        pass
+    return rows
+
+
+def _hist_backfill(serial: str):
+    """Один раз за запуск: добавить в журнал пробы, которые уже лежат в cv_results (до появления
+    журнала). Идемпотентно: что уже есть в журнале — не дублируем."""
+    if serial in _HIST_FILLED:
+        return
+    _HIST_FILLED.add(serial)
+    sd = _serial_dir(serial)
+    if not sd.exists():
+        return
+    known = set()
+    if _hist_dir(serial).exists():
+        for f in _hist_dir(serial).glob("*.jsonl"):
+            known.update(r.get("ts") for r in _hist_read(serial, f.stem))
+    for p in sorted(x for x in sd.iterdir() if x.is_dir()):
+        if p.name in known:
+            continue
+        try:
+            _hist_append(serial, json.loads((p / "result.json").read_text(encoding="utf-8")))
+        except Exception:
+            continue
+
+
+def history_days(serial: str) -> list[dict]:
+    """Дни, за которые есть пробы: [{date, n, first, last}] по возрастанию даты (для выбора даты)."""
+    _hist_backfill(serial)
+    out = []
+    if _hist_dir(serial).exists():
+        for f in sorted(_hist_dir(serial).glob("*.jsonl")):
+            rows = _hist_read(serial, f.stem)
+            if rows:
+                ts = [r["t"] for r in rows if r.get("t") is not None]
+                out.append({"date": f.stem, "n": len(rows), "first": min(ts), "last": max(ts)})
+    return out
+
+
+def trend_range(serial: str, t_from: float, t_to: float, series: Optional[list[str]] = None,
+                limit: int = 5000) -> dict:
+    """Тренд по реальному времени: пробы с t_from по t_to (epoch, сек) из журнала по дням.
+    Возвращает {t:[...], ts:[...], stage:[...], series:{name:[...]}}; не больше limit точек."""
+    _hist_backfill(serial)
+    series = series or ["small", "medium", "large", "reject", "mean", "median"]
+    rows = []
+    hd = _hist_dir(serial)
+    # перебираем только существующие файлы дней (а не все даты в диапазоне): запрос «с 1970» не падает
+    for f in (sorted(hd.glob("*.jsonl")) if hd.exists() else []):
+        try:
+            day0 = time.mktime(time.strptime(f.stem, "%Y-%m-%d"))
+        except Exception:
+            continue
+        if day0 > t_to or day0 + 86400 < t_from:
+            continue
+        rows.extend(r for r in _hist_read(serial, f.stem)
+                    if r.get("t") is not None and t_from <= r["t"] <= t_to)
+    rows.sort(key=lambda r: r["t"])
+    if len(rows) > limit:
+        rows = rows[-limit:]
+    return {
+        "from": t_from, "to": t_to,
+        "t": [r["t"] for r in rows], "ts": [r["ts"] for r in rows],
+        "stage": [r.get("stage") for r in rows],
+        "series": {s: [r.get(s) for r in rows] for s in series},
+    }
 
 
 def _probe_dir(serial: str, ts: str) -> Optional[Path]:
@@ -134,6 +262,10 @@ def save_sample(serial: str, stage, frames: list[dict], images: list, timing: di
         }
         (d / "result.json").write_text(
             json.dumps(result, ensure_ascii=False, indent=1), encoding="utf-8")
+        try:
+            _hist_append(serial, result)         # журнал трендов — переживает ротацию кадров
+        except Exception as e:
+            log_event("cv_store", "Не записана строка журнала трендов", "warn", {"error": str(e)})
         _rotate(serial, keep_last)
         log_event("cv_store", "Проба CV сохранена", "info",
                   {"serial": str(serial), "ts": ts, "count": summary.get("count")})

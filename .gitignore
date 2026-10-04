@@ -20,6 +20,7 @@ __pycache__/
 /dataset
 /Videos
 /cv_results
+/cv_history
 /rtsp_cameras.json
 /save_settings.json
 /plate_config.json

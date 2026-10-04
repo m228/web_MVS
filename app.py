@@ -682,9 +682,21 @@ def cv_thumb(serial: str | None = None, ts: str = ""):
 
 
 @app.get("/api/cv/trend")
-def cv_trend(serial: str | None = None, series: str | None = None, limit: int = 200):
+def cv_trend(serial: str | None = None, series: str | None = None, limit: int = 200,
+             t_from: float | None = Query(None, alias="from"), t_to: float | None = Query(None, alias="to")):
+    """Тренд. С from/to (epoch, сек) — по реальному времени из журнала по дням (вся история);
+    без них — последние limit проб (вкладка «Разломы»)."""
     ser = [s.strip() for s in series.split(",")] if series else None
+    if t_from is not None and t_to is not None:
+        return cv_store.trend_range(_cv_serial(serial), t_from, t_to, series=ser,
+                                    limit=max(10, min(limit, 5000)))
     return cv_store.trend(_cv_serial(serial), series=ser, limit=limit)
+
+
+@app.get("/api/cv/trend/days")
+def cv_trend_days(serial: str | None = None):
+    """Дни, за которые есть пробы (для выбора даты в тренде)."""
+    return {"days": cv_store.history_days(_cv_serial(serial))}
 
 
 @app.get("/api/cv/objects")

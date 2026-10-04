@@ -313,7 +313,9 @@ def _js_api_routes():
 # =====================================================================================
 
 MODULES = [
-    "paths", "logger", "camera_core", "sdk_gige", "dahua_control", "net_tools", "rtsp_store",
+    "paths", "logger", "camera_core", "camera_core.gentl_env", "camera_core.utils", "camera_core.imaging",
+    "camera_core.base_worker", "camera_core.gige_worker", "camera_core.rtsp_worker", "camera_core.camera_manager",
+    "sdk_gige", "dahua_control", "net_tools", "rtsp_store",
     "save_settings", "plate_config", "sv_source", "microscope_plc", "microscope_fsm",
     "microscope_service", "cv_analyzer", "cv_fracture", "cv_client", "cv_store", "fracture_lab",
     "updater", "autostart", "diag", "app", "mvsdk",

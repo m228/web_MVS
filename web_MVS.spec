@@ -36,6 +36,8 @@ selfcheck_imports = ['selfcheck', 'cv_analyzer', 'cv_fracture', 'cv_client', 'cv
 hiddenimports += collect_submodules('uvicorn')
 # вложенная обёртка MVS SDK (mvsdk/) — динамические импорты, тянем все подмодули
 hiddenimports += collect_submodules('mvsdk')
+# camera_core — пакет (бывший camera_core.py): подмодули тоже явно, чтобы ничего не потерялось
+hiddenimports += collect_submodules('camera_core')
 
 for pkg in ('genicam', 'harvesters'):
     d, b, h = collect_all(pkg)

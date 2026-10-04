@@ -83,6 +83,9 @@ class MicroscopeFSM:
         # режим повтора пробы внутри цикла: "time" (по паузе), "sv" (по целому СВ в [from..to])
         # или "cv" (по готовности CV: прошлая проба разобрана → следующая, см. set_cv_dwell)
         self._trigger_mode = self._norm_trigger(pc.get("trigger_mode", "time"))
+        # датчик, по которому автомат решает «мотор приехал» (отвод/подвод/возврат):
+        # "enc" — энкодер (1285), "calc" — расчётная абс. позиция (1274), "ai" — аналоговый датчик (1271)
+        self._arrive_sensor = self._norm_arrive(pc.get("arrive_sensor", "enc"))
         # ВЫДЕРЖКА «ПО CV» (включает microscope_service, когда включён CV): у стекла стоим не
         # dwell_sec, а пока сервис не разберёт _cv_frames кадров (кадр → разбор → следующий) и не
         # даст cv_release. _cv_timeout_sec — страховка, если CV завис. _cv_gap_sec — защитная пауза
@@ -246,6 +249,17 @@ class MicroscopeFSM:
             self.cycle_t = 0
             self._last_sv_shot = None
             return {"trigger_mode": self._trigger_mode}
+
+    @staticmethod
+    def _norm_arrive(mode):
+        mode = str(mode)
+        return mode if mode in ("enc", "calc", "ai") else "enc"
+
+    def set_arrive_sensor(self, mode):
+        """Сменить датчик прихода на лету (применяется к следующему шагу движения)."""
+        with self._lock:
+            self._arrive_sensor = self._norm_arrive(mode)
+            return {"arrive_sensor": self._arrive_sensor}
 
     @staticmethod
     def _norm_trigger(mode):
@@ -725,6 +739,7 @@ class MicroscopeFSM:
                     "shot_interval_sec": self._shot_interval_sec,
                     "pause_sec": self._pause_sec,
                     "trigger_mode": self._trigger_mode,
+                    "arrive_sensor": self._arrive_sensor,
                     "sv_from": self._sv_from,
                     "sv_to": self._sv_to,
                     "ignore_stage": self._ignore_stage,
@@ -777,6 +792,12 @@ class MicroscopeFSM:
         # не трогаем, JS сам умножает). Одна точка: дальше по tick pos1_ai уже приведён.
         if pos1_ai is not None:
             pos1_ai = pos1_ai * self._sensor_scale
+        # ПОЗИЦИЯ ДЛЯ ПРИХОДА — по выбранному датчику (вкладка «Цикл»). Нет значения от выбранного
+        # датчика — берём энкодер, чтобы цикл не встал. pos_enc ниже остаётся энкодером (для доводки).
+        sel = self._arrive_sensor
+        pos_sel = pos1 if sel == "calc" else (pos1_ai if sel == "ai" else pos_enc)
+        if pos_sel is None:
+            pos_sel = pos_enc
 
         with self._lock:
             # 0) подтверждение перехода из ручного: фронт входа стадии в рабочую зону (3..9),
@@ -939,11 +960,11 @@ class MicroscopeFSM:
                 # отвод в retract_pos (напр. 20000 мкм)
                 self.m1_sp = self._retract_pos
                 if self.t == 0:
-                    self._step_start = pos_enc     # запомнить старт шага (направление отвода)
+                    self._step_start = pos_sel     # запомнить старт шага (направление отвода)
                     self._settle = 0
                 self.t += 1
-                # отвод: стоп СРАЗУ, как энкодер перешёл черту retract_pos (не ждём выдержки)
-                if self._reached_retract(pos_enc, self._retract_pos) or self.t > self._step_timeout_ticks:
+                # отвод: стоп СРАЗУ, как выбранный датчик перешёл черту retract_pos (не ждём выдержки)
+                if self._reached_retract(pos_sel, self._retract_pos) or self.t > self._step_timeout_ticks:
                     if self._settle_wait():        # приехал → пауза settle (осадка датчика) → дальше
                         self.t = 0
                         self.mode = 21
@@ -984,7 +1005,10 @@ class MicroscopeFSM:
                 if self._fa_enabled:
                     arrived = self._approach_step(pos_enc, pos1_ai)   # грубо по энкодеру, точно по датчику
                 else:
-                    arrived = self._reached_hold(pos1_ai, pos_enc, self.m1_sp)   # доезд по ЭНКОДЕРУ
+                    # доезд по ВЫБРАННОМУ датчику: аналог — по |датчик − цель|, энкодер/расчётная — ±допуск
+                    # (+ страховка «аналог у стекла»)
+                    arrived = self._reached_hold(pos1_ai, pos_sel, self.m1_sp,
+                                                 prefer_ai=(sel == "ai" and pos1_ai is not None))
                 if arrived or self.t > self._step_timeout_ticks:
                     self.cw0 = False                   # по приходу к стеклу — закрыть трубку
                     if self._settle_wait():            # приехал → пауза settle (осадка датчика) → выдержка
@@ -1029,11 +1053,11 @@ class MicroscopeFSM:
                 # возврат в retract_pos
                 self.m1_sp = self._retract_pos
                 if self.t == 0:
-                    self._step_start = pos_enc     # запомнить старт шага (направление возврата)
+                    self._step_start = pos_sel     # запомнить старт шага (направление возврата)
                     self._settle = 0
                 self.t += 1
-                # возврат: стоп СРАЗУ, как энкодер перешёл черту retract_pos
-                if self._reached_retract(pos_enc, self._retract_pos) or self.t > self._step_timeout_ticks:
+                # возврат: стоп СРАЗУ, как выбранный датчик перешёл черту retract_pos
+                if self._reached_retract(pos_sel, self._retract_pos) or self.t > self._step_timeout_ticks:
                     if self._settle_wait():        # приехал → пауза settle (осадка датчика) → дальше
                         self.t = 0
                         self.mode = 0

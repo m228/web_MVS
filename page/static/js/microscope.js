@@ -77,7 +77,7 @@
         dwell_sec: $("pcDwell").value, shot_interval_sec: $("pcShotInterval").value,
         pause_sec: $("pcPause").value,
         photo_format: $("pcFormatSw").checked ? "jpg" : "png",
-        trigger_mode: pcTrigMode,
+        trigger_mode: pcTrigMode, arrive_sensor: pcArriveMode,
         sv_from: $("pcSvFrom").value, sv_to: $("pcSvTo").value,
       };
       try {
@@ -93,6 +93,14 @@
         setTrigMode(mode);
         api("/api/micro/trigger_mode", { mode }).catch(() => {});   // применяется сразу
         sentCmd("Триггер пробы: " + TRIG_NAMES[mode]);
+      });
+    });
+    document.querySelectorAll("#pcArrive .micro-trig__btn").forEach((b) => {
+      b.addEventListener("click", () => {
+        const mode = b.dataset.arr;
+        setArriveMode(mode);
+        api("/api/micro/arrive_sensor", { mode }).catch(() => {});   // применяется сразу
+        sentCmd("Датчик прихода цикла: " + ARRIVE_NAMES[mode]);
       });
     });
     // кадров на пробу / пауза после разбора — настройки CV, применяются сразу (без перезапуска)
@@ -117,6 +125,15 @@
     updateTriggerFields();
   }
 
+  // датчик прихода мотора для цикла: enc / calc / ai (три кнопки на вкладке «Цикл»)
+  const ARRIVE_NAMES = { enc: "энкодер (1285)", calc: "расчётная позиция (1274)", ai: "аналоговый датчик (1271)" };
+  let pcArriveMode = "enc";
+  function setArriveMode(mode) {
+    pcArriveMode = ARRIVE_NAMES[mode] ? mode : "enc";
+    document.querySelectorAll("#pcArrive .micro-trig__btn").forEach((b) => {
+      b.classList.toggle("is-active", b.dataset.arr === pcArriveMode);
+    });
+  }
   // триггер пробы: time / sv / cv (три кнопки на вкладке «Цикл»)
   const TRIG_NAMES = { time: "по времени", sv: "по СВ", cv: "по CV" };
   let pcTrigMode = "time";
@@ -703,6 +720,7 @@
           sv("pcDwell", pc.dwell_sec); sv("pcShotInterval", pc.shot_interval_sec);
           sv("pcPause", pc.pause_sec); sv("pcSvFrom", pc.sv_from); sv("pcSvTo", pc.sv_to);
           setTrigMode(pc.trigger_mode);
+          setArriveMode(pc.arrive_sensor);
           const fmSw = $("pcFormatSw"); if (fmSw) fmSw.checked = (pc.photo_format === "jpg");
           const fmSt = $("pcFormatState"); if (fmSt) fmSt.textContent = (pc.photo_format === "jpg") ? "JPG" : "PNG";
           const peSw = $("photoEnableSw"); if (peSw) peSw.checked = (pc.photo_enabled === true);

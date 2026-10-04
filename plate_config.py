@@ -190,6 +190,8 @@ DEFAULTS = {
     # выдержка dwell_sec (скрины каждые shot_interval_sec + видео) -> возврат в retract_pos.
     # Доезд определяется по ОБОИМ датчикам сразу: аналог pos1_ai И энкодер pos1 (гасит дрожь).
     # Авто-циклы гоняются, пока стадия варки в диапазоне 3..9 (общее разрешение, см. microscope_fsm).
+    # arrive_sensor — по какому датчику автомат решает, что мотор приехал (отвод/подвод/возврат):
+    #   "enc" — энкодер (1285); "calc" — расчётная абс. позиция (1274); "ai" — аналоговый датчик (1271).
     # ВНУТРИ этого — повторяемость пробы задаёт trigger_mode:
     #   "time" — следующая проба через pause_sec секунд;
     #   "sv"   — проба на каждом ЦЕЛОМ значении СВ в диапазоне [sv_from..sv_to] по мере роста.
@@ -206,7 +208,7 @@ DEFAULTS = {
     # ложится только распознанный overlay (JPEG, см. cv_store).
     "probe_cycle": {"retract_pos": 20000, "pre_wash_sec": 4, "dwell_sec": 15,
                     "shot_interval_sec": 3, "pause_sec": 60, "photo_format": "png",
-                    "trigger_mode": "time", "sv_from": 84, "sv_to": 92, "ignore_stage": False,
+                    "trigger_mode": "time", "arrive_sensor": "enc", "sv_from": 84, "sv_to": 92, "ignore_stage": False,
                     "ignore_focus": True, "settle_sec": 2,
                     "post_wash_pause_sec": 2, "photo_enabled": False},
 

@@ -529,6 +529,16 @@ class MicroscopeService:
                   "info", {"photo_enabled": on})
         return {"photo_enabled": on}
 
+    def set_arrive_sensor(self, mode):
+        """Датчик прихода мотора для цикла (enc/calc/ai) — сразу, без перезапуска платы, и в конфиг."""
+        mode = str(mode) if str(mode) in ("enc", "calc", "ai") else "enc"
+        res = self.fsm.set_arrive_sensor(mode) if self.fsm else {"arrive_sensor": mode}
+        plate_config.save({"probe_cycle": {"arrive_sensor": mode}})
+        if self.cfg is not None:
+            self.cfg.setdefault("probe_cycle", {})["arrive_sensor"] = mode
+        log_event("microscope_service", "Датчик прихода цикла: " + mode, "info", {"arrive_sensor": mode})
+        return res
+
     def set_trigger_mode(self, mode):
         """Сменить триггер пробы (time/sv/cv) сразу, без перезапуска платы, и запомнить в конфиг."""
         mode = str(mode) if str(mode) in ("time", "sv", "cv") else "time"

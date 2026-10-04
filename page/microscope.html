@@ -247,6 +247,12 @@
 
                 <div class="micro-cycle-head micro-sub__title--sep">
                   <span class="micro-sub__title">Параметры цикла</span>
+                  <div class="micro-trig" id="pcArrive" role="tablist" title="По какому датчику автомат решает, что мотор приехал (отвод, подвод, возврат): энкодер 1285, расчётная абсолютная позиция 1274 или аналоговый датчик 1271. Применяется сразу.">
+                    <span class="micro-trig__lbl">Приход по</span>
+                    <button type="button" class="micro-trig__btn is-active" data-arr="enc" title="Энкодер (рег. 1285)">энкодер</button>
+                    <button type="button" class="micro-trig__btn" data-arr="calc" title="Расчётная абсолютная позиция (рег. 1274)">расчётная</button>
+                    <button type="button" class="micro-trig__btn" data-arr="ai" title="Аналоговый датчик (рег. 1271)">аналог</button>
+                  </div>
                   <div class="micro-trig" id="pcTrigger" role="tablist" title="Когда брать следующую пробу: по времени (пауза между пробами), по СВ (на каждом целом СВ) или по CV (как только прошлая проба разобрана).">
                     <span class="micro-trig__lbl">Триггер</span>
                     <button type="button" class="micro-trig__btn is-active" data-trig="time">время</button>

@@ -228,6 +228,12 @@ def micro_cycle_autostart(on: int):
     return micro.set_cycle_autostart(bool(on))
 
 
+@app.get("/api/micro/arrive_sensor")
+def micro_arrive_sensor(mode: str):
+    # датчик прихода мотора для цикла: enc (энкодер 1285) / calc (расчётная 1274) / ai (аналог 1271)
+    return micro.set_arrive_sensor(mode)
+
+
 @app.get("/api/micro/trigger_mode")
 def micro_trigger_mode(mode: str):
     # переключатель триггера пробы time/sv — применяется сразу (без перезапуска платы)
@@ -506,6 +512,7 @@ def micro_settings(
     pause_sec: int | None = None,
     photo_format: str | None = None,
     trigger_mode: str | None = None,
+    arrive_sensor: str | None = None,
     sv_from: float | None = None,
     sv_to: float | None = None,
     host: str | None = None,
@@ -530,6 +537,7 @@ def micro_settings(
     if pause_sec is not None: pc["pause_sec"] = pause_sec
     if photo_format is not None: pc["photo_format"] = photo_format
     if trigger_mode is not None: pc["trigger_mode"] = trigger_mode
+    if arrive_sensor is not None: pc["arrive_sensor"] = arrive_sensor
     if sv_from is not None: pc["sv_from"] = sv_from
     if sv_to is not None: pc["sv_to"] = sv_to
     if pc:

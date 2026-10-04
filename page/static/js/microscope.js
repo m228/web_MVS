@@ -1406,6 +1406,8 @@
     set("cvUmPerPx", cv.um_per_px); set("cvTiles", cv.tiles);
     set("cvMinCirc", sh.min_circularity); set("cvMinSol", sh.min_solidity);
     set("cvMaxAspect", sh.max_aspect); set("cvConf", cv.conf);
+    set("cvSuspect", sh.suspect_aspect); set("cvRejectSv", cv.reject_from_sv);
+    if ($("cvRejectAlways")) $("cvRejectAlways").checked = !!cv.reject_always;
     set("pcCvFrames", cv.frames_per_probe); set("pcCvGap", cv.gap_sec);   // поля на вкладке «Цикл»
     updateTriggerFields();
   }
@@ -1413,8 +1415,9 @@
     const num = (id) => { const e = $(id); return e && e.value !== "" ? parseFloat(e.value) : undefined; };
     return {
       groups: { small_max_um: num("cvSmallMax"), medium_max_um: num("cvMediumMax") },
-      shape: { min_circularity: num("cvMinCirc"), min_solidity: num("cvMinSol"), max_aspect: num("cvMaxAspect") },
+      shape: { min_circularity: num("cvMinCirc"), min_solidity: num("cvMinSol"), max_aspect: num("cvMaxAspect"), suspect_aspect: num("cvSuspect") },
       um_per_px: num("cvUmPerPx"), tiles: num("cvTiles"), conf: num("cvConf"),
+      reject_from_sv: num("cvRejectSv"), reject_always: $("cvRejectAlways") ? $("cvRejectAlways").checked : undefined,
     };
   }
   async function cvPostSettings(patch) {
@@ -1493,6 +1496,7 @@
       if (b) b.textContent = v;
       if (em) em.textContent = p + "%";
     });
+    cvRenderReasons(s, r && r.sv);
     const sz = s.size_um || {};
     const setT = (id, v) => { const e = $(id); if (e) e.textContent = v; };
     setT("cvMean", sz.mean != null ? sz.mean + " мкм" : "—");
@@ -1514,10 +1518,10 @@
   }
 
   // --- оверлей поверх чистого кадра: слои по группам, подсветка формы кристалла под мышкой ---
-  const CV_GROUP_NAMES = { small: "малая", medium: "средняя", large: "большая", reject: "брак", cut: "обрезан краем — не в рассеве" };
-  const CV_GROUP_COLOR = { small: "#1d9e75", medium: "#378add", large: "#ba7517", reject: "#e24b4a", cut: "#9aa3ad" };
+  const CV_GROUP_NAMES = { small: "малая", medium: "средняя", large: "большая", reject: "брак", suspect: "вытянутый (не брак)", cut: "обрезан краем — не в рассеве" };
+  const CV_GROUP_COLOR = { small: "#1d9e75", medium: "#378add", large: "#ba7517", reject: "#e24b4a", suspect: "#6ad1f5", cut: "#9aa3ad" };
   const CV_LAYERS_KEY = "microCvLayers";
-  let cvLayers = { small: true, medium: true, large: true, reject: true, cut: true, sizes: false, frac: true };
+  let cvLayers = { small: true, medium: true, large: true, reject: true, suspect: true, cut: true, sizes: false, frac: true };
   let cvCurClean = false;       // текущий кадр чистый (контуры рисуем сами); false — старая проба с «впечёнными»
   let cvHoverObj = null;        // кристалл под мышкой (подсвечиваем форму)
 
@@ -1528,16 +1532,35 @@
     const sc = Math.min(bw / ov.naturalWidth, bh / ov.naturalHeight);
     return { sc, ox: (bw - ov.naturalWidth * sc) / 2, oy: (bh - ov.naturalHeight * sc) / 2, bw, bh };
   }
-  // группа кристалла по ТЕКУЩИМ порогам вкладки «CV»: поменял порог — оверлей сразу перекрасился,
-  // без повторного прогона модели (сохранённый рассев пробы обновится при следующем разборе)
-  function cvGroupOf(o) {
-    if (o.group === "cut" || o.circularity == null) return o.group;
+  // Классификация кристалла по ТЕКУЩИМ порогам вкладки «CV» (поменял порог — оверлей сразу перекрасился,
+  // без повторного прогона модели; сохранённый рассев пробы обновится при следующем разборе).
+  // Причина дефекта определяется ВСЕГДА (и подписывается красным), в «% брака» идёт с порога по СВ — это
+  // решает сервер при разборе. Правила зеркалят cv_analyzer._defect; размер-брак (tiny/huge) берём от сервера.
+  const CV_REASONS = {
+    needle: { name: "игла", cause: "раффиноза — приходит с сырьём (старая, подмороженная свёкла)", todo: "уваркой не убрать; снизить пересыщение, смотреть качество и хранение свёклы" },
+    aggregate: { name: "сросток", cause: "высокое пересыщение, плохое перемешивание, много центров при заводке", todo: "вести по СВ и t, усилить циркуляцию, не переуваривать" },
+    crooked: { name: "кривой", cause: "высокий фон несахаров, низкая чистота утфеля", todo: "поднять чистоту сиропа; держать стабильные t и циркуляцию" },
+    tiny: { name: "мелочь (<0,25 мм)", cause: "слишком много центров при заводке", todo: "проверить дозировку затравки и СВ заводки" },
+    huge: { name: "слишком крупный (>1,2 мм)", cause: "возможно сросток", todo: "проверить кристалл на срастание" },
+  };
+  const CV_NOTCH_MAX = 5;
+  function cvClassify(o) {
+    if (o.group === "cut") return { layer: "cut", reason: null };
     const thr = (id) => { const e = $(id); return e && e.value !== "" ? parseFloat(e.value) : null; };
-    const tC = thr("cvMinCirc"), tS = thr("cvMinSol"), tA = thr("cvMaxAspect"), gS = thr("cvSmallMax"), gM = thr("cvMediumMax");
-    if ([tC, tS, tA, gS, gM].some((v) => v == null || isNaN(v))) return o.group;
-    if (o.circularity < tC || o.aspect > tA || o.solidity < tS) return "reject";
-    return o.size_um < gS ? "small" : (o.size_um < gM ? "medium" : "large");
+    const tC = thr("cvMinCirc"), tS = thr("cvMinSol"), tA = thr("cvMaxAspect"), tU = thr("cvSuspect"), gS = thr("cvSmallMax"), gM = thr("cvMediumMax");
+    if (o.circularity == null || [tC, tS, tA, gS, gM].some((v) => v == null || isNaN(v)))
+      return { layer: o.defect ? "reject" : (o.suspect ? "suspect" : o.group), reason: o.defect || null };
+    const n = o.notches || 0;
+    let reason = null;
+    if (o.aspect > tA) reason = "needle";
+    else if (n >= 1 && n <= CV_NOTCH_MAX && (n >= 2 || o.solidity < tS)) reason = "aggregate";
+    else if (n > CV_NOTCH_MAX || o.solidity < tS || o.circularity < tC) reason = "crooked";
+    else if (o.defect === "tiny" || o.defect === "huge") reason = o.defect;
+    if (reason) return { layer: "reject", reason };
+    if (tU != null && !isNaN(tU) && o.aspect > tU) return { layer: "suspect", reason: null, suspect: true };
+    return { layer: o.size_um < gS ? "small" : (o.size_um < gM ? "medium" : "large"), reason: null };
   }
+  function cvGroupOf(o) { return cvClassify(o).layer; }
   function cvDrawOverlay() {
     const cv = $("cvOverlayCanvas"), ov = $("cvOverlay"); if (!cv || !ov) return;
     // верх картинки в карточке — к нему привязаны листалка кадров и кнопка fullscreen (над
@@ -1566,7 +1589,8 @@
       if (!o.poly || o.poly.length < 3 || o === cvHoverObj) return;
       const gr = cvGroupOf(o); if (!cvLayers[gr]) return;
       ctx.strokeStyle = CV_GROUP_COLOR[gr] || "#ccc"; ctx.lineWidth = 1.5;
-      path(o.poly); ctx.stroke();
+      ctx.setLineDash(gr === "suspect" ? [5, 3] : []);
+      path(o.poly); ctx.stroke(); ctx.setLineDash([]);
       if (cvLayers.sizes && gr !== "reject" && gr !== "cut") {
         ctx.fillStyle = CV_GROUP_COLOR[gr]; ctx.font = "10px sans-serif"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
         ctx.fillText(String(Math.round(o.size_um)), g.ox + o.cx * g.sc, g.oy + o.cy * g.sc);
@@ -1609,7 +1633,7 @@
       });
     });
     // пороги на вкладке «CV» → оверлей перекрашивается сразу
-    ["cvMinCirc", "cvMinSol", "cvMaxAspect", "cvSmallMax", "cvMediumMax"].forEach((id) => {
+    ["cvMinCirc", "cvMinSol", "cvMaxAspect", "cvSuspect", "cvSmallMax", "cvMediumMax"].forEach((id) => {
       const e = $(id); if (e) e.addEventListener("input", cvDrawOverlay);
     });
     const ov = $("cvOverlay");
@@ -1619,6 +1643,23 @@
     }
     window.addEventListener("resize", cvDrawOverlay);
     document.addEventListener("fullscreenchange", () => setTimeout(cvDrawOverlay, 60));
+  }
+
+  // причины брака и вытянутые под рассевом: счётчики всегда; в «брак» они идут с порога по СВ
+  function cvRenderReasons(s, probeSv) {
+    const box = $("cvReasons"); if (!box) return;
+    const rs = s.reasons || {};
+    const rows = ["needle", "aggregate", "crooked", "tiny", "huge"].filter((k) => k in rs && (rs[k] > 0 || k === "needle" || k === "aggregate" || k === "crooked"));
+    let html = "";
+    if (s.reject_active === false)
+      html += '<div class="note">СВ ' + (probeSv != null ? probeSv : (s.sv != null ? s.sv : "—")) + ' — ниже порога: причины подписаны, в «брак» пока не считаются</div>';
+    rows.forEach((k) => {
+      const n = Math.round((rs[k] || 0) * 10) / 10;
+      html += '<div class="rs' + (n ? "" : " is-zero") + '" title="' + CV_REASONS[k].cause + ' — ' + CV_REASONS[k].todo + '"><i style="background:#e24b4a"></i><span>' + CV_REASONS[k].name + '</span><b>' + n + '</b></div>';
+    });
+    const su = Math.round((s.suspect || 0) * 10) / 10;
+    html += '<div class="rs' + (su ? "" : " is-zero") + '" title="Вытянутые 1,6–3,0: не брак, но рост доли — предупреждение"><i style="background:#6ad1f5"></i><span>вытянутые (не брак)</span><b>' + su + '</b></div>';
+    box.innerHTML = html;
   }
 
   // --- лента проб слева от окна (новая сверху) + кадры выбранной пробы ---
@@ -1736,7 +1777,10 @@
       }
       setHover(best);
       if (!best) { tip.hidden = true; return; }
-      const gr = CV_GROUP_NAMES[cvGroupOf(best)] || best.group;
+      const cls = cvClassify(best), gr = CV_GROUP_NAMES[cls.layer] || best.group;
+      const rs = cls.reason && CV_REASONS[cls.reason];
+      const why = rs ? '<span class="why"><b>' + rs.name + '</b> — ' + rs.cause + '.<br>Что делать: ' + rs.todo + '.</span>'
+        : (cls.layer === "suspect" ? '<span class="why">Вытянутый, но не игла. Следи за долей таких: рост — сигнал про глюкозу/раффинозу.</span>' : "");
       // форма: округлость / выпуклость / вытянутость; значение за текущим порогом (поля вкладки
       // «CV») подсвечиваем — видно, из-за чего кристалл ушёл в брак и куда двигать порог
       const thr = (id) => { const e = $(id); return e && e.value !== "" ? parseFloat(e.value) : null; };
@@ -1746,7 +1790,7 @@
         " · выпукл. " + mark(best.solidity.toFixed(2), tS != null && best.solidity < tS) +
         " · вытянут. " + mark(best.aspect.toFixed(1), tA != null && best.aspect > tA);
       tip.innerHTML = "Ø <b>" + best.size_um + " мкм</b> · S <b>" + Math.round(best.area_um2) + " мкм²</b><br>" +
-        best.length_um + "×" + best.width_um + " мкм · " + gr + shape;
+        best.length_um + "×" + best.width_um + " мкм · " + gr + shape + why;
       const cardR = card.getBoundingClientRect();
       tip.style.left = (e.clientX - cardR.left) + "px";
       tip.style.top = (e.clientY - cardR.top) + "px";

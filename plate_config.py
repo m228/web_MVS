@@ -252,8 +252,16 @@ DEFAULTS = {
         "service_url": "http://127.0.0.1:8765",
         "um_per_px": 1.629,
         "tiles": 6, "conf": 0.25, "iou": 0.45, "overlap": 0.15,
-        "groups": {"small_max_um": 300.0, "medium_max_um": 600.0},
-        "shape": {"min_circularity": 0.55, "max_aspect": 2.8, "min_solidity": 0.82},
+        "groups": {"small_max_um": 500.0, "medium_max_um": 900.0},
+        # стартовые пороги — из «Памятки оператора» (Сапронов): игла L/W > 3,0; сросток/кривой при выпуклости
+        # < 0,90; вытянутые 1,6–3,0 — не брак, а предупреждение; notch_frac — глубина перетяжки сростка
+        "shape": {"min_circularity": 0.55, "max_aspect": 3.0, "min_solidity": 0.90,
+                  "suspect_aspect": 1.6, "notch_frac": 0.06},
+        # брак по размеру (мелочь < 0,25 мм, слишком крупный > 1,2 мм) — только когда СВ ≥ reject_from_sv
+        "size_reject": {"min_um": 250.0, "max_um": 1200.0},
+        # брак идёт в рассев/тренд только с этого СВ (кристаллы подросли); reject_always — считать всегда.
+        # Причина дефекта (игла/сросток/кривой) определяется и подписывается ВСЕГДА.
+        "reject_from_sv": 88.0, "reject_always": False,
         "min_size_um": 20.0, "blur_min": 8.0, "keep_last": 50,
         "overlay_jpeg_quality": 85,
         # проба «по CV»: у стекла стоим, пока не разобрано frames_per_probe кадров (кадр → разбор

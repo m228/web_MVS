@@ -40,6 +40,7 @@ class MicroscopeService:
             if self._started:
                 return
             self.cfg = plate_config.load()
+            self._migrate_cv_thresholds()
             self.plate = PlateClient(self.cfg)
             self.fsm = MicroscopeFSM(self.plate, self.cfg)
             self.fsm.on_photo = self._auto_photo   # кадры пробы в выдержке (см. _auto_photo)
@@ -78,6 +79,19 @@ class MicroscopeService:
         if sv is not None:
             parts.append("SV" + ("%.1f" % float(sv)).replace(".", "_"))
         return "_".join(parts)
+
+    def _migrate_cv_thresholds(self):
+        """Один раз: старые сохранённые пороги групп/формы заменяем стартовыми из «Памятки оператора»
+        (группы 500/900 мкм, игла 3,0, выпуклость 0,90, вытянутые от 1,6). Округлость и уверенность
+        модели не трогаем. Метка th_ver в plate_config.json — чтобы не затирать правки Макса снова."""
+        cv = (self.cfg or {}).get("cv") or {}
+        if int(cv.get("th_ver", 0)) >= 2:
+            return
+        patch = {"th_ver": 2,
+                 "groups": {"small_max_um": 500.0, "medium_max_um": 900.0},
+                 "shape": {"max_aspect": 3.0, "min_solidity": 0.90, "suspect_aspect": 1.6}}
+        self.cfg = plate_config.save({"cv": patch})
+        log_event("microscope_service", "Пороги CV обновлены на стартовые из памятки (th_ver=2)", "info", patch)
 
     def _auto_photo(self):
         """Колбэк автомата: дёргается на входе в выдержку пробы и далее каждые shot_interval_sec
@@ -318,6 +332,7 @@ class MicroscopeService:
             "fr_cfg": fr_cfg, "fr_on": fr_cfg.get("enabled", True),
             # overlays — ЧИСТЫЕ кадры серии (контуры в картинку не впекаем — их рисует браузер)
             "frame_recs": [], "overlays": [], "zones": [], "timing": {}, "answered": 0, "shape": None,
+            "svs": [],       # СВ на момент каждого кадра: от него зависит, идёт ли брак в рассев
         }
 
     def _cv_analyze_one(self, run, img):
@@ -339,7 +354,9 @@ class MicroscopeService:
             if resp:
                 run["answered"] += 1
                 run["timing"] = resp.get("timing", {})
-                res = cv_analyzer.analyze(img, resp.get("objects", []), cv_cfg=cv, with_overlay=False)
+                sv = self.fsm.sv if self.fsm else None
+                run["svs"].append(sv)
+                res = cv_analyzer.analyze(img, resp.get("objects", []), cv_cfg=cv, with_overlay=False, sv=sv)
                 summary, objects = res["summary"], res["objects"]
         # --- разломы (чистый OpenCV, всегда) ---
         run["zones"].append(cv_fracture.detect_zones(img, run["fr_cfg"]) if run["fr_on"] else [])
@@ -374,7 +391,9 @@ class MicroscopeService:
         saved = cv_store.save_sample(serial, stage, run["frame_recs"], overlays, run["timing"],
                                      keep_last=int(cv.get("keep_last", 50)), fracture=fracture,
                                      jpeg_quality=int(cv.get("overlay_jpeg_quality", 85)),
-                                     thumb_img=thumb_img)
+                                     thumb_img=thumb_img,
+                                     sv=(sum(x for x in run["svs"] if x is not None) / max(1, len([x for x in run["svs"] if x is not None]))
+                                         if any(x is not None for x in run["svs"]) else None))
         if not saved:
             self._set_cv_status("error", "не удалось сохранить пробу (см. лог)")
         elif not run["sidecar_ok"]:

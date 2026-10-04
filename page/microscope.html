@@ -116,6 +116,7 @@
               <label title="Показать кристаллы средней группы"><input type="checkbox" value="medium" checked /><span class="dot" style="background:#378add"></span>средняя</label>
               <label title="Показать кристаллы большой группы"><input type="checkbox" value="large" checked /><span class="dot" style="background:#ba7517"></span>большая</label>
               <label title="Показать брак по форме"><input type="checkbox" value="reject" checked /><span class="dot" style="background:#e24b4a"></span>брак</label>
+              <label title="Вытянутые кристаллы (длина/ширина от 1,6 до порога иглы) — не брак, а предупреждение: следи за их долей"><input type="checkbox" value="suspect" checked /><span class="dot" style="background:#6ad1f5"></span>вытянутые</label>
               <label title="Кристаллы, обрезанные краем кадра — в рассев не идут"><input type="checkbox" value="cut" checked /><span class="dot" style="background:#9aa3ad"></span>обрезанные</label>
               <label title="Подписать размер каждого кристалла, мкм"><input type="checkbox" value="sizes" />размеры</label>
               <label title="Показать зоны разломов"><input type="checkbox" value="frac" checked />разломы</label>
@@ -677,7 +678,7 @@
                       <label class="micro-cycle-f" title="На сколько частей резать кадр перед распознаванием. Больше частей — лучше видна мелочь, но дольше и больше кристаллов попадает на швы. 1 — без нарезки."><span>Частей нарезки кадра</span><input type="number" id="cvTiles" step="1" min="1" max="9" /></label>
                     </div>
                   </div>
-                  <p class="micro-cv-group-lbl" title="Кристалл уходит в «брак», если нарушен хотя бы один из порогов формы.">Брак по форме</p>
+                  <p class="micro-cv-group-lbl" title="Причина дефекта (игла, сросток, кривой) подписывается всегда. В рассев и тренд брак идёт с порога по СВ (ниже).">Брак по форме</p>
                   <div class="micro-cycle-cols">
                     <div class="micro-cycle-col">
                       <label class="micro-cycle-f" title="Округлость 0…1: насколько контур компактный. Круг = 1, квадрат ≈ 0.79, прямоугольник 2:1 ≈ 0.70, 3:1 ≈ 0.59; рваный или игольчатый контур — ниже. Меньше порога — брак. Поднять порог — строже."><span>Мин. округлость</span><input type="number" id="cvMinCirc" step="0.05" /></label>
@@ -688,6 +689,18 @@
                       <label class="micro-cycle-f" title="Уверенность модели 0…1, что найденный объект — кристалл. Всё, что ниже порога, отбрасывается. Выше порог — меньше мусора, но теряется мелочь и нерезкие кристаллы; ниже — находит больше, но больше ложных."><span>Порог уверенности</span><input type="number" id="cvConf" step="0.05" min="0" max="1" /></label>
                     </div>
                   </div>
+                  <div class="micro-cycle-cols">
+                    <div class="micro-cycle-col">
+                      <label class="micro-cycle-f" title="Вытянутость (длина/ширина) от этого значения до «Макс. вытянутость» — не брак, а предупреждение (голубой слой). Рост их доли — сигнал: в сиропе глюкоза или раффиноза."><span>Вытянутые от</span><input type="number" id="cvSuspect" step="0.1" /></label>
+                    </div>
+                    <div class="micro-cycle-col">
+                      <label class="micro-cycle-f" title="Брак идёт в рассев и тренд, только когда СВ не ниже этого значения: пока кристаллы мелкие и растут, дефекты формы только подписываются. Для спуска на 90 ставят около 88."><span>Брак считать с СВ</span><input type="number" id="cvRejectSv" step="0.5" /></label>
+                    </div>
+                  </div>
+                  <label class="micro-check micro-cv-always" title="Включено — брак идёт в рассев и тренд на любом СВ, без порога. Для сравнения «с порогом» и «без».">
+                    <input type="checkbox" id="cvRejectAlways" />
+                    <span class="micro-check__text">Считать брак всегда <span class="micro-ro">(без порога по СВ)</span></span>
+                  </label>
                 </div>
                 <div class="micro-cv-foot">
                   <button type="button" id="cvSaveBtn" class="toolbar-btn toolbar-btn--primary" title="Сохранить пороги — применятся к следующему разбору">Сохранить пороги</button>
@@ -876,6 +889,8 @@
                   <div class="micro-cv-row" data-g="large"><span>Большая</span><div class="micro-cv-bar"><i></i></div><b>—</b><em>—</em></div>
                   <div class="micro-cv-row" data-g="reject"><span>Брак</span><div class="micro-cv-bar"><i></i></div><b>—</b><em>—</em></div>
                 </div>
+                <!-- причины брака (всегда) и вытянутые; в рассев брак идёт с порога по СВ -->
+                <div class="micro-cv-reasons" id="cvReasons"></div>
                 <div class="micro-cv-stats">
                   <div class="micro-tile"><span>Общая</span><b id="cvMean">—</b></div>
                   <div class="micro-tile"><span>Медиана</span><b id="cvMedian">—</b></div>
@@ -894,7 +909,7 @@
                   <button type="button" class="micro-trend__btn" id="cvTrendPrev" title="Предыдущий день с пробами">‹</button>
                   <input type="date" id="cvTrendDate" class="micro-trend__date" title="Дата тренда" />
                   <button type="button" class="micro-trend__btn" id="cvTrendNext" title="Следующий день с пробами">›</button>
-                  <button type="button" class="micro-trend__btn micro-trend__btn--text" id="cvTrendToday" title="Последний день с пробами">Сегодня</button>
+                  <button type="button" class="micro-trend__btn micro-trend__btn--text" id="cvTrendToday" title="Вернуться к самым свежим пробам">Последнее</button>
                   <span class="micro-trend__span" id="cvTrendSpan">—</span>
                 </div>
                 <div class="micro-trend__row">

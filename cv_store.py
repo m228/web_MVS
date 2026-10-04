@@ -63,7 +63,7 @@ def _hist_row(result: dict) -> Optional[dict]:
     pct = s.get("groups_pct") or {}
     fr = (result.get("fracture") or {}).get("summary") or {}
     return {
-        "ts": result["ts"], "t": t, "stage": result.get("stage"),
+        "ts": result["ts"], "t": t, "stage": result.get("stage"), "sv": result.get("sv"),
         "count": s.get("count"), "mean": sz.get("mean"), "median": sz.get("median"),
         "small": pct.get("small"), "medium": pct.get("medium"),
         "large": pct.get("large"), "reject": pct.get("reject"),
@@ -181,6 +181,9 @@ def _encode_thumb(img) -> Optional[bytes]:
     return enc.tobytes() if ok else None
 
 
+REASONS = ["needle", "aggregate", "crooked", "tiny", "huge"]
+
+
 def _aggregate(frames: list[dict]) -> dict:
     """Сводка пробы = усреднение по-кадровых сводок (кадры одной пробы ~ одинаковы)."""
     ok = [f["summary"] for f in frames if f.get("summary")]
@@ -201,6 +204,10 @@ def _aggregate(frames: list[dict]) -> dict:
             "cv_pct": round(sum(s["size_um"].get("cv_pct", 0) for s in ok) / n, 1),
         },
         "density_per_mm2": round(sum(s["density_per_mm2"] for s in ok) / n, 2),
+        # причины брака и вытянутые — средние по кадрам; reject_active — брак шёл в рассев хотя бы в одном кадре
+        "reasons": {r: round(sum((s.get("reasons") or {}).get(r, 0) for s in ok) / n, 1) for r in REASONS},
+        "suspect": round(sum(s.get("suspect", 0) for s in ok) / n, 1),
+        "reject_active": any(s.get("reject_active", True) for s in ok),
         "reject_pct": round(sum(s["reject_pct"] for s in ok) / n, 1),
         "quality": "low" if any(s.get("quality") == "low" for s in ok) else "ok",
         "frames": n,
@@ -210,7 +217,7 @@ def _aggregate(frames: list[dict]) -> dict:
 def save_sample(serial: str, stage, frames: list[dict], images: list, timing: dict,
                 keep_last: int = 50, ts: Optional[str] = None,
                 fracture: Optional[dict] = None, jpeg_quality: int = 85,
-                thumb_img=None) -> Optional[dict]:
+                thumb_img=None, sv: Optional[float] = None) -> Optional[dict]:
     """Сохранить пробу. frames — список {file, summary, objects}. images — ЧИСТЫЕ кадры пробы
     (numpy BGR), пишутся в JPEG (jpeg_quality); контуры поверх рисует браузер по objects_N.json.
     thumb_img — кадр с контурами для миниатюры (нет — миниатюра из чистого кадра 0).
@@ -254,6 +261,7 @@ def save_sample(serial: str, stage, frames: list[dict], images: list, timing: di
             "serial": str(serial),
             "ts": ts,
             "stage": stage,
+            "sv": round(sv, 1) if sv is not None else None,   # СВ пробы (от него зависит учёт брака)
             "timing": timing,
             "summary": summary,
             "frames": frame_recs,

@@ -46,3 +46,6 @@ bug.txt
 /tasks
 /tools
 /task.txt
+
+# --- отчёт самопроверки (selfcheck.py / SelfCheck.exe) ---
+/selfcheck_output.txt

@@ -1,0 +1,1048 @@
+"""selfcheck — проверка, что КАЖДЫЙ модуль web_MVS живой и откликается (без железа).
+
+Запуск из ИСХОДНИКОВ:   python selfcheck.py
+Запуск из СОБРАННОГО:   SelfCheck.exe        (лежит рядом с web_MVS.exe, тот же бандл и _internal)
+Ключи:
+    --hw         дополнительно «живые» проверки железа (GigE-камеры, плата, ПЛК, CV-сервис, RTSP-камеры):
+                 только чтение/опрос, ничего не меняют. Без железа эти пункты — SKIP.
+    --no-pause   не ждать Enter в конце (для скриптов)
+    --keep       не удалять временную песочницу
+Результат: таблица OK / SKIP / FAIL по модулям, отчёт дублируется в selfcheck_output.txt рядом с exe.
+Код возврата: 0 — нет FAIL, 1 — есть FAIL.
+
+Принцип безопасности: ВСЕ пользовательские данные (plate_config.json, dataset/, cv_results/,
+rtsp_cameras.json …) на время проверки уходят во ВРЕМЕННУЮ ПЕСОЧНИЦУ (paths.DATA_DIR подменяется до
+импорта модулей проекта), боевые данные не читаются и не пишутся. Железо без --hw не трогается:
+плата и ПЛК заменены встроенным мини-Modbus-сервером на 127.0.0.1, веб-слой вызывается напрямую
+через ASGI (без сети), lifespan приложения (драйвер камер, микроскоп) НЕ запускается.
+"""
+import asyncio
+import json
+import os
+import re
+import shutil
+import socket
+import struct
+import sys
+import tempfile
+import threading
+import time
+import traceback
+from collections import defaultdict
+from pathlib import Path
+
+# --- песочница: подменяем DATA_DIR ДО импорта любого модуля проекта (они берут его при импорте) ---
+import paths
+
+REAL_DATA_DIR = paths.DATA_DIR
+BUNDLE_DIR = paths.BUNDLE_DIR
+SANDBOX = Path(tempfile.mkdtemp(prefix="web_mvs_selfcheck_"))
+paths.DATA_DIR = SANDBOX
+
+try:
+    sys.stdout.reconfigure(encoding="utf-8")
+except Exception:
+    pass
+
+
+class Skip(Exception):
+    """Проверка неприменима (нет железа / не включён --hw) — не ошибка."""
+
+
+CHECKS = []   # (группа, название, hw, функция)
+
+
+def check(group, name, hw=False):
+    def deco(fn):
+        CHECKS.append((group, name, hw, fn))
+        return fn
+    return deco
+
+
+# =====================================================================================
+# Инфраструктура: мини-Modbus-TCP сервер (замена платы и ПЛК), ASGI-вызов приложения
+# =====================================================================================
+
+class FakeModbus:
+    """Хранилище holding-регистров по TCP: FC03 (чтение), FC06 (запись 1), FC16 (запись N)."""
+
+    def __init__(self):
+        self.regs = defaultdict(int)
+        self.writes = []
+        self._srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self._srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        self._srv.bind(("127.0.0.1", 0))
+        self._srv.listen(8)
+        self._srv.settimeout(0.2)
+        self.port = self._srv.getsockname()[1]
+        self._running = True
+        self._conns = []
+        self._thread = threading.Thread(target=self._accept, name="selfcheck-modbus", daemon=True)
+        self._thread.start()
+
+    def _accept(self):
+        while self._running:
+            try:
+                conn, _ = self._srv.accept()
+            except socket.timeout:
+                continue
+            except OSError:
+                return
+            conn.settimeout(0.5)
+            self._conns.append(conn)
+            threading.Thread(target=self._serve, args=(conn,), daemon=True).start()
+
+    @staticmethod
+    def _recv(conn, n, running):
+        buf = b""
+        while len(buf) < n:
+            try:
+                chunk = conn.recv(n - len(buf))
+            except socket.timeout:
+                if not running():
+                    return None
+                continue
+            except OSError:
+                return None
+            if not chunk:
+                return None
+            buf += chunk
+        return buf
+
+    def _serve(self, conn):
+        run = lambda: self._running
+        while self._running:
+            head = self._recv(conn, 7, run)
+            if head is None:
+                break
+            tid, pid, length, unit = struct.unpack(">HHHB", head)
+            pdu = self._recv(conn, length - 1, run)
+            if pdu is None:
+                break
+            fc = pdu[0]
+            try:
+                if fc == 3:
+                    addr, count = struct.unpack(">HH", pdu[1:5])
+                    data = b"".join(struct.pack(">H", self.regs[addr + i] & 0xFFFF) for i in range(count))
+                    resp = bytes([3, len(data)]) + data
+                elif fc == 6:
+                    addr, val = struct.unpack(">HH", pdu[1:5])
+                    self.regs[addr] = val
+                    self.writes.append((addr, val))
+                    resp = pdu[:5]
+                elif fc == 16:
+                    addr, count, _bc = struct.unpack(">HHB", pdu[1:6])
+                    for i in range(count):
+                        v = struct.unpack(">H", pdu[6 + 2 * i:8 + 2 * i])[0]
+                        self.regs[addr + i] = v
+                        self.writes.append((addr + i, v))
+                    resp = struct.pack(">BHH", 16, addr, count)
+                else:
+                    resp = bytes([fc | 0x80, 1])
+            except Exception:
+                resp = bytes([fc | 0x80, 4])
+            try:
+                conn.sendall(struct.pack(">HHHB", tid, 0, len(resp) + 1, unit) + resp)
+            except OSError:
+                break
+
+    def close(self):
+        self._running = False
+        try:
+            self._srv.close()
+        except OSError:
+            pass
+        for c in self._conns:
+            try:
+                c.close()
+            except OSError:
+                pass
+
+
+_fake = None
+
+
+def fake_modbus():
+    global _fake
+    if _fake is None:
+        _fake = FakeModbus()
+    return _fake
+
+
+async def _asgi_get(app, path, query=""):
+    scope = {"type": "http", "asgi": {"version": "3.0"}, "http_version": "1.1", "method": "GET",
+             "scheme": "http", "path": path, "raw_path": path.encode(), "query_string": query.encode(),
+             "headers": [(b"host", b"selfcheck")], "client": ("127.0.0.1", 1),
+             "server": ("selfcheck", 80), "root_path": ""}
+    out = {"status": None, "headers": {}, "body": bytearray()}
+    sent = {"done": False}
+
+    async def receive():
+        if sent["done"]:
+            await asyncio.sleep(3600)
+        sent["done"] = True
+        return {"type": "http.request", "body": b"", "more_body": False}
+
+    async def send(msg):
+        if msg["type"] == "http.response.start":
+            out["status"] = msg["status"]
+            out["headers"] = {k.decode().lower(): v.decode() for k, v in msg.get("headers", [])}
+        elif msg["type"] == "http.response.body":
+            out["body"] += msg.get("body", b"")
+
+    await asyncio.wait_for(app(scope, receive, send), timeout=30)
+    return out["status"], out["headers"], bytes(out["body"])
+
+
+def http_get(path, query=""):
+    import app as web
+    return asyncio.run(_asgi_get(web.app, path, query))
+
+
+def synth_frame(w=640, h=480, crystals=6):
+    """Синтетический кадр: светлый фон + светлые эллипсы-«кристаллы» + тёмный блок."""
+    import cv2
+    import numpy as np
+    img = np.full((h, w, 3), 90, np.uint8)
+    rng = np.random.RandomState(1)
+    objs = []
+    for i in range(crystals):
+        cx, cy = 80 + (i % 3) * 190, 100 + (i // 3) * 220
+        ax, ay = int(rng.randint(30, 50)), int(rng.randint(22, 38))
+        cv2.ellipse(img, (cx, cy), (ax, ay), int(rng.randint(0, 90)), 0, 360, (210, 215, 220), -1)
+        poly = cv2.ellipse2Poly((cx, cy), (ax, ay), 0, 0, 360, 15)
+        objs.append({"bbox": [cx - ax, cy - ay, cx + ax, cy + ay], "conf": 0.9,
+                     "polygon": poly.tolist()})
+    return img, objs
+
+
+# =====================================================================================
+# 1. Окружение и ресурсы бандла
+# =====================================================================================
+
+@check("Окружение", "Python / режим / песочница данных")
+def _env():
+    import plate_config
+    assert str(plate_config.CONFIG_PATH).startswith(str(SANDBOX)), "песочница не подхватилась модулями"
+    return "py %s, %s, bundle=%s" % (sys.version.split()[0], "exe" if getattr(sys, "frozen", False) else "исходники", BUNDLE_DIR)
+
+
+@check("Окружение", "VERSION читается")
+def _version():
+    v = paths.read_version()
+    assert v and v != "dev" or not getattr(sys, "frozen", False), "в бандле нет VERSION"
+    return v
+
+
+@check("Ресурсы", "страницы page/*.html на месте")
+def _pages():
+    names = ["index", "camera", "rtsp", "multi", "network", "microscope"]
+    miss = [n for n in names if not (BUNDLE_DIR / "page" / (n + ".html")).is_file()]
+    assert not miss, "нет страниц: %s" % miss
+    return "%d страниц" % len(names)
+
+
+def _html_static_refs():
+    refs = {}
+    for html in sorted((BUNDLE_DIR / "page").glob("*.html")):
+        text = html.read_text(encoding="utf-8")
+        refs[html.name] = re.findall(r"""(?:src|href)\s*=\s*["'](/static/[^"'#?]+)""", text)
+    return refs
+
+
+@check("Ресурсы", "все /static/... из HTML существуют (скрипты, стили, иконки)")
+def _static_refs():
+    miss, total = [], 0
+    for page, refs in _html_static_refs().items():
+        for r in refs:
+            total += 1
+            if not (BUNDLE_DIR / "page" / r.lstrip("/")).is_file():
+                miss.append("%s → %s" % (page, r))
+    assert not miss, "битые ссылки: %s" % miss
+    return "%d ссылок" % total
+
+
+@check("Ресурсы", "в каждой странице <script> идут без дублей, а JS-файлы страниц не пустые")
+def _script_order():
+    problems = []
+    for page, refs in _html_static_refs().items():
+        js = [r for r in refs if r.endswith(".js")]
+        if len(js) != len(set(js)):
+            problems.append("%s: дубли скриптов" % page)
+        for r in js:
+            if (BUNDLE_DIR / "page" / r.lstrip("/")).stat().st_size < 20:
+                problems.append("%s: пустой %s" % (page, r))
+    assert not problems, problems
+    return "ok"
+
+
+@check("Ресурсы", "драйвер MVS: Driver/*.dll и *.cti")
+def _driver_files():
+    d = BUNDLE_DIR / "Driver"
+    miss = [n for n in ("MvCameraControl.dll", "MvProducerGEV.cti") if not (d / n).is_file()]
+    assert not miss, "нет в %s: %s" % (d, miss)
+    return str(d)
+
+
+@check("Ресурсы", "все /api/... из JS-страниц существуют в приложении")
+def _js_api_routes():
+    import app as web
+    routes = {r.path for r in web.app.routes if getattr(r, "path", None)}
+    unknown, seen = [], set()
+    for js in sorted((BUNDLE_DIR / "page" / "static" / "js").glob("*.js")) + sorted(
+            (BUNDLE_DIR / "page" / "static" / "js").glob("**/*.js")):
+        text = js.read_text(encoding="utf-8")
+        for m in re.findall(r"""['"`](/api/[A-Za-z0-9_/\-]*)""", text):
+            if m in seen:
+                continue
+            seen.add(m)
+            if m in routes or any(r.startswith(m) for r in routes):
+                continue
+            unknown.append("%s (%s)" % (m, js.name))
+    for page in (BUNDLE_DIR / "page").glob("*.html"):
+        for m in re.findall(r"""['"`](/api/[A-Za-z0-9_/\-]*)""", page.read_text(encoding="utf-8")):
+            if m not in seen and not (m in routes or any(r.startswith(m) for r in routes)):
+                unknown.append("%s (%s)" % (m, page.name))
+            seen.add(m)
+    assert not unknown, "в JS есть адреса без эндпоинта: %s" % unknown
+    return "%d адресов, маршрутов в app: %d" % (len(seen), len(routes))
+
+
+# =====================================================================================
+# 2. Импорты и публичный API (то, на что опираются соседние модули)
+# =====================================================================================
+
+MODULES = [
+    "paths", "logger", "camera_core", "sdk_gige", "dahua_control", "net_tools", "rtsp_store",
+    "save_settings", "plate_config", "sv_source", "microscope_plc", "microscope_fsm",
+    "microscope_service", "cv_analyzer", "cv_fracture", "cv_client", "cv_store", "fracture_lab",
+    "updater", "autostart", "diag", "app", "mvsdk",
+]
+THIRD_PARTY = ["cv2", "numpy", "fastapi", "starlette", "uvicorn", "pymodbus", "harvesters", "genicam",
+               "pydantic", "multipart"]
+
+# имя модуля -> имена, которые от него ждут другие модули / диагностика
+API = {
+    "camera_core": ["manager", "CameraManager", "CameraWorker", "RtspCameraWorker", "BaseCameraWorker",
+                    "build_rtsp_url", "replace_host_in_url", "ip_to_int", "int_to_ip", "ping_device",
+                    "_to_bgr", "_apply_color", "_discover_cti", "_find_mvs_runtime", "_explain_error",
+                    "MVS_GENTL_DIRS"],
+    "microscope_service": ["micro", "MicroscopeService"],
+    "microscope_plc": ["PlateClient"],
+    "microscope_fsm": ["MicroscopeFSM"],
+    "sv_source": ["SvSource"],
+    "plate_config": ["load", "save", "replace_all", "backup", "DEFAULTS", "CONFIG_PATH"],
+    "cv_analyzer": ["analyze", "measure_objects", "summarize", "draw_overlay", "blur_score"],
+    "cv_fracture": ["detect_zones", "confirm", "draw", "area_pct"],
+    "cv_store": ["save_sample", "list_samples", "get_last", "get_prev", "get_result", "trend",
+                 "trend_range", "history_days", "get_objects", "overlay_path", "thumb_path"],
+    "cv_client": ["health", "infer", "model_info", "model_upload", "model_load"],
+    "fracture_lab": ["save_frame", "list_frames", "set_label", "delete", "zones", "all_zones", "jpeg"],
+    "rtsp_store": ["load", "save", "set_autostart", "remove"],
+    "save_settings": ["load", "get", "update"],
+    "updater": ["check_latest", "download_latest", "apply_update", "_version_tuple"],
+    "autostart": ["status", "enable", "disable"],
+    "net_tools": ["status", "enable_jumbo", "disable_jumbo", "enable_filter", "disable_filter"],
+    "dahua_control": ["parse_rtsp_credentials", "get_capabilities", "set_white_light"],
+    "sdk_gige": ["init", "available", "enum_gige", "GigeSdkStream", "read_ranges"],
+    "logger": ["log_event", "get_events"],
+    "paths": ["BUNDLE_DIR", "DATA_DIR", "read_version"],
+    "app": ["app"],
+}
+
+
+def _make_import_check(modname):
+    def fn():
+        import importlib
+        mod = importlib.import_module(modname)
+        return getattr(mod, "__file__", "builtin") and ""
+    return fn
+
+
+for _m in MODULES:
+    check("Импорт", "модуль %s" % _m)(_make_import_check(_m))
+for _m in THIRD_PARTY:
+    check("Импорт", "библиотека %s" % _m)(_make_import_check(_m))
+
+
+@check("Импорт", "список MODULES покрывает все .py проекта (только исходники)")
+def _modules_complete():
+    if getattr(sys, "frozen", False):
+        raise Skip("в exe исходников нет")
+    skip = {"run", "selfcheck"}
+    pyfiles = {p.stem for p in BUNDLE_DIR.glob("*.py")} - skip
+    pkgs = {p.parent.name for p in BUNDLE_DIR.glob("*/__init__.py") if p.parent.name in ("mvsdk", "camera_core")}
+    known = set(MODULES)
+    missing = (pyfiles | pkgs) - known
+    assert not missing, "модули не внесены в selfcheck.MODULES: %s" % sorted(missing)
+    return "%d модулей" % len(pyfiles | pkgs)
+
+
+def _make_api_check(modname, names):
+    def fn():
+        import importlib
+        mod = importlib.import_module(modname)
+        miss = [n for n in names if not hasattr(mod, n)]
+        assert not miss, "нет имён: %s" % miss
+        return "%d имён" % len(names)
+    return fn
+
+
+for _m, _names in API.items():
+    check("Публичный API", "%s: нужные имена на месте" % _m)(_make_api_check(_m, _names))
+
+
+@check("Публичный API", "camera_core.manager — синглтон CameraManager")
+def _manager_singleton():
+    import camera_core
+    from camera_core import manager
+    assert isinstance(manager, camera_core.CameraManager)
+    import microscope_service
+    return "ok"
+
+
+# =====================================================================================
+# 3. Веб-слой (ASGI напрямую, без сети и без lifespan)
+# =====================================================================================
+
+PAGES = ["/", "/camera", "/rtsp", "/multi", "/network", "/microscope"]
+
+# Безопасные read-only эндпоинты: не трогают камеру/плату/сеть/файлы вне песочницы.
+# Всё остальное (сеттеры, стримы, update/*, cams, cv/analyze, cv/model …) сознательно НЕ вызывается.
+SAFE_API = [
+    "/api/version", "/api/debug/info", "/api/debug/logs",
+    "/api/micro/enabled", "/api/micro/status", "/api/micro/telemetry", "/api/micro/config_dump",
+    "/api/micro/config_snapshots",
+    "/api/cv/settings", "/api/cv/fracture/settings", "/api/cv/approach/settings",
+    "/api/cv/last", "/api/cv/prev", "/api/cv/samples", "/api/cv/trend", "/api/cv/trend/days",
+    "/api/cv/fracture/lab/list",
+    "/api/rtsp/saved", "/api/autostart/status", "/api/net/status",
+]
+
+
+def _make_page_check(path):
+    def fn():
+        status, headers, body = http_get(path)
+        assert status == 200, "HTTP %s" % status
+        assert b"<html" in body.lower() or b"<!doctype" in body.lower(), "не HTML"
+        return "%d байт" % len(body)
+    return fn
+
+
+def _make_api_get_check(path):
+    def fn():
+        status, headers, body = http_get(path)
+        assert status == 200, "HTTP %s: %s" % (status, body[:200])
+        json.loads(body.decode("utf-8"))
+        return "%d байт" % len(body)
+    return fn
+
+
+for _p in PAGES:
+    check("Веб", "страница GET %s" % _p)(_make_page_check(_p))
+
+
+@check("Веб", "статика: style.css и все js из страниц отдаются 200")
+def _static_served():
+    files = set()
+    for refs in _html_static_refs().values():
+        files.update(refs)
+    bad = []
+    for f in sorted(files):
+        status, _, body = http_get(f)
+        if status != 200 or not body:
+            bad.append("%s → %s" % (f, status))
+    assert not bad, bad
+    return "%d файлов" % len(files)
+
+
+for _p in SAFE_API:
+    check("Веб", "API GET %s" % _p)(_make_api_get_check(_p))
+
+
+@check("Веб", "несуществующий адрес даёт 404 (роутер жив)")
+def _404():
+    status, _, _ = http_get("/api/selfcheck/nope")
+    assert status == 404, "HTTP %s" % status
+    return "404"
+
+
+# =====================================================================================
+# 4. Камеры (без железа)
+# =====================================================================================
+
+@check("Камеры", "ip_to_int / int_to_ip туда-обратно")
+def _ip():
+    from camera_core import ip_to_int, int_to_ip
+    for ip in ("192.168.1.108", "10.20.2.180", "0.0.0.0"):
+        assert int_to_ip(ip_to_int(ip)) == ip
+    return "ok"
+
+
+@check("Камеры", "build_rtsp_url / replace_host_in_url / parse_rtsp_credentials")
+def _rtsp_url():
+    from camera_core import build_rtsp_url, replace_host_in_url
+    import dahua_control
+    url = build_rtsp_url("192.168.1.108", "admin", "p@ss", 1, 0)
+    assert url.startswith("rtsp://admin:p@ss@192.168.1.108:554/"), url
+    new = replace_host_in_url(url, "10.0.0.5")
+    assert "10.0.0.5" in new and "192.168.1.108" not in new, new
+    creds = dahua_control.parse_rtsp_credentials(url)
+    assert creds, "creds пусты"
+    return "ok"
+
+
+@check("Камеры", "_explain_error расшифровывает код GenTL")
+def _explain():
+    from camera_core import _explain_error
+    res = _explain_error(Exception("GenTL error (ID: -1006)"))
+    assert res.get("code") == -1006 and res.get("hint"), "код/подсказка не разобраны: %s" % res
+    assert _explain_error(Exception("что-то своё")).get("error"), "без кода должен вернуть текст ошибки"
+    return res["hint"][:60]
+
+
+@check("Камеры", "_to_bgr: Mono8 / BayerRG8 / RGB8 → BGR нужного размера")
+def _to_bgr():
+    import numpy as np
+    from camera_core import _to_bgr
+    w, h = 32, 16
+    for fmt, ch in (("Mono8", 1), ("BayerRG8", 1), ("RGB8", 3)):
+        data = np.random.randint(0, 255, w * h * ch, dtype=np.uint8)
+        out = _to_bgr(data, w, h, fmt)
+        assert out is not None and out.shape == (h, w, 3), "%s → %s" % (fmt, None if out is None else out.shape)
+    assert _to_bgr(np.zeros(5, np.uint8), w, h, "Mono8") is None
+    return "3 формата"
+
+
+@check("Камеры", "_apply_color: гамма/контраст/насыщенность/палитра сохраняют форму кадра")
+def _color():
+    from camera_core import _apply_color
+    img, _ = synth_frame()
+    for c in ({}, {"gamma": 1.3}, {"contrast": 1.2, "brightness": 5, "saturation": 0.8},
+              {"sharpness": 0.5, "clarity": 1.0}, {"palette": "jet"}):
+        out = _apply_color(img, c)
+        assert out.shape == img.shape, c
+    return "5 режимов"
+
+
+@check("Камеры", "GigE-воркер создаётся без камеры, поток не идёт")
+def _gige_worker():
+    from camera_core import manager, CameraWorker
+    w = manager.get("SELFCHECK-GIGE")
+    assert isinstance(w, CameraWorker)
+    st = w.stream_state()
+    assert isinstance(st, dict)
+    return "stream_state=%s" % (st,)
+
+
+@check("Камеры", "RTSP-воркер создаётся без камеры, захват не стартует сам")
+def _rtsp_worker():
+    from camera_core import manager, RtspCameraWorker
+    w = manager.get_rtsp("SELFCHECK-RTSP", "rtsp://127.0.0.1:1/none")
+    assert isinstance(w, RtspCameraWorker)
+    assert w.viewer_count() == 0
+    manager.drop_rtsp("SELFCHECK-RTSP")
+    return "ok"
+
+
+@check("Камеры", "запись фото воркером: PNG пишется в песочницу и читается")
+def _write_photo():
+    import cv2
+    from camera_core import manager
+    w = manager.get("SELFCHECK-PHOTO")
+    w.photo_project = "selfcheck"
+    img, _ = synth_frame(160, 120)
+    path = w.write_photo(img)
+    assert path and Path(path).is_file(), "файл не записан: %s" % w.last_save_error
+    assert str(SANDBOX) in str(path), "пишет не в песочницу: %s" % path
+    back = cv2.imdecode(__import__("numpy").fromfile(path, dtype="uint8"), cv2.IMREAD_COLOR)
+    assert back is not None and back.shape == img.shape
+    return Path(path).name
+
+
+@check("Камеры", "поиск .cti и MVS runtime (нужны, чтобы камеры вообще стартовали)")
+def _cti():
+    from camera_core import _discover_cti, _find_mvs_runtime
+    cti = _discover_cti()
+    assert cti, "MvProducerGEV.cti не найден"
+    rt = _find_mvs_runtime()
+    return "cti=%s, runtime=%s" % (cti, rt)
+
+
+@check("Камеры", "MVS SDK (sdk_gige): DLL загружается")
+def _sdk():
+    import sdk_gige
+    sdk_gige.init()
+    assert sdk_gige.available(), "SDK недоступен"
+    return "ok"
+
+
+# =====================================================================================
+# 5. Микроскоп: плата и ПЛК = встроенный Modbus-сервер, автомат живой
+# =====================================================================================
+
+def _plate_cfg(fake):
+    import plate_config
+    cfg = plate_config.load()
+    cfg["host"], cfg["port"] = "127.0.0.1", fake.port
+    cfg["poll_interval_ms"], cfg["timeout_s"] = 50, 1.0
+    return cfg
+
+
+def _wait(cond, timeout=5.0, step=0.05):
+    end = time.time() + timeout
+    while time.time() < end:
+        if cond():
+            return True
+        time.sleep(step)
+    return False
+
+
+@check("Микроскоп", "plate_config: DEFAULTS собираются, ключи на месте")
+def _cfg_defaults():
+    import plate_config
+    cfg = plate_config.load()
+    for k in ("host", "port", "read_base", "write_base", "out", "in", "SP", "SVSP", "probe_cycle", "cv", "fracture"):
+        assert k in cfg, "нет ключа %s" % k
+    assert len(cfg["SP"]) == len(cfg["SVSP"]), "SP и SVSP разной длины"
+    return "%d ключей" % len(cfg)
+
+
+@check("Микроскоп", "plate_config: save → load → снапшот (в песочнице)")
+def _cfg_roundtrip():
+    import plate_config
+    plate_config.save({"led_bright": 37})
+    assert plate_config.load()["led_bright"] == 37
+    assert plate_config.CONFIG_PATH.is_file()
+    plate_config.save({"led_bright": plate_config.DEFAULTS["led_bright"]})
+    return "ok"
+
+
+@check("Микроскоп", "PlateClient: связь, чтение телеметрии и запись команд (Modbus-эмулятор)")
+def _plate_client():
+    from microscope_plc import PlateClient
+    fake = fake_modbus()
+    cfg = _plate_cfg(fake)
+    name, spec = next((n, s) for n, s in cfg["in"].items() if n not in ("pos1_ai",) and s.get("off", 99) < cfg["read_len"])
+    fake.regs[cfg["read_base"] + int(spec["off"])] = 123
+    client = PlateClient(cfg)
+    client.start()
+    try:
+        assert _wait(lambda: client.status["connected"]), "нет связи: %s" % client.status.get("error")
+        tel = client.telemetry
+        assert _wait(lambda: client.telemetry.get(name) == 123 * spec.get("scale", 1)), \
+            "телеметрия %s=%s" % (name, client.telemetry.get(name))
+        client.write_m1_sp(40000)
+        idx = cfg["write_base"] + int(cfg["out"]["m1_sp"])
+        assert _wait(lambda: fake.regs[idx] == 4000), "запись m1_sp не дошла: %s" % fake.regs[idx]
+    finally:
+        client.stop()
+    return "поллов=%d, %s=123" % (client.status["poll_count"], name)
+
+
+@check("Микроскоп", "SvSource: читает СВ и стадию из ПЛК (Modbus-эмулятор)")
+def _sv_source():
+    from sv_source import SvSource
+    import plate_config
+    fake = fake_modbus()
+    scfg = dict(plate_config.load()["sv_source"])
+    scfg["host"], scfg["port"], scfg["period_s"] = "127.0.0.1", fake.port, 0.1
+    fake.regs[int(scfg["fields"]["sv"]["reg"])] = 5250       # 52.50 при scale 100
+    fake.regs[int(scfg["fields"]["stage"]["reg"])] = 7
+    seen = []
+    src = SvSource(scfg, on_update=lambda sv, stage: seen.append((sv, stage)))
+    src.start()
+    try:
+        assert _wait(lambda: src.status()["connected"], 5), "нет связи с ПЛК: %s" % src.status().get("error")
+        assert _wait(lambda: src.status()["sv"] is not None, 3)
+        assert abs(src.status()["sv"] - 52.5) < 0.01, "sv=%s" % src.status()["sv"]
+        assert src.status()["stage"] == 7, "stage=%s" % src.status()["stage"]
+    finally:
+        src.stop()
+    return "sv=52.5 stage=7"
+
+
+@check("Микроскоп", "MicroscopeFSM: такты идут, СВ/стадия принимаются, проба стартует")
+def _fsm():
+    from microscope_fsm import MicroscopeFSM
+    from microscope_plc import PlateClient
+    fake = fake_modbus()
+    cfg = _plate_cfg(fake)
+    plate = PlateClient(cfg)
+    plate.start()
+    try:
+        assert _wait(lambda: plate.status["connected"]), "нет связи с платой"
+        fsm = MicroscopeFSM(plate, cfg)
+        fsm.set_sv(55.0)
+        fsm.set_stage(7)
+        for _ in range(5):
+            fsm.tick()
+        st0 = fsm.state
+        assert isinstance(st0, dict) and "mode" in st0, "state() без mode: %s" % list(st0)
+        fsm.start_sample()
+        for _ in range(5):
+            fsm.tick()
+        st1 = fsm.state
+        assert st1["mode"] != 0 or st1.get("label") != st0.get("label"), "цикл пробы не стартовал: %s" % st1
+    finally:
+        plate.stop()
+    return "mode %s → %s" % (st0["mode"], st1["mode"])
+
+
+@check("Микроскоп", "MicroscopeService: start → связь → телеметрия/статус → stop (всё через эмулятор)")
+def _micro_service():
+    import plate_config
+    from microscope_service import micro
+    fake = fake_modbus()
+    plate_config.save({"host": "127.0.0.1", "port": fake.port, "poll_interval_ms": 50,
+                       "sv_source": {"host": "127.0.0.1", "port": fake.port, "period_s": 0.2}})
+    micro.start()
+    try:
+        assert _wait(lambda: micro.status().get("connected"), 6), "сервис не связался: %s" % micro.status()
+        assert isinstance(micro.telemetry(), dict)
+        assert isinstance(micro.state(), dict)
+        assert isinstance(micro.config(), dict)
+        assert isinstance(micro.cv_config(), dict)
+    finally:
+        micro.stop()
+    return "связь есть"
+
+
+# =====================================================================================
+# 6. CV
+# =====================================================================================
+
+@check("CV", "cv_analyzer.analyze: кристаллы измеряются, сводка и overlay строятся")
+def _cv_analyze():
+    import cv_analyzer
+    img, objs = synth_frame()
+    res = cv_analyzer.analyze(img, objs, None, with_overlay=True, sv=90.0)
+    assert len(res["objects"]) == len(objs), "объектов %d из %d" % (len(res["objects"]), len(objs))
+    assert res["summary"], "пустая сводка"
+    assert res["_overlay"].shape == img.shape
+    assert all(o["size_um"] > 0 for o in res["objects"])
+    return "%d кристаллов" % len(res["objects"])
+
+
+@check("CV", "cv_fracture: зоны ищутся, серия кадров сводится, отрисовка работает")
+def _cv_fracture():
+    import cv2
+    import cv_fracture
+    img, _ = synth_frame()
+    cv2.rectangle(img, (400, 300), (560, 420), (25, 25, 25), -1)
+    z = cv_fracture.detect_zones(img, None)
+    assert isinstance(z, list)
+    confirmed, summ = cv_fracture.confirm([z, z, z], None)
+    assert isinstance(confirmed, list) and isinstance(summ, dict)
+    out = cv_fracture.draw(img.copy(), confirmed)
+    assert out.shape == img.shape
+    assert isinstance(cv_fracture.area_pct(confirmed, img.shape), (int, float))
+    return "зон=%d, подтверждено=%d" % (len(z), len(confirmed))
+
+
+@check("CV", "cv_store: сохранить пробу → список → последняя → тренд → миниатюра (песочница)")
+def _cv_store():
+    import cv_analyzer
+    import cv_store
+    img, objs = synth_frame()
+    res = cv_analyzer.analyze(img, objs, None, with_overlay=False, sv=90.0)
+    frames = [{"file": "f0.jpg", "summary": res["summary"], "objects": res["objects"]}]
+    rec = cv_store.save_sample("SELFCHECK", 7, frames, [img], {"total_ms": 1}, keep_last=5, sv=90.0)
+    assert rec and rec.get("ts"), "save_sample вернул %r" % (rec,)
+    assert cv_store.list_samples("SELFCHECK"), "список проб пуст"
+    last = cv_store.get_last("SELFCHECK")
+    assert last and last["ts"] == rec["ts"]
+    assert cv_store.get_objects("SELFCHECK", rec["ts"], 0), "объекты не читаются"
+    assert cv_store.trend("SELFCHECK") is not None
+    assert cv_store.thumb_path("SELFCHECK", rec["ts"]) is not None, "миниатюра не создана"
+    assert cv_store.history_days("SELFCHECK") is not None
+    return "ts=%s" % rec["ts"]
+
+
+@check("CV", "fracture_lab: кадр → метка → список → зоны → удаление (песочница)")
+def _fracture_lab():
+    import fracture_lab
+    img, _ = synth_frame()
+    name = fracture_lab.save_frame(img, "ok")
+    try:
+        assert any(f["name"] == name and f["label"] == "ok" for f in fracture_lab.list_frames())
+        fracture_lab.set_label(name, "fracture")
+        zs = fracture_lab.zones(name, 25, 0.002)
+        assert isinstance(zs, list)
+        assert fracture_lab.jpeg(name)[:2] == b"\xff\xd8", "не JPEG"
+        assert isinstance(fracture_lab.all_zones(25, 0.002), list)
+    finally:
+        fracture_lab.delete(name)
+    assert not any(f["name"] == name for f in fracture_lab.list_frames())
+    return name
+
+
+@check("CV", "cv_client.health: CV-сервис недоступен → None без исключения и зависания")
+def _cv_client_offline():
+    import cv_client
+    t0 = time.time()
+    assert cv_client.health("http://127.0.0.1:1", timeout=1.0) is None
+    assert time.time() - t0 < 5
+    return "None за %.1f с" % (time.time() - t0)
+
+
+# =====================================================================================
+# 7. Служебные модули
+# =====================================================================================
+
+@check("Служебные", "save_settings: update → get (песочница)")
+def _save_settings():
+    import save_settings
+    save_settings.update("SELFCHECK", photo_project="p1")
+    got = save_settings.get("SELFCHECK")
+    assert got and got.get("photo_project") == "p1", got
+    return "ok"
+
+
+@check("Служебные", "rtsp_store: save → load → autostart → remove (песочница)")
+def _rtsp_store():
+    import rtsp_store
+    url = "rtsp://admin:x@127.0.0.9:554/cam"
+    rtsp_store.save({"url": url, "label": "selfcheck", "ip": "127.0.0.9"})
+    assert any(i.get("url") == url for i in rtsp_store.load())
+    rtsp_store.set_autostart(url, True)
+    assert any(i.get("url") == url and i.get("autostart") for i in rtsp_store.load())
+    rtsp_store.remove(url)
+    assert not any(i.get("url") == url for i in rtsp_store.load())
+    return "ok"
+
+
+@check("Служебные", "updater: сравнение версий (1.10.0 > 1.9.9, 1.8.0 > 1.7.28)")
+def _updater():
+    from updater import _version_tuple
+    assert _version_tuple("1.10.0") > _version_tuple("1.9.9")
+    assert _version_tuple("v1.8.0") > _version_tuple("1.7.28")
+    return "ok"
+
+
+@check("Служебные", "autostart.status: планировщик Windows отвечает")
+def _autostart():
+    import autostart
+    st = autostart.status()
+    assert isinstance(st, dict)
+    return str(st)[:80]
+
+
+@check("Служебные", "net_tools.status: сетевые адаптеры читаются")
+def _net():
+    import net_tools
+    st = net_tools.status()
+    assert isinstance(st, (dict, list))
+    return "ok"
+
+
+@check("Служебные", "logger: события пишутся и читаются")
+def _logger():
+    from logger import log_event, get_events
+    before = get_events(0)["last_id"]
+    log_event("selfcheck", "ping")
+    assert get_events(before)["items"][-1]["source"] == "selfcheck"
+    return "ok"
+
+
+# =====================================================================================
+# 8. Железо (только с --hw): опрос, без изменений
+# =====================================================================================
+
+def _real_cfg():
+    import plate_config
+    cfg = json.loads(json.dumps(plate_config.DEFAULTS))
+    p = REAL_DATA_DIR / "plate_config.json"
+    if p.is_file():
+        try:
+            cfg = plate_config._deep_merge(cfg, json.loads(p.read_text(encoding="utf-8")))
+        except Exception:
+            pass
+    return cfg
+
+
+def _tcp(host, port, timeout=2.0):
+    s = socket.socket()
+    s.settimeout(timeout)
+    try:
+        s.connect((host, int(port)))
+        return True
+    except OSError:
+        return False
+    finally:
+        s.close()
+
+
+@check("Железо", "GigE: драйвер грузится, камеры перечисляются (главный поток)", hw=True)
+def _hw_gige():
+    from camera_core import manager
+    manager.load_driver()
+    cams = manager.scan_cams()
+    n = len(cams) if hasattr(cams, "__len__") else 0
+    if n == 0:
+        raise Skip("камер не найдено (драйвер загружен)")
+    return "камер: %d" % n
+
+
+@check("Железо", "плата микроскопа: TCP и чтение регистров (боевой конфиг, только чтение)", hw=True)
+def _hw_plate():
+    from pymodbus.client import ModbusTcpClient
+    cfg = _real_cfg()
+    if not _tcp(cfg["host"], cfg["port"]):
+        raise Skip("плата %s:%s недоступна" % (cfg["host"], cfg["port"]))
+    c = ModbusTcpClient(cfg["host"], port=int(cfg["port"]), timeout=2.0)
+    try:
+        assert c.connect()
+        rr = c.read_holding_registers(int(cfg["read_base"]), count=int(cfg["read_len"]), slave=int(cfg["unit"]))
+        assert not rr.isError(), "ответ-ошибка: %r" % rr
+    finally:
+        c.close()
+    return "%s:%s читается" % (cfg["host"], cfg["port"])
+
+
+@check("Железо", "ПЛК аппарата: СВ и стадия читаются (боевой конфиг, только чтение)", hw=True)
+def _hw_plc():
+    from pymodbus.client import ModbusTcpClient
+    sv = _real_cfg().get("sv_source") or {}
+    if not sv.get("host") or not _tcp(sv["host"], sv.get("port", 502)):
+        raise Skip("ПЛК %s недоступен" % sv.get("host"))
+    c = ModbusTcpClient(sv["host"], port=int(sv.get("port", 502)), timeout=2.0)
+    try:
+        assert c.connect()
+        reg = int(sv["fields"]["sv"]["reg"])
+        rr = c.read_holding_registers(reg, count=1, slave=int(sv.get("unit", 255)))
+        assert not rr.isError(), "ответ-ошибка: %r" % rr
+        val = rr.registers[0] / float(sv["fields"]["sv"].get("scale", 1))
+    finally:
+        c.close()
+    return "СВ=%.2f" % val
+
+
+@check("Железо", "CV-сервис (сайдкар): health и модель", hw=True)
+def _hw_cv():
+    import cv_client
+    url = (_real_cfg().get("cv") or {}).get("service_url", "http://127.0.0.1:8765")
+    h = cv_client.health(url)
+    if h is None:
+        raise Skip("сайдкар %s не отвечает" % url)
+    return "online, %s" % (str(h)[:80])
+
+
+@check("Железо", "RTSP-камеры из сохранённых: порт 554 отвечает", hw=True)
+def _hw_rtsp():
+    from urllib.parse import urlparse
+    items = []
+    p = REAL_DATA_DIR / "rtsp_cameras.json"
+    if p.is_file():
+        try:
+            items = json.loads(p.read_text(encoding="utf-8"))
+            items = items.get("items", items) if isinstance(items, dict) else items
+        except Exception:
+            pass
+    if not items:
+        raise Skip("сохранённых RTSP-камер нет")
+    ok = []
+    for it in items:
+        u = urlparse(it.get("url", ""))
+        ok.append("%s:%s=%s" % (u.hostname, u.port or 554, "ok" if _tcp(u.hostname, u.port or 554, 1.5) else "нет"))
+    return "; ".join(ok)
+
+
+# =====================================================================================
+# Запуск
+# =====================================================================================
+
+class _Tee:
+    def __init__(self, *streams):
+        self._s = streams
+
+    def write(self, d):
+        for s in self._s:
+            try:
+                s.write(d)
+            except Exception:
+                pass
+
+    def flush(self):
+        for s in self._s:
+            try:
+                s.flush()
+            except Exception:
+                pass
+
+
+def run(with_hw):
+    results = []
+    group_prev = None
+    for group, name, hw, fn in CHECKS:
+        if group != group_prev:
+            print("\n== %s ==" % group)
+            group_prev = group
+        if hw and not with_hw:
+            results.append((group, name, "SKIP", "нужен ключ --hw", 0.0))
+            print("  [SKIP] %s — нужен ключ --hw" % name)
+            continue
+        t0 = time.time()
+        try:
+            detail = fn() or ""
+            status = "OK"
+        except Skip as s:
+            status, detail = "SKIP", str(s)
+        except AssertionError as e:
+            status, detail = "FAIL", "проверка не прошла: %s" % e
+        except Exception as e:
+            tb = traceback.format_exc().strip().splitlines()
+            status, detail = "FAIL", "%s: %s  [%s]" % (type(e).__name__, e, tb[-3].strip() if len(tb) >= 3 else "")
+        dt = time.time() - t0
+        results.append((group, name, status, detail, dt))
+        print("  [%-4s] %s%s  (%.2f с)" % (status, name, (" — " + str(detail)) if detail else "", dt))
+    return results
+
+
+def main():
+    argv = sys.argv[1:]
+    with_hw = "--hw" in argv
+    out_path = REAL_DATA_DIR / "selfcheck_output.txt"
+    f = None
+    orig = sys.stdout
+    try:
+        f = open(out_path, "w", encoding="utf-8")
+        sys.stdout = _Tee(orig, f)
+    except Exception:
+        f = None
+    code = 0
+    try:
+        print("web_MVS selfcheck %s · %s · %s" % (paths.read_version(), time.strftime("%Y-%m-%d %H:%M:%S"),
+                                                   "exe" if getattr(sys, "frozen", False) else "исходники"))
+        print("песочница данных: %s" % SANDBOX)
+        print("боевые данные не трогаются; железо: %s" % ("ОПРОС (--hw)" if with_hw else "не используется (эмуляторы)"))
+        results = run(with_hw)
+        n_ok = sum(1 for r in results if r[2] == "OK")
+        n_skip = sum(1 for r in results if r[2] == "SKIP")
+        fails = [r for r in results if r[2] == "FAIL"]
+        print("\n" + "=" * 72)
+        print("ИТОГ: OK %d · SKIP %d · FAIL %d  (всего %d)" % (n_ok, n_skip, len(fails), len(results)))
+        for g, n, _s, d, _t in fails:
+            print("  FAIL: %s / %s — %s" % (g, n, d))
+        print("РЕЗУЛЬТАТ: %s" % ("ВСЁ В ПОРЯДКЕ" if not fails else "ЕСТЬ ОШИБКИ"))
+        code = 1 if fails else 0
+    finally:
+        sys.stdout = orig
+        if f is not None:
+            f.close()
+        if _fake is not None:
+            _fake.close()
+        if "--keep" not in argv:
+            shutil.rmtree(SANDBOX, ignore_errors=True)
+    print("Отчёт сохранён: %s" % out_path)
+    if getattr(sys, "frozen", False) and "--no-pause" not in argv:
+        try:
+            input("Нажми Enter, чтобы закрыть окно...")
+        except Exception:
+            pass
+    sys.stdout.flush()
+    os._exit(code)   # фоновые потоки (воркеры, Modbus) не должны держать процесс
+
+
+if __name__ == "__main__":
+    main()

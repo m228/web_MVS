@@ -1593,7 +1593,9 @@
   const CV_GROUP_NAMES = { small: "малая", medium: "средняя", large: "большая", reject: "брак", suspect: "вытянутый (не брак)", cut: "обрезан краем — не в рассеве" };
   const CV_GROUP_COLOR = { small: "#1d9e75", medium: "#378add", large: "#ba7517", reject: "#e24b4a", suspect: "#6ad1f5", cut: "#9aa3ad" };
   const CV_LAYERS_KEY = "microCvLayers";
-  let cvLayers = { small: true, medium: true, large: true, reject: true, suspect: true, cut: true, sizes: false, frac: true };
+  let cvLayers = { small: true, medium: true, large: true, reject: true, suspect: true, cut: true, sizes: false, conf: false, frac: true };
+  // порог уверенности из поля вкладки CV: кристаллы с conf ниже него скрываем (живой предпросмотр «а если поднять?»)
+  function cvConfThr() { const e = $("cvConf"); const v = e && e.value !== "" ? parseFloat(e.value) : NaN; return isNaN(v) ? 0 : v; }
   let cvCurClean = false;       // текущий кадр чистый (контуры рисуем сами); false — старая проба с «впечёнными»
   let cvHoverObj = null;        // кристалл под мышкой (подсвечиваем форму)
 
@@ -1657,8 +1659,11 @@
       ctx.closePath();
     };
     ctx.lineJoin = "round";
+    const confThr = cvConfThr(); let hiddenByConf = 0;
     cvCurObjects.forEach((o) => {
-      if (!o.poly || o.poly.length < 3 || o === cvHoverObj) return;
+      if (!o.poly || o.poly.length < 3) return;
+      if (o.conf != null && o.conf < confThr) { hiddenByConf++; return; }
+      if (o === cvHoverObj) return;
       const gr = cvGroupOf(o); if (!cvLayers[gr]) return;
       ctx.strokeStyle = CV_GROUP_COLOR[gr] || "#ccc"; ctx.lineWidth = 1.5;
       ctx.setLineDash(gr === "suspect" ? [5, 3] : []);
@@ -1667,7 +1672,12 @@
         ctx.fillStyle = CV_GROUP_COLOR[gr]; ctx.font = "10px sans-serif"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
         ctx.fillText(String(Math.round(o.size_um)), g.ox + o.cx * g.sc, g.oy + o.cy * g.sc);
       }
+      if (cvLayers.conf && o.conf != null) {         // уверенность модели на кристалле; сомнительные — красным
+        ctx.fillStyle = o.conf < 0.5 ? "#ff8a80" : "#e7eefb"; ctx.font = "10px sans-serif"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+        ctx.fillText(o.conf.toFixed(2), g.ox + o.cx * g.sc, g.oy + o.cy * g.sc + (cvLayers.sizes ? 11 : 0));
+      }
     });
+    const cn = $("cvConfHidden"); if (cn) cn.textContent = hiddenByConf ? "скрыто по conf ≥ " + confThr + ": " + hiddenByConf : "";
     // зоны разломов (подтверждённые по серии кадров)
     if (cvLayers.frac) {
       (((cvView && cvView.fracture) || {}).zones || []).forEach((z) => {
@@ -1705,7 +1715,7 @@
       });
     });
     // пороги на вкладке «CV» → оверлей перекрашивается сразу
-    ["cvMinCirc", "cvMinSol", "cvMaxAspect", "cvSuspect", "cvSmallMax", "cvMediumMax"].forEach((id) => {
+    ["cvMinCirc", "cvMinSol", "cvMaxAspect", "cvSuspect", "cvSmallMax", "cvMediumMax", "cvConf"].forEach((id) => {
       const e = $(id); if (e) e.addEventListener("input", cvDrawOverlay);
     });
     const ov = $("cvOverlay");
@@ -1850,6 +1860,7 @@
         const b = o.bbox; if (!b) continue;
         if (ix < b[0] || ix > b[0] + b[2] || iy < b[1] || iy > b[1] + b[3]) continue;
         if (cvCurClean && !cvLayers[cvGroupOf(o)]) continue;
+        if (o.conf != null && o.conf < cvConfThr()) continue;
         if (o.poly && o.poly.length >= 3 && !cvPointInPoly(o.poly, ix, iy)) continue;
         const a = b[2] * b[3];
         if (a < bestArea) { bestArea = a; best = o; }
@@ -1867,7 +1878,8 @@
       const tC = thr("cvMinCirc"), tS = thr("cvMinSol"), tA = thr("cvMaxAspect");
       const shape = best.circularity == null ? "" : "<br>округл. " + mark(best.circularity.toFixed(2), tC != null && best.circularity < tC) +
         " · выпукл. " + mark(best.solidity.toFixed(2), tS != null && best.solidity < tS) +
-        " · вытянут. " + mark(best.aspect.toFixed(1), tA != null && best.aspect > tA);
+        " · вытянут. " + mark(best.aspect.toFixed(1), tA != null && best.aspect > tA) +
+        (best.conf != null ? "<br>уверенность модели (conf) " + mark(best.conf.toFixed(2), best.conf < 0.5) : "");
       tip.innerHTML = "Ø <b>" + best.size_um + " мкм</b> · S <b>" + Math.round(best.area_um2) + " мкм²</b><br>" +
         best.length_um + "×" + best.width_um + " мкм · " + gr + shape + why;
       const cardR = card.getBoundingClientRect();

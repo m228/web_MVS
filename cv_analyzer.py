@@ -86,6 +86,7 @@ class CrystalMeasure:
     conf: float
     contour: Optional[np.ndarray] = None
     bbox: Optional[tuple] = None
+    outline: Optional[np.ndarray] = None   # контур для отрисовки (чистый и скруглённый); метрики — не по нему
     defect: Optional[str] = None    # причина брака (REASONS) — определяется всегда, даже если брак пока не считается
     suspect: bool = False           # вытянутый 1,6–3,0: не брак, предупреждение
     notches: int = 0                # глубоких выемок контура (признак сростка)
@@ -133,6 +134,34 @@ def _clean_contour(cnt: np.ndarray, eq_d_px: float) -> np.ndarray:
         c = max(cs, key=cv2.contourArea)
         if cv2.contourArea(c) < 0.5 * cv2.contourArea(cnt):
             return cnt
+        return (c.reshape(-1, 2).astype(np.float32) + np.array([x0, y0], np.float32)).reshape(-1, 1, 2)
+    except cv2.error:
+        return cnt
+
+
+def _outline(cnt: np.ndarray, eq_d_px: float) -> np.ndarray:
+    """Контур ДЛЯ ОТРИСОВКИ: чистый (без самопересечений, волосков и шипов) и слегка скруглённый.
+    Маска → открытие (убрать хвосты) → небольшое размытие и порог (убрать «лесенку» пикселей) →
+    внешний контур → упрощение. На метрики формы не влияет (они считаются по _clean_contour)."""
+    try:
+        pts = cnt.reshape(-1, 2).astype(np.float32)
+        x0, y0 = np.floor(pts.min(axis=0)).astype(int) - 4
+        w, h = (np.ceil(pts.max(axis=0)).astype(int) + 4 - (x0, y0))
+        if w < 8 or h < 8 or w * h > 4_000_000:
+            return cnt
+        m = np.zeros((h, w), np.uint8)
+        cv2.fillPoly(m, [np.round(pts - (x0, y0)).astype(np.int32).reshape(-1, 1, 2)], 255)
+        k = max(3, int(round(0.04 * eq_d_px)) | 1)
+        m = cv2.morphologyEx(m, cv2.MORPH_OPEN, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k, k)))
+        kb = max(3, int(round(0.03 * eq_d_px)) | 1)
+        m = cv2.threshold(cv2.GaussianBlur(m, (kb, kb), 0), 127, 255, cv2.THRESH_BINARY)[1]
+        cs = cv2.findContours(m, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)[0]
+        if not cs:
+            return cnt
+        c = max(cs, key=cv2.contourArea)
+        if cv2.contourArea(c) < 0.5 * cv2.contourArea(cnt):
+            return cnt
+        c = cv2.approxPolyDP(c, max(1.0, 0.004 * cv2.arcLength(c, True)), True)
         return (c.reshape(-1, 2).astype(np.float32) + np.array([x0, y0], np.float32)).reshape(-1, 1, 2)
     except cv2.error:
         return cnt
@@ -232,6 +261,7 @@ def measure_objects(objects: list[dict], cv_cfg: Optional[dict] = None,
             conf=float(obj.get("conf", 0.0)), contour=cnt.astype(np.int32),
             bbox=tuple(obj["bbox"]) if obj.get("bbox") else None,
             defect=defect, suspect=suspect, notches=notches,
+            outline=(_outline(cnt, eq_d_px) if obj.get("polygon") else cnt),
         ))
     return out
 
@@ -342,8 +372,9 @@ def analyze(image: np.ndarray, objects: list[dict], cv_cfg: Optional[dict] = Non
         area_um2 = round(math.pi * (m.size_um / 2.0) ** 2, 0)
         # контур для отрисовки в браузере (слои, подсветка формы под мышкой) — упрощённый
         poly = []
-        if m.contour is not None:
-            poly = cv2.approxPolyDP(m.contour, POLY_EPS_PX, True).reshape(-1, 2).tolist()
+        src = m.outline if m.outline is not None else m.contour
+        if src is not None:
+            poly = np.round(cv2.approxPolyDP(src.astype(np.float32), POLY_EPS_PX, True)).astype(int).reshape(-1, 2).tolist()
         return {
             "poly": poly,
             "cx": round(m.cx, 1), "cy": round(m.cy, 1),

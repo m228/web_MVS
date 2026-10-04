@@ -3641,6 +3641,8 @@ input.micro-cam-num { width: 56px; min-width: 0; flex: 0 0 auto; padding: 4px 5p
 .micro-cv-canvas[hidden], .micro-cam-card:not(.cv-win) .micro-cv-canvas { display: none; }
 /* в режиме CV над картинкой стоит ряд слоёв — кнопку fullscreen держим у верха картинки */
 .micro-cam-card.cv-win .micro-cam-actions { top: calc(var(--cv-img-top, 48px) + 10px); }
+.micro-cv-confnote { font-size: 0.78em; color: var(--muted, #8a94a6); align-self: center; padding: 0 4px; }
+.micro-cv-confnote:empty { display: none; }
 /* причины брака и вытянутые под рассевом */
 .micro-cv-reasons { margin: 8px 0 2px; display: flex; flex-direction: column; gap: 3px; font-size: 0.82em; }
 .micro-cv-reasons .rs { display: grid; grid-template-columns: 10px 1fr auto; gap: 8px; align-items: center; }

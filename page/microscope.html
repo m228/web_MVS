@@ -119,7 +119,9 @@
               <label title="Вытянутые кристаллы (длина/ширина от 1,6 до порога иглы) — не брак, а предупреждение: следи за их долей"><input type="checkbox" value="suspect" checked /><span class="dot" style="background:#6ad1f5"></span>вытянутые</label>
               <label title="Кристаллы, обрезанные краем кадра — в рассев не идут"><input type="checkbox" value="cut" checked /><span class="dot" style="background:#9aa3ad"></span>обрезанные</label>
               <label title="Подписать размер каждого кристалла, мкм"><input type="checkbox" value="sizes" />размеры</label>
+              <label title="Подписать уверенность модели (0…1, conf) на каждом кристалле — видно, где модель сомневается"><input type="checkbox" value="conf" />уверенность</label>
               <label title="Показать зоны разломов"><input type="checkbox" value="frac" checked />разломы</label>
+              <span class="micro-cv-confnote" id="cvConfHidden" title="Живой предпросмотр: кристаллы с уверенностью ниже поля «Порог уверенности (conf)» на вкладке CV скрыты. Поднял порог — видно, что исчезнет; в разбор он применится со следующей пробы."></span>
             </div>
             <div id="camPlaceholder" class="camera-placeholder micro-cam-ph">Поиск камеры…</div>
             <img id="microCamStream" class="micro-cam-frame" alt="Видео камеры" hidden />
@@ -699,7 +701,7 @@
                     </div>
                     <div class="micro-cycle-col">
                       <label class="micro-cycle-f" title="Вытянутость: длина, делённая на ширину. Квадратный кристалл = 1, вдвое длиннее ширины = 2. Больше порога (иглы, пластинки на ребре, обрезки) — брак. Опустить порог — строже."><span>Макс. вытянутость</span><input type="number" id="cvMaxAspect" step="0.1" /></label>
-                      <label class="micro-cycle-f" title="Уверенность модели 0…1, что найденный объект — кристалл. Всё, что ниже порога, отбрасывается. Выше порог — меньше мусора, но теряется мелочь и нерезкие кристаллы; ниже — находит больше, но больше ложных."><span>Порог уверенности</span><input type="number" id="cvConf" step="0.05" min="0" max="1" /></label>
+                      <label class="micro-cycle-f" title="Уверенность модели (conf) 0…1, что найденный объект — кристалл. Всё, что ниже порога, отбрасывается. Выше порог — меньше мусора, но теряется мелочь и нерезкие кристаллы; ниже — находит больше, но больше ложных. Предпросмотр: подними значение — в окне CV сразу скроются кристаллы с меньшей уверенностью (счётчик рядом со слоями); в разбор порог применится со следующей пробы."><span>Порог уверенности (conf)</span><input type="number" id="cvConf" step="0.05" min="0" max="1" /></label>
                     </div>
                   </div>
                   <div class="micro-cycle-cols">

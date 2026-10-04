@@ -10,6 +10,7 @@
 """
 import json
 import os
+import shutil
 import threading
 from copy import deepcopy
 
@@ -18,6 +19,8 @@ from paths import DATA_DIR
 
 CONFIG_PATH = DATA_DIR / "plate_config.json"
 BACKUP_PATH = DATA_DIR / "plate_config.backup.json"   # копия «before-import» перед загрузкой дампа
+LAST_GOOD_PATH = DATA_DIR / "plate_config.last_good.json"   # последняя УДАЧНО записанная копия (на случай битого файла)
+CORRUPT_PATH = DATA_DIR / "plate_config.corrupt.json"       # что осталось от битого файла (для разбора вручную)
 
 # --- значения по умолчанию (ПЛЕЙСХОЛДЕРЫ для SP/SVSP — Макс подставит боевые) ---
 DEFAULTS = {
@@ -374,9 +377,7 @@ def _write_default_file():
     старым файлом (напр. sv_source не включался). Теперь база всегда из DEFAULTS, файл — оверрайды."""
     try:
         CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
-        tmp = CONFIG_PATH.parent / (CONFIG_PATH.name + ".tmp")
-        tmp.write_text("{}", encoding="utf-8")
-        os.replace(tmp, CONFIG_PATH)
+        _atomic_write(CONFIG_PATH, "{}")
         log_event("plate_config", "Создан пустой plate_config.json (правки поверх DEFAULTS)", "info",
                   {"path": str(CONFIG_PATH)})
     except Exception as e:
@@ -402,18 +403,54 @@ def _drop_stale_sv_source(user):
     return user
 
 
+def _atomic_write(path, text):
+    """Запись без «пустого файла» после резкого закрытия/отключения питания: во временный файл,
+    принудительно на диск (fsync), потом переименование. Без fsync Windows после сбоя мог оставить
+    новый файл нулевой длины — и все параметры «слетали»."""
+    tmp = path.parent / (path.name + ".tmp")
+    with open(tmp, "w", encoding="utf-8") as fh:
+        fh.write(text)
+        fh.flush()
+        os.fsync(fh.fileno())
+    os.replace(tmp, path)
+
+
+def _read_user():
+    """Правки пользователя из plate_config.json (dict). Файл пустой/битый (резкое закрытие) — НЕ
+    теряем всё молча: битый файл сохраняем рядом (plate_config.corrupt.json), восстанавливаем из
+    последней удачной копии (plate_config.last_good.json) и пишем это в журнал как ошибку."""
+    try:
+        d = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
+        if isinstance(d, dict):
+            return d
+        raise ValueError("в файле не JSON-объект")
+    except Exception as e:
+        log_event("plate_config", "plate_config.json пустой или повреждён — восстанавливаем", "error",
+                  {"error": str(e)})
+        try:
+            shutil.copyfile(CONFIG_PATH, CORRUPT_PATH)
+        except Exception:
+            pass
+        try:
+            text = LAST_GOOD_PATH.read_text(encoding="utf-8")
+            d = json.loads(text)
+            if isinstance(d, dict):
+                _atomic_write(CONFIG_PATH, text)
+                log_event("plate_config", "Настройки восстановлены из plate_config.last_good.json", "warn",
+                          {"keys": list(d.keys())})
+                return d
+        except Exception:
+            pass
+        log_event("plate_config", "Копии настроек нет — берём значения по умолчанию", "error")
+        return {}
+
+
 def load():
     """Собранный конфиг: DEFAULTS + правки из plate_config.json (если есть)."""
     if not CONFIG_PATH.is_file():
         _write_default_file()
         return deepcopy(DEFAULTS)
-    try:
-        user = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
-        return _deep_merge(DEFAULTS, _drop_stale_sv_source(user))
-    except Exception as e:
-        log_event("plate_config", "Ошибка чтения plate_config.json — берём значения по умолчанию",
-                  "warn", {"error": str(e)})
-        return deepcopy(DEFAULTS)
+    return _deep_merge(DEFAULTS, _drop_stale_sv_source(_read_user()))
 
 
 _SAVE_LOCK = threading.Lock()
@@ -426,18 +463,16 @@ def save(patch):
     # под локом: «прочитать → слить → записать» из двух запросов сразу (напр. триггер и настройки
     # CV) иначе затирают правки друг друга — второй пишет свою устаревшую копию файла
     with _SAVE_LOCK:
-        try:
-            current = json.loads(CONFIG_PATH.read_text(encoding="utf-8")) if CONFIG_PATH.is_file() else {}
-            if not isinstance(current, dict):
-                current = {}
-        except Exception:
-            current = {}
+        current = _read_user() if CONFIG_PATH.is_file() else {}
         merged = _deep_merge(current, patch or {})
         try:
             CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
-            tmp = CONFIG_PATH.parent / (CONFIG_PATH.name + ".tmp")
-            tmp.write_text(json.dumps(merged, ensure_ascii=False, indent=2), encoding="utf-8")
-            os.replace(tmp, CONFIG_PATH)
+            text = json.dumps(merged, ensure_ascii=False, indent=2)
+            _atomic_write(CONFIG_PATH, text)
+            try:
+                _atomic_write(LAST_GOOD_PATH, text)      # копия для восстановления, если файл потом побьётся
+            except Exception:
+                pass
             log_event("plate_config", "plate_config.json обновлён со страницы", "info",
                       {"keys": list((patch or {}).keys())})
         except Exception as e:
@@ -463,9 +498,12 @@ def replace_all(new_config):
         raise ValueError("дамп должен быть непустым JSON-объектом")
     backup()
     CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
-    tmp = CONFIG_PATH.parent / (CONFIG_PATH.name + ".tmp")
-    tmp.write_text(json.dumps(new_config, ensure_ascii=False, indent=2), encoding="utf-8")
-    os.replace(tmp, CONFIG_PATH)
+    text = json.dumps(new_config, ensure_ascii=False, indent=2)
+    _atomic_write(CONFIG_PATH, text)
+    try:
+        _atomic_write(LAST_GOOD_PATH, text)
+    except Exception:
+        pass
     log_event("plate_config", "Импортирован дамп настроек (backup сохранён)", "info",
               {"keys": list(new_config.keys())})
     return load()

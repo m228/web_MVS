@@ -27,22 +27,30 @@ class Detection:
 
     bbox — (x1, y1, x2, y2). polygon — список точек [[x, y], ...] контура маски
     (для seg-модели); у detect-модели/заглушки может быть None — тогда размер считаем
-    по боксу. conf — уверенность 0..1.
+    по боксу. conf — уверенность 0..1. cut — обрезан швом нарезки и целиком нигде не найден;
+    edge — упёрся в край кадра (обрезан кадром). Такие объекты не идут в статистику размера.
     """
     bbox: tuple[float, float, float, float]
     conf: float
     polygon: Optional[list[list[float]]] = None
+    cut: bool = False
+    edge: bool = False
 
     def as_dict(self) -> dict:
         # приводим к обычному float — numpy-типы (np.float64) ломают JSON-сериализацию
         x1, y1, x2, y2 = self.bbox
-        return {
+        out = {
             "bbox": [round(float(x1), 1), round(float(y1), 1),
                      round(float(x2), 1), round(float(y2), 1)],
             "conf": round(float(self.conf), 3),
             "polygon": ([[round(float(px), 1), round(float(py), 1)] for px, py in self.polygon]
                         if self.polygon else None),
         }
+        if self.cut:
+            out["cut"] = True
+        if self.edge:
+            out["edge"] = True
+        return out
 
 
 class Detector:

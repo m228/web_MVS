@@ -31,8 +31,13 @@ GROUP_COLORS = {
     "medium": (221, 138, 55),    # blue
     "large":  (23, 117, 186),    # amber
     "reject": (74, 75, 226),     # red
+    "cut":    (150, 150, 150),   # grey — обрезан краем кадра/швом, в статистику не идёт
 }
 GROUP_ORDER = ["small", "medium", "large", "reject"]
+# «cut» — служебная группа вне рассева: кристалл обрезан краем кадра (edge) или швом нарезки
+# (cut, см. cv_service/sahi_tiler.py). Размер/форма такого обрубка недостоверны.
+CUT_GROUP = "cut"
+POLY_EPS_PX = 1.5      # упрощение контура для сохранения/отрисовки в браузере, px
 
 
 def _cfg(cv_cfg: Optional[dict]) -> dict:
@@ -121,7 +126,8 @@ def measure_objects(objects: list[dict], cv_cfg: Optional[dict] = None) -> list[
         m = cv2.moments(cnt)
         cx = m["m10"] / m["m00"] if m["m00"] else float(cnt[:, 0, 0].mean())
         cy = m["m01"] / m["m00"] if m["m00"] else float(cnt[:, 0, 1].mean())
-        group = _classify(size_um, circ, aspect, solidity, cfg)
+        group = CUT_GROUP if (obj.get("cut") or obj.get("edge")) else \
+            _classify(size_um, circ, aspect, solidity, cfg)
         out.append(CrystalMeasure(
             cx=cx, cy=cy, size_um=size_um, length_um=length_um, width_um=width_um,
             circularity=circ, aspect=aspect, solidity=solidity, group=group,
@@ -142,13 +148,17 @@ def summarize(measures: list[CrystalMeasure], image_shape: tuple,
     """Сводка кадра: счётчики групп, %, средний/медианный размер, плотность, доля брака."""
     cfg = _cfg(cv_cfg)
     h, w = image_shape[:2]
-    n = len(measures)
     counts = {g: 0 for g in GROUP_ORDER}
     sizes = []
+    n_cut = 0
     for m in measures:
+        if m.group == CUT_GROUP:      # обрезан кадром/швом — вне рассева и размеров
+            n_cut += 1
+            continue
         counts[m.group] += 1
         if m.group != "reject":
             sizes.append(m.size_um)
+    n = len(measures) - n_cut
     area_mm2 = (w * cfg["um_per_px"] / 1000.0) * (h * cfg["um_per_px"] / 1000.0)
     sizes_np = np.array(sizes) if sizes else np.array([0.0])
     quality = "ok"
@@ -156,6 +166,7 @@ def summarize(measures: list[CrystalMeasure], image_shape: tuple,
         quality = "low"
     return {
         "count": n,
+        "cut": n_cut,
         "groups": counts,
         "groups_pct": {g: (round(100.0 * counts[g] / n, 1) if n else 0.0) for g in GROUP_ORDER},
         "size_um": {
@@ -182,7 +193,7 @@ def draw_overlay(image: np.ndarray, measures: list[CrystalMeasure],
         color = GROUP_COLORS.get(m.group, (200, 200, 200))
         if m.contour is not None:
             cv2.drawContours(out, [m.contour], -1, color, 2)
-        if draw_size and m.group != "reject":
+        if draw_size and m.group not in ("reject", CUT_GROUP):
             cv2.putText(out, f"{int(round(m.size_um))}",
                         (int(m.cx) - 12, int(m.cy) - 6),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1, cv2.LINE_AA)
@@ -202,7 +213,12 @@ def analyze(image: np.ndarray, objects: list[dict], cv_cfg: Optional[dict] = Non
         else:
             x = y = w = h = 0
         area_um2 = round(math.pi * (m.size_um / 2.0) ** 2, 0)
+        # контур для отрисовки в браузере (слои, подсветка формы под мышкой) — упрощённый
+        poly = []
+        if m.contour is not None:
+            poly = cv2.approxPolyDP(m.contour, POLY_EPS_PX, True).reshape(-1, 2).tolist()
         return {
+            "poly": poly,
             "cx": round(m.cx, 1), "cy": round(m.cy, 1),
             "bbox": [int(x), int(y), int(w), int(h)],
             "size_um": round(m.size_um, 1), "area_um2": area_um2,

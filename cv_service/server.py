@@ -33,7 +33,7 @@ os.makedirs(MODEL_DIR, exist_ok=True)
 MODEL_PATH = os.environ.get("CV_MODEL", "").strip() or None
 AVG_COUNT = int(os.environ.get("CV_STUB_COUNT", "40"))
 
-app = FastAPI(title="web_MVS CV service", version="0.2.0")
+app = FastAPI(title="web_MVS CV service", version="0.3.0")
 _lock = threading.Lock()                       # защита на время горячей замены модели
 _detector = build_detector(MODEL_PATH, avg_count=AVG_COUNT)
 _model_path = MODEL_PATH

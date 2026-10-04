@@ -1561,7 +1561,7 @@
         }
       }
       if (!best) { tip.hidden = true; return; }
-      const gr = { small: "малая", medium: "средняя", large: "большая", reject: "брак" }[best.group] || best.group;
+      const gr = { small: "малая", medium: "средняя", large: "большая", reject: "брак", cut: "обрезан краем — не в рассеве" }[best.group] || best.group;
       // форма: округлость / выпуклость / вытянутость; значение за текущим порогом (поля вкладки
       // «CV») подсвечиваем — видно, из-за чего кристалл ушёл в брак и куда двигать порог
       const thr = (id) => { const e = $(id); return e && e.value !== "" ? parseFloat(e.value) : null; };

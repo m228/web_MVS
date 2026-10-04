@@ -1332,6 +1332,7 @@
       if (stream && stream.getAttribute("src")) { stream.hidden = false; if (ph) ph.hidden = true; }
       else if (ph) ph.hidden = false;
     }
+    cvDrawOverlay();     // холст с контурами следует за картинкой (и прячется вместе с ней)
   }
   function wireWindow() {
     const camBtn = $("winCamBtn"), cvBtn = $("winCvBtn");
@@ -1456,6 +1457,114 @@
     }
   }
 
+  // --- оверлей поверх чистого кадра: слои по группам, подсветка формы кристалла под мышкой ---
+  const CV_GROUP_NAMES = { small: "малая", medium: "средняя", large: "большая", reject: "брак", cut: "обрезан краем — не в рассеве" };
+  const CV_GROUP_COLOR = { small: "#1d9e75", medium: "#378add", large: "#ba7517", reject: "#e24b4a", cut: "#9aa3ad" };
+  const CV_LAYERS_KEY = "microCvLayers";
+  let cvLayers = { small: true, medium: true, large: true, reject: true, cut: true, sizes: false, frac: true };
+  let cvCurClean = false;       // текущий кадр чистый (контуры рисуем сами); false — старая проба с «впечёнными»
+  let cvHoverObj = null;        // кристалл под мышкой (подсвечиваем форму)
+
+  // где внутри <img> лежит сама картинка (object-fit: contain даёт поля по бокам/сверху)
+  function cvImgGeom() {
+    const ov = $("cvOverlay"); if (!ov || !ov.naturalWidth || !ov.clientWidth) return null;
+    const bw = ov.clientWidth, bh = ov.clientHeight;
+    const sc = Math.min(bw / ov.naturalWidth, bh / ov.naturalHeight);
+    return { sc, ox: (bw - ov.naturalWidth * sc) / 2, oy: (bh - ov.naturalHeight * sc) / 2, bw, bh };
+  }
+  // группа кристалла по ТЕКУЩИМ порогам вкладки «CV»: поменял порог — оверлей сразу перекрасился,
+  // без повторного прогона модели (сохранённый рассев пробы обновится при следующем разборе)
+  function cvGroupOf(o) {
+    if (o.group === "cut" || o.circularity == null) return o.group;
+    const thr = (id) => { const e = $(id); return e && e.value !== "" ? parseFloat(e.value) : null; };
+    const tC = thr("cvMinCirc"), tS = thr("cvMinSol"), tA = thr("cvMaxAspect"), gS = thr("cvSmallMax"), gM = thr("cvMediumMax");
+    if ([tC, tS, tA, gS, gM].some((v) => v == null || isNaN(v))) return o.group;
+    if (o.circularity < tC || o.aspect > tA || o.solidity < tS) return "reject";
+    return o.size_um < gS ? "small" : (o.size_um < gM ? "medium" : "large");
+  }
+  function cvDrawOverlay() {
+    const cv = $("cvOverlayCanvas"), ov = $("cvOverlay"); if (!cv || !ov) return;
+    // верх картинки в карточке — к нему привязаны листалка кадров и кнопка fullscreen (над
+    // картинкой в режиме CV стоит ряд слоёв, его высота зависит от ширины окна)
+    const card = document.querySelector(".micro-cam-card");
+    if (card && !ov.hidden && ov.offsetTop) card.style.setProperty("--cv-img-top", ov.offsetTop + "px");
+    const g = cvCurClean && !ov.hidden ? cvImgGeom() : null;
+    if (!g) { cv.hidden = true; return; }
+    cv.hidden = false;
+    const dpr = window.devicePixelRatio || 1;
+    cv.style.left = ov.offsetLeft + "px"; cv.style.top = ov.offsetTop + "px";
+    cv.style.width = g.bw + "px"; cv.style.height = g.bh + "px";
+    if (cv.width !== Math.round(g.bw * dpr) || cv.height !== Math.round(g.bh * dpr)) {
+      cv.width = Math.round(g.bw * dpr); cv.height = Math.round(g.bh * dpr);
+    }
+    const ctx = cv.getContext("2d");
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, g.bw, g.bh);
+    const path = (poly) => {
+      ctx.beginPath();
+      poly.forEach((p, i) => { const x = g.ox + p[0] * g.sc, y = g.oy + p[1] * g.sc; if (i) ctx.lineTo(x, y); else ctx.moveTo(x, y); });
+      ctx.closePath();
+    };
+    ctx.lineJoin = "round";
+    cvCurObjects.forEach((o) => {
+      if (!o.poly || o.poly.length < 3 || o === cvHoverObj) return;
+      const gr = cvGroupOf(o); if (!cvLayers[gr]) return;
+      ctx.strokeStyle = CV_GROUP_COLOR[gr] || "#ccc"; ctx.lineWidth = 1.5;
+      path(o.poly); ctx.stroke();
+      if (cvLayers.sizes && gr !== "reject" && gr !== "cut") {
+        ctx.fillStyle = CV_GROUP_COLOR[gr]; ctx.font = "10px sans-serif"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+        ctx.fillText(String(Math.round(o.size_um)), g.ox + o.cx * g.sc, g.oy + o.cy * g.sc);
+      }
+    });
+    // зоны разломов (подтверждённые по серии кадров)
+    if (cvLayers.frac) {
+      (((cvView && cvView.fracture) || {}).zones || []).forEach((z) => {
+        if (!z.poly || z.poly.length < 3) return;
+        ctx.strokeStyle = "#ff3b30"; ctx.lineWidth = 2.5; ctx.setLineDash([7, 4]);
+        path(z.poly); ctx.stroke(); ctx.setLineDash([]);
+      });
+    }
+    // кристалл под мышкой — поверх всего: заливка формы + жирный контур
+    const h = cvHoverObj;
+    if (h && h.poly && h.poly.length >= 3) {
+      const col = CV_GROUP_COLOR[cvGroupOf(h)] || "#fff";
+      path(h.poly);
+      ctx.globalAlpha = 0.3; ctx.fillStyle = col; ctx.fill(); ctx.globalAlpha = 1;
+      ctx.strokeStyle = "#fff"; ctx.lineWidth = 4; ctx.stroke();
+      ctx.strokeStyle = col; ctx.lineWidth = 2.5; ctx.stroke();
+    }
+  }
+  function cvPointInPoly(poly, x, y) {
+    let inside = false;
+    for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+      const xi = poly[i][0], yi = poly[i][1], xj = poly[j][0], yj = poly[j][1];
+      if ((yi > y) !== (yj > y) && x < (xj - xi) * (y - yi) / (yj - yi) + xi) inside = !inside;
+    }
+    return inside;
+  }
+  function wireLayers() {
+    try { Object.assign(cvLayers, JSON.parse(localStorage.getItem(CV_LAYERS_KEY) || "{}")); } catch (e) { }
+    document.querySelectorAll("#cvLayers input").forEach((c) => {
+      if (c.value in cvLayers) c.checked = !!cvLayers[c.value];
+      c.addEventListener("change", () => {
+        cvLayers[c.value] = c.checked;
+        try { localStorage.setItem(CV_LAYERS_KEY, JSON.stringify(cvLayers)); } catch (e) { }
+        cvDrawOverlay();
+      });
+    });
+    // пороги на вкладке «CV» → оверлей перекрашивается сразу
+    ["cvMinCirc", "cvMinSol", "cvMaxAspect", "cvSmallMax", "cvMediumMax"].forEach((id) => {
+      const e = $(id); if (e) e.addEventListener("input", cvDrawOverlay);
+    });
+    const ov = $("cvOverlay");
+    if (ov) {
+      ov.addEventListener("load", cvDrawOverlay);
+      if (window.ResizeObserver) new ResizeObserver(cvDrawOverlay).observe(ov);
+    }
+    window.addEventListener("resize", cvDrawOverlay);
+    document.addEventListener("fullscreenchange", () => setTimeout(cvDrawOverlay, 60));
+  }
+
   // --- лента проб слева от окна (новая сверху) + кадры выбранной пробы ---
   function cvOverlaySrc(ts, idx) {
     // проба неизменна → без анти-кэша: браузер кэширует, картинка не перегружается каждые 5 с
@@ -1527,6 +1636,7 @@
     cvGalIdx = Math.max(0, Math.min(cvGalIdx, frames.length - 1));
     const ts = cvView.ts, idx = frames[cvGalIdx].idx != null ? frames[cvGalIdx].idx : cvGalIdx;
     const key = ts + "#" + idx;
+    cvCurClean = frames[cvGalIdx].clean === true;
     if (ov.dataset.key !== key) {              // кадр сменился — грузим; иначе картинку не дёргаем
       ov.dataset.key = key;
       ov.src = cvOverlaySrc(ts, idx);
@@ -1535,33 +1645,42 @@
     if (posEl) posEl.textContent = cvTsLabel(ts) + " · " + (cvGalIdx + 1) + "/" + frames.length;
     if (pager) pager.hidden = false;
     if (cvWinOn) applyWinMode();
+    cvDrawOverlay();
   }
-  // объекты кадра для наведения (bbox/size_um/area_um2)
+  // объекты кадра для наведения и отрисовки (bbox/size_um/форма/контур)
   function cvLoadObjects(ts, idx) {
-    cvCurObjects = [];
+    cvCurObjects = []; cvHoverObj = null; cvDrawOverlay();
     const q = [cvSerialQ(), "ts=" + encodeURIComponent(ts), "idx=" + idx].filter(Boolean).join("&");
-    api("/api/cv/objects?" + q).then((r) => { cvCurObjects = (r && r.objects) || []; }).catch(() => {});
+    const key = ts + "#" + idx;
+    api("/api/cv/objects?" + q).then((r) => {
+      if ($("cvOverlay").dataset.key !== key) return;       // успели переключить кадр
+      cvCurObjects = (r && r.objects) || []; cvDrawOverlay();
+    }).catch(() => {});
   }
-  // наведение на кристалл в окне CV → тултип с размером/площадью
+  // наведение на кристалл в окне CV → подсветка его формы + тултип с размером/формой
   function wireHoverTip() {
     const ov = $("cvOverlay"), tip = $("cvHoverTip"), card = document.querySelector(".micro-cam-card");
     if (!ov || !tip || !card) return;
+    const setHover = (o) => { if (o !== cvHoverObj) { cvHoverObj = o; cvDrawOverlay(); } };
     ov.addEventListener("mousemove", (e) => {
-      if (!cvWinOn || !cvCurObjects.length || !ov.naturalWidth) { tip.hidden = true; return; }
+      const g = cvImgGeom();
+      if (!cvWinOn || !cvCurObjects.length || !g) { tip.hidden = true; setHover(null); return; }
       const r = ov.getBoundingClientRect();
-      const ix = (e.clientX - r.left) / r.width * ov.naturalWidth;
-      const iy = (e.clientY - r.top) / r.height * ov.naturalHeight;
-      // ищем самый маленький bbox, накрывающий курсор (кристаллы могут перекрываться)
+      const ix = (e.clientX - r.left - g.ox) / g.sc, iy = (e.clientY - r.top - g.oy) / g.sc;
+      // самый маленький объект под курсором (кристаллы могут лежать друг на друге): по контуру,
+      // а у старых проб без контура — по прямоугольнику. Скрытые слои не ловим.
       let best = null, bestArea = Infinity;
       for (const o of cvCurObjects) {
         const b = o.bbox; if (!b) continue;
-        if (ix >= b[0] && ix <= b[0] + b[2] && iy >= b[1] && iy <= b[1] + b[3]) {
-          const a = b[2] * b[3];
-          if (a < bestArea) { bestArea = a; best = o; }
-        }
+        if (ix < b[0] || ix > b[0] + b[2] || iy < b[1] || iy > b[1] + b[3]) continue;
+        if (cvCurClean && !cvLayers[cvGroupOf(o)]) continue;
+        if (o.poly && o.poly.length >= 3 && !cvPointInPoly(o.poly, ix, iy)) continue;
+        const a = b[2] * b[3];
+        if (a < bestArea) { bestArea = a; best = o; }
       }
+      setHover(best);
       if (!best) { tip.hidden = true; return; }
-      const gr = { small: "малая", medium: "средняя", large: "большая", reject: "брак", cut: "обрезан краем — не в рассеве" }[best.group] || best.group;
+      const gr = CV_GROUP_NAMES[cvGroupOf(best)] || best.group;
       // форма: округлость / выпуклость / вытянутость; значение за текущим порогом (поля вкладки
       // «CV») подсвечиваем — видно, из-за чего кристалл ушёл в брак и куда двигать порог
       const thr = (id) => { const e = $(id); return e && e.value !== "" ? parseFloat(e.value) : null; };
@@ -1577,7 +1696,7 @@
       tip.style.top = (e.clientY - cardR.top) + "px";
       tip.hidden = false;
     });
-    ov.addEventListener("mouseleave", () => { tip.hidden = true; });
+    ov.addEventListener("mouseleave", () => { tip.hidden = true; setHover(null); });
   }
   // листалка кадров выбранной пробы (‹ › поверх окна «Комп. зрение»)
   function cvViewFrame(idx) {
@@ -1794,6 +1913,7 @@
     wireTrend();
     wireModelUpload();
     wireHoverTip();
+    wireLayers();
     cvModelRefresh();
     const en = $("cvEnable");
     if (en) en.addEventListener("change", () => { updateTriggerFields(); cvPostSettings({ enabled: en.checked }).then(cvHealth); });

@@ -3,9 +3,11 @@
 Раскладка (в DATA_DIR, переживает обновление, см. paths.py):
     <DATA_DIR>/cv_results/<serial>/<ts>/
         result.json        — сводка пробы + по-кадровые данные
-        overlay_0.jpg ...   — кадры с обводкой кристаллов (JPEG; старые пробы — .png)
-        objects_0.json ...  — объекты кадра (для наведения в UI)
-        thumb.jpg          — миниатюра кадра 0 (лента проб в UI)
+        frame_0.jpg ...     — ЧИСТЫЕ кадры пробы (JPEG); контуры кристаллов рисует браузер по
+                             objects_N.json (слои по группам, подсветка формы под мышкой)
+        objects_0.json ...  — объекты кадра: размер, форма, группа, контур (poly)
+        thumb.jpg          — миниатюра кадра 0 с контурами (лента проб в UI)
+    Старые пробы: overlay_N.jpg / overlay_N.png — кадры с контурами, нарисованными в картинке.
 
 Ротация: держим последние keep_last проб на серийник (старые удаляем).
 """
@@ -77,12 +79,14 @@ def _aggregate(frames: list[dict]) -> dict:
     }
 
 
-def save_sample(serial: str, stage, frames: list[dict], overlays: list, timing: dict,
+def save_sample(serial: str, stage, frames: list[dict], images: list, timing: dict,
                 keep_last: int = 50, ts: Optional[str] = None,
-                fracture: Optional[dict] = None, jpeg_quality: int = 85) -> Optional[dict]:
-    """Сохранить пробу. frames — список {file, summary, objects}. overlays — numpy BGR по кадрам.
+                fracture: Optional[dict] = None, jpeg_quality: int = 85,
+                thumb_img=None) -> Optional[dict]:
+    """Сохранить пробу. frames — список {file, summary, objects}. images — ЧИСТЫЕ кадры пробы
+    (numpy BGR), пишутся в JPEG (jpeg_quality); контуры поверх рисует браузер по objects_N.json.
+    thumb_img — кадр с контурами для миниатюры (нет — миниатюра из чистого кадра 0).
 
-    Overlay пишется в JPEG (jpeg_quality) — в разы легче PNG; сырой кадр не хранится.
     Возвращает {ts, dir, summary} или None при ошибке.
     """
     ts = ts or time.strftime("%Y-%m-%d_%H_%M_%S")
@@ -92,16 +96,16 @@ def save_sample(serial: str, stage, frames: list[dict], overlays: list, timing: 
         frame_recs = []
         for i, fr in enumerate(frames):
             ov_name = None
-            if i < len(overlays) and overlays[i] is not None:
-                ov_name = "overlay_%d.jpg" % i
+            if i < len(images) and images[i] is not None:
+                ov_name = "frame_%d.jpg" % i
                 # imencode + write_bytes, а не cv2.imwrite: тот ломается на путях с кириллицей
-                ok, enc = cv2.imencode(".jpg", overlays[i],
+                ok, enc = cv2.imencode(".jpg", images[i],
                                        [cv2.IMWRITE_JPEG_QUALITY, int(jpeg_quality)])
                 if not ok:
-                    raise OSError("не удалось закодировать overlay в JPEG")
+                    raise OSError("не удалось закодировать кадр в JPEG")
                 (d / ov_name).write_bytes(enc.tobytes())
                 if i == 0:
-                    thumb = _encode_thumb(overlays[i])
+                    thumb = _encode_thumb(thumb_img if thumb_img is not None else images[i])
                     if thumb:
                         (d / "thumb.jpg").write_bytes(thumb)
             # объекты кадра — в отдельный файл (для наведения в UI), чтобы result.json был лёгким
@@ -112,7 +116,8 @@ def save_sample(serial: str, stage, frames: list[dict], overlays: list, timing: 
             frame_recs.append({
                 "idx": i,
                 "src": fr.get("file"),
-                "overlay": ov_name,
+                "overlay": ov_name,          # файл кадра (имя поля — для совместимости с UI)
+                "clean": True,               # кадр чистый: контуры рисует браузер по objects
                 "summary": fr.get("summary"),
                 "objects_n": len(objs),
             })
@@ -189,9 +194,10 @@ def overlay_path(serial: str, ts: str, idx: int = 0) -> Optional[Path]:
     d = _probe_dir(serial, ts)
     if d is None:
         return None
-    # .jpg — текущий формат; .png — пробы, сохранённые до перехода на JPEG
-    for ext in ("jpg", "png"):
-        p = d / ("overlay_%d.%s" % (int(idx), ext))
+    # frame_N.jpg — текущий формат (чистый кадр); overlay_N.jpg/.png — старые пробы с контурами
+    # в самой картинке
+    for name in ("frame_%d.jpg", "overlay_%d.jpg", "overlay_%d.png"):
+        p = d / (name % int(idx))
         if p.exists():
             return p
     return None

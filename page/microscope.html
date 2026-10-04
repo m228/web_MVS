@@ -110,9 +110,21 @@
               <button type="button" class="micro-win-btn is-active" id="winCamBtn" data-win="cam">Камера</button>
               <button type="button" class="micro-win-btn" id="winCvBtn" data-win="cv">Комп. зрение</button>
             </div>
+            <!-- слои оверлея (только в режиме «Комп. зрение»): что рисовать поверх кадра -->
+            <div class="micro-cv-series micro-cv-layers" id="cvLayers">
+              <label title="Показать кристаллы малой группы"><input type="checkbox" value="small" checked /><span class="dot" style="background:#1d9e75"></span>малая</label>
+              <label title="Показать кристаллы средней группы"><input type="checkbox" value="medium" checked /><span class="dot" style="background:#378add"></span>средняя</label>
+              <label title="Показать кристаллы большой группы"><input type="checkbox" value="large" checked /><span class="dot" style="background:#ba7517"></span>большая</label>
+              <label title="Показать брак по форме"><input type="checkbox" value="reject" checked /><span class="dot" style="background:#e24b4a"></span>брак</label>
+              <label title="Кристаллы, обрезанные краем кадра — в рассев не идут"><input type="checkbox" value="cut" checked /><span class="dot" style="background:#9aa3ad"></span>обрезанные</label>
+              <label title="Подписать размер каждого кристалла, мкм"><input type="checkbox" value="sizes" />размеры</label>
+              <label title="Показать зоны разломов"><input type="checkbox" value="frac" checked />разломы</label>
+            </div>
             <div id="camPlaceholder" class="camera-placeholder micro-cam-ph">Поиск камеры…</div>
             <img id="microCamStream" class="micro-cam-frame" alt="Видео камеры" hidden />
             <img id="cvOverlay" class="micro-cam-frame" alt="Комп. зрение: распознанные кристаллы" hidden />
+            <!-- контуры кристаллов поверх чистого кадра (рисует браузер по objects) -->
+            <canvas id="cvOverlayCanvas" class="micro-cv-canvas" hidden></canvas>
             <div id="cvOverlayPh" class="camera-placeholder micro-cam-ph" hidden>Нет разбора пробы. Включите CV и возьмите пробу.</div>
             <div id="cvHoverTip" class="micro-cv-tip" hidden></div>
             <!-- листалка кадров выбранной пробы (только в режиме «Комп. зрение») -->

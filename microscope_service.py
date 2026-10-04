@@ -316,6 +316,7 @@ class MicroscopeService:
             "cv": cv, "url": url,
             "sidecar_ok": cv_client.health(url) is not None,    # кристаллы (YOLO) — опционально
             "fr_cfg": fr_cfg, "fr_on": fr_cfg.get("enabled", True),
+            # overlays — ЧИСТЫЕ кадры серии (контуры в картинку не впекаем — их рисует браузер)
             "frame_recs": [], "overlays": [], "zones": [], "timing": {}, "answered": 0, "shape": None,
         }
 
@@ -328,7 +329,7 @@ class MicroscopeService:
         import cv_fracture
         cv = run["cv"]
         # --- кристаллы (сайдкар YOLO), если он поднят ---
-        summary, objects, overlay = None, [], None
+        summary, objects = None, []
         if run["sidecar_ok"]:
             ok, enc = cv2.imencode(".png", img)
             resp = cv_client.infer(
@@ -338,31 +339,31 @@ class MicroscopeService:
             if resp:
                 run["answered"] += 1
                 run["timing"] = resp.get("timing", {})
-                res = cv_analyzer.analyze(img, resp.get("objects", []), cv_cfg=cv, with_overlay=True)
-                summary, objects, overlay = res["summary"], res["objects"], res.pop("_overlay", None)
-        if overlay is None:
-            overlay = img.copy()   # нет кристаллов-overlay → рисуем разломы поверх кадра
+                res = cv_analyzer.analyze(img, resp.get("objects", []), cv_cfg=cv, with_overlay=False)
+                summary, objects = res["summary"], res["objects"]
         # --- разломы (чистый OpenCV, всегда) ---
         run["zones"].append(cv_fracture.detect_zones(img, run["fr_cfg"]) if run["fr_on"] else [])
         run["frame_recs"].append({"file": "frame_%d" % len(run["overlays"]),
                                   "summary": summary, "objects": objects})
-        run["overlays"].append(overlay)
+        run["overlays"].append(img)
         run["shape"] = img.shape
 
     def _cv_finish(self, run, stage, serial):
-        """Закрыть разбор: подтвердить разломы по серии кадров, сохранить пробу (overlay в JPEG +
-        result.json), выставить итоговый статус."""
+        """Закрыть разбор: подтвердить разломы по серии кадров, сохранить пробу (чистые кадры в
+        JPEG + объекты с контурами + result.json), выставить итоговый статус."""
+        import cv_analyzer
         import cv_fracture
         import cv_store
         cv = run["cv"]
         overlays = run["overlays"]
-        # подтверждение разломов по серии кадров + отрисовка на всех overlay
+        # миниатюра пробы — кадр 0 с контурами (в ленте проб видно, что распознано)
+        thumb_img = cv_analyzer.draw_objects(overlays[0], run["frame_recs"][0]["objects"])
+        # подтверждение разломов по серии кадров; зоны уходят в result.json — их рисует браузер
         fracture = None
         if run["fr_on"]:
             confirmed, fr_summary = cv_fracture.confirm(run["zones"], run["fr_cfg"])
             fr_summary["area_pct"] = cv_fracture.area_pct(confirmed, run["shape"])
-            for ov in overlays:
-                cv_fracture.draw(ov, confirmed, confirmed=True)
+            cv_fracture.draw(thumb_img, confirmed, confirmed=True)
             fracture = {"summary": fr_summary, "zones": confirmed}
             if fr_summary["has_fracture"]:
                 log_event("microscope_service",
@@ -372,7 +373,8 @@ class MicroscopeService:
 
         saved = cv_store.save_sample(serial, stage, run["frame_recs"], overlays, run["timing"],
                                      keep_last=int(cv.get("keep_last", 50)), fracture=fracture,
-                                     jpeg_quality=int(cv.get("overlay_jpeg_quality", 85)))
+                                     jpeg_quality=int(cv.get("overlay_jpeg_quality", 85)),
+                                     thumb_img=thumb_img)
         if not saved:
             self._set_cv_status("error", "не удалось сохранить пробу (см. лог)")
         elif not run["sidecar_ok"]:

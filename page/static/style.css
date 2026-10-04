@@ -3621,8 +3621,21 @@ input.micro-cam-num { width: 56px; min-width: 0; flex: 0 0 auto; padding: 4px 5p
 .micro-cam-card:fullscreen .micro-cv-strip,
 .micro-cam-card:-webkit-full-screen .micro-cv-strip { display: none; }
 
+/* Оверлей CV: холст с контурами поверх чистого кадра (мышь проходит сквозь него к картинке) */
+.micro-cv-canvas { position: absolute; z-index: 2; pointer-events: none; }
+.micro-cv-canvas[hidden], .micro-cam-card:not(.cv-win) .micro-cv-canvas { display: none; }
+/* в режиме CV над картинкой стоит ряд слоёв — кнопку fullscreen держим у верха картинки */
+.micro-cam-card.cv-win .micro-cam-actions { top: calc(var(--cv-img-top, 48px) + 10px); }
+/* Слои оверлея — чипы под переключателем окна, только в режиме «Комп. зрение» */
+.micro-cv-layers { margin: 0 0 8px; }
+.micro-cam-card:not(.cv-win) .micro-cv-layers { display: none; }
+.micro-cam-card:fullscreen .micro-cv-layers,
+.micro-cam-card:-webkit-full-screen .micro-cv-layers { flex: 0 0 auto; }
+.micro-cam-card:fullscreen #cvOverlay,
+.micro-cam-card:-webkit-full-screen #cvOverlay { flex: 1 1 auto; min-height: 0; height: auto; max-height: none; width: 100%; object-fit: contain; }
+
 /* Листалка кадров пробы поверх окна «Комп. зрение» (слева, напротив кнопки fullscreen) */
-.micro-cv-pager { position: absolute; top: 58px; left: 14px; z-index: 3; display: inline-flex; align-items: center; gap: 2px;
+.micro-cv-pager { position: absolute; top: calc(var(--cv-img-top, 48px) + 10px); left: 14px; z-index: 3; display: inline-flex; align-items: center; gap: 2px;
   padding: 2px 4px; border-radius: 8px; background: rgba(8,23,38,0.78); color: #e7eefb; font-size: 12px; font-variant-numeric: tabular-nums; }
 .micro-cv-pager[hidden], .micro-cam-card:not(.cv-win) .micro-cv-pager { display: none; }
 .micro-cv-pager__btn { border: 0; background: transparent; color: inherit; cursor: pointer; font-size: 16px; line-height: 1; padding: 2px 8px; border-radius: 6px; }

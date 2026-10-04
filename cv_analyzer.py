@@ -200,6 +200,21 @@ def draw_overlay(image: np.ndarray, measures: list[CrystalMeasure],
     return out
 
 
+def draw_objects(image: np.ndarray, objects: list[dict]) -> np.ndarray:
+    """Контуры кристаллов по готовым объектам разбора (поля poly/group) — для миниатюры пробы.
+    Сам кадр пробы хранится чистым, в окне CV контуры рисует браузер. Возвращает копию кадра."""
+    out = image.copy()
+    if out.ndim == 2:
+        out = cv2.cvtColor(out, cv2.COLOR_GRAY2BGR)
+    thick = max(2, int(round(max(out.shape[:2]) / 600)))     # чтобы контур не пропал при уменьшении
+    for o in objects:
+        poly = o.get("poly")
+        if poly and len(poly) >= 3:
+            pts = np.asarray(poly, dtype=np.int32).reshape(-1, 1, 2)
+            cv2.polylines(out, [pts], True, GROUP_COLORS.get(o.get("group"), (200, 200, 200)), thick)
+    return out
+
+
 def analyze(image: np.ndarray, objects: list[dict], cv_cfg: Optional[dict] = None,
             with_overlay: bool = True) -> dict:
     """Полный разбор одного кадра: измерения → сводка → (опц.) overlay-картинка (BGR)."""

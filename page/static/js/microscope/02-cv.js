@@ -168,7 +168,6 @@
     const sz = s.size_um || {};
     const setT = (id, v) => { const e = $(id); if (e) e.textContent = v; };
     setT("cvMean", sz.mean != null ? sz.mean + " мкм" : "—");
-    setT("cvMedian", sz.median != null ? sz.median + " мкм" : "—");
     setT("cvDensity", s.density_per_mm2 != null ? s.density_per_mm2 + " /мм²" : "—");
     setT("cvCvpct", sz.cv_pct != null ? sz.cv_pct + " %" : "—");
     setT("cvQuality", s.quality === "low" ? "низкое" : (s.quality || "—"));
@@ -741,7 +740,7 @@
     const head = "<b>" + cvFmtT(d.t[i], true) + "</b>" + (stage != null ? " · стадия " + stage : "");
     const cnt = val("count"), mean = val("mean"), med = val("median");
     const svv = val("sv");
-    const line2 = [svv != null ? "СВ " + svv : null, cnt != null ? Math.round(cnt) + " крист." : null, mean != null ? "общая " + mean + " мкм" : null, med != null ? "медиана " + med + " мкм" : null].filter(Boolean).join(" · ");
+    const line2 = [svv != null ? "СВ " + svv : null, cnt != null ? Math.round(cnt) + " крист." : null, mean != null ? "среднее " + mean + " мкм" : null, med != null ? "медиана " + med + " мкм" : null].filter(Boolean).join(" · ");
     const names = { small: "малая", medium: "средняя", large: "большая", reject: "брак" };
     const groups = CV_GROUPS.map((g) => val(g) == null ? "" :
       '<span class="dot" style="background:' + CV_SERIES_COLOR[g] + '"></span>' + names[g] + " " + val(g) + "%").filter(Boolean).join("<br>");

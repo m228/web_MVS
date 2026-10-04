@@ -250,13 +250,31 @@ def _seam_lines(shape: tuple, tiles: int, overlap: float) -> tuple[list, list]:
     return sorted(xs), sorted(ys)
 
 
-def _on_seam(poly: np.ndarray, xs: list, ys: list, tol: float = 2.5, min_len: float = 16.0) -> bool:
-    """У маски есть ровный край ровно на линии стыка частей кадра (≥2 вершины в пределах tol px от линии,
-    растянутые вдоль неё на ≥ min_len px) — значит кристалл разрезан швом нарезки."""
+def _seam_edges(poly: np.ndarray, xs: list, ys: list, tol: float = 2.5, min_len: float = 16.0) -> list:
+    """Ровные края маски ровно на линиях стыка частей кадра: [(ось, линия, сторона, от, до)].
+    сторона = -1/+1 — по какую сторону линии лежит маска; (от, до) — протяжённость края вдоль линии."""
+    out = []
     for axis, lines in ((0, xs), (1, ys)):
         for L in lines:
             on = poly[np.abs(poly[:, axis] - L) <= tol]
-            if len(on) >= 2 and float(on[:, 1 - axis].max() - on[:, 1 - axis].min()) >= min_len:
+            if len(on) >= 2:
+                lo, hi = float(on[:, 1 - axis].min()), float(on[:, 1 - axis].max())
+                if hi - lo >= min_len:
+                    out.append((axis, L, -1 if float(poly[:, axis].mean()) < L else 1, lo, hi))
+    return out
+
+
+def _on_seam(poly: np.ndarray, xs: list, ys: list, tol: float = 2.5, min_len: float = 16.0) -> bool:
+    """У маски есть ровный край ровно на линии стыка частей кадра — кристалл разрезан швом нарезки."""
+    return bool(_seam_edges(poly, xs, ys, tol, min_len))
+
+
+def _opposite(ei: list, ej: list) -> bool:
+    """Две маски — половинки одного кристалла: ровные края на ОДНОЙ линии шва, но по разные стороны от неё,
+    и протяжённости краёв заметно перекрываются."""
+    for ax, L, sd, lo, hi in ei:
+        for ax2, L2, sd2, lo2, hi2 in ej:
+            if ax == ax2 and L == L2 and sd != sd2 and                     min(hi, hi2) - max(lo, lo2) >= 0.3 * min(hi - lo, hi2 - lo2):
                 return True
     return False
 
@@ -270,7 +288,8 @@ def _merge_seams(objects: list[dict], shape: tuple, tiles: int, overlap: float, 
     idx = [i for i, o in enumerate(objects)
            if o.get("polygon") and len(o["polygon"]) >= 3 and not (o.get("cut") or o.get("edge"))]
     P = {i: np.asarray(objects[i]["polygon"], np.float32) for i in idx}
-    piece = {i for i in idx if _on_seam(P[i], xs, ys)}
+    edges = {i: _seam_edges(P[i], xs, ys) for i in idx}
+    piece = {i for i in idx if edges[i]}
     if not piece:
         return objects
     parent = {i: i for i in idx}
@@ -290,7 +309,10 @@ def _merge_seams(objects: list[dict], shape: tuple, tiles: int, overlap: float, 
                 continue
             if bb[i][2] + pad < bb[j][0] or bb[j][2] + pad < bb[i][0] or bb[i][3] + pad < bb[j][1] or bb[j][3] + pad < bb[i][1]:
                 continue
-            if _pair_relation(P[i], P[j], gap)[2]:
+            fa, fb, touch = _pair_relation(P[i], P[j], gap)
+            # склеиваем только «половинки одного кристалла»: маска реально налезает на эту (дубль/целый) либо
+            # это обрубок по ДРУГУЮ сторону того же шва. Просто соседний кристалл вплотную — НЕ склеиваем.
+            if touch and (max(fa, fb) >= 0.3 or (j in piece and _opposite(edges[i], edges[j]))):
                 parent[find(i)] = find(j)
                 paired.update((i, j))
     groups: dict[int, list[int]] = {}
@@ -468,7 +490,7 @@ def measure_objects(objects: list[dict], cv_cfg: Optional[dict] = None,
     if img_shape is not None and cfg["edge_margin_px"] > 0:
         objects = _flag_edges(objects, img_shape, cfg["edge_margin_px"])
     if img_shape is not None and cfg["seam_merge"]:
-        objects = _merge_seams(objects, img_shape, int(cfg["tiles"]), cfg["overlap"], max(cfg["cluster_gap_px"], 4.0))
+        objects = _merge_seams(objects, img_shape, int(cfg["tiles"]), cfg["overlap"], 2.0)
     objects = _merge_touching(objects, cfg["cluster_gap_px"], cfg["nest_frac"])
     counting = is_counting(cfg, sv)
     size_active = sv is not None and sv >= cfg["reject_from_sv"]   # размер-брак — только у готового

@@ -727,6 +727,7 @@
                       <label class="micro-cycle-f" title="Кристалл ближе этого расстояния (px) к краю кадра считается обрезанным (серый слой, в рассев не идёт). Увеличь, если на краях остаются обрубки. 0 — выкл. Применяется со следующего разбора."><span>Край кадра, px</span><input type="number" id="cvEdgeMargin" step="2" min="0" /></label>
                     </div>
                   </div>
+                  <label class="micro-check" title="Кристалл, разрезанный швом нарезки кадра (ровный край ровно на линии стыка частей), склеивается обратно из половинок. Выключи, если склеивает лишнее. Применяется со следующего разбора."><input type="checkbox" id="cvSeamMerge" /><span class="micro-check__text">Склеивать половинки по шву нарезки</span></label>
                   <label class="micro-check micro-cv-always" title="Включено — брак идёт в рассев и тренд на любом СВ, без порога. Для сравнения «с порогом» и «без».">
                     <input type="checkbox" id="cvRejectAlways" />
                     <span class="micro-check__text">Считать брак всегда <span class="micro-ro">(без порога по СВ)</span></span>
@@ -950,6 +951,7 @@
                     <label class="micro-srow" data-unit="%"><input type="checkbox" value="large" checked /><i style="background:#ba7517"></i><span>большая</span><b>—</b></label>
                     <label class="micro-srow" data-unit="%"><input type="checkbox" value="reject" /><i style="background:#e24b4a"></i><span>брак</span><b>—</b></label>
                     <label class="micro-srow" data-unit="мкм" title="Среднее: сумма размеров / число кристаллов"><input type="checkbox" value="mean" checked /><i style="background:#7f77dd"></i><span>общая</span><b>—</b></label>
+                    <label class="micro-srow" data-unit="" title="Стадия варки (номер) на момент пробы: белая ступенчатая линия с цифрами на каждом переходе"><input type="checkbox" value="stage" checked /><i style="background:var(--text)"></i><span>стадия</span><b>—</b></label>
                     <label class="micro-srow" data-unit="мкм" title="Медиана: половина кристаллов мельче, половина крупнее"><input type="checkbox" value="median" /><i style="background:#d16fb8"></i><span>медиана</span><b>—</b></label>
                   </div>
                   <div class="micro-cv-trendwrap">

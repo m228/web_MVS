@@ -1480,6 +1480,7 @@
     set("cvMaxAspect", sh.max_aspect); set("cvConf", cv.conf);
     set("cvSuspect", sh.suspect_aspect); set("cvRejectSv", cv.reject_from_sv);
     set("cvClusterGap", cv.cluster_gap_px); set("cvEdgeMargin", cv.edge_margin_px);
+    if ($("cvSeamMerge")) $("cvSeamMerge").checked = cv.seam_merge !== false;
     if ($("cvRejectAlways")) $("cvRejectAlways").checked = !!cv.reject_always;
     set("pcCvFrames", cv.frames_per_probe); set("pcCvGap", cv.gap_sec);   // поля на вкладке «Цикл»
     updateTriggerFields();
@@ -1490,7 +1491,8 @@
       groups: { small_max_um: num("cvSmallMax"), medium_max_um: num("cvMediumMax") },
       shape: { min_circularity: num("cvMinCirc"), min_solidity: num("cvMinSol"), max_aspect: num("cvMaxAspect"), suspect_aspect: num("cvSuspect") },
       um_per_px: num("cvUmPerPx"), tiles: num("cvTiles"), conf: num("cvConf"),
-      reject_from_sv: num("cvRejectSv"), cluster_gap_px: num("cvClusterGap"), edge_margin_px: num("cvEdgeMargin"), reject_always: $("cvRejectAlways") ? $("cvRejectAlways").checked : undefined,
+      reject_from_sv: num("cvRejectSv"), cluster_gap_px: num("cvClusterGap"), edge_margin_px: num("cvEdgeMargin"),
+      seam_merge: $("cvSeamMerge") ? $("cvSeamMerge").checked : undefined, reject_always: $("cvRejectAlways") ? $("cvRejectAlways").checked : undefined,
     };
   }
   async function cvPostSettings(patch) {
@@ -1932,7 +1934,7 @@
 
   // --- тренд по РЕАЛЬНОМУ времени (как в SCADA): выбор даты, сдвиг за пределы загруженного, масштаб ---
   // Данные берутся из журнала проб по дням (cv_history) — он не стирается ротацией кадров.
-  const CV_TREND_KEY = "microCvTrendSeries";
+  const CV_TREND_KEY = "microCvTrendSeries2";   // 2: добавлена серия «стадия» (включена по умолчанию)
   const CV_PCT_SERIES = ["small", "medium", "large", "reject"];   // шкала слева, %
   const CV_UM_SERIES = ["mean", "median"];                        // шкала справа, мкм
   const CV_MAX_SPAN = 400 * 86400, CV_MIN_SPAN = 60;
@@ -1958,7 +1960,7 @@
   }
   async function cvTrendFetch(a, b) {            // загрузить пробы [a,b] (epoch, сек)
     const seq = ++cvTrendSeq;
-    const q = [cvSerialQ(), "series=small,medium,large,reject,mean,median,count", "from=" + Math.floor(a), "to=" + Math.ceil(b), "limit=5000"].filter(Boolean).join("&");
+    const q = [cvSerialQ(), "series=small,medium,large,reject,mean,median,count,stage", "from=" + Math.floor(a), "to=" + Math.ceil(b), "limit=5000"].filter(Boolean).join("&");
     const d = await api("/api/cv/trend?" + q);
     if (seq !== cvTrendSeq) return false;        // пока грузили, запросили другое — это устарело
     cvTrendData = d; return true;
@@ -2036,7 +2038,11 @@
     let umMax = 10;
     for (let i = i0; i < i1; i++) for (const s of CV_UM_SERIES) if (sel.includes(s) && series[s] && series[s][i] != null) umMax = Math.max(umMax, series[s][i]);
     umMax = cvNiceMax(umMax * 1.05);
-    const scaleOf = (name) => (CV_UM_SERIES.includes(name) ? umMax : 100);
+    // стадия — на своей шкале (0…max видимой, не меньше 10), чтобы ступеньки были читаемы
+    let stageMax = 10;
+    if (series.stage) for (let i = i0; i < i1; i++) if (series.stage[i] != null) stageMax = Math.max(stageMax, series.stage[i] + 1);
+    const scaleOf = (name) => (name === "stage" ? stageMax : (CV_UM_SERIES.includes(name) ? umMax : 100));
+    const colorOf = (name) => (name === "stage" ? getCss("--text", "#fff") : (CV_SERIES_COLOR[name] || "#888"));
     const yAt = (val, mx) => pad.t + plotH * (1 - Math.max(0, Math.min(1, val / mx)));
     // сетка: горизонтали + подписи слева (%) и справа (мкм)
     ctx.font = "10px monospace"; ctx.lineWidth = 1;
@@ -2076,16 +2082,27 @@
     const brewBreak = (i) => i > 0 && (t[i] - t[i - 1] > gap || (stg[i] != null && stg[i - 1] != null && stg[i] < stg[i - 1]));
     const drawSeries = (name) => {
       const arr = series[name]; if (!arr) return;
-      const col = CV_SERIES_COLOR[name] || "#888"; const mx = scaleOf(name);
-      ctx.strokeStyle = col; ctx.fillStyle = col; ctx.lineWidth = 2; ctx.beginPath();
-      let started = false;
+      const col = colorOf(name); const mx = scaleOf(name); const isStage = name === "stage";
+      ctx.strokeStyle = col; ctx.fillStyle = col; ctx.lineWidth = isStage ? 1.5 : 2; ctx.beginPath();
+      let started = false, prevY = 0;
       for (let i = a; i < b; i++) {
         const val = arr[i]; if (val == null) { started = false; continue; }
         const x = xAt(t[i]), y = yAt(val, mx);
-        if (started && !brewBreak(i)) ctx.lineTo(x, y); else ctx.moveTo(x, y);
-        started = true;
+        if (started && !brewBreak(i)) { if (isStage) ctx.lineTo(x, prevY); ctx.lineTo(x, y); } else ctx.moveTo(x, y);   // стадия — ступенькой
+        started = true; prevY = y;
       }
       ctx.stroke();
+      if (isStage) {                                                   // цифры стадии на каждом переходе (и на первой видимой пробе)
+        ctx.font = "bold 11px sans-serif"; ctx.textAlign = "center"; ctx.textBaseline = "bottom";
+        let last = null;
+        for (let i = i0; i < i1; i++) {
+          const val = arr[i]; if (val == null) continue;
+          if (val !== last || brewBreak(i)) ctx.fillText(String(val), xAt(t[i]), yAt(val, mx) - 4);
+          last = val;
+        }
+        ctx.textBaseline = "alphabetic";
+        return;
+      }
       if (i1 - i0 <= 120) for (let i = i0; i < i1; i++) {          // точки-пробы, пока их немного
         const val = arr[i]; if (val == null) continue;
         ctx.beginPath(); ctx.arc(xAt(t[i]), yAt(val, mx), 2.2, 0, Math.PI * 2); ctx.fill();
@@ -2094,6 +2111,7 @@
     ctx.save(); ctx.beginPath(); ctx.rect(pad.l, pad.t - 2, plotW, plotH + 4); ctx.clip();
     sel.filter((s) => CV_PCT_SERIES.includes(s)).forEach(drawSeries);
     sel.filter((s) => CV_UM_SERIES.includes(s)).forEach(drawSeries);
+    if (sel.includes("stage")) drawSeries("stage");           // стадия — поверх остальных
     // линия-курсор: стоит на ближайшей к мышке пробе
     const hi = cvTrendHover;
     if (hi != null && hi >= 0 && hi < t.length && t[hi] >= v.start && t[hi] <= v.end) {
@@ -2102,7 +2120,7 @@
       ctx.beginPath(); ctx.moveTo(x, pad.t); ctx.lineTo(x, pad.t + plotH); ctx.stroke(); ctx.setLineDash([]);
       sel.forEach((name) => {
         const val = series[name] && series[name][hi]; if (val == null) return;
-        ctx.fillStyle = CV_SERIES_COLOR[name] || "#888";
+        ctx.fillStyle = colorOf(name);
         ctx.beginPath(); ctx.arc(x, yAt(val, scaleOf(name)), 4, 0, Math.PI * 2); ctx.fill();
       });
     }

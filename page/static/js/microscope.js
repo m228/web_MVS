@@ -1944,20 +1944,26 @@
       ctx.fillStyle = muted; ctx.font = "12px sans-serif"; ctx.textAlign = "center";
       ctx.fillText("нет проб за этот период", pad.l + plotW / 2, pad.t + plotH / 2);
     }
-    // линии: разрыв, если между пробами пауза (между варками) — не соединяем часы тишины
-    const dts = []; for (let i = a + 1; i < b; i++) dts.push(t[i] - t[i - 1]);
+    // линии идут КУСКАМИ — по одной варке. Разрыв между соседними пробами, если:
+    //  • пауза больше обычной (≥ 5 обычных интервалов, но не меньше 10 мин) — сигналов нет, варка кончилась;
+    //  • стадия упала (напр. 9 → 3) — началась новая варка.
+    // «Обычный» интервал берём по ВСЕМ загруженным пробам, а не по видимым: при сдвиге в окне остаются
+    // две точки из разных варок, и интервал по ним самим тянул линию через всю паузу.
+    const dts = []; for (let i = 1; i < t.length; i++) dts.push(t[i] - t[i - 1]);
     dts.sort((x, y) => x - y);
-    const gap = Math.max(900, (dts.length ? dts[Math.floor(dts.length / 2)] : 0) * 5);
+    const gap = Math.max(600, (dts.length ? dts[Math.floor(dts.length / 2)] : 0) * 5);
+    const stg = d.stage || [];
+    const brewBreak = (i) => i > 0 && (t[i] - t[i - 1] > gap || (stg[i] != null && stg[i - 1] != null && stg[i] < stg[i - 1]));
     const drawSeries = (name) => {
       const arr = series[name]; if (!arr) return;
       const col = CV_SERIES_COLOR[name] || "#888"; const mx = scaleOf(name);
       ctx.strokeStyle = col; ctx.fillStyle = col; ctx.lineWidth = 2; ctx.beginPath();
-      let prev = null;
+      let started = false;
       for (let i = a; i < b; i++) {
-        const val = arr[i]; if (val == null) { prev = null; continue; }
+        const val = arr[i]; if (val == null) { started = false; continue; }
         const x = xAt(t[i]), y = yAt(val, mx);
-        if (prev != null && t[i] - prev <= gap) ctx.lineTo(x, y); else ctx.moveTo(x, y);
-        prev = t[i];
+        if (started && !brewBreak(i)) ctx.lineTo(x, y); else ctx.moveTo(x, y);
+        started = true;
       }
       ctx.stroke();
       if (i1 - i0 <= 120) for (let i = i0; i < i1; i++) {          // точки-пробы, пока их немного

@@ -31,6 +31,8 @@ DEFAULTS = {
     "cluster_gap_px": 4.0,     # маски с зазором ≤ этого (px) склеиваются в сросток; 0 — выкл
     "nest_frac": 0.8,          # маска, лежащая внутри другой на ≥ этой доли, — лишняя, убирается; 0 — выкл
     "edge_margin_px": 12.0,    # объект ближе этого (px) к краю кадра считается обрезанным; 0 — выкл
+    "seam_merge": True,        # склеивать кристалл, разрезанный швом нарезки (ровный край на линии стыка частей)
+    "tiles": 6, "overlap": 0.15,   # как в настройках CV (их же получает сайдкар) — нужны, чтобы знать, где швы
     "min_size_um": 20.0,   # мельче — считаем пылью/шумом, не кристаллом
     "blur_min": 8.0,       # variance of Laplacian ниже — кадр смазан (тюним под камеру на Server)
 }
@@ -63,8 +65,9 @@ def _cfg(cv_cfg: Optional[dict]) -> dict:
         c["blur_min"] = float(cv_cfg.get("blur_min", c["blur_min"]))
         c["reject_from_sv"] = float(cv_cfg.get("reject_from_sv", c["reject_from_sv"]))
         c["reject_always"] = bool(cv_cfg.get("reject_always", c["reject_always"]))
-        for k in ("cluster_gap_px", "nest_frac", "edge_margin_px"):
+        for k in ("cluster_gap_px", "nest_frac", "edge_margin_px", "tiles", "overlap"):
             c[k] = float(cv_cfg.get(k, c[k]))
+        c["seam_merge"] = bool(cv_cfg.get("seam_merge", c["seam_merge"]))
         for key in ("groups", "shape", "size_reject"):
             if cv_cfg.get(key):
                 c[key] = {**c[key], **cv_cfg[key]}
@@ -96,6 +99,7 @@ class CrystalMeasure:
     suspect: bool = False           # вытянутый 1,6–3,0: не брак, предупреждение
     notches: int = 0                # глубоких выемок контура (признак сростка)
     members: int = 1                # из скольких масок склеен объект (>1 — сросток по близости масок)
+    seam_merged: int = 0            # >0 — один кристалл, склеенный из стольких частей по шву нарезки
 
 
 def _contour_from_obj(obj: dict) -> Optional[np.ndarray]:
@@ -210,6 +214,112 @@ def _defect(size_um: float, circularity: float, aspect: float, solidity: float,
         if size_um > sr["max_um"]:
             return "huge"
     return None
+
+
+def _grid(cols_rows: int) -> tuple[int, int]:
+    """Число частей нарезки -> (столбцы, строки): как в cv_service/sahi_tiler.py (должно совпадать)."""
+    presets = {1: (1, 1), 2: (2, 1), 4: (2, 2), 6: (3, 2), 9: (3, 3)}
+    if cols_rows in presets:
+        return presets[cols_rows]
+    cols = int(math.ceil(math.sqrt(cols_rows)))
+    return cols, int(math.ceil(cols_rows / cols))
+
+
+def _seam_lines(shape: tuple, tiles: int, overlap: float) -> tuple[list, list]:
+    """Внутренние границы частей нарезки (x-ы вертикальных и y-и горизонтальных стыков) — по тем же
+    формулам, что в сайдкаре (tiles и overlap берутся из настроек CV, их же получает сайдкар)."""
+    h, w = shape[:2]
+    if tiles <= 1:
+        return [], []
+    cols, rows = _grid(tiles)
+    tw, th = w / cols, h / rows
+    ox, oy = tw * overlap, th * overlap
+    xs, ys = set(), set()
+    for c in range(cols):
+        x1, x2 = max(0, int(c * tw - ox)), min(w, int((c + 1) * tw + ox))
+        if x1 > 0:
+            xs.add(x1)
+        if x2 < w:
+            xs.add(x2)
+    for r in range(rows):
+        y1, y2 = max(0, int(r * th - oy)), min(h, int((r + 1) * th + oy))
+        if y1 > 0:
+            ys.add(y1)
+        if y2 < h:
+            ys.add(y2)
+    return sorted(xs), sorted(ys)
+
+
+def _on_seam(poly: np.ndarray, xs: list, ys: list, tol: float = 2.5, min_len: float = 16.0) -> bool:
+    """У маски есть ровный край ровно на линии стыка частей кадра (≥2 вершины в пределах tol px от линии,
+    растянутые вдоль неё на ≥ min_len px) — значит кристалл разрезан швом нарезки."""
+    for axis, lines in ((0, xs), (1, ys)):
+        for L in lines:
+            on = poly[np.abs(poly[:, axis] - L) <= tol]
+            if len(on) >= 2 and float(on[:, 1 - axis].max() - on[:, 1 - axis].min()) >= min_len:
+                return True
+    return False
+
+
+def _merge_seams(objects: list[dict], shape: tuple, tiles: int, overlap: float, gap: float) -> list[dict]:
+    """Склеиваем кристаллы, разрезанные швом нарезки (старый сайдкар их не метит): маска с ровным краем на
+    линии стыка + соприкасающаяся с ней маска = ОДИН кристалл (не сросток). Обрубок без пары помечаем cut."""
+    xs, ys = _seam_lines(shape, tiles, overlap)
+    if not xs and not ys:
+        return objects
+    idx = [i for i, o in enumerate(objects)
+           if o.get("polygon") and len(o["polygon"]) >= 3 and not (o.get("cut") or o.get("edge"))]
+    P = {i: np.asarray(objects[i]["polygon"], np.float32) for i in idx}
+    piece = {i for i in idx if _on_seam(P[i], xs, ys)}
+    if not piece:
+        return objects
+    parent = {i: i for i in idx}
+
+    def find(x):
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    bb = {i: (P[i][:, 0].min(), P[i][:, 1].min(), P[i][:, 0].max(), P[i][:, 1].max()) for i in idx}
+    pad = max(gap, 0) + 1
+    paired = set()
+    for i in piece:
+        for j in idx:
+            if j == i or (j in piece and j < i):
+                continue
+            if bb[i][2] + pad < bb[j][0] or bb[j][2] + pad < bb[i][0] or bb[i][3] + pad < bb[j][1] or bb[j][3] + pad < bb[i][1]:
+                continue
+            if _pair_relation(P[i], P[j], gap)[2]:
+                parent[find(i)] = find(j)
+                paired.update((i, j))
+    groups: dict[int, list[int]] = {}
+    for i in idx:
+        groups.setdefault(find(i), []).append(i)
+    out, done = [], set()
+    for i, o in enumerate(objects):
+        if i not in P:
+            out.append(o)
+            continue
+        g = groups[find(i)]
+        if len(g) == 1:
+            out.append({**o, "cut": True} if i in piece else o)       # обрубок шва без пары — обрезанный
+            continue
+        if not any(k in piece for k in g):
+            out.append(o)
+            continue
+        if find(i) in done:
+            continue
+        done.add(find(i))
+        poly = _union_polygon([P[k] for k in g], gap)
+        if poly is None:
+            out.extend(objects[k] for k in g)
+            continue
+        xs_, ys_ = [p[0] for p in poly], [p[1] for p in poly]
+        out.append({"bbox": [min(xs_), min(ys_), max(xs_), max(ys_)],
+                    "conf": float(max(objects[k].get("conf", 0.0) for k in g)),
+                    "polygon": poly, "seam_merged": len(g)})
+    return out
 
 
 def _flag_edges(objects: list[dict], shape: tuple, margin: float) -> list[dict]:
@@ -357,6 +467,8 @@ def measure_objects(objects: list[dict], cv_cfg: Optional[dict] = None,
     min_size = cfg["min_size_um"]
     if img_shape is not None and cfg["edge_margin_px"] > 0:
         objects = _flag_edges(objects, img_shape, cfg["edge_margin_px"])
+    if img_shape is not None and cfg["seam_merge"]:
+        objects = _merge_seams(objects, img_shape, int(cfg["tiles"]), cfg["overlap"], max(cfg["cluster_gap_px"], 4.0))
     objects = _merge_touching(objects, cfg["cluster_gap_px"], cfg["nest_frac"])
     counting = is_counting(cfg, sv)
     size_active = sv is not None and sv >= cfg["reject_from_sv"]   # размер-брак — только у готового
@@ -405,6 +517,7 @@ def measure_objects(objects: list[dict], cv_cfg: Optional[dict] = None,
             conf=float(obj.get("conf", 0.0)), contour=cnt.astype(np.int32),
             bbox=tuple(obj["bbox"]) if obj.get("bbox") else None,
             defect=defect, suspect=suspect, notches=notches, members=members,
+            seam_merged=int(obj.get("seam_merged", 0)),
             outline=(_outline(cnt, eq_d_px) if obj.get("polygon") else cnt),
         ))
     return out
@@ -527,7 +640,7 @@ def analyze(image: np.ndarray, objects: list[dict], cv_cfg: Optional[dict] = Non
             "length_um": round(m.length_um, 1), "width_um": round(m.width_um, 1),
             "circularity": round(m.circularity, 3), "aspect": round(m.aspect, 2),
             "solidity": round(m.solidity, 3), "group": m.group, "conf": round(m.conf, 3),
-            "defect": m.defect, "suspect": m.suspect, "notches": m.notches, "members": m.members,
+            "defect": m.defect, "suspect": m.suspect, "notches": m.notches, "members": m.members, "seam_merged": m.seam_merged,
         }
     result = {"summary": summary, "objects": [_obj(m) for m in measures]}
     if with_overlay:

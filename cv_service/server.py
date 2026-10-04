@@ -33,7 +33,18 @@ os.makedirs(MODEL_DIR, exist_ok=True)
 MODEL_PATH = os.environ.get("CV_MODEL", "").strip() or None
 AVG_COUNT = int(os.environ.get("CV_STUB_COUNT", "40"))
 
-app = FastAPI(title="web_MVS CV service", version="0.3.0")
+def _read_version() -> str:
+    """Версия сервиса = номер релиза, с которым собран архив cv_service (build.bat кладёт файл VERSION).
+    Из исходников файла нет — тогда «dev»."""
+    try:
+        with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "VERSION"), encoding="utf-8") as fh:
+            return fh.read().strip() or "dev"
+    except Exception:
+        return "dev"
+
+
+SERVICE_VERSION = _read_version()
+app = FastAPI(title="web_MVS CV service", version=SERVICE_VERSION)
 _lock = threading.Lock()                       # защита на время горячей замены модели
 _detector = build_detector(MODEL_PATH, avg_count=AVG_COUNT)
 _model_path = MODEL_PATH
@@ -62,6 +73,7 @@ def _load(path: str | None):
 def health():
     return {
         "ok": True,
+        "version": SERVICE_VERSION,          # основное приложение показывает её внизу шапки
         "uptime_s": round(time.time() - _started, 1),
         "detector": _detector.info(),
         "model_path": _model_path,

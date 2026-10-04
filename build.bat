@@ -28,6 +28,7 @@ echo [build] Packing main archive ...
 powershell -NoProfile -Command "Compress-Archive -Path 'dist\web_MVS\*' -DestinationPath 'dist\web_MVS_v%VER%.zip' -Force" || exit /b 1
 
 echo [build] Packing CV add-on (cv_service, code only) ...
+copy /Y VERSION "cv_service\VERSION" >nul
 powershell -NoProfile -Command "$f=Get-ChildItem 'cv_service' -Recurse -File | Where-Object { $_.FullName -notmatch '\\\.venv\\' -and $_.FullName -notmatch '\\model\\' -and $_.FullName -notmatch '__pycache__' }; Compress-Archive -Path $f.FullName -DestinationPath 'dist\cv_service_v%VER%.zip' -Force" || exit /b 1
 
 echo.

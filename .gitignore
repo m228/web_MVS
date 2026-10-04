@@ -27,6 +27,7 @@ __pycache__/
 /plate_config.last_good.json
 /plate_config.corrupt.json
 /config_backups
+/cv_service/VERSION
 
 # --- временная папка самообновления ---
 /.update

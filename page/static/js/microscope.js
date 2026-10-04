@@ -1509,9 +1509,19 @@
   // статус сервиса + статус последнего разбора (чтобы отказ был виден, а не молчал).
   // Возвращает состояние разбора (running/ok/…): по нему кнопка «Разобрать пробу» ждёт конца.
   const CV_FAIL = ["no_camera", "no_frames", "sidecar_offline", "error"];
+  // версия CV-сервиса внизу шапки: номер релиза, «старый» (сервис без версии — нужен UpdaterCV), «нет связи»
+  function setVerCv(text, cls, title) {
+    const e = $("verCv"); if (!e) return;
+    e.textContent = text; e.className = "micro-ver" + (cls ? " " + cls : "");
+    if (title) e.title = title;
+  }
   async function cvHealth() {
     try {
       const h = await api("/api/cv/health");
+      if (!h.enabled) setVerCv("CV сервис: выключен", "");
+      else if (!h.online) setVerCv("CV сервис: нет связи", "is-off");
+      else if (h.service && h.service.version) setVerCv("CV сервис v" + h.service.version, "is-ok");
+      else setVerCv("CV сервис: старый (без версии)", "is-warn", "Сервис не отдаёт версию — это сборка до 1.7.24. Нарезка на нём прежняя (швы режут кристаллы). Запусти UpdaterCV.bat и перезапусти cv_service\\run.bat");
       const a = h.analysis || {};
       const tail = a.message ? " · " + a.message + (a.ts && a.state !== "running" ? " (" + a.ts + ")" : "") : "";
       const failed = CV_FAIL.includes(a.state);
@@ -1871,7 +1881,8 @@
       if (!best) { tip.hidden = true; return; }
       const cls = cvClassify(best), gr = CV_GROUP_NAMES[cls.layer] || best.group;
       const rs = cls.reason && CV_REASONS[cls.reason];
-      const grp = best.members > 1 ? " · сросток из " + best.members + " кристаллов (маски соприкасаются)" : "";
+      const grp = best.members > 1 ? " · сросток из " + best.members + " кристаллов (маски соприкасаются)"
+        : (best.seam_merged ? " · склеен из " + best.seam_merged + " частей по шву нарезки" : "");
       const why = rs ? '<span class="why"><b>' + rs.name + '</b> — ' + rs.cause + '.<br>Что делать: ' + rs.todo + '.</span>'
         : (cls.layer === "suspect" ? '<span class="why">Вытянутый, но не игла. Следи за долей таких: рост — сигнал про глюкозу/раффинозу.</span>' : "");
       // форма: округлость / выпуклость / вытянутость; значение за текущим порогом (поля вкладки
@@ -2423,6 +2434,7 @@
 
   document.addEventListener("DOMContentLoaded", () => {
     lockSaves(true);          // пока настройки не загружены с сервера, сохранять нельзя
+    api("/api/version").then((v) => { const e = $("verApp"); if (e) { e.textContent = "программа v" + v.app; e.classList.add("is-ok"); } }).catch(() => {});
     wire();
     syncManual(false);
     initCamera();

@@ -470,6 +470,12 @@ def micro_config_dump():
     return plate_config.load()
 
 
+@app.get("/api/version")
+def api_version():
+    """Версия программы (для шапки страницы микроскопа)."""
+    return {"app": read_version()}
+
+
 @app.get("/api/micro/config_snapshots")
 def micro_config_snapshots():
     """Автокопии настроек (с датой) для отката на вкладке «Дамп»."""

@@ -122,6 +122,7 @@
               <label title="Показать брак по форме"><input type="checkbox" value="reject" checked /><span class="dot" style="background:#e24b4a"></span>брак</label>
               <label title="Вытянутые кристаллы (длина/ширина от 1,6 до порога иглы) — не брак, а предупреждение: следи за их долей"><input type="checkbox" value="suspect" checked /><span class="dot" style="background:#6ad1f5"></span>вытянутые</label>
               <label title="Кристаллы, обрезанные краем кадра — в рассев не идут"><input type="checkbox" value="cut" checked /><span class="dot" style="background:#9aa3ad"></span>обрезанные</label>
+              <label title="Пузыри воздуха — ровные круги, не кристаллы: в рассев не идут"><input type="checkbox" value="bubble" checked /><span class="dot" style="background:#e0b04a"></span>пузыри</label>
               <label title="Подписать размер каждого кристалла, мкм"><input type="checkbox" value="sizes" />размеры</label>
               <label title="Подписать уверенность модели (0…1, conf) на каждом кристалле — видно, где модель сомневается"><input type="checkbox" value="conf" />уверенность</label>
               <label title="Подсказка при наведении на кристалл. Включено — подробно: размеры, форма, причина брака, «что делать», уверенность. Выключено — коротко: только размер и площадь."><input type="checkbox" value="detail" checked />подробно</label>
@@ -728,6 +729,8 @@
                     </div>
                   </div>
                   <label class="micro-check" title="Кристалл, разрезанный швом нарезки кадра (ровный край ровно на линии стыка частей), склеивается обратно из половинок. Выключи, если склеивает лишнее. Применяется со следующего разбора."><input type="checkbox" id="cvSeamMerge" /><span class="micro-check__text">Склеивать половинки по шву нарезки</span></label>
+                  <label class="micro-check" title="Кристалл, оставшийся «обрезанным» у шва нарезки, перепроверяется повторным проходом модели по окну вокруг него: целый — идёт в рассев, а не серым. Добавляет около секунды на кадр. Выключи, если мешает. Применяется со следующего разбора."><input type="checkbox" id="cvSeamRefine" /><span class="micro-check__text">Перепроверять обрезанные швом</span></label>
+                  <label class="micro-check" title="Ровный круг (радиус почти не меняется по контуру, не вытянутый, гладкий, от 100 мкм) — это пузырь воздуха, а не кристалл: в рассев и размеры не идёт, показывается отдельным слоем «пузыри». Выключи, если отсеивает настоящие кристаллы. Применяется со следующего разбора."><input type="checkbox" id="cvBubble" /><span class="micro-check__text">Отсеивать пузыри воздуха (ровный круг)</span></label>
                   <label class="micro-check micro-cv-always" title="Включено — брак идёт в рассев и тренд на любом СВ, без порога. Для сравнения «с порогом» и «без».">
                     <input type="checkbox" id="cvRejectAlways" />
                     <span class="micro-check__text">Считать брак всегда <span class="micro-ro">(без порога по СВ)</span></span>

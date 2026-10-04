@@ -64,6 +64,8 @@
     set("cvSuspect", sh.suspect_aspect); set("cvRejectSv", cv.reject_from_sv);
     set("cvClusterGap", cv.cluster_gap_px); set("cvEdgeMargin", cv.edge_margin_px);
     if ($("cvSeamMerge")) $("cvSeamMerge").checked = cv.seam_merge !== false;
+    if ($("cvSeamRefine")) $("cvSeamRefine").checked = cv.seam_refine !== false;
+    if ($("cvBubble")) $("cvBubble").checked = cv.bubble_filter !== false;
     if ($("cvRejectAlways")) $("cvRejectAlways").checked = !!cv.reject_always;
     set("pcCvFrames", cv.frames_per_probe); set("pcCvGap", cv.gap_sec);   // поля на вкладке «Цикл»
     updateTriggerFields();
@@ -75,7 +77,9 @@
       shape: { min_circularity: num("cvMinCirc"), min_solidity: num("cvMinSol"), max_aspect: num("cvMaxAspect"), suspect_aspect: num("cvSuspect") },
       um_per_px: num("cvUmPerPx"), tiles: num("cvTiles"), conf: num("cvConf"),
       reject_from_sv: num("cvRejectSv"), cluster_gap_px: num("cvClusterGap"), edge_margin_px: num("cvEdgeMargin"),
-      seam_merge: $("cvSeamMerge") ? $("cvSeamMerge").checked : undefined, reject_always: $("cvRejectAlways") ? $("cvRejectAlways").checked : undefined,
+      seam_merge: $("cvSeamMerge") ? $("cvSeamMerge").checked : undefined,
+      seam_refine: $("cvSeamRefine") ? $("cvSeamRefine").checked : undefined,
+      bubble_filter: $("cvBubble") ? $("cvBubble").checked : undefined, reject_always: $("cvRejectAlways") ? $("cvRejectAlways").checked : undefined,
     };
   }
   async function cvPostSettings(patch) {
@@ -185,10 +189,10 @@
   }
 
   // --- оверлей поверх чистого кадра: слои по группам, подсветка формы кристалла под мышкой ---
-  const CV_GROUP_NAMES = { small: "малая", medium: "средняя", large: "большая", reject: "брак", suspect: "вытянутый (не брак)", cut: "обрезан краем — не в рассеве" };
-  const CV_GROUP_COLOR = { small: "#1d9e75", medium: "#378add", large: "#ba7517", reject: "#e24b4a", suspect: "#6ad1f5", cut: "#9aa3ad" };
+  const CV_GROUP_NAMES = { small: "малая", medium: "средняя", large: "большая", reject: "брак", suspect: "вытянутый (не брак)", cut: "обрезан краем кадра или швом нарезки — не в рассеве", bubble: "пузырь воздуха (ровный круг) — не кристалл, не в рассеве" };
+  const CV_GROUP_COLOR = { small: "#1d9e75", medium: "#378add", large: "#ba7517", reject: "#e24b4a", suspect: "#6ad1f5", cut: "#9aa3ad", bubble: "#e0b04a" };
   const CV_LAYERS_KEY = "microCvLayers";
-  let cvLayers = { small: true, medium: true, large: true, reject: true, suspect: true, cut: true, sizes: false, conf: false, frac: true, detail: true };
+  let cvLayers = { small: true, medium: true, large: true, reject: true, suspect: true, cut: true, bubble: true, sizes: false, conf: false, frac: true, detail: true };
   // порог уверенности из поля вкладки CV: кристаллы с conf ниже него скрываем (живой предпросмотр «а если поднять?»)
   function cvConfThr() { const e = $("cvConf"); const v = e && e.value !== "" ? parseFloat(e.value) : NaN; return isNaN(v) ? 0 : v; }
   let cvCurClean = false;       // текущий кадр чистый (контуры рисуем сами); false — старая проба с «впечёнными»
@@ -215,6 +219,7 @@
   const CV_NOTCH_MAX = 5;
   function cvClassify(o) {
     if (o.group === "cut") return { layer: "cut", reason: null };
+    if (o.group === "bubble") return { layer: "bubble", reason: null };
     if (o.members > 1) return { layer: "reject", reason: "aggregate" };   // склеен из нескольких масок
     const thr = (id) => { const e = $(id); return e && e.value !== "" ? parseFloat(e.value) : null; };
     const tC = thr("cvMinCirc"), tS = thr("cvMinSol"), tA = thr("cvMaxAspect"), tU = thr("cvSuspect"), gS = thr("cvSmallMax"), gM = thr("cvMediumMax");
@@ -264,7 +269,7 @@
       ctx.strokeStyle = CV_GROUP_COLOR[gr] || "#ccc"; ctx.lineWidth = 1.5;
       ctx.setLineDash(gr === "suspect" ? [5, 3] : []);
       path(o.poly); ctx.stroke(); ctx.setLineDash([]);
-      if (cvLayers.sizes && gr !== "reject" && gr !== "cut") {
+      if (cvLayers.sizes && gr !== "reject" && gr !== "cut" && gr !== "bubble") {
         ctx.fillStyle = CV_GROUP_COLOR[gr]; ctx.font = "10px sans-serif"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
         ctx.fillText(String(Math.round(o.size_um)), g.ox + o.cx * g.sc, g.oy + o.cy * g.sc);
       }

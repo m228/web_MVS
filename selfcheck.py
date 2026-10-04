@@ -765,6 +765,67 @@ def _cv_analyze():
     return "%d кристаллов" % len(res["objects"])
 
 
+@check("CV", "cv_analyzer: пузырь воздуха (ровный круг) отсеивается из рассева, шестиугольники — нет")
+def _cv_bubble():
+    import math
+    import numpy as np
+    import cv_analyzer
+
+    def circle(cx, cy, r, n=90):
+        return [[cx + r * math.cos(2 * math.pi * i / n), cy + r * math.sin(2 * math.pi * i / n)] for i in range(n)]
+
+    def hexa(cx, cy, r, st=1.0):
+        return [[cx + r * st * math.cos(math.pi / 3 * i), cy + r * math.sin(math.pi / 3 * i)] for i in range(6)]
+
+    img = np.full((1000, 1200, 3), 120, np.uint8)
+    polys = [circle(300, 300, 85), hexa(700, 300, 100), hexa(300, 700, 100, 1.3)]
+    objs = [{"bbox": [min(p[0] for p in q), min(p[1] for p in q), max(p[0] for p in q), max(p[1] for p in q)],
+             "conf": 0.9, "polygon": q} for q in polys]
+    res = cv_analyzer.analyze(img, objs, {"tiles": 1}, with_overlay=False, sv=90)
+    groups = [o["group"] for o in res["objects"]]
+    assert groups[0] == "bubble" and "bubble" not in groups[1:], "группы: %s" % groups
+    assert res["summary"]["bubbles"] == 1 and res["summary"]["count"] == 2, res["summary"]
+    off = cv_analyzer.analyze(img, objs, {"tiles": 1, "bubble_filter": False}, with_overlay=False, sv=90)
+    assert off["summary"]["bubbles"] == 0 and off["summary"]["count"] == 3, "выключатель не работает"
+    return "круг → bubble, 2 шестиугольника остались в рассеве"
+
+
+@check("CV", "cv_analyzer: обрубок на шве перепроверяется повторным проходом (фейковая модель) и становится целым")
+def _cv_seam_refine():
+    import numpy as np
+    import cv_analyzer
+    img = np.full((2048, 2448, 3), 120, np.uint8)
+    xs, _ys = cv_analyzer._seam_lines(img.shape, 6, 0.15)
+    sx = xs[1]                                                    # вертикальный шов нарезки
+    stub = [[sx, 500], [sx + 40, 500], [sx + 60, 550], [sx + 40, 600], [sx, 600]]      # ровный край ровно на шве
+    whole = [[sx - 50, 500], [sx + 40, 500], [sx + 60, 550], [sx + 40, 600], [sx - 50, 600]]
+    raw = [{"bbox": [sx, 500, sx + 60, 600], "conf": 0.9, "polygon": stub}]
+    cfg = {"tiles": 6, "overlap": 0.15}
+    before = cv_analyzer.analyze(img, raw, cfg, with_overlay=False, sv=90)
+    assert before["objects"][0]["group"] == "cut", "тест не воспроизводит обрубок: %s" % before["objects"][0]["group"]
+    calls = []
+
+    def fake_infer(crop):
+        calls.append(crop.shape)
+        # окно вырезано с известного смещения: возвращаем целую маску в координатах окна
+        h, w = crop.shape[:2]
+        cx, cy = (sx + 5) , 550
+        wx1 = int(min(max(0, cx - w / 2), 2448 - w)); wy1 = int(min(max(0, cy - h / 2), 2048 - h))
+        return [{"bbox": [x - wx1 for x in (sx - 50,)] + [500 - wy1, sx + 60 - wx1, 600 - wy1], "conf": 0.9,
+                 "polygon": [[x - wx1, y - wy1] for x, y in whole]}]
+
+    st = {}
+    objs = cv_analyzer.refine_seam_stubs(img, raw, cfg, fake_infer, st)
+    after = cv_analyzer.analyze(img, objs, cfg, with_overlay=False, sv=90)
+    assert st["fixed"] == 1 and calls, "не заменён: %s" % st
+    assert after["objects"][0]["group"] != "cut" and after["summary"]["cut"] == 0, "остался обрубком"
+    off = cv_analyzer.refine_seam_stubs(img, raw, {**cfg, "seam_refine": False}, fake_infer, {})
+    assert off == raw, "при выключенной настройке список должен вернуться как есть"
+    broken = cv_analyzer.refine_seam_stubs(img, raw, cfg, lambda crop: None, {})
+    assert broken == raw, "сбой модели: обрубок должен остаться как был"
+    return "обрубок → целый (вызовов модели: %d)" % len(calls)
+
+
 @check("CV", "cv_fracture: зоны ищутся, серия кадров сводится, отрисовка работает")
 def _cv_fracture():
     import cv2

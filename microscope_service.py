@@ -375,7 +375,22 @@ class MicroscopeService:
                 run["timing"] = resp.get("timing", {})
                 sv = self.fsm.sv if self.fsm else None
                 run["svs"].append(sv)
-                res = cv_analyzer.analyze(img, resp.get("objects", []), cv_cfg=cv, with_overlay=False, sv=sv)
+                objs = resp.get("objects", [])
+                if cv.get("seam_refine", True) and int(cv.get("tiles", 6)) > 1:
+                    # обрубки у шва нарезки — повторный проход модели по окну вокруг них (целый кристалл
+                    # идёт в рассев). Сбой запроса = обрубок остаётся как был.
+                    def _infer_window(crop, _url=run["url"], _cv=cv):
+                        okw, encw = cv2.imencode(".png", crop)
+                        rw = cv_client.infer(_url, encw.tobytes(), tiles=1, conf=float(_cv.get("conf", 0.25)),
+                                             iou=float(_cv.get("iou", 0.45)), overlap=float(_cv.get("overlap", 0.15)),
+                                             timeout=30.0) if okw else None
+                        return rw.get("objects") if rw else None
+                    t_ref = time.time()
+                    ref = {}
+                    objs = cv_analyzer.refine_seam_stubs(img, objs, cv, _infer_window, ref)
+                    run["timing"] = {**run["timing"], "refine_ms": round((time.time() - t_ref) * 1000),
+                                     "refine_stubs": ref.get("stubs", 0), "refine_fixed": ref.get("fixed", 0)}
+                res = cv_analyzer.analyze(img, objs, cv_cfg=cv, with_overlay=False, sv=sv)
                 summary, objects = res["summary"], res["objects"]
         # --- разломы (чистый OpenCV, всегда) ---
         run["zones"].append(cv_fracture.detect_zones(img, run["fr_cfg"]) if run["fr_on"] else [])

@@ -541,6 +541,8 @@ def micro_settings(
     arrive_sensor: str | None = None,
     sv_from: float | None = None,
     sv_to: float | None = None,
+    stage_from: int | None = None,
+    stage_to: int | None = None,
     host: str | None = None,
     port: int | None = None,
     unit: int | None = None,
@@ -566,6 +568,8 @@ def micro_settings(
     if arrive_sensor is not None: pc["arrive_sensor"] = arrive_sensor
     if sv_from is not None: pc["sv_from"] = sv_from
     if sv_to is not None: pc["sv_to"] = sv_to
+    if stage_from is not None: pc["stage_from"] = stage_from
+    if stage_to is not None: pc["stage_to"] = stage_to
     if pc:
         patch["probe_cycle"] = pc            # параметры цикла пробы (вкладка «Цикл»)
     if host is not None:

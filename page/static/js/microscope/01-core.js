@@ -79,6 +79,7 @@
         photo_format: $("pcFormatSw").checked ? "jpg" : "png",
         trigger_mode: pcTrigMode, arrive_sensor: pcArriveMode,
         sv_from: $("pcSvFrom").value, sv_to: $("pcSvTo").value,
+        stage_from: $("pcStageFrom").value, stage_to: $("pcStageTo").value,
       };
       try {
         await cvPostCycleFields();          // кадров на пробу / пауза CV — до перезапуска автомата
@@ -763,6 +764,7 @@
           sv("pcRetract", pc.retract_pos); sv("pcPreWash", pc.pre_wash_sec);
           sv("pcDwell", pc.dwell_sec); sv("pcShotInterval", pc.shot_interval_sec);
           sv("pcPause", pc.pause_sec); sv("pcSvFrom", pc.sv_from); sv("pcSvTo", pc.sv_to);
+          sv("pcStageFrom", pc.stage_from); sv("pcStageTo", pc.stage_to);
           setTrigMode(pc.trigger_mode);
           setArriveMode(pc.arrive_sensor);
           const fmSw = $("pcFormatSw"); if (fmSw) fmSw.checked = (pc.photo_format === "jpg");

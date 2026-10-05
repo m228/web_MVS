@@ -100,6 +100,9 @@ class MicroscopeFSM:
         self._cv_last_ok = True       # прошлая проба по CV удалась (иначе ждём обычную паузу)
         self._sv_from = float(pc.get("sv_from", 84))
         self._sv_to = float(pc.get("sv_to", 92))
+        # диапазон стадий, в котором авто-цикл разрешён (правится на вкладке «Цикл»); перепутали местами — меняем
+        a, b = int(pc.get("stage_from", CYCLE_STAGE_MIN)), int(pc.get("stage_to", CYCLE_STAGE_MAX))
+        self._stage_min, self._stage_max = (a, b) if a <= b else (b, a)
         # «варить без стадии»: при ручной варке ПЛК не двигает стадию (стоит), а СВ растёт —
         # тогда авто-цикл гоняем БЕЗ проверки стадии 3..9 (только по триггеру время/СВ).
         self._ignore_stage = bool(pc.get("ignore_stage", False))
@@ -657,7 +660,7 @@ class MicroscopeFSM:
                 label = "Возврат в %d мкм" % self._retract_pos
             else:
                 # Ожидание — поясняем ЧЕГО ждём (чтобы было видно, продолжится ли авто-цикл)
-                stage_in = self._ignore_stage or (CYCLE_STAGE_MIN <= self.stage <= CYCLE_STAGE_MAX)
+                stage_in = self._ignore_stage or (self._stage_min <= self.stage <= self._stage_max)
                 if self.manual:
                     label = "Ручной режим — авто-цикл не идёт"
                 elif not self.sw0:
@@ -729,7 +732,7 @@ class MicroscopeFSM:
                 "stage": self.stage,
                 "u": self.u,
                 # авто-цикл разрешён по стадии (3..9) ИЛИ включено «варить без стадии».
-                "stage_ok": self._ignore_stage or (CYCLE_STAGE_MIN <= self.stage <= CYCLE_STAGE_MAX),
+                "stage_ok": self._ignore_stage or (self._stage_min <= self.stage <= self._stage_max),
                 "last_sv_shot": self._last_sv_shot,   # на каком целом СВ взяли последнюю пробу (режим sv)
                 "manual_confirm": self._manual_confirm,   # варка началась, а мы в ручном — спросить оператора
                 "cycle_params": {
@@ -803,7 +806,7 @@ class MicroscopeFSM:
             # 0) подтверждение перехода из ручного: фронт входа стадии в рабочую зону (3..9),
             # пока стоит Ручной режим -> просим оператора подтвердить переход в Автомат.
             # Флаг держится, пока не подтвердят/отклонят или стадия не выйдет из зоны.
-            stage_in = CYCLE_STAGE_MIN <= self.stage <= CYCLE_STAGE_MAX
+            stage_in = self._stage_min <= self.stage <= self._stage_max
             if stage_in and not self._stage_prev_in and self.manual:
                 self._manual_confirm = True
             if not stage_in:
@@ -880,7 +883,7 @@ class MicroscopeFSM:
             #            и только при СВ в [sv_from..sv_to].
             # Стадия вне диапазона -> ничего не капает, новый цикл не стартует (уже идущий доводим),
             # счётчик СВ сбрасываем (новая варка снимет заново с sv_from).
-            stage_ok = self._ignore_stage or (CYCLE_STAGE_MIN <= self.stage <= CYCLE_STAGE_MAX)
+            stage_ok = self._ignore_stage or (self._stage_min <= self.stage <= self._stage_max)
             if self.sw0 and stage_ok and not self._cal_active:   # идёт калибровка — цикл не стартуем
                 if self.mode == 0:
                     if self._trigger_mode == "sv":

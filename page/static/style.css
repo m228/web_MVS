@@ -3183,7 +3183,9 @@ html {
 
 /* переключатель ручного режима */
 .micro-switch { display: inline-flex; flex-direction: row; align-items: center; gap: 10px; cursor: pointer; user-select: none; }
-.micro-switch input { position: absolute; opacity: 0; width: 0; height: 0; }
+.micro-switch { position: relative; }
+/* скрытый чекбокс не должен ловить клики: общие правила полей (.micro-cycle-f input { width:100% }) раньше растягивали его на соседние поля */
+.micro-switch input, .micro-cycle-f .micro-switch input { position: absolute; opacity: 0; width: 0; height: 0; padding: 0; margin: 0; pointer-events: none; }
 .micro-switch__track { width: 44px; height: 24px; border-radius: 999px; background: var(--surface-muted); border: 1px solid var(--border-strong); position: relative; transition: background .15s; }
 .micro-switch__thumb { position: absolute; top: 2px; left: 2px; width: 18px; height: 18px; border-radius: 50%; background: var(--muted); transition: transform .15s, background .15s; }
 .micro-switch input:checked + .micro-switch__track { background: var(--success-soft); border-color: var(--success); }
@@ -3439,6 +3441,8 @@ input.micro-cam-num { width: 56px; min-width: 0; flex: 0 0 auto; padding: 4px 5p
 /* строка «Формат скринов» с тумблером справа */
 .micro-cycle-fmt { display: flex; align-items: center; justify-content: space-between; }
 .micro-cycle-f span { color: var(--muted); }
+.micro-cycle-range { grid-template-columns: 1fr 120px; }
+.micro-cycle-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
 .micro-cycle-f input { width: 100%; padding: 5px 7px; text-align: right; -moz-appearance: textfield; }
 .micro-cycle-f input::-webkit-outer-spin-button, .micro-cycle-f input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
 .micro-cycle-actions { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-top: 10px; }

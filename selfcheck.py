@@ -719,6 +719,16 @@ def _fsm():
             fsm.tick()
         st1 = fsm.state
         assert st1["mode"] != 0 or st1.get("label") != st0.get("label"), "цикл пробы не стартовал: %s" % st1
+        # диапазон стадий цикла берётся из настроек (вкладка «Цикл»): 5..7 — стадия 4 вне, 6 внутри; 7..5 перепутаны — то же
+        import copy
+        cfg2 = copy.deepcopy(cfg)
+        cfg2.setdefault("probe_cycle", {}).update({"stage_from": 7, "stage_to": 5})
+        fsm2 = MicroscopeFSM(plate, cfg2)
+        fsm2.set_stage(4); fsm2.tick()
+        assert fsm2.state["stage_ok"] is False, "стадия 4 вне диапазона 5..7, а stage_ok=True"
+        fsm2.set_stage(6); fsm2.tick()
+        assert fsm2.state["stage_ok"] is True, "стадия 6 в диапазоне 5..7, а stage_ok=False"
+        assert fsm.state["stage_ok"] is True, "по умолчанию стадия 7 должна быть в 3..9"
     finally:
         plate.stop()
     return "mode %s → %s" % (st0["mode"], st1["mode"])

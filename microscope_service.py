@@ -14,12 +14,19 @@ from sv_source import SvSource
 from logger import log_event
 
 
+# поля ПЛК (sv_source), которые пишем в запись пробы CV — режим варки на момент пробы
+PLC_KEYS = ("temp_app", "level", "current", "press_top", "cook_time")
+
+
 class MicroscopeService:
     def __init__(self):
         self.cfg = None
         self.plate = None
         self.fsm = None
         self.sv_source = None
+        # заводка: момент перехода «Сгущение(3) → Затравка и далее(4..9)»; None — варка не отслеживается
+        self._last_stage = None
+        self._seed_ts = None
         self._started = False
         self._lock = threading.Lock()
         # DEBUG (убрать после отладки цикла): перехват ПЛК — при True данные СВ/стадии
@@ -352,6 +359,8 @@ class MicroscopeService:
             # overlays — ЧИСТЫЕ кадры серии (контуры в картинку не впекаем — их рисует браузер)
             "frame_recs": [], "overlays": [], "zones": [], "timing": {}, "answered": 0, "shape": None,
             "svs": [],       # СВ на момент каждого кадра: от него зависит, идёт ли брак в рассев
+            "plc": [],       # снимки полей ПЛК (PLC_KEYS) на момент каждого кадра — в запись пробы
+            "t0": time.time(),
         }
 
     def _cv_analyze_one(self, run, img):
@@ -362,6 +371,9 @@ class MicroscopeService:
         import cv_client
         import cv_fracture
         cv = run["cv"]
+        snap = self._plc_snapshot()
+        if snap:
+            run["plc"].append(snap)
         # --- кристаллы (сайдкар YOLO), если он поднят ---
         summary, objects = None, []
         if run["sidecar_ok"]:
@@ -427,7 +439,8 @@ class MicroscopeService:
                                      jpeg_quality=int(cv.get("overlay_jpeg_quality", 85)),
                                      thumb_img=thumb_img,
                                      sv=(sum(x for x in run["svs"] if x is not None) / max(1, len([x for x in run["svs"] if x is not None]))
-                                         if any(x is not None for x in run["svs"]) else None))
+                                         if any(x is not None for x in run["svs"]) else None),
+                                     plc=self._plc_summary(run))
         if not saved:
             self._set_cv_status("error", "не удалось сохранить пробу (см. лог)")
         elif not run["sidecar_ok"]:
@@ -440,8 +453,47 @@ class MicroscopeService:
             self._set_cv_status("ok", "разбор готов: %d крист., кадров %d" % (
                 round(saved["summary"].get("count") or 0), len(overlays)))
 
+    def _note_stage(self, stage):
+        """Заводка = переход из «Сгущения»(3) в 4..9 (затравка и далее). Вход в 2/3 из другой стадии —
+        новая варка, отсчёт сбрасывается. Перезапуск приложения посреди варки момент заводки теряет (None)."""
+        if stage is None:
+            return
+        prev, self._last_stage = self._last_stage, stage
+        if prev == 3 and 4 <= stage <= 9:
+            self._seed_ts = time.time()
+        elif stage in (2, 3) and prev not in (2, 3):
+            self._seed_ts = None
+
+    def _plc_snapshot(self):
+        """Текущие значения ПЛК из sv_source для записи пробы (только чтение). Нет связи — None."""
+        src = self.sv_source
+        if not src:
+            return None
+        try:
+            st = src.status()
+        except Exception:
+            return None
+        if not st.get("connected"):
+            return None
+        vals = st.get("values") or {}
+        snap = {k: vals[k] for k in PLC_KEYS if vals.get(k) is not None}
+        return snap or None
+
+    def _plc_summary(self, run):
+        """Среднее по кадрам пробы (время варки — последнее значение) + время с заводки на начало пробы."""
+        out = {}
+        for k in PLC_KEYS:
+            vals = [s[k] for s in run.get("plc", []) if s.get(k) is not None]
+            if not vals:
+                continue
+            out[k] = int(vals[-1]) if k == "cook_time" else round(sum(vals) / len(vals), 1)
+        if self._seed_ts is not None:
+            out["seed_age_s"] = max(0, int(run.get("t0", time.time()) - self._seed_ts))
+        return out or None
+
     def _on_sv(self, sv, stage):
         # СВ/стадия из ПЛК -> в автомат (заменяет ручной ввод, пока источник жив)
+        self._note_stage(stage)      # заводку отслеживаем всегда, даже при перехвате ПЛК
         # DEBUG: при перехвате ПЛК не затираем ручной ввод со страницы
         if self._sv_override:
             return
@@ -948,6 +1000,7 @@ class MicroscopeService:
     def set_stage(self, stage):
         if self.fsm:
             self.fsm.set_stage(stage)
+        self._note_stage(stage)      # ручная стадия (отладка/тест) тоже двигает отсчёт заводки
 
     def set_cyclic(self, on):
         if self.fsm:

@@ -62,8 +62,12 @@ def _hist_row(result: dict) -> Optional[dict]:
     sz = s.get("size_um") or {}
     pct = s.get("groups_pct") or {}
     fr = (result.get("fracture") or {}).get("summary") or {}
+    plc = result.get("plc") or {}
     return {
         "ts": result["ts"], "t": t, "stage": result.get("stage"), "sv": result.get("sv"),
+        # режим варки на момент пробы (ПЛК): для разбора «почему слиплось» по серии проб
+        "temp": plc.get("temp_app"), "level": plc.get("level"), "current": plc.get("current"),
+        "vac": plc.get("press_top"), "cook_time": plc.get("cook_time"), "seed_age": plc.get("seed_age_s"),
         "count": s.get("count"), "mean": sz.get("mean"), "median": sz.get("median"),
         "small": pct.get("small"), "medium": pct.get("medium"),
         "large": pct.get("large"), "reject": pct.get("reject"),
@@ -217,7 +221,8 @@ def _aggregate(frames: list[dict]) -> dict:
 def save_sample(serial: str, stage, frames: list[dict], images: list, timing: dict,
                 keep_last: int = 50, ts: Optional[str] = None,
                 fracture: Optional[dict] = None, jpeg_quality: int = 85,
-                thumb_img=None, sv: Optional[float] = None) -> Optional[dict]:
+                thumb_img=None, sv: Optional[float] = None,
+                plc: Optional[dict] = None) -> Optional[dict]:
     """Сохранить пробу. frames — список {file, summary, objects}. images — ЧИСТЫЕ кадры пробы
     (numpy BGR), пишутся в JPEG (jpeg_quality); контуры поверх рисует браузер по objects_N.json.
     thumb_img — кадр с контурами для миниатюры (нет — миниатюра из чистого кадра 0).
@@ -262,6 +267,9 @@ def save_sample(serial: str, stage, frames: list[dict], images: list, timing: di
             "ts": ts,
             "stage": stage,
             "sv": round(sv, 1) if sv is not None else None,   # СВ пробы (от него зависит учёт брака)
+            # режим варки из ПЛК на момент пробы: temp_app °C, level %, current A (ток циркулятора),
+            # press_top (разрежение сверху), cook_time с, seed_age_s с (время с заводки). Нет ПЛК — ключа нет.
+            **({"plc": plc} if plc else {}),
             "timing": timing,
             "summary": summary,
             "frames": frame_recs,

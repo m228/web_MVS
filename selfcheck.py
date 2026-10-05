@@ -849,16 +849,60 @@ def _cv_store():
     img, objs = synth_frame()
     res = cv_analyzer.analyze(img, objs, None, with_overlay=False, sv=90.0)
     frames = [{"file": "f0.jpg", "summary": res["summary"], "objects": res["objects"]}]
-    rec = cv_store.save_sample("SELFCHECK", 7, frames, [img], {"total_ms": 1}, keep_last=5, sv=90.0)
+    plc = {"temp_app": 74.5, "level": 61.0, "current": 12.0, "press_top": -0.8,
+           "cook_time": 1500, "seed_age_s": 420}
+    rec = cv_store.save_sample("SELFCHECK", 7, frames, [img], {"total_ms": 1}, keep_last=5, sv=90.0, plc=plc)
     assert rec and rec.get("ts"), "save_sample вернул %r" % (rec,)
     assert cv_store.list_samples("SELFCHECK"), "список проб пуст"
     last = cv_store.get_last("SELFCHECK")
     assert last and last["ts"] == rec["ts"]
+    assert last.get("plc") == plc, "режим варки (plc) не попал в result.json: %r" % (last.get("plc"),)
+    row = cv_store._hist_row(last)
+    assert row["temp"] == 74.5 and row["vac"] == -0.8 and row["seed_age"] == 420, "журнал трендов без plc: %r" % (row,)
+    rec0 = cv_store.save_sample("SELFCHECK", 7, frames, [img], {"total_ms": 1}, keep_last=5, sv=90.0)
+    assert "plc" not in (cv_store.get_result("SELFCHECK", rec0["ts"]) or {}), "без ПЛК ключ plc быть не должен"
     assert cv_store.get_objects("SELFCHECK", rec["ts"], 0), "объекты не читаются"
     assert cv_store.trend("SELFCHECK") is not None
     assert cv_store.thumb_path("SELFCHECK", rec["ts"]) is not None, "миниатюра не создана"
     assert cv_store.history_days("SELFCHECK") is not None
     return "ts=%s" % rec["ts"]
+
+
+@check("CV", "microscope_service: снимок ПЛК в пробу + время с заводки (3 → 4..9), без сети")
+def _micro_plc_snapshot():
+    import time as _t
+    from microscope_service import MicroscopeService
+
+    class _FakeSrc:
+        def __init__(self):
+            self.up, self.vals = True, {"temp_app": 70, "level": 50, "current": 10,
+                                        "press_top": -0.9, "cook_time": 900, "stage": 3, "substage": 31}
+        def status(self):
+            return {"connected": self.up, "values": dict(self.vals)}
+
+    ms = MicroscopeService()                 # не start(): ни платы, ни сокетов
+    assert ms._plc_snapshot() is None, "без sv_source снимок должен быть None"
+    ms.sv_source = _FakeSrc()
+    snap = ms._plc_snapshot()
+    assert set(snap) == {"temp_app", "level", "current", "press_top", "cook_time"}, "в снимке лишнее/нет: %r" % (snap,)
+    assert "substage" not in snap and "stage" not in snap
+    ms.sv_source.up = False
+    assert ms._plc_snapshot() is None, "нет связи с ПЛК — снимка нет"
+    ms.sv_source.up = True
+    # заводка: 3 → 4 ставит метку, повторные опросы стадии 4 её не двигают
+    ms._note_stage(2); ms._note_stage(3)
+    assert ms._seed_ts is None
+    ms._note_stage(4)
+    t1 = ms._seed_ts
+    assert t1 is not None, "переход 3 → 4 не поймал заводку"
+    ms._note_stage(4); ms._note_stage(7)
+    assert ms._seed_ts == t1, "метка заводки сдвинулась"
+    run = {"plc": [{"temp_app": 70, "cook_time": 900}, {"temp_app": 72, "cook_time": 905}], "t0": t1 + 60}
+    s = ms._plc_summary(run)
+    assert s["temp_app"] == 71.0 and s["cook_time"] == 905 and s["seed_age_s"] == 60, s
+    ms._note_stage(10); ms._note_stage(2)    # выгрузка → новый набор: отсчёт сброшен
+    assert ms._seed_ts is None and "seed_age_s" not in (ms._plc_summary({"plc": [], "t0": _t.time()}) or {})
+    return "снимок %d полей, заводка ловится" % len(snap)
 
 
 @check("CV", "fracture_lab: кадр → метка → список → зоны → удаление (песочница)")

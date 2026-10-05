@@ -19,6 +19,24 @@
     return n ? `${m} (${n})` : String(m);
   };
 
+  // пояснения к стадиям — как их называл Макс (память varka-stages); чего нет в списке, не придумываем
+  const STAGE_HELP = { 5: "набор уровня", 6: "набор СВ", 7: "(!!!)", 8: "набор СВ" };
+  function pcStageInfoBuild(x, y) {
+    const pop = $("pcStageInfoPop"); if (!pop) return;
+    pop.innerHTML = '<b>Стадии варки (M.mode)</b>' + Object.keys(STAGE_NAMES).map((k) => {
+      const inR = Number(k) >= x && Number(k) <= y;
+      return '<div class="' + (inR ? "in" : "") + '"><i>' + k + '</i> ' + STAGE_NAMES[k] + (STAGE_HELP[k] ? ' <em>— ' + STAGE_HELP[k] + '</em>' : '') + '</div>';
+    }).join("") + '<small>Подсвечено — стадии, в которых идёт авто-цикл пробы (поля слева)</small>';
+  }
+  // подпись под полями «Стадии от — до»: «3 Сгущение → 9 Готовность»; полный список стадий — в подсказке
+  function pcStageHintUpdate() {
+    const a = $("pcStageFrom"), b = $("pcStageTo"), h = $("pcStageHint"); if (!a || !b || !h) return;
+    const nm = (v) => { const n = STAGE_NAMES[Number(v)]; return n ? v + " " + n : (v || "—"); };
+    let x = Number(a.value), y = Number(b.value); if (x > y) [x, y] = [y, x];
+    h.textContent = nm(x) + " → " + nm(y);
+    pcStageInfoBuild(x, y);
+  }
+
   let manualOn = false;
   let cfg = null;
   let camSerial = "";
@@ -69,6 +87,8 @@
       try { await api("/api/micro/cycle_reset"); sentCmd("Цикл: сброс"); const h = $("cycHint"); if (h) h.textContent = "цикл сброшен"; }
       catch (e) { const h = $("cycHint"); if (h) h.textContent = "ошибка: " + e.message; }
     });
+    ["pcStageFrom", "pcStageTo"].forEach((id) => { const e = $(id); if (e) e.addEventListener("input", pcStageHintUpdate); });
+    pcStageHintUpdate();
     const save = $("pcSave");
     if (save) save.addEventListener("click", async () => {
       if (!cfgLoaded) { loadHint("настройки ещё не загружены — подожди"); return; }
@@ -764,7 +784,7 @@
           sv("pcRetract", pc.retract_pos); sv("pcPreWash", pc.pre_wash_sec);
           sv("pcDwell", pc.dwell_sec); sv("pcShotInterval", pc.shot_interval_sec);
           sv("pcPause", pc.pause_sec); sv("pcSvFrom", pc.sv_from); sv("pcSvTo", pc.sv_to);
-          sv("pcStageFrom", pc.stage_from); sv("pcStageTo", pc.stage_to);
+          sv("pcStageFrom", pc.stage_from); sv("pcStageTo", pc.stage_to); pcStageHintUpdate();
           setTrigMode(pc.trigger_mode);
           setArriveMode(pc.arrive_sensor);
           const fmSw = $("pcFormatSw"); if (fmSw) fmSw.checked = (pc.photo_format === "jpg");

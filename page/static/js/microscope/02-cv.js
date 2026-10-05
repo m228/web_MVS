@@ -5,7 +5,8 @@
   // ================= Компьютерное зрение (CV) =================
   // Вкладка «CV» + переключатель окна камера/распознавание. Данные с /api/cv/*.
   const CV_GROUPS = ["small", "medium", "large", "reject"];
-  const CV_SERIES_COLOR = { small: "#1d9e75", medium: "#378add", large: "#ba7517", reject: "#e24b4a", mean: "#7f77dd", median: "#d16fb8", sv: "#f2c94c" };
+  const CV_SERIES_COLOR = { small: "#1d9e75", medium: "#378add", large: "#ba7517", reject: "#e24b4a", mean: "#7f77dd", median: "#d16fb8", sv: "#f2c94c",
+    temp: "#ff8a4c", vac: "#4fd1e8", level: "#8aa4c8", current: "#a3d95b", cook_time: "#b9a98f", seed_age: "#ffb347" };
   let cvWinOn = false;          // окно показывает CV (true) или камеру (false)
   let cvLastResult = null;      // последняя проба (result.json)
   let cvPrevResult = null;      // предыдущая проба (для Δ к прошлой)
@@ -524,6 +525,11 @@
   const CV_TREND_KEY = "microCvTrendSeries3";   // 3: добавлены серии «стадия» и «СВ» (включены по умолчанию)
   const CV_PCT_SERIES = ["small", "medium", "large", "reject", "sv"];   // шкала слева, % (СВ тоже в % — те же 0–100)
   const CV_UM_SERIES = ["mean", "median"];                        // шкала справа, мкм
+  // режим варки из ПЛК (рисуется пунктиром). Уровень — в %, на общей шкале 0–100; остальные — каждая на своей шкале
+  // по видимому участку, но не уже «минимального размаха» (иначе шум на 0,2 °C выглядел бы бурей)
+  const CV_REGIME = ["temp", "vac", "level", "current", "cook_time", "seed_age"];
+  const CV_AUTO_SPAN = { temp: 10, vac: 0.5, current: 5, cook_time: 60, seed_age: 60 };
+  const CV_MIN_SERIES = ["cook_time", "seed_age"];                // в журнале секунды, показываем минуты
   const CV_MAX_SPAN = 400 * 86400, CV_MIN_SPAN = 60;
   let cvTrendDay = null;         // выбранная дата «YYYY-MM-DD»
   let cvTrendDays = [];          // дни, за которые есть пробы
@@ -547,9 +553,10 @@
   }
   async function cvTrendFetch(a, b) {            // загрузить пробы [a,b] (epoch, сек)
     const seq = ++cvTrendSeq;
-    const q = [cvSerialQ(), "series=small,medium,large,reject,mean,median,count,stage,sv", "from=" + Math.floor(a), "to=" + Math.ceil(b), "limit=5000"].filter(Boolean).join("&");
+    const q = [cvSerialQ(), "series=small,medium,large,reject,mean,median,count,stage,sv," + CV_REGIME.join(","), "from=" + Math.floor(a), "to=" + Math.ceil(b), "limit=5000"].filter(Boolean).join("&");
     const d = await api("/api/cv/trend?" + q);
     if (seq !== cvTrendSeq) return false;        // пока грузили, запросили другое — это устарело
+    CV_MIN_SERIES.forEach((k) => { if (d.series && d.series[k]) d.series[k] = d.series[k].map((x) => (x == null ? null : x / 60)); });
     cvTrendData = d; return true;
   }
   // подгон вида под выбранный день: от первой до последней пробы, с полями
@@ -631,6 +638,19 @@
     const scaleOf = (name) => (name === "stage" ? stageMax : (CV_UM_SERIES.includes(name) ? umMax : 100));
     const colorOf = (name) => (name === "stage" ? getCss("--text", "#fff") : (CV_SERIES_COLOR[name] || "#888"));
     const yAt = (val, mx) => pad.t + plotH * (1 - Math.max(0, Math.min(1, val / mx)));
+    // режим варки со своей шкалой: диапазон по видимым точкам (не уже CV_AUTO_SPAN) + 8 % полей
+    const auto = {};
+    for (const s of CV_REGIME) {
+      if (!CV_AUTO_SPAN[s] || !sel.includes(s) || !series[s]) continue;
+      let lo = Infinity, hi = -Infinity;
+      for (let i = i0; i < i1; i++) { const x = series[s][i]; if (x != null) { lo = Math.min(lo, x); hi = Math.max(hi, x); } }
+      if (lo === Infinity) continue;
+      if (hi - lo < CV_AUTO_SPAN[s]) { const c = (hi + lo) / 2; lo = c - CV_AUTO_SPAN[s] / 2; hi = c + CV_AUTO_SPAN[s] / 2; }
+      const p = (hi - lo) * 0.08; auto[s] = { lo: lo - p, hi: hi + p };
+    }
+    const yOf = (name, val, mx) => (auto[name]
+      ? pad.t + plotH * (1 - Math.max(0, Math.min(1, (val - auto[name].lo) / (auto[name].hi - auto[name].lo))))
+      : yAt(val, mx));
     // сетка: горизонтали + подписи слева (%) и справа (мкм)
     ctx.font = "10px monospace"; ctx.lineWidth = 1;
     for (let k = 0; k <= 4; k++) {
@@ -674,11 +694,12 @@
       let started = false, prevY = 0;
       for (let i = a; i < b; i++) {
         const val = arr[i]; if (val == null) { started = false; continue; }
-        const x = xAt(t[i]), y = yAt(val, mx);
+        const x = xAt(t[i]), y = yOf(name, val, mx);
         if (started && !brewBreak(i)) { if (isStage) ctx.lineTo(x, prevY); ctx.lineTo(x, y); } else ctx.moveTo(x, y);   // стадия — ступенькой
         started = true; prevY = y;
       }
-      ctx.stroke();
+      if (CV_REGIME.includes(name)) ctx.setLineDash([6, 4]);          // режим варки — пунктиром
+      ctx.stroke(); ctx.setLineDash([]);
       if (isStage) {                                                   // цифры стадии на каждом переходе (и на первой видимой пробе)
         ctx.font = "bold 11px sans-serif"; ctx.textAlign = "center"; ctx.textBaseline = "bottom";
         let last = null;
@@ -692,12 +713,13 @@
       }
       if (i1 - i0 <= 120) for (let i = i0; i < i1; i++) {          // точки-пробы, пока их немного
         const val = arr[i]; if (val == null) continue;
-        ctx.beginPath(); ctx.arc(xAt(t[i]), yAt(val, mx), 2.2, 0, Math.PI * 2); ctx.fill();
+        ctx.beginPath(); ctx.arc(xAt(t[i]), yOf(name, val, mx), 2.2, 0, Math.PI * 2); ctx.fill();
       }
     };
     ctx.save(); ctx.beginPath(); ctx.rect(pad.l, pad.t - 2, plotW, plotH + 4); ctx.clip();
     sel.filter((s) => CV_PCT_SERIES.includes(s)).forEach(drawSeries);
     sel.filter((s) => CV_UM_SERIES.includes(s)).forEach(drawSeries);
+    sel.filter((s) => CV_REGIME.includes(s)).forEach(drawSeries);
     if (sel.includes("stage")) drawSeries("stage");           // стадия — поверх остальных
     // линия-курсор: стоит на ближайшей к мышке пробе
     const hi = cvTrendHover;
@@ -708,7 +730,7 @@
       sel.forEach((name) => {
         const val = series[name] && series[name][hi]; if (val == null) return;
         ctx.fillStyle = colorOf(name);
-        ctx.beginPath(); ctx.arc(x, yAt(val, scaleOf(name)), 4, 0, Math.PI * 2); ctx.fill();
+        ctx.beginPath(); ctx.arc(x, yOf(name, val, scaleOf(name)), 4, 0, Math.PI * 2); ctx.fill();
       });
     }
     ctx.restore();
@@ -721,8 +743,8 @@
     if (i == null) { i = d.t.length - 1; while (i >= 0 && d.t[i] > v.end) i--; if (i >= 0 && d.t[i] < v.start) i = -1; }
     document.querySelectorAll("#cvSeries .micro-srow").forEach((row) => {
       const name = row.querySelector("input").value, val = i >= 0 && d.series[name] ? d.series[name][i] : null;
-      const unit = row.dataset.unit || "";
-      row.querySelector("b").textContent = val == null ? "—" : (Math.round(val * 10) / 10) + (unit === "%" ? "%" : " " + unit);
+      const unit = row.dataset.unit || "", k = Math.pow(10, Number(row.dataset.dec) || 1);     // data-dec: знаков после запятой (по умолчанию 1)
+      row.querySelector("b").textContent = val == null ? "—" : (Math.round(val * k) / k) + (unit === "%" ? "%" : " " + unit);
     });
   }
   function cvTrendUpdateSpan() {
@@ -746,10 +768,15 @@
     const cnt = val("count"), mean = val("mean"), med = val("median");
     const svv = val("sv");
     const line2 = [svv != null ? "СВ " + svv : null, cnt != null ? Math.round(cnt) + " крист." : null, mean != null ? "среднее " + mean + " мкм" : null, med != null ? "медиана " + med + " мкм" : null].filter(Boolean).join(" · ");
+    // режим варки (ПЛК) на момент пробы — все доступные значения, независимо от выбранных серий
+    const rv = (k, n) => (s[k] && s[k][i] != null ? Math.round(s[k][i] * n) / n : null);
+    const line3 = [rv("temp", 10) != null ? "t " + rv("temp", 10) + " °C" : null, rv("vac", 1000) != null ? "разр. " + rv("vac", 1000) + " бар" : null,
+      rv("level", 10) != null ? "ур. " + rv("level", 10) + "%" : null, rv("current", 10) != null ? "ток " + rv("current", 10) + " А" : null,
+      rv("cook_time", 1) != null ? "варка " + rv("cook_time", 1) + " мин" : null, rv("seed_age", 1) != null ? "с заводки " + rv("seed_age", 1) + " мин" : null].filter(Boolean).join(" · ");
     const names = { small: "малая", medium: "средняя", large: "большая", reject: "брак" };
     const groups = CV_GROUPS.map((g) => val(g) == null ? "" :
       '<span class="dot" style="background:' + CV_SERIES_COLOR[g] + '"></span>' + names[g] + " " + val(g) + "%").filter(Boolean).join("<br>");
-    tip.innerHTML = head + (line2 ? "<br>" + line2 : "") + (groups ? "<br>" + groups : "") + (msg ? "<br><i>" + msg + "</i>" : "");
+    tip.innerHTML = head + (line2 ? "<br>" + line2 : "") + (line3 ? "<br>" + line3 : "") + (groups ? "<br>" + groups : "") + (msg ? "<br><i>" + msg + "</i>" : "");
     tip.hidden = false;
     const w = tip.offsetWidth, W = cv.clientWidth;
     tip.style.left = (x + 12 + w > W ? Math.max(0, x - 12 - w) : x + 12) + "px";
@@ -771,6 +798,15 @@
       const cand = dir < 0 ? cvTrendDays.filter((x) => x < cur).pop() : cvTrendDays.find((x) => x > cur);
       if (cand) cvTrendSetDay(cand);
     };
+    // выгрузка проб в CSV (для разбора и обучения): всё, а с Shift — только выбранный день
+    const csv = $("cvTrendCsv");
+    if (csv) csv.addEventListener("click", (e) => {
+      const q = [cvSerialQ()];
+      if (e.shiftKey && cvTrendDay) { const r = cvDayRange(cvTrendDay); q.push("from=" + r[0], "to=" + r[1]); }
+      const a = document.createElement("a");
+      a.href = "/api/cv/trend/export?" + q.filter(Boolean).join("&");
+      a.download = ""; document.body.appendChild(a); a.click(); a.remove();
+    });
     const prev = $("cvTrendPrev"), next = $("cvTrendNext"), today = $("cvTrendToday");
     if (prev) prev.addEventListener("click", () => stepDay(-1));
     if (next) next.addEventListener("click", () => stepDay(1));

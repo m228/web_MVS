@@ -982,6 +982,7 @@
                   <input type="date" id="cvTrendDate" class="micro-trend__date" title="Дата тренда" />
                   <button type="button" class="micro-trend__btn" id="cvTrendNext" title="Следующий день с пробами">›</button>
                   <button type="button" class="micro-trend__btn micro-trend__btn--text" id="cvTrendToday" title="Вернуться к самым свежим пробам">Последнее</button>
+                  <button type="button" class="micro-trend__btn micro-trend__btn--text" id="cvTrendCsv" title="Скачать все пробы в CSV (рассев, причины брака, режим варки) — для разбора и обучения. Shift+клик — только выбранный день">CSV</button>
                   <span class="micro-trend__span" id="cvTrendSpan">—</span>
                 </div>
                 <div class="micro-trend__row">
@@ -995,6 +996,14 @@
                     <label class="micro-srow" data-unit="" title="СВ (сухие вещества, Brix, %) на момент пробы — на той же шкале 0–100, что и доли групп"><input type="checkbox" value="sv" checked /><i style="background:#f2c94c"></i><span>СВ</span><b>—</b></label>
                     <label class="micro-srow" data-unit="" title="Стадия варки (номер) на момент пробы: белая ступенчатая линия с цифрами на каждом переходе"><input type="checkbox" value="stage" checked /><i style="background:var(--text)"></i><span>стадия</span><b>—</b></label>
                     <label class="micro-srow" data-unit="мкм" title="Медиана: половина кристаллов мельче, половина крупнее"><input type="checkbox" value="median" /><i style="background:#d16fb8"></i><span>медиана</span><b>—</b></label>
+                    <!-- режим варки из ПЛК на момент пробы: линии пунктиром, у каждой своя шкала по видимому участку -->
+                    <div class="micro-srow-sep" title="Линии пунктиром: у каждой своя шкала по видимому участку графика. Точные значения — справа и в подсказке">режим варки</div>
+                    <label class="micro-srow" data-unit="°C" title="Температура в аппарате"><input type="checkbox" value="temp" /><i style="background:#ff8a4c"></i><span>температура</span><b>—</b></label>
+                    <label class="micro-srow" data-unit="бар" data-dec="3" title="Разрежение сверху"><input type="checkbox" value="vac" /><i style="background:#4fd1e8"></i><span>разрежение</span><b>—</b></label>
+                    <label class="micro-srow" data-unit="%" title="Уровень в аппарате, % (шкала 0–100)"><input type="checkbox" value="level" /><i style="background:#8aa4c8"></i><span>уровень</span><b>—</b></label>
+                    <label class="micro-srow" data-unit="А" title="Ток циркулятора (мешалки): растёт — утфель густеет"><input type="checkbox" value="current" /><i style="background:#a3d95b"></i><span>ток мешалки</span><b>—</b></label>
+                    <label class="micro-srow" data-unit="мин" title="Время варки с её начала"><input type="checkbox" value="cook_time" /><i style="background:#b9a98f"></i><span>время варки</span><b>—</b></label>
+                    <label class="micro-srow" data-unit="мин" title="Время с заводки: от перехода «Сгущение» → «Затравка»"><input type="checkbox" value="seed_age" /><i style="background:#ffb347"></i><span>с заводки</span><b>—</b></label>
                   </div>
                   <div class="micro-cv-trendwrap">
                     <canvas id="cvTrend" class="micro-cv-trend" width="620" height="360"></canvas>

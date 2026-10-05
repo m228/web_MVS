@@ -63,8 +63,13 @@ def _hist_row(result: dict) -> Optional[dict]:
     pct = s.get("groups_pct") or {}
     fr = (result.get("fracture") or {}).get("summary") or {}
     plc = result.get("plc") or {}
+    rs = s.get("reasons") or {}
     return {
         "ts": result["ts"], "t": t, "stage": result.get("stage"), "sv": result.get("sv"),
+        # причины брака (среднее число на кадр), разброс размера и плотность — для разбора слипания и обучения
+        "n_needle": rs.get("needle"), "n_aggregate": rs.get("aggregate"), "n_crooked": rs.get("crooked"),
+        "n_tiny": rs.get("tiny"), "n_huge": rs.get("huge"), "suspect": s.get("suspect"),
+        "reject_pct": s.get("reject_pct"), "cv_pct": sz.get("cv_pct"), "density": s.get("density_per_mm2"),
         # режим варки на момент пробы (ПЛК): для разбора «почему слиплось» по серии проб
         "temp": plc.get("temp_app"), "level": plc.get("level"), "current": plc.get("current"),
         "vac": plc.get("press_top"), "cook_time": plc.get("cook_time"), "seed_age": plc.get("seed_age_s"),
@@ -167,6 +172,25 @@ def trend_range(serial: str, t_from: float, t_to: float, series: Optional[list[s
         "stage": [r.get("stage") for r in rows],
         "series": {s: [r.get(s) for r in rows] for s in series},
     }
+
+
+EXPORT_COLUMNS = ["ts", "t", "stage", "sv", "temp", "level", "current", "vac", "cook_time", "seed_age",
+                  "count", "mean", "median", "cv_pct", "density", "small", "medium", "large", "reject",
+                  "reject_pct", "n_needle", "n_aggregate", "n_crooked", "n_tiny", "n_huge", "suspect",
+                  "frac_zones", "frac_pct", "frames"]
+
+
+def export_rows(serial: str, t_from: Optional[float] = None, t_to: Optional[float] = None) -> list[dict]:
+    """Все строки журнала проб (по времени) в заданном диапазоне — для выгрузки в CSV/обучение.
+    Без границ — вся история. Колонки — EXPORT_COLUMNS; чего в старой пробе не было — None."""
+    _hist_backfill(serial)
+    rows = []
+    hd = _hist_dir(serial)
+    for f in (sorted(hd.glob("*.jsonl")) if hd.exists() else []):
+        rows.extend(r for r in _hist_read(serial, f.stem) if r.get("t") is not None
+                    and (t_from is None or r["t"] >= t_from) and (t_to is None or r["t"] <= t_to))
+    rows.sort(key=lambda r: r["t"])
+    return [{c: r.get(c) for c in EXPORT_COLUMNS} for r in rows]
 
 
 def _probe_dir(serial: str, ts: str) -> Optional[Path]:

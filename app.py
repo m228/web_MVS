@@ -786,6 +786,26 @@ def cv_trend_days(serial: str | None = None):
     return {"days": cv_store.history_days(_cv_serial(serial))}
 
 
+@app.get("/api/cv/trend/export")
+def cv_trend_export(serial: str | None = None,
+                    t_from: float | None = Query(None, alias="from"), t_to: float | None = Query(None, alias="to")):
+    """Журнал проб в CSV (для разбора и обучения): по строке на пробу — рассев, причины брака, режим варки
+    из ПЛК (температура, уровень, ток, разрежение, время варки, время с заводки). Без from/to — вся история."""
+    import csv
+    import io
+    import time as _time
+    rows = cv_store.export_rows(_cv_serial(serial), t_from, t_to)
+    buf = io.StringIO()
+    w = csv.DictWriter(buf, fieldnames=cv_store.EXPORT_COLUMNS)
+    w.writeheader()
+    for r in rows:
+        w.writerow({k: ("" if v is None else v) for k, v in r.items()})
+    name = "cv_probes_%s.csv" % _time.strftime("%Y%m%d_%H%M")
+    # utf-8-sig: Excel открывает без «кракозябр»; pandas читает как обычный utf-8
+    return Response(content=buf.getvalue().encode("utf-8-sig"), media_type="text/csv; charset=utf-8",
+                    headers={"Content-Disposition": 'attachment; filename="%s"' % name})
+
+
 @app.get("/api/cv/objects")
 def cv_objects(serial: str | None = None, ts: str = "", idx: int = 0):
     """Объекты кадра (кристаллы) для наведения: bbox/size_um/area_um2/group."""

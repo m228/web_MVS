@@ -486,7 +486,9 @@ class MicroscopeService:
             vals = [s[k] for s in run.get("plc", []) if s.get(k) is not None]
             if not vals:
                 continue
-            out[k] = int(vals[-1]) if k == "cook_time" else round(sum(vals) / len(vals), 1)
+            # разрежение — до тысячных (на экране так же), остальное до десятых; время варки — последнее
+            out[k] = (int(vals[-1]) if k == "cook_time"
+                      else round(sum(vals) / len(vals), 3 if k == "press_top" else 1))
         if self._seed_ts is not None:
             out["seed_age_s"] = max(0, int(run.get("t0", time.time()) - self._seed_ts))
         return out or None

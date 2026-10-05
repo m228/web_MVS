@@ -861,6 +861,17 @@ def _cv_store():
     assert row["temp"] == 74.5 and row["vac"] == -0.8 and row["seed_age"] == 420, "журнал трендов без plc: %r" % (row,)
     rec0 = cv_store.save_sample("SELFCHECK", 7, frames, [img], {"total_ms": 1}, keep_last=5, sv=90.0)
     assert "plc" not in (cv_store.get_result("SELFCHECK", rec0["ts"]) or {}), "без ПЛК ключ plc быть не должен"
+    # выгрузка журнала проб в CSV (для разбора/обучения): колонки, режим варки, причины брака
+    ex = cv_store.export_rows("SELFCHECK")
+    assert ex and list(ex[0].keys()) == cv_store.EXPORT_COLUMNS, "колонки выгрузки не те"
+    mine = [r for r in ex if r["ts"] == rec["ts"]]
+    assert mine and mine[0]["temp"] == 74.5 and mine[0]["seed_age"] == 420, "в выгрузке нет режима варки: %r" % (mine,)
+    assert "n_aggregate" in mine[0] and "cv_pct" in mine[0], "в выгрузке нет причин брака/CV%"
+    import app as web
+    resp = web.cv_trend_export(serial="SELFCHECK", t_from=None, t_to=None)   # прямой вызов: Query-умолчания не подставляются
+    body = resp.body.decode("utf-8-sig").splitlines()
+    assert resp.body[:3] == b"\xef\xbb\xbf" and body[0].split(",") == cv_store.EXPORT_COLUMNS, "CSV: нет BOM/шапки"
+    assert len(body) == 1 + len(ex), "CSV: строк %d, ожидали %d" % (len(body) - 1, len(ex))
     assert cv_store.get_objects("SELFCHECK", rec["ts"], 0), "объекты не читаются"
     assert cv_store.trend("SELFCHECK") is not None
     assert cv_store.thumb_path("SELFCHECK", rec["ts"]) is not None, "миниатюра не создана"

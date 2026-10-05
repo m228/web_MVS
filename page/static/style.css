@@ -3701,15 +3701,16 @@ input.micro-cam-num { width: 56px; min-width: 0; flex: 0 0 auto; padding: 4px 5p
 .micro-trend__btn--text { font-size: 0.82em; }
 .micro-trend__date { flex: 0 0 auto; width: 148px; border: 1px solid var(--border, rgba(131,151,179,.28)); background: var(--surface-muted, #f4f8fc); color: var(--text); border-radius: 8px; padding: 4px 8px; font: inherit; font-size: 0.88em; color-scheme: light dark; }
 .micro-trend__span { margin-left: auto; font-size: 0.78em; color: var(--muted, #8a94a6); }
-.micro-trend__row { display: grid; grid-template-columns: 150px minmax(0, 1fr); gap: 10px; align-items: stretch; }
+.micro-trend__row { display: grid; grid-template-columns: 176px minmax(0, 1fr); gap: 10px; align-items: stretch; }
 @media (max-width: 700px) { .micro-trend__row { grid-template-columns: 1fr; } }
 .micro-trend__rows { display: flex; flex-direction: column; gap: 6px; }
 .micro-srow { position: relative; display: grid; grid-template-columns: 10px 1fr auto; align-items: center; gap: 8px; padding: 9px 10px; border-radius: 8px;
   border: 1px solid var(--border, rgba(131,151,179,.28)); background: transparent; cursor: pointer; user-select: none;
   font-size: 0.86em; color: var(--muted, #5b6b81); opacity: .55; transition: opacity .15s ease, background .15s ease, border-color .15s ease; }
 .micro-srow input { display: none; }
+.micro-srow-sep { margin: 6px 2px 0; font-size: .75em; letter-spacing: .06em; text-transform: uppercase; color: var(--muted, #8a94a6); opacity: .8; }
 .micro-srow i { width: 10px; height: 10px; border-radius: 50%; }
-.micro-srow b { font-variant-numeric: tabular-nums; font-weight: 600; font-size: 0.95em; }
+.micro-srow b { font-variant-numeric: tabular-nums; font-weight: 600; font-size: 0.95em; white-space: nowrap; }
 .micro-srow:hover { opacity: .85; }
 .micro-srow:has(input:checked) { opacity: 1; color: var(--text); background: var(--chip-bg, var(--surface-muted, #f4f8fc)); border-color: var(--border-strong, rgba(118,142,178,.45)); }
 .micro-srow:has(input:checked)::before { content: ""; position: absolute; left: 0; top: 6px; bottom: 6px; width: 3px; border-radius: 2px; background: currentColor; opacity: 0; }

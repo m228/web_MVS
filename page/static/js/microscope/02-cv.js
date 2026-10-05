@@ -127,21 +127,21 @@
   // переключатель нижней секции: телеметрия платы ↔ распознавание
   function wireTeleToggle() {
     const seg = document.querySelector(".micro-tele-seg");
-    const plateBtn = $("telePlateBtn"), cvBtn = $("teleCvBtn");
-    const plate = $("teleStripPlate"), cvv = $("teleStripCv");
-    if (!plateBtn || !cvBtn) return;
-    function set(showCv) {
-      if (seg) seg.classList.toggle("cv", showCv);
-      plateBtn.classList.toggle("is-active", !showCv);
-      cvBtn.classList.toggle("is-active", showCv);
-      if (plate) plate.hidden = showCv;
-      if (cvv) cvv.hidden = !showCv;
-      if (showCv) { cvRefresh(); setTimeout(cvDrawTrend, 30); }
+    const btns = { plate: $("telePlateBtn"), cv: $("teleCvBtn"), trend: $("teleTrendBtn") };
+    const panes = { plate: $("teleStripPlate"), cv: $("teleStripCv"), trend: $("teleStripTrend") };
+    if (!btns.plate || !btns.cv) return;
+    function set(mode) {
+      if (seg) { seg.classList.toggle("cv", mode === "cv"); seg.classList.toggle("trend", mode === "trend"); }
+      Object.keys(btns).forEach((k) => {
+        if (btns[k]) btns[k].classList.toggle("is-active", k === mode);
+        if (panes[k]) panes[k].hidden = k !== mode;
+      });
+      if (mode !== "plate") cvRefresh();
+      if (mode === "trend") setTimeout(cvDrawTrend, 30);     // canvas берёт ширину у показанной вкладки
     }
-    plateBtn.addEventListener("click", () => set(false));
-    cvBtn.addEventListener("click", () => set(true));
+    Object.keys(btns).forEach((k) => { if (btns[k]) btns[k].addEventListener("click", () => set(k)); });
   }
-  function isTeleCvVisible() { const e = $("teleStripCv"); return e && !e.hidden; }
+  function isTeleCvVisible() { return ["teleStripCv", "teleStripTrend"].some((id) => { const e = $(id); return e && !e.hidden; }); }
 
   // --- рассев + статистика ---
   function cvRenderScatter() {

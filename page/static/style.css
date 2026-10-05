@@ -3744,7 +3744,15 @@ input.micro-cam-num { width: 56px; min-width: 0; flex: 0 0 auto; padding: 4px 5p
   border-color: var(--border-strong, rgba(118,142,178,.45)); }
 
 /* Переключатель низа: шире + не переносить текст */
-.micro-tele-seg { max-width: 460px; }
+.micro-tele-seg { width: 420px; max-width: 100%; grid-template-columns: repeat(3, 1fr); }
+/* ползунок на 3 кнопки: внутренний отступ 3px, ширина кнопки = (100% - 6px) / 3 */
+.micro-tele-seg .micro-win-pill { width: calc((100% - 6px) / 3); }
+.micro-tele-seg.cv .micro-win-pill { left: calc(3px + (100% - 6px) / 3); }
+.micro-tele-seg.trend .micro-win-pill { left: calc(3px + 2 * (100% - 6px) / 3); }
+/* «Распознавание» теперь одна колонка; тренды вынесены в свою вкладку на всю ширину */
+.micro-tele-cv { grid-template-columns: 1fr; }
+.micro-tele-trend .micro-cv-block:first-child { margin-top: 0; padding-top: 0; border-top: 0; }
+.micro-tele-trend .micro-cv-trend { height: 360px; }
 .micro-tele-seg .micro-win-btn { white-space: nowrap; }
 
 /* (превью галереи убрано — основной просмотр в окне камеры) */

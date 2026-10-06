@@ -524,11 +524,11 @@
         " · выпукл. " + mark(best.solidity.toFixed(2), tS != null && best.solidity < tS) +
         " · вытянут. " + mark(best.aspect.toFixed(1), tA != null && best.aspect > tA) +
         (best.conf != null ? "<br>уверенность модели (conf) " + mark(best.conf.toFixed(2), best.conf < 0.5) : "");
-      // объём по модели «призма» (M3), мкм³ (с пробелами между тысячами); у кристалла мельче порога мелочи — пометка
+      // объём по модели «призма» (M3), мм³ = мкм³ / 1e9 (в мкм³ числа слишком большие); у кристалла мельче порога мелочи — пометка
       const fu = parseFloat(($("cvFinesUm") || {}).value), kt = parseFloat(($("cvKThick") || {}).value);
       // у проб, снятых до объёма, в objects его нет — считаем по той же формуле: площадь · k · ширина
       const v3 = best.vol_um3 ? best.vol_um3.m3 : (kt > 0 ? Math.PI / 4 * best.size_um * best.size_um * kt * best.width_um : null);
-      const vol = v3 == null ? "" : "<br>V <b>" + Math.round(v3).toLocaleString("ru-RU") + " мкм³</b> (призма)" +
+      const vol = v3 == null ? "" : "<br>V <b>" + Number((v3 / 1e9).toPrecision(2)) + " мм³</b> (призма)" +
         (fu > 0 && best.size_um < fu && cls.reason !== "aggregate" ? " · мелочь" : "");
       const head = "Ø <b>" + best.size_um + " мкм</b> · S <b>" + Math.round(best.area_um2) + " мкм²</b>";
       // «подробно» выключено — коротко: только размер и площадь; включено — форма, причина, что делать, уверенность

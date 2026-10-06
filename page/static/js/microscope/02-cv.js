@@ -204,7 +204,8 @@
     const finesOff = !!(s && s.volume && s.volume.fines_off);
     const st = $("cvVolState");
     if (st) st.textContent = finesOff ? "мелочь — с СВ " + (cfg.fines_from_sv != null ? cfg.fines_from_sv : "") : "";
-    const lbl = $("cvVolLblFines"); if (lbl) lbl.textContent = "Мелочь <" + (cfg.fines_um != null ? cfg.fines_um : $("cvFinesUm") ? $("cvFinesUm").value : "");
+    const lbl = $("cvVolLblFines"); if (lbl) lbl.textContent = "Мелочь <" + (cfg.fines_um != null ? cfg.fines_um : $("cvFinesUm") ? $("cvFinesUm").value : "") + " мкм";
+    if (lbl) lbl.title = "Диаметр круга той же площади, что кристалл (эквивалентный диаметр), мкм — не площадь";
     const n = $("cvFinesN"), pn = vp.n && vp.n.fines;
     if (n) n.textContent = "по числу " + (pn == null ? "—" : pn + " %");
   }

@@ -398,7 +398,7 @@ def list_samples(serial: str, limit: int = 50) -> list[dict]:
     for p in dirs[:limit]:
         try:
             r = _with_volume(p, json.loads((p / "result.json").read_text(encoding="utf-8")), vcfg)
-            out.append({"ts": r["ts"], "stage": r.get("stage"),
+            out.append({"ts": r["ts"], "stage": r.get("stage"), "sv": r.get("sv"),
                         "summary": r.get("summary"), "frames": len(r.get("frames", [])),
                         "fracture": (r.get("fracture") or {}).get("summary")})
         except Exception:

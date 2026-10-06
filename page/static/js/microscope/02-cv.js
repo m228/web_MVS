@@ -440,6 +440,7 @@
     const sm = s.summary || {}, sz = sm.size_um || {}, fr = s.fracture || {};
     const parts = [cvTsLabel(s.ts, true)];
     if (s.stage != null) parts.push("стадия " + s.stage);
+    if (s.sv != null) parts.push("СВ " + s.sv);
     if (sm.count != null) parts.push(Math.round(sm.count) + " крист.");
     if (sz.mean != null) parts.push("ср. " + sz.mean + " мкм");
     if (s.frames) parts.push("кадров " + s.frames);
@@ -463,7 +464,8 @@
         b.title = cvSampleTitle(s);
         const im = document.createElement("img"); im.alt = ""; im.src = cvThumbSrc(s.ts);
         const cap = document.createElement("span");
-        cap.textContent = cvTsLabel(s.ts).slice(0, 5) + (s.stage != null ? " · ст." + s.stage : "");
+        // две строки: время · стадия, ниже СВ (Brix) пробы
+        cap.textContent = cvTsLabel(s.ts).slice(0, 5) + (s.stage != null ? " · ст." + s.stage : "") + (s.sv != null ? "\nСВ " + String(Number(s.sv).toFixed(1)).replace(".", ",") : "");
         b.appendChild(im); b.appendChild(cap);
         b.addEventListener("click", () => cvSelectProbe(s.ts));
         wrap.insertBefore(b, prevEl ? prevEl.nextSibling : wrap.firstChild);

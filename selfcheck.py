@@ -734,6 +734,21 @@ def _autocal():
         assert not st["active"], "калибровка не завершилась: %s" % st
         return pl.calls.count("motor_find_zero"), pl.calls.count("motor_set_zero"), st["failed"]
 
+    # из ручного режима: кнопка снимает ручной, калибровка проходит целиком, потом ручной возвращается
+    cfg = copy.deepcopy(plate_config.load())
+    pl = _Plate()
+    fsm = MicroscopeFSM(pl, cfg)
+    fsm.set_manual(True)
+    st0 = fsm.start_autocal()
+    assert st0["status"] == "started" and st0["was_manual"] and not fsm.manual, "из ручного калибровка должна стартовать: %s" % st0
+    for t in range(2000):
+        n = pl.calls.count("motor_find_zero")
+        enc = min(fsm._retract_pos, pl.telemetry["pos1_enc"] + 400) if "motor_set_zero" in pl.calls else 0
+        pl.telemetry.update(pos1_enc=enc, pos1=enc, pos1_ai=200)
+        fsm.tick()
+        if t > 3 and not fsm.state["autocal"]["active"]:
+            break
+    assert pl.calls.count("motor_set_zero") == 1 and fsm.manual, "после калибровки из ручного — set_zero и снова ручной режим"
     assert run(lambda n: 0, 20) == (1, 1, False), "успех с 1-й попытки"
     assert run(lambda n: 330 if n < 3 else 0, 20) == (3, 1, False), "успех на 3-й попытке"
     assert run(lambda n: 330, 89) == (3, 0, True), "провал: set_zero слать нельзя, failed=True"

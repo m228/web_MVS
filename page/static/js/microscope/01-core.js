@@ -1240,7 +1240,7 @@
     if (acStart) acStart.addEventListener("click", () => {
       api("/api/micro/autocal/start").then((r) => {
         const h = $("acHint");
-        if (h) { h.textContent = r && r.status === "started" ? "калибровка запущена" : "занято (" + (r && r.status) + ")"; setTimeout(() => { h.textContent = ""; }, 3000); }
+        if (h) { h.textContent = r && r.status === "started" ? (r.was_manual ? "калибровка запущена из ручного — потом вернётся ручной" : "калибровка запущена") : "занято (" + (r && r.status) + ")"; setTimeout(() => { h.textContent = ""; }, 3000); }
       }).catch(() => {});
     });
     const acReset = $("acReset");

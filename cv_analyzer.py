@@ -55,6 +55,13 @@ GROUP_COLORS = {
     "cut":    (150, 150, 150),   # grey — обрезан краем кадра/швом, в статистику не идёт
     "bubble": (74, 176, 224),    # янтарный — пузырь воздуха (ровный круг), не кристалл, в статистику не идёт
 }
+# причины брака красятся по-разному (в группу «брак» идут все вместе): сросток — розовый, игла — оранжевый,
+# кривой — фиолетовый; мелочь/крупный (tiny/huge) остаются красными. Те же цвета — в окне CV (02-cv.js)
+DEFECT_COLORS = {
+    "aggregate": (166, 95, 236),   # #ec5fa6
+    "needle":    (47, 122, 255),   # #ff7a2f
+    "crooked":   (240, 108, 154),  # #9a6cf0
+}
 GROUP_ORDER = ["small", "medium", "large", "reject"]
 # причины брака (по «Памятке»): игла — раффиноза; сросток — высокое пересыщение; кривой — несахара;
 # tiny/huge — по размеру (только у готового сахара)
@@ -807,7 +814,7 @@ def draw_overlay(image: np.ndarray, measures: list[CrystalMeasure],
     if out.ndim == 2:
         out = cv2.cvtColor(out, cv2.COLOR_GRAY2BGR)
     for m in measures:
-        color = GROUP_COLORS.get("reject" if m.defect else ("suspect" if m.suspect else m.group), (200, 200, 200))
+        color = DEFECT_COLORS.get(m.defect) or GROUP_COLORS.get("reject" if m.defect else ("suspect" if m.suspect else m.group), (200, 200, 200))
         if m.contour is not None:
             cv2.drawContours(out, [m.contour], -1, color, 2)
         if draw_size and m.group not in ("reject", CUT_GROUP, BUBBLE_GROUP):
@@ -829,7 +836,7 @@ def draw_objects(image: np.ndarray, objects: list[dict]) -> np.ndarray:
         if poly and len(poly) >= 3:
             pts = np.asarray(poly, dtype=np.int32).reshape(-1, 1, 2)
             key = "reject" if o.get("defect") else ("suspect" if o.get("suspect") else o.get("group"))
-            cv2.polylines(out, [pts], True, GROUP_COLORS.get(key, (200, 200, 200)), thick)
+            cv2.polylines(out, [pts], True, DEFECT_COLORS.get(o.get("defect")) or GROUP_COLORS.get(key, (200, 200, 200)), thick)
     return out
 
 

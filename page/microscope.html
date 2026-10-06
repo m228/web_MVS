@@ -119,15 +119,10 @@
               <label title="Показать кристаллы малой группы"><input type="checkbox" value="small" checked /><span class="dot" style="background:#1d9e75"></span>малая</label>
               <label title="Показать кристаллы средней группы"><input type="checkbox" value="medium" checked /><span class="dot" style="background:#378add"></span>средняя</label>
               <label title="Показать кристаллы большой группы"><input type="checkbox" value="large" checked /><span class="dot" style="background:#ba7517"></span>большая</label>
-              <label title="Показать брак по форме"><input type="checkbox" value="reject" checked /><span class="dot" style="background:#e24b4a"></span>брак</label>
+              <label title="Показать брак — все причины вместе. Цвет контура по причине: сросток — розовый, игла — оранжевый, кривой — фиолетовый, мелочь / слишком крупный — красный"><input type="checkbox" value="reject" checked /><span class="dot dot--reject"></span>брак</label>
               <label title="Вытянутые кристаллы (длина/ширина от 1,6 до порога иглы) — не брак, а предупреждение: следи за их долей"><input type="checkbox" value="suspect" checked /><span class="dot" style="background:#6ad1f5"></span>вытянутые</label>
               <label title="Кристаллы, обрезанные краем кадра — в рассев не идут"><input type="checkbox" value="cut" checked /><span class="dot" style="background:#9aa3ad"></span>обрезанные</label>
               <label title="Пузыри воздуха — ровные круги, не кристаллы: в рассев не идут"><input type="checkbox" value="bubble" checked /><span class="dot" style="background:#e0b04a"></span>пузыри</label>
-              <label title="Подписать размер каждого кристалла, мкм"><input type="checkbox" value="sizes" />размеры</label>
-              <label title="Подписать уверенность модели (0…1, conf) на каждом кристалле — видно, где модель сомневается"><input type="checkbox" value="conf" />уверенность</label>
-              <label title="Подсказка при наведении на кристалл. Включено — подробно: размеры, форма, причина брака, «что делать», уверенность. Выключено — коротко: только размер и площадь."><input type="checkbox" value="detail" checked />подробно</label>
-              <label title="Показать зоны разломов"><input type="checkbox" value="frac" checked />разломы</label>
-              <span class="micro-cv-confnote" id="cvConfHidden" title="Живой предпросмотр: кристаллы с уверенностью ниже поля «Порог уверенности (conf)» на вкладке CV скрыты. Поднял порог — видно, что исчезнет; в разбор он применится со следующей пробы."></span>
             </div>
             <div id="camPlaceholder" class="camera-placeholder micro-cam-ph">Поиск камеры…</div>
             <img id="microCamStream" class="micro-cam-frame" alt="Видео камеры" hidden />
@@ -142,6 +137,15 @@
               <span id="cvGalPos">—</span>
               <button type="button" id="cvGalNext" class="micro-cv-pager__btn" title="Следующий кадр пробы">›</button>
               <button type="button" id="cvFollowBtn" class="micro-cv-pager__btn micro-cv-pager__btn--follow" title="Автопереход на самую свежую пробу: включён — окно само показывает новые пробы; выключен — остаётся на той, что ты смотришь (новые просто добавляются в ленту сверху)">авто</button>
+            </div>
+            <!-- что показывать на кристаллах и в подсказке (только в режиме «Комп. зрение») -->
+            <div class="micro-cv-opts" id="cvOpts">
+              <label title="Подробно: при наведении на кристалл — вся информация о нём: длина × ширина, объём, форма (округлость, выпуклость, вытянутость), уверенность модели. Выключено — коротко, только размер и площадь."><input type="checkbox" value="detail" checked />подробно</label>
+              <label title="Подсказки: при наведении на кристалл с браком — как он появился и что с этим делать. Работает отдельно от «подробно»."><input type="checkbox" value="hint" checked />подсказки</label>
+              <label title="Подписать размер каждого кристалла, мкм"><input type="checkbox" value="sizes" />размеры</label>
+              <label title="Подписать уверенность модели (0…1, conf) на каждом кристалле — видно, где модель сомневается"><input type="checkbox" value="conf" />уверенность</label>
+              <label title="Показать зоны разломов"><input type="checkbox" value="frac" checked />разломы</label>
+              <span class="micro-cv-confnote" id="cvConfHidden" title="Живой предпросмотр: кристаллы с уверенностью ниже поля «Порог уверенности (conf)» на вкладке CV скрыты. Поднял порог — видно, что исчезнет; в разбор он применится со следующей пробы."></span>
             </div>
             <div class="micro-cam-tele" id="camTele">
               <div class="micro-cam-tile"><span>СВ (Brix)</span><b id="camSv_v">—</b></div>

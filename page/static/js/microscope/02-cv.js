@@ -223,7 +223,7 @@
   const CV_GROUP_NAMES = { small: "малая", medium: "средняя", large: "большая", reject: "брак", suspect: "вытянутый (не брак)", cut: "обрезан краем кадра или швом нарезки — не в рассеве", bubble: "пузырь воздуха (ровный круг) — не кристалл, не в рассеве" };
   const CV_GROUP_COLOR = { small: "#1d9e75", medium: "#378add", large: "#ba7517", reject: "#e24b4a", suspect: "#6ad1f5", cut: "#9aa3ad", bubble: "#e0b04a" };
   const CV_LAYERS_KEY = "microCvLayers";
-  let cvLayers = { small: true, medium: true, large: true, reject: true, suspect: true, cut: true, bubble: true, sizes: false, conf: false, frac: true, detail: true };
+  let cvLayers = { small: true, medium: true, large: true, reject: true, suspect: true, cut: true, bubble: true, sizes: false, conf: false, frac: true, detail: true, hint: true };
   // порог уверенности из поля вкладки CV: кристаллы с conf ниже него скрываем (живой предпросмотр «а если поднять?»)
   function cvConfThr() { const e = $("cvConf"); const v = e && e.value !== "" ? parseFloat(e.value) : NaN; return isNaN(v) ? 0 : v; }
   let cvCurClean = false;       // текущий кадр чистый (контуры рисуем сами); false — старая проба с «впечёнными»
@@ -247,6 +247,8 @@
     tiny: { name: "мелочь (<0,25 мм)", cause: "слишком много центров при заводке", todo: "проверить дозировку затравки и СВ заводки" },
     huge: { name: "слишком крупный (>1,2 мм)", cause: "возможно сросток", todo: "проверить кристалл на срастание" },
   };
+  // причины брака красятся по-разному (в «брак» идут вместе); в cv_analyzer.DEFECT_COLORS — те же цвета для миниатюры
+  const CV_REASON_COLOR = { aggregate: "#ec5fa6", needle: "#ff7a2f", crooked: "#9a6cf0" };   // розовый / оранжевый / фиолетовый
   const CV_NOTCH_MAX = 5;
   function cvClassify(o) {
     if (o.group === "cut") return { layer: "cut", reason: null };
@@ -267,6 +269,11 @@
     return { layer: o.size_um < gS ? "small" : (o.size_um < gM ? "medium" : "large"), reason: null };
   }
   function cvGroupOf(o) { return cvClassify(o).layer; }
+  // цвет контура: у брака — по причине (мелочь/крупный остаются красными), у остальных — цвет группы
+  function cvColorOf(o) {
+    const c = cvClassify(o);
+    return (c.layer === "reject" && CV_REASON_COLOR[c.reason]) || CV_GROUP_COLOR[c.layer] || "#ccc";
+  }
   function cvDrawOverlay() {
     const cv = $("cvOverlayCanvas"), ov = $("cvOverlay"); if (!cv || !ov) return;
     // верх картинки в карточке — к нему привязаны листалка кадров и кнопка fullscreen (над
@@ -297,7 +304,7 @@
       if (o.conf != null && o.conf < confThr) { hiddenByConf++; return; }
       if (o === cvHoverObj) return;
       const gr = cvGroupOf(o); if (!cvLayers[gr]) return;
-      ctx.strokeStyle = CV_GROUP_COLOR[gr] || "#ccc"; ctx.lineWidth = 1.5;
+      ctx.strokeStyle = cvColorOf(o); ctx.lineWidth = 1.5;
       ctx.setLineDash(gr === "suspect" ? [5, 3] : []);
       path(o.poly); ctx.stroke(); ctx.setLineDash([]);
       if (cvLayers.sizes && gr !== "reject" && gr !== "cut" && gr !== "bubble") {
@@ -321,7 +328,7 @@
     // кристалл под мышкой — поверх всего: заливка формы + жирный контур
     const h = cvHoverObj;
     if (h && h.poly && h.poly.length >= 3) {
-      const col = CV_GROUP_COLOR[cvGroupOf(h)] || "#fff";
+      const col = cvColorOf(h) || "#fff";
       path(h.poly);
       ctx.globalAlpha = 0.3; ctx.fillStyle = col; ctx.fill(); ctx.globalAlpha = 1;
       ctx.strokeStyle = "#fff"; ctx.lineWidth = 4; ctx.stroke();
@@ -338,7 +345,7 @@
   }
   function wireLayers() {
     try { Object.assign(cvLayers, JSON.parse(localStorage.getItem(CV_LAYERS_KEY) || "{}")); } catch (e) { }
-    document.querySelectorAll("#cvLayers input").forEach((c) => {
+    document.querySelectorAll("#cvLayers input, #cvOpts input").forEach((c) => {
       if (c.value in cvLayers) c.checked = !!cvLayers[c.value];
       c.addEventListener("change", () => {
         cvLayers[c.value] = c.checked;
@@ -369,7 +376,7 @@
       html += '<div class="note">СВ ' + (probeSv != null ? probeSv : (s.sv != null ? s.sv : "—")) + ' — ниже порога: причины подписаны, в «брак» пока не считаются</div>';
     rows.forEach((k) => {
       const n = Math.round((rs[k] || 0) * 10) / 10;
-      html += '<div class="rs' + (n ? "" : " is-zero") + '" title="' + CV_REASONS[k].cause + ' — ' + CV_REASONS[k].todo + '"><i style="background:#e24b4a"></i><span>' + CV_REASONS[k].name + '</span><b>' + n + '</b></div>';
+      html += '<div class="rs' + (n ? "" : " is-zero") + '" title="' + CV_REASONS[k].cause + ' — ' + CV_REASONS[k].todo + '"><i style="background:' + (CV_REASON_COLOR[k] || "#e24b4a") + '"></i><span>' + CV_REASONS[k].name + '</span><b>' + n + '</b></div>';
     });
     const su = Math.round((s.suspect || 0) * 10) / 10;
     html += '<div class="rs' + (su ? "" : " is-zero") + '" title="Вытянутые 1,6–3,0: не брак, но рост доли — предупреждение"><i style="background:#6ad1f5"></i><span>вытянутые (не брак)</span><b>' + su + '</b></div>';
@@ -503,8 +510,11 @@
       const rs = cls.reason && CV_REASONS[cls.reason];
       const grp = best.members > 1 ? " · сросток из " + best.members + " кристаллов (маски соприкасаются)"
         : (best.seam_merged ? " · склеен из " + best.seam_merged + " частей по шву нарезки" : "");
-      const why = rs ? '<span class="why"><b>' + rs.name + '</b> — ' + rs.cause + '.<br>Что делать: ' + rs.todo + '.</span>'
+      // «подсказка» — как появился и что делать (включается отдельно от «подробно»)
+      const why = rs ? '<span class="why"><b>Как появился:</b> ' + rs.cause + '.<br><b>Что делать:</b> ' + rs.todo + '.</span>'
         : (cls.layer === "suspect" ? '<span class="why">Вытянутый, но не игла. Следи за долей таких: рост — сигнал про глюкозу/раффинозу.</span>' : "");
+      const tag = rs ? ' · <b style="color:' + cvColorOf(best) + '">' + rs.name + '</b>'
+        : (cls.layer === "suspect" ? ' · <b style="color:#6ad1f5">вытянутый</b>' : "");
       // форма: округлость / выпуклость / вытянутость; значение за текущим порогом (поля вкладки
       // «CV») подсвечиваем — видно, из-за чего кристалл ушёл в брак и куда двигать порог
       const thr = (id) => { const e = $(id); return e && e.value !== "" ? parseFloat(e.value) : null; };
@@ -515,13 +525,16 @@
         " · вытянут. " + mark(best.aspect.toFixed(1), tA != null && best.aspect > tA) +
         (best.conf != null ? "<br>уверенность модели (conf) " + mark(best.conf.toFixed(2), best.conf < 0.5) : "");
       // объём по модели «призма» (M3), мкм³ (с пробелами между тысячами); у кристалла мельче порога мелочи — пометка
-      const v3 = best.vol_um3 && best.vol_um3.m3, fu = parseFloat(($("cvFinesUm") || {}).value);
+      const fu = parseFloat(($("cvFinesUm") || {}).value), kt = parseFloat(($("cvKThick") || {}).value);
+      // у проб, снятых до объёма, в objects его нет — считаем по той же формуле: площадь · k · ширина
+      const v3 = best.vol_um3 ? best.vol_um3.m3 : (kt > 0 ? Math.PI / 4 * best.size_um * best.size_um * kt * best.width_um : null);
       const vol = v3 == null ? "" : "<br>V <b>" + Math.round(v3).toLocaleString("ru-RU") + " мкм³</b> (призма)" +
         (fu > 0 && best.size_um < fu && cls.reason !== "aggregate" ? " · мелочь" : "");
       const head = "Ø <b>" + best.size_um + " мкм</b> · S <b>" + Math.round(best.area_um2) + " мкм²</b>";
       // «подробно» выключено — коротко: только размер и площадь; включено — форма, причина, что делать, уверенность
-      tip.innerHTML = cvLayers.detail === false ? head
-        : head + "<br>" + best.length_um + "×" + best.width_um + " мкм · " + gr + grp + vol + shape + why;
+      tip.innerHTML = head + tag
+        + (cvLayers.detail === false ? "" : "<br>" + best.length_um + "×" + best.width_um + " мкм · " + gr + grp + vol + shape)
+        + (cvLayers.hint === false ? "" : why);
       // позиция: справа-снизу от курсора; у правого/нижнего края карточки — слева/сверху, чтобы
       // подсказка не уезжала за край и не обрезалась. Размер меряем при left=0 (иначе у края
       // блок сжимается и переносит строки).

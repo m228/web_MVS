@@ -3808,3 +3808,18 @@ input.micro-cam-num { width: 56px; min-width: 0; flex: 0 0 auto; padding: 4px 5p
 .micro-cv-tip b { color: #7ee0bf; font-weight: 600; }
 .micro-cv-tip .is-bad { color: #ff8a80; font-weight: 600; }   /* метрика формы за порогом брака */
 .micro-cam-card #cvOverlay { cursor: crosshair; }
+
+/* Слой «брак»: точка из четырёх цветов причин (сросток, игла, кривой, мелочь/крупный) */
+.micro-cv-series .dot.dot--reject { background: conic-gradient(#ec5fa6 0 25%, #ff7a2f 0 50%, #9a6cf0 0 75%, #e24b4a 0); }
+
+/* Нижний ряд опций окна CV: аккуратные переключатели «подробно / подсказки / размеры / уверенность / разломы» */
+.micro-cv-opts { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 10px 0 2px; }
+.micro-cam-card:not(.cv-win) .micro-cv-opts { display: none; }
+.micro-cv-opts label { display: inline-flex; align-items: center; gap: 7px; padding: 4px 12px 4px 8px; border: 1px solid var(--border, rgba(131,151,179,.28));
+  border-radius: 999px; font-size: 0.8em; color: var(--muted, #5b6b81); cursor: pointer; user-select: none; transition: color .15s ease, border-color .15s ease, background .15s ease; }
+.micro-cv-opts label:hover { border-color: var(--border-strong, rgba(118,142,178,.45)); }
+.micro-cv-opts input { display: none; }
+.micro-cv-opts label::before { content: ""; width: 24px; height: 14px; border-radius: 999px; flex: none; transition: background .15s ease;
+  background: radial-gradient(circle at 7px 50%, #fff 5px, transparent 5.5px), rgba(131,151,179,.38); }
+.micro-cv-opts label:has(input:checked) { color: var(--text, inherit); background: var(--chip-bg, var(--surface-muted, #f4f8fc)); border-color: var(--border-strong, rgba(118,142,178,.45)); }
+.micro-cv-opts label:has(input:checked)::before { background: radial-gradient(circle at 17px 50%, #fff 5px, transparent 5.5px), var(--accent, #2563eb); }

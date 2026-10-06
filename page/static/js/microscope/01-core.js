@@ -1022,11 +1022,16 @@
       const ac = f.autocal || {};
       set("acCount", ac.count == null ? "—" : ac.count);
       set("acEveryNShow", ac.every_n == null ? "—" : ac.every_n);
+      const acN = ac.attempts || 3;
       const acStatusTxt = ac.active
-        ? (ac.phase === "find_zero" ? ("Поиск 0 (" + (ac.attempt || 1) + "/2)")
-                                    : ("жду ноль (" + (ac.attempt || 1) + "/2)"))
+        ? (ac.phase === "find_zero" ? ("Поиск 0 (" + (ac.attempt || 1) + "/" + acN + ")")
+          : ac.phase === "wait" ? ("жду ноль (" + (ac.attempt || 1) + "/" + acN + ")")
+          : ac.phase === "zero_settle" ? "ноль установлен"
+          : "отвод")
         : (ac.result || "ждёт пропарки");
       set("acStatus", acStatusTxt);
+      // «не удалось» — красная мигающая плашка на вкладках «Цикл» и «Настройки моторов» до первой успешной калибровки
+      ["acFail", "cycAcFail"].forEach((id) => { const el = $(id); if (el) el.hidden = !ac.failed; });
       set("cycSv", f.sv == null ? "—" : Number(f.sv).toFixed(1));
       // СВ рядом с видео камеры (телеметрия камеры) — чтобы было видно при просмотре потока
       set("camSv_v", f.sv == null ? "—" : Number(f.sv).toFixed(1));

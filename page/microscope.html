@@ -243,6 +243,7 @@
                     <span class="micro-cycle-badge" id="cycStepBadge">Ожидание</span>
                     <b id="cycLabel">—</b>
                   </div>
+                  <p class="micro-ac-fail" id="cycAcFail" hidden>⚠ Автокалибровка не удалась — ноль не тронут, работаем дальше</p>
                   <div class="micro-cycle-tiles">
                     <div class="micro-tile"><span>СВ (Brix)</span><b id="cycSv">—</b></div>
                     <div class="micro-tile"><span>Цель М1, мкм</span><b id="cycTarget">—</b></div>
@@ -432,15 +433,15 @@
                 <p class="micro-plc-note">Стоп М1, фильтр датчика и довод — в прошивке платы. Текущий порог Стоп М1 в плате: <b id="sStopSensor">—</b> мкм.</p>
 
                 <div class="micro-sub__title micro-sub__title--sep">Автокалибровка нуля М1 <span class="micro-ro">только в Автомате, на пропарке</span></div>
-                <label class="micro-check" title="На стадии пропарки раз в N варок: жмём «Поиск 0», ждём пока расчётная (1274) И аналог датчик оба в зоне нуля → устанавливаем 0. Не сошлось → 2-я попытка (только по аналогу). Работает только в Автомате.">
+                <label class="micro-check" title="На стадии пропарки раз в N варок: жмём «Поиск 0» (прошивка сама доводит мотор), ждём пока энкодер 0±5 мкм И аналог в зоне нуля → устанавливаем 0 и отводим. Не сошлось за «Ожидание» → «Поиск 0» ещё раз, всего 3 попытки; не вышло → красное мигающее «не удалось», ноль не трогаем, отвод всё равно. Работает только в Автомате.">
                   <input type="checkbox" id="autocalToggle" />
                   <span class="micro-check__text">Автокалибровка на пропарке <span class="micro-ro">(раз в N варок)</span></span>
                 </label>
                 <div class="micro-lock__fields">
                   <label><span>Через N варок</span><input type="number" id="acEveryN" step="1" min="1" value="3" /></label>
                   <label><span>Зона 0: от</span><input type="number" id="acLo" step="1" value="0" /></label>
-                  <label><span>Зона 0: до</span><input type="number" id="acHi" step="1" value="30" /></label>
-                  <label><span>Ожидание, с</span><input type="number" id="acTimeout" step="10" min="1" value="60" /></label>
+                  <label><span>Зона 0: до</span><input type="number" id="acHi" step="1" value="50" /></label>
+                  <label><span>Ожидание на попытку, с</span><input type="number" id="acTimeout" step="1" min="1" value="5" /></label>
                 </div>
                 <div class="micro-svsp-actions">
                   <button type="button" id="acStart" class="toolbar-btn toolbar-btn--neutral">Проверить сейчас</button>
@@ -448,6 +449,7 @@
                   <span class="micro-conn-hint" id="acHint"></span>
                 </div>
                 <p class="micro-plc-note">Варок <b id="acCount">—</b>/<b id="acEveryNShow">—</b> · статус: <b id="acStatus">—</b>. Ход калибровки виден в инфо-строке на вкладке «Цикл».</p>
+                <p class="micro-ac-fail" id="acFail" hidden>⚠ Автокалибровка не удалась — ноль не тронут, работаем дальше</p>
               </div>
 
               <!-- Мнемосхема вакуум-аппарата (данные с ПЛК) -->
@@ -978,11 +980,11 @@
                   <span class="micro-info" tabindex="0" aria-label="Как считается объём">ⓘ
                     <span class="micro-info__pop micro-vol__pop" role="tooltip">
                       <b>Как считаем объём по 2D-кадру</b>
-                      <div class="in"><i>M1</i> шар: <code>V = π/6 · d³</code> <em>d — диаметр круга той же площади</em></div>
-                      <div class="in"><i>M2</i> сфероид: <code>V = π/6 · Д · Ш · Т</code></div>
-                      <div class="in"><i>M3</i> призма: <code>V = Площадь · Т</code> <em>плоский кристалл на грани — рабочая</em></div>
-                      <small>Д, Ш — длинная и короткая сторона на кадре. Толщины на кадре не видно, поэтому <b>Т = k · Ш</b> (k — поле справа). Пример: Ш = 500 мкм, k = 0,88 → Т = 440 мкм. В M1 толщина не нужна.</small>
-                      <small><b>Откуда k = 0,88.</b> Сапронов, с. 294: оси кристалла сахарозы a : b : c = 1,2595 : 1 : 0,8782 (у молекулы, нм: a = 1,089; b = 0,869; c = 0,777). Допущение: короткая сторона на кадре ≈ ось b, толщина ≈ ось c, значит c/b = 0,8782 ≈ 0,88. В книге это про форму кристалла, не про то, как он лежит на стекле — подгоняется по лаборатории.</small>
+                      <div class="in"><i>M1</i> шар: <code>объём = π/6 · диаметр³</code> <em>диаметр круга той же площади, что кристалл</em></div>
+                      <div class="in"><i>M2</i> сфероид: <code>объём = π/6 · длина · ширина · толщина</code></div>
+                      <div class="in"><i>M3</i> призма: <code>объём = площадь · толщина</code> <em>плоский кристалл на грани — рабочая</em></div>
+                      <small><b>Длина</b> и <b>ширина</b> — длинная и короткая сторона кристалла на кадре. <b>Толщины</b> на кадре не видно, поэтому <b>толщина = k · ширина</b> (k — поле справа). Пример: ширина 500 мкм, k = 0,88 → толщина 440 мкм. В M1 толщина не нужна.</small>
+                      <small><b>Откуда k = 0,88.</b> Сапронов, с. 294: оси кристалла сахарозы a : b : c = 1,2595 : 1 : 0,8782 (у молекулы, нм: a = 1,089; b = 0,869; c = 0,777). Допущение: ширина на кадре ≈ ось b, толщина ≈ ось c, значит c/b = 0,8782 ≈ 0,88.</small>
                       <small>Мелочь % = объём кристаллов мельче порога ÷ объём всех × 100. Сростки — отдельной строкой, в мелочь не входят. Обрезанные краем и пузыри не считаются.</small>
                       <small>Идёт у готового сахара (СВ ≥ порога брака). Порог и k применяются со следующей пробы.</small>
                     </span>

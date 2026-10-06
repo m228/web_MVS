@@ -54,6 +54,22 @@ def _ts_epoch(ts: str) -> Optional[float]:
         return None
 
 
+def _volume_cols(s: dict, vp: dict, n_frames: int) -> dict:
+    """Столбцы журнала по объёму: доли мелочи/сростков (% от общего) по трём моделям, площади и числу;
+    общий объём на кадр (мм³) и с какими fines_um/k_thick считали — чтобы потом пересчитать и сверить."""
+    sums, cfg = s.get("volume") or {}, s.get("volume_cfg") or {}
+    out = {}
+    for kind in ("fines", "agg"):
+        for key in ("m1", "m2", "m3", "area"):
+            out["%s_%s" % (kind, key)] = (vp.get(key) or {}).get(kind)
+        out["%s_n" % kind] = (vp.get("n") or {}).get(kind)
+    for key in ("m1", "m2", "m3"):
+        tot = (sums.get(key) or {}).get("total")
+        out["vtot_" + key] = round(tot / 1e9 / n_frames, 4) if tot else None
+    out["fines_um"], out["k_thick"] = cfg.get("fines_um"), cfg.get("k_thick")
+    return out
+
+
 def _hist_row(result: dict) -> Optional[dict]:
     """Одна строка журнала из result.json пробы: только числа для тренда (без кадров и объектов)."""
     t = _ts_epoch(result.get("ts", ""))
@@ -79,10 +95,7 @@ def _hist_row(result: dict) -> Optional[dict]:
         "small": pct.get("small"), "medium": pct.get("medium"),
         "large": pct.get("large"), "reject": pct.get("reject"),
         # мелочь и сростки по объёму (модели M1 шар / M2 сфероид / M3 призма) и по площади, % от общего
-        "fines_m1": vp.get("m1", {}).get("fines"), "fines_m2": vp.get("m2", {}).get("fines"),
-        "fines_m3": vp.get("m3", {}).get("fines"), "fines_area": vp.get("area", {}).get("fines"),
-        "agg_m3": vp.get("m3", {}).get("agg"), "agg_area": vp.get("area", {}).get("agg"),
-        "fines_n": vp.get("n", {}).get("fines"),
+        **_volume_cols(s, vp, len(result.get("frames") or []) or 1),
         "frac_zones": fr.get("zones"), "frac_pct": fr.get("area_pct"),
         "frames": len(result.get("frames") or []),
     }
@@ -183,7 +196,8 @@ def trend_range(serial: str, t_from: float, t_to: float, series: Optional[list[s
 
 EXPORT_COLUMNS = ["ts", "t", "stage", "sv", "temp", "level", "current", "vac", "cook_time", "seed_age",
                   "count", "mean", "median", "cv_pct", "density", "small", "medium", "large", "reject",
-                  "reject_pct", "fines_m1", "fines_m2", "fines_m3", "fines_area", "agg_m3", "agg_area", "fines_n",
+                  "reject_pct", "fines_m1", "fines_m2", "fines_m3", "fines_area", "fines_n",
+                  "agg_m1", "agg_m2", "agg_m3", "agg_area", "agg_n", "vtot_m1", "vtot_m2", "vtot_m3", "fines_um", "k_thick",
                   "n_needle", "n_aggregate", "n_crooked", "n_tiny", "n_huge", "suspect",
                   "frac_zones", "frac_pct", "frames"]
 

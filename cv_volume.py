@@ -12,7 +12,8 @@ S — площадь маски, L/W — длинная/короткая сто�
 короткая сторона проекции ≈ ось b, а толщина ≈ ось c. Подгоняется по лаборатории.
 
 Доли — от общего объёма всех кристаллов кадра (без обрезанных краем и пузырей):
-  мелочь   = объём кристаллов мельче fines_um (эквивалентный диаметр), без сростков
+  мелочь   = объём кристаллов с площадью меньше квадрата fines_side_mm × fines_side_mm (по умолчанию 0,2 × 0,2 мм =
+             0,04 мм²), без сростков. Это то же, что эквивалентный диаметр меньше fines_um = 2·сторона/√π (≈ 226 мкм)
   сростки  = отдельной строкой (другой тип кристалла)
 """
 from __future__ import annotations
@@ -21,7 +22,12 @@ import math
 
 MODELS = ("m1", "m2", "m3")
 KINDS = ("fines", "agg", "total")
-DEFAULTS = {"fines_um": 200.0, "k_thick": 0.88, "fines_from_sv": 88.0}
+DEFAULTS = {"fines_side_mm": 0.2, "k_thick": 0.88, "fines_from_sv": 88.0}
+
+
+def fines_diameter_um(side_mm: float) -> float:
+    """Эквивалентный диаметр круга с площадью квадрата side_mm × side_mm, мкм: d = 2·сторона/√π."""
+    return 2000.0 * side_mm / math.sqrt(math.pi)
 
 
 def volume_cfg(cv_cfg: dict | None) -> dict:
@@ -35,6 +41,7 @@ def volume_cfg(cv_cfg: dict | None) -> dict:
                 v[key] = x
         except (TypeError, ValueError):
             pass
+    v["fines_um"] = fines_diameter_um(v["fines_side_mm"])    # расчётный порог по диаметру — им и сравниваем размер кристалла
     return v
 
 

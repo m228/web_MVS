@@ -831,7 +831,7 @@ def _cv_volume():
     assert abs(v["m1"] - math.pi / 6 * 600.0 ** 3) < 1e-6, "M1 не шар"
     assert abs(v["m2"] - math.pi / 6 * 700.0 * 500.0 * 440.0) < 1e-6, "M2 не сфероид"
     assert abs(v["m3"] - math.pi * 300.0 ** 2 * 440.0) < 1e-6, "M3 не призма"
-    s = cv_volume.sums_for([big, fine, agg, cut], {"volume": {"fines_um": 200.0, "k_thick": 0.88}})
+    s = cv_volume.sums_for([big, fine, agg, cut], {"volume": {"fines_side_mm": 0.2, "k_thick": 0.88}})
     assert s["n"] == {"fines": 1, "agg": 1, "total": 3}, "обрезанный/мелочь/сросток разнесены неверно: %s" % s["n"]
     p = cv_volume.percents(s)
     tot = sum(cv_volume.crystal_volumes(o.size_um, o.length_um, o.width_um, 0.88)["m1"] for o in (big, fine, agg))
@@ -839,8 +839,9 @@ def _cv_volume():
     assert abs(p["m1"]["fines"] - want) < 0.01, "доля мелочи %s ≠ %s" % (p["m1"]["fines"], want)
     assert p["m1"]["fines"] < p["n"]["fines"], "по объёму мелочи должно быть меньше, чем по числу"
     assert cv_volume.percents(cv_volume.empty_sums())["m3"]["fines"] is None, "пустой кадр должен дать None"
-    off = cv_volume.sums_for([big, fine, agg], {"volume": {"fines_um": 200.0}}, count_fines=False)
+    off = cv_volume.sums_for([big, fine, agg], {"volume": {"fines_side_mm": 0.2}}, count_fines=False)
     assert cv_volume.percents(off)["m3"]["fines"] is None and cv_volume.percents(off)["m3"]["agg"] is not None, "до нужного СВ мелочь не считается, сростки — да"
+    assert abs(cv_volume.volume_cfg(None)["fines_um"] - 225.68) < 0.01, "0,2 × 0,2 мм ↔ диаметр 226 мкм"
     assert not cv_volume.fines_on({}, 85.0) and cv_volume.fines_on({}, 88.0) and cv_volume.fines_on({}, None), "порог СВ для мелочи"
     return "мелочь %.3f %% объёма (M1)" % p["m1"]["fines"]
 

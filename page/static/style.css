@@ -3822,3 +3822,8 @@ input.micro-cam-num { width: 56px; min-width: 0; flex: 0 0 auto; padding: 4px 5p
   background: radial-gradient(circle at 7px 50%, #fff 5px, transparent 5.5px), rgba(131,151,179,.38); }
 .micro-cv-opts label:has(input:checked) { color: var(--text, inherit); background: var(--chip-bg, var(--surface-muted, #f4f8fc)); border-color: var(--border-strong, rgba(118,142,178,.45)); }
 .micro-cv-opts label:has(input:checked)::before { background: radial-gradient(circle at 17px 50%, #fff 5px, transparent 5.5px), var(--accent, #2563eb); }
+
+/* Пояснения под таблицей объёма: штуки / по числу / по объёму / общий объём */
+.micro-vol__note { margin-top: 10px; font-size: 0.78em; line-height: 1.5; color: var(--muted, #5b6b81); }
+.micro-vol__note > div + div { margin-top: 3px; }
+.micro-vol__note b { color: var(--text, inherit); font-weight: 600; }

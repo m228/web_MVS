@@ -56,7 +56,7 @@ def _ts_epoch(ts: str) -> Optional[float]:
 
 def _volume_cols(s: dict, vp: dict, n_frames: int) -> dict:
     """Столбцы журнала по объёму: доли мелочи/сростков (% от общего) по трём моделям, площади и числу;
-    общий объём на кадр (мм³) и с какими fines_um/k_thick считали — чтобы потом пересчитать и сверить."""
+    общий объём на кадр (мм³) и с какими fines_side_mm/k_thick считали — чтобы потом пересчитать и сверить."""
     sums, cfg = s.get("volume") or {}, s.get("volume_cfg") or {}
     out = {}
     for kind in ("fines", "agg"):
@@ -66,7 +66,8 @@ def _volume_cols(s: dict, vp: dict, n_frames: int) -> dict:
     for key in ("m1", "m2", "m3"):
         tot = (sums.get(key) or {}).get("total")
         out["vtot_" + key] = round(tot / 1e9 / n_frames, 4) if tot else None
-    out["fines_um"], out["k_thick"], out["fines_from_sv"] = cfg.get("fines_um"), cfg.get("k_thick"), cfg.get("fines_from_sv")
+    out["fines_side_mm"], out["fines_um"] = cfg.get("fines_side_mm"), cfg.get("fines_um")
+    out["k_thick"], out["fines_from_sv"] = cfg.get("k_thick"), cfg.get("fines_from_sv")
     return out
 
 
@@ -197,7 +198,7 @@ def trend_range(serial: str, t_from: float, t_to: float, series: Optional[list[s
 EXPORT_COLUMNS = ["ts", "t", "stage", "sv", "temp", "level", "current", "vac", "cook_time", "seed_age",
                   "count", "mean", "median", "cv_pct", "density", "small", "medium", "large", "reject",
                   "reject_pct", "fines_m1", "fines_m2", "fines_m3", "fines_area", "fines_n",
-                  "agg_m1", "agg_m2", "agg_m3", "agg_area", "agg_n", "vtot_m1", "vtot_m2", "vtot_m3", "fines_um", "k_thick", "fines_from_sv",
+                  "agg_m1", "agg_m2", "agg_m3", "agg_area", "agg_n", "vtot_m1", "vtot_m2", "vtot_m3", "fines_side_mm", "fines_um", "k_thick", "fines_from_sv",
                   "n_needle", "n_aggregate", "n_crooked", "n_tiny", "n_huge", "suspect",
                   "frac_zones", "frac_pct", "frames"]
 

@@ -69,7 +69,7 @@
     if ($("cvBubble")) $("cvBubble").checked = cv.bubble_filter !== false;
     if ($("cvRejectAlways")) $("cvRejectAlways").checked = !!cv.reject_always;
     const vo = cv.volume || {};
-    set("cvFinesUm", vo.fines_um); set("cvKThick", vo.k_thick); set("cvFinesSv", vo.fines_from_sv);   // поля блока «Объём и мелочь»
+    set("cvFinesMm", vo.fines_side_mm); set("cvKThick", vo.k_thick); set("cvFinesSv", vo.fines_from_sv);   // поля блока «Объём и мелочь»
     set("pcCvFrames", cv.frames_per_probe); set("pcCvGap", cv.gap_sec);   // поля на вкладке «Цикл»
     updateTriggerFields();
   }
@@ -194,6 +194,35 @@
 
   // --- объём и мелочь: M1/M2/M3 + площадь, % от общего объёма кадров пробы ---
   const fmtPct = (v) => (v == null ? "—" : (v >= 10 ? v.toFixed(1) : v.toFixed(2)) + " %");
+  // расчётный порог мелочи по диаметру: круг той же площади, что квадрат side × side мм → 2000·side/√π, мкм
+  function cvFinesDiam() { const v = parseFloat(($("cvFinesMm") || {}).value); return v > 0 ? 2000 * v / Math.sqrt(Math.PI) : null; }
+  function cvFinesCalcText() {
+    const side = parseFloat(($("cvFinesMm") || {}).value), d = cvFinesDiam();
+    if (!(side > 0) || d == null) return "—";
+    const f = (x, p) => String(Number(x.toPrecision(p))).replace(".", ",");
+    return "Сейчас: " + f(side, 3) + " × " + f(side, 3) + " мм = " + f(side * side, 3) + " мм² (" + Math.round(side * side * 1e6) +
+      " мкм²) → диаметр 2 · " + f(side * 1000, 4) + " / √π ≈ " + Math.round(d) + " мкм. Мельче — мелочь.";
+  }
+  // пояснение под таблицей: что стоит за процентами. Суммы в summary.volume сложены по кадрам пробы — делим на число кадров
+  function cvRenderVolNote(s, vp, cfg, finesOff) {
+    const box = $("cvVolNote"); if (!box) return;
+    const vol = (s && s.volume) || {}, n = vol.n || {}, frames = Math.max(1, Math.round(s && s.frames ? s.frames : ((cvView || cvLastResult || {}).frames || []).length || 1));
+    if (!n.total) { box.innerHTML = ""; return; }
+    const per = (x) => Math.round((x || 0) / frames * 10) / 10;
+    const pc = (v) => (v == null ? "—" : (v >= 10 ? v.toFixed(1) : v.toFixed(2)).replace(".", ",") + " %");
+    const mm3 = (um3) => String(Number((um3 / 1e9 / frames).toPrecision(2))).replace(".", ",");
+    const m3 = (vp.m3 || {}), nn = vp.n || {};
+    const rows = [];
+    if (finesOff) {
+      rows.push("<div><b>Мелочь</b> пока не считается: СВ ниже " + (cfg.fines_from_sv != null ? cfg.fines_from_sv : "") + " — кристаллы ещё растут, это неактуально.</div>");
+    } else {
+      rows.push("<div><b>Мелочь:</b> " + per(n.fines) + " из " + per(n.total) + " кристаллов на кадре — <b>" + pc(nn.fines) + " по числу</b>, но всего <b>" + pc(m3.fines) +
+        " по объёму</b> (призма) и " + pc((vp.area || {}).fines) + " по площади. Мелких много штук, а вещества в них мало.</div>");
+    }
+    rows.push("<div><b>Сростки:</b> " + per(n.agg) + " шт (" + pc(nn.agg) + " по числу), <b>" + pc(m3.agg) + " объёма</b> — считаются отдельно, в мелочь не входят.</div>");
+    rows.push("<div><b>Общий объём</b> кристаллов на кадре: " + mm3((vol.m3 || {}).total || 0) + " мм³ (призма), " + mm3((vol.m1 || {}).total || 0) + " (шар), " + mm3((vol.m2 || {}).total || 0) + " (сфероид).</div>");
+    box.innerHTML = rows.join("");
+  }
   function cvRenderVolume(s) {
     const vp = (s && s.volume_pct) || {}, cfg = (s && s.volume_cfg) || {};
     document.querySelectorAll("#cvVolGrid [data-v]").forEach((el) => {
@@ -204,20 +233,25 @@
     const finesOff = !!(s && s.volume && s.volume.fines_off);
     const st = $("cvVolState");
     if (st) st.textContent = finesOff ? "мелочь — с СВ " + (cfg.fines_from_sv != null ? cfg.fines_from_sv : "") : "";
-    const lbl = $("cvVolLblFines"); if (lbl) lbl.textContent = "Мелочь <" + (cfg.fines_um != null ? cfg.fines_um : $("cvFinesUm") ? $("cvFinesUm").value : "") + " мкм";
-    if (lbl) lbl.title = "Диаметр круга той же площади, что кристалл (эквивалентный диаметр), мкм — не площадь";
-    const n = $("cvFinesN"), pn = vp.n && vp.n.fines;
-    if (n) n.textContent = "по числу " + (pn == null ? "—" : pn + " %");
+    const lbl = $("cvVolLblFines"), fd = cfg.fines_um != null ? cfg.fines_um : cvFinesDiam();
+    const side = cfg.fines_side_mm != null ? cfg.fines_side_mm : ($("cvFinesMm") || {}).value;
+    if (lbl) {
+      lbl.textContent = "Мелочь <" + (fd != null ? Math.round(fd) : "") + " мкм";
+      lbl.title = "Площадь меньше " + side + " × " + side + " мм — это диаметр круга той же площади меньше " + (fd != null ? Math.round(fd) : "") + " мкм (расчётный порог)";
+    }
+    const calc = $("cvFinesCalc"); if (calc) calc.textContent = cvFinesCalcText();
+    cvRenderVolNote(s, vp, cfg, finesOff);
   }
   function wireVolumeFields() {
-    ["cvFinesUm", "cvKThick", "cvFinesSv"].forEach((id) => {
+    const fm = $("cvFinesMm"); if (fm) fm.addEventListener("input", () => { const c = $("cvFinesCalc"); if (c) c.textContent = cvFinesCalcText(); });
+    ["cvFinesMm", "cvKThick", "cvFinesSv"].forEach((id) => {
       const e = $(id); if (!e) return;
       e.addEventListener("change", () => {
         if (!cvSettingsLoaded) return;
-        const fu = parseFloat(($("cvFinesUm") || {}).value), k = parseFloat(($("cvKThick") || {}).value),
+        const fu = parseFloat(($("cvFinesMm") || {}).value), k = parseFloat(($("cvKThick") || {}).value),
           fs = parseFloat(($("cvFinesSv") || {}).value);
         if (!(fu > 0) || !(k > 0) || !(fs >= 0)) return;
-        cvPostSettings({ volume: { fines_um: fu, k_thick: k, fines_from_sv: fs } });
+        cvPostSettings({ volume: { fines_side_mm: fu, k_thick: k, fines_from_sv: fs } });
       });
     });
   }
@@ -528,7 +562,7 @@
         " · вытянут. " + mark(best.aspect.toFixed(1), tA != null && best.aspect > tA) +
         (best.conf != null ? "<br>уверенность модели (conf) " + mark(best.conf.toFixed(2), best.conf < 0.5) : "");
       // объём по модели «призма» (M3), мм³ = мкм³ / 1e9 (в мкм³ числа слишком большие); у кристалла мельче порога мелочи — пометка
-      const fu = parseFloat(($("cvFinesUm") || {}).value), kt = parseFloat(($("cvKThick") || {}).value);
+      const fu = cvFinesDiam(), kt = parseFloat(($("cvKThick") || {}).value);
       // у проб, снятых до объёма, в objects его нет — считаем по той же формуле: площадь · k · ширина
       const v3 = best.vol_um3 ? best.vol_um3.m3 : (kt > 0 ? Math.PI / 4 * best.size_um * best.size_um * kt * best.width_um : null);
       const vol = v3 == null ? "" : "<br>V <b>" + Number((v3 / 1e9).toPrecision(2)) + " мм³</b> (призма)" +

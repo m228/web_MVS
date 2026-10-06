@@ -27,7 +27,7 @@ DEFAULTS = {
     "shape": {"min_circularity": 0.55, "max_aspect": 3.0, "min_solidity": 0.90,
               "suspect_aspect": 1.6,     # вытянутые: от этого L/W до max_aspect (не брак)
               "notch_frac": 0.06},       # «выемка» контура глубже этой доли диаметра → признак сростка
-    "volume": {"fines_um": 200.0, "k_thick": 0.88, "fines_from_sv": 88.0},   # объём (см. cv_volume.py): мелочь мельче fines_um, считается с СВ ≥ fines_from_sv; толщина = k_thick · ширина
+    "volume": {"fines_side_mm": 0.2, "k_thick": 0.88, "fines_from_sv": 88.0},   # объём (см. cv_volume.py): мелочь — площадь меньше fines_side_mm², считается с СВ ≥ fines_from_sv; толщина = k_thick · ширина
     "size_reject": {"min_um": 250.0, "max_um": 1200.0},   # брак по размеру (только у готового, см. reject_from_sv)
     "reject_from_sv": 88.0,    # брак идёт в рассев/тренд, только когда СВ ≥ этого (кристаллы подросли)
     "reject_always": False,    # True — считать брак всегда, без порога по СВ

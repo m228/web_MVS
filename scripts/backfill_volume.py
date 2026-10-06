@@ -8,7 +8,7 @@
 Повторный запуск проб с объёмом не трогает. Данные кадров (jpg, objects) не меняются.
 
     .venv\\Scripts\\python.exe scripts\\backfill_volume.py E:\\cv_result\\bui
-    .venv\\Scripts\\python.exe scripts\\backfill_volume.py cv_results\\camera --hist cv_history\\camera --fines 200 --k 0.88
+    .venv\\Scripts\\python.exe scripts\\backfill_volume.py cv_results\\camera --hist cv_history\\camera --fines 0.2 --k 0.88
 """
 import argparse
 import json
@@ -24,7 +24,7 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("probes", help="папка с пробами (внутри — папки 2026-..._HH_MM_SS)")
     ap.add_argument("--hist", help="папка журнала *.jsonl (по умолчанию — та же, что и probes)")
-    ap.add_argument("--fines", type=float, help="порог мелочи, мкм (по умолчанию из конфига)")
+    ap.add_argument("--fines", type=float, help="сторона квадрата мелочи, мм (по умолчанию из конфига, 0,2)")
     ap.add_argument("--k", type=float, help="коэффициент толщины (по умолчанию из конфига)")
     ap.add_argument("--force", action="store_true", help="пересчитать и пробы, где объём уже есть (например, после смены порога)")
     ap.add_argument("--dry", action="store_true", help="только показать, что будет сделано")
@@ -35,7 +35,7 @@ def main() -> int:
     cfg = cv_store._volume_cfg_now()
     vol = cfg.setdefault("volume", {})
     if a.fines:
-        vol["fines_um"] = a.fines
+        vol["fines_side_mm"] = a.fines
     if a.k:
         vol["k_thick"] = a.k
 

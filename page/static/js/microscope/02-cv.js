@@ -68,6 +68,8 @@
     if ($("cvSeamRefine")) $("cvSeamRefine").checked = cv.seam_refine !== false;
     if ($("cvBubble")) $("cvBubble").checked = cv.bubble_filter !== false;
     if ($("cvRejectAlways")) $("cvRejectAlways").checked = !!cv.reject_always;
+    const vo = cv.volume || {};
+    set("cvFinesUm", vo.fines_um); set("cvKThick", vo.k_thick);   // поля блока «Объём и мелочь»
     set("pcCvFrames", cv.frames_per_probe); set("pcCvGap", cv.gap_sec);   // поля на вкладке «Цикл»
     updateTriggerFields();
   }
@@ -170,6 +172,7 @@
       if (em) em.textContent = p + "%";
     });
     cvRenderReasons(s, r && r.sv);
+    cvRenderVolume(s);
     const sz = s.size_um || {};
     const setT = (id, v) => { const e = $(id); if (e) e.textContent = v; };
     setT("cvMean", sz.mean != null ? sz.mean + " мкм" : "—");
@@ -187,6 +190,33 @@
         dEl.style.color = d > 0 ? "var(--success)" : (d < 0 ? "var(--danger)" : "");
       } else { dEl.textContent = "—"; dEl.style.color = ""; }
     }
+  }
+
+  // --- объём и мелочь: M1/M2/M3 + площадь, % от общего объёма кадров пробы ---
+  const fmtPct = (v) => (v == null ? "—" : (v >= 10 ? v.toFixed(1) : v.toFixed(2)) + " %");
+  function cvRenderVolume(s) {
+    const vp = (s && s.volume_pct) || {}, cfg = (s && s.volume_cfg) || {};
+    document.querySelectorAll("#cvVolGrid [data-v]").forEach((el) => {
+      const [model, kind] = el.dataset.v.split(".");
+      el.textContent = fmtPct(vp[model] ? vp[model][kind] : null);
+    });
+    const grid = $("cvVolGrid"); if (grid) grid.classList.toggle("is-idle", !(s && s.reject_active));
+    const st = $("cvVolState");
+    if (st) st.textContent = s && s.reject_active ? "" : "пока не готов";
+    const lbl = $("cvVolLblFines"); if (lbl) lbl.textContent = "Мелочь <" + (cfg.fines_um != null ? cfg.fines_um : $("cvFinesUm") ? $("cvFinesUm").value : "");
+    const n = $("cvFinesN"), pn = vp.n && vp.n.fines;
+    if (n) n.textContent = "по числу " + (pn == null ? "—" : pn + " %");
+  }
+  function wireVolumeFields() {
+    ["cvFinesUm", "cvKThick"].forEach((id) => {
+      const e = $(id); if (!e) return;
+      e.addEventListener("change", () => {
+        if (!cvSettingsLoaded) return;
+        const fu = parseFloat(($("cvFinesUm") || {}).value), k = parseFloat(($("cvKThick") || {}).value);
+        if (!(fu > 0) || !(k > 0)) return;
+        cvPostSettings({ volume: { fines_um: fu, k_thick: k } });
+      });
+    });
   }
 
   // --- оверлей поверх чистого кадра: слои по группам, подсветка формы кристалла под мышкой ---
@@ -484,14 +514,28 @@
         " · выпукл. " + mark(best.solidity.toFixed(2), tS != null && best.solidity < tS) +
         " · вытянут. " + mark(best.aspect.toFixed(1), tA != null && best.aspect > tA) +
         (best.conf != null ? "<br>уверенность модели (conf) " + mark(best.conf.toFixed(2), best.conf < 0.5) : "");
+      // объём по модели «призма» (M3), мм³ = мкм³ / 1e9; у кристалла мельче порога мелочи — пометка
+      const v3 = best.vol_um3 && best.vol_um3.m3, fu = parseFloat(($("cvFinesUm") || {}).value);
+      const vol = v3 == null ? "" : "<br>V <b>" + Number((v3 / 1e9).toPrecision(2)) + " мм³</b> (призма)" +
+        (fu > 0 && best.size_um < fu && cls.reason !== "aggregate" ? " · мелочь" : "");
       const head = "Ø <b>" + best.size_um + " мкм</b> · S <b>" + Math.round(best.area_um2) + " мкм²</b>";
       // «подробно» выключено — коротко: только размер и площадь; включено — форма, причина, что делать, уверенность
       tip.innerHTML = cvLayers.detail === false ? head
-        : head + "<br>" + best.length_um + "×" + best.width_um + " мкм · " + gr + grp + shape + why;
+        : head + "<br>" + best.length_um + "×" + best.width_um + " мкм · " + gr + grp + vol + shape + why;
+      // позиция: справа-снизу от курсора; у правого/нижнего края карточки — слева/сверху, чтобы
+      // подсказка не уезжала за край и не обрезалась. Размер меряем при left=0 (иначе у края
+      // блок сжимается и переносит строки).
       const cardR = card.getBoundingClientRect();
-      tip.style.left = (e.clientX - cardR.left) + "px";
-      tip.style.top = (e.clientY - cardR.top) + "px";
+      const cx = e.clientX - cardR.left, cy = e.clientY - cardR.top;
       tip.hidden = false;
+      tip.style.transform = "none";
+      tip.style.left = "0px"; tip.style.top = "0px";
+      const tw = tip.offsetWidth, th = tip.offsetHeight, gap = 12, pad = 4;
+      let x = cx + gap, y = cy + gap;
+      if (x + tw > cardR.width - pad) x = cx - gap - tw;
+      if (y + th > cardR.height - pad) y = cy - gap - th;
+      tip.style.left = Math.max(pad, x) + "px";
+      tip.style.top = Math.max(pad, y) + "px";
     });
     ov.addEventListener("mouseleave", () => { tip.hidden = true; setHover(null); });
   }
@@ -946,6 +990,7 @@
     wireModelUpload();
     wireHoverTip();
     wireLayers();
+    wireVolumeFields();
     cvModelRefresh();
     const en = $("cvEnable");
     if (en) en.addEventListener("change", () => { updateTriggerFields(); cvPostSettings({ enabled: en.checked }).then(cvHealth); });

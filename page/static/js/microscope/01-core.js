@@ -947,6 +947,12 @@
   const um = (v) => (v == null ? "—" : v + " мкм");
   const pair = (a, b) => ((a == null && b == null) ? "—" : (num(a) + " / " + num(b)));
   const set = (id, v) => { const el = $(id); if (el) el.textContent = v; };
+  // клапан: «открыт» — зелёным, «закрыт» — серым (цвет читается быстрее мелкого текста)
+  const setValve = (id, open) => {
+    const el = $(id); if (!el) return;
+    el.textContent = open ? "открыт" : "закрыт";
+    el.classList.toggle("is-open", !!open);
+  };
   const HW = { 19: "hw1.3", 32: "hw2.0" };
 
   function bits6(v) { return (v == null) ? "—" : "0b" + Number(v).toString(2).padStart(6, "0"); }
@@ -1002,8 +1008,8 @@
       set("tSv", f.sv == null ? "—" : Number(f.sv).toFixed(2));
       set("microStep", f.step || "—");
       set("microMode", f.mode == null ? "—" : f.mode);
-      set("valveTube", f.valve_tube ? "открыт" : "закрыт");
-      set("valveGlass", f.valve_glass ? "открыт" : "закрыт");
+      setValve("valveTube", f.valve_tube);
+      setValve("valveGlass", f.valve_glass);
 
       // вкладка «Цикл»: живой шаг + таймеры
       const cb = $("cycStepBadge"); if (cb) cb.textContent = f.step || "—";
@@ -1050,8 +1056,8 @@
       // абсолютный датчик 1271 (по нему идёт доезд) — тем же масштабом показа, что и в телеметрии
       set("cycSensor", um(t.pos1_ai == null ? null : Math.round(t.pos1_ai * dScale)));
       set("cycEnc", um(t.pos1_enc));   // энкодер М1 (1285) — по нему доезд цикла
-      set("cycTube", f.valve_tube ? "открыт" : "закрыт");
-      set("cycGlass", f.valve_glass ? "открыт" : "закрыт");
+      setValve("cycTube", f.valve_tube);
+      setValve("cycGlass", f.valve_glass);
 
       // DEBUG live-строка (обратная связь ручного ввода СВ): шаг/СВ/зазор/позиция
       set("dbgStep", f.step == null ? "—" : f.step + " (" + f.mode + ")");

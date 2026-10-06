@@ -24,6 +24,7 @@ from typing import Optional
 import cv2
 import numpy as np
 
+import cv_volume
 from logger import log_event
 from paths import DATA_DIR
 
@@ -64,6 +65,7 @@ def _hist_row(result: dict) -> Optional[dict]:
     fr = (result.get("fracture") or {}).get("summary") or {}
     plc = result.get("plc") or {}
     rs = s.get("reasons") or {}
+    vp = s.get("volume_pct") or {}
     return {
         "ts": result["ts"], "t": t, "stage": result.get("stage"), "sv": result.get("sv"),
         # причины брака (среднее число на кадр), разброс размера и плотность — для разбора слипания и обучения
@@ -76,6 +78,11 @@ def _hist_row(result: dict) -> Optional[dict]:
         "count": s.get("count"), "mean": sz.get("mean"), "median": sz.get("median"),
         "small": pct.get("small"), "medium": pct.get("medium"),
         "large": pct.get("large"), "reject": pct.get("reject"),
+        # мелочь и сростки по объёму (модели M1 шар / M2 сфероид / M3 призма) и по площади, % от общего
+        "fines_m1": vp.get("m1", {}).get("fines"), "fines_m2": vp.get("m2", {}).get("fines"),
+        "fines_m3": vp.get("m3", {}).get("fines"), "fines_area": vp.get("area", {}).get("fines"),
+        "agg_m3": vp.get("m3", {}).get("agg"), "agg_area": vp.get("area", {}).get("agg"),
+        "fines_n": vp.get("n", {}).get("fines"),
         "frac_zones": fr.get("zones"), "frac_pct": fr.get("area_pct"),
         "frames": len(result.get("frames") or []),
     }
@@ -176,7 +183,8 @@ def trend_range(serial: str, t_from: float, t_to: float, series: Optional[list[s
 
 EXPORT_COLUMNS = ["ts", "t", "stage", "sv", "temp", "level", "current", "vac", "cook_time", "seed_age",
                   "count", "mean", "median", "cv_pct", "density", "small", "medium", "large", "reject",
-                  "reject_pct", "n_needle", "n_aggregate", "n_crooked", "n_tiny", "n_huge", "suspect",
+                  "reject_pct", "fines_m1", "fines_m2", "fines_m3", "fines_area", "agg_m3", "agg_area", "fines_n",
+                  "n_needle", "n_aggregate", "n_crooked", "n_tiny", "n_huge", "suspect",
                   "frac_zones", "frac_pct", "frames"]
 
 
@@ -222,9 +230,16 @@ def _aggregate(frames: list[dict]) -> dict:
     total = sum(counts.values()) or 1
     mean_size = sum(s["size_um"]["mean"] for s in ok) / n
     median_size = sum(s["size_um"]["median"] for s in ok) / n
+    vol = cv_volume.empty_sums()
+    for s in ok:
+        vol = cv_volume.add_sums(vol, s.get("volume") or {})
+    has_vol = any(s.get("volume") for s in ok)
     return {
         "count": round(sum(s["count"] for s in ok) / n, 1),
         "groups": counts,
+        # объём: суммы по кадрам (а не среднее процентов — большие кристаллы весят больше)
+        **({"volume": vol, "volume_pct": cv_volume.percents(vol),
+            "volume_cfg": next((s["volume_cfg"] for s in ok if s.get("volume_cfg")), None)} if has_vol else {}),
         "groups_pct": {g: round(100.0 * counts[g] / total, 1) for g in GROUP_ORDER},
         "size_um": {
             "mean": round(mean_size, 1),

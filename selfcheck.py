@@ -350,7 +350,7 @@ MODULES = [
     "camera_core.base_worker", "camera_core.gige_worker", "camera_core.rtsp_worker", "camera_core.camera_manager",
     "sdk_gige", "dahua_control", "net_tools", "rtsp_store",
     "save_settings", "plate_config", "sv_source", "microscope_plc", "microscope_fsm",
-    "microscope_service", "cv_analyzer", "cv_fracture", "cv_client", "cv_store", "fracture_lab",
+    "microscope_service", "cv_analyzer", "cv_volume", "cv_fracture", "cv_client", "cv_store", "fracture_lab",
     "updater", "autostart", "diag", "app", "mvsdk",
 ]
 THIRD_PARTY = ["cv2", "numpy", "fastapi", "starlette", "uvicorn", "pymodbus", "harvesters", "genicam",
@@ -368,6 +368,7 @@ API = {
     "sv_source": ["SvSource"],
     "plate_config": ["load", "save", "replace_all", "backup", "DEFAULTS", "CONFIG_PATH"],
     "cv_analyzer": ["analyze", "measure_objects", "summarize", "draw_overlay", "blur_score"],
+    "cv_volume": ["volume_cfg", "crystal_volumes", "sums_for", "add_sums", "percents"],
     "cv_fracture": ["detect_zones", "confirm", "draw", "area_pct"],
     "cv_store": ["save_sample", "list_samples", "get_last", "get_prev", "get_result", "trend",
                  "trend_range", "history_days", "get_objects", "overlay_path", "thumb_path"],
@@ -773,6 +774,30 @@ def _cv_analyze():
     assert res["_overlay"].shape == img.shape
     assert all(o["size_um"] > 0 for o in res["objects"])
     return "%d кристаллов" % len(res["objects"])
+
+
+@check("CV", "cv_volume: объём шара/сфероида/призмы совпадает с формулой, мелочь и сростки считаются отдельно")
+def _cv_volume():
+    import math
+    from types import SimpleNamespace as NS
+    import cv_volume
+    big = NS(group="large", defect=None, size_um=600.0, length_um=700.0, width_um=500.0)
+    fine = NS(group="small", defect=None, size_um=100.0, length_um=120.0, width_um=90.0)
+    agg = NS(group="reject", defect="aggregate", size_um=400.0, length_um=500.0, width_um=300.0)
+    cut = NS(group="cut", defect=None, size_um=900.0, length_um=900.0, width_um=900.0)
+    v = cv_volume.crystal_volumes(600.0, 700.0, 500.0, 0.88)
+    assert abs(v["m1"] - math.pi / 6 * 600.0 ** 3) < 1e-6, "M1 не шар"
+    assert abs(v["m2"] - math.pi / 6 * 700.0 * 500.0 * 440.0) < 1e-6, "M2 не сфероид"
+    assert abs(v["m3"] - math.pi * 300.0 ** 2 * 440.0) < 1e-6, "M3 не призма"
+    s = cv_volume.sums_for([big, fine, agg, cut], {"volume": {"fines_um": 200.0, "k_thick": 0.88}})
+    assert s["n"] == {"fines": 1, "agg": 1, "total": 3}, "обрезанный/мелочь/сросток разнесены неверно: %s" % s["n"]
+    p = cv_volume.percents(s)
+    tot = sum(cv_volume.crystal_volumes(o.size_um, o.length_um, o.width_um, 0.88)["m1"] for o in (big, fine, agg))
+    want = 100.0 * math.pi / 6 * 100.0 ** 3 / tot
+    assert abs(p["m1"]["fines"] - want) < 0.01, "доля мелочи %s ≠ %s" % (p["m1"]["fines"], want)
+    assert p["m1"]["fines"] < p["n"]["fines"], "по объёму мелочи должно быть меньше, чем по числу"
+    assert cv_volume.percents(cv_volume.empty_sums())["m3"]["fines"] is None, "пустой кадр должен дать None"
+    return "мелочь %.3f %% объёма (M1)" % p["m1"]["fines"]
 
 
 @check("CV", "cv_analyzer: пузырь воздуха (ровный круг) отсеивается из рассева, шестиугольники — нет")

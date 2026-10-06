@@ -16,6 +16,8 @@ from typing import Optional
 import cv2
 import numpy as np
 
+import cv_volume
+
 # дефолты-заглушки (перекрываются блоком cv из plate_config); размеры — по эквив. диаметру, мкм.
 # Стартовые пороги — из «Памятки оператора» (Сапронов): норма 0,5–0,9 мм, игла > 3,0, сросток/кривой
 # при выпуклости < 0,90; вытянутые 1,6–3,0 — не брак, а предупреждение.
@@ -25,6 +27,7 @@ DEFAULTS = {
     "shape": {"min_circularity": 0.55, "max_aspect": 3.0, "min_solidity": 0.90,
               "suspect_aspect": 1.6,     # вытянутые: от этого L/W до max_aspect (не брак)
               "notch_frac": 0.06},       # «выемка» контура глубже этой доли диаметра → признак сростка
+    "volume": {"fines_um": 200.0, "k_thick": 0.88},   # объём (см. cv_volume.py): мелочь мельче fines_um; толщина = k_thick · ширина
     "size_reject": {"min_um": 250.0, "max_um": 1200.0},   # брак по размеру (только у готового, см. reject_from_sv)
     "reject_from_sv": 88.0,    # брак идёт в рассев/тренд, только когда СВ ≥ этого (кристаллы подросли)
     "reject_always": False,    # True — считать брак всегда, без порога по СВ
@@ -84,7 +87,7 @@ def _cfg(cv_cfg: Optional[dict]) -> dict:
         for k in ("bubble_radial_cv", "bubble_aspect", "bubble_solidity", "bubble_min_um"):
             c[k] = float(cv_cfg.get(k, c[k]))
         c["refine_max"] = float(cv_cfg.get("refine_max", c["refine_max"]))
-        for key in ("groups", "shape", "size_reject"):
+        for key in ("groups", "shape", "size_reject", "volume"):
             if cv_cfg.get(key):
                 c[key] = {**c[key], **cv_cfg[key]}
     return c
@@ -766,6 +769,7 @@ def summarize(measures: list[CrystalMeasure], image_shape: tuple,
     n = len(measures) - n_cut - n_bubble
     area_mm2 = (w * cfg["um_per_px"] / 1000.0) * (h * cfg["um_per_px"] / 1000.0)
     sizes_np = np.array(sizes) if sizes else np.array([0.0])
+    vol_sums = cv_volume.sums_for(measures, cfg)
     quality = "ok"
     if blur is not None and blur < cfg["blur_min"]:
         quality = "low"
@@ -787,6 +791,9 @@ def summarize(measures: list[CrystalMeasure], image_shape: tuple,
             "cv_pct": round(float(100.0 * sizes_np.std() / sizes_np.mean()), 1) if sizes_np.mean() else 0.0,
         },
         "density_per_mm2": round(n / area_mm2, 2) if area_mm2 > 0 else 0.0,
+        # объём/площадь: суммы (складываются по кадрам пробы) и доли мелочи/сростков, % от общего
+        "volume": vol_sums, "volume_pct": cv_volume.percents(vol_sums),
+        "volume_cfg": cv_volume.volume_cfg(cfg),
         "reject_pct": round(100.0 * counts["reject"] / n, 1) if n else 0.0,
         "quality": quality,
         "blur": round(blur, 1) if blur is not None else None,
@@ -833,6 +840,7 @@ def analyze(image: np.ndarray, objects: list[dict], cv_cfg: Optional[dict] = Non
     measures = measure_objects(objects, cv_cfg, sv=sv, img_shape=image.shape)
     blur = blur_score(image)
     summary = summarize(measures, image.shape, cv_cfg, blur=blur, sv=sv)
+    vol_k = cv_volume.volume_cfg(_cfg(cv_cfg))["k_thick"]
     def _obj(m):
         # bbox для наведения (hit-test в UI); площадь — по эквив.диаметру (= площадь маски), мкм²
         if m.contour is not None:
@@ -840,6 +848,7 @@ def analyze(image: np.ndarray, objects: list[dict], cv_cfg: Optional[dict] = Non
         else:
             x = y = w = h = 0
         area_um2 = round(math.pi * (m.size_um / 2.0) ** 2, 0)
+        vols = cv_volume.crystal_volumes(m.size_um, m.length_um, m.width_um, vol_k)
         # контур для отрисовки в браузере (слои, подсветка формы под мышкой) — упрощённый
         poly = []
         src = m.outline if m.outline is not None else m.contour
@@ -853,6 +862,7 @@ def analyze(image: np.ndarray, objects: list[dict], cv_cfg: Optional[dict] = Non
             "length_um": round(m.length_um, 1), "width_um": round(m.width_um, 1),
             "circularity": round(m.circularity, 3), "aspect": round(m.aspect, 2),
             "solidity": round(m.solidity, 3), "group": m.group, "conf": round(m.conf, 3),
+            "vol_um3": {k: round(v) for k, v in vols.items()},
             "defect": m.defect, "suspect": m.suspect, "notches": m.notches, "members": m.members, "seam_merged": m.seam_merged,
         }
     result = {"summary": summary, "objects": [_obj(m) for m in measures]}

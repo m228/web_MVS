@@ -3505,6 +3505,9 @@ input.micro-cam-num { width: 56px; min-width: 0; flex: 0 0 auto; padding: 4px 5p
 .micro-tele-col { min-width: 0; }
 .micro-tele-col .micro-tele-group:first-child { margin-top: 0; }
 .micro-tile--hidden { display: none; }
+/* клапан трубки/стекла: закрыт — серый, открыт — зелёный */
+.micro-valve { color: var(--muted); }
+.micro-valve.is-open { color: var(--success); }
 
 /* Встроенная камера в микроскопе = ОДНО окно: видео + тулбар + параметры В СТОЛБИК
    (чтобы влезало в колонку и видео было крупным). «Сетевые настройки» прячем — их кнопка
@@ -3740,6 +3743,23 @@ input.micro-cam-num { width: 56px; min-width: 0; flex: 0 0 auto; padding: 4px 5p
 .micro-cam-card.cv-win #camPlaceholder { display: none !important; }
 #cvOverlay[hidden], #cvOverlayPh[hidden] { display: none !important; }
 .micro-cv-tele { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; margin-bottom: 4px; }
+
+/* Рассев и объём — два компактных блока рядом; объём — сетка 5 колонок с мелкими числами */
+.micro-cv-pair { display: grid; grid-template-columns: minmax(0, 5fr) minmax(0, 6fr); gap: 18px; align-items: start; }
+.micro-cv-pair > .micro-cv-block { margin-top: 0; padding-top: 0; border-top: 0; }
+@media (max-width: 900px) { .micro-cv-pair { grid-template-columns: 1fr; } }
+.micro-vol__grid { display: grid; grid-template-columns: auto repeat(4, minmax(0, 1fr)); gap: 6px 10px; align-items: baseline; font-size: 0.85em; }
+.micro-vol__grid > b { font-weight: 600; font-size: 0.85em; color: var(--muted); text-align: right; white-space: nowrap; cursor: help; }
+.micro-vol__grid > span { color: var(--muted); white-space: nowrap; }
+.micro-vol__grid > em { font-style: normal; font-weight: 600; text-align: right; font-variant-numeric: tabular-nums; }
+.micro-vol__grid.is-idle > em { opacity: .45; }          /* проба ещё не готовый сахар — числа справочные */
+.micro-vol__fields { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; margin-top: 10px; font-size: 0.8em; color: var(--muted); }
+.micro-vol__fields label { display: inline-flex; flex-direction: row; align-items: center; gap: 6px; margin: 0; font-weight: 400; }
+.micro-vol__fields input[type="number"] { width: 62px; height: 26px; min-height: 0; padding: 2px 6px; font-size: 1em; border-radius: 6px; }
+.micro-vol__by-n { margin-left: auto; font-variant-numeric: tabular-nums; }
+.micro-vol__pop { width: 330px; }
+.micro-vol__pop code { background: none; padding: 0; font-family: inherit; font-weight: 600; font-size: 1em; color: inherit; }
+.micro-vol__pop em { display: block; margin-left: 24px; }
 
 /* Нижняя секция: переключатель Плата/Распознавание + широкая раскладка распознавания */
 .micro-tele-seg { max-width: 400px; margin: 0; }

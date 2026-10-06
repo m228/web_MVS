@@ -248,7 +248,7 @@
                     <div class="micro-tile"><span>Цель М1, мкм</span><b id="cycTarget">—</b></div>
                     <div class="micro-tile"><span>Позиция М1 (расч.)</span><b id="cycPos">—</b></div>
                     <div class="micro-tile" title="Абсолютный датчик 1271 — по нему идёт доезд подвода"><span>Датчик (абс.), мкм</span><b id="cycSensor">—</b></div>
-                    <div class="micro-tile"><span>Кл. труб / стекло</span><b><span id="cycTube">—</span> / <span id="cycGlass">—</span></b></div>
+                    <div class="micro-tile"><span>Кл. труб / стекло</span><b><span id="cycTube" class="micro-valve">—</span> / <span id="cycGlass" class="micro-valve">—</span></b></div>
                     <div class="micro-tile" title="Энкодер М1 (рег.1285) — по нему идёт доезд цикла"><span>Энкодер, мкм</span><b id="cycEnc">—</b></div>
                   </div>
                   <p class="micro-cycle-hint" id="cycHint">Нажми «Взять пробу», чтобы запустить цикл. Нужна связь с платой и снятый «Ручной режим».</p>
@@ -895,8 +895,8 @@
               <div class="micro-tiles micro-tiles--one">
                 <div class="micro-tile"><span>СВ (Brix)</span><b id="tSv">—</b></div>
                 <div class="micro-tile"><span>Шаг</span><b id="microStep">—</b></div>
-                <div class="micro-tile"><span>Клапан трубки</span><b id="valveTube">—</b></div>
-                <div class="micro-tile"><span>Клапан стекла</span><b id="valveGlass">—</b></div>
+                <div class="micro-tile"><span>Клапан трубки</span><b id="valveTube" class="micro-valve">—</b></div>
+                <div class="micro-tile"><span>Клапан стекла</span><b id="valveGlass" class="micro-valve">—</b></div>
                 <div class="micro-tile"><span>Входы DI</span><b id="tDi">—</b></div>
                 <div class="micro-tile"><span>Выходы DQ</span><b id="tDq">—</b></div>
                 <div class="micro-tile micro-tile--hidden"><span>Режим</span><b id="microMode">—</b></div>
@@ -955,6 +955,7 @@
                 <div class="micro-tile"><span>Кадров</span><b id="cvFramesN">—</b></div>
                 <div class="micro-tile"><span>Модель</span><b id="cvModel">—</b></div>
               </div>
+              <div class="micro-cv-pair">
               <div class="micro-cv-block">
                 <div class="micro-cv-block__title">Рассев кристаллов <span class="micro-cv-n" id="cvCount">—</span></div>
                 <div class="micro-cv-bars" id="cvBars">
@@ -969,6 +970,39 @@
                   <div class="micro-tile"><span>Среднее</span><b id="cvMean">—</b></div>
                   <div class="micro-tile"><span>Δ к прошлой</span><b id="cvDelta">—</b></div>
                 </div>
+              </div>
+
+              <!-- объём и доля мелочи: три модели рядом + площадь; поля — как считать (применяются со следующей пробы) -->
+              <div class="micro-cv-block micro-vol" id="cvVol">
+                <div class="micro-cv-block__title">Объём и мелочь
+                  <span class="micro-info" tabindex="0" aria-label="Как считается объём">ⓘ
+                    <span class="micro-info__pop micro-vol__pop" role="tooltip">
+                      <b>Как считаем объём по 2D-кадру</b>
+                      <div class="in"><i>M1</i> шар: <code>V = π/6 · d³</code> <em>d — диаметр круга той же площади</em></div>
+                      <div class="in"><i>M2</i> сфероид: <code>V = π/6 · Д · Ш · Т</code></div>
+                      <div class="in"><i>M3</i> призма: <code>V = Площадь · Т</code> <em>плоский кристалл на грани — рабочая</em></div>
+                      <small>Д, Ш — длинная и короткая сторона, Т = k · Ш (толщина), k — поле справа.</small>
+                      <small>Мелочь % = объём кристаллов мельче порога ÷ объём всех × 100. Сростки — отдельной строкой, в мелочь не входят. Обрезанные краем и пузыри не считаются.</small>
+                      <small>Идёт у готового сахара (СВ ≥ порога брака). Порог и k применяются со следующей пробы.</small>
+                    </span>
+                  </span>
+                  <span class="micro-cv-n" id="cvVolState"></span>
+                </div>
+                <div class="micro-vol__grid" id="cvVolGrid">
+                  <span></span>
+                  <b title="Шар по площади: V = π/6·d³. Допущений о толщине нет">M1 шар</b>
+                  <b title="Сфероид: V = π/6·Д·Ш·Т, Т = k·Ш">M2 сфер.</b>
+                  <b title="Призма: V = Площадь·Т, Т = k·Ш. Плоский кристалл на грани — рабочая модель">M3 призма</b>
+                  <b title="Доля площади кристаллов на кадре (без объёма)">Площадь</b>
+                  <span id="cvVolLblFines">Мелочь</span><em data-v="m1.fines">—</em><em data-v="m2.fines">—</em><em data-v="m3.fines">—</em><em data-v="area.fines">—</em>
+                  <span>Сростки</span><em data-v="m1.agg">—</em><em data-v="m2.agg">—</em><em data-v="m3.agg">—</em><em data-v="area.agg">—</em>
+                </div>
+                <div class="micro-vol__fields">
+                  <label title="Кристалл мельче этого размера (эквивалентный диаметр, мкм) считается мелочью"><span>Мелочь &lt;, мкм</span><input type="number" id="cvFinesUm" min="1" step="10" value="200" /></label>
+                  <label title="Толщина кристалла = k · короткая сторона. 0,88 — отношение осей c/b у сахарозы (Сапронов, с. 294); подгоняется по лаборатории"><span>Толщина k</span><input type="number" id="cvKThick" min="0.1" max="2" step="0.01" value="0.88" /></label>
+                  <span class="micro-vol__by-n" id="cvFinesN" title="Мелочь по числу кристаллов (для сравнения с объёмом)">по числу —</span>
+                </div>
+              </div>
               </div>
             </div>
 

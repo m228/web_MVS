@@ -134,7 +134,7 @@ def _hist_backfill(serial: str):
         if p.name in known:
             continue
         try:
-            _hist_append(serial, json.loads((p / "result.json").read_text(encoding="utf-8")))
+            _hist_append(serial, _with_volume(p, json.loads((p / "result.json").read_text(encoding="utf-8"))))
         except Exception:
             continue
 
@@ -339,6 +339,37 @@ def _rotate(serial: str, keep_last: int):
         shutil.rmtree(old, ignore_errors=True)
 
 
+def _volume_cfg_now() -> dict:
+    """Настройки объёма из конфига (поля блока «Объём и мелочь»); нет конфига — дефолты."""
+    try:
+        import plate_config
+        return {"volume": (plate_config.load().get("cv") or {}).get("volume") or {}}
+    except Exception:
+        return {}
+
+
+def _with_volume(d: Path, r: dict, cfg: Optional[dict] = None) -> dict:
+    """Проба, снятая до появления объёма (в summary нет volume): досчитать мелочь/сростки по
+    сохранённым объектам кадров по ТЕКУЩИМ полям порога и k. Файлы пробы не меняем — только ответ."""
+    s = (r or {}).get("summary")
+    if not s or s.get("volume"):
+        return r
+    try:
+        from types import SimpleNamespace as NS
+        cfg = cfg if cfg is not None else _volume_cfg_now()
+        tot = cv_volume.empty_sums()
+        for i in range(len(r.get("frames") or [1])):
+            objs = json.loads((d / ("objects_%d.json" % i)).read_text(encoding="utf-8"))
+            ms = [NS(group=o.get("group"), defect=o.get("defect"), size_um=o["size_um"],
+                     length_um=o["length_um"], width_um=o["width_um"]) for o in objs]
+            tot = cv_volume.add_sums(tot, cv_volume.sums_for(ms, cfg))
+        s["volume"], s["volume_pct"] = tot, cv_volume.percents(tot)
+        s["volume_cfg"] = cv_volume.volume_cfg(cfg)
+    except Exception:
+        pass            # нет объектов/битый файл — проба просто без объёма
+    return r
+
+
 def list_samples(serial: str, limit: int = 50) -> list[dict]:
     """Список проб (новые сверху): [{ts, count, summary}]. Без тяжёлых по-кадровых данных."""
     sd = _serial_dir(serial)
@@ -346,9 +377,10 @@ def list_samples(serial: str, limit: int = 50) -> list[dict]:
         return []
     dirs = sorted([p for p in sd.iterdir() if p.is_dir()], key=lambda p: p.name, reverse=True)
     out = []
+    vcfg = _volume_cfg_now()
     for p in dirs[:limit]:
         try:
-            r = json.loads((p / "result.json").read_text(encoding="utf-8"))
+            r = _with_volume(p, json.loads((p / "result.json").read_text(encoding="utf-8")), vcfg)
             out.append({"ts": r["ts"], "stage": r.get("stage"),
                         "summary": r.get("summary"), "frames": len(r.get("frames", [])),
                         "fracture": (r.get("fracture") or {}).get("summary")})
@@ -362,7 +394,7 @@ def get_result(serial: str, ts: str) -> Optional[dict]:
     if d is None:
         return None
     try:
-        return json.loads((d / "result.json").read_text(encoding="utf-8"))
+        return _with_volume(d, json.loads((d / "result.json").read_text(encoding="utf-8")))
     except Exception:
         return None
 

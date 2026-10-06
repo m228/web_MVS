@@ -69,7 +69,7 @@
     if ($("cvBubble")) $("cvBubble").checked = cv.bubble_filter !== false;
     if ($("cvRejectAlways")) $("cvRejectAlways").checked = !!cv.reject_always;
     const vo = cv.volume || {};
-    set("cvFinesUm", vo.fines_um); set("cvKThick", vo.k_thick);   // поля блока «Объём и мелочь»
+    set("cvFinesUm", vo.fines_um); set("cvKThick", vo.k_thick); set("cvFinesSv", vo.fines_from_sv);   // поля блока «Объём и мелочь»
     set("pcCvFrames", cv.frames_per_probe); set("pcCvGap", cv.gap_sec);   // поля на вкладке «Цикл»
     updateTriggerFields();
   }
@@ -200,21 +200,23 @@
       const [model, kind] = el.dataset.v.split(".");
       el.textContent = fmtPct(vp[model] ? vp[model][kind] : null);
     });
-    const grid = $("cvVolGrid"); if (grid) grid.classList.toggle("is-idle", !(s && s.reject_active));
+    // мелочь не считается, пока СВ ниже «Мелочь с СВ» (кристаллы растут — неактуально): тогда прочерк и пояснение
+    const finesOff = !!(s && s.volume && s.volume.fines_off);
     const st = $("cvVolState");
-    if (st) st.textContent = s && s.reject_active ? "" : "пока не готов";
+    if (st) st.textContent = finesOff ? "мелочь — с СВ " + (cfg.fines_from_sv != null ? cfg.fines_from_sv : "") : "";
     const lbl = $("cvVolLblFines"); if (lbl) lbl.textContent = "Мелочь <" + (cfg.fines_um != null ? cfg.fines_um : $("cvFinesUm") ? $("cvFinesUm").value : "");
     const n = $("cvFinesN"), pn = vp.n && vp.n.fines;
     if (n) n.textContent = "по числу " + (pn == null ? "—" : pn + " %");
   }
   function wireVolumeFields() {
-    ["cvFinesUm", "cvKThick"].forEach((id) => {
+    ["cvFinesUm", "cvKThick", "cvFinesSv"].forEach((id) => {
       const e = $(id); if (!e) return;
       e.addEventListener("change", () => {
         if (!cvSettingsLoaded) return;
-        const fu = parseFloat(($("cvFinesUm") || {}).value), k = parseFloat(($("cvKThick") || {}).value);
-        if (!(fu > 0) || !(k > 0)) return;
-        cvPostSettings({ volume: { fines_um: fu, k_thick: k } });
+        const fu = parseFloat(($("cvFinesUm") || {}).value), k = parseFloat(($("cvKThick") || {}).value),
+          fs = parseFloat(($("cvFinesSv") || {}).value);
+        if (!(fu > 0) || !(k > 0) || !(fs >= 0)) return;
+        cvPostSettings({ volume: { fines_um: fu, k_thick: k, fines_from_sv: fs } });
       });
     });
   }

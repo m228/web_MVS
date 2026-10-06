@@ -698,6 +698,48 @@ def _sv_source():
     return "sv=52.5 stage=7"
 
 
+@check("Микроскоп", "Автокалибровка нуля М1: энкодер 0±5 + аналог → set_zero → отвод; 3 попытки; провал не трогает ноль")
+def _autocal():
+    import copy
+    import plate_config
+    from microscope_fsm import MicroscopeFSM, CAL_ATTEMPTS
+
+    class _Plate:
+        def __init__(self):
+            self.telemetry = {"pos1": 0, "pos1_ai": 0, "pos1_enc": 0}
+            self.status = {"connected": True}
+            self.calls = []
+
+        def __getattr__(self, n):
+            return lambda *a, **k: self.calls.append(n)
+
+    def run(enc_at_attempt, ai):
+        cfg = copy.deepcopy(plate_config.load())
+        cfg.setdefault("autocal", {})["enabled"] = True
+        pl = _Plate()
+        fsm = MicroscopeFSM(pl, cfg)
+        fsm.set_manual(False)
+        assert fsm.start_autocal()["status"] == "started"
+        for t in range(2000):
+            n = pl.calls.count("motor_find_zero")
+            if "motor_set_zero" in pl.calls or (n >= CAL_ATTEMPTS and t > 200):
+                enc = min(fsm._retract_pos, pl.telemetry["pos1_enc"] + 400)     # едем в отвод
+            else:
+                enc = enc_at_attempt(n)
+            pl.telemetry.update(pos1_enc=enc, pos1=enc, pos1_ai=ai * 10)        # ×0.1 внутри FSM
+            fsm.tick()
+            if t > 3 and not fsm.state["autocal"]["active"]:
+                break
+        st = fsm.state["autocal"]
+        assert not st["active"], "калибровка не завершилась: %s" % st
+        return pl.calls.count("motor_find_zero"), pl.calls.count("motor_set_zero"), st["failed"]
+
+    assert run(lambda n: 0, 20) == (1, 1, False), "успех с 1-й попытки"
+    assert run(lambda n: 330 if n < 3 else 0, 20) == (3, 1, False), "успех на 3-й попытке"
+    assert run(lambda n: 330, 89) == (3, 0, True), "провал: set_zero слать нельзя, failed=True"
+    return "1-я / 3-я попытка / провал (3×Поиск 0, без set_zero)"
+
+
 @check("Микроскоп", "MicroscopeFSM: такты идут, СВ/стадия принимаются, проба стартует")
 def _fsm():
     from microscope_fsm import MicroscopeFSM
@@ -797,6 +839,9 @@ def _cv_volume():
     assert abs(p["m1"]["fines"] - want) < 0.01, "доля мелочи %s ≠ %s" % (p["m1"]["fines"], want)
     assert p["m1"]["fines"] < p["n"]["fines"], "по объёму мелочи должно быть меньше, чем по числу"
     assert cv_volume.percents(cv_volume.empty_sums())["m3"]["fines"] is None, "пустой кадр должен дать None"
+    off = cv_volume.sums_for([big, fine, agg], {"volume": {"fines_um": 200.0}}, count_fines=False)
+    assert cv_volume.percents(off)["m3"]["fines"] is None and cv_volume.percents(off)["m3"]["agg"] is not None, "до нужного СВ мелочь не считается, сростки — да"
+    assert not cv_volume.fines_on({}, 85.0) and cv_volume.fines_on({}, 88.0) and cv_volume.fines_on({}, None), "порог СВ для мелочи"
     return "мелочь %.3f %% объёма (M1)" % p["m1"]["fines"]
 
 

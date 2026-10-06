@@ -26,6 +26,7 @@ def main() -> int:
     ap.add_argument("--hist", help="папка журнала *.jsonl (по умолчанию — та же, что и probes)")
     ap.add_argument("--fines", type=float, help="порог мелочи, мкм (по умолчанию из конфига)")
     ap.add_argument("--k", type=float, help="коэффициент толщины (по умолчанию из конфига)")
+    ap.add_argument("--force", action="store_true", help="пересчитать и пробы, где объём уже есть (например, после смены порога)")
     ap.add_argument("--dry", action="store_true", help="только показать, что будет сделано")
     a = ap.parse_args()
 
@@ -46,6 +47,8 @@ def main() -> int:
         except Exception as e:
             bad.append("%s: %s" % (d.name, e))
             continue
+        if a.force and r.get("summary"):
+            r["summary"].pop("volume", None)
         had = bool((r.get("summary") or {}).get("volume"))
         if not had:
             r = cv_store._with_volume(d, r, cfg)
@@ -75,7 +78,9 @@ def main() -> int:
                 continue
             src = rows_by_ts.get(row.get("ts"))
             if src:
-                new = {**row, **{k: v for k, v in src.items() if k not in row or row.get(k) is None}}
+                vol_keys = [k for k in src if k.startswith(("fines_", "agg_", "vtot_")) or k == "k_thick"]
+                new = ({**row, **{k: src[k] for k in vol_keys}} if a.force
+                       else {**row, **{k: v for k, v in src.items() if k not in row or row.get(k) is None}})
                 changed += new != row
                 row = new
             out.append(json.dumps(row, ensure_ascii=False))

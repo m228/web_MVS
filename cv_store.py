@@ -66,7 +66,7 @@ def _volume_cols(s: dict, vp: dict, n_frames: int) -> dict:
     for key in ("m1", "m2", "m3"):
         tot = (sums.get(key) or {}).get("total")
         out["vtot_" + key] = round(tot / 1e9 / n_frames, 4) if tot else None
-    out["fines_um"], out["k_thick"] = cfg.get("fines_um"), cfg.get("k_thick")
+    out["fines_um"], out["k_thick"], out["fines_from_sv"] = cfg.get("fines_um"), cfg.get("k_thick"), cfg.get("fines_from_sv")
     return out
 
 
@@ -197,7 +197,7 @@ def trend_range(serial: str, t_from: float, t_to: float, series: Optional[list[s
 EXPORT_COLUMNS = ["ts", "t", "stage", "sv", "temp", "level", "current", "vac", "cook_time", "seed_age",
                   "count", "mean", "median", "cv_pct", "density", "small", "medium", "large", "reject",
                   "reject_pct", "fines_m1", "fines_m2", "fines_m3", "fines_area", "fines_n",
-                  "agg_m1", "agg_m2", "agg_m3", "agg_area", "agg_n", "vtot_m1", "vtot_m2", "vtot_m3", "fines_um", "k_thick",
+                  "agg_m1", "agg_m2", "agg_m3", "agg_area", "agg_n", "vtot_m1", "vtot_m2", "vtot_m3", "fines_um", "k_thick", "fines_from_sv",
                   "n_needle", "n_aggregate", "n_crooked", "n_tiny", "n_huge", "suspect",
                   "frac_zones", "frac_pct", "frames"]
 
@@ -357,7 +357,8 @@ def _volume_cfg_now() -> dict:
     """Настройки объёма из конфига (поля блока «Объём и мелочь»); нет конфига — дефолты."""
     try:
         import plate_config
-        return {"volume": (plate_config.load().get("cv") or {}).get("volume") or {}}
+        cv = plate_config.load().get("cv") or {}
+        return {"volume": cv.get("volume") or {}, "reject_always": cv.get("reject_always")}
     except Exception:
         return {}
 
@@ -372,11 +373,12 @@ def _with_volume(d: Path, r: dict, cfg: Optional[dict] = None) -> dict:
         from types import SimpleNamespace as NS
         cfg = cfg if cfg is not None else _volume_cfg_now()
         tot = cv_volume.empty_sums()
+        fines_on = cv_volume.fines_on(cfg, s.get("sv", r.get("sv")))
         for i in range(len(r.get("frames") or [1])):
             objs = json.loads((d / ("objects_%d.json" % i)).read_text(encoding="utf-8"))
             ms = [NS(group=o.get("group"), defect=o.get("defect"), size_um=o["size_um"],
                      length_um=o["length_um"], width_um=o["width_um"]) for o in objs]
-            tot = cv_volume.add_sums(tot, cv_volume.sums_for(ms, cfg))
+            tot = cv_volume.add_sums(tot, cv_volume.sums_for(ms, cfg, fines_on))
         s["volume"], s["volume_pct"] = tot, cv_volume.percents(tot)
         s["volume_cfg"] = cv_volume.volume_cfg(cfg)
     except Exception:

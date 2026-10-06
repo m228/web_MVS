@@ -27,7 +27,7 @@ DEFAULTS = {
     "shape": {"min_circularity": 0.55, "max_aspect": 3.0, "min_solidity": 0.90,
               "suspect_aspect": 1.6,     # вытянутые: от этого L/W до max_aspect (не брак)
               "notch_frac": 0.06},       # «выемка» контура глубже этой доли диаметра → признак сростка
-    "volume": {"fines_um": 200.0, "k_thick": 0.88},   # объём (см. cv_volume.py): мелочь мельче fines_um; толщина = k_thick · ширина
+    "volume": {"fines_um": 200.0, "k_thick": 0.88, "fines_from_sv": 88.0},   # объём (см. cv_volume.py): мелочь мельче fines_um, считается с СВ ≥ fines_from_sv; толщина = k_thick · ширина
     "size_reject": {"min_um": 250.0, "max_um": 1200.0},   # брак по размеру (только у готового, см. reject_from_sv)
     "reject_from_sv": 88.0,    # брак идёт в рассев/тренд, только когда СВ ≥ этого (кристаллы подросли)
     "reject_always": False,    # True — считать брак всегда, без порога по СВ
@@ -776,7 +776,7 @@ def summarize(measures: list[CrystalMeasure], image_shape: tuple,
     n = len(measures) - n_cut - n_bubble
     area_mm2 = (w * cfg["um_per_px"] / 1000.0) * (h * cfg["um_per_px"] / 1000.0)
     sizes_np = np.array(sizes) if sizes else np.array([0.0])
-    vol_sums = cv_volume.sums_for(measures, cfg)
+    vol_sums = cv_volume.sums_for(measures, cfg, cv_volume.fines_on(cfg, sv))
     quality = "ok"
     if blur is not None and blur < cfg["blur_min"]:
         quality = "low"

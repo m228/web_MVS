@@ -846,6 +846,38 @@ def _cv_volume():
     return "мелочь %.3f %% объёма (M1)" % p["m1"]["fines"]
 
 
+@check("CV", "cv_store.boils: журнал режется на варки, мелочь по варке считается только по пробам финиша")
+def _cv_boils():
+    import cv_store
+    def row(t, sv, stage, cook, fm3=None, vt=1.0):
+        return {"ts": "2026-10-06_%02d_%02d_00" % (t // 60, t % 60), "t": t * 60.0, "sv": sv, "stage": stage, "cook_time": cook,
+                "fines_m1": fm3, "fines_m2": fm3, "fines_m3": fm3, "fines_area": fm3, "fines_n": fm3,
+                "agg_m1": 10.0, "agg_m2": 10.0, "agg_m3": 10.0, "agg_area": 10.0, "agg_n": 10.0,
+                "vtot_m1": vt, "vtot_m2": vt, "vtot_m3": vt}
+    a = [row(t, 80 + t * 0.2, 7, t * 60, None) for t in range(0, 20, 2)] + [row(20, 88.0, 8, 1200, 4.0), row(22, 88.5, 8, 1320, 2.0)]
+    b = [row(300 + t, 80 + t * 0.2, 3 if t == 0 else 7, 100 + t * 60, None) for t in range(0, 20, 2)] + [row(320, 88.0, 8, 1300, 6.0, vt=3.0)]
+    import time as _t
+    orig = (cv_store._hist_backfill, cv_store._hist_dir, cv_store._hist_read)
+    cv_store._hist_backfill = lambda serial: None
+    class _D:
+        def exists(self): return True
+        def glob(self, pat): return [type("F", (), {"stem": "d"})()]
+    cv_store._hist_dir = lambda serial: _D()
+    cv_store._hist_read = lambda serial, day: a + b
+    try:
+        res = cv_store.boils("X", limit=5, now=321 * 60.0)       # последняя проба 1 мин назад → варка идёт
+        done = cv_store.boils("X", limit=5, now=321 * 60.0 + 7200)
+    finally:
+        cv_store._hist_backfill, cv_store._hist_dir, cv_store._hist_read = orig
+    assert len(res) == 2, "варок %d, ждали 2 (пауза 4 ч между пробами)" % len(res)
+    assert not res[0]["finished"] and res[1]["finished"], "новая варка идёт, прошлая закончена"
+    assert done[0]["finished"], "через 2 часа без проб варка закончена"
+    assert res[1]["counted"] == 2 and res[1]["fines"]["m3"] == 3.0, "мелочь прошлой варки = среднее по 2 пробам финиша: %s" % res[1]["fines"]
+    assert res[0]["counted"] == 1 and res[0]["fines"]["m3"] == 6.0, "в новой варке мелочь по одной пробе"
+    assert res[1]["agg"]["m3"] == 10.0 and res[1]["n"] == 12, "сростки — по всем пробам варки"
+    return "варок %d, мелочь прошлой %.1f %%" % (len(res), res[1]["fines"]["m3"])
+
+
 @check("CV", "cv_analyzer: пузырь воздуха (ровный круг) отсеивается из рассева, шестиугольники — нет")
 def _cv_bubble():
     import math

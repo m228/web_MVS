@@ -3827,3 +3827,15 @@ input.micro-cam-num { width: 56px; min-width: 0; flex: 0 0 auto; padding: 4px 5p
 .micro-vol__note { margin-top: 10px; font-size: 0.78em; line-height: 1.5; color: var(--muted, #5b6b81); }
 .micro-vol__note > div + div { margin-top: 3px; }
 .micro-vol__note b { color: var(--text, inherit); font-weight: 600; }
+
+/* Объём и мелочь: переключатель «по варке / по пробе» и стрелки по варкам */
+.micro-vol__nav { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin: 0 0 10px; }
+.micro-vol__mode { display: inline-flex; border: 1px solid var(--border, rgba(131,151,179,.28)); border-radius: 999px; overflow: hidden; }
+.micro-vol__mode button { border: 0; background: transparent; color: var(--muted, #5b6b81); font-size: 0.78em; padding: 4px 11px; cursor: pointer; }
+.micro-vol__mode button.is-active { background: var(--accent, #2563eb); color: #fff; }
+.micro-vol__boil { display: inline-flex; align-items: center; gap: 6px; font-size: 0.8em; color: var(--muted, #5b6b81); min-width: 0; }
+.micro-vol__boil[hidden] { display: none; }
+.micro-vol__boil button { border: 1px solid var(--border, rgba(131,151,179,.28)); background: transparent; color: inherit; border-radius: 6px; width: 24px; height: 24px; cursor: pointer; font-size: 15px; line-height: 1; }
+.micro-vol__boil button:hover:not(:disabled) { border-color: var(--accent, #2563eb); color: var(--accent, #2563eb); }
+.micro-vol__boil button:disabled { opacity: .35; cursor: default; }
+.micro-vol__boil #cvBoilLbl { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--text, inherit); font-weight: 600; font-variant-numeric: tabular-nums; }

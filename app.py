@@ -790,6 +790,13 @@ def cv_trend_days(serial: str | None = None):
     return {"days": cv_store.history_days(_cv_serial(serial))}
 
 
+@app.get("/api/cv/boils")
+def cv_boils(serial: str | None = None, limit: int = 6):
+    """Последние варки (новая первой) со сводкой мелочи/сростков/объёма: для «Объём и мелочь» с листалкой по варкам.
+    Варка идёт, пока последняя проба свежая; мелочь считается по пробам варки с СВ ≥ порога (финиш)."""
+    return {"boils": cv_store.boils(_cv_serial(serial), limit=max(1, min(int(limit), 20)))}
+
+
 @app.get("/api/cv/trend/export")
 def cv_trend_export(serial: str | None = None,
                     t_from: float | None = Query(None, alias="from"), t_to: float | None = Query(None, alias="to")):

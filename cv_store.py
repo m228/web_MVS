@@ -216,6 +216,88 @@ def export_rows(serial: str, t_from: Optional[float] = None, t_to: Optional[floa
     return [{c: r.get(c) for c in EXPORT_COLUMNS} for r in rows]
 
 
+# --- варки: журнал проб нарезается на варки, по варке — сводка мелочи/сростков/объёма ---
+BOIL_GAP_S = 45 * 60        # пауза между пробами больше этой — новая варка (пробы идут раз в 1–2 мин)
+BOIL_COOK_DROP_S = 300      # время варки (cook_time) упало больше чем на это — новая варка
+BOIL_SV_DROP = 4.0          # СВ упало на столько и больше — новая варка (запасной признак)
+BOIL_OPEN_S = 15 * 60       # последняя варка «идёт», если последняя проба моложе этого
+
+
+def _is_new_boil(prev: dict, r: dict) -> bool:
+    """Начало новой варки между двумя соседними пробами журнала: длинная пауза, время варки упало,
+    стадия откатилась на заводку (было ≥6, стало ≤4) или СВ резко упало."""
+    if r["t"] - prev["t"] > BOIL_GAP_S:
+        return True
+    ct, pt = r.get("cook_time"), prev.get("cook_time")
+    if ct is not None and pt is not None and ct < pt - BOIL_COOK_DROP_S:
+        return True
+    st, ps = r.get("stage"), prev.get("stage")
+    if st is not None and ps is not None and ps >= 6 and st <= 4:
+        return True
+    sv, psv = r.get("sv"), prev.get("sv")
+    return sv is not None and psv is not None and sv < psv - BOIL_SV_DROP
+
+
+def _wmean(rows: list, key: str, wkey: Optional[str]) -> Optional[float]:
+    """Среднее по пробам, где значение есть; с весом wkey (общий объём пробы), если он есть у всех."""
+    pts = [(r[key], r.get(wkey) if wkey else None) for r in rows if r.get(key) is not None]
+    if not pts:
+        return None
+    if wkey and all(w for _, w in pts):
+        return sum(v * w for v, w in pts) / sum(w for _, w in pts)
+    return sum(v for v, _ in pts) / len(pts)
+
+
+def _boil_summary(rows: list, finished: bool) -> dict:
+    """Сводка варки по строкам журнала. Мелочь — по пробам, где она считалась (СВ ≥ порога), с весом по общему
+    объёму пробы: большая проба весит больше. Сростки и площадь — по всем пробам варки."""
+    def r3(v):
+        return None if v is None else round(v, 3)
+
+    out = {"id": rows[0]["ts"], "ts_from": rows[0]["ts"], "ts_to": rows[-1]["ts"],
+           "t_from": rows[0]["t"], "t_to": rows[-1]["t"], "n": len(rows), "finished": finished}
+    svs = [r["sv"] for r in rows if r.get("sv") is not None]
+    out["sv_min"], out["sv_max"] = (min(svs), max(svs)) if svs else (None, None)
+    out["counted"] = sum(1 for r in rows if r.get("fines_m3") is not None)   # проб, где мелочь считалась
+    fines, agg, vtot = {}, {}, {}
+    for m in ("m1", "m2", "m3"):
+        w = "vtot_" + m
+        fines[m] = r3(_wmean(rows, "fines_" + m, w))
+        agg[m] = r3(_wmean(rows, "agg_" + m, w))
+        vtot[m] = r3(_wmean(rows, w, None))
+    fines["area"], agg["area"] = r3(_wmean(rows, "fines_area", None)), r3(_wmean(rows, "agg_area", None))
+    fines["n"], agg["n"] = r3(_wmean(rows, "fines_n", None)), r3(_wmean(rows, "agg_n", None))
+    out["fines"], out["agg"], out["vtot"] = fines, agg, vtot
+    last = rows[-1]
+    out["cfg"] = {k: last.get(k) for k in ("fines_side_mm", "fines_um", "k_thick", "fines_from_sv")}
+    return out
+
+
+def boils(serial: str, limit: int = 6, now: Optional[float] = None) -> list[dict]:
+    """Последние варки (новая первой): журнал проб режется на варки (_is_new_boil), по каждой — сводка
+    мелочи/сростков/объёма. Последняя варка «идёт», пока последняя проба моложе BOIL_OPEN_S."""
+    _hist_backfill(serial)
+    rows, seen = [], set()
+    hd = _hist_dir(serial)
+    for f in (sorted(hd.glob("*.jsonl")) if hd.exists() else []):
+        for r in _hist_read(serial, f.stem):
+            if r.get("t") is not None and r.get("ts") not in seen:
+                seen.add(r.get("ts"))
+                rows.append(r)
+    rows.sort(key=lambda r: r["t"])
+    groups: list[list[dict]] = []
+    for r in rows:
+        if not groups or _is_new_boil(groups[-1][-1], r):
+            groups.append([])
+        groups[-1].append(r)
+    now = time.time() if now is None else now
+    out = []
+    for i, g in enumerate(reversed(groups[-limit:])):
+        finished = not (i == 0 and now - g[-1]["t"] <= BOIL_OPEN_S)
+        out.append(_boil_summary(g, finished))
+    return out
+
+
 def _probe_dir(serial: str, ts: str) -> Optional[Path]:
     """Папка пробы по метке времени. ts приходит из запроса — пускаем только «цифры/_/-»,
     чтобы через него нельзя было выйти из каталога проб."""

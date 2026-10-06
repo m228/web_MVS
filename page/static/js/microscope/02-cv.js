@@ -223,7 +223,92 @@
     rows.push("<div><b>Общий объём</b> кристаллов на кадре: " + mm3((vol.m3 || {}).total || 0) + " мм³ (призма), " + mm3((vol.m1 || {}).total || 0) + " (шар), " + mm3((vol.m2 || {}).total || 0) + " (сфероид).</div>");
     box.innerHTML = rows.join("");
   }
+  // --- по варке: журнал проб нарезан на варки (/api/cv/boils), листаем стрелками ---
+  let cvBoils = [], cvBoilSel = null, cvBoilTs = 0, cvVolMode = "boil";
+  try { cvVolMode = localStorage.getItem("microCvVolMode") === "probe" ? "probe" : "boil"; } catch (e) { }
+  // по умолчанию показываем ПРЕДЫДУЩУЮ (законченную) варку: идущая ещё не дошла до финиша, мелочь у неё неактуальна
+  function cvBoilIdx() {
+    if (!cvBoils.length) return -1;
+    if (cvBoilSel) { const i = cvBoils.findIndex((b) => b.id === cvBoilSel); if (i >= 0) return i; }
+    const k = cvBoils.findIndex((b) => b.finished);
+    return k >= 0 ? k : 0;
+  }
+  function cvBoilName(i) {
+    const b = cvBoils[i]; if (!b.finished) return "идёт сейчас";
+    const k = cvBoils.slice(0, i).filter((x) => x.finished).length;
+    return k === 0 ? "предыдущая варка" : (k === 1 ? "пред-предыдущая" : (k + 1) + " варки назад");
+  }
+  function cvBoilSpan(b) {
+    const d = (ts) => cvTsLabel(ts, true).slice(0, 11);       // «05.10 16:27»
+    return d(b.ts_from) + "–" + cvTsLabel(b.ts_to).slice(0, 5);
+  }
+  async function cvLoadBoils(force) {
+    if (!force && Date.now() - cvBoilTs < 15000) return;
+    cvBoilTs = Date.now();
+    try {
+      const q = cvSerialQ();
+      const r = await api("/api/cv/boils?" + (q ? q + "&" : "") + "limit=6");
+      cvBoils = (r && r.boils) || [];
+    } catch (e) { }
+    if (cvVolMode === "boil") cvRenderBoil();
+  }
+  function cvRenderBoil() {
+    const i = cvBoilIdx(), b = i >= 0 ? cvBoils[i] : null;
+    const lbl = $("cvBoilLbl"), older = $("cvBoilOlder"), newer = $("cvBoilNewer"), st = $("cvVolState"), box = $("cvVolNote");
+    if (older) older.disabled = !(i >= 0 && i < cvBoils.length - 1);
+    if (newer) newer.disabled = !(i > 0);
+    const cells = (kind) => document.querySelectorAll("#cvVolGrid [data-v$='." + kind + "']");
+    const put = (kind, src) => cells(kind).forEach((el) => { const m = el.dataset.v.split(".")[0]; el.textContent = fmtPct(src ? src[m] : null); });
+    if (!b) {
+      if (lbl) lbl.textContent = "варок пока нет";
+      put("fines", null); put("agg", null); if (st) st.textContent = "";
+      if (box) box.innerHTML = "<div>Журнал проб пуст — варки появятся, когда пойдут пробы.</div>";
+      return;
+    }
+    if (lbl) { lbl.textContent = cvBoilName(i) + " · " + cvBoilSpan(b); lbl.title = "Варка " + cvBoilSpan(b) + " · проб " + b.n; }
+    put("fines", b.fines); put("agg", b.agg);
+    const cfg = b.cfg || {};
+    const fd = cfg.fines_um != null ? cfg.fines_um : cvFinesDiam();
+    const fl = $("cvVolLblFines"); if (fl) fl.textContent = "Мелочь <" + (fd != null ? Math.round(fd) : "") + " мкм";
+    const calc = $("cvFinesCalc"); if (calc) calc.textContent = cvFinesCalcText();
+    const pc = (v) => (v == null ? "—" : (v >= 10 ? v.toFixed(1) : v.toFixed(2)).replace(".", ",") + " %");
+    const hasVol = b.vtot && b.vtot.m3 != null;
+    const svr = (b.sv_min != null ? String(b.sv_min).replace(".", ",") + "…" + String(b.sv_max).replace(".", ",") : "—");
+    if (st) st.textContent = b.finished ? "" : "варка идёт";
+    const rows = ["<div><b>" + cvBoilName(i) + ":</b> " + cvBoilSpan(b) + " · проб " + b.n + " · СВ " + svr + ".</div>"];
+    if (!hasVol) {
+      rows.push("<div>Объёма по этой варке нет: её пробы сняты до расчёта объёма или кадры уже стёрты ротацией (хранится последних проб " + 50 + ").</div>");
+    } else if (!b.counted) {
+      rows.push("<div><b>Мелочь</b> по варке не считалась: СВ не дошёл до " + (cfg.fines_from_sv != null ? cfg.fines_from_sv : "порога") + " (максимум " + (b.sv_max != null ? String(b.sv_max).replace(".", ",") : "—") + "). Порог — поле «Мелочь с СВ».</div>");
+    } else {
+      rows.push("<div><b>Мелочь по варке: " + pc(b.fines.m3) + " объёма</b> (призма) — по " + b.counted + " пробам финиша (СВ ≥ " + (cfg.fines_from_sv != null ? cfg.fines_from_sv : "") + ") из " + b.n + "; по числу " + pc(b.fines.n) + ", по площади " + pc(b.fines.area) + ".</div>");
+    }
+    if (hasVol) {
+      rows.push("<div><b>Сростки:</b> " + pc(b.agg.m3) + " объёма по всей варке — считаются отдельно, в мелочь не входят.</div>");
+      rows.push("<div><b>Объём</b> кристаллов на кадре в среднем: " + String(Number(b.vtot.m3.toPrecision(2))).replace(".", ",") + " мм³ (призма).</div>");
+    }
+    if (box) box.innerHTML = rows.join("");
+  }
+  function wireBoilNav() {
+    const setMode = (m) => {
+      cvVolMode = m;
+      try { localStorage.setItem("microCvVolMode", m); } catch (e) { }
+      document.querySelectorAll("#cvVolNav [data-vmode]").forEach((b) => b.classList.toggle("is-active", b.dataset.vmode === m));
+      const bx = $("cvBoilBox"); if (bx) bx.hidden = m !== "boil";
+      if (m === "boil") { cvRenderBoil(); cvLoadBoils(true); } else cvRenderScatter();
+    };
+    document.querySelectorAll("#cvVolNav [data-vmode]").forEach((b) => b.addEventListener("click", () => setMode(b.dataset.vmode)));
+    const step = (d) => {
+      const i = cvBoilIdx(), j = i + d; if (i < 0 || j < 0 || j >= cvBoils.length) return;
+      cvBoilSel = cvBoils[j].id; cvRenderBoil();
+    };
+    const o = $("cvBoilOlder"), n = $("cvBoilNewer");
+    if (o) o.addEventListener("click", () => step(+1));
+    if (n) n.addEventListener("click", () => step(-1));
+    setMode(cvVolMode);
+  }
   function cvRenderVolume(s) {
+    if (cvVolMode === "boil") { cvRenderBoil(); return; }
     const vp = (s && s.volume_pct) || {}, cfg = (s && s.volume_cfg) || {};
     document.querySelectorAll("#cvVolGrid [data-v]").forEach((el) => {
       const [model, kind] = el.dataset.v.split(".");
@@ -990,6 +1075,7 @@
         cvView = cvLastResult; cvViewPinned = false;
       }
       cvRenderScatter();
+      cvLoadBoils(false);
       cvRenderStrip();
       cvShowFrame();
       cvLoadTrend();
@@ -1043,6 +1129,7 @@
     wireHoverTip();
     wireLayers();
     wireVolumeFields();
+    wireBoilNav();
     cvModelRefresh();
     const en = $("cvEnable");
     if (en) en.addEventListener("change", () => { updateTriggerFields(); cvPostSettings({ enabled: en.checked }).then(cvHealth); });

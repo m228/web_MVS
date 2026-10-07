@@ -1328,7 +1328,21 @@ def _update_script():
            "if($e){$e|%%{$_.Message};exit 1}" % str(ps1).replace("'", "''"))
     r = subprocess.run([ps, "-NoProfile", "-Command", cmd], capture_output=True, timeout=60)
     assert r.returncode == 0, "update.ps1 не разбирается: %s" % r.stdout.decode("utf-8", "replace")[:300]
-    return "разбор без ошибок"
+    # запуск БЕЗ параметров из чужой папки (так его запускает update.bat): папка установки должна определиться сама.
+    # Раньше $PSScriptRoot в значении параметра при запуске через -File был пуст -> «не удаётся привязать аргумент LiteralPath»
+    assert "[string]$Root = ''" in text, "-Root по умолчанию должен быть пустым и вычисляться в теле скрипта"
+    import tempfile
+    d = Path(tempfile.mkdtemp(prefix="updroot_"))
+    try:
+        shutil.copy2(ps1, d / "update.ps1")
+        r = subprocess.run([ps, "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(d / "update.ps1"), "-NoElevate",
+                            "-ZipPath", str(d / "no_such.zip")], capture_output=True, timeout=90, cwd=tempfile.gettempdir())
+        out = (r.stdout + r.stderr).decode("utf-8", "replace") + (r.stdout + r.stderr).decode("cp866", "replace")
+        assert "ParameterBindingValidationException" not in out and "LiteralPath" not in out, "update.ps1 без параметров падает на пустой папке: %s" % out[:300]
+        assert r.returncode == 1, "ждали код 1 (архив не найден), получили %s" % r.returncode
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+    return "разбор без ошибок, запуск без параметров находит папку установки"
 
 
 @check("Служебные", "autostart.status: планировщик Windows отвечает")

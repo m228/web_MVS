@@ -270,7 +270,7 @@ DEFAULTS = {
         "groups": {"small_max_um": 500.0, "medium_max_um": 900.0},
         # стартовые пороги — из «Памятки оператора» (Сапронов): игла L/W > 3,0; сросток/кривой при выпуклости
         # < 0,90; вытянутые 1,6–3,0 — не брак, а предупреждение; notch_frac — глубина перетяжки сростка
-        "shape": {"min_circularity": 0.55, "max_aspect": 3.0, "min_solidity": 0.90,
+        "shape": {"min_circularity": 0.55, "max_aspect": 3.0, "min_solidity": 0.90, "min_um": 100.0, "smooth_k": 5,
                   "suspect_aspect": 1.6, "notch_frac": 0.06},
         # брак по размеру (мелочь < 0,25 мм, слишком крупный > 1,2 мм) — только когда СВ ≥ reject_from_sv
         "size_reject": {"min_um": 250.0, "max_um": 1200.0},

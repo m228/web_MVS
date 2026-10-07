@@ -1051,6 +1051,23 @@ def _cv_reject_to_sv():
     return "до 85 брак считается, выше — отсеян"
 
 
+@check("CV", "cv_analyzer: форму (сросток/игла/кривой) судим только от «Форму судить от» (100 мкм), мельче — хороший кристалл")
+def _cv_shape_min():
+    import cv_analyzer as A
+    cfg = A._cfg(None)
+    assert cfg["shape"]["min_um"] == 100.0, "по умолчанию 100 мкм"
+    args = dict(circularity=0.9, aspect=1.2, solidity=0.95, notches=2, cfg=cfg, size_active=False)
+    assert A._defect(size_um=80.0, **args) is None, "мельче 100 мкм сросток не определяется"
+    assert A._defect(size_um=150.0, **args) == "aggregate", "от 100 мкм сросток определяется"
+    needle = dict(circularity=0.9, aspect=4.0, solidity=0.95, notches=0, cfg=cfg, size_active=False)
+    assert A._defect(size_um=60.0, **needle) is None and A._defect(size_um=300.0, **needle) == "needle", "игла — тоже только от порога"
+    off = A._cfg({"shape": {"min_um": 0.0}})
+    assert A._defect(size_um=40.0, **dict(args, cfg=off)) == "aggregate", "порог 0 — судим всё, как раньше"
+    # размер-брак (tiny) от порога формы не зависит
+    assert A._defect(size_um=40.0, **dict(args, notches=0, cfg=A._cfg({"size_reject": {"min_um": 250.0, "max_um": 1200.0}}), size_active=True)) == "tiny"
+    return "мельче 100 мкм форму не судим"
+
+
 @check("CV", "cv_volume: рассев по ситам — фракции по границам 0,2·0,5·0,7·0,8·1·1,2 мм, сумма 100 %, слияние кадров")
 def _cv_sieve():
     import cv_volume

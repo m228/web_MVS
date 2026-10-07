@@ -62,7 +62,7 @@
     set("cvUmPerPx", cv.um_per_px); set("cvTiles", cv.tiles);
     set("cvMinCirc", sh.min_circularity); set("cvMinSol", sh.min_solidity);
     set("cvMaxAspect", sh.max_aspect); set("cvConf", cv.conf);
-    set("cvSuspect", sh.suspect_aspect); set("cvRejectSv", cv.reject_to_sv != null ? cv.reject_to_sv : 85);
+    set("cvSuspect", sh.suspect_aspect); set("cvShapeMin", sh.min_um != null ? sh.min_um : 100); set("cvSmoothK", sh.smooth_k != null ? sh.smooth_k : 5); set("cvRejectSv", cv.reject_to_sv != null ? cv.reject_to_sv : 85);
     set("cvClusterGap", cv.cluster_gap_px); set("cvEdgeMargin", cv.edge_margin_px);
     if ($("cvSeamMerge")) $("cvSeamMerge").checked = cv.seam_merge !== false;
     if ($("cvSeamRefine")) $("cvSeamRefine").checked = cv.seam_refine !== false;
@@ -78,7 +78,7 @@
     const num = (id) => { const e = $(id); return e && e.value !== "" ? parseFloat(e.value) : undefined; };
     return {
       groups: { small_max_um: num("cvSmallMax"), medium_max_um: num("cvMediumMax") },
-      shape: { min_circularity: num("cvMinCirc"), min_solidity: num("cvMinSol"), max_aspect: num("cvMaxAspect"), suspect_aspect: num("cvSuspect") },
+      shape: { min_circularity: num("cvMinCirc"), min_solidity: num("cvMinSol"), max_aspect: num("cvMaxAspect"), suspect_aspect: num("cvSuspect"), min_um: num("cvShapeMin"), smooth_k: num("cvSmoothK") },
       um_per_px: num("cvUmPerPx"), tiles: num("cvTiles"), conf: num("cvConf"),
       reject_to_sv: num("cvRejectSv"), cluster_gap_px: num("cvClusterGap"), edge_margin_px: num("cvEdgeMargin"),
       seam_merge: $("cvSeamMerge") ? $("cvSeamMerge").checked : undefined,
@@ -418,14 +418,17 @@
   function cvClassify(o) {
     if (o.group === "cut") return { layer: "cut", reason: null };
     if (o.group === "bubble") return { layer: "bubble", reason: null };
-    if (o.members > 1) return { layer: "reject", reason: "aggregate" };   // склеен из нескольких масок
+    const tM = (() => { const e = $("cvShapeMin"); const v = e && e.value !== "" ? parseFloat(e.value) : NaN; return isNaN(v) ? 0 : v; })();   // «Форму судить от, мкм»
+    const judge = !(tM > 0 && o.size_um < tM);       // мельче порога форму не судим: ни сростка, ни иглы, ни кривого
+    if (o.members > 1 && judge) return { layer: "reject", reason: "aggregate" };   // склеен из нескольких масок
     const thr = (id) => { const e = $(id); return e && e.value !== "" ? parseFloat(e.value) : null; };
     const tC = thr("cvMinCirc"), tS = thr("cvMinSol"), tA = thr("cvMaxAspect"), tU = thr("cvSuspect"), gS = thr("cvSmallMax"), gM = thr("cvMediumMax");
     if (o.circularity == null || [tC, tS, tA, gS, gM].some((v) => v == null || isNaN(v)))
       return { layer: o.defect ? "reject" : (o.suspect ? "suspect" : o.group), reason: o.defect || null };
     const n = o.notches || 0;
     let reason = null;
-    if (o.aspect > tA) reason = "needle";
+    if (!judge) reason = (o.defect === "tiny" || o.defect === "huge") ? o.defect : null;
+    else if (o.aspect > tA) reason = "needle";
     else if (n >= 1 && n <= CV_NOTCH_MAX && (n >= 2 || o.solidity < tS)) reason = "aggregate";
     else if (n > CV_NOTCH_MAX || o.solidity < tS || o.circularity < tC) reason = "crooked";
     else if (o.defect === "tiny" || o.defect === "huge") reason = o.defect;

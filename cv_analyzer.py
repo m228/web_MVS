@@ -26,6 +26,8 @@ DEFAULTS = {
     "groups": {"small_max_um": 500.0, "medium_max_um": 900.0},
     "shape": {"min_circularity": 0.55, "max_aspect": 3.0, "min_solidity": 0.90,
               "suspect_aspect": 1.6,     # вытянутые: от этого L/W до max_aspect (не брак)
+              "smooth_k": 5,             # сглаживание маски: минимальное ядро, px (больше — контур глаже, меньше ложных перетяжек у мелких; 1–3 — почти без сглаживания)
+              "min_um": 100.0,           # форму (игла/сросток/кривой) оцениваем только у кристаллов от этого размера: у мелких маска в десятки px, контур шумит и даёт ложный брак
               "notch_frac": 0.06},       # «выемка» контура глубже этой доли диаметра → признак сростка
     "volume": {"fines_side_mm": 0.2, "k_thick": 0.88, "fines_from_sv": 88.0},   # объём (см. cv_volume.py): мелочь — площадь меньше fines_side_mm², считается с СВ ≥ fines_from_sv; толщина = k_thick · ширина
     "size_reject": {"min_um": 250.0, "max_um": 1200.0},   # брак по размеру (только у готового, см. reject_from_sv)
@@ -170,7 +172,10 @@ def _radial_cv(cnt: np.ndarray, n: int = 180) -> float:
     return float(r.std() / r.mean()) if r.mean() > 0 else 1.0
 
 
-def _clean_contour(cnt: np.ndarray, eq_d_px: float) -> np.ndarray:
+SMOOTH_MIN_K = 5        # минимальное ядро сглаживания маски, px (у мелких кристаллов ядро 5 % диаметра выходит меньше — шум контура давал ложные «перетяжки»)
+
+
+def _clean_contour(cnt: np.ndarray, eq_d_px: float, kmin: int = SMOOTH_MIN_K) -> np.ndarray:
     """Контур маски без тонких хвостов и шипов: маска морфологически открывается (ядро ≈ 5 % диаметра).
     Модель часто тянет за кристаллом волосок — он занижает выпуклость и даёт ложные «перетяжки»;
     форму кристалла (округлость, выпуклость, выемки) оцениваем по очищенному контуру.
@@ -183,7 +188,7 @@ def _clean_contour(cnt: np.ndarray, eq_d_px: float) -> np.ndarray:
             return cnt
         m = np.zeros((h, w), np.uint8)
         cv2.fillPoly(m, [np.round(pts - (x0, y0)).astype(np.int32).reshape(-1, 1, 2)], 1)
-        k = max(3, int(round(0.05 * eq_d_px)) | 1)
+        k = max(int(kmin), int(round(0.05 * eq_d_px)) | 1)
         m = cv2.morphologyEx(m, cv2.MORPH_OPEN, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k, k)))
         cs = cv2.findContours(m, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)[0]
         if not cs:
@@ -246,14 +251,15 @@ def _defect(size_um: float, circularity: float, aspect: float, solidity: float,
             notches: int, cfg: dict, size_active: bool) -> Optional[str]:
     """Причина брака по форме/размеру или None. Порядок = приоритет причин."""
     sh = cfg["shape"]
-    if aspect > sh["max_aspect"]:
-        return "needle"                                   # игла (раффиноза)
-    # сросток: 2–5 глубоких перетяжек контура (либо 1 перетяжка при невыпуклом силуэте);
-    # выемок МНОГО (>5) — это не срастание тел, а рваный/неровный край → «кривой»
-    if 1 <= notches <= NOTCH_MAX and (notches >= 2 or solidity < sh["min_solidity"]):
-        return "aggregate"
-    if notches > NOTCH_MAX or solidity < sh["min_solidity"] or circularity < sh["min_circularity"]:
-        return "crooked"                                  # кривой / неровный контур
+    if size_um >= sh.get("min_um", 0.0):                  # мельче — форму не судим (шум контура)
+        if aspect > sh["max_aspect"]:
+            return "needle"                               # игла (раффиноза)
+        # сросток: 2–5 глубоких перетяжек контура (либо 1 перетяжка при невыпуклом силуэте);
+        # выемок МНОГО (>5) — это не срастание тел, а рваный/неровный край → «кривой»
+        if 1 <= notches <= NOTCH_MAX and (notches >= 2 or solidity < sh["min_solidity"]):
+            return "aggregate"
+        if notches > NOTCH_MAX or solidity < sh["min_solidity"] or circularity < sh["min_circularity"]:
+            return "crooked"                              # кривой / неровный контур
     if size_active:
         sr = cfg["size_reject"]
         if size_um < sr["min_um"]:
@@ -704,7 +710,7 @@ def measure_objects(objects: list[dict], cv_cfg: Optional[dict] = None,
         width_um = min(rw, rh) * upp
         aspect = (max(rw, rh) / min(rw, rh)) if min(rw, rh) > 0 else 99.0
         # форма (округлость, выпуклость, выемки) — по очищенному от шипов контуру; размер — по маске как есть
-        clean = _clean_contour(cnt, eq_d_px) if obj.get("polygon") else cnt
+        clean = _clean_contour(cnt, eq_d_px, int(cfg["shape"].get("smooth_k", SMOOTH_MIN_K))) if obj.get("polygon") else cnt
         c_area, c_perim = cv2.contourArea(clean), cv2.arcLength(clean, True)
         circ = min((4.0 * math.pi * c_area / (c_perim * c_perim)) if c_perim > 0 else 0.0, 1.0)
         hull_area = cv2.contourArea(cv2.convexHull(clean))
@@ -716,7 +722,7 @@ def measure_objects(objects: list[dict], cv_cfg: Optional[dict] = None,
         notches = 0 if (cut or not obj.get("polygon")) else _notches(clean, eq_d_px, cfg["shape"]["notch_frac"])
         members = int(obj.get("members", 1))
         defect = None if cut else _defect(size_um, circ, aspect, solidity, notches, cfg, size_active)
-        if members > 1 and not cut:
+        if members > 1 and not cut and size_um >= cfg["shape"].get("min_um", 0.0):
             defect = "aggregate"          # склеено из нескольких масок — сросток по определению
         suspect = (not cut) and defect is None and aspect > cfg["shape"]["suspect_aspect"]
         bubble = (cfg["bubble_filter"] and not cut and members == 1 and obj.get("polygon")

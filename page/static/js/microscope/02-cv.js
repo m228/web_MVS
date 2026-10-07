@@ -764,20 +764,25 @@
   function cvBuildStylePanel() {
     const box = $("cvTrendStylePanel"); if (!box) return;
     const hex = (c) => (/^#[0-9a-f]{6}$/i.test(c || "") ? c : "#888888");
-    let html = '<div class="micro-tstyle__hd"><b>Вид линий</b><button type="button" id="cvStyleReset">Сбросить всё</button></div>';
-    document.querySelectorAll("#cvSeries .micro-srow").forEach((row) => {
-      const name = row.querySelector("input").value, label = row.querySelector("span").textContent;
-      const def = name === "stage" ? "#e6e8ec" : (CV_SERIES_COLOR[name] || "#888888"), st = cvTrendStyle[name] || {};
-      html += '<div class="micro-tstyle__row" data-s="' + name + '"><span>' + label + '</span>' +
-        '<input type="color" value="' + hex(st.color || def) + '" title="Цвет линии" />' +
-        '<input type="range" min="1" max="8" step="0.5" value="' + (Number(st.width) || (name === "stage" ? 1.5 : 2)) + '" title="Толщина линии" /></div>';
+    // те же две группы, что в списке серий: «Кристаллы» и «Тренды с ВА»; в строке — кружок цвета, название, ползунок толщины и число
+    let html = '<div class="micro-tstyle__hd"><b>Вид линий</b><button type="button" id="cvStyleReset">Сбросить всё</button></div><div class="micro-tstyle__cols">';
+    document.querySelectorAll("#cvSeries .micro-trend__col").forEach((col) => {
+      html += '<div class="micro-tstyle__col"><div class="micro-tstyle__title">' + col.querySelector(".micro-srow-sep").textContent + "</div>";
+      col.querySelectorAll(".micro-srow").forEach((row) => {
+        const name = row.querySelector("input").value, label = row.querySelector("span").textContent;
+        const def = name === "stage" ? "#e6e8ec" : (CV_SERIES_COLOR[name] || "#888888"), st = cvTrendStyle[name] || {};
+        const w = Number(st.width) || (name === "stage" ? 1.5 : 2);
+        html += '<div class="micro-tstyle__row" data-s="' + name + '"><input type="color" value="' + hex(st.color || def) + '" title="Цвет линии «' + label + '»" />' +
+          '<span class="lbl">' + label + '</span><input type="range" min="1" max="8" step="0.5" value="' + w + '" title="Толщина линии «' + label + '»" /><em>' + w + "</em></div>";
+      });
+      html += "</div>";
     });
-    box.innerHTML = html;
+    box.innerHTML = html + "</div>";
     let timer = null;
     const save = () => { clearTimeout(timer); timer = setTimeout(() => cvPostSettings({ trend_style: cvTrendStyle }), 400); };
     box.querySelectorAll(".micro-tstyle__row").forEach((row) => {
-      const name = row.dataset.s, [col, wid] = row.querySelectorAll("input");
-      const upd = () => { cvTrendStyle[name] = { color: col.value, width: Number(wid.value) }; cvApplyStyleToRows(); cvDrawTrend(); save(); };
+      const name = row.dataset.s, col = row.querySelector("input[type=color]"), wid = row.querySelector("input[type=range]"), val = row.querySelector("em");
+      const upd = () => { cvTrendStyle[name] = { color: col.value, width: Number(wid.value) }; val.textContent = wid.value; cvApplyStyleToRows(); cvDrawTrend(); save(); };
       col.addEventListener("input", upd); wid.addEventListener("input", upd);
     });
     const rs = $("cvStyleReset");

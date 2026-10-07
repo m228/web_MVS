@@ -24,6 +24,7 @@ import net_tools
 import updater
 from microscope_service import micro
 import cv_client
+import fracture_lab
 import cv_store
 import autostart
 from paths import read_version, BUNDLE_DIR, DATA_DIR
@@ -540,6 +541,8 @@ def micro_settings(
     arrive_sensor: str | None = None,
     sv_from: float | None = None,
     sv_to: float | None = None,
+    stage_from: int | None = None,
+    stage_to: int | None = None,
     host: str | None = None,
     port: int | None = None,
     unit: int | None = None,
@@ -565,6 +568,8 @@ def micro_settings(
     if arrive_sensor is not None: pc["arrive_sensor"] = arrive_sensor
     if sv_from is not None: pc["sv_from"] = sv_from
     if sv_to is not None: pc["sv_to"] = sv_to
+    if stage_from is not None: pc["stage_from"] = stage_from
+    if stage_to is not None: pc["stage_to"] = stage_to
     if pc:
         patch["probe_cycle"] = pc            # параметры цикла пробы (вкладка «Цикл»)
     if host is not None:
@@ -684,6 +689,59 @@ def cv_approach_set(patch: dict = Body(...)):
     return {"status": "ok", "approach": data}
 
 
+# --- калибровка разломов по своим кадрам (см. fracture_lab.py) ---
+@app.get("/api/cv/fracture/lab/snap")
+def cv_lab_snap(label: str = "unknown"):
+    res = micro.lab_snap(label)
+    api_log("api.cv.fracture.lab", "Кадр калибровки разломов", payload={"label": label, "result": res})
+    return res
+
+
+@app.get("/api/cv/fracture/lab/list")
+def cv_lab_list():
+    return {"frames": fracture_lab.list_frames()}
+
+
+@app.get("/api/cv/fracture/lab/image")
+def cv_lab_image(name: str):
+    try:
+        return Response(content=fracture_lab.jpeg(name), media_type="image/jpeg")
+    except Exception:
+        return Response(status_code=404)
+
+
+@app.get("/api/cv/fracture/lab/label")
+def cv_lab_label(name: str, label: str):
+    try:
+        return {"status": "ok", **fracture_lab.set_label(name, label)}
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@app.get("/api/cv/fracture/lab/delete")
+def cv_lab_delete(name: str):
+    try:
+        fracture_lab.delete(name)
+        return {"status": "ok"}
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@app.get("/api/cv/fracture/lab/zones")
+def cv_lab_zones(name: str, dark_thr: float = 30.0, min_area_frac: float = 0.0018):
+    """Зоны-кандидаты на кадре (с контуром) при данных dark_thr / min_area_frac."""
+    try:
+        return {"zones": fracture_lab.zones(name, dark_thr, min_area_frac)}
+    except Exception as e:
+        return {"error": str(e), "zones": []}
+
+
+@app.get("/api/cv/fracture/lab/all")
+def cv_lab_all(dark_thr: float = 30.0, min_area_frac: float = 0.0018):
+    """Зоны (только D/T/площадь) по всем размеченным кадрам — для оценки и подбора порогов."""
+    return {"frames": fracture_lab.all_zones(dark_thr, min_area_frac)}
+
+
 @app.get("/api/cv/last")
 def cv_last(serial: str | None = None):
     return cv_store.get_last(_cv_serial(serial)) or {"empty": True}
@@ -730,6 +788,33 @@ def cv_trend(serial: str | None = None, series: str | None = None, limit: int = 
 def cv_trend_days(serial: str | None = None):
     """Дни, за которые есть пробы (для выбора даты в тренде)."""
     return {"days": cv_store.history_days(_cv_serial(serial))}
+
+
+@app.get("/api/cv/boils")
+def cv_boils(serial: str | None = None, limit: int = 6):
+    """Последние варки (новая первой) со сводкой мелочи/сростков/объёма: для «Объём и мелочь» с листалкой по варкам.
+    Варка идёт, пока последняя проба свежая; мелочь считается по пробам варки с СВ ≥ порога (финиш)."""
+    return {"boils": cv_store.boils(_cv_serial(serial), limit=max(1, min(int(limit), 20)))}
+
+
+@app.get("/api/cv/trend/export")
+def cv_trend_export(serial: str | None = None,
+                    t_from: float | None = Query(None, alias="from"), t_to: float | None = Query(None, alias="to")):
+    """Журнал проб в CSV (для разбора и обучения): по строке на пробу — рассев, причины брака, режим варки
+    из ПЛК (температура, уровень, ток, разрежение, время варки, время с заводки). Без from/to — вся история."""
+    import csv
+    import io
+    import time as _time
+    rows = cv_store.export_rows(_cv_serial(serial), t_from, t_to)
+    buf = io.StringIO()
+    w = csv.DictWriter(buf, fieldnames=cv_store.EXPORT_COLUMNS)
+    w.writeheader()
+    for r in rows:
+        w.writerow({k: ("" if v is None else v) for k, v in r.items()})
+    name = "cv_probes_%s.csv" % _time.strftime("%Y%m%d_%H%M")
+    # utf-8-sig: Excel открывает без «кракозябр»; pandas читает как обычный utf-8
+    return Response(content=buf.getvalue().encode("utf-8-sig"), media_type="text/csv; charset=utf-8",
+                    headers={"Content-Disposition": 'attachment; filename="%s"' % name})
 
 
 @app.get("/api/cv/objects")

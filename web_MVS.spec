@@ -16,6 +16,8 @@
 #   ВАЖНО: pymodbus должен стоять в venv, которым собирает PyInstaller (см. requirements).
 # * uvicorn выбирает loop/protocol-реализации динамически по строке "app:app",
 #   поэтому тянем все его подмодули + локальные модули как hiddenimports.
+# * рядом с web_MVS.exe собирается ОТДЕЛЬНЫЙ SelfCheck.exe (selfcheck.py) — проверка всех модулей
+#   ТЕМ ЖЕ бандлом (общие _internal\): оба exe в одном COLLECT, зависимости не дублируются (MERGE).
 # * PySide6/shiboken6 исключены — в коде не используются (лишние ~150-200 МБ).
 
 import os
@@ -28,9 +30,14 @@ hiddenimports = ['app', 'camera_core', 'rtsp_store', 'net_tools', 'paths', 'logg
                  'dahua_control', 'sdk_gige',
                  # микроскоп (страница /microscope): плата по Modbus TCP + автомат
                  'microscope_service', 'microscope_plc', 'microscope_fsm', 'plate_config', 'sv_source']
+# selfcheck.py грузит модули по имени строкой (importlib) — PyInstaller их не увидит сам
+selfcheck_imports = ['selfcheck', 'cv_analyzer', 'cv_fracture', 'cv_client', 'cv_store', 'fracture_lab',
+                     'autostart', 'multipart', 'starlette', 'fastapi', 'pydantic']
 hiddenimports += collect_submodules('uvicorn')
 # вложенная обёртка MVS SDK (mvsdk/) — динамические импорты, тянем все подмодули
 hiddenimports += collect_submodules('mvsdk')
+# camera_core — пакет (бывший camera_core.py): подмодули тоже явно, чтобы ничего не потерялось
+hiddenimports += collect_submodules('camera_core')
 
 for pkg in ('genicam', 'harvesters'):
     d, b, h = collect_all(pkg)
@@ -57,7 +64,26 @@ a = Analysis(
     noarchive=False,
 )
 
+sc = Analysis(
+    ['selfcheck.py'],
+    pathex=[],
+    binaries=binaries,
+    datas=datas,
+    hiddenimports=hiddenimports + selfcheck_imports,
+    hookspath=[],
+    runtime_hooks=[],
+    excludes=[
+        'PySide6', 'PySide6_Addons', 'PySide6_Essentials', 'shiboken6',
+        'PyQt5', 'PyQt6', 'tkinter', 'matplotlib',
+    ],
+    noarchive=False,
+)
+
+# общие зависимости обоих exe лежат в одном _internal\ и не дублируются
+MERGE((a, 'run', 'web_MVS'), (sc, 'selfcheck', 'SelfCheck'))
+
 pyz = PYZ(a.pure)
+pyz_sc = PYZ(sc.pure)
 
 exe = EXE(
     pyz,
@@ -74,10 +100,25 @@ exe = EXE(
     uac_admin=True,
 )
 
+# SelfCheck.exe — без UAC: проверка только читает и работает в песочнице
+exe_sc = EXE(
+    pyz_sc,
+    sc.scripts,
+    [],
+    exclude_binaries=True,
+    name='SelfCheck',
+    console=True,
+    strip=False,
+    upx=False,
+)
+
 coll = COLLECT(
     exe,
     a.binaries,
     a.datas,
+    exe_sc,
+    sc.binaries,
+    sc.datas,
     strip=False,
     upx=False,
     name='web_MVS',

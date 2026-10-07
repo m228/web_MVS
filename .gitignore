@@ -27,6 +27,7 @@ __pycache__/
 /plate_config.last_good.json
 /plate_config.corrupt.json
 /config_backups
+/fracture_lab
 /cv_service/VERSION
 
 # --- временная папка самообновления ---
@@ -45,3 +46,6 @@ bug.txt
 /tasks
 /tools
 /task.txt
+
+# --- отчёт самопроверки (selfcheck.py / SelfCheck.exe) ---
+/selfcheck_output.txt

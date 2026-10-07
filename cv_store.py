@@ -24,6 +24,7 @@ from typing import Optional
 import cv2
 import numpy as np
 
+import cv_volume
 from logger import log_event
 from paths import DATA_DIR
 
@@ -53,6 +54,23 @@ def _ts_epoch(ts: str) -> Optional[float]:
         return None
 
 
+def _volume_cols(s: dict, vp: dict, n_frames: int) -> dict:
+    """Столбцы журнала по объёму: доли мелочи/сростков (% от общего) по трём моделям, площади и числу;
+    общий объём на кадр (мм³) и с какими fines_side_mm/k_thick считали — чтобы потом пересчитать и сверить."""
+    sums, cfg = s.get("volume") or {}, s.get("volume_cfg") or {}
+    out = {}
+    for kind in ("fines", "agg"):
+        for key in ("m1", "m2", "m3", "area"):
+            out["%s_%s" % (kind, key)] = (vp.get(key) or {}).get(kind)
+        out["%s_n" % kind] = (vp.get("n") or {}).get(kind)
+    for key in ("m1", "m2", "m3"):
+        tot = (sums.get(key) or {}).get("total")
+        out["vtot_" + key] = round(tot / 1e9 / n_frames, 4) if tot else None
+    out["fines_side_mm"], out["fines_um"] = cfg.get("fines_side_mm"), cfg.get("fines_um")
+    out["k_thick"], out["fines_from_sv"] = cfg.get("k_thick"), cfg.get("fines_from_sv")
+    return out
+
+
 def _hist_row(result: dict) -> Optional[dict]:
     """Одна строка журнала из result.json пробы: только числа для тренда (без кадров и объектов)."""
     t = _ts_epoch(result.get("ts", ""))
@@ -62,11 +80,23 @@ def _hist_row(result: dict) -> Optional[dict]:
     sz = s.get("size_um") or {}
     pct = s.get("groups_pct") or {}
     fr = (result.get("fracture") or {}).get("summary") or {}
+    plc = result.get("plc") or {}
+    rs = s.get("reasons") or {}
+    vp = s.get("volume_pct") or {}
     return {
         "ts": result["ts"], "t": t, "stage": result.get("stage"), "sv": result.get("sv"),
+        # причины брака (среднее число на кадр), разброс размера и плотность — для разбора слипания и обучения
+        "n_needle": rs.get("needle"), "n_aggregate": rs.get("aggregate"), "n_crooked": rs.get("crooked"),
+        "n_tiny": rs.get("tiny"), "n_huge": rs.get("huge"), "suspect": s.get("suspect"),
+        "reject_pct": s.get("reject_pct"), "cv_pct": sz.get("cv_pct"), "density": s.get("density_per_mm2"),
+        # режим варки на момент пробы (ПЛК): для разбора «почему слиплось» по серии проб
+        "temp": plc.get("temp_app"), "level": plc.get("level"), "current": plc.get("current"),
+        "vac": plc.get("press_top"), "cook_time": plc.get("cook_time"), "seed_age": plc.get("seed_age_s"),
         "count": s.get("count"), "mean": sz.get("mean"), "median": sz.get("median"),
         "small": pct.get("small"), "medium": pct.get("medium"),
         "large": pct.get("large"), "reject": pct.get("reject"),
+        # мелочь и сростки по объёму (модели M1 шар / M2 сфероид / M3 призма) и по площади, % от общего
+        **_volume_cols(s, vp, len(result.get("frames") or []) or 1),
         "frac_zones": fr.get("zones"), "frac_pct": fr.get("area_pct"),
         "frames": len(result.get("frames") or []),
     }
@@ -118,7 +148,7 @@ def _hist_backfill(serial: str):
         if p.name in known:
             continue
         try:
-            _hist_append(serial, json.loads((p / "result.json").read_text(encoding="utf-8")))
+            _hist_append(serial, _with_volume(p, json.loads((p / "result.json").read_text(encoding="utf-8"))))
         except Exception:
             continue
 
@@ -161,8 +191,117 @@ def trend_range(serial: str, t_from: float, t_to: float, series: Optional[list[s
         "from": t_from, "to": t_to,
         "t": [r["t"] for r in rows], "ts": [r["ts"] for r in rows],
         "stage": [r.get("stage") for r in rows],
-        "series": {s: [r.get(s) for r in rows] for s in series},
+        "series": {s: [(fines_avg(r) if s == "fines_avg" else r.get(s)) for r in rows] for s in series},
     }
+
+
+EXPORT_COLUMNS = ["ts", "t", "stage", "sv", "temp", "level", "current", "vac", "cook_time", "seed_age",
+                  "count", "mean", "median", "cv_pct", "density", "small", "medium", "large", "reject",
+                  "reject_pct", "fines_m1", "fines_m2", "fines_m3", "fines_avg", "fines_area", "fines_n",
+                  "agg_m1", "agg_m2", "agg_m3", "agg_area", "agg_n", "vtot_m1", "vtot_m2", "vtot_m3", "fines_side_mm", "fines_um", "k_thick", "fines_from_sv",
+                  "n_needle", "n_aggregate", "n_crooked", "n_tiny", "n_huge", "suspect",
+                  "frac_zones", "frac_pct", "frames"]
+
+
+def fines_avg(r: dict) -> Optional[float]:
+    """Мелочь по объёму, % — среднее трёх моделей (M1 шар, M2 сфероид, M3 призма); модели без значения пропускаем."""
+    v = [r[k] for k in ("fines_m1", "fines_m2", "fines_m3") if r.get(k) is not None]
+    return round(sum(v) / len(v), 3) if v else None
+
+
+def export_rows(serial: str, t_from: Optional[float] = None, t_to: Optional[float] = None) -> list[dict]:
+    """Все строки журнала проб (по времени) в заданном диапазоне — для выгрузки в CSV/обучение.
+    Без границ — вся история. Колонки — EXPORT_COLUMNS; чего в старой пробе не было — None."""
+    _hist_backfill(serial)
+    rows = []
+    hd = _hist_dir(serial)
+    for f in (sorted(hd.glob("*.jsonl")) if hd.exists() else []):
+        rows.extend(r for r in _hist_read(serial, f.stem) if r.get("t") is not None
+                    and (t_from is None or r["t"] >= t_from) and (t_to is None or r["t"] <= t_to))
+    rows.sort(key=lambda r: r["t"])
+    return [{c: (fines_avg(r) if c == "fines_avg" else r.get(c)) for c in EXPORT_COLUMNS} for r in rows]
+
+
+# --- варки: журнал проб нарезается на варки, по варке — сводка мелочи/сростков/объёма ---
+BOIL_GAP_S = 45 * 60        # пауза между пробами больше этой — новая варка (пробы идут раз в 1–2 мин)
+BOIL_COOK_DROP_S = 300      # время варки (cook_time) упало больше чем на это — новая варка
+BOIL_SV_DROP = 4.0          # СВ упало на столько и больше — новая варка (запасной признак)
+BOIL_OPEN_S = 15 * 60       # последняя варка «идёт», если последняя проба моложе этого
+
+
+def _is_new_boil(prev: dict, r: dict) -> bool:
+    """Начало новой варки между двумя соседними пробами журнала: длинная пауза, время варки упало,
+    стадия откатилась на заводку (было ≥6, стало ≤4) или СВ резко упало."""
+    if r["t"] - prev["t"] > BOIL_GAP_S:
+        return True
+    ct, pt = r.get("cook_time"), prev.get("cook_time")
+    if ct is not None and pt is not None and ct < pt - BOIL_COOK_DROP_S:
+        return True
+    st, ps = r.get("stage"), prev.get("stage")
+    if st is not None and ps is not None and ps >= 6 and st <= 4:
+        return True
+    sv, psv = r.get("sv"), prev.get("sv")
+    return sv is not None and psv is not None and sv < psv - BOIL_SV_DROP
+
+
+def _wmean(rows: list, key: str, wkey: Optional[str]) -> Optional[float]:
+    """Среднее по пробам, где значение есть; с весом wkey (общий объём пробы), если он есть у всех."""
+    pts = [(r[key], r.get(wkey) if wkey else None) for r in rows if r.get(key) is not None]
+    if not pts:
+        return None
+    if wkey and all(w for _, w in pts):
+        return sum(v * w for v, w in pts) / sum(w for _, w in pts)
+    return sum(v for v, _ in pts) / len(pts)
+
+
+def _boil_summary(rows: list, finished: bool) -> dict:
+    """Сводка варки по строкам журнала. Мелочь — по пробам, где она считалась (СВ ≥ порога), с весом по общему
+    объёму пробы: большая проба весит больше. Сростки и площадь — по всем пробам варки."""
+    def r3(v):
+        return None if v is None else round(v, 3)
+
+    out = {"id": rows[0]["ts"], "ts_from": rows[0]["ts"], "ts_to": rows[-1]["ts"],
+           "t_from": rows[0]["t"], "t_to": rows[-1]["t"], "n": len(rows), "finished": finished}
+    svs = [r["sv"] for r in rows if r.get("sv") is not None]
+    out["sv_min"], out["sv_max"] = (min(svs), max(svs)) if svs else (None, None)
+    out["counted"] = sum(1 for r in rows if r.get("fines_m3") is not None)   # проб, где мелочь считалась
+    fines, agg, vtot = {}, {}, {}
+    for m in ("m1", "m2", "m3"):
+        w = "vtot_" + m
+        fines[m] = r3(_wmean(rows, "fines_" + m, w))
+        agg[m] = r3(_wmean(rows, "agg_" + m, w))
+        vtot[m] = r3(_wmean(rows, w, None))
+    fines["area"], agg["area"] = r3(_wmean(rows, "fines_area", None)), r3(_wmean(rows, "agg_area", None))
+    fines["n"], agg["n"] = r3(_wmean(rows, "fines_n", None)), r3(_wmean(rows, "agg_n", None))
+    out["fines"], out["agg"], out["vtot"] = fines, agg, vtot
+    last = rows[-1]
+    out["cfg"] = {k: last.get(k) for k in ("fines_side_mm", "fines_um", "k_thick", "fines_from_sv")}
+    return out
+
+
+def boils(serial: str, limit: int = 6, now: Optional[float] = None) -> list[dict]:
+    """Последние варки (новая первой): журнал проб режется на варки (_is_new_boil), по каждой — сводка
+    мелочи/сростков/объёма. Последняя варка «идёт», пока последняя проба моложе BOIL_OPEN_S."""
+    _hist_backfill(serial)
+    rows, seen = [], set()
+    hd = _hist_dir(serial)
+    for f in (sorted(hd.glob("*.jsonl")) if hd.exists() else []):
+        for r in _hist_read(serial, f.stem):
+            if r.get("t") is not None and r.get("ts") not in seen:
+                seen.add(r.get("ts"))
+                rows.append(r)
+    rows.sort(key=lambda r: r["t"])
+    groups: list[list[dict]] = []
+    for r in rows:
+        if not groups or _is_new_boil(groups[-1][-1], r):
+            groups.append([])
+        groups[-1].append(r)
+    now = time.time() if now is None else now
+    out = []
+    for i, g in enumerate(reversed(groups[-limit:])):
+        finished = not (i == 0 and now - g[-1]["t"] <= BOIL_OPEN_S)
+        out.append(_boil_summary(g, finished))
+    return out
 
 
 def _probe_dir(serial: str, ts: str) -> Optional[Path]:
@@ -194,9 +333,16 @@ def _aggregate(frames: list[dict]) -> dict:
     total = sum(counts.values()) or 1
     mean_size = sum(s["size_um"]["mean"] for s in ok) / n
     median_size = sum(s["size_um"]["median"] for s in ok) / n
+    vol = cv_volume.empty_sums()
+    for s in ok:
+        vol = cv_volume.add_sums(vol, s.get("volume") or {})
+    has_vol = any(s.get("volume") for s in ok)
     return {
         "count": round(sum(s["count"] for s in ok) / n, 1),
         "groups": counts,
+        # объём: суммы по кадрам (а не среднее процентов — большие кристаллы весят больше)
+        **({"volume": vol, "volume_pct": cv_volume.percents(vol),
+            "volume_cfg": next((s["volume_cfg"] for s in ok if s.get("volume_cfg")), None)} if has_vol else {}),
         "groups_pct": {g: round(100.0 * counts[g] / total, 1) for g in GROUP_ORDER},
         "size_um": {
             "mean": round(mean_size, 1),
@@ -217,7 +363,8 @@ def _aggregate(frames: list[dict]) -> dict:
 def save_sample(serial: str, stage, frames: list[dict], images: list, timing: dict,
                 keep_last: int = 50, ts: Optional[str] = None,
                 fracture: Optional[dict] = None, jpeg_quality: int = 85,
-                thumb_img=None, sv: Optional[float] = None) -> Optional[dict]:
+                thumb_img=None, sv: Optional[float] = None,
+                plc: Optional[dict] = None) -> Optional[dict]:
     """Сохранить пробу. frames — список {file, summary, objects}. images — ЧИСТЫЕ кадры пробы
     (numpy BGR), пишутся в JPEG (jpeg_quality); контуры поверх рисует браузер по objects_N.json.
     thumb_img — кадр с контурами для миниатюры (нет — миниатюра из чистого кадра 0).
@@ -262,6 +409,9 @@ def save_sample(serial: str, stage, frames: list[dict], images: list, timing: di
             "ts": ts,
             "stage": stage,
             "sv": round(sv, 1) if sv is not None else None,   # СВ пробы (от него зависит учёт брака)
+            # режим варки из ПЛК на момент пробы: temp_app °C, level %, current A (ток циркулятора),
+            # press_top (разрежение сверху), cook_time с, seed_age_s с (время с заводки). Нет ПЛК — ключа нет.
+            **({"plc": plc} if plc else {}),
             "timing": timing,
             "summary": summary,
             "frames": frame_recs,
@@ -292,6 +442,39 @@ def _rotate(serial: str, keep_last: int):
         shutil.rmtree(old, ignore_errors=True)
 
 
+def _volume_cfg_now() -> dict:
+    """Настройки объёма из конфига (поля блока «Объём и мелочь»); нет конфига — дефолты."""
+    try:
+        import plate_config
+        cv = plate_config.load().get("cv") or {}
+        return {"volume": cv.get("volume") or {}, "reject_always": cv.get("reject_always")}
+    except Exception:
+        return {}
+
+
+def _with_volume(d: Path, r: dict, cfg: Optional[dict] = None) -> dict:
+    """Проба, снятая до появления объёма (в summary нет volume): досчитать мелочь/сростки по
+    сохранённым объектам кадров по ТЕКУЩИМ полям порога и k. Файлы пробы не меняем — только ответ."""
+    s = (r or {}).get("summary")
+    if not s or s.get("volume"):
+        return r
+    try:
+        from types import SimpleNamespace as NS
+        cfg = cfg if cfg is not None else _volume_cfg_now()
+        tot = cv_volume.empty_sums()
+        fines_on = cv_volume.fines_on(cfg, s.get("sv", r.get("sv")))
+        for i in range(len(r.get("frames") or [1])):
+            objs = json.loads((d / ("objects_%d.json" % i)).read_text(encoding="utf-8"))
+            ms = [NS(group=o.get("group"), defect=o.get("defect"), size_um=o["size_um"],
+                     length_um=o["length_um"], width_um=o["width_um"]) for o in objs]
+            tot = cv_volume.add_sums(tot, cv_volume.sums_for(ms, cfg, fines_on))
+        s["volume"], s["volume_pct"] = tot, cv_volume.percents(tot)
+        s["volume_cfg"] = cv_volume.volume_cfg(cfg)
+    except Exception:
+        pass            # нет объектов/битый файл — проба просто без объёма
+    return r
+
+
 def list_samples(serial: str, limit: int = 50) -> list[dict]:
     """Список проб (новые сверху): [{ts, count, summary}]. Без тяжёлых по-кадровых данных."""
     sd = _serial_dir(serial)
@@ -299,10 +482,11 @@ def list_samples(serial: str, limit: int = 50) -> list[dict]:
         return []
     dirs = sorted([p for p in sd.iterdir() if p.is_dir()], key=lambda p: p.name, reverse=True)
     out = []
+    vcfg = _volume_cfg_now()
     for p in dirs[:limit]:
         try:
-            r = json.loads((p / "result.json").read_text(encoding="utf-8"))
-            out.append({"ts": r["ts"], "stage": r.get("stage"),
+            r = _with_volume(p, json.loads((p / "result.json").read_text(encoding="utf-8")), vcfg)
+            out.append({"ts": r["ts"], "stage": r.get("stage"), "sv": r.get("sv"),
                         "summary": r.get("summary"), "frames": len(r.get("frames", [])),
                         "fracture": (r.get("fracture") or {}).get("summary")})
         except Exception:
@@ -315,7 +499,7 @@ def get_result(serial: str, ts: str) -> Optional[dict]:
     if d is None:
         return None
     try:
-        return json.loads((d / "result.json").read_text(encoding="utf-8"))
+        return _with_volume(d, json.loads((d / "result.json").read_text(encoding="utf-8")))
     except Exception:
         return None
 

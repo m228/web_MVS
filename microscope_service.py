@@ -14,12 +14,19 @@ from sv_source import SvSource
 from logger import log_event
 
 
+# поля ПЛК (sv_source), которые пишем в запись пробы CV — режим варки на момент пробы
+PLC_KEYS = ("temp_app", "level", "current", "press_top", "cook_time")
+
+
 class MicroscopeService:
     def __init__(self):
         self.cfg = None
         self.plate = None
         self.fsm = None
         self.sv_source = None
+        # заводка: момент перехода «Сгущение(3) → Затравка и далее(4..9)»; None — варка не отслеживается
+        self._last_stage = None
+        self._seed_ts = None
         self._started = False
         self._lock = threading.Lock()
         # DEBUG (убрать после отладки цикла): перехват ПЛК — при True данные СВ/стадии
@@ -280,6 +287,25 @@ class MicroscopeService:
                     fsm.cv_release(ok=False)
                 fsm.cv_end()
 
+    def lab_snap(self, label):
+        """Калибровка разломов: снять ЖИВОЙ кадр с камеры и сохранить его чистым PNG с меткой
+        (fracture / ok / unknown) в fracture_lab/. Не мешает пробе: во время набора кадров пробы отказ."""
+        import fracture_lab
+        cfg = self.cfg or {}
+        serial = (cfg.get("camera_serial") or "").strip()
+        if not serial:
+            return {"error": "no_camera", "hint": "камера не выбрана"}
+        from camera_core import manager as cam_manager
+        worker = cam_manager.get(serial)
+        if not worker.running:
+            return {"error": "no_camera", "hint": "камера не стримит — подключи поток"}
+        if self._probe_collecting or self._cv_run_lock.locked():
+            return {"error": "busy", "hint": "идёт проба/разбор — подожди"}
+        img = self._grab_frame(worker)
+        if img is None:
+            return {"error": "no_frame", "hint": "камера не отдала кадр за 5 с"}
+        return {"status": "ok", "name": fracture_lab.save_frame(img, label)}
+
     def analyze_last_probe(self):
         """Ручной разбор (кнопка «Разобрать пробу», /api/cv/analyze): взять ЖИВОЙ кадр с камеры
         и разобрать его. Сырых файлов на диске нет, поэтому разбираем то, что камера видит сейчас."""
@@ -333,6 +359,8 @@ class MicroscopeService:
             # overlays — ЧИСТЫЕ кадры серии (контуры в картинку не впекаем — их рисует браузер)
             "frame_recs": [], "overlays": [], "zones": [], "timing": {}, "answered": 0, "shape": None,
             "svs": [],       # СВ на момент каждого кадра: от него зависит, идёт ли брак в рассев
+            "plc": [],       # снимки полей ПЛК (PLC_KEYS) на момент каждого кадра — в запись пробы
+            "t0": time.time(),
         }
 
     def _cv_analyze_one(self, run, img):
@@ -343,6 +371,9 @@ class MicroscopeService:
         import cv_client
         import cv_fracture
         cv = run["cv"]
+        snap = self._plc_snapshot()
+        if snap:
+            run["plc"].append(snap)
         # --- кристаллы (сайдкар YOLO), если он поднят ---
         summary, objects = None, []
         if run["sidecar_ok"]:
@@ -356,7 +387,22 @@ class MicroscopeService:
                 run["timing"] = resp.get("timing", {})
                 sv = self.fsm.sv if self.fsm else None
                 run["svs"].append(sv)
-                res = cv_analyzer.analyze(img, resp.get("objects", []), cv_cfg=cv, with_overlay=False, sv=sv)
+                objs = resp.get("objects", [])
+                if cv.get("seam_refine", True) and int(cv.get("tiles", 6)) > 1:
+                    # обрубки у шва нарезки — повторный проход модели по окну вокруг них (целый кристалл
+                    # идёт в рассев). Сбой запроса = обрубок остаётся как был.
+                    def _infer_window(crop, _url=run["url"], _cv=cv):
+                        okw, encw = cv2.imencode(".png", crop)
+                        rw = cv_client.infer(_url, encw.tobytes(), tiles=1, conf=float(_cv.get("conf", 0.25)),
+                                             iou=float(_cv.get("iou", 0.45)), overlap=float(_cv.get("overlap", 0.15)),
+                                             timeout=30.0) if okw else None
+                        return rw.get("objects") if rw else None
+                    t_ref = time.time()
+                    ref = {}
+                    objs = cv_analyzer.refine_seam_stubs(img, objs, cv, _infer_window, ref)
+                    run["timing"] = {**run["timing"], "refine_ms": round((time.time() - t_ref) * 1000),
+                                     "refine_stubs": ref.get("stubs", 0), "refine_fixed": ref.get("fixed", 0)}
+                res = cv_analyzer.analyze(img, objs, cv_cfg=cv, with_overlay=False, sv=sv)
                 summary, objects = res["summary"], res["objects"]
         # --- разломы (чистый OpenCV, всегда) ---
         run["zones"].append(cv_fracture.detect_zones(img, run["fr_cfg"]) if run["fr_on"] else [])
@@ -393,7 +439,8 @@ class MicroscopeService:
                                      jpeg_quality=int(cv.get("overlay_jpeg_quality", 85)),
                                      thumb_img=thumb_img,
                                      sv=(sum(x for x in run["svs"] if x is not None) / max(1, len([x for x in run["svs"] if x is not None]))
-                                         if any(x is not None for x in run["svs"]) else None))
+                                         if any(x is not None for x in run["svs"]) else None),
+                                     plc=self._plc_summary(run))
         if not saved:
             self._set_cv_status("error", "не удалось сохранить пробу (см. лог)")
         elif not run["sidecar_ok"]:
@@ -406,8 +453,49 @@ class MicroscopeService:
             self._set_cv_status("ok", "разбор готов: %d крист., кадров %d" % (
                 round(saved["summary"].get("count") or 0), len(overlays)))
 
+    def _note_stage(self, stage):
+        """Заводка = переход из «Сгущения»(3) в 4..9 (затравка и далее). Вход в 2/3 из другой стадии —
+        новая варка, отсчёт сбрасывается. Перезапуск приложения посреди варки момент заводки теряет (None)."""
+        if stage is None:
+            return
+        prev, self._last_stage = self._last_stage, stage
+        if prev == 3 and 4 <= stage <= 9:
+            self._seed_ts = time.time()
+        elif stage in (2, 3) and prev not in (2, 3):
+            self._seed_ts = None
+
+    def _plc_snapshot(self):
+        """Текущие значения ПЛК из sv_source для записи пробы (только чтение). Нет связи — None."""
+        src = self.sv_source
+        if not src:
+            return None
+        try:
+            st = src.status()
+        except Exception:
+            return None
+        if not st.get("connected"):
+            return None
+        vals = st.get("values") or {}
+        snap = {k: vals[k] for k in PLC_KEYS if vals.get(k) is not None}
+        return snap or None
+
+    def _plc_summary(self, run):
+        """Среднее по кадрам пробы (время варки — последнее значение) + время с заводки на начало пробы."""
+        out = {}
+        for k in PLC_KEYS:
+            vals = [s[k] for s in run.get("plc", []) if s.get(k) is not None]
+            if not vals:
+                continue
+            # разрежение — до тысячных (на экране так же), остальное до десятых; время варки — последнее
+            out[k] = (int(vals[-1]) if k == "cook_time"
+                      else round(sum(vals) / len(vals), 3 if k == "press_top" else 1))
+        if self._seed_ts is not None:
+            out["seed_age_s"] = max(0, int(run.get("t0", time.time()) - self._seed_ts))
+        return out or None
+
     def _on_sv(self, sv, stage):
         # СВ/стадия из ПЛК -> в автомат (заменяет ручной ввод, пока источник жив)
+        self._note_stage(stage)      # заводку отслеживаем всегда, даже при перехвате ПЛК
         # DEBUG: при перехвате ПЛК не затираем ручной ввод со страницы
         if self._sv_override:
             return
@@ -914,6 +1002,7 @@ class MicroscopeService:
     def set_stage(self, stage):
         if self.fsm:
             self.fsm.set_stage(stage)
+        self._note_stage(stage)      # ручная стадия (отладка/тест) тоже двигает отсчёт заводки
 
     def set_cyclic(self, on):
         if self.fsm:

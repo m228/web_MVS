@@ -3183,12 +3183,29 @@ html {
 
 /* переключатель ручного режима */
 .micro-switch { display: inline-flex; flex-direction: row; align-items: center; gap: 10px; cursor: pointer; user-select: none; }
-.micro-switch input { position: absolute; opacity: 0; width: 0; height: 0; }
+.micro-switch { position: relative; }
+/* скрытый чекбокс не должен ловить клики: общие правила полей (.micro-cycle-f input { width:100% }) раньше растягивали его на соседние поля */
+.micro-switch input, .micro-cycle-f .micro-switch input { position: absolute; opacity: 0; width: 0; height: 0; padding: 0; margin: 0; pointer-events: none; }
 .micro-switch__track { width: 44px; height: 24px; border-radius: 999px; background: var(--surface-muted); border: 1px solid var(--border-strong); position: relative; transition: background .15s; }
 .micro-switch__thumb { position: absolute; top: 2px; left: 2px; width: 18px; height: 18px; border-radius: 50%; background: var(--muted); transition: transform .15s, background .15s; }
 .micro-switch input:checked + .micro-switch__track { background: var(--success-soft); border-color: var(--success); }
 .micro-switch input:checked + .micro-switch__track .micro-switch__thumb { transform: translateX(20px); background: var(--success); }
 .micro-switch__label { font-size: 0.92em; }
+/* Калибровка разломов */
+.frac-lab-list { display: flex; flex-direction: column; gap: 4px; max-height: 190px; overflow-y: auto; margin: 8px 0; }
+.frac-lab-row { display: grid; grid-template-columns: 1fr auto auto; gap: 8px; align-items: center; padding: 5px 9px; border-radius: 8px;
+  border: 1px solid var(--border, rgba(131,151,179,.28)); background: transparent; color: inherit; font: inherit; font-size: 0.82em; cursor: pointer; text-align: left; }
+.frac-lab-row:hover { border-color: var(--accent, #2563eb); }
+.frac-lab-row.is-active { border-color: var(--accent, #2563eb); box-shadow: 0 0 0 1px var(--accent, #2563eb); }
+.frac-lab-badge { font-size: 0.86em; padding: 1px 8px; border-radius: 999px; border: 1px solid currentColor; }
+.frac-lab-badge.is-fracture { color: #e24b4a; } .frac-lab-badge.is-ok { color: #1d9e75; } .frac-lab-badge.is-unknown { color: var(--muted, #8a94a6); }
+.frac-lab-mark { font-weight: 700; min-width: 2.6em; text-align: right; font-variant-numeric: tabular-nums; }
+.frac-lab-mark.good { color: #1d9e75; } .frac-lab-mark.bad { color: #e24b4a; }
+.frac-lab-view { position: relative; margin: 8px 0; border-radius: 8px; overflow: hidden; background: #000; }
+.frac-lab-view img { display: block; width: 100%; height: auto; }
+.frac-lab-view canvas { position: absolute; left: 0; top: 0; width: 100%; height: 100%; pointer-events: none; }
+.frac-lab-eval { font-size: 0.86em; line-height: 1.45; margin: 6px 0; }
+.frac-lab-eval b.good { color: #1d9e75; } .frac-lab-eval b.bad { color: #e24b4a; }
 /* версии программы и CV-сервиса — справа во второй строке шапки */
 .micro-hero__ver { margin-left: auto; display: inline-flex; gap: 8px; flex-wrap: wrap; align-items: center; }
 .micro-ver { font-size: 0.78em; padding: 3px 10px; border-radius: 999px; border: 1px solid var(--border, rgba(131,151,179,.28)); color: var(--muted, #8a94a6); white-space: nowrap; }
@@ -3424,6 +3441,19 @@ input.micro-cam-num { width: 56px; min-width: 0; flex: 0 0 auto; padding: 4px 5p
 /* строка «Формат скринов» с тумблером справа */
 .micro-cycle-fmt { display: flex; align-items: center; justify-content: space-between; }
 .micro-cycle-f span { color: var(--muted); }
+.micro-cycle-range { grid-template-columns: 1fr 120px; }
+.micro-info { position: relative; display: inline-block; margin-left: 4px; cursor: help; color: var(--accent, #2563eb); font-style: normal; outline: none; }
+.micro-info__pop { display: none; position: absolute; left: -8px; bottom: calc(100% + 6px); z-index: 60; width: 270px; padding: 10px 12px; border-radius: 10px; font-size: 12.5px; line-height: 1.5; text-align: left;
+  background: var(--surface-elevated, #fff); color: var(--text); border: 1px solid var(--border-strong, rgba(118,142,178,.45)); box-shadow: 0 8px 24px rgba(0,0,0,.28); }
+.micro-info:hover .micro-info__pop, .micro-info:focus .micro-info__pop { display: block; }
+.micro-info__pop b { display: block; margin-bottom: 4px; }
+.micro-info__pop div { opacity: .55; }
+.micro-info__pop div.in { opacity: 1; font-weight: 600; }
+.micro-info__pop i { display: inline-block; min-width: 20px; font-style: normal; color: var(--accent, #2563eb); }
+.micro-info__pop em { font-weight: 400; font-style: normal; color: var(--muted); }
+.micro-info__pop small { display: block; margin-top: 6px; color: var(--muted); }
+.micro-cycle-stagehint { font-size: 0.8em; color: var(--muted); text-align: right; margin-top: -4px; cursor: help; }
+.micro-cycle-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
 .micro-cycle-f input { width: 100%; padding: 5px 7px; text-align: right; -moz-appearance: textfield; }
 .micro-cycle-f input::-webkit-outer-spin-button, .micro-cycle-f input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
 .micro-cycle-actions { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-top: 10px; }
@@ -3475,6 +3505,9 @@ input.micro-cam-num { width: 56px; min-width: 0; flex: 0 0 auto; padding: 4px 5p
 .micro-tele-col { min-width: 0; }
 .micro-tele-col .micro-tele-group:first-child { margin-top: 0; }
 .micro-tile--hidden { display: none; }
+/* клапан трубки/стекла: закрыт — серый, открыт — зелёный */
+.micro-valve { color: var(--muted); }
+.micro-valve.is-open { color: var(--success); }
 
 /* Встроенная камера в микроскопе = ОДНО окно: видео + тулбар + параметры В СТОЛБИК
    (чтобы влезало в колонку и видео было крупным). «Сетевые настройки» прячем — их кнопка
@@ -3634,7 +3667,7 @@ input.micro-cam-num { width: 56px; min-width: 0; flex: 0 0 auto; padding: 4px 5p
   border: 1px solid var(--border, rgba(131,151,179,.28)); border-radius: 8px; background: var(--surface-muted, #f4f8fc);
   color: var(--muted, #5b6b81); cursor: pointer; font: inherit; transition: border-color .15s ease, color .15s ease; }
 .micro-cv-strip__item img { display: block; width: 100%; aspect-ratio: 6 / 5; object-fit: cover; background: #0e1726; }
-.micro-cv-strip__item span { font-size: 10px; line-height: 1; padding: 4px 2px; text-align: center; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.micro-cv-strip__item span { font-size: 10px; line-height: 1.3; padding: 4px 2px; text-align: center; white-space: pre; font-variant-numeric: tabular-nums; }
 .micro-cv-strip__item:hover { border-color: var(--accent, #2563eb); color: var(--text); }
 .micro-cv-strip__item.is-active { border-color: var(--accent, #2563eb); box-shadow: 0 0 0 1px var(--accent, #2563eb); color: var(--accent, #2563eb); }
 @media (min-width: 1820px) {
@@ -3686,15 +3719,16 @@ input.micro-cam-num { width: 56px; min-width: 0; flex: 0 0 auto; padding: 4px 5p
 .micro-trend__btn--text { font-size: 0.82em; }
 .micro-trend__date { flex: 0 0 auto; width: 148px; border: 1px solid var(--border, rgba(131,151,179,.28)); background: var(--surface-muted, #f4f8fc); color: var(--text); border-radius: 8px; padding: 4px 8px; font: inherit; font-size: 0.88em; color-scheme: light dark; }
 .micro-trend__span { margin-left: auto; font-size: 0.78em; color: var(--muted, #8a94a6); }
-.micro-trend__row { display: grid; grid-template-columns: 150px minmax(0, 1fr); gap: 10px; align-items: stretch; }
+.micro-trend__row { display: grid; grid-template-columns: 176px minmax(0, 1fr); gap: 10px; align-items: stretch; }
 @media (max-width: 700px) { .micro-trend__row { grid-template-columns: 1fr; } }
 .micro-trend__rows { display: flex; flex-direction: column; gap: 6px; }
 .micro-srow { position: relative; display: grid; grid-template-columns: 10px 1fr auto; align-items: center; gap: 8px; padding: 9px 10px; border-radius: 8px;
   border: 1px solid var(--border, rgba(131,151,179,.28)); background: transparent; cursor: pointer; user-select: none;
   font-size: 0.86em; color: var(--muted, #5b6b81); opacity: .55; transition: opacity .15s ease, background .15s ease, border-color .15s ease; }
 .micro-srow input { display: none; }
+.micro-srow-sep { margin: 6px 2px 0; font-size: .75em; letter-spacing: .06em; text-transform: uppercase; color: var(--muted, #8a94a6); opacity: .8; }
 .micro-srow i { width: 10px; height: 10px; border-radius: 50%; }
-.micro-srow b { font-variant-numeric: tabular-nums; font-weight: 600; font-size: 0.95em; }
+.micro-srow b { font-variant-numeric: tabular-nums; font-weight: 600; font-size: 0.95em; white-space: nowrap; }
 .micro-srow:hover { opacity: .85; }
 .micro-srow:has(input:checked) { opacity: 1; color: var(--text); background: var(--chip-bg, var(--surface-muted, #f4f8fc)); border-color: var(--border-strong, rgba(118,142,178,.45)); }
 .micro-srow:has(input:checked)::before { content: ""; position: absolute; left: 0; top: 6px; bottom: 6px; width: 3px; border-radius: 2px; background: currentColor; opacity: 0; }
@@ -3709,6 +3743,24 @@ input.micro-cam-num { width: 56px; min-width: 0; flex: 0 0 auto; padding: 4px 5p
 .micro-cam-card.cv-win #camPlaceholder { display: none !important; }
 #cvOverlay[hidden], #cvOverlayPh[hidden] { display: none !important; }
 .micro-cv-tele { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; margin-bottom: 4px; }
+
+/* Рассев и объём — два компактных блока рядом; объём — сетка 5 колонок с мелкими числами */
+.micro-cv-pair { display: grid; grid-template-columns: minmax(0, 5fr) minmax(0, 6fr); gap: 18px; align-items: start; }
+.micro-cv-pair > .micro-cv-block { margin-top: 0; padding-top: 0; border-top: 0; }
+@media (max-width: 900px) { .micro-cv-pair { grid-template-columns: 1fr; } }
+.micro-vol__grid { display: grid; grid-template-columns: auto repeat(5, minmax(0, 1fr)); gap: 6px 10px; align-items: baseline; font-size: 0.85em; }
+.micro-vol__grid > b { font-weight: 600; font-size: 0.85em; color: var(--muted); text-align: right; white-space: nowrap; cursor: help; }
+.micro-vol__grid > span { color: var(--muted); white-space: nowrap; }
+.micro-vol__grid > em { font-style: normal; font-weight: 600; text-align: right; font-variant-numeric: tabular-nums; }
+.micro-vol__fields { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; margin-top: 10px; font-size: 0.8em; color: var(--muted); }
+.micro-vol__fields label { display: inline-flex; flex-direction: row; align-items: center; gap: 6px; margin: 0; font-weight: 400; }
+.micro-vol__fields input[type="number"] { width: 62px; height: 26px; min-height: 0; padding: 2px 6px; font-size: 1em; border-radius: 6px; }
+.micro-vol__by-n { margin-left: auto; font-variant-numeric: tabular-nums; }
+.micro-vol__pop { width: 360px; font-size: 11.5px; line-height: 1.45; }
+.micro-vol__pop small { font-size: 1em; }
+.micro-vol__pop small b { display: inline; margin: 0; }   /* общее правило .micro-info__pop b делает жирное блоком */
+.micro-vol__pop code { background: none; padding: 0; font-family: inherit; font-weight: 600; font-size: 1em; color: inherit; }
+.micro-vol__pop em { display: block; margin-left: 24px; }
 
 /* Нижняя секция: переключатель Плата/Распознавание + широкая раскладка распознавания */
 .micro-tele-seg { max-width: 400px; margin: 0; }
@@ -3729,15 +3781,61 @@ input.micro-cam-num { width: 56px; min-width: 0; flex: 0 0 auto; padding: 4px 5p
   border-color: var(--border-strong, rgba(118,142,178,.45)); }
 
 /* Переключатель низа: шире + не переносить текст */
-.micro-tele-seg { max-width: 460px; }
+.micro-tele-seg { width: 420px; max-width: 100%; grid-template-columns: repeat(3, 1fr); }
+/* ползунок на 3 кнопки: внутренний отступ 3px, ширина кнопки = (100% - 6px) / 3 */
+.micro-tele-seg .micro-win-pill { width: calc((100% - 6px) / 3); }
+.micro-tele-seg.cv .micro-win-pill { left: calc(3px + (100% - 6px) / 3); }
+.micro-tele-seg.trend .micro-win-pill { left: calc(3px + 2 * (100% - 6px) / 3); }
+/* «Распознавание» теперь одна колонка; тренды вынесены в свою вкладку на всю ширину */
+.micro-tele-cv { grid-template-columns: 1fr; }
+.micro-tele-trend .micro-cv-block:first-child { margin-top: 0; padding-top: 0; border-top: 0; }
+.micro-tele-trend .micro-cv-trend { height: 360px; }
 .micro-tele-seg .micro-win-btn { white-space: nowrap; }
 
 /* (превью галереи убрано — основной просмотр в окне камеры) */
 
 /* Тултип наведения на кристалл (окно CV): размер/площадь в мкм */
+/* автокалибровка не удалась: красная мигающая плашка */
+.micro-ac-fail { margin: 6px 0 0; padding: 6px 10px; border-radius: 8px; font-size: 12.5px; font-weight: 600;
+  color: #ffd9d4; background: rgba(214, 60, 48, 0.28); border: 1px solid rgba(255, 110, 96, 0.6);
+  animation: ac-fail-blink 1.1s ease-in-out infinite; }
+.micro-ac-fail[hidden] { display: none; }
+@keyframes ac-fail-blink { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
 .micro-cv-tip { position: absolute; z-index: 5; pointer-events: none; background: rgba(8,23,38,0.92);
   color: #e7eefb; font-size: 12px; line-height: 1.35; padding: 6px 9px; border-radius: 7px;
   border: 1px solid rgba(131,170,227,0.3); white-space: nowrap; transform: translate(10px, 10px); }
 .micro-cv-tip b { color: #7ee0bf; font-weight: 600; }
 .micro-cv-tip .is-bad { color: #ff8a80; font-weight: 600; }   /* метрика формы за порогом брака */
 .micro-cam-card #cvOverlay { cursor: crosshair; }
+
+/* Слой «брак»: точка из четырёх цветов причин (сросток, игла, кривой, мелочь/крупный) */
+.micro-cv-series .dot.dot--reject { background: conic-gradient(#ec5fa6 0 25%, #ff7a2f 0 50%, #9a6cf0 0 75%, #e24b4a 0); }
+
+/* Нижний ряд опций окна CV: аккуратные переключатели «подробно / подсказки / размеры / уверенность / разломы» */
+.micro-cv-opts { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 10px 0 2px; }
+.micro-cam-card:not(.cv-win) .micro-cv-opts { display: none; }
+.micro-cv-opts label { display: inline-flex; align-items: center; gap: 7px; padding: 4px 12px 4px 8px; border: 1px solid var(--border, rgba(131,151,179,.28));
+  border-radius: 999px; font-size: 0.8em; color: var(--muted, #5b6b81); cursor: pointer; user-select: none; transition: color .15s ease, border-color .15s ease, background .15s ease; }
+.micro-cv-opts label:hover { border-color: var(--border-strong, rgba(118,142,178,.45)); }
+.micro-cv-opts input { display: none; }
+.micro-cv-opts label::before { content: ""; width: 24px; height: 14px; border-radius: 999px; flex: none; transition: background .15s ease;
+  background: radial-gradient(circle at 7px 50%, #fff 5px, transparent 5.5px), rgba(131,151,179,.38); }
+.micro-cv-opts label:has(input:checked) { color: var(--text, inherit); background: var(--chip-bg, var(--surface-muted, #f4f8fc)); border-color: var(--border-strong, rgba(118,142,178,.45)); }
+.micro-cv-opts label:has(input:checked)::before { background: radial-gradient(circle at 17px 50%, #fff 5px, transparent 5.5px), var(--accent, #2563eb); }
+
+/* Пояснения под таблицей объёма: штуки / по числу / по объёму / общий объём */
+.micro-vol__note { margin-top: 10px; font-size: 0.78em; line-height: 1.5; color: var(--muted, #5b6b81); }
+.micro-vol__note > div + div { margin-top: 3px; }
+.micro-vol__note b { color: var(--text, inherit); font-weight: 600; }
+
+/* Объём и мелочь: переключатель «по варке / по пробе» и стрелки по варкам */
+.micro-vol__nav { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin: 0 0 10px; }
+.micro-vol__mode { display: inline-flex; border: 1px solid var(--border, rgba(131,151,179,.28)); border-radius: 999px; overflow: hidden; }
+.micro-vol__mode button { border: 0; background: transparent; color: var(--muted, #5b6b81); font-size: 0.78em; padding: 4px 11px; cursor: pointer; }
+.micro-vol__mode button.is-active { background: var(--accent, #2563eb); color: #fff; }
+.micro-vol__boil { display: inline-flex; align-items: center; gap: 6px; font-size: 0.8em; color: var(--muted, #5b6b81); min-width: 0; }
+.micro-vol__boil[hidden] { display: none; }
+.micro-vol__boil button { border: 1px solid var(--border, rgba(131,151,179,.28)); background: transparent; color: inherit; border-radius: 6px; width: 24px; height: 24px; cursor: pointer; font-size: 15px; line-height: 1; }
+.micro-vol__boil button:hover:not(:disabled) { border-color: var(--accent, #2563eb); color: var(--accent, #2563eb); }
+.micro-vol__boil button:disabled { opacity: .35; cursor: default; }
+.micro-vol__boil #cvBoilLbl { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--text, inherit); font-weight: 600; font-variant-numeric: tabular-nums; }

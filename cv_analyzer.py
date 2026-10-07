@@ -16,6 +16,8 @@ from typing import Optional
 import cv2
 import numpy as np
 
+import cv_volume
+
 # дефолты-заглушки (перекрываются блоком cv из plate_config); размеры — по эквив. диаметру, мкм.
 # Стартовые пороги — из «Памятки оператора» (Сапронов): норма 0,5–0,9 мм, игла > 3,0, сросток/кривой
 # при выпуклости < 0,90; вытянутые 1,6–3,0 — не брак, а предупреждение.
@@ -25,6 +27,7 @@ DEFAULTS = {
     "shape": {"min_circularity": 0.55, "max_aspect": 3.0, "min_solidity": 0.90,
               "suspect_aspect": 1.6,     # вытянутые: от этого L/W до max_aspect (не брак)
               "notch_frac": 0.06},       # «выемка» контура глубже этой доли диаметра → признак сростка
+    "volume": {"fines_side_mm": 0.2, "k_thick": 0.88, "fines_from_sv": 88.0},   # объём (см. cv_volume.py): мелочь — площадь меньше fines_side_mm², считается с СВ ≥ fines_from_sv; толщина = k_thick · ширина
     "size_reject": {"min_um": 250.0, "max_um": 1200.0},   # брак по размеру (только у готового, см. reject_from_sv)
     "reject_from_sv": 88.0,    # брак идёт в рассев/тренд, только когда СВ ≥ этого (кристаллы подросли)
     "reject_always": False,    # True — считать брак всегда, без порога по СВ
@@ -32,6 +35,11 @@ DEFAULTS = {
     "nest_frac": 0.8,          # маска, лежащая внутри другой на ≥ этой доли, — лишняя, убирается; 0 — выкл
     "edge_margin_px": 12.0,    # объект ближе этого (px) к краю кадра считается обрезанным; 0 — выкл
     "seam_merge": True,        # склеивать кристалл, разрезанный швом нарезки (ровный край на линии стыка частей)
+    "bubble_filter": True,     # ровный круг (пузырь воздуха) — не кристалл: уходит в группу «bubble», вне рассева
+    "bubble_radial_cv": 0.025, "bubble_aspect": 1.12, "bubble_solidity": 0.97,   # пузырь: разброс радиуса ≤, вытянутость ≤, выпуклость ≥
+    "bubble_min_um": 100.0,    # мельче — не трогаем (на мелких масках форма недостоверна)
+    "seam_refine": True,       # обрубок на шве без пары — заново найти целым: повторный проход модели по окну вокруг него
+    "refine_max": 30.0,        # не больше стольких обрубков на кадр (каждый — один запрос к сайдкару)
     "tiles": 6, "overlap": 0.15,   # как в настройках CV (их же получает сайдкар) — нужны, чтобы знать, где швы
     "min_size_um": 20.0,   # мельче — считаем пылью/шумом, не кристаллом
     "blur_min": 8.0,       # variance of Laplacian ниже — кадр смазан (тюним под камеру на Server)
@@ -45,6 +53,14 @@ GROUP_COLORS = {
     "reject": (74, 75, 226),     # red
     "suspect": (245, 209, 106),  # голубой — вытянутые 1,6–3,0 (не брак)
     "cut":    (150, 150, 150),   # grey — обрезан краем кадра/швом, в статистику не идёт
+    "bubble": (74, 176, 224),    # янтарный — пузырь воздуха (ровный круг), не кристалл, в статистику не идёт
+}
+# причины брака красятся по-разному (в группу «брак» идут все вместе): сросток — розовый, игла — оранжевый,
+# кривой — фиолетовый; мелочь/крупный (tiny/huge) остаются красными. Те же цвета — в окне CV (02-cv.js)
+DEFECT_COLORS = {
+    "aggregate": (166, 95, 236),   # #ec5fa6
+    "needle":    (47, 122, 255),   # #ff7a2f
+    "crooked":   (240, 108, 154),  # #9a6cf0
 }
 GROUP_ORDER = ["small", "medium", "large", "reject"]
 # причины брака (по «Памятке»): игла — раффиноза; сросток — высокое пересыщение; кривой — несахара;
@@ -53,6 +69,11 @@ REASONS = ["needle", "aggregate", "crooked", "tiny", "huge"]
 # «cut» — служебная группа вне рассева: кристалл обрезан краем кадра (edge) или швом нарезки
 # (cut, см. cv_service/sahi_tiler.py). Размер/форма такого обрубка недостоверны.
 CUT_GROUP = "cut"
+# «bubble» — служебная группа вне рассева: ровный круг = пузырь воздуха, а не кристалл. Круглость 4πA/P² тут не
+# годится (у идеального круга после очистки контура ≈ 0,90, как у правильного шестиугольника), поэтому
+# смотрим на разброс расстояния от центра до границы (radial CV): круг с шумом контура до 3 px ≤ 0,025,
+# правильный шестиугольник ≈ 0,044, у реальных кристаллов ≥ 80 мкм на тестовых кадрах ≥ 0,0345 (медиана 0,19).
+BUBBLE_GROUP = "bubble"
 NOTCH_MAX = 5          # больше выемок — рваный край (кривой), а не сросток
 POLY_EPS_PX = 1.5      # упрощение контура для сохранения/отрисовки в браузере, px
 
@@ -68,7 +89,12 @@ def _cfg(cv_cfg: Optional[dict]) -> dict:
         for k in ("cluster_gap_px", "nest_frac", "edge_margin_px", "tiles", "overlap"):
             c[k] = float(cv_cfg.get(k, c[k]))
         c["seam_merge"] = bool(cv_cfg.get("seam_merge", c["seam_merge"]))
-        for key in ("groups", "shape", "size_reject"):
+        c["seam_refine"] = bool(cv_cfg.get("seam_refine", c["seam_refine"]))
+        c["bubble_filter"] = bool(cv_cfg.get("bubble_filter", c["bubble_filter"]))
+        for k in ("bubble_radial_cv", "bubble_aspect", "bubble_solidity", "bubble_min_um"):
+            c[k] = float(cv_cfg.get(k, c[k]))
+        c["refine_max"] = float(cv_cfg.get("refine_max", c["refine_max"]))
+        for key in ("groups", "shape", "size_reject", "volume"):
             if cv_cfg.get(key):
                 c[key] = {**c[key], **cv_cfg[key]}
     return c
@@ -121,6 +147,24 @@ def _size_group(size_um: float, cfg: dict) -> str:
     if size_um < g["medium_max_um"]:
         return "medium"
     return "large"
+
+
+def _radial_cv(cnt: np.ndarray, n: int = 180) -> float:
+    """Разброс расстояния от центроида до границы / среднее расстояние (0 — идеальный круг). Контур
+    пересэмплируется равномерно по длине дуги, чтобы неравномерная густота точек маски не искажала оценку."""
+    P = cnt.reshape(-1, 2).astype(np.float64)
+    if len(P) < 8:
+        return 1.0
+    P = np.vstack([P, P[:1]])
+    s = np.concatenate([[0.0], np.cumsum(np.hypot(*(P[1:] - P[:-1]).T))])
+    if s[-1] <= 0:
+        return 1.0
+    t = np.linspace(0.0, s[-1], n, endpoint=False)
+    x, y = np.interp(t, s, P[:, 0]), np.interp(t, s, P[:, 1])
+    m = cv2.moments(cnt)
+    cx, cy = (m["m10"] / m["m00"], m["m01"] / m["m00"]) if m["m00"] else (x.mean(), y.mean())
+    r = np.hypot(x - cx, y - cy)
+    return float(r.std() / r.mean()) if r.mean() > 0 else 1.0
 
 
 def _clean_contour(cnt: np.ndarray, eq_d_px: float) -> np.ndarray:
@@ -250,13 +294,31 @@ def _seam_lines(shape: tuple, tiles: int, overlap: float) -> tuple[list, list]:
     return sorted(xs), sorted(ys)
 
 
-def _on_seam(poly: np.ndarray, xs: list, ys: list, tol: float = 2.5, min_len: float = 16.0) -> bool:
-    """У маски есть ровный край ровно на линии стыка частей кадра (≥2 вершины в пределах tol px от линии,
-    растянутые вдоль неё на ≥ min_len px) — значит кристалл разрезан швом нарезки."""
+def _seam_edges(poly: np.ndarray, xs: list, ys: list, tol: float = 2.5, min_len: float = 16.0) -> list:
+    """Ровные края маски ровно на линиях стыка частей кадра: [(ось, линия, сторона, от, до)].
+    сторона = -1/+1 — по какую сторону линии лежит маска; (от, до) — протяжённость края вдоль линии."""
+    out = []
     for axis, lines in ((0, xs), (1, ys)):
         for L in lines:
             on = poly[np.abs(poly[:, axis] - L) <= tol]
-            if len(on) >= 2 and float(on[:, 1 - axis].max() - on[:, 1 - axis].min()) >= min_len:
+            if len(on) >= 2:
+                lo, hi = float(on[:, 1 - axis].min()), float(on[:, 1 - axis].max())
+                if hi - lo >= min_len:
+                    out.append((axis, L, -1 if float(poly[:, axis].mean()) < L else 1, lo, hi))
+    return out
+
+
+def _on_seam(poly: np.ndarray, xs: list, ys: list, tol: float = 2.5, min_len: float = 16.0) -> bool:
+    """У маски есть ровный край ровно на линии стыка частей кадра — кристалл разрезан швом нарезки."""
+    return bool(_seam_edges(poly, xs, ys, tol, min_len))
+
+
+def _opposite(ei: list, ej: list) -> bool:
+    """Две маски — половинки одного кристалла: ровные края на ОДНОЙ линии шва, но по разные стороны от неё,
+    и протяжённости краёв заметно перекрываются."""
+    for ax, L, sd, lo, hi in ei:
+        for ax2, L2, sd2, lo2, hi2 in ej:
+            if ax == ax2 and L == L2 and sd != sd2 and                     min(hi, hi2) - max(lo, lo2) >= 0.3 * min(hi - lo, hi2 - lo2):
                 return True
     return False
 
@@ -268,9 +330,10 @@ def _merge_seams(objects: list[dict], shape: tuple, tiles: int, overlap: float, 
     if not xs and not ys:
         return objects
     idx = [i for i, o in enumerate(objects)
-           if o.get("polygon") and len(o["polygon"]) >= 3 and not (o.get("cut") or o.get("edge"))]
+           if o.get("polygon") and len(o["polygon"]) >= 3 and not (o.get("cut") or o.get("edge") or o.get("refined"))]
     P = {i: np.asarray(objects[i]["polygon"], np.float32) for i in idx}
-    piece = {i for i in idx if _on_seam(P[i], xs, ys)}
+    edges = {i: _seam_edges(P[i], xs, ys) for i in idx}
+    piece = {i for i in idx if edges[i]}
     if not piece:
         return objects
     parent = {i: i for i in idx}
@@ -290,7 +353,10 @@ def _merge_seams(objects: list[dict], shape: tuple, tiles: int, overlap: float, 
                 continue
             if bb[i][2] + pad < bb[j][0] or bb[j][2] + pad < bb[i][0] or bb[i][3] + pad < bb[j][1] or bb[j][3] + pad < bb[i][1]:
                 continue
-            if _pair_relation(P[i], P[j], gap)[2]:
+            fa, fb, touch = _pair_relation(P[i], P[j], gap)
+            # склеиваем только «половинки одного кристалла»: маска реально налезает на эту (дубль/целый) либо
+            # это обрубок по ДРУГУЮ сторону того же шва. Просто соседний кристалл вплотную — НЕ склеиваем.
+            if touch and (max(fa, fb) >= 0.3 or (j in piece and _opposite(edges[i], edges[j]))):
                 parent[find(i)] = find(j)
                 paired.update((i, j))
     groups: dict[int, list[int]] = {}
@@ -454,6 +520,151 @@ def _merge_touching(objects: list[dict], gap: float, nest: float) -> list[dict]:
     return out
 
 
+def _poly_mask(poly, x0: int, y0: int, w: int, h: int) -> np.ndarray:
+    """Маска полигона (координаты кадра) в окне с началом (x0, y0) и размером w×h."""
+    m = np.zeros((h, w), np.uint8)
+    pts = np.round(np.asarray(poly, np.float32).reshape(-1, 2) - (x0, y0)).astype(np.int32).reshape(-1, 1, 2)
+    cv2.fillPoly(m, [pts], 1)
+    return m
+
+
+def _mask_overlap(A, B) -> tuple[int, int, int]:
+    """(пересечение, площадь A, площадь B) в пикселях для двух полигонов — на холсте по их общему габариту."""
+    A = np.asarray(A, np.float32).reshape(-1, 2)
+    B = np.asarray(B, np.float32).reshape(-1, 2)
+    pts = np.vstack([A, B])
+    x0, y0 = np.floor(pts.min(0)).astype(int)
+    x1, y1 = np.ceil(pts.max(0)).astype(int) + 1
+    ma, mb = _poly_mask(A, x0, y0, x1 - x0, y1 - y0), _poly_mask(B, x0, y0, x1 - x0, y1 - y0)
+    return int((ma & mb).sum()), int(ma.sum()), int(mb.sum())
+
+
+def refine_seam_stubs(image: np.ndarray, objects: list[dict], cv_cfg: Optional[dict], infer_fn,
+                      stats: Optional[dict] = None) -> list[dict]:
+    """Проверяет «обрубки» на шве (cut, не у края кадра) повторным проходом модели без шва.
+
+    Объект получает пометку cut, когда на его маске есть ровный край на линии стыка частей нарезки, а
+    целой пары по ту сторону шва не нашлось. Но это либо правда обрубок (модель потеряла вторую половину),
+    либо целый кристалл, у которого просто ровная грань лежит у шва. Различаем: берём окно размером с обычную
+    часть нарезки (масштаб для модели тот же), ставим обрубок в центр (шва внутри окна нет), прогоняем модель
+    (infer_fn(окно) → объекты в координатах окна). Если нашлась маска, накрывающая обрубок (≥60% его
+    площади) и не меньше 85% его площади, — кристалл целый: обрубок заменяется этой маской и больше не
+    «cut» (в маске refined=True, повторной склейке по шву не подлежит). Поглощённые парные обрубки убираются.
+    Новая маска, накрывшая уже целый нормальный кристалл, — неоднозначно: обрубок не трогаем. Маска,
+    упёршаяся в границу окна, не годится.
+
+    Один проход модели по окну проверяет все обрубки, лежащие в окне с запасом от его границы.
+    Возвращает СЫРОЙ список (как пришёл от сайдкара) с заменами — склейку/края/измерения дальше делает
+    measure_objects как обычно. infer_fn=None или seam_refine выключен — вернёт objects как есть. Сбой
+    запроса = обрубок остаётся как был.
+    """
+    cfg = _cfg(cv_cfg)
+    st = stats if stats is not None else {}
+    st.update({"stubs": 0, "fixed": 0, "calls": 0})
+    if infer_fn is None or not cfg["seam_refine"] or cfg["tiles"] <= 1:
+        return objects
+    h, w = image.shape[:2]
+    cols, rows = _grid(int(cfg["tiles"]))
+    win_w = min(w, int(w / cols * (1 + 2 * cfg["overlap"])))
+    win_h = min(h, int(h / rows * (1 + 2 * cfg["overlap"])))
+    margin = 40                      # обрубок должен лежать в окне не ближе этого к его границе
+    marked = objects
+    if cfg["edge_margin_px"] > 0:
+        marked = _flag_edges(marked, image.shape, cfg["edge_margin_px"])
+    if cfg["seam_merge"]:
+        marked = _merge_seams(marked, image.shape, int(cfg["tiles"]), cfg["overlap"], 2.0)
+    marked = list(marked)       # для поиска обрубков и перекрытий; ВОЗВРАЩАЕМ сырой список
+    result = list(objects)
+
+    def is_stub(o):
+        return bool(o.get("cut") and not o.get("edge") and o.get("polygon") and len(o["polygon"]) >= 3)
+
+    def bounds(o):
+        P = np.asarray(o["polygon"], np.float32).reshape(-1, 2)
+        return P, P.min(0), P.max(0)
+
+    stubs = [o for o in marked if is_stub(o)]
+    stubs.sort(key=lambda o: -cv2.contourArea(np.asarray(o["polygon"], np.float32).reshape(-1, 1, 2)))
+    st["stubs"] = len(stubs)
+    todo = stubs[:int(cfg["refine_max"])]
+    handled = set()
+    for stub in todo:
+        if id(stub) in handled:
+            continue
+        P, lo, hi = bounds(stub)
+        cx, cy = (lo + hi) / 2.0
+        wx1 = int(min(max(0, cx - win_w / 2), w - win_w))
+        wy1 = int(min(max(0, cy - win_h / 2), h - win_h))
+        wx2, wy2 = wx1 + win_w, wy1 + win_h
+        st["calls"] += 1
+        try:
+            found = infer_fn(image[wy1:wy2, wx1:wx2])
+        except Exception:
+            found = None
+        # все обрубки, лежащие в окне с запасом (первый — всегда), проверяются по одному результату модели
+        group = [stub]
+        for o in todo:
+            if o is stub or id(o) in handled:
+                continue
+            _, olo, ohi = bounds(o)
+            if olo[0] >= wx1 + margin and olo[1] >= wy1 + margin and ohi[0] <= wx2 - margin and ohi[1] <= wy2 - margin:
+                group.append(o)
+        cand = []
+        for c in (found or []):
+            poly = c.get("polygon")
+            if not poly or len(poly) < 3:
+                continue
+            C = np.asarray(poly, np.float32).reshape(-1, 2) + (wx1, wy1)
+            if C[:, 0].min() <= wx1 + 3 or C[:, 1].min() <= wy1 + 3 or C[:, 0].max() >= wx2 - 3 or C[:, 1].max() >= wy2 - 3:
+                continue                                  # упёрлась в границу окна — снова обрубок
+            cand.append((C, c))
+        for s_obj in group:
+            handled.add(id(s_obj))
+            if not found or not any(o is s_obj for o in marked):   # сбой запроса / уже поглощён
+                continue
+            Ps, slo, shi = bounds(s_obj)
+            best = None
+            for C, c in cand:
+                if C[:, 0].max() < slo[0] or C[:, 0].min() > shi[0] or C[:, 1].max() < slo[1] or C[:, 1].min() > shi[1]:
+                    continue
+                inter, s_area, c_area = _mask_overlap(Ps, C)
+                if inter < 0.6 * s_area or c_area < 0.85 * s_area:
+                    continue                              # не накрывает обрубок или это лишь его кусок
+                if best is None or inter > best[0]:
+                    best = (inter, C, c)
+            if best is None:
+                continue
+            _, C, c = best
+            absorbed, ambiguous = [], False
+            for o in marked:
+                if o is s_obj or not o.get("polygon") or len(o["polygon"]) < 3:
+                    continue
+                Q, qlo, qhi = bounds(o)
+                if qhi[0] < C[:, 0].min() or qlo[0] > C[:, 0].max() or qhi[1] < C[:, 1].min() or qlo[1] > C[:, 1].max():
+                    continue
+                inter_q, oa, _ = _mask_overlap(Q, C)
+                if oa and inter_q >= 0.6 * oa:
+                    if is_stub(o):
+                        absorbed.append(o)
+                    else:
+                        ambiguous = True                  # накрыла целый нормальный кристалл
+                        break
+            if ambiguous:
+                continue
+            new = {k: v for k, v in c.items() if k not in ("cut", "edge")}
+            new["polygon"] = np.round(C, 1).tolist()
+            new["bbox"] = [float(C[:, 0].min()), float(C[:, 1].min()), float(C[:, 0].max()), float(C[:, 1].max())]
+            new["refined"] = True
+            # обрубок — копия сырого объекта с тем же списком polygon (identity), по нему находим сырой
+            drop = {id(s_obj["polygon"])} | {id(o["polygon"]) for o in absorbed}
+            result = [o for o in result if id(o.get("polygon")) not in drop] + [new]
+            marked = [o for o in marked if id(o.get("polygon")) not in drop] + [new]
+            for o in absorbed:
+                handled.add(id(o))
+            st["fixed"] += 1
+    return result
+
+
 def measure_objects(objects: list[dict], cv_cfg: Optional[dict] = None,
                     sv: Optional[float] = None, img_shape: Optional[tuple] = None) -> list[CrystalMeasure]:
     """Посчитать геометрию/форму/группу для каждого объекта. Мелочь < min_size_um отсекаем.
@@ -468,7 +679,7 @@ def measure_objects(objects: list[dict], cv_cfg: Optional[dict] = None,
     if img_shape is not None and cfg["edge_margin_px"] > 0:
         objects = _flag_edges(objects, img_shape, cfg["edge_margin_px"])
     if img_shape is not None and cfg["seam_merge"]:
-        objects = _merge_seams(objects, img_shape, int(cfg["tiles"]), cfg["overlap"], max(cfg["cluster_gap_px"], 4.0))
+        objects = _merge_seams(objects, img_shape, int(cfg["tiles"]), cfg["overlap"], 2.0)
     objects = _merge_touching(objects, cfg["cluster_gap_px"], cfg["nest_frac"])
     counting = is_counting(cfg, sv)
     size_active = sv is not None and sv >= cfg["reject_from_sv"]   # размер-брак — только у готового
@@ -505,8 +716,15 @@ def measure_objects(objects: list[dict], cv_cfg: Optional[dict] = None,
         if members > 1 and not cut:
             defect = "aggregate"          # склеено из нескольких масок — сросток по определению
         suspect = (not cut) and defect is None and aspect > cfg["shape"]["suspect_aspect"]
+        bubble = (cfg["bubble_filter"] and not cut and members == 1 and obj.get("polygon")
+                  and size_um >= cfg["bubble_min_um"] and aspect <= cfg["bubble_aspect"]
+                  and solidity >= cfg["bubble_solidity"] and _radial_cv(cnt) <= cfg["bubble_radial_cv"])
+        if bubble:
+            defect, suspect = None, False        # не кристалл: ни брака, ни «вытянутого»
         if cut:
             group = CUT_GROUP
+        elif bubble:
+            group = BUBBLE_GROUP
         elif defect and counting:
             group = "reject"
         else:
@@ -538,11 +756,15 @@ def summarize(measures: list[CrystalMeasure], image_shape: tuple,
     counts = {g: 0 for g in GROUP_ORDER}
     sizes = []
     n_cut = 0
+    n_bubble = 0
     reasons = {r: 0 for r in REASONS}
     n_suspect = 0
     for m in measures:
         if m.group == CUT_GROUP:      # обрезан кадром/швом — вне рассева и размеров
             n_cut += 1
+            continue
+        if m.group == BUBBLE_GROUP:   # пузырь воздуха — не кристалл, вне рассева и размеров
+            n_bubble += 1
             continue
         counts[m.group] += 1
         if m.defect:
@@ -551,15 +773,17 @@ def summarize(measures: list[CrystalMeasure], image_shape: tuple,
             n_suspect += 1
         if m.group != "reject":
             sizes.append(m.size_um)
-    n = len(measures) - n_cut
+    n = len(measures) - n_cut - n_bubble
     area_mm2 = (w * cfg["um_per_px"] / 1000.0) * (h * cfg["um_per_px"] / 1000.0)
     sizes_np = np.array(sizes) if sizes else np.array([0.0])
+    vol_sums = cv_volume.sums_for(measures, cfg, cv_volume.fines_on(cfg, sv))
     quality = "ok"
     if blur is not None and blur < cfg["blur_min"]:
         quality = "low"
     return {
         "count": n,
         "cut": n_cut,
+        "bubbles": n_bubble,
         "reasons": reasons,
         "suspect": n_suspect,
         "reject_active": is_counting(cfg, sv),
@@ -574,6 +798,9 @@ def summarize(measures: list[CrystalMeasure], image_shape: tuple,
             "cv_pct": round(float(100.0 * sizes_np.std() / sizes_np.mean()), 1) if sizes_np.mean() else 0.0,
         },
         "density_per_mm2": round(n / area_mm2, 2) if area_mm2 > 0 else 0.0,
+        # объём/площадь: суммы (складываются по кадрам пробы) и доли мелочи/сростков, % от общего
+        "volume": vol_sums, "volume_pct": cv_volume.percents(vol_sums),
+        "volume_cfg": cv_volume.volume_cfg(cfg),
         "reject_pct": round(100.0 * counts["reject"] / n, 1) if n else 0.0,
         "quality": quality,
         "blur": round(blur, 1) if blur is not None else None,
@@ -587,10 +814,10 @@ def draw_overlay(image: np.ndarray, measures: list[CrystalMeasure],
     if out.ndim == 2:
         out = cv2.cvtColor(out, cv2.COLOR_GRAY2BGR)
     for m in measures:
-        color = GROUP_COLORS.get("reject" if m.defect else ("suspect" if m.suspect else m.group), (200, 200, 200))
+        color = DEFECT_COLORS.get(m.defect) or GROUP_COLORS.get("reject" if m.defect else ("suspect" if m.suspect else m.group), (200, 200, 200))
         if m.contour is not None:
             cv2.drawContours(out, [m.contour], -1, color, 2)
-        if draw_size and m.group not in ("reject", CUT_GROUP):
+        if draw_size and m.group not in ("reject", CUT_GROUP, BUBBLE_GROUP):
             cv2.putText(out, f"{int(round(m.size_um))}",
                         (int(m.cx) - 12, int(m.cy) - 6),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1, cv2.LINE_AA)
@@ -609,7 +836,7 @@ def draw_objects(image: np.ndarray, objects: list[dict]) -> np.ndarray:
         if poly and len(poly) >= 3:
             pts = np.asarray(poly, dtype=np.int32).reshape(-1, 1, 2)
             key = "reject" if o.get("defect") else ("suspect" if o.get("suspect") else o.get("group"))
-            cv2.polylines(out, [pts], True, GROUP_COLORS.get(key, (200, 200, 200)), thick)
+            cv2.polylines(out, [pts], True, DEFECT_COLORS.get(o.get("defect")) or GROUP_COLORS.get(key, (200, 200, 200)), thick)
     return out
 
 
@@ -620,6 +847,7 @@ def analyze(image: np.ndarray, objects: list[dict], cv_cfg: Optional[dict] = Non
     measures = measure_objects(objects, cv_cfg, sv=sv, img_shape=image.shape)
     blur = blur_score(image)
     summary = summarize(measures, image.shape, cv_cfg, blur=blur, sv=sv)
+    vol_k = cv_volume.volume_cfg(_cfg(cv_cfg))["k_thick"]
     def _obj(m):
         # bbox для наведения (hit-test в UI); площадь — по эквив.диаметру (= площадь маски), мкм²
         if m.contour is not None:
@@ -627,6 +855,7 @@ def analyze(image: np.ndarray, objects: list[dict], cv_cfg: Optional[dict] = Non
         else:
             x = y = w = h = 0
         area_um2 = round(math.pi * (m.size_um / 2.0) ** 2, 0)
+        vols = cv_volume.crystal_volumes(m.size_um, m.length_um, m.width_um, vol_k)
         # контур для отрисовки в браузере (слои, подсветка формы под мышкой) — упрощённый
         poly = []
         src = m.outline if m.outline is not None else m.contour
@@ -640,6 +869,7 @@ def analyze(image: np.ndarray, objects: list[dict], cv_cfg: Optional[dict] = Non
             "length_um": round(m.length_um, 1), "width_um": round(m.width_um, 1),
             "circularity": round(m.circularity, 3), "aspect": round(m.aspect, 2),
             "solidity": round(m.solidity, 3), "group": m.group, "conf": round(m.conf, 3),
+            "vol_um3": {k: round(v) for k, v in vols.items()},
             "defect": m.defect, "suspect": m.suspect, "notches": m.notches, "members": m.members, "seam_merged": m.seam_merged,
         }
     result = {"summary": summary, "objects": [_obj(m) for m in measures]}

@@ -1221,7 +1221,30 @@ def _cv_export_rotate():
         assert not cv_store.export_png(ser, "../../etc", 0, dest)["ok"], "ts не должен выводить за каталог проб"
     finally:
         shutil.rmtree(dest, ignore_errors=True)
-    return "архив по варкам и PNG работают"
+    # архив в PNG (без потерь): кадр лежит как frame_N.png, пиксель в пиксель с исходным; экспорт копирует как есть; потолок по размеру
+    ser2 = "SELFCHECK_PNG"
+    t0 = _tm.strftime(cv_store.TS_FMT, _tm.localtime(_tm.time() - 600))
+    rec = cv_store.save_sample(ser2, 7, frames, [img], {"total_ms": 1}, keep_last=100, ts=t0, sv=90.0, frame_format="png")
+    sd2 = cv_store._serial_dir(ser2) / t0
+    assert (sd2 / "frame_0.png").exists() and not (sd2 / "frame_0.jpg").exists(), "кадр должен лежать в PNG"
+    assert cv_store.overlay_path(ser2, t0, 0).suffix == ".png", "overlay_path не находит PNG-кадр"
+    raw = cv2.imdecode(_np.frombuffer((sd2 / "frame_0.png").read_bytes(), _np.uint8), cv2.IMREAD_COLOR)
+    assert (raw == img).all(), "PNG-кадр отличается от исходного — потери"
+    dest2 = Path(tempfile.mkdtemp(prefix="tolabel2_"))
+    try:
+        r2 = cv_store.export_png(ser2, t0, 0, dest2)
+        assert r2["ok"] and (dest2 / r2["name"]).read_bytes() == (sd2 / "frame_0.png").read_bytes(), "экспорт PNG должен копировать файл как есть"
+        # потолок: 3 пробы, лимит крошечный → остаются только защищённые keep_last
+        for k in range(1, 4):
+            cv_store.save_sample(ser2, 7, frames, [img], {"total_ms": 1}, keep_last=100, sv=90.0, frame_format="png",
+                                 ts=_tm.strftime(cv_store.TS_FMT, _tm.localtime(_tm.time() - 500 + k * 60)))
+        before = len([p for p in cv_store._serial_dir(ser2).iterdir() if p.is_dir()])
+        cv_store._rotate(ser2, keep_last=1, keep_boils=0, max_gb=0.000001)
+        after = len([p for p in cv_store._serial_dir(ser2).iterdir() if p.is_dir()])
+        assert before == 4 and after == 1, "потолок по размеру: было %d, стало %d (ждали 4 → 1: последняя проба защищена)" % (before, after)
+    finally:
+        shutil.rmtree(dest2, ignore_errors=True)
+    return "архив по варкам, PNG-кадры без потерь и потолок по размеру работают"
 
 
 @check("CV", "fracture_lab: кадр → метка → список → зоны → удаление (песочница)")

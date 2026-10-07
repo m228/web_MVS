@@ -436,7 +436,7 @@ class MicroscopeService:
 
         saved = cv_store.save_sample(serial, stage, run["frame_recs"], overlays, run["timing"],
                                      keep_last=int(cv.get("keep_last", 50)), keep_boils=int(cv.get("keep_boils", 10)), fracture=fracture,
-                                     jpeg_quality=int(cv.get("overlay_jpeg_quality", 85)),
+                                     jpeg_quality=int(cv.get("overlay_jpeg_quality", 85)), frame_format=str(cv.get("frame_format", "png")), max_gb=float(cv.get("archive_max_gb", 30)),
                                      thumb_img=thumb_img,
                                      sv=(sum(x for x in run["svs"] if x is not None) / max(1, len([x for x in run["svs"] if x is not None]))
                                          if any(x is not None for x in run["svs"]) else None),

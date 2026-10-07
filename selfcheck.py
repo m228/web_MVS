@@ -1043,8 +1043,11 @@ def _cv_sieve():
     for m in ("m1", "m2", "m3"):
         assert len(pct[m]) == 7 and abs(sum(pct[m]) - 100) < 0.01, "сумма фракций %s = %s" % (m, sum(pct[m]))
         assert pct[m][6] > pct[m][5] > pct[m][0], "крупные фракции должны весить больше по объёму"
+    assert len(pct["area"]) == 7 and abs(sum(pct["area"]) - 100) < 0.01, "рассев по площади: сумма %s" % sum(pct["area"])
+    assert pct["area"][6] > 0 and pct["area"][0] > 0, "по площади крупная и мелкая фракции должны быть непустыми"
     both = cv_volume.add_sums(s1, s1)
     assert abs(sum(cv_volume.percents(both)["sieve"]["m3"]) - 100) < 0.01, "слияние кадров ломает рассев"
+    assert abs(sum(cv_volume.percents(both)["sieve"]["area"]) - 100) < 0.01, "слияние кадров ломает рассев по площади"
     assert cv_volume.percents(cv_volume.empty_sums())["sieve"] == {}, "пустые суммы → пустой рассев"
     # брак по форме (сросток/игла/кривой) отсеян: ни в рассев, ни в общий объём, ни в муку не попадает, считается отдельно
     bad = [NS(group="small", defect=d, size_um=800, length_um=800, width_um=800) for d in ("aggregate", "needle", "crooked")]

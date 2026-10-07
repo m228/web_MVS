@@ -3757,6 +3757,10 @@ input.micro-cam-num { width: 56px; min-width: 0; flex: 0 0 auto; padding: 4px 5p
 .micro-cv-pair > .micro-cv-block { margin-top: 0; padding-top: 0; border-top: 0; }
 @media (max-width: 900px) { .micro-cv-pair { grid-template-columns: 1fr; } }
 .micro-vol__grid { display: grid; grid-template-columns: auto repeat(5, minmax(0, 1fr)); gap: 6px 10px; align-items: baseline; font-size: 0.85em; }
+.micro-vol__models { font: inherit; font-size: .78em; padding: 2px 8px; border-radius: 7px; border: 1px solid var(--border, rgba(131,151,179,.28)); background: none; color: var(--muted); cursor: pointer; }
+.micro-vol__models.is-on { border-color: var(--accent, #2563eb); color: var(--accent, #2563eb); }
+.micro-vol--lite #cvVolGrid { grid-template-columns: auto repeat(2, minmax(0, 1fr)); }
+.micro-vol--lite #cvVolGrid .mdl, .micro-vol--lite #cvVolGrid em[data-v^="m"] { display: none; }
 .micro-vol__sub { margin: 14px 0 6px; font-size: .8em; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
 .micro-sieve { grid-template-columns: auto repeat(4, minmax(0, 1fr)); }
 .micro-vol__grid > b { font-weight: 600; font-size: 0.85em; color: var(--muted); text-align: right; white-space: nowrap; cursor: help; }

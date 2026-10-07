@@ -67,7 +67,7 @@ def _volume_cols(s: dict, vp: dict, n_frames: int) -> dict:
         tot = (sums.get(key) or {}).get("total")
         out["vtot_" + key] = round(tot / 1e9 / n_frames, 4) if tot else None
     sv = (vp.get("sieve") or {})
-    for mod in ("m1", "m2", "m3"):                   # рассев по ситам, % объёма: sieve_<модель>_b0 (дно) … b6 (>1,2 мм)
+    for mod in ("m1", "m2", "m3", "area"):           # рассев по ситам, %: sieve_<m1|m2|m3|area>_b0 (дно) … b6 (>1,2 мм); area — доля по площади
         for i in range(len(cv_volume.SIEVE_MM) + 1):
             out["sieve_%s_b%d" % (mod, i)] = (sv.get(mod) or [None] * (len(cv_volume.SIEVE_MM) + 1))[i]
     out["good_n"], out["rej_n"] = (sums.get("n") or {}).get("total"), (sums.get("n") or {}).get("agg")     # хороших кристаллов / отсеянного брака в пробе (штук, все кадры)
@@ -208,6 +208,7 @@ EXPORT_COLUMNS = ["ts", "t", "stage", "sv", "temp", "level", "current", "vac", "
                   "count", "mean", "median", "cv_pct", "density", "small", "medium", "large", "reject",
                   "reject_pct", "fines_m1", "fines_m2", "fines_m3", "fines_avg", "fines_area", "fines_n",
                   "good_n", "rej_n", "sieve_b0", "sieve_b1", "sieve_b2", "sieve_b3", "sieve_b4", "sieve_b5", "sieve_b6",
+                  "sieve_area_b0", "sieve_area_b1", "sieve_area_b2", "sieve_area_b3", "sieve_area_b4", "sieve_area_b5", "sieve_area_b6",
                   "agg_m1", "agg_m2", "agg_m3", "agg_area", "agg_n", "vtot_m1", "vtot_m2", "vtot_m3", "fines_side_mm", "fines_um", "k_thick", "fines_from_sv",
                   "n_needle", "n_aggregate", "n_crooked", "n_tiny", "n_huge", "suspect",
                   "frac_zones", "frac_pct", "frames"]
@@ -286,7 +287,8 @@ def _vol_block(sel: list) -> dict:
            "ts_from": fin[0]["ts"] if fin else None, "ts_to": fin[-1]["ts"] if fin else None}
     out["fines"] = {m: r3(_wmean(fin, "fines_" + m, "vtot_" + m)) for m in ("m1", "m2", "m3")}
     out["fines"]["area"], out["fines"]["n"] = r3(_wmean(fin, "fines_area", None)), r3(_wmean(fin, "fines_n", None))
-    out["sieve"] = {m: [r3(_wmean(fin, "sieve_%s_b%d" % (m, i), "vtot_" + m)) for i in range(len(cv_volume.SIEVE_MM) + 1)] for m in ("m1", "m2", "m3")}
+    # рассев по объёму (M1–M3, вес — общий объём пробы) и по площади (area, простое среднее по пробам)
+    out["sieve"] = {m: [r3(_wmean(fin, "sieve_%s_b%d" % (m, i), ("vtot_" + m) if m != "area" else None)) for i in range(len(cv_volume.SIEVE_MM) + 1)] for m in ("m1", "m2", "m3", "area")}
     return out
 
 
@@ -312,7 +314,8 @@ def _boil_summary(rows: list, finished: bool, avg_n: int = 4) -> dict:
     out["fines"], out["agg"], out["vtot"] = fines, agg, vtot
     # рассев по варке — по тем же пробам финиша, что и мука, взвешено по общему объёму пробы
     fin = [r for r in rows if r.get("fines_m3") is not None]
-    out["sieve"] = {m: [r3(_wmean(fin, "sieve_%s_b%d" % (m, i), "vtot_" + m)) for i in range(len(cv_volume.SIEVE_MM) + 1)] for m in ("m1", "m2", "m3")}
+    # рассев по объёму (M1–M3, вес — общий объём пробы) и по площади (area, простое среднее по пробам)
+    out["sieve"] = {m: [r3(_wmean(fin, "sieve_%s_b%d" % (m, i), ("vtot_" + m) if m != "area" else None)) for i in range(len(cv_volume.SIEVE_MM) + 1)] for m in ("m1", "m2", "m3", "area")}
     out["all"] = _vol_block(fin)                      # все пробы финиша варки
     out["tail"] = _vol_block(fin[-avg_n:])            # последние N проб финиша (поле «Проб в среднем»)
     last = rows[-1]

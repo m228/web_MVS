@@ -227,15 +227,29 @@
   }
   // --- рассев по ситам: фракции снизу вверх b0 (дно) … b6 (>1,2 мм); строки рисуем сверху вниз как в лабораторной таблице ---
   const CV_SIEVE_ROWS = [[6, "> 1,2"], [5, "1 – 1,2"], [4, "0,8 – 1"], [3, "0,7 – 0,8"], [2, "0,5 – 0,7"], [1, "0,2 – 0,5"], [0, "дно < 0,2"]];
-  function cvRenderSieve(sv) {            // sv = {m1:[7], m2:[7], m3:[7]} в % объёма; нет данных — прочерки
+  // показывать ли отдельные модели M1–M3 (по умолчанию скрыты: «Среднее» и «Площадь» понятнее)
+  let cvShowModels = false;
+  try { cvShowModels = localStorage.getItem("microCvShowModels") === "1"; } catch (e) { }
+  let cvSieveLast = null;
+  function cvRenderSieve(sv) {            // sv = {m1:[7], m2:[7], m3:[7], area:[7]} в %: объём по трём моделям и площадь; нет данных — прочерки
+    cvSieveLast = sv;
     const g = $("cvSieveGrid"); if (!g) return;
     const val = (m, i) => (sv && sv[m] && sv[m][i] != null ? sv[m][i] : null);
     const avg = (i) => cvAvg3({ m1: val("m1", i), m2: val("m2", i), m3: val("m3", i) });
-    let html = "<span>размер, мм</span><b>M1 шар</b><b>M2 сфер.</b><b>M3 призма</b><b>Среднее</b>";
+    g.style.gridTemplateColumns = "auto repeat(" + (cvShowModels ? 5 : 2) + ", minmax(0, 1fr))";
+    let html = '<span>размер, мм</span><b title="Доля по объёму (объём ~ масса): среднее трёх моделей M1–M3">Среднее</b><b title="Доля по площади кристаллов на кадре">Площадь</b>' +
+      (cvShowModels ? "<b>M1 шар</b><b>M2 сфер.</b><b>M3 призма</b>" : "");
     CV_SIEVE_ROWS.forEach(([i, name]) => {
-      html += "<span>" + name + "</span><em>" + fmtPct(val("m1", i)) + "</em><em>" + fmtPct(val("m2", i)) + "</em><em>" + fmtPct(val("m3", i)) + "</em><em>" + fmtPct(avg(i)) + "</em>";
+      html += "<span>" + name + "</span><em>" + fmtPct(avg(i)) + "</em><em>" + fmtPct(val("area", i)) + "</em>" +
+        (cvShowModels ? "<em>" + fmtPct(val("m1", i)) + "</em><em>" + fmtPct(val("m2", i)) + "</em><em>" + fmtPct(val("m3", i)) + "</em>" : "");
     });
     g.innerHTML = html;
+  }
+  function cvApplyModels() {              // скрыть/показать M1–M3 в обеих таблицах («Объём и мука» и рассев)
+    const box = $("cvVol"), btn = $("cvVolModelsBtn");
+    if (box) box.classList.toggle("micro-vol--lite", !cvShowModels);
+    if (btn) btn.classList.toggle("is-on", cvShowModels);
+    cvRenderSieve(cvSieveLast);
   }
   // --- по варке: журнал проб нарезан на варки (/api/cv/boils), листаем стрелками ---
   let cvBoils = [], cvBoilSel = null, cvBoilTs = 0, cvVolMode = "tail";
@@ -314,6 +328,9 @@
     if (box) box.innerHTML = rows.join("");
   }
   function wireBoilNav() {
+    const mb = $("cvVolModelsBtn");
+    if (mb) mb.addEventListener("click", () => { cvShowModels = !cvShowModels; try { localStorage.setItem("microCvShowModels", cvShowModels ? "1" : "0"); } catch (e) { } cvApplyModels(); });
+    cvApplyModels();
     const setMode = (m) => {
       cvVolMode = m;
       try { localStorage.setItem("microCvVolMode", m); } catch (e) { }

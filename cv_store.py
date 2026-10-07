@@ -122,7 +122,21 @@ def _hist_append(serial: str, result: dict):
             fh.write(json.dumps(row, ensure_ascii=False) + "\n")
 
 
-def _hist_read(serial: str, day: str) -> list[dict]:
+def _null_sv_outliers(rows: list[dict]) -> list[dict]:
+    """СВ, которое явно не настоящее (< 5 или сильно отличается от соседних проб — разовый сбой чтения ПЛК: 0,0 или 58 при 87),
+    заменяем на None: иначе тренд падает в ноль, а варка делится на две. Сами файлы журнала не меняем."""
+    for i, r in enumerate(rows):
+        sv = r.get("sv")
+        if sv is None:
+            continue
+        nb = sorted(x["sv"] for x in rows[max(0, i - 3):i] + rows[i + 1:i + 4] if x.get("sv") is not None)
+        med = nb[len(nb) // 2] if len(nb) >= 2 else None
+        if sv < 5 or (med is not None and abs(sv - med) > 15):
+            r["sv"] = None
+    return rows
+
+
+def _hist_read(serial: str, day: str, clean: bool = True) -> list[dict]:
     f = _hist_dir(serial) / (day + ".jsonl")
     rows = []
     try:
@@ -133,7 +147,7 @@ def _hist_read(serial: str, day: str) -> list[dict]:
                 continue            # битая строка (обрыв записи) не рушит весь день
     except Exception:
         pass
-    return rows
+    return _null_sv_outliers(rows) if clean else rows       # clean=False — сырые строки (для перезаписи журнала)
 
 
 def _hist_backfill(serial: str):
@@ -263,8 +277,9 @@ def _is_new_boil(prev: dict, r: dict) -> bool:
     st, ps = r.get("stage"), prev.get("stage")
     if st is not None and ps is not None and ps >= 6 and st <= 4:
         return True
+    # СВ упало — запасной признак, и только когда времени варки нет вовсе: одиночный сбой чтения СВ не должен делить варку
     sv, psv = r.get("sv"), prev.get("sv")
-    return sv is not None and psv is not None and sv < psv - BOIL_SV_DROP
+    return (ct is None or pt is None) and sv is not None and psv is not None and sv < psv - BOIL_SV_DROP
 
 
 def _wmean(rows: list, key: str, wkey: Optional[str]) -> Optional[float]:
@@ -542,7 +557,7 @@ def recompute_journal(serial: str) -> int:
     n = 0
     with _HIST_LOCK:
         for f in (sorted(_hist_dir(serial).glob("*.jsonl")) if _hist_dir(serial).exists() else []):
-            rows, changed = _hist_read(serial, f.stem), False
+            rows, changed = _hist_read(serial, f.stem, clean=False), False
             for i, r in enumerate(rows):
                 if r.get("ts") in fresh and fresh[r["ts"]] != r:
                     rows[i], changed = fresh[r["ts"]], True

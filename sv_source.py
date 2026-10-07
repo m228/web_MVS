@@ -58,6 +58,9 @@ class SvSource:
         # защита от разовых сбоев чтения (СВ вдруг 0 или 58 при 87, стадия на один опрос «3»): новое значение принимаем,
         # только если оно продержалось несколько опросов подряд. Реальный скачок принимается с задержкой в пару секунд.
         self.glitch_filter = bool(cfg.get("glitch_filter", True))
+        # чтение одним запросом на весь блок регистров (согласованный снимок, 1 запрос вместо 9); не получилось — по одному
+        self._block_ok = bool(cfg.get("block_read", True))
+        self.requests = 0                     # счётчик запросов к ПЛК (для проверки)
         self._sv_good, self._sv_bad_n = None, 0
         self._stage_cur, self._stage_cand, self._stage_n = None, None, 0
         self._last_glitch_log = 0.0
@@ -161,7 +164,24 @@ class SvSource:
         self._sock_up = False
         return False
 
+    BLOCK_MAX = 100       # блок длиннее — читаем по одному
+
+    def _read_all(self):
+        """Все нужные регистры -> {reg: raw}. Один запрос на весь блок [мин..макс] — снимок согласован по времени, запросов в 9 раз
+        меньше; ПЛК не дал блок (исключение Modbus) — читаем по одному регистру. Сетевые ошибки идут выше (переподключение)."""
+        regs = sorted({reg for reg, _, _ in self.fields.values()})
+        lo, hi = regs[0], regs[-1]
+        if self._block_ok and hi - lo + 1 <= self.BLOCK_MAX:
+            self.requests += 1
+            rr = self._client.read_holding_registers(lo, count=hi - lo + 1, slave=self.unit)
+            if not rr.isError() and len(rr.registers) == hi - lo + 1:
+                return {reg: rr.registers[reg - lo] for reg in regs}
+            self._block_ok = False
+            log_event("sv_source", "ПЛК не отдал блок регистров %d..%d — читаем по одному" % (lo, hi), "warn", {"resp": repr(rr)})
+        return {reg: self._read_reg(reg) for reg in regs}
+
     def _read_reg(self, addr):
+        self.requests += 1
         rr = self._client.read_holding_registers(addr, count=1, slave=self.unit)
         if rr.isError():
             raise IOError("read reg %d error: %r" % (addr, rr))
@@ -180,8 +200,9 @@ class SvSource:
                 continue
             try:
                 values = {}
+                raws = self._read_all()
                 for name, (reg, scale, signed) in self.fields.items():
-                    raw = self._read_reg(reg)
+                    raw = raws[reg]
                     if signed and raw >= 0x8000:        # int16 в доп. коде -> отрицательное
                         raw -= 0x10000
                     values[name] = raw if scale == 1 else raw / scale   # scale=1 -> целое (стадия)

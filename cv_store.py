@@ -277,8 +277,9 @@ def _is_new_boil(prev: dict, r: dict) -> bool:
     st, ps = r.get("stage"), prev.get("stage")
     if st is not None and ps is not None and ps >= 6 and st <= 4:
         return True
+    # СВ упало — запасной признак, и только когда времени варки нет вовсе: одиночный сбой чтения СВ не должен делить варку
     sv, psv = r.get("sv"), prev.get("sv")
-    return sv is not None and psv is not None and sv < psv - BOIL_SV_DROP
+    return (ct is None or pt is None) and sv is not None and psv is not None and sv < psv - BOIL_SV_DROP
 
 
 def _wmean(rows: list, key: str, wkey: Optional[str]) -> Optional[float]:

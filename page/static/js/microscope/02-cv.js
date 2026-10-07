@@ -62,7 +62,7 @@
     set("cvUmPerPx", cv.um_per_px); set("cvTiles", cv.tiles);
     set("cvMinCirc", sh.min_circularity); set("cvMinSol", sh.min_solidity);
     set("cvMaxAspect", sh.max_aspect); set("cvConf", cv.conf);
-    set("cvKeepBoils", cv.keep_boils != null ? cv.keep_boils : 10); set("cvSuspect", sh.suspect_aspect); set("cvShapeMin", sh.min_um != null ? sh.min_um : 100); set("cvSmoothK", sh.smooth_k != null ? sh.smooth_k : 5); set("cvRejectSv", cv.reject_to_sv != null ? cv.reject_to_sv : 85);
+    set("cvKeepBoils", cv.keep_boils != null ? cv.keep_boils : 10); set("cvArchiveGb", cv.archive_max_gb != null ? cv.archive_max_gb : 30); if ($("cvFramePng")) $("cvFramePng").checked = (cv.frame_format || "png") === "png"; set("cvSuspect", sh.suspect_aspect); set("cvShapeMin", sh.min_um != null ? sh.min_um : 100); set("cvSmoothK", sh.smooth_k != null ? sh.smooth_k : 5); set("cvRejectSv", cv.reject_to_sv != null ? cv.reject_to_sv : 85);
     set("cvClusterGap", cv.cluster_gap_px); set("cvEdgeMargin", cv.edge_margin_px);
     if ($("cvSeamMerge")) $("cvSeamMerge").checked = cv.seam_merge !== false;
     if ($("cvSeamRefine")) $("cvSeamRefine").checked = cv.seam_refine !== false;
@@ -80,7 +80,7 @@
       groups: { small_max_um: num("cvSmallMax"), medium_max_um: num("cvMediumMax") },
       shape: { min_circularity: num("cvMinCirc"), min_solidity: num("cvMinSol"), max_aspect: num("cvMaxAspect"), suspect_aspect: num("cvSuspect"), min_um: num("cvShapeMin"), smooth_k: num("cvSmoothK") },
       um_per_px: num("cvUmPerPx"), tiles: num("cvTiles"), conf: num("cvConf"),
-      reject_to_sv: num("cvRejectSv"), keep_boils: num("cvKeepBoils"), cluster_gap_px: num("cvClusterGap"), edge_margin_px: num("cvEdgeMargin"),
+      reject_to_sv: num("cvRejectSv"), keep_boils: num("cvKeepBoils"), archive_max_gb: num("cvArchiveGb"), frame_format: $("cvFramePng") ? ($("cvFramePng").checked ? "png" : "jpg") : undefined, cluster_gap_px: num("cvClusterGap"), edge_margin_px: num("cvEdgeMargin"),
       seam_merge: $("cvSeamMerge") ? $("cvSeamMerge").checked : undefined,
       seam_refine: $("cvSeamRefine") ? $("cvSeamRefine").checked : undefined,
       bubble_filter: $("cvBubble") ? $("cvBubble").checked : undefined, reject_always: $("cvRejectAlways") ? $("cvRejectAlways").checked : undefined,

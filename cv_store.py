@@ -423,7 +423,7 @@ def _aggregate(frames: list[dict]) -> dict:
 
 def save_sample(serial: str, stage, frames: list[dict], images: list, timing: dict,
                 keep_last: int = 50, keep_boils: int = 0, ts: Optional[str] = None,
-                fracture: Optional[dict] = None, jpeg_quality: int = 85,
+                fracture: Optional[dict] = None, jpeg_quality: int = 85, frame_format: str = "jpg", max_gb: float = 0.0,
                 thumb_img=None, sv: Optional[float] = None,
                 plc: Optional[dict] = None) -> Optional[dict]:
     """Сохранить пробу. frames — список {file, summary, objects}. images — ЧИСТЫЕ кадры пробы
@@ -440,12 +440,13 @@ def save_sample(serial: str, stage, frames: list[dict], images: list, timing: di
         for i, fr in enumerate(frames):
             ov_name = None
             if i < len(images) and images[i] is not None:
-                ov_name = "frame_%d.jpg" % i
+                png = str(frame_format).lower() == "png"          # PNG — без потерь (≈ 7 МБ на кадр), JPEG — компактно (≈ 1 МБ)
+                ov_name = "frame_%d.%s" % (i, "png" if png else "jpg")
                 # imencode + write_bytes, а не cv2.imwrite: тот ломается на путях с кириллицей
-                ok, enc = cv2.imencode(".jpg", images[i],
-                                       [cv2.IMWRITE_JPEG_QUALITY, int(jpeg_quality)])
+                ok, enc = (cv2.imencode(".png", images[i], [cv2.IMWRITE_PNG_COMPRESSION, 1]) if png else
+                           cv2.imencode(".jpg", images[i], [cv2.IMWRITE_JPEG_QUALITY, int(jpeg_quality)]))
                 if not ok:
-                    raise OSError("не удалось закодировать кадр в JPEG")
+                    raise OSError("не удалось закодировать кадр в %s" % ("PNG" if png else "JPEG"))
                 (d / ov_name).write_bytes(enc.tobytes())
                 if i == 0:
                     thumb = _encode_thumb(thumb_img if thumb_img is not None else images[i])
@@ -485,7 +486,7 @@ def save_sample(serial: str, stage, frames: list[dict], images: list, timing: di
             _hist_append(serial, result)         # журнал трендов — переживает ротацию кадров
         except Exception as e:
             log_event("cv_store", "Не записана строка журнала трендов", "warn", {"error": str(e)})
-        _rotate(serial, keep_last, keep_boils)
+        _rotate(serial, keep_last, keep_boils, max_gb)
         log_event("cv_store", "Проба CV сохранена", "info",
                   {"serial": str(serial), "ts": ts, "count": summary.get("count")})
         return {"ts": ts, "dir": str(d), "summary": summary}
@@ -512,7 +513,14 @@ def _boil_starts(serial: str) -> list[float]:
     return starts
 
 
-def _rotate(serial: str, keep_last: int, keep_boils: int = 0):
+def _dir_size(p: Path) -> int:
+    try:
+        return sum(f.stat().st_size for f in p.iterdir() if f.is_file())
+    except OSError:
+        return 0
+
+
+def _rotate(serial: str, keep_last: int, keep_boils: int = 0, max_gb: float = 0.0):
     """Архив проб: удаляем только то, что старше И «последних keep_last проб», И начала N-й с конца варки (keep_boils > 0).
     Так кадры последних N варок лежат целиком — их можно просматривать и забирать на разметку; потолок KEEP_MAX_PROBES."""
     sd = _serial_dir(serial)
@@ -531,6 +539,19 @@ def _rotate(serial: str, keep_last: int, keep_boils: int = 0):
         old = list({p.name: p for p in old + dirs[:len(dirs) - KEEP_MAX_PROBES]}.values())
     for p in old:
         shutil.rmtree(p, ignore_errors=True)
+    # потолок по занятому месту (max_gb > 0): сверх него удаляем самые старые, но последние keep_last проб не трогаем
+    if max_gb and max_gb > 0:
+        left = [p for p in dirs if p.exists()]
+        sizes = {p: _dir_size(p) for p in left}
+        total, cap = sum(sizes.values()), int(max_gb * 1e9)
+        protected = set(left[-keep_last:]) if keep_last > 0 else set()
+        for p in left:
+            if total <= cap:
+                break
+            if p in protected:
+                continue
+            total -= sizes[p]
+            shutil.rmtree(p, ignore_errors=True)
 
 
 def export_png(serial: str, ts: str, idx: int, dest_dir) -> dict:
@@ -539,15 +560,19 @@ def export_png(serial: str, ts: str, idx: int, dest_dir) -> dict:
     d = _probe_dir(serial, ts)
     if d is None:
         return {"ok": False, "error": "проба не найдена"}
-    p = d / ("frame_%d.jpg" % int(idx))
+    pp, pj = d / ("frame_%d.png" % int(idx)), d / ("frame_%d.jpg" % int(idx))
+    p = pp if pp.exists() else pj
     if not p.exists():
         return {"ok": False, "error": "чистого кадра нет (старая проба с контурами в картинке или кадр удалён)"}
-    img = cv2.imdecode(np.frombuffer(p.read_bytes(), np.uint8), cv2.IMREAD_COLOR)
-    if img is None:
-        return {"ok": False, "error": "кадр не читается"}
     dest = Path(dest_dir)
     dest.mkdir(parents=True, exist_ok=True)
     name = "%s_%s_f%d.png" % (_serial_dir(serial).name, ts, int(idx))
+    if p.suffix == ".png":                              # архив уже в PNG (без потерь) — копируем как есть, без перекодирования
+        (dest / name).write_bytes(p.read_bytes())
+        return {"ok": True, "name": name, "path": str(dest / name), "size_mb": round(p.stat().st_size / 1e6, 1)}
+    img = cv2.imdecode(np.frombuffer(p.read_bytes(), np.uint8), cv2.IMREAD_COLOR)
+    if img is None:
+        return {"ok": False, "error": "кадр не читается"}
     ok, enc = cv2.imencode(".png", img, [cv2.IMWRITE_PNG_COMPRESSION, 3])     # imencode+write_bytes: путь может быть кириллическим
     if not ok:
         return {"ok": False, "error": "не удалось закодировать PNG"}
@@ -560,7 +585,7 @@ def export_probe_pngs(serial: str, ts: str, dest_dir) -> list[dict]:
     d = _probe_dir(serial, ts)
     if d is None:
         return [{"ok": False, "error": "проба не найдена"}]
-    idxs = sorted(int(x.stem.split("_")[1]) for x in d.glob("frame_*.jpg") if x.stem.split("_")[1].isdigit())
+    idxs = sorted({int(x.stem.split("_")[1]) for x in list(d.glob("frame_*.jpg")) + list(d.glob("frame_*.png")) if x.stem.split("_")[1].isdigit()})
     return [export_png(serial, ts, i, dest_dir) for i in idxs] or [{"ok": False, "error": "в пробе нет чистых кадров"}]
 
 
@@ -675,7 +700,7 @@ def overlay_path(serial: str, ts: str, idx: int = 0) -> Optional[Path]:
         return None
     # frame_N.jpg — текущий формат (чистый кадр); overlay_N.jpg/.png — старые пробы с контурами
     # в самой картинке
-    for name in ("frame_%d.jpg", "overlay_%d.jpg", "overlay_%d.png"):
+    for name in ("frame_%d.png", "frame_%d.jpg", "overlay_%d.jpg", "overlay_%d.png"):
         p = d / (name % int(idx))
         if p.exists():
             return p

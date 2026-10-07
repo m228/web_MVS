@@ -631,7 +631,13 @@ def cv_settings_get():
 def cv_settings_set(patch: dict = Body(...)):
     data = micro.set_cv(patch or {})
     api_log("api.cv.settings", "Изменены настройки CV", payload={"patch": patch})
-    return {"status": "ok", "cv": data}
+    out = {"status": "ok", "cv": data}
+    if patch and "volume" in patch:          # поля «Мука, мм» / «Мука с СВ» / k: пересчитать журнал по сохранённым кадрам
+        try:
+            out["recomputed"] = cv_store.recompute_journal(_cv_serial(None))
+        except Exception as e:
+            api_log("api.cv.settings", "Не удалось пересчитать журнал по новым полям объёма", "warn", {"error": str(e)})
+    return out
 
 
 # --- разломы (Часть B) + автоподвод (Часть C) ---

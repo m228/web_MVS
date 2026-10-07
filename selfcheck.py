@@ -693,9 +693,14 @@ def _sv_source():
         assert _wait(lambda: src.status()["sv"] is not None, 3)
         assert abs(src.status()["sv"] - 52.5) < 0.01, "sv=%s" % src.status()["sv"]
         assert src.status()["stage"] == 7, "stage=%s" % src.status()["stage"]
+        # весь блок регистров читается ОДНИМ запросом за опрос (а не 9 отдельными)
+        r0 = src.requests
+        time.sleep(0.55)
+        n = src.requests - r0
+        assert src._block_ok and 3 <= n <= 8, "запросов за 0,55 с: %d (ждали по одному на опрос, ~5), block_ok=%s" % (n, src._block_ok)
     finally:
         src.stop()
-    return "sv=52.5 stage=7"
+    return "sv=52.5 stage=7, 1 запрос на опрос"
 
 
 @check("Микроскоп", "Автокалибровка нуля М1: энкодер 0±5 + аналог → set_zero → отвод; 3 попытки; провал не трогает ноль")
@@ -833,7 +838,7 @@ def _cv_analyze():
     return "%d кристаллов" % len(res["objects"])
 
 
-@check("CV", "cv_volume: объём шара/сфероида/призмы совпадает с формулой, мелочь и сростки считаются отдельно")
+@check("CV", "cv_volume: объём шара/сфероида/призмы совпадает с формулой, мука среди хороших, брак отсеян и считается отдельно")
 def _cv_volume():
     import math
     from types import SimpleNamespace as NS
@@ -847,15 +852,15 @@ def _cv_volume():
     assert abs(v["m2"] - math.pi / 6 * 700.0 * 500.0 * 440.0) < 1e-6, "M2 не сфероид"
     assert abs(v["m3"] - math.pi * 300.0 ** 2 * 440.0) < 1e-6, "M3 не призма"
     s = cv_volume.sums_for([big, fine, agg, cut], {"volume": {"fines_side_mm": 0.2, "k_thick": 0.88}})
-    assert s["n"] == {"fines": 1, "agg": 1, "total": 3}, "обрезанный/мелочь/сросток разнесены неверно: %s" % s["n"]
+    assert s["n"] == {"fines": 1, "agg": 1, "total": 2}, "обрезанный/мука/брак разнесены неверно: %s" % s["n"]     # хороших 2 (крупный + мука), брак отсеян отдельно
     p = cv_volume.percents(s)
-    tot = sum(cv_volume.crystal_volumes(o.size_um, o.length_um, o.width_um, 0.88)["m1"] for o in (big, fine, agg))
+    tot = sum(cv_volume.crystal_volumes(o.size_um, o.length_um, o.width_um, 0.88)["m1"] for o in (big, fine))     # брак в общий объём не входит
     want = 100.0 * math.pi / 6 * 100.0 ** 3 / tot
     assert abs(p["m1"]["fines"] - want) < 0.01, "доля мелочи %s ≠ %s" % (p["m1"]["fines"], want)
     assert p["m1"]["fines"] < p["n"]["fines"], "по объёму мелочи должно быть меньше, чем по числу"
     assert cv_volume.percents(cv_volume.empty_sums())["m3"]["fines"] is None, "пустой кадр должен дать None"
     off = cv_volume.sums_for([big, fine, agg], {"volume": {"fines_side_mm": 0.2}}, count_fines=False)
-    assert cv_volume.percents(off)["m3"]["fines"] is None and cv_volume.percents(off)["m3"]["agg"] is not None, "до нужного СВ мелочь не считается, сростки — да"
+    assert cv_volume.percents(off)["m3"]["fines"] is None and cv_volume.percents(off)["m3"]["agg"] is not None, "до нужного СВ мука не считается, брак — да (считается отдельно)"
     assert abs(cv_volume.volume_cfg(None)["fines_um"] - 225.68) < 0.01, "0,2 × 0,2 мм ↔ диаметр 226 мкм"
     assert not cv_volume.fines_on({}, 85.0) and cv_volume.fines_on({}, 88.0) and cv_volume.fines_on({}, None), "порог СВ для мелочи"
     return "мелочь %.3f %% объёма (M1)" % p["m1"]["fines"]
@@ -890,6 +895,11 @@ def _cv_boils():
     assert res[1]["counted"] == 2 and res[1]["fines"]["m3"] == 3.0, "мелочь прошлой варки = среднее по 2 пробам финиша: %s" % res[1]["fines"]
     assert res[0]["counted"] == 1 and res[0]["fines"]["m3"] == 6.0, "в новой варке мелочь по одной пробе"
     assert res[1]["agg"]["m3"] == 10.0 and res[1]["n"] == 12, "сростки — по всем пробам варки"
+    # окно «последние N проб финиша» (avg_n) и счётчики: сколько проб и хороших кристаллов вошло в среднее
+    for bb in res:
+        assert "tail" in bb and "all" in bb and bb["tail"]["probes"] <= bb["cfg"]["avg_n"], "нет окна последних проб"
+    assert res[1]["all"]["probes"] == 2 and res[1]["tail"]["probes"] == 2, "прошлая варка: 2 пробы финиша (avg_n=4 ≥ 2)"
+    assert res[1]["all"]["fines"]["m3"] == 3.0 and res[1]["tail"]["fines"]["m3"] == 3.0
     return "варок %d, мелочь прошлой %.1f %%" % (len(res), res[1]["fines"]["m3"])
 
 
@@ -987,7 +997,9 @@ def _cv_store():
     assert last.get("plc") == plc, "режим варки (plc) не попал в result.json: %r" % (last.get("plc"),)
     row = cv_store._hist_row(last)
     assert row["temp"] == 74.5 and row["vac"] == -0.8 and row["seed_age"] == 420, "журнал трендов без plc: %r" % (row,)
-    rec0 = cv_store.save_sample("SELFCHECK", 7, frames, [img], {"total_ms": 1}, keep_last=5, sv=90.0)
+    import time as _tm
+    rec0 = cv_store.save_sample("SELFCHECK", 7, frames, [img], {"total_ms": 1}, keep_last=5, sv=90.0,
+                                ts=_tm.strftime(cv_store.TS_FMT, _tm.localtime(_tm.time() + 7)))     # своя метка: две пробы за одну секунду слились бы
     assert "plc" not in (cv_store.get_result("SELFCHECK", rec0["ts"]) or {}), "без ПЛК ключ plc быть не должен"
     # выгрузка журнала проб в CSV (для разбора/обучения): колонки, режим варки, причины брака
     ex = cv_store.export_rows("SELFCHECK")
@@ -1001,6 +1013,18 @@ def _cv_store():
     assert "fines_avg" in mine[0], "в выгрузке нет колонки fines_avg"
     tr = cv_store.trend_range("SELFCHECK", 0, 9999999999, series=["fines_avg", "sv"])
     assert "fines_avg" in tr["series"] and len(tr["series"]["fines_avg"]) == len(tr["t"]), "в тренде нет серии fines_avg"
+    # поля «Мука, мм» меняются → уже снятая проба и журнал пересчитываются по сохранённым кадрам (а не ждут следующей пробы)
+    import plate_config
+    cur = (plate_config.load().get("cv") or {}).get("volume") or {}
+    plate_config.save({"cv": {"volume": {"fines_side_mm": 0.05, "k_thick": 0.88, "fines_from_sv": 0}}})
+    try:
+        again = cv_store.get_result("SELFCHECK", rec["ts"])
+        assert again["summary"]["volume_cfg"]["fines_side_mm"] == 0.05, "проба не пересчиталась по новому порогу муки"
+        assert cv_store.recompute_journal("SELFCHECK") >= 1, "журнал не пересчитан"
+        assert [r for r in cv_store.export_rows("SELFCHECK") if r["ts"] == rec["ts"]][0]["fines_side_mm"] == 0.05, "в журнале старый порог"
+    finally:
+        plate_config.save({"cv": {"volume": {"fines_side_mm": cur.get("fines_side_mm", 0.2), "k_thick": cur.get("k_thick", 0.88),
+                                             "fines_from_sv": cur.get("fines_from_sv", 88.0)}}})
     import app as web
     resp = web.cv_trend_export(serial="SELFCHECK", t_from=None, t_to=None)   # прямой вызов: Query-умолчания не подставляются
     body = resp.body.decode("utf-8-sig").splitlines()
@@ -1011,6 +1035,108 @@ def _cv_store():
     assert cv_store.thumb_path("SELFCHECK", rec["ts"]) is not None, "миниатюра не создана"
     assert cv_store.history_days("SELFCHECK") is not None
     return "ts=%s" % rec["ts"]
+
+
+@check("CV", "cv_analyzer: брак по форме считается ДО «Брак до СВ» (85), выше — не считается и в расчёт не берётся")
+def _cv_reject_to_sv():
+    import cv_analyzer as A
+    cfg = {"reject_to_sv": 85.0}
+    c = A._cfg(cfg)
+    assert A.is_counting(c, 80.0) and A.is_counting(c, 85.0) and not A.is_counting(c, 85.1) and not A.is_counting(c, 90.0), "граница 85"
+    assert A.is_counting(c, None), "СВ неизвестно — считаем"
+    assert A.is_counting(A._cfg({"reject_to_sv": 85.0, "reject_always": True}), 95.0), "«брак всегда»"
+    def m(group, defect):
+        return A.CrystalMeasure(cx=10, cy=10, size_um=300, length_um=320, width_um=280, circularity=0.8, aspect=1.1, solidity=0.95,
+                                group=group, conf=0.9, defect=defect)
+    early = A.summarize([m("small", None), m("reject", "aggregate")], (200, 200, 3), cfg, sv=80.0)
+    late = A.summarize([m("small", None), m("small", "aggregate")], (200, 200, 3), cfg, sv=90.0)
+    assert early["reject_active"] and early["groups"]["reject"] == 1 and early["count"] == 2, "до СВ 85 брак должен считаться: %s" % early["groups"]
+    assert not late["reject_active"] and late["groups"]["reject"] == 0 and late["groups"]["small"] == 1 and late["count"] == 1 and late["excluded"] == 1,         "выше СВ 85 дефектный кристалл должен быть вне расчёта: %s excl=%s" % (late["groups"], late.get("excluded"))
+    assert late["reasons"]["aggregate"] == 1, "причина всё равно подписывается"
+    return "до 85 брак считается, выше — отсеян"
+
+
+@check("CV", "cv_analyzer: форму (сросток/игла/кривой) судим только от «Форму судить от» (100 мкм), мельче — хороший кристалл")
+def _cv_shape_min():
+    import cv_analyzer as A
+    cfg = A._cfg(None)
+    assert cfg["shape"]["min_um"] == 100.0, "по умолчанию 100 мкм"
+    args = dict(circularity=0.9, aspect=1.2, solidity=0.95, notches=2, cfg=cfg, size_active=False)
+    assert A._defect(size_um=80.0, **args) is None, "мельче 100 мкм сросток не определяется"
+    assert A._defect(size_um=150.0, **args) == "aggregate", "от 100 мкм сросток определяется"
+    needle = dict(circularity=0.9, aspect=4.0, solidity=0.95, notches=0, cfg=cfg, size_active=False)
+    assert A._defect(size_um=60.0, **needle) is None and A._defect(size_um=300.0, **needle) == "needle", "игла — тоже только от порога"
+    off = A._cfg({"shape": {"min_um": 0.0}})
+    assert A._defect(size_um=40.0, **dict(args, cfg=off)) == "aggregate", "порог 0 — судим всё, как раньше"
+    # размер-брак (tiny) от порога формы не зависит
+    assert A._defect(size_um=40.0, **dict(args, notches=0, cfg=A._cfg({"size_reject": {"min_um": 250.0, "max_um": 1200.0}}), size_active=True)) == "tiny"
+    return "мельче 100 мкм форму не судим"
+
+
+@check("Микроскоп", "SvSource: разовый сбой чтения СВ/стадии отбрасывается, настоящий скачок принимается с задержкой")
+def _sv_glitch():
+    from sv_source import SvSource
+    src = SvSource({"host": "x"})                 # без соединения: проверяем только фильтр
+    out = [src._sanitize({"sv": v, "stage": st}) for v, st in
+           [(87.5, 7), (87.6, 7), (0.0, 3), (87.7, 7), (58.4, 7), (87.8, 7)]]
+    assert [o["sv"] for o in out] == [87.5, 87.6, 87.6, 87.7, 87.7, 87.8], "разовые 0,0 и 58,4 должны быть отброшены: %s" % [o["sv"] for o in out]
+    assert all(o["stage"] == 7 for o in out), "стадия на один опрос «3» не должна проходить"
+    # настоящий скачок СВ (новый набор сиропа 88 → 70): держится ≥ 5 опросов → принимается
+    src2 = SvSource({"host": "x"})
+    seq = [src2._sanitize({"sv": v, "stage": 7})["sv"] for v in [88.0] + [70.0] * 6]
+    assert seq[1:5] == [88.0] * 4 and seq[5] == 70.0, "скачок принят не вовремя: %s" % seq
+    # настоящая смена стадии 7 → 8: принимается на третьем опросе
+    src3 = SvSource({"host": "x"})
+    st = [src3._sanitize({"sv": 87.0, "stage": x})["stage"] for x in [7, 7, 8, 8, 8, 8]]
+    assert st == [7, 7, 7, 7, 8, 8], "смена стадии принята не вовремя: %s" % st
+    off = SvSource({"host": "x", "glitch_filter": False})
+    assert off._sanitize({"sv": 0.0, "stage": 3}) == {"sv": 0.0, "stage": 3}, "фильтр выключен — значения как есть"
+    return "0,0/58,4/«3» отброшены, скачок и смена стадии проходят"
+
+
+@check("CV", "cv_store: разовый сбой СВ (0,0 или 58 при 87) обнуляется при чтении журнала, граница варок 88 → 80 остаётся")
+def _cv_sv_outliers():
+    import cv_store
+    rows = [{"sv": v} for v in (84.3, 84.5, 0.0, 85.0, 85.2, 87.5, 58.4, 87.8, 88.0, 80.5, 81.0, 81.6)]
+    out = cv_store._null_sv_outliers(rows)
+    assert [r["sv"] for r in out] == [84.3, 84.5, None, 85.0, 85.2, 87.5, None, 87.8, 88.0, 80.5, 81.0, 81.6], "выбросы: %s" % [r["sv"] for r in out]
+    # одиночный сбой СВ внутри варки (время варки идёт) не делит её на две; новая варка — по времени варки/стадии/паузе
+    prev = {"t": 1000.0, "sv": 87.0, "stage": 7, "cook_time": 6000}
+    assert not cv_store._is_new_boil(prev, {"t": 1080.0, "sv": 0.0, "stage": 7, "cook_time": 6080}), "сбой СВ поделил варку"
+    assert not cv_store._is_new_boil(prev, {"t": 1080.0, "sv": 58.4, "stage": 7, "cook_time": 6080}), "СВ 58 поделил варку"
+    assert cv_store._is_new_boil(prev, {"t": 1080.0, "sv": 80.5, "stage": 3, "cook_time": 20}), "время варки сбросилось — новая варка"
+    assert cv_store._is_new_boil(prev, {"t": 1080.0, "sv": 80.5, "stage": 4, "cook_time": 6080}), "стадия откатилась на заводку — новая варка"
+    assert cv_store._is_new_boil({"t": 1000.0, "sv": 87.0}, {"t": 1080.0, "sv": 75.0}), "нет времени варки — СВ упало на 12: запасной признак"
+    return "2 выброса обнулены, 88 → 80 (новая варка) сохранено, сбой СВ варку не делит"
+
+
+@check("CV", "cv_volume: рассев по ситам — фракции по границам 0,2·0,5·0,7·0,8·1·1,2 мм, сумма 100 %, слияние кадров")
+def _cv_sieve():
+    import cv_volume
+    from types import SimpleNamespace as NS
+    assert [cv_volume.sieve_bin(x) for x in (100, 199, 200, 499, 500, 699, 700, 799, 800, 999, 1000, 1199, 1200, 2000)] ==         [0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6], "границы сит смещены"
+    ms = [NS(group="small", defect=None, size_um=d, length_um=d, width_um=d) for d in (150, 300, 600, 750, 900, 1100, 1300)]
+    s1 = cv_volume.sums_for(ms, None, True)
+    pct = cv_volume.percents(s1)["sieve"]
+    for m in ("m1", "m2", "m3"):
+        assert len(pct[m]) == 7 and abs(sum(pct[m]) - 100) < 0.01, "сумма фракций %s = %s" % (m, sum(pct[m]))
+        assert pct[m][6] > pct[m][5] > pct[m][0], "крупные фракции должны весить больше по объёму"
+    assert len(pct["area"]) == 7 and abs(sum(pct["area"]) - 100) < 0.01, "рассев по площади: сумма %s" % sum(pct["area"])
+    assert pct["area"][6] > 0 and pct["area"][0] > 0, "по площади крупная и мелкая фракции должны быть непустыми"
+    both = cv_volume.add_sums(s1, s1)
+    assert abs(sum(cv_volume.percents(both)["sieve"]["m3"]) - 100) < 0.01, "слияние кадров ломает рассев"
+    assert abs(sum(cv_volume.percents(both)["sieve"]["area"]) - 100) < 0.01, "слияние кадров ломает рассев по площади"
+    assert cv_volume.percents(cv_volume.empty_sums())["sieve"] == {}, "пустые суммы → пустой рассев"
+    # брак по форме (сросток/игла/кривой) отсеян: ни в рассев, ни в общий объём, ни в муку не попадает, считается отдельно
+    bad = [NS(group="small", defect=d, size_um=800, length_um=800, width_um=800) for d in ("aggregate", "needle", "crooked")]
+    mixed = cv_volume.percents(cv_volume.sums_for(ms + bad, None, True))
+    assert mixed["sieve"] == pct, "брак попал в рассев"
+    assert mixed["m3"]["fines"] == cv_volume.percents(s1)["m3"]["fines"], "брак изменил долю муки"
+    assert mixed["m3"]["agg"] > 0 and mixed["n"]["agg"] > 0, "отсеянный брак не посчитан отдельно"
+    # СВ ниже порога: мука и рассев не считаются (прочерк)
+    off = cv_volume.percents(cv_volume.sums_for(ms, None, False))
+    assert off["sieve"] == {} and off["m3"]["fines"] is None, "до порога СВ рассев/мука должны быть пустыми"
+    return "7 фракций, сумма 100 %"
 
 
 @check("CV", "microscope_service: снимок ПЛК в пробу + время с заводки (3 → 4..9), без сети")

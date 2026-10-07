@@ -26,9 +26,12 @@ DEFAULTS = {
     "groups": {"small_max_um": 500.0, "medium_max_um": 900.0},
     "shape": {"min_circularity": 0.55, "max_aspect": 3.0, "min_solidity": 0.90,
               "suspect_aspect": 1.6,     # вытянутые: от этого L/W до max_aspect (не брак)
+              "smooth_k": 5,             # сглаживание маски: минимальное ядро, px (больше — контур глаже, меньше ложных перетяжек у мелких; 1–3 — почти без сглаживания)
+              "min_um": 100.0,           # форму (игла/сросток/кривой) оцениваем только у кристаллов от этого размера: у мелких маска в десятки px, контур шумит и даёт ложный брак
               "notch_frac": 0.06},       # «выемка» контура глубже этой доли диаметра → признак сростка
     "volume": {"fines_side_mm": 0.2, "k_thick": 0.88, "fines_from_sv": 88.0},   # объём (см. cv_volume.py): мелочь — площадь меньше fines_side_mm², считается с СВ ≥ fines_from_sv; толщина = k_thick · ширина
     "size_reject": {"min_um": 250.0, "max_um": 1200.0},   # брак по размеру (только у готового, см. reject_from_sv)
+    "reject_to_sv": 85.0,      # брак по форме (сросток/игла/кривой) считается, пока СВ ≤ этого (первые кристаллы после заводки); выше — не считаем и в расчёт не берём
     "reject_from_sv": 88.0,    # брак идёт в рассев/тренд, только когда СВ ≥ этого (кристаллы подросли)
     "reject_always": False,    # True — считать брак всегда, без порога по СВ
     "cluster_gap_px": 4.0,     # маски с зазором ≤ этого (px) склеиваются в сросток; 0 — выкл
@@ -85,6 +88,7 @@ def _cfg(cv_cfg: Optional[dict]) -> dict:
         c["min_size_um"] = float(cv_cfg.get("min_size_um", c["min_size_um"]))
         c["blur_min"] = float(cv_cfg.get("blur_min", c["blur_min"]))
         c["reject_from_sv"] = float(cv_cfg.get("reject_from_sv", c["reject_from_sv"]))
+        c["reject_to_sv"] = float(cv_cfg.get("reject_to_sv", c["reject_to_sv"]))
         c["reject_always"] = bool(cv_cfg.get("reject_always", c["reject_always"]))
         for k in ("cluster_gap_px", "nest_frac", "edge_margin_px", "tiles", "overlap"):
             c[k] = float(cv_cfg.get(k, c[k]))
@@ -101,9 +105,10 @@ def _cfg(cv_cfg: Optional[dict]) -> dict:
 
 
 def is_counting(cfg: dict, sv: Optional[float]) -> bool:
-    """Идёт ли брак в рассев/тренд: СВ дошло до порога, либо порог отключён галочкой, либо СВ
-    неизвестно (без датчика СВ фильтровать нечем — показываем как есть)."""
-    return bool(cfg["reject_always"] or sv is None or sv >= cfg["reject_from_sv"])
+    """Считается ли брак по форме (сросток/игла/кривой): пока СВ не выше «Брак до СВ» (первые кристаллы после заводки —
+    там сростки и ищем), либо включено «брак всегда», либо СВ неизвестно. Выше порога кристаллов слишком много —
+    брак не считается, а дефектные кристаллы в расчёт не берутся (только хорошие)."""
+    return bool(cfg["reject_always"] or sv is None or sv <= cfg["reject_to_sv"])
 
 
 @dataclass
@@ -167,7 +172,10 @@ def _radial_cv(cnt: np.ndarray, n: int = 180) -> float:
     return float(r.std() / r.mean()) if r.mean() > 0 else 1.0
 
 
-def _clean_contour(cnt: np.ndarray, eq_d_px: float) -> np.ndarray:
+SMOOTH_MIN_K = 5        # минимальное ядро сглаживания маски, px (у мелких кристаллов ядро 5 % диаметра выходит меньше — шум контура давал ложные «перетяжки»)
+
+
+def _clean_contour(cnt: np.ndarray, eq_d_px: float, kmin: int = SMOOTH_MIN_K) -> np.ndarray:
     """Контур маски без тонких хвостов и шипов: маска морфологически открывается (ядро ≈ 5 % диаметра).
     Модель часто тянет за кристаллом волосок — он занижает выпуклость и даёт ложные «перетяжки»;
     форму кристалла (округлость, выпуклость, выемки) оцениваем по очищенному контуру.
@@ -180,7 +188,7 @@ def _clean_contour(cnt: np.ndarray, eq_d_px: float) -> np.ndarray:
             return cnt
         m = np.zeros((h, w), np.uint8)
         cv2.fillPoly(m, [np.round(pts - (x0, y0)).astype(np.int32).reshape(-1, 1, 2)], 1)
-        k = max(3, int(round(0.05 * eq_d_px)) | 1)
+        k = max(int(kmin), int(round(0.05 * eq_d_px)) | 1)
         m = cv2.morphologyEx(m, cv2.MORPH_OPEN, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k, k)))
         cs = cv2.findContours(m, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)[0]
         if not cs:
@@ -243,14 +251,15 @@ def _defect(size_um: float, circularity: float, aspect: float, solidity: float,
             notches: int, cfg: dict, size_active: bool) -> Optional[str]:
     """Причина брака по форме/размеру или None. Порядок = приоритет причин."""
     sh = cfg["shape"]
-    if aspect > sh["max_aspect"]:
-        return "needle"                                   # игла (раффиноза)
-    # сросток: 2–5 глубоких перетяжек контура (либо 1 перетяжка при невыпуклом силуэте);
-    # выемок МНОГО (>5) — это не срастание тел, а рваный/неровный край → «кривой»
-    if 1 <= notches <= NOTCH_MAX and (notches >= 2 or solidity < sh["min_solidity"]):
-        return "aggregate"
-    if notches > NOTCH_MAX or solidity < sh["min_solidity"] or circularity < sh["min_circularity"]:
-        return "crooked"                                  # кривой / неровный контур
+    if size_um >= sh.get("min_um", 0.0):                  # мельче — форму не судим (шум контура)
+        if aspect > sh["max_aspect"]:
+            return "needle"                               # игла (раффиноза)
+        # сросток: 2–5 глубоких перетяжек контура (либо 1 перетяжка при невыпуклом силуэте);
+        # выемок МНОГО (>5) — это не срастание тел, а рваный/неровный край → «кривой»
+        if 1 <= notches <= NOTCH_MAX and (notches >= 2 or solidity < sh["min_solidity"]):
+            return "aggregate"
+        if notches > NOTCH_MAX or solidity < sh["min_solidity"] or circularity < sh["min_circularity"]:
+            return "crooked"                              # кривой / неровный контур
     if size_active:
         sr = cfg["size_reject"]
         if size_um < sr["min_um"]:
@@ -701,7 +710,7 @@ def measure_objects(objects: list[dict], cv_cfg: Optional[dict] = None,
         width_um = min(rw, rh) * upp
         aspect = (max(rw, rh) / min(rw, rh)) if min(rw, rh) > 0 else 99.0
         # форма (округлость, выпуклость, выемки) — по очищенному от шипов контуру; размер — по маске как есть
-        clean = _clean_contour(cnt, eq_d_px) if obj.get("polygon") else cnt
+        clean = _clean_contour(cnt, eq_d_px, int(cfg["shape"].get("smooth_k", SMOOTH_MIN_K))) if obj.get("polygon") else cnt
         c_area, c_perim = cv2.contourArea(clean), cv2.arcLength(clean, True)
         circ = min((4.0 * math.pi * c_area / (c_perim * c_perim)) if c_perim > 0 else 0.0, 1.0)
         hull_area = cv2.contourArea(cv2.convexHull(clean))
@@ -713,7 +722,7 @@ def measure_objects(objects: list[dict], cv_cfg: Optional[dict] = None,
         notches = 0 if (cut or not obj.get("polygon")) else _notches(clean, eq_d_px, cfg["shape"]["notch_frac"])
         members = int(obj.get("members", 1))
         defect = None if cut else _defect(size_um, circ, aspect, solidity, notches, cfg, size_active)
-        if members > 1 and not cut:
+        if members > 1 and not cut and size_um >= cfg["shape"].get("min_um", 0.0):
             defect = "aggregate"          # склеено из нескольких масок — сросток по определению
         suspect = (not cut) and defect is None and aspect > cfg["shape"]["suspect_aspect"]
         bubble = (cfg["bubble_filter"] and not cut and members == 1 and obj.get("polygon")
@@ -759,6 +768,8 @@ def summarize(measures: list[CrystalMeasure], image_shape: tuple,
     n_bubble = 0
     reasons = {r: 0 for r in REASONS}
     n_suspect = 0
+    n_excl = 0
+    counting = is_counting(cfg, sv)
     for m in measures:
         if m.group == CUT_GROUP:      # обрезан кадром/швом — вне рассева и размеров
             n_cut += 1
@@ -766,14 +777,18 @@ def summarize(measures: list[CrystalMeasure], image_shape: tuple,
         if m.group == BUBBLE_GROUP:   # пузырь воздуха — не кристалл, вне рассева и размеров
             n_bubble += 1
             continue
+        if m.defect in cv_volume.REJECT_DEFECTS and not counting:    # СВ выше «Брак до СВ»: брак не считаем и в расчёт не берём
+            n_excl += 1
+            reasons[m.defect] += 1                                    # причина подписана, но в группы/размеры не идёт
+            continue
         counts[m.group] += 1
         if m.defect:
-            reasons[m.defect] += 1    # причины считаем всегда (в рассев брак идёт по порогу СВ)
+            reasons[m.defect] += 1    # причины считаем всегда
         if m.suspect:
             n_suspect += 1
         if m.group != "reject":
             sizes.append(m.size_um)
-    n = len(measures) - n_cut - n_bubble
+    n = len(measures) - n_cut - n_bubble - n_excl
     area_mm2 = (w * cfg["um_per_px"] / 1000.0) * (h * cfg["um_per_px"] / 1000.0)
     sizes_np = np.array(sizes) if sizes else np.array([0.0])
     vol_sums = cv_volume.sums_for(measures, cfg, cv_volume.fines_on(cfg, sv))
@@ -786,7 +801,8 @@ def summarize(measures: list[CrystalMeasure], image_shape: tuple,
         "bubbles": n_bubble,
         "reasons": reasons,
         "suspect": n_suspect,
-        "reject_active": is_counting(cfg, sv),
+        "reject_active": counting,
+        "excluded": n_excl,                # дефектных кристаллов, не взятых в расчёт (СВ выше «Брак до СВ»)
         "sv": sv,
         "groups": counts,
         "groups_pct": {g: (round(100.0 * counts[g] / n, 1) if n else 0.0) for g in GROUP_ORDER},

@@ -6,7 +6,7 @@
   // Вкладка «CV» + переключатель окна камера/распознавание. Данные с /api/cv/*.
   const CV_GROUPS = ["small", "medium", "large", "reject"];
   const CV_SERIES_COLOR = { small: "#1d9e75", medium: "#378add", large: "#ba7517", reject: "#e24b4a", mean: "#7f77dd", median: "#d16fb8", sv: "#f2c94c",
-    temp: "#ff8a4c", vac: "#4fd1e8", level: "#8aa4c8", current: "#a3d95b", cook_time: "#b9a98f", seed_age: "#ffb347" };
+    temp: "#ff8a4c", vac: "#4fd1e8", level: "#8aa4c8", current: "#a3d95b", cook_time: "#b9a98f", seed_age: "#ffb347", fines_avg: "#e8c547" };
   let cvWinOn = false;          // окно показывает CV (true) или камеру (false)
   let cvLastResult = null;      // последняя проба (result.json)
   let cvPrevResult = null;      // предыдущая проба (для Δ к прошлой)
@@ -62,24 +62,25 @@
     set("cvUmPerPx", cv.um_per_px); set("cvTiles", cv.tiles);
     set("cvMinCirc", sh.min_circularity); set("cvMinSol", sh.min_solidity);
     set("cvMaxAspect", sh.max_aspect); set("cvConf", cv.conf);
-    set("cvSuspect", sh.suspect_aspect); set("cvRejectSv", cv.reject_from_sv);
+    set("cvSuspect", sh.suspect_aspect); set("cvShapeMin", sh.min_um != null ? sh.min_um : 100); set("cvSmoothK", sh.smooth_k != null ? sh.smooth_k : 5); set("cvRejectSv", cv.reject_to_sv != null ? cv.reject_to_sv : 85);
     set("cvClusterGap", cv.cluster_gap_px); set("cvEdgeMargin", cv.edge_margin_px);
     if ($("cvSeamMerge")) $("cvSeamMerge").checked = cv.seam_merge !== false;
     if ($("cvSeamRefine")) $("cvSeamRefine").checked = cv.seam_refine !== false;
     if ($("cvBubble")) $("cvBubble").checked = cv.bubble_filter !== false;
     if ($("cvRejectAlways")) $("cvRejectAlways").checked = !!cv.reject_always;
     const vo = cv.volume || {};
-    set("cvFinesMm", vo.fines_side_mm); set("cvKThick", vo.k_thick); set("cvFinesSv", vo.fines_from_sv);   // поля блока «Объём и мелочь»
+    set("cvAvgN", vo.avg_n); set("cvFinesMm", vo.fines_side_mm); set("cvKThick", vo.k_thick); set("cvFinesSv", vo.fines_from_sv);   // поля блока «Объём и мелочь»
     set("pcCvFrames", cv.frames_per_probe); set("pcCvGap", cv.gap_sec);   // поля на вкладке «Цикл»
+    cvTrendStyle = cv.trend_style || {}; cvApplyStyleToRows(); cvBuildStylePanel(); cvDrawTrend();   // вид линий тренда из конфига
     updateTriggerFields();
   }
   function cvCollectPatch() {
     const num = (id) => { const e = $(id); return e && e.value !== "" ? parseFloat(e.value) : undefined; };
     return {
       groups: { small_max_um: num("cvSmallMax"), medium_max_um: num("cvMediumMax") },
-      shape: { min_circularity: num("cvMinCirc"), min_solidity: num("cvMinSol"), max_aspect: num("cvMaxAspect"), suspect_aspect: num("cvSuspect") },
+      shape: { min_circularity: num("cvMinCirc"), min_solidity: num("cvMinSol"), max_aspect: num("cvMaxAspect"), suspect_aspect: num("cvSuspect"), min_um: num("cvShapeMin"), smooth_k: num("cvSmoothK") },
       um_per_px: num("cvUmPerPx"), tiles: num("cvTiles"), conf: num("cvConf"),
-      reject_from_sv: num("cvRejectSv"), cluster_gap_px: num("cvClusterGap"), edge_margin_px: num("cvEdgeMargin"),
+      reject_to_sv: num("cvRejectSv"), cluster_gap_px: num("cvClusterGap"), edge_margin_px: num("cvEdgeMargin"),
       seam_merge: $("cvSeamMerge") ? $("cvSeamMerge").checked : undefined,
       seam_refine: $("cvSeamRefine") ? $("cvSeamRefine").checked : undefined,
       bubble_filter: $("cvBubble") ? $("cvBubble").checked : undefined, reject_always: $("cvRejectAlways") ? $("cvRejectAlways").checked : undefined,
@@ -224,9 +225,35 @@
     rows.push("<div><b>Общий объём</b> кристаллов на кадре: " + mm3((vol.m3 || {}).total || 0) + " мм³ (призма), " + mm3((vol.m1 || {}).total || 0) + " (шар), " + mm3((vol.m2 || {}).total || 0) + " (сфероид).</div>");
     box.innerHTML = rows.join("");
   }
+  // --- рассев по ситам: фракции снизу вверх b0 (дно) … b6 (>1,2 мм); строки рисуем сверху вниз как в лабораторной таблице ---
+  const CV_SIEVE_ROWS = [[6, "> 1,2"], [5, "1 – 1,2"], [4, "0,8 – 1"], [3, "0,7 – 0,8"], [2, "0,5 – 0,7"], [1, "0,2 – 0,5"], [0, "дно < 0,2"]];
+  // показывать ли отдельные модели M1–M3 (по умолчанию скрыты: «Среднее» и «Площадь» понятнее)
+  let cvShowModels = false;
+  try { cvShowModels = localStorage.getItem("microCvShowModels") === "1"; } catch (e) { }
+  let cvSieveLast = null;
+  function cvRenderSieve(sv) {            // sv = {m1:[7], m2:[7], m3:[7], area:[7]} в %: объём по трём моделям и площадь; нет данных — прочерки
+    cvSieveLast = sv;
+    const g = $("cvSieveGrid"); if (!g) return;
+    const val = (m, i) => (sv && sv[m] && sv[m][i] != null ? sv[m][i] : null);
+    const avg = (i) => cvAvg3({ m1: val("m1", i), m2: val("m2", i), m3: val("m3", i) });
+    g.style.gridTemplateColumns = "auto repeat(" + (cvShowModels ? 5 : 2) + ", minmax(0, 1fr))";
+    let html = '<span>размер, мм</span><b title="Доля по объёму (объём ~ масса): среднее трёх моделей M1–M3">Среднее</b><b title="Доля по площади кристаллов на кадре">Площадь</b>' +
+      (cvShowModels ? "<b>M1 шар</b><b>M2 сфер.</b><b>M3 призма</b>" : "");
+    CV_SIEVE_ROWS.forEach(([i, name]) => {
+      html += "<span>" + name + "</span><em>" + fmtPct(avg(i)) + "</em><em>" + fmtPct(val("area", i)) + "</em>" +
+        (cvShowModels ? "<em>" + fmtPct(val("m1", i)) + "</em><em>" + fmtPct(val("m2", i)) + "</em><em>" + fmtPct(val("m3", i)) + "</em>" : "");
+    });
+    g.innerHTML = html;
+  }
+  function cvApplyModels() {              // скрыть/показать M1–M3 в обеих таблицах («Объём и мука» и рассев)
+    const box = $("cvVol"), btn = $("cvVolModelsBtn");
+    if (box) box.classList.toggle("micro-vol--lite", !cvShowModels);
+    if (btn) btn.classList.toggle("is-on", cvShowModels);
+    cvRenderSieve(cvSieveLast);
+  }
   // --- по варке: журнал проб нарезан на варки (/api/cv/boils), листаем стрелками ---
-  let cvBoils = [], cvBoilSel = null, cvBoilTs = 0, cvVolMode = "boil";
-  try { cvVolMode = localStorage.getItem("microCvVolMode") === "probe" ? "probe" : "boil"; } catch (e) { }
+  let cvBoils = [], cvBoilSel = null, cvBoilTs = 0, cvVolMode = "tail";
+  try { const m = localStorage.getItem("microCvVolMode"); cvVolMode = (m === "probe" || m === "boil") ? m : "tail"; } catch (e) { cvVolMode = "tail"; }
   // по умолчанию показываем ПРЕДЫДУЩУЮ (законченную) варку: идущая ещё не дошла до финиша, мука у неё неактуальна
   function cvBoilIdx() {
     if (!cvBoils.length) return -1;
@@ -251,7 +278,7 @@
       const r = await api("/api/cv/boils?" + (q ? q + "&" : "") + "limit=6");
       cvBoils = (r && r.boils) || [];
     } catch (e) { }
-    if (cvVolMode === "boil") cvRenderBoil();
+    if (cvVolMode !== "probe") cvRenderBoil();
   }
   function cvRenderBoil() {
     const i = cvBoilIdx(), b = i >= 0 ? cvBoils[i] : null;
@@ -260,6 +287,10 @@
     if (newer) newer.disabled = !(i > 0);
     const cells = (kind) => document.querySelectorAll("#cvVolGrid [data-v$='." + kind + "']");
     const put = (kind, src) => cells(kind).forEach((el) => { const m = el.dataset.v.split(".")[0]; el.textContent = fmtPct(src ? (m === "avg" ? cvAvg3(src) : src[m]) : null); });
+    // откуда числа: «последние N проб» (поле «Проб в среднем») или все пробы финиша варки
+    const tail = cvVolMode === "tail";
+    const blk = b ? ((tail ? b.tail : b.all) || b) : null;
+    cvRenderSieve(blk ? blk.sieve : null);
     if (!b) {
       if (lbl) lbl.textContent = "варок пока нет";
       put("fines", null); if (st) st.textContent = "";
@@ -267,7 +298,7 @@
       return;
     }
     if (lbl) { lbl.textContent = cvBoilName(i) + " · " + cvBoilSpan(b); lbl.title = "Варка " + cvBoilSpan(b) + " · проб " + b.n; }
-    put("fines", b.fines);
+    put("fines", blk.fines);
     const cfg = b.cfg || {};
     const fd = cfg.fines_um != null ? cfg.fines_um : cvFinesDiam();
     const fl = $("cvVolLblFines"); if (fl) fl.textContent = "Мука <" + (fd != null ? Math.round(fd) : "") + " мкм";
@@ -282,7 +313,14 @@
     } else if (!b.counted) {
       rows.push("<div><b>Мука</b> по варке не считалась: СВ не дошёл до " + (cfg.fines_from_sv != null ? cfg.fines_from_sv : "порога") + " (максимум " + (b.sv_max != null ? String(b.sv_max).replace(".", ",") : "—") + "). Порог — поле «Мука с СВ».</div>");
     } else {
-      rows.push("<div><b>Мука по варке: " + pc(cvAvg3(b.fines)) + " объёма</b> (среднее M1–M3) — по " + b.counted + " пробам финиша (СВ ≥ " + (cfg.fines_from_sv != null ? cfg.fines_from_sv : "") + ") из " + b.n + "; по числу " + pc(b.fines.n) + ", по площади " + pc(b.fines.area) + ".</div>");
+      // среднее и из чего оно собрано: сколько проб и сколько хороших кристаллов (брак отсеян)
+      const n = cfg.avg_n || 4, P = blk.probes != null ? blk.probes : b.counted, G = blk.good_n || 0, R = blk.rej_n || 0;
+      const sv = cfg.fines_from_sv != null ? cfg.fines_from_sv : "";
+      rows.push("<div><b>Мука: " + pc(cvAvg3(blk.fines)) + " объёма</b> (среднее M1–M3) — " + (tail ? "среднее по последним " + n + " пробам финиша" : "среднее по всем пробам финиша") +
+        ": собрано из <b>" + P + " проб</b> (СВ ≥ " + sv + ")" + (G ? ", всего <b>" + G + " хороших кристаллов</b>, брака отсеяно " + R : "") + "; по числу " + pc(blk.fines.n) + ", по площади " + pc(blk.fines.area) + ".</div>");
+      if (tail && P < n) rows.push("<div>Проб пока " + P + " из " + n + " — среднее будет точнее, когда наберётся.</div>");
+      if (G && G < 500) rows.push("<div>Хороших кристаллов мало (" + G + "): для надёжной оценки нужно хотя бы 500 (Faria 2003). Добавь проб или сократи паузу между ними.</div>");
+      if (!G) rows.push("<div>Число кристаллов в этих пробах не записано (старые пробы) — у новых оно будет.</div>");
     }
     if (hasVol) {
       rows.push("<div><b>Объём</b> кристаллов на кадре в среднем: " + String(Number(b.vtot.m3.toPrecision(2))).replace(".", ",") + " мм³ (призма).</div>");
@@ -290,12 +328,15 @@
     if (box) box.innerHTML = rows.join("");
   }
   function wireBoilNav() {
+    const mb = $("cvVolModelsBtn");
+    if (mb) mb.addEventListener("click", () => { cvShowModels = !cvShowModels; try { localStorage.setItem("microCvShowModels", cvShowModels ? "1" : "0"); } catch (e) { } cvApplyModels(); });
+    cvApplyModels();
     const setMode = (m) => {
       cvVolMode = m;
       try { localStorage.setItem("microCvVolMode", m); } catch (e) { }
       document.querySelectorAll("#cvVolNav [data-vmode]").forEach((b) => b.classList.toggle("is-active", b.dataset.vmode === m));
-      const bx = $("cvBoilBox"); if (bx) bx.hidden = m !== "boil";
-      if (m === "boil") { cvRenderBoil(); cvLoadBoils(true); } else cvRenderScatter();
+      const bx = $("cvBoilBox"); if (bx) bx.hidden = m === "probe";
+      if (m !== "probe") { cvRenderBoil(); cvLoadBoils(true); } else cvRenderScatter();
     };
     document.querySelectorAll("#cvVolNav [data-vmode]").forEach((b) => b.addEventListener("click", () => setMode(b.dataset.vmode)));
     const step = (d) => {
@@ -308,8 +349,9 @@
     setMode(cvVolMode);
   }
   function cvRenderVolume(s) {
-    if (cvVolMode === "boil") { cvRenderBoil(); return; }
+    if (cvVolMode !== "probe") { cvRenderBoil(); return; }
     const vp = (s && s.volume_pct) || {}, cfg = (s && s.volume_cfg) || {};
+    cvRenderSieve(vp.sieve);
     document.querySelectorAll("#cvVolGrid [data-v]").forEach((el) => {
       const [model, kind] = el.dataset.v.split(".");
       el.textContent = fmtPct(model === "avg" ? cvAvg3({ m1: (vp.m1 || {})[kind], m2: (vp.m2 || {})[kind], m3: (vp.m3 || {})[kind] }) : (vp[model] ? vp[model][kind] : null));
@@ -329,14 +371,15 @@
   }
   function wireVolumeFields() {
     const fm = $("cvFinesMm"); if (fm) fm.addEventListener("input", () => { const c = $("cvFinesCalc"); if (c) c.textContent = cvFinesCalcText(); });
-    ["cvFinesMm", "cvKThick", "cvFinesSv"].forEach((id) => {
+    ["cvFinesMm", "cvKThick", "cvFinesSv", "cvAvgN"].forEach((id) => {
       const e = $(id); if (!e) return;
       e.addEventListener("change", () => {
         if (!cvSettingsLoaded) return;
         const fu = parseFloat(($("cvFinesMm") || {}).value), k = parseFloat(($("cvKThick") || {}).value),
-          fs = parseFloat(($("cvFinesSv") || {}).value);
-        if (!(fu > 0) || !(k > 0) || !(fs >= 0)) return;
-        cvPostSettings({ volume: { fines_side_mm: fu, k_thick: k, fines_from_sv: fs } });
+          fs = parseFloat(($("cvFinesSv") || {}).value), an = parseInt(($("cvAvgN") || {}).value, 10);
+        if (!(fu > 0) || !(k > 0) || !(fs >= 0) || !(an >= 1)) return;
+        // сервер пересчитывает пробы по сохранённым кадрам и журнал; потом перерисовываем варки и текущую пробу
+        cvPostSettings({ volume: { fines_side_mm: fu, k_thick: k, fines_from_sv: fs, avg_n: an } }).then(() => { cvLoadBoils(true); cvRefresh(); }).catch(() => { });
       });
     });
   }
@@ -375,14 +418,17 @@
   function cvClassify(o) {
     if (o.group === "cut") return { layer: "cut", reason: null };
     if (o.group === "bubble") return { layer: "bubble", reason: null };
-    if (o.members > 1) return { layer: "reject", reason: "aggregate" };   // склеен из нескольких масок
+    const tM = (() => { const e = $("cvShapeMin"); const v = e && e.value !== "" ? parseFloat(e.value) : NaN; return isNaN(v) ? 0 : v; })();   // «Форму судить от, мкм»
+    const judge = !(tM > 0 && o.size_um < tM);       // мельче порога форму не судим: ни сростка, ни иглы, ни кривого
+    if (o.members > 1 && judge) return { layer: "reject", reason: "aggregate" };   // склеен из нескольких масок
     const thr = (id) => { const e = $(id); return e && e.value !== "" ? parseFloat(e.value) : null; };
     const tC = thr("cvMinCirc"), tS = thr("cvMinSol"), tA = thr("cvMaxAspect"), tU = thr("cvSuspect"), gS = thr("cvSmallMax"), gM = thr("cvMediumMax");
     if (o.circularity == null || [tC, tS, tA, gS, gM].some((v) => v == null || isNaN(v)))
       return { layer: o.defect ? "reject" : (o.suspect ? "suspect" : o.group), reason: o.defect || null };
     const n = o.notches || 0;
     let reason = null;
-    if (o.aspect > tA) reason = "needle";
+    if (!judge) reason = (o.defect === "tiny" || o.defect === "huge") ? o.defect : null;
+    else if (o.aspect > tA) reason = "needle";
     else if (n >= 1 && n <= CV_NOTCH_MAX && (n >= 2 || o.solidity < tS)) reason = "aggregate";
     else if (n > CV_NOTCH_MAX || o.solidity < tS || o.circularity < tC) reason = "crooked";
     else if (o.defect === "tiny" || o.defect === "huge") reason = o.defect;
@@ -495,7 +541,7 @@
     const rows = ["needle", "aggregate", "crooked", "tiny", "huge"].filter((k) => k in rs && (rs[k] > 0 || k === "needle" || k === "aggregate" || k === "crooked"));
     let html = "";
     if (s.reject_active === false)
-      html += '<div class="note">СВ ' + (probeSv != null ? probeSv : (s.sv != null ? s.sv : "—")) + ' — ниже порога: причины подписаны, в «брак» пока не считаются</div>';
+      html += '<div class="note">СВ ' + (probeSv != null ? probeSv : (s.sv != null ? s.sv : "—")) + ' — выше «Брак до СВ»: брак не считается, дефектные кристаллы в расчёт не берутся (только хорошие)</div>';
     rows.forEach((k) => {
       const n = Math.round((rs[k] || 0) * 10) / 10;
       html += '<div class="rs' + (n ? "" : " is-zero") + '" title="' + CV_REASONS[k].cause + ' — ' + CV_REASONS[k].todo + '"><i style="background:' + (CV_REASON_COLOR[k] || "#e24b4a") + '"></i><span>' + CV_REASONS[k].name + '</span><b>' + n + '</b></div>';
@@ -703,6 +749,48 @@
 
   // --- тренд по РЕАЛЬНОМУ времени (как в SCADA): выбор даты, сдвиг за пределы загруженного, масштаб ---
   // Данные берутся из журнала проб по дням (cv_history) — он не стирается ротацией кадров.
+  // вид линий тренда (цвет и толщина по сериям) — хранится в конфиге: cv.trend_style = { серия: { color, width } }, пусто — по умолчанию
+  let cvTrendStyle = {};
+  const cvLineColor = (name, def) => (cvTrendStyle[name] && cvTrendStyle[name].color) || def;
+  const cvLineWidth = (name, def) => (cvTrendStyle[name] && Number(cvTrendStyle[name].width)) || def;
+  function cvApplyStyleToRows() {          // кружок у строки серии — цвет линии
+    document.querySelectorAll("#cvSeries .micro-srow").forEach((row) => {
+      const name = row.querySelector("input").value, dot = row.querySelector("i");
+      if (!dot) return;
+      if (name === "stage") { dot.style.background = cvLineColor(name, "var(--text)"); return; }   // у «стадии» по умолчанию цвет текста
+      dot.style.background = cvLineColor(name, CV_SERIES_COLOR[name] || "#888");
+    });
+  }
+  function cvBuildStylePanel() {
+    const box = $("cvTrendStylePanel"); if (!box) return;
+    const hex = (c) => (/^#[0-9a-f]{6}$/i.test(c || "") ? c : "#888888");
+    // те же две группы, что в списке серий: «Кристаллы» и «Тренды с ВА»; в строке — кружок цвета, название, ползунок толщины и число
+    let html = '<div class="micro-tstyle__hd"><b>Вид линий</b><button type="button" id="cvStyleReset">Сбросить всё</button></div><div class="micro-tstyle__cols">';
+    document.querySelectorAll("#cvSeries .micro-trend__col").forEach((col) => {
+      html += '<div class="micro-tstyle__col"><div class="micro-tstyle__title">' + col.querySelector(".micro-srow-sep").textContent + "</div>";
+      col.querySelectorAll(".micro-srow").forEach((row) => {
+        const name = row.querySelector("input").value, label = row.querySelector("span").textContent;
+        const def = name === "stage" ? "#e6e8ec" : (CV_SERIES_COLOR[name] || "#888888"), st = cvTrendStyle[name] || {};
+        const w = Number(st.width) || (name === "stage" ? 1.5 : 2);
+        html += '<div class="micro-tstyle__row" data-s="' + name + '"><input type="color" value="' + hex(st.color || def) + '" title="Цвет линии «' + label + '»" />' +
+          '<span class="lbl">' + label + '</span><input type="range" min="1" max="8" step="0.5" value="' + w + '" title="Толщина линии «' + label + '»" /><em>' + w + "</em></div>";
+      });
+      html += "</div>";
+    });
+    box.innerHTML = html + "</div>";
+    let timer = null;
+    const save = () => { clearTimeout(timer); timer = setTimeout(() => cvPostSettings({ trend_style: cvTrendStyle }), 400); };
+    box.querySelectorAll(".micro-tstyle__row").forEach((row) => {
+      const name = row.dataset.s, col = row.querySelector("input[type=color]"), wid = row.querySelector("input[type=range]"), val = row.querySelector("em");
+      const upd = () => { cvTrendStyle[name] = { color: col.value, width: Number(wid.value) }; val.textContent = wid.value; cvApplyStyleToRows(); cvDrawTrend(); save(); };
+      col.addEventListener("input", upd); wid.addEventListener("input", upd);
+    });
+    const rs = $("cvStyleReset");
+    if (rs) rs.addEventListener("click", () => {
+      Object.keys(cvTrendStyle).forEach((k) => { cvTrendStyle[k] = { color: null, width: null }; });
+      cvPostSettings({ trend_style: cvTrendStyle }); cvBuildStylePanel(); cvApplyStyleToRows(); cvDrawTrend();
+    });
+  }
   const CV_TREND_KEY = "microCvTrendSeries4";   // 3: добавлены серии «стадия» и «СВ» (включены по умолчанию)
   const CV_PCT_SERIES = ["small", "medium", "large", "reject", "sv"];   // шкала слева, % (СВ тоже в % — те же 0–100)
   const CV_UM_SERIES = ["mean", "median"];                        // шкала справа, мкм
@@ -817,7 +905,7 @@
     let stageMax = 10;
     if (series.stage) for (let i = i0; i < i1; i++) if (series.stage[i] != null) stageMax = Math.max(stageMax, series.stage[i] + 1);
     const scaleOf = (name) => (name === "stage" ? stageMax : (CV_UM_SERIES.includes(name) ? umMax : 100));
-    const colorOf = (name) => (name === "stage" ? getCss("--text", "#fff") : (CV_SERIES_COLOR[name] || "#888"));
+    const colorOf = (name) => cvLineColor(name, name === "stage" ? getCss("--text", "#fff") : (CV_SERIES_COLOR[name] || "#888"));
     const yAt = (val, mx) => pad.t + plotH * (1 - Math.max(0, Math.min(1, val / mx)));
     // режим варки со своей шкалой: диапазон по видимым точкам (не уже CV_AUTO_SPAN) + 8 % полей
     const auto = {};
@@ -867,11 +955,12 @@
     dts.sort((x, y) => x - y);
     const gap = Math.max(600, (dts.length ? dts[Math.floor(dts.length / 2)] : 0) * 5);
     const stg = d.stage || [];
-    const brewBreak = (i) => i > 0 && (t[i] - t[i - 1] > gap || (stg[i] != null && stg[i - 1] != null && stg[i] < stg[i - 1]));
+    // новая варка — как в журнале (cv_store._is_new_boil): стадия откатилась на заводку (было ≥ 6, стало ≤ 4); откат 7 → 5 внутри варки — это подкачка, линию не рвём
+    const brewBreak = (i) => i > 0 && (t[i] - t[i - 1] > gap || (stg[i] != null && stg[i - 1] != null && stg[i - 1] >= 6 && stg[i] <= 4));
     const drawSeries = (name) => {
       const arr = series[name]; if (!arr) return;
       const col = colorOf(name); const mx = scaleOf(name); const isStage = name === "stage";
-      ctx.strokeStyle = col; ctx.fillStyle = col; ctx.lineWidth = isStage ? 1.5 : 2; ctx.beginPath();
+      ctx.strokeStyle = col; ctx.fillStyle = col; ctx.lineWidth = cvLineWidth(name, isStage ? 1.5 : 2); ctx.beginPath();
       let started = false, prevY = 0;
       for (let i = a; i < b; i++) {
         const val = arr[i]; if (val == null) { started = false; continue; }
@@ -980,6 +1069,8 @@
       if (cand) cvTrendSetDay(cand);
     };
     // выгрузка проб в CSV (для разбора и обучения): всё, а с Shift — только выбранный день
+    const sb = $("cvTrendStyleBtn"), sp = $("cvTrendStylePanel");
+    if (sb && sp) sb.addEventListener("click", () => { sp.hidden = !sp.hidden; sb.classList.toggle("is-on", !sp.hidden); });
     const csv = $("cvTrendCsv");
     if (csv) csv.addEventListener("click", (e) => {
       const q = [cvSerialQ()];

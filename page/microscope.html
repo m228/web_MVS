@@ -726,9 +726,11 @@
                   <div class="micro-cycle-cols">
                     <div class="micro-cycle-col">
                       <label class="micro-cycle-f" title="Вытянутость (длина/ширина) от этого значения до «Макс. вытянутость» — не брак, а предупреждение (голубой слой). Рост их доли — сигнал: в сиропе глюкоза или раффиноза."><span>Вытянутые от</span><input type="number" id="cvSuspect" step="0.1" /></label>
+                      <label class="micro-cycle-f" title="Форму (игла, сросток, кривой) оцениваем только у кристаллов от этого размера, мкм. У мелких маска в десятки пикселей, контур шумит и даёт ложный брак — их считаем хорошими."><span>Форму судить от, мкм</span><input type="number" id="cvShapeMin" step="10" min="0" /></label>
+                      <label class="micro-cycle-f" title="Насколько сглаживать маску кристалла перед оценкой формы, пиксели (минимальное ядро). Больше — контур глаже, меньше ложных «перетяжек» у мелких кристаллов, но слабые настоящие перетяжки у крупных тоже сглаживаются. 5 — по умолчанию, 1–3 — почти без сглаживания, 7–9 — сильно. Действует на новые пробы."><span>Сглаживание маски, px</span><input type="number" id="cvSmoothK" step="1" min="1" max="15" /></label>
                     </div>
                     <div class="micro-cycle-col">
-                      <label class="micro-cycle-f" title="Брак идёт в рассев и тренд, только когда СВ не ниже этого значения: пока кристаллы мелкие и растут, дефекты формы только подписываются. Для спуска на 90 ставят около 88."><span>Брак считать с СВ</span><input type="number" id="cvRejectSv" step="0.5" /></label>
+                      <label class="micro-cycle-f" title="Брак по форме (сросток, игла, кривой) считается, пока СВ не выше этого значения: у первых кристаллов после заводки сростки ищем. Выше — кристаллов слишком много, брак не считается, а дефектные кристаллы в расчёт не берутся (только хорошие). Мука и рассев — от поля «Мука с СВ»."><span>Брак считать до СВ</span><input type="number" id="cvRejectSv" step="0.5" /></label>
                     </div>
                   </div>
                   <div class="micro-cycle-cols">
@@ -991,8 +993,8 @@
                       <small><b>Откуда k = 0,88.</b> Сапронов, с. 294: оси кристалла сахарозы a : b : c = 1,2595 : 1 : 0,8782 (у молекулы, нм: a = 1,089; b = 0,869; c = 0,777). Допущение: ширина на кадре ≈ ось b, толщина ≈ ось c, значит c/b = 0,8782 ≈ 0,88.</small>
                       <small><b>По варке / по пробе.</b> «По варке» — числа за всю варку; стрелками ‹ › листаются предыдущая, пред-предыдущая и т.д. (до 6 варок). Мука в варке считается по пробам финиша, когда СВ дошёл до поля «Мука с СВ», среднее взвешено по объёму пробы. Новая варка начинается, когда стадия откатилась на заводку, время варки сбросилось или была пауза больше 45 минут. «По пробе» — одна проба, открытая в окне CV.</small>
                       <small><b>Как читать.</b> «По числу» — сколько кристаллов штуками мелкие (например, 53 из 100). «По объёму» — какая доля всего вещества сидит в мелких (объём пропорционален массе). Мелких кристаллов много, а весят они мало — поэтому по числу цифра большая, а по объёму маленькая. Для сахара важна цифра по объёму. «Площадь» — промежуточный вариант: какую долю площади на кадре занимают мелкие.</small>
-                      <small>Мука % = объём кристаллов мельче порога ÷ объём всех × 100. Обрезанные краем и пузыри не считаются.</small>
-                      <small>Мука считается только на финише варки: с СВ ≥ поля «Мука с СВ» (88). Раньше кристаллы ещё растут, и мука — неактуальная информация (прочерк). Площадь считается всегда. Поля применяются со следующей пробы.</small>
+                      <small>Мука % = объём кристаллов мельче порога ÷ объём хороших кристаллов × 100. Брак по форме (сростки, иглы, кривые), обрезанные краем и пузыри в расчёт не берутся — отсеяны.</small>
+                      <small>Мука считается только на финише варки: с СВ ≥ поля «Мука с СВ» (88). Раньше кристаллы ещё растут, и мука — неактуальная информация (прочерк). Площадь считается всегда. Поля пересчитывают сохранённые пробы (по кадрам, которые ещё лежат в архиве); пробы, у которых кадры уже стёрты, остаются с прежним порогом.</small>
                     </span>
                   </span>
                   <span class="micro-cv-n" id="cvVolState"></span>
@@ -1000,9 +1002,11 @@
                 <!-- откуда числа: по варке (законченная, листается стрелками) или по выбранной пробе -->
                 <div class="micro-vol__nav" id="cvVolNav">
                   <div class="micro-vol__mode" role="tablist" aria-label="Источник чисел">
-                    <button type="button" data-vmode="boil" class="is-active" title="Числа по варке: мука считается по пробам финиша варки">по варке</button>
+                    <button type="button" data-vmode="tail" class="is-active" title="Среднее по последним N пробам финиша (число N — поле «Проб в среднем»): частые пробы набивают количество хороших кристаллов">последние пробы</button>
+                    <button type="button" data-vmode="boil" title="Среднее по всем пробам финиша варки">по варке</button>
                     <button type="button" data-vmode="probe" title="Числа по одной пробе — той, что открыта в окне CV">по пробе</button>
                   </div>
+                  <button type="button" class="micro-vol__models" id="cvVolModelsBtn" title="Показать отдельные модели объёма M1 шар · M2 сфероид · M3 призма (по умолчанию — только среднее и площадь)">M1–M3</button>
                   <span class="micro-vol__boil" id="cvBoilBox">
                     <button type="button" id="cvBoilOlder" title="Более старая варка (предыдущая, пред-предыдущая…)">‹</button>
                     <span id="cvBoilLbl">—</span>
@@ -1011,14 +1015,15 @@
                 </div>
                 <div class="micro-vol__grid" id="cvVolGrid">
                   <span></span>
-                  <b title="Шар по площади: V = π/6·d³. Допущений о толщине нет">M1 шар</b>
-                  <b title="Сфероид: V = π/6·Д·Ш·Т, Т = k·Ш">M2 сфер.</b>
-                  <b title="Призма: V = Площадь·Т, Т = k·Ш. Плоский кристалл на грани — рабочая модель">M3 призма</b>
+                  <b class="mdl" title="Шар по площади: V = π/6·d³. Допущений о толщине нет">M1 шар</b>
+                  <b class="mdl" title="Сфероид: V = π/6·Д·Ш·Т, Т = k·Ш">M2 сфер.</b>
+                  <b class="mdl" title="Призма: V = Площадь·Т, Т = k·Ш. Плоский кристалл на грани — рабочая модель">M3 призма</b>
                   <b title="Среднее трёх моделей объёма: (M1 + M2 + M3) ÷ 3">Среднее</b>
                   <b title="Доля площади кристаллов на кадре (без объёма)">Площадь</b>
                   <span id="cvVolLblFines">Мука</span><em data-v="m1.fines">—</em><em data-v="m2.fines">—</em><em data-v="m3.fines">—</em><em data-v="avg.fines">—</em><em data-v="area.fines">—</em>
                 </div>
                 <div class="micro-vol__fields">
+                  <label title="Сколько последних проб финиша (СВ ≥ «Мука с СВ») усредняем. Одна проба — это несколько кадров; чем больше проб и хороших кристаллов, тем точнее мука и рассев. Для надёжной оценки нужно хотя бы 500 хороших кристаллов"><span>Проб в среднем</span><input type="number" id="cvAvgN" min="1" max="20" step="1" value="4" /></label>
                   <label title="Мука — кристалл, у которого площадь меньше квадрата со стороной в этом поле"><span>Мука, мм</span><input type="number" id="cvFinesMm" min="0.01" step="0.05" value="0.2" /></label>
                   <span class="micro-info" tabindex="0" aria-label="Как определяется мука">ⓘ
                     <span class="micro-info__pop micro-vol__pop" role="tooltip">
@@ -1034,6 +1039,9 @@
                 </div>
                 <!-- что стоит за цифрами: штуки, доля по числу и по объёму, общий объём (заполняет 02-cv.js) -->
                 <div class="micro-vol__note" id="cvVolNote"></div>
+                <!-- рассев по ситам, как в лаборатории: размер отверстий, мм; доля фракции в общем объёме (100 % — сумма всех) -->
+                <div class="micro-vol__sub">Рассев по ситам, %  <span class="micro-info" tabindex="0" aria-label="Как считается рассев">ⓘ<span class="micro-info__pop micro-vol__pop" role="tooltip"><b>Рассев по ситам</b><div class="in">Как в лаборатории: кристаллы раскладываются по размеру отверстий сит, мм (1,2 · 1 · 0,8 · 0,7 · 0,5 · 0,2 · дно). Фракция «0,5–0,7» — прошло сито 0,7, осталось на 0,5.</div><small>Берутся только хорошие кристаллы (брак по форме — сростки, иглы, кривые — отсеян). Доля — от их общего объёма (объём ~ масса), сумма 100 %. Размер — эквивалентный диаметр. Считается, как и мука, когда СВ дошёл до поля «Мука с СВ».</small></span></span></div>
+                <div class="micro-vol__grid micro-sieve" id="cvSieveGrid"></div>
               </div>
               </div>
             </div>
@@ -1053,29 +1061,35 @@
                   <input type="date" id="cvTrendDate" class="micro-trend__date" title="Дата тренда" />
                   <button type="button" class="micro-trend__btn" id="cvTrendNext" title="Следующий день с пробами">›</button>
                   <button type="button" class="micro-trend__btn micro-trend__btn--text" id="cvTrendToday" title="Вернуться к самым свежим пробам">Последнее</button>
+                  <button type="button" class="micro-trend__btn micro-trend__btn--text" id="cvTrendStyleBtn" title="Цвет и толщина линий по сериям (сохраняется в конфиге)">Вид</button>
                   <button type="button" class="micro-trend__btn micro-trend__btn--text" id="cvTrendCsv" title="Скачать все пробы в CSV (рассев, причины брака, режим варки) — для разбора и обучения. Shift+клик — только выбранный день">CSV</button>
                   <span class="micro-trend__span" id="cvTrendSpan">—</span>
                 </div>
+                <div class="micro-tstyle" id="cvTrendStylePanel" hidden></div>
                 <div class="micro-trend__row">
                   <!-- серии столбиком: строка = серия; включена — подсвечена; справа значение под курсором -->
                   <div class="micro-trend__rows" id="cvSeries">
-                    <label class="micro-srow" data-unit="%"><input type="checkbox" value="small" checked /><i style="background:#1d9e75"></i><span>малая</span><b>—</b></label>
-                    <label class="micro-srow" data-unit="%"><input type="checkbox" value="medium" checked /><i style="background:#378add"></i><span>средняя</span><b>—</b></label>
-                    <label class="micro-srow" data-unit="%"><input type="checkbox" value="large" checked /><i style="background:#ba7517"></i><span>большая</span><b>—</b></label>
-                    <label class="micro-srow" data-unit="%"><input type="checkbox" value="reject" /><i style="background:#e24b4a"></i><span>брак</span><b>—</b></label>
-                    <label class="micro-srow" data-unit="мкм" title="Среднее: сумма размеров / число кристаллов"><input type="checkbox" value="mean" checked /><i style="background:#7f77dd"></i><span>среднее</span><b>—</b></label>
-                    <label class="micro-srow" data-unit="" title="СВ (сухие вещества, Brix, %) на момент пробы — на той же шкале 0–100, что и доли групп"><input type="checkbox" value="sv" checked /><i style="background:#f2c94c"></i><span>СВ</span><b>—</b></label>
-                    <label class="micro-srow" data-unit="" title="Стадия варки (номер) на момент пробы: белая ступенчатая линия с цифрами на каждом переходе"><input type="checkbox" value="stage" checked /><i style="background:var(--text)"></i><span>стадия</span><b>—</b></label>
-                    <label class="micro-srow" data-unit="мкм" title="Медиана: половина кристаллов мельче, половина крупнее"><input type="checkbox" value="median" /><i style="background:#d16fb8"></i><span>медиана</span><b>—</b></label>
-                    <label class="micro-srow" data-unit="%" data-dec="2" title="Мука по объёму, % — среднее трёх моделей (M1 + M2 + M3) ÷ 3. Появляется ближе к концу варки: считается, только когда СВ дошёл до поля «Мука с СВ»"><input type="checkbox" value="fines_avg" checked /><i style="background:#e8c547"></i><span>средняя мука</span><b>—</b></label>
-                    <!-- режим варки из ПЛК на момент пробы: линии пунктиром, у каждой своя шкала по видимому участку -->
-                    <div class="micro-srow-sep" title="Линии пунктиром: у каждой своя шкала по видимому участку графика. Точные значения — справа и в подсказке">режим варки</div>
-                    <label class="micro-srow" data-unit="°C" title="Температура в аппарате"><input type="checkbox" value="temp" /><i style="background:#ff8a4c"></i><span>температура</span><b>—</b></label>
-                    <label class="micro-srow" data-unit="бар" data-dec="3" title="Разрежение сверху"><input type="checkbox" value="vac" /><i style="background:#4fd1e8"></i><span>разрежение</span><b>—</b></label>
-                    <label class="micro-srow" data-unit="%" title="Уровень в аппарате, % (шкала 0–100)"><input type="checkbox" value="level" /><i style="background:#8aa4c8"></i><span>уровень</span><b>—</b></label>
-                    <label class="micro-srow" data-unit="А" title="Ток циркулятора (мешалки): растёт — утфель густеет"><input type="checkbox" value="current" /><i style="background:#a3d95b"></i><span>ток мешалки</span><b>—</b></label>
-                    <label class="micro-srow" data-unit="мин" title="Время варки с её начала"><input type="checkbox" value="cook_time" /><i style="background:#b9a98f"></i><span>время варки</span><b>—</b></label>
-                    <label class="micro-srow" data-unit="мин" title="Время с заводки: от перехода «Сгущение» → «Затравка»"><input type="checkbox" value="seed_age" /><i style="background:#ffb347"></i><span>с заводки</span><b>—</b></label>
+                    <div class="micro-trend__col">
+                      <div class="micro-srow-sep" title="Рассев и размер кристаллов из распознавания; «средняя мука» появляется ближе к концу варки">Кристаллы</div>
+                      <label class="micro-srow" data-unit="%"><input type="checkbox" value="small" checked /><i style="background:#1d9e75"></i><span>малая</span><b>—</b></label>
+                      <label class="micro-srow" data-unit="%"><input type="checkbox" value="medium" checked /><i style="background:#378add"></i><span>средняя</span><b>—</b></label>
+                      <label class="micro-srow" data-unit="%"><input type="checkbox" value="large" checked /><i style="background:#ba7517"></i><span>большая</span><b>—</b></label>
+                      <label class="micro-srow" data-unit="%"><input type="checkbox" value="reject" /><i style="background:#e24b4a"></i><span>брак</span><b>—</b></label>
+                      <label class="micro-srow" data-unit="мкм" title="Среднее: сумма размеров / число кристаллов"><input type="checkbox" value="mean" checked /><i style="background:#7f77dd"></i><span>среднее</span><b>—</b></label>
+                      <label class="micro-srow" data-unit="мкм" title="Медиана: половина кристаллов мельче, половина крупнее"><input type="checkbox" value="median" /><i style="background:#d16fb8"></i><span>медиана</span><b>—</b></label>
+                      <label class="micro-srow" data-unit="%" data-dec="2" title="Мука по объёму, % — среднее трёх моделей (M1 + M2 + M3) ÷ 3. Появляется ближе к концу варки: считается, только когда СВ дошёл до поля «Мука с СВ»"><input type="checkbox" value="fines_avg" checked /><i style="background:#e8c547"></i><span>средняя мука</span><b>—</b></label>
+                    </div>
+                    <div class="micro-trend__col">
+                      <div class="micro-srow-sep" title="Данные с вакуум-аппарата из ПЛК на момент пробы. Линии пунктиром, у каждой своя шкала по видимому участку; точные значения — справа и в подсказке">Тренды с ВА</div>
+                      <label class="micro-srow" data-unit="" title="СВ (сухие вещества, Brix, %) на момент пробы — на той же шкале 0–100, что и доли групп"><input type="checkbox" value="sv" checked /><i style="background:#f2c94c"></i><span>СВ</span><b>—</b></label>
+                      <label class="micro-srow" data-unit="" title="Стадия варки (номер) на момент пробы: белая ступенчатая линия с цифрами на каждом переходе"><input type="checkbox" value="stage" checked /><i style="background:var(--text)"></i><span>стадия</span><b>—</b></label>
+                      <label class="micro-srow" data-unit="°C" title="Температура в аппарате"><input type="checkbox" value="temp" /><i style="background:#ff8a4c"></i><span>температура</span><b>—</b></label>
+                      <label class="micro-srow" data-unit="бар" data-dec="3" title="Разрежение сверху"><input type="checkbox" value="vac" /><i style="background:#4fd1e8"></i><span>разрежение</span><b>—</b></label>
+                      <label class="micro-srow" data-unit="%" title="Уровень в аппарате, % (шкала 0–100)"><input type="checkbox" value="level" /><i style="background:#8aa4c8"></i><span>уровень</span><b>—</b></label>
+                      <label class="micro-srow" data-unit="А" title="Ток циркулятора (мешалки): растёт — утфель густеет"><input type="checkbox" value="current" /><i style="background:#a3d95b"></i><span>ток мешалки</span><b>—</b></label>
+                      <label class="micro-srow" data-unit="мин" title="Время варки с её начала"><input type="checkbox" value="cook_time" /><i style="background:#b9a98f"></i><span>время варки</span><b>—</b></label>
+                      <label class="micro-srow" data-unit="мин" title="Время с заводки: от перехода «Сгущение» → «Затравка»"><input type="checkbox" value="seed_age" /><i style="background:#ffb347"></i><span>с заводки</span><b>—</b></label>
+                    </div>
                   </div>
                   <div class="micro-cv-trendwrap">
                     <canvas id="cvTrend" class="micro-cv-trend" width="620" height="360"></canvas>

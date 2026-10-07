@@ -66,6 +66,11 @@ def _volume_cols(s: dict, vp: dict, n_frames: int) -> dict:
     for key in ("m1", "m2", "m3"):
         tot = (sums.get(key) or {}).get("total")
         out["vtot_" + key] = round(tot / 1e9 / n_frames, 4) if tot else None
+    sv = (vp.get("sieve") or {})
+    for mod in ("m1", "m2", "m3", "area"):           # рассев по ситам, %: sieve_<m1|m2|m3|area>_b0 (дно) … b6 (>1,2 мм); area — доля по площади
+        for i in range(len(cv_volume.SIEVE_MM) + 1):
+            out["sieve_%s_b%d" % (mod, i)] = (sv.get(mod) or [None] * (len(cv_volume.SIEVE_MM) + 1))[i]
+    out["good_n"], out["rej_n"] = (sums.get("n") or {}).get("total"), (sums.get("n") or {}).get("agg")     # хороших кристаллов / отсеянного брака в пробе (штук, все кадры)
     out["fines_side_mm"], out["fines_um"] = cfg.get("fines_side_mm"), cfg.get("fines_um")
     out["k_thick"], out["fines_from_sv"] = cfg.get("k_thick"), cfg.get("fines_from_sv")
     return out
@@ -117,7 +122,21 @@ def _hist_append(serial: str, result: dict):
             fh.write(json.dumps(row, ensure_ascii=False) + "\n")
 
 
-def _hist_read(serial: str, day: str) -> list[dict]:
+def _null_sv_outliers(rows: list[dict]) -> list[dict]:
+    """СВ, которое явно не настоящее (< 5 или сильно отличается от соседних проб — разовый сбой чтения ПЛК: 0,0 или 58 при 87),
+    заменяем на None: иначе тренд падает в ноль, а варка делится на две. Сами файлы журнала не меняем."""
+    for i, r in enumerate(rows):
+        sv = r.get("sv")
+        if sv is None:
+            continue
+        nb = sorted(x["sv"] for x in rows[max(0, i - 3):i] + rows[i + 1:i + 4] if x.get("sv") is not None)
+        med = nb[len(nb) // 2] if len(nb) >= 2 else None
+        if sv < 5 or (med is not None and abs(sv - med) > 15):
+            r["sv"] = None
+    return rows
+
+
+def _hist_read(serial: str, day: str, clean: bool = True) -> list[dict]:
     f = _hist_dir(serial) / (day + ".jsonl")
     rows = []
     try:
@@ -128,7 +147,7 @@ def _hist_read(serial: str, day: str) -> list[dict]:
                 continue            # битая строка (обрыв записи) не рушит весь день
     except Exception:
         pass
-    return rows
+    return _null_sv_outliers(rows) if clean else rows       # clean=False — сырые строки (для перезаписи журнала)
 
 
 def _hist_backfill(serial: str):
@@ -140,6 +159,10 @@ def _hist_backfill(serial: str):
     sd = _serial_dir(serial)
     if not sd.exists():
         return
+    try:
+        recompute_journal(serial)       # логика объёма/муки/рассева изменилась (calc_ver) — обновить строки, у которых ещё есть кадры
+    except Exception:
+        pass
     known = set()
     if _hist_dir(serial).exists():
         for f in _hist_dir(serial).glob("*.jsonl"):
@@ -198,9 +221,17 @@ def trend_range(serial: str, t_from: float, t_to: float, series: Optional[list[s
 EXPORT_COLUMNS = ["ts", "t", "stage", "sv", "temp", "level", "current", "vac", "cook_time", "seed_age",
                   "count", "mean", "median", "cv_pct", "density", "small", "medium", "large", "reject",
                   "reject_pct", "fines_m1", "fines_m2", "fines_m3", "fines_avg", "fines_area", "fines_n",
+                  "good_n", "rej_n", "sieve_b0", "sieve_b1", "sieve_b2", "sieve_b3", "sieve_b4", "sieve_b5", "sieve_b6",
+                  "sieve_area_b0", "sieve_area_b1", "sieve_area_b2", "sieve_area_b3", "sieve_area_b4", "sieve_area_b5", "sieve_area_b6",
                   "agg_m1", "agg_m2", "agg_m3", "agg_area", "agg_n", "vtot_m1", "vtot_m2", "vtot_m3", "fines_side_mm", "fines_um", "k_thick", "fines_from_sv",
                   "n_needle", "n_aggregate", "n_crooked", "n_tiny", "n_huge", "suspect",
                   "frac_zones", "frac_pct", "frames"]
+
+
+def sieve_avg(r: dict, i: int) -> Optional[float]:
+    """Фракция рассева i, % объёма — среднее трёх моделей (пропуская пустые)."""
+    v = [r["sieve_%s_b%d" % (m, i)] for m in ("m1", "m2", "m3") if r.get("sieve_%s_b%d" % (m, i)) is not None]
+    return round(sum(v) / len(v), 3) if v else None
 
 
 def fines_avg(r: dict) -> Optional[float]:
@@ -219,7 +250,13 @@ def export_rows(serial: str, t_from: Optional[float] = None, t_to: Optional[floa
         rows.extend(r for r in _hist_read(serial, f.stem) if r.get("t") is not None
                     and (t_from is None or r["t"] >= t_from) and (t_to is None or r["t"] <= t_to))
     rows.sort(key=lambda r: r["t"])
-    return [{c: (fines_avg(r) if c == "fines_avg" else r.get(c)) for c in EXPORT_COLUMNS} for r in rows]
+    def cell(r, c):
+        if c == "fines_avg":
+            return fines_avg(r)
+        if c.startswith("sieve_b"):
+            return sieve_avg(r, int(c[7:]))
+        return r.get(c)
+    return [{c: cell(r, c) for c in EXPORT_COLUMNS} for r in rows]
 
 
 # --- варки: журнал проб нарезается на варки, по варке — сводка мелочи/сростков/объёма ---
@@ -240,8 +277,9 @@ def _is_new_boil(prev: dict, r: dict) -> bool:
     st, ps = r.get("stage"), prev.get("stage")
     if st is not None and ps is not None and ps >= 6 and st <= 4:
         return True
+    # СВ упало — запасной признак, и только когда времени варки нет вовсе: одиночный сбой чтения СВ не должен делить варку
     sv, psv = r.get("sv"), prev.get("sv")
-    return sv is not None and psv is not None and sv < psv - BOIL_SV_DROP
+    return (ct is None or pt is None) and sv is not None and psv is not None and sv < psv - BOIL_SV_DROP
 
 
 def _wmean(rows: list, key: str, wkey: Optional[str]) -> Optional[float]:
@@ -254,7 +292,22 @@ def _wmean(rows: list, key: str, wkey: Optional[str]) -> Optional[float]:
     return sum(v for v, _ in pts) / len(pts)
 
 
-def _boil_summary(rows: list, finished: bool) -> dict:
+def _vol_block(sel: list) -> dict:
+    """Среднее по набору проб (строк журнала): мука, отсеянный брак, рассев (взвешено по общему объёму пробы), сколько проб
+    и хороших кристаллов вошло. Строки без значения мелочи пропускаются."""
+    def r3(v):
+        return None if v is None else round(v, 3)
+    fin = [r for r in sel if r.get("fines_m3") is not None]
+    out = {"probes": len(fin), "good_n": sum(r.get("good_n") or 0 for r in fin), "rej_n": sum(r.get("rej_n") or 0 for r in fin),
+           "ts_from": fin[0]["ts"] if fin else None, "ts_to": fin[-1]["ts"] if fin else None}
+    out["fines"] = {m: r3(_wmean(fin, "fines_" + m, "vtot_" + m)) for m in ("m1", "m2", "m3")}
+    out["fines"]["area"], out["fines"]["n"] = r3(_wmean(fin, "fines_area", None)), r3(_wmean(fin, "fines_n", None))
+    # рассев по объёму (M1–M3, вес — общий объём пробы) и по площади (area, простое среднее по пробам)
+    out["sieve"] = {m: [r3(_wmean(fin, "sieve_%s_b%d" % (m, i), ("vtot_" + m) if m != "area" else None)) for i in range(len(cv_volume.SIEVE_MM) + 1)] for m in ("m1", "m2", "m3", "area")}
+    return out
+
+
+def _boil_summary(rows: list, finished: bool, avg_n: int = 4) -> dict:
     """Сводка варки по строкам журнала. Мелочь — по пробам, где она считалась (СВ ≥ порога), с весом по общему
     объёму пробы: большая проба весит больше. Сростки и площадь — по всем пробам варки."""
     def r3(v):
@@ -274,8 +327,15 @@ def _boil_summary(rows: list, finished: bool) -> dict:
     fines["area"], agg["area"] = r3(_wmean(rows, "fines_area", None)), r3(_wmean(rows, "agg_area", None))
     fines["n"], agg["n"] = r3(_wmean(rows, "fines_n", None)), r3(_wmean(rows, "agg_n", None))
     out["fines"], out["agg"], out["vtot"] = fines, agg, vtot
+    # рассев по варке — по тем же пробам финиша, что и мука, взвешено по общему объёму пробы
+    fin = [r for r in rows if r.get("fines_m3") is not None]
+    # рассев по объёму (M1–M3, вес — общий объём пробы) и по площади (area, простое среднее по пробам)
+    out["sieve"] = {m: [r3(_wmean(fin, "sieve_%s_b%d" % (m, i), ("vtot_" + m) if m != "area" else None)) for i in range(len(cv_volume.SIEVE_MM) + 1)] for m in ("m1", "m2", "m3", "area")}
+    out["all"] = _vol_block(fin)                      # все пробы финиша варки
+    out["tail"] = _vol_block(fin[-avg_n:])            # последние N проб финиша (поле «Проб в среднем»)
     last = rows[-1]
-    out["cfg"] = {k: last.get(k) for k in ("fines_side_mm", "fines_um", "k_thick", "fines_from_sv")}
+    out["cfg"] = {k: last.get(k) for k in ("fines_side_mm", "fines_um", "k_thick", "fines_from_sv", "avg_n")}
+    out["cfg"]["avg_n"] = avg_n
     return out
 
 
@@ -283,6 +343,7 @@ def boils(serial: str, limit: int = 6, now: Optional[float] = None) -> list[dict
     """Последние варки (новая первой): журнал проб режется на варки (_is_new_boil), по каждой — сводка
     мелочи/сростков/объёма. Последняя варка «идёт», пока последняя проба моложе BOIL_OPEN_S."""
     _hist_backfill(serial)
+    avg_n = cv_volume.volume_cfg(_volume_cfg_now())["avg_n"]
     rows, seen = [], set()
     hd = _hist_dir(serial)
     for f in (sorted(hd.glob("*.jsonl")) if hd.exists() else []):
@@ -300,7 +361,7 @@ def boils(serial: str, limit: int = 6, now: Optional[float] = None) -> list[dict
     out = []
     for i, g in enumerate(reversed(groups[-limit:])):
         finished = not (i == 0 and now - g[-1]["t"] <= BOIL_OPEN_S)
-        out.append(_boil_summary(g, finished))
+        out.append(_boil_summary(g, finished, avg_n))
     return out
 
 
@@ -456,11 +517,15 @@ def _with_volume(d: Path, r: dict, cfg: Optional[dict] = None) -> dict:
     """Проба, снятая до появления объёма (в summary нет volume): досчитать мелочь/сростки по
     сохранённым объектам кадров по ТЕКУЩИМ полям порога и k. Файлы пробы не меняем — только ответ."""
     s = (r or {}).get("summary")
-    if not s or s.get("volume"):
+    if not s:
+        return r
+    cfg = cfg if cfg is not None else _volume_cfg_now()
+    old, cur = s.get("volume_cfg") or {}, cv_volume.volume_cfg(cfg)
+    same = all(old.get(k) == cur.get(k) for k in ("fines_side_mm", "k_thick", "fines_from_sv", "calc_ver"))
+    if s.get("volume") and "sieve" in s["volume"] and same:       # посчитана с теми же полями — не трогаем
         return r
     try:
         from types import SimpleNamespace as NS
-        cfg = cfg if cfg is not None else _volume_cfg_now()
         tot = cv_volume.empty_sums()
         fines_on = cv_volume.fines_on(cfg, s.get("sv", r.get("sv")))
         for i in range(len(r.get("frames") or [1])):
@@ -473,6 +538,35 @@ def _with_volume(d: Path, r: dict, cfg: Optional[dict] = None) -> dict:
     except Exception:
         pass            # нет объектов/битый файл — проба просто без объёма
     return r
+
+
+def recompute_journal(serial: str) -> int:
+    """Пересчитать объём/муку/рассев в журнале по ТЕКУЩИМ полям («Мука, мм», «Мука с СВ», k) — для проб, у которых ещё
+    сохранены кадры (последние keep_last). Остальные строки журнала остаются как были. Возвращает число обновлённых строк."""
+    sd = _serial_dir(serial)
+    if not sd.exists():
+        return 0
+    cfg, fresh = _volume_cfg_now(), {}
+    for p in sorted(x for x in sd.iterdir() if x.is_dir()):
+        try:
+            row = _hist_row(_with_volume(p, json.loads((p / "result.json").read_text(encoding="utf-8")), cfg))
+            if row:
+                fresh[row["ts"]] = row
+        except Exception:
+            continue
+    n = 0
+    with _HIST_LOCK:
+        for f in (sorted(_hist_dir(serial).glob("*.jsonl")) if _hist_dir(serial).exists() else []):
+            rows, changed = _hist_read(serial, f.stem, clean=False), False
+            for i, r in enumerate(rows):
+                if r.get("ts") in fresh and fresh[r["ts"]] != r:
+                    rows[i], changed = fresh[r["ts"]], True
+                    n += 1
+            if changed:
+                tmp = f.with_suffix(".jsonl.tmp")
+                tmp.write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows), encoding="utf-8")
+                tmp.replace(f)
+    return n
 
 
 def list_samples(serial: str, limit: int = 50) -> list[dict]:

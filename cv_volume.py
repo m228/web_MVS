@@ -21,8 +21,21 @@ from __future__ import annotations
 import math
 
 MODELS = ("m1", "m2", "m3")
+# Рассев по ситам (как в лаборатории): отверстия, мм. Фракции снизу вверх: дно (<0,2), 0,2–0,5, 0,5–0,7, 0,7–0,8, 0,8–1,0, 1,0–1,2, >1,2.
+# Размер кристалла — эквивалентный диаметр (как везде в CV); доля фракции — по объёму (объём ~ масса), % от всех кристаллов.
+CALC_VER = 3     # 2: в расчёт идут только хорошие кристаллы (брак — сросток/игла/кривой — отсеян); менять при смене логики: старые пробы пересчитаются
+SIEVE_MM = (0.2, 0.5, 0.7, 0.8, 1.0, 1.2)
+SIEVE_LABELS = ("дно <0,2", "0,2–0,5", "0,5–0,7", "0,7–0,8", "0,8–1", "1–1,2", ">1,2")
+
+
+def sieve_bin(size_um: float) -> int:
+    """Номер фракции рассева: 0 — дно (мельче 0,2 мм), …, 6 — крупнее 1,2 мм."""
+    d, i = size_um / 1000.0, 0
+    while i < len(SIEVE_MM) and d >= SIEVE_MM[i]:
+        i += 1
+    return i
 KINDS = ("fines", "agg", "total")
-DEFAULTS = {"fines_side_mm": 0.2, "k_thick": 0.88, "fines_from_sv": 88.0}
+DEFAULTS = {"fines_side_mm": 0.2, "k_thick": 0.88, "fines_from_sv": 88.0, "avg_n": 4}    # avg_n — сколько последних проб финиша усредняем
 
 
 def fines_diameter_um(side_mm: float) -> float:
@@ -41,6 +54,8 @@ def volume_cfg(cv_cfg: dict | None) -> dict:
                 v[key] = x
         except (TypeError, ValueError):
             pass
+    v["avg_n"] = max(1, int(round(v["avg_n"])))
+    v["calc_ver"] = CALC_VER
     v["fines_um"] = fines_diameter_um(v["fines_side_mm"])    # расчётный порог по диаметру — им и сравниваем размер кристалла
     return v
 
@@ -68,11 +83,15 @@ def crystal_volumes(size_um: float, length_um: float, width_um: float, k: float)
     }
 
 
+REJECT_DEFECTS = ("aggregate", "needle", "crooked")     # брак по форме: в расчёт хороших кристаллов не идёт
+
+
 def kind_of(m, fines_um: float) -> str | None:
-    """К какой доле относится кристалл: fines / agg / rest; None — вне статистики (обрезан, пузырь)."""
+    """К какой доле относится кристалл: fines / rest (хорошие — идут в расчёт и рассев) / agg (брак по форме, отсеян:
+    считается отдельно, в общий объём не входит); None — вне статистики (обрезан, пузырь)."""
     if m.group in ("cut", "bubble"):
         return None
-    if m.defect == "aggregate":
+    if m.defect in REJECT_DEFECTS:
         return "agg"
     return "fines" if m.size_um < fines_um else "rest"
 
@@ -82,6 +101,7 @@ def empty_sums() -> dict:
     for mod in MODELS:
         s[mod] = {k: 0.0 for k in KINDS}
     s["n"] = {k: 0 for k in KINDS}
+    s["sieve"] = {mod: [0.0] * (len(SIEVE_MM) + 1) for mod in MODELS + ("area",)}   # объём (M1–M3, мкм³) и площадь ("area", мкм²) по фракциям рассева
     return s
 
 
@@ -99,13 +119,22 @@ def sums_for(measures: list, cv_cfg: dict | None, count_fines: bool = True) -> d
             continue
         vols = crystal_volumes(m.size_um, m.length_um, m.width_um, cfg["k_thick"])
         parts = {"area": area_um2(m.size_um), **vols}
+        if kind == "agg":                        # брак по форме отсеян: считаем отдельно, в общий объём и рассев не кладём
+            for key, val in parts.items():
+                s[key]["agg"] += val
+            s["n"]["agg"] += 1
+            continue
         for key, val in parts.items():
             s[key]["total"] += val
-            if kind in ("fines", "agg"):
-                s[key][kind] += val
+            if kind == "fines":
+                s[key]["fines"] += val
         s["n"]["total"] += 1
-        if kind in ("fines", "agg"):
-            s["n"][kind] += 1
+        b = sieve_bin(m.size_um)
+        for mod in MODELS:
+            s["sieve"][mod][b] += vols[mod]
+        s["sieve"]["area"][b] += parts["area"]
+        if kind == "fines":
+            s["n"]["fines"] += 1
     return s
 
 
@@ -117,6 +146,9 @@ def add_sums(a: dict, b: dict) -> dict:
             out[key][k] = (a.get(key) or {}).get(k, 0.0) + (b.get(key) or {}).get(k, 0.0)
     for k in KINDS:
         out["n"][k] = (a.get("n") or {}).get(k, 0) + (b.get("n") or {}).get(k, 0)
+    for mod in MODELS + ("area",):
+        sa, sb = (a.get("sieve") or {}).get(mod), (b.get("sieve") or {}).get(mod)
+        out["sieve"][mod] = [(sa[i] if sa else 0.0) + (sb[i] if sb else 0.0) for i in range(len(SIEVE_MM) + 1)]
     if a.get("fines_off") or b.get("fines_off"):
         out["fines_off"] = True
     return out
@@ -128,13 +160,17 @@ def percents(sums: dict | None) -> dict:
         return {}
     out = {}
     for key in ("area",) + MODELS:
-        tot = (sums.get(key) or {}).get("total", 0.0)
-        out[key] = ({k: round(100.0 * sums[key][k] / tot, 3) for k in ("fines", "agg")} if tot > 0
+        tot, rej = (sums.get(key) or {}).get("total", 0.0), (sums.get(key) or {}).get("agg", 0.0)
+        # мука — доля среди ХОРОШИХ кристаллов; agg — доля отсеянного брака среди всех (хорошие + брак)
+        out[key] = ({"fines": round(100.0 * sums[key]["fines"] / tot, 3), "agg": round(100.0 * rej / (tot + rej), 3)} if tot > 0
                     else {"fines": None, "agg": None})
-    n_tot = (sums.get("n") or {}).get("total", 0)
-    out["n"] = ({k: round(100.0 * sums["n"][k] / n_tot, 2) for k in ("fines", "agg")} if n_tot
+    n_tot, n_rej = (sums.get("n") or {}).get("total", 0), (sums.get("n") or {}).get("agg", 0)
+    out["n"] = ({"fines": round(100.0 * sums["n"]["fines"] / n_tot, 2), "agg": round(100.0 * n_rej / (n_tot + n_rej), 2)} if n_tot
                 else {"fines": None, "agg": None})
     if sums.get("fines_off"):            # мелочь пока не считаем — прочерк, а не 0 %
         for key in out:
             out[key]["fines"] = None
+    # рассев: доля каждой фракции в общем объёме, % (по трём моделям); нет данных — не добавляем
+    sv = {} if sums.get("fines_off") else (sums.get("sieve") or {})     # рассев — как мука: только когда СВ дошёл до порога
+    out["sieve"] = {mod: [round(100.0 * x / sum(sv[mod]), 3) for x in sv[mod]] for mod in MODELS + ("area",) if sv.get(mod) and sum(sv[mod]) > 0}
     return out

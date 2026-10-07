@@ -71,6 +71,7 @@
     const vo = cv.volume || {};
     set("cvFinesMm", vo.fines_side_mm); set("cvKThick", vo.k_thick); set("cvFinesSv", vo.fines_from_sv);   // поля блока «Объём и мелочь»
     set("pcCvFrames", cv.frames_per_probe); set("pcCvGap", cv.gap_sec);   // поля на вкладке «Цикл»
+    cvTrendStyle = cv.trend_style || {}; cvApplyStyleToRows(); cvBuildStylePanel(); cvDrawTrend();   // вид линий тренда из конфига
     updateTriggerFields();
   }
   function cvCollectPatch() {
@@ -350,7 +351,8 @@
         const fu = parseFloat(($("cvFinesMm") || {}).value), k = parseFloat(($("cvKThick") || {}).value),
           fs = parseFloat(($("cvFinesSv") || {}).value);
         if (!(fu > 0) || !(k > 0) || !(fs >= 0)) return;
-        cvPostSettings({ volume: { fines_side_mm: fu, k_thick: k, fines_from_sv: fs } });
+        // сервер пересчитывает пробы по сохранённым кадрам и журнал; потом перерисовываем варки и текущую пробу
+        cvPostSettings({ volume: { fines_side_mm: fu, k_thick: k, fines_from_sv: fs } }).then(() => { cvLoadBoils(true); cvRefresh(); }).catch(() => { });
       });
     });
   }
@@ -717,6 +719,41 @@
 
   // --- тренд по РЕАЛЬНОМУ времени (как в SCADA): выбор даты, сдвиг за пределы загруженного, масштаб ---
   // Данные берутся из журнала проб по дням (cv_history) — он не стирается ротацией кадров.
+  // вид линий тренда (цвет и толщина по сериям) — хранится в конфиге: cv.trend_style = { серия: { color, width } }, пусто — по умолчанию
+  let cvTrendStyle = {};
+  const cvLineColor = (name, def) => (cvTrendStyle[name] && cvTrendStyle[name].color) || def;
+  const cvLineWidth = (name, def) => (cvTrendStyle[name] && Number(cvTrendStyle[name].width)) || def;
+  function cvApplyStyleToRows() {          // кружок у строки серии — цвет линии
+    document.querySelectorAll("#cvSeries .micro-srow").forEach((row) => {
+      const name = row.querySelector("input").value, dot = row.querySelector("i");
+      if (dot) dot.style.background = name === "stage" ? cvLineColor(name, "") || "" : cvLineColor(name, CV_SERIES_COLOR[name] || "#888");
+    });
+  }
+  function cvBuildStylePanel() {
+    const box = $("cvTrendStylePanel"); if (!box) return;
+    const hex = (c) => (/^#[0-9a-f]{6}$/i.test(c || "") ? c : "#888888");
+    let html = '<div class="micro-tstyle__hd"><b>Вид линий</b><button type="button" id="cvStyleReset">Сбросить всё</button></div>';
+    document.querySelectorAll("#cvSeries .micro-srow").forEach((row) => {
+      const name = row.querySelector("input").value, label = row.querySelector("span").textContent;
+      const def = name === "stage" ? "#e6e8ec" : (CV_SERIES_COLOR[name] || "#888888"), st = cvTrendStyle[name] || {};
+      html += '<div class="micro-tstyle__row" data-s="' + name + '"><span>' + label + '</span>' +
+        '<input type="color" value="' + hex(st.color || def) + '" title="Цвет линии" />' +
+        '<input type="range" min="1" max="8" step="0.5" value="' + (Number(st.width) || (name === "stage" ? 1.5 : 2)) + '" title="Толщина линии" /></div>';
+    });
+    box.innerHTML = html;
+    let timer = null;
+    const save = () => { clearTimeout(timer); timer = setTimeout(() => cvPostSettings({ trend_style: cvTrendStyle }), 400); };
+    box.querySelectorAll(".micro-tstyle__row").forEach((row) => {
+      const name = row.dataset.s, [col, wid] = row.querySelectorAll("input");
+      const upd = () => { cvTrendStyle[name] = { color: col.value, width: Number(wid.value) }; cvApplyStyleToRows(); cvDrawTrend(); save(); };
+      col.addEventListener("input", upd); wid.addEventListener("input", upd);
+    });
+    const rs = $("cvStyleReset");
+    if (rs) rs.addEventListener("click", () => {
+      Object.keys(cvTrendStyle).forEach((k) => { cvTrendStyle[k] = { color: null, width: null }; });
+      cvPostSettings({ trend_style: cvTrendStyle }); cvBuildStylePanel(); cvApplyStyleToRows(); cvDrawTrend();
+    });
+  }
   const CV_TREND_KEY = "microCvTrendSeries4";   // 3: добавлены серии «стадия» и «СВ» (включены по умолчанию)
   const CV_PCT_SERIES = ["small", "medium", "large", "reject", "sv"];   // шкала слева, % (СВ тоже в % — те же 0–100)
   const CV_UM_SERIES = ["mean", "median"];                        // шкала справа, мкм
@@ -831,7 +868,7 @@
     let stageMax = 10;
     if (series.stage) for (let i = i0; i < i1; i++) if (series.stage[i] != null) stageMax = Math.max(stageMax, series.stage[i] + 1);
     const scaleOf = (name) => (name === "stage" ? stageMax : (CV_UM_SERIES.includes(name) ? umMax : 100));
-    const colorOf = (name) => (name === "stage" ? getCss("--text", "#fff") : (CV_SERIES_COLOR[name] || "#888"));
+    const colorOf = (name) => cvLineColor(name, name === "stage" ? getCss("--text", "#fff") : (CV_SERIES_COLOR[name] || "#888"));
     const yAt = (val, mx) => pad.t + plotH * (1 - Math.max(0, Math.min(1, val / mx)));
     // режим варки со своей шкалой: диапазон по видимым точкам (не уже CV_AUTO_SPAN) + 8 % полей
     const auto = {};
@@ -881,11 +918,12 @@
     dts.sort((x, y) => x - y);
     const gap = Math.max(600, (dts.length ? dts[Math.floor(dts.length / 2)] : 0) * 5);
     const stg = d.stage || [];
-    const brewBreak = (i) => i > 0 && (t[i] - t[i - 1] > gap || (stg[i] != null && stg[i - 1] != null && stg[i] < stg[i - 1]));
+    // новая варка — как в журнале (cv_store._is_new_boil): стадия откатилась на заводку (было ≥ 6, стало ≤ 4); откат 7 → 5 внутри варки — это подкачка, линию не рвём
+    const brewBreak = (i) => i > 0 && (t[i] - t[i - 1] > gap || (stg[i] != null && stg[i - 1] != null && stg[i - 1] >= 6 && stg[i] <= 4));
     const drawSeries = (name) => {
       const arr = series[name]; if (!arr) return;
       const col = colorOf(name); const mx = scaleOf(name); const isStage = name === "stage";
-      ctx.strokeStyle = col; ctx.fillStyle = col; ctx.lineWidth = isStage ? 1.5 : 2; ctx.beginPath();
+      ctx.strokeStyle = col; ctx.fillStyle = col; ctx.lineWidth = cvLineWidth(name, isStage ? 1.5 : 2); ctx.beginPath();
       let started = false, prevY = 0;
       for (let i = a; i < b; i++) {
         const val = arr[i]; if (val == null) { started = false; continue; }
@@ -994,6 +1032,8 @@
       if (cand) cvTrendSetDay(cand);
     };
     // выгрузка проб в CSV (для разбора и обучения): всё, а с Shift — только выбранный день
+    const sb = $("cvTrendStyleBtn"), sp = $("cvTrendStylePanel");
+    if (sb && sp) sb.addEventListener("click", () => { sp.hidden = !sp.hidden; sb.classList.toggle("is-on", !sp.hidden); });
     const csv = $("cvTrendCsv");
     if (csv) csv.addEventListener("click", (e) => {
       const q = [cvSerialQ()];

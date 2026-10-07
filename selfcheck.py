@@ -1001,6 +1001,18 @@ def _cv_store():
     assert "fines_avg" in mine[0], "в выгрузке нет колонки fines_avg"
     tr = cv_store.trend_range("SELFCHECK", 0, 9999999999, series=["fines_avg", "sv"])
     assert "fines_avg" in tr["series"] and len(tr["series"]["fines_avg"]) == len(tr["t"]), "в тренде нет серии fines_avg"
+    # поля «Мука, мм» меняются → уже снятая проба и журнал пересчитываются по сохранённым кадрам (а не ждут следующей пробы)
+    import plate_config
+    cur = (plate_config.load().get("cv") or {}).get("volume") or {}
+    plate_config.save({"cv": {"volume": {"fines_side_mm": 0.05, "k_thick": 0.88, "fines_from_sv": 0}}})
+    try:
+        again = cv_store.get_result("SELFCHECK", rec["ts"])
+        assert again["summary"]["volume_cfg"]["fines_side_mm"] == 0.05, "проба не пересчиталась по новому порогу муки"
+        assert cv_store.recompute_journal("SELFCHECK") >= 1, "журнал не пересчитан"
+        assert [r for r in cv_store.export_rows("SELFCHECK") if r["ts"] == rec["ts"]][0]["fines_side_mm"] == 0.05, "в журнале старый порог"
+    finally:
+        plate_config.save({"cv": {"volume": {"fines_side_mm": cur.get("fines_side_mm", 0.2), "k_thick": cur.get("k_thick", 0.88),
+                                             "fines_from_sv": cur.get("fines_from_sv", 88.0)}}})
     import app as web
     resp = web.cv_trend_export(serial="SELFCHECK", t_from=None, t_to=None)   # прямой вызов: Query-умолчания не подставляются
     body = resp.body.decode("utf-8-sig").splitlines()

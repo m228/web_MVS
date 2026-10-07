@@ -476,11 +476,15 @@ def _with_volume(d: Path, r: dict, cfg: Optional[dict] = None) -> dict:
     """Проба, снятая до появления объёма (в summary нет volume): досчитать мелочь/сростки по
     сохранённым объектам кадров по ТЕКУЩИМ полям порога и k. Файлы пробы не меняем — только ответ."""
     s = (r or {}).get("summary")
-    if not s or (s.get("volume") and "sieve" in s["volume"]):
+    if not s:
+        return r
+    cfg = cfg if cfg is not None else _volume_cfg_now()
+    old, cur = s.get("volume_cfg") or {}, cv_volume.volume_cfg(cfg)
+    same = all(old.get(k) == cur.get(k) for k in ("fines_side_mm", "k_thick", "fines_from_sv"))
+    if s.get("volume") and "sieve" in s["volume"] and same:       # посчитана с теми же полями — не трогаем
         return r
     try:
         from types import SimpleNamespace as NS
-        cfg = cfg if cfg is not None else _volume_cfg_now()
         tot = cv_volume.empty_sums()
         fines_on = cv_volume.fines_on(cfg, s.get("sv", r.get("sv")))
         for i in range(len(r.get("frames") or [1])):
@@ -493,6 +497,35 @@ def _with_volume(d: Path, r: dict, cfg: Optional[dict] = None) -> dict:
     except Exception:
         pass            # нет объектов/битый файл — проба просто без объёма
     return r
+
+
+def recompute_journal(serial: str) -> int:
+    """Пересчитать объём/муку/рассев в журнале по ТЕКУЩИМ полям («Мука, мм», «Мука с СВ», k) — для проб, у которых ещё
+    сохранены кадры (последние keep_last). Остальные строки журнала остаются как были. Возвращает число обновлённых строк."""
+    sd = _serial_dir(serial)
+    if not sd.exists():
+        return 0
+    cfg, fresh = _volume_cfg_now(), {}
+    for p in sorted(x for x in sd.iterdir() if x.is_dir()):
+        try:
+            row = _hist_row(_with_volume(p, json.loads((p / "result.json").read_text(encoding="utf-8")), cfg))
+            if row:
+                fresh[row["ts"]] = row
+        except Exception:
+            continue
+    n = 0
+    with _HIST_LOCK:
+        for f in (sorted(_hist_dir(serial).glob("*.jsonl")) if _hist_dir(serial).exists() else []):
+            rows, changed = _hist_read(serial, f.stem), False
+            for i, r in enumerate(rows):
+                if r.get("ts") in fresh and fresh[r["ts"]] != r:
+                    rows[i], changed = fresh[r["ts"]], True
+                    n += 1
+            if changed:
+                tmp = f.with_suffix(".jsonl.tmp")
+                tmp.write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows), encoding="utf-8")
+                tmp.replace(f)
+    return n
 
 
 def list_samples(serial: str, limit: int = 50) -> list[dict]:

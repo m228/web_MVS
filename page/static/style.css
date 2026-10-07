@@ -3726,6 +3726,14 @@ input.micro-cam-num { width: 56px; min-width: 0; flex: 0 0 auto; padding: 4px 5p
   border: 1px solid var(--border, rgba(131,151,179,.28)); background: transparent; cursor: pointer; user-select: none;
   font-size: 0.86em; color: var(--muted, #5b6b81); opacity: .55; transition: opacity .15s ease, background .15s ease, border-color .15s ease; }
 .micro-srow input { display: none; }
+.micro-trend__btn.is-on { border-color: var(--accent, #2563eb); color: var(--accent, #2563eb); }
+.micro-tstyle { margin: 0 0 10px; padding: 10px 12px; border: 1px solid var(--border, rgba(131,151,179,.28)); border-radius: 10px; display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 6px 18px; }
+.micro-tstyle[hidden] { display: none; }
+.micro-tstyle__hd { grid-column: 1 / -1; display: flex; justify-content: space-between; align-items: center; font-size: .9em; }
+.micro-tstyle__hd button { font: inherit; font-size: .85em; background: none; border: 0; color: var(--muted); cursor: pointer; text-decoration: underline; }
+.micro-tstyle__row { display: grid; grid-template-columns: 1fr 34px 110px; align-items: center; gap: 8px; font-size: .85em; }
+.micro-tstyle__row input[type=color] { width: 34px; height: 24px; padding: 0; border: 1px solid var(--border-strong, rgba(118,142,178,.45)); border-radius: 6px; background: none; cursor: pointer; }
+.micro-tstyle__row input[type=range] { width: 100%; }
 .micro-srow-sep { margin: 6px 2px 0; font-size: .75em; letter-spacing: .06em; text-transform: uppercase; color: var(--muted, #8a94a6); opacity: .8; }
 .micro-srow i { width: 10px; height: 10px; border-radius: 50%; }
 .micro-srow b { font-variant-numeric: tabular-nums; font-weight: 600; font-size: 0.95em; white-space: nowrap; }

@@ -1032,6 +1032,25 @@ def _cv_store():
     return "ts=%s" % rec["ts"]
 
 
+@check("CV", "cv_analyzer: брак по форме считается ДО «Брак до СВ» (85), выше — не считается и в расчёт не берётся")
+def _cv_reject_to_sv():
+    import cv_analyzer as A
+    cfg = {"reject_to_sv": 85.0}
+    c = A._cfg(cfg)
+    assert A.is_counting(c, 80.0) and A.is_counting(c, 85.0) and not A.is_counting(c, 85.1) and not A.is_counting(c, 90.0), "граница 85"
+    assert A.is_counting(c, None), "СВ неизвестно — считаем"
+    assert A.is_counting(A._cfg({"reject_to_sv": 85.0, "reject_always": True}), 95.0), "«брак всегда»"
+    def m(group, defect):
+        return A.CrystalMeasure(cx=10, cy=10, size_um=300, length_um=320, width_um=280, circularity=0.8, aspect=1.1, solidity=0.95,
+                                group=group, conf=0.9, defect=defect)
+    early = A.summarize([m("small", None), m("reject", "aggregate")], (200, 200, 3), cfg, sv=80.0)
+    late = A.summarize([m("small", None), m("small", "aggregate")], (200, 200, 3), cfg, sv=90.0)
+    assert early["reject_active"] and early["groups"]["reject"] == 1 and early["count"] == 2, "до СВ 85 брак должен считаться: %s" % early["groups"]
+    assert not late["reject_active"] and late["groups"]["reject"] == 0 and late["groups"]["small"] == 1 and late["count"] == 1 and late["excluded"] == 1,         "выше СВ 85 дефектный кристалл должен быть вне расчёта: %s excl=%s" % (late["groups"], late.get("excluded"))
+    assert late["reasons"]["aggregate"] == 1, "причина всё равно подписывается"
+    return "до 85 брак считается, выше — отсеян"
+
+
 @check("CV", "cv_volume: рассев по ситам — фракции по границам 0,2·0,5·0,7·0,8·1·1,2 мм, сумма 100 %, слияние кадров")
 def _cv_sieve():
     import cv_volume

@@ -29,6 +29,7 @@ DEFAULTS = {
               "notch_frac": 0.06},       # «выемка» контура глубже этой доли диаметра → признак сростка
     "volume": {"fines_side_mm": 0.2, "k_thick": 0.88, "fines_from_sv": 88.0},   # объём (см. cv_volume.py): мелочь — площадь меньше fines_side_mm², считается с СВ ≥ fines_from_sv; толщина = k_thick · ширина
     "size_reject": {"min_um": 250.0, "max_um": 1200.0},   # брак по размеру (только у готового, см. reject_from_sv)
+    "reject_to_sv": 85.0,      # брак по форме (сросток/игла/кривой) считается, пока СВ ≤ этого (первые кристаллы после заводки); выше — не считаем и в расчёт не берём
     "reject_from_sv": 88.0,    # брак идёт в рассев/тренд, только когда СВ ≥ этого (кристаллы подросли)
     "reject_always": False,    # True — считать брак всегда, без порога по СВ
     "cluster_gap_px": 4.0,     # маски с зазором ≤ этого (px) склеиваются в сросток; 0 — выкл
@@ -85,6 +86,7 @@ def _cfg(cv_cfg: Optional[dict]) -> dict:
         c["min_size_um"] = float(cv_cfg.get("min_size_um", c["min_size_um"]))
         c["blur_min"] = float(cv_cfg.get("blur_min", c["blur_min"]))
         c["reject_from_sv"] = float(cv_cfg.get("reject_from_sv", c["reject_from_sv"]))
+        c["reject_to_sv"] = float(cv_cfg.get("reject_to_sv", c["reject_to_sv"]))
         c["reject_always"] = bool(cv_cfg.get("reject_always", c["reject_always"]))
         for k in ("cluster_gap_px", "nest_frac", "edge_margin_px", "tiles", "overlap"):
             c[k] = float(cv_cfg.get(k, c[k]))
@@ -101,9 +103,10 @@ def _cfg(cv_cfg: Optional[dict]) -> dict:
 
 
 def is_counting(cfg: dict, sv: Optional[float]) -> bool:
-    """Идёт ли брак в рассев/тренд: СВ дошло до порога, либо порог отключён галочкой, либо СВ
-    неизвестно (без датчика СВ фильтровать нечем — показываем как есть)."""
-    return bool(cfg["reject_always"] or sv is None or sv >= cfg["reject_from_sv"])
+    """Считается ли брак по форме (сросток/игла/кривой): пока СВ не выше «Брак до СВ» (первые кристаллы после заводки —
+    там сростки и ищем), либо включено «брак всегда», либо СВ неизвестно. Выше порога кристаллов слишком много —
+    брак не считается, а дефектные кристаллы в расчёт не берутся (только хорошие)."""
+    return bool(cfg["reject_always"] or sv is None or sv <= cfg["reject_to_sv"])
 
 
 @dataclass
@@ -759,6 +762,8 @@ def summarize(measures: list[CrystalMeasure], image_shape: tuple,
     n_bubble = 0
     reasons = {r: 0 for r in REASONS}
     n_suspect = 0
+    n_excl = 0
+    counting = is_counting(cfg, sv)
     for m in measures:
         if m.group == CUT_GROUP:      # обрезан кадром/швом — вне рассева и размеров
             n_cut += 1
@@ -766,14 +771,18 @@ def summarize(measures: list[CrystalMeasure], image_shape: tuple,
         if m.group == BUBBLE_GROUP:   # пузырь воздуха — не кристалл, вне рассева и размеров
             n_bubble += 1
             continue
+        if m.defect in cv_volume.REJECT_DEFECTS and not counting:    # СВ выше «Брак до СВ»: брак не считаем и в расчёт не берём
+            n_excl += 1
+            reasons[m.defect] += 1                                    # причина подписана, но в группы/размеры не идёт
+            continue
         counts[m.group] += 1
         if m.defect:
-            reasons[m.defect] += 1    # причины считаем всегда (в рассев брак идёт по порогу СВ)
+            reasons[m.defect] += 1    # причины считаем всегда
         if m.suspect:
             n_suspect += 1
         if m.group != "reject":
             sizes.append(m.size_um)
-    n = len(measures) - n_cut - n_bubble
+    n = len(measures) - n_cut - n_bubble - n_excl
     area_mm2 = (w * cfg["um_per_px"] / 1000.0) * (h * cfg["um_per_px"] / 1000.0)
     sizes_np = np.array(sizes) if sizes else np.array([0.0])
     vol_sums = cv_volume.sums_for(measures, cfg, cv_volume.fines_on(cfg, sv))
@@ -786,7 +795,8 @@ def summarize(measures: list[CrystalMeasure], image_shape: tuple,
         "bubbles": n_bubble,
         "reasons": reasons,
         "suspect": n_suspect,
-        "reject_active": is_counting(cfg, sv),
+        "reject_active": counting,
+        "excluded": n_excl,                # дефектных кристаллов, не взятых в расчёт (СВ выше «Брак до СВ»)
         "sv": sv,
         "groups": counts,
         "groups_pct": {g: (round(100.0 * counts[g] / n, 1) if n else 0.0) for g in GROUP_ORDER},

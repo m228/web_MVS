@@ -62,7 +62,7 @@
     set("cvUmPerPx", cv.um_per_px); set("cvTiles", cv.tiles);
     set("cvMinCirc", sh.min_circularity); set("cvMinSol", sh.min_solidity);
     set("cvMaxAspect", sh.max_aspect); set("cvConf", cv.conf);
-    set("cvSuspect", sh.suspect_aspect); set("cvRejectSv", cv.reject_from_sv);
+    set("cvSuspect", sh.suspect_aspect); set("cvRejectSv", cv.reject_to_sv != null ? cv.reject_to_sv : 85);
     set("cvClusterGap", cv.cluster_gap_px); set("cvEdgeMargin", cv.edge_margin_px);
     if ($("cvSeamMerge")) $("cvSeamMerge").checked = cv.seam_merge !== false;
     if ($("cvSeamRefine")) $("cvSeamRefine").checked = cv.seam_refine !== false;
@@ -80,7 +80,7 @@
       groups: { small_max_um: num("cvSmallMax"), medium_max_um: num("cvMediumMax") },
       shape: { min_circularity: num("cvMinCirc"), min_solidity: num("cvMinSol"), max_aspect: num("cvMaxAspect"), suspect_aspect: num("cvSuspect") },
       um_per_px: num("cvUmPerPx"), tiles: num("cvTiles"), conf: num("cvConf"),
-      reject_from_sv: num("cvRejectSv"), cluster_gap_px: num("cvClusterGap"), edge_margin_px: num("cvEdgeMargin"),
+      reject_to_sv: num("cvRejectSv"), cluster_gap_px: num("cvClusterGap"), edge_margin_px: num("cvEdgeMargin"),
       seam_merge: $("cvSeamMerge") ? $("cvSeamMerge").checked : undefined,
       seam_refine: $("cvSeamRefine") ? $("cvSeamRefine").checked : undefined,
       bubble_filter: $("cvBubble") ? $("cvBubble").checked : undefined, reject_always: $("cvRejectAlways") ? $("cvRejectAlways").checked : undefined,
@@ -538,7 +538,7 @@
     const rows = ["needle", "aggregate", "crooked", "tiny", "huge"].filter((k) => k in rs && (rs[k] > 0 || k === "needle" || k === "aggregate" || k === "crooked"));
     let html = "";
     if (s.reject_active === false)
-      html += '<div class="note">СВ ' + (probeSv != null ? probeSv : (s.sv != null ? s.sv : "—")) + ' — ниже порога: причины подписаны, в «брак» пока не считаются</div>';
+      html += '<div class="note">СВ ' + (probeSv != null ? probeSv : (s.sv != null ? s.sv : "—")) + ' — выше «Брак до СВ»: брак не считается, дефектные кристаллы в расчёт не берутся (только хорошие)</div>';
     rows.forEach((k) => {
       const n = Math.round((rs[k] || 0) * 10) / 10;
       html += '<div class="rs' + (n ? "" : " is-zero") + '" title="' + CV_REASONS[k].cause + ' — ' + CV_REASONS[k].todo + '"><i style="background:' + (CV_REASON_COLOR[k] || "#e24b4a") + '"></i><span>' + CV_REASONS[k].name + '</span><b>' + n + '</b></div>';

@@ -1069,23 +1069,27 @@
                 <div class="micro-trend__row">
                   <!-- серии столбиком: строка = серия; включена — подсвечена; справа значение под курсором -->
                   <div class="micro-trend__rows" id="cvSeries">
-                    <label class="micro-srow" data-unit="%"><input type="checkbox" value="small" checked /><i style="background:#1d9e75"></i><span>малая</span><b>—</b></label>
-                    <label class="micro-srow" data-unit="%"><input type="checkbox" value="medium" checked /><i style="background:#378add"></i><span>средняя</span><b>—</b></label>
-                    <label class="micro-srow" data-unit="%"><input type="checkbox" value="large" checked /><i style="background:#ba7517"></i><span>большая</span><b>—</b></label>
-                    <label class="micro-srow" data-unit="%"><input type="checkbox" value="reject" /><i style="background:#e24b4a"></i><span>брак</span><b>—</b></label>
-                    <label class="micro-srow" data-unit="мкм" title="Среднее: сумма размеров / число кристаллов"><input type="checkbox" value="mean" checked /><i style="background:#7f77dd"></i><span>среднее</span><b>—</b></label>
-                    <label class="micro-srow" data-unit="" title="СВ (сухие вещества, Brix, %) на момент пробы — на той же шкале 0–100, что и доли групп"><input type="checkbox" value="sv" checked /><i style="background:#f2c94c"></i><span>СВ</span><b>—</b></label>
-                    <label class="micro-srow" data-unit="" title="Стадия варки (номер) на момент пробы: белая ступенчатая линия с цифрами на каждом переходе"><input type="checkbox" value="stage" checked /><i style="background:var(--text)"></i><span>стадия</span><b>—</b></label>
-                    <label class="micro-srow" data-unit="мкм" title="Медиана: половина кристаллов мельче, половина крупнее"><input type="checkbox" value="median" /><i style="background:#d16fb8"></i><span>медиана</span><b>—</b></label>
-                    <label class="micro-srow" data-unit="%" data-dec="2" title="Мука по объёму, % — среднее трёх моделей (M1 + M2 + M3) ÷ 3. Появляется ближе к концу варки: считается, только когда СВ дошёл до поля «Мука с СВ»"><input type="checkbox" value="fines_avg" checked /><i style="background:#e8c547"></i><span>средняя мука</span><b>—</b></label>
-                    <!-- режим варки из ПЛК на момент пробы: линии пунктиром, у каждой своя шкала по видимому участку -->
-                    <div class="micro-srow-sep" title="Линии пунктиром: у каждой своя шкала по видимому участку графика. Точные значения — справа и в подсказке">режим варки</div>
-                    <label class="micro-srow" data-unit="°C" title="Температура в аппарате"><input type="checkbox" value="temp" /><i style="background:#ff8a4c"></i><span>температура</span><b>—</b></label>
-                    <label class="micro-srow" data-unit="бар" data-dec="3" title="Разрежение сверху"><input type="checkbox" value="vac" /><i style="background:#4fd1e8"></i><span>разрежение</span><b>—</b></label>
-                    <label class="micro-srow" data-unit="%" title="Уровень в аппарате, % (шкала 0–100)"><input type="checkbox" value="level" /><i style="background:#8aa4c8"></i><span>уровень</span><b>—</b></label>
-                    <label class="micro-srow" data-unit="А" title="Ток циркулятора (мешалки): растёт — утфель густеет"><input type="checkbox" value="current" /><i style="background:#a3d95b"></i><span>ток мешалки</span><b>—</b></label>
-                    <label class="micro-srow" data-unit="мин" title="Время варки с её начала"><input type="checkbox" value="cook_time" /><i style="background:#b9a98f"></i><span>время варки</span><b>—</b></label>
-                    <label class="micro-srow" data-unit="мин" title="Время с заводки: от перехода «Сгущение» → «Затравка»"><input type="checkbox" value="seed_age" /><i style="background:#ffb347"></i><span>с заводки</span><b>—</b></label>
+                    <div class="micro-trend__col">
+                      <div class="micro-srow-sep" title="Рассев и размер кристаллов из распознавания; «средняя мука» появляется ближе к концу варки">Кристаллы</div>
+                      <label class="micro-srow" data-unit="%"><input type="checkbox" value="small" checked /><i style="background:#1d9e75"></i><span>малая</span><b>—</b></label>
+                      <label class="micro-srow" data-unit="%"><input type="checkbox" value="medium" checked /><i style="background:#378add"></i><span>средняя</span><b>—</b></label>
+                      <label class="micro-srow" data-unit="%"><input type="checkbox" value="large" checked /><i style="background:#ba7517"></i><span>большая</span><b>—</b></label>
+                      <label class="micro-srow" data-unit="%"><input type="checkbox" value="reject" /><i style="background:#e24b4a"></i><span>брак</span><b>—</b></label>
+                      <label class="micro-srow" data-unit="мкм" title="Среднее: сумма размеров / число кристаллов"><input type="checkbox" value="mean" checked /><i style="background:#7f77dd"></i><span>среднее</span><b>—</b></label>
+                      <label class="micro-srow" data-unit="мкм" title="Медиана: половина кристаллов мельче, половина крупнее"><input type="checkbox" value="median" /><i style="background:#d16fb8"></i><span>медиана</span><b>—</b></label>
+                      <label class="micro-srow" data-unit="%" data-dec="2" title="Мука по объёму, % — среднее трёх моделей (M1 + M2 + M3) ÷ 3. Появляется ближе к концу варки: считается, только когда СВ дошёл до поля «Мука с СВ»"><input type="checkbox" value="fines_avg" checked /><i style="background:#e8c547"></i><span>средняя мука</span><b>—</b></label>
+                    </div>
+                    <div class="micro-trend__col">
+                      <div class="micro-srow-sep" title="Данные с вакуум-аппарата из ПЛК на момент пробы. Линии пунктиром, у каждой своя шкала по видимому участку; точные значения — справа и в подсказке">Тренды с ВА</div>
+                      <label class="micro-srow" data-unit="" title="СВ (сухие вещества, Brix, %) на момент пробы — на той же шкале 0–100, что и доли групп"><input type="checkbox" value="sv" checked /><i style="background:#f2c94c"></i><span>СВ</span><b>—</b></label>
+                      <label class="micro-srow" data-unit="" title="Стадия варки (номер) на момент пробы: белая ступенчатая линия с цифрами на каждом переходе"><input type="checkbox" value="stage" checked /><i style="background:var(--text)"></i><span>стадия</span><b>—</b></label>
+                      <label class="micro-srow" data-unit="°C" title="Температура в аппарате"><input type="checkbox" value="temp" /><i style="background:#ff8a4c"></i><span>температура</span><b>—</b></label>
+                      <label class="micro-srow" data-unit="бар" data-dec="3" title="Разрежение сверху"><input type="checkbox" value="vac" /><i style="background:#4fd1e8"></i><span>разрежение</span><b>—</b></label>
+                      <label class="micro-srow" data-unit="%" title="Уровень в аппарате, % (шкала 0–100)"><input type="checkbox" value="level" /><i style="background:#8aa4c8"></i><span>уровень</span><b>—</b></label>
+                      <label class="micro-srow" data-unit="А" title="Ток циркулятора (мешалки): растёт — утфель густеет"><input type="checkbox" value="current" /><i style="background:#a3d95b"></i><span>ток мешалки</span><b>—</b></label>
+                      <label class="micro-srow" data-unit="мин" title="Время варки с её начала"><input type="checkbox" value="cook_time" /><i style="background:#b9a98f"></i><span>время варки</span><b>—</b></label>
+                      <label class="micro-srow" data-unit="мин" title="Время с заводки: от перехода «Сгущение» → «Затравка»"><input type="checkbox" value="seed_age" /><i style="background:#ffb347"></i><span>с заводки</span><b>—</b></label>
+                    </div>
                   </div>
                   <div class="micro-cv-trendwrap">
                     <canvas id="cvTrend" class="micro-cv-trend" width="620" height="360"></canvas>

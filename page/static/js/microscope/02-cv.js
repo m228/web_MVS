@@ -193,6 +193,8 @@
   }
 
   // --- объём и мелочь: M1/M2/M3 + площадь, % от общего объёма кадров пробы ---
+  // «Среднее» = (M1 + M2 + M3) / 3 по тем моделям, где значение есть; нет ни одной — null
+  const cvAvg3 = (o) => { const v = o ? ["m1", "m2", "m3"].map((k) => o[k]).filter((x) => x != null) : []; return v.length ? v.reduce((a, b) => a + b, 0) / v.length : null; };
   const fmtPct = (v) => (v == null ? "—" : (v >= 10 ? v.toFixed(1) : v.toFixed(2)) + " %");
   // расчётный порог мелочи по диаметру: круг той же площади, что квадрат side × side мм → 2000·side/√π, мкм
   function cvFinesDiam() { const v = parseFloat(($("cvFinesMm") || {}).value); return v > 0 ? 2000 * v / Math.sqrt(Math.PI) : null; }
@@ -216,10 +218,9 @@
     if (finesOff) {
       rows.push("<div><b>Мелочь</b> пока не считается: СВ ниже " + (cfg.fines_from_sv != null ? cfg.fines_from_sv : "") + " — кристаллы ещё растут, это неактуально.</div>");
     } else {
-      rows.push("<div><b>Мелочь:</b> " + per(n.fines) + " из " + per(n.total) + " кристаллов на кадре — <b>" + pc(nn.fines) + " по числу</b>, но всего <b>" + pc(m3.fines) +
-        " по объёму</b> (призма) и " + pc((vp.area || {}).fines) + " по площади. Мелких много штук, а вещества в них мало.</div>");
+      rows.push("<div><b>Мелочь:</b> " + per(n.fines) + " из " + per(n.total) + " кристаллов на кадре — <b>" + pc(nn.fines) + " по числу</b>, но всего <b>" + pc(cvAvg3({ m1: (vp.m1 || {}).fines, m2: (vp.m2 || {}).fines, m3: m3.fines })) +
+        " по объёму</b> (среднее M1–M3) и " + pc((vp.area || {}).fines) + " по площади. Мелких много штук, а вещества в них мало.</div>");
     }
-    rows.push("<div><b>Сростки:</b> " + per(n.agg) + " шт (" + pc(nn.agg) + " по числу), <b>" + pc(m3.agg) + " объёма</b> — считаются отдельно, в мелочь не входят.</div>");
     rows.push("<div><b>Общий объём</b> кристаллов на кадре: " + mm3((vol.m3 || {}).total || 0) + " мм³ (призма), " + mm3((vol.m1 || {}).total || 0) + " (шар), " + mm3((vol.m2 || {}).total || 0) + " (сфероид).</div>");
     box.innerHTML = rows.join("");
   }
@@ -258,15 +259,15 @@
     if (older) older.disabled = !(i >= 0 && i < cvBoils.length - 1);
     if (newer) newer.disabled = !(i > 0);
     const cells = (kind) => document.querySelectorAll("#cvVolGrid [data-v$='." + kind + "']");
-    const put = (kind, src) => cells(kind).forEach((el) => { const m = el.dataset.v.split(".")[0]; el.textContent = fmtPct(src ? src[m] : null); });
+    const put = (kind, src) => cells(kind).forEach((el) => { const m = el.dataset.v.split(".")[0]; el.textContent = fmtPct(src ? (m === "avg" ? cvAvg3(src) : src[m]) : null); });
     if (!b) {
       if (lbl) lbl.textContent = "варок пока нет";
-      put("fines", null); put("agg", null); if (st) st.textContent = "";
+      put("fines", null); if (st) st.textContent = "";
       if (box) box.innerHTML = "<div>Журнал проб пуст — варки появятся, когда пойдут пробы.</div>";
       return;
     }
     if (lbl) { lbl.textContent = cvBoilName(i) + " · " + cvBoilSpan(b); lbl.title = "Варка " + cvBoilSpan(b) + " · проб " + b.n; }
-    put("fines", b.fines); put("agg", b.agg);
+    put("fines", b.fines);
     const cfg = b.cfg || {};
     const fd = cfg.fines_um != null ? cfg.fines_um : cvFinesDiam();
     const fl = $("cvVolLblFines"); if (fl) fl.textContent = "Мелочь <" + (fd != null ? Math.round(fd) : "") + " мкм";
@@ -281,10 +282,9 @@
     } else if (!b.counted) {
       rows.push("<div><b>Мелочь</b> по варке не считалась: СВ не дошёл до " + (cfg.fines_from_sv != null ? cfg.fines_from_sv : "порога") + " (максимум " + (b.sv_max != null ? String(b.sv_max).replace(".", ",") : "—") + "). Порог — поле «Мелочь с СВ».</div>");
     } else {
-      rows.push("<div><b>Мелочь по варке: " + pc(b.fines.m3) + " объёма</b> (призма) — по " + b.counted + " пробам финиша (СВ ≥ " + (cfg.fines_from_sv != null ? cfg.fines_from_sv : "") + ") из " + b.n + "; по числу " + pc(b.fines.n) + ", по площади " + pc(b.fines.area) + ".</div>");
+      rows.push("<div><b>Мелочь по варке: " + pc(cvAvg3(b.fines)) + " объёма</b> (среднее M1–M3) — по " + b.counted + " пробам финиша (СВ ≥ " + (cfg.fines_from_sv != null ? cfg.fines_from_sv : "") + ") из " + b.n + "; по числу " + pc(b.fines.n) + ", по площади " + pc(b.fines.area) + ".</div>");
     }
     if (hasVol) {
-      rows.push("<div><b>Сростки:</b> " + pc(b.agg.m3) + " объёма по всей варке — считаются отдельно, в мелочь не входят.</div>");
       rows.push("<div><b>Объём</b> кристаллов на кадре в среднем: " + String(Number(b.vtot.m3.toPrecision(2))).replace(".", ",") + " мм³ (призма).</div>");
     }
     if (box) box.innerHTML = rows.join("");
@@ -312,7 +312,7 @@
     const vp = (s && s.volume_pct) || {}, cfg = (s && s.volume_cfg) || {};
     document.querySelectorAll("#cvVolGrid [data-v]").forEach((el) => {
       const [model, kind] = el.dataset.v.split(".");
-      el.textContent = fmtPct(vp[model] ? vp[model][kind] : null);
+      el.textContent = fmtPct(model === "avg" ? cvAvg3({ m1: (vp.m1 || {})[kind], m2: (vp.m2 || {})[kind], m3: (vp.m3 || {})[kind] }) : (vp[model] ? vp[model][kind] : null));
     });
     // мелочь не считается, пока СВ ниже «Мелочь с СВ» (кристаллы растут — неактуально): тогда прочерк и пояснение
     const finesOff = !!(s && s.volume && s.volume.fines_off);

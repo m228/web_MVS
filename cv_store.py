@@ -191,16 +191,22 @@ def trend_range(serial: str, t_from: float, t_to: float, series: Optional[list[s
         "from": t_from, "to": t_to,
         "t": [r["t"] for r in rows], "ts": [r["ts"] for r in rows],
         "stage": [r.get("stage") for r in rows],
-        "series": {s: [r.get(s) for r in rows] for s in series},
+        "series": {s: [(fines_avg(r) if s == "fines_avg" else r.get(s)) for r in rows] for s in series},
     }
 
 
 EXPORT_COLUMNS = ["ts", "t", "stage", "sv", "temp", "level", "current", "vac", "cook_time", "seed_age",
                   "count", "mean", "median", "cv_pct", "density", "small", "medium", "large", "reject",
-                  "reject_pct", "fines_m1", "fines_m2", "fines_m3", "fines_area", "fines_n",
+                  "reject_pct", "fines_m1", "fines_m2", "fines_m3", "fines_avg", "fines_area", "fines_n",
                   "agg_m1", "agg_m2", "agg_m3", "agg_area", "agg_n", "vtot_m1", "vtot_m2", "vtot_m3", "fines_side_mm", "fines_um", "k_thick", "fines_from_sv",
                   "n_needle", "n_aggregate", "n_crooked", "n_tiny", "n_huge", "suspect",
                   "frac_zones", "frac_pct", "frames"]
+
+
+def fines_avg(r: dict) -> Optional[float]:
+    """Мелочь по объёму, % — среднее трёх моделей (M1 шар, M2 сфероид, M3 призма); модели без значения пропускаем."""
+    v = [r[k] for k in ("fines_m1", "fines_m2", "fines_m3") if r.get(k) is not None]
+    return round(sum(v) / len(v), 3) if v else None
 
 
 def export_rows(serial: str, t_from: Optional[float] = None, t_to: Optional[float] = None) -> list[dict]:
@@ -213,7 +219,7 @@ def export_rows(serial: str, t_from: Optional[float] = None, t_to: Optional[floa
         rows.extend(r for r in _hist_read(serial, f.stem) if r.get("t") is not None
                     and (t_from is None or r["t"] >= t_from) and (t_to is None or r["t"] <= t_to))
     rows.sort(key=lambda r: r["t"])
-    return [{c: r.get(c) for c in EXPORT_COLUMNS} for r in rows]
+    return [{c: (fines_avg(r) if c == "fines_avg" else r.get(c)) for c in EXPORT_COLUMNS} for r in rows]
 
 
 # --- варки: журнал проб нарезается на варки, по варке — сводка мелочи/сростков/объёма ---

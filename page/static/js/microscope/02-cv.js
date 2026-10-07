@@ -703,13 +703,13 @@
 
   // --- тренд по РЕАЛЬНОМУ времени (как в SCADA): выбор даты, сдвиг за пределы загруженного, масштаб ---
   // Данные берутся из журнала проб по дням (cv_history) — он не стирается ротацией кадров.
-  const CV_TREND_KEY = "microCvTrendSeries3";   // 3: добавлены серии «стадия» и «СВ» (включены по умолчанию)
+  const CV_TREND_KEY = "microCvTrendSeries4";   // 3: добавлены серии «стадия» и «СВ» (включены по умолчанию)
   const CV_PCT_SERIES = ["small", "medium", "large", "reject", "sv"];   // шкала слева, % (СВ тоже в % — те же 0–100)
   const CV_UM_SERIES = ["mean", "median"];                        // шкала справа, мкм
   // режим варки из ПЛК (рисуется пунктиром). Уровень — в %, на общей шкале 0–100; остальные — каждая на своей шкале
   // по видимому участку, но не уже «минимального размаха» (иначе шум на 0,2 °C выглядел бы бурей)
-  const CV_REGIME = ["temp", "vac", "level", "current", "cook_time", "seed_age"];
-  const CV_AUTO_SPAN = { temp: 10, vac: 0.5, current: 5, cook_time: 60, seed_age: 60 };
+  const CV_REGIME = ["temp", "vac", "level", "current", "cook_time", "seed_age", "fines_avg"];   // fines_avg — мелочь, среднее M1–M3: рисуется сплошной, своя шкала
+  const CV_AUTO_SPAN = { temp: 10, vac: 0.5, current: 5, cook_time: 60, seed_age: 60, fines_avg: 10 };
   const CV_MIN_SERIES = ["cook_time", "seed_age"];                // в журнале секунды, показываем минуты
   const CV_MAX_SPAN = 400 * 86400, CV_MIN_SPAN = 60;
   let cvTrendDay = null;         // выбранная дата «YYYY-MM-DD»
@@ -879,7 +879,7 @@
         if (started && !brewBreak(i)) { if (isStage) ctx.lineTo(x, prevY); ctx.lineTo(x, y); } else ctx.moveTo(x, y);   // стадия — ступенькой
         started = true; prevY = y;
       }
-      if (CV_REGIME.includes(name)) ctx.setLineDash([6, 4]);          // режим варки — пунктиром
+      if (CV_REGIME.includes(name) && name !== "fines_avg") ctx.setLineDash([6, 4]);          // режим варки — пунктиром
       ctx.stroke(); ctx.setLineDash([]);
       if (isStage) {                                                   // цифры стадии на каждом переходе (и на первой видимой пробе)
         ctx.font = "bold 11px sans-serif"; ctx.textAlign = "center"; ctx.textBaseline = "bottom";
@@ -953,7 +953,7 @@
     const rv = (k, n) => (s[k] && s[k][i] != null ? Math.round(s[k][i] * n) / n : null);
     const line3 = [rv("temp", 10) != null ? "t " + rv("temp", 10) + " °C" : null, rv("vac", 1000) != null ? "разр. " + rv("vac", 1000) + " бар" : null,
       rv("level", 10) != null ? "ур. " + rv("level", 10) + "%" : null, rv("current", 10) != null ? "ток " + rv("current", 10) + " А" : null,
-      rv("cook_time", 1) != null ? "варка " + rv("cook_time", 1) + " мин" : null, rv("seed_age", 1) != null ? "с заводки " + rv("seed_age", 1) + " мин" : null].filter(Boolean).join(" · ");
+      rv("cook_time", 1) != null ? "варка " + rv("cook_time", 1) + " мин" : null, rv("seed_age", 1) != null ? "с заводки " + rv("seed_age", 1) + " мин" : null, rv("fines_avg", 100) != null ? "мелочь " + rv("fines_avg", 100) + " %" : null].filter(Boolean).join(" · ");
     const names = { small: "малая", medium: "средняя", large: "большая", reject: "брак" };
     const groups = CV_GROUPS.map((g) => val(g) == null ? "" :
       '<span class="dot" style="background:' + CV_SERIES_COLOR[g] + '"></span>' + names[g] + " " + val(g) + "%").filter(Boolean).join("<br>");

@@ -995,6 +995,12 @@ def _cv_store():
     mine = [r for r in ex if r["ts"] == rec["ts"]]
     assert mine and mine[0]["temp"] == 74.5 and mine[0]["seed_age"] == 420, "в выгрузке нет режима варки: %r" % (mine,)
     assert "n_aggregate" in mine[0] and "cv_pct" in mine[0], "в выгрузке нет причин брака/CV%"
+    # мелочь «среднее» = (M1 + M2 + M3) / 3, пустые модели пропускаются; нет данных — None; колонка есть в выгрузке
+    assert cv_store.fines_avg({"fines_m1": 3.73, "fines_m2": 3.14, "fines_m3": 3.42}) == 3.43, "среднее мелочи считается неверно"
+    assert cv_store.fines_avg({"fines_m1": 2, "fines_m2": None, "fines_m3": 4}) == 3.0 and cv_store.fines_avg({}) is None
+    assert "fines_avg" in mine[0], "в выгрузке нет колонки fines_avg"
+    tr = cv_store.trend_range("SELFCHECK", 0, 9999999999, series=["fines_avg", "sv"])
+    assert "fines_avg" in tr["series"] and len(tr["series"]["fines_avg"]) == len(tr["t"]), "в тренде нет серии fines_avg"
     import app as web
     resp = web.cv_trend_export(serial="SELFCHECK", t_from=None, t_to=None)   # прямой вызов: Query-умолчания не подставляются
     body = resp.body.decode("utf-8-sig").splitlines()

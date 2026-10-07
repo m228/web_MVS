@@ -1013,6 +1013,26 @@ def _cv_store():
     return "ts=%s" % rec["ts"]
 
 
+@check("CV", "cv_volume: рассев по ситам — фракции по границам 0,2·0,5·0,7·0,8·1·1,2 мм, сумма 100 %, слияние кадров")
+def _cv_sieve():
+    import cv_volume
+    from types import SimpleNamespace as NS
+    assert [cv_volume.sieve_bin(x) for x in (100, 199, 200, 499, 500, 699, 700, 799, 800, 999, 1000, 1199, 1200, 2000)] ==         [0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6], "границы сит смещены"
+    ms = [NS(group="small", defect=None, size_um=d, length_um=d, width_um=d) for d in (150, 300, 600, 750, 900, 1100, 1300)]
+    s1 = cv_volume.sums_for(ms, None, True)
+    pct = cv_volume.percents(s1)["sieve"]
+    for m in ("m1", "m2", "m3"):
+        assert len(pct[m]) == 7 and abs(sum(pct[m]) - 100) < 0.01, "сумма фракций %s = %s" % (m, sum(pct[m]))
+        assert pct[m][6] > pct[m][5] > pct[m][0], "крупные фракции должны весить больше по объёму"
+    both = cv_volume.add_sums(s1, s1)
+    assert abs(sum(cv_volume.percents(both)["sieve"]["m3"]) - 100) < 0.01, "слияние кадров ломает рассев"
+    assert cv_volume.percents(cv_volume.empty_sums())["sieve"] == {}, "пустые суммы → пустой рассев"
+    # мука выключена (СВ ниже порога) — рассев всё равно считается
+    off = cv_volume.percents(cv_volume.sums_for(ms, None, False))
+    assert off["sieve"].get("m3") and off["m3"]["fines"] is None
+    return "7 фракций, сумма 100 %"
+
+
 @check("CV", "microscope_service: снимок ПЛК в пробу + время с заводки (3 → 4..9), без сети")
 def _micro_plc_snapshot():
     import time as _t

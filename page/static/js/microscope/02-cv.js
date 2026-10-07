@@ -224,6 +224,18 @@
     rows.push("<div><b>Общий объём</b> кристаллов на кадре: " + mm3((vol.m3 || {}).total || 0) + " мм³ (призма), " + mm3((vol.m1 || {}).total || 0) + " (шар), " + mm3((vol.m2 || {}).total || 0) + " (сфероид).</div>");
     box.innerHTML = rows.join("");
   }
+  // --- рассев по ситам: фракции снизу вверх b0 (дно) … b6 (>1,2 мм); строки рисуем сверху вниз как в лабораторной таблице ---
+  const CV_SIEVE_ROWS = [[6, "> 1,2"], [5, "1 – 1,2"], [4, "0,8 – 1"], [3, "0,7 – 0,8"], [2, "0,5 – 0,7"], [1, "0,2 – 0,5"], [0, "дно < 0,2"]];
+  function cvRenderSieve(sv) {            // sv = {m1:[7], m2:[7], m3:[7]} в % объёма; нет данных — прочерки
+    const g = $("cvSieveGrid"); if (!g) return;
+    const val = (m, i) => (sv && sv[m] && sv[m][i] != null ? sv[m][i] : null);
+    const avg = (i) => cvAvg3({ m1: val("m1", i), m2: val("m2", i), m3: val("m3", i) });
+    let html = "<span>размер, мм</span><b>M1 шар</b><b>M2 сфер.</b><b>M3 призма</b><b>Среднее</b>";
+    CV_SIEVE_ROWS.forEach(([i, name]) => {
+      html += "<span>" + name + "</span><em>" + fmtPct(val("m1", i)) + "</em><em>" + fmtPct(val("m2", i)) + "</em><em>" + fmtPct(val("m3", i)) + "</em><em>" + fmtPct(avg(i)) + "</em>";
+    });
+    g.innerHTML = html;
+  }
   // --- по варке: журнал проб нарезан на варки (/api/cv/boils), листаем стрелками ---
   let cvBoils = [], cvBoilSel = null, cvBoilTs = 0, cvVolMode = "boil";
   try { cvVolMode = localStorage.getItem("microCvVolMode") === "probe" ? "probe" : "boil"; } catch (e) { }
@@ -260,6 +272,7 @@
     if (newer) newer.disabled = !(i > 0);
     const cells = (kind) => document.querySelectorAll("#cvVolGrid [data-v$='." + kind + "']");
     const put = (kind, src) => cells(kind).forEach((el) => { const m = el.dataset.v.split(".")[0]; el.textContent = fmtPct(src ? (m === "avg" ? cvAvg3(src) : src[m]) : null); });
+    cvRenderSieve(b ? b.sieve : null);
     if (!b) {
       if (lbl) lbl.textContent = "варок пока нет";
       put("fines", null); if (st) st.textContent = "";
@@ -310,6 +323,7 @@
   function cvRenderVolume(s) {
     if (cvVolMode === "boil") { cvRenderBoil(); return; }
     const vp = (s && s.volume_pct) || {}, cfg = (s && s.volume_cfg) || {};
+    cvRenderSieve(vp.sieve);
     document.querySelectorAll("#cvVolGrid [data-v]").forEach((el) => {
       const [model, kind] = el.dataset.v.split(".");
       el.textContent = fmtPct(model === "avg" ? cvAvg3({ m1: (vp.m1 || {})[kind], m2: (vp.m2 || {})[kind], m3: (vp.m3 || {})[kind] }) : (vp[model] ? vp[model][kind] : null));

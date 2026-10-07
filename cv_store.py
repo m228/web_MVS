@@ -66,6 +66,10 @@ def _volume_cols(s: dict, vp: dict, n_frames: int) -> dict:
     for key in ("m1", "m2", "m3"):
         tot = (sums.get(key) or {}).get("total")
         out["vtot_" + key] = round(tot / 1e9 / n_frames, 4) if tot else None
+    sv = (vp.get("sieve") or {})
+    for mod in ("m1", "m2", "m3"):                   # рассев по ситам, % объёма: sieve_<модель>_b0 (дно) … b6 (>1,2 мм)
+        for i in range(len(cv_volume.SIEVE_MM) + 1):
+            out["sieve_%s_b%d" % (mod, i)] = (sv.get(mod) or [None] * (len(cv_volume.SIEVE_MM) + 1))[i]
     out["fines_side_mm"], out["fines_um"] = cfg.get("fines_side_mm"), cfg.get("fines_um")
     out["k_thick"], out["fines_from_sv"] = cfg.get("k_thick"), cfg.get("fines_from_sv")
     return out
@@ -198,9 +202,16 @@ def trend_range(serial: str, t_from: float, t_to: float, series: Optional[list[s
 EXPORT_COLUMNS = ["ts", "t", "stage", "sv", "temp", "level", "current", "vac", "cook_time", "seed_age",
                   "count", "mean", "median", "cv_pct", "density", "small", "medium", "large", "reject",
                   "reject_pct", "fines_m1", "fines_m2", "fines_m3", "fines_avg", "fines_area", "fines_n",
+                  "sieve_b0", "sieve_b1", "sieve_b2", "sieve_b3", "sieve_b4", "sieve_b5", "sieve_b6",
                   "agg_m1", "agg_m2", "agg_m3", "agg_area", "agg_n", "vtot_m1", "vtot_m2", "vtot_m3", "fines_side_mm", "fines_um", "k_thick", "fines_from_sv",
                   "n_needle", "n_aggregate", "n_crooked", "n_tiny", "n_huge", "suspect",
                   "frac_zones", "frac_pct", "frames"]
+
+
+def sieve_avg(r: dict, i: int) -> Optional[float]:
+    """Фракция рассева i, % объёма — среднее трёх моделей (пропуская пустые)."""
+    v = [r["sieve_%s_b%d" % (m, i)] for m in ("m1", "m2", "m3") if r.get("sieve_%s_b%d" % (m, i)) is not None]
+    return round(sum(v) / len(v), 3) if v else None
 
 
 def fines_avg(r: dict) -> Optional[float]:
@@ -219,7 +230,13 @@ def export_rows(serial: str, t_from: Optional[float] = None, t_to: Optional[floa
         rows.extend(r for r in _hist_read(serial, f.stem) if r.get("t") is not None
                     and (t_from is None or r["t"] >= t_from) and (t_to is None or r["t"] <= t_to))
     rows.sort(key=lambda r: r["t"])
-    return [{c: (fines_avg(r) if c == "fines_avg" else r.get(c)) for c in EXPORT_COLUMNS} for r in rows]
+    def cell(r, c):
+        if c == "fines_avg":
+            return fines_avg(r)
+        if c.startswith("sieve_b"):
+            return sieve_avg(r, int(c[7:]))
+        return r.get(c)
+    return [{c: cell(r, c) for c in EXPORT_COLUMNS} for r in rows]
 
 
 # --- варки: журнал проб нарезается на варки, по варке — сводка мелочи/сростков/объёма ---
@@ -274,6 +291,9 @@ def _boil_summary(rows: list, finished: bool) -> dict:
     fines["area"], agg["area"] = r3(_wmean(rows, "fines_area", None)), r3(_wmean(rows, "agg_area", None))
     fines["n"], agg["n"] = r3(_wmean(rows, "fines_n", None)), r3(_wmean(rows, "agg_n", None))
     out["fines"], out["agg"], out["vtot"] = fines, agg, vtot
+    # рассев по варке — по тем же пробам финиша, что и мука, взвешено по общему объёму пробы
+    fin = [r for r in rows if r.get("fines_m3") is not None]
+    out["sieve"] = {m: [r3(_wmean(fin, "sieve_%s_b%d" % (m, i), "vtot_" + m)) for i in range(len(cv_volume.SIEVE_MM) + 1)] for m in ("m1", "m2", "m3")}
     last = rows[-1]
     out["cfg"] = {k: last.get(k) for k in ("fines_side_mm", "fines_um", "k_thick", "fines_from_sv")}
     return out
@@ -456,7 +476,7 @@ def _with_volume(d: Path, r: dict, cfg: Optional[dict] = None) -> dict:
     """Проба, снятая до появления объёма (в summary нет volume): досчитать мелочь/сростки по
     сохранённым объектам кадров по ТЕКУЩИМ полям порога и k. Файлы пробы не меняем — только ответ."""
     s = (r or {}).get("summary")
-    if not s or s.get("volume"):
+    if not s or (s.get("volume") and "sieve" in s["volume"]):
         return r
     try:
         from types import SimpleNamespace as NS

@@ -3749,6 +3749,8 @@ input.micro-cam-num { width: 56px; min-width: 0; flex: 0 0 auto; padding: 4px 5p
 .micro-cv-pair > .micro-cv-block { margin-top: 0; padding-top: 0; border-top: 0; }
 @media (max-width: 900px) { .micro-cv-pair { grid-template-columns: 1fr; } }
 .micro-vol__grid { display: grid; grid-template-columns: auto repeat(5, minmax(0, 1fr)); gap: 6px 10px; align-items: baseline; font-size: 0.85em; }
+.micro-vol__sub { margin: 14px 0 6px; font-size: .8em; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+.micro-sieve { grid-template-columns: auto repeat(4, minmax(0, 1fr)); }
 .micro-vol__grid > b { font-weight: 600; font-size: 0.85em; color: var(--muted); text-align: right; white-space: nowrap; cursor: help; }
 .micro-vol__grid > span { color: var(--muted); white-space: nowrap; }
 .micro-vol__grid > em { font-style: normal; font-weight: 600; text-align: right; font-variant-numeric: tabular-nums; }

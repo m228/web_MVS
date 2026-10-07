@@ -1176,6 +1176,77 @@ def _micro_plc_snapshot():
     return "снимок %d полей, заводка ловится" % len(snap)
 
 
+@check("CV", "cv_store: «В разметку» — чистый кадр в PNG; архив держит кадры последних N варок и не трогает свежее")
+def _cv_export_rotate():
+    import tempfile
+    import cv2
+    import time as _tm
+    import cv_analyzer
+    import cv_store
+    img, objs = synth_frame()
+    res = cv_analyzer.analyze(img, objs, None, with_overlay=False, sv=90.0)
+    frames = [{"file": "f.jpg", "summary": res["summary"], "objects": res["objects"]}]
+    ser = "SELFCHECK_ROT"
+    base = _tm.time() - 8 * 3600
+    # три варки (паузы по 2 часа), в каждой 3 пробы; время варки идёт, так что внутри варки разрывов нет
+    tss = []
+    for b in range(3):
+        for k in range(3):
+            tss.append(_tm.strftime(cv_store.TS_FMT, _tm.localtime(base + b * 7200 + k * 120)))
+    # без ротации: пишем с keep_last=1000, потом вручную ротируем с нужными параметрами
+    for i, ts in enumerate(tss):
+        cv_store.save_sample(ser, 7, frames, [img], {"total_ms": 1}, keep_last=1000, ts=ts, sv=90.0,
+                             plc={"cook_time": (i % 3) * 120 + 60})
+    sd = cv_store._serial_dir(ser)
+    assert len([p for p in sd.iterdir() if p.is_dir()]) == 9
+    cv_store._rotate(ser, keep_last=2, keep_boils=2)       # последние 2 варки целиком (6 проб), первая (3 пробы) — удалена
+    left = sorted(p.name for p in sd.iterdir() if p.is_dir())
+    assert left == sorted(tss[3:]), "архив по варкам: осталось %s, ждали %s" % (left, sorted(tss[3:]))
+    cv_store._rotate(ser, keep_last=2, keep_boils=0)       # без «варок в архиве» — как раньше, последние 2 пробы
+    assert len([p for p in sd.iterdir() if p.is_dir()]) == 2
+    # экспорт: PNG без разметки, размер как у кадра, пачка по пробе
+    dest = Path(tempfile.mkdtemp(prefix="tolabel_"))
+    try:
+        r = cv_store.export_png(ser, tss[-1], 0, dest)
+        assert r["ok"] and r["name"].endswith("_f0.png"), r
+        png = (dest / r["name"]).read_bytes()
+        assert png[:4] == bytes([0x89]) + b"PNG", "не PNG"
+        import numpy as _np
+        back = cv2.imdecode(_np.frombuffer(png, _np.uint8), cv2.IMREAD_COLOR)
+        assert back.shape == img.shape, "размер PNG %s ≠ кадр %s" % (back.shape, img.shape)
+        allr = cv_store.export_probe_pngs(ser, tss[-1], dest)
+        assert allr and all(x["ok"] for x in allr), allr
+        bad = cv_store.export_png(ser, "2000-01-01_00_00_00", 0, dest)
+        assert not bad["ok"], "несуществующая проба должна давать отказ"
+        assert not cv_store.export_png(ser, "../../etc", 0, dest)["ok"], "ts не должен выводить за каталог проб"
+    finally:
+        shutil.rmtree(dest, ignore_errors=True)
+    # архив в PNG (без потерь): кадр лежит как frame_N.png, пиксель в пиксель с исходным; экспорт копирует как есть; потолок по размеру
+    ser2 = "SELFCHECK_PNG"
+    t0 = _tm.strftime(cv_store.TS_FMT, _tm.localtime(_tm.time() - 600))
+    rec = cv_store.save_sample(ser2, 7, frames, [img], {"total_ms": 1}, keep_last=100, ts=t0, sv=90.0, frame_format="png")
+    sd2 = cv_store._serial_dir(ser2) / t0
+    assert (sd2 / "frame_0.png").exists() and not (sd2 / "frame_0.jpg").exists(), "кадр должен лежать в PNG"
+    assert cv_store.overlay_path(ser2, t0, 0).suffix == ".png", "overlay_path не находит PNG-кадр"
+    raw = cv2.imdecode(_np.frombuffer((sd2 / "frame_0.png").read_bytes(), _np.uint8), cv2.IMREAD_COLOR)
+    assert (raw == img).all(), "PNG-кадр отличается от исходного — потери"
+    dest2 = Path(tempfile.mkdtemp(prefix="tolabel2_"))
+    try:
+        r2 = cv_store.export_png(ser2, t0, 0, dest2)
+        assert r2["ok"] and (dest2 / r2["name"]).read_bytes() == (sd2 / "frame_0.png").read_bytes(), "экспорт PNG должен копировать файл как есть"
+        # потолок: 3 пробы, лимит крошечный → остаются только защищённые keep_last
+        for k in range(1, 4):
+            cv_store.save_sample(ser2, 7, frames, [img], {"total_ms": 1}, keep_last=100, sv=90.0, frame_format="png",
+                                 ts=_tm.strftime(cv_store.TS_FMT, _tm.localtime(_tm.time() - 500 + k * 60)))
+        before = len([p for p in cv_store._serial_dir(ser2).iterdir() if p.is_dir()])
+        cv_store._rotate(ser2, keep_last=1, keep_boils=0, max_gb=0.000001)
+        after = len([p for p in cv_store._serial_dir(ser2).iterdir() if p.is_dir()])
+        assert before == 4 and after == 1, "потолок по размеру: было %d, стало %d (ждали 4 → 1: последняя проба защищена)" % (before, after)
+    finally:
+        shutil.rmtree(dest2, ignore_errors=True)
+    return "архив по варкам, PNG-кадры без потерь и потолок по размеру работают"
+
+
 @check("CV", "fracture_lab: кадр → метка → список → зоны → удаление (песочница)")
 def _fracture_lab():
     import fracture_lab

@@ -62,7 +62,7 @@
     set("cvUmPerPx", cv.um_per_px); set("cvTiles", cv.tiles);
     set("cvMinCirc", sh.min_circularity); set("cvMinSol", sh.min_solidity);
     set("cvMaxAspect", sh.max_aspect); set("cvConf", cv.conf);
-    set("cvSuspect", sh.suspect_aspect); set("cvShapeMin", sh.min_um != null ? sh.min_um : 100); set("cvSmoothK", sh.smooth_k != null ? sh.smooth_k : 5); set("cvRejectSv", cv.reject_to_sv != null ? cv.reject_to_sv : 85);
+    set("cvKeepBoils", cv.keep_boils != null ? cv.keep_boils : 10); set("cvArchiveGb", cv.archive_max_gb != null ? cv.archive_max_gb : 30); if ($("cvFramePng")) $("cvFramePng").checked = (cv.frame_format || "png") === "png"; set("cvSuspect", sh.suspect_aspect); set("cvShapeMin", sh.min_um != null ? sh.min_um : 100); set("cvSmoothK", sh.smooth_k != null ? sh.smooth_k : 5); set("cvRejectSv", cv.reject_to_sv != null ? cv.reject_to_sv : 85);
     set("cvClusterGap", cv.cluster_gap_px); set("cvEdgeMargin", cv.edge_margin_px);
     if ($("cvSeamMerge")) $("cvSeamMerge").checked = cv.seam_merge !== false;
     if ($("cvSeamRefine")) $("cvSeamRefine").checked = cv.seam_refine !== false;
@@ -80,7 +80,7 @@
       groups: { small_max_um: num("cvSmallMax"), medium_max_um: num("cvMediumMax") },
       shape: { min_circularity: num("cvMinCirc"), min_solidity: num("cvMinSol"), max_aspect: num("cvMaxAspect"), suspect_aspect: num("cvSuspect"), min_um: num("cvShapeMin"), smooth_k: num("cvSmoothK") },
       um_per_px: num("cvUmPerPx"), tiles: num("cvTiles"), conf: num("cvConf"),
-      reject_to_sv: num("cvRejectSv"), cluster_gap_px: num("cvClusterGap"), edge_margin_px: num("cvEdgeMargin"),
+      reject_to_sv: num("cvRejectSv"), keep_boils: num("cvKeepBoils"), archive_max_gb: num("cvArchiveGb"), frame_format: $("cvFramePng") ? ($("cvFramePng").checked ? "png" : "jpg") : undefined, cluster_gap_px: num("cvClusterGap"), edge_margin_px: num("cvEdgeMargin"),
       seam_merge: $("cvSeamMerge") ? $("cvSeamMerge").checked : undefined,
       seam_refine: $("cvSeamRefine") ? $("cvSeamRefine").checked : undefined,
       bubble_filter: $("cvBubble") ? $("cvBubble").checked : undefined, reject_always: $("cvRejectAlways") ? $("cvRejectAlways").checked : undefined,
@@ -733,6 +733,19 @@
     const b = $("cvFollowBtn"); if (b) b.classList.toggle("is-on", !cvViewPinned);
   }
   function wireGallery() {
+    // «В разметку»: чистый кадр без контуров → PNG в папку to_label на этой машине (Shift — все кадры пробы)
+    const tl = $("cvToLabelBtn"), tm = $("cvToLabelMsg");
+    if (tl) tl.addEventListener("click", async (e) => {
+      const fr = cvViewFrames()[cvGalIdx];
+      if (!cvView || !fr) { if (tm) tm.textContent = "нет кадра"; return; }
+      const q = [cvSerialQ(), "ts=" + encodeURIComponent(cvView.ts), "idx=" + (fr.idx != null ? fr.idx : cvGalIdx), "all=" + (e.shiftKey ? 1 : 0)].filter(Boolean).join("&");
+      let msg;
+      try {
+        const r = await api("/api/cv/export_frame?" + q), ok = (r.saved || []).filter((x) => x.ok), bad = (r.saved || []).find((x) => !x.ok);
+        msg = ok.length ? "сохранено " + ok.length + " PNG → " + r.dir : (bad ? bad.error : "не удалось");
+      } catch (err) { msg = "ошибка: " + err.message; }
+      if (tm) { tm.textContent = msg; tm.title = msg; clearTimeout(tl._t); tl._t = setTimeout(() => { tm.textContent = ""; }, 8000); }
+    });
     const fb = $("cvFollowBtn");
     if (fb) fb.addEventListener("click", () => {
       cvViewPinned = !cvViewPinned;

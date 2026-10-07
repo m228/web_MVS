@@ -823,6 +823,17 @@ def cv_trend_export(serial: str | None = None,
                     headers={"Content-Disposition": 'attachment; filename="%s"' % name})
 
 
+@app.get("/api/cv/export_frame")
+def cv_export_frame(serial: str | None = None, ts: str = "", idx: int = 0, all: int = 0):
+    """Кадр пробы БЕЗ разметки → PNG в папку to_label рядом с приложением (оттуда файлы забирают на разметку).
+    all=1 — все кадры пробы."""
+    dest = DATA_DIR / "to_label"
+    ser = _cv_serial(serial)
+    res = cv_store.export_probe_pngs(ser, ts, dest) if all else [cv_store.export_png(ser, ts, idx, dest)]
+    api_log("api.cv.export", "Кадры пробы сохранены для разметки", payload={"ts": ts, "n": sum(1 for r in res if r.get("ok"))})
+    return {"dir": str(dest), "saved": res}
+
+
 @app.get("/api/cv/objects")
 def cv_objects(serial: str | None = None, ts: str = "", idx: int = 0):
     """Объекты кадра (кристаллы) для наведения: bbox/size_um/area_um2/group."""

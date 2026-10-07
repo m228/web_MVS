@@ -294,7 +294,7 @@ DEFAULTS = {
         # bubble_filter: ровный круг (разброс радиуса ≤ bubble_radial_cv, вытянутость ≤ bubble_aspect,
         # выпуклость ≥ bubble_solidity, не мельче bubble_min_um) — пузырь воздуха, не кристалл: в рассев не идёт
         "bubble_filter": True,
-        "min_size_um": 20.0, "blur_min": 8.0, "keep_last": 50,
+        "min_size_um": 20.0, "blur_min": 8.0, "keep_last": 50, "keep_boils": 10, "frame_format": "png", "archive_max_gb": 30,
         "overlay_jpeg_quality": 85,
         # проба «по CV»: у стекла стоим, пока не разобрано frames_per_probe кадров (кадр → разбор
         # → следующий), потом отвод; dwell_timeout_sec — страховка, если CV завис. gap_sec —

@@ -69,7 +69,7 @@
     if ($("cvBubble")) $("cvBubble").checked = cv.bubble_filter !== false;
     if ($("cvRejectAlways")) $("cvRejectAlways").checked = !!cv.reject_always;
     const vo = cv.volume || {};
-    set("cvFinesMm", vo.fines_side_mm); set("cvKThick", vo.k_thick); set("cvFinesSv", vo.fines_from_sv);   // поля блока «Объём и мелочь»
+    set("cvAvgN", vo.avg_n); set("cvFinesMm", vo.fines_side_mm); set("cvKThick", vo.k_thick); set("cvFinesSv", vo.fines_from_sv);   // поля блока «Объём и мелочь»
     set("pcCvFrames", cv.frames_per_probe); set("pcCvGap", cv.gap_sec);   // поля на вкладке «Цикл»
     cvTrendStyle = cv.trend_style || {}; cvApplyStyleToRows(); cvBuildStylePanel(); cvDrawTrend();   // вид линий тренда из конфига
     updateTriggerFields();
@@ -238,8 +238,8 @@
     g.innerHTML = html;
   }
   // --- по варке: журнал проб нарезан на варки (/api/cv/boils), листаем стрелками ---
-  let cvBoils = [], cvBoilSel = null, cvBoilTs = 0, cvVolMode = "boil";
-  try { cvVolMode = localStorage.getItem("microCvVolMode") === "probe" ? "probe" : "boil"; } catch (e) { }
+  let cvBoils = [], cvBoilSel = null, cvBoilTs = 0, cvVolMode = "tail";
+  try { const m = localStorage.getItem("microCvVolMode"); cvVolMode = (m === "probe" || m === "boil") ? m : "tail"; } catch (e) { cvVolMode = "tail"; }
   // по умолчанию показываем ПРЕДЫДУЩУЮ (законченную) варку: идущая ещё не дошла до финиша, мука у неё неактуальна
   function cvBoilIdx() {
     if (!cvBoils.length) return -1;
@@ -264,7 +264,7 @@
       const r = await api("/api/cv/boils?" + (q ? q + "&" : "") + "limit=6");
       cvBoils = (r && r.boils) || [];
     } catch (e) { }
-    if (cvVolMode === "boil") cvRenderBoil();
+    if (cvVolMode !== "probe") cvRenderBoil();
   }
   function cvRenderBoil() {
     const i = cvBoilIdx(), b = i >= 0 ? cvBoils[i] : null;
@@ -273,7 +273,10 @@
     if (newer) newer.disabled = !(i > 0);
     const cells = (kind) => document.querySelectorAll("#cvVolGrid [data-v$='." + kind + "']");
     const put = (kind, src) => cells(kind).forEach((el) => { const m = el.dataset.v.split(".")[0]; el.textContent = fmtPct(src ? (m === "avg" ? cvAvg3(src) : src[m]) : null); });
-    cvRenderSieve(b ? b.sieve : null);
+    // откуда числа: «последние N проб» (поле «Проб в среднем») или все пробы финиша варки
+    const tail = cvVolMode === "tail";
+    const blk = b ? ((tail ? b.tail : b.all) || b) : null;
+    cvRenderSieve(blk ? blk.sieve : null);
     if (!b) {
       if (lbl) lbl.textContent = "варок пока нет";
       put("fines", null); if (st) st.textContent = "";
@@ -281,7 +284,7 @@
       return;
     }
     if (lbl) { lbl.textContent = cvBoilName(i) + " · " + cvBoilSpan(b); lbl.title = "Варка " + cvBoilSpan(b) + " · проб " + b.n; }
-    put("fines", b.fines);
+    put("fines", blk.fines);
     const cfg = b.cfg || {};
     const fd = cfg.fines_um != null ? cfg.fines_um : cvFinesDiam();
     const fl = $("cvVolLblFines"); if (fl) fl.textContent = "Мука <" + (fd != null ? Math.round(fd) : "") + " мкм";
@@ -296,7 +299,14 @@
     } else if (!b.counted) {
       rows.push("<div><b>Мука</b> по варке не считалась: СВ не дошёл до " + (cfg.fines_from_sv != null ? cfg.fines_from_sv : "порога") + " (максимум " + (b.sv_max != null ? String(b.sv_max).replace(".", ",") : "—") + "). Порог — поле «Мука с СВ».</div>");
     } else {
-      rows.push("<div><b>Мука по варке: " + pc(cvAvg3(b.fines)) + " объёма</b> (среднее M1–M3) — по " + b.counted + " пробам финиша (СВ ≥ " + (cfg.fines_from_sv != null ? cfg.fines_from_sv : "") + ") из " + b.n + "; по числу " + pc(b.fines.n) + ", по площади " + pc(b.fines.area) + ".</div>");
+      // среднее и из чего оно собрано: сколько проб и сколько хороших кристаллов (брак отсеян)
+      const n = cfg.avg_n || 4, P = blk.probes != null ? blk.probes : b.counted, G = blk.good_n || 0, R = blk.rej_n || 0;
+      const sv = cfg.fines_from_sv != null ? cfg.fines_from_sv : "";
+      rows.push("<div><b>Мука: " + pc(cvAvg3(blk.fines)) + " объёма</b> (среднее M1–M3) — " + (tail ? "среднее по последним " + n + " пробам финиша" : "среднее по всем пробам финиша") +
+        ": собрано из <b>" + P + " проб</b> (СВ ≥ " + sv + ")" + (G ? ", всего <b>" + G + " хороших кристаллов</b>, брака отсеяно " + R : "") + "; по числу " + pc(blk.fines.n) + ", по площади " + pc(blk.fines.area) + ".</div>");
+      if (tail && P < n) rows.push("<div>Проб пока " + P + " из " + n + " — среднее будет точнее, когда наберётся.</div>");
+      if (G && G < 500) rows.push("<div>Хороших кристаллов мало (" + G + "): для надёжной оценки нужно хотя бы 500 (Faria 2003). Добавь проб или сократи паузу между ними.</div>");
+      if (!G) rows.push("<div>Число кристаллов в этих пробах не записано (старые пробы) — у новых оно будет.</div>");
     }
     if (hasVol) {
       rows.push("<div><b>Объём</b> кристаллов на кадре в среднем: " + String(Number(b.vtot.m3.toPrecision(2))).replace(".", ",") + " мм³ (призма).</div>");
@@ -308,8 +318,8 @@
       cvVolMode = m;
       try { localStorage.setItem("microCvVolMode", m); } catch (e) { }
       document.querySelectorAll("#cvVolNav [data-vmode]").forEach((b) => b.classList.toggle("is-active", b.dataset.vmode === m));
-      const bx = $("cvBoilBox"); if (bx) bx.hidden = m !== "boil";
-      if (m === "boil") { cvRenderBoil(); cvLoadBoils(true); } else cvRenderScatter();
+      const bx = $("cvBoilBox"); if (bx) bx.hidden = m === "probe";
+      if (m !== "probe") { cvRenderBoil(); cvLoadBoils(true); } else cvRenderScatter();
     };
     document.querySelectorAll("#cvVolNav [data-vmode]").forEach((b) => b.addEventListener("click", () => setMode(b.dataset.vmode)));
     const step = (d) => {
@@ -322,7 +332,7 @@
     setMode(cvVolMode);
   }
   function cvRenderVolume(s) {
-    if (cvVolMode === "boil") { cvRenderBoil(); return; }
+    if (cvVolMode !== "probe") { cvRenderBoil(); return; }
     const vp = (s && s.volume_pct) || {}, cfg = (s && s.volume_cfg) || {};
     cvRenderSieve(vp.sieve);
     document.querySelectorAll("#cvVolGrid [data-v]").forEach((el) => {
@@ -344,15 +354,15 @@
   }
   function wireVolumeFields() {
     const fm = $("cvFinesMm"); if (fm) fm.addEventListener("input", () => { const c = $("cvFinesCalc"); if (c) c.textContent = cvFinesCalcText(); });
-    ["cvFinesMm", "cvKThick", "cvFinesSv"].forEach((id) => {
+    ["cvFinesMm", "cvKThick", "cvFinesSv", "cvAvgN"].forEach((id) => {
       const e = $(id); if (!e) return;
       e.addEventListener("change", () => {
         if (!cvSettingsLoaded) return;
         const fu = parseFloat(($("cvFinesMm") || {}).value), k = parseFloat(($("cvKThick") || {}).value),
-          fs = parseFloat(($("cvFinesSv") || {}).value);
-        if (!(fu > 0) || !(k > 0) || !(fs >= 0)) return;
+          fs = parseFloat(($("cvFinesSv") || {}).value), an = parseInt(($("cvAvgN") || {}).value, 10);
+        if (!(fu > 0) || !(k > 0) || !(fs >= 0) || !(an >= 1)) return;
         // сервер пересчитывает пробы по сохранённым кадрам и журнал; потом перерисовываем варки и текущую пробу
-        cvPostSettings({ volume: { fines_side_mm: fu, k_thick: k, fines_from_sv: fs } }).then(() => { cvLoadBoils(true); cvRefresh(); }).catch(() => { });
+        cvPostSettings({ volume: { fines_side_mm: fu, k_thick: k, fines_from_sv: fs, avg_n: an } }).then(() => { cvLoadBoils(true); cvRefresh(); }).catch(() => { });
       });
     });
   }

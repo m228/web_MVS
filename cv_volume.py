@@ -35,7 +35,7 @@ def sieve_bin(size_um: float) -> int:
         i += 1
     return i
 KINDS = ("fines", "agg", "total")
-DEFAULTS = {"fines_side_mm": 0.2, "k_thick": 0.88, "fines_from_sv": 88.0}
+DEFAULTS = {"fines_side_mm": 0.2, "k_thick": 0.88, "fines_from_sv": 88.0, "avg_n": 4}    # avg_n — сколько последних проб финиша усредняем
 
 
 def fines_diameter_um(side_mm: float) -> float:
@@ -54,6 +54,7 @@ def volume_cfg(cv_cfg: dict | None) -> dict:
                 v[key] = x
         except (TypeError, ValueError):
             pass
+    v["avg_n"] = max(1, int(round(v["avg_n"])))
     v["calc_ver"] = CALC_VER
     v["fines_um"] = fines_diameter_um(v["fines_side_mm"])    # расчётный порог по диаметру — им и сравниваем размер кристалла
     return v

@@ -1000,7 +1000,8 @@
                 <!-- откуда числа: по варке (законченная, листается стрелками) или по выбранной пробе -->
                 <div class="micro-vol__nav" id="cvVolNav">
                   <div class="micro-vol__mode" role="tablist" aria-label="Источник чисел">
-                    <button type="button" data-vmode="boil" class="is-active" title="Числа по варке: мука считается по пробам финиша варки">по варке</button>
+                    <button type="button" data-vmode="tail" class="is-active" title="Среднее по последним N пробам финиша (число N — поле «Проб в среднем»): частые пробы набивают количество хороших кристаллов">последние пробы</button>
+                    <button type="button" data-vmode="boil" title="Среднее по всем пробам финиша варки">по варке</button>
                     <button type="button" data-vmode="probe" title="Числа по одной пробе — той, что открыта в окне CV">по пробе</button>
                   </div>
                   <span class="micro-vol__boil" id="cvBoilBox">
@@ -1019,6 +1020,7 @@
                   <span id="cvVolLblFines">Мука</span><em data-v="m1.fines">—</em><em data-v="m2.fines">—</em><em data-v="m3.fines">—</em><em data-v="avg.fines">—</em><em data-v="area.fines">—</em>
                 </div>
                 <div class="micro-vol__fields">
+                  <label title="Сколько последних проб финиша (СВ ≥ «Мука с СВ») усредняем. Одна проба — это несколько кадров; чем больше проб и хороших кристаллов, тем точнее мука и рассев. Для надёжной оценки нужно хотя бы 500 хороших кристаллов"><span>Проб в среднем</span><input type="number" id="cvAvgN" min="1" max="20" step="1" value="4" /></label>
                   <label title="Мука — кристалл, у которого площадь меньше квадрата со стороной в этом поле"><span>Мука, мм</span><input type="number" id="cvFinesMm" min="0.01" step="0.05" value="0.2" /></label>
                   <span class="micro-info" tabindex="0" aria-label="Как определяется мука">ⓘ
                     <span class="micro-info__pop micro-vol__pop" role="tooltip">

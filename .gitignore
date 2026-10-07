@@ -49,3 +49,6 @@ bug.txt
 
 # --- отчёт самопроверки (selfcheck.py / SelfCheck.exe) ---
 /selfcheck_output.txt
+
+# кадры «В разметку» (PNG без разметки, забираются вручную)
+/to_label/

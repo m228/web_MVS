@@ -1176,6 +1176,54 @@ def _micro_plc_snapshot():
     return "снимок %d полей, заводка ловится" % len(snap)
 
 
+@check("CV", "cv_store: «В разметку» — чистый кадр в PNG; архив держит кадры последних N варок и не трогает свежее")
+def _cv_export_rotate():
+    import tempfile
+    import cv2
+    import time as _tm
+    import cv_analyzer
+    import cv_store
+    img, objs = synth_frame()
+    res = cv_analyzer.analyze(img, objs, None, with_overlay=False, sv=90.0)
+    frames = [{"file": "f.jpg", "summary": res["summary"], "objects": res["objects"]}]
+    ser = "SELFCHECK_ROT"
+    base = _tm.time() - 8 * 3600
+    # три варки (паузы по 2 часа), в каждой 3 пробы; время варки идёт, так что внутри варки разрывов нет
+    tss = []
+    for b in range(3):
+        for k in range(3):
+            tss.append(_tm.strftime(cv_store.TS_FMT, _tm.localtime(base + b * 7200 + k * 120)))
+    # без ротации: пишем с keep_last=1000, потом вручную ротируем с нужными параметрами
+    for i, ts in enumerate(tss):
+        cv_store.save_sample(ser, 7, frames, [img], {"total_ms": 1}, keep_last=1000, ts=ts, sv=90.0,
+                             plc={"cook_time": (i % 3) * 120 + 60})
+    sd = cv_store._serial_dir(ser)
+    assert len([p for p in sd.iterdir() if p.is_dir()]) == 9
+    cv_store._rotate(ser, keep_last=2, keep_boils=2)       # последние 2 варки целиком (6 проб), первая (3 пробы) — удалена
+    left = sorted(p.name for p in sd.iterdir() if p.is_dir())
+    assert left == sorted(tss[3:]), "архив по варкам: осталось %s, ждали %s" % (left, sorted(tss[3:]))
+    cv_store._rotate(ser, keep_last=2, keep_boils=0)       # без «варок в архиве» — как раньше, последние 2 пробы
+    assert len([p for p in sd.iterdir() if p.is_dir()]) == 2
+    # экспорт: PNG без разметки, размер как у кадра, пачка по пробе
+    dest = Path(tempfile.mkdtemp(prefix="tolabel_"))
+    try:
+        r = cv_store.export_png(ser, tss[-1], 0, dest)
+        assert r["ok"] and r["name"].endswith("_f0.png"), r
+        png = (dest / r["name"]).read_bytes()
+        assert png[:4] == bytes([0x89]) + b"PNG", "не PNG"
+        import numpy as _np
+        back = cv2.imdecode(_np.frombuffer(png, _np.uint8), cv2.IMREAD_COLOR)
+        assert back.shape == img.shape, "размер PNG %s ≠ кадр %s" % (back.shape, img.shape)
+        allr = cv_store.export_probe_pngs(ser, tss[-1], dest)
+        assert allr and all(x["ok"] for x in allr), allr
+        bad = cv_store.export_png(ser, "2000-01-01_00_00_00", 0, dest)
+        assert not bad["ok"], "несуществующая проба должна давать отказ"
+        assert not cv_store.export_png(ser, "../../etc", 0, dest)["ok"], "ts не должен выводить за каталог проб"
+    finally:
+        shutil.rmtree(dest, ignore_errors=True)
+    return "архив по варкам и PNG работают"
+
+
 @check("CV", "fracture_lab: кадр → метка → список → зоны → удаление (песочница)")
 def _fracture_lab():
     import fracture_lab

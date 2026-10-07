@@ -3709,6 +3709,7 @@ input.micro-cam-num { width: 56px; min-width: 0; flex: 0 0 auto; padding: 4px 5p
 .micro-cv-pager[hidden], .micro-cam-card:not(.cv-win) .micro-cv-pager { display: none; }
 .micro-cv-pager__btn { border: 0; background: transparent; color: inherit; cursor: pointer; font-size: 16px; line-height: 1; padding: 2px 8px; border-radius: 6px; }
 .micro-cv-pager__btn:hover { background: rgba(255,255,255,0.14); }
+.micro-cv-pager__msg { font-size: 11px; opacity: .85; margin-left: 6px; max-width: 280px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .micro-cv-pager__btn--follow { font-size: 11px; padding: 2px 8px; margin-left: 4px; border: 1px solid rgba(255,255,255,0.28); opacity: .75; }
 .micro-cv-pager__btn--follow.is-on { background: var(--accent, #2563eb); border-color: transparent; opacity: 1; }
 

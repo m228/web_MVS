@@ -422,7 +422,7 @@ def _aggregate(frames: list[dict]) -> dict:
 
 
 def save_sample(serial: str, stage, frames: list[dict], images: list, timing: dict,
-                keep_last: int = 50, ts: Optional[str] = None,
+                keep_last: int = 50, keep_boils: int = 0, ts: Optional[str] = None,
                 fracture: Optional[dict] = None, jpeg_quality: int = 85,
                 thumb_img=None, sv: Optional[float] = None,
                 plc: Optional[dict] = None) -> Optional[dict]:
@@ -485,7 +485,7 @@ def save_sample(serial: str, stage, frames: list[dict], images: list, timing: di
             _hist_append(serial, result)         # журнал трендов — переживает ротацию кадров
         except Exception as e:
             log_event("cv_store", "Не записана строка журнала трендов", "warn", {"error": str(e)})
-        _rotate(serial, keep_last)
+        _rotate(serial, keep_last, keep_boils)
         log_event("cv_store", "Проба CV сохранена", "info",
                   {"serial": str(serial), "ts": ts, "count": summary.get("count")})
         return {"ts": ts, "dir": str(d), "summary": summary}
@@ -494,13 +494,74 @@ def save_sample(serial: str, stage, frames: list[dict], images: list, timing: di
         return None
 
 
-def _rotate(serial: str, keep_last: int):
+KEEP_MAX_PROBES = 2000      # жёсткий потолок проб в архиве (≈ 10 ГБ), что бы ни стояло в «варок в архиве»
+
+
+def _boil_starts(serial: str) -> list[float]:
+    """Времена начала варок по журналу (по возрастанию) — те же правила, что в boils()."""
+    rows = []
+    hd = _hist_dir(serial)
+    for f in (sorted(hd.glob("*.jsonl")) if hd.exists() else []):
+        rows.extend(r for r in _hist_read(serial, f.stem) if r.get("t") is not None)
+    rows.sort(key=lambda r: r["t"])
+    starts, prev = [], None
+    for r in rows:
+        if prev is None or _is_new_boil(prev, r):
+            starts.append(r["t"])
+        prev = r
+    return starts
+
+
+def _rotate(serial: str, keep_last: int, keep_boils: int = 0):
+    """Архив проб: удаляем только то, что старше И «последних keep_last проб», И начала N-й с конца варки (keep_boils > 0).
+    Так кадры последних N варок лежат целиком — их можно просматривать и забирать на разметку; потолок KEEP_MAX_PROBES."""
     sd = _serial_dir(serial)
     if not sd.exists():
         return
     dirs = sorted([p for p in sd.iterdir() if p.is_dir()], key=lambda p: p.name)
-    for old in dirs[:-keep_last] if keep_last > 0 else []:
-        shutil.rmtree(old, ignore_errors=True)
+    old = dirs[:-keep_last] if keep_last > 0 else []
+    if keep_boils > 0 and old:
+        starts = _boil_starts(serial)
+        if len(starts) < keep_boils:
+            old = []                                   # варок меньше, чем «варок в архиве» — удалять нечего
+        else:
+            t_keep = starts[-keep_boils]
+            old = [p for p in old if (_ts_epoch(p.name) or 0) < t_keep]
+    if len(dirs) > KEEP_MAX_PROBES:                    # аварийный потолок по диску
+        old = list({p.name: p for p in old + dirs[:len(dirs) - KEEP_MAX_PROBES]}.values())
+    for p in old:
+        shutil.rmtree(p, ignore_errors=True)
+
+
+def export_png(serial: str, ts: str, idx: int, dest_dir) -> dict:
+    """Сохранить ЧИСТЫЙ кадр пробы (без разметки) в PNG в папку dest_dir — для ручной разметки и дообучения.
+    PNG делается из сохранённого JPEG пробы. Пробы со старым форматом (контуры впечатаны в картинку) — отказ."""
+    d = _probe_dir(serial, ts)
+    if d is None:
+        return {"ok": False, "error": "проба не найдена"}
+    p = d / ("frame_%d.jpg" % int(idx))
+    if not p.exists():
+        return {"ok": False, "error": "чистого кадра нет (старая проба с контурами в картинке или кадр удалён)"}
+    img = cv2.imdecode(np.frombuffer(p.read_bytes(), np.uint8), cv2.IMREAD_COLOR)
+    if img is None:
+        return {"ok": False, "error": "кадр не читается"}
+    dest = Path(dest_dir)
+    dest.mkdir(parents=True, exist_ok=True)
+    name = "%s_%s_f%d.png" % (_serial_dir(serial).name, ts, int(idx))
+    ok, enc = cv2.imencode(".png", img, [cv2.IMWRITE_PNG_COMPRESSION, 3])     # imencode+write_bytes: путь может быть кириллическим
+    if not ok:
+        return {"ok": False, "error": "не удалось закодировать PNG"}
+    (dest / name).write_bytes(enc.tobytes())
+    return {"ok": True, "name": name, "path": str(dest / name), "size_mb": round(len(enc) / 1e6, 1)}
+
+
+def export_probe_pngs(serial: str, ts: str, dest_dir) -> list[dict]:
+    """Все чистые кадры пробы в PNG."""
+    d = _probe_dir(serial, ts)
+    if d is None:
+        return [{"ok": False, "error": "проба не найдена"}]
+    idxs = sorted(int(x.stem.split("_")[1]) for x in d.glob("frame_*.jpg") if x.stem.split("_")[1].isdigit())
+    return [export_png(serial, ts, i, dest_dir) for i in idxs] or [{"ok": False, "error": "в пробе нет чистых кадров"}]
 
 
 def _volume_cfg_now() -> dict:

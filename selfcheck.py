@@ -1237,6 +1237,29 @@ def _updater():
     return "ok"
 
 
+@check("Служебные", "update.ps1: разбирается без ошибок, умеет версии/NaN, остановку-запуск-проверку и откат; update.bat без кириллицы")
+def _update_script():
+    import shutil
+    import subprocess
+    ps1 = BUNDLE_DIR / "update.ps1"
+    text = ps1.read_text(encoding="utf-8-sig")
+    for must in ("Get-InstalledVersion", "'NaN'", "Stop-App", "Start-AppAndWait", "api/debug/info", "-ZipPath", "Move-Item", "откат"):
+        assert must in text, "в update.ps1 нет: %s" % must
+    import codecs
+    assert ps1.read_bytes()[:3] == codecs.BOM_UTF8, "update.ps1 должен быть в UTF-8 с BOM (иначе PowerShell 5.1 ломает русский текст)"
+    bat = (BUNDLE_DIR / "update.bat").read_bytes()
+    assert all(b < 128 for b in bat), "update.bat должен быть ASCII (кириллица в .bat рвётся под cp866)"
+    assert b"%*" in bat and b"update.ps1" in bat, "update.bat должен передавать параметры в update.ps1"
+    ps = shutil.which("powershell")
+    if not ps:
+        return "разбор PowerShell пропущен (нет powershell)"
+    cmd = ("$e=$null;$t=$null;[void][System.Management.Automation.Language.Parser]::ParseFile('%s',[ref]$t,[ref]$e);"
+           "if($e){$e|%%{$_.Message};exit 1}" % str(ps1).replace("'", "''"))
+    r = subprocess.run([ps, "-NoProfile", "-Command", cmd], capture_output=True, timeout=60)
+    assert r.returncode == 0, "update.ps1 не разбирается: %s" % r.stdout.decode("utf-8", "replace")[:300]
+    return "разбор без ошибок"
+
+
 @check("Служебные", "autostart.status: планировщик Windows отвечает")
 def _autostart():
     import autostart

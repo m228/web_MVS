@@ -833,7 +833,7 @@ def _cv_analyze():
     return "%d кристаллов" % len(res["objects"])
 
 
-@check("CV", "cv_volume: объём шара/сфероида/призмы совпадает с формулой, мелочь и сростки считаются отдельно")
+@check("CV", "cv_volume: объём шара/сфероида/призмы совпадает с формулой, мука среди хороших, брак отсеян и считается отдельно")
 def _cv_volume():
     import math
     from types import SimpleNamespace as NS
@@ -847,15 +847,15 @@ def _cv_volume():
     assert abs(v["m2"] - math.pi / 6 * 700.0 * 500.0 * 440.0) < 1e-6, "M2 не сфероид"
     assert abs(v["m3"] - math.pi * 300.0 ** 2 * 440.0) < 1e-6, "M3 не призма"
     s = cv_volume.sums_for([big, fine, agg, cut], {"volume": {"fines_side_mm": 0.2, "k_thick": 0.88}})
-    assert s["n"] == {"fines": 1, "agg": 1, "total": 3}, "обрезанный/мелочь/сросток разнесены неверно: %s" % s["n"]
+    assert s["n"] == {"fines": 1, "agg": 1, "total": 2}, "обрезанный/мука/брак разнесены неверно: %s" % s["n"]     # хороших 2 (крупный + мука), брак отсеян отдельно
     p = cv_volume.percents(s)
-    tot = sum(cv_volume.crystal_volumes(o.size_um, o.length_um, o.width_um, 0.88)["m1"] for o in (big, fine, agg))
+    tot = sum(cv_volume.crystal_volumes(o.size_um, o.length_um, o.width_um, 0.88)["m1"] for o in (big, fine))     # брак в общий объём не входит
     want = 100.0 * math.pi / 6 * 100.0 ** 3 / tot
     assert abs(p["m1"]["fines"] - want) < 0.01, "доля мелочи %s ≠ %s" % (p["m1"]["fines"], want)
     assert p["m1"]["fines"] < p["n"]["fines"], "по объёму мелочи должно быть меньше, чем по числу"
     assert cv_volume.percents(cv_volume.empty_sums())["m3"]["fines"] is None, "пустой кадр должен дать None"
     off = cv_volume.sums_for([big, fine, agg], {"volume": {"fines_side_mm": 0.2}}, count_fines=False)
-    assert cv_volume.percents(off)["m3"]["fines"] is None and cv_volume.percents(off)["m3"]["agg"] is not None, "до нужного СВ мелочь не считается, сростки — да"
+    assert cv_volume.percents(off)["m3"]["fines"] is None and cv_volume.percents(off)["m3"]["agg"] is not None, "до нужного СВ мука не считается, брак — да (считается отдельно)"
     assert abs(cv_volume.volume_cfg(None)["fines_um"] - 225.68) < 0.01, "0,2 × 0,2 мм ↔ диаметр 226 мкм"
     assert not cv_volume.fines_on({}, 85.0) and cv_volume.fines_on({}, 88.0) and cv_volume.fines_on({}, None), "порог СВ для мелочи"
     return "мелочь %.3f %% объёма (M1)" % p["m1"]["fines"]
@@ -987,7 +987,9 @@ def _cv_store():
     assert last.get("plc") == plc, "режим варки (plc) не попал в result.json: %r" % (last.get("plc"),)
     row = cv_store._hist_row(last)
     assert row["temp"] == 74.5 and row["vac"] == -0.8 and row["seed_age"] == 420, "журнал трендов без plc: %r" % (row,)
-    rec0 = cv_store.save_sample("SELFCHECK", 7, frames, [img], {"total_ms": 1}, keep_last=5, sv=90.0)
+    import time as _tm
+    rec0 = cv_store.save_sample("SELFCHECK", 7, frames, [img], {"total_ms": 1}, keep_last=5, sv=90.0,
+                                ts=_tm.strftime(cv_store.TS_FMT, _tm.localtime(_tm.time() + 7)))     # своя метка: две пробы за одну секунду слились бы
     assert "plc" not in (cv_store.get_result("SELFCHECK", rec0["ts"]) or {}), "без ПЛК ключ plc быть не должен"
     # выгрузка журнала проб в CSV (для разбора/обучения): колонки, режим варки, причины брака
     ex = cv_store.export_rows("SELFCHECK")
@@ -1039,9 +1041,15 @@ def _cv_sieve():
     both = cv_volume.add_sums(s1, s1)
     assert abs(sum(cv_volume.percents(both)["sieve"]["m3"]) - 100) < 0.01, "слияние кадров ломает рассев"
     assert cv_volume.percents(cv_volume.empty_sums())["sieve"] == {}, "пустые суммы → пустой рассев"
-    # мука выключена (СВ ниже порога) — рассев всё равно считается
+    # брак по форме (сросток/игла/кривой) отсеян: ни в рассев, ни в общий объём, ни в муку не попадает, считается отдельно
+    bad = [NS(group="small", defect=d, size_um=800, length_um=800, width_um=800) for d in ("aggregate", "needle", "crooked")]
+    mixed = cv_volume.percents(cv_volume.sums_for(ms + bad, None, True))
+    assert mixed["sieve"] == pct, "брак попал в рассев"
+    assert mixed["m3"]["fines"] == cv_volume.percents(s1)["m3"]["fines"], "брак изменил долю муки"
+    assert mixed["m3"]["agg"] > 0 and mixed["n"]["agg"] > 0, "отсеянный брак не посчитан отдельно"
+    # СВ ниже порога: мука и рассев не считаются (прочерк)
     off = cv_volume.percents(cv_volume.sums_for(ms, None, False))
-    assert off["sieve"].get("m3") and off["m3"]["fines"] is None
+    assert off["sieve"] == {} and off["m3"]["fines"] is None, "до порога СВ рассев/мука должны быть пустыми"
     return "7 фракций, сумма 100 %"
 
 

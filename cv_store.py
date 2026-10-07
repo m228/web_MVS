@@ -144,6 +144,10 @@ def _hist_backfill(serial: str):
     sd = _serial_dir(serial)
     if not sd.exists():
         return
+    try:
+        recompute_journal(serial)       # логика объёма/муки/рассева изменилась (calc_ver) — обновить строки, у которых ещё есть кадры
+    except Exception:
+        pass
     known = set()
     if _hist_dir(serial).exists():
         for f in _hist_dir(serial).glob("*.jsonl"):
@@ -480,7 +484,7 @@ def _with_volume(d: Path, r: dict, cfg: Optional[dict] = None) -> dict:
         return r
     cfg = cfg if cfg is not None else _volume_cfg_now()
     old, cur = s.get("volume_cfg") or {}, cv_volume.volume_cfg(cfg)
-    same = all(old.get(k) == cur.get(k) for k in ("fines_side_mm", "k_thick", "fines_from_sv"))
+    same = all(old.get(k) == cur.get(k) for k in ("fines_side_mm", "k_thick", "fines_from_sv", "calc_ver"))
     if s.get("volume") and "sieve" in s["volume"] and same:       # посчитана с теми же полями — не трогаем
         return r
     try:

@@ -192,18 +192,18 @@
     }
   }
 
-  // --- объём и мелочь: M1/M2/M3 + площадь, % от общего объёма кадров пробы ---
+  // --- объём и мука: M1/M2/M3 + площадь, % от общего объёма кадров пробы ---
   // «Среднее» = (M1 + M2 + M3) / 3 по тем моделям, где значение есть; нет ни одной — null
   const cvAvg3 = (o) => { const v = o ? ["m1", "m2", "m3"].map((k) => o[k]).filter((x) => x != null) : []; return v.length ? v.reduce((a, b) => a + b, 0) / v.length : null; };
   const fmtPct = (v) => (v == null ? "—" : (v >= 10 ? v.toFixed(1) : v.toFixed(2)) + " %");
-  // расчётный порог мелочи по диаметру: круг той же площади, что квадрат side × side мм → 2000·side/√π, мкм
+  // расчётный порог муки по диаметру: круг той же площади, что квадрат side × side мм → 2000·side/√π, мкм
   function cvFinesDiam() { const v = parseFloat(($("cvFinesMm") || {}).value); return v > 0 ? 2000 * v / Math.sqrt(Math.PI) : null; }
   function cvFinesCalcText() {
     const side = parseFloat(($("cvFinesMm") || {}).value), d = cvFinesDiam();
     if (!(side > 0) || d == null) return "—";
     const f = (x, p) => String(Number(x.toPrecision(p))).replace(".", ",");
     return "Сейчас: " + f(side, 3) + " × " + f(side, 3) + " мм = " + f(side * side, 3) + " мм² (" + Math.round(side * side * 1e6) +
-      " мкм²) → диаметр 2 · " + f(side * 1000, 4) + " / √π ≈ " + Math.round(d) + " мкм. Мельче — мелочь.";
+      " мкм²) → диаметр 2 · " + f(side * 1000, 4) + " / √π ≈ " + Math.round(d) + " мкм. Мельче — мука.";
   }
   // пояснение под таблицей: что стоит за процентами. Суммы в summary.volume сложены по кадрам пробы — делим на число кадров
   function cvRenderVolNote(s, vp, cfg, finesOff) {
@@ -216,9 +216,9 @@
     const m3 = (vp.m3 || {}), nn = vp.n || {};
     const rows = [];
     if (finesOff) {
-      rows.push("<div><b>Мелочь</b> пока не считается: СВ ниже " + (cfg.fines_from_sv != null ? cfg.fines_from_sv : "") + " — кристаллы ещё растут, это неактуально.</div>");
+      rows.push("<div><b>Мука</b> пока не считается: СВ ниже " + (cfg.fines_from_sv != null ? cfg.fines_from_sv : "") + " — кристаллы ещё растут, это неактуально.</div>");
     } else {
-      rows.push("<div><b>Мелочь:</b> " + per(n.fines) + " из " + per(n.total) + " кристаллов на кадре — <b>" + pc(nn.fines) + " по числу</b>, но всего <b>" + pc(cvAvg3({ m1: (vp.m1 || {}).fines, m2: (vp.m2 || {}).fines, m3: m3.fines })) +
+      rows.push("<div><b>Мука:</b> " + per(n.fines) + " из " + per(n.total) + " кристаллов на кадре — <b>" + pc(nn.fines) + " по числу</b>, но всего <b>" + pc(cvAvg3({ m1: (vp.m1 || {}).fines, m2: (vp.m2 || {}).fines, m3: m3.fines })) +
         " по объёму</b> (среднее M1–M3) и " + pc((vp.area || {}).fines) + " по площади. Мелких много штук, а вещества в них мало.</div>");
     }
     rows.push("<div><b>Общий объём</b> кристаллов на кадре: " + mm3((vol.m3 || {}).total || 0) + " мм³ (призма), " + mm3((vol.m1 || {}).total || 0) + " (шар), " + mm3((vol.m2 || {}).total || 0) + " (сфероид).</div>");
@@ -227,7 +227,7 @@
   // --- по варке: журнал проб нарезан на варки (/api/cv/boils), листаем стрелками ---
   let cvBoils = [], cvBoilSel = null, cvBoilTs = 0, cvVolMode = "boil";
   try { cvVolMode = localStorage.getItem("microCvVolMode") === "probe" ? "probe" : "boil"; } catch (e) { }
-  // по умолчанию показываем ПРЕДЫДУЩУЮ (законченную) варку: идущая ещё не дошла до финиша, мелочь у неё неактуальна
+  // по умолчанию показываем ПРЕДЫДУЩУЮ (законченную) варку: идущая ещё не дошла до финиша, мука у неё неактуальна
   function cvBoilIdx() {
     if (!cvBoils.length) return -1;
     if (cvBoilSel) { const i = cvBoils.findIndex((b) => b.id === cvBoilSel); if (i >= 0) return i; }
@@ -270,7 +270,7 @@
     put("fines", b.fines);
     const cfg = b.cfg || {};
     const fd = cfg.fines_um != null ? cfg.fines_um : cvFinesDiam();
-    const fl = $("cvVolLblFines"); if (fl) fl.textContent = "Мелочь <" + (fd != null ? Math.round(fd) : "") + " мкм";
+    const fl = $("cvVolLblFines"); if (fl) fl.textContent = "Мука <" + (fd != null ? Math.round(fd) : "") + " мкм";
     const calc = $("cvFinesCalc"); if (calc) calc.textContent = cvFinesCalcText();
     const pc = (v) => (v == null ? "—" : (v >= 10 ? v.toFixed(1) : v.toFixed(2)).replace(".", ",") + " %");
     const hasVol = b.vtot && b.vtot.m3 != null;
@@ -280,9 +280,9 @@
     if (!hasVol) {
       rows.push("<div>Объёма по этой варке нет: её пробы сняты до расчёта объёма или кадры уже стёрты ротацией (хранится последних проб " + 50 + ").</div>");
     } else if (!b.counted) {
-      rows.push("<div><b>Мелочь</b> по варке не считалась: СВ не дошёл до " + (cfg.fines_from_sv != null ? cfg.fines_from_sv : "порога") + " (максимум " + (b.sv_max != null ? String(b.sv_max).replace(".", ",") : "—") + "). Порог — поле «Мелочь с СВ».</div>");
+      rows.push("<div><b>Мука</b> по варке не считалась: СВ не дошёл до " + (cfg.fines_from_sv != null ? cfg.fines_from_sv : "порога") + " (максимум " + (b.sv_max != null ? String(b.sv_max).replace(".", ",") : "—") + "). Порог — поле «Мука с СВ».</div>");
     } else {
-      rows.push("<div><b>Мелочь по варке: " + pc(cvAvg3(b.fines)) + " объёма</b> (среднее M1–M3) — по " + b.counted + " пробам финиша (СВ ≥ " + (cfg.fines_from_sv != null ? cfg.fines_from_sv : "") + ") из " + b.n + "; по числу " + pc(b.fines.n) + ", по площади " + pc(b.fines.area) + ".</div>");
+      rows.push("<div><b>Мука по варке: " + pc(cvAvg3(b.fines)) + " объёма</b> (среднее M1–M3) — по " + b.counted + " пробам финиша (СВ ≥ " + (cfg.fines_from_sv != null ? cfg.fines_from_sv : "") + ") из " + b.n + "; по числу " + pc(b.fines.n) + ", по площади " + pc(b.fines.area) + ".</div>");
     }
     if (hasVol) {
       rows.push("<div><b>Объём</b> кристаллов на кадре в среднем: " + String(Number(b.vtot.m3.toPrecision(2))).replace(".", ",") + " мм³ (призма).</div>");
@@ -314,14 +314,14 @@
       const [model, kind] = el.dataset.v.split(".");
       el.textContent = fmtPct(model === "avg" ? cvAvg3({ m1: (vp.m1 || {})[kind], m2: (vp.m2 || {})[kind], m3: (vp.m3 || {})[kind] }) : (vp[model] ? vp[model][kind] : null));
     });
-    // мелочь не считается, пока СВ ниже «Мелочь с СВ» (кристаллы растут — неактуально): тогда прочерк и пояснение
+    // мука не считается, пока СВ ниже «Мука с СВ» (кристаллы растут — неактуально): тогда прочерк и пояснение
     const finesOff = !!(s && s.volume && s.volume.fines_off);
     const st = $("cvVolState");
-    if (st) st.textContent = finesOff ? "мелочь — с СВ " + (cfg.fines_from_sv != null ? cfg.fines_from_sv : "") : "";
+    if (st) st.textContent = finesOff ? "мука — с СВ " + (cfg.fines_from_sv != null ? cfg.fines_from_sv : "") : "";
     const lbl = $("cvVolLblFines"), fd = cfg.fines_um != null ? cfg.fines_um : cvFinesDiam();
     const side = cfg.fines_side_mm != null ? cfg.fines_side_mm : ($("cvFinesMm") || {}).value;
     if (lbl) {
-      lbl.textContent = "Мелочь <" + (fd != null ? Math.round(fd) : "") + " мкм";
+      lbl.textContent = "Мука <" + (fd != null ? Math.round(fd) : "") + " мкм";
       lbl.title = "Площадь меньше " + side + " × " + side + " мм — это диаметр круга той же площади меньше " + (fd != null ? Math.round(fd) : "") + " мкм (расчётный порог)";
     }
     const calc = $("cvFinesCalc"); if (calc) calc.textContent = cvFinesCalcText();
@@ -653,7 +653,7 @@
       // у проб, снятых до объёма, в objects его нет — считаем по той же формуле: площадь · k · ширина
       const v3 = best.vol_um3 ? best.vol_um3.m3 : (kt > 0 ? Math.PI / 4 * best.size_um * best.size_um * kt * best.width_um : null);
       const vol = v3 == null ? "" : "<br>V <b>" + Number((v3 / 1e9).toPrecision(2)) + " мм³</b> (призма)" +
-        (fu > 0 && best.size_um < fu && cls.reason !== "aggregate" ? " · мелочь" : "");
+        (fu > 0 && best.size_um < fu && cls.reason !== "aggregate" ? " · мука" : "");
       const head = "Ø <b>" + best.size_um + " мкм</b> · S <b>" + Math.round(best.area_um2) + " мкм²</b>";
       // «подробно» выключено — коротко: только размер и площадь; включено — форма, причина, что делать, уверенность
       tip.innerHTML = head + tag
@@ -708,7 +708,7 @@
   const CV_UM_SERIES = ["mean", "median"];                        // шкала справа, мкм
   // режим варки из ПЛК (рисуется пунктиром). Уровень — в %, на общей шкале 0–100; остальные — каждая на своей шкале
   // по видимому участку, но не уже «минимального размаха» (иначе шум на 0,2 °C выглядел бы бурей)
-  const CV_REGIME = ["temp", "vac", "level", "current", "cook_time", "seed_age", "fines_avg"];   // fines_avg — мелочь, среднее M1–M3: рисуется сплошной, своя шкала
+  const CV_REGIME = ["temp", "vac", "level", "current", "cook_time", "seed_age", "fines_avg"];   // fines_avg — мука, среднее M1–M3: рисуется сплошной, своя шкала
   const CV_AUTO_SPAN = { temp: 10, vac: 0.5, current: 5, cook_time: 60, seed_age: 60, fines_avg: 10 };
   const CV_MIN_SERIES = ["cook_time", "seed_age"];                // в журнале секунды, показываем минуты
   const CV_MAX_SPAN = 400 * 86400, CV_MIN_SPAN = 60;
@@ -953,7 +953,7 @@
     const rv = (k, n) => (s[k] && s[k][i] != null ? Math.round(s[k][i] * n) / n : null);
     const line3 = [rv("temp", 10) != null ? "t " + rv("temp", 10) + " °C" : null, rv("vac", 1000) != null ? "разр. " + rv("vac", 1000) + " бар" : null,
       rv("level", 10) != null ? "ур. " + rv("level", 10) + "%" : null, rv("current", 10) != null ? "ток " + rv("current", 10) + " А" : null,
-      rv("cook_time", 1) != null ? "варка " + rv("cook_time", 1) + " мин" : null, rv("seed_age", 1) != null ? "с заводки " + rv("seed_age", 1) + " мин" : null, rv("fines_avg", 100) != null ? "мелочь " + rv("fines_avg", 100) + " %" : null].filter(Boolean).join(" · ");
+      rv("cook_time", 1) != null ? "варка " + rv("cook_time", 1) + " мин" : null, rv("seed_age", 1) != null ? "с заводки " + rv("seed_age", 1) + " мин" : null, rv("fines_avg", 100) != null ? "средняя мука " + rv("fines_avg", 100) + " %" : null].filter(Boolean).join(" · ");
     const names = { small: "малая", medium: "средняя", large: "большая", reject: "брак" };
     const groups = CV_GROUPS.map((g) => val(g) == null ? "" :
       '<span class="dot" style="background:' + CV_SERIES_COLOR[g] + '"></span>' + names[g] + " " + val(g) + "%").filter(Boolean).join("<br>");

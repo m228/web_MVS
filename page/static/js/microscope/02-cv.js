@@ -6,7 +6,7 @@
   // Вкладка «CV» + переключатель окна камера/распознавание. Данные с /api/cv/*.
   const CV_GROUPS = ["small", "medium", "large", "reject"];
   const CV_SERIES_COLOR = { small: "#1d9e75", medium: "#378add", large: "#ba7517", reject: "#e24b4a", mean: "#7f77dd", median: "#d16fb8", sv: "#f2c94c",
-    temp: "#ff8a4c", vac: "#4fd1e8", level: "#8aa4c8", current: "#a3d95b", cook_time: "#b9a98f", seed_age: "#ffb347" };
+    temp: "#ff8a4c", vac: "#4fd1e8", level: "#8aa4c8", current: "#a3d95b", cook_time: "#b9a98f", seed_age: "#ffb347", fines_avg: "#e8c547" };
   let cvWinOn = false;          // окно показывает CV (true) или камеру (false)
   let cvLastResult = null;      // последняя проба (result.json)
   let cvPrevResult = null;      // предыдущая проба (для Δ к прошлой)
@@ -726,7 +726,9 @@
   function cvApplyStyleToRows() {          // кружок у строки серии — цвет линии
     document.querySelectorAll("#cvSeries .micro-srow").forEach((row) => {
       const name = row.querySelector("input").value, dot = row.querySelector("i");
-      if (dot) dot.style.background = name === "stage" ? cvLineColor(name, "") || "" : cvLineColor(name, CV_SERIES_COLOR[name] || "#888");
+      if (!dot) return;
+      if (name === "stage") { dot.style.background = cvLineColor(name, "var(--text)"); return; }   // у «стадии» по умолчанию цвет текста
+      dot.style.background = cvLineColor(name, CV_SERIES_COLOR[name] || "#888");
     });
   }
   function cvBuildStylePanel() {

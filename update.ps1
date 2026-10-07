@@ -13,7 +13,7 @@
 #   -NoElevate        не запрашивать права администратора (для проверок)
 [CmdletBinding()]
 param(
-    [string]$Root = $PSScriptRoot,
+    [string]$Root = '',
     [string]$ZipPath = '',
     [string]$Repo = 'm228/web_MVS',
     [int]$Port = 8000,
@@ -27,6 +27,13 @@ try { [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::
 try { [Console]::OutputEncoding = [System.Text.Encoding]::UTF8 } catch {}
 
 $repo = $Repo
+# папка установки: $PSScriptRoot в значении параметра при запуске через -File пуст (PowerShell 5.1), поэтому берём здесь
+if ([string]::IsNullOrWhiteSpace($Root)) {
+    if ($PSScriptRoot) { $Root = $PSScriptRoot }
+    elseif ($PSCommandPath) { $Root = Split-Path -Parent $PSCommandPath }
+    elseif ($MyInvocation.MyCommand.Path) { $Root = Split-Path -Parent $MyInvocation.MyCommand.Path }
+    else { $Root = (Get-Location).Path }
+}
 $Root = (Resolve-Path -LiteralPath $Root).Path
 $logFile = Join-Path $Root 'update.log'
 $script:exitCode = 0

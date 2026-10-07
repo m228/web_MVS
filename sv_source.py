@@ -55,6 +55,12 @@ class SvSource:
         self._sock_up = False
         self._last_error = None
         self._values = {}
+        # защита от разовых сбоев чтения (СВ вдруг 0 или 58 при 87, стадия на один опрос «3»): новое значение принимаем,
+        # только если оно продержалось несколько опросов подряд. Реальный скачок принимается с задержкой в пару секунд.
+        self.glitch_filter = bool(cfg.get("glitch_filter", True))
+        self._sv_good, self._sv_bad_n = None, 0
+        self._stage_cur, self._stage_cand, self._stage_n = None, None, 0
+        self._last_glitch_log = 0.0
 
     # ---------- жизненный цикл ----------
 
@@ -86,6 +92,46 @@ class SvSource:
         }
 
     # ---------- внутреннее ----------
+
+    SV_JUMP = 10.0        # скачок СВ больше этого (или СВ < 5) за один опрос — подозрение на сбой чтения
+    SV_CONFIRM = 5        # столько опросов подряд должно держаться новое СВ, чтобы его принять как настоящее
+    STAGE_CONFIRM = 3     # столько опросов подряд должна держаться новая стадия
+
+    def _sanitize(self, values):
+        """Отсечь разовые сбои чтения ПЛК: СВ и стадию. Остальные поля не трогаем. Возвращает значения для публикации."""
+        if not self.glitch_filter:
+            return values
+        v = dict(values)
+        sv = v.get("sv")
+        if sv is not None:
+            if self._sv_good is None or not (sv < 5 or abs(sv - self._sv_good) > self.SV_JUMP):
+                self._sv_good, self._sv_bad_n = sv, 0                 # нормальное значение
+            else:
+                self._sv_bad_n += 1
+                if self._sv_bad_n >= self.SV_CONFIRM:                  # продержалось — это не сбой, а настоящий скачок
+                    self._sv_good, self._sv_bad_n = sv, 0
+                else:
+                    v["sv"] = self._sv_good                            # пока держим последнее хорошее
+                    self._note_glitch("СВ", sv, self._sv_good)
+        st = v.get("stage")
+        if st is not None:
+            if self._stage_cur is None or st == self._stage_cur:
+                self._stage_cur, self._stage_cand, self._stage_n = st, None, 0
+            else:
+                self._stage_n = self._stage_n + 1 if st == self._stage_cand else 1
+                self._stage_cand = st
+                if self._stage_n >= self.STAGE_CONFIRM:
+                    self._stage_cur, self._stage_cand, self._stage_n = st, None, 0
+                else:
+                    v["stage"] = self._stage_cur
+                    self._note_glitch("стадия", st, self._stage_cur)
+        return v
+
+    def _note_glitch(self, what, raw, kept):
+        now = time.time()
+        if now - self._last_glitch_log > 60.0:                          # не чаще раза в минуту
+            self._last_glitch_log = now
+            log_event("sv_source", "Разовый сбой чтения ПЛК отброшен: %s %s вместо %s" % (what, raw, kept), "warn", {"raw": raw, "kept": kept})
 
     def _close(self):
         if self._client is not None:
@@ -139,6 +185,7 @@ class SvSource:
                     if signed and raw >= 0x8000:        # int16 в доп. коде -> отрицательное
                         raw -= 0x10000
                     values[name] = raw if scale == 1 else raw / scale   # scale=1 -> целое (стадия)
+                values = self._sanitize(values)
                 self._values = values
                 if self.on_update is not None:
                     self.on_update(values.get("sv"), values.get("stage"))

@@ -693,9 +693,14 @@ def _sv_source():
         assert _wait(lambda: src.status()["sv"] is not None, 3)
         assert abs(src.status()["sv"] - 52.5) < 0.01, "sv=%s" % src.status()["sv"]
         assert src.status()["stage"] == 7, "stage=%s" % src.status()["stage"]
+        # весь блок регистров читается ОДНИМ запросом за опрос (а не 9 отдельными)
+        r0 = src.requests
+        time.sleep(0.55)
+        n = src.requests - r0
+        assert src._block_ok and 3 <= n <= 8, "запросов за 0,55 с: %d (ждали по одному на опрос, ~5), block_ok=%s" % (n, src._block_ok)
     finally:
         src.stop()
-    return "sv=52.5 stage=7"
+    return "sv=52.5 stage=7, 1 запрос на опрос"
 
 
 @check("Микроскоп", "Автокалибровка нуля М1: энкодер 0±5 + аналог → set_zero → отвод; 3 попытки; провал не трогает ноль")
@@ -1095,7 +1100,14 @@ def _cv_sv_outliers():
     rows = [{"sv": v} for v in (84.3, 84.5, 0.0, 85.0, 85.2, 87.5, 58.4, 87.8, 88.0, 80.5, 81.0, 81.6)]
     out = cv_store._null_sv_outliers(rows)
     assert [r["sv"] for r in out] == [84.3, 84.5, None, 85.0, 85.2, 87.5, None, 87.8, 88.0, 80.5, 81.0, 81.6], "выбросы: %s" % [r["sv"] for r in out]
-    return "2 выброса обнулены, 88 → 80 (новая варка) сохранено"
+    # одиночный сбой СВ внутри варки (время варки идёт) не делит её на две; новая варка — по времени варки/стадии/паузе
+    prev = {"t": 1000.0, "sv": 87.0, "stage": 7, "cook_time": 6000}
+    assert not cv_store._is_new_boil(prev, {"t": 1080.0, "sv": 0.0, "stage": 7, "cook_time": 6080}), "сбой СВ поделил варку"
+    assert not cv_store._is_new_boil(prev, {"t": 1080.0, "sv": 58.4, "stage": 7, "cook_time": 6080}), "СВ 58 поделил варку"
+    assert cv_store._is_new_boil(prev, {"t": 1080.0, "sv": 80.5, "stage": 3, "cook_time": 20}), "время варки сбросилось — новая варка"
+    assert cv_store._is_new_boil(prev, {"t": 1080.0, "sv": 80.5, "stage": 4, "cook_time": 6080}), "стадия откатилась на заводку — новая варка"
+    assert cv_store._is_new_boil({"t": 1000.0, "sv": 87.0}, {"t": 1080.0, "sv": 75.0}), "нет времени варки — СВ упало на 12: запасной признак"
+    return "2 выброса обнулены, 88 → 80 (новая варка) сохранено, сбой СВ варку не делит"
 
 
 @check("CV", "cv_volume: рассев по ситам — фракции по границам 0,2·0,5·0,7·0,8·1·1,2 мм, сумма 100 %, слияние кадров")

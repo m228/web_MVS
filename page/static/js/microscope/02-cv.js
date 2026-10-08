@@ -719,7 +719,7 @@
         b = document.createElement("button");
         b.type = "button"; b.className = "micro-cv-strip__item"; b.dataset.ts = s.ts;
         b.title = cvSampleTitle(s);
-        const im = document.createElement("img"); im.alt = ""; im.src = cvThumbSrc(s.ts);
+        const im = document.createElement("img"); im.alt = ""; im.loading = "lazy"; im.src = cvThumbSrc(s.ts);      // миниатюры подгружаются по мере прокрутки
         const cap = document.createElement("span");
         // две строки: время · стадия, ниже СВ (Brix) пробы
         cap.textContent = cvTsLabel(s.ts).slice(0, 5) + (s.stage != null ? " · ст." + s.stage : "") + (s.sv != null ? "\nСВ " + String(Number(s.sv).toFixed(1)).replace(".", ",") : "");
@@ -1395,7 +1395,7 @@
       const [last, prev, smp] = await Promise.all([
         api("/api/cv/last" + q).catch(() => null),
         api("/api/cv/prev" + q).catch(() => null),
-        api("/api/cv/samples" + (q ? q + "&" : "?") + "limit=20").catch(() => null),
+        api("/api/cv/samples" + (q ? q + "&" : "?") + "archive=1").catch(() => null),      // вся лента архива: сколько проб — по «Варок в архиве»
       ]);
       cvLastResult = last && !last.empty ? last : null;
       cvPrevResult = prev && !prev.empty ? prev : null;

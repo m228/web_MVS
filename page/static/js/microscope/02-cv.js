@@ -759,6 +759,7 @@
     cvCurClean = frames[cvGalIdx].clean === true;
     if (ov.dataset.key !== key) {              // кадр сменился — грузим; иначе картинку не дёргаем
       ov.dataset.key = key;
+      cvGalNote(true, "");                     // сообщение прошлого кадра («✓ сохранено») не тащим на новый
       ov.src = cvOverlaySrc(ts, idx);
       cvLoadObjects(ts, idx);                  // объекты кадра для наведения (размер/форма)
     }
@@ -853,7 +854,7 @@
   function wireFracEdit() {
     const ov = $("cvOverlay"), btn = $("cvFracEditBtn"), msg = $("cvToLabelMsg");
     if (!ov || !btn) return;
-    const say = (t) => { if (msg) { msg.textContent = t || ""; msg.title = t || ""; clearTimeout(btn._t); if (t) btn._t = setTimeout(() => { msg.textContent = ""; }, 7000); } };
+    const say = (t, okFlag) => cvGalNote(okFlag !== false && /^сохранено|^правка разломов/.test(t || ""), t);
     const toImg = (e) => {
       const g = cvImgGeom(); if (!g) return null;
       const r = ov.getBoundingClientRect();
@@ -863,7 +864,6 @@
     const setOn = (on) => {
       cvFracEdit.on = on; cvFracEdit.pts = []; cvFracEdit.mouse = null;
       btn.classList.toggle("is-on", on); ov.style.cursor = on ? "crosshair" : "";
-      if (on) say("правка разломов: клик по зоне — удалить/принять, по пустому — рисовать");
       cvDrawOverlay();
     };
     async function send(body) {
@@ -923,6 +923,15 @@
       else if (e.key === "Backspace" && cvFracEdit.pts.length) { e.preventDefault(); cvFracEdit.pts.pop(); cvDrawOverlay(); }
     });
   }
+  // Сообщение рядом с кнопками галереи («В разметку», правка разломов): успех — зелёная ✓ (подробности в подсказке), ошибка — текст;
+  // всё исчезает, когда листаешь на другой кадр.
+  function cvGalNote(okFlag, text) {
+    const m = $("cvToLabelMsg"); if (!m) return;
+    m.classList.toggle("is-ok", !!okFlag && !!text); m.classList.toggle("is-bad", !okFlag && !!text);
+    m.textContent = okFlag && text ? "✓" : (text || ""); m.title = text || "";
+    clearTimeout(m._t);
+    if (!okFlag && text) m._t = setTimeout(() => cvGalNote(true, ""), 8000);        // ошибку убираем сами, успех — только при смене кадра
+  }
   // листалка кадров выбранной пробы (‹ › поверх окна «Комп. зрение»)
   function cvViewFrame(idx) {
     cvGalIdx = idx;
@@ -938,14 +947,15 @@
     const tl = $("cvToLabelBtn"), tm = $("cvToLabelMsg");
     if (tl) tl.addEventListener("click", async (e) => {
       const fr = cvViewFrames()[cvGalIdx];
-      if (!cvView || !fr) { if (tm) tm.textContent = "нет кадра"; return; }
+      if (!cvView || !fr) { cvGalNote(false, "нет кадра"); return; }
       const q = [cvSerialQ(), "ts=" + encodeURIComponent(cvView.ts), "idx=" + (fr.idx != null ? fr.idx : cvGalIdx), "all=" + (e.shiftKey ? 1 : 0)].filter(Boolean).join("&");
-      let msg;
+      let msg, saved = false;
       try {
         const r = await api("/api/cv/export_frame?" + q), ok = (r.saved || []).filter((x) => x.ok), bad = (r.saved || []).find((x) => !x.ok);
-        msg = ok.length ? "сохранено " + ok.length + " PNG → " + r.dir : (bad ? bad.error : "не удалось");
+        saved = ok.length > 0;
+        msg = saved ? "сохранено " + ok.length + " PNG → " + r.dir : (bad ? bad.error : "не удалось");
       } catch (err) { msg = "ошибка: " + err.message; }
-      if (tm) { tm.textContent = msg; tm.title = msg; clearTimeout(tl._t); tl._t = setTimeout(() => { tm.textContent = ""; }, 8000); }
+      cvGalNote(saved, msg);
     });
     const fb = $("cvFollowBtn");
     if (fb) fb.addEventListener("click", () => {

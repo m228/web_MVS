@@ -3944,3 +3944,7 @@ input.micro-cam-num { width: 56px; min-width: 0; flex: 0 0 auto; padding: 4px 5p
 
 
 /* Отчёт в верхней панели: узкая колонка — карточки по две в ряд, таблицы с прокруткой; хранилище — внизу */
+
+/* сообщение рядом с «В разметку»: зелёная галочка при успехе */
+.micro-cv-pager__msg.is-ok { color: #34d399; font-size: 15px; font-weight: 700; opacity: 1; margin-left: 4px; }
+.micro-cv-pager__msg.is-bad { color: #ff8a80; opacity: 1; }

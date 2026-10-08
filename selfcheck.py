@@ -1405,6 +1405,30 @@ def _cv_store_db_only():
     return "3 пробы: запись, тренд, CSV, варки, правка строки — из базы"
 
 
+@check("CV", "cv_store.list_archive: лента = все пробы архива (лёгкие записи из журнала), столько, сколько хранит архив")
+def _cv_list_archive():
+    import cv_analyzer, cv_store, shutil
+    img, objs = synth_frame()
+    res = cv_analyzer.analyze(img, objs, None, with_overlay=False, sv=90.0)
+    frames = [{"file": "f0.jpg", "summary": res["summary"], "objects": res["objects"]}]
+    import time as _tm
+    try:
+        for i in range(7):
+            cv_store.save_sample("SELFARC", 7, frames, [img], {"total_ms": 1}, keep_last=50, keep_boils=0, sv=85.0 + i,
+                                 plc={"cook_time": 600 + 90 * i, "substage": 72}, ts=_tm.strftime(cv_store.TS_FMT, _tm.localtime(_tm.time() + 500 + i)))
+        arc = cv_store.list_archive("SELFARC")
+        assert len(arc) == 7 and [a["ts"] for a in arc] == sorted((a["ts"] for a in arc), reverse=True), "лента: все 7 проб, новые сверху"
+        assert arc[0]["stage"] == 7 and arc[0]["sv"] == 91.0 and arc[0]["substage"] == 72 and arc[0]["frames"] == 1, arc[0]
+        assert arc[0]["summary"]["count"] is not None and "has_fracture" in arc[0]["fracture"]
+        # ротация убрала старые кадры — лента показывает только оставшиеся
+        cv_store._rotate("SELFARC", 3, 0, 0.0)
+        assert len(cv_store.list_archive("SELFARC")) == 3, "после ротации в ленте только 3 пробы"
+        assert cv_store.list_archive("NOSUCH") == []
+    finally:
+        shutil.rmtree(cv_store._serial_dir("SELFARC"), ignore_errors=True)
+    return "7 проб → 7 в ленте, после ротации 3"
+
+
 @check("CV", "report: отчёт по варкам за период — варки, мука с порога СВ, подстадии, недели, обрывки отброшены, CSV")
 def _report():
     import tempfile

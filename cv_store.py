@@ -807,6 +807,31 @@ def list_samples(serial: str, limit: int = 50) -> list[dict]:
     return out
 
 
+def list_archive(serial: str) -> list[dict]:
+    """Лента проб = ВСЕ пробы, что сейчас лежат в архиве кадров (новые сверху). Сколько их — решает настройка «Варок в архиве»
+    (и потолок по месту): ротация удаляет старое, лента показывает то, что осталось. Лёгкие записи из журнала (SQLite) — без чтения
+    result.json каждой пробы: ts, стадия, СВ, подстадия, число кристаллов, средний размер, разлом, кадров."""
+    sd = _serial_dir(serial)
+    if not sd.exists():
+        return []
+    dirs = sorted((p.name for p in sd.iterdir() if p.is_dir() and (p / "result.json").exists()), reverse=True)
+    if not dirs:
+        return []
+    t0 = _ts_epoch(dirs[-1])
+    rows = {r["ts"]: r for r in db.read_rows(sd.name, t_from=(t0 - 1) if t0 else None)}
+    out = []
+    for ts in dirs:
+        r = rows.get(ts)
+        if r is None:                         # пробы нет в журнале (ещё не залита) — минимальная запись
+            out.append({"ts": ts, "stage": None, "sv": None, "substage": None, "summary": {}, "frames": 0, "fracture": {}})
+            continue
+        out.append({"ts": ts, "stage": r.get("stage"), "sv": r.get("sv"), "substage": r.get("substage"),
+                    "summary": {"count": r.get("count"), "size_um": {"mean": r.get("mean")}},
+                    "frames": r.get("frames") or 0,
+                    "fracture": {"has_fracture": bool(r.get("frac_zones")), "zones": r.get("frac_zones")}})
+    return out
+
+
 def get_result(serial: str, ts: str) -> Optional[dict]:
     d = _probe_dir(serial, ts)
     if d is None:

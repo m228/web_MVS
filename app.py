@@ -841,7 +841,10 @@ def cv_prev(serial: str | None = None):
 
 
 @app.get("/api/cv/samples")
-def cv_samples(serial: str | None = None, limit: int = 50):
+def cv_samples(serial: str | None = None, limit: int = 50, archive: int = 0):
+    """Лента проб. archive=1 — все пробы архива (лёгкие записи; сколько их — настройка «Варок в архиве»), иначе последние limit."""
+    if archive:
+        return {"samples": cv_store.list_archive(_cv_serial(serial))}
     return {"samples": cv_store.list_samples(_cv_serial(serial), limit=limit)}
 
 

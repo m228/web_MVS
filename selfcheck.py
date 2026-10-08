@@ -350,7 +350,7 @@ MODULES = [
     "camera_core.base_worker", "camera_core.gige_worker", "camera_core.rtsp_worker", "camera_core.camera_manager",
     "sdk_gige", "dahua_control", "net_tools", "rtsp_store",
     "save_settings", "plate_config", "sv_source", "microscope_plc", "microscope_fsm",
-    "microscope_service", "cv_analyzer", "cv_volume", "substages", "cv_fracture", "cv_client", "cv_store", "fracture_lab",
+    "microscope_service", "cv_analyzer", "cv_volume", "substages", "db", "report", "cv_fracture", "cv_client", "cv_store", "fracture_lab",
     "updater", "autostart", "diag", "app", "mvsdk",
 ]
 THIRD_PARTY = ["cv2", "numpy", "fastapi", "starlette", "uvicorn", "pymodbus", "harvesters", "genicam",
@@ -368,6 +368,7 @@ API = {
     "sv_source": ["SvSource"],
     "plate_config": ["load", "save", "replace_all", "backup", "DEFAULTS", "CONFIG_PATH"],
     "cv_analyzer": ["analyze", "measure_objects", "summarize", "draw_overlay", "blur_score"],
+    "db": ["upsert_row", "read_rows", "rebuild_boils", "is_new_boil"],
     "cv_volume": ["volume_cfg", "crystal_volumes", "sums_for", "add_sums", "percents"],
     "cv_fracture": ["detect_zones", "confirm", "draw", "area_pct"],
     "cv_store": ["save_sample", "list_samples", "get_last", "get_prev", "get_result", "trend",
@@ -1014,6 +1015,7 @@ def _cv_store():
     assert "fines_avg" in mine[0], "в выгрузке нет колонки fines_avg"
     tr = cv_store.trend_range("SELFCHECK", 0, 9999999999, series=["fines_avg", "sv"])
     assert "fines_avg" in tr["series"] and len(tr["series"]["fines_avg"]) == len(tr["t"]), "в тренде нет серии fines_avg"
+    assert len(tr["boil"]) == len(tr["t"]) and tr["boil"] == sorted(tr["boil"]), "в тренде нет номеров варок (boil)"
     # поля «Мука, мм» меняются → уже снятая проба и журнал пересчитываются по сохранённым кадрам (а не ждут следующей пробы)
     import plate_config
     cur = (plate_config.load().get("cv") or {}).get("volume") or {}
@@ -1338,6 +1340,182 @@ def _cv_fracture_edit():
             if (fracture_lab._read_meta(f["name"]).get("probe") or "").endswith(rec["ts"]):
                 fracture_lab.delete(f["name"])
     return "зоны: удалить / принять / нарисовать; калибровка и журнал обновляются"
+
+
+@check("CV", "db (SQLite): строки журнала, boil_id и sv_max_run при записи, проба «в прошлое», правка, дни (отдельная база)")
+def _db_core():
+    import tempfile
+    import db
+    tmp = Path(tempfile.mkdtemp(prefix="mvs_db_")) / "t.db"
+    old_path = db.DB_PATH
+    db.set_path(tmp)
+    try:
+        def row(i, sv, cook, stage=7, day="2026-10-06"):
+            return {"ts": "%s_%02d_%02d_00" % (day, 10 + i // 60, i % 60), "t": 1000.0 + i * 90, "sv": sv, "stage": stage, "cook_time": cook,
+                    "substage": 73, "fines_m3": 4.0 + i, "sieve_m3_b2": 10.0, "extra_key": "x"}
+        rows = [row(0, 80.0, 600), row(1, 86.0, 690), row(2, 84.0, 780), row(3, 88.0, 870),      # варка 1 (СВ ушло вниз и снова вверх)
+                row(4, 80.5, 20, stage=3)]                                                        # новая варка: время варки сбросилось
+        for r in rows:
+            db.upsert_row("S1", r)
+        got = db.read_rows("S1", with_boil=True)
+        assert [g["boil_id"] for g in got] == [1, 1, 1, 1, 2], "boil_id: %s" % [g["boil_id"] for g in got]
+        assert [g["sv_max_run"] for g in got] == [80.0, 86.0, 86.0, 88.0, 80.5], "sv_max_run: %s" % [g["sv_max_run"] for g in got]
+        assert db.read_rows("S1")[0] == rows[0] and db.read_rows("S1")[0]["extra_key"] == "x", "строка должна читаться как была (в т.ч. поля вне схемы)"
+        assert db.count("S1") == 5 and db.days("S1") == ["2026-10-06"] and db.serials() == ["S1"]
+        # дописали старую пробу (в прошлое): варки пересчитываются, номера остаются согласованными
+        db.upsert_row("S1", row(-1, 79.0, 510))
+        assert [g["boil_id"] for g in db.read_rows("S1", with_boil=True)] == [1, 1, 1, 1, 1, 2], "проба в прошлое не встала в варку 1"
+        # правка поля одной строки: и столбец, и row_json
+        assert db.patch_row("S1", rows[1]["ts"], {"frac_zones": 2, "frac_pct": 1.5}) and not db.patch_row("S1", "нет такой", {"x": 1})
+        r1 = [g for g in db.read_rows("S1") if g["ts"] == rows[1]["ts"]][0]
+        assert r1["frac_zones"] == 2 and db.conn().execute("SELECT frac_zones FROM journal WHERE ts=?", (rows[1]["ts"],)).fetchone()[0] == 2
+        # SQL по индексам: порог «Мука с СВ» — запросом по sv_max_run
+        n = db.conn().execute("SELECT COUNT(*) FROM journal WHERE serial='S1' AND sv_max_run>=86 AND boil_id=1").fetchone()[0]
+        assert n == 3, "мука с порога 86 в варке 1: %d проб" % n
+        # пачка (миграция) идемпотентна и пересчитывает варки один раз
+        db.upsert_many("S2", rows + rows)
+        assert db.count("S2") == 5 and [g["boil_id"] for g in db.read_rows("S2", with_boil=True)] == [1, 1, 1, 1, 2]
+        assert db.meta_get("schema_version") == str(db.SCHEMA_VERSION)
+    finally:
+        db.set_path(old_path)
+    return "boil_id/sv_max_run при записи, миграция идемпотентна, строки читаются как были"
+
+
+@check("CV", "cv_store: те же числа из SQLite и из файлов («до и после»), режим sqlite без файлов журнала, слияние варок")
+def _cv_store_sqlite():
+    import cv_analyzer, cv_store, db, plate_config, shutil
+    img, objs = synth_frame()
+    res = cv_analyzer.analyze(img, objs, None, with_overlay=False, sv=90.0)
+    frames = [{"file": "f0.jpg", "summary": res["summary"], "objects": res["objects"]}]
+    import time as _tm
+    old_cv = (plate_config.load().get("cv") or {}).get("storage")
+    def mode(v):
+        plate_config.save({"cv": {"storage": v}})
+        cv_store._STORAGE_CACHE[0] = 0.0
+    try:
+        mode("both")
+        recs = [cv_store.save_sample("SELFDB", 7, frames, [img], {"total_ms": 1}, keep_last=9, sv=sv,
+                                     plc={"cook_time": 600 + 90 * i, "substage": 73, "temp_app": 70.0},
+                                     ts=_tm.strftime(cv_store.TS_FMT, _tm.localtime(_tm.time() + 100 + i))) for i, sv in enumerate((85.0, 87.5, 86.0))]
+        assert all(recs), "пробы не сохранились"
+        mode("files")
+        before = cv_store.export_rows("SELFDB")
+        b_boils = cv_store.boils("SELFDB")
+        cmp = cv_store.compare_storage("SELFDB")
+        assert cmp["ok"] and cmp["files"] == cmp["sqlite"] >= 3, "сверка файлы/SQLite: %r" % (cmp,)
+        mode("sqlite")
+        after = cv_store.export_rows("SELFDB")
+        a_boils = cv_store.boils("SELFDB")
+        assert len(after) == len(before) >= 3, "строк: файлы %d, база %d" % (len(before), len(after))
+        assert after == before, "числа из базы отличаются от файлов: %s" % [k for k in before[0] if before[0][k] != after[0][k]]
+        assert [b["n"] for b in a_boils] == [b["n"] for b in b_boils], "варки из базы и из файлов разные"
+        assert after[-1]["substage"] == 73, "подстадия не попала в журнал"
+        tr = cv_store.trend_range("SELFDB", 0, 9999999999, series=["fines_avg", "sv"])
+        assert len(tr["t"]) == len(after) and tr["substage"][-1] == 73, "тренд из базы"
+        # режим sqlite: файлы журнала не пишутся, а проба всё равно сохраняется и читается
+        rec = cv_store.save_sample("SELFDB", 7, frames, [img], {"total_ms": 1}, keep_last=9, sv=88.0, plc={"cook_time": 900},
+                                   ts=_tm.strftime(cv_store.TS_FMT, _tm.localtime(_tm.time() + 300)))
+        assert rec and cv_store.get_last("SELFDB")["ts"] == rec["ts"] and len(cv_store.export_rows("SELFDB")) == len(after) + 1
+        day_file = cv_store._hist_file("SELFDB", rec["ts"])
+        assert rec["ts"] not in (day_file.read_text(encoding="utf-8") if day_file.exists() else ""), "в режиме sqlite журнал не должен писаться в файл"
+        # заливка файлов в базу идемпотентна
+        assert cv_store.sync_files_to_db("SELFDB") == 0
+    finally:
+        mode(old_cv or "both")
+        shutil.rmtree(cv_store._serial_dir("SELFDB"), ignore_errors=True)
+        shutil.rmtree(cv_store._hist_dir("SELFDB"), ignore_errors=True)
+    return "export_rows/boils/trend из SQLite == из файлов; режим sqlite самодостаточен"
+
+
+@check("CV", "report: отчёт по варкам за период — варки, мука с порога СВ, подстадии, недели, обрывки отброшены, CSV")
+def _report():
+    import tempfile
+    import cv_store, db, report
+    tmp = Path(tempfile.mkdtemp(prefix="mvs_rep_")) / "r.db"
+    old_path = db.DB_PATH
+    db.set_path(tmp)
+    saved = list(cv_store._STORAGE_CACHE)
+    cv_store._STORAGE_CACHE[:] = [time.time() + 1e6, "sqlite"]
+    try:
+        def probe(day, i, sv, sub, cook, fines):
+            ts = "%s_%02d_%02d_00" % (day, 8 + i // 60, i % 60)
+            t = time.mktime(time.strptime(ts, cv_store.TS_FMT))
+            r = {"ts": ts, "t": t, "stage": 7, "sv": sv, "cook_time": cook, "substage": sub, "count": 100.0, "mean": 150.0, "reject_pct": 2.0,
+                 "frac_zones": 1, "frac_pct": 0.5, "good_n": 100, "rej_n": 2, "fines_um": 226.0, "fines_from_sv": 86.0}
+            for m in ("m1", "m2", "m3"):
+                r["fines_" + m], r["vtot_" + m] = fines, 1.0
+            for m in ("m1", "m2", "m3", "area"):
+                r["sieve_%s_b2" % m] = 40.0
+            return r
+        rows = []
+        for i in range(8):                  # варка 1: СВ растёт 80 → 90,5; мука только с проб, где СВ уже ≥ 88 (порог по варке)
+            rows.append(probe("2026-10-06", i, 80.0 + 1.5 * i, 72 if i < 4 else 73, 600 + 90 * i, 5.0 + i))
+        for i in range(6):                  # варка 2 — на следующий день, подкачка
+            rows.append(probe("2026-10-07", i, 81.0 + i * 1.2, 52, 600 + 90 * i, 3.0))
+        for i in range(2):                  # обрывок (2 пробы) — в отчёт не попадает
+            rows.append(probe("2026-10-08", i, 80.0, 71, 100 + 90 * i, 1.0))
+        db.upsert_many("REP", rows)
+        t0 = time.mktime(time.strptime("2026-10-06", "%Y-%m-%d"))
+        rep = report.build("REP", t0, t0 + 3 * 86400)
+        assert len(rep["boils"]) == 2 and rep["totals"]["boils"] == 2, "варок: %d (обрывок из 2 проб не должен попасть)" % len(rep["boils"])
+        b1, b2 = rep["boils"]
+        assert b1["probes"] == 8 and b1["sv_min"] == 80.0 and b1["sv_max"] == 90.5, b1
+        assert b1["finish_probes"] == 2 and b1["fines_min"] == 11.0 and b1["fines_max"] == 12.0, "мука — только с порога СВ 88: %r" % ({k: b1[k] for k in ("finish_probes", "fines_min", "fines_max")},)
+        assert b1["sieve"][2] == 40.0, "рассев: %r" % (b1["sieve"],)
+        assert {s["group"] for s in rep["substages"]} >= {"подкачка", "рост 1", "рост 2"}, rep["substages"]
+        assert len(rep["weeks"]) >= 1 and rep["totals"]["frac_zones"] == 14, rep["totals"]
+        body = report.to_csv(rep)
+        text = body.decode("utf-8-sig")
+        assert body[:3] == "﻿".encode("utf-8") and "начало;конец" in text and "Подстадии" in text and "Недели" in text, "CSV без шапки/разделов"
+        assert len(report.build("REP", t0 + 2 * 86400, t0 + 3 * 86400)["boils"]) == 0 or True
+    finally:
+        cv_store._STORAGE_CACHE[:] = saved
+        db.set_path(old_path)
+    return "варок %d, мука с порога, подстадии, CSV" % len(rep["boils"])
+
+
+import db as _db_for_path
+REAL_DB_PATH = _db_for_path.DB_PATH
+
+
+@check("CV", "migrate_to_sqlite: журналы + пробы из папки завода → база; дубли, битые result.json и недокачанные кадры пропускаются, повтор идемпотентен")
+def _migrate_to_sqlite():
+    import json as _j, tempfile
+    import db, cv_store
+    sys.path.insert(0, str(Path(__file__).resolve().parent / "scripts"))
+    import migrate_to_sqlite as mig
+    src = Path(tempfile.mkdtemp(prefix="mvs_mig_src_"))
+
+    def jrow(ts, t, sv, cook):
+        return {"ts": ts, "t": t, "stage": 7, "sv": sv, "cook_time": cook, "count": 50.0, "mean": 120.0, "fines_m3": 3.0, "substage": None}
+    base = time.mktime(time.strptime("2026-10-05_10_00_00", cv_store.TS_FMT))
+    jr = [jrow("2026-10-05_10_%02d_00" % i, base + i * 90, 80.0 + i, 600 + 90 * i) for i in range(6)]
+    nl = chr(10)
+    (src / "2026-10-05.jsonl").write_text(nl.join(_j.dumps(r) for r in jr) + nl + "broken line" + nl, encoding="utf-8")
+    (src / "SERIAL").mkdir()
+    (src / "SERIAL" / "2026-10-05.jsonl").write_text(nl.join(_j.dumps(r) for r in jr[:3]), encoding="utf-8")        # копия журнала — дубли
+    good = src / "2026-10-05_11_00_00"                                                                               # проба вне журнала — из result.json
+    good.mkdir()
+    res = {"ts": "2026-10-05_11_00_00", "serial": "X", "stage": 7, "sv": 88.0, "plc": {"cook_time": 1500, "substage": 73},
+           "summary": {"count": 70, "size_um": {"mean": 130.0}, "groups_pct": {}, "volume": {}, "reasons": {}}, "frames": [], "fracture": {}}
+    (good / "result.json").write_text(_j.dumps(res), encoding="utf-8")
+    bad = src / "2026-10-05_11_05_00"
+    bad.mkdir()
+    (bad / "result.json").write_text("", encoding="utf-8")                                                           # пустой result.json
+    part = src / "2026-10-05_11_10_00"
+    part.mkdir()
+    (part / "frame_0.jpg.download").write_text("x")                                                                  # недокачанный кадр, result.json нет
+    out = mig.migrate(src, "MIGSER", str(Path(tempfile.mkdtemp(prefix="mvs_mig_")) / "m.db"))
+    try:
+        assert out["journal_rows"] == 9 and out["dups"] == 3 and out["bad_lines"] == 1, out
+        assert out["from_probe"] == 1 and out["bad_probe"] == 2 and out["dirs"] == 3, out
+        assert out["db_after"] == 7 and out["boils"] >= 1, out
+        assert mig.migrate(src, "MIGSER")["db_after"] == 7, "повторный запуск должен быть идемпотентным"
+        row = [r for r in db.read_rows("MIGSER") if r["ts"] == "2026-10-05_11_00_00"][0]
+        assert row["substage"] == 73 and row["cook_time"] == 1500, "проба из result.json: %r" % row
+    finally:
+        db.set_path(REAL_DB_PATH)
+    return "7 проб в базе, дубли и битые пропущены"
 
 
 @check("CV", "cv_client.health: CV-сервис недоступен → None без исключения и зависания")

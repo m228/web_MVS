@@ -131,11 +131,11 @@
   // переключатель нижней секции: телеметрия платы ↔ распознавание
   function wireTeleToggle() {
     const seg = document.querySelector(".micro-tele-seg");
-    const btns = { plate: $("telePlateBtn"), cv: $("teleCvBtn"), trend: $("teleTrendBtn"), cfg: $("teleCfgBtn") };
-    const panes = { plate: $("teleStripPlate"), cv: $("teleStripCv"), trend: $("teleStripTrend"), cfg: $("teleStripCfg") };
+    const btns = { plate: $("telePlateBtn"), cv: $("teleCvBtn"), trend: $("teleTrendBtn"), cfg: $("teleCfgBtn"), report: $("teleReportBtn") };
+    const panes = { plate: $("teleStripPlate"), cv: $("teleStripCv"), trend: $("teleStripTrend"), cfg: $("teleStripCfg"), report: $("teleStripReport") };
     if (!btns.plate || !btns.cv) return;
     function set(mode) {
-      if (seg) { seg.classList.toggle("cv", mode === "cv"); seg.classList.toggle("trend", mode === "trend"); seg.classList.toggle("cfg", mode === "cfg"); }
+      if (seg) { seg.classList.toggle("cv", mode === "cv"); seg.classList.toggle("trend", mode === "trend"); seg.classList.toggle("cfg", mode === "cfg"); seg.classList.toggle("report", mode === "report"); }
       Object.keys(btns).forEach((k) => {
         if (btns[k]) btns[k].classList.toggle("is-active", k === mode);
         if (panes[k]) panes[k].hidden = k !== mode;
@@ -1170,7 +1170,7 @@
     const gap = Math.max(600, (dts.length ? dts[Math.floor(dts.length / 2)] : 0) * 5);
     const stg = d.stage || [];
     // новая варка — как в журнале (cv_store._is_new_boil): стадия откатилась на заводку (было ≥ 6, стало ≤ 4); откат 7 → 5 внутри варки — это подкачка, линию не рвём
-    const brewBreak = (i) => i > 0 && (t[i] - t[i - 1] > gap || (stg[i] != null && stg[i - 1] != null && stg[i - 1] >= 6 && stg[i] <= 4));
+    const brewBreak = (i) => i > 0 && (t[i] - t[i - 1] > gap || (d.boil ? d.boil[i] !== d.boil[i - 1] : (stg[i] != null && stg[i - 1] != null && stg[i - 1] >= 6 && stg[i] <= 4)));   // граница варки приходит с сервера (boil)
     const drawSeries = (name) => {
       const arr = series[name]; if (!arr) return;
       const col = colorOf(name); const mx = scaleOf(name); const isStage = name === "stage";

@@ -30,8 +30,7 @@ from logger import log_event
 from paths import DATA_DIR
 
 BASE = DATA_DIR / "cv_results"
-HISTORY = DATA_DIR / "cv_history"      # лёгкий журнал проб по дням — НЕ чистится ротацией кадров
-_HIST_LOCK = threading.Lock()
+HISTORY = DATA_DIR / "cv_history"      # старый журнал проб (jsonl, до 1.9.0): теперь только разовый импорт в SQLite
 _HIST_FILLED = set()                   # серийники, для которых журнал уже дополнен из cv_results
 TS_FMT = "%Y-%m-%d_%H_%M_%S"
 
@@ -109,177 +108,60 @@ def _hist_row(result: dict) -> Optional[dict]:
     }
 
 
-def _hist_file(serial: str, ts: str) -> Path:
-    return _hist_dir(serial) / (ts[:10] + ".jsonl")      # «2026-10-04»
-
-
-# Хранилище журнала проб: cv.storage = "files" (только jsonl, как раньше) | "both" (читаем файлы, пишем и в SQLite — для сверки
-# «до и после») | "sqlite" (читаем и пишем только базу; кадры проб по-прежнему файлами). По умолчанию "both".
-_STORAGE_CACHE = [0.0, "both"]
-
-
-def _storage() -> str:
-    now = time.time()
-    if now - _STORAGE_CACHE[0] > 3:
-        try:
-            import plate_config
-            v = str((plate_config.load().get("cv") or {}).get("storage", "both"))
-        except Exception:
-            v = "both"
-        _STORAGE_CACHE[0], _STORAGE_CACHE[1] = now, (v if v in ("files", "both", "sqlite") else "both")
-    return _STORAGE_CACHE[1]
-
-
-def _use_files() -> bool:
-    return _storage() in ("files", "both")
-
-
-def _use_db() -> bool:
-    return _storage() in ("both", "sqlite")
-
-
-def _read_from_db() -> bool:
-    return _storage() == "sqlite"
-
-
 def _hist_append(serial: str, result: dict):
+    """Строка журнала пробы → в базу (одна короткая транзакция в db.upsert_row)."""
     row = _hist_row(result)
     if row is None:
         return
-    if _use_files():
-        with _HIST_LOCK:
-            f = _hist_file(serial, row["ts"])
-            f.parent.mkdir(parents=True, exist_ok=True)
-            with open(f, "a", encoding="utf-8") as fh:
-                fh.write(json.dumps(row, ensure_ascii=False) + "\n")
-    if _use_db():
-        try:
-            db.upsert_row(_serial_dir(serial).name, row)
-        except Exception as e:
-            log_event("cv_store", "Не записана строка журнала в SQLite", "warn", {"error": str(e)})
-
-
-def all_serials() -> list[str]:
-    """Серийники (папки камер), по которым на этой машине есть пробы или журнал."""
-    names = set()
-    for base in (BASE, HISTORY):
-        if base.exists():
-            names.update(p.name for p in base.iterdir() if p.is_dir())
-    return sorted(names)
-
-
-def migrate_all() -> list[dict]:
-    """Перенести ВСЕ старые данные этой машины в SQLite: журналы jsonl и пробы из cv_results, по каждой камере.
-    Идемпотентно (ключ serial+ts); файлы не меняет. Возвращает по камере: сколько было в файлах/базе и сколько добавилось."""
-    out = []
-    for tag in all_serials():
-        before = db.count(tag)
-        _HIST_FILLED.discard(tag)
-        try:
-            added = sync_files_to_db(tag)                # журнал jsonl → база
-            _hist_backfill(tag)                          # пробы из cv_results, которых нет в журнале (и в базу тоже)
-            db.rebuild_boils(tag)                        # номера варок по всей истории
-            err = None
-        except Exception as e:
-            added, err = 0, str(e)
-        out.append({"serial": tag, "db_before": before, "db_after": db.count(tag), "added": added, "error": err,
-                    "check": compare_storage(tag)})
-    return out
-
-
-def set_storage(mode: str) -> str:
-    """Записать режим хранилища в конфиг (files | both | sqlite) и применить сразу, без перезапуска."""
-    if mode not in ("files", "both", "sqlite"):
-        raise ValueError("режим: files / both / sqlite")
-    import plate_config
-    plate_config.save({"cv": {"storage": mode}})
-    _STORAGE_CACHE[0] = 0.0
-    return _storage()
-
-
-def compare_storage(serial: str) -> dict:
-    """Сверка «до и после»: журнал в файлах (jsonl) и в SQLite — число проб, чего где нет, чем строки отличаются по ключевым числам."""
-    tag = _serial_dir(serial).name
-    hd = _hist_dir(serial)
-    files = {}
-    for f in (sorted(hd.glob("*.jsonl")) if hd.exists() else []):
-        for r in _read_jsonl(f):
-            if r.get("ts") is not None and r.get("t") is not None:
-                files[r["ts"]] = r
-    dbr = {r["ts"]: r for r in db.read_rows(tag)}
-    keys = ("sv", "stage", "substage", "count", "mean", "fines_m1", "fines_m2", "fines_m3", "reject_pct", "frac_zones", "frac_pct", "cook_time")
-    diff = [ts for ts in files.keys() & dbr.keys() if any(files[ts].get(k) != dbr[ts].get(k) for k in keys)]
-    return {"serial": tag, "files": len(files), "sqlite": len(dbr), "only_files": len(files.keys() - dbr.keys()),
-            "only_sqlite": len(dbr.keys() - files.keys()), "different": len(diff), "sample_different": sorted(diff)[:5],
-            "ok": not (files.keys() - dbr.keys()) and not diff, "storage": _storage()}      # ok: в базе есть всё, что в файлах (в базе может быть больше)
-
-
-def _hist_days(serial: str) -> list[str]:
-    """Даты (YYYY-MM-DD), за которые есть пробы в журнале, по возрастанию."""
-    if _read_from_db():
-        return db.days(_serial_dir(serial).name)
-    hd = _hist_dir(serial)
-    return [f.stem for f in sorted(hd.glob("*.jsonl"))] if hd.exists() else []
+    try:
+        db.upsert_row(_serial_dir(serial).name, row)
+    except Exception as e:
+        log_event("cv_store", "Не записана строка журнала в SQLite", "warn", {"error": str(e)})
 
 
 _null_sv_outliers = db.null_sv_outliers      # правило сбойного СВ — в db.py (там же считается boil_id)
 
 
+def _hist_days(serial: str) -> list[str]:
+    """Даты (YYYY-MM-DD), за которые есть пробы в журнале, по возрастанию."""
+    return db.days(_serial_dir(serial).name)
+
+
 def _hist_read(serial: str, day: str, clean: bool = True) -> list[dict]:
-    if _read_from_db():
-        rows = db.read_rows(_serial_dir(serial).name, day=day)
-        return _null_sv_outliers(rows) if clean else rows
-    f = _hist_dir(serial) / (day + ".jsonl")
-    rows = []
-    try:
-        for line in f.read_text(encoding="utf-8").splitlines():
-            try:
-                rows.append(json.loads(line))
-            except Exception:
-                continue            # битая строка (обрыв записи) не рушит весь день
-    except Exception:
-        pass
+    rows = db.read_rows(_serial_dir(serial).name, day=day)
     return _null_sv_outliers(rows) if clean else rows       # clean=False — сырые строки (для перезаписи журнала)
 
 
-def sync_files_to_db(serial: str) -> int:
-    """Залить в SQLite строки журнала из jsonl, которых там ещё нет (миграция и сверка «до и после»). Идемпотентно:
-    ключ (serial, ts). Возвращает число добавленных строк. Файлы не меняет."""
+def import_legacy_journal(serial: str) -> int:
+    """Разовый импорт старого журнала (cv_history/<serial>/*.jsonl, до версии 1.9.0) в SQLite. Идемпотентно: ключ (serial, ts);
+    нет папки со старым журналом — ничего не делает. Файлы не трогает. Возвращает число добавленных проб."""
     tag = _serial_dir(serial).name
-    have, rows = db.known_ts(tag), []
     hd = _hist_dir(serial)
-    for f in (sorted(hd.glob("*.jsonl")) if hd.exists() else []):
-        for r in _read_jsonl(f):
+    if not hd.exists():
+        return 0
+    have, rows = db.known_ts(tag), []
+    for f in sorted(hd.glob("*.jsonl")):
+        for line in f.read_text(encoding="utf-8", errors="replace").splitlines():
+            try:
+                r = json.loads(line)
+            except Exception:
+                continue            # битая строка (обрыв записи) не рушит весь файл
             if r.get("ts") not in have and r.get("t") is not None:
                 have.add(r["ts"])
                 rows.append(r)
     return db.upsert_many(tag, rows) if rows else 0
 
 
-def _read_jsonl(f: Path) -> list[dict]:
-    rows = []
-    try:
-        for line in f.read_text(encoding="utf-8").splitlines():
-            try:
-                rows.append(json.loads(line))
-            except Exception:
-                continue            # битая строка (обрыв записи) не рушит весь день
-    except Exception:
-        pass
-    return rows
-
-
 def _hist_backfill(serial: str):
     """Один раз за запуск: добавить в журнал пробы, которые уже лежат в cv_results (до появления
-    журнала). Идемпотентно: что уже есть в журнале — не дублируем. Заодно журнал из файлов заливается в SQLite."""
+    журнала). Идемпотентно: что уже есть в журнале — не дублируем. Заодно импортируется старый журнал jsonl."""
     if serial in _HIST_FILLED:
         return
     _HIST_FILLED.add(serial)
-    if _use_db():
-        try:
-            sync_files_to_db(serial)
-        except Exception as e:
-            log_event("cv_store", "Не удалось залить журнал в SQLite", "warn", {"error": str(e)})
+    try:
+        import_legacy_journal(serial)       # старые jsonl (версии до 1.9.0) → база, один раз
+    except Exception as e:
+        log_event("cv_store", "Не удалось импортировать старый журнал в SQLite", "warn", {"error": str(e)})
     sd = _serial_dir(serial)
     if not sd.exists():
         return
@@ -713,26 +595,10 @@ def _rotate(serial: str, keep_last: int, keep_boils: int = 0, max_gb: float = 0.
 
 def _hist_patch(serial: str, ts: str, fields: dict) -> None:
     """Поправить поля одной строки журнала (после ручной правки пробы), остальные строки не трогаем."""
-    if _use_db():
-        try:
-            db.patch_row(_serial_dir(serial).name, ts, fields)
-        except Exception as e:
-            log_event("cv_store", "Не поправлена строка журнала в SQLite", "warn", {"error": str(e)})
-    if not _use_files():
-        return
-    f = _hist_file(serial, ts)
-    with _HIST_LOCK:
-        if not f.exists():
-            return
-        rows, changed = _read_jsonl(f), False
-        for r in rows:
-            if r.get("ts") == ts:
-                r.update(fields)
-                changed = True
-        if changed:
-            tmp = f.with_suffix(".jsonl.tmp")
-            tmp.write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows), encoding="utf-8")
-            tmp.replace(f)
+    try:
+        db.patch_row(_serial_dir(serial).name, ts, fields)
+    except Exception as e:
+        log_event("cv_store", "Не поправлена строка журнала в SQLite", "warn", {"error": str(e)})
 
 
 def _clean_frame_path(d: Path, idx: int) -> Optional[Path]:
@@ -800,18 +666,17 @@ def edit_fracture(serial: str, ts: str, idx: int = 0, remove=(), promote=(), add
     tmp.write_text(json.dumps(r, ensure_ascii=False, indent=1), encoding="utf-8")
     tmp.replace(rp)
     _hist_patch(serial, ts, {"frac_zones": sm["zones"], "frac_pct": sm["area_pct"]})
-    if _use_db():
-        try:
-            now = time.time()
-            tag = _serial_dir(serial).name
-            for zid in rem:
-                db.log_fracture_edit(tag, ts, "remove", zid, idx, now)
-            for zid in prom:
-                db.log_fracture_edit(tag, ts, "promote", zid, idx, now)
-            for _ in add or ():
-                db.log_fracture_edit(tag, ts, "add", None, idx, now)
-        except Exception as e:
-            log_event("cv_store", "Не записана правка разломов в SQLite", "warn", {"error": str(e)})
+    try:
+        now = time.time()
+        tag = _serial_dir(serial).name
+        for zid in rem:
+            db.log_fracture_edit(tag, ts, "remove", zid, idx, now)
+        for zid in prom:
+            db.log_fracture_edit(tag, ts, "promote", zid, idx, now)
+        for _ in add or ():
+            db.log_fracture_edit(tag, ts, "add", None, idx, now)
+    except Exception as e:
+        log_event("cv_store", "Не записана правка разломов в SQLite", "warn", {"error": str(e)})
     try:                                                      # в калибровку: кадр без разметки + что оператор решил
         import fracture_lab
         p = _clean_frame_path(d, idx)
@@ -914,27 +779,12 @@ def recompute_journal(serial: str) -> int:
         except Exception:
             continue
     n = 0
-    if _use_db():
-        tag = _serial_dir(serial).name
-        cur = {r["ts"]: r for r in db.read_rows(tag)}
-        for ts, row in fresh.items():
-            if ts in cur and cur[ts] != row:
-                db.upsert_row(tag, row)
-                n += 1
-    if _use_files():
-        with _HIST_LOCK:
-            nf = 0
-            for f in (sorted(_hist_dir(serial).glob("*.jsonl")) if _hist_dir(serial).exists() else []):
-                rows, changed = _read_jsonl(f), False
-                for i, r in enumerate(rows):
-                    if r.get("ts") in fresh and fresh[r["ts"]] != r:
-                        rows[i], changed = fresh[r["ts"]], True
-                        nf += 1
-                if changed:
-                    tmp = f.with_suffix(".jsonl.tmp")
-                    tmp.write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows), encoding="utf-8")
-                    tmp.replace(f)
-            n = max(n, nf)
+    tag = _serial_dir(serial).name
+    cur = {r["ts"]: r for r in db.read_rows(tag)}
+    for ts, row in fresh.items():
+        if ts in cur and cur[ts] != row:
+            db.upsert_row(tag, row)
+            n += 1
     return n
 
 

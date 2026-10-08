@@ -878,18 +878,15 @@ def _cv_boils():
     a = [row(t, 80 + t * 0.2, 7, t * 60, None) for t in range(0, 20, 2)] + [row(20, 88.0, 8, 1200, 4.0), row(22, 88.5, 8, 1320, 2.0)]
     b = [row(300 + t, 80 + t * 0.2, 3 if t == 0 else 7, 100 + t * 60, None) for t in range(0, 20, 2)] + [row(320, 88.0, 8, 1300, 6.0, vt=3.0)]
     import time as _t
-    orig = (cv_store._hist_backfill, cv_store._hist_dir, cv_store._hist_read)
+    orig = (cv_store._hist_backfill, cv_store._hist_days, cv_store._hist_read)
     cv_store._hist_backfill = lambda serial: None
-    class _D:
-        def exists(self): return True
-        def glob(self, pat): return [type("F", (), {"stem": "d"})()]
-    cv_store._hist_dir = lambda serial: _D()
+    cv_store._hist_days = lambda serial: ["d"]
     cv_store._hist_read = lambda serial, day: a + b
     try:
         res = cv_store.boils("X", limit=5, now=321 * 60.0)       # последняя проба 1 мин назад → варка идёт
         done = cv_store.boils("X", limit=5, now=321 * 60.0 + 7200)
     finally:
-        cv_store._hist_backfill, cv_store._hist_dir, cv_store._hist_read = orig
+        cv_store._hist_backfill, cv_store._hist_days, cv_store._hist_read = orig
     assert len(res) == 2, "варок %d, ждали 2 (пауза 4 ч между пробами)" % len(res)
     assert not res[0]["finished"] and res[1]["finished"], "новая варка идёт, прошлая закончена"
     assert done[0]["finished"], "через 2 часа без проб варка закончена"
@@ -1381,50 +1378,31 @@ def _db_core():
     return "boil_id/sv_max_run при записи, миграция идемпотентна, строки читаются как были"
 
 
-@check("CV", "cv_store: те же числа из SQLite и из файлов («до и после»), режим sqlite без файлов журнала, слияние варок")
-def _cv_store_sqlite():
-    import cv_analyzer, cv_store, db, plate_config, shutil
+@check("CV", "cv_store: журнал проб только в SQLite — запись пробы, тренд, CSV, варки, подстадия; файл jsonl не пишется")
+def _cv_store_db_only():
+    import cv_analyzer, cv_store, db, shutil
     img, objs = synth_frame()
     res = cv_analyzer.analyze(img, objs, None, with_overlay=False, sv=90.0)
     frames = [{"file": "f0.jpg", "summary": res["summary"], "objects": res["objects"]}]
     import time as _tm
-    old_cv = (plate_config.load().get("cv") or {}).get("storage")
-    def mode(v):
-        plate_config.save({"cv": {"storage": v}})
-        cv_store._STORAGE_CACHE[0] = 0.0
     try:
-        mode("both")
         recs = [cv_store.save_sample("SELFDB", 7, frames, [img], {"total_ms": 1}, keep_last=9, sv=sv,
                                      plc={"cook_time": 600 + 90 * i, "substage": 73, "temp_app": 70.0},
                                      ts=_tm.strftime(cv_store.TS_FMT, _tm.localtime(_tm.time() + 100 + i))) for i, sv in enumerate((85.0, 87.5, 86.0))]
         assert all(recs), "пробы не сохранились"
-        mode("files")
-        before = cv_store.export_rows("SELFDB")
-        b_boils = cv_store.boils("SELFDB")
-        cmp = cv_store.compare_storage("SELFDB")
-        assert cmp["ok"] and cmp["files"] == cmp["sqlite"] >= 3, "сверка файлы/SQLite: %r" % (cmp,)
-        mode("sqlite")
-        after = cv_store.export_rows("SELFDB")
-        a_boils = cv_store.boils("SELFDB")
-        assert len(after) == len(before) >= 3, "строк: файлы %d, база %d" % (len(before), len(after))
-        assert after == before, "числа из базы отличаются от файлов: %s" % [k for k in before[0] if before[0][k] != after[0][k]]
-        assert [b["n"] for b in a_boils] == [b["n"] for b in b_boils], "варки из базы и из файлов разные"
-        assert after[-1]["substage"] == 73, "подстадия не попала в журнал"
+        assert db.count("SELFDB") == 3, "в базе должно быть 3 пробы, а их %d" % db.count("SELFDB")
+        assert not cv_store._hist_dir("SELFDB").exists(), "журнал jsonl больше не пишется"
+        rows = cv_store.export_rows("SELFDB")
+        assert len(rows) == 3 and rows[-1]["substage"] == 73 and rows[-1]["cook_time"] == 780, "строки журнала из базы: %r" % (rows[-1],)
+        assert [b["n"] for b in cv_store.boils("SELFDB")] == [3], "варка из 3 проб"
         tr = cv_store.trend_range("SELFDB", 0, 9999999999, series=["fines_avg", "sv"])
-        assert len(tr["t"]) == len(after) and tr["substage"][-1] == 73, "тренд из базы"
-        # режим sqlite: файлы журнала не пишутся, а проба всё равно сохраняется и читается
-        rec = cv_store.save_sample("SELFDB", 7, frames, [img], {"total_ms": 1}, keep_last=9, sv=88.0, plc={"cook_time": 900},
-                                   ts=_tm.strftime(cv_store.TS_FMT, _tm.localtime(_tm.time() + 300)))
-        assert rec and cv_store.get_last("SELFDB")["ts"] == rec["ts"] and len(cv_store.export_rows("SELFDB")) == len(after) + 1
-        day_file = cv_store._hist_file("SELFDB", rec["ts"])
-        assert rec["ts"] not in (day_file.read_text(encoding="utf-8") if day_file.exists() else ""), "в режиме sqlite журнал не должен писаться в файл"
-        # заливка файлов в базу идемпотентна
-        assert cv_store.sync_files_to_db("SELFDB") == 0
+        assert len(tr["t"]) == 3 and tr["substage"][-1] == 73 and tr["boil"] == [1, 1, 1], "тренд из базы"
+        assert cv_store.get_last("SELFDB")["ts"] == recs[-1]["ts"]
+        cv_store._hist_patch("SELFDB", recs[0]["ts"], {"frac_zones": 4})
+        assert [r for r in cv_store.export_rows("SELFDB") if r["ts"] == recs[0]["ts"]][0]["frac_zones"] == 4, "правка строки журнала"
     finally:
-        mode(old_cv or "both")
         shutil.rmtree(cv_store._serial_dir("SELFDB"), ignore_errors=True)
-        shutil.rmtree(cv_store._hist_dir("SELFDB"), ignore_errors=True)
-    return "export_rows/boils/trend из SQLite == из файлов; режим sqlite самодостаточен"
+    return "3 пробы: запись, тренд, CSV, варки, правка строки — из базы"
 
 
 @check("CV", "report: отчёт по варкам за период — варки, мука с порога СВ, подстадии, недели, обрывки отброшены, CSV")
@@ -1434,8 +1412,6 @@ def _report():
     tmp = Path(tempfile.mkdtemp(prefix="mvs_rep_")) / "r.db"
     old_path = db.DB_PATH
     db.set_path(tmp)
-    saved = list(cv_store._STORAGE_CACHE)
-    cv_store._STORAGE_CACHE[:] = [time.time() + 1e6, "sqlite"]
     try:
         def probe(day, i, sv, sub, cook, fines):
             ts = "%s_%02d_%02d_00" % (day, 8 + i // 60, i % 60)
@@ -1469,7 +1445,6 @@ def _report():
         assert body[:3] == "﻿".encode("utf-8") and "начало;конец" in text and "Подстадии" in text and "Недели" in text, "CSV без шапки/разделов"
         assert len(report.build("REP", t0 + 2 * 86400, t0 + 3 * 86400)["boils"]) == 0 or True
     finally:
-        cv_store._STORAGE_CACHE[:] = saved
         db.set_path(old_path)
     return "варок %d, мука с порога, подстадии, CSV" % len(rep["boils"])
 
@@ -1518,11 +1493,10 @@ def _migrate_to_sqlite():
     return "7 проб в базе, дубли и битые пропущены"
 
 
-@check("CV", "хранилище: перенос старых данных кнопкой (migrate_all), сверка, переключение на базу только после успешной сверки (409 до переноса)")
-def _storage_switch():
+@check("CV", "старый журнал jsonl (версии до 1.9.0) один раз импортируется в SQLite: дубли и битые строки пропускаются, повтор идемпотентен")
+def _legacy_journal_import():
     import json as _j, shutil
-    import cv_store, db, plate_config
-    import app as web
+    import cv_store, db
     tag = "SELFOLD"
     hd = cv_store.HISTORY / tag
     hd.mkdir(parents=True, exist_ok=True)
@@ -1530,30 +1504,15 @@ def _storage_switch():
     rows = [{"ts": time.strftime(cv_store.TS_FMT, time.localtime(base + i * 90)), "t": base + i * 90, "stage": 7, "sv": 80.0 + i, "cook_time": 600 + 90 * i,
              "count": 40.0, "mean": 110.0, "fines_m3": 2.0} for i in range(6)]
     nl = chr(10)
-    (hd / "2026-10-05.jsonl").write_text(nl.join(_j.dumps(r) for r in rows) + nl, encoding="utf-8")        # «старые» данные: только файлы
-    old_cv = (plate_config.load().get("cv") or {}).get("storage")
+    (hd / "2026-10-05.jsonl").write_text(nl.join(_j.dumps(r) for r in rows + rows[:2]) + nl + "broken line" + nl, encoding="utf-8")
     try:
-        cv_store.set_storage("both")
-        assert db.count(tag) == 0 and not cv_store.compare_storage(tag)["ok"], "до переноса в базе пусто, сверка не проходит"
-        r409 = web.cv_storage_mode({"mode": "sqlite"})
-        assert getattr(r409, "status_code", 200) == 409, "на базу до успешной сверки переключать нельзя"
-        res = [c for c in cv_store.migrate_all() if c["serial"] == tag][0]
-        assert res["added"] == 6 and res["db_after"] == 6 and res["check"]["ok"] and res["error"] is None, res
-        again = [c for c in cv_store.migrate_all() if c["serial"] == tag][0]
-        assert again["added"] == 0 and again["db_after"] == 6, "повторный перенос ничего не дублирует"
-        ok = web.cv_storage_mode({"mode": "sqlite"})
-        assert ok["mode"] == "sqlite" and cv_store._storage() == "sqlite", "после сверки переключение проходит"
-        assert web.cv_storage_state()["mode"] == "sqlite" and web.cv_storage_state()["db_rows"] >= 6
-        assert web.cv_storage_mode({"mode": "files"})["mode"] == "files" and plate_config.load()["cv"]["storage"] == "files", "откат на файлы"
-        try:
-            cv_store.set_storage("nonsense")
-            raise AssertionError("неверный режим должен отклоняться")
-        except ValueError:
-            pass
+        assert db.count(tag) == 0
+        assert cv_store.import_legacy_journal(tag) == 6, "добавить 6 проб (2 дубля и битая строка пропущены)"
+        assert cv_store.import_legacy_journal(tag) == 0 and db.count(tag) == 6, "повторный импорт ничего не дублирует"
+        assert len(cv_store.export_rows(tag)) == 6 and cv_store.import_legacy_journal("NOSUCH") == 0
     finally:
-        cv_store.set_storage(old_cv or "both")
         shutil.rmtree(hd, ignore_errors=True)
-    return "перенос 6 проб, повтор без дублей, 409 до сверки, переключение и откат"
+    return "импорт 6 проб, повтор без дублей, нет папки — тихо"
 
 
 @check("CV", "cv_client.health: CV-сервис недоступен → None без исключения и зависания")

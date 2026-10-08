@@ -26,7 +26,6 @@ from microscope_service import micro
 import cv_client
 import fracture_lab
 import cv_store
-import db
 import autostart
 from paths import read_version, BUNDLE_DIR, DATA_DIR
 
@@ -746,44 +745,6 @@ def _report_range(frm: str | None, to: str | None):
     t1 = one(to, True) or _t.time()
     t0 = one(frm, False)
     return (t0 if t0 is not None else t1 - 7 * 86400), t1
-
-
-@app.get("/api/cv/storage")
-def cv_storage_state():
-    """Текущий режим хранилища, число проб в базе и по каждой камере сверка файлов с базой."""
-    return {"mode": cv_store._storage(), "db_rows": db.count(), "db_path": str(db.DB_PATH),
-            "cameras": [cv_store.compare_storage(s) for s in cv_store.all_serials()]}
-
-
-@app.post("/api/cv/storage/migrate")
-def cv_storage_migrate():
-    """Перенести все старые данные этой машины (журналы и пробы) в SQLite. Файлы не меняются, повтор безопасен."""
-    res = cv_store.migrate_all()
-    api_log("api.cv.storage", "Перенос данных в SQLite", payload={"cameras": [(r["serial"], r["db_after"]) for r in res]})
-    return {"status": "ok", "cameras": res}
-
-
-@app.post("/api/cv/storage/mode")
-def cv_storage_mode(body: dict = Body(...)):
-    """Переключить хранилище: files | both | sqlite. На sqlite — только после успешной сверки (иначе 409), force=true — в обход."""
-    mode = str(body.get("mode") or "")
-    if mode == "sqlite" and not body.get("force"):
-        bad = [c for c in (cv_store.compare_storage(s) for s in cv_store.all_serials()) if not c["ok"]]
-        if bad:
-            return Response(content=json.dumps({"error": "сверка не прошла", "cameras": bad}, ensure_ascii=False),
-                            status_code=409, media_type="application/json")
-    try:
-        cur = cv_store.set_storage(mode)
-    except ValueError as e:
-        return Response(content=str(e), status_code=400)
-    api_log("api.cv.storage", "Режим хранилища: %s" % cur)
-    return {"status": "ok", "mode": cur}
-
-
-@app.get("/api/cv/storage/check")
-def cv_storage_check(serial: str | None = None):
-    """Сверка «до и после»: журнал в файлах и в SQLite (число проб, расхождения). Режим хранения — cv.storage."""
-    return cv_store.compare_storage(_cv_serial(serial))
 
 
 @app.get("/api/cv/report")

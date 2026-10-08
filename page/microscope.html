@@ -734,7 +734,13 @@
                     <div class="micro-cycle-col">
                       <label class="micro-cycle-f" title="Брак по форме (сросток, игла, кривой) считается, пока СВ не выше этого значения: у первых кристаллов после заводки сростки ищем. Выше — кристаллов слишком много, брак не считается, а дефектные кристаллы в расчёт не берутся (только хорошие). Мука и рассев — от поля «Мука с СВ»."><span>Брак считать до СВ</span><input type="number" id="cvRejectSv" step="0.5" /></label>
                       <label class="micro-cycle-f" title="Кадры скольких последних варок хранить в архиве проб (их можно листать в галерее и сохранять кнопкой «В разметку»). Место на варку: в PNG около 2 ГБ, в JPEG около 0,3 ГБ. Старше — удаляются сами; общий предел — «Потолок архива»."><span>Варок в архиве</span><input type="number" id="cvKeepBoils" step="1" min="1" max="40" /></label>
-                      <label class="micro-cycle-f" title="Формат кадров проб в архиве. PNG — без потерь, ≈ 7 МБ на кадр (для разметки и дообучения лучше). JPEG — сжатие с лёгкими потерями, ≈ 1 МБ на кадр. Действует на новые пробы."><span>Кадры в PNG (без потерь)</span><input type="checkbox" id="cvFramePng" /></label>
+                      <div class="micro-cycle-f micro-cycle-fmt" title="Формат кадров проб в архиве. Включено — PNG без потерь (≈ 7 МБ на кадр, лучше для разметки и дообучения). Выключено — JPEG (≈ 1 МБ на кадр, лёгкие потери). Действует на новые пробы.">
+                        <span>Кадры в PNG</span>
+                        <label class="micro-switch" for="cvFramePng">
+                          <input type="checkbox" id="cvFramePng" />
+                          <span class="micro-switch__track"><span class="micro-switch__thumb"></span></span>
+                        </label>
+                      </div>
                       <label class="micro-cycle-f" title="Сколько места под кадры проб на этой машине, ГБ. Когда архив больше — удаляются самые старые пробы (последние 50 проб не трогаем). Защита от переполнения диска."><span>Потолок архива, ГБ</span><input type="number" id="cvArchiveGb" step="5" min="2" max="500" /></label>
                     </div>
                   </div>

@@ -1518,6 +1518,44 @@ def _migrate_to_sqlite():
     return "7 проб в базе, дубли и битые пропущены"
 
 
+@check("CV", "хранилище: перенос старых данных кнопкой (migrate_all), сверка, переключение на базу только после успешной сверки (409 до переноса)")
+def _storage_switch():
+    import json as _j, shutil
+    import cv_store, db, plate_config
+    import app as web
+    tag = "SELFOLD"
+    hd = cv_store.HISTORY / tag
+    hd.mkdir(parents=True, exist_ok=True)
+    base = time.mktime(time.strptime("2026-10-05_09_00_00", cv_store.TS_FMT))
+    rows = [{"ts": time.strftime(cv_store.TS_FMT, time.localtime(base + i * 90)), "t": base + i * 90, "stage": 7, "sv": 80.0 + i, "cook_time": 600 + 90 * i,
+             "count": 40.0, "mean": 110.0, "fines_m3": 2.0} for i in range(6)]
+    nl = chr(10)
+    (hd / "2026-10-05.jsonl").write_text(nl.join(_j.dumps(r) for r in rows) + nl, encoding="utf-8")        # «старые» данные: только файлы
+    old_cv = (plate_config.load().get("cv") or {}).get("storage")
+    try:
+        cv_store.set_storage("both")
+        assert db.count(tag) == 0 and not cv_store.compare_storage(tag)["ok"], "до переноса в базе пусто, сверка не проходит"
+        r409 = web.cv_storage_mode({"mode": "sqlite"})
+        assert getattr(r409, "status_code", 200) == 409, "на базу до успешной сверки переключать нельзя"
+        res = [c for c in cv_store.migrate_all() if c["serial"] == tag][0]
+        assert res["added"] == 6 and res["db_after"] == 6 and res["check"]["ok"] and res["error"] is None, res
+        again = [c for c in cv_store.migrate_all() if c["serial"] == tag][0]
+        assert again["added"] == 0 and again["db_after"] == 6, "повторный перенос ничего не дублирует"
+        ok = web.cv_storage_mode({"mode": "sqlite"})
+        assert ok["mode"] == "sqlite" and cv_store._storage() == "sqlite", "после сверки переключение проходит"
+        assert web.cv_storage_state()["mode"] == "sqlite" and web.cv_storage_state()["db_rows"] >= 6
+        assert web.cv_storage_mode({"mode": "files"})["mode"] == "files" and plate_config.load()["cv"]["storage"] == "files", "откат на файлы"
+        try:
+            cv_store.set_storage("nonsense")
+            raise AssertionError("неверный режим должен отклоняться")
+        except ValueError:
+            pass
+    finally:
+        cv_store.set_storage(old_cv or "both")
+        shutil.rmtree(hd, ignore_errors=True)
+    return "перенос 6 проб, повтор без дублей, 409 до сверки, переключение и откат"
+
+
 @check("CV", "cv_client.health: CV-сервис недоступен → None без исключения и зависания")
 def _cv_client_offline():
     import cv_client

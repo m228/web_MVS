@@ -279,7 +279,6 @@
     const b = cvBoils[i]; if (!b.finished) return "идёт сейчас";
     const k = cvBoils.slice(0, i).filter((x) => x.finished).length;
     if (k === 0) return "предыдущая варка";
-    if (k === 1) return "две варки назад";
     const n = k + 1, m10 = n % 10, m100 = n % 100;
     return n + ((m10 >= 2 && m10 <= 4 && (m100 < 10 || m100 >= 20)) ? " варки назад" : " варок назад");
   }

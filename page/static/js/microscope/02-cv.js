@@ -1157,11 +1157,14 @@
       const arr = series[name]; if (!arr) return;
       const col = colorOf(name); const mx = scaleOf(name); const isStage = name === "stage";
       ctx.strokeStyle = col; ctx.fillStyle = col; ctx.lineWidth = cvLineWidth(name, isStage ? 1.5 : 2); ctx.beginPath();
-      let started = false, prevY = 0;
+      let started = false, prevY = 0, lastI = -1;
+      // граница варки между прошлой нарисованной точкой и этой (точки с пропуском данных между ними не соседние — brewBreak(i) один не видит)
+      const brewBetween = (from, to) => { for (let k = from + 1; k <= to; k++) if (brewBreak(k)) return true; return false; };
       for (let i = a; i < b; i++) {
-        const val = arr[i]; if (val == null) { if (name !== "fines_avg") started = false; continue; }     // мука: пропуск данных не рвёт линию
+        const val = arr[i]; if (val == null) { if (name !== "fines_avg") started = false; continue; }     // мука: пропуск данных не рвёт линию внутри варки
         const x = xAt(t[i]), y = yOf(name, val, mx);
-        if (started && !brewBreak(i)) { if (isStage) ctx.lineTo(x, prevY); ctx.lineTo(x, y); } else ctx.moveTo(x, y);   // стадия — ступенькой
+        const cut = lastI >= 0 && brewBetween(lastI, i); lastI = i;       // между варками линию рвём, внутри варки — соединяем
+        if (started && !cut) { if (isStage) ctx.lineTo(x, prevY); ctx.lineTo(x, y); } else ctx.moveTo(x, y);   // стадия — ступенькой
         started = true; prevY = y;
       }
       if (CV_REGIME.includes(name) && name !== "fines_avg") ctx.setLineDash([6, 4]);          // режим варки — пунктиром
@@ -1173,6 +1176,18 @@
           const val = arr[i]; if (val == null) continue;
           if (val !== last || brewBreak(i)) ctx.fillText(String(val), xAt(t[i]), yAt(val, mx) - 4);
           last = val;
+        }
+        // название подстадии (рост 2, подкачка 3…) — мелким под линией стадии на каждой смене
+        const sub = d.substage || [];
+        if (sub.some((v) => v != null)) {
+          ctx.font = "10px sans-serif"; ctx.textBaseline = "top"; ctx.globalAlpha = 0.85;
+          let lastS = null;
+          for (let i = i0; i < i1; i++) {
+            const sv = sub[i], val = arr[i]; if (sv == null || val == null) continue;
+            if (sv !== lastS || brewBreak(i)) { const nm = substageName(sv); if (nm) ctx.fillText(nm, xAt(t[i]), yAt(val, mx) + 4); }
+            lastS = sv;
+          }
+          ctx.globalAlpha = 1;
         }
         ctx.textBaseline = "alphabetic";
         return;

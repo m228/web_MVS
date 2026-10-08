@@ -428,7 +428,10 @@ class MicroscopeService:
             confirmed, fr_summary = cv_fracture.confirm(run["zones"], run["fr_cfg"])
             fr_summary["area_pct"] = cv_fracture.area_pct(confirmed, run["shape"])
             cv_fracture.draw(thumb_img, confirmed, confirmed=True)
-            fracture = {"summary": fr_summary, "zones": confirmed}
+            cands = cv_fracture.candidates(run["zones"], confirmed, run["fr_cfg"])
+            cv_fracture.number_zones(confirmed, cands)
+            fracture = {"summary": fr_summary, "zones": confirmed, "candidates": cands,
+                        "size": [int(run["shape"][1]), int(run["shape"][0])]}
             if fr_summary["has_fracture"]:
                 log_event("microscope_service",
                           "Разлом обнаружен: %d зон (%.1f%% кадра)" % (

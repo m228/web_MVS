@@ -159,6 +159,46 @@ def confirm(frame_zone_lists: list[list[dict]], fr_cfg: dict | None = None) -> t
     return confirmed, summary
 
 
+def candidates(frame_zone_lists: list[list[dict]], confirmed: list[dict], fr_cfg: dict | None = None,
+               min_conf: float = 0.25, limit: int = 12) -> list[dict]:
+    """Кандидаты на разлом, которые НЕ стали подтверждёнными (уверенность ниже порога или держатся на слишком малом числе
+    кадров): сохраняются в пробу, чтобы оператор мог сам решить — «да, это разлом». Каждый — лучший экземпляр кластера
+    по кадрам, с числом кадров. Зоны, совпадающие с подтверждёнными, пропускаются."""
+    c = _cfg(fr_cfg)
+    iou_thr = float(c["iou"])
+    clusters = []
+    for fi, zones in enumerate(frame_zone_lists):
+        for z in zones:
+            if z["conf"] < min_conf:
+                continue
+            for cl in clusters:
+                if _iou(cl["bbox"], z["bbox"]) >= iou_thr:
+                    cl["frames"].add(fi)
+                    if z["conf"] > cl["best"]["conf"]:
+                        cl["best"], cl["bbox"] = z, z["bbox"]
+                    break
+            else:
+                clusters.append({"best": z, "bbox": z["bbox"], "frames": {fi}})
+    out = []
+    for cl in sorted(clusters, key=lambda k: k["best"]["conf"], reverse=True):
+        if any(_iou(cl["bbox"], z["bbox"]) >= iou_thr for z in confirmed):
+            continue
+        z = dict(cl["best"])
+        z["frames_seen"] = len(cl["frames"])
+        out.append(z)
+        if len(out) >= limit:
+            break
+    return out
+
+
+def number_zones(confirmed: list[dict], cands: list[dict]) -> None:
+    """Проставить зонам стабильные id (по ним правка из интерфейса): a0.. — подтверждённые, c0.. — кандидаты."""
+    for i, z in enumerate(confirmed):
+        z["id"], z["src"] = "a%d" % i, "auto"
+    for i, z in enumerate(cands):
+        z["id"], z["src"] = "c%d" % i, "candidate"
+
+
 def draw(overlay: np.ndarray, zones: list[dict], confirmed: bool = True) -> np.ndarray:
     """Нарисовать зоны разломов контуром поверх кадра (поверх кристаллов). Возвращает тот же кадр."""
     col = COL_CONFIRMED if confirmed else COL_MAYBE

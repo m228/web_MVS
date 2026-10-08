@@ -731,6 +731,19 @@ def cv_approach_set(patch: dict = Body(...)):
 
 
 # --- калибровка разломов по своим кадрам (см. fracture_lab.py) ---
+@app.post("/api/cv/fracture/edit")
+def cv_fracture_edit(body: dict = Body(...)):
+    """Ручная правка разломов пробы: remove / promote — id зон, add — свои зоны [{poly}]. Кадр уходит в калибровку."""
+    try:
+        fr = cv_store.edit_fracture(_cv_serial(body.get("serial")), str(body.get("ts") or ""), int(body.get("idx") or 0),
+                                    body.get("remove") or [], body.get("promote") or [], body.get("add") or [])
+    except FileNotFoundError as e:
+        return Response(content=str(e), status_code=404)
+    api_log("api.cv.fracture", "Правка разломов пробы", payload={"ts": body.get("ts"), "remove": body.get("remove"),
+                                                                   "promote": body.get("promote"), "add": len(body.get("add") or [])})
+    return {"status": "ok", "fracture": fr}
+
+
 @app.get("/api/cv/fracture/lab/snap")
 def cv_lab_snap(label: str = "unknown"):
     res = micro.lab_snap(label)

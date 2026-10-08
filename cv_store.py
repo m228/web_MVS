@@ -586,6 +586,102 @@ def _rotate(serial: str, keep_last: int, keep_boils: int = 0, max_gb: float = 0.
             shutil.rmtree(p, ignore_errors=True)
 
 
+def _hist_patch(serial: str, ts: str, fields: dict) -> None:
+    """Поправить поля одной строки журнала (после ручной правки пробы), остальные строки не трогаем."""
+    f = _hist_file(serial, ts)
+    with _HIST_LOCK:
+        if not f.exists():
+            return
+        rows, changed = _hist_read(serial, f.stem, clean=False), False
+        for r in rows:
+            if r.get("ts") == ts:
+                r.update(fields)
+                changed = True
+        if changed:
+            tmp = f.with_suffix(".jsonl.tmp")
+            tmp.write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows), encoding="utf-8")
+            tmp.replace(f)
+
+
+def _clean_frame_path(d: Path, idx: int) -> Optional[Path]:
+    for name in ("frame_%d.png", "frame_%d.jpg"):
+        p = d / (name % int(idx))
+        if p.exists():
+            return p
+    return None
+
+
+def edit_fracture(serial: str, ts: str, idx: int = 0, remove=(), promote=(), add=()) -> dict:
+    """Ручная правка разломов пробы. remove — id зон (подтверждённых/ручных/кандидатов): «это не разлом»; promote — id
+    кандидатов: «это разлом»; add — свои зоны [{poly: [[x, y], …]}] в пикселях кадра. Результат — в result.json пробы
+    (зоны, сводка, журнал) и кадр с разметкой — в калибровку разломов (fracture_lab): по ним подбираются пороги."""
+    d = _probe_dir(serial, ts)
+    if d is None:
+        raise FileNotFoundError("проба не найдена")
+    rp = d / "result.json"
+    r = json.loads(rp.read_text(encoding="utf-8"))
+    fr = r.get("fracture") or {}
+    zones, cands = [dict(z) for z in fr.get("zones") or []], [dict(z) for z in fr.get("candidates") or []]
+    for i, z in enumerate(zones):                              # пробы до правки: id проставляем сами
+        z.setdefault("id", "a%d" % i)
+        z.setdefault("src", "auto")
+    for i, z in enumerate(cands):
+        z.setdefault("id", "c%d" % i)
+        z.setdefault("src", "candidate")
+    fr.setdefault("auto_zones", [dict(z) for z in zones if z["src"] == "auto"])   # исходный автодетект — один раз, для разбора
+    rem, prom = {str(x) for x in remove}, {str(x) for x in promote}
+    rejected = list(fr.get("rejected") or [])
+    for z in zones + cands:
+        if z["id"] in rem:
+            rejected.append({k: z.get(k) for k in ("id", "src", "bbox", "poly", "conf")})
+    zones = [z for z in zones if z["id"] not in rem]
+    n_next = 1 + max([int(str(z["id"])[1:]) for z in zones + cands if str(z["id"])[1:].isdigit()] + [-1] +
+                     [int(str(z["id"])[1:]) for z in rejected if str(z.get("id", ""))[1:].isdigit()])
+    for z in cands:
+        if z["id"] in prom:
+            z.update({"id": "p%d" % n_next, "src": "promoted"})
+            n_next += 1
+            zones.append(z)
+    cands = [z for z in cands if z["id"] not in rem and z["id"] not in prom and z.get("src") == "candidate"]
+    w_h = fr.get("size")
+    if not w_h:
+        p = _clean_frame_path(d, idx)
+        im = cv2.imdecode(np.frombuffer(p.read_bytes(), np.uint8), cv2.IMREAD_COLOR) if p else None
+        w_h = [int(im.shape[1]), int(im.shape[0])] if im is not None else None
+    for a in add or ():
+        pts = [[int(round(float(x))), int(round(float(y)))] for x, y in (a.get("poly") or [])]
+        if len(pts) < 3:
+            continue
+        arr = np.array(pts, np.int32).reshape(-1, 1, 2)
+        x, y, bw, bh = cv2.boundingRect(arr)
+        zones.append({"id": "m%d" % n_next, "src": "manual", "poly": pts, "bbox": [int(x), int(y), int(bw), int(bh)],
+                      "area": int(cv2.contourArea(arr)), "conf": 1.0, "D": None, "T": None})
+        n_next += 1
+    fr["zones"], fr["candidates"], fr["rejected"], fr["size"], fr["edited"] = zones, cands, rejected, w_h, True
+    sm = dict(fr.get("summary") or {})
+    sm["zones"], sm["has_fracture"], sm["edited"] = len(zones), bool(zones), True
+    area = sum(int(z.get("area") or 0) for z in zones)
+    sm["area_pct"] = round(100.0 * area / (w_h[0] * w_h[1]), 2) if w_h else sm.get("area_pct", 0.0)
+    fr["summary"] = sm
+    r["fracture"] = fr
+    tmp = rp.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(r, ensure_ascii=False, indent=1), encoding="utf-8")
+    tmp.replace(rp)
+    _hist_patch(serial, ts, {"frac_zones": sm["zones"], "frac_pct": sm["area_pct"]})
+    try:                                                      # в калибровку: кадр без разметки + что оператор решил
+        import fracture_lab
+        p = _clean_frame_path(d, idx)
+        img = cv2.imdecode(np.frombuffer(p.read_bytes(), np.uint8), cv2.IMREAD_COLOR) if p else None
+        if img is not None:
+            fracture_lab.save_probe_sample(
+                "%s/%s" % (_serial_dir(serial).name, ts), img, "fracture" if zones else "ok",
+                {"zones": [{k: z.get(k) for k in ("id", "src", "poly", "bbox", "conf")} for z in zones],
+                 "rejected": [{k: z.get(k) for k in ("id", "src", "poly", "bbox", "conf")} for z in rejected], "frame": int(idx)})
+    except Exception as e:
+        log_event("cv_store", "Правка разломов: кадр не попал в калибровку", "warn", {"error": str(e)})
+    return fr
+
+
 def export_png(serial: str, ts: str, idx: int, dest_dir) -> dict:
     """Сохранить ЧИСТЫЙ кадр пробы (без разметки) в PNG в папку dest_dir — для ручной разметки и дообучения.
     PNG делается из сохранённого JPEG пробы. Пробы со старым форматом (контуры впечатаны в картинку) — отказ."""

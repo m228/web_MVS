@@ -731,6 +731,46 @@ def cv_approach_set(patch: dict = Body(...)):
 
 
 # --- калибровка разломов по своим кадрам (см. fracture_lab.py) ---
+def _report_range(frm: str | None, to: str | None):
+    """Период отчёта: даты YYYY-MM-DD (включительно) или epoch; пусто — последние 7 дней."""
+    import time as _t
+
+    def one(v, end):
+        if v in (None, ""):
+            return None
+        try:
+            return float(v)
+        except ValueError:
+            return _t.mktime(_t.strptime(str(v), "%Y-%m-%d")) + (86399 if end else 0)
+    t1 = one(to, True) or _t.time()
+    t0 = one(frm, False)
+    return (t0 if t0 is not None else t1 - 7 * 86400), t1
+
+
+@app.get("/api/cv/storage/check")
+def cv_storage_check(serial: str | None = None):
+    """Сверка «до и после»: журнал в файлах и в SQLite (число проб, расхождения). Режим хранения — cv.storage."""
+    return cv_store.compare_storage(_cv_serial(serial))
+
+
+@app.get("/api/cv/report")
+def cv_report(serial: str | None = None, frm: str | None = Query(None, alias="from"), to: str | None = None):
+    """Отчёт по варкам за период: по каждой варке, итоги, недели, подстадии (см. report.py)."""
+    import report
+    t0, t1 = _report_range(frm, to)
+    return report.build(_cv_serial(serial), t0, t1)
+
+
+@app.get("/api/cv/report.csv")
+def cv_report_csv(serial: str | None = None, frm: str | None = Query(None, alias="from"), to: str | None = None):
+    import report, time as _t
+    t0, t1 = _report_range(frm, to)
+    rep = report.build(_cv_serial(serial), t0, t1)
+    name = "cv_report_%s_%s.csv" % (_t.strftime("%Y%m%d", _t.localtime(t0)), _t.strftime("%Y%m%d", _t.localtime(t1)))
+    return Response(content=report.to_csv(rep), media_type="text/csv; charset=utf-8",
+                    headers={"Content-Disposition": 'attachment; filename="%s"' % name})
+
+
 @app.post("/api/cv/fracture/edit")
 def cv_fracture_edit(body: dict = Body(...)):
     """Ручная правка разломов пробы: remove / promote — id зон, add — свои зоны [{poly}]. Кадр уходит в калибровку."""

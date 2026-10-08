@@ -3809,12 +3809,13 @@ input.micro-cam-num { width: 56px; min-width: 0; flex: 0 0 auto; padding: 4px 5p
   border-color: var(--border-strong, rgba(118,142,178,.45)); }
 
 /* Переключатель низа: шире + не переносить текст */
-.micro-tele-seg { width: 520px; max-width: 100%; grid-template-columns: repeat(4, 1fr); }
-/* ползунок на 4 кнопки: внутренний отступ 3px, ширина кнопки = (100% - 6px) / 4 */
-.micro-tele-seg .micro-win-pill { width: calc((100% - 6px) / 4); }
-.micro-tele-seg.cv .micro-win-pill { left: calc(3px + (100% - 6px) / 4); }
-.micro-tele-seg.trend .micro-win-pill { left: calc(3px + 2 * (100% - 6px) / 4); }
-.micro-tele-seg.cfg .micro-win-pill { left: calc(3px + 3 * (100% - 6px) / 4); }
+.micro-tele-seg { width: 640px; max-width: 100%; grid-template-columns: repeat(5, 1fr); }
+/* ползунок на 5 кнопок: внутренний отступ 3px, ширина кнопки = (100% - 6px) / 5 */
+.micro-tele-seg .micro-win-pill { width: calc((100% - 6px) / 5); }
+.micro-tele-seg.cv .micro-win-pill { left: calc(3px + (100% - 6px) / 5); }
+.micro-tele-seg.trend .micro-win-pill { left: calc(3px + 2 * (100% - 6px) / 5); }
+.micro-tele-seg.cfg .micro-win-pill { left: calc(3px + 3 * (100% - 6px) / 5); }
+.micro-tele-seg.report .micro-win-pill { left: calc(3px + 4 * (100% - 6px) / 5); }
 /* «Распознавание» теперь одна колонка; тренды вынесены в свою вкладку на всю ширину */
 .micro-tele-cv { grid-template-columns: 1fr; }
 .micro-tele-trend .micro-cv-block:first-child { margin-top: 0; padding-top: 0; border-top: 0; }
@@ -3910,3 +3911,32 @@ input.micro-cam-num { width: 56px; min-width: 0; flex: 0 0 auto; padding: 4px 5p
 #cvVol.is-crit-volume .micro-vol__fields input#cvFinesG2 { width: 104px; }
 
 .micro-vol__eq { color: var(--muted); font-size: 0.95em; min-width: 76px; }
+
+/* ===== Вкладка «Отчёт» ===== */
+.micro-rep-bar { display: flex; align-items: center; gap: 10px 12px; flex-wrap: wrap; margin-bottom: 14px; }
+.micro-rep-bar .toolbar-btn { min-width: 0; padding: 6px 14px; font-size: 0.85em; }
+.micro-rep-dates { display: inline-flex; align-items: center; gap: 6px; }
+.micro-rep-dates[hidden] { display: none; }
+.micro-rep-dates input { padding: 4px 8px; font-size: 0.85em; }
+.micro-rep-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 10px; margin-bottom: 14px; }
+.micro-rep-card { background: var(--surface-muted, rgba(255,255,255,.04)); border: 1px solid var(--border, rgba(131,151,179,.28)); border-radius: 10px; padding: 10px 12px; }
+.micro-rep-card span { display: block; color: var(--muted); font-size: 0.78em; }
+.micro-rep-card b { display: block; font-size: 1.25em; margin-top: 2px; font-variant-numeric: tabular-nums; }
+.micro-rep-card small { color: var(--muted); font-size: 0.78em; }
+.micro-rep-h { margin: 16px 0 6px; font-size: 0.9em; font-weight: 600; }
+.micro-rep-title { font-size: 1.05em; font-weight: 600; margin-bottom: 10px; }
+.micro-rep-wrap { overflow-x: auto; }
+.micro-rep-table { width: 100%; border-collapse: collapse; font-size: 0.85em; font-variant-numeric: tabular-nums; }
+.micro-rep-table th, .micro-rep-table td { padding: 5px 8px; text-align: right; border-bottom: 1px solid var(--border, rgba(131,151,179,.2)); white-space: nowrap; }
+.micro-rep-table th:first-child, .micro-rep-table td:first-child { text-align: left; }
+.micro-rep-table th { color: var(--muted); font-weight: 500; font-size: 0.9em; }
+.micro-rep-table tr.is-open td { color: var(--muted); font-style: italic; }
+@media print {
+  body * { visibility: hidden !important; }
+  #repOut, #repOut * { visibility: visible !important; }
+  #repOut { position: absolute; left: 0; top: 0; width: 100%; background: #fff; color: #111; padding: 12mm; }
+  #repOut .micro-rep-card, #repOut .micro-rep-table th, #repOut .micro-rep-table td { color: #111 !important; border-color: #bbb !important; background: #fff !important; }
+  #repOut .micro-rep-card span, #repOut .micro-rep-card small, #repOut .micro-rep-table th { color: #555 !important; }
+  .micro-rep-wrap { overflow: visible; }
+  @page { size: A4 landscape; margin: 10mm; }
+}

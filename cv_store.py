@@ -25,6 +25,7 @@ import cv2
 import numpy as np
 
 import cv_volume
+import db
 from logger import log_event
 from paths import DATA_DIR
 
@@ -112,32 +113,84 @@ def _hist_file(serial: str, ts: str) -> Path:
     return _hist_dir(serial) / (ts[:10] + ".jsonl")      # «2026-10-04»
 
 
+# Хранилище журнала проб: cv.storage = "files" (только jsonl, как раньше) | "both" (читаем файлы, пишем и в SQLite — для сверки
+# «до и после») | "sqlite" (читаем и пишем только базу; кадры проб по-прежнему файлами). По умолчанию "both".
+_STORAGE_CACHE = [0.0, "both"]
+
+
+def _storage() -> str:
+    now = time.time()
+    if now - _STORAGE_CACHE[0] > 3:
+        try:
+            import plate_config
+            v = str((plate_config.load().get("cv") or {}).get("storage", "both"))
+        except Exception:
+            v = "both"
+        _STORAGE_CACHE[0], _STORAGE_CACHE[1] = now, (v if v in ("files", "both", "sqlite") else "both")
+    return _STORAGE_CACHE[1]
+
+
+def _use_files() -> bool:
+    return _storage() in ("files", "both")
+
+
+def _use_db() -> bool:
+    return _storage() in ("both", "sqlite")
+
+
+def _read_from_db() -> bool:
+    return _storage() == "sqlite"
+
+
 def _hist_append(serial: str, result: dict):
     row = _hist_row(result)
     if row is None:
         return
-    with _HIST_LOCK:
-        f = _hist_file(serial, row["ts"])
-        f.parent.mkdir(parents=True, exist_ok=True)
-        with open(f, "a", encoding="utf-8") as fh:
-            fh.write(json.dumps(row, ensure_ascii=False) + "\n")
+    if _use_files():
+        with _HIST_LOCK:
+            f = _hist_file(serial, row["ts"])
+            f.parent.mkdir(parents=True, exist_ok=True)
+            with open(f, "a", encoding="utf-8") as fh:
+                fh.write(json.dumps(row, ensure_ascii=False) + "\n")
+    if _use_db():
+        try:
+            db.upsert_row(_serial_dir(serial).name, row)
+        except Exception as e:
+            log_event("cv_store", "Не записана строка журнала в SQLite", "warn", {"error": str(e)})
 
 
-def _null_sv_outliers(rows: list[dict]) -> list[dict]:
-    """СВ, которое явно не настоящее (< 5 или сильно отличается от соседних проб — разовый сбой чтения ПЛК: 0,0 или 58 при 87),
-    заменяем на None: иначе тренд падает в ноль, а варка делится на две. Сами файлы журнала не меняем."""
-    for i, r in enumerate(rows):
-        sv = r.get("sv")
-        if sv is None:
-            continue
-        nb = sorted(x["sv"] for x in rows[max(0, i - 3):i] + rows[i + 1:i + 4] if x.get("sv") is not None)
-        med = nb[len(nb) // 2] if len(nb) >= 2 else None
-        if sv < 5 or (med is not None and abs(sv - med) > 15):
-            r["sv"] = None
-    return rows
+def compare_storage(serial: str) -> dict:
+    """Сверка «до и после»: журнал в файлах (jsonl) и в SQLite — число проб, чего где нет, чем строки отличаются по ключевым числам."""
+    tag = _serial_dir(serial).name
+    hd = _hist_dir(serial)
+    files = {}
+    for f in (sorted(hd.glob("*.jsonl")) if hd.exists() else []):
+        for r in _read_jsonl(f):
+            if r.get("ts") is not None and r.get("t") is not None:
+                files[r["ts"]] = r
+    dbr = {r["ts"]: r for r in db.read_rows(tag)}
+    keys = ("sv", "stage", "substage", "count", "mean", "fines_m1", "fines_m2", "fines_m3", "reject_pct", "frac_zones", "frac_pct", "cook_time")
+    diff = [ts for ts in files.keys() & dbr.keys() if any(files[ts].get(k) != dbr[ts].get(k) for k in keys)]
+    return {"serial": tag, "files": len(files), "sqlite": len(dbr), "only_files": len(files.keys() - dbr.keys()),
+            "only_sqlite": len(dbr.keys() - files.keys()), "different": len(diff), "sample_different": sorted(diff)[:5],
+            "ok": not (files.keys() ^ dbr.keys()) and not diff, "storage": _storage()}
+
+
+def _hist_days(serial: str) -> list[str]:
+    """Даты (YYYY-MM-DD), за которые есть пробы в журнале, по возрастанию."""
+    if _read_from_db():
+        return db.days(_serial_dir(serial).name)
+    hd = _hist_dir(serial)
+    return [f.stem for f in sorted(hd.glob("*.jsonl"))] if hd.exists() else []
+
+
+_null_sv_outliers = db.null_sv_outliers      # правило сбойного СВ — в db.py (там же считается boil_id)
 
 
 def _hist_read(serial: str, day: str, clean: bool = True) -> list[dict]:
+    if _read_from_db():
+        rows = db.read_rows(_serial_dir(serial).name, day=day)
+        return _null_sv_outliers(rows) if clean else rows
     f = _hist_dir(serial) / (day + ".jsonl")
     rows = []
     try:
@@ -151,12 +204,44 @@ def _hist_read(serial: str, day: str, clean: bool = True) -> list[dict]:
     return _null_sv_outliers(rows) if clean else rows       # clean=False — сырые строки (для перезаписи журнала)
 
 
+def sync_files_to_db(serial: str) -> int:
+    """Залить в SQLite строки журнала из jsonl, которых там ещё нет (миграция и сверка «до и после»). Идемпотентно:
+    ключ (serial, ts). Возвращает число добавленных строк. Файлы не меняет."""
+    tag = _serial_dir(serial).name
+    have, rows = db.known_ts(tag), []
+    hd = _hist_dir(serial)
+    for f in (sorted(hd.glob("*.jsonl")) if hd.exists() else []):
+        for r in _read_jsonl(f):
+            if r.get("ts") not in have and r.get("t") is not None:
+                have.add(r["ts"])
+                rows.append(r)
+    return db.upsert_many(tag, rows) if rows else 0
+
+
+def _read_jsonl(f: Path) -> list[dict]:
+    rows = []
+    try:
+        for line in f.read_text(encoding="utf-8").splitlines():
+            try:
+                rows.append(json.loads(line))
+            except Exception:
+                continue            # битая строка (обрыв записи) не рушит весь день
+    except Exception:
+        pass
+    return rows
+
+
 def _hist_backfill(serial: str):
     """Один раз за запуск: добавить в журнал пробы, которые уже лежат в cv_results (до появления
-    журнала). Идемпотентно: что уже есть в журнале — не дублируем."""
+    журнала). Идемпотентно: что уже есть в журнале — не дублируем. Заодно журнал из файлов заливается в SQLite."""
     if serial in _HIST_FILLED:
         return
     _HIST_FILLED.add(serial)
+    if _use_db():
+        try:
+            sync_files_to_db(serial)
+        except Exception as e:
+            log_event("cv_store", "Не удалось залить журнал в SQLite", "warn", {"error": str(e)})
     sd = _serial_dir(serial)
     if not sd.exists():
         return
@@ -165,9 +250,8 @@ def _hist_backfill(serial: str):
     except Exception:
         pass
     known = set()
-    if _hist_dir(serial).exists():
-        for f in _hist_dir(serial).glob("*.jsonl"):
-            known.update(r.get("ts") for r in _hist_read(serial, f.stem))
+    for day in _hist_days(serial):
+        known.update(r.get("ts") for r in _hist_read(serial, day))
     for p in sorted(x for x in sd.iterdir() if x.is_dir()):
         if p.name in known:
             continue
@@ -181,12 +265,11 @@ def history_days(serial: str) -> list[dict]:
     """Дни, за которые есть пробы: [{date, n, first, last}] по возрастанию даты (для выбора даты)."""
     _hist_backfill(serial)
     out = []
-    if _hist_dir(serial).exists():
-        for f in sorted(_hist_dir(serial).glob("*.jsonl")):
-            rows = _hist_read(serial, f.stem)
-            if rows:
-                ts = [r["t"] for r in rows if r.get("t") is not None]
-                out.append({"date": f.stem, "n": len(rows), "first": min(ts), "last": max(ts)})
+    for day in _hist_days(serial):
+        rows = _hist_read(serial, day)
+        if rows:
+            ts = [r["t"] for r in rows if r.get("t") is not None]
+            out.append({"date": day, "n": len(rows), "first": min(ts), "last": max(ts)})
     return out
 
 
@@ -224,24 +307,28 @@ def trend_range(serial: str, t_from: float, t_to: float, series: Optional[list[s
     _hist_backfill(serial)
     series = series or ["small", "medium", "large", "reject", "mean", "median"]
     rows = []
-    hd = _hist_dir(serial)
-    # перебираем только существующие файлы дней (а не все даты в диапазоне): запрос «с 1970» не падает
-    for f in (sorted(hd.glob("*.jsonl")) if hd.exists() else []):
+    # перебираем только существующие дни (а не все даты в диапазоне): запрос «с 1970» не падает
+    for day in _hist_days(serial):
         try:
-            day0 = time.mktime(time.strptime(f.stem, "%Y-%m-%d"))
+            day0 = time.mktime(time.strptime(day, "%Y-%m-%d"))
         except Exception:
             continue
         if day0 > t_to or day0 + 86400 < t_from - 86400:        # день назад — запас: варка могла начаться до окна (нужно для порога СВ)
             continue
-        rows.extend(r for r in _hist_read(serial, f.stem) if r.get("t") is not None and r["t"] <= t_to)
+        rows.extend(r for r in _hist_read(serial, day) if r.get("t") is not None and r["t"] <= t_to)
     rows.sort(key=lambda r: r["t"])
     _apply_fines_gate(rows)
+    bid, prev = 0, None                      # номер варки каждой точки — по тем же правилам, что в журнале (JS границу сам не ищет)
+    for r in rows:
+        if prev is None or _is_new_boil(prev, r):
+            bid += 1
+        r["_boil"], prev = bid, r
     rows = [r for r in rows if r["t"] >= t_from]
     if len(rows) > limit:
         rows = rows[-limit:]
     return {
         "from": t_from, "to": t_to,
-        "t": [r["t"] for r in rows], "ts": [r["ts"] for r in rows],
+        "t": [r["t"] for r in rows], "ts": [r["ts"] for r in rows], "boil": [r["_boil"] for r in rows],
         "stage": [r.get("stage") for r in rows],
         "substage": [r.get("substage") for r in rows],
         "series": {s: [(fines_avg(r) if s == "fines_avg" else r.get(s)) for r in rows] for s in series},
@@ -275,9 +362,8 @@ def export_rows(serial: str, t_from: Optional[float] = None, t_to: Optional[floa
     Без границ — вся история. Колонки — EXPORT_COLUMNS; чего в старой пробе не было — None."""
     _hist_backfill(serial)
     rows = []
-    hd = _hist_dir(serial)
-    for f in (sorted(hd.glob("*.jsonl")) if hd.exists() else []):
-        rows.extend(r for r in _hist_read(serial, f.stem) if r.get("t") is not None)
+    for day in _hist_days(serial):
+        rows.extend(r for r in _hist_read(serial, day) if r.get("t") is not None)
     rows.sort(key=lambda r: r["t"])
     _apply_fines_gate(rows)
     rows = [r for r in rows if (t_from is None or r["t"] >= t_from) and (t_to is None or r["t"] <= t_to)]
@@ -291,26 +377,9 @@ def export_rows(serial: str, t_from: Optional[float] = None, t_to: Optional[floa
 
 
 # --- варки: журнал проб нарезается на варки, по варке — сводка мелочи/сростков/объёма ---
-BOIL_GAP_S = 45 * 60        # пауза между пробами больше этой — новая варка (пробы идут раз в 1–2 мин)
-BOIL_COOK_DROP_S = 300      # время варки (cook_time) упало больше чем на это — новая варка
-BOIL_SV_DROP = 4.0          # СВ упало на столько и больше — новая варка (запасной признак)
+BOIL_GAP_S, BOIL_COOK_DROP_S, BOIL_SV_DROP = db.BOIL_GAP_S, db.BOIL_COOK_DROP_S, db.BOIL_SV_DROP
 BOIL_OPEN_S = 15 * 60       # последняя варка «идёт», если последняя проба моложе этого
-
-
-def _is_new_boil(prev: dict, r: dict) -> bool:
-    """Начало новой варки между двумя соседними пробами журнала: длинная пауза, время варки упало,
-    стадия откатилась на заводку (было ≥6, стало ≤4) или СВ резко упало."""
-    if r["t"] - prev["t"] > BOIL_GAP_S:
-        return True
-    ct, pt = r.get("cook_time"), prev.get("cook_time")
-    if ct is not None and pt is not None and ct < pt - BOIL_COOK_DROP_S:
-        return True
-    st, ps = r.get("stage"), prev.get("stage")
-    if st is not None and ps is not None and ps >= 6 and st <= 4:
-        return True
-    # СВ упало — запасной признак, и только когда времени варки нет вовсе: одиночный сбой чтения СВ не должен делить варку
-    sv, psv = r.get("sv"), prev.get("sv")
-    return (ct is None or pt is None) and sv is not None and psv is not None and sv < psv - BOIL_SV_DROP
+_is_new_boil = db.is_new_boil
 
 
 def _wmean(rows: list, key: str, wkey: Optional[str]) -> Optional[float]:
@@ -370,25 +439,44 @@ def _boil_summary(rows: list, finished: bool, avg_n: int = 4) -> dict:
     return out
 
 
+def _group_boils(rows: list[dict]) -> list[list[dict]]:
+    """Строки журнала (по времени) → варки: список групп проб."""
+    groups: list[list[dict]] = []
+    for r in rows:
+        if not groups or _is_new_boil(groups[-1][-1], r):
+            groups.append([])
+        groups[-1].append(r)
+    return groups
+
+
+def boil_groups(serial: str) -> list[list[dict]]:
+    """Все варки серийника (старые первыми): группы проб; мука/рассев — с порогом «Мука с СВ» по варке (как в тренде)."""
+    _hist_backfill(serial)
+    rows, seen = [], set()
+    for day in _hist_days(serial):
+        for r in _hist_read(serial, day):
+            if r.get("t") is not None and r.get("ts") not in seen:
+                seen.add(r.get("ts"))
+                rows.append(r)
+    rows.sort(key=lambda r: r["t"])
+    _apply_fines_gate(rows)
+    return _group_boils(rows)
+
+
 def boils(serial: str, limit: int = 6, now: Optional[float] = None) -> list[dict]:
     """Последние варки (новая первой): журнал проб режется на варки (_is_new_boil), по каждой — сводка
     мелочи/сростков/объёма. Последняя варка «идёт», пока последняя проба моложе BOIL_OPEN_S."""
     _hist_backfill(serial)
     avg_n = cv_volume.volume_cfg(_volume_cfg_now())["avg_n"]
     rows, seen = [], set()
-    hd = _hist_dir(serial)
-    for f in (sorted(hd.glob("*.jsonl")) if hd.exists() else []):
-        for r in _hist_read(serial, f.stem):
+    for day in _hist_days(serial):
+        for r in _hist_read(serial, day):
             if r.get("t") is not None and r.get("ts") not in seen:
                 seen.add(r.get("ts"))
                 rows.append(r)
     rows.sort(key=lambda r: r["t"])
     _apply_fines_gate(rows)
-    groups: list[list[dict]] = []
-    for r in rows:
-        if not groups or _is_new_boil(groups[-1][-1], r):
-            groups.append([])
-        groups[-1].append(r)
+    groups = _group_boils(rows)
     now = time.time() if now is None else now
     out = []
     for i, g in enumerate(reversed(groups[-limit:])):
@@ -533,9 +621,8 @@ KEEP_MAX_PROBES = 2000      # жёсткий потолок проб в архи
 def _boil_starts(serial: str) -> list[float]:
     """Времена начала варок по журналу (по возрастанию) — те же правила, что в boils()."""
     rows = []
-    hd = _hist_dir(serial)
-    for f in (sorted(hd.glob("*.jsonl")) if hd.exists() else []):
-        rows.extend(r for r in _hist_read(serial, f.stem) if r.get("t") is not None)
+    for day in _hist_days(serial):
+        rows.extend(r for r in _hist_read(serial, day) if r.get("t") is not None)
     rows.sort(key=lambda r: r["t"])
     starts, prev = [], None
     for r in rows:
@@ -588,11 +675,18 @@ def _rotate(serial: str, keep_last: int, keep_boils: int = 0, max_gb: float = 0.
 
 def _hist_patch(serial: str, ts: str, fields: dict) -> None:
     """Поправить поля одной строки журнала (после ручной правки пробы), остальные строки не трогаем."""
+    if _use_db():
+        try:
+            db.patch_row(_serial_dir(serial).name, ts, fields)
+        except Exception as e:
+            log_event("cv_store", "Не поправлена строка журнала в SQLite", "warn", {"error": str(e)})
+    if not _use_files():
+        return
     f = _hist_file(serial, ts)
     with _HIST_LOCK:
         if not f.exists():
             return
-        rows, changed = _hist_read(serial, f.stem, clean=False), False
+        rows, changed = _read_jsonl(f), False
         for r in rows:
             if r.get("ts") == ts:
                 r.update(fields)
@@ -668,6 +762,18 @@ def edit_fracture(serial: str, ts: str, idx: int = 0, remove=(), promote=(), add
     tmp.write_text(json.dumps(r, ensure_ascii=False, indent=1), encoding="utf-8")
     tmp.replace(rp)
     _hist_patch(serial, ts, {"frac_zones": sm["zones"], "frac_pct": sm["area_pct"]})
+    if _use_db():
+        try:
+            now = time.time()
+            tag = _serial_dir(serial).name
+            for zid in rem:
+                db.log_fracture_edit(tag, ts, "remove", zid, idx, now)
+            for zid in prom:
+                db.log_fracture_edit(tag, ts, "promote", zid, idx, now)
+            for _ in add or ():
+                db.log_fracture_edit(tag, ts, "add", None, idx, now)
+        except Exception as e:
+            log_event("cv_store", "Не записана правка разломов в SQLite", "warn", {"error": str(e)})
     try:                                                      # в калибровку: кадр без разметки + что оператор решил
         import fracture_lab
         p = _clean_frame_path(d, idx)
@@ -770,17 +876,27 @@ def recompute_journal(serial: str) -> int:
         except Exception:
             continue
     n = 0
-    with _HIST_LOCK:
-        for f in (sorted(_hist_dir(serial).glob("*.jsonl")) if _hist_dir(serial).exists() else []):
-            rows, changed = _hist_read(serial, f.stem, clean=False), False
-            for i, r in enumerate(rows):
-                if r.get("ts") in fresh and fresh[r["ts"]] != r:
-                    rows[i], changed = fresh[r["ts"]], True
-                    n += 1
-            if changed:
-                tmp = f.with_suffix(".jsonl.tmp")
-                tmp.write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows), encoding="utf-8")
-                tmp.replace(f)
+    if _use_db():
+        tag = _serial_dir(serial).name
+        cur = {r["ts"]: r for r in db.read_rows(tag)}
+        for ts, row in fresh.items():
+            if ts in cur and cur[ts] != row:
+                db.upsert_row(tag, row)
+                n += 1
+    if _use_files():
+        with _HIST_LOCK:
+            nf = 0
+            for f in (sorted(_hist_dir(serial).glob("*.jsonl")) if _hist_dir(serial).exists() else []):
+                rows, changed = _read_jsonl(f), False
+                for i, r in enumerate(rows):
+                    if r.get("ts") in fresh and fresh[r["ts"]] != r:
+                        rows[i], changed = fresh[r["ts"]], True
+                        nf += 1
+                if changed:
+                    tmp = f.with_suffix(".jsonl.tmp")
+                    tmp.write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows), encoding="utf-8")
+                    tmp.replace(f)
+            n = max(n, nf)
     return n
 
 

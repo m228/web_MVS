@@ -159,6 +159,44 @@ def _hist_append(serial: str, result: dict):
             log_event("cv_store", "Не записана строка журнала в SQLite", "warn", {"error": str(e)})
 
 
+def all_serials() -> list[str]:
+    """Серийники (папки камер), по которым на этой машине есть пробы или журнал."""
+    names = set()
+    for base in (BASE, HISTORY):
+        if base.exists():
+            names.update(p.name for p in base.iterdir() if p.is_dir())
+    return sorted(names)
+
+
+def migrate_all() -> list[dict]:
+    """Перенести ВСЕ старые данные этой машины в SQLite: журналы jsonl и пробы из cv_results, по каждой камере.
+    Идемпотентно (ключ serial+ts); файлы не меняет. Возвращает по камере: сколько было в файлах/базе и сколько добавилось."""
+    out = []
+    for tag in all_serials():
+        before = db.count(tag)
+        _HIST_FILLED.discard(tag)
+        try:
+            added = sync_files_to_db(tag)                # журнал jsonl → база
+            _hist_backfill(tag)                          # пробы из cv_results, которых нет в журнале (и в базу тоже)
+            db.rebuild_boils(tag)                        # номера варок по всей истории
+            err = None
+        except Exception as e:
+            added, err = 0, str(e)
+        out.append({"serial": tag, "db_before": before, "db_after": db.count(tag), "added": added, "error": err,
+                    "check": compare_storage(tag)})
+    return out
+
+
+def set_storage(mode: str) -> str:
+    """Записать режим хранилища в конфиг (files | both | sqlite) и применить сразу, без перезапуска."""
+    if mode not in ("files", "both", "sqlite"):
+        raise ValueError("режим: files / both / sqlite")
+    import plate_config
+    plate_config.save({"cv": {"storage": mode}})
+    _STORAGE_CACHE[0] = 0.0
+    return _storage()
+
+
 def compare_storage(serial: str) -> dict:
     """Сверка «до и после»: журнал в файлах (jsonl) и в SQLite — число проб, чего где нет, чем строки отличаются по ключевым числам."""
     tag = _serial_dir(serial).name
@@ -173,7 +211,7 @@ def compare_storage(serial: str) -> dict:
     diff = [ts for ts in files.keys() & dbr.keys() if any(files[ts].get(k) != dbr[ts].get(k) for k in keys)]
     return {"serial": tag, "files": len(files), "sqlite": len(dbr), "only_files": len(files.keys() - dbr.keys()),
             "only_sqlite": len(dbr.keys() - files.keys()), "different": len(diff), "sample_different": sorted(diff)[:5],
-            "ok": not (files.keys() ^ dbr.keys()) and not diff, "storage": _storage()}
+            "ok": not (files.keys() - dbr.keys()) and not diff, "storage": _storage()}      # ok: в базе есть всё, что в файлах (в базе может быть больше)
 
 
 def _hist_days(serial: str) -> list[str]:

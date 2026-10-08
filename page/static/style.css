@@ -3940,3 +3940,11 @@ input.micro-cam-num { width: 56px; min-width: 0; flex: 0 0 auto; padding: 4px 5p
   .micro-rep-wrap { overflow: visible; }
   @page { size: A4 landscape; margin: 10mm; }
 }
+
+/* Карточка «Хранилище данных» (вкладка CV) */
+.micro-st-btns { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 4px; }
+.micro-st-btns .toolbar-btn { min-width: 0; padding: 6px 12px; font-size: 0.82em; }
+.micro-st-rows { display: flex; flex-direction: column; gap: 4px; font-size: 0.84em; font-variant-numeric: tabular-nums; }
+.micro-st-row { display: flex; justify-content: space-between; gap: 10px; padding: 5px 8px; border-radius: 7px; background: var(--surface, rgba(255,255,255,.03)); }
+.micro-st-row.is-ok b { color: #1d9e75; }
+.micro-st-row.is-bad b { color: #e24b4a; }

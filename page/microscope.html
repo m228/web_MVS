@@ -1085,6 +1085,20 @@
               </span>
             </div>
             <div class="micro-cfg-grid">
+              <section class="micro-cfg-card" id="storageCard">
+                <h4>Хранилище данных</h4>
+                <span class="micro-seg2" id="stModeSeg" role="group" aria-label="Где хранить журнал проб">
+                  <button type="button" data-mode="files" title="Как раньше: только файлы (jsonl)">файлы</button>
+                  <button type="button" data-mode="both" title="Читаем файлы, пишем и в файлы, и в базу — для сверки">файлы + база</button>
+                  <button type="button" data-mode="sqlite" title="Читаем и пишем только базу (SQLite). Включается после успешной сверки">база</button>
+                </span>
+                <div class="micro-conn-hint" id="stInfo">—</div>
+                <div class="micro-st-btns">
+                  <button type="button" id="stMigrateBtn" class="toolbar-btn toolbar-btn--primary" title="Перенести все старые пробы и журналы этой машины в базу. Файлы не меняются, повтор безопасен">Перенести старые данные в базу</button>
+                  <button type="button" id="stCheckBtn" class="toolbar-btn toolbar-btn--neutral" title="Сверить журнал в файлах и в базе: число проб и расхождения">Сверить</button>
+                </div>
+                <div class="micro-st-rows" id="stRows"></div>
+              </section>
               <section class="micro-cfg-card">
                 <h4>Группы и масштаб</h4>
           <label class="micro-cycle-f" title="Кристалл мельче этого размера (эквивалентный диаметр, мкм) идёт в группу «малая»."><span>Малая &lt;, мкм</span><input type="number" id="cvSmallMax" step="10" /></label>
@@ -1152,6 +1166,7 @@
       <script src="/static/js/microscope/02-cv.js"></script>
       <script src="/static/js/microscope/03-frac.js"></script>
       <script src="/static/js/microscope/05-report.js"></script>
+      <script src="/static/js/microscope/06-storage.js"></script>
       <script src="/static/js/microscope/04-init.js"></script>
     </main>
   </div>

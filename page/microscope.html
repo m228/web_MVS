@@ -219,6 +219,10 @@
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12M8 11l4 4 4-4M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/></svg>
                 <span>Дамп</span>
               </button>
+              <button type="button" class="micro-ptab" data-ptab="report" title="Отчёт по варкам за период (неделя, месяц, свой) + хранилище данных" aria-label="Отчёт">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 3h9l4 4v14H6z"/><path d="M14 3v5h5M9 13h7M9 17h7M9 9h3"/></svg>
+                <span>Отчёт</span>
+              </button>
               <button type="button" class="micro-ptab" data-ptab="frac" title="Разломы кристаллов: детект, статистика, тренд, автоподвод" aria-label="Разломы">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7l5 3-2 4 6 1 1 5 3-4 4 1-2-5 3-4-6-2 1-4-5 3-3-3z"/></svg>
                 <span>Разломы</span>
@@ -685,6 +689,42 @@
               </div>
 
               <!-- Компьютерное зрение: рассев кристаллов, тренд, галерея, пороги -->
+              <!-- Отчёт по варкам за период + хранилище данных (на время обкатки базы) -->
+              <div class="micro-ppane hidden" data-ppane="report">
+                <div class="micro-cv-head"><b>Отчёт по варкам</b></div>
+                <div class="micro-rep-bar">
+                <span class="micro-seg2" id="repPeriodSeg" role="group" aria-label="Период отчёта">
+                  <button type="button" data-p="week" class="is-active" title="Последние 7 дней">неделя</button>
+                  <button type="button" data-p="month" title="Последние 30 дней">месяц</button>
+                  <button type="button" data-p="custom" title="Свой период: две даты">свой период</button>
+                </span>
+                <span class="micro-rep-dates" id="repDates" hidden>
+                  <input type="date" id="repFrom" /> — <input type="date" id="repTo" />
+                </span>
+                <button type="button" id="repGoBtn" class="toolbar-btn toolbar-btn--primary" title="Собрать отчёт по варкам за выбранный период">Сформировать отчёт</button>
+                <button type="button" id="repCsvBtn" class="toolbar-btn toolbar-btn--neutral" title="Скачать отчёт в CSV (открывается в Excel)" disabled>CSV</button>
+                <button type="button" id="repPdfBtn" class="toolbar-btn toolbar-btn--neutral" title="Печать → «Сохранить как PDF»" disabled>PDF</button>
+                <span class="micro-conn-hint" id="repHint"></span>
+              </div>
+              <div class="micro-rep-out" id="repOut"><div class="micro-conn-hint">Выбери период и нажми «Сформировать отчёт».</div></div>
+                <div class="micro-cfg-grid micro-rep-storage">
+              <section class="micro-cfg-card" id="storageCard">
+                <h4>Хранилище данных</h4>
+                <span class="micro-seg2" id="stModeSeg" role="group" aria-label="Где хранить журнал проб">
+                  <button type="button" data-mode="files" title="Как раньше: только файлы (jsonl)">файлы</button>
+                  <button type="button" data-mode="both" title="Читаем файлы, пишем и в файлы, и в базу — для сверки">файлы + база</button>
+                  <button type="button" data-mode="sqlite" title="Читаем и пишем только базу (SQLite). Включается после успешной сверки">база</button>
+                </span>
+                <div class="micro-conn-hint" id="stInfo">—</div>
+                <div class="micro-st-btns">
+                  <button type="button" id="stMigrateBtn" class="toolbar-btn toolbar-btn--primary" title="Перенести все старые пробы и журналы этой машины в базу. Файлы не меняются, повтор безопасен">Перенести старые данные в базу</button>
+                  <button type="button" id="stCheckBtn" class="toolbar-btn toolbar-btn--neutral" title="Сверить журнал в файлах и в базе: число проб и расхождения">Сверить</button>
+                </div>
+                <div class="micro-st-rows" id="stRows"></div>
+              </section>
+                </div>
+              </div>
+
               <!-- Разломы кристаллов (отдельная подсистема CV, без YOLO) -->
               <div class="micro-ppane hidden" data-ppane="frac">
                 <div class="micro-cv-head">
@@ -813,7 +853,6 @@
               <button type="button" class="micro-win-btn" id="teleCvBtn" data-tele="cv">Распознавание</button>
               <button type="button" class="micro-win-btn" id="teleTrendBtn" data-tele="trend">Тренды</button>
               <button type="button" class="micro-win-btn" id="teleCfgBtn" data-tele="cfg">CV</button>
-              <button type="button" class="micro-win-btn" id="teleReportBtn" data-tele="report">Отчёт</button>
             </div>
             <span class="micro-cv-status" id="cvStatus2" style="margin-left:auto"></span>
           </div>
@@ -1046,25 +1085,6 @@
             </div>
           </div>
 
-          <!-- «Отчёт» — отчёт по варкам за период (5-я вкладка нижней полосы) -->
-          <div class="micro-tele-report" id="teleStripReport" hidden>
-            <div class="micro-rep-bar">
-              <span class="micro-seg2" id="repPeriodSeg" role="group" aria-label="Период отчёта">
-                <button type="button" data-p="week" class="is-active" title="Последние 7 дней">неделя</button>
-                <button type="button" data-p="month" title="Последние 30 дней">месяц</button>
-                <button type="button" data-p="custom" title="Свой период: две даты">свой период</button>
-              </span>
-              <span class="micro-rep-dates" id="repDates" hidden>
-                <input type="date" id="repFrom" /> — <input type="date" id="repTo" />
-              </span>
-              <button type="button" id="repGoBtn" class="toolbar-btn toolbar-btn--primary" title="Собрать отчёт по варкам за выбранный период">Сформировать отчёт</button>
-              <button type="button" id="repCsvBtn" class="toolbar-btn toolbar-btn--neutral" title="Скачать отчёт в CSV (открывается в Excel)" disabled>CSV</button>
-              <button type="button" id="repPdfBtn" class="toolbar-btn toolbar-btn--neutral" title="Печать → «Сохранить как PDF»" disabled>PDF</button>
-              <span class="micro-conn-hint" id="repHint"></span>
-            </div>
-            <div class="micro-rep-out" id="repOut"><div class="micro-conn-hint">Выбери период и нажми «Сформировать отчёт».</div></div>
-          </div>
-
           <!-- «CV» — настройки распознавания (4-я вкладка нижней полосы) -->
           <div class="micro-tele-cfg" id="teleStripCfg" hidden>
             <div class="micro-cfg-top">
@@ -1085,20 +1105,6 @@
               </span>
             </div>
             <div class="micro-cfg-grid">
-              <section class="micro-cfg-card" id="storageCard">
-                <h4>Хранилище данных</h4>
-                <span class="micro-seg2" id="stModeSeg" role="group" aria-label="Где хранить журнал проб">
-                  <button type="button" data-mode="files" title="Как раньше: только файлы (jsonl)">файлы</button>
-                  <button type="button" data-mode="both" title="Читаем файлы, пишем и в файлы, и в базу — для сверки">файлы + база</button>
-                  <button type="button" data-mode="sqlite" title="Читаем и пишем только базу (SQLite). Включается после успешной сверки">база</button>
-                </span>
-                <div class="micro-conn-hint" id="stInfo">—</div>
-                <div class="micro-st-btns">
-                  <button type="button" id="stMigrateBtn" class="toolbar-btn toolbar-btn--primary" title="Перенести все старые пробы и журналы этой машины в базу. Файлы не меняются, повтор безопасен">Перенести старые данные в базу</button>
-                  <button type="button" id="stCheckBtn" class="toolbar-btn toolbar-btn--neutral" title="Сверить журнал в файлах и в базе: число проб и расхождения">Сверить</button>
-                </div>
-                <div class="micro-st-rows" id="stRows"></div>
-              </section>
               <section class="micro-cfg-card">
                 <h4>Группы и масштаб</h4>
           <label class="micro-cycle-f" title="Кристалл мельче этого размера (эквивалентный диаметр, мкм) идёт в группу «малая»."><span>Малая &lt;, мкм</span><input type="number" id="cvSmallMax" step="10" /></label>

@@ -485,13 +485,36 @@
       }
     });
     const cn = $("cvConfHidden"); if (cn) cn.textContent = hiddenByConf ? "скрыто по conf ≥ " + confThr + ": " + hiddenByConf : "";
-    // зоны разломов (подтверждённые по серии кадров)
-    if (cvLayers.frac) {
-      (((cvView && cvView.fracture) || {}).zones || []).forEach((z) => {
+    // зоны разломов (подтверждённые по серии кадров); в режиме правки — ещё кандидаты и рисуемая зона
+    if (cvLayers.frac || cvFracEdit.on) {
+      const fr = (cvView && cvView.fracture) || {};
+      if (cvFracEdit.on) (fr.candidates || []).forEach((z) => {
         if (!z.poly || z.poly.length < 3) return;
-        ctx.strokeStyle = "#ff3b30"; ctx.lineWidth = 2.5; ctx.setLineDash([7, 4]);
+        ctx.strokeStyle = "#ffa21a"; ctx.lineWidth = 2; ctx.setLineDash([3, 4]);
         path(z.poly); ctx.stroke(); ctx.setLineDash([]);
+        ctx.fillStyle = "#ffa21a"; ctx.font = "bold 11px sans-serif"; ctx.textAlign = "left"; ctx.textBaseline = "bottom";
+        ctx.fillText("кандидат " + (z.conf != null ? z.conf.toFixed(2) : ""), g.ox + z.bbox[0] * g.sc, g.oy + z.bbox[1] * g.sc - 3);
       });
+      (fr.zones || []).forEach((z) => {
+        if (!z.poly || z.poly.length < 3) return;
+        const manual = z.src === "manual" || z.src === "promoted";
+        ctx.strokeStyle = manual ? "#ff2d95" : "#ff3b30"; ctx.lineWidth = 2.5; ctx.setLineDash(manual ? [] : [7, 4]);
+        path(z.poly); ctx.stroke(); ctx.setLineDash([]);
+        if (cvFracEdit.on) {
+          ctx.globalAlpha = 0.14; ctx.fillStyle = ctx.strokeStyle; path(z.poly); ctx.fill(); ctx.globalAlpha = 1;
+          ctx.fillStyle = ctx.strokeStyle; ctx.font = "bold 11px sans-serif"; ctx.textAlign = "left"; ctx.textBaseline = "bottom";
+          ctx.fillText((z.src === "manual" ? "мой разлом" : z.src === "promoted" ? "принят" : "разлом " + (z.conf != null ? z.conf.toFixed(2) : "")) + " · клик — удалить",
+            g.ox + z.bbox[0] * g.sc, g.oy + z.bbox[1] * g.sc - 3);
+        }
+      });
+      if (cvFracEdit.on && cvFracEdit.pts.length) {                       // зона, которую рисуют сейчас
+        ctx.strokeStyle = "#2dd4bf"; ctx.fillStyle = "#2dd4bf"; ctx.lineWidth = 2;
+        ctx.beginPath();
+        cvFracEdit.pts.forEach((p, i) => { const x = g.ox + p[0] * g.sc, y = g.oy + p[1] * g.sc; if (i) ctx.lineTo(x, y); else ctx.moveTo(x, y); });
+        if (cvFracEdit.mouse) ctx.lineTo(g.ox + cvFracEdit.mouse[0] * g.sc, g.oy + cvFracEdit.mouse[1] * g.sc);
+        ctx.stroke();
+        cvFracEdit.pts.forEach((p) => { ctx.beginPath(); ctx.arc(g.ox + p[0] * g.sc, g.oy + p[1] * g.sc, 4, 0, Math.PI * 2); ctx.fill(); });
+      }
     }
     // кристалл под мышкой — поверх всего: заливка формы + жирный контур
     const h = cvHoverObj;
@@ -659,7 +682,7 @@
     const setHover = (o) => { if (o !== cvHoverObj) { cvHoverObj = o; cvDrawOverlay(); } };
     ov.addEventListener("mousemove", (e) => {
       const g = cvImgGeom();
-      if (!cvWinOn || !cvCurObjects.length || !g) { tip.hidden = true; setHover(null); return; }
+      if (!cvWinOn || !cvCurObjects.length || !g || cvFracEdit.on) { tip.hidden = true; setHover(null); return; }
       const r = ov.getBoundingClientRect();
       const ix = (e.clientX - r.left - g.ox) / g.sc, iy = (e.clientY - r.top - g.oy) / g.sc;
       // самый маленький объект под курсором (кристаллы могут лежать друг на друге): по контуру,
@@ -721,6 +744,81 @@
       tip.style.top = Math.max(pad, y) + "px";
     });
     ov.addEventListener("mouseleave", () => { tip.hidden = true; setHover(null); });
+  }
+  // --- правка разломов на кадре пробы: удалить зону / принять кандидата / нарисовать свою (всё запоминается на сервере) ---
+  const cvFracEdit = { on: false, pts: [], mouse: null, busy: false };
+  function wireFracEdit() {
+    const ov = $("cvOverlay"), btn = $("cvFracEditBtn"), msg = $("cvToLabelMsg");
+    if (!ov || !btn) return;
+    const say = (t) => { if (msg) { msg.textContent = t || ""; msg.title = t || ""; clearTimeout(btn._t); if (t) btn._t = setTimeout(() => { msg.textContent = ""; }, 7000); } };
+    const toImg = (e) => {
+      const g = cvImgGeom(); if (!g) return null;
+      const r = ov.getBoundingClientRect();
+      return [Math.round((e.clientX - r.left - g.ox) / g.sc), Math.round((e.clientY - r.top - g.oy) / g.sc), g];
+    };
+    const frameIdx = () => { const fr = cvViewFrames()[cvGalIdx]; return fr && fr.idx != null ? fr.idx : cvGalIdx; };
+    const setOn = (on) => {
+      cvFracEdit.on = on; cvFracEdit.pts = []; cvFracEdit.mouse = null;
+      btn.classList.toggle("is-on", on); ov.style.cursor = on ? "crosshair" : "";
+      if (on) say("правка разломов: клик по зоне — удалить/принять, по пустому — рисовать");
+      cvDrawOverlay();
+    };
+    async function send(body) {
+      if (!cvView || cvFracEdit.busy) return;
+      cvFracEdit.busy = true;
+      try {
+        const q = cvSerialQ();
+        const r = await fetch("/api/cv/fracture/edit", { method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(Object.assign({ ts: cvView.ts, idx: frameIdx(), serial: q ? decodeURIComponent(q.split("=")[1]) : null }, body)) });
+        if (!r.ok) throw new Error(await r.text());
+        const d = await r.json();
+        cvView.fracture = d.fracture;                                     // зоны пробы обновились — перерисовать
+        const s = cvSamples.find((x) => x.ts === cvView.ts); if (s) s.fracture = d.fracture.summary;
+        cvRenderStrip(); fracRender();
+        say("сохранено: зон " + (d.fracture.zones || []).length + ", кадр ушёл в калибровку разломов");
+      } catch (err) { say("не сохранилось: " + err.message); }
+      cvFracEdit.busy = false; cvFracEdit.pts = []; cvDrawOverlay();
+    }
+    const finish = () => {
+      if (cvFracEdit.pts.length >= 3) send({ add: [{ poly: cvFracEdit.pts.slice() }] });
+      else { cvFracEdit.pts = []; cvDrawOverlay(); }
+    };
+    btn.addEventListener("click", () => setOn(!cvFracEdit.on));
+    ov.addEventListener("click", (e) => {
+      if (!cvFracEdit.on) return;
+      const t = toImg(e); if (!t) return;
+      const [x, y, g] = t, fr = (cvView && cvView.fracture) || {};
+      const pts = cvFracEdit.pts;
+      if (pts.length) {                                              // рисуем: замкнуть у первой точки или добавить точку
+        if (pts.length >= 3 && Math.hypot(x - pts[0][0], y - pts[0][1]) * g.sc < 10) { finish(); return; }
+        pts.push([x, y]); cvDrawOverlay(); return;
+      }
+      (fr.zones || []).forEach((z, i) => { if (!z.id) { z.id = "a" + i; z.src = z.src || "auto"; } });        // пробы до правки: id как на сервере
+      (fr.candidates || []).forEach((z, i) => { if (!z.id) { z.id = "c" + i; z.src = z.src || "candidate"; } });
+      const hit = (zs) => zs.filter((z) => z.poly && cvPointInPoly(z.poly, x, y)).sort((a, b) => (a.area || 0) - (b.area || 0))[0];
+      const z = hit(fr.zones || []), c = hit(fr.candidates || []);
+      if (z) send({ remove: [z.id] });
+      else if (c) send({ promote: [c.id] });
+      else { pts.push([x, y]); cvDrawOverlay(); }
+    });
+    ov.addEventListener("dblclick", () => { if (cvFracEdit.on && cvFracEdit.pts.length) { cvFracEdit.pts.pop(); finish(); } });
+    ov.addEventListener("contextmenu", (e) => {
+      if (!cvFracEdit.on) return;
+      e.preventDefault();
+      if (cvFracEdit.pts.length) { cvFracEdit.pts.pop(); cvDrawOverlay(); }
+    });
+    ov.addEventListener("mousemove", (e) => {
+      if (!cvFracEdit.on || !cvFracEdit.pts.length) return;
+      const t = toImg(e); if (t) { cvFracEdit.mouse = [t[0], t[1]]; cvDrawOverlay(); }
+    });
+    document.addEventListener("keydown", (e) => {
+      if (!cvFracEdit.on) return;
+      const tag = (e.target && e.target.tagName) || "";
+      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
+      if (e.key === "Enter" && cvFracEdit.pts.length) { e.preventDefault(); finish(); }
+      else if (e.key === "Escape") { if (cvFracEdit.pts.length) { cvFracEdit.pts = []; cvDrawOverlay(); } else setOn(false); }
+      else if (e.key === "Backspace" && cvFracEdit.pts.length) { e.preventDefault(); cvFracEdit.pts.pop(); cvDrawOverlay(); }
+    });
   }
   // листалка кадров выбранной пробы (‹ › поверх окна «Комп. зрение»)
   function cvViewFrame(idx) {
@@ -1231,6 +1329,7 @@
     wireTrend();
     wireModelUpload();
     wireHoverTip();
+    wireFracEdit();
     wireLayers();
     wireVolumeFields();
     wireBoilNav();

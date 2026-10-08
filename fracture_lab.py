@@ -54,8 +54,8 @@ def _forget(name: str):
         _zone_cache.pop(k, None)
 
 
-def save_frame(img: np.ndarray, label: str = "unknown") -> str:
-    """Сохранить кадр (чистый PNG) с меткой. Возвращает имя файла."""
+def save_frame(img: np.ndarray, label: str = "unknown", meta: Optional[dict] = None) -> str:
+    """Сохранить кадр (чистый PNG) с меткой. Возвращает имя файла. meta — доп. поля метаданных (например, разметка зон)."""
     label = label if label in LABELS else "unknown"
     LAB_DIR.mkdir(parents=True, exist_ok=True)
     base = time.strftime("fr_%Y%m%d_%H%M%S")
@@ -66,9 +66,27 @@ def save_frame(img: np.ndarray, label: str = "unknown") -> str:
     if not ok:
         raise OSError("не удалось закодировать кадр")
     (LAB_DIR / name).write_bytes(enc.tobytes())
-    _write_meta(name, {"label": label, "ts": time.time()})
+    _write_meta(name, {**(meta or {}), "label": label, "ts": time.time()})
     log_event("fracture_lab", "Кадр калибровки разломов сохранён", "info", {"name": name, "label": label})
     return name
+
+
+def save_probe_sample(key: str, img: np.ndarray, label: str, extra: dict) -> str:
+    """Кадр пробы, размеченный оператором вручную (удалил/принял/нарисовал зоны), — в калибровку: подбор порогов по
+    разметке (вкладка «Разломы») берёт его как обычный размеченный кадр. Одна проба — один кадр: повторная правка
+    обновляет метку и разметку, а не плодит файлы. extra: зоны оператора, удалённые автозоны."""
+    meta = {**extra, "probe": key, "source": "operator_edit"}
+    if LAB_DIR.exists():
+        for p in LAB_DIR.glob("fr_*.json"):
+            try:
+                m = json.loads(p.read_text(encoding="utf-8"))
+            except Exception:
+                continue
+            if isinstance(m, dict) and m.get("probe") == key and (LAB_DIR / (p.stem + ".png")).exists():
+                name = p.stem + ".png"
+                _write_meta(name, {**meta, "label": label if label in LABELS else "unknown", "ts": time.time()})
+                return name
+    return save_frame(img, label, meta)
 
 
 def list_frames() -> list[dict]:

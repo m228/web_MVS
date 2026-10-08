@@ -3865,3 +3865,6 @@ input.micro-cam-num { width: 56px; min-width: 0; flex: 0 0 auto; padding: 4px 5p
 .micro-vol__boil button:hover:not(:disabled) { border-color: var(--accent, #2563eb); color: var(--accent, #2563eb); }
 .micro-vol__boil button:disabled { opacity: .35; cursor: default; }
 .micro-vol__boil #cvBoilLbl { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--text, inherit); font-weight: 600; font-variant-numeric: tabular-nums; }
+
+/* правка разломов в галерее: кнопка включена — подсветка; курсор-прицел на кадре задаёт JS */
+#cvFracEditBtn.is-on { background: #e24b4a; border-color: transparent; opacity: 1; }

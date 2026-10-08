@@ -977,6 +977,7 @@ def _cv_fracture():
     out = cv_fracture.draw(img.copy(), confirmed)
     assert out.shape == img.shape
     assert isinstance(cv_fracture.area_pct(confirmed, img.shape), (int, float))
+    assert isinstance(cv_fracture.candidates([z, z, z], confirmed, None), list), "кандидаты на разлом"
     return "зон=%d, подтверждено=%d" % (len(z), len(confirmed))
 
 
@@ -1284,6 +1285,44 @@ def _fracture_lab():
         fracture_lab.delete(name)
     assert not any(f["name"] == name for f in fracture_lab.list_frames())
     return name
+
+
+@check("CV", "cv_store.edit_fracture: удалить зону / принять кандидата / нарисовать свою → проба, журнал и калибровка обновились")
+def _cv_fracture_edit():
+    import cv_analyzer, cv_fracture, cv_store, fracture_lab
+    img, objs = synth_frame()
+    res = cv_analyzer.analyze(img, objs, None, with_overlay=False, sv=90.0)
+    frames = [{"file": "f0.jpg", "summary": res["summary"], "objects": res["objects"]}]
+    h, w = img.shape[:2]
+    zone = lambda x, y, c: {"bbox": [x, y, 100, 80], "poly": [[x, y], [x + 100, y], [x + 100, y + 80], [x, y + 80]], "conf": c, "D": .7, "T": .6, "area": 8000}
+    conf, cands = [zone(10, 10, 0.8)], [zone(300, 200, 0.4)]
+    cv_fracture.number_zones(conf, cands)
+    fr = {"summary": {"zones": 1, "has_fracture": True, "area_pct": 1.0}, "zones": conf, "candidates": cands, "size": [w, h]}
+    import time as _tm
+    rec = cv_store.save_sample("SELFCHECK", 7, frames, [img], {"total_ms": 1}, keep_last=5, sv=90.0, fracture=fr,
+                               ts=_tm.strftime(cv_store.TS_FMT, _tm.localtime(_tm.time() + 11)))
+    lab = None
+    try:
+        out = cv_store.edit_fracture("SELFCHECK", rec["ts"], 0, remove=["a0"], promote=["c0"],
+                                     add=[{"poly": [[50, 50], [150, 50], [150, 120], [50, 120]]}])
+        assert [z["src"] for z in out["zones"]] == ["promoted", "manual"], "зоны после правки: %r" % ([z.get("src") for z in out["zones"]],)
+        assert out["candidates"] == [] and out["rejected"][0]["id"] == "a0" and out["auto_zones"][0]["id"] == "a0", "кандидаты/удалённые/исходник"
+        sm = out["summary"]
+        assert sm["zones"] == 2 and sm["has_fracture"] and sm["edited"] and sm["area_pct"] > 0, "сводка: %r" % (sm,)
+        again = cv_store.get_result("SELFCHECK", rec["ts"])["fracture"]
+        assert len(again["zones"]) == 2 and again["edited"], "result.json не обновился"
+        row = [r for r in cv_store.export_rows("SELFCHECK") if r["ts"] == rec["ts"]][0]
+        assert row["frac_zones"] == 2, "журнал: frac_zones=%r" % (row["frac_zones"],)
+        lab = [f for f in fracture_lab.list_frames() if f["label"] == "fracture" and (fracture_lab._read_meta(f["name"]).get("probe") or "").endswith(rec["ts"])]
+        assert lab, "кадр с правкой не попал в калибровку разломов"
+        cv_store.edit_fracture("SELFCHECK", rec["ts"], 0, remove=[z["id"] for z in out["zones"]])
+        lab2 = [f for f in fracture_lab.list_frames() if (fracture_lab._read_meta(f["name"]).get("probe") or "").endswith(rec["ts"])]
+        assert len(lab2) == 1 and lab2[0]["label"] == "ok", "повторная правка: один кадр, метка «норма», а не новый файл: %r" % (lab2,)
+    finally:
+        for f in fracture_lab.list_frames():
+            if (fracture_lab._read_meta(f["name"]).get("probe") or "").endswith(rec["ts"]):
+                fracture_lab.delete(f["name"])
+    return "зоны: удалить / принять / нарисовать; калибровка и журнал обновляются"
 
 
 @check("CV", "cv_client.health: CV-сервис недоступен → None без исключения и зависания")

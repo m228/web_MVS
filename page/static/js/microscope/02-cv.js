@@ -131,11 +131,11 @@
   // переключатель нижней секции: телеметрия платы ↔ распознавание
   function wireTeleToggle() {
     const seg = document.querySelector(".micro-tele-seg");
-    const btns = { plate: $("telePlateBtn"), cv: $("teleCvBtn"), trend: $("teleTrendBtn"), cfg: $("teleCfgBtn"), report: $("teleReportBtn") };
-    const panes = { plate: $("teleStripPlate"), cv: $("teleStripCv"), trend: $("teleStripTrend"), cfg: $("teleStripCfg"), report: $("teleStripReport") };
+    const btns = { plate: $("telePlateBtn"), cv: $("teleCvBtn"), trend: $("teleTrendBtn"), cfg: $("teleCfgBtn") };
+    const panes = { plate: $("teleStripPlate"), cv: $("teleStripCv"), trend: $("teleStripTrend"), cfg: $("teleStripCfg") };
     if (!btns.plate || !btns.cv) return;
     function set(mode) {
-      if (seg) { seg.classList.toggle("cv", mode === "cv"); seg.classList.toggle("trend", mode === "trend"); seg.classList.toggle("cfg", mode === "cfg"); seg.classList.toggle("report", mode === "report"); }
+      if (seg) { seg.classList.toggle("cv", mode === "cv"); seg.classList.toggle("trend", mode === "trend"); seg.classList.toggle("cfg", mode === "cfg"); }
       Object.keys(btns).forEach((k) => {
         if (btns[k]) btns[k].classList.toggle("is-active", k === mode);
         if (panes[k]) panes[k].hidden = k !== mode;

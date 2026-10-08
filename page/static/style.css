@@ -3809,13 +3809,12 @@ input.micro-cam-num { width: 56px; min-width: 0; flex: 0 0 auto; padding: 4px 5p
   border-color: var(--border-strong, rgba(118,142,178,.45)); }
 
 /* Переключатель низа: шире + не переносить текст */
-.micro-tele-seg { width: 640px; max-width: 100%; grid-template-columns: repeat(5, 1fr); }
-/* ползунок на 5 кнопок: внутренний отступ 3px, ширина кнопки = (100% - 6px) / 5 */
-.micro-tele-seg .micro-win-pill { width: calc((100% - 6px) / 5); }
-.micro-tele-seg.cv .micro-win-pill { left: calc(3px + (100% - 6px) / 5); }
-.micro-tele-seg.trend .micro-win-pill { left: calc(3px + 2 * (100% - 6px) / 5); }
-.micro-tele-seg.cfg .micro-win-pill { left: calc(3px + 3 * (100% - 6px) / 5); }
-.micro-tele-seg.report .micro-win-pill { left: calc(3px + 4 * (100% - 6px) / 5); }
+.micro-tele-seg { width: 520px; max-width: 100%; grid-template-columns: repeat(4, 1fr); }
+/* ползунок на 4 кнопки: внутренний отступ 3px, ширина кнопки = (100% - 6px) / 4 */
+.micro-tele-seg .micro-win-pill { width: calc((100% - 6px) / 4); }
+.micro-tele-seg.cv .micro-win-pill { left: calc(3px + (100% - 6px) / 4); }
+.micro-tele-seg.trend .micro-win-pill { left: calc(3px + 2 * (100% - 6px) / 4); }
+.micro-tele-seg.cfg .micro-win-pill { left: calc(3px + 3 * (100% - 6px) / 4); }
 /* «Распознавание» теперь одна колонка; тренды вынесены в свою вкладку на всю ширину */
 .micro-tele-cv { grid-template-columns: 1fr; }
 .micro-tele-trend .micro-cv-block:first-child { margin-top: 0; padding-top: 0; border-top: 0; }
@@ -3948,3 +3947,7 @@ input.micro-cam-num { width: 56px; min-width: 0; flex: 0 0 auto; padding: 4px 5p
 .micro-st-row { display: flex; justify-content: space-between; gap: 10px; padding: 5px 8px; border-radius: 7px; background: var(--surface, rgba(255,255,255,.03)); }
 .micro-st-row.is-ok b { color: #1d9e75; }
 .micro-st-row.is-bad b { color: #e24b4a; }
+
+/* Отчёт в верхней панели: узкая колонка — карточки по две в ряд, таблицы с прокруткой; хранилище — внизу */
+.micro-ppane[data-ppane="report"] .micro-rep-cards { grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); }
+.micro-rep-storage { margin-top: 16px; grid-template-columns: 1fr; }

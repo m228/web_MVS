@@ -3901,3 +3901,8 @@ input.micro-cam-num { width: 56px; min-width: 0; flex: 0 0 auto; padding: 4px 5p
   border-radius: 6px; padding: 1px 8px; font-size: 0.78em; cursor: pointer; }
 .micro-vol__notebtn.is-on { color: var(--text); border-color: var(--border-strong, rgba(118,142,178,.45)); }
 .micro-vol__note[hidden] { display: none; }
+/* критерий «по объёму, мм³»: значения вида 0,00450000 — полям нужна ширина под ~8 цифр */
+#cvVol.is-crit-volume .micro-vol__fields input#cvFinesMm,
+#cvVol.is-crit-volume .micro-vol__fields input#cvFinesPump,
+#cvVol.is-crit-volume .micro-vol__fields input#cvFinesG1,
+#cvVol.is-crit-volume .micro-vol__fields input#cvFinesG2 { width: 104px; }

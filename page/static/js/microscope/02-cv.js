@@ -401,6 +401,7 @@
     Object.keys(CV_VOL_SUB).forEach((g) => set(CV_VOL_SUB[g], cvVolCfg[cvVolKey(g)]));
     [m, ...Object.values(CV_VOL_SUB).map($)].forEach((e) => { if (e) { e.step = vol ? "0.0005" : "0.01"; e.min = e === m ? (vol ? "0.0001" : "0.01") : "0"; } });
     const lbl = $("cvFinesLbl"); if (lbl) lbl.textContent = vol ? "Мука, мм³" : "Мука, мм";
+    const vb = $("cvVol"); if (vb) vb.classList.toggle("is-crit-volume", vol);
     document.querySelectorAll("#cvFinesModeSeg button").forEach((b) => b.classList.toggle("is-active", b.dataset.mode === cvCrit));
     const c = $("cvFinesCalc"); if (c) c.textContent = cvFinesCalcText();
     cvVolMarkDirty();

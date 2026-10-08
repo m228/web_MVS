@@ -3762,7 +3762,9 @@ input.micro-cam-num { width: 56px; min-width: 0; flex: 0 0 auto; padding: 4px 5p
 .micro-cam-card.cv-win #microCamStream,
 .micro-cam-card.cv-win #camPlaceholder { display: none !important; }
 #cvOverlay[hidden], #cvOverlayPh[hidden] { display: none !important; }
-.micro-cv-tele { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; margin-bottom: 4px; }
+.micro-cv-tele { display: grid; grid-template-columns: 1fr; gap: 4px; margin-top: 10px; }
+.micro-cv-tele .micro-tile { display: flex; flex-direction: row; justify-content: space-between; align-items: baseline; gap: 10px; padding: 6px 10px; }
+.micro-cv-tele .micro-tile b { font-size: 0.95em; text-align: right; }
 
 /* Рассев и объём — два компактных блока рядом; объём — сетка 5 колонок с мелкими числами */
 .micro-cv-pair { display: grid; grid-template-columns: minmax(0, 5fr) minmax(0, 6fr); gap: 18px; align-items: start; }
@@ -3807,11 +3809,12 @@ input.micro-cam-num { width: 56px; min-width: 0; flex: 0 0 auto; padding: 4px 5p
   border-color: var(--border-strong, rgba(118,142,178,.45)); }
 
 /* Переключатель низа: шире + не переносить текст */
-.micro-tele-seg { width: 420px; max-width: 100%; grid-template-columns: repeat(3, 1fr); }
-/* ползунок на 3 кнопки: внутренний отступ 3px, ширина кнопки = (100% - 6px) / 3 */
-.micro-tele-seg .micro-win-pill { width: calc((100% - 6px) / 3); }
-.micro-tele-seg.cv .micro-win-pill { left: calc(3px + (100% - 6px) / 3); }
-.micro-tele-seg.trend .micro-win-pill { left: calc(3px + 2 * (100% - 6px) / 3); }
+.micro-tele-seg { width: 520px; max-width: 100%; grid-template-columns: repeat(4, 1fr); }
+/* ползунок на 4 кнопки: внутренний отступ 3px, ширина кнопки = (100% - 6px) / 4 */
+.micro-tele-seg .micro-win-pill { width: calc((100% - 6px) / 4); }
+.micro-tele-seg.cv .micro-win-pill { left: calc(3px + (100% - 6px) / 4); }
+.micro-tele-seg.trend .micro-win-pill { left: calc(3px + 2 * (100% - 6px) / 4); }
+.micro-tele-seg.cfg .micro-win-pill { left: calc(3px + 3 * (100% - 6px) / 4); }
 /* «Распознавание» теперь одна колонка; тренды вынесены в свою вкладку на всю ширину */
 .micro-tele-cv { grid-template-columns: 1fr; }
 .micro-tele-trend .micro-cv-block:first-child { margin-top: 0; padding-top: 0; border-top: 0; }
@@ -3868,3 +3871,40 @@ input.micro-cam-num { width: 56px; min-width: 0; flex: 0 0 auto; padding: 4px 5p
 
 /* правка разломов в галерее: кнопка включена — подсветка; курсор-прицел на кадре задаёт JS */
 #cvFracEditBtn.is-on { background: #e24b4a; border-color: transparent; opacity: 1; }
+
+/* ===== Вкладка «CV» (настройки распознавания): карточки в колонках ===== */
+.micro-cfg-top { display: flex; align-items: center; gap: 10px 14px; flex-wrap: wrap; margin-bottom: 14px; }
+.micro-cfg-top .micro-cv-status { flex: 1 1 200px; min-width: 0; }
+.micro-cfg-top__btns { display: flex; gap: 8px; margin-left: auto; flex-wrap: wrap; }
+.micro-cfg-top__btns .toolbar-btn { min-width: 0; padding: 6px 14px; font-size: 0.85em; }
+.micro-cfg-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 14px; align-items: start; }
+.micro-cfg-card { display: flex; flex-direction: column; gap: 8px; padding: 12px 14px 14px; border-radius: 12px;
+  background: var(--surface-muted, rgba(255,255,255,.04)); border: 1px solid var(--border, rgba(131,151,179,.28)); }
+.micro-cfg-card h4 { margin: 0 0 4px; font-size: 0.78em; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--muted, #8a94a6); }
+.micro-cfg-card .micro-cycle-f { grid-template-columns: 1fr 84px; }
+.micro-cfg-card .micro-check { margin: 2px 0 0; }
+
+/* Поля «Объём и мука»: критерий муки (сторона / объём), три порога по подстадиям, ✓/✕ применить */
+.micro-vol__fields--sub { margin-top: 6px; }
+.micro-vol__fields input[type="number"].is-dirty { border-color: var(--accent, #2563eb); }
+.micro-seg2 { display: inline-flex; border: 1px solid var(--border, rgba(131,151,179,.28)); border-radius: 7px; overflow: hidden; }
+.micro-seg2 button { border: 0; background: transparent; color: var(--muted); font-size: 1em; padding: 3px 10px; cursor: pointer; }
+.micro-seg2 button.is-active { background: var(--accent, #2563eb); color: var(--accent-contrast, #fff); }
+.micro-apply { display: inline-flex; gap: 4px; align-items: center; margin-left: auto; }
+.micro-apply[hidden] { display: none; }
+.micro-apply button { width: 24px; height: 24px; padding: 0; border: 0; border-radius: 6px; font-size: 14px; line-height: 1; cursor: pointer; color: #fff; }
+.micro-apply__ok { background: #1d9e75; }
+.micro-apply__no { background: #d6504e; }
+.micro-apply.is-busy button { opacity: .45; pointer-events: none; }
+.micro-apply__msg { font-size: 0.9em; color: var(--muted); }
+
+.micro-sieve__title { margin-top: 14px; }
+.micro-vol__notebtn { margin-left: auto; border: 1px solid var(--border, rgba(131,151,179,.28)); background: transparent; color: var(--muted);
+  border-radius: 6px; padding: 1px 8px; font-size: 0.78em; cursor: pointer; }
+.micro-vol__notebtn.is-on { color: var(--text); border-color: var(--border-strong, rgba(118,142,178,.45)); }
+.micro-vol__note[hidden] { display: none; }
+/* критерий «по объёму, мм³»: значения вида 0,00450000 — полям нужна ширина под ~8 цифр */
+#cvVol.is-crit-volume .micro-vol__fields input#cvFinesMm,
+#cvVol.is-crit-volume .micro-vol__fields input#cvFinesPump,
+#cvVol.is-crit-volume .micro-vol__fields input#cvFinesG1,
+#cvVol.is-crit-volume .micro-vol__fields input#cvFinesG2 { width: 104px; }

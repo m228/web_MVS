@@ -350,7 +350,7 @@ MODULES = [
     "camera_core.base_worker", "camera_core.gige_worker", "camera_core.rtsp_worker", "camera_core.camera_manager",
     "sdk_gige", "dahua_control", "net_tools", "rtsp_store",
     "save_settings", "plate_config", "sv_source", "microscope_plc", "microscope_fsm",
-    "microscope_service", "cv_analyzer", "cv_volume", "cv_fracture", "cv_client", "cv_store", "fracture_lab",
+    "microscope_service", "cv_analyzer", "cv_volume", "substages", "cv_fracture", "cv_client", "cv_store", "fracture_lab",
     "updater", "autostart", "diag", "app", "mvsdk",
 ]
 THIRD_PARTY = ["cv2", "numpy", "fastapi", "starlette", "uvicorn", "pymodbus", "harvesters", "genicam",
@@ -1132,6 +1132,21 @@ def _cv_fines_latch():
     return "порог по варке: с первого достижения до конца, пропуски СВ линию не рвут"
 
 
+@check("CV", "cv_volume: порог муки по подстадиям (подкачка / рост 1 / рост 2), переключатель сторона/объём, неизвестная подстадия — общий порог")
+def _cv_fines_substage():
+    import cv_volume, substages
+    base = cv_volume.volume_cfg(None)["fines_um"]
+    cfg = {"volume": {"fines_side_pump": 0.1, "fines_side_g1": 0.15, "fines_side_g2": 0.3}}
+    um = lambda sub: cv_volume.volume_cfg(cfg, sub)["fines_um"]
+    assert um(None) == base and um(99) == base and um(71 + 20) == base, "неизвестная подстадия — общий порог"
+    assert um(52) < um(71) == um(72) < um(73) == um(77), "подкачка < рост 1 < рост 2: %s %s %s" % (um(52), um(72), um(73))
+    assert cv_volume.volume_cfg({"volume": {"fines_side_g1": 0}}, 72)["fines_um"] == base, "0 в поле группы — как общий"
+    vol = {"volume": {"fines_mode": "volume", "fines_vol_mm3": 0.006}}
+    assert abs(cv_volume.volume_cfg(vol)["fines_um"] - 225.68) < 0.5, "объём 0,006 мм³ ≈ шар 226 мкм"
+    assert substages.name_of(73) == "рост 2" and substages.name_of(71) == "рост" and substages.group_of(58) == "pump"
+    return "три порога + режим объёма работают"
+
+
 @check("CV", "cv_volume: рассев по ситам — фракции по границам 0,2·0,5·0,7·0,8·1·1,2 мм, сумма 100 %, слияние кадров")
 def _cv_sieve():
     import cv_volume
@@ -1177,8 +1192,8 @@ def _micro_plc_snapshot():
     assert ms._plc_snapshot() is None, "без sv_source снимок должен быть None"
     ms.sv_source = _FakeSrc()
     snap = ms._plc_snapshot()
-    assert set(snap) == {"temp_app", "level", "current", "press_top", "cook_time"}, "в снимке лишнее/нет: %r" % (snap,)
-    assert "substage" not in snap and "stage" not in snap
+    assert set(snap) == {"temp_app", "level", "current", "press_top", "cook_time", "substage"}, "в снимке лишнее/нет: %r" % (snap,)
+    assert snap["substage"] == 31 and "stage" not in snap
     ms.sv_source.up = False
     assert ms._plc_snapshot() is None, "нет связи с ПЛК — снимка нет"
     ms.sv_source.up = True

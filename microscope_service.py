@@ -15,7 +15,7 @@ from logger import log_event
 
 
 # поля ПЛК (sv_source), которые пишем в запись пробы CV — режим варки на момент пробы
-PLC_KEYS = ("temp_app", "level", "current", "press_top", "cook_time")
+PLC_KEYS = ("temp_app", "level", "current", "press_top", "cook_time", "substage")
 
 
 class MicroscopeService:
@@ -402,7 +402,8 @@ class MicroscopeService:
                     objs = cv_analyzer.refine_seam_stubs(img, objs, cv, _infer_window, ref)
                     run["timing"] = {**run["timing"], "refine_ms": round((time.time() - t_ref) * 1000),
                                      "refine_stubs": ref.get("stubs", 0), "refine_fixed": ref.get("fixed", 0)}
-                res = cv_analyzer.analyze(img, objs, cv_cfg=cv, with_overlay=False, sv=sv)
+                res = cv_analyzer.analyze(img, objs, cv_cfg=cv, with_overlay=False, sv=sv,
+                                          substage=(snap or {}).get("substage"))
                 summary, objects = res["summary"], res["objects"]
         # --- разломы (чистый OpenCV, всегда) ---
         run["zones"].append(cv_fracture.detect_zones(img, run["fr_cfg"]) if run["fr_on"] else [])
@@ -490,7 +491,7 @@ class MicroscopeService:
             if not vals:
                 continue
             # разрежение — до тысячных (на экране так же), остальное до десятых; время варки — последнее
-            out[k] = (int(vals[-1]) if k == "cook_time"
+            out[k] = (int(vals[-1]) if k in ("cook_time", "substage")
                       else round(sum(vals) / len(vals), 3 if k == "press_top" else 1))
         if self._seed_ts is not None:
             out["seed_age_s"] = max(0, int(run.get("t0", time.time()) - self._seed_ts))

@@ -69,7 +69,7 @@
     if ($("cvBubble")) $("cvBubble").checked = cv.bubble_filter !== false;
     if ($("cvRejectAlways")) $("cvRejectAlways").checked = !!cv.reject_always;
     const vo = cv.volume || {};
-    set("cvAvgN", vo.avg_n); set("cvFinesMm", vo.fines_side_mm); set("cvKThick", vo.k_thick); set("cvFinesSv", vo.fines_from_sv);   // поля блока «Объём и мелочь»
+    cvVolFill(vo);   // поля блока «Объём и мука»
     set("pcCvFrames", cv.frames_per_probe); set("pcCvGap", cv.gap_sec);   // поля на вкладке «Цикл»
     cvTrendStyle = cv.trend_style || {}; cvApplyStyleToRows(); cvBuildStylePanel(); cvDrawTrend();   // вид линий тренда из конфига
     updateTriggerFields();
@@ -131,11 +131,11 @@
   // переключатель нижней секции: телеметрия платы ↔ распознавание
   function wireTeleToggle() {
     const seg = document.querySelector(".micro-tele-seg");
-    const btns = { plate: $("telePlateBtn"), cv: $("teleCvBtn"), trend: $("teleTrendBtn") };
-    const panes = { plate: $("teleStripPlate"), cv: $("teleStripCv"), trend: $("teleStripTrend") };
+    const btns = { plate: $("telePlateBtn"), cv: $("teleCvBtn"), trend: $("teleTrendBtn"), cfg: $("teleCfgBtn") };
+    const panes = { plate: $("teleStripPlate"), cv: $("teleStripCv"), trend: $("teleStripTrend"), cfg: $("teleStripCfg") };
     if (!btns.plate || !btns.cv) return;
     function set(mode) {
-      if (seg) { seg.classList.toggle("cv", mode === "cv"); seg.classList.toggle("trend", mode === "trend"); }
+      if (seg) { seg.classList.toggle("cv", mode === "cv"); seg.classList.toggle("trend", mode === "trend"); seg.classList.toggle("cfg", mode === "cfg"); }
       Object.keys(btns).forEach((k) => {
         if (btns[k]) btns[k].classList.toggle("is-active", k === mode);
         if (panes[k]) panes[k].hidden = k !== mode;
@@ -145,7 +145,7 @@
     }
     Object.keys(btns).forEach((k) => { if (btns[k]) btns[k].addEventListener("click", () => set(k)); });
   }
-  function isTeleCvVisible() { return ["teleStripCv", "teleStripTrend"].some((id) => { const e = $(id); return e && !e.hidden; }); }
+  function isTeleCvVisible() { return ["teleStripCv", "teleStripTrend", "teleStripCfg"].some((id) => { const e = $(id); return e && !e.hidden; }); }
 
   // --- рассев + статистика ---
   function cvRenderScatter() {
@@ -198,11 +198,18 @@
   const cvAvg3 = (o) => { const v = o ? ["m1", "m2", "m3"].map((k) => o[k]).filter((x) => x != null) : []; return v.length ? v.reduce((a, b) => a + b, 0) / v.length : null; };
   const fmtPct = (v) => (v == null ? "—" : (v >= 10 ? v.toFixed(1) : v.toFixed(2)) + " %");
   // расчётный порог муки по диаметру: круг той же площади, что квадрат side × side мм → 2000·side/√π, мкм
-  function cvFinesDiam() { const v = parseFloat(($("cvFinesMm") || {}).value); return v > 0 ? 2000 * v / Math.sqrt(Math.PI) : null; }
+  // критерий «по объёму»: шар объёмом V мм³ → d = 1000·(6V/π)^(1/3), мкм
+  let cvCrit = "side";   // чем меряем муку: side — сторона, мм; volume — объём, мм³
+  function cvFinesDiam() {
+    const v = parseFloat(($("cvFinesMm") || {}).value);
+    if (!(v > 0)) return null;
+    return cvCrit === "volume" ? 1000 * Math.cbrt(6 * v / Math.PI) : 2000 * v / Math.sqrt(Math.PI);
+  }
   function cvFinesCalcText() {
     const side = parseFloat(($("cvFinesMm") || {}).value), d = cvFinesDiam();
     if (!(side > 0) || d == null) return "—";
     const f = (x, p) => String(Number(x.toPrecision(p))).replace(".", ",");
+    if (cvCrit === "volume") return "Сейчас: объём " + f(side, 3) + " мм³ ↔ шар диаметром ≈ " + Math.round(d) + " мкм. Объём кристалла меньше — мука.";
     return "Сейчас: " + f(side, 3) + " × " + f(side, 3) + " мм = " + f(side * side, 3) + " мм² (" + Math.round(side * side * 1e6) +
       " мкм²) → диаметр 2 · " + f(side * 1000, 4) + " / √π ≈ " + Math.round(d) + " мкм. Мельче — мука.";
   }
@@ -226,7 +233,7 @@
     box.innerHTML = rows.join("");
   }
   // --- рассев по ситам: фракции снизу вверх b0 (дно) … b6 (>1,2 мм); строки рисуем сверху вниз как в лабораторной таблице ---
-  const CV_SIEVE_ROWS = [[6, "> 1,2"], [5, "1 – 1,2"], [4, "0,8 – 1"], [3, "0,7 – 0,8"], [2, "0,5 – 0,7"], [1, "0,2 – 0,5"], [0, "дно < 0,2"]];
+  const CV_SIEVE_ROWS = [[[5, 6], "> 1"], [4, "0,8 – 1"], [3, "0,7 – 0,8"], [2, "0,5 – 0,7"], [1, "0,2 – 0,5"], [0, "дно < 0,2"]];
   // показывать ли отдельные модели M1–M3 (по умолчанию скрыты: «Среднее» и «Площадь» понятнее)
   let cvShowModels = false;
   try { cvShowModels = localStorage.getItem("microCvShowModels") === "1"; } catch (e) { }
@@ -234,7 +241,9 @@
   function cvRenderSieve(sv) {            // sv = {m1:[7], m2:[7], m3:[7], area:[7]} в %: объём по трём моделям и площадь; нет данных — прочерки
     cvSieveLast = sv;
     const g = $("cvSieveGrid"); if (!g) return;
-    const val = (m, i) => (sv && sv[m] && sv[m][i] != null ? sv[m][i] : null);
+    const one = (m, k) => (sv && sv[m] && sv[m][k] != null ? sv[m][k] : null);
+    // строка может объединять несколько фракций (например «> 1» = 1–1,2 + больше 1,2 — таких крупных кристаллов у маточника нет)
+    const val = (m, i) => { if (!Array.isArray(i)) return one(m, i); const v = i.map((k) => one(m, k)).filter((x) => x != null); return v.length ? v.reduce((a, b) => a + b, 0) : null; };
     const avg = (i) => cvAvg3({ m1: val("m1", i), m2: val("m2", i), m3: val("m3", i) });
     g.style.gridTemplateColumns = "auto repeat(" + (cvShowModels ? 5 : 2) + ", minmax(0, 1fr))";
     let html = '<span>размер, мм</span><b title="Доля по объёму (объём ~ масса): среднее трёх моделей M1–M3">Среднее</b><b title="Доля по площади кристаллов на кадре">Площадь</b>' +
@@ -264,7 +273,10 @@
   function cvBoilName(i) {
     const b = cvBoils[i]; if (!b.finished) return "идёт сейчас";
     const k = cvBoils.slice(0, i).filter((x) => x.finished).length;
-    return k === 0 ? "предыдущая варка" : (k === 1 ? "пред-предыдущая" : (k + 1) + " варки назад");
+    if (k === 0) return "предыдущая варка";
+    if (k === 1) return "две варки назад";
+    const n = k + 1, m10 = n % 10, m100 = n % 100;
+    return n + ((m10 >= 2 && m10 <= 4 && (m100 < 10 || m100 >= 20)) ? " варки назад" : " варок назад");
   }
   function cvBoilSpan(b) {
     const d = (ts) => cvTsLabel(ts, true).slice(0, 11);       // «05.10 16:27»
@@ -369,18 +381,91 @@
     const calc = $("cvFinesCalc"); if (calc) calc.textContent = cvFinesCalcText();
     cvRenderVolNote(s, vp, cfg, finesOff);
   }
+  // --- поля «Объём и мука»: критерий муки (сторона мм / объём мм³), три порога по подстадиям, применение по ✓ ---
+  let cvVolCfg = {};
+  const CV_VOL_SUB = { pump: "cvFinesPump", g1: "cvFinesG1", g2: "cvFinesG2" };
+  const cvVolKey = (g) => (cvCrit === "volume" ? "fines_vol_" : "fines_side_") + g;
+  const cvVolMain = () => (cvCrit === "volume" ? "fines_vol_mm3" : "fines_side_mm");
+  const cvNum = (id) => { const e = $(id); return e && e.value !== "" ? parseFloat(e.value) : NaN; };
+  function cvVolFill(vo) { cvVolCfg = vo || {}; cvCrit = cvVolCfg.fines_mode === "volume" ? "volume" : "side"; cvVolRender(true); }
+  // fillShared — перезаписать и общие поля (проб в среднем, СВ, k); при переключении критерия их не трогаем
+  function cvVolRender(fillShared) {
+    const set = (id, v) => { const e = $(id); if (e) e.value = v == null || v === 0 ? "" : v; };
+    if (fillShared) {
+      const dv = (k, d) => (cvVolCfg[k] != null ? cvVolCfg[k] : d);          // нет в конфиге — дефолт сервера (cv_volume.DEFAULTS)
+      set("cvAvgN", dv("avg_n", 4)); set("cvKThick", dv("k_thick", 0.88));
+      const sv = $("cvFinesSv"); if (sv) sv.value = dv("fines_from_sv", 88);
+    }
+    const vol = cvCrit === "volume", m = $("cvFinesMm");
+    set("cvFinesMm", cvVolCfg[cvVolMain()] != null ? cvVolCfg[cvVolMain()] : (vol ? 0.006 : 0.2));
+    Object.keys(CV_VOL_SUB).forEach((g) => set(CV_VOL_SUB[g], cvVolCfg[cvVolKey(g)]));
+    [m, ...Object.values(CV_VOL_SUB).map($)].forEach((e) => { if (e) { e.step = vol ? "0.0005" : "0.01"; e.min = e === m ? (vol ? "0.0001" : "0.01") : "0"; } });
+    const lbl = $("cvFinesLbl"); if (lbl) lbl.textContent = vol ? "Мука, мм³" : "Мука, мм";
+    const vb = $("cvVol"); if (vb) vb.classList.toggle("is-crit-volume", vol);
+    document.querySelectorAll("#cvFinesModeSeg button").forEach((b) => b.classList.toggle("is-active", b.dataset.mode === cvCrit));
+    const c = $("cvFinesCalc"); if (c) c.textContent = cvFinesCalcText();
+    cvVolMarkDirty();
+  }
+  // изменено ли что-то относительно сохранённого (в любом из полей) — тогда показываем ✓/✕
+  function cvVolDirty() {
+    const eq = (a, b) => (isNaN(a) && isNaN(b)) || Math.abs(a - b) < 1e-9;
+    const cfg = cvVolCfg, saved = (k, d) => (cfg[k] != null ? Number(cfg[k]) : d);
+    const rows = [["cvAvgN", saved("avg_n", 4)], ["cvKThick", saved("k_thick", 0.88)], ["cvFinesSv", saved("fines_from_sv", 88)],
+      ["cvFinesMm", saved(cvVolMain(), cvCrit === "volume" ? 0.006 : 0.2)]];
+    Object.keys(CV_VOL_SUB).forEach((g) => rows.push([CV_VOL_SUB[g], saved(cvVolKey(g), 0)]));
+    const subIds = Object.values(CV_VOL_SUB);
+    let dirty = (cfg.fines_mode === "volume" ? "volume" : "side") !== cvCrit;
+    rows.forEach(([id, sv]) => {
+      let v = cvNum(id); if (isNaN(v) && subIds.includes(id)) v = 0;
+      const d = !eq(v, sv); if ($(id)) $(id).classList.toggle("is-dirty", d); dirty = dirty || d;
+    });
+    return dirty;
+  }
+  function cvVolMarkDirty() { const box = $("cvVolApply"); if (box && !box.classList.contains("is-busy")) box.hidden = !cvVolDirty(); }
+  function cvVolPayload() {
+    const k = cvNum("cvKThick"), fs = cvNum("cvFinesSv"), an = Math.round(cvNum("cvAvgN")), fm = cvNum("cvFinesMm");
+    if (!(fm > 0) || !(k > 0) || !(fs >= 0) || !(an >= 1)) return null;
+    const vo = { fines_mode: cvCrit, avg_n: an, fines_from_sv: fs, k_thick: k, [cvVolMain()]: fm };
+    for (const g of Object.keys(CV_VOL_SUB)) { const v = cvNum(CV_VOL_SUB[g]); vo[cvVolKey(g)] = v > 0 ? v : 0; }
+    return vo;
+  }
+  // пересчёт журнала по кадрам идёт на сервере в фоне — ждём окончания, не блокируя страницу
+  async function cvWaitRecompute(msg) {
+    for (let i = 0; i < 600; i++) {
+      await new Promise((r) => setTimeout(r, 700));
+      try { const st = await (await fetch("/api/cv/recompute_state")).json(); if (!st.running) return; } catch (e) { return; }
+      if (msg && i === 2) msg.textContent = "пересчёт проб…";
+    }
+  }
+  function wireVolNoteBtn() {
+    const btn = $("cvVolNoteBtn"), box = $("cvVolNote"); if (!btn || !box) return;
+    let shown = true; try { shown = localStorage.getItem("microCvVolNote") !== "0"; } catch (e) { }
+    const apply = () => { box.hidden = !shown; btn.classList.toggle("is-on", shown); };
+    btn.addEventListener("click", () => { shown = !shown; try { localStorage.setItem("microCvVolNote", shown ? "1" : "0"); } catch (e) { } apply(); });
+    apply();
+  }
   function wireVolumeFields() {
-    const fm = $("cvFinesMm"); if (fm) fm.addEventListener("input", () => { const c = $("cvFinesCalc"); if (c) c.textContent = cvFinesCalcText(); });
-    ["cvFinesMm", "cvKThick", "cvFinesSv", "cvAvgN"].forEach((id) => {
-      const e = $(id); if (!e) return;
-      e.addEventListener("change", () => {
-        if (!cvSettingsLoaded) return;
-        const fu = parseFloat(($("cvFinesMm") || {}).value), k = parseFloat(($("cvKThick") || {}).value),
-          fs = parseFloat(($("cvFinesSv") || {}).value), an = parseInt(($("cvAvgN") || {}).value, 10);
-        if (!(fu > 0) || !(k > 0) || !(fs >= 0) || !(an >= 1)) return;
-        // сервер пересчитывает пробы по сохранённым кадрам и журнал; потом перерисовываем варки и текущую пробу
-        cvPostSettings({ volume: { fines_side_mm: fu, k_thick: k, fines_from_sv: fs, avg_n: an } }).then(() => { cvLoadBoils(true); cvRefresh(); }).catch(() => { });
-      });
+    wireVolNoteBtn();
+    const ids = ["cvFinesMm", "cvKThick", "cvFinesSv", "cvAvgN", ...Object.values(CV_VOL_SUB)];
+    ids.forEach((id) => { const e = $(id); if (e) e.addEventListener("input", () => { const c = $("cvFinesCalc"); if (c) c.textContent = cvFinesCalcText(); cvVolMarkDirty(); }); });
+    document.querySelectorAll("#cvFinesModeSeg button").forEach((b) => b.addEventListener("click", () => {
+      if (b.dataset.mode === cvCrit) return;
+      cvCrit = b.dataset.mode; cvVolRender(false);
+    }));
+    const ok = $("cvVolOk"), no = $("cvVolNo"), box = $("cvVolApply"), msg = $("cvVolMsg");
+    if (no) no.addEventListener("click", () => { cvCrit = cvVolCfg.fines_mode === "volume" ? "volume" : "side"; cvVolRender(true); });
+    if (ok) ok.addEventListener("click", async () => {
+      if (!cvSettingsLoaded) return;
+      const vo = cvVolPayload(); if (!vo) { if (msg) msg.textContent = "проверь значения"; return; }
+      box.classList.add("is-busy"); if (msg) msg.textContent = "применяю…";
+      try {
+        const r = await fetch("/api/cv/settings", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ volume: vo }) });
+        const d = await r.json();
+        cvVolCfg = Object.assign({}, cvVolCfg, vo);
+        if (d && d.recompute) await cvWaitRecompute(msg);
+        cvLoadBoils(true); cvRefresh();
+      } catch (e) { /* CV необязателен */ }
+      box.classList.remove("is-busy"); if (msg) msg.textContent = ""; cvVolRender(false);
     });
   }
 
@@ -1145,7 +1230,8 @@
     const d = cvTrendData, s = d.series || {};
     const val = (name) => (s[name] && s[name][i] != null ? Math.round(s[name][i] * 10) / 10 : null);
     const stage = d.stage && d.stage[i];
-    const head = "<b>" + cvFmtT(d.t[i], true) + "</b>" + (stage != null ? " · стадия " + stage : "");
+    const subN = substageName(d.substage && d.substage[i]);
+    const head = "<b>" + cvFmtT(d.t[i], true) + "</b>" + (stage != null ? " · стадия " + stage : "") + (subN ? " · " + subN : "");
     const cnt = val("count"), mean = val("mean"), med = val("median");
     const svv = val("sv");
     const line2 = [svv != null ? "СВ " + svv : null, cnt != null ? Math.round(cnt) + " крист." : null, mean != null ? "среднее " + mean + " мкм" : null, med != null ? "медиана " + med + " мкм" : null].filter(Boolean).join(" · ");
@@ -1367,7 +1453,7 @@
     }, 5000);
   }
   function isCvPaneVisible() {
-    const p = document.querySelector('.micro-ppane[data-ppane="cv"]');
-    return p && !p.classList.contains("hidden");
+    const p = $("teleStripCfg");
+    return !!p && !p.hidden;
   }
 

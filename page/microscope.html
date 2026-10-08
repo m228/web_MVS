@@ -219,10 +219,6 @@
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12M8 11l4 4 4-4M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/></svg>
                 <span>Дамп</span>
               </button>
-              <button type="button" class="micro-ptab" data-ptab="cv" title="Компьютерное зрение: рассев кристаллов, тренд, пороги" aria-label="Компьютерное зрение">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="14" rx="2"/><path d="M3 9h18M8 4v14"/><circle cx="14" cy="12" r="2.2"/></svg>
-                <span>CV</span>
-              </button>
               <button type="button" class="micro-ptab" data-ptab="frac" title="Разломы кристаллов: детект, статистика, тренд, автоподвод" aria-label="Разломы">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7l5 3-2 4 6 1 1 5 3-4 4 1-2-5 3-4-6-2 1-4-5 3-3-3z"/></svg>
                 <span>Разломы</span>
@@ -689,88 +685,6 @@
               </div>
 
               <!-- Компьютерное зрение: рассев кристаллов, тренд, галерея, пороги -->
-              <div class="micro-ppane hidden" data-ppane="cv">
-                <div class="micro-cv-head">
-                  <label class="micro-switch" for="cvEnable" title="Включить распознавание кристаллов по пробам">
-                    <input type="checkbox" id="cvEnable" />
-                    <span class="micro-switch__track"><span class="micro-switch__thumb"></span></span>
-                    <span class="micro-switch__label">CV</span>
-                  </label>
-                  <span class="micro-cv-status" id="cvStatus">сервис: —</span>
-                </div>
-                <!-- Модель: только инфо; кнопка загрузки — в нижнем ряду -->
-                <div class="micro-cv-model">Модель <span class="micro-cv-n" id="cvModelInfo">—</span></div>
-
-                <!-- Пороги: правятся живьём, применяются к следующей пробе -->
-                <div class="micro-cv-block">
-                  <div class="micro-cv-block__title">Пороги</div>
-                  <p class="micro-cv-group-lbl">Группы по размеру, мкм (эквив. диаметр)</p>
-                  <div class="micro-cycle-cols">
-                    <div class="micro-cycle-col">
-                      <label class="micro-cycle-f" title="Кристалл мельче этого размера (эквивалентный диаметр, мкм) идёт в группу «малая»."><span>Малая &lt;, мкм</span><input type="number" id="cvSmallMax" step="10" /></label>
-                      <label class="micro-cycle-f" title="Сколько микрон в одном пикселе кадра. От него зависят все размеры в мкм."><span>Масштаб, мкм/px</span><input type="number" id="cvUmPerPx" step="0.001" /></label>
-                    </div>
-                    <div class="micro-cycle-col">
-                      <label class="micro-cycle-f" title="Кристалл мельче этого размера (и не «малая») идёт в группу «средняя»; крупнее — «большая»."><span>Средняя &lt;, мкм</span><input type="number" id="cvMediumMax" step="10" /></label>
-                      <label class="micro-cycle-f" title="На сколько частей резать кадр перед распознаванием. Больше частей — лучше видна мелочь, но дольше и больше кристаллов попадает на швы. 1 — без нарезки."><span>Частей нарезки кадра</span><input type="number" id="cvTiles" step="1" min="1" max="9" /></label>
-                    </div>
-                  </div>
-                  <p class="micro-cv-group-lbl" title="Причина дефекта (игла, сросток, кривой) подписывается всегда. В рассев и тренд брак идёт с порога по СВ (ниже).">Брак по форме</p>
-                  <div class="micro-cycle-cols">
-                    <div class="micro-cycle-col">
-                      <label class="micro-cycle-f" title="Округлость 0…1: насколько контур компактный. Круг = 1, квадрат ≈ 0.79, прямоугольник 2:1 ≈ 0.70, 3:1 ≈ 0.59; рваный или игольчатый контур — ниже. Меньше порога — брак. Поднять порог — строже."><span>Мин. округлость</span><input type="number" id="cvMinCirc" step="0.05" /></label>
-                      <label class="micro-cycle-f" title="Выпуклость 0…1: доля площади кристалла от его выпуклой оболочки. Целый гранёный кристалл ≈ 0.95–1. Сростки, сколы и вмятины дают впадины в контуре — значение падает. Меньше порога — брак. Поднять порог — строже."><span>Мин. выпуклость</span><input type="number" id="cvMinSol" step="0.05" /></label>
-                    </div>
-                    <div class="micro-cycle-col">
-                      <label class="micro-cycle-f" title="Вытянутость: длина, делённая на ширину. Квадратный кристалл = 1, вдвое длиннее ширины = 2. Больше порога (иглы, пластинки на ребре, обрезки) — брак. Опустить порог — строже."><span>Макс. вытянутость</span><input type="number" id="cvMaxAspect" step="0.1" /></label>
-                      <label class="micro-cycle-f" title="Уверенность модели (conf) 0…1, что найденный объект — кристалл. Всё, что ниже порога, отбрасывается. Выше порог — меньше мусора, но теряется мелочь и нерезкие кристаллы; ниже — находит больше, но больше ложных. Предпросмотр: подними значение — в окне CV сразу скроются кристаллы с меньшей уверенностью (счётчик рядом со слоями); в разбор порог применится со следующей пробы."><span>Порог уверенности (conf)</span><input type="number" id="cvConf" step="0.05" min="0" max="1" /></label>
-                    </div>
-                  </div>
-                  <div class="micro-cycle-cols">
-                    <div class="micro-cycle-col">
-                      <label class="micro-cycle-f" title="Вытянутость (длина/ширина) от этого значения до «Макс. вытянутость» — не брак, а предупреждение (голубой слой). Рост их доли — сигнал: в сиропе глюкоза или раффиноза."><span>Вытянутые от</span><input type="number" id="cvSuspect" step="0.1" /></label>
-                      <label class="micro-cycle-f" title="Форму (игла, сросток, кривой) оцениваем только у кристаллов от этого размера, мкм. У мелких маска в десятки пикселей, контур шумит и даёт ложный брак — их считаем хорошими."><span>Форму судить от, мкм</span><input type="number" id="cvShapeMin" step="10" min="0" /></label>
-                      <label class="micro-cycle-f" title="Насколько сглаживать маску кристалла перед оценкой формы, пиксели (минимальное ядро). Больше — контур глаже, меньше ложных «перетяжек» у мелких кристаллов, но слабые настоящие перетяжки у крупных тоже сглаживаются. 5 — по умолчанию, 1–3 — почти без сглаживания, 7–9 — сильно. Действует на новые пробы."><span>Сглаживание маски, px</span><input type="number" id="cvSmoothK" step="1" min="1" max="15" /></label>
-                    </div>
-                    <div class="micro-cycle-col">
-                      <label class="micro-cycle-f" title="Брак по форме (сросток, игла, кривой) считается, пока СВ не выше этого значения: у первых кристаллов после заводки сростки ищем. Выше — кристаллов слишком много, брак не считается, а дефектные кристаллы в расчёт не берутся (только хорошие). Мука и рассев — от поля «Мука с СВ»."><span>Брак считать до СВ</span><input type="number" id="cvRejectSv" step="0.5" /></label>
-                      <label class="micro-cycle-f" title="Кадры скольких последних варок хранить в архиве проб (их можно листать в галерее и сохранять кнопкой «В разметку»). Место на варку: в PNG около 2 ГБ, в JPEG около 0,3 ГБ. Старше — удаляются сами; общий предел — «Потолок архива»."><span>Варок в архиве</span><input type="number" id="cvKeepBoils" step="1" min="1" max="40" /></label>
-                      <div class="micro-cycle-f micro-cycle-fmt" title="Формат кадров проб в архиве. Включено — PNG без потерь (≈ 7 МБ на кадр, лучше для разметки и дообучения). Выключено — JPEG (≈ 1 МБ на кадр, лёгкие потери). Действует на новые пробы.">
-                        <span>Кадры в PNG</span>
-                        <label class="micro-switch" for="cvFramePng">
-                          <input type="checkbox" id="cvFramePng" />
-                          <span class="micro-switch__track"><span class="micro-switch__thumb"></span></span>
-                        </label>
-                      </div>
-                      <label class="micro-cycle-f" title="Сколько места под кадры проб на этой машине, ГБ. Когда архив больше — удаляются самые старые пробы (последние 50 проб не трогаем). Защита от переполнения диска."><span>Потолок архива, ГБ</span><input type="number" id="cvArchiveGb" step="5" min="2" max="500" /></label>
-                    </div>
-                  </div>
-                  <div class="micro-cycle-cols">
-                    <div class="micro-cycle-col">
-                      <label class="micro-cycle-f" title="Маски кристаллов с зазором не больше этого (px) считаются срослись и склеиваются в ОДИН сросток; маска, лежащая внутри другой, убирается как лишнее обнаружение. 0 — не склеивать. Применяется со следующего разбора."><span>Сросток: зазор, px</span><input type="number" id="cvClusterGap" step="1" min="0" /></label>
-                    </div>
-                    <div class="micro-cycle-col">
-                      <label class="micro-cycle-f" title="Кристалл ближе этого расстояния (px) к краю кадра считается обрезанным (серый слой, в рассев не идёт). Увеличь, если на краях остаются обрубки. 0 — выкл. Применяется со следующего разбора."><span>Край кадра, px</span><input type="number" id="cvEdgeMargin" step="2" min="0" /></label>
-                    </div>
-                  </div>
-                  <label class="micro-check" title="Кристалл, разрезанный швом нарезки кадра (ровный край ровно на линии стыка частей), склеивается обратно из половинок. Выключи, если склеивает лишнее. Применяется со следующего разбора."><input type="checkbox" id="cvSeamMerge" /><span class="micro-check__text">Склеивать половинки по шву нарезки</span></label>
-                  <label class="micro-check" title="Кристалл, оставшийся «обрезанным» у шва нарезки, перепроверяется повторным проходом модели по окну вокруг него: целый — идёт в рассев, а не серым. Добавляет около секунды на кадр. Выключи, если мешает. Применяется со следующего разбора."><input type="checkbox" id="cvSeamRefine" /><span class="micro-check__text">Перепроверять обрезанные швом</span></label>
-                  <label class="micro-check" title="Ровный круг (радиус почти не меняется по контуру, не вытянутый, гладкий, от 100 мкм) — это пузырь воздуха, а не кристалл: в рассев и размеры не идёт, показывается отдельным слоем «пузыри». Выключи, если отсеивает настоящие кристаллы. Применяется со следующего разбора."><input type="checkbox" id="cvBubble" /><span class="micro-check__text">Отсеивать пузыри воздуха (ровный круг)</span></label>
-                  <label class="micro-check micro-cv-always" title="Включено — брак идёт в рассев и тренд на любом СВ, без порога. Для сравнения «с порогом» и «без».">
-                    <input type="checkbox" id="cvRejectAlways" />
-                    <span class="micro-check__text">Считать брак всегда <span class="micro-ro">(без порога по СВ)</span></span>
-                  </label>
-                </div>
-                <div class="micro-cv-foot">
-                  <button type="button" id="cvSaveBtn" class="toolbar-btn toolbar-btn--primary" title="Сохранить пороги — применятся к следующему разбору">Сохранить пороги</button>
-                  <span class="micro-conn-hint" id="cvSaveHint"></span>
-                  <span class="micro-conn-hint" id="cvModelHint"></span>
-                  <button type="button" id="cvAnalyzeBtn" class="toolbar-btn toolbar-btn--neutral micro-cv-foot__right" title="Снять живой кадр с камеры и разобрать его сейчас">Разобрать пробу</button>
-                  <button type="button" id="cvModelBtn" class="toolbar-btn toolbar-btn--neutral" title="Залить файл модели (.pt) — сервис подхватит его без перезапуска">Загрузить модель</button>
-                  <input type="file" id="cvModelFile" accept=".pt,.onnx,.engine" hidden />
-                </div>
-              </div>
-
               <!-- Разломы кристаллов (отдельная подсистема CV, без YOLO) -->
               <div class="micro-ppane hidden" data-ppane="frac">
                 <div class="micro-cv-head">
@@ -898,6 +812,7 @@
               <button type="button" class="micro-win-btn is-active" id="telePlateBtn" data-tele="plate">Плата</button>
               <button type="button" class="micro-win-btn" id="teleCvBtn" data-tele="cv">Распознавание</button>
               <button type="button" class="micro-win-btn" id="teleTrendBtn" data-tele="trend">Тренды</button>
+              <button type="button" class="micro-win-btn" id="teleCfgBtn" data-tele="cfg">CV</button>
             </div>
             <span class="micro-cv-status" id="cvStatus2" style="margin-left:auto"></span>
           </div>
@@ -937,6 +852,7 @@
               <div class="micro-tiles micro-tiles--one">
                 <div class="micro-tile"><span>СВ (Brix)</span><b id="pcSv">(—)</b></div>
                 <div class="micro-tile"><span>Стадия варки</span><b id="pcStage">(—)</b></div>
+                <div class="micro-tile"><span>Подстадия</span><b id="pcSubstage">(—)</b></div>
                 <div class="micro-tile"><span>Температура аппарата</span><b id="pcTemp">(—)</b></div>
                 <div class="micro-tile"><span>Разрежение</span><b id="pcVacuum">(—)</b></div>
                 <div class="micro-tile"><span>Ток циркулятора</span><b id="maCurrent">—</b></div>
@@ -967,14 +883,6 @@
           <!-- Распознавание кристаллов (переключается с телеметрией платы) -->
           <div class="micro-tele-cv" id="teleStripCv" hidden>
             <div class="micro-tele-cv__col">
-              <div class="micro-cv-tele">
-                <div class="micro-tile"><span>Время распозн.</span><b id="cvTimeTotal">—</b></div>
-                <div class="micro-tile"><span>Частей нарезки</span><b id="cvTilesN">—</b></div>
-                <div class="micro-tile"><span>Infer / NMS</span><b id="cvInferNms">—</b></div>
-                <div class="micro-tile"><span>Кристаллов</span><b id="cvCountTele">—</b></div>
-                <div class="micro-tile"><span>Кадров</span><b id="cvFramesN">—</b></div>
-                <div class="micro-tile"><span>Модель</span><b id="cvModel">—</b></div>
-              </div>
               <div class="micro-cv-pair">
               <div class="micro-cv-block">
                 <div class="micro-cv-block__title">Рассев кристаллов <span class="micro-cv-n" id="cvCount">—</span></div>
@@ -989,6 +897,15 @@
                 <div class="micro-cv-stats">
                   <div class="micro-tile"><span>Среднее</span><b id="cvMean">—</b></div>
                   <div class="micro-tile"><span>Δ к прошлой</span><b id="cvDelta">—</b></div>
+                </div>
+
+                <div class="micro-cv-tele">
+                  <div class="micro-tile"><span>Время распозн.</span><b id="cvTimeTotal">—</b></div>
+                  <div class="micro-tile"><span>Частей нарезки</span><b id="cvTilesN">—</b></div>
+                  <div class="micro-tile"><span>Infer / NMS</span><b id="cvInferNms">—</b></div>
+                  <div class="micro-tile"><span>Кристаллов</span><b id="cvCountTele">—</b></div>
+                  <div class="micro-tile"><span>Кадров</span><b id="cvFramesN">—</b></div>
+                  <div class="micro-tile"><span>Модель</span><b id="cvModel">—</b></div>
                 </div>
               </div>
 
@@ -1010,6 +927,7 @@
                     </span>
                   </span>
                   <span class="micro-cv-n" id="cvVolState"></span>
+                  <button type="button" class="micro-vol__notebtn" id="cvVolNoteBtn" title="Показать / скрыть подробности: какая варка, сколько проб и кристаллов, мука по числу и площади">подробности</button>
                 </div>
                 <!-- откуда числа: по варке (законченная, листается стрелками) или по выбранной пробе -->
                 <div class="micro-vol__nav" id="cvVolNav">
@@ -1036,7 +954,7 @@
                 </div>
                 <div class="micro-vol__fields">
                   <label title="Сколько последних проб финиша (СВ ≥ «Мука с СВ») усредняем. Одна проба — это несколько кадров; чем больше проб и хороших кристаллов, тем точнее мука и рассев. Для надёжной оценки нужно хотя бы 500 хороших кристаллов"><span>Проб в среднем</span><input type="number" id="cvAvgN" min="1" max="20" step="1" value="4" /></label>
-                  <label title="Мука — кристалл, у которого площадь меньше квадрата со стороной в этом поле"><span>Мука, мм</span><input type="number" id="cvFinesMm" min="0.01" step="0.05" value="0.2" /></label>
+                  <label title="Общий порог муки — для любой подстадии, кроме подкачки / роста 1 / роста 2 (у них свои поля ниже) и когда подстадия неизвестна. По стороне: площадь кристалла меньше квадрата со стороной в этом поле. По объёму: объём меньше значения в мм³"><span id="cvFinesLbl">Мука, мм</span><input type="number" id="cvFinesMm" min="0.01" step="0.05" value="0.2" /></label>
                   <span class="micro-info" tabindex="0" aria-label="Как определяется мука">ⓘ
                     <span class="micro-info__pop micro-vol__pop" role="tooltip">
                       <b>Как определяется мука</b>
@@ -1048,11 +966,25 @@
                   </span>
                   <label title="Мука считается только у почти готового сахара: пока СВ ниже этого значения, кристаллы ещё растут и мука — неактуальная информация (показывается прочерк). По умолчанию 88 — как порог брака. 0 — считать всегда."><span>Мука с СВ</span><input type="number" id="cvFinesSv" min="0" max="100" step="0.5" value="88" /></label>
                   <label title="Толщина кристалла = k · короткая сторона. 0,88 — отношение осей c/b у сахарозы (Сапронов, с. 294); подгоняется по лаборатории"><span>Толщина k</span><input type="number" id="cvKThick" min="0.1" max="2" step="0.01" value="0.88" /></label>
+                  <span class="micro-apply" id="cvVolApply" hidden>
+                    <span class="micro-apply__msg" id="cvVolMsg"></span>
+                    <button type="button" class="micro-apply__ok" id="cvVolOk" title="Применить новые значения">✓</button>
+                    <button type="button" class="micro-apply__no" id="cvVolNo" title="Отменить изменения">✕</button>
+                  </span>
+                </div>
+                <div class="micro-vol__fields micro-vol__fields--sub">
+                  <span class="micro-seg2" id="cvFinesModeSeg" role="group" aria-label="Чем мерить муку">
+                    <button type="button" data-mode="side" title="По площади: сторона квадрата, мм">по стороне, мм</button>
+                    <button type="button" data-mode="volume" title="По объёму кристалла, мм³ (шар эквивалентного диаметра)">по объёму, мм³</button>
+                  </span>
+                  <label title="Порог муки на подкачке (коды 51–59). Пусто или 0 — как общий порог"><span>подкачка</span><input type="number" id="cvFinesPump" min="0" step="0.01" placeholder="общий" /></label>
+                  <label title="Порог муки на росте 1 (коды 71 «рост» и 72 «рост 1»). Пусто или 0 — как общий порог"><span>рост 1</span><input type="number" id="cvFinesG1" min="0" step="0.01" placeholder="общий" /></label>
+                  <label title="Порог муки на росте 2 (коды 73–79: «рост 2» и дальше). Пусто или 0 — как общий порог"><span>рост 2</span><input type="number" id="cvFinesG2" min="0" step="0.01" placeholder="общий" /></label>
                 </div>
                 <!-- что стоит за цифрами: штуки, доля по числу и по объёму, общий объём (заполняет 02-cv.js) -->
                 <div class="micro-vol__note" id="cvVolNote"></div>
                 <!-- рассев по ситам, как в лаборатории: размер отверстий, мм; доля фракции в общем объёме (100 % — сумма всех) -->
-                <div class="micro-vol__sub">Рассев по ситам, %  <span class="micro-info" tabindex="0" aria-label="Как считается рассев">ⓘ<span class="micro-info__pop micro-vol__pop" role="tooltip"><b>Рассев по ситам</b><div class="in">Как в лаборатории: кристаллы раскладываются по размеру отверстий сит, мм (1,2 · 1 · 0,8 · 0,7 · 0,5 · 0,2 · дно). Фракция «0,5–0,7» — прошло сито 0,7, осталось на 0,5.</div><small>Берутся только хорошие кристаллы (брак по форме — сростки, иглы, кривые — отсеян). Доля — от их общего объёма (объём ~ масса), сумма 100 %. Размер — эквивалентный диаметр. Считается, как и мука, когда СВ дошёл до поля «Мука с СВ».</small></span></span></div>
+                <div class="micro-cv-block__title micro-sieve__title">Рассев по ситам, %  <span class="micro-info" tabindex="0" aria-label="Как считается рассев">ⓘ<span class="micro-info__pop micro-vol__pop" role="tooltip"><b>Рассев по ситам</b><div class="in">Как в лаборатории: кристаллы раскладываются по размеру отверстий сит, мм (1,2 · 1 · 0,8 · 0,7 · 0,5 · 0,2 · дно). Фракция «0,5–0,7» — прошло сито 0,7, осталось на 0,5.</div><small>Берутся только хорошие кристаллы (брак по форме — сростки, иглы, кривые — отсеян). Доля — от их общего объёма (объём ~ масса), сумма 100 %. Размер — эквивалентный диаметр. Считается, как и мука, когда СВ дошёл до поля «Мука с СВ».</small></span></span></div>
                 <div class="micro-vol__grid micro-sieve" id="cvSieveGrid"></div>
               </div>
               </div>
@@ -1109,6 +1041,71 @@
                   </div>
                 </div>
               </div>
+            </div>
+          </div>
+
+          <!-- «CV» — настройки распознавания (4-я вкладка нижней полосы) -->
+          <div class="micro-tele-cfg" id="teleStripCfg" hidden>
+            <div class="micro-cfg-top">
+              <label class="micro-switch" for="cvEnable" title="Включить распознавание кристаллов по пробам">
+                <input type="checkbox" id="cvEnable" />
+                <span class="micro-switch__track"><span class="micro-switch__thumb"></span></span>
+                <span class="micro-switch__label">CV</span>
+              </label>
+              <span class="micro-cv-status" id="cvStatus">сервис: —</span>
+              <div class="micro-cv-model">Модель <span class="micro-cv-n" id="cvModelInfo">—</span></div>
+              <span class="micro-conn-hint" id="cvSaveHint"></span>
+              <span class="micro-conn-hint" id="cvModelHint"></span>
+              <span class="micro-cfg-top__btns">
+                <button type="button" id="cvAnalyzeBtn" class="toolbar-btn toolbar-btn--neutral" title="Снять живой кадр с камеры и разобрать его сейчас">Разобрать пробу</button>
+                <button type="button" id="cvModelBtn" class="toolbar-btn toolbar-btn--neutral" title="Залить файл модели (.pt) — сервис подхватит его без перезапуска">Загрузить модель</button>
+                <input type="file" id="cvModelFile" accept=".pt,.onnx,.engine" hidden />
+                <button type="button" id="cvSaveBtn" class="toolbar-btn toolbar-btn--primary" title="Сохранить все настройки — применятся к следующему разбору">Сохранить</button>
+              </span>
+            </div>
+            <div class="micro-cfg-grid">
+              <section class="micro-cfg-card">
+                <h4>Группы и масштаб</h4>
+          <label class="micro-cycle-f" title="Кристалл мельче этого размера (эквивалентный диаметр, мкм) идёт в группу «малая»."><span>Малая &lt;, мкм</span><input type="number" id="cvSmallMax" step="10" /></label>
+          <label class="micro-cycle-f" title="Кристалл мельче этого размера (и не «малая») идёт в группу «средняя»; крупнее — «большая»."><span>Средняя &lt;, мкм</span><input type="number" id="cvMediumMax" step="10" /></label>
+          <label class="micro-cycle-f" title="Сколько микрон в одном пикселе кадра. От него зависят все размеры в мкм."><span>Масштаб, мкм/px</span><input type="number" id="cvUmPerPx" step="0.001" /></label>
+          <label class="micro-cycle-f" title="На сколько частей резать кадр перед распознаванием. Больше частей — лучше видна мелочь, но дольше и больше кристаллов попадает на швы. 1 — без нарезки."><span>Частей нарезки кадра</span><input type="number" id="cvTiles" step="1" min="1" max="9" /></label>
+              </section>
+              <section class="micro-cfg-card">
+                <h4>Форма кристалла</h4>
+          <label class="micro-cycle-f" title="Округлость 0…1: насколько контур компактный. Круг = 1, квадрат ≈ 0.79, прямоугольник 2:1 ≈ 0.70, 3:1 ≈ 0.59; рваный или игольчатый контур — ниже. Меньше порога — брак. Поднять порог — строже."><span>Мин. округлость</span><input type="number" id="cvMinCirc" step="0.05" /></label>
+          <label class="micro-cycle-f" title="Выпуклость 0…1: доля площади кристалла от его выпуклой оболочки. Целый гранёный кристалл ≈ 0.95–1. Сростки, сколы и вмятины дают впадины в контуре — значение падает. Меньше порога — брак. Поднять порог — строже."><span>Мин. выпуклость</span><input type="number" id="cvMinSol" step="0.05" /></label>
+          <label class="micro-cycle-f" title="Вытянутость: длина, делённая на ширину. Квадратный кристалл = 1, вдвое длиннее ширины = 2. Больше порога (иглы, пластинки на ребре, обрезки) — брак. Опустить порог — строже."><span>Макс. вытянутость</span><input type="number" id="cvMaxAspect" step="0.1" /></label>
+          <label class="micro-cycle-f" title="Вытянутость (длина/ширина) от этого значения до «Макс. вытянутость» — не брак, а предупреждение (голубой слой). Рост их доли — сигнал: в сиропе глюкоза или раффиноза."><span>Вытянутые от</span><input type="number" id="cvSuspect" step="0.1" /></label>
+          <label class="micro-cycle-f" title="Форму (игла, сросток, кривой) оцениваем только у кристаллов от этого размера, мкм. У мелких маска в десятки пикселей, контур шумит и даёт ложный брак — их считаем хорошими."><span>Форму судить от, мкм</span><input type="number" id="cvShapeMin" step="10" min="0" /></label>
+          <label class="micro-cycle-f" title="Насколько сглаживать маску кристалла перед оценкой формы, пиксели (минимальное ядро). Больше — контур глаже, меньше ложных «перетяжек» у мелких кристаллов, но слабые настоящие перетяжки у крупных тоже сглаживаются. 5 — по умолчанию, 1–3 — почти без сглаживания, 7–9 — сильно. Действует на новые пробы."><span>Сглаживание маски, px</span><input type="number" id="cvSmoothK" step="1" min="1" max="15" /></label>
+          <label class="micro-cycle-f" title="Уверенность модели (conf) 0…1, что найденный объект — кристалл. Всё, что ниже порога, отбрасывается. Выше порог — меньше мусора, но теряется мелочь и нерезкие кристаллы; ниже — находит больше, но больше ложных. Предпросмотр: подними значение — в окне CV сразу скроются кристаллы с меньшей уверенностью (счётчик рядом со слоями); в разбор порог применится со следующей пробы."><span>Порог уверенности (conf)</span><input type="number" id="cvConf" step="0.05" min="0" max="1" /></label>
+              </section>
+              <section class="micro-cfg-card">
+                <h4>Брак и архив</h4>
+          <label class="micro-cycle-f" title="Брак по форме (сросток, игла, кривой) считается, пока СВ не выше этого значения: у первых кристаллов после заводки сростки ищем. Выше — кристаллов слишком много, брак не считается, а дефектные кристаллы в расчёт не берутся (только хорошие). Мука и рассев — от поля «Мука с СВ»."><span>Брак считать до СВ</span><input type="number" id="cvRejectSv" step="0.5" /></label>
+          <label class="micro-check micro-cv-always" title="Включено — брак идёт в рассев и тренд на любом СВ, без порога. Для сравнения «с порогом» и «без».">
+          <input type="checkbox" id="cvRejectAlways" />
+          <span class="micro-check__text">Считать брак всегда <span class="micro-ro">(без порога по СВ)</span></span>
+          </label>
+          <label class="micro-cycle-f" title="Кадры скольких последних варок хранить в архиве проб (их можно листать в галерее и сохранять кнопкой «В разметку»). Место на варку: в PNG около 2 ГБ, в JPEG около 0,3 ГБ. Старше — удаляются сами; общий предел — «Потолок архива»."><span>Варок в архиве</span><input type="number" id="cvKeepBoils" step="1" min="1" max="40" /></label>
+          <div class="micro-cycle-f micro-cycle-fmt" title="Формат кадров проб в архиве. Включено — PNG без потерь (≈ 7 МБ на кадр, лучше для разметки и дообучения). Выключено — JPEG (≈ 1 МБ на кадр, лёгкие потери). Действует на новые пробы.">
+            <span>Кадры в PNG</span>
+            <label class="micro-switch" for="cvFramePng">
+            <input type="checkbox" id="cvFramePng" />
+            <span class="micro-switch__track"><span class="micro-switch__thumb"></span></span>
+            </label>
+            </div>
+          <label class="micro-cycle-f" title="Сколько места под кадры проб на этой машине, ГБ. Когда архив больше — удаляются самые старые пробы (последние 50 проб не трогаем). Защита от переполнения диска."><span>Потолок архива, ГБ</span><input type="number" id="cvArchiveGb" step="5" min="2" max="500" /></label>
+              </section>
+              <section class="micro-cfg-card">
+                <h4>Склейка и края</h4>
+          <label class="micro-cycle-f" title="Маски кристаллов с зазором не больше этого (px) считаются срослись и склеиваются в ОДИН сросток; маска, лежащая внутри другой, убирается как лишнее обнаружение. 0 — не склеивать. Применяется со следующего разбора."><span>Сросток: зазор, px</span><input type="number" id="cvClusterGap" step="1" min="0" /></label>
+          <label class="micro-cycle-f" title="Кристалл ближе этого расстояния (px) к краю кадра считается обрезанным (серый слой, в рассев не идёт). Увеличь, если на краях остаются обрубки. 0 — выкл. Применяется со следующего разбора."><span>Край кадра, px</span><input type="number" id="cvEdgeMargin" step="2" min="0" /></label>
+          <label class="micro-check" title="Кристалл, разрезанный швом нарезки кадра (ровный край ровно на линии стыка частей), склеивается обратно из половинок. Выключи, если склеивает лишнее. Применяется со следующего разбора."><input type="checkbox" id="cvSeamMerge" /><span class="micro-check__text">Склеивать половинки по шву нарезки</span></label>
+          <label class="micro-check" title="Кристалл, оставшийся «обрезанным» у шва нарезки, перепроверяется повторным проходом модели по окну вокруг него: целый — идёт в рассев, а не серым. Добавляет около секунды на кадр. Выключи, если мешает. Применяется со следующего разбора."><input type="checkbox" id="cvSeamRefine" /><span class="micro-check__text">Перепроверять обрезанные швом</span></label>
+          <label class="micro-check" title="Ровный круг (радиус почти не меняется по контуру, не вытянутый, гладкий, от 100 мкм) — это пузырь воздуха, а не кристалл: в рассев и размеры не идёт, показывается отдельным слоем «пузыри». Выключи, если отсеивает настоящие кристаллы. Применяется со следующего разбора."><input type="checkbox" id="cvBubble" /><span class="micro-check__text">Отсеивать пузыри воздуха (ровный круг)</span></label>
+              </section>
             </div>
           </div>
         </section>

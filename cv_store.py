@@ -87,7 +87,8 @@ def _hist_row(result: dict) -> Optional[dict]:
     fr = (result.get("fracture") or {}).get("summary") or {}
     plc = result.get("plc") or {}
     rs = s.get("reasons") or {}
-    vp = s.get("volume_pct") or {}
+    # в журнал — мука и рассев БЕЗ порога СВ (он применяется при показе по варке, _apply_fines_gate)
+    vp = (cv_volume.percents(s["volume"], ignore_off=True) if s.get("volume") else s.get("volume_pct")) or {}
     return {
         "ts": result["ts"], "t": t, "stage": result.get("stage"), "sv": result.get("sv"),
         # причины брака (среднее число на кадр), разброс размера и плотность — для разбора слипания и обучения
@@ -189,6 +190,33 @@ def history_days(serial: str) -> list[dict]:
     return out
 
 
+_FINES_KEYS = ("fines_m1", "fines_m2", "fines_m3", "fines_area", "fines_n",
+               "sieve_m1_b", "sieve_m2_b", "sieve_m3_b", "sieve_area_b")
+
+
+def _apply_fines_gate(rows: list[dict]) -> list[dict]:
+    """Порог «Мука с СВ» по варке: мука и рассев считаются с первой пробы, где СВ достигло порога, и ДО КОНЦА варки — даже если на
+    подкачке СВ проседает ниже порога (раньше в такие пробы мука не считалась, и линия рвалась). До первого достижения порога
+    значения обнуляются. Строки — все пробы по времени (из разных дней), варки режутся теми же правилами, что в boils()."""
+    try:
+        thr = float(cv_volume.volume_cfg(_volume_cfg_now())["fines_from_sv"])
+    except Exception:
+        thr = 88.0
+    latched, prev = False, None
+    for r in rows:
+        if prev is None or _is_new_boil(prev, r):
+            latched = False
+        prev = r
+        sv = r.get("sv")
+        if not latched and sv is not None and sv >= thr:
+            latched = True
+        if not latched:
+            for k in list(r.keys()):
+                if k.startswith(_FINES_KEYS):
+                    r[k] = None
+    return rows
+
+
 def trend_range(serial: str, t_from: float, t_to: float, series: Optional[list[str]] = None,
                 limit: int = 5000) -> dict:
     """Тренд по реальному времени: пробы с t_from по t_to (epoch, сек) из журнала по дням.
@@ -203,11 +231,12 @@ def trend_range(serial: str, t_from: float, t_to: float, series: Optional[list[s
             day0 = time.mktime(time.strptime(f.stem, "%Y-%m-%d"))
         except Exception:
             continue
-        if day0 > t_to or day0 + 86400 < t_from:
+        if day0 > t_to or day0 + 86400 < t_from - 86400:        # день назад — запас: варка могла начаться до окна (нужно для порога СВ)
             continue
-        rows.extend(r for r in _hist_read(serial, f.stem)
-                    if r.get("t") is not None and t_from <= r["t"] <= t_to)
+        rows.extend(r for r in _hist_read(serial, f.stem) if r.get("t") is not None and r["t"] <= t_to)
     rows.sort(key=lambda r: r["t"])
+    _apply_fines_gate(rows)
+    rows = [r for r in rows if r["t"] >= t_from]
     if len(rows) > limit:
         rows = rows[-limit:]
     return {
@@ -247,9 +276,10 @@ def export_rows(serial: str, t_from: Optional[float] = None, t_to: Optional[floa
     rows = []
     hd = _hist_dir(serial)
     for f in (sorted(hd.glob("*.jsonl")) if hd.exists() else []):
-        rows.extend(r for r in _hist_read(serial, f.stem) if r.get("t") is not None
-                    and (t_from is None or r["t"] >= t_from) and (t_to is None or r["t"] <= t_to))
+        rows.extend(r for r in _hist_read(serial, f.stem) if r.get("t") is not None)
     rows.sort(key=lambda r: r["t"])
+    _apply_fines_gate(rows)
+    rows = [r for r in rows if (t_from is None or r["t"] >= t_from) and (t_to is None or r["t"] <= t_to)]
     def cell(r, c):
         if c == "fines_avg":
             return fines_avg(r)
@@ -352,6 +382,7 @@ def boils(serial: str, limit: int = 6, now: Optional[float] = None) -> list[dict
                 seen.add(r.get("ts"))
                 rows.append(r)
     rows.sort(key=lambda r: r["t"])
+    _apply_fines_gate(rows)
     groups: list[list[dict]] = []
     for r in rows:
         if not groups or _is_new_boil(groups[-1][-1], r):

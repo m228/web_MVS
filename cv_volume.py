@@ -23,7 +23,7 @@ import math
 MODELS = ("m1", "m2", "m3")
 # Рассев по ситам (как в лаборатории): отверстия, мм. Фракции снизу вверх: дно (<0,2), 0,2–0,5, 0,5–0,7, 0,7–0,8, 0,8–1,0, 1,0–1,2, >1,2.
 # Размер кристалла — эквивалентный диаметр (как везде в CV); доля фракции — по объёму (объём ~ масса), % от всех кристаллов.
-CALC_VER = 3     # 2: в расчёт идут только хорошие кристаллы (брак — сросток/игла/кривой — отсеян); менять при смене логики: старые пробы пересчитаются
+CALC_VER = 4     # 2: в расчёт идут только хорошие кристаллы (брак — сросток/игла/кривой — отсеян); менять при смене логики: старые пробы пересчитаются
 SIEVE_MM = (0.2, 0.5, 0.7, 0.8, 1.0, 1.2)
 SIEVE_LABELS = ("дно <0,2", "0,2–0,5", "0,5–0,7", "0,7–0,8", "0,8–1", "1–1,2", ">1,2")
 
@@ -112,9 +112,10 @@ def sums_for(measures: list, cv_cfg: dict | None, count_fines: bool = True) -> d
     cfg = volume_cfg(cv_cfg)
     s = empty_sums()
     if not count_fines:
-        s["fines_off"] = True
+        s["fines_off"] = True          # только флаг «СВ ниже порога» (для показа по пробе); саму муку считаем всегда —
+                                       # порог СВ по варке применяется при показе (cv_store._apply_fines_gate)
     for m in measures:
-        kind = kind_of(m, cfg["fines_um"] if count_fines else 0.0)
+        kind = kind_of(m, cfg["fines_um"])
         if kind is None:
             continue
         vols = crystal_volumes(m.size_um, m.length_um, m.width_um, cfg["k_thick"])
@@ -154,7 +155,7 @@ def add_sums(a: dict, b: dict) -> dict:
     return out
 
 
-def percents(sums: dict | None) -> dict:
+def percents(sums: dict | None, ignore_off: bool = False) -> dict:
     """Доли в % от общего: {m1:{fines,agg}, m2:…, m3:…, area:…, n:{fines,agg}}. Нет данных → None."""
     if not sums:
         return {}
@@ -167,10 +168,10 @@ def percents(sums: dict | None) -> dict:
     n_tot, n_rej = (sums.get("n") or {}).get("total", 0), (sums.get("n") or {}).get("agg", 0)
     out["n"] = ({"fines": round(100.0 * sums["n"]["fines"] / n_tot, 2), "agg": round(100.0 * n_rej / (n_tot + n_rej), 2)} if n_tot
                 else {"fines": None, "agg": None})
-    if sums.get("fines_off"):            # мелочь пока не считаем — прочерк, а не 0 %
+    if sums.get("fines_off") and not ignore_off:            # мелочь пока не считаем — прочерк, а не 0 %
         for key in out:
             out[key]["fines"] = None
     # рассев: доля каждой фракции в общем объёме, % (по трём моделям); нет данных — не добавляем
-    sv = {} if sums.get("fines_off") else (sums.get("sieve") or {})     # рассев — как мука: только когда СВ дошёл до порога
+    sv = {} if (sums.get("fines_off") and not ignore_off) else (sums.get("sieve") or {})     # рассев — как мука: только когда СВ дошёл до порога
     out["sieve"] = {mod: [round(100.0 * x / sum(sv[mod]), 3) for x in sv[mod]] for mod in MODELS + ("area",) if sv.get(mod) and sum(sv[mod]) > 0}
     return out

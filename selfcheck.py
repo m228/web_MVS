@@ -1110,6 +1110,27 @@ def _cv_sv_outliers():
     return "2 выброса обнулены, 88 → 80 (новая варка) сохранено, сбой СВ варку не делит"
 
 
+@check("CV", "cv_store: мука считается с первого достижения порога СВ ДО КОНЦА варки — провал СВ на подкачке линию не рвёт")
+def _cv_fines_latch():
+    import cv_store, cv_volume
+    from types import SimpleNamespace as NS
+    # СВ: до порога (88 по умолчанию) → достигли → проседание на подкачке → снова выше; потом новая варка (время варки сбросилось)
+    svs = [80.0, 84.0, 88.5, 87.0, 83.0, 82.5, 88.0, 89.0]
+    rows = [{"t": 1000.0 + i * 90, "sv": v, "stage": 7, "cook_time": 600 + i * 90, "fines_m1": 5.0, "fines_m2": 5.0, "fines_m3": 5.0,
+             "sieve_m3_b0": 1.0, "sieve_area_b2": 40.0, "good_n": 300} for i, v in enumerate(svs)]
+    rows.append({"t": 1000.0 + 8 * 90, "sv": 80.5, "stage": 3, "cook_time": 20, "fines_m3": 7.0})   # новая варка: порог заново
+    cv_store._apply_fines_gate(rows)
+    got = [r.get("fines_m3") for r in rows]
+    assert got == [None, None, 5.0, 5.0, 5.0, 5.0, 5.0, 5.0, None], "порог по варке (с первого достижения, до конца): %s" % got
+    assert rows[4]["sieve_m3_b0"] == 1.0 and rows[0]["sieve_m3_b0"] is None and rows[0]["good_n"] == 300, "рассев — тот же порог, счётчики не трогаем"
+    # мука считается ВСЕГДА: СВ ниже порога — только флаг fines_off, а числа в суммах есть (журнал хранит их без порога)
+    ms = [NS(group="small", defect=None, size_um=d, length_um=d, width_um=d) for d in (100, 150, 600)]
+    low = cv_volume.sums_for(ms, None, count_fines=False)
+    assert low.get("fines_off") and cv_volume.percents(low)["m3"]["fines"] is None, "показ по пробе: ниже порога — прочерк"
+    assert cv_volume.percents(low, ignore_off=True)["m3"]["fines"] > 0, "для журнала мука без порога"
+    return "порог по варке: с первого достижения до конца, пропуски СВ линию не рвут"
+
+
 @check("CV", "cv_volume: рассев по ситам — фракции по границам 0,2·0,5·0,7·0,8·1·1,2 мм, сумма 100 %, слияние кадров")
 def _cv_sieve():
     import cv_volume

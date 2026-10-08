@@ -23,7 +23,7 @@ import math
 MODELS = ("m1", "m2", "m3")
 # Рассев по ситам (как в лаборатории): отверстия, мм. Фракции снизу вверх: дно (<0,2), 0,2–0,5, 0,5–0,7, 0,7–0,8, 0,8–1,0, 1,0–1,2, >1,2.
 # Размер кристалла — эквивалентный диаметр (как везде в CV); доля фракции — по объёму (объём ~ масса), % от всех кристаллов.
-CALC_VER = 4     # 2: в расчёт идут только хорошие кристаллы (брак — сросток/игла/кривой — отсеян); менять при смене логики: старые пробы пересчитаются
+CALC_VER = 5     # 2: в расчёт идут только хорошие кристаллы (брак — сросток/игла/кривой — отсеян); менять при смене логики: старые пробы пересчитаются
 SIEVE_MM = (0.2, 0.5, 0.7, 0.8, 1.0, 1.2)
 SIEVE_LABELS = ("дно <0,2", "0,2–0,5", "0,5–0,7", "0,7–0,8", "0,8–1", "1–1,2", ">1,2")
 
@@ -36,6 +36,11 @@ def sieve_bin(size_um: float) -> int:
     return i
 KINDS = ("fines", "agg", "total")
 DEFAULTS = {"fines_side_mm": 0.2, "k_thick": 0.88, "fines_from_sv": 88.0, "avg_n": 4}    # avg_n — сколько последних проб финиша усредняем
+# Порог муки по подстадиям (substages.GROUPS): 0 = «как общий». Критерий: "side" — сторона квадрата, мм (по площади);
+# "volume" — объём, мм³ (кристалл = мука, если объём шара эквивалентного диаметра меньше порога).
+FINES_GROUPS = ("pump", "g1", "g2")
+MODE_DEFAULTS = {"fines_mode": "side", "fines_vol_mm3": 0.006}
+GROUP_KEYS = tuple("fines_side_%s" % g for g in FINES_GROUPS) + tuple("fines_vol_%s" % g for g in FINES_GROUPS)
 
 
 def fines_diameter_um(side_mm: float) -> float:
@@ -43,8 +48,14 @@ def fines_diameter_um(side_mm: float) -> float:
     return 2000.0 * side_mm / math.sqrt(math.pi)
 
 
-def volume_cfg(cv_cfg: dict | None) -> dict:
-    """Настройки объёма из блока cv (с дефолтами и защитой от мусора)."""
+def fines_diameter_from_volume_um(vol_mm3: float) -> float:
+    """Диаметр шара объёмом vol_mm3, мкм: d = (6V/π)^(1/3)."""
+    return 1000.0 * (6.0 * vol_mm3 / math.pi) ** (1.0 / 3.0)
+
+
+def volume_cfg(cv_cfg: dict | None, substage=None) -> dict:
+    """Настройки объёма из блока cv (с дефолтами и защитой от мусора). substage — код подстадии пробы: порог муки
+    берётся из поля её группы (подкачка / рост 1 / рост 2); пусто, 0 или подстадия неизвестна — общий порог."""
     v = dict(DEFAULTS)
     src = (cv_cfg or {}).get("volume") or {}
     for key in DEFAULTS:
@@ -56,7 +67,29 @@ def volume_cfg(cv_cfg: dict | None) -> dict:
             pass
     v["avg_n"] = max(1, int(round(v["avg_n"])))
     v["calc_ver"] = CALC_VER
-    v["fines_um"] = fines_diameter_um(v["fines_side_mm"])    # расчётный порог по диаметру — им и сравниваем размер кристалла
+    v["fines_mode"] = "volume" if str(src.get("fines_mode", "side")) == "volume" else "side"
+    for key, dflt in (("fines_vol_mm3", MODE_DEFAULTS["fines_vol_mm3"]),):
+        try:
+            x = float(src.get(key, dflt))
+            v[key] = x if x > 0 else dflt
+        except (TypeError, ValueError):
+            v[key] = dflt
+    for key in GROUP_KEYS:
+        try:
+            x = float(src.get(key) or 0)
+        except (TypeError, ValueError):
+            x = 0.0
+        v[key] = x if x > 0 else 0.0
+    import substages
+    grp = substages.group_of(substage)
+    v["substage_group"] = grp
+    side, vol = v["fines_side_mm"], v["fines_vol_mm3"]
+    if grp:
+        side = v["fines_side_%s" % grp] or side
+        vol = v["fines_vol_%s" % grp] or vol
+    v["fines_side_eff"], v["fines_vol_eff"] = side, vol
+    # расчётный порог по диаметру — им и сравниваем размер кристалла
+    v["fines_um"] = fines_diameter_from_volume_um(vol) if v["fines_mode"] == "volume" else fines_diameter_um(side)
     return v
 
 
@@ -105,11 +138,11 @@ def empty_sums() -> dict:
     return s
 
 
-def sums_for(measures: list, cv_cfg: dict | None, count_fines: bool = True) -> dict:
+def sums_for(measures: list, cv_cfg: dict | None, count_fines: bool = True, substage=None) -> dict:
     """Суммы объёма/площади по кадру: мелочь, сростки, всё. Складываются между кадрами пробы.
     count_fines=False — мелочь не считаем (варка не дошла до нужного СВ): мелкие кристаллы идут в «остальные»,
     а в сумме стоит пометка fines_off — доля мелочи будет None."""
-    cfg = volume_cfg(cv_cfg)
+    cfg = volume_cfg(cv_cfg, substage)
     s = empty_sums()
     if not count_fines:
         s["fines_off"] = True          # только флаг «СВ ниже порога» (для показа по пробе); саму муку считаем всегда —

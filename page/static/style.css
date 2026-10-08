@@ -3908,3 +3908,5 @@ input.micro-cam-num { width: 56px; min-width: 0; flex: 0 0 auto; padding: 4px 5p
 #cvVol.is-crit-volume .micro-vol__fields input#cvFinesPump,
 #cvVol.is-crit-volume .micro-vol__fields input#cvFinesG1,
 #cvVol.is-crit-volume .micro-vol__fields input#cvFinesG2 { width: 104px; }
+
+.micro-vol__eq { color: var(--muted); font-size: 0.95em; min-width: 76px; }

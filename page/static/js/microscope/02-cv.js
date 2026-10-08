@@ -198,6 +198,11 @@
   const cvAvg3 = (o) => { const v = o ? ["m1", "m2", "m3"].map((k) => o[k]).filter((x) => x != null) : []; return v.length ? v.reduce((a, b) => a + b, 0) / v.length : null; };
   const fmtPct = (v) => (v == null ? "—" : (v >= 10 ? v.toFixed(1) : v.toFixed(2)) + " %");
   // расчётный порог муки по диаметру: круг той же площади, что квадрат side × side мм → 2000·side/√π, мкм
+  // Один и тот же порог в двух единицах: сторона квадрата s мм (площадь s²) ↔ шар того же диаметра объёмом V мм³.
+  // d = 2·s/√π; V = π/6·d³ — поэтому «0,2 мм» и «0,006 мм³» делят кристаллы одинаково.
+  const cvSideToVol = (s) => Math.PI / 6 * Math.pow(2 * s / Math.sqrt(Math.PI), 3);
+  const cvVolToSide = (v) => Math.sqrt(Math.PI) / 2 * Math.cbrt(6 * v / Math.PI);
+  const cvFmtNum = (x) => String(Number(x.toPrecision(3)));
   // критерий «по объёму»: шар объёмом V мм³ → d = 1000·(6V/π)^(1/3), мкм
   let cvCrit = "side";   // чем меряем муку: side — сторона, мм; volume — объём, мм³
   function cvFinesDiam() {
@@ -209,7 +214,7 @@
     const side = parseFloat(($("cvFinesMm") || {}).value), d = cvFinesDiam();
     if (!(side > 0) || d == null) return "—";
     const f = (x, p) => String(Number(x.toPrecision(p))).replace(".", ",");
-    if (cvCrit === "volume") return "Сейчас: объём " + f(side, 3) + " мм³ ↔ шар диаметром ≈ " + Math.round(d) + " мкм. Объём кристалла меньше — мука.";
+    if (cvCrit === "volume") return "Сейчас: объём " + f(side, 3) + " мм³ ↔ шар диаметром ≈ " + Math.round(d) + " мкм (то же, что сторона " + f(cvVolToSide(side), 3) + " мм). Объём кристалла меньше — мука.";
     return "Сейчас: " + f(side, 3) + " × " + f(side, 3) + " мм = " + f(side * side, 3) + " мм² (" + Math.round(side * side * 1e6) +
       " мкм²) → диаметр 2 · " + f(side * 1000, 4) + " / √π ≈ " + Math.round(d) + " мкм. Мельче — мука.";
   }
@@ -421,7 +426,14 @@
     });
     return dirty;
   }
-  function cvVolMarkDirty() { const box = $("cvVolApply"); if (box && !box.classList.contains("is-busy")) box.hidden = !cvVolDirty(); }
+  // «≈ 0,006 мм³» / «≈ 0,2 мм» — тот же порог в другой единице, пока вводишь
+  function cvFinesEqUpdate() {
+    const e = $("cvFinesEq"); if (!e) return;
+    const v = cvNum("cvFinesMm");
+    e.textContent = v > 0 ? "≈ " + (cvCrit === "volume" ? cvFmtNum(cvVolToSide(v)) + " мм" : cvFmtNum(cvSideToVol(v)) + " мм³") : "";
+  }
+  function cvVolMarkDirty() {
+    cvFinesEqUpdate(); const box = $("cvVolApply"); if (box && !box.classList.contains("is-busy")) box.hidden = !cvVolDirty(); }
   function cvVolPayload() {
     const k = cvNum("cvKThick"), fs = cvNum("cvFinesSv"), an = Math.round(cvNum("cvAvgN")), fm = cvNum("cvFinesMm");
     if (!(fm > 0) || !(k > 0) || !(fs >= 0) || !(an >= 1)) return null;
@@ -450,7 +462,14 @@
     ids.forEach((id) => { const e = $(id); if (e) e.addEventListener("input", () => { const c = $("cvFinesCalc"); if (c) c.textContent = cvFinesCalcText(); cvVolMarkDirty(); }); });
     document.querySelectorAll("#cvFinesModeSeg button").forEach((b) => b.addEventListener("click", () => {
       if (b.dataset.mode === cvCrit) return;
+      // значения не теряем, а переводим в другую единицу (порог тот же): мм ↔ мм³
+      const conv = b.dataset.mode === "volume" ? cvSideToVol : cvVolToSide;
+      const ids = ["cvFinesMm", ...Object.values(CV_VOL_SUB)];
+      const old = ids.map((id) => cvNum(id));
       cvCrit = b.dataset.mode; cvVolRender(false);
+      ids.forEach((id, i) => { const e = $(id); if (e && old[i] > 0) e.value = cvFmtNum(conv(old[i])); });
+      const c = $("cvFinesCalc"); if (c) c.textContent = cvFinesCalcText();
+      cvVolMarkDirty(); cvFinesEqUpdate();
     }));
     const ok = $("cvVolOk"), no = $("cvVolNo"), box = $("cvVolApply"), msg = $("cvVolMsg");
     if (no) no.addEventListener("click", () => { cvCrit = cvVolCfg.fines_mode === "volume" ? "volume" : "side"; cvVolRender(true); });

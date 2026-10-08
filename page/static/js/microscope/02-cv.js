@@ -976,7 +976,7 @@
       ctx.strokeStyle = col; ctx.fillStyle = col; ctx.lineWidth = cvLineWidth(name, isStage ? 1.5 : 2); ctx.beginPath();
       let started = false, prevY = 0;
       for (let i = a; i < b; i++) {
-        const val = arr[i]; if (val == null) { started = false; continue; }
+        const val = arr[i]; if (val == null) { if (name !== "fines_avg") started = false; continue; }     // мука: пропуск данных не рвёт линию
         const x = xAt(t[i]), y = yOf(name, val, mx);
         if (started && !brewBreak(i)) { if (isStage) ctx.lineTo(x, prevY); ctx.lineTo(x, y); } else ctx.moveTo(x, y);   // стадия — ступенькой
         started = true; prevY = y;

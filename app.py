@@ -627,16 +627,51 @@ def cv_settings_get():
     return micro.cv_config()
 
 
+# Пересчёт журнала по кадрам (долгий) — в фоне, чтобы поля применялись мгновенно. Нужен, только когда меняется то, что влияет на
+# геометрию муки/объёма: порог муки (сторона/объём, по подстадиям), режим, k. «Проб в среднем» и «Мука с СВ» применяются при показе.
+_RECOMPUTE = {"running": False, "pending": False, "n": None, "error": None}
+_RECOMPUTE_LOCK = threading.Lock()
+_VOLUME_LIGHT_KEYS = ("avg_n", "fines_from_sv")
+
+
+def _recompute_worker(serial):
+    while True:
+        try:
+            _RECOMPUTE["n"], _RECOMPUTE["error"] = cv_store.recompute_journal(serial), None
+        except Exception as e:
+            _RECOMPUTE["error"] = str(e)
+            api_log("api.cv.settings", "Не удалось пересчитать журнал по новым полям объёма", "warn", {"error": str(e)})
+        with _RECOMPUTE_LOCK:
+            if _RECOMPUTE["pending"]:                 # за время пересчёта поля снова менялись — ещё раз
+                _RECOMPUTE["pending"] = False
+                continue
+            _RECOMPUTE["running"] = False
+            return
+
+
+def _start_recompute(serial):
+    with _RECOMPUTE_LOCK:
+        if _RECOMPUTE["running"]:
+            _RECOMPUTE["pending"] = True
+            return
+        _RECOMPUTE["running"] = True
+    threading.Thread(target=_recompute_worker, args=(serial,), daemon=True, name="cv-recompute").start()
+
+
+@app.get("/api/cv/recompute_state")
+def cv_recompute_state():
+    return {"running": _RECOMPUTE["running"], "n": _RECOMPUTE["n"], "error": _RECOMPUTE["error"]}
+
+
 @app.post("/api/cv/settings")
 def cv_settings_set(patch: dict = Body(...)):
     data = micro.set_cv(patch or {})
     api_log("api.cv.settings", "Изменены настройки CV", payload={"patch": patch})
-    out = {"status": "ok", "cv": data}
-    if patch and "volume" in patch:          # поля «Мука, мм» / «Мука с СВ» / k: пересчитать журнал по сохранённым кадрам
-        try:
-            out["recomputed"] = cv_store.recompute_journal(_cv_serial(None))
-        except Exception as e:
-            api_log("api.cv.settings", "Не удалось пересчитать журнал по новым полям объёма", "warn", {"error": str(e)})
+    out = {"status": "ok", "cv": data, "recompute": False}
+    vol = (patch or {}).get("volume")
+    if isinstance(vol, dict) and any(k not in _VOLUME_LIGHT_KEYS for k in vol):
+        _start_recompute(_cv_serial(None))
+        out["recompute"] = True
     return out
 
 

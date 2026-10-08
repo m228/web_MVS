@@ -97,7 +97,7 @@ def _hist_row(result: dict) -> Optional[dict]:
         "reject_pct": s.get("reject_pct"), "cv_pct": sz.get("cv_pct"), "density": s.get("density_per_mm2"),
         # режим варки на момент пробы (ПЛК): для разбора «почему слиплось» по серии проб
         "temp": plc.get("temp_app"), "level": plc.get("level"), "current": plc.get("current"),
-        "vac": plc.get("press_top"), "cook_time": plc.get("cook_time"), "seed_age": plc.get("seed_age_s"),
+        "vac": plc.get("press_top"), "cook_time": plc.get("cook_time"), "substage": plc.get("substage"), "seed_age": plc.get("seed_age_s"),
         "count": s.get("count"), "mean": sz.get("mean"), "median": sz.get("median"),
         "small": pct.get("small"), "medium": pct.get("medium"),
         "large": pct.get("large"), "reject": pct.get("reject"),
@@ -243,11 +243,12 @@ def trend_range(serial: str, t_from: float, t_to: float, series: Optional[list[s
         "from": t_from, "to": t_to,
         "t": [r["t"] for r in rows], "ts": [r["ts"] for r in rows],
         "stage": [r.get("stage") for r in rows],
+        "substage": [r.get("substage") for r in rows],
         "series": {s: [(fines_avg(r) if s == "fines_avg" else r.get(s)) for r in rows] for s in series},
     }
 
 
-EXPORT_COLUMNS = ["ts", "t", "stage", "sv", "temp", "level", "current", "vac", "cook_time", "seed_age",
+EXPORT_COLUMNS = ["ts", "t", "stage", "substage", "sv", "temp", "level", "current", "vac", "cook_time", "seed_age",
                   "count", "mean", "median", "cv_pct", "density", "small", "medium", "large", "reject",
                   "reject_pct", "fines_m1", "fines_m2", "fines_m3", "fines_avg", "fines_area", "fines_n",
                   "good_n", "rej_n", "sieve_b0", "sieve_b1", "sieve_b2", "sieve_b3", "sieve_b4", "sieve_b5", "sieve_b6",
@@ -637,8 +638,9 @@ def _with_volume(d: Path, r: dict, cfg: Optional[dict] = None) -> dict:
     if not s:
         return r
     cfg = cfg if cfg is not None else _volume_cfg_now()
-    old, cur = s.get("volume_cfg") or {}, cv_volume.volume_cfg(cfg)
-    same = all(old.get(k) == cur.get(k) for k in ("fines_side_mm", "k_thick", "fines_from_sv", "calc_ver"))
+    sub_code = (r.get("plc") or {}).get("substage")
+    old, cur = s.get("volume_cfg") or {}, cv_volume.volume_cfg(cfg, sub_code)
+    same = all(old.get(k) == cur.get(k) for k in ("fines_um", "fines_mode", "k_thick", "fines_from_sv", "calc_ver"))
     if s.get("volume") and "sieve" in s["volume"] and same:       # посчитана с теми же полями — не трогаем
         return r
     try:
@@ -649,9 +651,9 @@ def _with_volume(d: Path, r: dict, cfg: Optional[dict] = None) -> dict:
             objs = json.loads((d / ("objects_%d.json" % i)).read_text(encoding="utf-8"))
             ms = [NS(group=o.get("group"), defect=o.get("defect"), size_um=o["size_um"],
                      length_um=o["length_um"], width_um=o["width_um"]) for o in objs]
-            tot = cv_volume.add_sums(tot, cv_volume.sums_for(ms, cfg, fines_on))
+            tot = cv_volume.add_sums(tot, cv_volume.sums_for(ms, cfg, fines_on, sub_code))
         s["volume"], s["volume_pct"] = tot, cv_volume.percents(tot)
-        s["volume_cfg"] = cv_volume.volume_cfg(cfg)
+        s["volume_cfg"] = cv_volume.volume_cfg(cfg, sub_code)
     except Exception:
         pass            # нет объектов/битый файл — проба просто без объёма
     return r
@@ -697,7 +699,7 @@ def list_samples(serial: str, limit: int = 50) -> list[dict]:
     for p in dirs[:limit]:
         try:
             r = _with_volume(p, json.loads((p / "result.json").read_text(encoding="utf-8")), vcfg)
-            out.append({"ts": r["ts"], "stage": r.get("stage"), "sv": r.get("sv"),
+            out.append({"ts": r["ts"], "stage": r.get("stage"), "substage": (r.get("plc") or {}).get("substage"), "sv": r.get("sv"),
                         "summary": r.get("summary"), "frames": len(r.get("frames", [])),
                         "fracture": (r.get("fracture") or {}).get("summary")})
         except Exception:

@@ -4012,14 +4012,6 @@ input.micro-cam-num { width: 56px; min-width: 0; flex: 0 0 auto; padding: 4px 5p
 #cvVol.is-crit-volume .micro-phase__table input#cvFinesP1, #cvVol.is-crit-volume .micro-phase__table input#cvFinesG1,
 #cvVol.is-crit-volume .micro-phase__table input#cvFinesP2, #cvVol.is-crit-volume .micro-phase__table input#cvFinesG2 { width: 112px; }
 
-/* переключатель источника чисел с ползунком: финиш · по варке · по пробе + фазы варки (как «Плата · Распознавание · Тренды») */
-.micro-vol__mode { position: relative; flex-wrap: nowrap; }
-.micro-vol__mode button { position: relative; z-index: 1; white-space: nowrap; transition: color .15s; }
-.micro-vol__mode button.is-active { background: transparent; color: var(--accent-contrast, #fff); }
-.micro-vol__pill { position: absolute; top: 0; bottom: 0; left: 0; width: 0; border-radius: 999px; background: var(--accent, #2563eb);
-  transition: left .2s cubic-bezier(.4,0,.2,1), width .2s cubic-bezier(.4,0,.2,1), opacity .15s; z-index: 0; pointer-events: none; }
-.micro-vol__nav { flex-wrap: wrap; }
-
 /* кнопка «проверить / обновить» рядом с версиями в шапке микроскопа */
 .micro-ver--btn { cursor: pointer; font: inherit; background: transparent; }
 .micro-ver--btn:hover { border-color: var(--accent, #2563eb); color: var(--accent, #2563eb); }

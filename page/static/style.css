@@ -4031,3 +4031,4 @@ input.micro-cam-num { width: 56px; min-width: 0; flex: 0 0 auto; padding: 4px 5p
 /* строка заголовка рассева: «Рассев по ситам, %» · переключатель фаз (слева, рядом с названием) · ⓘ — справа */
 .micro-sieve-card .micro-sieve__tiles { order: 2; margin: 0 0 0 4px; }
 .micro-sieve-card .micro-sieve__title > .micro-info { order: 3; margin-left: auto; }
+.micro-sieve-card .micro-sieve__sv { order: 2; font-size: .78em; color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }

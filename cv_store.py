@@ -399,6 +399,8 @@ def _vol_block(sel: list) -> dict:
     fin = [r for r in sel if r.get("fines_m3") is not None]
     out = {"probes": len(fin), "good_n": sum(r.get("good_n") or 0 for r in fin), "rej_n": sum(r.get("rej_n") or 0 for r in fin),
            "ts_from": fin[0]["ts"] if fin else None, "ts_to": fin[-1]["ts"] if fin else None}
+    svs = [r["sv"] for r in fin if r.get("sv") is not None]
+    out["sv_from"], out["sv_to"] = (min(svs), max(svs)) if svs else (None, None)     # в каком диапазоне СВ сняты пробы этого рассева
     out["fines"] = {m: r3(_wmean(fin, "fines_" + m, "vtot_" + m)) for m in ("m1", "m2", "m3")}
     out["fines"]["area"], out["fines"]["n"] = r3(_wmean(fin, "fines_area", None)), r3(_wmean(fin, "fines_n", None))
     # рассев по объёму (M1–M3, вес — общий объём пробы) и по площади (area, простое среднее по пробам)

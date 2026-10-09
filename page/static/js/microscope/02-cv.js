@@ -309,15 +309,18 @@
   // началась новая стадия. Только для режимов по варке (в режиме «по пробе» плиток нет — у пробы свои сита по её фазе).
   function cvRenderSieveTiles(b) {
     const box = $("cvSieveTiles"); if (!box) return;
-    if (!b || cvVolMode === "probe") { box.hidden = true; return; }
-    const have = CV_PHASES.filter((p) => b.phases && b.phases[p]);
-    box.hidden = !have.length;
-    if (cvSievePhase !== "boil" && !have.includes(cvSievePhase)) cvSievePhase = "boil";
+    if (cvVolMode === "probe") { box.hidden = true; return; }
+    const has = (p) => !!(b && b.phases && b.phases[p]);
+    box.hidden = false;
+    if (cvSievePhase !== "boil" && !has(cvSievePhase)) cvSievePhase = "boil";
     box.innerHTML = "";
-    [["boil", "варка"], ...have.map((p) => [p, CV_PHASE_TITLE[p]])].forEach(([k, name]) => {
-      const bt = document.createElement("button");
-      bt.type = "button"; bt.textContent = name; bt.className = "micro-sieve__tile" + (k === cvSievePhase ? " is-active" : "");
-      bt.title = k === "boil" ? "Рассев и мука по всей варке (финиш или все пробы — по переключателю выше)" : "Рассев и мука только по пробам этой фазы, сита и порог муки в её масштабе";
+    [["boil", "варка"], ...CV_PHASES.map((p) => [p, CV_PHASE_TITLE[p]])].forEach(([k, name]) => {
+      const ok = k === "boil" || has(k), bt = document.createElement("button");
+      bt.type = "button"; bt.textContent = name; bt.className = "micro-sieve__tile" + (k === cvSievePhase ? " is-active" : "") + (ok ? "" : " is-empty");
+      bt.disabled = !ok;
+      bt.title = k === "boil" ? "Рассев и мука по всей варке (финиш или все пробы — по переключателю выше)"
+        : (ok ? "Рассев и мука только по пробам этой фазы (" + (b.phases[k].n || b.phases[k].probes) + " проб), сита и порог муки в её масштабе"
+              : "В этой варке такой фазы ещё не было (или пробы сняты до версии с фазами и кадры уже стёрты)");
       bt.addEventListener("click", () => { cvSievePhase = k; cvRenderBoil(); });
       box.appendChild(bt);
     });
@@ -463,7 +466,22 @@
     });
     return dirty;
   }
-  function cvVolMarkDirty() { cvFinesEqUpdate(); const box = $("cvVolApply"); if (box && !box.classList.contains("is-busy")) box.hidden = !cvVolDirty(); }
+  // расчётные колонки таблицы фаз: сито 0,2 мм после масштаба и порог муки, который реально применится (свой или общий × масштаб)
+  function cvPhaseTableUpdate() {
+    const vol = cvCrit === "volume", general = cvNum("cvFinesMm"), f = (x) => String(Number(x.toPrecision(3))).replace(".", ",");
+    CV_PHASES.forEach((p) => {
+      const tr = document.querySelector('.micro-phase__table tr[data-ph="' + p + '"]'); if (!tr) return;
+      const sc = (cvNum(CV_VOL_SCALE[p]) > 0 ? cvNum(CV_VOL_SCALE[p]) : CV_PHASE_SCALE[p]) / 100, own = cvNum(CV_VOL_SUB[p]);
+      const edge = tr.querySelector('[data-c="edge"]'), fines = tr.querySelector('[data-c="fines"]'), ownEl = $(CV_VOL_SUB[p]);
+      if (edge) edge.textContent = f(0.2 * sc) + " мм";
+      // порог: свой — как задан; иначе общий × масштаб (по диаметру: в режиме объёма объём × масштаб³)
+      const eff = own > 0 ? own : (general > 0 ? (vol ? general * sc * sc * sc : general * sc) : NaN);
+      if (fines) fines.textContent = isNaN(eff) ? "—" : f(eff) + (vol ? " мм³" : " мм");
+      if (ownEl) ownEl.placeholder = isNaN(eff) || own > 0 ? "авто" : f(eff);
+    });
+    const h = $("cvPhOwnHead"); if (h) h.textContent = vol ? "свой порог, мм³" : "свой порог, мм";
+  }
+  function cvVolMarkDirty() { cvPhaseTableUpdate(); cvFinesEqUpdate(); const box = $("cvVolApply"); if (box && !box.classList.contains("is-busy")) box.hidden = !cvVolDirty(); }
   function cvVolPayload() {
     const k = cvNum("cvKThick"), fs = cvNum("cvFinesSv"), fm = cvNum("cvFinesMm");
     if (!(fm > 0) || !(k > 0) || !(fs >= 0)) return null;

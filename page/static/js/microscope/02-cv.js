@@ -310,17 +310,17 @@
   function cvRenderSieveTiles(b) {
     const box = $("cvSieveTiles"); if (!box) return;
     if (cvVolMode === "probe") { box.hidden = true; return; }
-    const has = (p) => !!(b && b.phases && b.phases[p]);
+    // «варка» — всегда; плитка фазы — только если такая фаза в ВЫБРАННОЙ варке была (идущая варка — новая появляется со стадией,
+    // прошлые варки — какие были). Фазы, которых не было, не показываем вовсе.
+    const have = CV_PHASES.filter((p) => b && b.phases && b.phases[p]);
     box.hidden = false;
-    if (cvSievePhase !== "boil" && !has(cvSievePhase)) cvSievePhase = "boil";
+    if (cvSievePhase !== "boil" && !have.includes(cvSievePhase)) cvSievePhase = "boil";
     box.innerHTML = "";
-    [["boil", "варка"], ...CV_PHASES.map((p) => [p, CV_PHASE_TITLE[p]])].forEach(([k, name]) => {
-      const ok = k === "boil" || has(k), bt = document.createElement("button");
-      bt.type = "button"; bt.textContent = name; bt.className = "micro-sieve__tile" + (k === cvSievePhase ? " is-active" : "") + (ok ? "" : " is-empty");
-      bt.disabled = !ok;
+    [["boil", "варка"], ...have.map((p) => [p, CV_PHASE_TITLE[p]])].forEach(([k, name]) => {
+      const bt = document.createElement("button");
+      bt.type = "button"; bt.textContent = name; bt.className = "micro-sieve__tile" + (k === cvSievePhase ? " is-active" : "");
       bt.title = k === "boil" ? "Рассев и мука по всей варке (финиш или все пробы — по переключателю выше)"
-        : (ok ? "Рассев и мука только по пробам этой фазы (" + (b.phases[k].n || b.phases[k].probes) + " проб), сита и порог муки в её масштабе"
-              : "В этой варке такой фазы ещё не было (или пробы сняты до версии с фазами и кадры уже стёрты)");
+        : "Рассев и мука только по пробам этой фазы (" + (b.phases[k].n || b.phases[k].probes) + " проб), сита и порог муки в её масштабе";
       bt.addEventListener("click", () => { cvSievePhase = k; cvRenderBoil(); });
       box.appendChild(bt);
     });
@@ -555,14 +555,14 @@
         cvLoadBoils(true); cvRefresh();
       } catch (e) { if (msg) msg.textContent = "не применилось: " + e.message; }
       box.classList.remove("is-busy"); if (msg && msg.textContent === "применяю…" || (msg && msg.textContent === "пересчёт проб…")) msg.textContent = "";
-      applying = false; cvVolRender(false);
+      applying = false; cvVolMarkDirty();       // поля НЕ перерисовываем: пока шло применение, ты мог ввести ещё — не затираем набранное
     }
     if (ok) ok.addEventListener("click", applyVol);
-    // таблица фаз (сита, % и свой порог): ввёл значение и ушёл из поля (Enter / Tab / клик в сторону) — применяется и пересчитывается само
-    let autoT = null;
+    // таблица фаз (сита, % и свой порог) — как остальные поля: набрал → появилась ✓ → нажал ✓ (или Enter в поле). Само ничего не применяется:
+    // ни по таймеру, ни при уходе из поля, ни от стрелок ▲▼
     [...Object.values(CV_VOL_SCALE), ...Object.values(CV_VOL_SUB)].forEach((id) => {
       const e = $(id); if (!e) return;
-      e.addEventListener("change", () => { clearTimeout(autoT); autoT = setTimeout(() => { if (cvVolDirty()) applyVol(); }, 350); });
+      e.addEventListener("keydown", (ev) => { if (ev.key === "Enter") { ev.preventDefault(); if (cvVolDirty()) applyVol(); } });
     });
   }
 

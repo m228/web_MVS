@@ -991,26 +991,28 @@
                     <button type="button" data-mode="volume" title="По объёму кристалла, мм³ (шар эквивалентного диаметра)">по объёму, мм³</button>
                   </span>
                   <span class="micro-vol__eq" id="cvFinesEq" title="Тот же общий порог в другой единице: сторона 0,2 мм = объём 0,006 мм³ — кристаллы делятся одинаково"></span>
-                  <label title="Порог муки на подкачке 1 (первая стадия 5). Пусто — общий порог × «сита, %» этой фазы"><span>подкачка 1</span><input type="number" id="cvFinesP1" min="0" step="0.01" placeholder="авто" /></label>
-                  <label title="Порог муки на росте 1 (первая стадия 7). Пусто — общий порог × «сита, %» этой фазы"><span>рост 1</span><input type="number" id="cvFinesG1" min="0" step="0.01" placeholder="авто" /></label>
-                  <label title="Порог муки на подкачке 2 (вторая стадия 5). Пусто — общий порог × «сита, %» этой фазы"><span>подкачка 2</span><input type="number" id="cvFinesP2" min="0" step="0.01" placeholder="авто" /></label>
-                  <label title="Порог муки на росте 2 (вторая стадия 7 и далее). Пусто — общий порог × «сита, %» этой фазы"><span>рост 2</span><input type="number" id="cvFinesG2" min="0" step="0.01" placeholder="авто" /></label>
                 </div>
-                <div class="micro-vol__fields micro-vol__fields--sub">
-                  <span class="micro-vol__lbl" title="Масштаб сит и порога муки по фазам варки">сита, %</span>
-                  <label title="Подкачка 1: сита и порог муки — столько % от обычных (100 % = сита 0,2 / 0,5 / 0,7 / 0,8 / 1,0 мм и общий порог муки)"><span>подкачка 1</span><input type="number" id="cvScaleP1" min="1" max="200" step="1" value="20" /></label>
-                  <label title="Рост 1: сита и порог муки — столько % от обычных"><span>рост 1</span><input type="number" id="cvScaleG1" min="1" max="200" step="1" value="40" /></label>
-                  <label title="Подкачка 2: сита и порог муки — столько % от обычных"><span>подкачка 2</span><input type="number" id="cvScaleP2" min="1" max="200" step="1" value="40" /></label>
-                  <label title="Рост 2: сита и порог муки — столько % от обычных"><span>рост 2</span><input type="number" id="cvScaleG2" min="1" max="200" step="1" value="80" /></label>
-                  <span class="micro-info" tabindex="0" aria-label="Как считаются фазы">ⓘ
-                    <span class="micro-info__pop micro-vol__pop" role="tooltip">
-                      <b>Фазы варки и масштаб сит</b>
-                      <div class="in">Фазы идут по порядку стадий рецепта: 1-я подкачка (стадия 5) → 1-й рост (7) → 2-я подкачка (5) → 2-й рост (7). Проба принадлежит фазе, в которой началась.</div>
-                      <div class="in"><code>100 % = обычные сита 0,2 · 0,5 · 0,7 · 0,8 · 1,0 мм и общий порог «Мука»</code></div>
-                      <small>На ранних фазах кристаллы ещё мелкие, поэтому и сита, и порог муки уменьшаются: при 40 % сито 0,2 мм становится 0,08 мм, порог муки — в 2,5 раза мельче. Проценты подбираются по опыту: по мере накопления данных меняй поля.</small>
-                      <small>Свой порог муки фазы (поля выше) — если нужно задать его прямо, а не масштабом.</small>
+                <div class="micro-phase">
+                  <div class="micro-phase__title">Фазы варки: порог муки и сита
+                    <span class="micro-info" tabindex="0" aria-label="Как считаются фазы">ⓘ
+                      <span class="micro-info__pop micro-vol__pop" role="tooltip">
+                        <b>Фазы варки и масштаб сит</b>
+                        <div class="in">Фазы идут по порядку стадий рецепта: 1-я подкачка (стадия 5) → 1-й рост (7) → 2-я подкачка (5) → 2-й рост (7). Проба принадлежит фазе, в которой началась.</div>
+                        <div class="in"><code>100 % = обычные сита 0,2 · 0,5 · 0,7 · 0,8 · 1,0 мм и общий порог «Мука»</code></div>
+                        <small>На ранних фазах кристаллы ещё мелкие, поэтому и сита, и порог муки уменьшаются: при 40 % сито 0,2 мм становится 0,08 мм, порог муки — в 2,5 раза мельче. Проценты подбираются по опыту: по мере накопления данных меняй поля.</small>
+                        <small>«Свой порог» — если нужно задать порог муки фазы прямо, а не масштабом (пусто — авто = общий порог × %).</small>
+                      </span>
                     </span>
-                  </span>
+                  </div>
+                  <table class="micro-phase__table">
+                    <thead><tr><th>фаза</th><th title="Сита и порог муки — столько % от обычных (100 % = сита 0,2 / 0,5 / 0,7 / 0,8 / 1,0 мм)">сита, %</th><th>сито 0,2 мм →</th><th title="Свой порог муки фазы. Пусто — общий порог × «сита, %»" id="cvPhOwnHead">свой порог муки</th><th title="Порог муки, который реально применяется на этой фазе">мука &lt;</th></tr></thead>
+                    <tbody>
+                      <tr data-ph="p1"><td>подкачка 1</td><td><input type="number" id="cvScaleP1" min="1" max="200" step="1" value="20" /></td><td class="micro-phase__calc" data-c="edge"></td><td><input type="number" id="cvFinesP1" min="0" step="0.01" placeholder="авто" /></td><td class="micro-phase__calc" data-c="fines"></td></tr>
+                      <tr data-ph="g1"><td>рост 1</td><td><input type="number" id="cvScaleG1" min="1" max="200" step="1" value="40" /></td><td class="micro-phase__calc" data-c="edge"></td><td><input type="number" id="cvFinesG1" min="0" step="0.01" placeholder="авто" /></td><td class="micro-phase__calc" data-c="fines"></td></tr>
+                      <tr data-ph="p2"><td>подкачка 2</td><td><input type="number" id="cvScaleP2" min="1" max="200" step="1" value="40" /></td><td class="micro-phase__calc" data-c="edge"></td><td><input type="number" id="cvFinesP2" min="0" step="0.01" placeholder="авто" /></td><td class="micro-phase__calc" data-c="fines"></td></tr>
+                      <tr data-ph="g2"><td>рост 2</td><td><input type="number" id="cvScaleG2" min="1" max="200" step="1" value="80" /></td><td class="micro-phase__calc" data-c="edge"></td><td><input type="number" id="cvFinesG2" min="0" step="0.01" placeholder="авто" /></td><td class="micro-phase__calc" data-c="fines"></td></tr>
+                    </tbody>
+                  </table>
                 </div>
                 <!-- что стоит за цифрами: штуки, доля по числу и по объёму, общий объём (заполняет 02-cv.js) -->
                 <div class="micro-vol__note" id="cvVolNote"></div>

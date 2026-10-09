@@ -5,6 +5,7 @@ warnings.filterwarnings("ignore", message=r".*WebSocketServerProtocol is depreca
 
 import asyncio
 import json
+import re
 import os
 import threading
 from contextlib import asynccontextmanager
@@ -85,29 +86,40 @@ class _NoCacheStatic(StaticFiles):
 app.mount("/static", _NoCacheStatic(directory=str(PAGE_DIR / "static")), name="static")
 
 
+_STATIC_REF = re.compile(r'((?:src|href)="/static/[^"?]+\.(?:js|css))"')
+
+
+def _page(name: str) -> HTMLResponse:
+    """HTML-страница со скриптами/стилями вида /static/js/x.js?v=<версия>: после обновления адрес новый, и браузер
+    физически не может взять старый файл из кэша (смесь нового HTML и старого JS ломала кнопки)."""
+    html = (PAGE_DIR / name).read_text(encoding="utf-8")
+    ver = read_version()
+    return HTMLResponse(_STATIC_REF.sub(lambda m: m.group(1) + "?v=" + ver + '"', html), headers=_NOCACHE)
+
+
 @app.get("/")
 def home():
-    return FileResponse(str(PAGE_DIR / "index.html"), headers=_NOCACHE)
+    return _page("index.html")
 
 
 @app.get("/camera")
 def camera():
-    return FileResponse(str(PAGE_DIR / "camera.html"), headers=_NOCACHE)
+    return _page("camera.html")
 
 
 @app.get("/rtsp")
 def rtsp_page():
-    return FileResponse(str(PAGE_DIR / "rtsp.html"), headers=_NOCACHE)
+    return _page("rtsp.html")
 
 
 @app.get("/multi")
 def multi_page():
-    return FileResponse(str(PAGE_DIR / "multi.html"), headers=_NOCACHE)
+    return _page("multi.html")
 
 
 @app.get("/network")
 def network_page():
-    return FileResponse(str(PAGE_DIR / "network.html"), headers=_NOCACHE)
+    return _page("network.html")
 
 
 @app.get("/microscope")
@@ -127,7 +139,7 @@ def microscope_page():
             "</head><body><div class=b><h1>Микроскоп выключен</h1>"
             "<p>Включите его галочкой на главной странице.</p>"
             "<a href='/'>На главную</a></div></body></html>")
-    return FileResponse(str(PAGE_DIR / "microscope.html"), headers=_NOCACHE)
+    return _page("microscope.html")
 
 
 @app.get("/api/micro/enabled")

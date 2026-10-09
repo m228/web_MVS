@@ -4017,3 +4017,13 @@ input.micro-cam-num { width: 56px; min-width: 0; flex: 0 0 auto; padding: 4px 5p
 .micro-ver--btn:hover { border-color: var(--accent, #2563eb); color: var(--accent, #2563eb); }
 .micro-ver--btn.is-new { background: var(--accent, #2563eb); border-color: transparent; color: #fff; font-weight: 600; }
 .micro-ver--btn.is-busy { opacity: .6; pointer-events: none; }
+
+/* переключатель фаз рассева — отдельный монолит в строке заголовка «Рассев по ситам» (как «Плата · Распознавание · Тренды», со скользящим ползунком) */
+.micro-sieve-card .micro-sieve__title { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 10px; }
+.micro-sieve-card .micro-sieve__tiles { position: relative; display: inline-flex; align-items: stretch; gap: 0; margin: 0 0 0 auto; padding: 2px;
+  border: 1px solid var(--border, rgba(131,151,179,.28)); border-radius: 9px; background: var(--surface-muted, rgba(255,255,255,.04)); }
+.micro-sieve-card .micro-sieve__tile { position: relative; z-index: 1; border: 0; background: transparent; border-radius: 7px; padding: 3px 11px;
+  font-size: 0.8em; font-weight: 500; color: var(--muted); cursor: pointer; white-space: nowrap; transition: color .15s; }
+.micro-sieve-card .micro-sieve__tile.is-active { background: transparent; color: var(--accent-contrast, #fff); }
+.micro-sieve__pill { position: absolute; top: 2px; bottom: 2px; left: 0; width: 0; border-radius: 7px; background: var(--accent, #2563eb); z-index: 0; pointer-events: none;
+  transition: left .2s cubic-bezier(.4,0,.2,1), width .2s cubic-bezier(.4,0,.2,1), opacity .15s; }

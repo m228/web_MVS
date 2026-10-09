@@ -315,7 +315,7 @@
     const have = CV_PHASES.filter((p) => b && b.phases && b.phases[p]);
     box.hidden = false;
     if (cvSievePhase !== "boil" && !have.includes(cvSievePhase)) cvSievePhase = "boil";
-    box.innerHTML = "";
+    box.innerHTML = '<span class="micro-sieve__pill" id="cvSievePill" aria-hidden="true"></span>';     // скользящий ползунок под активным сегментом
     [["boil", "варка"], ...have.map((p) => [p, CV_PHASE_TITLE[p]])].forEach(([k, name]) => {
       const bt = document.createElement("button");
       bt.type = "button"; bt.textContent = name; bt.className = "micro-sieve__tile" + (k === cvSievePhase ? " is-active" : "");
@@ -324,6 +324,12 @@
       bt.addEventListener("click", () => { cvSievePhase = k; cvRenderBoil(); });
       box.appendChild(bt);
     });
+    cvPlaceSievePill();
+  }
+  function cvPlaceSievePill() {
+    const box = $("cvSieveTiles"), pill = $("cvSievePill"); if (!box || !pill) return;
+    const act = box.querySelector("button.is-active"); if (!act) { pill.style.opacity = 0; return; }
+    pill.style.opacity = 1; pill.style.left = act.offsetLeft + "px"; pill.style.width = act.offsetWidth + "px";
   }
   function cvRenderBoil() {
     const i = cvBoilIdx(), b = i >= 0 ? cvBoils[i] : null;

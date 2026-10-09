@@ -408,6 +408,23 @@ def _vol_block(sel: list) -> dict:
     return out
 
 
+def phase_durations(rows: list) -> dict:
+    """{фаза: секунд} по пробам варки (строки по времени). Фаза идёт от первой её пробы до первой пробы следующей (последняя проба
+    варки — до неё самой); несколько отрезков одной фазы (3-я и далее подкачка вливаются во 2-ю) складываются."""
+    out: dict = {}
+    i, n = 0, len(rows)
+    while i < n:
+        ph = rows[i].get("phase")
+        j = i
+        while j + 1 < n and rows[j + 1].get("phase") == ph:
+            j += 1
+        if ph:
+            end = rows[j + 1]["t"] if j + 1 < n else rows[j]["t"]
+            out[ph] = out.get(ph, 0.0) + max(0.0, end - rows[i]["t"])
+        i = j + 1
+    return {k: round(v) for k, v in out.items()}
+
+
 def _boil_summary(rows: list, finished: bool, avg_n: int = 4) -> dict:
     """Сводка варки по строкам журнала. Мелочь — по пробам, где она считалась (СВ ≥ порога), с весом по общему
     объёму пробы: большая проба весит больше. Сростки и площадь — по всем пробам варки."""
@@ -439,11 +456,13 @@ def _boil_summary(rows: list, finished: bool, avg_n: int = 4) -> dict:
     out["tail"] = _vol_block(finish_probes(fin)[0])   # финиш: пробы последних ~2 СВ (раньше — последние N проб)
     # по фазам (подкачка 1 / рост 1 / подкачка 2 / рост 2): ВСЕ пробы фазы, мука и рассев в масштабе фазы
     out["phases"] = {}
+    out["dur_s"] = round(rows[-1]["t"] - rows[0]["t"])                       # вся варка по пробам, с
+    durs = phase_durations(rows)
     for ph in cv_volume.PHASES:
         rp = [r for r in rows if r.get("phase") == ph]
         if rp:
             blk = _vol_block(rp)
-            blk.update({"n": len(rp), "ts_from": rp[0]["ts"], "ts_to": rp[-1]["ts"], "title": cv_volume.PHASE_TITLES[ph]})
+            blk.update({"n": len(rp), "ts_from": rp[0]["ts"], "ts_to": rp[-1]["ts"], "title": cv_volume.PHASE_TITLES[ph], "dur_s": durs.get(ph)})
             out["phases"][ph] = blk
     last = rows[-1]
     out["cfg"] = {k: last.get(k) for k in ("fines_side_mm", "fines_um", "k_thick", "fines_from_sv", "avg_n")}

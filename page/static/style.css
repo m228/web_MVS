@@ -4032,3 +4032,5 @@ input.micro-cam-num { width: 56px; min-width: 0; flex: 0 0 auto; padding: 4px 5p
 .micro-sieve-card .micro-sieve__tiles { order: 2; margin: 0 0 0 4px; }
 .micro-sieve-card .micro-sieve__title > .micro-info { order: 3; margin-left: auto; }
 .micro-sieve-card .micro-sieve__sv { order: 2; font-size: .78em; color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.micro-sieve-card .micro-sieve__dur { margin: -2px 0 8px; font-size: .76em; color: var(--muted); line-height: 1.4; }
+.micro-sieve-card .micro-sieve__dur[hidden] { display: none; }

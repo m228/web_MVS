@@ -4058,3 +4058,4 @@ input.micro-cam-num { width: 56px; min-width: 0; flex: 0 0 auto; padding: 4px 5p
 .micro-vol__fields--col input[type="number"] { width: 84px; height: 28px; }
 .micro-vol__main .micro-phase { margin-top: 0; }
 .micro-vol > .micro-vol__note { margin-top: 14px; font-size: 0.8em; }
+.micro-vol__lblcell { display: inline-flex; align-items: baseline; gap: 6px; color: var(--muted); white-space: nowrap; }

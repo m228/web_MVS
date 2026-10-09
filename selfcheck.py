@@ -1689,6 +1689,41 @@ def _js_cv_functions_defined():
     return "%d cv*-функций вызывается, все определены" % len(calls)
 
 
+@check("Обновление", "кнопка «обновить» в шапке: update.ps1 запускается отвязанно (путь, -Root, -Port, своя консоль/группа); из исходников и без update.ps1 — понятная ошибка; нет breakaway — запасной запуск")
+def _updater_run_script():
+    import tempfile
+    import updater
+    orig = (updater.is_frozen, updater._app_dir, updater.subprocess.Popen)
+    calls = []
+
+    def fake_popen(cmd, **kw):
+        calls.append((cmd, kw))
+        if len(calls) == 1 and kw.get("creationflags", 0) & 0x01000000:
+            raise OSError("job не разрешает breakaway")
+        return object()
+    try:
+        updater.is_frozen = lambda: False
+        r = updater.run_update_script(8000)
+        assert not r["ok"] and ".exe" in r["error"], r
+        d = Path(tempfile.mkdtemp(prefix="mvs_upd_"))
+        updater.is_frozen = lambda: True
+        updater._app_dir = lambda: d
+        r = updater.run_update_script(8000)
+        assert not r["ok"] and "update.ps1" in r["error"], r
+        (d / "update.ps1").write_text("# stub", encoding="utf-8")
+        updater.subprocess.Popen = fake_popen
+        r = updater.run_update_script(8123)
+        assert r["ok"], r
+        assert len(calls) == 2, "первый запуск с BREAKAWAY упал → второй без него: %d вызовов" % len(calls)
+        cmd, kw = calls[1]
+        assert cmd[0].lower().endswith("powershell.exe") or cmd[0] == "powershell"
+        assert cmd[cmd.index("-File") + 1] == str(d / "update.ps1") and cmd[cmd.index("-Root") + 1] == str(d) and cmd[cmd.index("-Port") + 1] == "8123", cmd
+        assert "Hidden" in cmd and kw["creationflags"] & 0x00000010 and kw["creationflags"] & 0x00000200 and not kw["creationflags"] & 0x01000000, kw
+    finally:
+        updater.is_frozen, updater._app_dir, updater.subprocess.Popen = orig
+    return "update.ps1 -Root -Port, скрытая консоль, новая группа, запасной запуск без breakaway"
+
+
 @check("CV", "cv_client.health: CV-сервис недоступен → None без исключения и зависания")
 def _cv_client_offline():
     import cv_client

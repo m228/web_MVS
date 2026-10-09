@@ -305,31 +305,31 @@
   const CV_PHASES = ["p1", "g1", "p2", "g2"];
   const CV_PHASE_TITLE = { p1: "подкачка 1", g1: "рост 1", p2: "подкачка 2", g2: "рост 2" };
   const CV_PHASE_SCALE = { p1: 20, g1: 40, p2: 40, g2: 80 };
-  // Переключатель «что показывать» в «Объёме и муке»: финиш · по варке · по пробе — и дальше ФАЗЫ выбранной варки (подкачка 1, рост 1, подкачка 2,
-  // рост 2). Фазы «нарастают» в том же переключателе по мере варки: показываются только те, что в этой варке были; активный сегмент подсвечивает
-  // скользящий ползунок. Выбор фазы переключает и муку, и рассев по ситам (сита в масштабе фазы).
-  function cvPlacePill() {
-    const pill = $("cvVolPill"), box = $("cvVolMode"); if (!pill || !box) return;
-    const act = box.querySelector("button.is-active"); if (!act) { pill.style.opacity = 0; return; }
-    pill.style.opacity = 1; pill.style.left = act.offsetLeft + "px"; pill.style.width = act.offsetWidth + "px";
-  }
-  function cvRenderPhaseSegs(b) {
-    const box = $("cvVolMode"); if (!box) return;
-    box.querySelectorAll("button[data-phase]").forEach((x) => x.remove());
-    const have = cvVolMode === "probe" ? [] : CV_PHASES.filter((p) => b && b.phases && b.phases[p]);
+  // плитки рассева: «варка» (итог/финиш, как раньше) + по одной на каждую фазу, которая в этой варке была; новая появляется, когда
+  // началась новая стадия. Только для режимов по варке (в режиме «по пробе» плиток нет — у пробы свои сита по её фазе).
+  function cvRenderSieveTiles(b) {
+    const box = $("cvSieveTiles"); if (!box) return;
+    if (cvVolMode === "probe") { box.hidden = true; return; }
+    // «варка» — всегда; плитка фазы — только если такая фаза в ВЫБРАННОЙ варке была (идущая варка — новая появляется со стадией,
+    // прошлые варки — какие были). Фазы, которых не было, не показываем вовсе.
+    const have = CV_PHASES.filter((p) => b && b.phases && b.phases[p]);
+    box.hidden = false;
     if (cvSievePhase !== "boil" && !have.includes(cvSievePhase)) cvSievePhase = "boil";
-    have.forEach((p) => {
+    box.innerHTML = '<span class="micro-sieve__pill" id="cvSievePill" aria-hidden="true"></span>';     // скользящий ползунок под активным сегментом
+    [["boil", "варка"], ...have.map((p) => [p, CV_PHASE_TITLE[p]])].forEach(([k, name]) => {
       const bt = document.createElement("button");
-      bt.type = "button"; bt.dataset.phase = p; bt.textContent = CV_PHASE_TITLE[p];
-      bt.title = "Мука и рассев только по пробам этой фазы (" + (b.phases[p].n || b.phases[p].probes) + " проб); сита и порог муки — в масштабе фазы";
-      bt.addEventListener("click", () => { cvSievePhase = p; cvRenderBoil(); });
+      bt.type = "button"; bt.textContent = name; bt.className = "micro-sieve__tile" + (k === cvSievePhase ? " is-active" : "");
+      bt.title = k === "boil" ? "Рассев и мука по всей варке (финиш или все пробы — по переключателю выше)"
+        : "Рассев и мука только по пробам этой фазы (" + (b.phases[k].n || b.phases[k].probes) + " проб), сита и порог муки в её масштабе";
+      bt.addEventListener("click", () => { cvSievePhase = k; cvRenderBoil(); });
       box.appendChild(bt);
     });
-    box.querySelectorAll("button").forEach((x) => {
-      const on = x.dataset.phase ? x.dataset.phase === cvSievePhase : (cvSievePhase === "boil" && x.dataset.vmode === cvVolMode);
-      x.classList.toggle("is-active", on);
-    });
-    cvPlacePill();
+    cvPlaceSievePill();
+  }
+  function cvPlaceSievePill() {
+    const box = $("cvSieveTiles"), pill = $("cvSievePill"); if (!box || !pill) return;
+    const act = box.querySelector("button.is-active"); if (!act) { pill.style.opacity = 0; return; }
+    pill.style.opacity = 1; pill.style.left = act.offsetLeft + "px"; pill.style.width = act.offsetWidth + "px";
   }
   function cvRenderBoil() {
     const i = cvBoilIdx(), b = i >= 0 ? cvBoils[i] : null;
@@ -340,7 +340,7 @@
     const put = (kind, src) => cells(kind).forEach((el) => { const m = el.dataset.v.split(".")[0]; el.textContent = fmtPct(src ? (m === "avg" ? cvAvg3(src) : src[m]) : null); });
     // откуда числа: «последние N проб» (поле «Проб в среднем») или все пробы финиша варки
     const tail = cvVolMode === "tail";
-    cvRenderPhaseSegs(b);
+    cvRenderSieveTiles(b);
     const ph = b && cvSievePhase !== "boil" && b.phases && b.phases[cvSievePhase] ? cvSievePhase : "boil";
     if (b && ph === "boil") cvSievePhase = "boil";
     const pscale = ph !== "boil" ? ((b.cfg || {})["phase_scale_" + ph] || CV_PHASE_SCALE[ph]) / 100 : 1;
@@ -392,10 +392,9 @@
     if (mb) mb.addEventListener("click", () => { cvShowModels = !cvShowModels; try { localStorage.setItem("microCvShowModels", cvShowModels ? "1" : "0"); } catch (e) { } cvApplyModels(); });
     cvApplyModels();
     const setMode = (m) => {
-      cvVolMode = m; cvSievePhase = "boil";
+      cvVolMode = m;
       try { localStorage.setItem("microCvVolMode", m); } catch (e) { }
       document.querySelectorAll("#cvVolNav [data-vmode]").forEach((b) => b.classList.toggle("is-active", b.dataset.vmode === m));
-      cvPlacePill();
       const bx = $("cvBoilBox"); if (bx) bx.hidden = m === "probe";
       if (m !== "probe") { cvRenderBoil(); cvLoadBoils(true); } else cvRenderScatter();
     };
@@ -408,13 +407,12 @@
     if (o) o.addEventListener("click", () => step(+1));
     if (n) n.addEventListener("click", () => step(-1));
     setMode(cvVolMode);
-    window.addEventListener("resize", cvPlacePill);
   }
   function cvRenderVolume(s) {
     if (cvVolMode !== "probe") { cvRenderBoil(); return; }
     const vp = (s && s.volume_pct) || {}, cfg = (s && s.volume_cfg) || {};
     cvRenderSieve(vp.sieve, cfg.size_scale || 1);      // у пробы — масштаб сит её фазы
-    cvRenderPhaseSegs(null);
+    cvRenderSieveTiles(null);
     document.querySelectorAll("#cvVolGrid [data-v]").forEach((el) => {
       const [model, kind] = el.dataset.v.split(".");
       el.textContent = fmtPct(model === "avg" ? cvAvg3({ m1: (vp.m1 || {})[kind], m2: (vp.m2 || {})[kind], m3: (vp.m3 || {})[kind] }) : (vp[model] ? vp[model][kind] : null));

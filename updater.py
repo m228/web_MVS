@@ -363,3 +363,30 @@ Remove-Item -LiteralPath $PSCommandPath -Force -ErrorAction SilentlyContinue
     log_event("updater.apply", "Запущен апдейтер; приложение завершается для замены файлов",
               "warn", {"helper": str(helper)})
     return {"ok": True}
+
+
+def run_update_script(port: int = 8000) -> dict:
+    """Запустить update.ps1 из папки установки (тот же апдейтер, что update.bat): он сам остановит приложение, заменит файлы из
+    последнего релиза, запустит приложение и дождётся ответа (при сбое откатит). Здесь только отвязанный запуск: сам скрипт
+    приложение останавливает — выходить из процесса тут не нужно. Приложение работает с правами админа (манифест exe), поэтому
+    скрипт наследует админ-токен и UAC-окно не показывает."""
+    if not is_frozen():
+        return {"ok": False, "error": "Обновление доступно только в собранной версии (.exe)"}
+    app_dir = _app_dir()
+    script = app_dir / "update.ps1"
+    if not script.is_file():
+        return {"ok": False, "error": "update.ps1 не найден рядом с программой (%s)" % app_dir}
+    # абсолютный путь к powershell.exe (не через PATH): запуск идёт с админ-токеном
+    ps_exe = os.path.expandvars(r"%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe")
+    if not os.path.isfile(ps_exe):
+        ps_exe = "powershell"
+    cmd = [ps_exe, "-NoProfile", "-ExecutionPolicy", "Bypass", "-WindowStyle", "Hidden", "-File", str(script),
+           "-Root", str(app_dir), "-Port", str(int(port))]
+    CREATE_NEW_CONSOLE, CREATE_NEW_PROCESS_GROUP, CREATE_BREAKAWAY_FROM_JOB = 0x00000010, 0x00000200, 0x01000000
+    base = CREATE_NEW_CONSOLE | CREATE_NEW_PROCESS_GROUP         # своя (скрытая) консоль + своя группа: скрипт переживёт выход приложения
+    try:
+        subprocess.Popen(cmd, creationflags=base | CREATE_BREAKAWAY_FROM_JOB, close_fds=True, cwd=str(app_dir))
+    except OSError:                                              # job не разрешает breakaway (или job нет) — без него
+        subprocess.Popen(cmd, creationflags=base, close_fds=True, cwd=str(app_dir))
+    log_event("updater.run", "Запущен update.ps1 из папки установки; приложение будет остановлено и запущено заново", "warn", {"script": str(script)})
+    return {"ok": True, "message": "обновление запущено"}

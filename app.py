@@ -178,6 +178,13 @@ def api_update_download():
     return updater.download_latest()
 
 
+@app.get("/api/update/run")
+def api_update_run(request: Request):
+    """Кнопка «обновить» в шапке: запускает update.ps1 из папки установки (останавливает приложение, ставит последнюю версию, запускает снова)."""
+    api_log("api.update", "Запуск обновления (update.ps1)")
+    return updater.run_update_script(request.url.port or 8000)
+
+
 @app.get("/api/update/apply")
 def api_update_apply():
     api_log("api.update", "Применение обновления (перезапуск)")

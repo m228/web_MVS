@@ -4019,3 +4019,9 @@ input.micro-cam-num { width: 56px; min-width: 0; flex: 0 0 auto; padding: 4px 5p
 .micro-vol__pill { position: absolute; top: 0; bottom: 0; left: 0; width: 0; border-radius: 999px; background: var(--accent, #2563eb);
   transition: left .2s cubic-bezier(.4,0,.2,1), width .2s cubic-bezier(.4,0,.2,1), opacity .15s; z-index: 0; pointer-events: none; }
 .micro-vol__nav { flex-wrap: wrap; }
+
+/* кнопка «проверить / обновить» рядом с версиями в шапке микроскопа */
+.micro-ver--btn { cursor: pointer; font: inherit; background: transparent; }
+.micro-ver--btn:hover { border-color: var(--accent, #2563eb); color: var(--accent, #2563eb); }
+.micro-ver--btn.is-new { background: var(--accent, #2563eb); border-color: transparent; color: #fff; font-weight: 600; }
+.micro-ver--btn.is-busy { opacity: .6; pointer-events: none; }

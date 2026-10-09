@@ -540,6 +540,14 @@
     const apply = () => { box.hidden = !shown; btn.classList.toggle("is-on", shown); };
     btn.addEventListener("click", () => { shown = !shown; try { localStorage.setItem("microCvVolNote", shown ? "1" : "0"); } catch (e) { } apply(); });
     apply();
+    // глазок у «Фазы варки»: таблица порогов и сит скрыта, пока не нажмёшь (по умолчанию скрыта); выбор запоминается
+    const eye = $("cvPhaseEye"), tbl = $("cvPhaseTable");
+    if (eye && tbl) {
+      let open = false; try { open = localStorage.getItem("microCvPhaseOpen") === "1"; } catch (e) { }
+      const show = () => { tbl.hidden = !open; eye.classList.toggle("is-on", open); eye.setAttribute("aria-pressed", open ? "true" : "false"); };
+      eye.addEventListener("click", () => { open = !open; try { localStorage.setItem("microCvPhaseOpen", open ? "1" : "0"); } catch (e) { } show(); });
+      show();
+    }
   }
   function wireVolumeFields() {
     wireVolNoteBtn();

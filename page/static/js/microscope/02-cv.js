@@ -1205,14 +1205,20 @@
           if (val !== last || brewBreak(i)) ctx.fillText(String(val), xAt(t[i]), yAt(val, mx) - 4);
           last = val;
         }
-        // название подстадии (рост 2, подкачка 3…) — мелким под линией стадии на каждой смене
+        // название подстадии (рост 2, подкачка 3…) — мелким под линией стадии на каждой смене; перекрывающиеся подписи пропускаем
         const sub = d.substage || [];
         if (sub.some((v) => v != null)) {
           ctx.font = "10px sans-serif"; ctx.textBaseline = "top"; ctx.globalAlpha = 0.85;
-          let lastS = null;
+          let lastS = null; const placed = [];                      // уже нарисованные подписи: [x0, y0, x1, y1]
           for (let i = i0; i < i1; i++) {
             const sv = sub[i], val = arr[i]; if (sv == null || val == null) continue;
-            if (sv !== lastS || brewBreak(i)) { const nm = substageName(sv); if (nm) ctx.fillText(nm, xAt(t[i]), yAt(val, mx) + 4); }
+            if (sv !== lastS || brewBreak(i)) {
+              const nm = substageName(sv);
+              if (nm) {
+                const w = ctx.measureText(nm).width, cx = xAt(t[i]), cy = yAt(val, mx) + 4, box = [cx - w / 2 - 3, cy, cx + w / 2 + 3, cy + 11];
+                if (!placed.some((p) => box[0] < p[2] && box[2] > p[0] && box[1] < p[3] && box[3] > p[1])) { ctx.fillText(nm, cx, cy); placed.push(box); }
+              }
+            }
             lastS = sv;
           }
           ctx.globalAlpha = 1;

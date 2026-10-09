@@ -1143,6 +1143,10 @@ def _cv_fines_substage():
     vol = {"volume": {"fines_mode": "volume", "fines_vol_mm3": 0.006}}
     assert abs(cv_volume.volume_cfg(vol)["fines_um"] - 225.68) < 0.5, "объём 0,006 мм³ ≈ шар 226 мкм"
     assert substages.name_of(73) == "рост 2" and substages.name_of(71) == "рост" and substages.group_of(58) == "pump"
+    # коды, которых нет в таблице SCADA, называются по формуле этап·10 + подэтап (как на заводе: 50, 60, 70, 114)
+    assert [substages.name_of(c) for c in (50, 60, 70, 114, 80, 95, 143)] == ["подкачка", "стабилизация", "рост", "пропарка", "уваривание", "готовность 5", "термоудар 2"], \
+        [substages.name_of(c) for c in (50, 60, 70, 114, 80, 95, 143)]
+    assert substages.group_of(50) == "pump" and substages.group_of(70) == "g1" and substages.group_of(80) is None, "базовые коды 50/70 — в группах подкачки/роста 1"
     return "три порога + режим объёма работают"
 
 

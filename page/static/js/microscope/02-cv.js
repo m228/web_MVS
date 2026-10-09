@@ -1280,7 +1280,10 @@
     const val = (name) => (s[name] && s[name][i] != null ? Math.round(s[name][i] * 10) / 10 : null);
     const stage = d.stage && d.stage[i];
     const subN = substageName(d.substage && d.substage[i]);
-    const head = "<b>" + cvFmtT(d.t[i], true) + "</b>" + (stage != null ? " · стадия " + stage : "") + (subN ? " · " + subN : "");
+    // порог муки этой пробы (по её подстадии: подкачка / рост 1 / рост 2 — как задано в полях «Объём и мука»), в текущей единице
+    const fu = d.fines_um && d.fines_um[i];
+    const fines = fu > 0 ? " · мука &lt; " + (cvCrit === "volume" ? cvFmtNum(cvSideToVol(fu * Math.sqrt(Math.PI) / 2000)) + " мм³" : cvFmtNum(fu * Math.sqrt(Math.PI) / 2000) + " мм").replace(".", ",") : "";
+    const head = "<b>" + cvFmtT(d.t[i], true) + "</b>" + (stage != null ? " · стадия " + stage : "") + (subN ? " · " + subN : "") + fines;
     const cnt = val("count"), mean = val("mean"), med = val("median");
     const svv = val("sv");
     const line2 = [svv != null ? "СВ " + svv : null, cnt != null ? Math.round(cnt) + " крист." : null, mean != null ? "среднее " + mean + " мкм" : null, med != null ? "медиана " + med + " мкм" : null].filter(Boolean).join(" · ");

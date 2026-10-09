@@ -1057,11 +1057,14 @@
                 <span class="micro-rep-dates" id="repDates" hidden>
                   <input type="date" id="repFrom" /> — <input type="date" id="repTo" />
                 </span>
-                <button type="button" id="repGoBtn" class="toolbar-btn toolbar-btn--primary" title="Собрать отчёт по варкам за выбранный период">Сформировать отчёт</button>
-                <button type="button" id="repCsvBtn" class="toolbar-btn toolbar-btn--neutral" title="Скачать отчёт в CSV (открывается в Excel)" disabled>CSV</button>
+                <label class="micro-rep-fin" title="Мука и рассев варки считаются на ФИНИШЕ: берутся все пробы, где СВ в пределах этого числа от конечного (последние 1,5–2 СВ). Начало варки, где кристаллы ещё мелкие, в среднее не входит">финиш, СВ <input type="number" id="repFinSv" min="0.5" max="10" step="0.5" value="2" /></label>
+              <button type="button" id="repGoBtn" class="toolbar-btn toolbar-btn--primary" title="Собрать отчёт по варкам за выбранный период">Сформировать отчёт</button>
+                <button type="button" id="repColsBtn" class="toolbar-btn toolbar-btn--neutral" title="Какие столбцы показывать в отчёте (запоминается, действует и на CSV)">Столбцы</button>
+              <button type="button" id="repCsvBtn" class="toolbar-btn toolbar-btn--neutral" title="Скачать отчёт в CSV (открывается в Excel)" disabled>CSV</button>
                 <button type="button" id="repPdfBtn" class="toolbar-btn toolbar-btn--neutral" title="Печать → «Сохранить как PDF»" disabled>PDF</button>
                 <span class="micro-conn-hint" id="repHint"></span>
               </div>
+              <div class="micro-rep-cols" id="repColsPanel" hidden></div>
               <div class="micro-rep-out" id="repOut"><div class="micro-conn-hint">Выбери период и нажми «Сформировать отчёт».</div></div>
           </div>
 

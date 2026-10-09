@@ -1471,6 +1471,15 @@ def _report():
         body = report.to_csv(rep)
         text = body.decode("utf-8-sig")
         assert body[:3] == "﻿".encode("utf-8") and "начало;конец" in text and "Подстадии" in text and "Недели" in text, "CSV без шапки/разделов"
+        # финиш = пробы в пределах fin_sv от конечного СВ (последние 1,5–2 СВ), а не вся варка после порога
+        fin = [{"ts": "t%d" % i, "t": float(i), "sv": 84.0 + i * 0.5, "fines_m1": 30.0 - i, "fines_m2": 30.0 - i, "fines_m3": 30.0 - i,
+                "vtot_m1": 1.0, "vtot_m2": 1.0, "vtot_m3": 1.0} for i in range(10)]            # СВ 84 … 88,5 (конечное — медиана последних 5 = 87,5), мука 30 → 21
+        sel, ref = report._finish_probes(fin, 2.0)
+        assert ref == 87.5 and [r["ts"] for r in sel] == ["t3", "t4", "t5", "t6", "t7", "t8", "t9"], "финиш: СВ ≥ 85,5 (конечное 87,5 − 2): %s ref=%s" % ([r["ts"] for r in sel], ref)
+        assert [r["ts"] for r in report._finish_probes(fin, 1.0)[0]] == ["t5", "t6", "t7", "t8", "t9"], "окно 1 СВ — пробы с СВ ≥ 86,5"
+        assert report._finish_probes([{"ts": "a", "t": 1.0, "sv": None, "fines_m3": 1.0}], 2.0)[0], "нет СВ — берём последние пробы"
+        only = report.to_csv(rep, ["fines_avg", "probes"]).decode("utf-8-sig")
+        assert "мука на финише" in only and "длительность" not in only and "разломов" not in only and "брак" not in only, "CSV — только выбранные столбцы"
         assert len(report.build("REP", t0 + 2 * 86400, t0 + 3 * 86400)["boils"]) == 0 or True
     finally:
         db.set_path(old_path)

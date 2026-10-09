@@ -3948,3 +3948,12 @@ input.micro-cam-num { width: 56px; min-width: 0; flex: 0 0 auto; padding: 4px 5p
 /* сообщение рядом с «В разметку»: зелёная галочка при успехе */
 .micro-cv-pager__msg.is-ok { color: #34d399; font-size: 15px; font-weight: 700; opacity: 1; margin-left: 4px; }
 .micro-cv-pager__msg.is-bad { color: #ff8a80; opacity: 1; }
+
+/* панель «Столбцы» отчёта */
+.micro-rep-cols { display: flex; flex-wrap: wrap; gap: 6px 16px; padding: 10px 12px; margin-bottom: 12px; border-radius: 10px;
+  background: var(--surface-muted, rgba(255,255,255,.04)); border: 1px solid var(--border, rgba(131,151,179,.28)); font-size: 0.85em; }
+.micro-rep-cols[hidden] { display: none; }
+.micro-rep-cols label { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; white-space: nowrap; }
+.micro-rep-bar .toolbar-btn.is-on { outline: 2px solid var(--accent, #2563eb); }
+.micro-rep-fin { display: inline-flex; align-items: center; gap: 6px; font-size: 0.85em; color: var(--muted); }
+.micro-rep-fin input { width: 58px; padding: 4px 6px; text-align: right; }

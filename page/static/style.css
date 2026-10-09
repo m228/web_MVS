@@ -3906,7 +3906,8 @@ input.micro-cam-num { width: 56px; min-width: 0; flex: 0 0 auto; padding: 4px 5p
 .micro-vol__note[hidden] { display: none; }
 /* критерий «по объёму, мм³»: значения вида 0,00450000 — полям нужна ширина под ~8 цифр */
 #cvVol.is-crit-volume .micro-vol__fields input#cvFinesMm,
-#cvVol.is-crit-volume .micro-vol__fields input#cvFinesPump,
+#cvVol.is-crit-volume .micro-vol__fields input#cvFinesP1,
+#cvVol.is-crit-volume .micro-vol__fields input#cvFinesP2,
 #cvVol.is-crit-volume .micro-vol__fields input#cvFinesG1,
 #cvVol.is-crit-volume .micro-vol__fields input#cvFinesG2 { width: 104px; }
 
@@ -3963,3 +3964,16 @@ input.micro-cam-num { width: 56px; min-width: 0; flex: 0 0 auto; padding: 4px 5p
 .micro-rep-cols label { flex-direction: row; align-items: center; }
 .micro-rep-fin { flex-direction: row; align-items: center; }
 .micro-rep-fin input { width: 54px; height: 30px; min-height: 0; padding: 2px 6px; }
+
+/* плитки рассева по фазам варки */
+.micro-sieve__tiles { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0 8px; }
+.micro-sieve__tiles[hidden] { display: none; }
+.micro-sieve__tile { border: 1px solid var(--border, rgba(131,151,179,.28)); background: transparent; color: var(--muted); border-radius: 8px; padding: 3px 12px; font-size: 0.82em; cursor: pointer; }
+.micro-sieve__tile:hover { color: var(--text); }
+.micro-sieve__tile.is-active { background: var(--accent, #2563eb); border-color: transparent; color: var(--accent-contrast, #fff); }
+.micro-vol__lbl { color: var(--muted); font-size: 0.95em; }
+#cvVol.is-crit-volume .micro-vol__fields input#cvFinesP1, #cvVol.is-crit-volume .micro-vol__fields input#cvFinesP2 { width: 104px; }
+
+/* «Цикл пробы»: третья колонка — быстрый цикл на подкачке; на узкой панели колонки переносятся */
+.micro-cycle-cols--3 { grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); }
+.micro-cycle-col--fast { border-top: 1px solid var(--border, rgba(131,151,179,.28)); padding-top: 10px; margin-top: 2px; }

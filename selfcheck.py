@@ -1131,23 +1131,64 @@ def _cv_fines_latch():
     return "порог по варке: с первого достижения до конца, пропуски СВ линию не рвут"
 
 
-@check("CV", "cv_volume: порог муки по подстадиям (подкачка / рост 1 / рост 2), переключатель сторона/объём, неизвестная подстадия — общий порог")
-def _cv_fines_substage():
-    import cv_volume, substages
+@check("CV", "фазы варки: порядок стадий 5/7 → p1 g1 p2 g2; сита и порог муки в масштабе фазы (20/40/40/80 %), свой порог фазы, режим сторона/объём")
+def _cv_phases():
+    import cv_store, cv_volume, substages
+    # 1. фазы по порядку стадий (рецепт: затравка → подкачка 1 → рост 1 → подкачка 2 → рост 2 → уваривание)
+    seq = [3, 4, 5, 5, 7, 7, 7, 5, 5, 7, 7, 8, 9]
+    got = cv_store.phases_for_boil(seq)
+    assert got == [None, None, "p1", "p1", "g1", "g1", "g1", "p2", "p2", "g2", "g2", None, None], got
+    assert cv_store.phases_for_boil([5, 7, 5, 7, 5, 7]) == ["p1", "g1", "p2", "g2", "p2", "g2"], "третья подкачка/рост вливаются во вторую"
+    assert cv_store.phases_for_boil([5, None, 5, 7]) == ["p1", "p1", "p1", "g1"], "стадия неизвестна — как у предыдущей пробы"
+    # 2. масштаб фаз: порог муки и сита
     base = cv_volume.volume_cfg(None)["fines_um"]
-    cfg = {"volume": {"fines_side_pump": 0.1, "fines_side_g1": 0.15, "fines_side_g2": 0.3}}
-    um = lambda sub: cv_volume.volume_cfg(cfg, sub)["fines_um"]
-    assert um(None) == base and um(99) == base and um(71 + 20) == base, "неизвестная подстадия — общий порог"
-    assert um(52) < um(71) == um(72) < um(73) == um(77), "подкачка < рост 1 < рост 2: %s %s %s" % (um(52), um(72), um(73))
-    assert cv_volume.volume_cfg({"volume": {"fines_side_g1": 0}}, 72)["fines_um"] == base, "0 в поле группы — как общий"
-    vol = {"volume": {"fines_mode": "volume", "fines_vol_mm3": 0.006}}
-    assert abs(cv_volume.volume_cfg(vol)["fines_um"] - 225.68) < 0.5, "объём 0,006 мм³ ≈ шар 226 мкм"
-    assert substages.name_of(73) == "рост 2" and substages.name_of(71) == "рост" and substages.group_of(58) == "pump"
-    # коды, которых нет в таблице SCADA, называются по формуле этап·10 + подэтап (как на заводе: 50, 60, 70, 114)
-    assert [substages.name_of(c) for c in (50, 60, 70, 114, 80, 95, 143)] == ["подкачка", "стабилизация", "рост", "пропарка", "уваривание", "готовность 5", "термоудар 2"], \
-        [substages.name_of(c) for c in (50, 60, 70, 114, 80, 95, 143)]
-    assert substages.group_of(50) == "pump" and substages.group_of(70) == "g1" and substages.group_of(80) is None, "базовые коды 50/70 — в группах подкачки/роста 1"
-    return "три порога + режим объёма работают"
+    cfg = {"volume": {}}
+    vc = lambda ph: cv_volume.volume_cfg(cfg, ph)
+    assert vc(None)["size_scale"] == 1.0 and vc(None)["fines_um"] == base and vc("zzz")["phase"] is None, "нет фазы — обычные сита и порог"
+    assert [round(vc(ph)["size_scale"], 2) for ph in cv_volume.PHASES] == [0.2, 0.4, 0.4, 0.8], "масштаб по умолчанию 20/40/40/80 %"
+    assert abs(vc("p1")["fines_um"] - base * 0.2) < 1e-6 and abs(vc("g2")["fines_um"] - base * 0.8) < 1e-6, "порог муки уменьшается вместе с ситами"
+    cfg = {"volume": {"phase_scale_g1": 50, "fines_side_p2": 0.05}}
+    assert abs(vc("g1")["fines_um"] - base * 0.5) < 1e-6, "свой масштаб фазы"
+    assert abs(vc("p2")["fines_um"] - cv_volume.fines_diameter_um(0.05)) < 1e-6, "свой порог фазы — как задан (мм), без масштаба"
+    cfg = {"volume": {"fines_mode": "volume", "fines_vol_mm3": 0.006}}
+    assert abs(vc("g1")["fines_um"] - cv_volume.fines_diameter_from_volume_um(0.006) * 0.4) < 1e-6, "режим объёма: масштаб по диаметру"
+    # 3. сита фазы: кристалл 300 мкм — на обычных ситах «0,2–0,5» (бин 1), на ситах 40 % (0,08; 0,2; 0,28; 0,32 мм) — бин 3, а 150 мкм — бин 1
+    assert cv_volume.sieve_bin(300.0) == 1 and cv_volume.sieve_bin(300.0, 0.4) == 3 and cv_volume.sieve_bin(150.0, 0.4) == 1, \
+        (cv_volume.sieve_bin(300.0, 0.4), cv_volume.sieve_bin(150.0, 0.4))
+    from types import SimpleNamespace as NS
+    ms = [NS(group="small", defect=None, size_um=d, length_um=d, width_um=d) for d in (40, 90, 150, 300)]
+    sp = cv_volume.sums_for(ms, {"volume": {}}, True, "p1")      # p1: порог муки = 226·0,2 ≈ 45 мкм → мука только 40-мкм кристалл
+    assert sp["n"]["fines"] == 1 and sp["n"]["total"] == 4, sp["n"]
+    assert sum(1 for x in sp["sieve"]["m3"] if x > 0) >= 3, "на фазе рассев разложен по масштабированным ситам, а не в одно ведро"
+    # 4. подстадии остались только для имён (в порогах не участвуют)
+    assert substages.name_of(52) == "подкачка 1" and substages.name_of(73) == "рост 2"
+    return "p1/g1/p2/g2 по порядку стадий; сита и порог 20/40/40/80 %; свой порог и масштаб"
+
+
+@check("CV", "cv_store: сводка варки — блоки по фазам (все пробы фазы, мука без порога СВ), итоги варки без проб фаз, финиш = последние ~2 СВ")
+def _cv_phase_blocks():
+    import cv_store
+    def row(i, sv, stage, phase, fines):
+        r = {"ts": "2026-10-06_10_%02d_00" % i, "t": 1000.0 + i * 90, "sv": sv, "stage": stage, "phase": phase, "cook_time": 600 + 90 * i,
+             "fines_m3": fines, "fines_m1": fines, "fines_m2": fines, "vtot_m1": 1.0, "vtot_m2": 1.0, "vtot_m3": 1.0, "good_n": 100}
+        for m in ("m1", "m2", "m3", "area"):
+            for b in range(7):
+                r["sieve_%s_b%d" % (m, b)] = 100.0 if b == 1 else 0.0
+        return r
+    rows = [row(0, 82.0, 5, "p1", 60.0), row(1, 82.5, 5, "p1", 50.0), row(2, 83.0, 7, "g1", 30.0), row(3, 84.0, 7, "g1", 28.0),
+            row(4, 82.4, 5, "p2", 20.0), row(5, 85.0, 7, "g2", 12.0), row(6, 87.0, 8, None, 10.0), row(7, 88.0, 8, None, 9.0),
+            row(8, 89.0, 8, None, 8.0), row(9, 89.5, 9, None, 7.0)]
+    cv_store._apply_fines_gate(rows)                     # порог «Мука с СВ» 88: фазы он не гасит, остальные пробы до 88 — гасит
+    assert [r["fines_m3"] for r in rows[:6]] == [60.0, 50.0, 30.0, 28.0, 20.0, 12.0], "на фазах мука считается с самого начала"
+    assert rows[6]["fines_m3"] is None and rows[7]["fines_m3"] == 9.0, "вне фаз порог СВ работает как раньше"
+    sm = cv_store._boil_summary(rows, True)
+    assert set(sm["phases"]) == {"p1", "g1", "p2", "g2"} and sm["phases"]["p1"]["probes"] == 2 and sm["phases"]["g1"]["probes"] == 2, sm["phases"].keys()
+    assert abs(sm["phases"]["p1"]["fines"]["m3"] - 55.0) < 1e-6, "мука фазы — среднее по ВСЕМ её пробам: %s" % sm["phases"]["p1"]["fines"]
+    assert sm["phases"]["p1"]["sieve"]["m3"][1] == 100.0 and sm["phases"]["p1"]["title"] == "подкачка 1"
+    assert sm["counted"] == 3 and abs(sm["fines"]["m3"] - 8.0) < 0.6, "итоги варки — по пробам вне фаз (финиш), без фаз: %s" % sm["fines"]
+    sel, ref = cv_store.finish_probes([r for r in rows if r["fines_m3"] is not None and not r["phase"]], 2.0)
+    assert [r["ts"][-5:-3] for r in sel] == ["07", "08", "09"] and ref == 89.0, ([r["ts"] for r in sel], ref)
+    return "блоки фаз по всем пробам, итоги варки без фаз, финиш по СВ"
 
 
 @check("CV", "cv_volume: рассев по ситам — фракции по границам 0,2·0,5·0,7·0,8·1·1,2 мм, сумма 100 %, слияние кадров")
@@ -1550,6 +1591,87 @@ def _legacy_journal_import():
     finally:
         shutil.rmtree(hd, ignore_errors=True)
     return "импорт 6 проб, повтор без дублей, нет папки — тихо"
+
+
+@check("Микроскоп", "быстрый цикл на подкачке (стадия 5) + диапазон СВ: параметры цикла по стадии, диапазон не останавливает начатую варку и подкачку")
+def _fsm_fast_cycle():
+    import copy
+    import plate_config
+    from microscope_fsm import MicroscopeFSM
+
+    class _Plate:
+        def __init__(self):
+            self.telemetry = {"pos1": 0, "pos1_ai": 0, "pos1_enc": 0}
+            self.status = {"connected": True}
+
+        def __getattr__(self, n):
+            return lambda *a, **k: None
+    cfg = copy.deepcopy(plate_config.load())
+    pc = cfg.setdefault("probe_cycle", {})
+    pc.update({"pre_wash_sec": 4, "post_wash_pause_sec": 2, "sv_from": 84, "sv_to": 92,
+               "fast": {"enabled": True, "frames": 1, "gap_sec": 2, "pre_wash_sec": 2, "post_wash_pause_sec": 1}})
+    cfg.setdefault("cv", {}).update({"gap_sec": 10, "frames_per_probe": 3})
+    fsm = MicroscopeFSM(_Plate(), cfg)
+    fsm.set_cv_dwell(True, frames=3, gap_sec=10)
+    fsm.set_stage(7)
+    assert (fsm._pre_wash(), fsm._post_wash(), fsm._cv_gap(), fsm._cv_need()) == (4, 2, 10, 3), "обычная стадия — обычные параметры"
+    fsm.set_stage(5)
+    assert (fsm._pre_wash(), fsm._post_wash(), fsm._cv_gap(), fsm._cv_need()) == (2, 1, 2, 1), "подкачка (5) — быстрый цикл"
+    fsm._fast["enabled"] = False
+    assert fsm._pre_wash() == 4 and fsm._cv_need() == 3, "быстрый цикл выключен — обычные"
+    fsm._fast["enabled"] = True
+    # диапазон СВ [84..92]: до начала варки пробу не пускает, на подкачке (СВ 82) — не проверяется, начатую варку — не останавливает
+    fsm.set_stage(7)
+    fsm.set_sv(82.0)
+    assert not fsm._range_ok(), "СВ 82 ниже диапазона, варка не начата — пробу не пускаем"
+    fsm.set_stage(5)
+    assert fsm._range_ok(), "на подкачке диапазон СВ не проверяется"
+    fsm.set_stage(7)
+    fsm._range_latched = True
+    fsm.set_sv(81.0)
+    assert fsm._range_ok(), "проба уже шла в этой варке — диапазон больше не останавливает"
+    fsm.set_stage(10)                                          # выгрузка — вне 3..9: защёлка сбрасывается тиком (новая варка — снова диапазон)
+    fsm.sw0 = True
+    fsm.tick()
+    assert not fsm._range_latched, "после варки защёлка диапазона сброшена"
+    return "стадия 5: промывка 2 / пауза 2 / 1 кадр; диапазон СВ снят на подкачке и после старта пробы"
+
+
+@check("CV", "фазы в сервисе: счётчики подкачек/ростов по ходу стадий, новая варка (сгущение) сбрасывает, перезапуск посреди варки — счётчики из журнала")
+def _service_phases():
+    import cv_store, db
+    from microscope_service import MicroscopeService
+    ms = MicroscopeService()
+    ms._phase_ready = True                                       # без журнала: считаем только по ходу стадий
+    got = []
+    for st in (2, 3, 4, 5, 5, 7, 7, 5, 5, 7, 8, 9, 10, 3, 4, 5, 7):
+        ms._note_stage(st)
+        got.append(ms._current_phase(st))
+    assert got == [None, None, None, "p1", "p1", "g1", "g1", "p2", "p2", "g2", None, None, None, None, None, "p1", "g1"], got
+    # перезапуск посреди варки: счётчики берём из журнала идущей варки (иначе вторая подкачка стала бы первой)
+    import tempfile, shutil
+    from pathlib import Path
+    tmp = Path(tempfile.mkdtemp(prefix="mvs_ph_")) / "p.db"
+    old_path = db.DB_PATH
+    db.set_path(tmp)
+    try:
+        now = time.time()
+        stages = [4, 5, 5, 7, 7, 7, 5, 5]
+        rows = [{"ts": time.strftime(cv_store.TS_FMT, time.localtime(now - (len(stages) - i) * 90)), "t": now - (len(stages) - i) * 90, "stage": st,
+                 "sv": 82.0 + i * 0.1, "cook_time": 600 + 90 * i} for i, st in enumerate(stages)]
+        db.upsert_many("PHSER", rows)
+        stt = cv_store.phase_state("PHSER")
+        assert stt == {"pump": 2, "grow": 1, "last": 5}, stt
+        ms2 = MicroscopeService()
+        ms2.cfg = {"camera_serial": "PHSER"}
+        ms2._note_stage(5)                                       # после перезапуска первая же стадия 5 — всё ещё 2-я подкачка
+        assert ms2._current_phase(5) == "p2", ms2._current_phase(5)
+        ms2._note_stage(7)
+        assert ms2._current_phase(7) == "g2", "после 2-й подкачки — 2-й рост"
+        assert cv_store.phase_state("NOSUCH") == {"pump": 0, "grow": 0, "last": None}
+    finally:
+        db.set_path(old_path)
+    return "p1 g1 p2 g2 по ходу стадий; сгущение — новая варка; перезапуск — из журнала"
 
 
 @check("CV", "cv_client.health: CV-сервис недоступен → None без исключения и зависания")

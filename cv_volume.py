@@ -23,24 +23,28 @@ import math
 MODELS = ("m1", "m2", "m3")
 # Рассев по ситам (как в лаборатории): отверстия, мм. Фракции снизу вверх: дно (<0,2), 0,2–0,5, 0,5–0,7, 0,7–0,8, 0,8–1,0, 1,0–1,2, >1,2.
 # Размер кристалла — эквивалентный диаметр (как везде в CV); доля фракции — по объёму (объём ~ масса), % от всех кристаллов.
-CALC_VER = 5     # 2: в расчёт идут только хорошие кристаллы (брак — сросток/игла/кривой — отсеян); менять при смене логики: старые пробы пересчитаются
+CALC_VER = 6     # 2: в расчёт идут только хорошие кристаллы (брак — сросток/игла/кривой — отсеян); менять при смене логики: старые пробы пересчитаются
 SIEVE_MM = (0.2, 0.5, 0.7, 0.8, 1.0, 1.2)
 SIEVE_LABELS = ("дно <0,2", "0,2–0,5", "0,5–0,7", "0,7–0,8", "0,8–1", "1–1,2", ">1,2")
 
 
-def sieve_bin(size_um: float) -> int:
-    """Номер фракции рассева: 0 — дно (мельче 0,2 мм), …, 6 — крупнее 1,2 мм."""
+def sieve_bin(size_um: float, scale: float = 1.0) -> int:
+    """Номер фракции рассева: 0 — дно (мельче 0,2 мм), …, 6 — крупнее 1,2 мм. scale — масштаб сит фазы (0,4 = 40 % от обычных)."""
     d, i = size_um / 1000.0, 0
-    while i < len(SIEVE_MM) and d >= SIEVE_MM[i]:
+    while i < len(SIEVE_MM) and d >= SIEVE_MM[i] * scale:
         i += 1
     return i
 KINDS = ("fines", "agg", "total")
 DEFAULTS = {"fines_side_mm": 0.2, "k_thick": 0.88, "fines_from_sv": 88.0, "avg_n": 4}    # avg_n — сколько последних проб финиша усредняем
-# Порог муки по подстадиям (substages.GROUPS): 0 = «как общий». Критерий: "side" — сторона квадрата, мм (по площади);
-# "volume" — объём, мм³ (кристалл = мука, если объём шара эквивалентного диаметра меньше порога).
-FINES_GROUPS = ("pump", "g1", "g2")
+# ФАЗЫ варки (по порядку стадий: 1-я «подкачка» p1 → 1-й «рост» g1 → 2-я подкачка p2 → 2-й рост g2; см. cv_store.phases_for_boil).
+# На каждой фазе сита рассева и порог «Мука» уменьшаются в phase_scale_<фаза> % от обычных (100 % = SIEVE_MM и общий порог):
+# кристаллы ещё мелкие. Порог можно и задать прямо: fines_side_<фаза> (мм) / fines_vol_<фаза> (мм³); 0 — «общий × масштаб».
+# Критерий: "side" — сторона квадрата, мм (по площади); "volume" — объём, мм³ (шар эквивалентного диаметра).
+PHASES = ("p1", "g1", "p2", "g2")
+PHASE_TITLES = {"p1": "подкачка 1", "g1": "рост 1", "p2": "подкачка 2", "g2": "рост 2"}
+PHASE_SCALE_DEFAULT = {"p1": 20.0, "g1": 40.0, "p2": 40.0, "g2": 80.0}      # % от обычных сит; подбираются по опыту
 MODE_DEFAULTS = {"fines_mode": "side", "fines_vol_mm3": 0.006}
-GROUP_KEYS = tuple("fines_side_%s" % g for g in FINES_GROUPS) + tuple("fines_vol_%s" % g for g in FINES_GROUPS)
+GROUP_KEYS = tuple("fines_side_%s" % g for g in PHASES) + tuple("fines_vol_%s" % g for g in PHASES)
 
 
 def fines_diameter_um(side_mm: float) -> float:
@@ -53,9 +57,9 @@ def fines_diameter_from_volume_um(vol_mm3: float) -> float:
     return 1000.0 * (6.0 * vol_mm3 / math.pi) ** (1.0 / 3.0)
 
 
-def volume_cfg(cv_cfg: dict | None, substage=None) -> dict:
-    """Настройки объёма из блока cv (с дефолтами и защитой от мусора). substage — код подстадии пробы: порог муки
-    берётся из поля её группы (подкачка / рост 1 / рост 2); пусто, 0 или подстадия неизвестна — общий порог."""
+def volume_cfg(cv_cfg: dict | None, phase=None) -> dict:
+    """Настройки объёма из блока cv (с дефолтами и защитой от мусора). phase — фаза варки пробы (p1/g1/p2/g2) или None:
+    сита и порог муки берутся в масштабе phase_scale_<фаза> % (или порог — из своего поля фазы)."""
     v = dict(DEFAULTS)
     src = (cv_cfg or {}).get("volume") or {}
     for key in DEFAULTS:
@@ -80,16 +84,29 @@ def volume_cfg(cv_cfg: dict | None, substage=None) -> dict:
         except (TypeError, ValueError):
             x = 0.0
         v[key] = x if x > 0 else 0.0
-    import substages
-    grp = substages.group_of(substage)
-    v["substage_group"] = grp
+    for ph in PHASES:                                            # масштаб фаз, % (по умолчанию 20 / 40 / 40 / 80)
+        try:
+            x = float(src.get("phase_scale_" + ph) or 0)
+        except (TypeError, ValueError):
+            x = 0.0
+        v["phase_scale_" + ph] = x if x > 0 else PHASE_SCALE_DEFAULT[ph]
+    ph = phase if phase in PHASES else None
+    v["phase"] = ph
+    scale = v["phase_scale_" + ph] / 100.0 if ph else 1.0
+    v["size_scale"] = scale
     side, vol = v["fines_side_mm"], v["fines_vol_mm3"]
-    if grp:
-        side = v["fines_side_%s" % grp] or side
-        vol = v["fines_vol_%s" % grp] or vol
+    own = (v["fines_vol_%s" % ph] if v["fines_mode"] == "volume" else v["fines_side_%s" % ph]) if ph else 0.0
+    if own:                                                      # свой порог фазы — как задан
+        if v["fines_mode"] == "volume":
+            vol = own
+        else:
+            side = own
+        base_um = fines_diameter_from_volume_um(vol) if v["fines_mode"] == "volume" else fines_diameter_um(side)
+        v["fines_um"] = base_um
+    else:                                                        # общий порог × масштаб фазы (по диаметру)
+        base_um = fines_diameter_from_volume_um(vol) if v["fines_mode"] == "volume" else fines_diameter_um(side)
+        v["fines_um"] = base_um * scale
     v["fines_side_eff"], v["fines_vol_eff"] = side, vol
-    # расчётный порог по диаметру — им и сравниваем размер кристалла
-    v["fines_um"] = fines_diameter_from_volume_um(vol) if v["fines_mode"] == "volume" else fines_diameter_um(side)
     return v
 
 
@@ -138,11 +155,11 @@ def empty_sums() -> dict:
     return s
 
 
-def sums_for(measures: list, cv_cfg: dict | None, count_fines: bool = True, substage=None) -> dict:
+def sums_for(measures: list, cv_cfg: dict | None, count_fines: bool = True, phase=None) -> dict:
     """Суммы объёма/площади по кадру: мелочь, сростки, всё. Складываются между кадрами пробы.
     count_fines=False — мелочь не считаем (варка не дошла до нужного СВ): мелкие кристаллы идут в «остальные»,
     а в сумме стоит пометка fines_off — доля мелочи будет None."""
-    cfg = volume_cfg(cv_cfg, substage)
+    cfg = volume_cfg(cv_cfg, phase)
     s = empty_sums()
     if not count_fines:
         s["fines_off"] = True          # только флаг «СВ ниже порога» (для показа по пробе); саму муку считаем всегда —
@@ -163,7 +180,7 @@ def sums_for(measures: list, cv_cfg: dict | None, count_fines: bool = True, subs
             if kind == "fines":
                 s[key]["fines"] += val
         s["n"]["total"] += 1
-        b = sieve_bin(m.size_um)
+        b = sieve_bin(m.size_um, cfg["size_scale"])
         for mod in MODELS:
             s["sieve"][mod][b] += vols[mod]
         s["sieve"]["area"][b] += parts["area"]

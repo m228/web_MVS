@@ -76,6 +76,83 @@ def _volume_cols(s: dict, vp: dict, n_frames: int) -> dict:
     return out
 
 
+def phases_for_boil(stages: list) -> list:
+    """Фаза каждой пробы варки по ПОРЯДКУ стадий (рецепт идёт строго по порядку): стадия 5 = подкачка, 7 = рост. 1-я «5» → p1,
+    1-я «7» → g1, 2-я «5» → p2, 2-я «7» → g2 (3-я и далее вливаются во 2-ю). Прочие стадии (сгущение, затравка, уваривание…) — None.
+    Стадия пробы — на момент её начала: проба, начатая в подкачке, остаётся в подкачке, даже если к концу стадия сменилась."""
+    pump = grow = 0
+    last, prev, out = None, None, []
+    for st in stages:
+        if st is None:
+            out.append(prev)                                   # стадия неизвестна — как у предыдущей пробы
+            continue
+        st = int(st)
+        if st == 5:
+            if last != 5:
+                pump += 1
+            prev = "p%d" % min(pump, 2)
+        elif st == 7:
+            if last != 7:
+                grow += 1
+            prev = "g%d" % min(grow, 2)
+        else:
+            prev = None
+        out.append(prev)
+        last = st
+    return out
+
+
+_PHASE_CACHE: dict = {}
+
+
+def phase_map(serial: str, max_age: float = 30.0) -> dict:
+    """{ts: фаза} по журналу: для проб, снятых до появления фаз (в result.json её нет). Кэш на max_age секунд."""
+    tag = _serial_dir(serial).name
+    now = time.time()
+    hit = _PHASE_CACHE.get(tag)
+    if hit and now - hit[0] < max_age:
+        return hit[1]
+    out = {}
+    for g in _group_boils(sorted(db.read_rows(tag), key=lambda r: r["t"])):
+        for r, ph in zip(g, phases_for_boil([r.get("stage") for r in g])):
+            out[r["ts"]] = ph
+    _PHASE_CACHE[tag] = (now, out)
+    return out
+
+
+def phase_state(serial: str, max_idle_s: float = 20 * 60) -> dict:
+    """Состояние счётчиков фаз ИДУЩЕЙ варки по журналу (для перезапуска приложения посреди варки): {"pump": n, "grow": n, "last": stage}.
+    Последняя проба старше max_idle_s — варка закончилась, счётчики с нуля."""
+    tag = _serial_dir(serial).name
+    rows = sorted(db.read_rows(tag, t_from=time.time() - 12 * 3600), key=lambda r: r["t"])
+    if not rows or time.time() - rows[-1]["t"] > max_idle_s:
+        return {"pump": 0, "grow": 0, "last": None}
+    g = _group_boils(rows)[-1]
+    pump = grow = 0
+    last = None
+    for r in g:
+        st = r.get("stage")
+        if st is None:
+            continue
+        if st == 5 and last != 5:
+            pump += 1
+        elif st == 7 and last != 7:
+            grow += 1
+        last = st
+    return {"pump": pump, "grow": grow, "last": last}
+
+
+def finish_probes(fin: list, fin_sv: float = 2.0) -> tuple[list, Optional[float]]:
+    """Пробы финиша: СВ в пределах fin_sv (последние ~2 СВ) от конечного. Конечное СВ — медиана СВ последних 5 проб с мукой
+    (одиночный выброс или провал СВ на подкачке не сдвигает отсчёт). Нет СВ — последние 4 пробы."""
+    svs = [r["sv"] for r in fin[-5:] if r.get("sv") is not None and r["sv"] >= 5]
+    if not svs:
+        return fin[-4:], None
+    ref = sorted(svs)[len(svs) // 2]
+    sel = [r for r in fin if r.get("sv") is not None and r["sv"] >= ref - fin_sv]
+    return (sel or fin[-4:]), ref
+
+
 def _hist_row(result: dict) -> Optional[dict]:
     """Одна строка журнала из result.json пробы: только числа для тренда (без кадров и объектов)."""
     t = _ts_epoch(result.get("ts", ""))
@@ -90,7 +167,7 @@ def _hist_row(result: dict) -> Optional[dict]:
     # в журнал — мука и рассев БЕЗ порога СВ (он применяется при показе по варке, _apply_fines_gate)
     vp = (cv_volume.percents(s["volume"], ignore_off=True) if s.get("volume") else s.get("volume_pct")) or {}
     return {
-        "ts": result["ts"], "t": t, "stage": result.get("stage"), "sv": result.get("sv"),
+        "ts": result["ts"], "t": t, "stage": result.get("stage"), "phase": result.get("phase"), "sv": result.get("sv"),
         # причины брака (среднее число на кадр), разброс размера и плотность — для разбора слипания и обучения
         "n_needle": rs.get("needle"), "n_aggregate": rs.get("aggregate"), "n_crooked": rs.get("crooked"),
         "n_tiny": rs.get("tiny"), "n_huge": rs.get("huge"), "suspect": s.get("suspect"),
@@ -213,7 +290,7 @@ def _apply_fines_gate(rows: list[dict]) -> list[dict]:
         sv = r.get("sv")
         if not latched and sv is not None and sv >= thr:
             latched = True
-        if not latched:
+        if not latched and not r.get("phase"):                # на фазе подкачка/рост мука нужна с самого начала — порог СВ её не гасит
             for k in list(r.keys()):
                 if k.startswith(_FINES_KEYS):
                     r[k] = None
@@ -249,14 +326,15 @@ def trend_range(serial: str, t_from: float, t_to: float, series: Optional[list[s
     return {
         "from": t_from, "to": t_to,
         "t": [r["t"] for r in rows], "ts": [r["ts"] for r in rows], "boil": [r["_boil"] for r in rows],
-        "fines_um": [r.get("fines_um") for r in rows],               # порог муки пробы (диаметр, мкм) — с учётом её подстадии
+        "fines_um": [r.get("fines_um") for r in rows],
+        "phase": [r.get("phase") for r in rows],               # порог муки пробы (диаметр, мкм) — с учётом её подстадии
         "stage": [r.get("stage") for r in rows],
         "substage": [r.get("substage") for r in rows],
         "series": {s: [(fines_avg(r) if s == "fines_avg" else r.get(s)) for r in rows] for s in series},
     }
 
 
-EXPORT_COLUMNS = ["ts", "t", "stage", "substage", "sv", "temp", "level", "current", "vac", "cook_time", "seed_age",
+EXPORT_COLUMNS = ["ts", "t", "stage", "substage", "phase", "sv", "temp", "level", "current", "vac", "cook_time", "seed_age",
                   "count", "mean", "median", "cv_pct", "density", "small", "medium", "large", "reject",
                   "reject_pct", "fines_m1", "fines_m2", "fines_m3", "fines_avg", "fines_area", "fines_n",
                   "good_n", "rej_n", "sieve_b0", "sieve_b1", "sieve_b2", "sieve_b3", "sieve_b4", "sieve_b5", "sieve_b6",
@@ -338,22 +416,33 @@ def _boil_summary(rows: list, finished: bool, avg_n: int = 4) -> dict:
            "t_from": rows[0]["t"], "t_to": rows[-1]["t"], "n": len(rows), "finished": finished}
     svs = [r["sv"] for r in rows if r.get("sv") is not None]
     out["sv_min"], out["sv_max"] = (min(svs), max(svs)) if svs else (None, None)
-    out["counted"] = sum(1 for r in rows if r.get("fines_m3") is not None)   # проб, где мелочь считалась
+    # итоги варки (мука/рассев «по варке», финиш) — по пробам БЕЗ фазы (сгущение, затравка, уваривание…): на фазах подкачка/рост
+    # сита и порог муки в масштабе фазы, их смешивать с финишем нельзя (они идут отдельными блоками phases). Нет таких проб — берём все.
+    base = [r for r in rows if not r.get("phase")] or rows
+    out["counted"] = sum(1 for r in base if r.get("fines_m3") is not None)   # проб, где мелочь считалась
     fines, agg, vtot = {}, {}, {}
     for m in ("m1", "m2", "m3"):
         w = "vtot_" + m
-        fines[m] = r3(_wmean(rows, "fines_" + m, w))
-        agg[m] = r3(_wmean(rows, "agg_" + m, w))
-        vtot[m] = r3(_wmean(rows, w, None))
-    fines["area"], agg["area"] = r3(_wmean(rows, "fines_area", None)), r3(_wmean(rows, "agg_area", None))
-    fines["n"], agg["n"] = r3(_wmean(rows, "fines_n", None)), r3(_wmean(rows, "agg_n", None))
+        fines[m] = r3(_wmean(base, "fines_" + m, w))
+        agg[m] = r3(_wmean(base, "agg_" + m, w))
+        vtot[m] = r3(_wmean(base, w, None))
+    fines["area"], agg["area"] = r3(_wmean(base, "fines_area", None)), r3(_wmean(base, "agg_area", None))
+    fines["n"], agg["n"] = r3(_wmean(base, "fines_n", None)), r3(_wmean(base, "agg_n", None))
     out["fines"], out["agg"], out["vtot"] = fines, agg, vtot
     # рассев по варке — по тем же пробам финиша, что и мука, взвешено по общему объёму пробы
-    fin = [r for r in rows if r.get("fines_m3") is not None]
+    fin = [r for r in base if r.get("fines_m3") is not None]
     # рассев по объёму (M1–M3, вес — общий объём пробы) и по площади (area, простое среднее по пробам)
     out["sieve"] = {m: [r3(_wmean(fin, "sieve_%s_b%d" % (m, i), ("vtot_" + m) if m != "area" else None)) for i in range(len(cv_volume.SIEVE_MM) + 1)] for m in ("m1", "m2", "m3", "area")}
     out["all"] = _vol_block(fin)                      # все пробы финиша варки
-    out["tail"] = _vol_block(fin[-avg_n:])            # последние N проб финиша (поле «Проб в среднем»)
+    out["tail"] = _vol_block(finish_probes(fin)[0])   # финиш: пробы последних ~2 СВ (раньше — последние N проб)
+    # по фазам (подкачка 1 / рост 1 / подкачка 2 / рост 2): ВСЕ пробы фазы, мука и рассев в масштабе фазы
+    out["phases"] = {}
+    for ph in cv_volume.PHASES:
+        rp = [r for r in rows if r.get("phase") == ph]
+        if rp:
+            blk = _vol_block(rp)
+            blk.update({"n": len(rp), "ts_from": rp[0]["ts"], "ts_to": rp[-1]["ts"], "title": cv_volume.PHASE_TITLES[ph]})
+            out["phases"][ph] = blk
     last = rows[-1]
     out["cfg"] = {k: last.get(k) for k in ("fines_side_mm", "fines_um", "k_thick", "fines_from_sv", "avg_n")}
     out["cfg"]["avg_n"] = avg_n
@@ -466,7 +555,7 @@ def save_sample(serial: str, stage, frames: list[dict], images: list, timing: di
                 keep_last: int = 50, keep_boils: int = 0, ts: Optional[str] = None,
                 fracture: Optional[dict] = None, jpeg_quality: int = 85, frame_format: str = "jpg", max_gb: float = 0.0,
                 thumb_img=None, sv: Optional[float] = None,
-                plc: Optional[dict] = None) -> Optional[dict]:
+                plc: Optional[dict] = None, phase: Optional[str] = None) -> Optional[dict]:
     """Сохранить пробу. frames — список {file, summary, objects}. images — ЧИСТЫЕ кадры пробы
     (numpy BGR), пишутся в JPEG (jpeg_quality); контуры поверх рисует браузер по objects_N.json.
     thumb_img — кадр с контурами для миниатюры (нет — миниатюра из чистого кадра 0).
@@ -511,6 +600,7 @@ def save_sample(serial: str, stage, frames: list[dict], images: list, timing: di
             "serial": str(serial),
             "ts": ts,
             "stage": stage,
+            "phase": phase,                                  # фаза варки на начало пробы: p1/g1/p2/g2 или None (см. phases_for_boil)
             "sv": round(sv, 1) if sv is not None else None,   # СВ пробы (от него зависит учёт брака)
             # режим варки из ПЛК на момент пробы: temp_app °C, level %, current A (ток циркулятора),
             # press_top (разрежение сверху), cook_time с, seed_age_s с (время с заводки). Нет ПЛК — ключа нет.
@@ -737,29 +827,32 @@ def _volume_cfg_now() -> dict:
         return {}
 
 
-def _with_volume(d: Path, r: dict, cfg: Optional[dict] = None) -> dict:
-    """Проба, снятая до появления объёма (в summary нет volume): досчитать мелочь/сростки по
-    сохранённым объектам кадров по ТЕКУЩИМ полям порога и k. Файлы пробы не меняем — только ответ."""
+def _with_volume(d: Path, r: dict, cfg: Optional[dict] = None, phase: Optional[str] = None) -> dict:
+    """Проба, снятая до появления объёма/фаз (или с другими полями порога): досчитать муку, сростки и рассев по сохранённым
+    объектам кадров по ТЕКУЩИМ полям (порог, k, масштаб фазы). Файлы пробы не меняем — только ответ. Фаза — из result.json,
+    а для старых проб — по порядку стадий в журнале (phase_map)."""
     s = (r or {}).get("summary")
     if not s:
         return r
     cfg = cfg if cfg is not None else _volume_cfg_now()
-    sub_code = (r.get("plc") or {}).get("substage")
-    old, cur = s.get("volume_cfg") or {}, cv_volume.volume_cfg(cfg, sub_code)
-    same = all(old.get(k) == cur.get(k) for k in ("fines_um", "fines_mode", "k_thick", "fines_from_sv", "calc_ver"))
+    phase = phase or r.get("phase") or phase_map(d.parent.name).get(r.get("ts"))
+    old, cur = s.get("volume_cfg") or {}, cv_volume.volume_cfg(cfg, phase)
+    same = all(old.get(k) == cur.get(k) for k in ("fines_um", "fines_mode", "k_thick", "fines_from_sv", "calc_ver", "phase"))
     if s.get("volume") and "sieve" in s["volume"] and same:       # посчитана с теми же полями — не трогаем
         return r
     try:
         from types import SimpleNamespace as NS
         tot = cv_volume.empty_sums()
-        fines_on = cv_volume.fines_on(cfg, s.get("sv", r.get("sv")))
+        fines_on = cv_volume.fines_on(cfg, s.get("sv", r.get("sv"))) or phase is not None
         for i in range(len(r.get("frames") or [1])):
             objs = json.loads((d / ("objects_%d.json" % i)).read_text(encoding="utf-8"))
             ms = [NS(group=o.get("group"), defect=o.get("defect"), size_um=o["size_um"],
                      length_um=o["length_um"], width_um=o["width_um"]) for o in objs]
-            tot = cv_volume.add_sums(tot, cv_volume.sums_for(ms, cfg, fines_on, sub_code))
+            tot = cv_volume.add_sums(tot, cv_volume.sums_for(ms, cfg, fines_on, phase))
         s["volume"], s["volume_pct"] = tot, cv_volume.percents(tot)
-        s["volume_cfg"] = cv_volume.volume_cfg(cfg, sub_code)
+        s["volume_cfg"] = cv_volume.volume_cfg(cfg, phase)
+        if phase:
+            r["phase"] = phase
     except Exception:
         pass            # нет объектов/битый файл — проба просто без объёма
     return r

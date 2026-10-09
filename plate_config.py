@@ -219,7 +219,10 @@ DEFAULTS = {
                     "trigger_mode": "time", "arrive_sensor": "enc", "sv_from": 84, "sv_to": 92, "ignore_stage": False,
                     "stage_from": 3, "stage_to": 9,
                     "ignore_focus": True, "settle_sec": 2,
-                    "post_wash_pause_sec": 2, "photo_enabled": False},
+                    "post_wash_pause_sec": 2, "photo_enabled": False,
+                    # быстрый цикл на ПОДКАЧКЕ (стадия 5): на подкачке нужно успеть 2–3 пробы за минуту, поэтому меньше кадров, короче пауза
+                    # между разборами и короче промывка. Включается сам, пока стадия = 5 (обе подкачки), и выключается на другой стадии.
+                    "fast": {"enabled": True, "frames": 1, "gap_sec": 2, "pre_wash_sec": 2, "post_wash_pause_sec": 1}},
 
     # фильтр аналогового датчика перемещения (рег.1271): сглаживание дрожания (0/-50/70).
     # enabled — вкл скользящее среднее; avg_sec — окно усреднения (сек). Отфильтрованное

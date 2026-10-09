@@ -26,6 +26,10 @@ class MicroscopeService:
         self.sv_source = None
         # заводка: момент перехода «Сгущение(3) → Затравка и далее(4..9)»; None — варка не отслеживается
         self._last_stage = None
+        self._pump_runs = 0              # сколько раз началась подкачка (стадия 5) в идущей варке
+        self._grow_runs = 0              # сколько раз начался рост (стадия 7)
+        self._phase_last = None          # прошлая стадия для счёта фаз
+        self._phase_ready = False        # счётчики подтянуты из журнала (перезапуск посреди варки)
         self._seed_ts = None
         self._started = False
         self._lock = threading.Lock()
@@ -172,7 +176,11 @@ class MicroscopeService:
     def cv_status(self):
         return dict(self._cv_status)
 
-    def _cv_frames_per_probe(self, cv):
+    def _cv_frames_per_probe(self, cv, stage=None):
+        """Кадров на пробу: на подкачке (стадия 5) — из быстрого цикла (probe_cycle.fast.frames), иначе обычное cv.frames_per_probe."""
+        fast = ((self.cfg or {}).get("probe_cycle") or {}).get("fast") or {}
+        if stage == 5 and fast.get("enabled", True):
+            return max(1, min(self.PROBE_MAX_FRAMES, int(fast.get("frames", 1))))
         return max(1, min(self.PROBE_MAX_FRAMES, int(cv.get("frames_per_probe", 3))))
 
     def _sync_cv_fsm(self):
@@ -251,7 +259,7 @@ class MicroscopeService:
             save_raw = bool(pc.get("photo_enabled", False))
             fmt = pc.get("photo_format", "png")
             stage = fsm.stage if fsm else None
-            need = self._cv_frames_per_probe(cv)
+            need = self._cv_frames_per_probe(cv, stage)
             deadline = time.time() + max(10, int(cv.get("dwell_timeout_sec", 60)))   # страховка
             run = self._cv_begin(cfg)
             while (self._probe_at_glass() and len(run["overlays"]) < need
@@ -361,6 +369,7 @@ class MicroscopeService:
             "svs": [],       # СВ на момент каждого кадра: от него зависит, идёт ли брак в рассев
             "plc": [],       # снимки полей ПЛК (PLC_KEYS) на момент каждого кадра — в запись пробы
             "t0": time.time(),
+            "phase": self._current_phase(self.fsm.stage if self.fsm else None),    # фаза на начало пробы: она же и остаётся у пробы
         }
 
     def _cv_analyze_one(self, run, img):
@@ -403,7 +412,7 @@ class MicroscopeService:
                     run["timing"] = {**run["timing"], "refine_ms": round((time.time() - t_ref) * 1000),
                                      "refine_stubs": ref.get("stubs", 0), "refine_fixed": ref.get("fixed", 0)}
                 res = cv_analyzer.analyze(img, objs, cv_cfg=cv, with_overlay=False, sv=sv,
-                                          substage=(snap or {}).get("substage"))
+                                          phase=run.get("phase"))
                 summary, objects = res["summary"], res["objects"]
         # --- разломы (чистый OpenCV, всегда) ---
         run["zones"].append(cv_fracture.detect_zones(img, run["fr_cfg"]) if run["fr_on"] else [])
@@ -444,7 +453,7 @@ class MicroscopeService:
                                      thumb_img=thumb_img,
                                      sv=(sum(x for x in run["svs"] if x is not None) / max(1, len([x for x in run["svs"] if x is not None]))
                                          if any(x is not None for x in run["svs"]) else None),
-                                     plc=self._plc_summary(run))
+                                     plc=self._plc_summary(run), phase=run.get("phase"))
         if not saved:
             self._set_cv_status("error", "не удалось сохранить пробу (см. лог)")
         elif not run["sidecar_ok"]:
@@ -457,11 +466,46 @@ class MicroscopeService:
             self._set_cv_status("ok", "разбор готов: %d крист., кадров %d" % (
                 round(saved["summary"].get("count") or 0), len(overlays)))
 
+    def _phase_init(self):
+        """Счётчики фаз после перезапуска приложения посреди варки — по журналу идущей варки (иначе вторая подкачка стала бы первой)."""
+        if self._phase_ready:
+            return
+        serial = ((self.cfg or {}).get("camera_serial") or "").strip()
+        if not serial:
+            return
+        self._phase_ready = True
+        try:
+            import cv_store
+            st = cv_store.phase_state(serial)
+            self._pump_runs, self._grow_runs, self._phase_last = st["pump"], st["grow"], st["last"]
+        except Exception as e:
+            log_event("microscope_service", "Счётчики фаз из журнала не подтянулись", "warn", {"error": str(e)})
+
+    def _count_phases(self, stage):
+        """Фазы варки по порядку стадий: каждая новая «5» — новая подкачка, каждая новая «7» — новый рост; сгущение (2–3) — новая варка."""
+        self._phase_init()
+        prev, self._phase_last = self._phase_last, stage
+        if stage in (2, 3) and prev not in (2, 3):
+            self._pump_runs = self._grow_runs = 0
+        elif stage == 5 and prev != 5:
+            self._pump_runs += 1
+        elif stage == 7 and prev != 7:
+            self._grow_runs += 1
+
+    def _current_phase(self, stage):
+        """Фаза пробы, начатой на стадии stage: p1/p2 (подкачка), g1/g2 (рост) или None. 3-я и далее вливаются во 2-ю."""
+        if stage == 5:
+            return "p%d" % min(max(self._pump_runs, 1), 2)
+        if stage == 7:
+            return "g%d" % min(max(self._grow_runs, 1), 2)
+        return None
+
     def _note_stage(self, stage):
         """Заводка = переход из «Сгущения»(3) в 4..9 (затравка и далее). Вход в 2/3 из другой стадии —
         новая варка, отсчёт сбрасывается. Перезапуск приложения посреди варки момент заводки теряет (None)."""
         if stage is None:
             return
+        self._count_phases(stage)
         prev, self._last_stage = self._last_stage, stage
         if prev == 3 and 4 <= stage <= 9:
             self._seed_ts = time.time()

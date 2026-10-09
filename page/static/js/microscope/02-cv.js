@@ -238,13 +238,19 @@
     box.innerHTML = rows.join("");
   }
   // --- рассев по ситам: фракции снизу вверх b0 (дно) … b6 (>1,2 мм); строки рисуем сверху вниз как в лабораторной таблице ---
-  const CV_SIEVE_ROWS = [[[5, 6], "> 1"], [4, "0,8 – 1"], [3, "0,7 – 0,8"], [2, "0,5 – 0,7"], [1, "0,2 – 0,5"], [0, "дно < 0,2"]];
+  // строки: [фракция(и), индекс края снизу]; края сит — SIEVE_MM × масштаб фазы (0,2 / 0,5 / 0,7 / 0,8 / 1,0 мм при 100 %)
+  const CV_SIEVE_EDGES = [0.2, 0.5, 0.7, 0.8, 1.0];
+  const CV_SIEVE_BINS = [[5, 6], 4, 3, 2, 1, 0];
+  function cvSieveRows(scale) {
+    const f = (x) => String(Number((x * scale).toPrecision(2))).replace(".", ","), e = CV_SIEVE_EDGES;
+    return [[[5, 6], "> " + f(e[4])], [4, f(e[3]) + " – " + f(e[4])], [3, f(e[2]) + " – " + f(e[3])], [2, f(e[1]) + " – " + f(e[2])], [1, f(e[0]) + " – " + f(e[1])], [0, "дно < " + f(e[0])]];
+  }
   // показывать ли отдельные модели M1–M3 (по умолчанию скрыты: «Среднее» и «Площадь» понятнее)
   let cvShowModels = false;
   try { cvShowModels = localStorage.getItem("microCvShowModels") === "1"; } catch (e) { }
-  let cvSieveLast = null;
-  function cvRenderSieve(sv) {            // sv = {m1:[7], m2:[7], m3:[7], area:[7]} в %: объём по трём моделям и площадь; нет данных — прочерки
-    cvSieveLast = sv;
+  let cvSieveLast = null, cvSieveScale = 1, cvSievePhase = "boil";     // cvSievePhase: boil | p1 | g1 | p2 | g2 — какая плитка рассева выбрана
+  function cvRenderSieve(sv, scale) {      // scale — масштаб сит фазы (0,4 = 40 %), по умолчанию 1; sv = {m1:[7], m2:[7], m3:[7], area:[7]} в %: объём по трём моделям и площадь; нет данных — прочерки
+    cvSieveLast = sv; cvSieveScale = scale || 1;
     const g = $("cvSieveGrid"); if (!g) return;
     const one = (m, k) => (sv && sv[m] && sv[m][k] != null ? sv[m][k] : null);
     // строка может объединять несколько фракций (например «> 1» = 1–1,2 + больше 1,2 — таких крупных кристаллов у маточника нет)
@@ -253,7 +259,7 @@
     g.style.gridTemplateColumns = "auto repeat(" + (cvShowModels ? 5 : 2) + ", minmax(0, 1fr))";
     let html = '<span>размер, мм</span><b title="Доля по объёму (объём ~ масса): среднее трёх моделей M1–M3">Среднее</b><b title="Доля по площади кристаллов на кадре">Площадь</b>' +
       (cvShowModels ? "<b>M1 шар</b><b>M2 сфер.</b><b>M3 призма</b>" : "");
-    CV_SIEVE_ROWS.forEach(([i, name]) => {
+    cvSieveRows(cvSieveScale).forEach(([i, name]) => {
       html += "<span>" + name + "</span><em>" + fmtPct(avg(i)) + "</em><em>" + fmtPct(val("area", i)) + "</em>" +
         (cvShowModels ? "<em>" + fmtPct(val("m1", i)) + "</em><em>" + fmtPct(val("m2", i)) + "</em><em>" + fmtPct(val("m3", i)) + "</em>" : "");
     });
@@ -263,7 +269,7 @@
     const box = $("cvVol"), btn = $("cvVolModelsBtn");
     if (box) box.classList.toggle("micro-vol--lite", !cvShowModels);
     if (btn) btn.classList.toggle("is-on", cvShowModels);
-    cvRenderSieve(cvSieveLast);
+    cvRenderSieve(cvSieveLast, cvSieveScale);
   }
   // --- по варке: журнал проб нарезан на варки (/api/cv/boils), листаем стрелками ---
   let cvBoils = [], cvBoilSel = null, cvBoilTs = 0, cvVolMode = "tail";
@@ -296,6 +302,26 @@
     } catch (e) { }
     if (cvVolMode !== "probe") cvRenderBoil();
   }
+  const CV_PHASES = ["p1", "g1", "p2", "g2"];
+  const CV_PHASE_TITLE = { p1: "подкачка 1", g1: "рост 1", p2: "подкачка 2", g2: "рост 2" };
+  const CV_PHASE_SCALE = { p1: 20, g1: 40, p2: 40, g2: 80 };
+  // плитки рассева: «варка» (итог/финиш, как раньше) + по одной на каждую фазу, которая в этой варке была; новая появляется, когда
+  // началась новая стадия. Только для режимов по варке (в режиме «по пробе» плиток нет — у пробы свои сита по её фазе).
+  function cvRenderSieveTiles(b) {
+    const box = $("cvSieveTiles"); if (!box) return;
+    if (!b || cvVolMode === "probe") { box.hidden = true; return; }
+    const have = CV_PHASES.filter((p) => b.phases && b.phases[p]);
+    box.hidden = !have.length;
+    if (cvSievePhase !== "boil" && !have.includes(cvSievePhase)) cvSievePhase = "boil";
+    box.innerHTML = "";
+    [["boil", "варка"], ...have.map((p) => [p, CV_PHASE_TITLE[p]])].forEach(([k, name]) => {
+      const bt = document.createElement("button");
+      bt.type = "button"; bt.textContent = name; bt.className = "micro-sieve__tile" + (k === cvSievePhase ? " is-active" : "");
+      bt.title = k === "boil" ? "Рассев и мука по всей варке (финиш или все пробы — по переключателю выше)" : "Рассев и мука только по пробам этой фазы, сита и порог муки в её масштабе";
+      bt.addEventListener("click", () => { cvSievePhase = k; cvRenderBoil(); });
+      box.appendChild(bt);
+    });
+  }
   function cvRenderBoil() {
     const i = cvBoilIdx(), b = i >= 0 ? cvBoils[i] : null;
     const lbl = $("cvBoilLbl"), older = $("cvBoilOlder"), newer = $("cvBoilNewer"), st = $("cvVolState"), box = $("cvVolNote");
@@ -305,8 +331,12 @@
     const put = (kind, src) => cells(kind).forEach((el) => { const m = el.dataset.v.split(".")[0]; el.textContent = fmtPct(src ? (m === "avg" ? cvAvg3(src) : src[m]) : null); });
     // откуда числа: «последние N проб» (поле «Проб в среднем») или все пробы финиша варки
     const tail = cvVolMode === "tail";
-    const blk = b ? ((tail ? b.tail : b.all) || b) : null;
-    cvRenderSieve(blk ? blk.sieve : null);
+    cvRenderSieveTiles(b);
+    const ph = b && cvSievePhase !== "boil" && b.phases && b.phases[cvSievePhase] ? cvSievePhase : "boil";
+    if (b && ph === "boil") cvSievePhase = "boil";
+    const pscale = ph !== "boil" ? ((b.cfg || {})["phase_scale_" + ph] || CV_PHASE_SCALE[ph]) / 100 : 1;
+    const blk = b ? (ph !== "boil" ? b.phases[ph] : ((tail ? b.tail : b.all) || b)) : null;
+    cvRenderSieve(blk ? blk.sieve : null, pscale);
     if (!b) {
       if (lbl) lbl.textContent = "варок пока нет";
       put("fines", null); if (st) st.textContent = "";
@@ -315,11 +345,17 @@
     }
     if (lbl) { lbl.textContent = cvBoilName(i) + " · " + cvBoilSpan(b); lbl.title = "Варка " + cvBoilSpan(b) + " · проб " + b.n; }
     put("fines", blk.fines);
-    const cfg = b.cfg || {};
-    const fd = cfg.fines_um != null ? cfg.fines_um : cvFinesDiam();
-    const fl = $("cvVolLblFines"); if (fl) fl.textContent = "Мука <" + (fd != null ? Math.round(fd) : "") + " мкм";
-    const calc = $("cvFinesCalc"); if (calc) calc.textContent = cvFinesCalcText();
     const pc = (v) => (v == null ? "—" : (v >= 10 ? v.toFixed(1) : v.toFixed(2)).replace(".", ",") + " %");
+    const cfg = b.cfg || {};
+    const fd0 = cfg.fines_um != null ? cfg.fines_um : cvFinesDiam(), fd = fd0 != null ? fd0 * pscale : fd0;
+    const fl = $("cvVolLblFines"); if (fl) fl.textContent = "Мука <" + (fd != null ? Math.round(fd) : "") + " мкм";
+    if (ph !== "boil") {          // фаза: подробный текст про фазу вместо итогов варки
+      const P = blk.probes != null ? blk.probes : blk.n;
+      if (box) box.innerHTML = "<div><b>" + CV_PHASE_TITLE[ph] + ":</b> все пробы фазы — " + P + " (" + cvTsLabel(blk.ts_from).slice(6, 11) + "–" + cvTsLabel(blk.ts_to).slice(6, 11) + "), хороших кристаллов " + (blk.good_n || 0) +
+        ". Сита и порог муки — " + Math.round(pscale * 100) + " % от обычных (сито 0,2 мм → " + String(Number((0.2 * pscale).toPrecision(2))).replace(".", ",") + " мм). Мука: <b>" + pc(cvAvg3(blk.fines)) + "</b> объёма (среднее M1–M3).</div>";
+      return;
+    }
+    const calc = $("cvFinesCalc"); if (calc) calc.textContent = cvFinesCalcText();
     const hasVol = b.vtot && b.vtot.m3 != null;
     const svr = (b.sv_min != null ? String(b.sv_min).replace(".", ",") + "…" + String(b.sv_max).replace(".", ",") : "—");
     if (st) st.textContent = b.finished ? "" : "варка идёт";
@@ -330,11 +366,10 @@
       rows.push("<div><b>Мука</b> по варке не считалась: СВ не дошёл до " + (cfg.fines_from_sv != null ? cfg.fines_from_sv : "порога") + " (максимум " + (b.sv_max != null ? String(b.sv_max).replace(".", ",") : "—") + "). Порог — поле «Мука с СВ».</div>");
     } else {
       // среднее и из чего оно собрано: сколько проб и сколько хороших кристаллов (брак отсеян)
-      const n = cfg.avg_n || 4, P = blk.probes != null ? blk.probes : b.counted, G = blk.good_n || 0, R = blk.rej_n || 0;
+      const P = blk.probes != null ? blk.probes : b.counted, G = blk.good_n || 0, R = blk.rej_n || 0;
       const sv = cfg.fines_from_sv != null ? cfg.fines_from_sv : "";
-      rows.push("<div><b>Мука: " + pc(cvAvg3(blk.fines)) + " объёма</b> (среднее M1–M3) — " + (tail ? "среднее по последним " + n + " пробам финиша" : "среднее по всем пробам финиша") +
+      rows.push("<div><b>Мука: " + pc(cvAvg3(blk.fines)) + " объёма</b> (среднее M1–M3) — " + (tail ? "среднее по пробам последних ~2 СВ (финиш)" : "среднее по всем пробам финиша") +
         ": собрано из <b>" + P + " проб</b> (СВ ≥ " + sv + ")" + (G ? ", всего <b>" + G + " хороших кристаллов</b>, брака отсеяно " + R : "") + "; по числу " + pc(blk.fines.n) + ", по площади " + pc(blk.fines.area) + ".</div>");
-      if (tail && P < n) rows.push("<div>Проб пока " + P + " из " + n + " — среднее будет точнее, когда наберётся.</div>");
       if (G && G < 500) rows.push("<div>Хороших кристаллов мало (" + G + "): для надёжной оценки нужно хотя бы 500 (Faria 2003). Добавь проб или сократи паузу между ними.</div>");
       if (!G) rows.push("<div>Число кристаллов в этих пробах не записано (старые пробы) — у новых оно будет.</div>");
     }
@@ -367,7 +402,8 @@
   function cvRenderVolume(s) {
     if (cvVolMode !== "probe") { cvRenderBoil(); return; }
     const vp = (s && s.volume_pct) || {}, cfg = (s && s.volume_cfg) || {};
-    cvRenderSieve(vp.sieve);
+    cvRenderSieve(vp.sieve, cfg.size_scale || 1);      // у пробы — масштаб сит её фазы
+    cvRenderSieveTiles(null);
     document.querySelectorAll("#cvVolGrid [data-v]").forEach((el) => {
       const [model, kind] = el.dataset.v.split(".");
       el.textContent = fmtPct(model === "avg" ? cvAvg3({ m1: (vp.m1 || {})[kind], m2: (vp.m2 || {})[kind], m3: (vp.m3 || {})[kind] }) : (vp[model] ? vp[model][kind] : null));
@@ -387,22 +423,24 @@
   }
   // --- поля «Объём и мука»: критерий муки (сторона мм / объём мм³), три порога по подстадиям, применение по ✓ ---
   let cvVolCfg = {};
-  const CV_VOL_SUB = { pump: "cvFinesPump", g1: "cvFinesG1", g2: "cvFinesG2" };
+  const CV_VOL_SUB = { p1: "cvFinesP1", g1: "cvFinesG1", p2: "cvFinesP2", g2: "cvFinesG2" };         // свой порог муки фазы (пусто — авто)
+  const CV_VOL_SCALE = { p1: "cvScaleP1", g1: "cvScaleG1", p2: "cvScaleP2", g2: "cvScaleG2" };       // масштаб сит и порога фазы, %
   const cvVolKey = (g) => (cvCrit === "volume" ? "fines_vol_" : "fines_side_") + g;
   const cvVolMain = () => (cvCrit === "volume" ? "fines_vol_mm3" : "fines_side_mm");
   const cvNum = (id) => { const e = $(id); return e && e.value !== "" ? parseFloat(e.value) : NaN; };
   function cvVolFill(vo) { cvVolCfg = vo || {}; cvCrit = cvVolCfg.fines_mode === "volume" ? "volume" : "side"; cvVolRender(true); }
-  // fillShared — перезаписать и общие поля (проб в среднем, СВ, k); при переключении критерия их не трогаем
+  // fillShared — перезаписать и общие поля (СВ, k, масштабы); при переключении критерия их не трогаем
   function cvVolRender(fillShared) {
     const set = (id, v) => { const e = $(id); if (e) e.value = v == null || v === 0 ? "" : v; };
     if (fillShared) {
       const dv = (k, d) => (cvVolCfg[k] != null ? cvVolCfg[k] : d);          // нет в конфиге — дефолт сервера (cv_volume.DEFAULTS)
-      set("cvAvgN", dv("avg_n", 4)); set("cvKThick", dv("k_thick", 0.88));
+      set("cvKThick", dv("k_thick", 0.88));
       const sv = $("cvFinesSv"); if (sv) sv.value = dv("fines_from_sv", 88);
+      CV_PHASES.forEach((p) => set(CV_VOL_SCALE[p], dv("phase_scale_" + p, CV_PHASE_SCALE[p])));
     }
     const vol = cvCrit === "volume", m = $("cvFinesMm");
     set("cvFinesMm", cvVolCfg[cvVolMain()] != null ? cvVolCfg[cvVolMain()] : (vol ? 0.006 : 0.2));
-    Object.keys(CV_VOL_SUB).forEach((g) => set(CV_VOL_SUB[g], cvVolCfg[cvVolKey(g)]));
+    CV_PHASES.forEach((g) => set(CV_VOL_SUB[g], cvVolCfg[cvVolKey(g)]));
     [m, ...Object.values(CV_VOL_SUB).map($)].forEach((e) => { if (e) { e.step = vol ? "0.0005" : "0.01"; e.min = e === m ? (vol ? "0.0001" : "0.01") : "0"; } });
     const lbl = $("cvFinesLbl"); if (lbl) lbl.textContent = vol ? "Мука, мм³" : "Мука, мм";
     const vb = $("cvVol"); if (vb) vb.classList.toggle("is-crit-volume", vol);
@@ -414,9 +452,9 @@
   function cvVolDirty() {
     const eq = (a, b) => (isNaN(a) && isNaN(b)) || Math.abs(a - b) < 1e-9;
     const cfg = cvVolCfg, saved = (k, d) => (cfg[k] != null ? Number(cfg[k]) : d);
-    const rows = [["cvAvgN", saved("avg_n", 4)], ["cvKThick", saved("k_thick", 0.88)], ["cvFinesSv", saved("fines_from_sv", 88)],
+    const rows = [["cvKThick", saved("k_thick", 0.88)], ["cvFinesSv", saved("fines_from_sv", 88)],
       ["cvFinesMm", saved(cvVolMain(), cvCrit === "volume" ? 0.006 : 0.2)]];
-    Object.keys(CV_VOL_SUB).forEach((g) => rows.push([CV_VOL_SUB[g], saved(cvVolKey(g), 0)]));
+    CV_PHASES.forEach((g) => { rows.push([CV_VOL_SUB[g], saved(cvVolKey(g), 0)]); rows.push([CV_VOL_SCALE[g], saved("phase_scale_" + g, CV_PHASE_SCALE[g])]); });
     const subIds = Object.values(CV_VOL_SUB);
     let dirty = (cfg.fines_mode === "volume" ? "volume" : "side") !== cvCrit;
     rows.forEach(([id, sv]) => {
@@ -425,19 +463,15 @@
     });
     return dirty;
   }
-  // «≈ 0,006 мм³» / «≈ 0,2 мм» — тот же порог в другой единице, пока вводишь
-  function cvFinesEqUpdate() {
-    const e = $("cvFinesEq"); if (!e) return;
-    const v = cvNum("cvFinesMm");
-    e.textContent = v > 0 ? "≈ " + (cvCrit === "volume" ? cvFmtNum(cvVolToSide(v)) + " мм" : cvFmtNum(cvSideToVol(v)) + " мм³") : "";
-  }
-  function cvVolMarkDirty() {
-    cvFinesEqUpdate(); const box = $("cvVolApply"); if (box && !box.classList.contains("is-busy")) box.hidden = !cvVolDirty(); }
+  function cvVolMarkDirty() { cvFinesEqUpdate(); const box = $("cvVolApply"); if (box && !box.classList.contains("is-busy")) box.hidden = !cvVolDirty(); }
   function cvVolPayload() {
-    const k = cvNum("cvKThick"), fs = cvNum("cvFinesSv"), an = Math.round(cvNum("cvAvgN")), fm = cvNum("cvFinesMm");
-    if (!(fm > 0) || !(k > 0) || !(fs >= 0) || !(an >= 1)) return null;
-    const vo = { fines_mode: cvCrit, avg_n: an, fines_from_sv: fs, k_thick: k, [cvVolMain()]: fm };
-    for (const g of Object.keys(CV_VOL_SUB)) { const v = cvNum(CV_VOL_SUB[g]); vo[cvVolKey(g)] = v > 0 ? v : 0; }
+    const k = cvNum("cvKThick"), fs = cvNum("cvFinesSv"), fm = cvNum("cvFinesMm");
+    if (!(fm > 0) || !(k > 0) || !(fs >= 0)) return null;
+    const vo = { fines_mode: cvCrit, fines_from_sv: fs, k_thick: k, [cvVolMain()]: fm };
+    for (const g of CV_PHASES) {
+      const v = cvNum(CV_VOL_SUB[g]); vo[cvVolKey(g)] = v > 0 ? v : 0;
+      const sc = cvNum(CV_VOL_SCALE[g]); vo["phase_scale_" + g] = sc > 0 ? sc : CV_PHASE_SCALE[g];
+    }
     return vo;
   }
   // пересчёт журнала по кадрам идёт на сервере в фоне — ждём окончания, не блокируя страницу
@@ -457,7 +491,7 @@
   }
   function wireVolumeFields() {
     wireVolNoteBtn();
-    const ids = ["cvFinesMm", "cvKThick", "cvFinesSv", "cvAvgN", ...Object.values(CV_VOL_SUB)];
+    const ids = ["cvFinesMm", "cvKThick", "cvFinesSv", ...Object.values(CV_VOL_SUB), ...Object.values(CV_VOL_SCALE)];
     ids.forEach((id) => { const e = $(id); if (e) e.addEventListener("input", () => { const c = $("cvFinesCalc"); if (c) c.textContent = cvFinesCalcText(); cvVolMarkDirty(); }); });
     document.querySelectorAll("#cvFinesModeSeg button").forEach((b) => b.addEventListener("click", () => {
       if (b.dataset.mode === cvCrit) return;

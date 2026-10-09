@@ -64,7 +64,7 @@ def null_sv_outliers(rows: list[dict]) -> list[dict]:
 _INT_COLS = ("stage", "substage", "frames", "frac_zones", "cook_time", "seed_age", "good_n", "rej_n")
 _SIEVE = ["sieve_%s_b%d" % (m, i) for m in ("m1", "m2", "m3", "area") for i in range(7)]
 ROW_COLS = (
-    ["t", "stage", "substage", "sv", "count", "mean", "median", "small", "medium", "large", "reject", "reject_pct",
+    ["t", "stage", "substage", "phase", "sv", "count", "mean", "median", "small", "medium", "large", "reject", "reject_pct",
      "cv_pct", "density", "suspect", "n_needle", "n_aggregate", "n_crooked", "n_tiny", "n_huge",
      "temp", "level", "current", "vac", "cook_time", "seed_age",
      "fines_m1", "fines_m2", "fines_m3", "fines_area", "fines_n", "agg_m1", "agg_m2", "agg_m3", "agg_area", "agg_n",
@@ -74,7 +74,7 @@ ROW_COLS = (
 
 
 def _col_type(c: str) -> str:
-    return "INTEGER" if c in _INT_COLS else "REAL"
+    return "INTEGER" if c in _INT_COLS else ("TEXT" if c == "phase" else "REAL")
 
 
 _local = threading.local()

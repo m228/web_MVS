@@ -48,15 +48,7 @@ def _sieve_rows(sv: dict) -> list:
 FIN_SV = 2.0        # «финиш» варки: пробы, у которых СВ не ниже конечного СВ минус столько единиц
 
 
-def _finish_probes(fin: list, fin_sv: float) -> tuple[list, Optional[float]]:
-    """Пробы финиша: СВ в пределах fin_sv (последние 1,5–2 СВ) от конечного. Конечное СВ — медиана СВ последних 5 проб с мукой
-    (одиночный выброс или провал СВ на подкачке не сдвигает отсчёт). Нет СВ — последние 4 пробы."""
-    svs = [r["sv"] for r in fin[-5:] if r.get("sv") is not None and r["sv"] >= 5]
-    if not svs:
-        return fin[-4:], None
-    ref = sorted(svs)[len(svs) // 2]
-    sel = [r for r in fin if r.get("sv") is not None and r["sv"] >= ref - fin_sv]
-    return (sel or fin[-4:]), ref
+_finish_probes = cv_store.finish_probes      # одно правило «финиша» для отчёта и окна «Объём и мука»
 
 
 def _boil_row(g: list, summary: dict, fin_sv: float = FIN_SV) -> dict:

@@ -275,7 +275,7 @@
                   </div>
                   </div>
                 </div>
-                <div class="micro-cycle-cols">
+                <div class="micro-cycle-cols micro-cycle-cols--3">
                   <div class="micro-cycle-col">
                     <label class="micro-cycle-f"><span>Отвод/возврат, мкм</span><input type="number" id="pcRetract" step="100" value="20000" /></label>
                     <label class="micro-cycle-f" id="pcDwellWrap" title="Сколько стоять у стекла, когда CV выключен. При включённом CV стоим до нужного числа разобранных кадров."><span>Выдержка пробы, с</span><input type="number" id="pcDwell" step="1" min="1" value="15" /></label>
@@ -301,6 +301,19 @@
                     <label class="micro-cycle-f" id="pcPauseWrap"><span>Пауза между пробами, с</span><input type="number" id="pcPause" step="1" min="0" value="60" /></label>
                     <label class="micro-cycle-f" id="pcCvFramesWrap" title="Работает при ВКЛЮЧЁННОМ CV (тумблер на вкладке CV; серое поле = CV выключен). У стекла стоим, пока не разобрано столько кадров (кадр → разбор → следующий), потом отвод. Применяется сразу."><span>Кадров на пробу (CV)</span><input type="number" id="pcCvFrames" step="1" min="1" max="12" value="3" /></label>
                     <label class="micro-cycle-f" id="pcCvGapWrap" title="Работает при триггере «CV» И включённом CV (тумблер на вкладке CV; серое поле = CV выключен или другой триггер). Защитная пауза после того, как проба разобрана и сохранена, перед следующей пробой. 0 — без паузы. Применяется сразу."><span>Пауза после разбора (CV), с</span><input type="number" id="pcCvGap" step="1" min="0" value="10" /></label>
+                  </div>
+                  <div class="micro-cycle-col micro-cycle-col--fast">
+                    <div class="micro-cycle-f micro-cycle-fmt" title="Быстрый цикл включается сам, пока стадия варки = 5 (подкачка, обе подкачки), и выключается на другой стадии. Нужен, чтобы за минуту подкачки успеть 2–3 пробы и увидеть, что кристалл не размыло">
+                      <span>Подкачка: быстрый цикл</span>
+                      <label class="micro-switch" for="pcFastOn">
+                        <input type="checkbox" id="pcFastOn" checked />
+                        <span class="micro-switch__track"><span class="micro-switch__thumb"></span></span>
+                      </label>
+                    </div>
+                    <label class="micro-cycle-f" title="Кадров на пробу на подкачке (вместо обычных «Кадров на пробу»)"><span>Кадров на пробу</span><input type="number" id="pcFastFrames" step="1" min="1" max="10" value="1" /></label>
+                    <label class="micro-cycle-f" title="Пауза между разборами на подкачке, с (вместо обычной «Пауза CV»; триггер «CV»)"><span>Пауза между разборами, с</span><input type="number" id="pcFastGap" step="1" min="0" value="2" /></label>
+                    <label class="micro-cycle-f" title="Промывка перед пробой на подкачке, с (вместо обычной)"><span>Промывка, с</span><input type="number" id="pcFastPreWash" step="1" min="0" value="2" /></label>
+                    <label class="micro-cycle-f" title="Пауза после промывки перед подводом на подкачке, с"><span>Пауза после промывки, с</span><input type="number" id="pcFastPostWash" step="1" min="0" value="1" /></label>
                   </div>
                 </div>
                 <label class="micro-check micro-cycle-ignore" title="Ручная варка: ПЛК не двигает стадию (стоит), а СВ растёт. С галочкой авто-цикл идёт без проверки стадии 3–9 — только по триггеру (время/СВ).">
@@ -933,7 +946,7 @@
                 <!-- откуда числа: по варке (законченная, листается стрелками) или по выбранной пробе -->
                 <div class="micro-vol__nav" id="cvVolNav">
                   <div class="micro-vol__mode" role="tablist" aria-label="Источник чисел">
-                    <button type="button" data-vmode="tail" class="is-active" title="Среднее по последним N пробам финиша (число N — поле «Проб в среднем»): частые пробы набивают количество хороших кристаллов">последние пробы</button>
+                    <button type="button" data-vmode="tail" class="is-active" title="Финиш варки: среднее по пробам последних ~2 СВ (пробы набираются часто, их хватает на надёжную оценку). Раньше было «последние N проб»">финиш</button>
                     <button type="button" data-vmode="boil" title="Среднее по всем пробам финиша варки">по варке</button>
                     <button type="button" data-vmode="probe" title="Числа по одной пробе — той, что открыта в окне CV">по пробе</button>
                   </div>
@@ -954,7 +967,6 @@
                   <span id="cvVolLblFines">Мука</span><em data-v="m1.fines">—</em><em data-v="m2.fines">—</em><em data-v="m3.fines">—</em><em data-v="avg.fines">—</em><em data-v="area.fines">—</em>
                 </div>
                 <div class="micro-vol__fields">
-                  <label title="Сколько последних проб финиша (СВ ≥ «Мука с СВ») усредняем. Одна проба — это несколько кадров; чем больше проб и хороших кристаллов, тем точнее мука и рассев. Для надёжной оценки нужно хотя бы 500 хороших кристаллов"><span>Проб в среднем</span><input type="number" id="cvAvgN" min="1" max="20" step="1" value="4" /></label>
                   <label title="Общий порог муки — для любой подстадии, кроме подкачки / роста 1 / роста 2 (у них свои поля ниже) и когда подстадия неизвестна. По стороне: площадь кристалла меньше квадрата со стороной в этом поле. По объёму: объём меньше значения в мм³"><span id="cvFinesLbl">Мука, мм</span><input type="number" id="cvFinesMm" min="0.01" step="0.05" value="0.2" /></label>
                   <span class="micro-info" tabindex="0" aria-label="Как определяется мука">ⓘ
                     <span class="micro-info__pop micro-vol__pop" role="tooltip">
@@ -979,14 +991,32 @@
                     <button type="button" data-mode="volume" title="По объёму кристалла, мм³ (шар эквивалентного диаметра)">по объёму, мм³</button>
                   </span>
                   <span class="micro-vol__eq" id="cvFinesEq" title="Тот же общий порог в другой единице: сторона 0,2 мм = объём 0,006 мм³ — кристаллы делятся одинаково"></span>
-                  <label title="Порог муки на подкачке (коды 51–59). Пусто или 0 — как общий порог"><span>подкачка</span><input type="number" id="cvFinesPump" min="0" step="0.01" placeholder="общий" /></label>
-                  <label title="Порог муки на росте 1 (коды 71 «рост» и 72 «рост 1»). Пусто или 0 — как общий порог"><span>рост 1</span><input type="number" id="cvFinesG1" min="0" step="0.01" placeholder="общий" /></label>
-                  <label title="Порог муки на росте 2 (коды 73–79: «рост 2» и дальше). Пусто или 0 — как общий порог"><span>рост 2</span><input type="number" id="cvFinesG2" min="0" step="0.01" placeholder="общий" /></label>
+                  <label title="Порог муки на подкачке 1 (первая стадия 5). Пусто — общий порог × «сита, %» этой фазы"><span>подкачка 1</span><input type="number" id="cvFinesP1" min="0" step="0.01" placeholder="авто" /></label>
+                  <label title="Порог муки на росте 1 (первая стадия 7). Пусто — общий порог × «сита, %» этой фазы"><span>рост 1</span><input type="number" id="cvFinesG1" min="0" step="0.01" placeholder="авто" /></label>
+                  <label title="Порог муки на подкачке 2 (вторая стадия 5). Пусто — общий порог × «сита, %» этой фазы"><span>подкачка 2</span><input type="number" id="cvFinesP2" min="0" step="0.01" placeholder="авто" /></label>
+                  <label title="Порог муки на росте 2 (вторая стадия 7 и далее). Пусто — общий порог × «сита, %» этой фазы"><span>рост 2</span><input type="number" id="cvFinesG2" min="0" step="0.01" placeholder="авто" /></label>
+                </div>
+                <div class="micro-vol__fields micro-vol__fields--sub">
+                  <span class="micro-vol__lbl" title="Масштаб сит и порога муки по фазам варки">сита, %</span>
+                  <label title="Подкачка 1: сита и порог муки — столько % от обычных (100 % = сита 0,2 / 0,5 / 0,7 / 0,8 / 1,0 мм и общий порог муки)"><span>подкачка 1</span><input type="number" id="cvScaleP1" min="1" max="200" step="1" value="20" /></label>
+                  <label title="Рост 1: сита и порог муки — столько % от обычных"><span>рост 1</span><input type="number" id="cvScaleG1" min="1" max="200" step="1" value="40" /></label>
+                  <label title="Подкачка 2: сита и порог муки — столько % от обычных"><span>подкачка 2</span><input type="number" id="cvScaleP2" min="1" max="200" step="1" value="40" /></label>
+                  <label title="Рост 2: сита и порог муки — столько % от обычных"><span>рост 2</span><input type="number" id="cvScaleG2" min="1" max="200" step="1" value="80" /></label>
+                  <span class="micro-info" tabindex="0" aria-label="Как считаются фазы">ⓘ
+                    <span class="micro-info__pop micro-vol__pop" role="tooltip">
+                      <b>Фазы варки и масштаб сит</b>
+                      <div class="in">Фазы идут по порядку стадий рецепта: 1-я подкачка (стадия 5) → 1-й рост (7) → 2-я подкачка (5) → 2-й рост (7). Проба принадлежит фазе, в которой началась.</div>
+                      <div class="in"><code>100 % = обычные сита 0,2 · 0,5 · 0,7 · 0,8 · 1,0 мм и общий порог «Мука»</code></div>
+                      <small>На ранних фазах кристаллы ещё мелкие, поэтому и сита, и порог муки уменьшаются: при 40 % сито 0,2 мм становится 0,08 мм, порог муки — в 2,5 раза мельче. Проценты подбираются по опыту: по мере накопления данных меняй поля.</small>
+                      <small>Свой порог муки фазы (поля выше) — если нужно задать его прямо, а не масштабом.</small>
+                    </span>
+                  </span>
                 </div>
                 <!-- что стоит за цифрами: штуки, доля по числу и по объёму, общий объём (заполняет 02-cv.js) -->
                 <div class="micro-vol__note" id="cvVolNote"></div>
                 <!-- рассев по ситам, как в лаборатории: размер отверстий, мм; доля фракции в общем объёме (100 % — сумма всех) -->
                 <div class="micro-cv-block__title micro-sieve__title">Рассев по ситам, %  <span class="micro-info" tabindex="0" aria-label="Как считается рассев">ⓘ<span class="micro-info__pop micro-vol__pop" role="tooltip"><b>Рассев по ситам</b><div class="in">Как в лаборатории: кристаллы раскладываются по размеру отверстий сит, мм (1,2 · 1 · 0,8 · 0,7 · 0,5 · 0,2 · дно). Фракция «0,5–0,7» — прошло сито 0,7, осталось на 0,5.</div><small>Берутся только хорошие кристаллы (брак по форме — сростки, иглы, кривые — отсеян). Доля — от их общего объёма (объём ~ масса), сумма 100 %. Размер — эквивалентный диаметр. Считается, как и мука, когда СВ дошёл до поля «Мука с СВ».</small></span></span></div>
+                <div class="micro-sieve__tiles" id="cvSieveTiles" hidden></div>
                 <div class="micro-vol__grid micro-sieve" id="cvSieveGrid"></div>
               </div>
               </div>

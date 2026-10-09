@@ -748,20 +748,22 @@ def _report_range(frm: str | None, to: str | None):
 
 
 @app.get("/api/cv/report")
-def cv_report(serial: str | None = None, frm: str | None = Query(None, alias="from"), to: str | None = None):
+def cv_report(serial: str | None = None, frm: str | None = Query(None, alias="from"), to: str | None = None, fin_sv: float = 2.0):
     """Отчёт по варкам за период: по каждой варке, итоги, недели, подстадии (см. report.py)."""
     import report
     t0, t1 = _report_range(frm, to)
-    return report.build(_cv_serial(serial), t0, t1)
+    return report.build(_cv_serial(serial), t0, t1, fin_sv=max(0.2, min(fin_sv, 20.0)))
 
 
 @app.get("/api/cv/report.csv")
-def cv_report_csv(serial: str | None = None, frm: str | None = Query(None, alias="from"), to: str | None = None):
+def cv_report_csv(serial: str | None = None, frm: str | None = Query(None, alias="from"), to: str | None = None, fin_sv: float = 2.0,
+                  cols: str | None = None):
     import report, time as _t
     t0, t1 = _report_range(frm, to)
-    rep = report.build(_cv_serial(serial), t0, t1)
+    rep = report.build(_cv_serial(serial), t0, t1, fin_sv=max(0.2, min(fin_sv, 20.0)))
     name = "cv_report_%s_%s.csv" % (_t.strftime("%Y%m%d", _t.localtime(t0)), _t.strftime("%Y%m%d", _t.localtime(t1)))
-    return Response(content=report.to_csv(rep), media_type="text/csv; charset=utf-8",
+    sel = [c for c in (cols or "").split(",") if c] or None
+    return Response(content=report.to_csv(rep, sel), media_type="text/csv; charset=utf-8",
                     headers={"Content-Disposition": 'attachment; filename="%s"' % name})
 
 

@@ -249,6 +249,7 @@ def trend_range(serial: str, t_from: float, t_to: float, series: Optional[list[s
     return {
         "from": t_from, "to": t_to,
         "t": [r["t"] for r in rows], "ts": [r["ts"] for r in rows], "boil": [r["_boil"] for r in rows],
+        "fines_um": [r.get("fines_um") for r in rows],               # порог муки пробы (диаметр, мкм) — с учётом её подстадии
         "stage": [r.get("stage") for r in rows],
         "substage": [r.get("substage") for r in rows],
         "series": {s: [(fines_avg(r) if s == "fines_avg" else r.get(s)) for r in rows] for s in series},

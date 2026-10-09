@@ -4000,3 +4000,14 @@ input.micro-cam-num { width: 56px; min-width: 0; flex: 0 0 auto; padding: 4px 5p
 #cvVol.is-crit-volume .micro-phase__table input#cvFinesP1, #cvVol.is-crit-volume .micro-phase__table input#cvFinesG1,
 #cvVol.is-crit-volume .micro-phase__table input#cvFinesP2, #cvVol.is-crit-volume .micro-phase__table input#cvFinesG2 { width: 78px; }
 .micro-phase__title { font-size: 0.76em; margin-bottom: 2px; }
+
+/* «Рассев по ситам» — одна панель: заголовок, плитки фаз и таблица в общей рамке */
+.micro-sieve-card { margin-top: 14px; padding: 10px 14px 12px; border-radius: 12px; background: var(--surface-muted, rgba(255,255,255,.04));
+  border: 1px solid var(--border, rgba(131,151,179,.28)); }
+.micro-sieve-card .micro-sieve__title { margin-top: 0; margin-bottom: 6px; }
+.micro-sieve-card .micro-sieve__tiles { margin: 2px 0 8px; }
+/* поля таблицы фаз пошире: «сита, %» и особенно «свой порог» */
+.micro-phase__table input[type="number"] { width: 62px; }
+.micro-phase__table input#cvFinesP1, .micro-phase__table input#cvFinesG1, .micro-phase__table input#cvFinesP2, .micro-phase__table input#cvFinesG2 { width: 88px; }
+#cvVol.is-crit-volume .micro-phase__table input#cvFinesP1, #cvVol.is-crit-volume .micro-phase__table input#cvFinesG1,
+#cvVol.is-crit-volume .micro-phase__table input#cvFinesP2, #cvVol.is-crit-volume .micro-phase__table input#cvFinesG2 { width: 112px; }

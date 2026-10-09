@@ -3991,3 +3991,12 @@ input.micro-cam-num { width: 56px; min-width: 0; flex: 0 0 auto; padding: 4px 5p
 #cvVol.is-crit-volume .micro-phase__table input#cvFinesP1, #cvVol.is-crit-volume .micro-phase__table input#cvFinesG1,
 #cvVol.is-crit-volume .micro-phase__table input#cvFinesP2, #cvVol.is-crit-volume .micro-phase__table input#cvFinesG2 { width: 96px; }
 .micro-sieve__tile.is-empty { opacity: .45; cursor: not-allowed; }
+
+/* компактная таблица фаз: уже столбцы, мельче шрифт и отступы */
+.micro-phase__table { width: auto; font-size: 0.76em; }
+.micro-phase__table th { padding: 1px 4px; font-size: 0.9em; }
+.micro-phase__table td { padding: 2px 4px; }
+.micro-phase__table input[type="number"] { width: 46px; height: 22px; padding: 1px 4px; font-size: 1em; }
+#cvVol.is-crit-volume .micro-phase__table input#cvFinesP1, #cvVol.is-crit-volume .micro-phase__table input#cvFinesG1,
+#cvVol.is-crit-volume .micro-phase__table input#cvFinesP2, #cvVol.is-crit-volume .micro-phase__table input#cvFinesG2 { width: 78px; }
+.micro-phase__title { font-size: 0.76em; margin-bottom: 2px; }

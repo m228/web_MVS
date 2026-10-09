@@ -462,6 +462,8 @@ def _make_page_check(path):
         status, headers, body = http_get(path)
         assert status == 200, "HTTP %s" % status
         assert b"<html" in body.lower() or b"<!doctype" in body.lower(), "не HTML"
+        hv = {k.lower(): v for k, v in dict(headers).items()}
+        assert "no-cache" in hv.get("cache-control", ""), "страница отдаётся без no-cache: браузер после обновления может взять старую из кэша"
         return "%d байт" % len(body)
     return fn
 

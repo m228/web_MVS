@@ -454,15 +454,24 @@
   // изменено ли что-то относительно сохранённого (в любом из полей) — тогда показываем ✓/✕
   function cvVolDirty() {
     const eq = (a, b) => (isNaN(a) && isNaN(b)) || Math.abs(a - b) < 1e-9;
+    const eqU = (a, b) => eq(a, b) || (a > 0 && b > 0 && Math.abs(a - b) / Math.max(a, b) < 0.02);       // пороги в другой единице — с допуском на округление
     const cfg = cvVolCfg, saved = (k, d) => (cfg[k] != null ? Number(cfg[k]) : d);
-    const rows = [["cvKThick", saved("k_thick", 0.88)], ["cvFinesSv", saved("fines_from_sv", 88)],
-      ["cvFinesMm", saved(cvVolMain(), cvCrit === "volume" ? 0.006 : 0.2)]];
-    CV_PHASES.forEach((g) => { rows.push([CV_VOL_SUB[g], saved(cvVolKey(g), 0)]); rows.push([CV_VOL_SCALE[g], saved("phase_scale_" + g, CV_PHASE_SCALE[g])]); });
+    // Переключатель «по стороне / по объёму» — просмотр: сохранённые пороги переводим в показанную единицу и сравниваем в ней,
+    // поэтому одно лишь переключение единицы изменением не считается (✓ не появляется); ✓ — только когда поменялось число.
+    const savedMode = cfg.fines_mode === "volume" ? "volume" : "side";
+    const unit = (v) => (v > 0 && savedMode !== cvCrit ? (cvCrit === "volume" ? cvSideToVol(v) : cvVolToSide(v)) : v);
+    const sKey = (g) => (savedMode === "volume" ? "fines_vol_" : "fines_side_") + g;
+    const rows = [["cvKThick", saved("k_thick", 0.88), eq], ["cvFinesSv", saved("fines_from_sv", 88), eq],
+      ["cvFinesMm", unit(saved(savedMode === "volume" ? "fines_vol_mm3" : "fines_side_mm", savedMode === "volume" ? 0.006 : 0.2)), eqU]];
+    CV_PHASES.forEach((g) => {
+      rows.push([CV_VOL_SUB[g], unit(saved(sKey(g), 0)), eqU]);
+      rows.push([CV_VOL_SCALE[g], saved("phase_scale_" + g, CV_PHASE_SCALE[g]), eq]);
+    });
     const subIds = Object.values(CV_VOL_SUB);
-    let dirty = (cfg.fines_mode === "volume" ? "volume" : "side") !== cvCrit;
-    rows.forEach(([id, sv]) => {
+    let dirty = false;
+    rows.forEach(([id, sv, cmp]) => {
       let v = cvNum(id); if (isNaN(v) && subIds.includes(id)) v = 0;
-      const d = !eq(v, sv); if ($(id)) $(id).classList.toggle("is-dirty", d); dirty = dirty || d;
+      const d = !cmp(v, sv); if ($(id)) $(id).classList.toggle("is-dirty", d); dirty = dirty || d;
     });
     return dirty;
   }
@@ -525,7 +534,7 @@
       const ids = ["cvFinesMm", ...Object.values(CV_VOL_SUB)];
       const old = ids.map((id) => cvNum(id));
       cvCrit = b.dataset.mode; cvVolRender(false);
-      ids.forEach((id, i) => { const e = $(id); if (e && old[i] > 0) e.value = cvFmtNum(conv(old[i])); });
+      ids.forEach((id, i) => { const e = $(id); if (e && old[i] > 0) e.value = String(Number(conv(old[i]).toPrecision(4))); });
       const c = $("cvFinesCalc"); if (c) c.textContent = cvFinesCalcText();
       cvVolMarkDirty(); cvFinesEqUpdate();
     }));

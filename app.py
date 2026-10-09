@@ -69,32 +69,45 @@ async def lifespan(app: FastAPI):
 PAGE_DIR = BUNDLE_DIR / "page"
 
 app = FastAPI(lifespan=lifespan)
-app.mount("/static", StaticFiles(directory=str(PAGE_DIR / "static")), name="static")
+# Страницы и скрипты не кэшируем «вслепую»: после обновления приложения браузер обязан сверить файл (304, если не менялся) —
+# иначе новая страница с СТАРЫМ скриптом из кэша ломает поля и кнопки (мелочь не ломалась бы, но сохранение/применение отваливалось).
+_NOCACHE = {"Cache-Control": "no-cache"}
+
+
+class _NoCacheStatic(StaticFiles):
+    async def get_response(self, path, scope):
+        resp = await super().get_response(path, scope)
+        if path.endswith((".js", ".css", ".html")):
+            resp.headers["Cache-Control"] = "no-cache"
+        return resp
+
+
+app.mount("/static", _NoCacheStatic(directory=str(PAGE_DIR / "static")), name="static")
 
 
 @app.get("/")
 def home():
-    return FileResponse(str(PAGE_DIR / "index.html"))
+    return FileResponse(str(PAGE_DIR / "index.html"), headers=_NOCACHE)
 
 
 @app.get("/camera")
 def camera():
-    return FileResponse(str(PAGE_DIR / "camera.html"))
+    return FileResponse(str(PAGE_DIR / "camera.html"), headers=_NOCACHE)
 
 
 @app.get("/rtsp")
 def rtsp_page():
-    return FileResponse(str(PAGE_DIR / "rtsp.html"))
+    return FileResponse(str(PAGE_DIR / "rtsp.html"), headers=_NOCACHE)
 
 
 @app.get("/multi")
 def multi_page():
-    return FileResponse(str(PAGE_DIR / "multi.html"))
+    return FileResponse(str(PAGE_DIR / "multi.html"), headers=_NOCACHE)
 
 
 @app.get("/network")
 def network_page():
-    return FileResponse(str(PAGE_DIR / "network.html"))
+    return FileResponse(str(PAGE_DIR / "network.html"), headers=_NOCACHE)
 
 
 @app.get("/microscope")
@@ -114,7 +127,7 @@ def microscope_page():
             "</head><body><div class=b><h1>Микроскоп выключен</h1>"
             "<p>Включите его галочкой на главной странице.</p>"
             "<a href='/'>На главную</a></div></body></html>")
-    return FileResponse(str(PAGE_DIR / "microscope.html"))
+    return FileResponse(str(PAGE_DIR / "microscope.html"), headers=_NOCACHE)
 
 
 @app.get("/api/micro/enabled")

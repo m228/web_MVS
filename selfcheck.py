@@ -1674,6 +1674,19 @@ def _service_phases():
     return "p1 g1 p2 g2 по ходу стадий; сгущение — новая варка; перезапуск — из журнала"
 
 
+@check("UI", "JS страницы микроскопа: все вызываемые cv*-функции определены (пропавшая функция тихо ломала поля «Объём и мука»)")
+def _js_cv_functions_defined():
+    import re
+    js = Path(BUNDLE_DIR) / "page" / "static" / "js" / "microscope"
+    srcs = {f.name: f.read_text(encoding="utf-8") for f in sorted(js.glob("*.js"))}
+    allsrc = "\n".join(srcs.values())
+    defs = set(re.findall(r"function\s+(cv[A-Z]\w*)", allsrc)) | set(re.findall(r"(?:const|let|var)\s+(cv[A-Z]\w*)\b", allsrc))
+    calls = set(re.findall(r"(?<![\w.$])(cv[A-Z]\w*)\s*\(", allsrc))
+    missing = sorted(calls - defs)
+    assert not missing, "вызываются, но не определены: %s" % ", ".join(missing)
+    return "%d cv*-функций вызывается, все определены" % len(calls)
+
+
 @check("CV", "cv_client.health: CV-сервис недоступен → None без исключения и зависания")
 def _cv_client_offline():
     import cv_client

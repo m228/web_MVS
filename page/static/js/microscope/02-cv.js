@@ -466,6 +466,12 @@
     });
     return dirty;
   }
+  // «≈ 0,006 мм³» / «≈ 0,2 мм» — тот же общий порог в другой единице, пока вводишь
+  function cvFinesEqUpdate() {
+    const e = $("cvFinesEq"); if (!e) return;
+    const v = cvNum("cvFinesMm");
+    e.textContent = v > 0 ? "≈ " + (cvCrit === "volume" ? cvFmtNum(cvVolToSide(v)) + " мм" : cvFmtNum(cvSideToVol(v)) + " мм³") : "";
+  }
   // расчётные колонки таблицы фаз: сито 0,2 мм после масштаба и порог муки, который реально применится (свой или общий × масштаб)
   function cvPhaseTableUpdate() {
     const vol = cvCrit === "volume", general = cvNum("cvFinesMm"), f = (x) => String(Number(x.toPrecision(3))).replace(".", ",");
@@ -525,18 +531,29 @@
     }));
     const ok = $("cvVolOk"), no = $("cvVolNo"), box = $("cvVolApply"), msg = $("cvVolMsg");
     if (no) no.addEventListener("click", () => { cvCrit = cvVolCfg.fines_mode === "volume" ? "volume" : "side"; cvVolRender(true); });
-    if (ok) ok.addEventListener("click", async () => {
-      if (!cvSettingsLoaded) return;
+    // применить поля: сохранить на сервер, дождаться фонового пересчёта журнала, перерисовать варки
+    let applying = false;
+    async function applyVol() {
+      if (!cvSettingsLoaded || applying) return;
       const vo = cvVolPayload(); if (!vo) { if (msg) msg.textContent = "проверь значения"; return; }
-      box.classList.add("is-busy"); if (msg) msg.textContent = "применяю…";
+      applying = true;
+      box.classList.add("is-busy"); box.hidden = false; if (msg) msg.textContent = "применяю…";
       try {
         const r = await fetch("/api/cv/settings", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ volume: vo }) });
         const d = await r.json();
         cvVolCfg = Object.assign({}, cvVolCfg, vo);
         if (d && d.recompute) await cvWaitRecompute(msg);
         cvLoadBoils(true); cvRefresh();
-      } catch (e) { /* CV необязателен */ }
-      box.classList.remove("is-busy"); if (msg) msg.textContent = ""; cvVolRender(false);
+      } catch (e) { if (msg) msg.textContent = "не применилось: " + e.message; }
+      box.classList.remove("is-busy"); if (msg && msg.textContent === "применяю…" || (msg && msg.textContent === "пересчёт проб…")) msg.textContent = "";
+      applying = false; cvVolRender(false);
+    }
+    if (ok) ok.addEventListener("click", applyVol);
+    // таблица фаз (сита, % и свой порог): ввёл значение и ушёл из поля (Enter / Tab / клик в сторону) — применяется и пересчитывается само
+    let autoT = null;
+    [...Object.values(CV_VOL_SCALE), ...Object.values(CV_VOL_SUB)].forEach((id) => {
+      const e = $(id); if (!e) return;
+      e.addEventListener("change", () => { clearTimeout(autoT); autoT = setTimeout(() => { if (cvVolDirty()) applyVol(); }, 350); });
     });
   }
 

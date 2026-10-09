@@ -4050,3 +4050,11 @@ input.micro-cam-num { width: 56px; min-width: 0; flex: 0 0 auto; padding: 4px 5p
 .micro-phase__eye.is-on .slash { display: none; }
 .micro-phase__table[hidden] { display: none; }
 @media (max-width: 760px) { .micro-vol__cols { grid-template-columns: minmax(0, 1fr); } }
+
+/* правка раскладки: мм/мм³ — справа в строке «финиш · по варке…», поля — справа от «Фаз варки» с воздухом, подробности — на всю ширину */
+.micro-vol__unit { margin-left: auto; display: inline-flex; align-items: center; gap: 8px; font-size: 0.8em; color: var(--muted); }
+.micro-vol__cols { grid-template-columns: minmax(0, 1fr) minmax(230px, 320px); gap: 0 28px; margin-top: 12px; }
+.micro-vol__side .micro-vol__fields--col { gap: 10px; margin-top: 0; font-size: .82em; }
+.micro-vol__fields--col input[type="number"] { width: 84px; height: 28px; }
+.micro-vol__main .micro-phase { margin-top: 0; }
+.micro-vol > .micro-vol__note { margin-top: 14px; font-size: 0.8em; }

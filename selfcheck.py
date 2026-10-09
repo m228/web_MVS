@@ -1689,6 +1689,22 @@ def _js_cv_functions_defined():
     return "%d cv*-функций вызывается, все определены" % len(calls)
 
 
+@check("UI", "страницы отдают скрипты и стили с ?v=<версия> (после обновления браузер не возьмёт старый файл из кэша)")
+def _pages_static_version_query():
+    import re
+    import app as appmod
+    from paths import read_version
+    ver = read_version()
+    bad = []
+    for name in ("index", "camera", "rtsp", "multi", "network", "microscope"):
+        html = appmod._page(name + ".html").body.decode("utf-8")
+        refs = re.findall(r'(?:src|href)="(/static/[^"]+\.(?:js|css)[^"]*)"', html)
+        assert refs, name
+        bad += ["%s: %s" % (name, r) for r in refs if not r.endswith("?v=" + ver)]
+    assert not bad, "без версии: %s" % "; ".join(bad[:5])
+    return "6 страниц, у всех /static/*.js|css?v=" + ver
+
+
 @check("Обновление", "кнопка «обновить» в шапке: update.ps1 запускается отвязанно (путь, -Root, -Port, своя консоль/группа); из исходников и без update.ps1 — понятная ошибка; нет breakaway — запасной запуск")
 def _updater_run_script():
     import tempfile

@@ -307,6 +307,7 @@
   const CV_PHASE_SCALE = { p1: 20, g1: 40, p2: 40, g2: 80 };
   // плитки рассева: «варка» (итог/финиш, как раньше) + по одной на каждую фазу, которая в этой варке была; новая появляется, когда
   // началась новая стадия. Только для режимов по варке (в режиме «по пробе» плиток нет — у пробы свои сита по её фазе).
+  let cvSieveSig = "";          // какие сегменты сейчас нарисованы (варка + фазы): пока набор тот же, DOM не пересоздаём — иначе ползунок «улетает» и возвращается
   function cvRenderSieveTiles(b) {
     const box = $("cvSieveTiles"); if (!box) return;
     if (cvVolMode === "probe") { box.hidden = true; return; }
@@ -315,21 +316,32 @@
     const have = CV_PHASES.filter((p) => b && b.phases && b.phases[p]);
     box.hidden = false;
     if (cvSievePhase !== "boil" && !have.includes(cvSievePhase)) cvSievePhase = "boil";
-    box.innerHTML = '<span class="micro-sieve__pill" id="cvSievePill" aria-hidden="true"></span>';     // скользящий ползунок под активным сегментом
-    [["boil", "варка"], ...have.map((p) => [p, CV_PHASE_TITLE[p]])].forEach(([k, name]) => {
-      const bt = document.createElement("button");
-      bt.type = "button"; bt.textContent = name; bt.className = "micro-sieve__tile" + (k === cvSievePhase ? " is-active" : "");
-      bt.title = k === "boil" ? "Рассев и мука по всей варке (финиш или все пробы — по переключателю выше)"
-        : "Рассев и мука только по пробам этой фазы (" + (b.phases[k].n || b.phases[k].probes) + " проб), сита и порог муки в её масштабе";
-      bt.addEventListener("click", () => { cvSievePhase = k; cvRenderBoil(); });
-      box.appendChild(bt);
+    const keys = ["boil", ...have], sig = keys.join(",");
+    const titleOf = (k) => (k === "boil" ? "Рассев и мука по всей варке (финиш или все пробы — по переключателю выше)"
+      : "Рассев и мука только по пробам этой фазы (" + (b.phases[k].n || b.phases[k].probes) + " проб), сита и порог муки в её масштабе");
+    let rebuilt = false;
+    if (sig !== cvSieveSig || !$("cvSievePill")) {                 // набор сегментов изменился (другая варка / началась новая фаза) — перестроить
+      box.innerHTML = '<span class="micro-sieve__pill" id="cvSievePill" aria-hidden="true"></span>';       // скользящий ползунок под активным сегментом
+      keys.forEach((k) => {
+        const bt = document.createElement("button");
+        bt.type = "button"; bt.dataset.k = k; bt.className = "micro-sieve__tile"; bt.textContent = k === "boil" ? "варка" : CV_PHASE_TITLE[k];
+        bt.addEventListener("click", () => { cvSievePhase = k; cvRenderBoil(); });
+        box.appendChild(bt);
+      });
+      cvSieveSig = sig; rebuilt = true;
+    }
+    box.querySelectorAll("button").forEach((bt) => {              // обновляем на месте: подсветка и подсказки (проб стало больше)
+      bt.classList.toggle("is-active", bt.dataset.k === cvSievePhase);
+      bt.title = titleOf(bt.dataset.k);
     });
-    cvPlaceSievePill();
+    cvPlaceSievePill(rebuilt);
   }
-  function cvPlaceSievePill() {
+  function cvPlaceSievePill(instant) {
     const box = $("cvSieveTiles"), pill = $("cvSievePill"); if (!box || !pill) return;
     const act = box.querySelector("button.is-active"); if (!act) { pill.style.opacity = 0; return; }
+    if (instant) pill.style.transition = "none";                  // новый ползунок встаёт сразу на место, без пролёта из нуля
     pill.style.opacity = 1; pill.style.left = act.offsetLeft + "px"; pill.style.width = act.offsetWidth + "px";
+    if (instant) { void pill.offsetWidth; pill.style.transition = ""; }
   }
   function cvRenderBoil() {
     const i = cvBoilIdx(), b = i >= 0 ? cvBoils[i] : null;

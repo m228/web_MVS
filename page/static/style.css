@@ -3957,3 +3957,9 @@ input.micro-cam-num { width: 56px; min-width: 0; flex: 0 0 auto; padding: 4px 5p
 .micro-rep-bar .toolbar-btn.is-on { outline: 2px solid var(--accent, #2563eb); }
 .micro-rep-fin { display: inline-flex; align-items: center; gap: 6px; font-size: 0.85em; color: var(--muted); }
 .micro-rep-fin input { width: 58px; padding: 4px 6px; text-align: right; }
+
+/* маленькие галочки: правило проекта — чекбокс всегда компактный (15 px), а не растянутый общим стилем полей */
+.micro-rep-cols input[type="checkbox"] { width: 15px; height: 15px; min-height: 0; margin: 0; padding: 0; flex: 0 0 auto; accent-color: var(--accent, #2563eb); }
+.micro-rep-cols label { flex-direction: row; align-items: center; }
+.micro-rep-fin { flex-direction: row; align-items: center; }
+.micro-rep-fin input { width: 54px; height: 30px; min-height: 0; padding: 2px 6px; }

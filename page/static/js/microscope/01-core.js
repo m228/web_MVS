@@ -113,6 +113,8 @@
         trigger_mode: pcTrigMode, arrive_sensor: pcArriveMode,
         sv_from: $("pcSvFrom").value, sv_to: $("pcSvTo").value,
         stage_from: $("pcStageFrom").value, stage_to: $("pcStageTo").value,
+        fast_enabled: $("pcFastOn").checked ? 1 : 0, fast_frames: $("pcFastFrames").value, fast_gap_sec: $("pcFastGap").value,
+        fast_pre_wash_sec: $("pcFastPreWash").value, fast_post_wash_sec: $("pcFastPostWash").value,
       };
       try {
         await cvPostCycleFields();          // кадров на пробу / пауза CV — до перезапуска автомата
@@ -798,6 +800,10 @@
           sv("pcDwell", pc.dwell_sec); sv("pcShotInterval", pc.shot_interval_sec);
           sv("pcPause", pc.pause_sec); sv("pcSvFrom", pc.sv_from); sv("pcSvTo", pc.sv_to);
           sv("pcStageFrom", pc.stage_from); sv("pcStageTo", pc.stage_to); pcStageHintUpdate();
+          const fp = pc.fast || {};                                        // быстрый цикл на подкачке
+          const fo = $("pcFastOn"); if (fo) fo.checked = fp.enabled !== false;
+          sv("pcFastFrames", fp.frames != null ? fp.frames : 1); sv("pcFastGap", fp.gap_sec != null ? fp.gap_sec : 2);
+          sv("pcFastPreWash", fp.pre_wash_sec != null ? fp.pre_wash_sec : 2); sv("pcFastPostWash", fp.post_wash_pause_sec != null ? fp.post_wash_pause_sec : 1);
           setTrigMode(pc.trigger_mode);
           setArriveMode(pc.arrive_sensor);
           const fmSw = $("pcFormatSw"); if (fmSw) fmSw.checked = (pc.photo_format === "jpg");

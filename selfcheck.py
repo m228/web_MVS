@@ -1593,6 +1593,87 @@ def _legacy_journal_import():
     return "импорт 6 проб, повтор без дублей, нет папки — тихо"
 
 
+@check("Микроскоп", "быстрый цикл на подкачке (стадия 5) + диапазон СВ: параметры цикла по стадии, диапазон не останавливает начатую варку и подкачку")
+def _fsm_fast_cycle():
+    import copy
+    import plate_config
+    from microscope_fsm import MicroscopeFSM
+
+    class _Plate:
+        def __init__(self):
+            self.telemetry = {"pos1": 0, "pos1_ai": 0, "pos1_enc": 0}
+            self.status = {"connected": True}
+
+        def __getattr__(self, n):
+            return lambda *a, **k: None
+    cfg = copy.deepcopy(plate_config.load())
+    pc = cfg.setdefault("probe_cycle", {})
+    pc.update({"pre_wash_sec": 4, "post_wash_pause_sec": 2, "sv_from": 84, "sv_to": 92,
+               "fast": {"enabled": True, "frames": 1, "gap_sec": 2, "pre_wash_sec": 2, "post_wash_pause_sec": 1}})
+    cfg.setdefault("cv", {}).update({"gap_sec": 10, "frames_per_probe": 3})
+    fsm = MicroscopeFSM(_Plate(), cfg)
+    fsm.set_cv_dwell(True, frames=3, gap_sec=10)
+    fsm.set_stage(7)
+    assert (fsm._pre_wash(), fsm._post_wash(), fsm._cv_gap(), fsm._cv_need()) == (4, 2, 10, 3), "обычная стадия — обычные параметры"
+    fsm.set_stage(5)
+    assert (fsm._pre_wash(), fsm._post_wash(), fsm._cv_gap(), fsm._cv_need()) == (2, 1, 2, 1), "подкачка (5) — быстрый цикл"
+    fsm._fast["enabled"] = False
+    assert fsm._pre_wash() == 4 and fsm._cv_need() == 3, "быстрый цикл выключен — обычные"
+    fsm._fast["enabled"] = True
+    # диапазон СВ [84..92]: до начала варки пробу не пускает, на подкачке (СВ 82) — не проверяется, начатую варку — не останавливает
+    fsm.set_stage(7)
+    fsm.set_sv(82.0)
+    assert not fsm._range_ok(), "СВ 82 ниже диапазона, варка не начата — пробу не пускаем"
+    fsm.set_stage(5)
+    assert fsm._range_ok(), "на подкачке диапазон СВ не проверяется"
+    fsm.set_stage(7)
+    fsm._range_latched = True
+    fsm.set_sv(81.0)
+    assert fsm._range_ok(), "проба уже шла в этой варке — диапазон больше не останавливает"
+    fsm.set_stage(10)                                          # выгрузка — вне 3..9: защёлка сбрасывается тиком (новая варка — снова диапазон)
+    fsm.sw0 = True
+    fsm.tick()
+    assert not fsm._range_latched, "после варки защёлка диапазона сброшена"
+    return "стадия 5: промывка 2 / пауза 2 / 1 кадр; диапазон СВ снят на подкачке и после старта пробы"
+
+
+@check("CV", "фазы в сервисе: счётчики подкачек/ростов по ходу стадий, новая варка (сгущение) сбрасывает, перезапуск посреди варки — счётчики из журнала")
+def _service_phases():
+    import cv_store, db
+    from microscope_service import MicroscopeService
+    ms = MicroscopeService()
+    ms._phase_ready = True                                       # без журнала: считаем только по ходу стадий
+    got = []
+    for st in (2, 3, 4, 5, 5, 7, 7, 5, 5, 7, 8, 9, 10, 3, 4, 5, 7):
+        ms._note_stage(st)
+        got.append(ms._current_phase(st))
+    assert got == [None, None, None, "p1", "p1", "g1", "g1", "p2", "p2", "g2", None, None, None, None, None, "p1", "g1"], got
+    # перезапуск посреди варки: счётчики берём из журнала идущей варки (иначе вторая подкачка стала бы первой)
+    import tempfile, shutil
+    from pathlib import Path
+    tmp = Path(tempfile.mkdtemp(prefix="mvs_ph_")) / "p.db"
+    old_path = db.DB_PATH
+    db.set_path(tmp)
+    try:
+        now = time.time()
+        stages = [4, 5, 5, 7, 7, 7, 5, 5]
+        rows = [{"ts": time.strftime(cv_store.TS_FMT, time.localtime(now - (len(stages) - i) * 90)), "t": now - (len(stages) - i) * 90, "stage": st,
+                 "sv": 82.0 + i * 0.1, "cook_time": 600 + 90 * i} for i, st in enumerate(stages)]
+        db.upsert_many("PHSER", rows)
+        stt = cv_store.phase_state("PHSER")
+        assert stt == {"pump": 2, "grow": 1, "last": 5}, stt
+        ms2 = MicroscopeService()
+        ms2.cfg = {"camera_serial": "PHSER"}
+        ms2._note_stage(5)                                       # после перезапуска первая же стадия 5 — всё ещё 2-я подкачка
+        assert ms2._current_phase(5) == "p2", ms2._current_phase(5)
+        ms2._note_stage(7)
+        assert ms2._current_phase(7) == "g2", "после 2-й подкачки — 2-й рост"
+        assert cv_store.phase_state("NOSUCH") == {"pump": 0, "grow": 0, "last": None}
+    finally:
+        db.set_path(old_path)
+    return "p1 g1 p2 g2 по ходу стадий; сгущение — новая варка; перезапуск — из журнала"
+
+
 @check("CV", "cv_client.health: CV-сервис недоступен → None без исключения и зависания")
 def _cv_client_offline():
     import cv_client

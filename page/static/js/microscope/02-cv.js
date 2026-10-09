@@ -473,13 +473,14 @@
       const tr = document.querySelector('.micro-phase__table tr[data-ph="' + p + '"]'); if (!tr) return;
       const sc = (cvNum(CV_VOL_SCALE[p]) > 0 ? cvNum(CV_VOL_SCALE[p]) : CV_PHASE_SCALE[p]) / 100, own = cvNum(CV_VOL_SUB[p]);
       const edge = tr.querySelector('[data-c="edge"]'), fines = tr.querySelector('[data-c="fines"]'), ownEl = $(CV_VOL_SUB[p]);
-      if (edge) edge.textContent = f(0.2 * sc) + " мм";
+      if (edge) edge.textContent = f(0.2 * sc);
       // порог: свой — как задан; иначе общий × масштаб (по диаметру: в режиме объёма объём × масштаб³)
       const eff = own > 0 ? own : (general > 0 ? (vol ? general * sc * sc * sc : general * sc) : NaN);
-      if (fines) fines.textContent = isNaN(eff) ? "—" : f(eff) + (vol ? " мм³" : " мм");
+      if (fines) fines.textContent = isNaN(eff) ? "—" : f(eff);
       if (ownEl) ownEl.placeholder = isNaN(eff) || own > 0 ? "авто" : f(eff);
     });
-    const h = $("cvPhOwnHead"); if (h) h.textContent = vol ? "свой порог, мм³" : "свой порог, мм";
+    const h = $("cvPhOwnHead"); if (h) h.textContent = vol ? "свой, мм³" : "свой, мм";
+    const h2 = $("cvPhEffHead"); if (h2) h2.textContent = vol ? "мука <, мм³" : "мука <, мм";
   }
   function cvVolMarkDirty() { cvPhaseTableUpdate(); cvFinesEqUpdate(); const box = $("cvVolApply"); if (box && !box.classList.contains("is-busy")) box.hidden = !cvVolDirty(); }
   function cvVolPayload() {

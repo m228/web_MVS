@@ -758,7 +758,7 @@ def blur_score(image: np.ndarray) -> float:
 
 def summarize(measures: list[CrystalMeasure], image_shape: tuple,
               cv_cfg: Optional[dict] = None, blur: Optional[float] = None,
-              sv: Optional[float] = None, substage=None) -> dict:
+              sv: Optional[float] = None, phase=None) -> dict:
     """Сводка кадра: счётчики групп, %, средний/медианный размер, плотность, доля брака."""
     cfg = _cfg(cv_cfg)
     h, w = image_shape[:2]
@@ -791,7 +791,7 @@ def summarize(measures: list[CrystalMeasure], image_shape: tuple,
     n = len(measures) - n_cut - n_bubble - n_excl
     area_mm2 = (w * cfg["um_per_px"] / 1000.0) * (h * cfg["um_per_px"] / 1000.0)
     sizes_np = np.array(sizes) if sizes else np.array([0.0])
-    vol_sums = cv_volume.sums_for(measures, cfg, cv_volume.fines_on(cfg, sv), substage)
+    vol_sums = cv_volume.sums_for(measures, cfg, cv_volume.fines_on(cfg, sv) or phase is not None, phase)    # на фазе (подкачка/рост) мука считается всегда
     quality = "ok"
     if blur is not None and blur < cfg["blur_min"]:
         quality = "low"
@@ -816,7 +816,7 @@ def summarize(measures: list[CrystalMeasure], image_shape: tuple,
         "density_per_mm2": round(n / area_mm2, 2) if area_mm2 > 0 else 0.0,
         # объём/площадь: суммы (складываются по кадрам пробы) и доли мелочи/сростков, % от общего
         "volume": vol_sums, "volume_pct": cv_volume.percents(vol_sums),
-        "volume_cfg": cv_volume.volume_cfg(cfg, substage),
+        "volume_cfg": cv_volume.volume_cfg(cfg, phase),
         "reject_pct": round(100.0 * counts["reject"] / n, 1) if n else 0.0,
         "quality": quality,
         "blur": round(blur, 1) if blur is not None else None,
@@ -857,12 +857,12 @@ def draw_objects(image: np.ndarray, objects: list[dict]) -> np.ndarray:
 
 
 def analyze(image: np.ndarray, objects: list[dict], cv_cfg: Optional[dict] = None,
-            with_overlay: bool = True, sv: Optional[float] = None, substage=None) -> dict:
+            with_overlay: bool = True, sv: Optional[float] = None, phase=None) -> dict:
     """Полный разбор одного кадра: измерения → сводка → (опц.) overlay-картинка (BGR).
     sv — СВ на момент кадра (порог, с которого брак идёт в рассев)."""
     measures = measure_objects(objects, cv_cfg, sv=sv, img_shape=image.shape)
     blur = blur_score(image)
-    summary = summarize(measures, image.shape, cv_cfg, blur=blur, sv=sv, substage=substage)
+    summary = summarize(measures, image.shape, cv_cfg, blur=blur, sv=sv, phase=phase)
     vol_k = cv_volume.volume_cfg(_cfg(cv_cfg))["k_thick"]
     def _obj(m):
         # bbox для наведения (hit-test в UI); площадь — по эквив.диаметру (= площадь маски), мкм²

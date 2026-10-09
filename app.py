@@ -543,6 +543,11 @@ def micro_settings(
     sv_to: float | None = None,
     stage_from: int | None = None,
     stage_to: int | None = None,
+    fast_enabled: int | None = None,
+    fast_frames: int | None = None,
+    fast_gap_sec: int | None = None,
+    fast_pre_wash_sec: int | None = None,
+    fast_post_wash_sec: int | None = None,
     host: str | None = None,
     port: int | None = None,
     unit: int | None = None,
@@ -570,6 +575,14 @@ def micro_settings(
     if sv_to is not None: pc["sv_to"] = sv_to
     if stage_from is not None: pc["stage_from"] = stage_from
     if stage_to is not None: pc["stage_to"] = stage_to
+    fast = {}                                                  # быстрый цикл на подкачке (стадия 5)
+    if fast_enabled is not None: fast["enabled"] = bool(fast_enabled)
+    if fast_frames is not None: fast["frames"] = max(1, fast_frames)
+    if fast_gap_sec is not None: fast["gap_sec"] = max(0, fast_gap_sec)
+    if fast_pre_wash_sec is not None: fast["pre_wash_sec"] = max(0, fast_pre_wash_sec)
+    if fast_post_wash_sec is not None: fast["post_wash_pause_sec"] = max(0, fast_post_wash_sec)
+    if fast:
+        pc["fast"] = fast
     if pc:
         patch["probe_cycle"] = pc            # параметры цикла пробы (вкладка «Цикл»)
     if host is not None:

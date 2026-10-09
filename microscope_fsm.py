@@ -85,6 +85,11 @@ class MicroscopeFSM:
         self._retract_pos = int(pc.get("retract_pos", 20000))       # отвод/возврат, мкм
         self._pre_wash_sec = int(pc.get("pre_wash_sec", 4))         # промывка перед подводом, с
         self._post_wash_pause_sec = int(pc.get("post_wash_pause_sec", 2))  # пауза после промывки перед подводом, с
+        fp = pc.get("fast") or {}                                  # быстрый цикл на подкачке (стадия 5)
+        self._fast = {"enabled": bool(fp.get("enabled", True)), "frames": max(1, int(fp.get("frames", 1))),
+                      "gap_sec": max(0, int(fp.get("gap_sec", 2))), "pre_wash_sec": max(0, int(fp.get("pre_wash_sec", 2))),
+                      "post_wash_pause_sec": max(0, int(fp.get("post_wash_pause_sec", 1)))}
+        self._range_latched = False                                # варка пошла: диапазон СВ уже не останавливает пробы
         self._dwell_sec = int(pc.get("dwell_sec", 15))             # выдержка пробы, с
         self._shot_interval_sec = max(1, int(pc.get("shot_interval_sec", 3)))  # период скринов, с
         self._pause_sec = max(0, int(pc.get("pause_sec", 60)))     # пауза между пробами (режим "time"), с
@@ -283,6 +288,27 @@ class MicroscopeFSM:
         return mode if mode in ("time", "sv", "cv") else "time"
 
     # ---------- выдержка «по CV» (дёргает microscope_service) ----------
+
+    # --- быстрый цикл на подкачке: значения параметров цикла «сейчас» (на стадии 5 — быстрые) ---
+    def _fast_on(self):
+        return bool(self._fast["enabled"]) and self.stage == 5
+
+    def _pre_wash(self):
+        return self._fast["pre_wash_sec"] if self._fast_on() else self._pre_wash_sec
+
+    def _post_wash(self):
+        return self._fast["post_wash_pause_sec"] if self._fast_on() else self._post_wash_pause_sec
+
+    def _cv_gap(self):
+        return self._fast["gap_sec"] if self._fast_on() else self._cv_gap_sec
+
+    def _cv_need(self):
+        return self._fast["frames"] if self._fast_on() else self._cv_frames
+
+    def _range_ok(self):
+        """Диапазон СВ [sv_from..sv_to] пускает пробу, пока варка не началась. Как только проба пошла (_range_latched) — диапазон больше не
+        останавливает до конца варки; на подкачке (стадия 5; СВ там 82–84,5, ниже обычного sv_from) — не проверяется вовсе."""
+        return self._range_latched or self.stage == 5 or (self._sv_from <= self.sv <= self._sv_to)
 
     def set_cv_dwell(self, on, frames=None, gap_sec=None, timeout_sec=None):
         """Вкл/выкл выдержку по CV и её параметры (на лету, из настроек CV)."""
@@ -675,11 +701,11 @@ class MicroscopeFSM:
             elif m == 20:
                 label = "Отвожу в %d мкм · таймаут %d с" % (self._retract_pos, step_left)
             elif m == 21:
-                if self.t <= self._pre_wash_sec * 10:
-                    left = max(0, self._pre_wash_sec * 10 - self.t) // 10
+                if self.t <= self._pre_wash() * 10:
+                    left = max(0, self._pre_wash() * 10 - self.t) // 10
                     label = "Промывка стекла+трубки: осталось %d с" % left
                 else:
-                    left = max(0, (self._pre_wash_sec + self._post_wash_pause_sec) * 10 - self.t + 9) // 10
+                    left = max(0, (self._pre_wash() + self._post_wash()) * 10 - self.t + 9) // 10
                     label = "Пауза после промывки: %d с" % max(1, left)
             elif m == 22:
                 if self._fa_enabled and self._fa_phase == "fine":
@@ -689,7 +715,7 @@ class MicroscopeFSM:
                     label = "Подвожу к %d мкм (по СВ %.1f) · таймаут %d с" % (self.m1_sp, self.sv, step_left)
             elif m == 23 and self._cv_dwell:
                 label = "Проба · CV: разобрано кадров %d из %d (страховка %d с)" % (
-                    self._cv_done, self._cv_frames,
+                    self._cv_done, self._cv_need(),
                     max(0, self._cv_timeout_sec * 10 - self.t) // 10)
             elif m == 23:
                 label = "Проба · выдержка: осталось %d с (скрин каждые %d с)" % (
@@ -715,11 +741,11 @@ class MicroscopeFSM:
                 elif self._trigger_mode == "cv" and self._cv_dwell:
                     if self._cv_busy:
                         label = "Ожидание — CV разбирает прошлую пробу"
-                    elif not (self._sv_from <= self.sv <= self._sv_to):
+                    elif not self._range_ok():
                         label = "Ожидание — CV: жду СВ в диапазоне %g–%g (сейчас %.1f)" % (
                             self._sv_from, self._sv_to, self.sv)
                     else:
-                        wait = self._cv_gap_sec if self._cv_last_ok else self._pause_sec
+                        wait = self._cv_gap() if self._cv_last_ok else self._pause_sec
                         left = max(0, wait * 10 - self.cycle_t) // 10
                         label = "Ожидание — CV готов, след. проба через %d с" % left
                 else:
@@ -730,7 +756,7 @@ class MicroscopeFSM:
                 "step": STEP_NAMES.get(m, str(m)),
                 "label": label,
                 "target": self.m1_sp if m in (20, 22, 24) else None,
-                "pre_wash_left_s": max(0, self._pre_wash_sec * 10 - self.t) // 10 if m == 21 else None,
+                "pre_wash_left_s": max(0, self._pre_wash() * 10 - self.t) // 10 if m == 21 else None,
                 "dwell_left_s": max(0, self._dwell_left) // 10 if m == 23 else None,
                 "step_timeout_left_s": step_left,   # тикающий отсчёт до таймаута шага движения
                 "fault": self._fault,
@@ -975,7 +1001,7 @@ class MicroscopeFSM:
                         # запоминаем ТОЧНОЕ СВ на старте цикла и снимаем следующую пробу, когда
                         # СВ отклонилось от него на >=1 в ЛЮБУЮ сторону (рост или падение —
                         # напр. 87.0 -> 86.0). Не по целым: разница считается от точки запуска.
-                        if (self._sv_from <= self.sv <= self._sv_to
+                        if (self._range_ok()
                                 and (self._last_sv_shot is None
                                      or abs(self.sv - self._last_sv_shot) >= 1.0)):
                             self._last_sv_shot = self.sv   # точка отсчёта = СВ на старте пробы
@@ -989,9 +1015,9 @@ class MicroscopeFSM:
                         # впустую. CV выключен → ветка ниже (как "time").
                         # + диапазон СВ [sv_from..sv_to]: пока СВ ниже (кристаллов ещё нет) или выше —
                         # проб не берём, отсчёт паузы не идёт (как в триггере «по СВ»)
-                        if not self._cv_busy and self._sv_from <= self.sv <= self._sv_to:
+                        if not self._cv_busy and self._range_ok():
                             self.cycle_t += 1
-                            wait = self._cv_gap_sec if self._cv_last_ok else self._pause_sec
+                            wait = self._cv_gap() if self._cv_last_ok else self._pause_sec
                             if self.cycle_t > wait * 10:
                                 self.mode = 20
                                 self.t = 0
@@ -1005,6 +1031,9 @@ class MicroscopeFSM:
             else:
                 self.cycle_t = 0
                 self._last_sv_shot = None
+                self._range_latched = False
+            if self.mode == 20:
+                self._range_latched = True
 
             # 2) обратный отсчёт промывки стекла (как ST)
             if self.u > 0:
@@ -1063,13 +1092,13 @@ class MicroscopeFSM:
                 # post_wash_pause_sec с закрытыми клапанами (стекло стекло/успокоилось) -> подвод
                 self._redrive = 0; self._in_range = 0
                 self.t += 1
-                if self.t <= self._pre_wash_sec * 10:
+                if self.t <= self._pre_wash() * 10:
                     self.cw0 = True                    # идёт промывка (оба клапана)
                     self.cw1 = True
                 else:
                     self.cw0 = False                   # промывка кончилась — пауза перед подводом
                     self.cw1 = False
-                if self.t > (self._pre_wash_sec + self._post_wash_pause_sec) * 10:
+                if self.t > (self._pre_wash() + self._post_wash()) * 10:
                     self.t = 0
                     self.mode = 22
             elif self.mode == 22:

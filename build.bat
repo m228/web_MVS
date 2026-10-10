@@ -1,6 +1,7 @@
 @echo off
 rem Build the web_MVS bundle on the build machine (needs Python 3.11 + .venv with deps).
 rem Output: dist\web_MVS\ and dist\web_MVS_v<version>.zip for GitHub Releases.
+rem After the build release.bat checks the tree and, after a Y/N question, publishes the release. "build.bat nopush" skips that.
 rem run.bat is bundled INTO the archive so the zip is self-sufficient to run.
 setlocal
 cd /d "%~dp0"
@@ -38,6 +39,12 @@ echo.
 echo [build] Done:
 echo         dist\web_MVS_v%VER%.zip      (основное приложение, для всех)
 echo         dist\cv_service_v%VER%.zip   (CV-модуль, докачивается UpdaterCV.bat на микроскопных машинах)
-echo [build] Publish release (ОБА ассета в один релиз):
-echo         gh release create v%VER% dist\web_MVS_v%VER%.zip dist\cv_service_v%VER%.zip -t v%VER% --generate-notes
-endlocal
+if /i "%~1"=="nopush" (
+    echo [build] nopush: release not published. Publish later with release.bat
+    endlocal
+    exit /b 0
+)
+echo [build] Publishing release (checks + confirmation) ...
+call release.bat
+set RC=%errorlevel%
+endlocal & exit /b %RC%

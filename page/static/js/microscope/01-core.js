@@ -312,6 +312,7 @@
     const info = $("camParamInfo"); if (info) info.textContent = has ? serial : "камера не найдена";
     camStop();  // на всякий: остановить прошлый поток, показать плейсхолдер
     if (has) {
+      camReconnectAfterUpdate();
       loadCamParams();
       loadSavedColor();   // подтянуть сохранённую цветокоррекцию в ползунки вкладки «Цвет»
       // IP камеры (разово, до старта потока — контрол-канал не занят стримом)
@@ -407,6 +408,30 @@
     camSetStreamBadge();
     camStartMetrics();
     sentCmd("Камера: подключение");
+  }
+
+  // штатно закрыть поток перед остановкой приложения (обновление): закрываем на сервере, ждём подтверждения (до 4 с) и ещё 1,5 с,
+  // чтобы камера отпустила канал. Поток не обрывается вместе с процессом — после обновления открывается уже новый.
+  async function camCloseGracefully() {
+    if (!camConnected || !camSerial) return false;
+    camStop();                                        // closeStream на сервере + сброс <img>; camConnected=false — сторож молчит
+    const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+    for (let t0 = Date.now(); Date.now() - t0 < 4000; ) {
+      try { const d = await CAM().getMetrics(camSerial); if (d && d.running === false) break; } catch (e) { break; }
+      await sleep(300);
+    }
+    await sleep(1500);
+    return true;
+  }
+  // после обновления страница перезагружается: если камера была подключена до него — подключаем новый поток (с автостартом цикла это делает он)
+  function camReconnectAfterUpdate() {
+    let on = false;
+    try { on = localStorage.getItem("microCamReconnect") === "1"; if (on) localStorage.removeItem("microCamReconnect"); } catch (e) { }
+    if (!on) return;
+    setTimeout(() => {
+      if (camConnected || !camSerial || (cfg && cfg.cycle_autostart)) return;
+      camConnect(); sentCmd("Камера: подключена после обновления");
+    }, 2500);
   }
 
   function camStop() {

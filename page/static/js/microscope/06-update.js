@@ -23,11 +23,19 @@
 
     async function run() {
       if (!window.confirm("Обновить до v" + latest + "? Приложение остановится и запустится заново (1–2 минуты). Во время варки лучше не обновлять.")) return;
-      btn.classList.add("is-busy"); say("запускаю…");
+      btn.classList.add("is-busy");
+      // поток камеры закрываем штатно ДО остановки приложения (а не обрываем вместе с процессом): после обновления откроется новый
+      let camWas = false;
+      try { if (camConnected) { say("закрываю камеру…"); camWas = await camCloseGracefully(); if (camWas) { try { localStorage.setItem("microCamReconnect", "1"); } catch (e) { } } } } catch (e) { }
+      say("запускаю…");
       try { window.__verBefore = (await (await fetch("/api/debug/info", { cache: "no-store" })).json()).version; } catch (e) { window.__verBefore = ""; }   // версию «до» берём ДО запуска
       let r;
       try { r = await (await fetch("/api/update/run")).json(); } catch (e) { r = null; }
-      if (!r || !r.ok) { btn.classList.remove("is-busy"); btn.classList.remove("is-new"); say((r && r.error) || "не запустилось", 7000); return; }
+      if (!r || !r.ok) {
+        btn.classList.remove("is-busy"); btn.classList.remove("is-new"); say((r && r.error) || "не запустилось", 7000);
+        if (camWas) { try { localStorage.removeItem("microCamReconnect"); camConnect(); sentCmd("Камера: обновление не запустилось, поток открыт снова"); } catch (e) { } }   // обновление не пошло — вернуть камеру
+        return;
+      }
       say("обновляю…");
       // приложение остановится, update.ps1 заменит файлы и запустит его снова: ждём, пока заработает новая версия, и перезагружаем страницу
       const started = Date.now();

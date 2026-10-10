@@ -4032,3 +4032,34 @@ input.micro-cam-num { width: 56px; min-width: 0; flex: 0 0 auto; padding: 4px 5p
 .micro-sieve-card .micro-sieve__tiles { order: 2; margin: 0 0 0 4px; }
 .micro-sieve-card .micro-sieve__title > .micro-info { order: 3; margin-left: auto; }
 .micro-sieve-card .micro-sieve__sv { order: 2; font-size: .78em; color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+
+/* «Объём и мука»: слева числа и фазы, справа поля, переключатель и подробности (рассев под ними поднимается выше) */
+.micro-vol__cols { display: grid; grid-template-columns: minmax(0, 1fr) minmax(220px, 300px); gap: 0 22px; align-items: start; }
+.micro-vol__main, .micro-vol__side { min-width: 0; }
+.micro-vol__side .micro-vol__fields--col { flex-direction: column; align-items: stretch; gap: 6px; margin-top: 2px; }
+.micro-vol__fields--col label { display: grid; grid-template-columns: 1fr auto auto; align-items: center; gap: 8px; }
+.micro-vol__fields--col label .micro-info { margin-left: -2px; }
+.micro-vol__fields--col input[type="number"] { width: 78px; }
+.micro-vol__side .micro-vol__fields--sub { margin-top: 8px; flex-wrap: nowrap; }
+.micro-vol__side .micro-seg2 { font-size: .78em; }
+.micro-vol__side .micro-seg2 button { padding: 2px 9px; }
+.micro-vol__side .micro-vol__note { margin-top: 10px; }
+.micro-vol__main .micro-phase { margin-top: 12px; }
+.micro-phase__eye { border: 0; background: none; padding: 2px 4px; color: var(--muted); cursor: pointer; display: inline-flex; border-radius: 6px; }
+.micro-phase__eye:hover { color: var(--text, inherit); }
+.micro-phase__eye.is-on { color: var(--accent, #2563eb); }
+.micro-phase__eye.is-on .slash { display: none; }
+.micro-phase__table[hidden] { display: none; }
+@media (max-width: 760px) { .micro-vol__cols { grid-template-columns: minmax(0, 1fr); } }
+
+/* правка раскладки: мм/мм³ — справа в строке «финиш · по варке…», поля — справа от «Фаз варки» с воздухом, подробности — на всю ширину */
+.micro-vol__unit { margin-left: auto; display: inline-flex; align-items: center; gap: 8px; font-size: 0.8em; color: var(--muted); }
+.micro-vol__cols { grid-template-columns: minmax(0, 1fr) minmax(230px, 320px); gap: 0 28px; margin-top: 12px; }
+.micro-vol__side .micro-vol__fields--col { gap: 10px; margin-top: 0; font-size: .82em; }
+.micro-vol__fields--col input[type="number"] { width: 84px; height: 28px; }
+.micro-vol__main .micro-phase { margin-top: 0; }
+.micro-vol > .micro-vol__note { margin-top: 14px; font-size: 0.8em; }
+.micro-vol__lblcell { display: inline-flex; align-items: baseline; gap: 6px; color: var(--muted); white-space: nowrap; }
+/* подсказка внутри ячейки таблицы наследовала white-space: nowrap и вылезала из рамки одной длинной строкой */
+.micro-info__pop { white-space: normal; font-weight: 400; }
+.micro-info__pop b, .micro-info__pop div.in { font-weight: 600; }

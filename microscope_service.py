@@ -243,6 +243,10 @@ class MicroscopeService:
                 return
             from camera_core import manager as cam_manager
             worker = cam_manager.get(serial)
+            for _ in range(20):          # страница сама перезапускает оборвавшийся поток (сторож) — даём ей до 10 с, прежде чем пропускать пробу
+                if worker.running:
+                    break
+                time.sleep(0.5)
             if not worker.running:
                 self._set_cv_status("no_camera", "проба не разобрана: камера не стримит")
                 log_event("microscope_service",

@@ -1263,6 +1263,7 @@ def stream_state(serial_number: str):
 def metrics(serial_number: str):
     worker = manager.get(serial_number)
     return {**worker.metrics,
+            "running": worker.running,      # страница по нему и по счётчику кадров понимает, что поток умер/завис, и перезапускает
             "photo": worker.save_photo,
             "video": worker.save_video,
             "photo_count": worker.photo_saved_count,

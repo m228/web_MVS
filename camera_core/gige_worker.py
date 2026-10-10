@@ -40,6 +40,12 @@ class CameraWorker(BaseCameraWorker):
         # (/stream и /force_close). Без него force_close мог уничтожить
         # acquirer между `self.ia = ia` и `ia.start()`.
         self._ia_lock = threading.Lock()
+        # запросы стрима (/api/camera/stream) идут строго по очереди: страница может прислать два подряд
+        # (двойной connect). Раньше второй не открывал камеру (занята первым), но в finally выставлял
+        # running=False и убивал уже идущий поток первого — картинка замирала, кадров не было до ручного перезапуска.
+        self._start_lock = threading.Lock()
+        # номер сеанса стрима: новый запрос вытесняет прежний; вытесненный не трогает общее состояние (running и т.д.)
+        self._session = 0
         # лимиты/текущие настройки камеры (заполняется при подключении)
         self.data_limit = None
         # фактический конфиг, с которым камера запущена в последний раз
@@ -498,26 +504,33 @@ class CameraWorker(BaseCameraWorker):
         if not self.manager.check():
             return
 
-        if self.running:
-            log_event("camera_core.generate_stream", "Старый поток открыт, принудительно закрытие", "warn")
-            self.force_close()
+        self._start_lock.acquire()           # старт сеанса — по очереди; SDK-путь отпускает лок сам, как только камера открыта
+        try:
+            self._session += 1
+            token = self._session
+            if self.running:
+                log_event("camera_core.generate_stream", "Старый поток открыт, принудительно закрытие", "warn")
+                self.force_close()
 
-        # ждём, пока прошлый сеанс полностью отпустит камеру (его генератор закрывает
-        # поток на своём потоке за ~SDK_GRAB_TIMEOUT_MS), иначе новый open упрётся в «занято»
-        _deadline = time.time() + 3.0
-        while time.time() < _deadline and (self._sdk_stream is not None or self.ia is not None):
-            time.sleep(0.1)
+            # ждём, пока прошлый сеанс полностью отпустит камеру (его генератор закрывает
+            # поток на своём потоке за ~SDK_GRAB_TIMEOUT_MS), иначе новый open упрётся в «занято»
+            _deadline = time.time() + 3.0
+            while time.time() < _deadline and (self._sdk_stream is not None or self.ia is not None):
+                time.sleep(0.1)
 
-        # GigE через MVS SDK (resend) — надёжнее harvesters на нагруженной сети И в обход
-        # genicam-декод-бага (−1020/−1006). Если SDK доступен и по серийнику есть device_info —
-        # идём этим путём (как MVS). Иначе — harvesters (с ретраем на флаки-декод).
-        device_info = _sdk_device_info(self.serial_number)
-        sdk_ok = sdk_gige.available() and device_info is not None
-        log_event("camera_core.generate_stream",
-                  "Путь стрима: %s" % ("SDK (нативный, как MVS)" if sdk_ok else "harvesters+genicam (SDK недоступен)"),
-                  "info" if sdk_ok else "warn",
-                  {"serial_number": self.serial_number, "sdk": sdk_gige.available(),
-                   "device_info": device_info is not None})
+            # GigE через MVS SDK (resend) — надёжнее harvesters на нагруженной сети И в обход
+            # genicam-декод-бага (−1020/−1006). Если SDK доступен и по серийнику есть device_info —
+            # идём этим путём (как MVS). Иначе — harvesters (с ретраем на флаки-декод).
+            device_info = _sdk_device_info(self.serial_number)
+            sdk_ok = sdk_gige.available() and device_info is not None
+            log_event("camera_core.generate_stream",
+                      "Путь стрима: %s" % ("SDK (нативный, как MVS)" if sdk_ok else "harvesters+genicam (SDK недоступен)"),
+                      "info" if sdk_ok else "warn",
+                      {"serial_number": self.serial_number, "sdk": sdk_gige.available(),
+                       "device_info": device_info is not None})
+        except BaseException:
+            self._start_lock.release()
+            raise
         if sdk_ok:
             settings = {
                 "width": width, "height": height,
@@ -525,8 +538,9 @@ class CameraWorker(BaseCameraWorker):
                 "fps": fps, "exposure_auto": exposure_auto,
                 "exposure_time": exposure_time, "pixel_format": pixel_format,
             }
-            yield from self._generate_sdk(device_info, settings)
+            yield from self._generate_sdk(device_info, settings, token)      # лок отпустит сам
             return
+        self._start_lock.release()           # harvesters-путь: прежнее поведение (лок только на предстартовые проверки)
 
         try:
             log_event(
@@ -687,8 +701,15 @@ class CameraWorker(BaseCameraWorker):
 
     # GigE-поток через MVS SDK (resend): применяет settings, отдаёт MJPEG теми же чанками,
     # что и harvesters-путь.
-    def _generate_sdk(self, device_info, settings=None):
+    def _generate_sdk(self, device_info, settings=None, token=None):
         stream = None
+        lock_held = True                   # _start_lock взят в generate(); отпускаем, как только камера открыта (или не открылась)
+
+        def _unlock():
+            nonlocal lock_held
+            if lock_held:
+                lock_held = False
+                self._start_lock.release()
         last_frame_time = None
         last_frame_wall = time.time()  # для отсчёта простоя ПО ВРЕМЕНИ
         fps = (settings or {}).get("fps")
@@ -712,6 +733,7 @@ class CameraWorker(BaseCameraWorker):
             with self._ia_lock:
                 self._sdk_stream = stream
                 self.running = True
+            _unlock()
             log_event("camera_core.generate_stream", "Поток камеры запущен (SDK)", "success",
                       {"serial_number": self.serial_number})
 
@@ -720,10 +742,10 @@ class CameraWorker(BaseCameraWorker):
             self.metrics["fps"] = 0.0
             self.metrics["bandwidth_mbps"] = 0.0
 
-            while self.running:
+            while self.running and self._session == token:      # вытеснил новый запрос стрима — выходим, не трогая общее состояние
                 res = stream.grab(timeout_ms=SDK_GRAB_TIMEOUT_MS)
                 if res is None:
-                    if not self.running:
+                    if not self.running or self._session != token:
                         break
                     # нет кадра — норм на низком FPS; рвём поток только если тишина
                     # дольше SDK_STREAM_STALL_SECONDS (реальная потеря связи)
@@ -780,7 +802,9 @@ class CameraWorker(BaseCameraWorker):
         finally:
             log_event("camera_core.generate_stream", "Поток камеры закрыт (SDK)", "info",
                       {"serial_number": self.serial_number})
-            self.running = False
+            mine = self._session == token       # False — нас вытеснил новый запрос: running и сохранение уже его
+            if mine:
+                self.running = False
             if stream is not None:
                 try:
                     stream.close()
@@ -789,7 +813,9 @@ class CameraWorker(BaseCameraWorker):
             with self._ia_lock:
                 if self._sdk_stream is stream:
                     self._sdk_stream = None
-            self._reset_save_state()
+            if mine:
+                self._reset_save_state()
+            _unlock()
 
     def force_close(self):
         # под тем же локом, что и старт в generate: снимаем acquirer атомарно,

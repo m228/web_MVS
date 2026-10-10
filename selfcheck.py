@@ -1676,6 +1676,81 @@ def _service_phases():
     return "p1 g1 p2 g2 по ходу стадий; сгущение — новая варка; перезапуск — из журнала"
 
 
+@check("Камера", "двойной запрос стрима (как в логе 09.10 20:21:01): второй не убивает первый — идёт один поток, камера не «залипает» без кадров")
+def _stream_double_request_race():
+    import threading
+    import numpy as np
+    from camera_core import gige_worker as gw
+
+    class FakeManager:
+        def check(self):
+            return True
+
+    opened = []                                       # открытые сейчас SDK-потоки: второй open при открытом первом — «занято», как у MVS
+
+    class FakeStream:
+        def __init__(self, info):
+            self.mine = False
+
+        def open(self, settings=None):
+            time.sleep(0.1)                           # открытие камеры не мгновенное (в логе ~2 с) — окно гонки двух запросов
+            if opened:
+                raise RuntimeError("MV_CC_OpenDevice ret=0x80000203")
+            opened.append(self)
+            self.mine = True
+
+        def grab(self, timeout_ms=300):
+            time.sleep(0.02)
+            return 8, 8, "BayerRG8", np.zeros((8, 8), np.uint8)
+
+        def close(self):
+            if self in opened:
+                opened.remove(self)
+
+    saved = (gw._sdk_device_info, gw.sdk_gige.available, gw.sdk_gige.GigeSdkStream, gw._to_bgr)
+    gw._sdk_device_info = lambda serial: object()
+    gw.sdk_gige.available = lambda: True
+    gw.sdk_gige.GigeSdkStream = FakeStream
+    gw._to_bgr = lambda raw, w, h, pf: np.zeros((8, 8, 3), np.uint8)
+    try:
+        w = gw.CameraWorker("RACE", FakeManager())
+        got = {"a": 0, "b": 0}
+        stop = {"a": False, "b": False}
+        errs = []
+
+        def consume(name):
+            try:
+                for _ in w.generate(fps=1):
+                    got[name] += 1
+                    if stop[name]:
+                        break
+            except Exception as e:
+                errs.append(repr(e))
+
+        ta = threading.Thread(target=consume, args=("a",), daemon=True)
+        tb = threading.Thread(target=consume, args=("b",), daemon=True)
+        ta.start(); tb.start()                         # два запроса подряд — как «двойной connect» страницы
+        time.sleep(4.5)                                # дольше ретраев открытия второго запроса в старом коде (6 × ~0,6 с)
+        assert not errs, errs
+        assert w.running, "после двойного запроса поток не идёт (второй запрос убил первый)"
+        n0 = got["a"] + got["b"]
+        time.sleep(0.5)
+        assert got["a"] + got["b"] > n0, "кадры не идут"
+        alive = [n for n, t in (("a", ta), ("b", tb)) if t.is_alive()]
+        assert len(alive) == 1, "должен остаться один поток, сейчас: %s" % alive
+        for k in stop:
+            stop[k] = True
+        w.running = False
+        ta.join(3); tb.join(3)
+        assert not (ta.is_alive() or tb.is_alive()), "потоки не закрылись"
+        assert not opened, "камера осталась открытой"
+        assert w._start_lock.acquire(False), "лок старта не отпущен"
+        w._start_lock.release()
+    finally:
+        gw._sdk_device_info, gw.sdk_gige.available, gw.sdk_gige.GigeSdkStream, gw._to_bgr = saved
+    return "кадров a=%d b=%d, остался один поток, камера закрыта, лок отпущен" % (got["a"], got["b"])
+
+
 @check("CV", "рассев: у блока (варка / фаза) есть диапазон СВ проб — sv_from / sv_to (min / max СВ проб, вошедших в рассев)")
 def _vol_block_sv_range():
     import cv_store

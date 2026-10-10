@@ -317,19 +317,13 @@
     const m = Math.round(s / 60); if (m < 60) return Math.max(m, 0) + " мин";
     return Math.floor(m / 60) + " ч" + (m % 60 ? " " + (m % 60) + " мин" : "");
   }
-  function cvSvRange(blk, durS) {
+  function cvSvRange(blk, durS) {        // «СВ 84,5 – 86,1 · 42 мин · 5 проб»
     const f = (v) => v.toFixed(1).replace(".", ",");
     const sv = blk && blk.sv_from != null && blk.sv_to != null ? "СВ " + f(blk.sv_from) + (blk.sv_to - blk.sv_from >= 0.05 ? " – " + f(blk.sv_to) : "") : "";
     const d = durS != null ? cvFmtDur(durS) : "";
-    return [sv, d].filter(Boolean).join(" · ");
-  }
-  // строка под переключателем: сколько длилась каждая фаза и вся варка (чтобы подбирать рецепт)
-  function cvShowDur(b) {
-    const e = $("cvSieveDur"); if (!e) return;
-    const parts = b && cvVolMode !== "probe" ? CV_PHASES.filter((p) => b.phases && b.phases[p] && b.phases[p].dur_s != null).map((p) => CV_PHASE_TITLE[p] + " " + cvFmtDur(b.phases[p].dur_s)) : [];
-    if (parts.length && b.dur_s != null) parts.push("вся варка " + cvFmtDur(b.dur_s));
-    const t = parts.join(" · ");
-    e.hidden = !t; if (e.textContent !== t) e.textContent = t;
+    const n = blk && blk.probes ? blk.probes : 0, m10 = n % 10, m100 = n % 100;
+    const p = n ? n + ((m10 === 1 && m100 !== 11) ? " проба" : (m10 >= 2 && m10 <= 4 && (m100 < 10 || m100 >= 20)) ? " пробы" : " проб") : "";
+    return [sv, d, p].filter(Boolean).join(" · ");
   }
   function cvShowSv(t) { const e = $("cvSieveSv"); if (e && e.textContent !== t) e.textContent = t; }
   function cvRenderSieveTiles(b) {
@@ -386,7 +380,6 @@
     const blk = b ? (ph !== "boil" ? b.phases[ph] : ((tail ? b.tail : b.all) || b)) : null;
     cvRenderSieve(blk ? blk.sieve : null, pscale);
     cvShowSv(cvSvRange(blk, ph !== "boil" ? blk.dur_s : (b ? b.dur_s : null)));
-    cvShowDur(b);
     if (!b) {
       cvSetText(lbl, "варок пока нет");
       put("fines", null); if (st) st.textContent = "";
@@ -454,7 +447,7 @@
     const vp = (s && s.volume_pct) || {}, cfg = (s && s.volume_cfg) || {};
     cvRenderSieve(vp.sieve, cfg.size_scale || 1);      // у пробы — масштаб сит её фазы
     cvRenderSieveTiles(null);
-    cvShowSv(""); cvShowDur(null);
+    cvShowSv("");
     document.querySelectorAll("#cvVolGrid [data-v]").forEach((el) => {
       const [model, kind] = el.dataset.v.split(".");
       el.textContent = fmtPct(model === "avg" ? cvAvg3({ m1: (vp.m1 || {})[kind], m2: (vp.m2 || {})[kind], m3: (vp.m3 || {})[kind] }) : (vp[model] ? vp[model][kind] : null));

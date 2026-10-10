@@ -280,6 +280,12 @@
   let camPhotoOn = false, camVideoOn = false;
   let hwMinute = 3, hwSecOn = 0;   // минута/секунда старта ежечасной промывки (из конфига)
   let camMetricsTimer = null;
+  // сторож потока: если поток умер (running=false) или кадры не идут — сам «Остановить → Подключить». «Остановить» кнопкой (camConnected=false) не трогает
+  const CAM_GRACE_MS = 8000;        // после подключения камере даём открыться (в логе открытие ~2 с, ретраи до ~4 с)
+  const CAM_DEAD_MS = 3000;         // поток не идёт столько — перезапуск
+  const CAM_STALL_MS = 12000;       // кадры не меняются столько (fps 1 → ~1 кадр/с) — перезапуск
+  const CAM_BACKOFF_MS = [0, 8000, 20000, 60000];   // пауза между подряд неудачными перезапусками
+  let camWd = { at: 0, img: null, imgAt: 0, badSince: 0, lastRestart: 0, fails: 0, restarting: false };
   const CAM = () => window.CameraApi;
 
   function setCamIp(ip) {
@@ -399,8 +405,11 @@
   function camConnect() {
     if (!camSerial) return;
     const img = $("microCamStream"), ph = $("camPlaceholder");
-    img.src = "/api/camera/stream?" + camBuildQuery().toString();
+    // _ = метка времени: без неё тот же адрес браузер берёт из своей памяти и НЕ ходит на сервер — картинка остаётся прежней, потока нет
+    const sq = camBuildQuery(); sq.set("_", String(Date.now()));
+    img.src = "/api/camera/stream?" + sq.toString();
     img.hidden = false;
+    camWd.at = Date.now(); camWd.img = null; camWd.imgAt = camWd.at; camWd.badSince = 0;
     if (ph) ph.classList.add("hidden");
     camConnected = true;
     const b = $("camConnectBtn"); if (b) { b.textContent = "Остановить"; b.classList.add("toolbar-btn--danger"); b.classList.remove("toolbar-btn--primary"); }
@@ -726,11 +735,45 @@
     sentCmd(on ? "Камера: запись ВКЛ" : "Камера: запись выкл");
   }
 
+  // перезапуск потока: закрыть на сервере, сбросить <img> и подключить заново (то же, что руками «Остановить» и «Подключить»)
+  async function camAutoRestart(reason) {
+    if (!camConnected || !camSerial || camWd.restarting) return;
+    camWd.restarting = true;
+    camWd.lastRestart = Date.now(); camWd.fails++;
+    const msg = "Камера: перезапуск потока (" + reason + ")" + (camWd.fails > 1 ? ", попытка " + camWd.fails : "");
+    sentCmd(msg);
+    try { if (window.log && log.warn) log.warn(msg); } catch (e) {}
+    try { CAM().closeStream(camSerial); } catch (e) {}
+    const img = $("microCamStream"); if (img) img.removeAttribute("src");
+    // не «передёргиваем»: ждём, пока сервер подтвердит, что поток закрыт (до 4 с), и даём камере ещё 2 с отпустить канал, потом подключаем
+    const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+    for (let t0 = Date.now(); Date.now() - t0 < 4000; ) {
+      try { const d = await CAM().getMetrics(camSerial); if (d && d.running === false) break; } catch (e) { break; }
+      await sleep(300);
+    }
+    await sleep(2000);
+    camWd.restarting = false;
+    if (camConnected) camConnect();
+  }
+  function camWatchdog(d) {
+    const now = Date.now();
+    if (camWd.restarting || now - camWd.at < CAM_GRACE_MS) return;
+    if (d.image_number !== camWd.img) { camWd.img = d.image_number; camWd.imgAt = now; }
+    const dead = d.running === false;
+    const stalled = !dead && now - camWd.imgAt > CAM_STALL_MS;
+    if (!dead && !stalled) { camWd.badSince = 0; if (now - camWd.lastRestart > 30000) camWd.fails = 0; return; }   // 30 с стабильно — счётчик неудач сброшен
+    if (!camWd.badSince) camWd.badSince = now;
+    if (dead && now - camWd.badSince < CAM_DEAD_MS) return;
+    if (now - camWd.lastRestart < CAM_BACKOFF_MS[Math.min(camWd.fails, CAM_BACKOFF_MS.length - 1)]) return;
+    camWd.badSince = 0;
+    camAutoRestart(dead ? "поток остановился" : "кадры не идут " + Math.round((now - camWd.imgAt) / 1000) + " с");
+  }
+
   function camStartMetrics() {
     camStopMetrics();
     camMetricsTimer = setInterval(async () => {
       if (!camConnected || !camSerial || !CAM()) return;
-      try { const d = await CAM().getMetrics(camSerial); if (d) camUpdateMetrics(d); } catch (e) {}
+      try { const d = await CAM().getMetrics(camSerial); if (d) { camUpdateMetrics(d); camWatchdog(d); } } catch (e) {}
       // синк статуса записи/фото с сервера: авто-завершение видео по длительности
       // само гасит кнопку «Видео» и флажок (раньше кнопка залипала «включённой»)
       try {
@@ -1316,7 +1359,8 @@
     $("camVideoBtn").addEventListener("click", camVideoToggle);
     $("camApplyBtn").addEventListener("click", camApply);
     const camImg = $("microCamStream");
-    if (camImg) camImg.addEventListener("error", () => { if (camConnected) camStop(); });
+    // поток оборвался (сервер перезапустился, камера не открылась): раньше страница просто «останавливалась» и картинка замирала
+    if (camImg) camImg.addEventListener("error", () => { if (camConnected && camImg.getAttribute("src")) camAutoRestart("поток оборвался"); });
     wireCamFullscreen();
     wireColor();
     wireDump();

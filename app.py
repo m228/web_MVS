@@ -1203,6 +1203,7 @@ def camera_stream(
     exposure_auto: str | None = None,
     exposure_time: float | None = Query(None, gt=0),
     pixel_format: str | None = None,
+    cid: str | None = Query(None, alias="_"),      # метка окна, открывшего поток (см. client_id в метриках)
 ):
     worker = manager.get(serial_number)
     if interface_id:
@@ -1235,6 +1236,7 @@ def camera_stream(
             exposure_auto=exposure_auto,
             exposure_time=exposure_time,
             pixel_format=pixel_format,
+            client_id=cid,
         ),
         media_type="multipart/x-mixed-replace; boundary=frame",
     )
@@ -1263,6 +1265,7 @@ def stream_state(serial_number: str):
 def metrics(serial_number: str):
     worker = manager.get(serial_number)
     return {**worker.metrics,
+            "client_id": getattr(worker, "client_id", None),   # какое окно владеет потоком
             "running": worker.running,      # страница по нему и по счётчику кадров понимает, что поток умер/завис, и перезапускает
             "photo": worker.save_photo,
             "video": worker.save_video,

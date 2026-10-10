@@ -1720,7 +1720,7 @@ def _stream_double_request_race():
 
         def consume(name):
             try:
-                for _ in w.generate(fps=1):
+                for _ in w.generate(fps=1, client_id=name):
                     got[name] += 1
                     if stop[name]:
                         break
@@ -1733,11 +1733,13 @@ def _stream_double_request_race():
         time.sleep(4.5)                                # дольше ретраев открытия второго запроса в старом коде (6 × ~0,6 с)
         assert not errs, errs
         assert w.running, "после двойного запроса поток не идёт (второй запрос убил первый)"
+        assert w.client_id in ("a", "b"), "владелец потока (client_id) не записан: %r" % w.client_id
         n0 = got["a"] + got["b"]
         time.sleep(0.5)
         assert got["a"] + got["b"] > n0, "кадры не идут"
         alive = [n for n, t in (("a", ta), ("b", tb)) if t.is_alive()]
         assert len(alive) == 1, "должен остаться один поток, сейчас: %s" % alive
+        assert w.client_id == alive[0], "client_id (%r) не совпал с живым потоком (%s)" % (w.client_id, alive[0])
         for k in stop:
             stop[k] = True
         w.running = False

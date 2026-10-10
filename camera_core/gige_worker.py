@@ -46,6 +46,9 @@ class CameraWorker(BaseCameraWorker):
         self._start_lock = threading.Lock()
         # номер сеанса стрима: новый запрос вытесняет прежний; вытесненный не трогает общее состояние (running и т.д.)
         self._session = 0
+        # метка страницы, чей запрос стрима сейчас владеет камерой (параметр «_» запроса): по ней страница узнаёт в метриках,
+        # что поток перехватило другое окно (иначе в проигравшем окне картинка чёрная, а телеметрия «кадры идут»)
+        self.client_id = None
         # лимиты/текущие настройки камеры (заполняется при подключении)
         self.data_limit = None
         # фактический конфиг, с которым камера запущена в последний раз
@@ -497,7 +500,7 @@ class CameraWorker(BaseCameraWorker):
         return {k: v for k, v in config.items() if v is not None}
 
     def generate(self, width=None, height=None, offset_x=None, offset_y=None,
-                 fps=None, exposure_auto=None, exposure_time=None, pixel_format=None):
+                 fps=None, exposure_auto=None, exposure_time=None, pixel_format=None, client_id=None):
         ia = None
         last_frame_time = None
 
@@ -508,6 +511,7 @@ class CameraWorker(BaseCameraWorker):
         try:
             self._session += 1
             token = self._session
+            self.client_id = client_id
             if self.running:
                 log_event("camera_core.generate_stream", "Старый поток открыт, принудительно закрытие", "warn")
                 self.force_close()

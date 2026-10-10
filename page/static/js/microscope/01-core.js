@@ -285,7 +285,7 @@
   const CAM_DEAD_MS = 3000;         // поток не идёт столько — перезапуск
   const CAM_STALL_MS = 12000;       // кадры не меняются столько (fps 1 → ~1 кадр/с) — перезапуск
   const CAM_BACKOFF_MS = [0, 8000, 20000, 60000];   // пауза между подряд неудачными перезапусками
-  let camWd = { at: 0, img: null, imgAt: 0, badSince: 0, lastRestart: 0, fails: 0, restarting: false };
+  let camWd = { at: 0, img: null, imgAt: 0, badSince: 0, lastRestart: 0, fails: 0, restarting: false, cid: null, taken: 0, reclaims: [] };
   const CAM = () => window.CameraApi;
 
   function setCamIp(ip) {
@@ -406,7 +406,8 @@
     if (!camSerial) return;
     const img = $("microCamStream"), ph = $("camPlaceholder");
     // _ = метка времени: без неё тот же адрес браузер берёт из своей памяти и НЕ ходит на сервер — картинка остаётся прежней, потока нет
-    const sq = camBuildQuery(); sq.set("_", String(Date.now()));
+    const cid = Date.now() + "-" + Math.floor(Math.random() * 1000);      // метка этого окна: сервер отдаёт её в метриках — так видно, кто владеет потоком
+    const sq = camBuildQuery(); sq.set("_", cid); camWd.cid = cid; camWd.taken = 0;
     img.src = "/api/camera/stream?" + sq.toString();
     img.hidden = false;
     camWd.at = Date.now(); camWd.img = null; camWd.imgAt = camWd.at; camWd.badSince = 0;
@@ -439,13 +440,13 @@
     if (!on) return;
     setTimeout(() => {
       if (camConnected || !camSerial || (cfg && cfg.cycle_autostart)) return;
-      camConnect(); sentCmd("Камера: подключена после обновления");
+      camConnectIfFree(); sentCmd("Камера: подключена после обновления");
     }, 2500);
   }
 
-  function camStop() {
+  function camStop(keepServer) {          // keepServer — отпустить поток только в этом окне, на сервере не закрывать (его держит другое окно)
     const img = $("microCamStream"), ph = $("camPlaceholder");
-    if (camConnected && camSerial && CAM()) { try { CAM().closeStream(camSerial); } catch (e) {} }
+    if (camConnected && camSerial && CAM() && !keepServer) { try { CAM().closeStream(camSerial); } catch (e) {} }
     camConnected = false;
     if (img) { img.hidden = true; img.removeAttribute("src"); }
     if (ph) { ph.textContent = camSerial ? "Нажми «Подключить» вверху — пойдёт видео." : "Камера не найдена. MVS ищет автоматически — проверь подключение/драйвер, либо укажи IP камеры."; ph.classList.remove("hidden"); }
@@ -755,9 +756,43 @@
     camWd.restarting = false;
     if (camConnected) camConnect();
   }
+  // чужое окно владеет потоком: видимое окно забирает камеру обратно (не чаще 2 раз в минуту, чтобы два видимых окна не воевали),
+  // скрытое или проигравшее спор — отпускает свой поток у себя и честно пишет, где камера
+  function camOnTaken() {
+    if (++camWd.taken < 3) return;                     // ~3 с подряд, не мигание
+    camWd.taken = 0;
+    const now = Date.now(), visible = document.visibilityState === "visible";
+    camWd.reclaims = (camWd.reclaims || []).filter((t) => now - t < 60000);
+    if (visible && camWd.reclaims.length < 2) {
+      camWd.reclaims.push(now);
+      sentCmd("Камера: поток открыло другое окно — забираю в это");
+      camConnect();
+      return;
+    }
+    camStop(true);
+    const ph = $("camPlaceholder");
+    if (ph) ph.textContent = "Камера открыта в другом окне. Нажми «Подключить», чтобы показать её здесь.";
+    sentCmd("Камера: поток у другого окна — в этом отключён");
+  }
+  // автоподключение (автостарт, после обновления): скрытое окно не отбирает камеру, если её уже держит другое окно
+  async function camConnectIfFree() {
+    try {
+      const d = await CAM().getMetrics(camSerial);
+      if (d && d.running && d.client_id && document.visibilityState !== "visible") {
+        const ph = $("camPlaceholder");
+        if (ph) ph.textContent = "Камера открыта в другом окне. Нажми «Подключить», чтобы показать её здесь.";
+        return false;
+      }
+    } catch (e) { }
+    if (!camConnected) camConnect();
+    return true;
+  }
   function camWatchdog(d) {
     const now = Date.now();
     if (camWd.restarting || now - camWd.at < CAM_GRACE_MS) return;
+    // поток идёт, но его открыло ДРУГОЕ окно (второе окно/вкладка с этой страницей): здесь картинка чёрная, а телеметрия общая «кадры идут»
+    if (d.running && d.client_id && camWd.cid && d.client_id !== camWd.cid) { camOnTaken(); return; }
+    camWd.taken = 0;
     if (d.image_number !== camWd.img) { camWd.img = d.image_number; camWd.imgAt = now; }
     const dead = d.running === false;
     const stalled = !dead && now - camWd.imgAt > CAM_STALL_MS;
@@ -939,7 +974,7 @@
     };
     const tryConnect = (n) => {
       if (camConnected) { enableAuto(); return; }
-      if (camSerial) { camConnect(); setTimeout(enableAuto, 2000); return; }
+      if (camSerial) { camConnectIfFree(); setTimeout(enableAuto, 2000); return; }
       if (n < 20) { setTimeout(() => tryConnect(n + 1), 1000); return; }
       enableAuto();   // камера не нашлась — всё равно включаем автомат (мотор/клапаны пойдут)
     };

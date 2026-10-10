@@ -1751,6 +1751,31 @@ def _stream_double_request_race():
     return "кадров a=%d b=%d, остался один поток, камера закрыта, лок отпущен" % (got["a"], got["b"])
 
 
+@check("CV", "рассев: у блока (варка / фаза) есть диапазон СВ проб — sv_from / sv_to (min / max СВ проб, вошедших в рассев)")
+def _vol_block_sv_range():
+    import cv_store
+    rows = [{"ts": "20261009_10%02d00" % i, "t": 1000.0 + i, "sv": sv, "fines_m3": 3.0, "vtot_m1": 1.0, "vtot_m2": 1.0, "vtot_m3": 1.0}
+            for i, sv in enumerate([82.0, 83.4, 84.5, None])]
+    rows.append({"ts": "20261009_109900", "t": 2000.0, "sv": 70.0, "fines_m3": None})          # без муки — в рассев не входит
+    b = cv_store._vol_block(rows)
+    assert (b["sv_from"], b["sv_to"]) == (82.0, 84.5), (b["sv_from"], b["sv_to"])
+    e = cv_store._vol_block([])
+    assert e["sv_from"] is None and e["sv_to"] is None
+    return "СВ %s – %s, пустой набор — None" % (b["sv_from"], b["sv_to"])
+
+
+@check("CV", "длительность фаз варки: от первой пробы фазы до первой пробы следующей, отрезки одной фазы складываются, в сводке варки dur_s")
+def _phase_durations():
+    import cv_store
+    ph = ["p1", "p1", "g1", "g1", "g1", None, "p2", "g2", "g2", "p2"]
+    ts = [0, 600, 1200, 1800, 2400, 3000, 3600, 4200, 4800, 5400]
+    rows = [{"t": float(t), "phase": p, "ts": "x%d" % t} for t, p in zip(ts, ph)]
+    d = cv_store.phase_durations(rows)
+    assert d == {"p1": 1200, "g1": 1800, "p2": 600 + 0, "g2": 1200}, d
+    assert cv_store.phase_durations([]) == {}
+    return "p1 20 мин, g1 30, g2 20, p2 (два отрезка) сложены; пустая варка — {}"
+
+
 @check("UI", "JS страницы микроскопа: все вызываемые cv*-функции определены (пропавшая функция тихо ломала поля «Объём и мука»)")
 def _js_cv_functions_defined():
     import re

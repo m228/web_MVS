@@ -196,6 +196,9 @@
   // --- объём и мука: M1/M2/M3 + площадь, % от общего объёма кадров пробы ---
   // «Среднее» = (M1 + M2 + M3) / 3 по тем моделям, где значение есть; нет ни одной — null
   const cvAvg3 = (o) => { const v = o ? ["m1", "m2", "m3"].map((k) => o[k]).filter((x) => x != null) : []; return v.length ? v.reduce((a, b) => a + b, 0) / v.length : null; };
+  // запись в DOM только при изменении: страница обновляется раз в несколько секунд, и пересборка тех же узлов даёт заметный «дёрг»
+  function cvSetHtml(el, html) { if (el && el.__h !== html) { el.innerHTML = html; el.__h = html; } }
+  function cvSetText(el, t) { if (el && el.textContent !== t) el.textContent = t; }
   const fmtPct = (v) => (v == null ? "—" : (v >= 10 ? v.toFixed(1) : v.toFixed(2)) + " %");
   // расчётный порог муки по диаметру: круг той же площади, что квадрат side × side мм → 2000·side/√π, мкм
   // Один и тот же порог в двух единицах: сторона квадрата s мм (площадь s²) ↔ шар того же диаметра объёмом V мм³.
@@ -222,7 +225,7 @@
   function cvRenderVolNote(s, vp, cfg, finesOff) {
     const box = $("cvVolNote"); if (!box) return;
     const vol = (s && s.volume) || {}, n = vol.n || {}, frames = Math.max(1, Math.round(s && s.frames ? s.frames : ((cvView || cvLastResult || {}).frames || []).length || 1));
-    if (!n.total) { box.innerHTML = ""; return; }
+    if (!n.total) { cvSetHtml(box, ""); return; }
     const per = (x) => Math.round((x || 0) / frames * 10) / 10;
     const pc = (v) => (v == null ? "—" : (v >= 10 ? v.toFixed(1) : v.toFixed(2)).replace(".", ",") + " %");
     const mm3 = (um3) => String(Number((um3 / 1e9 / frames).toPrecision(2))).replace(".", ",");
@@ -235,7 +238,7 @@
         " по объёму</b> (среднее M1–M3) и " + pc((vp.area || {}).fines) + " по площади. Мелких много штук, а вещества в них мало.</div>");
     }
     rows.push("<div><b>Общий объём</b> кристаллов на кадре: " + mm3((vol.m3 || {}).total || 0) + " мм³ (призма), " + mm3((vol.m1 || {}).total || 0) + " (шар), " + mm3((vol.m2 || {}).total || 0) + " (сфероид).</div>");
-    box.innerHTML = rows.join("");
+    cvSetHtml(box, rows.join(""));
   }
   // --- рассев по ситам: фракции снизу вверх b0 (дно) … b6 (>1,2 мм); строки рисуем сверху вниз как в лабораторной таблице ---
   // строки: [фракция(и), индекс края снизу]; края сит — SIEVE_MM × масштаб фазы (0,2 / 0,5 / 0,7 / 0,8 / 1,0 мм при 100 %)
@@ -263,7 +266,7 @@
       html += "<span>" + name + "</span><em>" + fmtPct(avg(i)) + "</em><em>" + fmtPct(val("area", i)) + "</em>" +
         (cvShowModels ? "<em>" + fmtPct(val("m1", i)) + "</em><em>" + fmtPct(val("m2", i)) + "</em><em>" + fmtPct(val("m3", i)) + "</em>" : "");
     });
-    g.innerHTML = html;
+    cvSetHtml(g, html);
   }
   function cvApplyModels() {              // скрыть/показать M1–M3 в обеих таблицах («Объём и мука» и рассев)
     const box = $("cvVol"), btn = $("cvVolModelsBtn");
@@ -308,6 +311,27 @@
   // плитки рассева: «варка» (итог/финиш, как раньше) + по одной на каждую фазу, которая в этой варке была; новая появляется, когда
   // началась новая стадия. Только для режимов по варке (в режиме «по пробе» плиток нет — у пробы свои сита по её фазе).
   let cvSieveSig = "";          // какие сегменты сейчас нарисованы (варка + фазы): пока набор тот же, DOM не пересоздаём — иначе ползунок «улетает» и возвращается
+  // «СВ 82,0 – 84,5»: в каком диапазоне СВ сняты пробы рассева (у фазы — её пробы, у «варки» — пробы финиша)
+  function cvFmtDur(s) {                 // 2520 → «42 мин», 8040 → «2 ч 14 мин»
+    if (s == null) return "";
+    const m = Math.round(s / 60); if (m < 60) return Math.max(m, 0) + " мин";
+    return Math.floor(m / 60) + " ч" + (m % 60 ? " " + (m % 60) + " мин" : "");
+  }
+  function cvSvRange(blk, durS) {
+    const f = (v) => v.toFixed(1).replace(".", ",");
+    const sv = blk && blk.sv_from != null && blk.sv_to != null ? "СВ " + f(blk.sv_from) + (blk.sv_to - blk.sv_from >= 0.05 ? " – " + f(blk.sv_to) : "") : "";
+    const d = durS != null ? cvFmtDur(durS) : "";
+    return [sv, d].filter(Boolean).join(" · ");
+  }
+  // строка под переключателем: сколько длилась каждая фаза и вся варка (чтобы подбирать рецепт)
+  function cvShowDur(b) {
+    const e = $("cvSieveDur"); if (!e) return;
+    const parts = b && cvVolMode !== "probe" ? CV_PHASES.filter((p) => b.phases && b.phases[p] && b.phases[p].dur_s != null).map((p) => CV_PHASE_TITLE[p] + " " + cvFmtDur(b.phases[p].dur_s)) : [];
+    if (parts.length && b.dur_s != null) parts.push("вся варка " + cvFmtDur(b.dur_s));
+    const t = parts.join(" · ");
+    e.hidden = !t; if (e.textContent !== t) e.textContent = t;
+  }
+  function cvShowSv(t) { const e = $("cvSieveSv"); if (e && e.textContent !== t) e.textContent = t; }
   function cvRenderSieveTiles(b) {
     const box = $("cvSieveTiles"); if (!box) return;
     if (cvVolMode === "probe") { box.hidden = true; return; }
@@ -332,7 +356,7 @@
     }
     box.querySelectorAll("button").forEach((bt) => {              // обновляем на месте: подсветка и подсказки (проб стало больше)
       bt.classList.toggle("is-active", bt.dataset.k === cvSievePhase);
-      bt.title = titleOf(bt.dataset.k);
+      const tt = titleOf(bt.dataset.k); if (bt.title !== tt) bt.title = tt;
     });
     cvPlaceSievePill(rebuilt);
   }
@@ -340,7 +364,10 @@
     const box = $("cvSieveTiles"), pill = $("cvSievePill"); if (!box || !pill) return;
     const act = box.querySelector("button.is-active"); if (!act) { pill.style.opacity = 0; return; }
     if (instant) pill.style.transition = "none";                  // новый ползунок встаёт сразу на место, без пролёта из нуля
-    pill.style.opacity = 1; pill.style.left = act.offsetLeft + "px"; pill.style.width = act.offsetWidth + "px";
+    const L = act.offsetLeft + "px", W = act.offsetWidth + "px";
+    if (pill.style.opacity !== "1") pill.style.opacity = 1;
+    if (pill.style.left !== L) pill.style.left = L;
+    if (pill.style.width !== W) pill.style.width = W;
     if (instant) { void pill.offsetWidth; pill.style.transition = ""; }
   }
   function cvRenderBoil() {
@@ -349,7 +376,7 @@
     if (older) older.disabled = !(i >= 0 && i < cvBoils.length - 1);
     if (newer) newer.disabled = !(i > 0);
     const cells = (kind) => document.querySelectorAll("#cvVolGrid [data-v$='." + kind + "']");
-    const put = (kind, src) => cells(kind).forEach((el) => { const m = el.dataset.v.split(".")[0]; el.textContent = fmtPct(src ? (m === "avg" ? cvAvg3(src) : src[m]) : null); });
+    const put = (kind, src) => cells(kind).forEach((el) => { const m = el.dataset.v.split(".")[0]; cvSetText(el, fmtPct(src ? (m === "avg" ? cvAvg3(src) : src[m]) : null)); });
     // откуда числа: «последние N проб» (поле «Проб в среднем») или все пробы финиша варки
     const tail = cvVolMode === "tail";
     cvRenderSieveTiles(b);
@@ -358,28 +385,30 @@
     const pscale = ph !== "boil" ? ((b.cfg || {})["phase_scale_" + ph] || CV_PHASE_SCALE[ph]) / 100 : 1;
     const blk = b ? (ph !== "boil" ? b.phases[ph] : ((tail ? b.tail : b.all) || b)) : null;
     cvRenderSieve(blk ? blk.sieve : null, pscale);
+    cvShowSv(cvSvRange(blk, ph !== "boil" ? blk.dur_s : (b ? b.dur_s : null)));
+    cvShowDur(b);
     if (!b) {
-      if (lbl) lbl.textContent = "варок пока нет";
+      cvSetText(lbl, "варок пока нет");
       put("fines", null); if (st) st.textContent = "";
-      if (box) box.innerHTML = "<div>Журнал проб пуст — варки появятся, когда пойдут пробы.</div>";
+      cvSetHtml(box, "<div>Журнал проб пуст — варки появятся, когда пойдут пробы.</div>");
       return;
     }
-    if (lbl) { lbl.textContent = cvBoilName(i) + " · " + cvBoilSpan(b); lbl.title = "Варка " + cvBoilSpan(b) + " · проб " + b.n; }
+    if (lbl) { cvSetText(lbl, cvBoilName(i) + " · " + cvBoilSpan(b)); lbl.title = "Варка " + cvBoilSpan(b) + " · проб " + b.n; }
     put("fines", blk.fines);
     const pc = (v) => (v == null ? "—" : (v >= 10 ? v.toFixed(1) : v.toFixed(2)).replace(".", ",") + " %");
     const cfg = b.cfg || {};
     const fd0 = cfg.fines_um != null ? cfg.fines_um : cvFinesDiam(), fd = fd0 != null ? fd0 * pscale : fd0;
-    const fl = $("cvVolLblFines"); if (fl) fl.textContent = "Мука <" + (fd != null ? Math.round(fd) : "") + " мкм";
+    cvSetText($("cvVolLblFines"), "Мука <" + (fd != null ? Math.round(fd) : "") + " мкм");
     if (ph !== "boil") {          // фаза: подробный текст про фазу вместо итогов варки
       const P = blk.probes != null ? blk.probes : blk.n;
-      if (box) box.innerHTML = "<div><b>" + CV_PHASE_TITLE[ph] + ":</b> все пробы фазы — " + P + " (" + cvTsLabel(blk.ts_from).slice(6, 11) + "–" + cvTsLabel(blk.ts_to).slice(6, 11) + "), хороших кристаллов " + (blk.good_n || 0) +
-        ". Сита и порог муки — " + Math.round(pscale * 100) + " % от обычных (сито 0,2 мм → " + String(Number((0.2 * pscale).toPrecision(2))).replace(".", ",") + " мм). Мука: <b>" + pc(cvAvg3(blk.fines)) + "</b> объёма (среднее M1–M3).</div>";
+      cvSetHtml(box, "<div><b>" + CV_PHASE_TITLE[ph] + ":</b> все пробы фазы — " + P + " (" + cvTsLabel(blk.ts_from).slice(6, 11) + "–" + cvTsLabel(blk.ts_to).slice(6, 11) + "), хороших кристаллов " + (blk.good_n || 0) +
+        ". Сита и порог муки — " + Math.round(pscale * 100) + " % от обычных (сито 0,2 мм → " + String(Number((0.2 * pscale).toPrecision(2))).replace(".", ",") + " мм). Мука: <b>" + pc(cvAvg3(blk.fines)) + "</b> объёма (среднее M1–M3).</div>");
       return;
     }
-    const calc = $("cvFinesCalc"); if (calc) calc.textContent = cvFinesCalcText();
+    cvSetText($("cvFinesCalc"), cvFinesCalcText());
     const hasVol = b.vtot && b.vtot.m3 != null;
     const svr = (b.sv_min != null ? String(b.sv_min).replace(".", ",") + "…" + String(b.sv_max).replace(".", ",") : "—");
-    if (st) st.textContent = b.finished ? "" : "варка идёт";
+    cvSetText(st, b.finished ? "" : "варка идёт");
     const rows = ["<div><b>" + cvBoilName(i) + ":</b> " + cvBoilSpan(b) + " · проб " + b.n + " · СВ " + svr + ".</div>"];
     if (!hasVol) {
       rows.push("<div>Объёма по этой варке нет: её пробы сняты до расчёта объёма или кадры уже стёрты ротацией (хранится последних проб " + 50 + ").</div>");
@@ -397,7 +426,7 @@
     if (hasVol) {
       rows.push("<div><b>Объём</b> кристаллов на кадре в среднем: " + String(Number(b.vtot.m3.toPrecision(2))).replace(".", ",") + " мм³ (призма).</div>");
     }
-    if (box) box.innerHTML = rows.join("");
+    cvSetHtml(box, rows.join(""));
   }
   function wireBoilNav() {
     const mb = $("cvVolModelsBtn");
@@ -425,6 +454,7 @@
     const vp = (s && s.volume_pct) || {}, cfg = (s && s.volume_cfg) || {};
     cvRenderSieve(vp.sieve, cfg.size_scale || 1);      // у пробы — масштаб сит её фазы
     cvRenderSieveTiles(null);
+    cvShowSv(""); cvShowDur(null);
     document.querySelectorAll("#cvVolGrid [data-v]").forEach((el) => {
       const [model, kind] = el.dataset.v.split(".");
       el.textContent = fmtPct(model === "avg" ? cvAvg3({ m1: (vp.m1 || {})[kind], m2: (vp.m2 || {})[kind], m3: (vp.m3 || {})[kind] }) : (vp[model] ? vp[model][kind] : null));
@@ -540,6 +570,14 @@
     const apply = () => { box.hidden = !shown; btn.classList.toggle("is-on", shown); };
     btn.addEventListener("click", () => { shown = !shown; try { localStorage.setItem("microCvVolNote", shown ? "1" : "0"); } catch (e) { } apply(); });
     apply();
+    // глазок у «Фазы варки»: таблица порогов и сит скрыта, пока не нажмёшь (по умолчанию скрыта); выбор запоминается
+    const eye = $("cvPhaseEye"), tbl = $("cvPhaseTable");
+    if (eye && tbl) {
+      let open = false; try { open = localStorage.getItem("microCvPhaseOpen") === "1"; } catch (e) { }
+      const show = () => { tbl.hidden = !open; eye.classList.toggle("is-on", open); eye.setAttribute("aria-pressed", open ? "true" : "false"); };
+      eye.addEventListener("click", () => { open = !open; try { localStorage.setItem("microCvPhaseOpen", open ? "1" : "0"); } catch (e) { } show(); });
+      show();
+    }
   }
   function wireVolumeFields() {
     wireVolNoteBtn();

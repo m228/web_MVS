@@ -312,10 +312,24 @@
   // началась новая стадия. Только для режимов по варке (в режиме «по пробе» плиток нет — у пробы свои сита по её фазе).
   let cvSieveSig = "";          // какие сегменты сейчас нарисованы (варка + фазы): пока набор тот же, DOM не пересоздаём — иначе ползунок «улетает» и возвращается
   // «СВ 82,0 – 84,5»: в каком диапазоне СВ сняты пробы рассева (у фазы — её пробы, у «варки» — пробы финиша)
-  function cvSvRange(blk) {
+  function cvFmtDur(s) {                 // 2520 → «42 мин», 8040 → «2 ч 14 мин»
+    if (s == null) return "";
+    const m = Math.round(s / 60); if (m < 60) return Math.max(m, 0) + " мин";
+    return Math.floor(m / 60) + " ч" + (m % 60 ? " " + (m % 60) + " мин" : "");
+  }
+  function cvSvRange(blk, durS) {
     const f = (v) => v.toFixed(1).replace(".", ",");
-    if (!blk || blk.sv_from == null || blk.sv_to == null) return "";
-    return "СВ " + f(blk.sv_from) + (blk.sv_to - blk.sv_from >= 0.05 ? " – " + f(blk.sv_to) : "");
+    const sv = blk && blk.sv_from != null && blk.sv_to != null ? "СВ " + f(blk.sv_from) + (blk.sv_to - blk.sv_from >= 0.05 ? " – " + f(blk.sv_to) : "") : "";
+    const d = durS != null ? cvFmtDur(durS) : "";
+    return [sv, d].filter(Boolean).join(" · ");
+  }
+  // строка под переключателем: сколько длилась каждая фаза и вся варка (чтобы подбирать рецепт)
+  function cvShowDur(b) {
+    const e = $("cvSieveDur"); if (!e) return;
+    const parts = b && cvVolMode !== "probe" ? CV_PHASES.filter((p) => b.phases && b.phases[p] && b.phases[p].dur_s != null).map((p) => CV_PHASE_TITLE[p] + " " + cvFmtDur(b.phases[p].dur_s)) : [];
+    if (parts.length && b.dur_s != null) parts.push("вся варка " + cvFmtDur(b.dur_s));
+    const t = parts.join(" · ");
+    e.hidden = !t; if (e.textContent !== t) e.textContent = t;
   }
   function cvShowSv(t) { const e = $("cvSieveSv"); if (e && e.textContent !== t) e.textContent = t; }
   function cvRenderSieveTiles(b) {
@@ -371,7 +385,8 @@
     const pscale = ph !== "boil" ? ((b.cfg || {})["phase_scale_" + ph] || CV_PHASE_SCALE[ph]) / 100 : 1;
     const blk = b ? (ph !== "boil" ? b.phases[ph] : ((tail ? b.tail : b.all) || b)) : null;
     cvRenderSieve(blk ? blk.sieve : null, pscale);
-    cvShowSv(cvSvRange(blk));
+    cvShowSv(cvSvRange(blk, ph !== "boil" ? blk.dur_s : (b ? b.dur_s : null)));
+    cvShowDur(b);
     if (!b) {
       cvSetText(lbl, "варок пока нет");
       put("fines", null); if (st) st.textContent = "";
@@ -439,7 +454,7 @@
     const vp = (s && s.volume_pct) || {}, cfg = (s && s.volume_cfg) || {};
     cvRenderSieve(vp.sieve, cfg.size_scale || 1);      // у пробы — масштаб сит её фазы
     cvRenderSieveTiles(null);
-    cvShowSv("");
+    cvShowSv(""); cvShowDur(null);
     document.querySelectorAll("#cvVolGrid [data-v]").forEach((el) => {
       const [model, kind] = el.dataset.v.split(".");
       el.textContent = fmtPct(model === "avg" ? cvAvg3({ m1: (vp.m1 || {})[kind], m2: (vp.m2 || {})[kind], m3: (vp.m3 || {})[kind] }) : (vp[model] ? vp[model][kind] : null));

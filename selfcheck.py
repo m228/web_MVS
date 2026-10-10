@@ -1689,6 +1689,18 @@ def _vol_block_sv_range():
     return "СВ %s – %s, пустой набор — None" % (b["sv_from"], b["sv_to"])
 
 
+@check("CV", "длительность фаз варки: от первой пробы фазы до первой пробы следующей, отрезки одной фазы складываются, в сводке варки dur_s")
+def _phase_durations():
+    import cv_store
+    ph = ["p1", "p1", "g1", "g1", "g1", None, "p2", "g2", "g2", "p2"]
+    ts = [0, 600, 1200, 1800, 2400, 3000, 3600, 4200, 4800, 5400]
+    rows = [{"t": float(t), "phase": p, "ts": "x%d" % t} for t, p in zip(ts, ph)]
+    d = cv_store.phase_durations(rows)
+    assert d == {"p1": 1200, "g1": 1800, "p2": 600 + 0, "g2": 1200}, d
+    assert cv_store.phase_durations([]) == {}
+    return "p1 20 мин, g1 30, g2 20, p2 (два отрезка) сложены; пустая варка — {}"
+
+
 @check("UI", "JS страницы микроскопа: все вызываемые cv*-функции определены (пропавшая функция тихо ломала поля «Объём и мука»)")
 def _js_cv_functions_defined():
     import re

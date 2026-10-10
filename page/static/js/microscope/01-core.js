@@ -404,7 +404,9 @@
   function camConnect() {
     if (!camSerial) return;
     const img = $("microCamStream"), ph = $("camPlaceholder");
-    img.src = "/api/camera/stream?" + camBuildQuery().toString();
+    // _ = метка времени: без неё тот же адрес браузер берёт из своей памяти и НЕ ходит на сервер — картинка остаётся прежней, потока нет
+    const sq = camBuildQuery(); sq.set("_", String(Date.now()));
+    img.src = "/api/camera/stream?" + sq.toString();
     img.hidden = false;
     camWd.at = Date.now(); camWd.img = null; camWd.imgAt = camWd.at; camWd.badSince = 0;
     if (ph) ph.classList.add("hidden");
@@ -709,7 +711,7 @@
   }
 
   // перезапуск потока: закрыть на сервере, сбросить <img> и подключить заново (то же, что руками «Остановить» и «Подключить»)
-  function camAutoRestart(reason) {
+  async function camAutoRestart(reason) {
     if (!camConnected || !camSerial || camWd.restarting) return;
     camWd.restarting = true;
     camWd.lastRestart = Date.now(); camWd.fails++;
@@ -718,7 +720,15 @@
     try { if (window.log && log.warn) log.warn(msg); } catch (e) {}
     try { CAM().closeStream(camSerial); } catch (e) {}
     const img = $("microCamStream"); if (img) img.removeAttribute("src");
-    setTimeout(() => { camWd.restarting = false; if (camConnected) camConnect(); }, 1500);
+    // не «передёргиваем»: ждём, пока сервер подтвердит, что поток закрыт (до 4 с), и даём камере ещё 2 с отпустить канал, потом подключаем
+    const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+    for (let t0 = Date.now(); Date.now() - t0 < 4000; ) {
+      try { const d = await CAM().getMetrics(camSerial); if (d && d.running === false) break; } catch (e) { break; }
+      await sleep(300);
+    }
+    await sleep(2000);
+    camWd.restarting = false;
+    if (camConnected) camConnect();
   }
   function camWatchdog(d) {
     const now = Date.now();

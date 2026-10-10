@@ -957,9 +957,14 @@
                     <span id="cvBoilLbl">—</span>
                     <button type="button" id="cvBoilNewer" title="Более новая варка">›</button>
                   </span>
+                <div class="micro-vol__unit">
+                  <span class="micro-seg2" id="cvFinesModeSeg" role="group" aria-label="Чем мерить муку">
+                    <button type="button" data-mode="side" title="Мерить муку по стороне квадрата, мм (по площади кристалла)">мм</button>
+                    <button type="button" data-mode="volume" title="Мерить муку по объёму кристалла, мм³ (шар эквивалентного диаметра)">мм³</button>
+                  </span>
+                  <span class="micro-vol__eq" id="cvFinesEq" title="Тот же общий порог в другой единице: сторона 0,2 мм = объём 0,006 мм³ — кристаллы делятся одинаково"></span>
                 </div>
-                <div class="micro-vol__cols">
-                  <div class="micro-vol__main">
+                </div>
                 <div class="micro-vol__grid" id="cvVolGrid">
                   <span></span>
                   <b class="mdl" title="Шар по площади: V = π/6·d³. Допущений о толщине нет">M1 шар</b>
@@ -967,8 +972,18 @@
                   <b class="mdl" title="Призма: V = Площадь·Т, Т = k·Ш. Плоский кристалл на грани — рабочая модель">M3 призма</b>
                   <b title="Среднее трёх моделей объёма: (M1 + M2 + M3) ÷ 3">Среднее</b>
                   <b title="Доля площади кристаллов на кадре (без объёма)">Площадь</b>
-                  <span id="cvVolLblFines">Мука</span><em data-v="m1.fines">—</em><em data-v="m2.fines">—</em><em data-v="m3.fines">—</em><em data-v="avg.fines">—</em><em data-v="area.fines">—</em>
+                  <span class="micro-vol__lblcell"><span id="cvVolLblFines">Мука</span> <span class="micro-info" tabindex="0" aria-label="Как определяется мука">ⓘ
+                      <span class="micro-info__pop micro-vol__pop" role="tooltip">
+                        <b>Как определяется мука</b>
+                        <div class="in">Эталон — квадрат со стороной из поля (по умолчанию 0,2 × 0,2 мм).</div>
+                        <div class="in"><code>мука: площадь кристалла &lt; сторона × сторона</code></div>
+                        <small>Площадь кристалла — площадь его маски на кадре. Для сравнения она пересчитывается в диаметр круга той же площади: <code>диаметр = 2 · сторона / √π</code>. Его и видно в подсказке над кристаллом как «Ø».</small>
+                        <small id="cvFinesCalc">—</small>
+                      </span>
+                    </span></span><em data-v="m1.fines">—</em><em data-v="m2.fines">—</em><em data-v="m3.fines">—</em><em data-v="avg.fines">—</em><em data-v="area.fines">—</em>
                 </div>
+                <div class="micro-vol__cols">
+                  <div class="micro-vol__main">
                 <div class="micro-phase">
                   <div class="micro-phase__title"><span>Фазы варки: порог муки и сита</span>
                     <span class="micro-info" tabindex="0" aria-label="Как считаются фазы">ⓘ
@@ -997,16 +1012,7 @@
                   </div>
                   <div class="micro-vol__side">
                 <div class="micro-vol__fields micro-vol__fields--col">
-                  <label title="Общий порог муки — для любой подстадии, кроме подкачки / роста 1 / роста 2 (у них свои поля ниже) и когда подстадия неизвестна. По стороне: площадь кристалла меньше квадрата со стороной в этом поле. По объёму: объём меньше значения в мм³"><span id="cvFinesLbl">Мука, мм</span><input type="number" id="cvFinesMm" min="0.01" step="0.05" value="0.2" />
-<span class="micro-info" tabindex="0" aria-label="Как определяется мука">ⓘ
-                    <span class="micro-info__pop micro-vol__pop" role="tooltip">
-                      <b>Как определяется мука</b>
-                      <div class="in">Эталон — квадрат со стороной из поля (по умолчанию 0,2 × 0,2 мм).</div>
-                      <div class="in"><code>мука: площадь кристалла &lt; сторона × сторона</code></div>
-                      <small>Площадь кристалла — площадь его маски на кадре. Для сравнения она пересчитывается в диаметр круга той же площади: <code>диаметр = 2 · сторона / √π</code>. Его и видно в подсказке над кристаллом как «Ø».</small>
-                      <small id="cvFinesCalc">—</small>
-                    </span>
-                  </span></label>
+                  <label title="Общий порог муки — для любой подстадии, кроме подкачки / роста 1 / роста 2 (у них свои поля ниже) и когда подстадия неизвестна. По стороне: площадь кристалла меньше квадрата со стороной в этом поле. По объёму: объём меньше значения в мм³"><span id="cvFinesLbl">Мука, мм</span><input type="number" id="cvFinesMm" min="0.01" step="0.05" value="0.2" /></label>
                   <label title="Мука считается только у почти готового сахара: пока СВ ниже этого значения, кристаллы ещё растут и мука — неактуальная информация (показывается прочерк). По умолчанию 88 — как порог брака. 0 — считать всегда."><span>Мука с СВ</span><input type="number" id="cvFinesSv" min="0" max="100" step="0.5" value="88" /></label>
                   <label title="Толщина кристалла = k · короткая сторона. 0,88 — отношение осей c/b у сахарозы (Сапронов, с. 294); подгоняется по лаборатории"><span>Толщина k</span><input type="number" id="cvKThick" min="0.1" max="2" step="0.01" value="0.88" /></label>
                   <span class="micro-apply" id="cvVolApply" hidden>
@@ -1015,17 +1021,10 @@
                     <button type="button" class="micro-apply__no" id="cvVolNo" title="Отменить изменения">✕</button>
                   </span>
                 </div>
-                <div class="micro-vol__fields micro-vol__fields--sub">
-                  <span class="micro-seg2" id="cvFinesModeSeg" role="group" aria-label="Чем мерить муку">
-                    <button type="button" data-mode="side" title="Мерить муку по стороне квадрата, мм (по площади кристалла)">мм</button>
-                    <button type="button" data-mode="volume" title="Мерить муку по объёму кристалла, мм³ (шар эквивалентного диаметра)">мм³</button>
-                  </span>
-                  <span class="micro-vol__eq" id="cvFinesEq" title="Тот же общий порог в другой единице: сторона 0,2 мм = объём 0,006 мм³ — кристаллы делятся одинаково"></span>
+                  </div>
                 </div>
                 <!-- что стоит за цифрами: штуки, доля по числу и по объёму, общий объём (заполняет 02-cv.js) -->
                 <div class="micro-vol__note" id="cvVolNote"></div>
-                  </div>
-                </div>
                 <!-- рассев по ситам, как в лаборатории: размер отверстий, мм; доля фракции в общем объёме (100 % — сумма всех) -->
                 <div class="micro-sieve-card">
                   <div class="micro-cv-block__title micro-sieve__title">Рассев по ситам, %  <span class="micro-info" tabindex="0" aria-label="Как считается рассев">ⓘ<span class="micro-info__pop micro-vol__pop" role="tooltip"><b>Рассев по ситам</b><div class="in">Как в лаборатории: кристаллы раскладываются по размеру отверстий сит, мм (1,2 · 1 · 0,8 · 0,7 · 0,5 · 0,2 · дно). Фракция «0,5–0,7» — прошло сито 0,7, осталось на 0,5.</div><small>Берутся только хорошие кристаллы (брак по форме — сростки, иглы, кривые — отсеян). Доля — от их общего объёма (объём ~ масса), сумма 100 %. Размер — эквивалентный диаметр. Считается, как и мука, когда СВ дошёл до поля «Мука с СВ».</small></span></span><div class="micro-sieve__tiles" id="cvSieveTiles" role="tablist" aria-label="Фаза варки для рассева" hidden></div></div>

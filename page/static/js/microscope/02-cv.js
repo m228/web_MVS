@@ -311,6 +311,13 @@
   // плитки рассева: «варка» (итог/финиш, как раньше) + по одной на каждую фазу, которая в этой варке была; новая появляется, когда
   // началась новая стадия. Только для режимов по варке (в режиме «по пробе» плиток нет — у пробы свои сита по её фазе).
   let cvSieveSig = "";          // какие сегменты сейчас нарисованы (варка + фазы): пока набор тот же, DOM не пересоздаём — иначе ползунок «улетает» и возвращается
+  // «СВ 82,0 – 84,5»: в каком диапазоне СВ сняты пробы рассева (у фазы — её пробы, у «варки» — пробы финиша)
+  function cvSvRange(blk) {
+    const f = (v) => v.toFixed(1).replace(".", ",");
+    if (!blk || blk.sv_from == null || blk.sv_to == null) return "";
+    return "СВ " + f(blk.sv_from) + (blk.sv_to - blk.sv_from >= 0.05 ? " – " + f(blk.sv_to) : "");
+  }
+  function cvShowSv(t) { const e = $("cvSieveSv"); if (e && e.textContent !== t) e.textContent = t; }
   function cvRenderSieveTiles(b) {
     const box = $("cvSieveTiles"); if (!box) return;
     if (cvVolMode === "probe") { box.hidden = true; return; }
@@ -364,6 +371,7 @@
     const pscale = ph !== "boil" ? ((b.cfg || {})["phase_scale_" + ph] || CV_PHASE_SCALE[ph]) / 100 : 1;
     const blk = b ? (ph !== "boil" ? b.phases[ph] : ((tail ? b.tail : b.all) || b)) : null;
     cvRenderSieve(blk ? blk.sieve : null, pscale);
+    cvShowSv(cvSvRange(blk));
     if (!b) {
       cvSetText(lbl, "варок пока нет");
       put("fines", null); if (st) st.textContent = "";
@@ -431,6 +439,7 @@
     const vp = (s && s.volume_pct) || {}, cfg = (s && s.volume_cfg) || {};
     cvRenderSieve(vp.sieve, cfg.size_scale || 1);      // у пробы — масштаб сит её фазы
     cvRenderSieveTiles(null);
+    cvShowSv("");
     document.querySelectorAll("#cvVolGrid [data-v]").forEach((el) => {
       const [model, kind] = el.dataset.v.split(".");
       el.textContent = fmtPct(model === "avg" ? cvAvg3({ m1: (vp.m1 || {})[kind], m2: (vp.m2 || {})[kind], m3: (vp.m3 || {})[kind] }) : (vp[model] ? vp[model][kind] : null));

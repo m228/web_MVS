@@ -4079,7 +4079,10 @@ input.micro-cam-num { width: 56px; min-width: 0; flex: 0 0 auto; padding: 4px 5p
 .micro-curve__row input[type="text"]:disabled { opacity: .45; }
 #cvVol.is-curve .micro-phase__table th:nth-child(n+4), #cvVol.is-curve .micro-phase__table td:nth-child(n+4) { opacity: .3; pointer-events: none; }
 /* рассев в процентах (21 фракция по 0,05 мм): под числом — полоска доли относительно максимума столбца, нули приглушены */
-.micro-sieve > em { position: relative; padding: 0 5px; border-radius: 4px; background: linear-gradient(90deg, var(--accent-soft, rgba(124, 92, 255, .30)) var(--bar, 0%), transparent var(--bar, 0%)); }
+.micro-sieve > em { display: flex; align-items: center; gap: 8px; }
+.micro-sieve > em .bar { flex: 1 1 auto; min-width: 0; height: 7px; text-align: left; }
+.micro-sieve > em .bar i { display: block; height: 100%; border-radius: 3px; background: var(--accent, #7c5cff); opacity: .55; }
+.micro-sieve > em .num { flex: 0 0 auto; min-width: 4.6em; text-align: right; }
 .micro-sieve > em.is-zero { opacity: .45; font-weight: 500; }
 .micro-sieve { row-gap: 3px; }
 .micro-curve--side { margin-top: 10px; display: flex; flex-direction: column; gap: 2px; }

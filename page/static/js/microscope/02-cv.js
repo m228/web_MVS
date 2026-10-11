@@ -268,7 +268,7 @@
       html += "<span>" + cvFineLabel(k) + "</span>";
       cols.forEach((c) => {
         const v = val(c, k), bar = v != null && mx[c] > 0 ? Math.round(100 * v / mx[c]) : 0;
-        html += '<em class="' + (v == null || v < 0.05 ? "is-zero" : "") + '" style="--bar:' + bar + '%">' + fmtPct(v) + "</em>";
+        html += '<em class="' + (v == null || v < 0.05 ? "is-zero" : "") + '"><span class="bar"><i style="width:' + bar + '%"></i></span><span class="num">' + fmtPct(v) + "</span></em>";   // полоска слева, число справа — не заходят друг на друга
       });
     }
     cvSetHtml(g, html);

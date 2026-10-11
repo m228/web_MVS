@@ -1000,12 +1000,6 @@
                     </button>
                   </div>
                   <div class="micro-curve" id="cvPhaseBody" hidden>
-                  <div class="micro-curve__row">
-                    <label title="Порог муки идёт ПЛАВНО по времени с заводки (по точкам ниже), а не ступеньками по фазам. Сита рассева остаются в масштабе фазы. Нет времени с заводки (приложение перезапускали посреди варки) — порог фазы."><input type="checkbox" id="cvCurveOn" /><span>плавный порог муки по времени с заводки</span></label>
-                  </div>
-                  <div class="micro-curve__row" id="cvCurveBox">
-                    <input type="text" id="cvCurve" spellcheck="false" autocomplete="off" title="Точки «минута с заводки : порог муки, мкм» через запятую. Между точками порог идёт линейно, до первой и после последней — крайнее значение. Подобраны по 21 варке Кира: порог ≈ 0,9 медианы кристалла, к 85-й минуте 203 мкм." />
-                  </div>
                   <table class="micro-phase__table" id="cvPhaseTable">
                     <thead><tr><th>фаза</th><th title="Сита и порог муки — столько % от обычных (100 % = сита 0,2 / 0,5 / 0,7 / 0,8 / 1,0 мм)">сита, %</th><th title="Что стало с ситом 0,2 мм после масштаба">0,2 →, мм</th><th title="Свой порог муки фазы. Пусто — общий порог × «сита, %»" id="cvPhOwnHead">свой, мм</th><th title="Порог муки, который реально применяется на этой фазе" id="cvPhEffHead">мука &lt;, мм</th></tr></thead>
                     <tbody>
@@ -1028,6 +1022,14 @@
                     <button type="button" class="micro-apply__ok" id="cvVolOk" title="Применить новые значения">✓</button>
                     <button type="button" class="micro-apply__no" id="cvVolNo" title="Отменить изменения">✕</button>
                   </span>
+                </div>
+                <div class="micro-curve micro-curve--side">
+                  <div class="micro-curve__row">
+                    <label title="Порог муки идёт ПЛАВНО по времени с заводки (по точкам ниже), а не ступеньками по фазам. Сита рассева остаются в масштабе фазы. Нет времени с заводки (приложение перезапускали посреди варки) — порог фазы."><input type="checkbox" id="cvCurveOn" /><span>мука: плавный порог по времени с заводки</span></label>
+                  </div>
+                  <div class="micro-curve__row" id="cvCurveBox">
+                    <input type="text" id="cvCurve" spellcheck="false" autocomplete="off" title="Точки «минута с заводки : порог муки, мкм» через запятую. Между точками порог растёт линейно, до первой и после последней — крайнее значение. По умолчанию две точки: 20 мкм (10 % от общего порога) в начале и 203 мкм (общий порог) на 81-й минуте — среднее время старта «готовности» по 22 варкам Кира." />
+                  </div>
                 </div>
                   </div>
                 </div>

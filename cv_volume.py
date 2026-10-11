@@ -24,8 +24,12 @@ import re
 MODELS = ("m1", "m2", "m3")
 # Рассев по ситам (как в лаборатории): отверстия, мм. Фракции снизу вверх: дно (<0,2), 0,2–0,5, 0,5–0,7, 0,7–0,8, 0,8–1,0, 1,0–1,2, >1,2.
 # Размер кристалла — эквивалентный диаметр (как везде в CV); доля фракции — по объёму (объём ~ масса), % от всех кристаллов.
-CALC_VER = 6     # 2: в расчёт идут только хорошие кристаллы (брак — сросток/игла/кривой — отсеян); менять при смене логики: старые пробы пересчитаются
+CALC_VER = 7     # 2: в расчёт идут только хорошие кристаллы (брак — сросток/игла/кривой — отсеян); менять при смене логики: старые пробы пересчитаются
 SIEVE_MM = (0.2, 0.5, 0.7, 0.8, 1.0, 1.2)
+# МЕЛКИЙ РАССЕВ «в процентах»: фракции по 0,05 мм от 0 до 1 мм + «больше 1 мм» (21 фракция), ОДНА шкала для всех фаз (без масштаба фазы) —
+# чтобы видеть, где сидит основная масса мелких кристаллов. Доля — по объёму (M1–M3) и по площади, % от хороших кристаллов.
+FINE_STEP_UM = 50.0
+FINE_N = 21
 SIEVE_LABELS = ("дно <0,2", "0,2–0,5", "0,5–0,7", "0,7–0,8", "0,8–1", "1–1,2", ">1,2")
 
 
@@ -36,6 +40,11 @@ def sieve_bin(size_um: float, scale: float = 1.0) -> int:
         i += 1
     return i
 KINDS = ("fines", "agg", "total")
+
+
+def fine_bin(size_um: float) -> int:
+    """Номер фракции мелкого рассева: 0 — до 0,05 мм, 1 — 0,05–0,10, …, 19 — 0,95–1,00, 20 — больше 1 мм. Целочисленно, без ошибок округления на границах."""
+    return max(0, min(FINE_N - 1, int(size_um // FINE_STEP_UM)))
 DEFAULTS = {"fines_side_mm": 0.2, "k_thick": 0.88, "fines_from_sv": 88.0, "avg_n": 4}    # avg_n — сколько последних проб финиша усредняем
 # ФАЗЫ варки (по порядку стадий: 1-я «подкачка» p1 → 1-й «рост» g1 → 2-я подкачка p2 → 2-й рост g2; см. cv_store.phases_for_boil).
 # На каждой фазе сита рассева и порог «Мука» уменьшаются в phase_scale_<фаза> % от обычных (100 % = SIEVE_MM и общий порог):
@@ -196,6 +205,7 @@ def empty_sums() -> dict:
         s[mod] = {k: 0.0 for k in KINDS}
     s["n"] = {k: 0 for k in KINDS}
     s["sieve"] = {mod: [0.0] * (len(SIEVE_MM) + 1) for mod in MODELS + ("area",)}   # объём (M1–M3, мкм³) и площадь ("area", мкм²) по фракциям рассева
+    s["sieve_fine"] = {mod: [0.0] * FINE_N for mod in MODELS + ("area",)}           # то же, мелкий рассев по 0,05 мм
     return s
 
 
@@ -228,6 +238,10 @@ def sums_for(measures: list, cv_cfg: dict | None, count_fines: bool = True, phas
         for mod in MODELS:
             s["sieve"][mod][b] += vols[mod]
         s["sieve"]["area"][b] += parts["area"]
+        fb = fine_bin(m.size_um)
+        for mod in MODELS:
+            s["sieve_fine"][mod][fb] += vols[mod]
+        s["sieve_fine"]["area"][fb] += parts["area"]
         if kind == "fines":
             s["n"]["fines"] += 1
     return s
@@ -244,6 +258,9 @@ def add_sums(a: dict, b: dict) -> dict:
     for mod in MODELS + ("area",):
         sa, sb = (a.get("sieve") or {}).get(mod), (b.get("sieve") or {}).get(mod)
         out["sieve"][mod] = [(sa[i] if sa else 0.0) + (sb[i] if sb else 0.0) for i in range(len(SIEVE_MM) + 1)]
+    for mod in MODELS + ("area",):
+        fa, fb = (a.get("sieve_fine") or {}).get(mod), (b.get("sieve_fine") or {}).get(mod)
+        out["sieve_fine"][mod] = [(fa[i] if fa else 0.0) + (fb[i] if fb else 0.0) for i in range(FINE_N)]
     if a.get("fines_off") or b.get("fines_off"):
         out["fines_off"] = True
     return out
@@ -268,4 +285,6 @@ def percents(sums: dict | None, ignore_off: bool = False) -> dict:
     # рассев: доля каждой фракции в общем объёме, % (по трём моделям); нет данных — не добавляем
     sv = {} if (sums.get("fines_off") and not ignore_off) else (sums.get("sieve") or {})     # рассев — как мука: только когда СВ дошёл до порога
     out["sieve"] = {mod: [round(100.0 * x / sum(sv[mod]), 3) for x in sv[mod]] for mod in MODELS + ("area",) if sv.get(mod) and sum(sv[mod]) > 0}
+    fv = {} if (sums.get("fines_off") and not ignore_off) else (sums.get("sieve_fine") or {})
+    out["sieve_fine"] = {mod: [round(100.0 * x / sum(fv[mod]), 3) for x in fv[mod]] for mod in MODELS + ("area",) if fv.get(mod) and sum(fv[mod]) > 0}
     return out

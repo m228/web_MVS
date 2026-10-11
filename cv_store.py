@@ -70,6 +70,11 @@ def _volume_cols(s: dict, vp: dict, n_frames: int) -> dict:
     for mod in ("m1", "m2", "m3", "area"):           # рассев по ситам, %: sieve_<m1|m2|m3|area>_b0 (дно) … b6 (>1,2 мм); area — доля по площади
         for i in range(len(cv_volume.SIEVE_MM) + 1):
             out["sieve_%s_b%d" % (mod, i)] = (sv.get(mod) or [None] * (len(cv_volume.SIEVE_MM) + 1))[i]
+    fv = (vp.get("sieve_fine") or {})
+    for mod in ("m1", "m2", "m3", "area"):           # мелкий рассев в процентах: fsieve_<m1|m2|m3|area>_b0 (до 0,05 мм) … b20 (больше 1 мм)
+        if fv.get(mod):
+            for i in range(cv_volume.FINE_N):
+                out["fsieve_%s_b%d" % (mod, i)] = fv[mod][i]
     out["good_n"], out["rej_n"] = (sums.get("n") or {}).get("total"), (sums.get("n") or {}).get("agg")     # хороших кристаллов / отсеянного брака в пробе (штук, все кадры)
     out["fines_side_mm"], out["fines_um"] = cfg.get("fines_side_mm"), cfg.get("fines_um")
     out["k_thick"], out["fines_from_sv"] = cfg.get("k_thick"), cfg.get("fines_from_sv")
@@ -270,7 +275,7 @@ def history_days(serial: str) -> list[dict]:
     return out
 
 
-_FINES_KEYS = ("fines_m1", "fines_m2", "fines_m3", "fines_area", "fines_n",
+_FINES_KEYS = ("fsieve_", "fines_m1", "fines_m2", "fines_m3", "fines_area", "fines_n",
                "sieve_m1_b", "sieve_m2_b", "sieve_m3_b", "sieve_area_b")
 
 
@@ -405,7 +410,18 @@ def _vol_block(sel: list) -> dict:
     out["fines"]["area"], out["fines"]["n"] = r3(_wmean(fin, "fines_area", None)), r3(_wmean(fin, "fines_n", None))
     # рассев по объёму (M1–M3, вес — общий объём пробы) и по площади (area, простое среднее по пробам)
     out["sieve"] = {m: [r3(_wmean(fin, "sieve_%s_b%d" % (m, i), ("vtot_" + m) if m != "area" else None)) for i in range(len(cv_volume.SIEVE_MM) + 1)] for m in ("m1", "m2", "m3", "area")}
+    out["fsieve"] = _fsieve(fin)
     return out
+
+
+def _fsieve(rows: list) -> dict:
+    """Мелкий рассев по набору проб: доля каждой фракции (0,05 мм) по моделям M1–M3 (вес — общий объём пробы) и по площади, % — списки по 21 фракции.
+    Нет ни одной пробы с мелким рассевом (старые пробы без кадров) — None."""
+    def r3(v):
+        return None if v is None else round(v, 3)
+    if not any(r.get("fsieve_m3_b0") is not None for r in rows):
+        return None
+    return {m: [r3(_wmean(rows, "fsieve_%s_b%d" % (m, i), ("vtot_" + m) if m != "area" else None)) for i in range(cv_volume.FINE_N)] for m in ("m1", "m2", "m3", "area")}
 
 
 def phase_durations(rows: list) -> dict:
@@ -452,6 +468,7 @@ def _boil_summary(rows: list, finished: bool, avg_n: int = 4) -> dict:
     fin = [r for r in base if r.get("fines_m3") is not None]
     # рассев по объёму (M1–M3, вес — общий объём пробы) и по площади (area, простое среднее по пробам)
     out["sieve"] = {m: [r3(_wmean(fin, "sieve_%s_b%d" % (m, i), ("vtot_" + m) if m != "area" else None)) for i in range(len(cv_volume.SIEVE_MM) + 1)] for m in ("m1", "m2", "m3", "area")}
+    out["fsieve"] = _fsieve(fin)
     out["all"] = _vol_block(fin)                      # все пробы финиша варки
     out["tail"] = _vol_block(finish_probes(fin)[0])   # финиш: пробы последних ~2 СВ (раньше — последние N проб)
     # по фазам (подкачка 1 / рост 1 / подкачка 2 / рост 2): ВСЕ пробы фазы, мука и рассев в масштабе фазы
@@ -861,7 +878,7 @@ def _with_volume(d: Path, r: dict, cfg: Optional[dict] = None, phase: Optional[s
     old, cur = s.get("volume_cfg") or {}, cv_volume.volume_cfg(cfg, phase, seed_age_s)
     same = all(old.get(k) == cur.get(k) for k in ("fines_um", "fines_mode", "k_thick", "fines_from_sv", "calc_ver", "phase"))
     same = same and bool(old.get("fines_curve_used")) == bool(cur.get("fines_curve_used"))      # у старых проб ключа нет = порог фазы
-    if s.get("volume") and "sieve" in s["volume"] and same:       # посчитана с теми же полями — не трогаем
+    if s.get("volume") and "sieve" in s["volume"] and "sieve_fine" in s["volume"] and same:       # посчитана с теми же полями — не трогаем
         return r
     try:
         from types import SimpleNamespace as NS

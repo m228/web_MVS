@@ -244,28 +244,33 @@
   // строки: [фракция(и), индекс края снизу]; края сит — SIEVE_MM × масштаб фазы (0,2 / 0,5 / 0,7 / 0,8 / 1,0 мм при 100 %)
   const CV_SIEVE_EDGES = [0.2, 0.5, 0.7, 0.8, 1.0];
   const CV_SIEVE_BINS = [[5, 6], 4, 3, 2, 1, 0];
-  function cvSieveRows(scale) {
-    const f = (x) => String(Number((x * scale).toPrecision(2))).replace(".", ","), e = CV_SIEVE_EDGES;
-    return [[[5, 6], "> " + f(e[4])], [4, f(e[3]) + " – " + f(e[4])], [3, f(e[2]) + " – " + f(e[3])], [2, f(e[1]) + " – " + f(e[2])], [1, f(e[0]) + " – " + f(e[1])], [0, "дно < " + f(e[0])]];
-  }
+  // рассев в процентах: фракции по 0,05 мм от 0 до 1 мм + «больше 1 мм» (21 строка), одна шкала для всех фаз; доля по объёму — как раньше
+  const CV_FINE_N = 21;
+  const cvFineLabel = (k) => {
+    const f = (x) => x.toFixed(2).replace(".", ",");
+    return k >= CV_FINE_N - 1 ? "> 1,0" : f(k * 0.05) + " – " + f((k + 1) * 0.05);
+  };
   // показывать ли отдельные модели M1–M3 (по умолчанию скрыты: «Среднее» и «Площадь» понятнее)
   let cvShowModels = false;
   try { cvShowModels = localStorage.getItem("microCvShowModels") === "1"; } catch (e) { }
   let cvSieveLast = null, cvSieveScale = 1, cvSievePhase = "boil";     // cvSievePhase: boil | p1 | g1 | p2 | g2 — какая плитка рассева выбрана
-  function cvRenderSieve(sv, scale) {      // scale — масштаб сит фазы (0,4 = 40 %), по умолчанию 1; sv = {m1:[7], m2:[7], m3:[7], area:[7]} в %: объём по трём моделям и площадь; нет данных — прочерки
+  function cvRenderSieve(sv, scale) {      // sv = {m1:[21], m2:[21], m3:[21], area:[21]} в %: объём по трём моделям и площадь; scale не нужен (шкала одна); нет данных — прочерки
     cvSieveLast = sv; cvSieveScale = scale || 1;
     const g = $("cvSieveGrid"); if (!g) return;
     const one = (m, k) => (sv && sv[m] && sv[m][k] != null ? sv[m][k] : null);
-    // строка может объединять несколько фракций (например «> 1» = 1–1,2 + больше 1,2 — таких крупных кристаллов у маточника нет)
-    const val = (m, i) => { if (!Array.isArray(i)) return one(m, i); const v = i.map((k) => one(m, k)).filter((x) => x != null); return v.length ? v.reduce((a, b) => a + b, 0) : null; };
-    const avg = (i) => cvAvg3({ m1: val("m1", i), m2: val("m2", i), m3: val("m3", i) });
-    g.style.gridTemplateColumns = "auto repeat(" + (cvShowModels ? 5 : 2) + ", minmax(0, 1fr))";
+    const cols = cvShowModels ? ["avg", "area", "m1", "m2", "m3"] : ["avg", "area"];
+    const val = (c, k) => (c === "avg" ? cvAvg3({ m1: one("m1", k), m2: one("m2", k), m3: one("m3", k) }) : one(c, k));
+    const mx = {}; cols.forEach((c) => { let m = 0; for (let k = 0; k < CV_FINE_N; k++) { const v = val(c, k); if (v != null && v > m) m = v; } mx[c] = m; });
+    g.style.gridTemplateColumns = "auto repeat(" + cols.length + ", minmax(0, 1fr))";
     let html = '<span>размер, мм</span><b title="Доля по объёму (объём ~ масса): среднее трёх моделей M1–M3">Среднее</b><b title="Доля по площади кристаллов на кадре">Площадь</b>' +
       (cvShowModels ? "<b>M1 шар</b><b>M2 сфер.</b><b>M3 призма</b>" : "");
-    cvSieveRows(cvSieveScale).forEach(([i, name]) => {
-      html += "<span>" + name + "</span><em>" + fmtPct(avg(i)) + "</em><em>" + fmtPct(val("area", i)) + "</em>" +
-        (cvShowModels ? "<em>" + fmtPct(val("m1", i)) + "</em><em>" + fmtPct(val("m2", i)) + "</em><em>" + fmtPct(val("m3", i)) + "</em>" : "");
-    });
+    for (let k = 0; k < CV_FINE_N; k++) {
+      html += "<span>" + cvFineLabel(k) + "</span>";
+      cols.forEach((c) => {
+        const v = val(c, k), bar = v != null && mx[c] > 0 ? Math.round(100 * v / mx[c]) : 0;
+        html += '<em class="' + (v == null || v < 0.05 ? "is-zero" : "") + '" style="--bar:' + bar + '%">' + fmtPct(v) + "</em>";
+      });
+    }
     cvSetHtml(g, html);
   }
   function cvApplyModels() {              // скрыть/показать M1–M3 в обеих таблицах («Объём и мука» и рассев)
@@ -379,7 +384,7 @@
     if (b && ph === "boil") cvSievePhase = "boil";
     const pscale = ph !== "boil" ? ((b.cfg || {})["phase_scale_" + ph] || CV_PHASE_SCALE[ph]) / 100 : 1;
     const blk = b ? (ph !== "boil" ? b.phases[ph] : ((tail ? b.tail : b.all) || b)) : null;
-    cvRenderSieve(blk ? blk.sieve : null, pscale);
+    cvRenderSieve(blk ? blk.fsieve : null, 1);
     cvShowSv(cvSvRange(blk, ph !== "boil" ? blk.dur_s : (b ? b.dur_s : null)));
     if (!b) {
       cvSetText(lbl, "варок пока нет");
@@ -396,7 +401,7 @@
     if (ph !== "boil") {          // фаза: подробный текст про фазу вместо итогов варки
       const P = blk.probes != null ? blk.probes : blk.n;
       cvSetHtml(box, "<div><b>" + CV_PHASE_TITLE[ph] + ":</b> все пробы фазы — " + P + " (" + cvTsLabel(blk.ts_from).slice(6, 11) + "–" + cvTsLabel(blk.ts_to).slice(6, 11) + "), хороших кристаллов " + (blk.good_n || 0) +
-        ". Сита и порог муки — " + Math.round(pscale * 100) + " % от обычных (сито 0,2 мм → " + String(Number((0.2 * pscale).toPrecision(2))).replace(".", ",") + " мм). Мука: <b>" + pc(cvAvg3(blk.fines)) + "</b> объёма (среднее M1–M3).</div>");
+        ". Мука: <b>" + pc(cvAvg3(blk.fines)) + "</b> объёма (среднее M1–M3).</div>");
       return;
     }
     cvSetText($("cvFinesCalc"), cvFinesCalcText());
@@ -446,7 +451,7 @@
   function cvRenderVolume(s) {
     if (cvVolMode !== "probe") { cvRenderBoil(); return; }
     const vp = (s && s.volume_pct) || {}, cfg = (s && s.volume_cfg) || {};
-    cvRenderSieve(vp.sieve, cfg.size_scale || 1);      // у пробы — масштаб сит её фазы
+    cvRenderSieve(vp.sieve_fine, 1);                    // мелкий рассев пробы — шкала общая для всех фаз
     cvRenderSieveTiles(null);
     cvShowSv("");
     document.querySelectorAll("#cvVolGrid [data-v]").forEach((el) => {

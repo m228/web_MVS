@@ -1824,6 +1824,53 @@ def _fines_curve_time():
     return "разбор/мусор, плавность (<1 мкм за 6 с), выкл и нет времени → порог фазы, на стыке фаз без скачка, 120 мкм: на 20-й мин не мука, на 60-й мука"
 
 
+@check("CV", "рассев в процентах: 21 фракция по 0,05 мм (до 1 мм и «больше»), границы без ошибок округления, сумма 100 %, запись в журнал, усреднение по варке, пересчёт старой пробы по объектам")
+def _fine_sieve():
+    import json
+    import tempfile
+    import cv_store
+    import cv_volume as V
+    from types import SimpleNamespace as NS
+    # границы: ровно 50 мкм — уже следующая фракция; 1000 мкм и больше — последняя
+    for um, b in ((0, 0), (49.9, 0), (50, 1), (99.9, 1), (100, 2), (150, 3), (300, 6), (350, 7), (950, 19), (999.9, 19), (1000, 20), (5000, 20)):
+        assert V.fine_bin(um) == b, (um, V.fine_bin(um), b)
+    assert V.FINE_N == 21 and V.CALC_VER >= 7
+    mk = lambda size: NS(group="medium", defect=None, size_um=size, length_um=size * 1.1, width_um=size * 0.9)
+    ms = [mk(30), mk(70), mk(130), mk(130), mk(180), mk(1100)]
+    tot = V.sums_for(ms, {"volume": {}}, True, None)
+    pct = V.percents(tot, ignore_off=True)["sieve_fine"]
+    for mod in ("m1", "m2", "m3", "area"):
+        assert len(pct[mod]) == 21 and abs(sum(pct[mod]) - 100) < 0.01, (mod, sum(pct[mod]))
+    assert pct["m3"][0] > 0 and pct["m3"][1] > 0 and pct["m3"][2] > 0 and pct["m3"][3] > 0 and pct["m3"][20] > 0 and pct["m3"][5] == 0
+    # кадры одной пробы складываются, а не усредняются
+    two = V.add_sums(tot, tot)
+    assert V.percents(two, ignore_off=True)["sieve_fine"]["m3"] == pct["m3"]
+    # СВ ниже порога: без ignore_off рассева нет (как у муки), в журнал идёт с ignore_off
+    off = dict(tot, fines_off=True)
+    assert V.percents(off)["sieve_fine"] == {} and V.percents(off, ignore_off=True)["sieve_fine"]
+    # журнал: столбцы fsieve_<модель>_b<номер>
+    res = {"ts": "2026-10-11_10_00_00", "summary": {"volume": tot, "volume_cfg": {}}, "frames": [1]}
+    row = cv_store._hist_row(res)
+    assert abs(sum(row["fsieve_m3_b%d" % i] for i in range(21)) - 100) < 0.05 and "fsieve_area_b20" in row, [k for k in row if k.startswith("fsieve")][:3]
+    assert cv_store._FINES_KEYS[0] == "fsieve_", "порог «Мука с СВ» должен гасить и мелкий рассев"
+    # усреднение по пробам варки: вес — общий объём пробы; нет данных — None
+    a = {"fines_m3": 1.0, "vtot_m3": 1.0, **{"fsieve_m3_b%d" % i: (100.0 if i == 2 else 0.0) for i in range(21)}}
+    b = {"fines_m3": 1.0, "vtot_m3": 3.0, **{"fsieve_m3_b%d" % i: (100.0 if i == 4 else 0.0) for i in range(21)}}
+    fs = cv_store._fsieve([a, b])
+    assert abs(fs["m3"][2] - 25.0) < 0.01 and abs(fs["m3"][4] - 75.0) < 0.01, (fs["m3"][2], fs["m3"][4])
+    assert cv_store._fsieve([{"fines_m3": 1.0}]) is None
+    # пересчёт СТАРОЙ пробы (посчитана до мелкого рассева, calc_ver 6): объекты кристаллов на диске → мелкий рассев появляется
+    d = Path(tempfile.mkdtemp(prefix="mvs_fs_"))
+    objs = [{"group": "medium", "defect": None, "size_um": float(u), "length_um": u * 1.1, "width_um": u * 0.9} for u in (60, 120, 130, 170)]
+    (d / "objects_0.json").write_text(json.dumps(objs), encoding="utf-8")
+    old = {"ts": "2026-10-11_10_00_00", "phase": "g1", "sv": 85.0, "frames": [1],
+           "summary": {"sv": 85.0, "volume": {"sieve": {"m3": [1] * 7}, "n": {}}, "volume_cfg": {"calc_ver": 6}}}
+    new = cv_store._with_volume(d, old, {"volume": {}}, "g1")
+    sf = (new["summary"]["volume_pct"] or {}).get("sieve_fine") or {}
+    assert sf.get("m3") and abs(sum(sf["m3"]) - 100) < 0.01 and sf["m3"][1] > 0 and sf["m3"][2] > 0 and sf["m3"][3] > 0, sf
+    return "границы, сумма 100 %%, журнал (%d столбцов), вес по объёму пробы, СВ-порог, пересчёт старой пробы по объектам" % sum(1 for k in row if k.startswith("fsieve"))
+
+
 @check("UI", "JS страницы микроскопа: все вызываемые cv*-функции определены (пропавшая функция тихо ломала поля «Объём и мука»)")
 def _js_cv_functions_defined():
     import re

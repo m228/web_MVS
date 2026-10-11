@@ -865,7 +865,7 @@ def _volume_cfg_now() -> dict:
         return {}
 
 
-def _with_volume(d: Path, r: dict, cfg: Optional[dict] = None, phase: Optional[str] = None) -> dict:
+def _with_volume(d: Path, r: dict, cfg: Optional[dict] = None, phase: Optional[str] = None, boil_t_s: Optional[float] = None) -> dict:
     """Проба, снятая до появления объёма/фаз (или с другими полями порога): досчитать муку, сростки и рассев по сохранённым
     объектам кадров по ТЕКУЩИМ полям (порог, k, масштаб фазы). Файлы пробы не меняем — только ответ. Фаза — из result.json,
     а для старых проб — по порядку стадий в журнале (phase_map)."""
@@ -875,7 +875,10 @@ def _with_volume(d: Path, r: dict, cfg: Optional[dict] = None, phase: Optional[s
     cfg = cfg if cfg is not None else _volume_cfg_now()
     phase = phase or r.get("phase") or phase_map(d.parent.name).get(r.get("ts"))
     seed_age_s = (r.get("plc") or {}).get("seed_age_s")           # время с заводки на начало пробы — для плавного порога муки
-    old, cur = s.get("volume_cfg") or {}, cv_volume.volume_cfg(cfg, phase, seed_age_s)
+    old = s.get("volume_cfg") or {}
+    if boil_t_s is None:
+        boil_t_s = old.get("fines_curve_boil_t_s")                 # растяжение варки уже определено — при показе пробы его не теряем
+    cur = cv_volume.volume_cfg(cfg, phase, seed_age_s, boil_t_s)
     same = all(old.get(k) == cur.get(k) for k in ("fines_um", "fines_mode", "k_thick", "fines_from_sv", "calc_ver", "phase"))
     same = same and bool(old.get("fines_curve_used")) == bool(cur.get("fines_curve_used"))      # у старых проб ключа нет = порог фазы
     if s.get("volume") and "sieve" in s["volume"] and "sieve_fine" in s["volume"] and same:       # посчитана с теми же полями — не трогаем
@@ -888,9 +891,9 @@ def _with_volume(d: Path, r: dict, cfg: Optional[dict] = None, phase: Optional[s
             objs = json.loads((d / ("objects_%d.json" % i)).read_text(encoding="utf-8"))
             ms = [NS(group=o.get("group"), defect=o.get("defect"), size_um=o["size_um"],
                      length_um=o["length_um"], width_um=o["width_um"]) for o in objs]
-            tot = cv_volume.add_sums(tot, cv_volume.sums_for(ms, cfg, fines_on, phase, seed_age_s))
+            tot = cv_volume.add_sums(tot, cv_volume.sums_for(ms, cfg, fines_on, phase, seed_age_s, boil_t_s))
         s["volume"], s["volume_pct"] = tot, cv_volume.percents(tot)
-        s["volume_cfg"] = cv_volume.volume_cfg(cfg, phase, seed_age_s)
+        s["volume_cfg"] = cv_volume.volume_cfg(cfg, phase, seed_age_s, boil_t_s)
         if phase:
             r["phase"] = phase
     except Exception:
@@ -898,16 +901,47 @@ def _with_volume(d: Path, r: dict, cfg: Optional[dict] = None, phase: Optional[s
     return r
 
 
-def recompute_journal(serial: str) -> int:
+def boil_fit_times(rows: list, now: Optional[float] = None) -> dict:
+    """{ts пробы: секунд с заводки до «готовности» ЕЁ варки}. Время берём по первой пробе стадии 9 («готовность»); нет такой, а варка уже закрыта
+    (не последняя «идущая») — по её последней пробе. Идущая варка без «готовности» — не попадает в словарь (считается по средней кривой).
+    Нужен seed_age пробы (время с заводки); без него (приложение перезапускали посреди варки) варку не растягиваем."""
+    now = time.time() if now is None else now
+    out = {}
+    groups = _group_boils(sorted(rows, key=lambda r: r["t"]))
+    for gi, g in enumerate(groups):
+        t9 = next((r["seed_age"] for r in g if r.get("stage") == 9 and r.get("seed_age")), None)
+        if t9 is None:
+            closed = gi < len(groups) - 1 or now - g[-1]["t"] > BOIL_OPEN_S
+            last = next((r["seed_age"] for r in reversed(g) if r.get("seed_age")), None)
+            t9 = last if closed else None
+        if t9:
+            for r in g:
+                out[r["ts"]] = t9
+    return out
+
+
+def refit_curve(serial: str, hours: float = 12.0) -> int:
+    """Растянуть плавный порог муки под настоящую длительность варок за последние hours часов и пересчитать их пробы. Только если плавный порог
+    включён. Вызывается автоматически: при первой пробе «готовности» и при начале новой варки (закрылась предыдущая)."""
+    if not cv_volume.volume_cfg(_volume_cfg_now())["fines_curve_on"]:
+        return 0
+    return recompute_journal(serial, t_from=time.time() - hours * 3600)
+
+
+def recompute_journal(serial: str, t_from: Optional[float] = None) -> int:
     """Пересчитать объём/муку/рассев в журнале по ТЕКУЩИМ полям («Мука, мм», «Мука с СВ», k) — для проб, у которых ещё
     сохранены кадры (последние keep_last). Остальные строки журнала остаются как были. Возвращает число обновлённых строк."""
     sd = _serial_dir(serial)
     if not sd.exists():
         return 0
     cfg, fresh = _volume_cfg_now(), {}
+    tag = _serial_dir(serial).name
+    fit = boil_fit_times(db.read_rows(tag)) if cv_volume.volume_cfg(cfg)["fines_curve_on"] else {}     # время «готовности» варок — для растяжения плавного порога
     for p in sorted(x for x in sd.iterdir() if x.is_dir()):
+        if t_from is not None and (_ts_epoch(p.name) or 0) < t_from:
+            continue
         try:
-            row = _hist_row(_with_volume(p, json.loads((p / "result.json").read_text(encoding="utf-8")), cfg))
+            row = _hist_row(_with_volume(p, json.loads((p / "result.json").read_text(encoding="utf-8")), cfg, boil_t_s=fit.get(p.name)))
             if row:
                 fresh[row["ts"]] = row
         except Exception:

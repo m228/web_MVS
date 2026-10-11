@@ -857,8 +857,10 @@ def _with_volume(d: Path, r: dict, cfg: Optional[dict] = None, phase: Optional[s
         return r
     cfg = cfg if cfg is not None else _volume_cfg_now()
     phase = phase or r.get("phase") or phase_map(d.parent.name).get(r.get("ts"))
-    old, cur = s.get("volume_cfg") or {}, cv_volume.volume_cfg(cfg, phase)
+    seed_age_s = (r.get("plc") or {}).get("seed_age_s")           # время с заводки на начало пробы — для плавного порога муки
+    old, cur = s.get("volume_cfg") or {}, cv_volume.volume_cfg(cfg, phase, seed_age_s)
     same = all(old.get(k) == cur.get(k) for k in ("fines_um", "fines_mode", "k_thick", "fines_from_sv", "calc_ver", "phase"))
+    same = same and bool(old.get("fines_curve_used")) == bool(cur.get("fines_curve_used"))      # у старых проб ключа нет = порог фазы
     if s.get("volume") and "sieve" in s["volume"] and same:       # посчитана с теми же полями — не трогаем
         return r
     try:
@@ -869,9 +871,9 @@ def _with_volume(d: Path, r: dict, cfg: Optional[dict] = None, phase: Optional[s
             objs = json.loads((d / ("objects_%d.json" % i)).read_text(encoding="utf-8"))
             ms = [NS(group=o.get("group"), defect=o.get("defect"), size_um=o["size_um"],
                      length_um=o["length_um"], width_um=o["width_um"]) for o in objs]
-            tot = cv_volume.add_sums(tot, cv_volume.sums_for(ms, cfg, fines_on, phase))
+            tot = cv_volume.add_sums(tot, cv_volume.sums_for(ms, cfg, fines_on, phase, seed_age_s))
         s["volume"], s["volume_pct"] = tot, cv_volume.percents(tot)
-        s["volume_cfg"] = cv_volume.volume_cfg(cfg, phase)
+        s["volume_cfg"] = cv_volume.volume_cfg(cfg, phase, seed_age_s)
         if phase:
             r["phase"] = phase
     except Exception:

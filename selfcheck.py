@@ -1788,6 +1788,42 @@ def _trend_fines_fixed_scale():
     return "авто-шкала только у режима варки (%s)" % ", ".join(sorted(re.findall(r"(\w+):", m.group(1))))
 
 
+@check("CV", "плавный порог муки по времени с заводки: разбор/кривая, без ступенек на стыках фаз, выкл → порог фазы, нет времени → порог фазы, мука реально зависит от минуты")
+def _fines_curve_time():
+    import cv_volume as V
+    from types import SimpleNamespace as NS
+    # разбор текста и защита от мусора
+    assert V.parse_fines_curve("0:25, 10:30; 20:65\n30=110") == [[0, 25], [10, 30], [20, 65], [30, 110]]
+    assert V.parse_fines_curve("0:25,10:30,20:65") == [[0, 25], [10, 30], [20, 65]]
+    for bad in ("5:10, 3:20", "abc", "0:25", "0:25, 10:-3", None, 5):
+        assert V.parse_fines_curve(bad) is None, bad
+    # кривая по умолчанию: монотонна, плавна (шаг по минуте мал), к концу — общий порог 203 мкм
+    c = V.FINES_CURVE_DEFAULT
+    vals = [V.fines_curve_um(c, m / 10.0) for m in range(0, 1500)]
+    assert all(b >= a for a, b in zip(vals, vals[1:])), "кривая должна не убывать"
+    assert max(abs(b - a) for a, b in zip(vals, vals[1:])) < 1.0, "ступенька: порог прыгает больше 1 мкм за 6 с"
+    assert V.fines_curve_um(c, 85) == 203 and V.fines_curve_um(c, 200) == 203 and V.fines_curve_um(c, -5) == 25
+    base = {"volume": {"fines_side_mm": 0.18, "fines_side_g1": 0.15, "phase_scale_g1": 70}}
+    # выключено / нет времени с заводки: порог фазы, как раньше
+    off = V.volume_cfg({"volume": dict(base["volume"])}, "g1", 3000)
+    assert off["fines_curve_used"] is False and abs(off["fines_um"] - V.fines_diameter_um(0.15)) < 1e-6, off["fines_um"]
+    on = {"volume": dict(base["volume"], fines_curve_on=True)}
+    assert V.volume_cfg(on, "g1", None)["fines_curve_used"] is False
+    assert abs(V.volume_cfg(on, "g1", None)["fines_um"] - V.fines_diameter_um(0.15)) < 1e-6
+    # включено: порог идёт по минуте и не зависит от фазы; сита рассева остаются в масштабе фазы
+    a, b = V.volume_cfg(on, "g1", 45 * 60), V.volume_cfg(on, "p2", 45 * 60)
+    assert a["fines_curve_used"] and a["fines_um"] == b["fines_um"] == round(V.fines_curve_um(c, 45), 1)
+    assert a["size_scale"] == 0.7 and b["size_scale"] != a["size_scale"], (a["size_scale"], b["size_scale"])
+    # стык фаз во времени: порог в минуте до и после смены фазы одинаков (раньше был скачок 102 → 158 мкм)
+    assert abs(V.volume_cfg(on, "p2", 54 * 60 + 50)["fines_um"] - V.volume_cfg(on, "g2", 55 * 60 + 10)["fines_um"]) < 1.0
+    # мука зависит от минуты: кристалл 120 мкм на 20-й минуте (порог 65) — не мука, на 60-й (155) — мука
+    m = NS(group="medium", defect=None, size_um=120.0, length_um=130.0, width_um=110.0)
+    early = V.sums_for([m], on, True, "g1", 20 * 60)
+    late = V.sums_for([m], on, True, "g1", 60 * 60)
+    assert early["n"]["fines"] == 0 and late["n"]["fines"] == 1, (early["n"], late["n"])
+    return "разбор/мусор, плавность (<1 мкм за 6 с), выкл и нет времени → порог фазы, на стыке фаз без скачка, 120 мкм: на 20-й мин не мука, на 60-й мука"
+
+
 @check("UI", "JS страницы микроскопа: все вызываемые cv*-функции определены (пропавшая функция тихо ломала поля «Объём и мука»)")
 def _js_cv_functions_defined():
     import re

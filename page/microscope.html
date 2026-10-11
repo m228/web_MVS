@@ -999,7 +999,14 @@
                       <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M1.5 12S5.5 5 12 5s10.5 7 10.5 7-4 7-10.5 7S1.5 12 1.5 12z"/><circle cx="12" cy="12" r="3"/><path class="slash" d="M3 3l18 18"/></svg>
                     </button>
                   </div>
-                  <table class="micro-phase__table" id="cvPhaseTable" hidden>
+                  <div class="micro-curve" id="cvPhaseBody" hidden>
+                  <div class="micro-curve__row">
+                    <label title="Порог муки идёт ПЛАВНО по времени с заводки (по точкам ниже), а не ступеньками по фазам. Сита рассева остаются в масштабе фазы. Нет времени с заводки (приложение перезапускали посреди варки) — порог фазы."><input type="checkbox" id="cvCurveOn" /><span>плавный порог муки по времени с заводки</span></label>
+                  </div>
+                  <div class="micro-curve__row" id="cvCurveBox">
+                    <input type="text" id="cvCurve" spellcheck="false" autocomplete="off" title="Точки «минута с заводки : порог муки, мкм» через запятую. Между точками порог идёт линейно, до первой и после последней — крайнее значение. Подобраны по 21 варке Кира: порог ≈ 0,9 медианы кристалла, к 85-й минуте 203 мкм." />
+                  </div>
+                  <table class="micro-phase__table" id="cvPhaseTable">
                     <thead><tr><th>фаза</th><th title="Сита и порог муки — столько % от обычных (100 % = сита 0,2 / 0,5 / 0,7 / 0,8 / 1,0 мм)">сита, %</th><th title="Что стало с ситом 0,2 мм после масштаба">0,2 →, мм</th><th title="Свой порог муки фазы. Пусто — общий порог × «сита, %»" id="cvPhOwnHead">свой, мм</th><th title="Порог муки, который реально применяется на этой фазе" id="cvPhEffHead">мука &lt;, мм</th></tr></thead>
                     <tbody>
                       <tr data-ph="p1"><td>подкачка 1</td><td><input type="number" id="cvScaleP1" min="1" max="200" step="1" value="20" /></td><td class="micro-phase__calc" data-c="edge"></td><td><input type="number" id="cvFinesP1" min="0" step="0.01" placeholder="авто" /></td><td class="micro-phase__calc" data-c="fines"></td></tr>
@@ -1008,6 +1015,7 @@
                       <tr data-ph="g2"><td>рост 2</td><td><input type="number" id="cvScaleG2" min="1" max="200" step="1" value="80" /></td><td class="micro-phase__calc" data-c="edge"></td><td><input type="number" id="cvFinesG2" min="0" step="0.01" placeholder="авто" /></td><td class="micro-phase__calc" data-c="fines"></td></tr>
                     </tbody>
                   </table>
+                  </div>
                 </div>
                   </div>
                   <div class="micro-vol__side">

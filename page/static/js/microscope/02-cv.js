@@ -303,6 +303,7 @@
       const r = await api("/api/cv/boils?" + (q ? q + "&" : "") + "limit=6");
       cvBoils = (r && r.boils) || [];
     } catch (e) { }
+    cvTrendBoilUpdate();
     if (cvVolMode !== "probe") cvRenderBoil();
   }
   const CV_PHASES = ["p1", "g1", "p2", "g2"];
@@ -1154,6 +1155,8 @@
   const CV_MAX_SPAN = 400 * 86400, CV_MIN_SPAN = 60;
   let cvTrendDay = null;         // выбранная дата «YYYY-MM-DD»
   let cvTrendDays = [];          // дни, за которые есть пробы
+  let cvTrendBoil = null;        // id варки (из /api/cv/boils), на которую растянут график; null — смотрим по дню
+  let cvTrendBoilFit = false;    // график ещё стоит «по варке» (двигали/масштабировали — перестаём подгонять под идущую варку)
   let cvTrendFollow = true;      // вид сам подгоняется под выбранный день (пока не двигали/масштабировали)
   let cvTrendFetchTimer = null;
   let cvTrendSeq = 0;
@@ -1196,6 +1199,11 @@
       }
       if (!cvTrendDay) cvTrendDay = cvTrendDays.length ? cvTrendDays[cvTrendDays.length - 1] : cvDayStr(new Date());
       const di = $("cvTrendDate"); if (di && di.value !== cvTrendDay) di.value = cvTrendDay;
+      if (cvTrendBoil && cvTrendBoilFit) {                                   // график растянут на варку: идущая подтягивается по мере новых проб
+        const b = cvBoils.find((x) => x.id === cvTrendBoil);
+        if (b && !b.finished) await cvTrendShowBoil(cvTrendBoil);
+        return;
+      }
       if (cvTrendFollow) {
         const r = cvDayRange(cvTrendDay);
         if (await cvTrendFetch(r[0], r[1])) { cvTrendFit(); cvDrawTrend(); }
@@ -1214,10 +1222,44 @@
     }, delay);
   }
   function cvTrendSetDay(day, fit) {
-    cvTrendDay = day; cvTrendFollow = true; cvTrendHover = null;
+    cvTrendDay = day; cvTrendFollow = true; cvTrendHover = null; cvTrendBoil = null; cvTrendBoilFit = false; cvTrendBoilUpdate();
     clearTimeout(cvTrendFetchTimer);
     const di = $("cvTrendDate"); if (di) di.value = day;
     cvLoadTrend(false);
+  }
+  // --- тренд «по варке»: график растягивается ровно на выбранную варку (с небольшими полями по краям), стрелки листают варки ---
+  function cvTrendBoilUpdate() {
+    const lbl = $("cvTrendBoilLbl"), older = $("cvTrendBoilOlder"), newer = $("cvTrendBoilNewer"); if (!lbl) return;
+    const i = cvTrendBoil ? cvBoils.findIndex((x) => x.id === cvTrendBoil) : -1;
+    const t = i >= 0 ? cvBoilName(i) + " · " + cvBoilSpan(cvBoils[i]) : "по варкам";
+    if (lbl.textContent !== t) lbl.textContent = t;
+    lbl.classList.toggle("is-on", i >= 0);
+    if (older) older.disabled = !cvBoils.length || (i >= 0 && i >= cvBoils.length - 1);
+    if (newer) newer.disabled = !(i > 0);
+  }
+  async function cvTrendShowBoil(id) {
+    const b = cvBoils.find((x) => x.id === id); if (!b) return;
+    cvTrendBoil = id; cvTrendBoilFit = true; cvTrendFollow = false; cvTrendHover = null; clearTimeout(cvTrendFetchTimer);
+    const dur = Math.max(60, b.t_to - b.t_from), pad = Math.max(120, dur * 0.04);       // поля ~4 %, чтобы варка не упиралась в края
+    const start = b.t_from - pad, end = b.t_to + pad;
+    try {
+      if (await cvTrendFetch(start - pad, end + pad)) {                                 // данные с запасом по бокам — сдвиг мышкой не упрётся в пустоту
+        if (!cvTrendBoilFit || cvTrendBoil !== id) return;                              // пока грузили, график уже двигали / выбрали другую варку
+        cvTrendView = { start, end };
+        cvTrendDay = cvDayStr(new Date(b.t_from * 1000));
+        const di = $("cvTrendDate"); if (di) di.value = cvTrendDay;
+        cvDrawTrend();
+      }
+    } catch (e) { /* нет данных */ }
+    cvTrendBoilUpdate();
+  }
+  async function cvTrendStepBoil(dir) {                  // dir +1 — старее, -1 — новее; «по варкам» ещё не включён — начинаем с самой свежей
+    if (!cvBoils.length) await cvLoadBoils(true);
+    if (!cvBoils.length) return;
+    const i = cvTrendBoil ? cvBoils.findIndex((x) => x.id === cvTrendBoil) : -1;
+    const j = i < 0 ? 0 : i + dir;
+    if (j < 0 || j >= cvBoils.length) return;
+    await cvTrendShowBoil(cvBoils[j].id);
   }
   function cvNiceStep(span) {                    // шаг подписей оси времени ≈ 6–8 меток на экран
     const steps = [60, 120, 300, 600, 900, 1800, 3600, 7200, 10800, 21600, 43200, 86400, 172800, 604800, 2592000];
@@ -1459,7 +1501,15 @@
     const prev = $("cvTrendPrev"), next = $("cvTrendNext"), today = $("cvTrendToday");
     if (prev) prev.addEventListener("click", () => stepDay(-1));
     if (next) next.addEventListener("click", () => stepDay(1));
-    if (today) today.addEventListener("click", () => cvTrendSetDay(cvTrendDays.length ? cvTrendDays[cvTrendDays.length - 1] : cvDayStr(new Date())));
+    // «Последнее» — график растягивается на последнюю варку (идущую или предыдущую); ‹ › — листать варки
+    if (today) today.addEventListener("click", async () => {
+      if (!cvBoils.length) await cvLoadBoils(true);
+      if (cvBoils.length) cvTrendShowBoil(cvBoils[0].id);
+      else cvTrendSetDay(cvTrendDays.length ? cvTrendDays[cvTrendDays.length - 1] : cvDayStr(new Date()));
+    });
+    const bo = $("cvTrendBoilOlder"), bn = $("cvTrendBoilNewer");
+    if (bo) bo.addEventListener("click", () => cvTrendStepBoil(1));
+    if (bn) bn.addEventListener("click", () => cvTrendStepBoil(-1));
 
     const cv = $("cvTrend"); if (!cv) return;
     const tip = $("cvTrendTip");
@@ -1492,7 +1542,7 @@
       // сдвиг по времени — без ограничений: можно уйти в любые даты
       const span = drag.view.end - drag.view.start;
       const dt = (e.clientX - drag.x) / cvTrendGeom.plotW * span;
-      cvTrendFollow = false; cvTrendHover = null;
+      cvTrendFollow = false; cvTrendBoilFit = false; cvTrendHover = null;
       cvTrendView = { start: drag.view.start - dt, end: drag.view.end - dt };
       cvDrawTrend(); cvTrendEnsure(150);
     });
@@ -1516,7 +1566,7 @@
       const span = v.end - v.start, center = v.start + Math.max(0, Math.min(1, frac)) * span;
       const k = e.deltaY > 0 ? 1.25 : 0.8;
       const ns = Math.max(CV_MIN_SPAN, Math.min(CV_MAX_SPAN, span * k));
-      cvTrendFollow = false; cvTrendHover = null;
+      cvTrendFollow = false; cvTrendBoilFit = false; cvTrendHover = null;
       cvTrendView = { start: center - (center - v.start) * ns / span, end: center + (v.end - center) * ns / span };
       cvDrawTrend(); cvTrendEnsure(200);
     }, { passive: false });

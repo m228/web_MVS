@@ -4063,3 +4063,9 @@ input.micro-cam-num { width: 56px; min-width: 0; flex: 0 0 auto; padding: 4px 5p
 /* подсказка внутри ячейки таблицы наследовала white-space: nowrap и вылезала из рамки одной длинной строкой */
 .micro-info__pop { white-space: normal; font-weight: 400; }
 .micro-info__pop b, .micro-info__pop div.in { font-weight: 600; }
+/* тренд «по варке»: ‹ идёт сейчас · 08:14–09:31 › — как в «Распознавании» */
+.micro-trend__boil { display: inline-flex; align-items: center; gap: 4px; font-size: 0.82em; color: var(--muted, #5b6b81); min-width: 0; }
+.micro-trend__boil .micro-trend__btn { padding: 2px 8px; }
+.micro-trend__boil .micro-trend__btn:disabled { opacity: .35; cursor: default; pointer-events: none; }
+.micro-trend__boil #cvTrendBoilLbl { white-space: nowrap; font-variant-numeric: tabular-nums; }
+.micro-trend__boil #cvTrendBoilLbl.is-on { color: var(--text, inherit); font-weight: 600; }

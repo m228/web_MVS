@@ -4105,3 +4105,7 @@ input.micro-cam-num { width: 56px; min-width: 0; flex: 0 0 auto; padding: 4px 5p
 .micro-vol__side .micro-vol__fields--col { flex: 0 0 auto; gap: 6px 14px; }
 .micro-curve--side { margin-top: 0; flex: 0 0 auto; gap: 8px; }
 .micro-curve--side .micro-curve__row:last-child { flex: 0 0 140px; }
+/* рассев: галочка «скрыть крупнее 0,20» справа сверху, ⓘ — правее неё */
+.micro-sieve-card .micro-sieve__hide { order: 3; margin-left: auto; display: inline-flex; flex-direction: row; align-items: center; gap: 5px; font-size: .74em; font-weight: 400; color: var(--muted); cursor: pointer; white-space: nowrap; }
+.micro-sieve-card .micro-sieve__hide input { width: 15px; height: 15px; min-height: 0; margin: 0; padding: 0; accent-color: var(--accent, #2563eb); }
+.micro-sieve-card .micro-sieve__title > .micro-info { order: 4; margin-left: 0; }

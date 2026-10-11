@@ -20,6 +20,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import urllib.request
 import zipfile
@@ -37,6 +38,33 @@ STAGED = STAGING / "staged"          # распакованное содержи
 # бэкап прежних _internal\ + exe (для отката). ВНЕ STAGING: apply в конце сносит
 # STAGING целиком, а бэкап должен пережить сбой и остаться для восстановления.
 BACKUP = DATA_DIR / ".update_backup"
+
+# скачивание идёт в фоне, пока приложение работает (камера, пробы, цикл не прерываются); одновременно — только одно
+_DL_LOCK = threading.Lock()
+
+
+def staged_zip():
+    """Скачанный и проверенный архив обновления (STAGING/web_MVS_*.zip) или None. Недокачанный лежит как *.part и не считается."""
+    try:
+        zs = sorted(STAGING.glob(ASSET_PREFIX + "*.zip")) if STAGING.is_dir() else []
+    except OSError:
+        return None
+    return zs[-1] if zs else None
+
+
+def staged_version() -> str:
+    """Версия скачанного обновления (из _internal/VERSION внутри архива) или пустая строка."""
+    z = staged_zip()
+    if z is None:
+        return ""
+    try:
+        with zipfile.ZipFile(z) as zf:
+            for name in zf.namelist():
+                if name.replace("\\", "/") == "_internal/VERSION":
+                    return _norm(zf.read(name).decode("utf-8", "replace").strip())
+    except Exception:
+        pass
+    return ""
 
 
 def is_frozen() -> bool:
@@ -118,6 +146,11 @@ def check_latest():
     latest = _norm(tag)
     # апдейт доступен только если релиз строго новее текущей — не предлагаем даунгрейд
     available = asset is not None and _version_tuple(latest) > _version_tuple(current)
+    downloading = _DL_LOCK.locked()
+    staged = "" if downloading else staged_version()
+    if staged and _version_tuple(staged) <= _version_tuple(current) and STAGING.exists():
+        shutil.rmtree(STAGING, ignore_errors=True)         # архив уже установлен — лишние ~80 МБ не держим
+        staged = ""
     log_event("updater.check", "Проверка обновлений", "info",
               {"current": current, "latest": latest, "available": available})
     return {
@@ -126,6 +159,8 @@ def check_latest():
         "update_available": available,
         "has_asset": asset is not None,
         "notes": notes,
+        "staged": staged or None,              # версия, уже скачанная и готовая к перезапуску
+        "downloading": downloading,            # скачивание идёт прямо сейчас (страницу могли перезагрузить)
     }
 
 
@@ -184,10 +219,22 @@ def _download_stream(resp, out, max_bytes, deadline):
     return total
 
 
-def download_latest():
-    """Скачать и распаковать последний релиз во временную папку (только в бандле)."""
+def download_latest(extract: bool = True):
+    """Скачать последний релиз (и распаковать во временную папку — для apply_update; для кнопки «перезапустить» на странице
+    микроскопа распаковка не нужна: update.ps1 сам распакует архив, extract=False). Только в бандле. Работает в фоне, приложение
+    при этом не останавливается. Скачивание идёт в *.part и переименовывается только после проверки размера и sha256 —
+    недокачанный файл не принимается за готовое обновление."""
     if not is_frozen():
         return {"ok": False, "error": "Обновление доступно только в собранной версии (.exe)"}
+    if not _DL_LOCK.acquire(blocking=False):
+        return {"ok": False, "busy": True, "error": "Скачивание уже идёт"}
+    try:
+        return _download_latest_locked(extract)
+    finally:
+        _DL_LOCK.release()
+
+
+def _download_latest_locked(extract: bool):
     try:
         # переиспользуем свежий ответ от check_latest (последние 2 минуты),
         # чтобы не делать второй запрос и скачать ту же версию, что в UI
@@ -202,6 +249,7 @@ def download_latest():
     STAGING.mkdir(parents=True, exist_ok=True)
     # имя приходит из GitHub API — берём только basename, чтобы оно не увело файл из STAGING
     zip_path = STAGING / Path(str(asset.get("name") or "web_MVS_new.zip")).name
+    part_path = zip_path.with_name(zip_path.name + ".part")
 
     try:
         log_event("updater.download", "Скачиваю релиз", "info", {"name": asset.get("name")})
@@ -211,21 +259,28 @@ def download_latest():
         # лимит: заявленный размер +5% на расхождения, иначе — страховочный потолок
         max_bytes = int(size * 1.05) if size > 0 else _MAX_DOWNLOAD_FALLBACK
         deadline = time.time() + _DOWNLOAD_DEADLINE
-        with urllib.request.urlopen(req, timeout=60) as resp, open(zip_path, "wb") as out:
+        with urllib.request.urlopen(req, timeout=60) as resp, open(part_path, "wb") as out:
             _download_stream(resp, out, max_bytes, deadline)
-        _verify_download(zip_path, asset)
-        with zipfile.ZipFile(zip_path) as zf:
-            _safe_extract(zf, STAGED)
+        _verify_download(part_path, asset)
+        os.replace(part_path, zip_path)                  # готово: только теперь архив считается скачанным
+        if extract:
+            with zipfile.ZipFile(zip_path) as zf:
+                _safe_extract(zf, STAGED)
     except Exception as exc:
         log_event("updater.download", "Ошибка скачивания/распаковки", "error", {"error": str(exc)})
+        try:
+            part_path.unlink()
+        except OSError:
+            pass
         return {"ok": False, "error": "Ошибка скачивания: " + str(exc)}
 
-    staged_ver = ""
-    try:
-        staged_ver = (STAGED / "_internal" / "VERSION").read_text(encoding="utf-8").strip()
-    except Exception:
-        pass
-    log_event("updater.download", "Релиз скачан и распакован", "success", {"version": staged_ver})
+    staged_ver = staged_version()
+    if not staged_ver and extract:
+        try:
+            staged_ver = (STAGED / "_internal" / "VERSION").read_text(encoding="utf-8").strip()
+        except Exception:
+            pass
+    log_event("updater.download", "Релиз скачан и проверен", "success", {"version": staged_ver, "extracted": extract})
     return {"ok": True, "version": staged_ver or _norm(tag)}
 
 
@@ -365,7 +420,7 @@ Remove-Item -LiteralPath $PSCommandPath -Force -ErrorAction SilentlyContinue
     return {"ok": True}
 
 
-def run_update_script(port: int = 8000) -> dict:
+def run_update_script(port: int = 8000, staged: bool = False) -> dict:
     """Запустить update.ps1 из папки установки (тот же апдейтер, что update.bat): он сам остановит приложение, заменит файлы из
     последнего релиза, запустит приложение и дождётся ответа (при сбое откатит). Здесь только отвязанный запуск: сам скрипт
     приложение останавливает — выходить из процесса тут не нужно. Приложение работает с правами админа (манифест exe), поэтому
@@ -382,6 +437,11 @@ def run_update_script(port: int = 8000) -> dict:
         ps_exe = "powershell"
     cmd = [ps_exe, "-NoProfile", "-ExecutionPolicy", "Bypass", "-WindowStyle", "Hidden", "-File", str(script),
            "-Root", str(app_dir), "-Port", str(int(port))]
+    if staged:                                   # быстрый перезапуск: архив уже скачан в фоне — скрипт не качает, только распаковывает и меняет
+        zp = staged_zip()
+        if zp is None:
+            return {"ok": False, "error": "Сначала скачайте обновление"}
+        cmd += ["-ZipPath", str(zp)]
     CREATE_NEW_CONSOLE, CREATE_NEW_PROCESS_GROUP, CREATE_BREAKAWAY_FROM_JOB = 0x00000010, 0x00000200, 0x01000000
     base = CREATE_NEW_CONSOLE | CREATE_NEW_PROCESS_GROUP         # своя (скрытая) консоль + своя группа: скрипт переживёт выход приложения
     try:

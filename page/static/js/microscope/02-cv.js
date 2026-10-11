@@ -254,24 +254,39 @@
   let cvShowModels = false;
   try { cvShowModels = localStorage.getItem("microCvShowModels") === "1"; } catch (e) { }
   let cvSieveLast = null, cvSieveScale = 1, cvSievePhase = "boil";     // cvSievePhase: boil | p1 | g1 | p2 | g2 — какая плитка рассева выбрана
+  // строки таблицы рассева: диапазон МУКИ (0–0,20 мм) — по 0,05 мм, оранжевые; крупнее — по 0,1 мм (те же 21 фракция, сложенные парами).
+  // Галочка «скрыть крупнее 0,20» оставляет только муку и одну итоговую строку «≥ 0,20» — чтобы доли по-прежнему давали 100 %.
+  const CV_SIEVE_ROWS = (() => {
+    const f = (x) => x.toFixed(2).replace(".", ",");
+    const rows = [];
+    for (let k = 0; k < CV_FINES_ROWS; k++) rows.push({ label: cvFineLabel(k), idx: [k], fines: true });
+    for (let k = CV_FINES_ROWS; k + 1 < CV_FINE_N - 1; k += 2) rows.push({ label: f(k * 0.05) + " – " + f((k + 2) * 0.05), idx: [k, k + 1], fines: false });
+    rows.push({ label: "> 1,0", idx: [CV_FINE_N - 1], fines: false });
+    return rows;
+  })();
+  const CV_SIEVE_REST = { label: "≥ 0,20", idx: Array.from({ length: CV_FINE_N - CV_FINES_ROWS }, (_, n) => CV_FINES_ROWS + n), fines: false, rest: true };
+  let cvSieveOnlyFines = false;
+  try { cvSieveOnlyFines = localStorage.getItem("microCvSieveOnlyFines") === "1"; } catch (e) { }
   function cvRenderSieve(sv, scale) {      // sv = {m1:[21], m2:[21], m3:[21], area:[21]} в %: объём по трём моделям и площадь; scale не нужен (шкала одна); нет данных — прочерки
     cvSieveLast = sv; cvSieveScale = scale || 1;
     const g = $("cvSieveGrid"); if (!g) return;
     const one = (m, k) => (sv && sv[m] && sv[m][k] != null ? sv[m][k] : null);
+    const sum = (m, idx) => { let s = null; idx.forEach((k) => { const v = one(m, k); if (v != null) s = (s || 0) + v; }); return s; };
     const cols = cvShowModels ? ["avg", "area", "m1", "m2", "m3"] : ["avg", "area"];
-    const val = (c, k) => (c === "avg" ? cvAvg3({ m1: one("m1", k), m2: one("m2", k), m3: one("m3", k) }) : one(c, k));
-    const mx = {}; cols.forEach((c) => { let m = 0; for (let k = 0; k < CV_FINE_N; k++) { const v = val(c, k); if (v != null && v > m) m = v; } mx[c] = m; });
+    const val = (c, idx) => (c === "avg" ? cvAvg3({ m1: sum("m1", idx), m2: sum("m2", idx), m3: sum("m3", idx) }) : sum(c, idx));
+    const rows = cvSieveOnlyFines ? [...CV_SIEVE_ROWS.slice(0, CV_FINES_ROWS), CV_SIEVE_REST] : CV_SIEVE_ROWS;
+    const mx = {}; cols.forEach((c) => { let m = 0; rows.forEach((r) => { const v = val(c, r.idx); if (v != null && v > m) m = v; }); mx[c] = m; });
     g.style.gridTemplateColumns = "auto repeat(" + cols.length + ", minmax(0, 1fr))";
     let html = '<span>размер, мм</span><b title="Доля по объёму (объём ~ масса): среднее трёх моделей M1–M3">Среднее</b><b title="Доля по площади кристаллов на кадре">Площадь</b>' +
       (cvShowModels ? "<b>M1 шар</b><b>M2 сфер.</b><b>M3 призма</b>" : "");
-    for (let k = 0; k < CV_FINE_N; k++) {
-      const fn = k < CV_FINES_ROWS ? " is-fines" : "";                // 0–0,20 мм — это и есть «мука»: строки выделяем цветом
-      html += '<span class="' + fn.trim() + '">' + cvFineLabel(k) + "</span>";
+    rows.forEach((r) => {
+      const fn = r.fines ? " is-fines" : "";                          // 0–0,20 мм — это и есть «мука»: строки выделяем цветом
+      html += '<span class="' + fn.trim() + '">' + r.label + "</span>";
       cols.forEach((c) => {
-        const v = val(c, k), bar = v != null && mx[c] > 0 ? Math.round(100 * v / mx[c]) : 0;
+        const v = val(c, r.idx), bar = v != null && mx[c] > 0 ? Math.round(100 * v / mx[c]) : 0;
         html += '<em class="' + (v == null || v < 0.05 ? "is-zero" : "") + fn + '"><span class="bar"><i style="width:' + bar + '%"></i></span><span class="num">' + fmtPct(v) + "</span></em>";   // полоска слева, число справа — не заходят друг на друга
       });
-    }
+    });
     cvSetHtml(g, html);
   }
   function cvApplyModels() {              // скрыть/показать M1–M3 в обеих таблицах («Объём и мука» и рассев)
@@ -429,6 +444,11 @@
     cvSetHtml(box, rows.join(""));
   }
   function wireBoilNav() {
+    const hb = $("cvSieveHide");                                      // «скрыть крупнее 0,20»: остаётся только диапазон муки
+    if (hb) {
+      hb.checked = cvSieveOnlyFines;
+      hb.addEventListener("change", () => { cvSieveOnlyFines = hb.checked; try { localStorage.setItem("microCvSieveOnlyFines", cvSieveOnlyFines ? "1" : "0"); } catch (e) { } cvRenderSieve(cvSieveLast, cvSieveScale); });
+    }
     const mb = $("cvVolModelsBtn");
     if (mb) mb.addEventListener("click", () => { cvShowModels = !cvShowModels; try { localStorage.setItem("microCvShowModels", cvShowModels ? "1" : "0"); } catch (e) { } cvApplyModels(); });
     cvApplyModels();

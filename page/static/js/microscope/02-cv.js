@@ -280,7 +280,7 @@
     let html = '<span>размер, мм</span><b title="Доля по объёму (объём ~ масса): среднее трёх моделей M1–M3">Среднее</b><b title="Доля по площади кристаллов на кадре">Площадь</b>' +
       (cvShowModels ? "<b>M1 шар</b><b>M2 сфер.</b><b>M3 призма</b>" : "");
     rows.forEach((r) => {
-      const fn = r.fines ? " is-fines" : "";                          // 0–0,20 мм — это и есть «мука»: строки выделяем цветом
+      const fn = r.fines && !cvSieveOnlyFines ? " is-fines" : "";     // 0–0,20 мм — это и есть «мука»: в полной таблице выделяем цветом, а когда «скрыть» (осталась одна мука) — обычный цвет
       html += '<span class="' + fn.trim() + '">' + r.label + "</span>";
       cols.forEach((c) => {
         const v = val(c, r.idx), bar = v != null && mx[c] > 0 ? Math.round(100 * v / mx[c]) : 0;

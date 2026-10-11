@@ -245,7 +245,7 @@
   const CV_SIEVE_EDGES = [0.2, 0.5, 0.7, 0.8, 1.0];
   const CV_SIEVE_BINS = [[5, 6], 4, 3, 2, 1, 0];
   // рассев в процентах: фракции по 0,05 мм от 0 до 1 мм + «больше 1 мм» (21 строка), одна шкала для всех фаз; доля по объёму — как раньше
-  const CV_FINE_N = 21;
+  const CV_FINE_N = 21, CV_FINES_ROWS = 4;      // CV_FINES_ROWS — первые 4 фракции (до 0,20 мм) = диапазон муки (порог ≈ 0,2 мм)
   const cvFineLabel = (k) => {
     const f = (x) => x.toFixed(2).replace(".", ",");
     return k >= CV_FINE_N - 1 ? "> 1,0" : f(k * 0.05) + " – " + f((k + 1) * 0.05);
@@ -265,10 +265,11 @@
     let html = '<span>размер, мм</span><b title="Доля по объёму (объём ~ масса): среднее трёх моделей M1–M3">Среднее</b><b title="Доля по площади кристаллов на кадре">Площадь</b>' +
       (cvShowModels ? "<b>M1 шар</b><b>M2 сфер.</b><b>M3 призма</b>" : "");
     for (let k = 0; k < CV_FINE_N; k++) {
-      html += "<span>" + cvFineLabel(k) + "</span>";
+      const fn = k < CV_FINES_ROWS ? " is-fines" : "";                // 0–0,20 мм — это и есть «мука»: строки выделяем цветом
+      html += '<span class="' + fn.trim() + '">' + cvFineLabel(k) + "</span>";
       cols.forEach((c) => {
         const v = val(c, k), bar = v != null && mx[c] > 0 ? Math.round(100 * v / mx[c]) : 0;
-        html += '<em class="' + (v == null || v < 0.05 ? "is-zero" : "") + '"><span class="bar"><i style="width:' + bar + '%"></i></span><span class="num">' + fmtPct(v) + "</span></em>";   // полоска слева, число справа — не заходят друг на друга
+        html += '<em class="' + (v == null || v < 0.05 ? "is-zero" : "") + fn + '"><span class="bar"><i style="width:' + bar + '%"></i></span><span class="num">' + fmtPct(v) + "</span></em>";   // полоска слева, число справа — не заходят друг на друга
       });
     }
     cvSetHtml(g, html);

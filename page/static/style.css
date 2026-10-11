@@ -4096,3 +4096,12 @@ input.micro-cam-num { width: 56px; min-width: 0; flex: 0 0 auto; padding: 4px 5p
 .micro-curve--side .micro-curve__row { margin: 0; }
 .micro-curve--side .micro-curve__row:last-child { flex: 1 1 auto; min-width: 0; }
 .micro-curve--side .micro-curve__row label span { white-space: nowrap; }
+/* рассев: диапазон муки (первые 4 фракции, до 0,20 мм) — тёплым цветом, чтобы выделялся из толпы */
+.micro-sieve > span.is-fines { color: #d9a066; font-weight: 600; }
+.micro-sieve > em.is-fines .bar i { background: #d9822b; opacity: .9; }
+.micro-sieve > em.is-fines .num { color: #e8b27a; }
+/* поля муки и плавный порог — одна строка (при нехватке места перенесётся) */
+.micro-vol__side { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 16px; }
+.micro-vol__side .micro-vol__fields--col { flex: 0 0 auto; gap: 6px 14px; }
+.micro-curve--side { margin-top: 0; flex: 0 0 auto; gap: 8px; }
+.micro-curve--side .micro-curve__row:last-child { flex: 0 0 140px; }

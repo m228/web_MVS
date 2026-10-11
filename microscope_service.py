@@ -415,8 +415,9 @@ class MicroscopeService:
                     objs = cv_analyzer.refine_seam_stubs(img, objs, cv, _infer_window, ref)
                     run["timing"] = {**run["timing"], "refine_ms": round((time.time() - t_ref) * 1000),
                                      "refine_stubs": ref.get("stubs", 0), "refine_fixed": ref.get("fixed", 0)}
+                seed_age_s = (max(0, int(run.get("t0", time.time()) - self._seed_ts)) if self._seed_ts is not None else None)   # время с заводки — для плавного порога муки
                 res = cv_analyzer.analyze(img, objs, cv_cfg=cv, with_overlay=False, sv=sv,
-                                          phase=run.get("phase"))
+                                          phase=run.get("phase"), seed_age_s=seed_age_s)
                 summary, objects = res["summary"], res["objects"]
         # --- разломы (чистый OpenCV, всегда) ---
         run["zones"].append(cv_fracture.detect_zones(img, run["fr_cfg"]) if run["fr_on"] else [])

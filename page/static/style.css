@@ -4069,3 +4069,12 @@ input.micro-cam-num { width: 56px; min-width: 0; flex: 0 0 auto; padding: 4px 5p
 .micro-trend__boil .micro-trend__btn:disabled { opacity: .35; cursor: default; pointer-events: none; }
 .micro-trend__boil #cvTrendBoilLbl { white-space: nowrap; font-variant-numeric: tabular-nums; }
 .micro-trend__boil #cvTrendBoilLbl.is-on { color: var(--text, inherit); font-weight: 600; }
+/* плавный порог муки по времени: флажок и точки «минута:мкм» внутри раскрываемой части «Фазы варки» */
+.micro-curve__row { display: flex; align-items: center; gap: 8px; margin: 2px 0 6px; font-size: .78em; color: var(--muted); }
+.micro-curve__row label { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; }
+.micro-curve__row input[type="checkbox"] { width: 15px; height: 15px; min-height: 0; margin: 0; padding: 0; flex: 0 0 auto; accent-color: var(--accent, #2563eb); }
+.micro-curve__row input[type="checkbox"].is-dirty { outline: 1px solid var(--accent, #2563eb); }
+.micro-curve__row input[type="text"] { flex: 1 1 auto; min-width: 0; height: 24px; min-height: 0; padding: 2px 6px; font-size: 1em; border-radius: 6px; font-variant-numeric: tabular-nums; }
+.micro-curve__row input[type="text"].is-dirty { border-color: var(--accent, #2563eb); }
+.micro-curve__row input[type="text"]:disabled { opacity: .45; }
+#cvVol.is-curve .micro-phase__table th:nth-child(n+4), #cvVol.is-curve .micro-phase__table td:nth-child(n+4) { opacity: .3; pointer-events: none; }

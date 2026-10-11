@@ -486,6 +486,10 @@
     const vol = cvCrit === "volume", m = $("cvFinesMm");
     set("cvFinesMm", cvVolCfg[cvVolMain()] != null ? cvVolCfg[cvVolMain()] : (vol ? 0.006 : 0.2));
     CV_PHASES.forEach((g) => set(CV_VOL_SUB[g], cvVolCfg[cvVolKey(g)]));
+    if (fillShared) {                                                       // плавный порог муки по времени с заводки
+      const on = $("cvCurveOn"); if (on) on.checked = !!cvVolCfg.fines_curve_on;
+      const ct = $("cvCurve"); if (ct) ct.value = cvCurveText(cvVolCfg.fines_curve);
+    }
     [m, ...Object.values(CV_VOL_SUB).map($)].forEach((e) => { if (e) { e.step = vol ? "0.0005" : "0.01"; e.min = e === m ? (vol ? "0.0001" : "0.01") : "0"; } });
     const lbl = $("cvFinesLbl"); if (lbl) lbl.textContent = vol ? "Мука, мм³" : "Мука, мм";
     const vb = $("cvVol"); if (vb) vb.classList.toggle("is-crit-volume", vol);
@@ -511,6 +515,11 @@
     });
     const subIds = Object.values(CV_VOL_SUB);
     let dirty = false;
+    const curveTyped = () => { const v = ($("cvCurve") || {}).value, p = cvCurveParse(v); return p ? cvCurveText(p) : "?" + v; };
+    const onDirty = !!($("cvCurveOn") || {}).checked !== !!cfg.fines_curve_on, ptsDirty = curveTyped() !== cvCurveText(cfg.fines_curve);
+    if ($("cvCurveOn")) $("cvCurveOn").classList.toggle("is-dirty", onDirty);
+    if ($("cvCurve")) $("cvCurve").classList.toggle("is-dirty", ptsDirty);
+    dirty = onDirty || ptsDirty;
     rows.forEach(([id, sv, cmp]) => {
       let v = cvNum(id); if (isNaN(v) && subIds.includes(id)) v = 0;
       const d = !cmp(v, sv); if ($(id)) $(id).classList.toggle("is-dirty", d); dirty = dirty || d;
@@ -539,11 +548,28 @@
     const h = $("cvPhOwnHead"); if (h) h.textContent = vol ? "свой, мм³" : "свой, мм";
     const h2 = $("cvPhEffHead"); if (h2) h2.textContent = vol ? "мука <, мм³" : "мука <, мм";
   }
-  function cvVolMarkDirty() { cvPhaseTableUpdate(); cvFinesEqUpdate(); const box = $("cvVolApply"); if (box && !box.classList.contains("is-busy")) box.hidden = !cvVolDirty(); }
+  function cvCurveSync() {            // плавный порог включён: «свой» порог и «мука <» в таблице фаз не действуют (остаются только сита), точки доступны
+    const on = !!($("cvCurveOn") || {}).checked, vb = $("cvVol");
+    if (vb) vb.classList.toggle("is-curve", on);
+    const ct = $("cvCurve"); if (ct) ct.disabled = !on;
+  }
+  function cvVolMarkDirty() { cvCurveSync(); cvPhaseTableUpdate(); cvFinesEqUpdate(); const box = $("cvVolApply"); if (box && !box.classList.contains("is-busy")) box.hidden = !cvVolDirty(); }
+  // плавный порог муки: «минута:мкм» через запятую ↔ [[мин, мкм], …] (как cv_volume.parse_fines_curve)
+  const CV_CURVE_DEFAULT = [[0, 25], [10, 30], [15, 45], [20, 65], [25, 85], [30, 110], [40, 135], [50, 150], [60, 155], [70, 170], [80, 190], [85, 203]];
+  const cvCurveText = (c) => (Array.isArray(c) && c.length >= 2 ? c : CV_CURVE_DEFAULT).map((p) => p[0] + ":" + p[1]).join(", ");
+  function cvCurveParse(text) {
+    const pts = []; const re = /(\d+(?:\.\d+)?)\s*[:=]\s*(\d+(?:\.\d+)?)/g; let m;
+    while ((m = re.exec(text || ""))) pts.push([parseFloat(m[1]), parseFloat(m[2])]);
+    if (pts.length < 2 || pts.some((p) => p[1] <= 0) || pts.some((p, i) => i && p[0] <= pts[i - 1][0])) return null;
+    return pts;
+  }
   function cvVolPayload() {
     const k = cvNum("cvKThick"), fs = cvNum("cvFinesSv"), fm = cvNum("cvFinesMm");
     if (!(fm > 0) || !(k > 0) || !(fs >= 0)) return null;
     const vo = { fines_mode: cvCrit, fines_from_sv: fs, k_thick: k, [cvVolMain()]: fm };
+    const cOn = !!($("cvCurveOn") || {}).checked, cPts = cvCurveParse(($("cvCurve") || {}).value);
+    if (cOn && !cPts) { const e = $("cvCurve"); if (e) e.classList.add("is-dirty"); return null; }     // плавный порог включён, а точки не разобрались — не сохраняем
+    vo.fines_curve_on = cOn; vo.fines_curve = cPts || CV_CURVE_DEFAULT;
     for (const g of CV_PHASES) {
       const v = cvNum(CV_VOL_SUB[g]); vo[cvVolKey(g)] = v > 0 ? v : 0;
       const sc = cvNum(CV_VOL_SCALE[g]); vo["phase_scale_" + g] = sc > 0 ? sc : CV_PHASE_SCALE[g];
@@ -565,7 +591,7 @@
     btn.addEventListener("click", () => { shown = !shown; try { localStorage.setItem("microCvVolNote", shown ? "1" : "0"); } catch (e) { } apply(); });
     apply();
     // глазок у «Фазы варки»: таблица порогов и сит скрыта, пока не нажмёшь (по умолчанию скрыта); выбор запоминается
-    const eye = $("cvPhaseEye"), tbl = $("cvPhaseTable");
+    const eye = $("cvPhaseEye"), tbl = $("cvPhaseBody");
     if (eye && tbl) {
       let open = false; try { open = localStorage.getItem("microCvPhaseOpen") === "1"; } catch (e) { }
       const show = () => { tbl.hidden = !open; eye.classList.toggle("is-on", open); eye.setAttribute("aria-pressed", open ? "true" : "false"); };
@@ -577,6 +603,7 @@
     wireVolNoteBtn();
     const ids = ["cvFinesMm", "cvKThick", "cvFinesSv", ...Object.values(CV_VOL_SUB), ...Object.values(CV_VOL_SCALE)];
     ids.forEach((id) => { const e = $(id); if (e) e.addEventListener("input", () => { const c = $("cvFinesCalc"); if (c) c.textContent = cvFinesCalcText(); cvVolMarkDirty(); }); });
+    ["cvCurveOn", "cvCurve"].forEach((id) => { const e = $(id); if (e) e.addEventListener(id === "cvCurveOn" ? "change" : "input", () => { cvCurveSync(); cvVolMarkDirty(); }); });
     document.querySelectorAll("#cvFinesModeSeg button").forEach((b) => b.addEventListener("click", () => {
       if (b.dataset.mode === cvCrit) return;
       // значения не теряем, а переводим в другую единицу (порог тот же): мм ↔ мм³

@@ -19,6 +19,7 @@ S — площадь маски, L/W — длинная/короткая сто�
 from __future__ import annotations
 
 import math
+import re
 
 MODELS = ("m1", "m2", "m3")
 # Рассев по ситам (как в лаборатории): отверстия, мм. Фракции снизу вверх: дно (<0,2), 0,2–0,5, 0,5–0,7, 0,7–0,8, 0,8–1,0, 1,0–1,2, >1,2.
@@ -47,6 +48,41 @@ MODE_DEFAULTS = {"fines_mode": "side", "fines_vol_mm3": 0.006}
 GROUP_KEYS = tuple("fines_side_%s" % g for g in PHASES) + tuple("fines_vol_%s" % g for g in PHASES)
 
 
+# ПЛАВНЫЙ порог муки по ВРЕМЕНИ С ЗАВОДКИ (вместо ступенек по фазам): минуты → порог, мкм (эквивалентный диаметр). Между точками — линейно, до
+# первой и после последней — крайнее значение. Точки подобраны по размеру кристаллов в 21 варке Кира (порог ≈ 0,9 медианы; к 85-й минуте — 203 мкм,
+# как «общий порог»); правятся на вкладке CV. От СВ не зависит: датчики СВ врут, а время идёт ровно. Включается cv.volume.fines_curve_on.
+FINES_CURVE_DEFAULT = [[0, 25], [10, 30], [15, 45], [20, 65], [25, 85], [30, 110], [40, 135], [50, 150], [60, 155], [70, 170], [80, 190], [85, 203]]
+_CURVE_PAIR = re.compile(r"(\d+(?:\.\d+)?)\s*[:=]\s*(\d+(?:\.\d+)?)")        # «мин:мкм»; запятая, «;» и перевод строки — разделители пар
+
+
+def parse_fines_curve(src):
+    """Кривая из конфига (список пар [мин, мкм]) или из текста «0:25, 10:30, …» → [[мин, мкм], …] или None, если не годится
+    (меньше двух точек, минуты не растут, значения не числа или не положительные)."""
+    pts = []
+    try:
+        if isinstance(src, str):
+            pts = [[float(a), float(b)] for a, b in _CURVE_PAIR.findall(src)]
+        elif isinstance(src, (list, tuple)):
+            pts = [[float(p[0]), float(p[1])] for p in src]
+        else:
+            return None
+    except (TypeError, ValueError, IndexError):
+        return None
+    if len(pts) < 2 or any(m < 0 or u <= 0 for m, u in pts) or any(pts[i][0] >= pts[i + 1][0] for i in range(len(pts) - 1)):
+        return None
+    return pts
+
+
+def fines_curve_um(curve, minutes: float) -> float:
+    """Порог муки (мкм) на minutes-й минуте с заводки: кусочно-линейно, за краями — крайние значения."""
+    if minutes <= curve[0][0]:
+        return float(curve[0][1])
+    for (m0, u0), (m1, u1) in zip(curve, curve[1:]):
+        if minutes <= m1:
+            return float(u0 + (u1 - u0) * (minutes - m0) / (m1 - m0))
+    return float(curve[-1][1])
+
+
 def fines_diameter_um(side_mm: float) -> float:
     """Эквивалентный диаметр круга с площадью квадрата side_mm × side_mm, мкм: d = 2·сторона/√π."""
     return 2000.0 * side_mm / math.sqrt(math.pi)
@@ -57,7 +93,7 @@ def fines_diameter_from_volume_um(vol_mm3: float) -> float:
     return 1000.0 * (6.0 * vol_mm3 / math.pi) ** (1.0 / 3.0)
 
 
-def volume_cfg(cv_cfg: dict | None, phase=None) -> dict:
+def volume_cfg(cv_cfg: dict | None, phase=None, seed_age_s=None) -> dict:
     """Настройки объёма из блока cv (с дефолтами и защитой от мусора). phase — фаза варки пробы (p1/g1/p2/g2) или None:
     сита и порог муки берутся в масштабе phase_scale_<фаза> % (или порог — из своего поля фазы)."""
     v = dict(DEFAULTS)
@@ -107,6 +143,14 @@ def volume_cfg(cv_cfg: dict | None, phase=None) -> dict:
         base_um = fines_diameter_from_volume_um(vol) if v["fines_mode"] == "volume" else fines_diameter_um(side)
         v["fines_um"] = base_um * scale
     v["fines_side_eff"], v["fines_vol_eff"] = side, vol
+    # плавный порог по времени с заводки: вместо порога фазы (сита рассева остаются в масштабе фазы). Нет времени с заводки
+    # (приложение перезапускали посреди варки) — порог фазы, как раньше.
+    v["fines_curve_on"] = bool(src.get("fines_curve_on"))
+    v["fines_curve"] = parse_fines_curve(src.get("fines_curve")) or [list(p) for p in FINES_CURVE_DEFAULT]
+    v["fines_curve_used"] = False
+    if v["fines_curve_on"] and seed_age_s is not None:
+        v["fines_um"] = round(fines_curve_um(v["fines_curve"], max(0.0, float(seed_age_s)) / 60.0), 1)
+        v["fines_curve_used"] = True
     return v
 
 
@@ -155,11 +199,11 @@ def empty_sums() -> dict:
     return s
 
 
-def sums_for(measures: list, cv_cfg: dict | None, count_fines: bool = True, phase=None) -> dict:
+def sums_for(measures: list, cv_cfg: dict | None, count_fines: bool = True, phase=None, seed_age_s=None) -> dict:
     """Суммы объёма/площади по кадру: мелочь, сростки, всё. Складываются между кадрами пробы.
     count_fines=False — мелочь не считаем (варка не дошла до нужного СВ): мелкие кристаллы идут в «остальные»,
     а в сумме стоит пометка fines_off — доля мелочи будет None."""
-    cfg = volume_cfg(cv_cfg, phase)
+    cfg = volume_cfg(cv_cfg, phase, seed_age_s)
     s = empty_sums()
     if not count_fines:
         s["fines_off"] = True          # только флаг «СВ ниже порога» (для показа по пробе); саму муку считаем всегда —

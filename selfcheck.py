@@ -1778,6 +1778,16 @@ def _phase_durations():
     return "p1 20 мин, g1 30, g2 20, p2 (два отрезка) сложены; пустая варка — {}"
 
 
+@check("UI", "тренд: «мука среднее» (fines_avg) на общей шкале 0–100 %, без авто-шкалы по видимому участку (иначе при приближении 30 % рисовалось у верха)")
+def _trend_fines_fixed_scale():
+    import re
+    js = (Path(BUNDLE_DIR) / "page" / "static" / "js" / "microscope" / "02-cv.js").read_text(encoding="utf-8")
+    m = re.search(r"const CV_AUTO_SPAN\s*=\s*\{([^}]*)\}", js)
+    assert m, "CV_AUTO_SPAN не найден"
+    assert "fines_avg" not in m.group(1), "у fines_avg снова своя авто-шкала: %s" % m.group(1)
+    return "авто-шкала только у режима варки (%s)" % ", ".join(sorted(re.findall(r"(\w+):", m.group(1))))
+
+
 @check("UI", "JS страницы микроскопа: все вызываемые cv*-функции определены (пропавшая функция тихо ломала поля «Объём и мука»)")
 def _js_cv_functions_defined():
     import re

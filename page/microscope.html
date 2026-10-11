@@ -1055,6 +1055,10 @@
                 </div>
                 <!-- выбор даты / листание по дням -->
                 <div class="micro-trend__bar">
+                  <span class="micro-seg2" id="cvTrendModeSeg" role="group" aria-label="Что показывать на тренде">
+                    <button type="button" data-m="crystals" class="is-active" title="Размеры кристаллов, мука и режим варки">Кристаллы</button>
+                    <button type="button" data-m="sieve" title="Рассев по ситам: доли фракций по пробам, итог по варке и по фазам">Рассев</button>
+                  </span>
                   <button type="button" class="micro-trend__btn" id="cvTrendPrev" title="Предыдущий день с пробами">‹</button>
                   <input type="date" id="cvTrendDate" class="micro-trend__date" title="Дата тренда" />
                   <button type="button" class="micro-trend__btn" id="cvTrendNext" title="Следующий день с пробами">›</button>
@@ -1072,7 +1076,7 @@
                 <div class="micro-trend__row">
                   <!-- серии столбиком: строка = серия; включена — подсвечена; справа значение под курсором -->
                   <div class="micro-trend__rows" id="cvSeries">
-                    <div class="micro-trend__col">
+                    <div class="micro-trend__col" data-m="crystals">
                       <div class="micro-srow-sep" title="Рассев и размер кристаллов из распознавания; «средняя мука» появляется ближе к концу варки">Кристаллы</div>
                       <label class="micro-srow" data-unit="%"><input type="checkbox" value="small" checked /><i style="background:#1d9e75"></i><span>малая</span><b>—</b></label>
                       <label class="micro-srow" data-unit="%"><input type="checkbox" value="medium" checked /><i style="background:#378add"></i><span>средняя</span><b>—</b></label>
@@ -1082,7 +1086,16 @@
                       <label class="micro-srow" data-unit="мкм" title="Медиана: половина кристаллов мельче, половина крупнее"><input type="checkbox" value="median" /><i style="background:#d16fb8"></i><span>медиана</span><b>—</b></label>
                       <label class="micro-srow" data-unit="%" data-dec="2" title="Мука по объёму, % — среднее трёх моделей (M1 + M2 + M3) ÷ 3. Появляется ближе к концу варки: считается, только когда СВ дошёл до поля «Мука с СВ»"><input type="checkbox" value="fines_avg" checked /><i style="background:#e8c547"></i><span>средняя мука</span><b>—</b></label>
                     </div>
-                    <div class="micro-trend__col">
+                    <div class="micro-trend__col" data-m="sieve" hidden>
+                      <div class="micro-srow-sep" title="Доля фракции в общем объёме кристаллов пробы (среднее M1–M3), %. Сумма всех линий = 100 %. Мука появляется ближе к концу варки (порог «Мука с СВ»); на подкачках и ростах считается с начала">Рассев, мм</div>
+                      <label class="micro-srow" data-unit="%" data-dec="2" title="Мука: 0–0,20 мм"><input type="checkbox" value="fsv0" checked /><i style="background:#e8c547"></i><span>0 – 0,20</span><b>—</b></label>
+                      <label class="micro-srow" data-unit="%" title="0,20–0,40 мм"><input type="checkbox" value="fsv1" checked /><i style="background:#1d9e75"></i><span>0,20 – 0,40</span><b>—</b></label>
+                      <label class="micro-srow" data-unit="%" title="0,40–0,60 мм"><input type="checkbox" value="fsv2" checked /><i style="background:#378add"></i><span>0,40 – 0,60</span><b>—</b></label>
+                      <label class="micro-srow" data-unit="%" title="0,60–0,80 мм"><input type="checkbox" value="fsv3" checked /><i style="background:#7f77dd"></i><span>0,60 – 0,80</span><b>—</b></label>
+                      <label class="micro-srow" data-unit="%" title="0,80–1,0 мм"><input type="checkbox" value="fsv4" checked /><i style="background:#d16fb8"></i><span>0,80 – 1,0</span><b>—</b></label>
+                      <label class="micro-srow" data-unit="%" title="Крупнее 1,0 мм"><input type="checkbox" value="fsv5" checked /><i style="background:#ba7517"></i><span>&gt; 1,0</span><b>—</b></label>
+                    </div>
+                    <div class="micro-trend__col" data-m="both">
                       <div class="micro-srow-sep" title="Данные с вакуум-аппарата из ПЛК на момент пробы. Линии пунктиром, у каждой своя шкала по видимому участку; точные значения — справа и в подсказке">Тренды с ВА</div>
                       <label class="micro-srow" data-unit="" title="СВ (сухие вещества, Brix, %) на момент пробы — на той же шкале 0–100, что и доли групп"><input type="checkbox" value="sv" checked /><i style="background:#f2c94c"></i><span>СВ</span><b>—</b></label>
                       <label class="micro-srow" data-unit="" title="Стадия варки (номер) на момент пробы: белая ступенчатая линия с цифрами на каждом переходе"><input type="checkbox" value="stage" checked /><i style="background:var(--text)"></i><span>стадия</span><b>—</b></label>
@@ -1098,6 +1111,11 @@
                     <canvas id="cvTrend" class="micro-cv-trend" width="620" height="360"></canvas>
                     <div id="cvTrendTip" class="micro-cv-tip" hidden></div>
                   </div>
+                </div>
+                <!-- рассев по ситам для варки, выбранной на тренде: плитки варка / фазы + таблица (заполняет 02-cv.js, режим «Рассев») -->
+                <div class="micro-sieve-card" id="cvTrSieveCard" hidden>
+                  <div class="micro-cv-block__title micro-sieve__title">Рассев, %<div class="micro-sieve__tiles" id="cvTrSieveTiles" role="tablist" aria-label="Фаза варки для рассева"></div><span class="micro-sieve__sv" id="cvTrSieveSv"></span></div>
+                  <div class="micro-vol__grid micro-sieve" id="cvTrSieveGrid"></div>
                 </div>
               </div>
             </div>

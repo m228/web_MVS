@@ -1778,6 +1778,26 @@ def _phase_durations():
     return "p1 20 мин, g1 30, g2 20, p2 (два отрезка) сложены; пустая варка — {}"
 
 
+@check("CV", "тренд «Рассев»: группы фракций fsv0…fsv5 — сумма 0,05-мм фракций, среднее M1–M3; пропуски и нет рассева → None; серия отдаётся trend_range")
+def _trend_sieve_groups():
+    import cv_store
+    r = {}
+    for m in ("m1", "m2", "m3"):
+        for i in range(cv_store.cv_volume.FINE_N):
+            r["fsieve_%s_b%d" % (m, i)] = 1.0 if m != "m3" else 4.0       # среднее по моделям на фракцию = 2.0
+    assert cv_store.fsieve_group(r, 0) == 8.0, "мука 0–0,20 = 4 фракции × 2 %"
+    assert cv_store.fsieve_group(r, 4) == 8.0 and cv_store.fsieve_group(r, 5) == 2.0, "0,80–1,0 — 4 фракции, «> 1,0» — одна"
+    assert sum(cv_store.fsieve_group(r, k) for k in range(6)) == 42.0, "21 фракция × 2 % — группы покрывают все"
+    assert cv_store.fsieve_group({}, 0) is None and cv_store._trend_val({}, "fsv3") is None, "нет рассева — None"
+    assert cv_store._trend_val(r, "fsv9") is None and cv_store._trend_val({"sv": 5}, "sv") == 5, "лишний номер не падает, обычные серии как раньше"
+    js = (Path(BUNDLE_DIR) / "page" / "static" / "js" / "microscope" / "02-cv.js").read_text(encoding="utf-8")
+    html = (Path(BUNDLE_DIR) / "page" / "microscope.html").read_text(encoding="utf-8")
+    for k in range(6):
+        assert 'value="fsv%d"' % k in html and '"fsv%d"' % k in js, "серия fsv%d не в странице/скрипте" % k
+    assert 'id="cvTrendModeSeg"' in html and 'id="cvTrSieveGrid"' in html, "нет переключателя режима или таблицы рассева на тренде"
+    return "6 групп = 21 фракция, переключатель и таблица на месте"
+
+
 @check("UI", "тренд: «мука среднее» (fines_avg) на общей шкале 0–100 %, без авто-шкалы по видимому участку (иначе при приближении 30 % рисовалось у верха)")
 def _trend_fines_fixed_scale():
     import re

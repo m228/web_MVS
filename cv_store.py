@@ -302,6 +302,14 @@ def _apply_fines_gate(rows: list[dict]) -> list[dict]:
     return rows
 
 
+def _trend_val(r: dict, name: str):
+    if name == "fines_avg":
+        return fines_avg(r)
+    if name.startswith("fsv") and name[3:].isdigit() and int(name[3:]) < len(FSV_GROUPS):
+        return fsieve_group(r, int(name[3:]))
+    return r.get(name)
+
+
 def trend_range(serial: str, t_from: float, t_to: float, series: Optional[list[str]] = None,
                 limit: int = 5000) -> dict:
     """Тренд по реальному времени: пробы с t_from по t_to (epoch, сек) из журнала по дням.
@@ -335,7 +343,7 @@ def trend_range(serial: str, t_from: float, t_to: float, series: Optional[list[s
         "phase": [r.get("phase") for r in rows],               # порог муки пробы (диаметр, мкм) — с учётом её подстадии
         "stage": [r.get("stage") for r in rows],
         "substage": [r.get("substage") for r in rows],
-        "series": {s: [(fines_avg(r) if s == "fines_avg" else r.get(s)) for r in rows] for s in series},
+        "series": {s: [_trend_val(r, s) for r in rows] for s in series},
     }
 
 
@@ -353,6 +361,20 @@ def sieve_avg(r: dict, i: int) -> Optional[float]:
     """Фракция рассева i, % объёма — среднее трёх моделей (пропуская пустые)."""
     v = [r["sieve_%s_b%d" % (m, i)] for m in ("m1", "m2", "m3") if r.get("sieve_%s_b%d" % (m, i)) is not None]
     return round(sum(v) / len(v), 3) if v else None
+
+
+# серии рассева для тренда: fsv0…fsv5 — доли по объёму (среднее M1–M3) в диапазонах 0–0,20 (мука) / 0,20–0,40 / … / 0,80–1,00 / >1,0 мм
+FSV_GROUPS = [range(0, 4), range(4, 8), range(8, 12), range(12, 16), range(16, 20), range(20, 21)]
+
+
+def fsieve_group(r: dict, k: int) -> Optional[float]:
+    """Доля группы k мелкого рассева пробы, % объёма: сумма фракций по 0,05 мм, каждая — среднее трёх моделей. Нет рассева — None."""
+    vals = []
+    for i in FSV_GROUPS[k]:
+        v = [r["fsieve_%s_b%d" % (m, i)] for m in ("m1", "m2", "m3") if r.get("fsieve_%s_b%d" % (m, i)) is not None]
+        if v:
+            vals.append(sum(v) / len(v))
+    return round(sum(vals), 3) if vals else None
 
 
 def fines_avg(r: dict) -> Optional[float]:

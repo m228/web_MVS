@@ -4086,3 +4086,13 @@ input.micro-cam-num { width: 56px; min-width: 0; flex: 0 0 auto; padding: 4px 5p
 .micro-sieve > em.is-zero { opacity: .45; font-weight: 500; }
 .micro-sieve { row-gap: 3px; }
 .micro-curve--side { margin-top: 10px; display: flex; flex-direction: column; gap: 2px; }
+/* «Объём и мука» компактно: левая колонка была пустой (панель фаз скрыта) — поля идут ОДНОЙ строкой на всю ширину, плавный порог — второй строкой */
+.micro-vol__cols { grid-template-columns: minmax(0, 1fr); gap: 0; margin-top: 8px; }
+.micro-vol__side .micro-vol__fields--col { flex-direction: row; flex-wrap: wrap; align-items: center; gap: 6px 18px; margin-top: 0; font-size: .82em; }
+.micro-vol__fields--col label { display: inline-flex; flex-direction: row; align-items: center; gap: 6px; margin: 0; }
+.micro-vol__fields--col input[type="number"] { width: 62px; height: 24px; }
+.micro-vol__side .micro-apply { margin-left: 0; }
+.micro-curve--side { margin-top: 6px; flex-direction: row; align-items: center; flex-wrap: nowrap; gap: 10px; }
+.micro-curve--side .micro-curve__row { margin: 0; }
+.micro-curve--side .micro-curve__row:last-child { flex: 1 1 auto; min-width: 0; }
+.micro-curve--side .micro-curve__row label span { white-space: nowrap; }

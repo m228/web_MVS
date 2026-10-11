@@ -32,6 +32,7 @@ class MicroscopeService:
         self._phase_ready = False        # счётчики подтянуты из журнала (перезапуск посреди варки)
         self._seed_ts = None
         self._fit_key = None            # заводка, для которой уже растянут порог муки (первая проба «готовности»)
+        self._boil_t_s = None           # время с заводки до «готовности» идущей варки (известно с первой пробы стадии 9)
         self._refit_busy = False
         self._started = False
         self._lock = threading.Lock()
@@ -376,6 +377,7 @@ class MicroscopeService:
             "plc": [],       # снимки полей ПЛК (PLC_KEYS) на момент каждого кадра — в запись пробы
             "t0": time.time(),
             "phase": self._current_phase(self.fsm.stage if self.fsm else None),    # фаза на начало пробы: она же и остаётся у пробы
+            "stage": self.fsm.stage if self.fsm else None,                          # стадия на начало пробы (9 = «готовность»: длительность варки становится известной)
         }
 
     def _cv_analyze_one(self, run, img):
@@ -418,8 +420,11 @@ class MicroscopeService:
                     run["timing"] = {**run["timing"], "refine_ms": round((time.time() - t_ref) * 1000),
                                      "refine_stubs": ref.get("stubs", 0), "refine_fixed": ref.get("fixed", 0)}
                 seed_age_s = (max(0, int(run.get("t0", time.time()) - self._seed_ts)) if self._seed_ts is not None else None)   # время с заводки — для плавного порога муки
+                if seed_age_s is not None and run.get("stage") == 9 and self._boil_t_s is None:
+                    self._boil_t_s = seed_age_s       # первая проба «готовности»: длительность варки известна — эта и все следующие пробы сразу считаются по растянутой кривой
                 res = cv_analyzer.analyze(img, objs, cv_cfg=cv, with_overlay=False, sv=sv,
-                                          phase=run.get("phase"), seed_age_s=seed_age_s)
+                                          phase=run.get("phase"), seed_age_s=seed_age_s,
+                                          boil_t_s=self._boil_t_s if self._seed_ts is not None else None)
                 summary, objects = res["summary"], res["objects"]
         # --- разломы (чистый OpenCV, всегда) ---
         run["zones"].append(cv_fracture.detect_zones(img, run["fr_cfg"]) if run["fr_on"] else [])
@@ -537,9 +542,11 @@ class MicroscopeService:
         prev, self._last_stage = self._last_stage, stage
         if prev == 3 and 4 <= stage <= 9:
             self._seed_ts = time.time()
+            self._boil_t_s = None
             self._spawn_refit((self.cfg or {}).get("camera_serial") or "")           # началась новая варка — предыдущая закрыта (в т.ч. без «готовности»)
         elif stage in (2, 3) and prev not in (2, 3):
             self._seed_ts = None
+            self._boil_t_s = None
             self._spawn_refit((self.cfg or {}).get("camera_serial") or "")
 
     def _plc_snapshot(self):

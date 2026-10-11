@@ -83,6 +83,9 @@ def parse_fines_curve(src):
     return pts
 
 
+FIT_MIN_S, FIT_MAX_S = 20 * 60.0, 150 * 60.0       # «готовность» раньше 20-й или позже 150-й минуты — сбой/нетипичная варка, растяжение ограничиваем
+
+
 def fines_curve_um(curve, minutes: float) -> float:
     """Порог муки (мкм) на minutes-й минуте с заводки: кусочно-линейно, за краями — крайние значения."""
     if minutes <= curve[0][0]:
@@ -103,7 +106,7 @@ def fines_diameter_from_volume_um(vol_mm3: float) -> float:
     return 1000.0 * (6.0 * vol_mm3 / math.pi) ** (1.0 / 3.0)
 
 
-def volume_cfg(cv_cfg: dict | None, phase=None, seed_age_s=None) -> dict:
+def volume_cfg(cv_cfg: dict | None, phase=None, seed_age_s=None, boil_t_s=None) -> dict:
     """Настройки объёма из блока cv (с дефолтами и защитой от мусора). phase — фаза варки пробы (p1/g1/p2/g2) или None:
     сита и порог муки берутся в масштабе phase_scale_<фаза> % (или порог — из своего поля фазы)."""
     v = dict(DEFAULTS)
@@ -158,8 +161,14 @@ def volume_cfg(cv_cfg: dict | None, phase=None, seed_age_s=None) -> dict:
     v["fines_curve_on"] = bool(src.get("fines_curve_on"))
     v["fines_curve"] = parse_fines_curve(src.get("fines_curve")) or [list(p) for p in FINES_CURVE_DEFAULT]
     v["fines_curve_used"] = False
+    v["fines_curve_boil_t_s"] = None
     if v["fines_curve_on"] and seed_age_s is not None:
-        v["fines_um"] = round(fines_curve_um(v["fines_curve"], max(0.0, float(seed_age_s)) / 60.0), 1)
+        minutes = max(0.0, float(seed_age_s)) / 60.0
+        if boil_t_s:                                   # варка известна целиком: кривую растягиваем так, чтобы её последняя точка пришлась на «готовность» ЭТОЙ варки
+            bt = min(max(float(boil_t_s), FIT_MIN_S), FIT_MAX_S)
+            minutes *= v["fines_curve"][-1][0] / (bt / 60.0)
+            v["fines_curve_boil_t_s"] = int(round(bt))
+        v["fines_um"] = round(fines_curve_um(v["fines_curve"], minutes), 1)
         v["fines_curve_used"] = True
     return v
 
@@ -210,11 +219,11 @@ def empty_sums() -> dict:
     return s
 
 
-def sums_for(measures: list, cv_cfg: dict | None, count_fines: bool = True, phase=None, seed_age_s=None) -> dict:
+def sums_for(measures: list, cv_cfg: dict | None, count_fines: bool = True, phase=None, seed_age_s=None, boil_t_s=None) -> dict:
     """Суммы объёма/площади по кадру: мелочь, сростки, всё. Складываются между кадрами пробы.
     count_fines=False — мелочь не считаем (варка не дошла до нужного СВ): мелкие кристаллы идут в «остальные»,
     а в сумме стоит пометка fines_off — доля мелочи будет None."""
-    cfg = volume_cfg(cv_cfg, phase, seed_age_s)
+    cfg = volume_cfg(cv_cfg, phase, seed_age_s, boil_t_s)
     s = empty_sums()
     if not count_fines:
         s["fines_off"] = True          # только флаг «СВ ниже порога» (для показа по пробе); саму муку считаем всегда —

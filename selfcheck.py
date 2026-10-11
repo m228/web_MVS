@@ -1871,6 +1871,57 @@ def _fine_sieve():
     return "границы, сумма 100 %%, журнал (%d столбцов), вес по объёму пробы, СВ-порог, пересчёт старой пробы по объектам" % sum(1 for k in row if k.startswith("fsieve"))
 
 
+@check("CV", "плавный порог муки растягивается под длительность варки: кривая → «готовность» этой варки, время готовности по журналу, идущая варка — по средней, пересчёт сохраняет растяжение")
+def _fines_curve_fit():
+    import json
+    import tempfile
+    import cv_store
+    import cv_volume as V
+    from types import SimpleNamespace as NS
+    on = {"volume": {"fines_curve_on": True, "fines_curve": [[0, 20], [81, 203]]}}
+    # средняя кривая: на 30-й минуте 20 + 183·30/81 = 87,8 мкм; на 81-й — 203
+    assert abs(V.volume_cfg(on, "g1", 30 * 60)["fines_um"] - 87.8) < 0.05
+    # варка закончилась на 60-й минуте: кривая растянута — на 60-й порог уже 203, на 30-й — как у средней на 40,5-й (111,5)
+    f60 = V.volume_cfg(on, "g1", 60 * 60, 60 * 60)
+    assert f60["fines_um"] == 203.0 and f60["fines_curve_boil_t_s"] == 3600, f60["fines_um"]
+    assert abs(V.volume_cfg(on, "g1", 30 * 60, 60 * 60)["fines_um"] - 111.5) < 0.05
+    # нетипичное «готовность» (5 минут) ограничено 20 минутами: порог на 20-й минуте уже полный
+    assert V.volume_cfg(on, None, 20 * 60, 5 * 60)["fines_um"] == 203.0 and V.volume_cfg(on, None, 20 * 60, 5 * 60)["fines_curve_boil_t_s"] == 1200
+    # без плавного порога растяжение ни на что не влияет
+    off = {"volume": {"fines_side_mm": 0.18}}
+    assert V.volume_cfg(off, None, 30 * 60, 60 * 60)["fines_curve_used"] is False
+    # время «готовности» по журналу: первая проба стадии 9 → вся варка; закрытая варка без неё — последняя проба; идущая без неё — нет
+    def row(ts, t, stage, seed, cook):
+        return {"ts": ts, "t": float(t), "stage": stage, "seed_age": seed, "cook_time": cook, "sv": 85.0}
+    A = [row("a1", 1000, 5, 60, 100), row("a2", 1100, 7, 1000, 1200), row("a3", 1200, 9, 3600, 3700), row("a4", 1300, 9, 3900, 4000)]
+    B = [row("b1", 100000, 5, 60, 100), row("b2", 100100, 7, 1500, 1600)]                   # закрыта (после неё есть варка C) без «готовности»
+    C = [row("c1", 200000, 5, 60, 100), row("c2", 200100, 7, 900, 1000)]                     # идущая: последняя проба свежая
+    fit = cv_store.boil_fit_times(A + B + C, now=200200)
+    assert all(fit.get(k) == 3600 for k in ("a1", "a2", "a3", "a4")), fit
+    assert all(fit.get(k) == 1500 for k in ("b1", "b2")), fit
+    assert "c1" not in fit and "c2" not in fit, "идущая варка без «готовности» не растягивается"
+    assert cv_store.boil_fit_times([row("x", 1000, 7, None, 100)], now=1e9) == {}, "нет времени с заводки — не растягиваем"
+    # пересчёт пробы: растяжение применяется по объектам и ОСТАЁТСЯ при показе пробы без явного времени варки
+    d = Path(tempfile.mkdtemp(prefix="mvs_fit_"))
+    objs = [{"group": "medium", "defect": None, "size_um": float(u), "length_um": u * 1.1, "width_um": u * 0.9} for u in (60, 120, 150, 180)]
+    (d / "objects_0.json").write_text(json.dumps(objs), encoding="utf-8")
+    mk = lambda: {"ts": "2026-10-11_10_00_00", "phase": "g1", "sv": 85.0, "frames": [1], "plc": {"seed_age_s": 1800},
+                  "summary": {"sv": 85.0, "volume": {"sieve": {"m3": [1] * 7}, "sieve_fine": {"m3": [1.0] * 21}, "n": {}}, "volume_cfg": {"calc_ver": V.CALC_VER}}}
+    r1 = cv_store._with_volume(d, mk(), on, "g1", boil_t_s=3600)
+    cfg1 = r1["summary"]["volume_cfg"]
+    assert cfg1["fines_curve_boil_t_s"] == 3600 and abs(cfg1["fines_um"] - 111.5) < 0.05, cfg1
+    r2 = cv_store._with_volume(d, json.loads(json.dumps(r1)), on, "g1")                    # показ пробы: растяжение не теряется
+    assert r2["summary"]["volume_cfg"]["fines_curve_boil_t_s"] == 3600 and abs(r2["summary"]["volume_cfg"]["fines_um"] - 111.5) < 0.05
+    # выключен плавный порог — автопересчёт ничего не делает
+    saved = cv_store._volume_cfg_now
+    cv_store._volume_cfg_now = lambda: {"volume": {"fines_curve_on": False}}
+    try:
+        assert cv_store.refit_curve("NOSUCH") == 0
+    finally:
+        cv_store._volume_cfg_now = saved
+    return "растяжение: 30-я мин при готовности 60 → 111,5 мкм; готовность по журналу (стадия 9 / закрытая без неё / идущая — нет); пересчёт держит растяжение"
+
+
 @check("UI", "JS страницы микроскопа: все вызываемые cv*-функции определены (пропавшая функция тихо ломала поля «Объём и мука»)")
 def _js_cv_functions_defined():
     import re

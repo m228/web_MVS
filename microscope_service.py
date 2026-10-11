@@ -31,6 +31,8 @@ class MicroscopeService:
         self._phase_last = None          # прошлая стадия для счёта фаз
         self._phase_ready = False        # счётчики подтянуты из журнала (перезапуск посреди варки)
         self._seed_ts = None
+        self._fit_key = None            # заводка, для которой уже растянут порог муки (первая проба «готовности»)
+        self._refit_busy = False
         self._started = False
         self._lock = threading.Lock()
         # DEBUG (убрать после отладки цикла): перехват ПЛК — при True данные СВ/стадии
@@ -459,6 +461,9 @@ class MicroscopeService:
                                      sv=(sum(x for x in run["svs"] if x is not None) / max(1, len([x for x in run["svs"] if x is not None]))
                                          if any(x is not None for x in run["svs"]) else None),
                                      plc=self._plc_summary(run), phase=run.get("phase"))
+        if saved and stage == 9 and self._fit_key != self._seed_ts:
+            self._fit_key = self._seed_ts                 # первая проба «готовности» этой варки: длительность известна — растягиваем порог муки и пересчитываем варку
+            self._spawn_refit(serial)
         if not saved:
             self._set_cv_status("error", "не удалось сохранить пробу (см. лог)")
         elif not run["sidecar_ok"]:
@@ -470,6 +475,24 @@ class MicroscopeService:
         else:
             self._set_cv_status("ok", "разбор готов: %d крист., кадров %d" % (
                 round(saved["summary"].get("count") or 0), len(overlays)))
+
+    def _spawn_refit(self, serial):
+        """Фоновый пересчёт плавного порога муки под длительность варок (авто: пользователю ничего нажимать не нужно). Один за раз."""
+        if self._refit_busy:
+            return
+        self._refit_busy = True
+
+        def run():
+            try:
+                import cv_store
+                n = cv_store.refit_curve(serial)
+                if n:
+                    log_event("microscope_service", "Плавный порог муки растянут под длительность варки: пересчитано проб %d" % n, "info", {"serial": serial})
+            except Exception as e:
+                log_event("microscope_service", "Не удалось растянуть плавный порог муки", "warn", {"error": str(e)})
+            finally:
+                self._refit_busy = False
+        threading.Thread(target=run, name="cv-refit", daemon=True).start()
 
     def _phase_init(self):
         """Счётчики фаз после перезапуска приложения посреди варки — по журналу идущей варки (иначе вторая подкачка стала бы первой)."""
@@ -514,8 +537,10 @@ class MicroscopeService:
         prev, self._last_stage = self._last_stage, stage
         if prev == 3 and 4 <= stage <= 9:
             self._seed_ts = time.time()
+            self._spawn_refit((self.cfg or {}).get("camera_serial") or "")           # началась новая варка — предыдущая закрыта (в т.ч. без «готовности»)
         elif stage in (2, 3) and prev not in (2, 3):
             self._seed_ts = None
+            self._spawn_refit((self.cfg or {}).get("camera_serial") or "")
 
     def _plc_snapshot(self):
         """Текущие значения ПЛК из sv_source для записи пробы (только чтение). Нет связи — None."""

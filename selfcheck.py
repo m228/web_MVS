@@ -1922,6 +1922,32 @@ def _fines_curve_fit():
     return "растяжение: 30-я мин при готовности 60 → 111,5 мкм; готовность по журналу (стадия 9 / закрытая без неё / идущая — нет); пересчёт держит растяжение"
 
 
+@check("CV", "«готовность»: пробы после первой (и сама первая) сразу считаются по растянутой кривой, а не по средней — порог на стадиях 8 и 9 одного пошага (без скачка 0,18 → 0,15)")
+def _fines_curve_live_fit():
+    import numpy as np
+    import cv_analyzer
+    from microscope_service import MicroscopeService
+    on = {"volume": {"fines_curve_on": True, "fines_curve": [[0, 20], [81, 203]]}}
+    img = np.zeros((100, 100, 3), np.uint8)
+    # варка кончилась на 64-й минуте (первая проба «готовности»): проба на 64-й — полный порог 203, и следующие (66-я, 70-я) — тоже; без растяжения было бы 164 / 169 / 183
+    um = lambda seed, t: cv_analyzer.analyze(img, [], cv_cfg=on, with_overlay=False, sv=86.0, phase=None, seed_age_s=seed * 60, boil_t_s=t)["summary"]["volume_cfg"]["fines_um"]
+    assert um(64, 64 * 60) == 203.0 and um(66, 64 * 60) == 203.0 and um(70, 64 * 60) == 203.0
+    assert um(64, None) < 170 and um(70, None) < 190, "без растяжения порог по средней кривой"
+    assert abs(um(50, 64 * 60) - 20 - 183 * 50 / 64) < 0.2, "до «готовности» — та же растянутая кривая"
+    # новая варка (заводка / сгущение) сбрасывает известную длительность варки
+    ms = MicroscopeService()
+    ms._spawn_refit = lambda serial: None
+    ms._boil_t_s = 3840
+    ms._last_stage = 3
+    ms._note_stage(4)
+    assert ms._boil_t_s is None and ms._seed_ts is not None, "заводка должна сбросить длительность прошлой варки"
+    ms._boil_t_s = 3840
+    ms._last_stage = 9
+    ms._note_stage(2)
+    assert ms._boil_t_s is None, "вход в 2/3 после готовности — новая варка"
+    return "порог 203 на 64, 66 и 70-й минуте при готовности на 64-й; без растяжения 164 / 169 / 183; новая варка сбрасывает длительность"
+
+
 @check("UI", "JS страницы микроскопа: все вызываемые cv*-функции определены (пропавшая функция тихо ломала поля «Объём и мука»)")
 def _js_cv_functions_defined():
     import re

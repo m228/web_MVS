@@ -1842,6 +1842,103 @@ def _updater_run_script():
     return "update.ps1 -Root -Port, скрытая консоль, новая группа, запасной запуск без breakaway"
 
 
+@check("Обновление", "обновление в две фазы: скачивание в фоне (.part → проверка → архив), одно скачивание за раз, версия готового архива, «перезапустить» = update.ps1 -ZipPath без скачивания")
+def _update_two_phase():
+    import hashlib
+    import io
+    import tempfile
+    import zipfile
+    import updater
+
+    def make_zip(version):
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w") as zf:
+            zf.writestr("web_MVS.exe", b"MZ")
+            zf.writestr("_internal/VERSION", version + "\n")
+        return buf.getvalue()
+
+    class FakeResp:
+        def __init__(self, data):
+            self.b = io.BytesIO(data)
+
+        def read(self, n=-1):
+            return self.b.read(n)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    saved = (updater.STAGING, updater.STAGED, updater.is_frozen, updater._fetch_latest_meta, updater.urllib.request.urlopen,
+             updater.read_version, updater._app_dir, updater.subprocess.Popen)
+    d = Path(tempfile.mkdtemp(prefix="mvs_upd2_"))
+    try:
+        updater.STAGING, updater.STAGED = d / ".update", d / ".update" / "staged"
+        updater.is_frozen = lambda: True
+        data = make_zip("9.9.9")
+        asset = {"name": "web_MVS_v9.9.9.zip", "browser_download_url": "http://x/y.zip", "size": len(data),
+                 "digest": "sha256:" + hashlib.sha256(data).hexdigest()}
+        updater._fetch_latest_meta = lambda max_age=0.0: ("v9.9.9", asset, "")
+        updater.urllib.request.urlopen = lambda req, timeout=60: FakeResp(data)
+        updater.read_version = lambda: "1.0.0"
+
+        # 1) удачное скачивание без распаковки: архив на месте, .part нет, версия читается из архива, STAGED не создан
+        r = updater.download_latest(extract=False)
+        assert r["ok"] and r["version"] == "9.9.9", r
+        assert updater.staged_zip() and not list(updater.STAGING.glob("*.part")) and not updater.STAGED.exists()
+        assert updater.staged_version() == "9.9.9"
+        c = updater.check_latest()
+        assert c["update_available"] and c["staged"] == "9.9.9" and c["downloading"] is False, c
+
+        # 2) повреждённая загрузка (размер не тот): архива нет, .part убран, готовым не считается
+        updater.urllib.request.urlopen = lambda req, timeout=60: FakeResp(data[:-5])
+        r = updater.download_latest(extract=False)
+        assert not r["ok"], r
+        assert updater.staged_zip() is None and not list(updater.STAGING.glob("*.part"))
+
+        # 3) одновременно — только одно скачивание
+        assert updater._DL_LOCK.acquire(False)
+        try:
+            r = updater.download_latest(extract=False)
+            assert not r["ok"] and r.get("busy"), r
+            assert updater.check_latest()["downloading"] is True
+        finally:
+            updater._DL_LOCK.release()
+
+        # 4) недокачанный *.part готовым не считается; устаревший архив (версия уже установлена) check убирает
+        (updater.STAGING).mkdir(parents=True, exist_ok=True)
+        (updater.STAGING / "web_MVS_v9.9.9.zip.part").write_bytes(b"half")
+        assert updater.staged_zip() is None
+        (updater.STAGING / "web_MVS_v1.0.0.zip").write_bytes(make_zip("1.0.0"))
+        assert updater.staged_version() == "1.0.0"
+        c = updater.check_latest()
+        assert c["staged"] is None and not updater.STAGING.exists(), "архив уже установленной версии не убран"
+
+        # 5) «перезапустить»: update.ps1 запускается с -ZipPath на скачанный архив; без архива — понятная ошибка
+        app = d / "app"
+        app.mkdir()
+        (app / "update.ps1").write_text("# stub", encoding="utf-8")
+        updater._app_dir = lambda: app
+        calls = []
+        updater.subprocess.Popen = lambda cmd, **kw: calls.append(cmd) or object()
+        r = updater.run_update_script(8000, staged=True)
+        assert not r["ok"] and "скачайте" in r["error"].lower(), r
+        updater.STAGING.mkdir(parents=True, exist_ok=True)
+        z = updater.STAGING / "web_MVS_v9.9.9.zip"
+        z.write_bytes(data)
+        r = updater.run_update_script(8000, staged=True)
+        assert r["ok"] and calls, r
+        assert calls[-1][calls[-1].index("-ZipPath") + 1] == str(z), calls[-1]
+        calls.clear()
+        r = updater.run_update_script(8000)
+        assert r["ok"] and "-ZipPath" not in calls[-1], "обычный запуск не должен брать готовый архив"
+    finally:
+        (updater.STAGING, updater.STAGED, updater.is_frozen, updater._fetch_latest_meta, updater.urllib.request.urlopen,
+         updater.read_version, updater._app_dir, updater.subprocess.Popen) = saved
+    return "скачивание в .part → проверка → архив; битый не принят; один за раз; версия из архива; устаревший убран; run: -ZipPath"
+
+
 @check("CV", "cv_client.health: CV-сервис недоступен → None без исключения и зависания")
 def _cv_client_offline():
     import cv_client

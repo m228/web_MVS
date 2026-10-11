@@ -1148,8 +1148,8 @@
   const CV_UM_SERIES = ["mean", "median"];                        // шкала справа, мкм
   // режим варки из ПЛК (рисуется пунктиром). Уровень — в %, на общей шкале 0–100; остальные — каждая на своей шкале
   // по видимому участку, но не уже «минимального размаха» (иначе шум на 0,2 °C выглядел бы бурей)
-  const CV_REGIME = ["temp", "vac", "level", "current", "cook_time", "seed_age", "fines_avg"];   // fines_avg — мука, среднее M1–M3: рисуется сплошной, своя шкала
-  const CV_AUTO_SPAN = { temp: 10, vac: 0.5, current: 5, cook_time: 60, seed_age: 60, fines_avg: 10 };
+  const CV_REGIME = ["temp", "vac", "level", "current", "cook_time", "seed_age", "fines_avg"];   // fines_avg — мука, среднее M1–M3: сплошной, но на общей шкале 0–100 % (как мелкая/средняя/крупная): 30 % всегда на одной высоте при любом приближении
+  const CV_AUTO_SPAN = { temp: 10, vac: 0.5, current: 5, cook_time: 60, seed_age: 60 };               // у муки своей авто-шкалы нет: по видимому участку она «растягивалась», и при приближении 30 % рисовалось у самого верха
   const CV_MIN_SERIES = ["cook_time", "seed_age"];                // в журнале секунды, показываем минуты
   const CV_MAX_SPAN = 400 * 86400, CV_MIN_SPAN = 60;
   let cvTrendDay = null;         // выбранная дата «YYYY-MM-DD»

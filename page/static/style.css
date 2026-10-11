@@ -4071,7 +4071,7 @@ input.micro-cam-num { width: 56px; min-width: 0; flex: 0 0 auto; padding: 4px 5p
 .micro-trend__boil #cvTrendBoilLbl.is-on { color: var(--text, inherit); font-weight: 600; }
 /* плавный порог муки по времени: флажок и точки «минута:мкм» внутри раскрываемой части «Фазы варки» */
 .micro-curve__row { display: flex; align-items: center; gap: 8px; margin: 2px 0 6px; font-size: .78em; color: var(--muted); }
-.micro-curve__row label { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; }
+.micro-curve__row label { display: inline-flex; flex-direction: row; align-items: center; gap: 6px; margin: 0; font-weight: 400; cursor: pointer; }
 .micro-curve__row input[type="checkbox"] { width: 15px; height: 15px; min-height: 0; margin: 0; padding: 0; flex: 0 0 auto; accent-color: var(--accent, #2563eb); }
 .micro-curve__row input[type="checkbox"].is-dirty { outline: 1px solid var(--accent, #2563eb); }
 .micro-curve__row input[type="text"] { flex: 1 1 auto; min-width: 0; height: 24px; min-height: 0; padding: 2px 6px; font-size: 1em; border-radius: 6px; font-variant-numeric: tabular-nums; }
@@ -4082,3 +4082,4 @@ input.micro-cam-num { width: 56px; min-width: 0; flex: 0 0 auto; padding: 4px 5p
 .micro-sieve > em { position: relative; padding: 0 5px; border-radius: 4px; background: linear-gradient(90deg, var(--accent-soft, rgba(124, 92, 255, .30)) var(--bar, 0%), transparent var(--bar, 0%)); }
 .micro-sieve > em.is-zero { opacity: .45; font-weight: 500; }
 .micro-sieve { row-gap: 3px; }
+.micro-curve--side { margin-top: 10px; display: flex; flex-direction: column; gap: 2px; }

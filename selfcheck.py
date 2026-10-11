@@ -1802,7 +1802,7 @@ def _fines_curve_time():
     vals = [V.fines_curve_um(c, m / 10.0) for m in range(0, 1500)]
     assert all(b >= a for a, b in zip(vals, vals[1:])), "кривая должна не убывать"
     assert max(abs(b - a) for a, b in zip(vals, vals[1:])) < 1.0, "ступенька: порог прыгает больше 1 мкм за 6 с"
-    assert V.fines_curve_um(c, 85) == 203 and V.fines_curve_um(c, 200) == 203 and V.fines_curve_um(c, -5) == 25
+    assert V.fines_curve_um(c, 81) == 203 and V.fines_curve_um(c, 200) == 203 and V.fines_curve_um(c, -5) == 20 and abs(V.fines_curve_um(c, 40.5) - 111.5) < 0.01
     base = {"volume": {"fines_side_mm": 0.18, "fines_side_g1": 0.15, "phase_scale_g1": 70}}
     # выключено / нет времени с заводки: порог фазы, как раньше
     off = V.volume_cfg({"volume": dict(base["volume"])}, "g1", 3000)

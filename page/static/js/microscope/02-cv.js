@@ -560,7 +560,7 @@
   }
   function cvVolMarkDirty() { cvCurveSync(); cvPhaseTableUpdate(); cvFinesEqUpdate(); const box = $("cvVolApply"); if (box && !box.classList.contains("is-busy")) box.hidden = !cvVolDirty(); }
   // плавный порог муки: «минута:мкм» через запятую ↔ [[мин, мкм], …] (как cv_volume.parse_fines_curve)
-  const CV_CURVE_DEFAULT = [[0, 25], [10, 30], [15, 45], [20, 65], [25, 85], [30, 110], [40, 135], [50, 150], [60, 155], [70, 170], [80, 190], [85, 203]];
+  const CV_CURVE_DEFAULT = [[0, 20], [81, 203]];                 // линейно от 10 % до общего порога 203 мкм к 81-й минуте (как cv_volume.FINES_CURVE_DEFAULT)
   const cvCurveText = (c) => (Array.isArray(c) && c.length >= 2 ? c : CV_CURVE_DEFAULT).map((p) => p[0] + ":" + p[1]).join(", ");
   function cvCurveParse(text) {
     const pts = []; const re = /(\d+(?:\.\d+)?)\s*[:=]\s*(\d+(?:\.\d+)?)/g; let m;

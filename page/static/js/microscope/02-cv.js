@@ -6,7 +6,8 @@
   // Вкладка «CV» + переключатель окна камера/распознавание. Данные с /api/cv/*.
   const CV_GROUPS = ["small", "medium", "large", "reject"];
   const CV_SERIES_COLOR = { small: "#1d9e75", medium: "#378add", large: "#ba7517", reject: "#e24b4a", mean: "#7f77dd", median: "#d16fb8", sv: "#f2c94c",
-    temp: "#ff8a4c", vac: "#4fd1e8", level: "#8aa4c8", current: "#a3d95b", cook_time: "#b9a98f", seed_age: "#ffb347", fines_avg: "#e8c547" };
+    temp: "#ff8a4c", vac: "#4fd1e8", level: "#8aa4c8", current: "#a3d95b", cook_time: "#b9a98f", seed_age: "#ffb347", fines_avg: "#e8c547",
+    fsv0: "#e8c547", fsv1: "#1d9e75", fsv2: "#378add", fsv3: "#7f77dd", fsv4: "#d16fb8", fsv5: "#ba7517" };   // fsv0–5 — фракции рассева в режиме «Рассев» тренда
   let cvWinOn = false;          // окно показывает CV (true) или камеру (false)
   let cvLastResult = null;      // последняя проба (result.json)
   let cvPrevResult = null;      // предыдущая проба (для Δ к прошлой)
@@ -269,7 +270,10 @@
   try { cvSieveOnlyFines = localStorage.getItem("microCvSieveOnlyFines") === "1"; } catch (e) { }
   function cvRenderSieve(sv, scale) {      // sv = {m1:[21], m2:[21], m3:[21], area:[21]} в %: объём по трём моделям и площадь; scale не нужен (шкала одна); нет данных — прочерки
     cvSieveLast = sv; cvSieveScale = scale || 1;
-    const g = $("cvSieveGrid"); if (!g) return;
+    cvFillSieve($("cvSieveGrid"), sv);
+  }
+  function cvFillSieve(g, sv) {            // таблица рассева в элемент g — одна и для вкладки «Распознавание», и для режима «Рассев» тренда
+    if (!g) return;
     const one = (m, k) => (sv && sv[m] && sv[m][k] != null ? sv[m][k] : null);
     const sum = (m, idx) => { let s = null; idx.forEach((k) => { const v = one(m, k); if (v != null) s = (s || 0) + v; }); return s; };
     const cols = cvShowModels ? ["avg", "area", "m1", "m2", "m3"] : ["avg", "area"];
@@ -326,6 +330,7 @@
     } catch (e) { }
     cvTrendBoilUpdate();
     if (cvVolMode !== "probe") cvRenderBoil();
+    cvTrendSieveRender();
   }
   const CV_PHASES = ["p1", "g1", "p2", "g2"];
   const CV_PHASE_TITLE = { p1: "подкачка 1", g1: "рост 1", p2: "подкачка 2", g2: "рост 2" };
@@ -1197,8 +1202,9 @@
       cvPostSettings({ trend_style: cvTrendStyle }); cvBuildStylePanel(); cvApplyStyleToRows(); cvDrawTrend();
     });
   }
-  const CV_TREND_KEY = "microCvTrendSeries4";   // 3: добавлены серии «стадия» и «СВ» (включены по умолчанию)
-  const CV_PCT_SERIES = ["small", "medium", "large", "reject", "sv"];   // шкала слева, % (СВ тоже в % — те же 0–100)
+  const CV_TREND_KEY = "microCvTrendSeries5";   // 3: добавлены серии «стадия» и «СВ»; 5: в список попадают и скрытые режимом серии (фракции рассева); старый ключ 4 читаем без них
+  const CV_TREND_KEY_OLD = "microCvTrendSeries4";
+  const CV_PCT_SERIES = ["small", "medium", "large", "reject", "sv", "fsv0", "fsv1", "fsv2", "fsv3", "fsv4", "fsv5"];   // шкала слева, % (СВ тоже в % — те же 0–100)
   const CV_UM_SERIES = ["mean", "median"];                        // шкала справа, мкм
   // режим варки из ПЛК (рисуется пунктиром). Уровень — в %, на общей шкале 0–100; остальные — каждая на своей шкале
   // по видимому участку, но не уже «минимального размаха» (иначе шум на 0,2 °C выглядел бы бурей)
@@ -1214,8 +1220,10 @@
   let cvTrendFetchTimer = null;
   let cvTrendSeq = 0;
 
-  function cvSelectedSeries() {
-    return [...document.querySelectorAll("#cvSeries input:checked")].map((c) => c.value);
+  let cvTrendMode = "crystals";  // что рисует тренд: crystals — кристаллы и режим варки, sieve — фракции рассева (+ СВ и стадия)
+  try { if (localStorage.getItem("microCvTrendMode") === "sieve") cvTrendMode = "sieve"; } catch (e) { }
+  function cvSelectedSeries() {      // отмеченные серии только видимых колонок: у режима своя колонка, «Тренды с ВА» общая
+    return [...document.querySelectorAll("#cvSeries input:checked")].filter((c) => !c.closest(".micro-trend__col").hidden).map((c) => c.value);
   }
   const cvPad2 = (n) => String(n).padStart(2, "0");
   function cvDayStr(d) { return d.getFullYear() + "-" + cvPad2(d.getMonth() + 1) + "-" + cvPad2(d.getDate()); }
@@ -1230,7 +1238,7 @@
   }
   async function cvTrendFetch(a, b) {            // загрузить пробы [a,b] (epoch, сек)
     const seq = ++cvTrendSeq;
-    const q = [cvSerialQ(), "series=small,medium,large,reject,mean,median,count,stage,sv," + CV_REGIME.join(","), "from=" + Math.floor(a), "to=" + Math.ceil(b), "limit=5000"].filter(Boolean).join("&");
+    const q = [cvSerialQ(), "series=small,medium,large,reject,mean,median,count,stage,sv,fsv0,fsv1,fsv2,fsv3,fsv4,fsv5," + CV_REGIME.join(","), "from=" + Math.floor(a), "to=" + Math.ceil(b), "limit=5000"].filter(Boolean).join("&");
     const d = await api("/api/cv/trend?" + q);
     if (seq !== cvTrendSeq) return false;        // пока грузили, запросили другое — это устарело
     CV_MIN_SERIES.forEach((k) => { if (d.series && d.series[k]) d.series[k] = d.series[k].map((x) => (x == null ? null : x / 60)); });
@@ -1472,7 +1480,47 @@
       });
     }
     ctx.restore();
-    cvTrendUpdateRows(); cvTrendUpdateSpan();
+    cvTrendUpdateRows(); cvTrendUpdateSpan(); cvTrendSieveRender();
+  }
+  // --- режим «Рассев»: переключатель, и под графиком — рассев варки, выбранной на тренде (плитки «варка» + фазы, как в «Распознавании») ---
+  let cvTrSievePhase = "boil", cvTrSieveSig = "";
+  function cvTrendSieveBoil() {          // варка рассева: растянутая на тренде; иначе та, что пересекает видимое окно (новые первыми); иначе самая свежая
+    if (cvTrendBoil) { const b = cvBoils.find((x) => x.id === cvTrendBoil); if (b) return b; }
+    const v = cvTrendView;
+    return (v && cvBoils.find((b) => b.t_from <= v.end && b.t_to >= v.start)) || cvBoils[0] || null;
+  }
+  function cvTrendSieveRender() {
+    const card = $("cvTrSieveCard"); if (!card) return;
+    card.hidden = cvTrendMode !== "sieve";
+    if (card.hidden) return;
+    const b = cvTrendSieveBoil(), have = CV_PHASES.filter((p) => b && b.phases && b.phases[p]);
+    if (cvTrSievePhase !== "boil" && !have.includes(cvTrSievePhase)) cvTrSievePhase = "boil";
+    const sig = [b ? b.id + ":" + b.n : "-", cvTrSievePhase, cvShowModels, cvSieveOnlyFines, have.join(",")].join("|");
+    if (sig === cvTrSieveSig) return;                      // та же варка и фаза — не перерисовываем на каждое движение мыши
+    cvTrSieveSig = sig;
+    const box = $("cvTrSieveTiles");
+    box.innerHTML = "";
+    ["boil", ...have].forEach((k) => {
+      const bt = document.createElement("button");
+      bt.type = "button"; bt.className = "micro-sieve__tile" + (k === cvTrSievePhase ? " is-active" : "");
+      bt.textContent = k === "boil" ? "варка" : CV_PHASE_TITLE[k];
+      bt.title = k === "boil" ? "Рассев по всей варке (пробы финиша)" : "Рассев только по пробам этой фазы";
+      bt.addEventListener("click", () => { cvTrSievePhase = k; cvTrendSieveRender(); });
+      box.appendChild(bt);
+    });
+    const blk = b ? (cvTrSievePhase !== "boil" ? b.phases[cvTrSievePhase] : ((cvVolMode === "tail" ? b.tail : b.all) || b)) : null;
+    cvFillSieve($("cvTrSieveGrid"), blk ? blk.fsieve : null);
+    cvShowTrSv(b ? cvBoilName(cvBoils.indexOf(b)) + " · " + cvSvRange(blk, cvTrSievePhase !== "boil" ? blk.dur_s : b.dur_s) : "варок пока нет");
+  }
+  function cvShowTrSv(t) { const e = $("cvTrSieveSv"); if (e && e.textContent !== t) e.textContent = t; }
+  function cvTrendSetMode(m) {
+    cvTrendMode = m;
+    try { localStorage.setItem("microCvTrendMode", m); } catch (e) { }
+    document.querySelectorAll("#cvTrendModeSeg button").forEach((b) => b.classList.toggle("is-active", b.dataset.m === m));
+    document.querySelectorAll("#cvSeries .micro-trend__col").forEach((c) => { c.hidden = c.dataset.m !== "both" && c.dataset.m !== m; });
+    cvTrSieveSig = "";
+    if (!cvBoils.length) cvLoadBoils(true);
+    cvDrawTrend(); cvTrendSieveRender();
   }
   // значения в строках серий: под курсором, а без него — по последней видимой пробе
   function cvTrendUpdateRows() {
@@ -1518,7 +1566,9 @@
     const names = { small: "малая", medium: "средняя", large: "большая", reject: "брак" };
     const groups = CV_GROUPS.map((g) => val(g) == null ? "" :
       '<span class="dot" style="background:' + CV_SERIES_COLOR[g] + '"></span>' + names[g] + " " + val(g) + "%").filter(Boolean).join("<br>");
-    tip.innerHTML = head + (line2 ? "<br>" + line2 : "") + (line3 ? "<br>" + line3 : "") + (groups ? "<br>" + groups : "") + (msg ? "<br><i>" + msg + "</i>" : "");
+    const fsv = cvTrendMode !== "sieve" ? "" : ["0–0,20", "0,20–0,40", "0,40–0,60", "0,60–0,80", "0,80–1,0", "&gt; 1,0"].map((n, k) => val("fsv" + k) == null ? "" :
+      '<span class="dot" style="background:' + CV_SERIES_COLOR["fsv" + k] + '"></span>' + n + " мм " + val("fsv" + k) + "%").filter(Boolean).join("<br>");
+    tip.innerHTML = head + (line2 ? "<br>" + line2 : "") + (line3 ? "<br>" + line3 : "") + (fsv ? "<br>" + fsv : (groups ? "<br>" + groups : "")) + (msg ? "<br><i>" + msg + "</i>" : "");
     tip.hidden = false;
     const w = tip.offsetWidth, W = cv.clientWidth;
     tip.style.left = (x + 12 + w > W ? Math.max(0, x - 12 - w) : x + 12) + "px";
@@ -1526,10 +1576,14 @@
   }
   function wireTrend() {
     // выбранные серии запоминаем в браузере
-    try { const saved = JSON.parse(localStorage.getItem(CV_TREND_KEY) || "null");
-      if (Array.isArray(saved)) document.querySelectorAll("#cvSeries input").forEach((c) => { c.checked = saved.includes(c.value); }); } catch (e) { }
+    try {
+      const cur = JSON.parse(localStorage.getItem(CV_TREND_KEY) || "null"), saved = cur || JSON.parse(localStorage.getItem(CV_TREND_KEY_OLD) || "null");
+      if (Array.isArray(saved)) document.querySelectorAll("#cvSeries input").forEach((c) => { if (cur || !c.value.startsWith("fsv")) c.checked = saved.includes(c.value); });
+    } catch (e) { }
+    document.querySelectorAll("#cvTrendModeSeg button").forEach((b) => b.addEventListener("click", () => cvTrendSetMode(b.dataset.m)));
+    cvTrendSetMode(cvTrendMode);
     document.querySelectorAll("#cvSeries input").forEach((c) => c.addEventListener("change", () => {
-      try { localStorage.setItem(CV_TREND_KEY, JSON.stringify(cvSelectedSeries())); } catch (e) { }
+      try { localStorage.setItem(CV_TREND_KEY, JSON.stringify([...document.querySelectorAll("#cvSeries input:checked")].map((c) => c.value))); } catch (e) { }
       cvDrawTrend();
     }));
     // дата: поле, «‹ ›» по дням с пробами, «Сегодня»

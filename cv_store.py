@@ -181,6 +181,7 @@ def _hist_row(result: dict) -> Optional[dict]:
         "temp": plc.get("temp_app"), "level": plc.get("level"), "current": plc.get("current"),
         "vac": plc.get("press_top"), "cook_time": plc.get("cook_time"), "substage": plc.get("substage"), "seed_age": plc.get("seed_age_s"),
         "count": s.get("count"), "mean": sz.get("mean"), "median": sz.get("median"),
+        "size_min": sz.get("min"), "size_max": sz.get("max"), "len_max": sz.get("len_max"),
         "small": pct.get("small"), "medium": pct.get("medium"),
         "large": pct.get("large"), "reject": pct.get("reject"),
         # мелочь и сростки по объёму (модели M1 шар / M2 сфероид / M3 призма) и по площади, % от общего
@@ -348,7 +349,7 @@ def trend_range(serial: str, t_from: float, t_to: float, series: Optional[list[s
 
 
 EXPORT_COLUMNS = ["ts", "t", "stage", "substage", "phase", "sv", "temp", "level", "current", "vac", "cook_time", "seed_age",
-                  "count", "mean", "median", "cv_pct", "density", "small", "medium", "large", "reject",
+                  "count", "mean", "median", "size_min", "size_max", "len_max", "cv_pct", "density", "small", "medium", "large", "reject",
                   "reject_pct", "fines_m1", "fines_m2", "fines_m3", "fines_avg", "fines_area", "fines_n",
                   "good_n", "rej_n", "sieve_b0", "sieve_b1", "sieve_b2", "sieve_b3", "sieve_b4", "sieve_b5", "sieve_b6",
                   "sieve_area_b0", "sieve_area_b1", "sieve_area_b2", "sieve_area_b3", "sieve_area_b4", "sieve_area_b5", "sieve_area_b6",
@@ -486,6 +487,7 @@ def _boil_summary(rows: list, finished: bool, avg_n: int = 4) -> dict:
     fines["area"], agg["area"] = r3(_wmean(base, "fines_area", None)), r3(_wmean(base, "agg_area", None))
     fines["n"], agg["n"] = r3(_wmean(base, "fines_n", None)), r3(_wmean(base, "agg_n", None))
     out["fines"], out["agg"], out["vtot"] = fines, agg, vtot
+    out["size"] = size_extremes(rows)                 # крайние кристаллы всей варки (все пробы, без брака/сростков)
     # рассев по варке — по тем же пробам финиша, что и мука, взвешено по общему объёму пробы
     fin = [r for r in base if r.get("fines_m3") is not None]
     # рассев по объёму (M1–M3, вес — общий объём пробы) и по площади (area, простое среднее по пробам)
@@ -501,6 +503,7 @@ def _boil_summary(rows: list, finished: bool, avg_n: int = 4) -> dict:
         rp = [r for r in rows if r.get("phase") == ph]
         if rp:
             blk = _vol_block(rp)
+            blk["size"] = size_extremes(rp)
             blk.update({"n": len(rp), "ts_from": rp[0]["ts"], "ts_to": rp[-1]["ts"], "title": cv_volume.PHASE_TITLES[ph], "dur_s": durs.get(ph)})
             out["phases"][ph] = blk
     last = rows[-1]
@@ -575,6 +578,18 @@ def _encode_thumb(img) -> Optional[bytes]:
 REASONS = ["needle", "aggregate", "crooked", "tiny", "huge"]
 
 
+def _ext(fn, vals: list) -> Optional[float]:
+    """min/max по значениям, где они есть; нет ни одного (старые пробы, пустой кадр) — None."""
+    v = [x for x in vals if x is not None]
+    return fn(v) if v else None
+
+
+def size_extremes(rows: list) -> dict:
+    """Самый мелкий и крупный кристалл (диаметр) и самый длинный (длинная сторона), мкм, по строкам журнала; нет данных — None."""
+    return {"min": _ext(min, [r.get("size_min") for r in rows]), "max": _ext(max, [r.get("size_max") for r in rows]),
+            "len_max": _ext(max, [r.get("len_max") for r in rows])}
+
+
 def _aggregate(frames: list[dict]) -> dict:
     """Сводка пробы = усреднение по-кадровых сводок (кадры одной пробы ~ одинаковы)."""
     ok = [f["summary"] for f in frames if f.get("summary")]
@@ -600,6 +615,10 @@ def _aggregate(frames: list[dict]) -> dict:
             "mean": round(mean_size, 1),
             "median": round(median_size, 1),
             "cv_pct": round(sum(s["size_um"].get("cv_pct", 0) for s in ok) / n, 1),
+            # крайние значения не усредняем, а берём по всем кадрам пробы
+            "min": _ext(min, [s["size_um"].get("min") for s in ok]),
+            "max": _ext(max, [s["size_um"].get("max") for s in ok]),
+            "len_max": _ext(max, [s["size_um"].get("len_max") for s in ok]),
         },
         "density_per_mm2": round(sum(s["density_per_mm2"] for s in ok) / n, 2),
         # причины брака и вытянутые — средние по кадрам; reject_active — брак шёл в рассев хотя бы в одном кадре

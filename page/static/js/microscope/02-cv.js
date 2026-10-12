@@ -158,6 +158,9 @@
     setTe("cvTimeTotal", tm.total_ms != null ? (Math.round(tm.total_ms) + " мс") : "—");
     setTe("cvTilesN", tm.tiles != null ? (tm.tiles + (tm.grid ? " (" + tm.grid + ")" : "")) : "—");
     setTe("cvInferNms", tm.infer_ms != null ? (Math.round(tm.infer_ms) + " / " + Math.round(tm.nms_ms || 0) + " мс") : "—");
+    const ex = (s && s.size_um) || {}, um = (v) => (v == null ? "—" : String(Math.round(v)));
+    setTe("cvSizeMinMax", ex.min == null && ex.max == null ? "—" : um(ex.min) + " / " + um(ex.max));
+    setTe("cvLenMax", um(ex.len_max));
     setTe("cvCountTele", s ? Math.round(s.count || 0) : "—");
     setTe("cvFramesN", r && r.frames ? r.frames.length : "—");
     setTe("cvModel", (s && s.model) || (cvLastModel || "—"));
@@ -437,10 +440,14 @@
     const cfg = b.cfg || {};
     const fd0 = cfg.fines_um != null ? cfg.fines_um : cvFinesDiam(), fd = fd0 != null ? fd0 * pscale : fd0;
     cvSetText($("cvVolLblFines"), "Мука <" + (fd != null ? Math.round(fd) : "") + " мкм");
+    // крайние кристаллы: самый мелкий / крупный (диаметр) и самый длинный (длина) — по варке или по фазе
+    const exLine = (e, what) => (e && (e.max != null || e.min != null || e.len_max != null)
+      ? "<div><b>Кристаллы " + what + ":</b> крупнейший " + (e.max != null ? Math.round(e.max) : "—") + " мкм, мельчайший " + (e.min != null ? Math.round(e.min) : "—") +
+        " мкм, самый длинный " + (e.len_max != null ? Math.round(e.len_max) : "—") + " мкм <i>(хорошие, без брака и сростков)</i>.</div>" : "");
     if (ph !== "boil") {          // фаза: подробный текст про фазу вместо итогов варки
       const P = blk.probes != null ? blk.probes : blk.n;
       cvSetHtml(box, "<div><b>" + CV_PHASE_TITLE[ph] + ":</b> все пробы фазы — " + P + " (" + cvTsLabel(blk.ts_from).slice(6, 11) + "–" + cvTsLabel(blk.ts_to).slice(6, 11) + "), хороших кристаллов " + (blk.good_n || 0) +
-        ". Мука: <b>" + pc(cvAvg3(blk.fines)) + "</b> объёма (среднее M1–M3).</div>");
+        ". Мука: <b>" + pc(cvAvg3(blk.fines)) + "</b> объёма (среднее M1–M3).</div>" + exLine(blk.size, "фазы"));
       return;
     }
     cvSetText($("cvFinesCalc"), cvFinesCalcText());
@@ -461,6 +468,7 @@
       if (G && G < 500) rows.push("<div>Хороших кристаллов мало (" + G + "): для надёжной оценки нужно хотя бы 500 (Faria 2003). Добавь проб или сократи паузу между ними.</div>");
       if (!G) rows.push("<div>Число кристаллов в этих пробах не записано (старые пробы) — у новых оно будет.</div>");
     }
+    rows.push(exLine(b.size, "варки"));
     if (hasVol) {
       rows.push("<div><b>Объём</b> кристаллов на кадре в среднем: " + String(Number(b.vtot.m3.toPrecision(2))).replace(".", ",") + " мм³ (призма).</div>");
     }

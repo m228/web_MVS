@@ -764,6 +764,7 @@ def summarize(measures: list[CrystalMeasure], image_shape: tuple,
     h, w = image_shape[:2]
     counts = {g: 0 for g in GROUP_ORDER}
     sizes = []
+    lens = []                         # длинная сторона тех же кристаллов — для «самого длинного»
     n_cut = 0
     n_bubble = 0
     reasons = {r: 0 for r in REASONS}
@@ -788,6 +789,7 @@ def summarize(measures: list[CrystalMeasure], image_shape: tuple,
             n_suspect += 1
         if m.group != "reject":
             sizes.append(m.size_um)
+            lens.append(m.length_um)
     n = len(measures) - n_cut - n_bubble - n_excl
     area_mm2 = (w * cfg["um_per_px"] / 1000.0) * (h * cfg["um_per_px"] / 1000.0)
     sizes_np = np.array(sizes) if sizes else np.array([0.0])
@@ -811,6 +813,10 @@ def summarize(measures: list[CrystalMeasure], image_shape: tuple,
             "median": round(float(np.median(sizes_np)), 1),
             "p10": round(float(np.percentile(sizes_np, 10)), 1),
             "p90": round(float(np.percentile(sizes_np, 90)), 1),
+            # самый мелкий / крупный (диаметр) и самый длинный (длинная сторона) из хороших кристаллов кадра: без брака, сростков, обрезанных, пузырей
+            "min": round(float(min(sizes)), 1) if sizes else None,
+            "max": round(float(max(sizes)), 1) if sizes else None,
+            "len_max": round(float(max(lens)), 1) if lens else None,
             "cv_pct": round(float(100.0 * sizes_np.std() / sizes_np.mean()), 1) if sizes_np.mean() else 0.0,
         },
         "density_per_mm2": round(n / area_mm2, 2) if area_mm2 > 0 else 0.0,

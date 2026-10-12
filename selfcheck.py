@@ -876,7 +876,7 @@ def _cv_boils():
         return {"ts": "2026-10-06_%02d_%02d_00" % (t // 60, t % 60), "t": t * 60.0, "sv": sv, "stage": stage, "cook_time": cook,
                 "fines_m1": fm3, "fines_m2": fm3, "fines_m3": fm3, "fines_area": fm3, "fines_n": fm3,
                 "agg_m1": 10.0, "agg_m2": 10.0, "agg_m3": 10.0, "agg_area": 10.0, "agg_n": 10.0,
-                "vtot_m1": vt, "vtot_m2": vt, "vtot_m3": vt}
+                "vtot_m1": vt, "vtot_m2": vt, "vtot_m3": vt, "size_min": 50.0 - t, "size_max": 400.0 + t, "len_max": 500.0 + t}
     a = [row(t, 80 + t * 0.2, 7, t * 60, None) for t in range(0, 20, 2)] + [row(20, 88.0, 8, 1200, 4.0), row(22, 88.5, 8, 1320, 2.0)]
     b = [row(300 + t, 80 + t * 0.2, 3 if t == 0 else 7, 100 + t * 60, None) for t in range(0, 20, 2)] + [row(320, 88.0, 8, 1300, 6.0, vt=3.0)]
     import time as _t
@@ -898,6 +898,7 @@ def _cv_boils():
     assert far == [], "за концом истории — пусто"
     assert res[1]["counted"] == 2 and res[1]["fines"]["m3"] == 3.0, "мелочь прошлой варки = среднее по 2 пробам финиша: %s" % res[1]["fines"]
     assert res[0]["counted"] == 1 and res[0]["fines"]["m3"] == 6.0, "в новой варке мелочь по одной пробе"
+    assert res[1]["size"] == {"min": 28.0, "max": 422.0, "len_max": 522.0}, "крайние кристаллы варки: %s" % res[1]["size"]
     assert res[1]["agg"]["m3"] == 10.0 and res[1]["n"] == 12, "сростки — по всем пробам варки"
     # окно «последние N проб финиша» (avg_n) и счётчики: сколько проб и хороших кристаллов вошло в среднее
     for bb in res:
@@ -905,6 +906,38 @@ def _cv_boils():
     assert res[1]["all"]["probes"] == 2 and res[1]["tail"]["probes"] == 2, "прошлая варка: 2 пробы финиша (avg_n=4 ≥ 2)"
     assert res[1]["all"]["fines"]["m3"] == 3.0 and res[1]["tail"]["fines"]["m3"] == 3.0
     return "варок %d, мелочь прошлой %.1f %%" % (len(res), res[1]["fines"]["m3"])
+
+
+@check("CV", "самый мелкий/крупный/длинный кристалл: кадр → проба (min/max по кадрам, не среднее) → строка журнала; брак и обрезанные не в счёт")
+def _cv_size_extremes():
+    import math
+    import numpy as np
+    import cv_analyzer
+    import cv_store
+
+    def hexa(cx, cy, r):
+        return [[cx + r * math.cos(math.pi / 3 * i), cy + r * math.sin(math.pi / 3 * i)] for i in range(6)]
+
+    img = np.full((1000, 1400, 3), 120, np.uint8)
+    polys = [hexa(200, 300, 40), hexa(600, 300, 90), hexa(1000, 300, 140), hexa(1250, 500, 120)]   # последний вылезает за край кадра — обрезан
+    objs = [{"bbox": [min(p[0] for p in q), min(p[1] for p in q), max(p[0] for p in q), max(p[1] for p in q)], "conf": 0.9, "polygon": q} for q in polys]
+    res = cv_analyzer.analyze(img, objs, {"tiles": 1}, with_overlay=False, sv=70)
+    sz = res["summary"]["size_um"]
+    assert sz["min"] is not None and sz["min"] < sz["max"] and sz["len_max"] >= sz["max"] - 0.5, sz
+    assert sz["max"] < 2 * 140 * cv_analyzer.DEFAULTS["um_per_px"] * 1.2, "обрезанный кристалл не должен попасть в максимум: %s" % sz
+    a = {"summary": {"groups": {}, "count": 5, "size_um": {"mean": 100.0, "median": 90.0, "cv_pct": 10, "min": 30.0, "max": 400.0, "len_max": 520.0}, "density_per_mm2": 1, "reject_pct": 0}}
+    b = {"summary": {"groups": {}, "count": 5, "size_um": {"mean": 120.0, "median": 95.0, "cv_pct": 10, "min": 20.0, "max": 380.0, "len_max": 610.0}, "density_per_mm2": 1, "reject_pct": 0}}
+    ag = cv_store._aggregate([a, b])["size_um"]
+    assert (ag["min"], ag["max"], ag["len_max"]) == (20.0, 400.0, 610.0), "по пробе — крайние значения кадров, не среднее: %s" % ag
+    old = {"summary": {"groups": {}, "count": 1, "size_um": {"mean": 1.0, "median": 1.0}, "density_per_mm2": 1, "reject_pct": 0}}
+    assert cv_store._aggregate([old])["size_um"]["max"] is None, "старая проба без крайних — None, не падаем"
+    ex = cv_store.size_extremes([{"size_min": 30, "size_max": 400, "len_max": 500}, {"size_min": 25, "size_max": 380, "len_max": 700}, {}])
+    assert ex == {"min": 25, "max": 400, "len_max": 700}, ex
+    assert cv_store.size_extremes([{}]) == {"min": None, "max": None, "len_max": None}
+    row = cv_store._hist_row({"ts": "2026-10-12_10_00_00", "summary": {**a["summary"], "size_um": {**a["summary"]["size_um"]}}, "frames": [1]})
+    assert row["size_min"] == 30.0 and row["size_max"] == 400.0 and row["len_max"] == 520.0, "в журнал не попали крайние кристаллы"
+    assert "size_max" in cv_store.EXPORT_COLUMNS, "нет в выгрузке CSV"
+    return "мин %.0f / макс %.0f / длина %.0f мкм на кадре; по пробе min/max кадров" % (sz["min"], sz["max"], sz["len_max"])
 
 
 @check("CV", "cv_analyzer: пузырь воздуха (ровный круг) отсеивается из рассева, шестиугольники — нет")

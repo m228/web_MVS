@@ -887,11 +887,15 @@ def _cv_boils():
     try:
         res = cv_store.boils("X", limit=5, now=321 * 60.0)       # последняя проба 1 мин назад → варка идёт
         done = cv_store.boils("X", limit=5, now=321 * 60.0 + 7200)
+        p1, p2 = cv_store.boils("X", limit=1, now=321 * 60.0), cv_store.boils("X", limit=1, offset=1, now=321 * 60.0)
+        far = cv_store.boils("X", limit=1, offset=5, now=321 * 60.0)
     finally:
         cv_store._hist_backfill, cv_store._hist_days, cv_store._hist_read = orig
     assert len(res) == 2, "варок %d, ждали 2 (пауза 4 ч между пробами)" % len(res)
     assert not res[0]["finished"] and res[1]["finished"], "новая варка идёт, прошлая закончена"
     assert done[0]["finished"], "через 2 часа без проб варка закончена"
+    assert [b["id"] for b in p1 + p2] == [b["id"] for b in res] and p2[0]["finished"] and not p1[0]["finished"], "листание страницами (offset) = тот же список"
+    assert far == [], "за концом истории — пусто"
     assert res[1]["counted"] == 2 and res[1]["fines"]["m3"] == 3.0, "мелочь прошлой варки = среднее по 2 пробам финиша: %s" % res[1]["fines"]
     assert res[0]["counted"] == 1 and res[0]["fines"]["m3"] == 6.0, "в новой варке мелочь по одной пробе"
     assert res[1]["agg"]["m3"] == 10.0 and res[1]["n"] == 12, "сростки — по всем пробам варки"

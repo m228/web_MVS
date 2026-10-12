@@ -301,6 +301,8 @@
   }
   // --- по варке: журнал проб нарезан на варки (/api/cv/boils), листаем стрелками ---
   let cvBoils = [], cvBoilSel = null, cvBoilTs = 0, cvVolMode = "tail";
+  let cvBoilsEnd = false;        // старше загруженных варок в журнале больше нет (листание вглубь подгружает по CV_BOIL_PAGE)
+  const CV_BOIL_PAGE = 6;
   try { const m = localStorage.getItem("microCvVolMode"); cvVolMode = (m === "probe" || m === "boil") ? m : "tail"; } catch (e) { cvVolMode = "tail"; }
   // по умолчанию показываем ПРЕДЫДУЩУЮ (законченную) варку: идущая ещё не дошла до финиша, мука у неё неактуальна
   function cvBoilIdx() {
@@ -325,12 +327,28 @@
     cvBoilTs = Date.now();
     try {
       const q = cvSerialQ();
-      const r = await api("/api/cv/boils?" + (q ? q + "&" : "") + "limit=6");
-      cvBoils = (r && r.boils) || [];
+      const r = await api("/api/cv/boils?" + (q ? q + "&" : "") + "limit=" + CV_BOIL_PAGE);
+      const fresh = (r && r.boils) || [];
+      // обновляем свежую страницу, а уже подгруженные более старые варки оставляем (иначе каждые 15 с листание сбрасывалось бы на 6 варок)
+      const keep = fresh.length ? cvBoils.filter((b) => b.t_to < fresh[fresh.length - 1].t_from) : [];
+      cvBoils = fresh.concat(keep);
+      if (fresh.length < CV_BOIL_PAGE && !keep.length) cvBoilsEnd = true;
     } catch (e) { }
     cvTrendBoilUpdate();
     if (cvVolMode !== "probe") cvRenderBoil();
     cvTrendSieveRender();
+  }
+  async function cvLoadMoreBoils() {      // подгрузить следующую (более старую) страницу варок; false — больше нет
+    if (cvBoilsEnd) return false;
+    try {
+      const q = cvSerialQ();
+      const r = await api("/api/cv/boils?" + (q ? q + "&" : "") + "limit=" + CV_BOIL_PAGE + "&offset=" + cvBoils.length);
+      const have = new Set(cvBoils.map((b) => b.id)), more = ((r && r.boils) || []).filter((b) => !have.has(b.id));
+      if (!more.length) { cvBoilsEnd = true; return false; }
+      cvBoils = cvBoils.concat(more);
+      if (more.length < CV_BOIL_PAGE) cvBoilsEnd = true;
+      return true;
+    } catch (e) { return false; }
   }
   const CV_PHASES = ["p1", "g1", "p2", "g2"];
   const CV_PHASE_TITLE = { p1: "подкачка 1", g1: "рост 1", p2: "подкачка 2", g2: "рост 2" };
@@ -394,7 +412,7 @@
   function cvRenderBoil() {
     const i = cvBoilIdx(), b = i >= 0 ? cvBoils[i] : null;
     const lbl = $("cvBoilLbl"), older = $("cvBoilOlder"), newer = $("cvBoilNewer"), st = $("cvVolState"), box = $("cvVolNote");
-    if (older) older.disabled = !(i >= 0 && i < cvBoils.length - 1);
+    if (older) older.disabled = !(i >= 0 && (i < cvBoils.length - 1 || !cvBoilsEnd));
     if (newer) newer.disabled = !(i > 0);
     const cells = (kind) => document.querySelectorAll("#cvVolGrid [data-v$='." + kind + "']");
     const put = (kind, src) => cells(kind).forEach((el) => { const m = el.dataset.v.split(".")[0]; cvSetText(el, fmtPct(src ? (m === "avg" ? cvAvg3(src) : src[m]) : null)); });
@@ -465,8 +483,10 @@
       if (m !== "probe") { cvRenderBoil(); cvLoadBoils(true); } else cvRenderScatter();
     };
     document.querySelectorAll("#cvVolNav [data-vmode]").forEach((b) => b.addEventListener("click", () => setMode(b.dataset.vmode)));
-    const step = (d) => {
-      const i = cvBoilIdx(), j = i + d; if (i < 0 || j < 0 || j >= cvBoils.length) return;
+    const step = async (d) => {
+      const i = cvBoilIdx(), j = i + d; if (i < 0 || j < 0) return;
+      if (j >= cvBoils.length && !(await cvLoadMoreBoils())) { cvRenderBoil(); return; }
+      if (j >= cvBoils.length) return;
       cvBoilSel = cvBoils[j].id; cvRenderBoil();
     };
     const o = $("cvBoilOlder"), n = $("cvBoilNewer");
@@ -1295,7 +1315,7 @@
     const t = i >= 0 ? cvBoilName(i) + " · " + cvBoilSpan(cvBoils[i]) : "по варкам";
     if (lbl.textContent !== t) lbl.textContent = t;
     lbl.classList.toggle("is-on", i >= 0);
-    if (older) older.disabled = !cvBoils.length || (i >= 0 && i >= cvBoils.length - 1);
+    if (older) older.disabled = !cvBoils.length || (i >= 0 && i >= cvBoils.length - 1 && cvBoilsEnd);
     if (newer) newer.disabled = !(i > 0);
   }
   async function cvTrendShowBoil(id) {
@@ -1319,7 +1339,9 @@
     if (!cvBoils.length) return;
     const i = cvTrendBoil ? cvBoils.findIndex((x) => x.id === cvTrendBoil) : -1;
     const j = i < 0 ? 0 : i + dir;
-    if (j < 0 || j >= cvBoils.length) return;
+    if (j < 0) return;
+    if (j >= cvBoils.length && !(await cvLoadMoreBoils())) { cvTrendBoilUpdate(); return; }
+    if (j >= cvBoils.length) return;
     await cvTrendShowBoil(cvBoils[j].id);
   }
   function cvNiceStep(span) {                    // шаг подписей оси времени ≈ 6–8 меток на экран

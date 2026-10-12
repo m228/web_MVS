@@ -364,8 +364,9 @@ def sieve_avg(r: dict, i: int) -> Optional[float]:
     return round(sum(v) / len(v), 3) if v else None
 
 
-# серии рассева для тренда: fsv0…fsv5 — доли по объёму (среднее M1–M3) в диапазонах 0–0,20 (мука) / 0,20–0,40 / … / 0,80–1,00 / >1,0 мм
-FSV_GROUPS = [range(0, 4), range(4, 8), range(8, 12), range(12, 16), range(16, 20), range(20, 21)]
+# серии рассева для тренда: fsv0…fsv8 — доли по объёму (среднее M1–M3): диапазон муки по 0,05 мм (fsv0–3: 0–0,05 … 0,15–0,20),
+# дальше 0,20–0,40 / 0,40–0,60 / 0,60–0,80 / 0,80–1,00 / >1,0 мм (fsv4–8)
+FSV_GROUPS = [range(i, i + 1) for i in range(4)] + [range(4, 8), range(8, 12), range(12, 16), range(16, 20), range(20, 21)]
 
 
 def fsieve_group(r: dict, k: int) -> Optional[float]:

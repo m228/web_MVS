@@ -1697,17 +1697,19 @@ def _service_phases():
         now = time.time()
         stages = [4, 5, 5, 7, 7, 7, 5, 5]
         rows = [{"ts": time.strftime(cv_store.TS_FMT, time.localtime(now - (len(stages) - i) * 90)), "t": now - (len(stages) - i) * 90, "stage": st,
-                 "sv": 82.0 + i * 0.1, "cook_time": 600 + 90 * i} for i, st in enumerate(stages)]
+                 "sv": 82.0 + i * 0.1, "cook_time": 600 + 90 * i, "seed_age": 10 + 90 * i} for i, st in enumerate(stages)]
         db.upsert_many("PHSER", rows)
         stt = cv_store.phase_state("PHSER")
-        assert stt == {"pump": 2, "grow": 1, "last": 5}, stt
+        assert (stt["pump"], stt["grow"], stt["last"]) == (2, 1, 5), stt
+        assert abs(stt["seed_ts"] - (now - 730)) < 1 and stt["boil_t_s"] is None, "заводка из журнала: время пробы минус время с заводки: %s" % stt
         ms2 = MicroscopeService()
         ms2.cfg = {"camera_serial": "PHSER"}
         ms2._note_stage(5)                                       # после перезапуска первая же стадия 5 — всё ещё 2-я подкачка
         assert ms2._current_phase(5) == "p2", ms2._current_phase(5)
+        assert ms2._seed_ts is not None and abs(ms2._seed_ts - (now - 730)) < 1, "после перезапуска заводка восстановлена (иначе порог муки падает на порог фазы)"
         ms2._note_stage(7)
         assert ms2._current_phase(7) == "g2", "после 2-й подкачки — 2-й рост"
-        assert cv_store.phase_state("NOSUCH") == {"pump": 0, "grow": 0, "last": None}
+        assert cv_store.phase_state("NOSUCH") == {"pump": 0, "grow": 0, "last": None, "seed_ts": None, "boil_t_s": None}
     finally:
         db.set_path(old_path)
     return "p1 g1 p2 g2 по ходу стадий; сгущение — новая варка; перезапуск — из журнала"
@@ -1958,6 +1960,11 @@ def _fines_curve_fit():
     assert all(fit.get(k) == 1500 for k in ("b1", "b2")), fit
     assert "c1" not in fit and "c2" not in fit, "идущая варка без «готовности» не растягивается"
     assert cv_store.boil_fit_times([row("x", 1000, 7, None, 100)], now=1e9) == {}, "нет времени с заводки — не растягиваем"
+    # перезапуск приложения потерял «с заводки» у части проб (в т.ч. у «готовности»): восстанавливаем по соседним пробам варки
+    D = [row("d1", 1000, 5, 60, 100), row("d2", 1100, 7, 160, 200), row("d3", 1200, 7, None, 300), row("d4", 1300, 9, None, 400)]
+    assert cv_store.fill_seed_age(D) == {"d3": 260, "d4": 360}, cv_store.fill_seed_age(D)
+    assert all(v == 360 for v in cv_store.boil_fit_times(D, now=1e9).values()) and len(cv_store.boil_fit_times(D, now=1e9)) == 4, "«готовность» без seed_age в журнале — берём восстановленное"
+    assert cv_store.fill_seed_age([row("z1", 1000, 3, None, 10), row("z2", 1100, 5, 60, 100)]) == {}, "до заводки (стадия 3) «с заводки» не придумываем"
     # пересчёт пробы: растяжение применяется по объектам и ОСТАЁТСЯ при показе пробы без явного времени варки
     d = Path(tempfile.mkdtemp(prefix="mvs_fit_"))
     objs = [{"group": "medium", "defect": None, "size_um": float(u), "length_um": u * 1.1, "width_um": u * 0.9} for u in (60, 120, 150, 180)]

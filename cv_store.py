@@ -533,9 +533,10 @@ def boil_groups(serial: str) -> list[list[dict]]:
     return _group_boils(rows)
 
 
-def boils(serial: str, limit: int = 6, now: Optional[float] = None) -> list[dict]:
+def boils(serial: str, limit: int = 6, now: Optional[float] = None, offset: int = 0) -> list[dict]:
     """Последние варки (новая первой): журнал проб режется на варки (_is_new_boil), по каждой — сводка
-    мелочи/сростков/объёма. Последняя варка «идёт», пока последняя проба моложе BOIL_OPEN_S."""
+    мелочи/сростков/объёма. Последняя варка «идёт», пока последняя проба моложе BOIL_OPEN_S.
+    offset — сколько самых новых варок пропустить (листание вглубь истории страницами по limit)."""
     _hist_backfill(serial)
     avg_n = cv_volume.volume_cfg(_volume_cfg_now())["avg_n"]
     rows, seen = [], set()
@@ -549,7 +550,7 @@ def boils(serial: str, limit: int = 6, now: Optional[float] = None) -> list[dict
     groups = _group_boils(rows)
     now = time.time() if now is None else now
     out = []
-    for i, g in enumerate(reversed(groups[-limit:])):
+    for i, g in enumerate(list(reversed(groups))[offset:offset + limit], start=offset):
         finished = not (i == 0 and now - g[-1]["t"] <= BOIL_OPEN_S)
         out.append(_boil_summary(g, finished, avg_n))
     return out

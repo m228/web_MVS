@@ -1974,6 +1974,10 @@ def _fines_curve_fit():
     r1 = cv_store._with_volume(d, mk(), on, "g1", boil_t_s=3600)
     cfg1 = r1["summary"]["volume_cfg"]
     assert cfg1["fines_curve_boil_t_s"] == 3600 and abs(cfg1["fines_um"] - 111.5) < 0.05, cfg1
+    # кадр без кристаллов файла объектов не пишет: такая проба не должна «застревать» на средней кривой (раньше пересчёт молча падал на отсутствующем файле)
+    mk2 = mk(); mk2["frames"] = [1, 2]
+    r3 = cv_store._with_volume(d, mk2, on, "g1", boil_t_s=3600)
+    assert abs(r3["summary"]["volume_cfg"]["fines_um"] - 111.5) < 0.05, "проба с пустым кадром не пересчиталась: %s" % r3["summary"]["volume_cfg"]
     r2 = cv_store._with_volume(d, json.loads(json.dumps(r1)), on, "g1")                    # показ пробы: растяжение не теряется
     assert r2["summary"]["volume_cfg"]["fines_curve_boil_t_s"] == 3600 and abs(r2["summary"]["volume_cfg"]["fines_um"] - 111.5) < 0.05
     # выключен плавный порог — автопересчёт ничего не делает

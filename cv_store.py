@@ -961,7 +961,8 @@ def _with_volume(d: Path, r: dict, cfg: Optional[dict] = None, phase: Optional[s
         tot = cv_volume.empty_sums()
         fines_on = cv_volume.fines_on(cfg, s.get("sv", r.get("sv"))) or phase is not None
         for i in range(len(r.get("frames") or [1])):
-            objs = json.loads((d / ("objects_%d.json" % i)).read_text(encoding="utf-8"))
+            f = d / ("objects_%d.json" % i)
+            objs = json.loads(f.read_text(encoding="utf-8")) if f.exists() else []     # кадр без кристаллов файла не пишет (save_sample) — это пустой кадр, а не ошибка
             ms = [NS(group=o.get("group"), defect=o.get("defect"), size_um=o["size_um"],
                      length_um=o["length_um"], width_um=o["width_um"]) for o in objs]
             tot = cv_volume.add_sums(tot, cv_volume.sums_for(ms, cfg, fines_on, phase, seed_age_s, boil_t_s))

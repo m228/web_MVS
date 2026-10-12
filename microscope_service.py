@@ -511,6 +511,10 @@ class MicroscopeService:
             import cv_store
             st = cv_store.phase_state(serial)
             self._pump_runs, self._grow_runs, self._phase_last = st["pump"], st["grow"], st["last"]
+            if self._seed_ts is None and st.get("seed_ts") is not None:
+                self._seed_ts = st["seed_ts"]                  # заводка идущей варки — из журнала: иначе после перезапуска порог муки скачет на пороге фазы
+                self._boil_t_s = st.get("boil_t_s")
+                self._fit_key = self._seed_ts if self._boil_t_s else None
         except Exception as e:
             log_event("microscope_service", "Счётчики фаз из журнала не подтянулись", "warn", {"error": str(e)})
 

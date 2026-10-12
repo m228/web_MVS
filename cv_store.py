@@ -127,12 +127,16 @@ def phase_map(serial: str, max_age: float = 30.0) -> dict:
 
 def phase_state(serial: str, max_idle_s: float = 20 * 60) -> dict:
     """Состояние счётчиков фаз ИДУЩЕЙ варки по журналу (для перезапуска приложения посреди варки): {"pump": n, "grow": n, "last": stage}.
-    Последняя проба старше max_idle_s — варка закончилась, счётчики с нуля."""
+    Последняя проба старше max_idle_s — варка закончилась, счётчики с нуля.
+    Ещё: seed_ts — момент заводки (epoch, по времени «с заводки» проб варки) и boil_t_s — время с заводки до «готовности», если она уже была:
+    после перезапуска приложения посреди варки отсчёт не теряется."""
     tag = _serial_dir(serial).name
     rows = sorted(db.read_rows(tag, t_from=time.time() - 12 * 3600), key=lambda r: r["t"])
     if not rows or time.time() - rows[-1]["t"] > max_idle_s:
-        return {"pump": 0, "grow": 0, "last": None}
+        return {"pump": 0, "grow": 0, "last": None, "seed_ts": None, "boil_t_s": None}
     g = _group_boils(rows)[-1]
+    seed_ts = _est_seed_ts(g)
+    boil_t_s = next((r["seed_age"] for r in g if r.get("stage") == 9 and r.get("seed_age")), None)
     pump = grow = 0
     last = None
     for r in g:
@@ -144,7 +148,27 @@ def phase_state(serial: str, max_idle_s: float = 20 * 60) -> dict:
         elif st == 7 and last != 7:
             grow += 1
         last = st
-    return {"pump": pump, "grow": grow, "last": last}
+    return {"pump": pump, "grow": grow, "last": last, "seed_ts": seed_ts, "boil_t_s": boil_t_s}
+
+
+def _est_seed_ts(group: list) -> Optional[float]:
+    """Момент заводки варки (epoch): медиана «время пробы − время с заводки» по её пробам, где оно записано; нет таких — None."""
+    v = sorted(r["t"] - r["seed_age"] for r in group if r.get("seed_age") is not None and r.get("t") is not None)
+    return v[len(v) // 2] if v else None
+
+
+def fill_seed_age(rows: list) -> dict:
+    """{ts: секунд с заводки} для проб, у которых его нет (приложение перезапускали посреди варки — заводка в памяти потерялась), а в варке оно
+    у других проб есть: заводку восстанавливаем по ним. Только пробы после заводки (стадия 4–9), строки не меняем."""
+    out = {}
+    for g in _group_boils(sorted(rows, key=lambda r: r["t"])):
+        st = _est_seed_ts(g)
+        if st is None:
+            continue
+        for r in g:
+            if r.get("seed_age") is None and r.get("stage") is not None and 4 <= r["stage"] <= 9 and r["t"] >= st - 1:
+                out[r["ts"]] = max(0, int(r["t"] - st))
+    return out
 
 
 def finish_probes(fin: list, fin_sv: float = 2.0) -> tuple[list, Optional[float]]:
@@ -908,7 +932,8 @@ def _volume_cfg_now() -> dict:
         return {}
 
 
-def _with_volume(d: Path, r: dict, cfg: Optional[dict] = None, phase: Optional[str] = None, boil_t_s: Optional[float] = None) -> dict:
+def _with_volume(d: Path, r: dict, cfg: Optional[dict] = None, phase: Optional[str] = None, boil_t_s: Optional[float] = None,
+                 seed_age_s: Optional[float] = None, force: bool = False) -> dict:
     """Проба, снятая до появления объёма/фаз (или с другими полями порога): досчитать муку, сростки и рассев по сохранённым
     объектам кадров по ТЕКУЩИМ полям (порог, k, масштаб фазы). Файлы пробы не меняем — только ответ. Фаза — из result.json,
     а для старых проб — по порядку стадий в журнале (phase_map)."""
@@ -917,13 +942,18 @@ def _with_volume(d: Path, r: dict, cfg: Optional[dict] = None, phase: Optional[s
         return r
     cfg = cfg if cfg is not None else _volume_cfg_now()
     phase = phase or r.get("phase") or phase_map(d.parent.name).get(r.get("ts"))
-    seed_age_s = (r.get("plc") or {}).get("seed_age_s")           # время с заводки на начало пробы — для плавного порога муки
+    own_age = (r.get("plc") or {}).get("seed_age_s")           # время с заводки на начало пробы — для плавного порога муки
+    if own_age is not None:
+        seed_age_s = own_age
+    elif seed_age_s is not None:                                # в пробе его нет (перезапуск посреди варки) — восстановленное по варке
+        r["plc"] = {**(r.get("plc") or {}), "seed_age_s": seed_age_s}
     old = s.get("volume_cfg") or {}
     if boil_t_s is None:
         boil_t_s = old.get("fines_curve_boil_t_s")                 # растяжение варки уже определено — при показе пробы его не теряем
     cur = cv_volume.volume_cfg(cfg, phase, seed_age_s, boil_t_s)
     same = all(old.get(k) == cur.get(k) for k in ("fines_um", "fines_mode", "k_thick", "fines_from_sv", "calc_ver", "phase"))
     same = same and bool(old.get("fines_curve_used")) == bool(cur.get("fines_curve_used"))      # у старых проб ключа нет = порог фазы
+    same = same and not force
     if s.get("volume") and "sieve" in s["volume"] and "sieve_fine" in s["volume"] and same:       # посчитана с теми же полями — не трогаем
         return r
     try:
@@ -931,7 +961,8 @@ def _with_volume(d: Path, r: dict, cfg: Optional[dict] = None, phase: Optional[s
         tot = cv_volume.empty_sums()
         fines_on = cv_volume.fines_on(cfg, s.get("sv", r.get("sv"))) or phase is not None
         for i in range(len(r.get("frames") or [1])):
-            objs = json.loads((d / ("objects_%d.json" % i)).read_text(encoding="utf-8"))
+            f = d / ("objects_%d.json" % i)
+            objs = json.loads(f.read_text(encoding="utf-8")) if f.exists() else []     # кадр без кристаллов файла не пишет (save_sample) — это пустой кадр, а не ошибка
             ms = [NS(group=o.get("group"), defect=o.get("defect"), size_um=o["size_um"],
                      length_um=o["length_um"], width_um=o["width_um"]) for o in objs]
             tot = cv_volume.add_sums(tot, cv_volume.sums_for(ms, cfg, fines_on, phase, seed_age_s, boil_t_s))
@@ -939,8 +970,8 @@ def _with_volume(d: Path, r: dict, cfg: Optional[dict] = None, phase: Optional[s
         s["volume_cfg"] = cv_volume.volume_cfg(cfg, phase, seed_age_s, boil_t_s)
         if phase:
             r["phase"] = phase
-    except Exception:
-        pass            # нет объектов/битый файл — проба просто без объёма
+    except Exception as e:      # нет объектов/битый файл — проба остаётся как была; раньше молча, из-за чего «застрявшую» пробу не найти
+        log_event("cv_store", "Проба не пересчитана по кадрам", "warn", {"ts": r.get("ts"), "error": repr(e)})
     return r
 
 
@@ -950,6 +981,8 @@ def boil_fit_times(rows: list, now: Optional[float] = None) -> dict:
     Нужен seed_age пробы (время с заводки); без него (приложение перезапускали посреди варки) варку не растягиваем."""
     now = time.time() if now is None else now
     out = {}
+    fill = fill_seed_age(rows)
+    rows = [dict(r, seed_age=fill[r["ts"]]) if r["ts"] in fill else r for r in rows]       # потерянное «с заводки» восстановлено по соседним пробам
     groups = _group_boils(sorted(rows, key=lambda r: r["t"]))
     for gi, g in enumerate(groups):
         t9 = next((r["seed_age"] for r in g if r.get("stage") == 9 and r.get("seed_age")), None)
@@ -979,12 +1012,24 @@ def recompute_journal(serial: str, t_from: Optional[float] = None) -> int:
         return 0
     cfg, fresh = _volume_cfg_now(), {}
     tag = _serial_dir(serial).name
-    fit = boil_fit_times(db.read_rows(tag)) if cv_volume.volume_cfg(cfg)["fines_curve_on"] else {}     # время «готовности» варок — для растяжения плавного порога
+    jr_rows = db.read_rows(tag)
+    curve_on = cv_volume.volume_cfg(cfg)["fines_curve_on"]
+    fit = boil_fit_times(jr_rows) if curve_on else {}     # время «готовности» варок — для растяжения плавного порога
+    fill = fill_seed_age(jr_rows) if curve_on else {}
+    jr = {r["ts"]: r for r in jr_rows}
     for p in sorted(x for x in sd.iterdir() if x.is_dir()):
         if t_from is not None and (_ts_epoch(p.name) or 0) < t_from:
             continue
         try:
-            row = _hist_row(_with_volume(p, json.loads((p / "result.json").read_text(encoding="utf-8")), cfg, boil_t_s=fit.get(p.name)))
+            # проверка по самому журналу: порог пробы в строке должен совпасть с тем, что даёт кривая для её времени с заводки и растяжения варки;
+            # не совпал (проба «застряла» на средней кривой) — пересчитываем принудительно, не доверяя сравнению с её result.json
+            j, force = jr.get(p.name), False
+            if curve_on and j and j.get("fines_um") is not None and p.name in fit:
+                sa = j.get("seed_age") if j.get("seed_age") is not None else fill.get(p.name)
+                want = cv_volume.volume_cfg(cfg, j.get("phase"), sa, fit[p.name])["fines_um"] if sa is not None else None
+                force = want is not None and abs(want - j["fines_um"]) > 0.05
+            row = _hist_row(_with_volume(p, json.loads((p / "result.json").read_text(encoding="utf-8")), cfg, boil_t_s=fit.get(p.name),
+                                         seed_age_s=fill.get(p.name), force=force))
             if row:
                 fresh[row["ts"]] = row
         except Exception:

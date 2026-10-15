@@ -37,6 +37,8 @@ DEFAULTS = {
     "cluster_gap_px": 4.0,     # маски с зазором ≤ этого (px) склеиваются в сросток; 0 — выкл
     "nest_frac": 0.8,          # маска, лежащая внутри другой на ≥ этой доли, — лишняя, убирается; 0 — выкл
     "edge_margin_px": 12.0,    # объект ближе этого (px) к краю кадра считается обрезанным; 0 — выкл
+    "mask_smooth": True,       # заглаживать маску: щели/врезы заклеить, отростки срезать (ошибки модели, не форма кристалла)
+    "mask_smooth_pct": 10.0,   # ...размером до стольких % диаметра кристалла; шире — настоящая форма (перетяжка сростка); 12 % уже стирает сростки
     "seam_merge": True,        # склеивать кристалл, разрезанный швом нарезки (ровный край на линии стыка частей)
     "bubble_filter": True,     # ровный круг (пузырь воздуха) — не кристалл: уходит в группу «bubble», вне рассева
     "bubble_radial_cv": 0.025, "bubble_aspect": 1.12, "bubble_solidity": 0.97,   # пузырь: разброс радиуса ≤, вытянутость ≤, выпуклость ≥
@@ -98,6 +100,8 @@ def _cfg(cv_cfg: Optional[dict]) -> dict:
         c["seam_refine"] = bool(cv_cfg.get("seam_refine", c["seam_refine"]))
         c["seam_in_sieve"] = bool(cv_cfg.get("seam_in_sieve", c["seam_in_sieve"]))
         c["bubble_filter"] = bool(cv_cfg.get("bubble_filter", c["bubble_filter"]))
+        c["mask_smooth"] = bool(cv_cfg.get("mask_smooth", c["mask_smooth"]))
+        c["mask_smooth_pct"] = float(cv_cfg.get("mask_smooth_pct", c["mask_smooth_pct"]))
         for k in ("bubble_radial_cv", "bubble_aspect", "bubble_solidity", "bubble_min_um"):
             c[k] = float(cv_cfg.get(k, c[k]))
         c["refine_max"] = float(cv_cfg.get("refine_max", c["refine_max"]))
@@ -200,6 +204,47 @@ def _clean_contour(cnt: np.ndarray, eq_d_px: float, kmin: int = SMOOTH_MIN_K) ->
         if cv2.contourArea(c) < 0.5 * cv2.contourArea(cnt):
             return cnt
         return (c.reshape(-1, 2).astype(np.float32) + np.array([x0, y0], np.float32)).reshape(-1, 1, 2)
+    except cv2.error:
+        return cnt
+
+
+def _smooth_mask(cnt: np.ndarray, pct: float, max_change: float = 0.15) -> np.ndarray:
+    """Маска без ошибок модели: щели и врезы уже pct % диаметра заклеиваются (MORPH_CLOSE), дыры заливаются,
+    отростки тоньше того же размера срезаются (MORPH_OPEN), берётся самый большой кусок. Нужна потому, что
+    ultralytics сшивает развалившуюся маску в один контур тонкими мостиками — получается зигзаг внутрь
+    кристалла (ложная выемка → ложный сросток/кривой, неверный размер). Широкая перетяжка настоящего сростка
+    шире ядра и остаётся. Площадь изменилась больше max_change — это настоящая форма: не трогаем."""
+    try:
+        pts = cnt.reshape(-1, 2).astype(np.float32)
+        span = pts.max(axis=0) - pts.min(axis=0)
+        if span.min() < 8 or span[0] * span[1] > 4_000_000:
+            return cnt
+        pad = int(0.0115 * pct * float(span.max())) + 5           # ядро ≤ pct % от eq-диаметра ≤ 1,13 · сторона бокса
+        off = np.floor(pts.min(axis=0)) - pad
+        w, h = (np.ceil(span).astype(int) + 2 * pad + 2)
+        m = np.zeros((h, w), np.uint8)
+        cv2.fillPoly(m, [np.round(pts - off).astype(np.int32).reshape(-1, 1, 2)], 1)
+        a0 = float(np.count_nonzero(m))
+        k = int(round(pct / 100.0 * math.sqrt(4.0 * a0 / math.pi))) | 1     # pct % диаметра маски, нечётное
+        if k < 3:
+            return cnt
+        ker = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k, k))
+        # сначала срезаем отростки и мостики к обрывкам (иначе заклейка их утолщает и прирастит обрывки к кристаллу),
+        # оставляем самый большой кусок; потом заклеиваем щели/врезы и заливаем дыры
+        m = cv2.morphologyEx(m, cv2.MORPH_OPEN, ker)
+        cs = cv2.findContours(m, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)[0]
+        if not cs:
+            return cnt
+        m = cv2.drawContours(np.zeros_like(m), [max(cs, key=cv2.contourArea)], -1, 1, cv2.FILLED)
+        m = cv2.morphologyEx(m, cv2.MORPH_CLOSE, ker)
+        cs = cv2.findContours(m, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)[0]
+        if not cs:
+            return cnt
+        c = max(cs, key=cv2.contourArea)
+        a1 = float(np.count_nonzero(cv2.drawContours(np.zeros_like(m), [c], -1, 1, cv2.FILLED)))     # дыры внутри — залиты
+        if abs(a1 - a0) > max_change * a0:
+            return cnt
+        return (c.reshape(-1, 2).astype(np.float32) + off.astype(np.float32)).reshape(-1, 1, 2)
     except cv2.error:
         return cnt
 
@@ -744,6 +789,8 @@ def measure_objects(objects: list[dict], cv_cfg: Optional[dict] = None,
         cnt = _contour_from_obj(obj)
         if cnt is None:
             continue
+        if cfg["mask_smooth"] and obj.get("polygon"):
+            cnt = _smooth_mask(cnt, cfg["mask_smooth_pct"])
         area_px = cv2.contourArea(cnt)
         if area_px <= 1:
             continue
@@ -817,8 +864,11 @@ def summarize(measures: list[CrystalMeasure], image_shape: tuple,
     reasons = {r: 0 for r in REASONS}
     n_suspect = 0
     n_excl = 0
+    max_i = agg_i = None              # номера (в measures = в objects кадра) самого крупного хорошего кристалла и самого большого сростка
     counting = is_counting(cfg, sv)
-    for m in measures:
+    for i, m in enumerate(measures):
+        if m.group not in (CUT_GROUP, BUBBLE_GROUP) and m.defect == "aggregate" and (agg_i is None or m.size_um > measures[agg_i].size_um):
+            agg_i = i                 # сросток — и когда брак не считается (СВ выше «Брак до СВ»): только показ, в рассев не идёт
         if m.group == CUT_GROUP:      # обрезан кадром/швом — вне рассева и размеров
             n_cut += 1
             continue
@@ -837,6 +887,8 @@ def summarize(measures: list[CrystalMeasure], image_shape: tuple,
         if m.group != "reject":
             sizes.append(m.size_um)
             lens.append(m.length_um)
+            if max_i is None or m.size_um > measures[max_i].size_um:
+                max_i = i
     n = len(measures) - n_cut - n_bubble - n_excl
     area_mm2 = (w * cfg["um_per_px"] / 1000.0) * (h * cfg["um_per_px"] / 1000.0)
     sizes_np = np.array(sizes) if sizes else np.array([0.0])
@@ -864,6 +916,9 @@ def summarize(measures: list[CrystalMeasure], image_shape: tuple,
             "min": round(float(min(sizes)), 1) if sizes else None,
             "max": round(float(max(sizes)), 1) if sizes else None,
             "len_max": round(float(max(lens)), 1) if lens else None,
+            "max_i": max_i,
+            "agg_max": round(float(measures[agg_i].size_um), 1) if agg_i is not None else None,
+            "agg_max_i": agg_i,
             "cv_pct": round(float(100.0 * sizes_np.std() / sizes_np.mean()), 1) if sizes_np.mean() else 0.0,
         },
         "density_per_mm2": round(n / area_mm2, 2) if area_mm2 > 0 else 0.0,

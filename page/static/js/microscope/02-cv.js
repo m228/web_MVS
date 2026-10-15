@@ -64,7 +64,7 @@
     set("cvMinCirc", sh.min_circularity); set("cvMinSol", sh.min_solidity);
     set("cvMaxAspect", sh.max_aspect); set("cvConf", cv.conf);
     set("cvKeepBoils", cv.keep_boils != null ? cv.keep_boils : 10); set("cvArchiveGb", cv.archive_max_gb != null ? cv.archive_max_gb : 30); if ($("cvFramePng")) $("cvFramePng").checked = (cv.frame_format || "png") === "png"; set("cvSuspect", sh.suspect_aspect); set("cvShapeMin", sh.min_um != null ? sh.min_um : 100); set("cvSmoothK", sh.smooth_k != null ? sh.smooth_k : 5); set("cvRejectSv", cv.reject_to_sv != null ? cv.reject_to_sv : 85);
-    set("cvClusterGap", cv.cluster_gap_px); set("cvEdgeMargin", cv.edge_margin_px);
+    set("cvClusterGap", cv.cluster_gap_px); set("cvEdgeMargin", cv.edge_margin_px); set("cvMaskSmooth", cv.mask_smooth === false ? 0 : cv.mask_smooth_pct);
     if ($("cvSeamMerge")) $("cvSeamMerge").checked = cv.seam_merge !== false;
     if ($("cvSeamRefine")) $("cvSeamRefine").checked = cv.seam_refine !== false;
     if ($("cvSeamInSieve")) $("cvSeamInSieve").checked = cv.seam_in_sieve !== false;
@@ -82,7 +82,7 @@
       groups: { small_max_um: num("cvSmallMax"), medium_max_um: num("cvMediumMax") },
       shape: { min_circularity: num("cvMinCirc"), min_solidity: num("cvMinSol"), max_aspect: num("cvMaxAspect"), suspect_aspect: num("cvSuspect"), min_um: num("cvShapeMin"), smooth_k: num("cvSmoothK") },
       um_per_px: num("cvUmPerPx"), tiles: num("cvTiles"), conf: num("cvConf"),
-      reject_to_sv: num("cvRejectSv"), keep_boils: num("cvKeepBoils"), archive_max_gb: num("cvArchiveGb"), frame_format: $("cvFramePng") ? ($("cvFramePng").checked ? "png" : "jpg") : undefined, cluster_gap_px: num("cvClusterGap"), edge_margin_px: num("cvEdgeMargin"),
+      reject_to_sv: num("cvRejectSv"), keep_boils: num("cvKeepBoils"), archive_max_gb: num("cvArchiveGb"), frame_format: $("cvFramePng") ? ($("cvFramePng").checked ? "png" : "jpg") : undefined, cluster_gap_px: num("cvClusterGap"), edge_margin_px: num("cvEdgeMargin"), mask_smooth: num("cvMaskSmooth") === undefined ? undefined : num("cvMaskSmooth") > 0, mask_smooth_pct: num("cvMaskSmooth") > 0 ? num("cvMaskSmooth") : undefined,
       seam_merge: $("cvSeamMerge") ? $("cvSeamMerge").checked : undefined,
       seam_refine: $("cvSeamRefine") ? $("cvSeamRefine").checked : undefined,
       seam_in_sieve: $("cvSeamInSieve") ? $("cvSeamInSieve").checked : undefined,
@@ -161,7 +161,8 @@
     setTe("cvTilesN", tm.tiles != null ? (tm.tiles + (tm.grid ? " (" + tm.grid + ")" : "")) : "—");
     setTe("cvInferNms", tm.infer_ms != null ? (Math.round(tm.infer_ms) + " / " + Math.round(tm.nms_ms || 0) + " мс") : "—");
     const ex = (s && s.size_um) || {}, um = (v) => (v == null ? "—" : String(Math.round(v)));
-    setTe("cvSizeMinMax", ex.min == null && ex.max == null ? "—" : um(ex.min) + " / " + um(ex.max));
+    setTe("cvSizeMin", um(ex.min)); setTe("cvSizeMax", um(ex.max)); setTe("cvAggMax", um(s && s.agg_max));
+    cvGoTile("cvSizeMaxTile", s && s.max_at); cvGoTile("cvAggMaxTile", s && s.agg_max_at);
     setTe("cvLenMax", um(ex.len_max));
     setTe("cvCountTele", s ? Math.round(s.count || 0) : "—");
     setTe("cvFramesN", r && r.frames ? r.frames.length : "—");
@@ -713,6 +714,7 @@
   function cvConfThr() { const e = $("cvConf"); const v = e && e.value !== "" ? parseFloat(e.value) : NaN; return isNaN(v) ? 0 : v; }
   let cvCurClean = false;       // текущий кадр чистый (контуры рисуем сами); false — старая проба с «впечёнными»
   let cvHoverObj = null;        // кристалл под мышкой (подсвечиваем форму)
+  let cvFocus = null;           // {key: "ts#кадр", i} — кристалл, на который перешли с плитки (подсвечен до движения мыши по кадру)
 
   // где внутри <img> лежит сама картинка (object-fit: contain даёт поля по бокам/сверху)
   function cvImgGeom() {
@@ -964,6 +966,22 @@
     cvGalIdx = 0; cvWinOn = true;              // переключаем верхнее окно в «Комп. зрение»
     cvRenderScatter(); cvRenderStrip(); cvShowFrame();
   }
+  // плитка «самый крупный / самый большой сросток»: клик — кадр пробы с этим кристаллом и его подсветка.
+  // at = [номер кадра, номер объекта в objects_N.json]; у старых проб места нет — плитка не кликается
+  function cvGoTile(id, at) {
+    const e = $(id); if (!e) return;
+    e.classList.toggle("is-go", !!at);
+    e.onclick = at ? () => cvFocusObject(at[0], at[1]) : null;
+  }
+  function cvFocusObject(idx, i) {
+    const pos = cvViewFrames().findIndex((f, k) => (f.idx != null ? f.idx : k) === idx);
+    if (pos < 0 || !cvView) return;
+    cvFocus = { key: cvView.ts + "#" + idx, i: i };
+    cvGalIdx = pos; cvWinOn = true;
+    const ov = $("cvOverlay");
+    if (ov && ov.dataset.key === cvFocus.key && cvCurObjects.length) { cvHoverObj = cvCurObjects[i] || null; }
+    cvShowFrame();
+  }
   function cvViewFrames() { return ((cvView && cvView.frames) || []).filter((f) => f.overlay); }
   function cvShowFrame() {
     const ov = $("cvOverlay"); if (!ov) return;
@@ -993,7 +1011,9 @@
     const key = ts + "#" + idx;
     api("/api/cv/objects?" + q).then((r) => {
       if ($("cvOverlay").dataset.key !== key) return;       // успели переключить кадр
-      cvCurObjects = (r && r.objects) || []; cvDrawOverlay();
+      cvCurObjects = (r && r.objects) || [];
+      if (cvFocus && cvFocus.key === key) cvHoverObj = cvCurObjects[cvFocus.i] || null;    // переход с плитки — подсветить кристалл
+      cvDrawOverlay();
     }).catch(() => {});
   }
   // наведение на кристалл в окне CV → подсветка его формы + тултип с размером/формой

@@ -940,6 +940,35 @@ def _cv_size_extremes():
     return "мин %.0f / макс %.0f / длина %.0f мкм на кадре; по пробе min/max кадров" % (sz["min"], sz["max"], sz["len_max"])
 
 
+@check("CV", "самый крупный кристалл и самый большой сросток: где они (кадр, номер объекта) — плитки в окне CV кликабельны")
+def _cv_extreme_at():
+    import math
+    import numpy as np
+    import cv_analyzer
+    import cv_store
+
+    def hexa(cx, cy, r):
+        return [[cx + r * math.cos(math.pi / 3 * i), cy + r * math.sin(math.pi / 3 * i)] for i in range(6)]
+
+    def obj(q, **kw):
+        return {"bbox": [min(p[0] for p in q), min(p[1] for p in q), max(p[0] for p in q), max(p[1] for p in q)], "conf": 0.9, "polygon": q, **kw}
+
+    img = np.full((1000, 1400, 3), 120, np.uint8)
+    cfg = {"tiles": 1, "cluster_gap_px": 0}
+    # кадр 0: два хороших кристалла + сросток (склеен из 2 масок); кадр 1: хороший крупнее
+    f0 = cv_analyzer.analyze(img, [obj(hexa(300, 300, 60)), obj(hexa(700, 300, 100)), obj(hexa(1000, 600, 150), members=2)],
+                             cfg, with_overlay=False, sv=95)          # СВ выше «Брак до СВ»: сросток не в рассеве, но найден
+    f1 = cv_analyzer.analyze(img, [obj(hexa(400, 400, 130))], cfg, with_overlay=False, sv=95)
+    s0 = f0["summary"]["size_um"]
+    assert f0["objects"][s0["max_i"]]["size_um"] == s0["max"], "max_i не указывает на самый крупный: %s" % s0
+    assert f0["objects"][s0["agg_max_i"]]["defect"] == "aggregate" and s0["agg_max"] == f0["objects"][s0["agg_max_i"]]["size_um"], s0
+    ag = cv_store._aggregate([{"summary": f0["summary"]}, {"summary": f1["summary"]}])
+    assert ag["max_at"] == [1, 0] and ag["agg_max_at"] == [0, s0["agg_max_i"]] and ag["agg_max"] == s0["agg_max"], ag
+    old = {"summary": {"groups": {}, "count": 1, "size_um": {"mean": 1.0, "median": 1.0, "max": 5.0}, "density_per_mm2": 1, "reject_pct": 0}}
+    assert "max_at" not in cv_store._aggregate([old]), "старая проба без места — плитка не кликается, не падаем"
+    return "крупный → кадр %s, сросток %.0f мкм → кадр %s" % (ag["max_at"], ag["agg_max"], ag["agg_max_at"])
+
+
 @check("CV", "cv_analyzer: пузырь воздуха (ровный круг) отсеивается из рассева, шестиугольники — нет")
 def _cv_bubble():
     import math
@@ -1025,6 +1054,28 @@ def _cv_seam_in_sieve():
     off = [o["group"] for o in cv_analyzer.analyze(img, raw, {**cfg, "seam_in_sieve": False}, with_overlay=False, sv=90)["objects"]]
     assert off.count("cut") == 4, "галочка выключена — всё как было: %s" % off
     return "в рассеве 2, серых 2; выкл — серых 4"
+
+
+@check("CV", "cv_analyzer: маска заглаживается — щель и отросток убраны, широкая перетяжка сростка остаётся")
+def _cv_mask_smooth():
+    import cv2
+    import numpy as np
+    import cv_analyzer
+    # квадрат 300 px с узкой щелью внутрь (зигзаг-шов ultralytics) и тонким хвостом наружу
+    slit = [[100, 100], [400, 100], [400, 240], [250, 245], [400, 250], [400, 400], [100, 400],
+            [100, 260], [20, 262], [100, 266]]
+    sm = cv_analyzer._smooth_mask(np.array(slit, np.float32).reshape(-1, 1, 2), cv_analyzer.DEFAULTS["mask_smooth_pct"])
+    P = sm.reshape(-1, 2)
+    assert P[:, 0].min() > 90, "хвост не срезан: x от %.0f" % P[:, 0].min()
+    assert cv2.pointPolygonTest(sm.astype(np.float32), (330.0, 245.0), False) >= 0, "щель не заклеена"
+    # два квадрата, сросшихся узкой перемычкой (перетяжка шире ядра) — форма не меняется
+    agg = [[0, 0], [200, 0], [200, 80], [260, 80], [260, 0], [460, 0], [460, 200], [260, 200], [260, 120],
+           [200, 120], [200, 200], [0, 200]]
+    a0 = np.array(agg, np.float32).reshape(-1, 1, 2)
+    a1 = cv_analyzer._smooth_mask(a0, cv_analyzer.DEFAULTS["mask_smooth_pct"])
+    assert abs(cv2.contourArea(a1) - cv2.contourArea(a0)) < 0.03 * cv2.contourArea(a0), "сросток заглажен"
+    assert cv_analyzer._notches(a1, 300.0, 0.06) >= 2, "перетяжка сростка пропала"
+    return "щель заклеена, хвост срезан, сросток на месте"
 
 
 @check("CV", "cv_fracture: зоны ищутся, серия кадров сводится, отрисовка работает")

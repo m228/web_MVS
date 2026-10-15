@@ -615,6 +615,24 @@ def size_extremes(rows: list) -> dict:
             "len_max": _ext(max, [r.get("len_max") for r in rows])}
 
 
+def _extreme_at(frames: list[dict]) -> dict:
+    """Где в пробе самый крупный хороший кристалл и самый большой сросток: [номер кадра, номер объекта в objects_N.json]
+    (плитки в окне CV кликабельны — переход на кадр и подсветка). Самый большой сросток — ещё и его размер."""
+    out = {}
+    for key, at in (("max", "max_at"), ("agg_max", "agg_max_at")):
+        best = None
+        for k, f in enumerate(frames):
+            su = (f.get("summary") or {}).get("size_um") or {}
+            v, i = su.get(key), su.get(key + "_i") if key == "agg_max" else su.get("max_i")
+            if v is not None and i is not None and (best is None or v > best[0]):
+                best = (v, [int(f.get("idx", k)), int(i)])
+        if best:
+            out[at] = best[1]
+            if key == "agg_max":
+                out["agg_max"] = best[0]
+    return out
+
+
 def _aggregate(frames: list[dict]) -> dict:
     """Сводка пробы = усреднение по-кадровых сводок (кадры одной пробы ~ одинаковы)."""
     ok = [f["summary"] for f in frames if f.get("summary")]
@@ -630,6 +648,7 @@ def _aggregate(frames: list[dict]) -> dict:
         vol = cv_volume.add_sums(vol, s.get("volume") or {})
     has_vol = any(s.get("volume") for s in ok)
     return {
+        **_extreme_at(frames),
         "count": round(sum(s["count"] for s in ok) / n, 1),
         "groups": counts,
         # объём: суммы по кадрам (а не среднее процентов — большие кристаллы весят больше)

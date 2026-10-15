@@ -3171,6 +3171,8 @@ html {
 .micro-tele-col--app .micro-app-svg { width: 150px; max-width: 100%; }
 .micro-tile { background: var(--surface-muted); border-radius: 8px; padding: 8px 10px; display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .micro-tile span { color: var(--muted); font-size: 0.78em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.micro-tile.is-go { cursor: pointer; }   /* плитка с переходом на кадр (самый крупный / сросток) */
+.micro-tile.is-go:hover { outline: 1px solid var(--accent); }
 .micro-tile b { font-weight: 600; font-variant-numeric: tabular-nums; }
 .micro-naladka { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--border); }
 

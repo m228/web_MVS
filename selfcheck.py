@@ -940,6 +940,35 @@ def _cv_size_extremes():
     return "мин %.0f / макс %.0f / длина %.0f мкм на кадре; по пробе min/max кадров" % (sz["min"], sz["max"], sz["len_max"])
 
 
+@check("CV", "самый крупный кристалл и самый большой сросток: где они (кадр, номер объекта) — плитки в окне CV кликабельны")
+def _cv_extreme_at():
+    import math
+    import numpy as np
+    import cv_analyzer
+    import cv_store
+
+    def hexa(cx, cy, r):
+        return [[cx + r * math.cos(math.pi / 3 * i), cy + r * math.sin(math.pi / 3 * i)] for i in range(6)]
+
+    def obj(q, **kw):
+        return {"bbox": [min(p[0] for p in q), min(p[1] for p in q), max(p[0] for p in q), max(p[1] for p in q)], "conf": 0.9, "polygon": q, **kw}
+
+    img = np.full((1000, 1400, 3), 120, np.uint8)
+    cfg = {"tiles": 1, "cluster_gap_px": 0}
+    # кадр 0: два хороших кристалла + сросток (склеен из 2 масок); кадр 1: хороший крупнее
+    f0 = cv_analyzer.analyze(img, [obj(hexa(300, 300, 60)), obj(hexa(700, 300, 100)), obj(hexa(1000, 600, 150), members=2)],
+                             cfg, with_overlay=False, sv=95)          # СВ выше «Брак до СВ»: сросток не в рассеве, но найден
+    f1 = cv_analyzer.analyze(img, [obj(hexa(400, 400, 130))], cfg, with_overlay=False, sv=95)
+    s0 = f0["summary"]["size_um"]
+    assert f0["objects"][s0["max_i"]]["size_um"] == s0["max"], "max_i не указывает на самый крупный: %s" % s0
+    assert f0["objects"][s0["agg_max_i"]]["defect"] == "aggregate" and s0["agg_max"] == f0["objects"][s0["agg_max_i"]]["size_um"], s0
+    ag = cv_store._aggregate([{"summary": f0["summary"]}, {"summary": f1["summary"]}])
+    assert ag["max_at"] == [1, 0] and ag["agg_max_at"] == [0, s0["agg_max_i"]] and ag["agg_max"] == s0["agg_max"], ag
+    old = {"summary": {"groups": {}, "count": 1, "size_um": {"mean": 1.0, "median": 1.0, "max": 5.0}, "density_per_mm2": 1, "reject_pct": 0}}
+    assert "max_at" not in cv_store._aggregate([old]), "старая проба без места — плитка не кликается, не падаем"
+    return "крупный → кадр %s, сросток %.0f мкм → кадр %s" % (ag["max_at"], ag["agg_max"], ag["agg_max_at"])
+
+
 @check("CV", "cv_analyzer: пузырь воздуха (ровный круг) отсеивается из рассева, шестиугольники — нет")
 def _cv_bubble():
     import math

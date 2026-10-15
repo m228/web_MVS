@@ -864,8 +864,11 @@ def summarize(measures: list[CrystalMeasure], image_shape: tuple,
     reasons = {r: 0 for r in REASONS}
     n_suspect = 0
     n_excl = 0
+    max_i = agg_i = None              # номера (в measures = в objects кадра) самого крупного хорошего кристалла и самого большого сростка
     counting = is_counting(cfg, sv)
-    for m in measures:
+    for i, m in enumerate(measures):
+        if m.group not in (CUT_GROUP, BUBBLE_GROUP) and m.defect == "aggregate" and (agg_i is None or m.size_um > measures[agg_i].size_um):
+            agg_i = i                 # сросток — и когда брак не считается (СВ выше «Брак до СВ»): только показ, в рассев не идёт
         if m.group == CUT_GROUP:      # обрезан кадром/швом — вне рассева и размеров
             n_cut += 1
             continue
@@ -884,6 +887,8 @@ def summarize(measures: list[CrystalMeasure], image_shape: tuple,
         if m.group != "reject":
             sizes.append(m.size_um)
             lens.append(m.length_um)
+            if max_i is None or m.size_um > measures[max_i].size_um:
+                max_i = i
     n = len(measures) - n_cut - n_bubble - n_excl
     area_mm2 = (w * cfg["um_per_px"] / 1000.0) * (h * cfg["um_per_px"] / 1000.0)
     sizes_np = np.array(sizes) if sizes else np.array([0.0])
@@ -911,6 +916,9 @@ def summarize(measures: list[CrystalMeasure], image_shape: tuple,
             "min": round(float(min(sizes)), 1) if sizes else None,
             "max": round(float(max(sizes)), 1) if sizes else None,
             "len_max": round(float(max(lens)), 1) if lens else None,
+            "max_i": max_i,
+            "agg_max": round(float(measures[agg_i].size_um), 1) if agg_i is not None else None,
+            "agg_max_i": agg_i,
             "cv_pct": round(float(100.0 * sizes_np.std() / sizes_np.mean()), 1) if sizes_np.mean() else 0.0,
         },
         "density_per_mm2": round(n / area_mm2, 2) if area_mm2 > 0 else 0.0,

@@ -64,7 +64,7 @@
     set("cvMinCirc", sh.min_circularity); set("cvMinSol", sh.min_solidity);
     set("cvMaxAspect", sh.max_aspect); set("cvConf", cv.conf);
     set("cvKeepBoils", cv.keep_boils != null ? cv.keep_boils : 10); set("cvArchiveGb", cv.archive_max_gb != null ? cv.archive_max_gb : 30); if ($("cvFramePng")) $("cvFramePng").checked = (cv.frame_format || "png") === "png"; set("cvSuspect", sh.suspect_aspect); set("cvShapeMin", sh.min_um != null ? sh.min_um : 100); set("cvSmoothK", sh.smooth_k != null ? sh.smooth_k : 5); set("cvRejectSv", cv.reject_to_sv != null ? cv.reject_to_sv : 85);
-    set("cvClusterGap", cv.cluster_gap_px); set("cvEdgeMargin", cv.edge_margin_px);
+    set("cvClusterGap", cv.cluster_gap_px); set("cvEdgeMargin", cv.edge_margin_px); set("cvMaskSmooth", cv.mask_smooth === false ? 0 : cv.mask_smooth_pct);
     if ($("cvSeamMerge")) $("cvSeamMerge").checked = cv.seam_merge !== false;
     if ($("cvSeamRefine")) $("cvSeamRefine").checked = cv.seam_refine !== false;
     if ($("cvSeamInSieve")) $("cvSeamInSieve").checked = cv.seam_in_sieve !== false;
@@ -82,7 +82,7 @@
       groups: { small_max_um: num("cvSmallMax"), medium_max_um: num("cvMediumMax") },
       shape: { min_circularity: num("cvMinCirc"), min_solidity: num("cvMinSol"), max_aspect: num("cvMaxAspect"), suspect_aspect: num("cvSuspect"), min_um: num("cvShapeMin"), smooth_k: num("cvSmoothK") },
       um_per_px: num("cvUmPerPx"), tiles: num("cvTiles"), conf: num("cvConf"),
-      reject_to_sv: num("cvRejectSv"), keep_boils: num("cvKeepBoils"), archive_max_gb: num("cvArchiveGb"), frame_format: $("cvFramePng") ? ($("cvFramePng").checked ? "png" : "jpg") : undefined, cluster_gap_px: num("cvClusterGap"), edge_margin_px: num("cvEdgeMargin"),
+      reject_to_sv: num("cvRejectSv"), keep_boils: num("cvKeepBoils"), archive_max_gb: num("cvArchiveGb"), frame_format: $("cvFramePng") ? ($("cvFramePng").checked ? "png" : "jpg") : undefined, cluster_gap_px: num("cvClusterGap"), edge_margin_px: num("cvEdgeMargin"), mask_smooth: num("cvMaskSmooth") === undefined ? undefined : num("cvMaskSmooth") > 0, mask_smooth_pct: num("cvMaskSmooth") > 0 ? num("cvMaskSmooth") : undefined,
       seam_merge: $("cvSeamMerge") ? $("cvSeamMerge").checked : undefined,
       seam_refine: $("cvSeamRefine") ? $("cvSeamRefine").checked : undefined,
       seam_in_sieve: $("cvSeamInSieve") ? $("cvSeamInSieve").checked : undefined,

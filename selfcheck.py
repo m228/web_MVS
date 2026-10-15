@@ -1027,6 +1027,28 @@ def _cv_seam_in_sieve():
     return "в рассеве 2, серых 2; выкл — серых 4"
 
 
+@check("CV", "cv_analyzer: маска заглаживается — щель и отросток убраны, широкая перетяжка сростка остаётся")
+def _cv_mask_smooth():
+    import cv2
+    import numpy as np
+    import cv_analyzer
+    # квадрат 300 px с узкой щелью внутрь (зигзаг-шов ultralytics) и тонким хвостом наружу
+    slit = [[100, 100], [400, 100], [400, 240], [250, 245], [400, 250], [400, 400], [100, 400],
+            [100, 260], [20, 262], [100, 266]]
+    sm = cv_analyzer._smooth_mask(np.array(slit, np.float32).reshape(-1, 1, 2), 6.0)
+    P = sm.reshape(-1, 2)
+    assert P[:, 0].min() > 90, "хвост не срезан: x от %.0f" % P[:, 0].min()
+    assert cv2.pointPolygonTest(sm.astype(np.float32), (330.0, 245.0), False) >= 0, "щель не заклеена"
+    # два квадрата, сросшихся узкой перемычкой (перетяжка шире ядра) — форма не меняется
+    agg = [[0, 0], [200, 0], [200, 80], [260, 80], [260, 0], [460, 0], [460, 200], [260, 200], [260, 120],
+           [200, 120], [200, 200], [0, 200]]
+    a0 = np.array(agg, np.float32).reshape(-1, 1, 2)
+    a1 = cv_analyzer._smooth_mask(a0, 6.0)
+    assert abs(cv2.contourArea(a1) - cv2.contourArea(a0)) < 0.03 * cv2.contourArea(a0), "сросток заглажен"
+    assert cv_analyzer._notches(a1, 300.0, 0.06) >= 2, "перетяжка сростка пропала"
+    return "щель заклеена, хвост срезан, сросток на месте"
+
+
 @check("CV", "cv_fracture: зоны ищутся, серия кадров сводится, отрисовка работает")
 def _cv_fracture():
     import cv2

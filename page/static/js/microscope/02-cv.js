@@ -67,6 +67,7 @@
     set("cvClusterGap", cv.cluster_gap_px); set("cvEdgeMargin", cv.edge_margin_px);
     if ($("cvSeamMerge")) $("cvSeamMerge").checked = cv.seam_merge !== false;
     if ($("cvSeamRefine")) $("cvSeamRefine").checked = cv.seam_refine !== false;
+    if ($("cvSeamInSieve")) $("cvSeamInSieve").checked = cv.seam_in_sieve !== false;
     if ($("cvBubble")) $("cvBubble").checked = cv.bubble_filter !== false;
     if ($("cvRejectAlways")) $("cvRejectAlways").checked = !!cv.reject_always;
     const vo = cv.volume || {};
@@ -84,6 +85,7 @@
       reject_to_sv: num("cvRejectSv"), keep_boils: num("cvKeepBoils"), archive_max_gb: num("cvArchiveGb"), frame_format: $("cvFramePng") ? ($("cvFramePng").checked ? "png" : "jpg") : undefined, cluster_gap_px: num("cvClusterGap"), edge_margin_px: num("cvEdgeMargin"),
       seam_merge: $("cvSeamMerge") ? $("cvSeamMerge").checked : undefined,
       seam_refine: $("cvSeamRefine") ? $("cvSeamRefine").checked : undefined,
+      seam_in_sieve: $("cvSeamInSieve") ? $("cvSeamInSieve").checked : undefined,
       bubble_filter: $("cvBubble") ? $("cvBubble").checked : undefined, reject_always: $("cvRejectAlways") ? $("cvRejectAlways").checked : undefined,
     };
   }

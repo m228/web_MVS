@@ -43,6 +43,7 @@ DEFAULTS = {
     "bubble_min_um": 100.0,    # мельче — не трогаем (на мелких масках форма недостоверна)
     "seam_refine": True,       # обрубок на шве без пары — заново найти целым: повторный проход модели по окну вокруг него
     "refine_max": 30.0,        # не больше стольких обрубков на кадр (каждый — один запрос к сайдкару)
+    "seam_in_sieve": True,     # «обрезанный» у шва, но целый по геометрии (шов не режет его ровным срезом) — в рассев
     "tiles": 6, "overlap": 0.15,   # как в настройках CV (их же получает сайдкар) — нужны, чтобы знать, где швы
     "min_size_um": 20.0,   # мельче — считаем пылью/шумом, не кристаллом
     "blur_min": 8.0,       # variance of Laplacian ниже — кадр смазан (тюним под камеру на Server)
@@ -79,6 +80,7 @@ CUT_GROUP = "cut"
 BUBBLE_GROUP = "bubble"
 NOTCH_MAX = 5          # больше выемок — рваный край (кривой), а не сросток
 POLY_EPS_PX = 1.5      # упрощение контура для сохранения/отрисовки в браузере, px
+EDGE_FRAME_PX = 12.0   # у края кадра ближе этого — обрезан кадром: в рассев со шва не возвращаем, даже если edge_margin_px выключен
 
 
 def _cfg(cv_cfg: Optional[dict]) -> dict:
@@ -94,6 +96,7 @@ def _cfg(cv_cfg: Optional[dict]) -> dict:
             c[k] = float(cv_cfg.get(k, c[k]))
         c["seam_merge"] = bool(cv_cfg.get("seam_merge", c["seam_merge"]))
         c["seam_refine"] = bool(cv_cfg.get("seam_refine", c["seam_refine"]))
+        c["seam_in_sieve"] = bool(cv_cfg.get("seam_in_sieve", c["seam_in_sieve"]))
         c["bubble_filter"] = bool(cv_cfg.get("bubble_filter", c["bubble_filter"]))
         for k in ("bubble_radial_cv", "bubble_aspect", "bubble_solidity", "bubble_min_um"):
             c[k] = float(cv_cfg.get(k, c[k]))
@@ -397,6 +400,48 @@ def _merge_seams(objects: list[dict], shape: tuple, tiles: int, overlap: float, 
     return out
 
 
+def _seam_stub(poly: np.ndarray, xs: list, ys: list, tol: float = 4.0, cross: float = 6.0,
+               flat_frac: float = 0.5) -> Optional[bool]:
+    """«Обрезанный» у шва — правда обрубок или целый кристалл? Обрубок лежит по ОДНУ сторону линии шва (за неё не
+    заходит дальше cross px) и упирается в неё ровным срезом — не короче flat_frac своего размера вдоль линии. Целый
+    кристалл шов пересекает либо лишь касается его краем. None — маска ни одной линии шва не касается (причина
+    «обрезан» неизвестна — не трогаем)."""
+    near = False
+    for axis, lines in ((0, xs), (1, ys)):
+        lo, hi = float(poly[:, axis].min()), float(poly[:, axis].max())
+        span = float(poly[:, 1 - axis].max() - poly[:, 1 - axis].min())
+        for L in lines:
+            if hi < L - tol or lo > L + tol:
+                continue
+            near = True
+            if lo < L - cross and hi > L + cross:
+                continue                                   # шов проходит сквозь маску — им не разрезан
+            on = poly[np.abs(poly[:, axis] - L) <= tol]
+            flat = float(on[:, 1 - axis].max() - on[:, 1 - axis].min()) if len(on) >= 2 else 0.0
+            if span > 0 and flat >= flat_frac * span:
+                return True
+    return False if near else None
+
+
+def _free_seam_whole(objects: list[dict], shape: tuple, cfg: dict) -> list[dict]:
+    """Кристаллы, помеченные cut у шва нарезки, но целые по геометрии (_seam_stub) — снимаем cut: идут в рассев.
+    Обрезанные краем кадра (edge или бокс у края) не трогаем."""
+    xs, ys = _seam_lines(shape, int(cfg["tiles"]), cfg["overlap"])
+    if not xs and not ys:
+        return objects
+    h, w = shape[:2]
+    m = max(cfg["edge_margin_px"], EDGE_FRAME_PX)
+    out = []
+    for o in objects:
+        b = o.get("bbox")
+        if (o.get("cut") and not o.get("edge") and b and o.get("polygon") and len(o["polygon"]) >= 3
+                and b[0] > m and b[1] > m and b[2] < w - m and b[3] < h - m
+                and _seam_stub(np.asarray(o["polygon"], np.float32).reshape(-1, 2), xs, ys) is False):
+            o = {k: v for k, v in o.items() if k != "cut"}
+        out.append(o)
+    return out
+
+
 def _flag_edges(objects: list[dict], shape: tuple, margin: float) -> list[dict]:
     """Помечаем edge у объектов, чей бокс ближе margin px к краю кадра: кристалл обрезан кадром (или маска
     модели не доходит до края на пару пикселей), его размер и форма недостоверны."""
@@ -689,6 +734,8 @@ def measure_objects(objects: list[dict], cv_cfg: Optional[dict] = None,
         objects = _flag_edges(objects, img_shape, cfg["edge_margin_px"])
     if img_shape is not None and cfg["seam_merge"]:
         objects = _merge_seams(objects, img_shape, int(cfg["tiles"]), cfg["overlap"], 2.0)
+    if img_shape is not None and cfg["seam_in_sieve"]:
+        objects = _free_seam_whole(objects, img_shape, cfg)
     objects = _merge_touching(objects, cfg["cluster_gap_px"], cfg["nest_frac"])
     counting = is_counting(cfg, sv)
     size_active = sv is not None and sv >= cfg["reject_from_sv"]   # размер-брак — только у готового

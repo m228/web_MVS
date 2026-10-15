@@ -1001,6 +1001,32 @@ def _cv_seam_refine():
     return "обрубок → целый (вызовов модели: %d)" % len(calls)
 
 
+@check("CV", "cv_analyzer: «обрезанный» у шва — целый (шов пересекает/касается) в рассеве, обрубок и край кадра — серые")
+def _cv_seam_in_sieve():
+    import numpy as np
+    import cv_analyzer
+    img = np.full((2048, 2448, 3), 120, np.uint8)
+    xs, _ys = cv_analyzer._seam_lines(img.shape, 4, 0.15)
+    sx = xs[0]
+    hexa = lambda cx, cy, r: [[cx + r * np.cos(a), cy + r * np.sin(a)] for a in np.linspace(0, 2 * np.pi, 7)[:-1]]
+
+    def cut(poly):
+        P = np.asarray(poly, float)
+        return {"bbox": [*P.min(0), *P.max(0)], "conf": 0.9, "polygon": [list(p) for p in P], "cut": True}
+
+    raw = [cut(hexa(sx + 10, 500, 120)),                                                    # шов проходит сквозь — целый
+           cut([[sx, 1000], [sx + 50, 1000], [sx + 60, 1060], [sx + 50, 1120], [sx, 1120]]),  # ровный срез по шву — обрубок
+           cut(hexa(sx - 122, 1500, 120)),                                                  # лишь касается шва углом — целый
+           cut(hexa(2448 - 110, 1500, 105))]                                                # у края кадра — обрезан кадром
+    cfg = {"tiles": 4, "overlap": 0.15, "um_per_px": 1.0, "cluster_gap_px": 0}
+    groups = [o["group"] for o in cv_analyzer.analyze(img, raw, cfg, with_overlay=False, sv=90)["objects"]]
+    assert groups[0] != "cut" and groups[2] != "cut", "целые на шве должны идти в рассев: %s" % groups
+    assert groups[1] == "cut" and groups[3] == "cut", "обрубок и край кадра должны остаться серыми: %s" % groups
+    off = [o["group"] for o in cv_analyzer.analyze(img, raw, {**cfg, "seam_in_sieve": False}, with_overlay=False, sv=90)["objects"]]
+    assert off.count("cut") == 4, "галочка выключена — всё как было: %s" % off
+    return "в рассеве 2, серых 2; выкл — серых 4"
+
+
 @check("CV", "cv_fracture: зоны ищутся, серия кадров сводится, отрисовка работает")
 def _cv_fracture():
     import cv2

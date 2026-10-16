@@ -395,23 +395,24 @@ class MicroscopeService:
         summary, objects = None, []
         if run["sidecar_ok"]:
             ok, enc = cv2.imencode(".png", img)
-            resp = cv_client.infer(
-                run["url"], enc.tobytes(), tiles=int(cv.get("tiles", 6)),
-                conf=float(cv.get("conf", 0.25)), iou=float(cv.get("iou", 0.45)),
-                overlap=float(cv.get("overlap", 0.15))) if ok else None
+            inf = {"tiles": int(cv.get("tiles", 6)), "conf": float(cv.get("conf", 0.25)),
+                   "iou": float(cv.get("iou", 0.45)), "overlap": float(cv.get("overlap", 0.15))}
+            resp = cv_client.infer(run["url"], enc.tobytes(), **inf) if ok else None
             if resp:
                 run["answered"] += 1
                 run["timing"] = resp.get("timing", {})
+                # чем и как снята проба: паспорт модели от сайдкара + параметры, что реально ушли в infer
+                run["detector"] = resp.get("detector")
+                run["infer"] = {**inf, "seam_refine": bool(cv.get("seam_refine", True)) and inf["tiles"] > 1}
                 sv = self.fsm.sv if self.fsm else None
                 run["svs"].append(sv)
                 objs = resp.get("objects", [])
-                if cv.get("seam_refine", True) and int(cv.get("tiles", 6)) > 1:
+                if run["infer"]["seam_refine"]:
                     # обрубки у шва нарезки — повторный проход модели по окну вокруг них (целый кристалл
                     # идёт в рассев). Сбой запроса = обрубок остаётся как был.
-                    def _infer_window(crop, _url=run["url"], _cv=cv):
+                    def _infer_window(crop, _url=run["url"], _inf=inf):
                         okw, encw = cv2.imencode(".png", crop)
-                        rw = cv_client.infer(_url, encw.tobytes(), tiles=1, conf=float(_cv.get("conf", 0.25)),
-                                             iou=float(_cv.get("iou", 0.45)), overlap=float(_cv.get("overlap", 0.15)),
+                        rw = cv_client.infer(_url, encw.tobytes(), **{**_inf, "tiles": 1},
                                              timeout=30.0) if okw else None
                         return rw.get("objects") if rw else None
                     t_ref = time.time()
@@ -465,7 +466,8 @@ class MicroscopeService:
                                      thumb_img=thumb_img,
                                      sv=(sum(x for x in run["svs"] if x is not None) / max(1, len([x for x in run["svs"] if x is not None]))
                                          if any(x is not None for x in run["svs"]) else None),
-                                     plc=self._plc_summary(run), phase=run.get("phase"))
+                                     plc=self._plc_summary(run), phase=run.get("phase"),
+                                     detector=run.get("detector"), infer=run.get("infer"))
         if saved and stage == 9 and self._fit_key != self._seed_ts:
             self._fit_key = self._seed_ts                 # первая проба «готовности» этой варки: длительность известна — растягиваем порог муки и пересчитываем варку
             self._spawn_refit(serial)

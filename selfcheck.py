@@ -763,6 +763,30 @@ def _autocal():
     return "1-я / 3-я попытка / провал (3×Поиск 0, без set_zero)"
 
 
+@check("Микроскоп", "Страховка разбора CV: по умолчанию 120 с, значение из настроек доходит до автомата, меньше 10 с не бывает")
+def _cv_dwell_timeout():
+    import copy
+    import plate_config
+    from microscope_fsm import MicroscopeFSM
+
+    class _Plate:
+        def __init__(self):
+            self.telemetry = {"pos1": 0, "pos1_ai": 0, "pos1_enc": 0}
+            self.status = {"connected": True}
+
+        def __getattr__(self, n):
+            return lambda *a, **k: None
+
+    assert plate_config.DEFAULTS["cv"]["dwell_timeout_sec"] == 120, "страховка по умолчанию должна быть 120 с"
+    fsm = MicroscopeFSM(_Plate(), copy.deepcopy(plate_config.load()))
+    assert fsm._cv_timeout_sec == 120, "автомат без настроек: %s" % fsm._cv_timeout_sec
+    fsm.set_cv_dwell(True, frames=7, timeout_sec=150)
+    assert fsm._cv_timeout_sec == 150, "значение из настроек не дошло: %s" % fsm._cv_timeout_sec
+    fsm.set_cv_dwell(True, timeout_sec=3)
+    assert fsm._cv_timeout_sec == 10, "меньше 10 с должно подниматься до 10: %s" % fsm._cv_timeout_sec
+    return "120 с по умолчанию · 150 из настроек · 3 → 10"
+
+
 @check("Микроскоп", "MicroscopeFSM: такты идут, СВ/стадия принимаются, проба стартует")
 def _fsm():
     from microscope_fsm import MicroscopeFSM

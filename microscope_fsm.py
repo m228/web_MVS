@@ -123,7 +123,7 @@ class MicroscopeFSM:
         self._cv_dwell = False
         self._cv_frames = 3
         self._cv_gap_sec = 10
-        self._cv_timeout_sec = 60
+        self._cv_timeout_sec = 120
         self._cv_done = 0             # разобрано кадров в текущей выдержке (для подписи шага)
         self._cv_release = False      # сервис: кадры набраны/отказ → можно отводить
         self._cv_busy = False         # сервис ещё разбирает/сохраняет пробу (триггер "cv" ждёт)

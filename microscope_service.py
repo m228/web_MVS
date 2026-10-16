@@ -246,7 +246,7 @@ class MicroscopeService:
         self.fsm.set_cv_dwell(bool(cv.get("enabled")),
                               frames=self._cv_frames_per_probe(cv),
                               gap_sec=cv.get("gap_sec", 10),
-                              timeout_sec=cv.get("dwell_timeout_sec", 60))
+                              timeout_sec=cv.get("dwell_timeout_sec", 120))
 
     def _probe_at_glass(self):
         """Автомат стоит в выдержке у стекла — кадры пробы можно брать."""
@@ -318,7 +318,7 @@ class MicroscopeService:
             fmt = pc.get("photo_format", "png")
             stage = fsm.stage if fsm else None
             need = self._cv_frames_per_probe(cv, stage)
-            deadline = time.time() + max(10, int(cv.get("dwell_timeout_sec", 60)))   # страховка
+            deadline = time.time() + max(10, int(cv.get("dwell_timeout_sec", 120)))   # страховка
             run = self._cv_begin(cfg)
             while (self._probe_at_glass() and len(run["overlays"]) < need
                    and time.time() < deadline):

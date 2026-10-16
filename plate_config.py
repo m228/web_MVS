@@ -311,9 +311,10 @@ DEFAULTS = {
         # max_gb — потолок места под архивы (старые удаляются)
         "boil_zip": {"enabled": False, "dir": "", "early_jpeg_quality": 90, "max_gb": 50.0},
         # проба «по CV»: у стекла стоим, пока не разобрано frames_per_probe кадров (кадр → разбор
-        # → следующий), потом отвод; dwell_timeout_sec — страховка, если CV завис. gap_sec —
+        # → следующий), потом отвод; dwell_timeout_sec — страховка, если CV завис (120 с: модель на imgsz 1280
+        # разбирает кадр в 3 раза дольше, 7 кадров на слабой видеокарте не влезали в 60 с). gap_sec —
         # защитная пауза перед следующей пробой в триггере "cv" (probe_cycle.trigger_mode).
-        "frames_per_probe": 3, "gap_sec": 10, "dwell_timeout_sec": 60,
+        "frames_per_probe": 3, "gap_sec": 10, "dwell_timeout_sec": 120,
     },
 
     # РАЗЛОМЫ (Часть B) — детект лопнутых/раздавленных кристаллов на OpenCV (без YOLO).

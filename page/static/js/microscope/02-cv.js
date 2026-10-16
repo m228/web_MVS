@@ -77,7 +77,7 @@
     if ($("cvRejectAlways")) $("cvRejectAlways").checked = !!cv.reject_always;
     const vo = cv.volume || {};
     cvVolFill(vo);   // поля блока «Объём и мука»
-    set("pcCvFrames", cv.frames_per_probe); set("pcCvGap", cv.gap_sec);   // поля на вкладке «Цикл»
+    set("pcCvFrames", cv.frames_per_probe); set("pcCvGap", cv.gap_sec); set("pcCvTimeout", cv.dwell_timeout_sec);   // поля на вкладке «Цикл»
     cvTrendStyle = cv.trend_style || {}; cvApplyStyleToRows(); cvBuildStylePanel(); cvDrawTrend();   // вид линий тренда из конфига
     updateTriggerFields();
   }

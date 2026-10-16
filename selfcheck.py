@@ -1936,6 +1936,24 @@ def _vol_block_sv_range():
     return "СВ %s – %s, пустой набор — None" % (b["sv_from"], b["sv_to"])
 
 
+@check("CV", "95% интервал муки блока (бутстрэп по пробам): одинаковые пробы — узкий, разброс — широкий, меньше 3 проб — None, цифры не прыгают")
+def _vol_block_fines_ci():
+    import cv_store
+
+    def probes(vals):
+        return [{"ts": "x%d" % i, "t": float(i), "sv": 88.0, "vtot_m1": 1.0 + i % 3, "vtot_m2": 1.0, "vtot_m3": 1.0,
+                 "fines_m1": v, "fines_m2": v, "fines_m3": v} for i, v in enumerate(vals)]
+    same = cv_store._vol_block(probes([3.4] * 11))
+    assert abs(same["fines_lo"]["m3"] - 3.4) < 1e-9 and abs(same["fines_hi"]["m3"] - 3.4) < 1e-9, (same["fines_lo"], same["fines_hi"])
+    spread = cv_store._vol_block(probes([2.3, 3.8, 3.2, 3.5, 2.8, 4.0, 2.8, 3.3, 3.9, 2.9, 3.1]))
+    lo, hi, mid = spread["fines_lo"]["m1"], spread["fines_hi"]["m1"], spread["fines"]["m1"]
+    assert lo < mid < hi and hi - lo > 0.4, (lo, mid, hi)
+    assert spread["fines_lo"] == cv_store._vol_block(probes([2.3, 3.8, 3.2, 3.5, 2.8, 4.0, 2.8, 3.3, 3.9, 2.9, 3.1]))["fines_lo"], "интервал прыгает"
+    two = cv_store._vol_block(probes([3.0, 4.0]))
+    assert all(two["fines_lo"][m] is None and two["fines_hi"][m] is None for m in ("m1", "m2", "m3")), (two["fines_lo"], two["fines_hi"])
+    return ("одинаковые 3,4–3,4; разброс %.2f (%.2f–%.2f); 2 пробы — None" % (mid, lo, hi)).replace(".", ",")
+
+
 @check("CV", "длительность фаз варки: от первой пробы фазы до первой пробы следующей, отрезки одной фазы складываются, в сводке варки dur_s")
 def _phase_durations():
     import cv_store

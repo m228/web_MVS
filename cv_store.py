@@ -461,6 +461,24 @@ def _wmean(rows: list, key: str, wkey: Optional[str]) -> Optional[float]:
     return sum(v for v, _ in pts) / len(pts)
 
 
+CI_BOOT_N, CI_SEED, CI_MIN_PROBES = 2000, 20261016, 3      # интервал муки: повторов бутстрэпа, seed (цифры не прыгают), минимум проб
+
+
+def _wmean_ci(rows: list, key: str, wkey: str) -> tuple[Optional[float], Optional[float]]:
+    """95% интервал взвешенного среднего (как _wmean) бутстрэпом по пробам: CI_BOOT_N раз выбираем пробы с возвратом,
+    берём 2,5 и 97,5 перцентили. Меньше CI_MIN_PROBES проб — (None, None)."""
+    pts = [(r[key], r.get(wkey)) for r in rows if r.get(key) is not None]
+    n = len(pts)
+    if n < CI_MIN_PROBES:
+        return None, None
+    v = np.array([p[0] for p in pts], dtype=float)
+    w = np.array([p[1] for p in pts], dtype=float) if all(p[1] for p in pts) else np.ones(n)
+    idx = np.random.default_rng(CI_SEED).integers(0, n, size=(CI_BOOT_N, n))
+    means = (v[idx] * w[idx]).sum(axis=1) / w[idx].sum(axis=1)
+    lo, hi = np.percentile(means, [2.5, 97.5])
+    return float(lo), float(hi)
+
+
 def _vol_block(sel: list) -> dict:
     """Среднее по набору проб (строк журнала): мука, отсеянный брак, рассев (взвешено по общему объёму пробы), сколько проб
     и хороших кристаллов вошло. Строки без значения мелочи пропускаются."""
@@ -473,6 +491,10 @@ def _vol_block(sel: list) -> dict:
     out["sv_from"], out["sv_to"] = (min(svs), max(svs)) if svs else (None, None)     # в каком диапазоне СВ сняты пробы этого рассева
     out["fines"] = {m: r3(_wmean(fin, "fines_" + m, "vtot_" + m)) for m in ("m1", "m2", "m3")}
     out["fines"]["area"], out["fines"]["n"] = r3(_wmean(fin, "fines_area", None)), r3(_wmean(fin, "fines_n", None))
+    # 95% интервал муки по моделям (бутстрэп по пробам): разница двух варок меньше интервала — шум пробы, а не процесс
+    ci = {m: _wmean_ci(fin, "fines_" + m, "vtot_" + m) for m in ("m1", "m2", "m3")}
+    out["fines_lo"] = {m: r3(ci[m][0]) for m in ci}
+    out["fines_hi"] = {m: r3(ci[m][1]) for m in ci}
     # рассев по объёму (M1–M3, вес — общий объём пробы) и по площади (area, простое среднее по пробам)
     out["sieve"] = {m: [r3(_wmean(fin, "sieve_%s_b%d" % (m, i), ("vtot_" + m) if m != "area" else None)) for i in range(len(cv_volume.SIEVE_MM) + 1)] for m in ("m1", "m2", "m3", "area")}
     out["fsieve"] = _fsieve(fin)

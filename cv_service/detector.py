@@ -171,16 +171,33 @@ class UltralyticsDetector(Detector):
     (sahi_tiler) вызывает infer() на каждом тайле, поэтому тут прогоняем как есть.
     """
 
-    def __init__(self, model_path: str, device: Optional[str] = None, imgsz: int = 640):
+    DEFAULT_IMGSZ = 640        # если размер обучения не известен (onnx/engine, битый чекпойнт) и CV_IMGSZ не задан
+
+    def __init__(self, model_path: str, device: Optional[str] = None, imgsz: Optional[int] = None):
         from ultralytics import YOLO   # тяжёлый импорт — только когда реально нужен
         self.model_path = model_path
         self.model = YOLO(model_path)
-        self.imgsz = imgsz
         self._device = device or self._auto_device()
         self.name = "yolo:" + model_path.rsplit("/", 1)[-1].rsplit("\\", 1)[-1]
         # seg-модель, если у неё есть маски (task=segment)
         self.is_seg = getattr(self.model, "task", "") == "segment"
         self._meta = self._file_meta(model_path, getattr(self.model, "ckpt", None))
+        self.imgsz = self._pick_imgsz(imgsz, self._meta.get("train_imgsz"))
+
+    @classmethod
+    def _pick_imgsz(cls, explicit=None, train=None) -> int:
+        """Размер входа модели: явный аргумент > CV_IMGSZ > imgsz обучения из чекпойнта > 640.
+        Гнать модель на другом размере, чем училась, — терять мелочь, поэтому по умолчанию берём обучающий.
+        Округляем вверх до кратного 32 (требование YOLO)."""
+        import os
+        for v in (explicit, os.environ.get("CV_IMGSZ"), train):
+            try:
+                n = int(float(v))
+            except (TypeError, ValueError):
+                continue
+            if n > 0:
+                return -(-n // 32) * 32
+        return cls.DEFAULT_IMGSZ
 
     @staticmethod
     def _file_meta(path: str, ck=None) -> dict:

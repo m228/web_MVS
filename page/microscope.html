@@ -1209,6 +1209,17 @@
             </label>
             </div>
           <label class="micro-cycle-f" title="Сколько места под кадры проб на этой машине, ГБ. Когда архив больше — удаляются самые старые пробы (последние 50 проб не трогаем). Защита от переполнения диска."><span>Потолок архива, ГБ</span><input type="number" id="cvArchiveGb" step="5" min="2" max="500" /></label>
+          <div class="micro-cycle-f micro-cycle-fmt" title="Законченная варка сама собирается в один ZIP: паспорт варки, таблица проб, пробы с контурами и кадрами. Только в перерыве между варками (стадия вне 3…9) — на варку не влияет; началась варка посреди сборки — сборка откладывается.">
+            <span>Архив варок в ZIP</span>
+            <label class="micro-switch" for="cvZipOn">
+            <input type="checkbox" id="cvZipOn" />
+            <span class="micro-switch__track"><span class="micro-switch__thumb"></span></span>
+            </label>
+            </div>
+          <label class="micro-cycle-f micro-zip-dir" title="Куда класть ZIP варок. Пусто — папка boil_archive рядом с данными программы. Можно другой диск или папку Syncthing — архив появится там только целиком."><span>Папка ZIP</span><input type="text" id="cvZipDir" spellcheck="false" autocomplete="off" placeholder="boil_archive" /></label>
+          <label class="micro-cycle-f" title="Кадры начала варки (подкачка 1, рост 1, подкачка 2) в ZIP пересжимаются в JPEG такого качества — мелочь там не нужна, архив вдвое меньше. Рост 2 и финиш всегда без потерь: JPEG даже q95 занижал там муку на 7 %. 0 — всё без пересжатия."><span>JPEG начала варки, q</span><input type="number" id="cvZipQ" step="5" min="0" max="100" /></label>
+          <label class="micro-cycle-f" title="Сколько места под ZIP варок, ГБ. Больше — удаляются самые старые архивы."><span>Потолок ZIP, ГБ</span><input type="number" id="cvZipGb" step="5" min="1" max="2000" /></label>
+          <div class="micro-zip-list" id="cvZipList"></div>
               </section>
               <section class="micro-cfg-card">
                 <h4>Склейка и края</h4>

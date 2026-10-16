@@ -3895,6 +3895,11 @@ input.micro-cam-num { width: 56px; min-width: 0; flex: 0 0 auto; padding: 4px 5p
   background: var(--surface-muted, rgba(255,255,255,.04)); border: 1px solid var(--border, rgba(131,151,179,.28)); }
 .micro-cfg-card h4 { margin: 0 0 4px; font-size: 0.78em; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--muted, #8a94a6); }
 .micro-cfg-card .micro-cycle-f { grid-template-columns: 1fr 84px; }
+.micro-cfg-card .micro-zip-dir { grid-template-columns: auto 1fr; }       /* папка ZIP варок — путь длинный */
+.micro-zip-dir input { text-align: left; }
+.micro-zip-list { font-size: .8em; color: var(--muted); line-height: 1.6; }
+.micro-zip-list a { color: inherit; font-variant-numeric: tabular-nums; }
+.micro-zip-list a:hover { color: var(--accent, #2563eb); }
 .micro-cfg-card .micro-check { margin: 2px 0 0; }
 
 /* Поля «Объём и мука»: критерий муки (сторона / объём), три порога по подстадиям, ✓/✕ применить */

@@ -350,7 +350,7 @@ MODULES = [
     "camera_core.base_worker", "camera_core.gige_worker", "camera_core.rtsp_worker", "camera_core.camera_manager",
     "sdk_gige", "dahua_control", "net_tools", "rtsp_store",
     "save_settings", "plate_config", "sv_source", "microscope_plc", "microscope_fsm",
-    "microscope_service", "cv_analyzer", "cv_volume", "substages", "db", "report", "cv_fracture", "cv_client", "cv_store", "fracture_lab",
+    "microscope_service", "cv_analyzer", "cv_volume", "substages", "db", "report", "cv_fracture", "cv_client", "cv_store", "boil_archive", "fracture_lab",
     "updater", "autostart", "diag", "app", "mvsdk",
 ]
 THIRD_PARTY = ["cv2", "numpy", "fastapi", "starlette", "uvicorn", "pymodbus", "harvesters", "genicam",
@@ -1496,6 +1496,79 @@ def _micro_plc_snapshot():
     ms._note_stage(10); ms._note_stage(2)    # выгрузка → новый набор: отсчёт сброшен
     assert ms._seed_ts is None and "seed_age_s" not in (ms._plc_summary({"plc": [], "t0": _t.time()}) or {})
     return "снимок %d полей, заводка ловится" % len(snap)
+
+
+@check("CV", "архив варки (ZIP): законченная варка → README/boil.json/timeline.csv/пробы; JPEG только начало варки, финиш без потерь; идущая не пакуется; прерывание без .part; лимит; сборка только между варками")
+def _boil_zip():
+    import io
+    import zipfile
+    import time as _tm
+    from types import SimpleNamespace as NS
+    import cv2
+    import numpy as _np
+    import boil_archive
+    import cv_analyzer
+    import cv_store
+    from microscope_service import MicroscopeService
+    img, objs = synth_frame()
+    res = cv_analyzer.analyze(img, objs, None, with_overlay=False, sv=90.0)
+    frames = [{"file": "f.png", "summary": res["summary"], "objects": res["objects"]}]
+    ser, now = "SELFCHECK_ZIP", _tm.time()
+    old = [_tm.strftime(cv_store.TS_FMT, _tm.localtime(now - 8 * 3600 + k * 120)) for k in range(3)]    # законченная варка
+    cur = [_tm.strftime(cv_store.TS_FMT, _tm.localtime(now - 300 + k * 60)) for k in range(2)]           # идёт (моложе 15 мин)
+    for i, ts in enumerate(old + cur):
+        cv_store.save_sample(ser, 7 if i == 0 else 9, frames, [img], {"total_ms": 1}, keep_last=1000, ts=ts, sv=90.0, frame_format="png",
+                             plc={"cook_time": i * 120 + 60, "temp_app": 70.0}, phase="g1" if i == 0 else None)    # 1-я — рост 1, дальше готовность
+    dest = Path(tempfile.mkdtemp(prefix="boilzip_"))
+    try:
+        todo = boil_archive.pending(ser, dest, now)
+        assert len(todo) == 1 and [r["ts"] for r in todo[0]] == old, "пакуется только законченная варка: %r" % ([[r["ts"] for r in g] for g in todo],)
+        g = todo[0]
+        # прервали посреди сборки — архива нет, .part не остаётся
+        assert boil_archive.pack(ser, g, dest, stop=lambda: True) is None
+        assert not list(dest.iterdir()), "после прерывания в папке осталось: %s" % [p.name for p in dest.iterdir()]
+        p = boil_archive.pack(ser, g, dest)                                   # кадры как есть (PNG, без потерь)
+        assert p and p.name == boil_archive.archive_name(ser, g) and p.name.startswith(ser + "_варка_"), p
+        with zipfile.ZipFile(p) as z:
+            names = set(z.namelist())
+            for need in ("README.md", "boil.json", "timeline.csv") + tuple("probes/%s/%s" % (old[0], f) for f in ("result.json", "objects_0.json", "frame_0.png", "thumb.jpg")):
+                assert need in names, "в архиве нет %s" % need
+            meta = json.loads(z.read("boil.json"))
+            assert meta["probes"] == 3 and not meta["probes_missing"] and meta["summary"]["n"] == 3, meta
+            tl = z.read("timeline.csv").decode("utf-8-sig").splitlines()
+            assert tl[0].split(";") == cv_store.EXPORT_COLUMNS and len(tl) == 4, "timeline.csv: %d строк" % len(tl)
+            src = (cv_store._serial_dir(ser) / old[0] / "frame_0.png").read_bytes()
+            assert z.read("probes/%s/frame_0.png" % old[0]) == src, "кадр без пересжатия должен лечь байт в байт"
+        assert not boil_archive.pending(ser, dest, now), "собранная варка снова в очереди"
+        assert [f["name"] for f in boil_archive.listing(dest)] == [p.name], boil_archive.listing(dest)
+        # JPEG только для начала варки: проба фазы g1 → frame_0.jpg (читается, ссылка в result.json на новое имя),
+        # проба финиша (без фазы) — PNG байт в байт
+        d2 = Path(tempfile.mkdtemp(prefix="boilzip2_"))
+        try:
+            p2 = boil_archive.pack(ser, g, d2, early_quality=90)
+            with zipfile.ZipFile(p2) as z:
+                jpg = z.read("probes/%s/frame_0.jpg" % old[0])
+                back = cv2.imdecode(_np.frombuffer(jpg, _np.uint8), cv2.IMREAD_COLOR)
+                assert back is not None and back.shape == img.shape, "JPEG-кадр не читается"
+                rj = json.loads(z.read("probes/%s/result.json" % old[0]))
+                assert all(not str(f.get("overlay", "")).endswith(".png") for f in rj.get("frames") or []), "ссылка на кадр осталась .png"
+                fin = (cv_store._serial_dir(ser) / old[1] / "frame_0.png").read_bytes()
+                assert z.read("probes/%s/frame_0.png" % old[1]) == fin, "кадр финиша должен лечь без потерь"
+        finally:
+            shutil.rmtree(d2, ignore_errors=True)
+        # лимит места: крошечный — архив удаляется
+        assert boil_archive.enforce_limit(dest, 1e-9) == [p.name] and not list(dest.glob("*.zip"))
+    finally:
+        shutil.rmtree(dest, ignore_errors=True)
+    # сборка только между варками: стадия в зоне цикла пробы или проба идёт — нельзя; стадия вне зоны (выгрузка) — можно
+    ms = MicroscopeService()
+    ms.fsm = NS(_stage_in=lambda: True)
+    assert not ms._boil_quiet(), "стадия варки — собирать нельзя"
+    ms.fsm = NS(_stage_in=lambda: False)
+    assert ms._boil_quiet(), "выгрузка/пауза — собирать можно"
+    ms._probe_collecting = True
+    assert not ms._boil_quiet(), "проба набирается — собирать нельзя"
+    return "варка %d проб → %s; идущая не пакуется, прерывание и лимит работают" % (len(old), p.name)
 
 
 @check("CV", "cv_store: «В разметку» — чистый кадр в PNG; архив держит кадры последних N варок и не трогает свежее")

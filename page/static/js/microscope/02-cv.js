@@ -64,6 +64,11 @@
     set("cvMinCirc", sh.min_circularity); set("cvMinSol", sh.min_solidity);
     set("cvMaxAspect", sh.max_aspect); set("cvConf", cv.conf);
     set("cvKeepBoils", cv.keep_boils != null ? cv.keep_boils : 10); set("cvArchiveGb", cv.archive_max_gb != null ? cv.archive_max_gb : 30); if ($("cvFramePng")) $("cvFramePng").checked = (cv.frame_format || "png") === "png"; set("cvSuspect", sh.suspect_aspect); set("cvShapeMin", sh.min_um != null ? sh.min_um : 100); set("cvSmoothK", sh.smooth_k != null ? sh.smooth_k : 5); set("cvRejectSv", cv.reject_to_sv != null ? cv.reject_to_sv : 85);
+    const bz = cv.boil_zip || {};                                       // архив варок в ZIP (boil_archive)
+    if ($("cvZipOn")) $("cvZipOn").checked = !!bz.enabled;
+    if ($("cvZipDir")) $("cvZipDir").value = bz.dir || "";
+    set("cvZipGb", bz.max_gb != null ? bz.max_gb : 50); set("cvZipQ", bz.early_jpeg_quality != null ? bz.early_jpeg_quality : 90);
+    cvLoadZips();
     set("cvClusterGap", cv.cluster_gap_px); set("cvEdgeMargin", cv.edge_margin_px); set("cvMaskSmooth", cv.mask_smooth === false ? 0 : cv.mask_smooth_pct);
     if ($("cvSeamMerge")) $("cvSeamMerge").checked = cv.seam_merge !== false;
     if ($("cvSeamRefine")) $("cvSeamRefine").checked = cv.seam_refine !== false;
@@ -87,7 +92,20 @@
       seam_refine: $("cvSeamRefine") ? $("cvSeamRefine").checked : undefined,
       seam_in_sieve: $("cvSeamInSieve") ? $("cvSeamInSieve").checked : undefined,
       bubble_filter: $("cvBubble") ? $("cvBubble").checked : undefined, reject_always: $("cvRejectAlways") ? $("cvRejectAlways").checked : undefined,
+      boil_zip: $("cvZipOn") ? { enabled: $("cvZipOn").checked, dir: ($("cvZipDir").value || "").trim(), max_gb: num("cvZipGb"), early_jpeg_quality: num("cvZipQ") } : undefined,
     };
+  }
+  // готовые ZIP варок: последние 5 — «16.10 12:18–13:51 · 4,8 ГБ» ссылкой на скачивание
+  async function cvLoadZips() {
+    const box = $("cvZipList"); if (!box) return;
+    let r = null;
+    try { r = await (await fetch("/api/cv/boil-zips")).json(); } catch (e) { }
+    const files = (r && r.files) || [];
+    const lbl = (s) => { const m = String(s || "").match(/(?:\d{4}-(\d\d)-(\d\d)_)?(\d\d)-(\d\d)$/); return m ? (m[1] ? m[2] + "." + m[1] + " " : "") + m[3] + ":" + m[4] : s; };
+    const gb = (b) => (b >= 1e9 ? (b / 1e9).toFixed(1) + " ГБ" : Math.max(1, Math.round(b / 1e6)) + " МБ").replace(".", ",");
+    box.title = r ? "Папка: " + r.dir : "";
+    cvSetHtml(box, files.slice(0, 5).map((f) => '<a href="/api/cv/boil-zips/file?name=' + encodeURIComponent(f.name) + '" download title="' + f.name + '">' +
+      lbl(f.from) + "–" + lbl(f.to) + "</a> <span>" + gb(f.size) + "</span>").join("<br>") + (files.length > 5 ? "<br><span>ещё " + (files.length - 5) + " — в папке</span>" : ""));
   }
   async function cvPostSettings(patch) {
     try {

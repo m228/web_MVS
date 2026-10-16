@@ -814,6 +814,25 @@ def cv_report_csv(serial: str | None = None, frm: str | None = Query(None, alias
                     headers={"Content-Disposition": 'attachment; filename="%s"' % name})
 
 
+@app.get("/api/cv/boil-zips")
+def cv_boil_zips():
+    """Архивы варок (boil_archive): готовые ZIP (новые первыми), папка и настройки."""
+    import boil_archive
+    st = boil_archive.settings(micro.cv_config())
+    dest = boil_archive.out_dir(st)
+    return {"dir": str(dest), "settings": st, "files": boil_archive.listing(dest)}
+
+
+@app.get("/api/cv/boil-zips/file")
+def cv_boil_zip_file(name: str):
+    """Скачать архив варки. Имя — только из списка готовых (без путей), чтобы из папки архивов не выйти."""
+    import boil_archive
+    dest = boil_archive.out_dir(boil_archive.settings(micro.cv_config()))
+    if name not in {f["name"] for f in boil_archive.listing(dest)}:
+        return Response(status_code=404)
+    return FileResponse(str(dest / name), media_type="application/zip", filename=name)
+
+
 @app.post("/api/cv/fracture/edit")
 def cv_fracture_edit(body: dict = Body(...)):
     """Ручная правка разломов пробы: remove / promote — id зон, add — свои зоны [{poly}]. Кадр уходит в калибровку."""

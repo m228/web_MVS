@@ -305,6 +305,11 @@ DEFAULTS = {
         "bubble_filter": True,
         "min_size_um": 20.0, "blur_min": 8.0, "keep_last": 50, "keep_boils": 10, "frame_format": "png", "archive_max_gb": 30,
         "overlay_jpeg_quality": 85,
+        # архив варки (boil_archive.py): законченная варка → один ZIP (паспорт, таблица проб, пробы с контурами и кадрами),
+        # собирается в фоне только между варками. dir — папка (пусто = <данные>\boil_archive), early_jpeg_quality — кадры начала
+        # варки (подкачка 1, рост 1, подкачка 2) пересжать в JPEG (0 — без пересжатия; рост 2 и финиш — всегда без потерь),
+        # max_gb — потолок места под архивы (старые удаляются)
+        "boil_zip": {"enabled": False, "dir": "", "early_jpeg_quality": 90, "max_gb": 50.0},
         # проба «по CV»: у стекла стоим, пока не разобрано frames_per_probe кадров (кадр → разбор
         # → следующий), потом отвод; dwell_timeout_sec — страховка, если CV завис. gap_sec —
         # защитная пауза перед следующей пробой в триггере "cv" (probe_cycle.trigger_mode).

@@ -461,7 +461,7 @@
     if (pill.style.width !== W) pill.style.width = W;
     if (instant) { void pill.offsetWidth; pill.style.transition = ""; }
   }
-  // 95% интервал муки по пробам (бутстрэп, cv_store._vol_block) — мелко и серым рядом со средним; меньше 3 проб — интервала нет
+  // 95% интервал муки по пробам (t-оценка, cv_store._vol_block) — мелко и серым рядом со средним; меньше 3 проб — интервала нет
   const CV_CI_TIP = "95% интервал муки по пробам: разница двух варок меньше интервала — шум, а не процесс";
   function cvCi(blk, dec) {               // «3,0–3,9» (dec — десятичный знак) или ""
     const lo = blk ? cvAvg3(blk.fines_lo) : null, hi = blk ? cvAvg3(blk.fines_hi) : null;

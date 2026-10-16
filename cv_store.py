@@ -461,22 +461,30 @@ def _wmean(rows: list, key: str, wkey: Optional[str]) -> Optional[float]:
     return sum(v for v, _ in pts) / len(pts)
 
 
-CI_BOOT_N, CI_SEED, CI_MIN_PROBES = 2000, 20261016, 3      # интервал муки: повторов бутстрэпа, seed (цифры не прыгают), минимум проб
+CI_MIN_PROBES = 3      # интервал муки: меньше проб — не показываем (при 2 пробах t = 12,7, интервал ни о чём)
+# t Стьюдента, 97,5 % (двусторонний 95 %), по числу степеней свободы 1…30; дальше — 1,96 + 2,4/df (точность ~0,005)
+_T975 = (12.706, 4.303, 3.182, 2.776, 2.571, 2.447, 2.365, 2.306, 2.262, 2.228, 2.201, 2.179, 2.160, 2.145, 2.131,
+         2.120, 2.110, 2.101, 2.093, 2.086, 2.080, 2.074, 2.069, 2.064, 2.060, 2.056, 2.052, 2.048, 2.045, 2.042)
+
+
+def _t975(df: int) -> float:
+    return _T975[df - 1] if df <= len(_T975) else 1.96 + 2.4 / df
 
 
 def _wmean_ci(rows: list, key: str, wkey: str) -> tuple[Optional[float], Optional[float]]:
-    """95% интервал взвешенного среднего (как _wmean) бутстрэпом по пробам: CI_BOOT_N раз выбираем пробы с возвратом,
-    берём 2,5 и 97,5 перцентили. Меньше CI_MIN_PROBES проб — (None, None)."""
+    """95% интервал взвешенного среднего (как _wmean): среднее ± t·SE, t Стьюдента с n−1 степенями свободы — на малом числе проб
+    честно широкий (бутстрэп там занижал в разы). SE взвешенного среднего: √(n/(n−1)·Σw²(v−m)²)/Σw, при равных весах это σ/√n.
+    Мука в процентах — интервал обрезаем 0…100. Меньше CI_MIN_PROBES проб — (None, None)."""
     pts = [(r[key], r.get(wkey)) for r in rows if r.get(key) is not None]
     n = len(pts)
     if n < CI_MIN_PROBES:
         return None, None
     v = np.array([p[0] for p in pts], dtype=float)
     w = np.array([p[1] for p in pts], dtype=float) if all(p[1] for p in pts) else np.ones(n)
-    idx = np.random.default_rng(CI_SEED).integers(0, n, size=(CI_BOOT_N, n))
-    means = (v[idx] * w[idx]).sum(axis=1) / w[idx].sum(axis=1)
-    lo, hi = np.percentile(means, [2.5, 97.5])
-    return float(lo), float(hi)
+    m = float((v * w).sum() / w.sum())
+    se = float(np.sqrt(n / (n - 1) * (w * w * (v - m) ** 2).sum()) / w.sum())
+    h = _t975(n - 1) * se
+    return max(0.0, m - h), min(100.0, m + h)
 
 
 def _vol_block(sel: list) -> dict:
@@ -491,7 +499,7 @@ def _vol_block(sel: list) -> dict:
     out["sv_from"], out["sv_to"] = (min(svs), max(svs)) if svs else (None, None)     # в каком диапазоне СВ сняты пробы этого рассева
     out["fines"] = {m: r3(_wmean(fin, "fines_" + m, "vtot_" + m)) for m in ("m1", "m2", "m3")}
     out["fines"]["area"], out["fines"]["n"] = r3(_wmean(fin, "fines_area", None)), r3(_wmean(fin, "fines_n", None))
-    # 95% интервал муки по моделям (бутстрэп по пробам): разница двух варок меньше интервала — шум пробы, а не процесс
+    # 95% интервал муки по моделям (t-оценка по пробам): разница двух варок меньше интервала — шум пробы, а не процесс
     ci = {m: _wmean_ci(fin, "fines_" + m, "vtot_" + m) for m in ("m1", "m2", "m3")}
     out["fines_lo"] = {m: r3(ci[m][0]) for m in ci}
     out["fines_hi"] = {m: r3(ci[m][1]) for m in ci}

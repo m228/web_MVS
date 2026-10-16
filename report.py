@@ -67,7 +67,7 @@ def _boil_row(g: list, summary: dict, fin_sv: float = FIN_SV) -> dict:
         "duration_min": round(dur, 1), "probes": len(g), "finish_probes": len(sel),
         "sv_min": min(ok_sv) if ok_sv else None, "sv_max": max(ok_sv) if ok_sv else None, "sv_end": sv_ref,
         "fines_avg": _avg3(block.get("fines") or {}), "fines_min": min(fa) if fa else None, "fines_max": max(fa) if fa else None,
-        "fines_lo": _avg3(block.get("fines_lo") or {}), "fines_hi": _avg3(block.get("fines_hi") or {}),     # 95% интервал муки финиша (бутстрэп по пробам)
+        "fines_lo": _avg3(block.get("fines_lo") or {}), "fines_hi": _avg3(block.get("fines_hi") or {}),     # 95% интервал муки финиша (t-оценка по пробам)
         "fines_all": _avg3(all_b.get("fines") or {}),
         "reject_pct": _mean([r.get("reject_pct") for r in g]),
         "needle": _mean([r.get("n_needle") for r in g]), "aggregate": _mean([r.get("n_aggregate") for r in g]),

@@ -1263,6 +1263,18 @@ def _cv_model_passport():
         assert m["train_date"].startswith("2026-10-15") and m["train_imgsz"] == 1280, m
         bad = mod.UltralyticsDetector._file_meta(f)          # чекпойнт не читается → без даты обучения, без падения
         assert "train_date" not in bad and bad["sha"] == m["sha"], bad
+    # размер входа: явный > CV_IMGSZ > обучающий из чекпойнта > 640, кратно 32
+    pick = mod.UltralyticsDetector._pick_imgsz
+    old_env = os.environ.pop("CV_IMGSZ", None)
+    try:
+        assert pick(None, 1280) == 1280 and pick(None, None) == 640 and pick(None, [1280]) == 640
+        assert pick(960, 1280) == 960 and pick(None, 1000) == 1024
+        os.environ["CV_IMGSZ"] = "1920"
+        assert pick(None, 1280) == 1920 and pick(640, 1280) == 640
+    finally:
+        os.environ.pop("CV_IMGSZ", None)
+        if old_env is not None:
+            os.environ["CV_IMGSZ"] = old_env
     return "модель %s, sha %s, imgsz %s, conf %s, частей %s" % (det["name"], det["sha"], det["imgsz"], inf["conf"], inf["tiles"])
 
 

@@ -15,6 +15,7 @@
 """
 from __future__ import annotations
 
+import json
 import os
 import threading
 import time
@@ -46,9 +47,8 @@ def _read_version() -> str:
 SERVICE_VERSION = _read_version()
 app = FastAPI(title="web_MVS CV service", version=SERVICE_VERSION)
 _lock = threading.Lock()                       # защита на время горячей замены модели
-_detector = build_detector(MODEL_PATH, avg_count=AVG_COUNT)
-_model_path = MODEL_PATH
 _started = time.time()
+LAST_FILE = os.path.join(MODEL_DIR, "last_model.json")   # какую модель грузили последней — её же берём при старте
 
 
 def _resolve(path: str) -> str:
@@ -56,6 +56,43 @@ def _resolve(path: str) -> str:
     if os.path.isabs(path):
         return path
     return os.path.join(os.path.dirname(os.path.abspath(__file__)), path)
+
+
+def _remember(path: str | None) -> None:
+    """Запомнить загруженную модель (имя/путь как передали), чтобы после рестарта не откатываться на best.pt."""
+    try:
+        with open(LAST_FILE, "w", encoding="utf-8") as fh:
+            json.dump({"path": path}, fh, ensure_ascii=False)
+    except Exception as e:
+        print("не удалось запомнить модель:", e)
+
+
+def _recall() -> str | None:
+    """Последняя загруженная модель, если файл на месте (и это не заглушка); иначе None."""
+    try:
+        with open(LAST_FILE, encoding="utf-8") as fh:
+            p = (json.load(fh) or {}).get("path")
+    except Exception:
+        return None
+    if p and (p == "classic" or os.path.exists(_resolve(p))):
+        return p
+    return None
+
+
+def _boot():
+    """Старт: последняя загруженная модель > CV_MODEL (run.bat кладёт туда best.pt) > заглушка.
+    Битая запомненная модель не мешает старту — откатываемся на CV_MODEL."""
+    last = _recall()
+    for cand in ([last] if last else []) + [MODEL_PATH]:
+        try:
+            return build_detector(cand if (not cand or cand == "classic") else _resolve(cand),
+                                  avg_count=AVG_COUNT), cand
+        except Exception as e:
+            print("модель %r не загрузилась: %s" % (cand, e))
+    return build_detector(None, avg_count=AVG_COUNT), None
+
+
+_detector, _model_path = _boot()
 
 
 def _load(path: str | None):
@@ -66,6 +103,7 @@ def _load(path: str | None):
     with _lock:
         _detector = det
         _model_path = path
+    _remember(path)
     return _detector.info()
 
 

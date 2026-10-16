@@ -696,10 +696,13 @@ def save_sample(serial: str, stage, frames: list[dict], images: list, timing: di
                 keep_last: int = 50, keep_boils: int = 0, ts: Optional[str] = None,
                 fracture: Optional[dict] = None, jpeg_quality: int = 85, frame_format: str = "jpg", max_gb: float = 0.0,
                 thumb_img=None, sv: Optional[float] = None,
-                plc: Optional[dict] = None, phase: Optional[str] = None) -> Optional[dict]:
+                plc: Optional[dict] = None, phase: Optional[str] = None,
+                detector: Optional[dict] = None, infer: Optional[dict] = None) -> Optional[dict]:
     """Сохранить пробу. frames — список {file, summary, objects}. images — ЧИСТЫЕ кадры пробы
     (numpy BGR), пишутся в JPEG (jpeg_quality); контуры поверх рисует браузер по objects_N.json.
     thumb_img — кадр с контурами для миниатюры (нет — миниатюра из чистого кадра 0).
+    detector — паспорт модели от сайдкара (name, sha, train_date, train_imgsz, imgsz…),
+    infer — параметры прогона (conf, iou, tiles, overlap, seam_refine). Нет — ключей в result.json нет.
 
     Возвращает {ts, dir, summary} или None при ошибке.
     """
@@ -746,6 +749,8 @@ def save_sample(serial: str, stage, frames: list[dict], images: list, timing: di
             # режим варки из ПЛК на момент пробы: temp_app °C, level %, current A (ток циркулятора),
             # press_top (разрежение сверху), cook_time с, seed_age_s с (время с заводки). Нет ПЛК — ключа нет.
             **({"plc": plc} if plc else {}),
+            **({"detector": detector} if detector else {}),     # чем снята проба: модель и её imgsz
+            **({"infer": infer} if infer else {}),              # как: conf / iou / tiles / overlap
             "timing": timing,
             "summary": summary,
             "frames": frame_recs,

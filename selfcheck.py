@@ -798,6 +798,25 @@ def _fsm():
         for st, ok in ((20, True), (10, False), (19, False), (21, False)):
             fsm.set_stage(st); fsm.tick()
             assert fsm.state["stage_ok"] is ok, "стадия %d: stage_ok должно быть %s (3..9 и 20 УНВ)" % (st, ok)
+        # ежечасная промывка: только когда варки не было целый час (пока варка/час после неё — клапаны не трогаем)
+        import datetime as _dt, microscope_fsm
+        class _At3(_dt.datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return _dt.datetime(2026, 10, 16, 10, 3, 1)
+        real_dt = microscope_fsm.datetime
+        microscope_fsm.datetime = _At3
+        try:
+            hw = MicroscopeFSM(plate, copy.deepcopy(cfg))
+            hw.set_stage(12); hw.tick()                       # варки не видели → простой, промывка можно
+            assert hw.state["valve_tube"] and hw.state["hw_idle"], "простой: ежечасная промывка должна идти"
+            hw2 = MicroscopeFSM(plate, copy.deepcopy(cfg))
+            hw2.set_stage(7); hw2.tick(); hw2.set_stage(12); hw2.tick()      # варка только что кончилась (< часа)
+            assert not hw2.state["valve_tube"] and not hw2.state["hw_idle"], "после варки < часа промывка не должна идти"
+            hw2._last_brew_t -= 3601; hw2.tick()                                # прошёл час без варки
+            assert hw2.state["valve_tube"] and hw2.state["hw_idle"], "час без варки: промывка должна идти"
+        finally:
+            microscope_fsm.datetime = real_dt
     finally:
         plate.stop()
     return "mode %s → %s" % (st0["mode"], st1["mode"])

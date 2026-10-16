@@ -330,6 +330,8 @@ def _apply_fines_gate(rows: list[dict]) -> list[dict]:
 def _trend_val(r: dict, name: str):
     if name == "fines_avg":
         return fines_avg(r)
+    if name == "fines_flat":
+        return r.get("_fines_flat")
     if name.startswith("fsv") and name[3:].isdigit() and int(name[3:]) < len(FSV_GROUPS):
         return fsieve_group(r, int(name[3:]))
     return r.get(name)
@@ -352,6 +354,8 @@ def trend_range(serial: str, t_from: float, t_to: float, series: Optional[list[s
             continue
         rows.extend(r for r in _hist_read(serial, day) if r.get("t") is not None and r["t"] <= t_to)
     rows.sort(key=lambda r: r["t"])
+    for r in rows:                                   # плоская мука — ДО порога СВ (гейт обнуляет fsieve_*): видно всю варку с начала
+        r["_fines_flat"] = fines_flat(r)
     _apply_fines_gate(rows)
     bid, prev = 0, None                      # номер варки каждой точки — по тем же правилам, что в журнале (JS границу сам не ищет)
     for r in rows:
@@ -393,14 +397,25 @@ def sieve_avg(r: dict, i: int) -> Optional[float]:
 FSV_GROUPS = [range(i, i + 1) for i in range(4)] + [range(4, 8), range(8, 12), range(12, 16), range(16, 20), range(20, 21)]
 
 
-def fsieve_group(r: dict, k: int) -> Optional[float]:
-    """Доля группы k мелкого рассева пробы, % объёма: сумма фракций по 0,05 мм, каждая — среднее трёх моделей. Нет рассева — None."""
+def fsieve_total(r: dict, i0: int, i1: int) -> Optional[float]:
+    """Сумма корзин мелкого рассева i0..i1-1, % объёма (каждая — среднее трёх моделей). Нет данных — None."""
     vals = []
-    for i in FSV_GROUPS[k]:
+    for i in range(i0, i1):
         v = [r["fsieve_%s_b%d" % (m, i)] for m in ("m1", "m2", "m3") if r.get("fsieve_%s_b%d" % (m, i)) is not None]
         if v:
             vals.append(sum(v) / len(v))
     return round(sum(vals), 3) if vals else None
+
+
+def fsieve_group(r: dict, k: int) -> Optional[float]:
+    """Доля группы k мелкого рассева пробы, % объёма: сумма фракций по 0,05 мм, каждая — среднее трёх моделей. Нет рассева — None."""
+    return fsieve_total(r, FSV_GROUPS[k].start, FSV_GROUPS[k].stop)
+
+
+def fines_flat(r: dict) -> Optional[float]:
+    """Мука БЕЗ плавного порога, % объёма: все кристаллы мельче 0,20 мм (200 мкм), порог один на всю варку. Это сумма первых четырёх
+    корзин мелкого рассева (0–0,05 … 0,15–0,20), каждая — среднее M1–M3. Нет рассева — None."""
+    return fsieve_total(r, 0, 4)
 
 
 def fines_avg(r: dict) -> Optional[float]:

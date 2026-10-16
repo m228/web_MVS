@@ -908,6 +908,31 @@ def _cv_boils():
     return "варок %d, мелочь прошлой %.1f %%" % (len(res), res[1]["fines"]["m3"])
 
 
+@check("CV", "тренд «мука без порога»: сумма корзин рассева до 0,20 мм, виден с начала варки (порог СВ не гасит), плавная мука при этом гасится")
+def _cv_flat_fines():
+    import cv_store
+    def row(t, sv, fa):
+        r = {"ts": "2026-10-16_10_%02d_00" % t, "t": t * 60.0, "sv": sv, "stage": 7, "cook_time": t * 60, "fines_m1": 5.0, "fines_m2": 5.0, "fines_m3": 5.0}
+        for m in ("m1", "m2", "m3"):
+            for i, v in enumerate(fa):
+                r["fsieve_%s_b%d" % (m, i)] = v
+        return r
+    rows = [row(0, 70.0, [1.0, 2.0, 3.0, 4.0, 50.0]), row(2, 90.0, [0.5, 0.5, 0.5, 0.5, 80.0])]
+    orig = (cv_store._hist_backfill, cv_store._hist_days, cv_store._hist_read)
+    cv_store._hist_backfill = lambda serial: None
+    cv_store._hist_days = lambda serial: ["2026-10-16"]
+    cv_store._hist_read = lambda serial, day: [dict(r) for r in rows]
+    try:
+        d = cv_store.trend_range("X", 0.0, 1e12, series=["fines_flat", "fines_avg", "fsv4"])
+    finally:
+        cv_store._hist_backfill, cv_store._hist_days, cv_store._hist_read = orig
+    flat = d["series"]["fines_flat"]
+    assert flat == [10.0, 2.0], "сумма корзин до 0,20 мм: %s" % flat
+    assert d["series"]["fines_avg"][0] is None and d["series"]["fines_avg"][1] == 5.0, "плавная мука до порога СВ гасится: %s" % d["series"]["fines_avg"]
+    assert d["series"]["fsv4"][0] is None, "рассев до порога СВ гасится, как раньше"
+    return "плоская мука %s" % flat
+
+
 @check("CV", "самый мелкий/крупный/длинный кристалл: кадр → проба (min/max по кадрам, не среднее) → строка журнала; брак и обрезанные не в счёт")
 def _cv_size_extremes():
     import math

@@ -38,6 +38,7 @@
       { key: "frac_zones", head: "разломов", cell: (b) => b.frac_zones, on: false },
       { key: "mean_um", head: "размер, мкм", tip: "Средний размер кристалла", cell: (b) => fmt(b.mean_um, 0), on: true },
     ];
+    const LINKED = ["fines_avg", "fines_range", "fines_all"];     // значения муки в таблице — кликабельные: открывают эту варку на «Трендах»
     const COLS_KEY = "microRepCols";
     function colState() {
       let saved = null; try { saved = JSON.parse(localStorage.getItem(COLS_KEY) || "null"); } catch (e) { }
@@ -63,7 +64,7 @@
       h += '<div class="micro-rep-h">Варки</div><div class="micro-rep-wrap"><table class="micro-rep-table"><thead><tr><th>начало</th>' +
         vis.map((c) => "<th" + (c.tip ? ' title="' + c.tip + '"' : "") + ">" + c.head + "</th>").join("") + "</tr></thead><tbody>";
       rep.boils.forEach((b) => {
-        h += '<tr class="' + (b.finished ? "" : "is-open") + '"><td>' + tsLbl(b.start) + (b.finished ? "" : " (идёт)") + "</td>" + vis.map((c) => "<td>" + c.cell(b) + "</td>").join("") + "</tr>";
+        h += '<tr class="' + (b.finished ? "" : "is-open") + '"><td class="micro-rep-link" title="Открыть эту варку на «Трендах»" data-boil="' + b.start + '">' + tsLbl(b.start) + (b.finished ? "" : " (идёт)") + "</td>" + vis.map((c) => "<td" + (LINKED.includes(c.key) ? ' class="micro-rep-link" title="Открыть эту варку на «Трендах»" data-boil="' + b.start + '"' : "") + ">" + c.cell(b) + "</td>").join("") + "</tr>";
       });
       h += "</tbody></table></div>";
       if (colOn(cols, "fines_avg")) {
@@ -110,8 +111,21 @@
       g("repGoBtn").disabled = false;
     }
 
+    // клик по началу варки или значению муки — переход на «Тренды», график растянут на эту варку (посмотреть, откуда такая мука)
+    async function openBoil(id) {
+      const hint = g("repHint");
+      try {
+        if (typeof cvTrendSetMode === "function") cvTrendSetMode("crystals");
+        const ok = await cvOpenBoil(id);                         // сначала грузим варку; не нашли — остаёмся в отчёте и говорим об этом
+        if (!ok) { if (hint) hint.textContent = "варка " + tsLbl(id) + " не найдена в журнале"; return; }
+        if (hint) hint.textContent = "";
+        const btn = g("teleTrendBtn"); if (btn) btn.click();      // переключение вкладки перерисует график уже с шириной
+      } catch (e) { if (hint) hint.textContent = "не открылось: " + e.message; }
+    }
+
     function init() {
       if (!g("repGoBtn")) return;
+      g("repOut").addEventListener("click", (e) => { const td = e.target.closest("[data-boil]"); if (td) openBoil(td.dataset.boil); });
       document.querySelectorAll("#repPeriodSeg button").forEach((b) => b.addEventListener("click", () => {
         period = b.dataset.p;
         document.querySelectorAll("#repPeriodSeg button").forEach((x) => x.classList.toggle("is-active", x === b));

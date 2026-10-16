@@ -884,6 +884,13 @@ def _cv_volume():
     assert abs(p["m1"]["fines"] - want) < 0.01, "доля мелочи %s ≠ %s" % (p["m1"]["fines"], want)
     assert p["m1"]["fines"] < p["n"]["fines"], "по объёму мелочи должно быть меньше, чем по числу"
     assert cv_volume.percents(cv_volume.empty_sums())["m3"]["fines"] is None, "пустой кадр должен дать None"
+    mid = NS(group="medium", defect=None, size_um=210.0, length_um=250.0, width_um=180.0)       # 210 мкм: меньше порога 226, но не меньше сита 200
+    sf = cv_volume.sums_for([big, fine, mid], {"volume": {"fines_side_mm": 0.2}}, phase="p1")        # на фазе порог муки ×0,2 — «плоская» мука от этого не зависит
+    pf = cv_volume.percents(sf)
+    tot3 = sum(cv_volume.crystal_volumes(o.size_um, o.length_um, o.width_um, 0.88)["m1"] for o in (big, fine, mid))
+    want_f = 100.0 * (math.pi / 6 * (100.0 ** 3 + 210.0 ** 3)) / tot3
+    assert abs(pf["flat"]["m1"] - want_f) < 0.01 and pf["m1"]["fines"] < pf["flat"]["m1"], "плоская мука по порогу 226 мкм: %s ≠ %s" % (pf["flat"]["m1"], want_f)
+    assert cv_volume.volume_cfg(None)["fines_flat_um"] == 225.7, "порог плоской муки = поле «Мука» (0,2 мм → 226 мкм)"
     off = cv_volume.sums_for([big, fine, agg], {"volume": {"fines_side_mm": 0.2}}, count_fines=False)
     assert cv_volume.percents(off)["m3"]["fines"] is None and cv_volume.percents(off)["m3"]["agg"] is not None, "до нужного СВ мука не считается, брак — да (считается отдельно)"
     assert abs(cv_volume.volume_cfg(None)["fines_um"] - 225.68) < 0.01, "0,2 × 0,2 мм ↔ диаметр 226 мкм"
@@ -930,16 +937,16 @@ def _cv_boils():
     return "варок %d, мелочь прошлой %.1f %%" % (len(res), res[1]["fines"]["m3"])
 
 
-@check("CV", "тренд «мука без порога»: сумма корзин рассева до 0,20 мм, виден с начала варки (порог СВ не гасит), плавная мука при этом гасится")
+@check("CV", "тренд «мука без порога»: доля муки по общему порогу из поля «Мука» (226 мкм), виден с начала варки (порог СВ не гасит), плавная мука при этом гасится")
 def _cv_flat_fines():
     import cv_store
     def row(t, sv, fa):
-        r = {"ts": "2026-10-16_10_%02d_00" % t, "t": t * 60.0, "sv": sv, "stage": 7, "cook_time": t * 60, "fines_m1": 5.0, "fines_m2": 5.0, "fines_m3": 5.0}
+        r = {"ts": "2026-10-16_10_%02d_00" % t, "t": t * 60.0, "sv": sv, "stage": 7, "cook_time": t * 60, "fines_m1": 5.0, "fines_m2": 5.0, "fines_m3": 5.0,
+             "fines_flat": fa}
         for m in ("m1", "m2", "m3"):
-            for i, v in enumerate(fa):
-                r["fsieve_%s_b%d" % (m, i)] = v
+            r["fsieve_%s_b0" % m] = 7.0
         return r
-    rows = [row(0, 70.0, [1.0, 2.0, 3.0, 4.0, 50.0]), row(2, 90.0, [0.5, 0.5, 0.5, 0.5, 80.0])]
+    rows = [row(0, 70.0, 10.0), row(2, 90.0, 2.0)]
     orig = (cv_store._hist_backfill, cv_store._hist_days, cv_store._hist_read)
     cv_store._hist_backfill = lambda serial: None
     cv_store._hist_days = lambda serial: ["2026-10-16"]
@@ -949,7 +956,7 @@ def _cv_flat_fines():
     finally:
         cv_store._hist_backfill, cv_store._hist_days, cv_store._hist_read = orig
     flat = d["series"]["fines_flat"]
-    assert flat == [10.0, 2.0], "сумма корзин до 0,20 мм: %s" % flat
+    assert flat == [10.0, 2.0], "плоская мука из журнала: %s" % flat
     assert d["series"]["fines_avg"][0] is None and d["series"]["fines_avg"][1] == 5.0, "плавная мука до порога СВ гасится: %s" % d["series"]["fines_avg"]
     assert d["series"]["fsv4"][0] is None, "рассев до порога СВ гасится, как раньше"
     return "плоская мука %s" % flat

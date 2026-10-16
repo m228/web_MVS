@@ -63,6 +63,8 @@ def _volume_cols(s: dict, vp: dict, n_frames: int) -> dict:
         for key in ("m1", "m2", "m3", "area"):
             out["%s_%s" % (kind, key)] = (vp.get(key) or {}).get(kind)
         out["%s_n" % kind] = (vp.get("n") or {}).get(kind)
+    fl = [x for x in (vp.get("flat") or {}).values() if x is not None]
+    out["fines_flat"] = round(sum(fl) / len(fl), 3) if fl else None      # мука без плавного порога, % (среднее M1–M3); нет кадров — None
     for key in ("m1", "m2", "m3"):
         tot = (sums.get(key) or {}).get("total")
         out["vtot_" + key] = round(tot / 1e9 / n_frames, 4) if tot else None
@@ -378,7 +380,7 @@ def trend_range(serial: str, t_from: float, t_to: float, series: Optional[list[s
 
 EXPORT_COLUMNS = ["ts", "t", "stage", "substage", "phase", "sv", "temp", "level", "current", "vac", "cook_time", "seed_age",
                   "count", "mean", "median", "size_min", "size_max", "len_max", "cv_pct", "density", "small", "medium", "large", "reject",
-                  "reject_pct", "fines_m1", "fines_m2", "fines_m3", "fines_avg", "fines_area", "fines_n",
+                  "reject_pct", "fines_m1", "fines_m2", "fines_m3", "fines_avg", "fines_flat", "fines_area", "fines_n",
                   "good_n", "rej_n", "sieve_b0", "sieve_b1", "sieve_b2", "sieve_b3", "sieve_b4", "sieve_b5", "sieve_b6",
                   "sieve_area_b0", "sieve_area_b1", "sieve_area_b2", "sieve_area_b3", "sieve_area_b4", "sieve_area_b5", "sieve_area_b6",
                   "agg_m1", "agg_m2", "agg_m3", "agg_area", "agg_n", "vtot_m1", "vtot_m2", "vtot_m3", "fines_side_mm", "fines_um", "k_thick", "fines_from_sv",
@@ -413,9 +415,9 @@ def fsieve_group(r: dict, k: int) -> Optional[float]:
 
 
 def fines_flat(r: dict) -> Optional[float]:
-    """Мука БЕЗ плавного порога, % объёма: все кристаллы мельче 0,20 мм (200 мкм), порог один на всю варку. Это сумма первых четырёх
-    корзин мелкого рассева (0–0,05 … 0,15–0,20), каждая — среднее M1–M3. Нет рассева — None."""
-    return fsieve_total(r, 0, 4)
+    """Мука БЕЗ плавного порога, % объёма: все хорошие кристаллы мельче общего порога из поля «Мука» (0,2 мм по стороне = 226 мкм по диаметру),
+    без масштаба фазы и кривой — один порог на всю варку. Значение посчитано при разборе пробы (cv_volume, «flat»), среднее M1–M3."""
+    return r.get("fines_flat")
 
 
 def fines_avg(r: dict) -> Optional[float]:

@@ -3503,7 +3503,7 @@ input.micro-cam-num { width: 56px; min-width: 0; flex: 0 0 auto; padding: 4px 5p
 /* название проекта (для скриншотов): поле → после Enter красивая подпись, двойной клик — правка */
 .micro-proj { display: inline-flex; align-items: center; margin-left: 14px; }
 .micro-proj[hidden] { display: none; }
-.micro-proj__input { width: 240px; padding: 5px 10px; font-size: 0.95em; border-radius: 8px;
+.micro-proj__input { width: 24ch; max-width: 60ch; padding: 4px 8px; font-size: 0.95em; border-radius: 8px;
   border: 1px solid var(--border, rgba(131,151,179,.28)); background: var(--surface-muted, #f4f8fc); color: inherit; }
 .micro-proj__name { font-size: 1.05em; font-weight: 600; letter-spacing: .02em; padding: 3px 4px; cursor: default; user-select: none;
   color: var(--text, inherit); border-bottom: 2px solid var(--accent, #2563eb); }

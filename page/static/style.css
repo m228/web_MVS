@@ -3500,6 +3500,14 @@ input.micro-cam-num { width: 56px; min-width: 0; flex: 0 0 auto; padding: 4px 5p
 
 /* телеметрия — компактной полосой снизу */
 .micro-tele-strip { margin-top: 16px; }
+/* название проекта (для скриншотов): поле → после Enter красивая подпись, двойной клик — правка */
+.micro-proj { display: inline-flex; align-items: center; margin-left: 14px; }
+.micro-proj[hidden] { display: none; }
+.micro-proj__input { width: 240px; padding: 5px 10px; font-size: 0.95em; border-radius: 8px;
+  border: 1px solid var(--border, rgba(131,151,179,.28)); background: var(--surface-muted, #f4f8fc); color: inherit; }
+.micro-proj__name { font-size: 1.05em; font-weight: 600; letter-spacing: .02em; padding: 3px 4px; cursor: default; user-select: none;
+  color: var(--text, inherit); border-bottom: 2px solid var(--accent, #2563eb); }
+.micro-proj__name[hidden], .micro-proj__input[hidden] { display: none; }
 .micro-tele-strip__head { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-bottom: 10px; }
 .micro-tele-strip__title { font-weight: 600; }
 .micro-tele-strip .micro-naladka { display: flex; align-items: center; gap: 8px; margin: 0; padding: 0; border: 0; }

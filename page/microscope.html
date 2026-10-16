@@ -829,6 +829,11 @@
               <button type="button" class="micro-win-btn" id="teleCfgBtn" data-tele="cfg">CV</button>
               <button type="button" class="micro-win-btn" id="teleReportBtn" data-tele="report">Отчёт</button>
             </div>
+            <!-- название проекта для скриншотов (вкладки «Распознавание» и «Тренды»): Enter — фиксируется, двойной клик — править -->
+            <span class="micro-proj" id="projWrap" hidden>
+              <input type="text" id="projInput" class="micro-proj__input" maxlength="60" placeholder="Название проекта — Enter" autocomplete="off" spellcheck="false" />
+              <span class="micro-proj__name" id="projName" title="Двойной клик — изменить" hidden></span>
+            </span>
             <span class="micro-cv-status" id="cvStatus2" style="margin-left:auto"></span>
           </div>
           <div class="micro-tele-cols" id="teleStripPlate">

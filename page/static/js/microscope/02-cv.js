@@ -143,10 +143,30 @@
         if (btns[k]) btns[k].classList.toggle("is-active", k === mode);
         if (panes[k]) panes[k].hidden = k !== mode;
       });
+      const pw = $("projWrap"); if (pw) pw.hidden = mode !== "cv" && mode !== "trend";    // название проекта — только на «Распознавании» и «Трендах»
       if (mode !== "plate") cvRefresh();
       if (mode === "trend") setTimeout(cvDrawTrend, 30);     // canvas берёт ширину у показанной вкладки
     }
     Object.keys(btns).forEach((k) => { if (btns[k]) btns[k].addEventListener("click", () => set(k)); });
+    cvWireProject();
+  }
+  // название проекта для скриншотов: пишем, Enter — остаётся красивой подписью; двойной клик — снова правка (Esc — отмена). Хранится в браузере
+  function cvWireProject() {
+    const inp = $("projInput"), lbl = $("projName"); if (!inp || !lbl) return;
+    const KEY = "microProjectName";
+    const show = (name) => { lbl.textContent = name; lbl.hidden = !name; inp.hidden = !!name; };
+    let saved = ""; try { saved = (localStorage.getItem(KEY) || "").trim(); } catch (e) { }
+    inp.value = saved; show(saved);
+    const commit = () => {
+      const v = inp.value.trim(); if (!v) return;
+      try { localStorage.setItem(KEY, v); } catch (e) { }
+      saved = v; show(v);
+    };
+    inp.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") { e.preventDefault(); commit(); }
+      else if (e.key === "Escape" && saved) { inp.value = saved; show(saved); }
+    });
+    lbl.addEventListener("dblclick", () => { show(""); inp.value = saved; inp.focus(); inp.select(); });
   }
   function isTeleCvVisible() { return ["teleStripCv", "teleStripTrend", "teleStripCfg"].some((id) => { const e = $(id); return e && !e.hidden; }); }
 

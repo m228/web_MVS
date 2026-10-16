@@ -48,6 +48,7 @@ class MicroscopeService:
         self._af_thread = None
         self._af_running = False
         self._af_status = {"running": False, "phase": "idle", "table": [], "best": None, "message": ""}
+        self._zip_thread = None                   # фоновый сборщик архивов варок (один на процесс, переживает reload)
 
     def start(self):
         with self._lock:
@@ -77,9 +78,59 @@ class MicroscopeService:
                                           fallback_host=self.cfg.get("host", ""))
                 self.sv_source.start()
             self._started = True
+            if self._zip_thread is None or not self._zip_thread.is_alive():
+                self._zip_thread = threading.Thread(target=self._boil_zip_loop, name="boil-zip", daemon=True)
+                self._zip_thread.start()
             log_event("microscope_service", "Микроскоп запущен",
                       "info", {"host": self.cfg.get("host"), "port": self.cfg.get("port"),
                                "sv_source": bool(svc.get("enabled"))})
+
+    BOIL_ZIP_TICK_S = 120        # раз во столько сборщик архивов смотрит, нет ли законченной варки без архива
+
+    def _boil_quiet(self):
+        """Варки сейчас нет — архив можно собирать: стадия вне зоны авто-цикла пробы (3…9, 20 УНВ — та же проверка,
+        что у цикла), проба не набирается и не разбирается. Нет связи с ПЛК — стадия 0, решают проба и «варка закончена»."""
+        if self._probe_collecting or self._cv_run_lock.locked():
+            return False
+        fsm = self.fsm
+        return not (fsm is not None and fsm._stage_in())
+
+    def _boil_zip_loop(self):
+        """Фон: законченные варки → ZIP (boil_archive), только в перерыве между варками, по одной, с паузами между пробами.
+        Варка началась посреди сборки — бросаем (.part удаляется), соберётся в следующий перерыв. Ошибки — в лог."""
+        import boil_archive
+        failed = set()
+        while True:
+            time.sleep(self.BOIL_ZIP_TICK_S)
+            try:
+                cfg = self.cfg or {}
+                st = boil_archive.settings(cfg.get("cv"))
+                serial = (cfg.get("camera_serial") or "").strip()
+                if not (self._started and st["enabled"] and serial and self._boil_quiet()):
+                    continue
+                dest = boil_archive.out_dir(st)
+                for g in boil_archive.pending(serial, dest):
+                    name = boil_archive.archive_name(serial, g)
+                    if name in failed:                # битая проба и т.п. — не долбим одну варку, остальные идут; повтор после перезапуска
+                        continue
+                    t0 = time.time()
+                    try:
+                        p = boil_archive.pack(serial, g, dest, int(st["early_jpeg_quality"] or 0),
+                                              stop=lambda: not (self._started and self._boil_quiet()), pause_s=0.05)
+                    except Exception as e:
+                        failed.add(name)
+                        log_event("microscope_service", "Архив варки не собран", "warn", {"file": name, "error": repr(e)})
+                        continue
+                    if p is None:
+                        log_event("microscope_service", "Архив варки отложен: началась варка", "info", {"boil": g[0]["ts"]})
+                        break
+                    log_event("microscope_service", "Архив варки собран", "info",
+                              {"file": p.name, "mb": round(p.stat().st_size / 1e6), "sec": round(time.time() - t0)})
+                    gone = boil_archive.enforce_limit(dest, float(st["max_gb"]))
+                    if gone:
+                        log_event("microscope_service", "Старые архивы варок удалены (лимит места)", "info", {"files": gone})
+            except Exception as e:
+                log_event("microscope_service", "Сборщик архивов варок: сбой", "warn", {"error": repr(e)})
 
     def _photo_suffix(self):
         """Суффикс в конец имени сырого скрина: стадия варки + СВ (напр. «st7_SV82_2» = стадия 7,

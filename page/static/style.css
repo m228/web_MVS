@@ -3941,6 +3941,8 @@ input.micro-cam-num { width: 56px; min-width: 0; flex: 0 0 auto; padding: 4px 5p
 .micro-rep-table th, .micro-rep-table td { padding: 5px 8px; text-align: right; border-bottom: 1px solid var(--border, rgba(131,151,179,.2)); white-space: nowrap; }
 .micro-rep-table th:first-child, .micro-rep-table td:first-child { text-align: left; }
 .micro-rep-table th { color: var(--muted); font-weight: 500; font-size: 0.9em; }
+.micro-rep-table td.micro-rep-link { cursor: pointer; }
+.micro-rep-table td.micro-rep-link:hover { color: var(--accent, #2563eb); text-decoration: underline; }
 .micro-rep-table tr.is-open td { color: var(--muted); font-style: italic; }
 @media print {
   body * { visibility: hidden !important; }

@@ -1387,6 +1387,14 @@
     } catch (e) { /* нет данных */ }
     cvTrendBoilUpdate();
   }
+  // открыть варку на «Трендах» по id (= ts её первой пробы, как «начало» в отчёте): старые страницы варок подгружаем, пока не найдём; false — такой варки нет
+  async function cvOpenBoil(id) {
+    if (!cvBoils.length) await cvLoadBoils(true);
+    for (let n = 0; n < 200 && !cvBoils.some((b) => b.id === id); n++) if (!(await cvLoadMoreBoils())) break;
+    if (!cvBoils.some((b) => b.id === id)) return false;
+    await cvTrendShowBoil(id);
+    return true;
+  }
   async function cvTrendStepBoil(dir) {                  // dir +1 — старее, -1 — новее; «по варкам» ещё не включён — начинаем с самой свежей
     if (!cvBoils.length) await cvLoadBoils(true);
     if (!cvBoils.length) return;

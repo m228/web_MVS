@@ -795,6 +795,9 @@ def _fsm():
         fsm2.set_stage(6); fsm2.tick()
         assert fsm2.state["stage_ok"] is True, "стадия 6 в диапазоне 5..7, а stage_ok=False"
         assert fsm.state["stage_ok"] is True, "по умолчанию стадия 7 должна быть в 3..9"
+        for st, ok in ((20, True), (10, False), (19, False), (21, False)):
+            fsm.set_stage(st); fsm.tick()
+            assert fsm.state["stage_ok"] is ok, "стадия %d: stage_ok должно быть %s (3..9 и 20 УНВ)" % (st, ok)
     finally:
         plate.stop()
     return "mode %s → %s" % (st0["mode"], st1["mode"])

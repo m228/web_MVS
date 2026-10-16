@@ -34,10 +34,11 @@
 
   // пояснения к стадиям — как их называл Макс (память varka-stages); чего нет в списке, не придумываем
   const STAGE_HELP = { 5: "набор уровня", 6: "набор СВ", 7: "(!!!)", 8: "набор СВ" };
+  const PC_EXTRA_STAGES = [20];   // как CYCLE_EXTRA_STAGES в microscope_fsm.py: 20 УНВ (удержание на воде) — пробы берутся и там
   function pcStageInfoBuild(x, y) {
     const pop = $("pcStageInfoPop"); if (!pop) return;
     pop.innerHTML = '<b>Стадии варки (M.mode)</b>' + Object.keys(STAGE_NAMES).map((k) => {
-      const inR = Number(k) >= x && Number(k) <= y;
+      const inR = (Number(k) >= x && Number(k) <= y) || PC_EXTRA_STAGES.includes(Number(k));
       return '<div class="' + (inR ? "in" : "") + '"><i>' + k + '</i> ' + STAGE_NAMES[k] + (STAGE_HELP[k] ? ' <em>— ' + STAGE_HELP[k] + '</em>' : '') + '</div>';
     }).join("") + '<small>Подсвечено — стадии, в которых идёт авто-цикл пробы (поля слева)</small>';
   }
@@ -46,7 +47,7 @@
     const a = $("pcStageFrom"), b = $("pcStageTo"), h = $("pcStageHint"); if (!a || !b || !h) return;
     const nm = (v) => { const n = STAGE_NAMES[Number(v)]; return n ? v + " " + n : (v || "—"); };
     let x = Number(a.value), y = Number(b.value); if (x > y) [x, y] = [y, x];
-    h.textContent = nm(x) + " → " + nm(y);
+    h.textContent = nm(x) + " → " + nm(y) + " · + 20 УНВ";
     pcStageInfoBuild(x, y);
   }
 

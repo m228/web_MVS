@@ -461,6 +461,20 @@
     if (pill.style.width !== W) pill.style.width = W;
     if (instant) { void pill.offsetWidth; pill.style.transition = ""; }
   }
+  // 95% интервал муки по пробам (t-оценка, cv_store._vol_block) — мелко и серым рядом со средним; меньше 3 проб — интервала нет
+  const CV_CI_TIP = "95% интервал муки по пробам: разница двух варок меньше интервала — шум, а не процесс";
+  function cvCi(blk, dec) {               // «3,0–3,9» (dec — десятичный знак) или ""
+    const lo = blk ? cvAvg3(blk.fines_lo) : null, hi = blk ? cvAvg3(blk.fines_hi) : null;
+    if (lo == null || hi == null) return "";
+    const f = (v) => (v >= 10 ? v.toFixed(0) : v.toFixed(1)).replace(".", dec);
+    return f(lo) + "–" + f(hi);
+  }
+  function cvPutAvgCi(blk) {              // ячейка «Среднее» муки: значение и интервал второй строкой (innerHTML сверяем сами — ячейку пишет и режим «по пробе»)
+    const el = document.querySelector("#cvVolGrid [data-v='avg.fines']"); if (!el) return;
+    const ci = cvCi(blk, "."), h = fmtPct(blk ? cvAvg3(blk.fines) : null) + (ci ? '<small class="micro-ci">' + ci + "</small>" : "");
+    if (el.innerHTML !== h) el.innerHTML = h;
+    const t = ci ? CV_CI_TIP : ""; if (el.title !== t) el.title = t;
+  }
   function cvRenderBoil() {
     const i = cvBoilIdx(), b = i >= 0 ? cvBoils[i] : null;
     const lbl = $("cvBoilLbl"), older = $("cvBoilOlder"), newer = $("cvBoilNewer"), st = $("cvVolState"), box = $("cvVolNote");
@@ -479,13 +493,14 @@
     cvShowSv(cvSvRange(blk, ph !== "boil" ? blk.dur_s : (b ? b.dur_s : null)));
     if (!b) {
       cvSetText(lbl, "варок пока нет");
-      put("fines", null); if (st) st.textContent = "";
+      put("fines", null); cvPutAvgCi(null); if (st) st.textContent = "";
       cvSetHtml(box, "<div>Журнал проб пуст — варки появятся, когда пойдут пробы.</div>");
       return;
     }
     if (lbl) { cvSetText(lbl, cvBoilName(i) + " · " + cvBoilSpan(b)); lbl.title = "Варка " + cvBoilSpan(b) + " · проб " + b.n; }
-    put("fines", blk.fines);
+    put("fines", blk.fines); cvPutAvgCi(blk);
     const pc = (v) => (v == null ? "—" : (v >= 10 ? v.toFixed(1) : v.toFixed(2)).replace(".", ",") + " %");
+    const ciTxt = cvCi(blk, ","), ci = ciTxt ? ' <span class="micro-ci" title="' + CV_CI_TIP + '">(' + ciTxt + ")</span>" : "";
     const cfg = b.cfg || {};
     const fd0 = cfg.fines_um != null ? cfg.fines_um : cvFinesDiam(), fd = fd0 != null ? fd0 * pscale : fd0;
     cvSetText($("cvVolLblFines"), "Мука <" + (fd != null ? Math.round(fd) : "") + " мкм");
@@ -496,7 +511,7 @@
     if (ph !== "boil") {          // фаза: подробный текст про фазу вместо итогов варки
       const P = blk.probes != null ? blk.probes : blk.n;
       cvSetHtml(box, "<div><b>" + CV_PHASE_TITLE[ph] + ":</b> все пробы фазы — " + P + " (" + cvTsLabel(blk.ts_from).slice(6, 11) + "–" + cvTsLabel(blk.ts_to).slice(6, 11) + "), хороших кристаллов " + (blk.good_n || 0) +
-        ". Мука: <b>" + pc(cvAvg3(blk.fines)) + "</b> объёма (среднее M1–M3).</div>" + exLine(blk.size, "фазы"));
+        ". Мука: <b>" + pc(cvAvg3(blk.fines)) + "</b>" + ci + " объёма (среднее M1–M3).</div>" + exLine(blk.size, "фазы"));
       return;
     }
     cvSetText($("cvFinesCalc"), cvFinesCalcText());
@@ -512,7 +527,7 @@
       // среднее и из чего оно собрано: сколько проб и сколько хороших кристаллов (брак отсеян)
       const P = blk.probes != null ? blk.probes : b.counted, G = blk.good_n || 0, R = blk.rej_n || 0;
       const sv = cfg.fines_from_sv != null ? cfg.fines_from_sv : "";
-      rows.push("<div><b>Мука: " + pc(cvAvg3(blk.fines)) + " объёма</b> (среднее M1–M3) — " + (tail ? "среднее по пробам последних ~2 СВ (финиш)" : "среднее по всем пробам финиша") +
+      rows.push("<div><b>Мука: " + pc(cvAvg3(blk.fines)) + "</b>" + ci + " <b>объёма</b> (среднее M1–M3) — " + (tail ? "среднее по пробам последних ~2 СВ (финиш)" : "среднее по всем пробам финиша") +
         ": собрано из <b>" + P + " проб</b> (СВ ≥ " + sv + ")" + (G ? ", всего <b>" + G + " хороших кристаллов</b>, брака отсеяно " + R : "") + "; по числу " + pc(blk.fines.n) + ", по площади " + pc(blk.fines.area) + ".</div>");
       if (G && G < 500) rows.push("<div>Хороших кристаллов мало (" + G + "): для надёжной оценки нужно хотя бы 500 (Faria 2003). Добавь проб или сократи паузу между ними.</div>");
       if (!G) rows.push("<div>Число кристаллов в этих пробах не записано (старые пробы) — у новых оно будет.</div>");
@@ -560,6 +575,7 @@
     document.querySelectorAll("#cvVolGrid [data-v]").forEach((el) => {
       const [model, kind] = el.dataset.v.split(".");
       el.textContent = fmtPct(model === "avg" ? cvAvg3({ m1: (vp.m1 || {})[kind], m2: (vp.m2 || {})[kind], m3: (vp.m3 || {})[kind] }) : (vp[model] ? vp[model][kind] : null));
+      if (el.title) el.title = "";                    // у одной пробы интервала нет (подсказка — от режима «по варке»)
     });
     // мука не считается, пока СВ ниже «Мука с СВ» (кристаллы растут — неактуально): тогда прочерк и пояснение
     const finesOff = !!(s && s.volume && s.volume.fines_off);

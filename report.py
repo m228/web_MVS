@@ -4,7 +4,7 @@
 начала. Мука — «Среднее» трёх моделей объёма (M1–M3), %; рассев — по ситам, % объёма (среднее M1–M3).
 
 Состав:
-  boils   — по каждой варке: начало/конец, длительность, проб, СВ мин/макс, мука НА ФИНИШЕ (пробы в пределах последних 1,5–2 СВ: среднее, мин, макс), брак %,
+  boils   — по каждой варке: начало/конец, длительность, проб, СВ мин/макс, мука НА ФИНИШЕ (пробы в пределах последних 1,5–2 СВ: среднее, 95% интервал, мин, макс), брак %,
             причины брака, разломы (зон / % площади, с учётом правок оператора), средний размер, рассев, подстадии.
   totals  — итоги: число варок, среднее/мин/макс по основным показателям, лучшая/худшая варка (по муке).
   weeks   — те же итоги по неделям внутри периода.
@@ -67,6 +67,7 @@ def _boil_row(g: list, summary: dict, fin_sv: float = FIN_SV) -> dict:
         "duration_min": round(dur, 1), "probes": len(g), "finish_probes": len(sel),
         "sv_min": min(ok_sv) if ok_sv else None, "sv_max": max(ok_sv) if ok_sv else None, "sv_end": sv_ref,
         "fines_avg": _avg3(block.get("fines") or {}), "fines_min": min(fa) if fa else None, "fines_max": max(fa) if fa else None,
+        "fines_lo": _avg3(block.get("fines_lo") or {}), "fines_hi": _avg3(block.get("fines_hi") or {}),     # 95% интервал муки финиша (t-оценка по пробам)
         "fines_all": _avg3(all_b.get("fines") or {}),
         "reject_pct": _mean([r.get("reject_pct") for r in g]),
         "needle": _mean([r.get("n_needle") for r in g]), "aggregate": _mean([r.get("n_aggregate") for r in g]),
@@ -145,7 +146,8 @@ def build(serial: str, t_from: float, t_to: float, min_probes: int = MIN_PROBES,
 
 
 _BOIL_COLS = [("start", "начало"), ("end", "конец"), ("duration_min", "длительность, мин"), ("probes", "проб"), ("sv_min", "СВ мин"), ("sv_max", "СВ макс"),
-              ("sv_end", "конечное СВ"), ("finish_probes", "проб финиша"), ("fines_avg", "мука на финише, % (последние СВ)"), ("fines_min", "мука мин, % (финиш)"), ("fines_max", "мука макс, % (финиш)"),
+              ("sv_end", "конечное СВ"), ("finish_probes", "проб финиша"), ("fines_avg", "мука на финише, % (последние СВ)"),
+              ("fines_lo", "мука финиша, 95% от"), ("fines_hi", "мука финиша, 95% до"), ("fines_min", "мука мин, % (финиш)"), ("fines_max", "мука макс, % (финиш)"),
               ("fines_all", "мука, % (все пробы после «Мука с СВ»)"), ("reject_pct", "брак, %"),
               ("needle", "иглы, шт/кадр"), ("aggregate", "сростки, шт/кадр"), ("crooked", "кривые, шт/кадр"), ("frac_zones", "разломов, зон"),
               ("frac_pct", "разлом, % площади"), ("mean_um", "средний размер, мкм")]

@@ -64,6 +64,14 @@ CYCLE_EXTRA_STAGES = (20,)
 
 
 class MicroscopeFSM:
+    def _brewing(self) -> bool:
+        """Идёт варка: стадия в зоне авто-цикла (или включено «варить без стадии» и «Автомат»), либо идёт проба."""
+        return self.mode != 0 or self._stage_in() or (self._ignore_stage and self.sw0 and not self.manual)
+
+    def _hw_idle(self) -> bool:
+        """Варки не было целый час (или с запуска программы не видели) — тогда ежечасная промывка разрешена."""
+        return self._last_brew_t is None or time.monotonic() - self._last_brew_t >= self._hw_idle_s
+
     def _stage_in(self) -> bool:
         """Стадия варки разрешает авто-цикл: в диапазоне «от…до» (вкладка «Цикл») или одна из CYCLE_EXTRA_STAGES (20 УНВ)."""
         return self._stage_min <= self.stage <= self._stage_max or self.stage in CYCLE_EXTRA_STAGES
@@ -85,6 +93,8 @@ class MicroscopeFSM:
         self._hw_minute = int(hw.get("minute", 3))
         self._hw_on = int(hw.get("sec_on", 30))
         self._hw_off = int(hw.get("sec_off", 59))
+        self._hw_idle_s = int(hw.get("idle_s", 3600))   # промывка только если варки не было столько секунд (час)
+        self._last_brew_t = None                         # когда последний раз шла варка (monotonic); None — с запуска программы варки не видели
 
         # параметры нового цикла пробы (правятся на вкладке «Цикл», persist в plate_config)
         pc = config.get("probe_cycle", {})
@@ -805,6 +815,7 @@ class MicroscopeFSM:
                 "u": self.u,
                 # авто-цикл разрешён по стадии (3..9) ИЛИ включено «варить без стадии».
                 "stage_ok": self._ignore_stage or self._stage_in(),
+                "hw_idle": self._hw_idle() and not self._brewing(),   # ежечасная промывка сейчас разрешена (варки не было час)
                 "last_sv_shot": self._last_sv_shot,   # на каком целом СВ взяли последнюю пробу (режим sv)
                 "manual_confirm": self._manual_confirm,   # варка началась, а мы в ручном — спросить оператора
                 "cycle_params": {
@@ -1047,9 +1058,12 @@ class MicroscopeFSM:
             if self.u == 1:
                 self.cw1 = False
 
-            # 3) ЕЖЕЧАСНАЯ промывка от засахаривания (всегда активна; только в простое mode 0,
-            # чтобы не мешать пробе). Раз в час на минуте hw_minute: открыть ОБА клапана на ~5 с.
-            if self._hw_enabled and self.mode == 0:
+            # 3) ЕЖЕЧАСНАЯ промывка от засахаривания (только в простое mode 0, чтобы не мешать пробе, и ТОЛЬКО когда варки
+            # не было целый час — пока варка идёт, хватает обычной промывки пробы). Раз в час на минуте hw_minute:
+            # открыть ОБА клапана на ~5 с.
+            if self._brewing():
+                self._last_brew_t = time.monotonic()
+            if self._hw_enabled and self.mode == 0 and self._hw_idle():
                 now = datetime.now()
                 if now.minute == self._hw_minute and self._hw_on <= now.second < self._hw_off:
                     self.cw0 = True

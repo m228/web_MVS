@@ -279,6 +279,7 @@
   //      параметры — во вкладке пульта, телеметрия — полосой снизу. Всё через CameraApi. ----
   let camConnected = false;
   let camPhotoOn = false, camVideoOn = false;
+  let hwIdleOk = true;             // ежечасная промывка разрешена: варки не было целый час (state.hw_idle)
   let hwMinute = 3, hwSecOn = 0;   // минута/секунда старта ежечасной промывки (из конфига)
   let camMetricsTimer = null;
   // сторож потока: если поток умер (running=false) или кадры не идут — сам «Остановить → Подключить». «Остановить» кнопкой (camConnected=false) не трогает
@@ -1165,6 +1166,7 @@
       if (f.mode === 23 && f.dwell_left_s != null) camStepTxt += " · " + f.dwell_left_s + " с";
       set("camStep_v", camStepTxt);
       // до следующей пробы — очень коротко (плитка под видео): авария/ручной/идёт/таймер/жду СВ
+      hwIdleOk = f.hw_idle !== false;
       let camNext;
       if (f.fault) camNext = "АВАРИЯ";
       else if (f.autocal && f.autocal.active) camNext = "калибр.";
@@ -1568,6 +1570,7 @@
     const el = $("hourlyWashLeft"); if (!el) return;
     const hwT = $("hourlyWashToggle");
     if (hwT && !hwT.checked) { el.textContent = "выкл"; return; }
+    if (!hwIdleOk) { el.textContent = "пока варка (< 1 ч)"; return; }
     const now = new Date();
     const next = new Date(now);
     next.setMinutes(hwMinute, hwSecOn, 0);

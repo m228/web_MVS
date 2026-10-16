@@ -157,6 +157,8 @@
     const show = (name) => { lbl.textContent = name; lbl.hidden = !name; inp.hidden = !!name; };
     let saved = ""; try { saved = (localStorage.getItem(KEY) || "").trim(); } catch (e) { }
     inp.value = saved; show(saved);
+    const fit = () => { inp.style.width = (inp.value ? Math.max(inp.value.length, 6) : 24) + 2 + "ch"; };      // поле по ширине текста (пустое — под подсказку, 24 знака)
+    inp.addEventListener("input", fit); fit();
     const commit = () => {
       const v = inp.value.trim(); if (!v) return;
       try { localStorage.setItem(KEY, v); } catch (e) { }
@@ -166,7 +168,7 @@
       if (e.key === "Enter") { e.preventDefault(); commit(); }
       else if (e.key === "Escape" && saved) { inp.value = saved; show(saved); }
     });
-    lbl.addEventListener("dblclick", () => { show(""); inp.value = saved; inp.focus(); inp.select(); });
+    lbl.addEventListener("dblclick", () => { show(""); inp.value = saved; fit(); inp.focus(); inp.select(); });
   }
   function isTeleCvVisible() { return ["teleStripCv", "teleStripTrend", "teleStripCfg"].some((id) => { const e = $(id); return e && !e.hidden; }); }
 

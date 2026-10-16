@@ -140,8 +140,8 @@
         sentCmd("Датчик прихода цикла: " + ARRIVE_NAMES[mode]);
       });
     });
-    // кадров на пробу / пауза после разбора — настройки CV, применяются сразу (без перезапуска)
-    ["pcCvFrames", "pcCvGap"].forEach((id) => {
+    // кадров на пробу / пауза после разбора / страховка — настройки CV, применяются сразу (без перезапуска)
+    ["pcCvFrames", "pcCvGap", "pcCvTimeout"].forEach((id) => {
       const e = $(id); if (e) e.addEventListener("change", () => { cvPostCycleFields(); });
     });
     const ign = $("ignoreStageToggle");
@@ -181,10 +181,12 @@
     });
     updateTriggerFields();
   }
-  // кадров на пробу / защитная пауза — лежат в настройках CV, шлём туда (применяется сразу)
+  // кадров на пробу / защитная пауза / страховка — лежат в настройках CV, шлём туда (применяется сразу)
   function cvPostCycleFields() {
     const num = (id) => { const e = $(id); return e && e.value !== "" ? parseInt(e.value, 10) : undefined; };
-    return cvPostSettings({ frames_per_probe: num("pcCvFrames"), gap_sec: num("pcCvGap") });
+    const to = num("pcCvTimeout");
+    return cvPostSettings({ frames_per_probe: num("pcCvFrames"), gap_sec: num("pcCvGap"),
+      dwell_timeout_sec: to === undefined || isNaN(to) ? undefined : Math.max(10, to) });
   }
 
   // приглушить неактуальные поля под выбранный триггер и режим CV (не скрываем — видно, что
@@ -199,6 +201,7 @@
     dim("pcPauseWrap", pcTrigMode === "sv" || (pcTrigMode === "cv" && cvOn));
     dim("pcCvGapWrap", !(pcTrigMode === "cv" && cvOn));
     dim("pcCvFramesWrap", !cvOn);
+    dim("pcCvTimeoutWrap", !cvOn);
     dim("pcDwellWrap", cvOn);
     dim("pcShotWrap", cvOn);
   }

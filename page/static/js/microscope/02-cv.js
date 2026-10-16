@@ -172,6 +172,30 @@
   }
   function isTeleCvVisible() { return ["teleStripCv", "teleStripTrend", "teleStripCfg"].some((id) => { const e = $(id); return e && !e.hidden; }); }
 
+  // модель пробы: в плитке имя и imgsz прогона, в подсказке — хеш, обучение и параметры распознавания.
+  // Старые пробы без паспорта — как раньше: текущая модель сайдкара.
+  function cvRenderModel(r, s) {
+    const b = $("cvModel"); if (!b) return;
+    const tile = b.closest(".micro-tile") || b;
+    const dt = r && r.detector;
+    if (!dt || !dt.name) {
+      b.textContent = (s && s.model) || (cvLastModel || "—");
+      tile.title = r ? "Модель в пробе не записана" + (cvLastModel ? " — показана текущая модель сайдкара" : "") : "";
+      return;
+    }
+    const num = (v) => String(v).replace(".", ",");
+    const nm = String(dt.name).replace(/^yolo:/, "");
+    b.textContent = nm + (dt.imgsz ? " · " + dt.imgsz : "");
+    const td = dt.train_date ? String(dt.train_date).slice(0, 10).split("-").reverse().join(".") : "";
+    const inf = (r && r.infer) || {};
+    const run = [dt.imgsz ? "imgsz " + dt.imgsz : "", inf.conf != null ? "conf " + num(inf.conf) : "",
+      inf.iou != null ? "iou " + num(inf.iou) : "", inf.tiles != null ? "частей " + inf.tiles : "",
+      inf.overlap != null ? "перекрытие " + num(inf.overlap) : "", inf.seam_refine ? "доводка швов" : ""].filter(Boolean);
+    tile.title = [nm + (dt.sha ? " · sha " + dt.sha : ""),
+      (td || dt.train_imgsz) ? "обучена" + (td ? " " + td : "") + (dt.train_imgsz ? " при " + dt.train_imgsz : "") : "",
+      run.length ? "распознавание: " + run.join(", ") : ""].filter(Boolean).join("\n");
+  }
+
   // --- рассев + статистика ---
   function cvRenderScatter() {
     const r = cvView || cvLastResult, s = r && r.summary;   // рассев — по пробе, показанной в окне
@@ -188,7 +212,7 @@
     setTe("cvLenMax", um(ex.len_max));
     setTe("cvCountTele", s ? Math.round(s.count || 0) : "—");
     setTe("cvFramesN", r && r.frames ? r.frames.length : "—");
-    setTe("cvModel", (s && s.model) || (cvLastModel || "—"));
+    cvRenderModel(r, s);
     if (!s) { if (cnt) cnt.textContent = "нет пробы"; return; }
     if (cnt) cnt.textContent = "N=" + Math.round(s.count || 0);
     const groups = s.groups || {}, pct = s.groups_pct || {};

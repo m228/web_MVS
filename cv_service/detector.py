@@ -180,6 +180,39 @@ class UltralyticsDetector(Detector):
         self.name = "yolo:" + model_path.rsplit("/", 1)[-1].rsplit("\\", 1)[-1]
         # seg-модель, если у неё есть маски (task=segment)
         self.is_seg = getattr(self.model, "task", "") == "segment"
+        self._meta = self._file_meta(model_path, getattr(self.model, "ckpt", None))
+
+    @staticmethod
+    def _file_meta(path: str, ck=None) -> dict:
+        """Паспорт модели для пробы: размер/mtime файла, короткий sha1, дата и imgsz обучения.
+        Считается один раз при загрузке. Чего не достали — того в паспорте нет (не падаем)."""
+        import hashlib
+        import os
+        meta: dict = {}
+        try:
+            st = os.stat(path)
+            meta["size"] = st.st_size
+            meta["mtime"] = int(st.st_mtime)
+            h = hashlib.sha1()
+            with open(path, "rb") as f:
+                for chunk in iter(lambda: f.read(1 << 20), b""):
+                    h.update(chunk)
+            meta["sha"] = h.hexdigest()[:10]
+        except Exception:
+            pass
+        try:
+            if not isinstance(ck, dict) and path.lower().endswith(".pt"):
+                import torch       # ultralytics не оставил чекпойнт — читаем сами
+                ck = torch.load(path, map_location="cpu", weights_only=False)
+            if isinstance(ck, dict):
+                if ck.get("date"):
+                    meta["train_date"] = str(ck["date"])
+                ti = (ck.get("train_args") or {}).get("imgsz")
+                if ti is not None:
+                    meta["train_imgsz"] = ti
+        except Exception:
+            pass
+        return meta
 
     @staticmethod
     def _auto_device():
@@ -209,7 +242,8 @@ class UltralyticsDetector(Detector):
         return dets
 
     def info(self) -> dict:
-        return {"name": self.name, "seg": self.is_seg, "device": str(self._device)}
+        return {"name": self.name, "seg": self.is_seg, "device": str(self._device),
+                "imgsz": self.imgsz, **self._meta}
 
 
 def build_detector(model_path: Optional[str] = None, avg_count: int = 40) -> Detector:

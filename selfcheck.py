@@ -1207,6 +1207,65 @@ def _cv_store():
     return "ts=%s" % rec["ts"]
 
 
+@check("CV", "проба помнит модель и параметры распознавания (паспорт в result.json); старая проба без него читается")
+def _cv_model_passport():
+    import hashlib
+    import importlib.util
+    import tempfile
+    import cv_client
+    import cv_store
+    from microscope_service import MicroscopeService
+    img, objs = synth_frame()
+    det = {"name": "yolo:26x_1280.pt", "seg": True, "device": "0", "imgsz": 640, "size": 141854526,
+           "mtime": 1760487975, "sha": "0123abcdef", "train_date": "2026-10-15T03:26:15+03:00", "train_imgsz": 1280}
+    calls = []
+
+    def fake_infer(url, data, tiles=6, conf=0.25, iou=0.45, overlap=0.15, timeout=20.0):
+        calls.append({"tiles": tiles, "conf": conf, "iou": iou, "overlap": overlap})
+        return {"objects": [dict(o) for o in objs], "timing": {"total_ms": 1, "tiles": tiles}, "detector": det}
+
+    orig = (cv_client.infer, cv_client.health)
+    cv_client.infer, cv_client.health = fake_infer, (lambda url, timeout=1.5: {"ok": True})
+    try:
+        ms = MicroscopeService()                 # не start(): ни платы, ни сокетов
+        run = ms._cv_begin({"cv": {"tiles": 2, "conf": 0.55, "iou": 0.5, "overlap": 0.2, "keep_last": 5}})
+        ms._cv_analyze_one(run, img)
+        ms._cv_finish(run, 7, "SELFMODEL")
+    finally:
+        cv_client.infer, cv_client.health = orig
+    r = cv_store.get_last("SELFMODEL")
+    assert r, "проба не сохранилась"
+    assert r.get("detector") == det, "паспорт модели не попал в result.json: %r" % (r.get("detector"),)
+    inf = r.get("infer") or {}
+    assert calls and calls[0] == {k: inf.get(k) for k in ("tiles", "conf", "iou", "overlap")}, \
+        "в result.json не те параметры, что ушли в infer: %r vs %r" % (inf, calls[0] if calls else None)
+    assert inf == {"tiles": 2, "conf": 0.55, "iou": 0.5, "overlap": 0.2, "seam_refine": True}, inf
+    # старая проба (до паспорта): ключей нет, открывается как раньше
+    old = cv_store.save_sample("SELFMODEL", 7, [{"file": "f0", "summary": run["frame_recs"][0]["summary"],
+                                                  "objects": run["frame_recs"][0]["objects"]}], [img], {"total_ms": 1},
+                               keep_last=5, ts="2020-01-01_00_00_00")
+    ro = cv_store.get_result("SELFMODEL", old["ts"])
+    assert ro and ro.get("summary") and "detector" not in ro and "infer" not in ro, "старая проба читается не так"
+    # сайдкар: паспорт файла модели (размер, sha) и обучение из чекпойнта; битый чекпойнт не роняет
+    p = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cv_service", "detector.py")
+    if not os.path.exists(p):
+        return "паспорт пишется и читается (detector.py в сборке нет — его часть пропущена)"
+    spec = importlib.util.spec_from_file_location("_sc_cv_detector", p)
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = mod                 # dataclass ищет свой модуль в sys.modules
+    spec.loader.exec_module(mod)
+    with tempfile.TemporaryDirectory() as td:
+        f = os.path.join(td, "m.pt")
+        with open(f, "wb") as fh:
+            fh.write(b"not a checkpoint")
+        m = mod.UltralyticsDetector._file_meta(f, {"date": "2026-10-15T03:26:15+03:00", "train_args": {"imgsz": 1280}})
+        assert m["size"] == 16 and m["sha"] == hashlib.sha1(b"not a checkpoint").hexdigest()[:10], m
+        assert m["train_date"].startswith("2026-10-15") and m["train_imgsz"] == 1280, m
+        bad = mod.UltralyticsDetector._file_meta(f)          # чекпойнт не читается → без даты обучения, без падения
+        assert "train_date" not in bad and bad["sha"] == m["sha"], bad
+    return "модель %s, sha %s, imgsz %s, conf %s, частей %s" % (det["name"], det["sha"], det["imgsz"], inf["conf"], inf["tiles"])
+
+
 @check("CV", "cv_analyzer: брак по форме считается ДО «Брак до СВ» (85), выше — не считается и в расчёт не берётся")
 def _cv_reject_to_sv():
     import cv_analyzer as A

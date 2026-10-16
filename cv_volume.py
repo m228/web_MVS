@@ -24,7 +24,7 @@ import re
 MODELS = ("m1", "m2", "m3")
 # Рассев по ситам (как в лаборатории): отверстия, мм. Фракции снизу вверх: дно (<0,2), 0,2–0,5, 0,5–0,7, 0,7–0,8, 0,8–1,0, 1,0–1,2, >1,2.
 # Размер кристалла — эквивалентный диаметр (как везде в CV); доля фракции — по объёму (объём ~ масса), % от всех кристаллов.
-CALC_VER = 7     # 2: в расчёт идут только хорошие кристаллы (брак — сросток/игла/кривой — отсеян); менять при смене логики: старые пробы пересчитаются
+CALC_VER = 8     # 2: в расчёт идут только хорошие кристаллы (брак — сросток/игла/кривой — отсеян); менять при смене логики: старые пробы пересчитаются
 SIEVE_MM = (0.2, 0.5, 0.7, 0.8, 1.0, 1.2)
 # МЕЛКИЙ РАССЕВ «в процентах»: фракции по 0,05 мм от 0 до 1 мм + «больше 1 мм» (21 фракция), ОДНА шкала для всех фаз (без масштаба фазы) —
 # чтобы видеть, где сидит основная масса мелких кристаллов. Доля — по объёму (M1–M3) и по площади, % от хороших кристаллов.
@@ -156,6 +156,8 @@ def volume_cfg(cv_cfg: dict | None, phase=None, seed_age_s=None, boil_t_s=None) 
         base_um = fines_diameter_from_volume_um(vol) if v["fines_mode"] == "volume" else fines_diameter_um(side)
         v["fines_um"] = base_um * scale
     v["fines_side_eff"], v["fines_vol_eff"] = side, vol
+    # «плоская» мука (линия «мука без порога» в тренде): ОБЩИЙ порог из поля «Мука» — без масштаба фазы, своего порога фазы и плавной кривой
+    v["fines_flat_um"] = round(fines_diameter_from_volume_um(v["fines_vol_mm3"]) if v["fines_mode"] == "volume" else fines_diameter_um(v["fines_side_mm"]), 1)
     # плавный порог по времени с заводки: вместо порога фазы (сита рассева остаются в масштабе фазы). Нет времени с заводки
     # (приложение перезапускали посреди варки) — порог фазы, как раньше.
     v["fines_curve_on"] = bool(src.get("fines_curve_on"))
@@ -214,6 +216,7 @@ def empty_sums() -> dict:
     for mod in MODELS:
         s[mod] = {k: 0.0 for k in KINDS}
     s["n"] = {k: 0 for k in KINDS}
+    s["flat"] = {mod: 0.0 for mod in MODELS}      # объём хороших кристаллов мельче общего порога (fines_flat_um), без плавной кривой/фазы
     s["sieve"] = {mod: [0.0] * (len(SIEVE_MM) + 1) for mod in MODELS + ("area",)}   # объём (M1–M3, мкм³) и площадь ("area", мкм²) по фракциям рассева
     s["sieve_fine"] = {mod: [0.0] * FINE_N for mod in MODELS + ("area",)}           # то же, мелкий рассев по 0,05 мм
     return s
@@ -244,6 +247,9 @@ def sums_for(measures: list, cv_cfg: dict | None, count_fines: bool = True, phas
             if kind == "fines":
                 s[key]["fines"] += val
         s["n"]["total"] += 1
+        if m.size_um < cfg["fines_flat_um"]:
+            for mod in MODELS:
+                s["flat"][mod] += vols[mod]
         b = sieve_bin(m.size_um, cfg["size_scale"])
         for mod in MODELS:
             s["sieve"][mod][b] += vols[mod]
@@ -271,6 +277,8 @@ def add_sums(a: dict, b: dict) -> dict:
     for mod in MODELS + ("area",):
         fa, fb = (a.get("sieve_fine") or {}).get(mod), (b.get("sieve_fine") or {}).get(mod)
         out["sieve_fine"][mod] = [(fa[i] if fa else 0.0) + (fb[i] if fb else 0.0) for i in range(FINE_N)]
+    for mod in MODELS:
+        out["flat"][mod] = (a.get("flat") or {}).get(mod, 0.0) + (b.get("flat") or {}).get(mod, 0.0)
     if a.get("fines_off") or b.get("fines_off"):
         out["fines_off"] = True
     return out
@@ -286,6 +294,8 @@ def percents(sums: dict | None, ignore_off: bool = False) -> dict:
         # мука — доля среди ХОРОШИХ кристаллов; agg — доля отсеянного брака среди всех (хорошие + брак)
         out[key] = ({"fines": round(100.0 * sums[key]["fines"] / tot, 3), "agg": round(100.0 * rej / (tot + rej), 3)} if tot > 0
                     else {"fines": None, "agg": None})
+    if sums.get("flat"):                                        # мука без плавного порога: доля среди хороших; порог СВ не применяем (он по варке, при показе)
+        out["flat"] = {mod: (round(100.0 * sums["flat"][mod] / sums[mod]["total"], 3) if (sums.get(mod) or {}).get("total", 0.0) > 0 else None) for mod in MODELS}
     n_tot, n_rej = (sums.get("n") or {}).get("total", 0), (sums.get("n") or {}).get("agg", 0)
     out["n"] = ({"fines": round(100.0 * sums["n"]["fines"] / n_tot, 2), "agg": round(100.0 * n_rej / (n_tot + n_rej), 2)} if n_tot
                 else {"fines": None, "agg": None})

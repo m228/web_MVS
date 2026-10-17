@@ -54,9 +54,29 @@ def test_upsert_many_idempotent(data_dir):
     assert db.days("S2") == ["2026-10-06"] and db.serials() == ["S2"]
 
 
-def test_sv_glitch_nulled_on_read(data_dir):
-    # разовый сбой СВ (0,0 среди 87) обнуляется, иначе варка делится и тренд падает в ноль
-    rows = [_row(0, 87.0, 600), _row(1, 0.0, 690), _row(2, 87.5, 780), _row(3, 88.0, 870)]
-    cleaned = db.null_sv_outliers([dict(r) for r in rows])
-    assert cleaned[1]["sv"] is None
-    assert [c["sv"] for c in cleaned if c["sv"] is not None] == [87.0, 87.5, 88.0]
+def test_sv_glitch_low_and_deviation_nulled(data_dir):
+    # разовый сбой СВ обнуляется: и явно низкий (<5), и резкий выброс (58 среди 87, |Δ|>15)
+    low = db.null_sv_outliers([dict(r) for r in
+                               [_row(0, 87.0, 600), _row(1, 0.0, 690), _row(2, 87.5, 780), _row(3, 88.0, 870)]])
+    assert low[1]["sv"] is None and [c["sv"] for c in low if c["sv"] is not None] == [87.0, 87.5, 88.0]
+    dev = db.null_sv_outliers([dict(r) for r in
+                               [_row(0, 87.0, 600), _row(1, 87.5, 690), _row(2, 58.0, 780), _row(3, 88.0, 870)]])
+    assert dev[2]["sv"] is None, "выброс 58 при соседях ~87 должен обнуляться"
+
+
+def test_boil_split_on_long_gap(data_dir):
+    # самая частая граница варок — пауза дольше BOIL_GAP_S (между пробами обычно 1–2 мин)
+    r0 = _row(0, 85.0, 600)
+    r1 = {**_row(1, 86.0, 690), "t": r0["t"] + db.BOIL_GAP_S + 100}
+    db.upsert_row("S1", r0)
+    db.upsert_row("S1", r1)
+    assert [g["boil_id"] for g in db.read_rows("S1", with_boil=True)] == [1, 2]
+
+
+def test_boil_split_sv_fallback_without_cook_time(data_dir):
+    # запасной признак: при отсутствии cook_time резкое падение СВ делит варку
+    rows = [{"ts": "2026-10-06_10_0%d_00" % i, "t": 1000.0 + i * 90, "sv": sv}
+            for i, sv in enumerate((88.0, 88.5, 80.0))]   # без cook_time; 88.5→80.0 падение > BOIL_SV_DROP
+    for r in rows:
+        db.upsert_row("S3", r)
+    assert [g["boil_id"] for g in db.read_rows("S3", with_boil=True)] == [1, 1, 2]

@@ -51,8 +51,25 @@ def test_stale_sv_source_dropped(data_dir):
     assert cfg["sv_source"]["fields"]["sv"]["reg"] == plate_config.DEFAULTS["sv_source"]["fields"]["sv"]["reg"]
 
 
-def test_replace_all_makes_backup(data_dir):
+def test_replace_all_replaces_not_merges(data_dir):
     plate_config.save({"led_bright": 5})
     plate_config.replace_all({"host": "10.0.0.1", "port": 502})
+    # это ЗАМЕНА, а не merge: прежняя пользовательская правка led_bright должна исчезнуть из файла
+    on_disk = json.loads(plate_config.CONFIG_PATH.read_text(encoding="utf-8"))
+    assert on_disk == {"host": "10.0.0.1", "port": 502}
     assert plate_config.load()["host"] == "10.0.0.1"
-    assert plate_config.BACKUP_PATH.is_file()
+    assert plate_config.BACKUP_PATH.is_file()                  # backup «before-import» сделан
+
+
+def test_replace_all_rejects_empty(data_dir):
+    import pytest
+    for bad in ({}, [], "строка", None):
+        with pytest.raises((ValueError, TypeError)):
+            plate_config.replace_all(bad)
+
+
+def test_read_snapshot_rejects_traversal(data_dir):
+    import pytest
+    for bad in ("../plate_config.json", "plate_config_2026.json", "..\\x", "plate_config_20261017_0900.txt"):
+        with pytest.raises(ValueError):
+            plate_config.read_snapshot(bad)

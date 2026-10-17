@@ -36,10 +36,16 @@ def get(path, query=""):
 @pytest.mark.parametrize("path", [
     "/api/version", "/api/debug/logs", "/api/micro/enabled",
     "/api/cv/settings", "/api/rtsp/saved", "/api/autostart/status",
+    "/api/cv/boils", "/api/cv/trend",
 ])
-def test_endpoints_200(data_dir, path):
-    status, _ = get(path)
+def test_endpoints_200_with_json_body(data_dir, path):
+    # в проекте ошибки отдаются со статусом 200 и {"error":...}, поэтому проверяем и тело:
+    # валидный JSON и без ключа error
+    import json
+    status, body = get(path)
     assert status == 200, "%s → HTTP %s" % (path, status)
+    data = json.loads(body)
+    assert "error" not in data, "%s вернул ошибку: %r" % (path, data)
 
 
 def test_pages_render(data_dir):
@@ -53,12 +59,24 @@ def test_unknown_route_404(data_dir):
     assert status == 404
 
 
-def test_rtsp_save_rejects_non_rtsp_scheme(data_dir):
+@pytest.mark.parametrize("url", ["file:///etc/passwd", "http://169.254.169.254/latest"])
+def test_rtsp_save_rejects_non_rtsp_scheme(data_dir, url):
     # SSRF-guard: file:// / http:// в базу не попадают (иначе cv2.VideoCapture открыл бы их)
     import json
-    status, body = get("/api/rtsp/save", "url=file:///etc/passwd")
+    import urllib.parse
+    status, body = get("/api/rtsp/save", "url=" + urllib.parse.quote(url))
     assert status == 200
     assert json.loads(body).get("error") == "invalid_rtsp_scheme"
+
+
+def test_rtsp_save_accepts_rtsp_scheme(data_dir):
+    # позитивный контроль: валидный rtsp:// проходит (иначе guard, режущий всё, был бы «зелёным»)
+    import json
+    import urllib.parse
+    status, body = get("/api/rtsp/save", "url=" + urllib.parse.quote("rtsp://127.0.0.1:554/live"))
+    assert status == 200
+    data = json.loads(body)
+    assert "error" not in data and any(i["url"] == "rtsp://127.0.0.1:554/live" for i in data.get("items", []))
 
 
 def test_version_payload(data_dir):

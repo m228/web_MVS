@@ -43,3 +43,20 @@ def test_save_settings_per_camera_isolation(data_dir):
     save_settings.update("CAM2", photo_project="b")
     assert save_settings.get("CAM1")["photo_project"] == "a"
     assert save_settings.get("CAM2")["photo_project"] == "b"
+
+
+def test_ip_change_keeps_serial_and_autostart(data_dir):
+    # регрессия: после смены IP камера теряла serial (ключ воркера/проекта) и autostart.
+    # app._update_rtsp_store_url переносит запись на новый url — проверяем, что оба поля сохраняются.
+    import app
+    old = "rtsp://admin:x@192.168.1.50:554/cam"
+    rtsp_store.save({"url": old, "label": "цех", "ip": "192.168.1.50",
+                     "serial": "SER123", "autostart": True, "scale": 50})
+    new = "rtsp://admin:x@192.168.1.77:554/cam"
+    app._update_rtsp_store_url(old, new, "192.168.1.77")
+    items = rtsp_store.load()
+    assert not any(i["url"] == old for i in items), "старый url должен исчезнуть"
+    moved = next(i for i in items if i["url"] == new)
+    assert moved["serial"] == "SER123", "serial потерян при смене IP"
+    assert moved["autostart"] is True, "autostart сброшен при смене IP"
+    assert moved["label"] == "цех" and moved["ip"] == "192.168.1.77"

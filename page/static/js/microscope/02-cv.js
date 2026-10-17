@@ -1569,33 +1569,36 @@
       }
       if (CV_REGIME.includes(name) && !CV_SOLID.includes(name)) ctx.setLineDash([6, 4]);          // режим варки — пунктиром
       ctx.stroke(); ctx.setLineDash([]);
-      if (isStage) {                                                   // цифры стадии на каждом переходе (и на первой видимой пробе)
-        ctx.font = "bold 11px sans-serif"; ctx.textAlign = "center"; ctx.textBaseline = "bottom";
-        let last = null;
+      if (isStage) {                                                   // на каждом переходе (и на первой видимой пробе): цифра стадии и справа от неё название
+        // название — по самой стадии (её ступеньке), а не по смене регистра подстадии: подстадия в ПЛК переключается на пробу раньше
+        // стадии, и «рост» садился на ступеньку 20 (УНВ). Подстадию берём, только если она этой же стадии (72 → «рост 1» у стадии 7)
+        const sub = d.substage || [];
+        const nameAt = (i, st) => {
+          for (let k = i; k < i1 && arr[k] === st && (k === i || !brewBreak(k)); k++) {
+            const c = Math.round(Number(sub[k])); if (sub[k] != null && Math.floor(c / 10) === Number(st)) return substageName(c);
+          }
+          return SUBSTAGE_STAGES[st] || (STAGE_NAMES[st] ? STAGE_NAMES[st].toLowerCase() : null);
+        };
+        const marks = []; let last = null;
         for (let i = i0; i < i1; i++) {
           const val = arr[i]; if (val == null) continue;
-          if (val !== last || brewBreak(i)) ctx.fillText(String(val), xAt(t[i]), yAt(val, mx) - 4);
+          if (val !== last || brewBreak(i)) marks.push({ i, val, x: xAt(t[i]), y: yAt(val, mx) - 4 });
           last = val;
         }
-        // название подстадии (рост 2, подкачка 3…) — мелким под линией стадии на каждой смене; перекрывающиеся подписи пропускаем
-        const sub = d.substage || [];
-        if (sub.some((v) => v != null)) {
-          ctx.font = "10px sans-serif"; ctx.textBaseline = "top"; ctx.globalAlpha = 0.85;
-          let lastS = null; const placed = [];                      // уже нарисованные подписи: [x0, y0, x1, y1]
-          for (let i = i0; i < i1; i++) {
-            const sv = sub[i], val = arr[i]; if (sv == null || val == null) continue;
-            if (sv !== lastS || brewBreak(i)) {
-              const nm = substageName(sv);
-              if (nm) {
-                const w = ctx.measureText(nm).width, cx = xAt(t[i]), cy = yAt(val, mx) + 4, box = [cx - w / 2 - 3, cy, cx + w / 2 + 3, cy + 11];
-                if (!placed.some((p) => box[0] < p[2] && box[2] > p[0] && box[1] < p[3] && box[3] > p[1])) { ctx.fillText(nm, cx, cy); placed.push(box); }
-              }
-            }
-            lastS = sv;
-          }
-          ctx.globalAlpha = 1;
-        }
-        ctx.textBaseline = "alphabetic";
+        ctx.textBaseline = "bottom";
+        ctx.font = "bold 11px sans-serif"; ctx.textAlign = "center";
+        const placed = marks.map((m) => {                             // сначала все цифры: подпись не должна лечь на соседнюю цифру
+          m.nw = ctx.measureText(String(m.val)).width; ctx.fillText(String(m.val), m.x, m.y);
+          return [m.x - m.nw / 2, m.y - 11, m.x + m.nw / 2, m.y];
+        });
+        ctx.font = "10px sans-serif"; ctx.textAlign = "left"; ctx.globalAlpha = 0.85;
+        marks.forEach((m) => {                                         // название справа от цифры; не влезает в график справа — слева; налезает на другую подпись — пропускаем
+          const nm = nameAt(m.i, m.val); if (!nm) return;
+          const w = ctx.measureText(nm).width, x0 = m.x + m.nw / 2 + 4 + w <= pad.l + plotW ? m.x + m.nw / 2 + 4 : m.x - m.nw / 2 - 4 - w;
+          const box = [x0 - 2, m.y - 11, x0 + w + 2, m.y];
+          if (!placed.some((p) => box[0] < p[2] && box[2] > p[0] && box[1] < p[3] && box[3] > p[1])) { ctx.fillText(nm, x0, m.y); placed.push(box); }
+        });
+        ctx.globalAlpha = 1; ctx.textBaseline = "alphabetic";
         return;
       }
       if (i1 - i0 <= 120) for (let i = i0; i < i1; i++) {          // точки-пробы, пока их немного

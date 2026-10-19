@@ -20,10 +20,12 @@ set /p VER=<VERSION
 echo [build] Building web_MVS %VER% ...
 pyinstaller --noconfirm web_MVS.spec || (echo [build] BUILD FAILED & exit /b 1)
 
-echo [build] Adding run.bat + update + UpdaterCV to the bundle ...
+echo [build] Adding run.bat + update + UpdaterCV + UpdaterVideo to the bundle ...
 copy /Y run.bat "dist\web_MVS\" >nul
 copy /Y UpdaterCV.bat "dist\web_MVS\" >nul
 copy /Y UpdaterCV.ps1 "dist\web_MVS\" >nul
+copy /Y UpdaterVideo.bat "dist\web_MVS\" >nul
+copy /Y UpdaterVideo.ps1 "dist\web_MVS\" >nul
 copy /Y SelfCheck_HW.bat "dist\web_MVS\" >nul
 copy /Y update.bat "dist\web_MVS\" >nul
 copy /Y update.ps1 "dist\web_MVS\" >nul
@@ -35,10 +37,16 @@ echo [build] Packing CV add-on (cv_service, code only) ...
 copy /Y VERSION "cv_service\VERSION" >nul
 powershell -NoProfile -Command "$f=Get-ChildItem 'cv_service' -Recurse -File | Where-Object { $_.FullName -notmatch '\\\.venv\\' -and $_.FullName -notmatch '\\model\\' -and $_.FullName -notmatch '__pycache__' }; Compress-Archive -Path $f.FullName -DestinationPath 'dist\cv_service_v%VER%.zip' -Force" || exit /b 1
 
+rem top-level items, not a flat file list: assets\ must keep its folder in the zip
+echo [build] Packing video add-on (video_service, code only) ...
+copy /Y VERSION "video_service\VERSION" >nul
+powershell -NoProfile -Command "$f=Get-ChildItem 'video_service' | Where-Object { $_.Name -notin @('.venv','venv','video','__pycache__') }; Compress-Archive -Path $f.FullName -DestinationPath 'dist\video_service_v%VER%.zip' -Force" || exit /b 1
+
 echo.
 echo [build] Done:
 echo         dist\web_MVS_v%VER%.zip      (основное приложение, для всех)
 echo         dist\cv_service_v%VER%.zip   (CV-модуль, докачивается UpdaterCV.bat на микроскопных машинах)
+echo         dist\video_service_v%VER%.zip (video add-on, fetched by UpdaterVideo.bat on microscope machines)
 if /i "%~1"=="nopush" (
     echo [build] nopush: release not published. Publish later with release.bat
     endlocal

@@ -29,6 +29,7 @@ __pycache__/
 /config_backups
 /fracture_lab
 /cv_service/VERSION
+/video_service/VERSION
 
 # --- временная папка самообновления ---
 /.update

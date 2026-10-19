@@ -1,0 +1,8 @@
+# Видео-сервис (ролик варки). Ставится в ОТДЕЛЬНЫЙ venv рядом с web_MVS (как cv_service).
+# Версии не жёсткие (>=), чтобы вставало на Python 3.10 / 3.11 / 3.12.
+fastapi>=0.110
+uvicorn>=0.27
+opencv-python>=4.8,<5
+numpy>=1.24,<3
+pillow>=10.1
+imageio-ffmpeg>=0.5

@@ -841,6 +841,7 @@
               <button type="button" class="micro-win-btn" id="teleTrendBtn" data-tele="trend">Тренды</button>
               <button type="button" class="micro-win-btn" id="teleCfgBtn" data-tele="cfg">CV</button>
               <button type="button" class="micro-win-btn" id="teleReportBtn" data-tele="report">Отчёт</button>
+              <button type="button" class="micro-win-btn" id="teleVideoBtn" data-tele="video" hidden title="Ролик варки: фото проб с контурами, рассев и графики (видео-сервис)">Ролик</button>
             </div>
             <!-- название проекта для скриншотов (вкладки «Распознавание» и «Тренды»): Enter — фиксируется, двойной клик — править -->
             <span class="micro-proj" id="projWrap" hidden>
@@ -1177,6 +1178,29 @@
               <div class="micro-rep-out" id="repOut"><div class="micro-conn-hint">Выбери период и нажми «Сформировать отчёт».</div></div>
           </div>
 
+          <!-- «Ролик» — ролик варки через видео-сервис (video_service/); вкладка видна, только пока сервис отвечает (07-video.js) -->
+          <div class="micro-tele-video" id="teleStripVideo" hidden>
+            <div class="micro-vid-head">
+              <span class="micro-vid-title">Ролик варки</span>
+              <span class="micro-vid-sub">фото проб с контурами, рассев и графики · 1920×1080 · 0,5 с на пробу</span>
+              <span class="micro-vid-msg" id="vidMsg"></span>
+            </div>
+            <div class="micro-vid-prog" id="vidProg" hidden>
+              <div class="micro-vid-bar"><i id="vidBar"></i></div>
+              <span id="vidProgTxt"></span>
+            </div>
+            <div class="micro-vid-cols">
+              <div>
+                <p class="micro-tele-group">Варки</p>
+                <div class="micro-vid-list" id="vidBoils"><div class="micro-vid-empty">—</div></div>
+              </div>
+              <div>
+                <p class="micro-tele-group">Готовые ролики</p>
+                <div class="micro-vid-list" id="vidFiles"><div class="micro-vid-empty">—</div></div>
+              </div>
+            </div>
+          </div>
+
           <!-- «CV» — настройки распознавания (4-я вкладка нижней полосы) -->
           <div class="micro-tele-cfg" id="teleStripCfg" hidden>
             <div class="micro-cfg-top">
@@ -1278,6 +1302,7 @@
       <script src="/static/js/microscope/03-frac.js"></script>
       <script src="/static/js/microscope/05-report.js"></script>
       <script src="/static/js/microscope/06-update.js"></script>
+      <script src="/static/js/microscope/07-video.js"></script>
       <script src="/static/js/microscope/04-init.js"></script>
     </main>
   </div>

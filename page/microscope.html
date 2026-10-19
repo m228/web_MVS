@@ -224,6 +224,14 @@
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7l5 3-2 4 6 1 1 5 3-4 4 1-2-5 3-4-6-2 1-4-5 3-3-3z"/></svg>
                 <span>Разломы</span>
               </button>
+              <button type="button" class="micro-ptab" data-ptab="sieve" title="Объём, мука и рассев по ситам — рядом с картинкой (тот же блок, что внизу на «Распознавании»)" aria-label="Рассев">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 10h18M4.5 10l1.7 7.4A2 2 0 0 0 8.2 19h7.6a2 2 0 0 0 2-1.6l1.7-7.4M9.5 10l.6 9M14.5 10l-.6 9M5.4 14.5h13.2"/><circle cx="8" cy="5.5" r=".9"/><circle cx="12" cy="3.8" r=".9"/><circle cx="16" cy="5.8" r=".9"/></svg>
+                <span>Рассев</span>
+              </button>
+              <button type="button" class="micro-ptab" data-ptab="trend" title="Тренд по пробам — рядом с картинкой (тот же тренд, что внизу на «Трендах»)" aria-label="Тренды">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 3v18h18"/><path d="M6.5 15.5l3.8-4.5 3.2 2.8 5-6.3"/></svg>
+                <span>Тренды</span>
+              </button>
             </div>
 
 
@@ -814,6 +822,10 @@
                 </div>
               </div>
 
+              <!-- «Рассев» и «Тренды»: пустые — блок из нижней полосы переезжает сюда, пока вкладка открыта (02-cv.js, cvPultBlocksSync) -->
+              <div class="micro-ppane hidden" data-ppane="sieve"></div>
+              <div class="micro-ppane hidden" data-ppane="trend"></div>
+
             </div>
 
           </section>
@@ -937,6 +949,8 @@
                 </div>
               </div>
 
+              <!-- заглушка на месте блока, пока он открыт во вкладке пульта «Рассев»; клик — вернуть сюда -->
+              <button type="button" class="micro-pult-stub" id="cvVolHome" hidden title="Вернуть блок сюда, вниз">Объём, мука и рассев открыты в пульте справа · <u>вернуть сюда</u></button>
               <!-- объём и доля муки: три модели рядом + площадь; поля — как считать (применяются со следующей пробы) -->
               <div class="micro-cv-block micro-vol" id="cvVol">
                 <div class="micro-cv-block__title">Объём и мука
@@ -970,13 +984,6 @@
                     <span id="cvBoilLbl">—</span>
                     <button type="button" id="cvBoilNewer" title="Более новая варка">›</button>
                   </span>
-                <div class="micro-vol__unit">
-                  <span class="micro-seg2" id="cvFinesModeSeg" role="group" aria-label="Чем мерить муку">
-                    <button type="button" data-mode="side" title="Мерить муку по стороне квадрата, мм (по площади кристалла)">мм</button>
-                    <button type="button" data-mode="volume" title="Мерить муку по объёму кристалла, мм³ (шар эквивалентного диаметра)">мм³</button>
-                  </span>
-                  <span class="micro-vol__eq" id="cvFinesEq" title="Тот же общий порог в другой единице: сторона 0,2 мм = объём 0,006 мм³ — кристаллы делятся одинаково"></span>
-                </div>
                 </div>
                 <div class="micro-vol__grid" id="cvVolGrid">
                   <span></span>
@@ -1044,6 +1051,14 @@
                     <input type="text" id="cvCurve" spellcheck="false" autocomplete="off" title="Точки «минута с заводки : порог муки, мкм» через запятую. Между точками порог растёт линейно, до первой и после последней — крайнее значение. По умолчанию две точки: 20 мкм (10 % от общего порога) в начале и 203 мкм (общий порог) на 81-й минуте — среднее время старта «готовности» по 22 варкам Кира." />
                   </div>
                 </div>
+                <!-- единица порога муки (к полю «Мука, мм»): справа в ряду полей -->
+                <div class="micro-vol__unit">
+                  <span class="micro-seg2" id="cvFinesModeSeg" role="group" aria-label="Чем мерить муку">
+                    <button type="button" data-mode="side" title="Мерить муку по стороне квадрата, мм (по площади кристалла)">мм</button>
+                    <button type="button" data-mode="volume" title="Мерить муку по объёму кристалла, мм³ (шар эквивалентного диаметра)">мм³</button>
+                  </span>
+                  <span class="micro-vol__eq" id="cvFinesEq" title="Тот же общий порог в другой единице: сторона 0,2 мм = объём 0,006 мм³ — кристаллы делятся одинаково"></span>
+                </div>
                   </div>
                 </div>
                 <!-- что стоит за цифрами: штуки, доля по числу и по объёму, общий объём (заполняет 02-cv.js) -->
@@ -1062,7 +1077,9 @@
           <!-- Тренды по пробам — третья вкладка нижней полосы -->
           <div class="micro-tele-trend" id="teleStripTrend" hidden>
             <div class="micro-tele-cv__col">
-              <div class="micro-cv-block micro-trend">
+              <!-- заглушка на месте тренда, пока он открыт во вкладке пульта «Тренды»; клик — вернуть сюда -->
+              <button type="button" class="micro-pult-stub" id="cvTrendBlockHome" hidden title="Вернуть тренд сюда, вниз">Тренд открыт в пульте справа · <u>вернуть сюда</u></button>
+              <div class="micro-cv-block micro-trend" id="cvTrendBlock">
                 <div class="micro-cv-block__title">Тренд по пробам
                   <span class="micro-cv-hint">наведи — проба, тащи — сдвиг по времени, колесо — масштаб, 2× — вся дата, клик — открыть пробу</span>
                 </div>

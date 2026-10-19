@@ -2311,6 +2311,21 @@ def _trend_fines_fixed_scale():
     return "авто-шкала только у режима варки (%s)" % ", ".join(sorted(re.findall(r"(\w+):", m.group(1))))
 
 
+@check("UI", "пульт: вкладки «Рассев» и «Тренды» — блок из нижней полосы переезжает в пульт; иконки, пустые панели и заглушки на месте")
+def _pult_sieve_trend_tabs():
+    import re
+    js = (Path(BUNDLE_DIR) / "page" / "static" / "js" / "microscope" / "02-cv.js").read_text(encoding="utf-8")
+    html = (Path(BUNDLE_DIR) / "page" / "microscope.html").read_text(encoding="utf-8")
+    m = re.search(r"const CV_PULT_BLOCKS\s*=\s*\{([^}]*)\}", js)
+    assert m, "CV_PULT_BLOCKS не найден"
+    pairs = re.findall(r"(\w+):\s*\"(\w+)\"", m.group(1))
+    assert dict(pairs) == {"sieve": "cvVol", "trend": "cvTrendBlock"}, "вкладки → блоки: %s" % pairs
+    for pane, bid in pairs:
+        assert 'data-ptab="%s"' % pane in html and 'data-ppane="%s"' % pane in html, "нет иконки или панели «%s»" % pane
+        assert 'id="%s"' % bid in html and 'id="%sHome"' % bid in html, "нет блока %s или заглушки %sHome" % (bid, bid)
+    return "%d вкладки: %s" % (len(pairs), ", ".join("%s → #%s" % p for p in pairs))
+
+
 @check("CV", "плавный порог муки по времени с заводки: разбор/кривая, без ступенек на стыках фаз, выкл → порог фазы, нет времени → порог фазы, мука реально зависит от минуты")
 def _fines_curve_time():
     import cv_volume as V

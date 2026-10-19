@@ -3485,8 +3485,8 @@ input.micro-cam-num { width: 56px; min-width: 0; flex: 0 0 auto; padding: 4px 5p
 
 /* иконки-вкладки */
 /* вкладки резиновые (44–58px), чтобы все влезали в один ряд; перенос — только на совсем узком пульте */
-.micro-ptabs { display: flex; gap: 4px; flex-wrap: wrap; border-bottom: 1px solid var(--border); padding-bottom: 10px; margin-bottom: 12px; }
-.micro-ptab { display: flex; flex-direction: column; align-items: center; gap: 2px; flex: 1 1 0; min-width: 44px; max-width: 58px; padding: 6px 2px; border: 1px solid transparent; border-radius: 10px; background: var(--surface-muted); color: var(--muted); cursor: pointer; font: inherit; }
+.micro-ptabs { display: flex; gap: 3px; flex-wrap: wrap; border-bottom: 1px solid var(--border); padding-bottom: 10px; margin-bottom: 12px; }
+.micro-ptab { display: flex; flex-direction: column; align-items: center; gap: 2px; flex: 1 1 0; min-width: 40px; max-width: 50px; padding: 6px 1px; border: 1px solid transparent; border-radius: 10px; background: var(--surface-muted); color: var(--muted); cursor: pointer; font: inherit; }
 .micro-ptab svg { width: 20px; height: 20px; }
 .micro-ptab span { font-size: 9.5px; line-height: 1; white-space: nowrap; }
 .micro-ptab:hover { color: var(--text); border-color: var(--border-strong); }
@@ -4132,3 +4132,25 @@ input.micro-cam-num { width: 56px; min-width: 0; flex: 0 0 auto; padding: 4px 5p
 /* тренд, режим «Рассев»: колонки серий прячутся атрибутом hidden; плитки фаз — без скользящего ползунка, активная подсвечена сама */
 .micro-trend__col[hidden], .micro-sieve-card[hidden] { display: none; }
 #cvTrSieveTiles .micro-sieve__tile.is-active { background: var(--accent, #2563eb); }
+
+/* вкладки пульта «Рассев» и «Тренды»: сюда переезжает блок из нижней полосы (02-cv.js, cvPultBlocksSync) */
+.micro-ppane > .micro-cv-block { margin-top: 0; padding-top: 0; border-top: 0; }
+.micro-ppane .micro-trend__row { grid-template-columns: minmax(0, 1fr); }
+.micro-ppane .micro-cv-trendwrap { order: -1; }               /* в узком пульте график сверху во всю ширину, серии под ним */
+.micro-ppane .micro-cv-trend { height: 280px; }
+.micro-ppane #cvTrendCsv { display: none; }                   /* CSV — только внизу, в пульте не нужен */
+/* серии под графиком в пульте: каждая группа — 2 столбика (всего 4), строки ниже — чтобы не толкали страницу вниз */
+.micro-ppane .micro-trend__col:not([hidden]) { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 3px 4px; }
+.micro-ppane .micro-trend__col .micro-srow-sep { grid-column: 1 / -1; margin-bottom: 0; }
+.micro-ppane .micro-trend__col .micro-srow { padding: 4px 5px; gap: 4px; font-size: .74em; }
+.micro-ppane .micro-trend__col .micro-srow span { white-space: normal; line-height: 1.15; }   /* длинное имя — в две строки, а не «…» */
+/* заглушка внизу на месте блока, пока он в пульте */
+.micro-pult-stub { display: block; width: 100%; padding: 14px; border: 1px dashed var(--border-strong, var(--border)); border-radius: 12px;
+  background: transparent; color: var(--muted); font: inherit; font-size: .85em; text-align: center; cursor: pointer; }
+.micro-pult-stub:hover { color: var(--text); border-color: var(--accent); }
+.micro-pult-stub[hidden] { display: none; }
+
+/* мм / мм³ — в ряду полей «Мука, мм · Мука с СВ · Толщина k», прижаты вправо (размер как был в строке навигации) */
+.micro-vol__side .micro-vol__unit { margin-left: auto; }
+.micro-vol__side .micro-vol__unit .micro-seg2 { font-size: 1em; }
+.micro-vol__side .micro-vol__unit .micro-seg2 button { padding: 3px 10px; }

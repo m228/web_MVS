@@ -984,13 +984,6 @@
                     <span id="cvBoilLbl">—</span>
                     <button type="button" id="cvBoilNewer" title="Более новая варка">›</button>
                   </span>
-                <div class="micro-vol__unit">
-                  <span class="micro-seg2" id="cvFinesModeSeg" role="group" aria-label="Чем мерить муку">
-                    <button type="button" data-mode="side" title="Мерить муку по стороне квадрата, мм (по площади кристалла)">мм</button>
-                    <button type="button" data-mode="volume" title="Мерить муку по объёму кристалла, мм³ (шар эквивалентного диаметра)">мм³</button>
-                  </span>
-                  <span class="micro-vol__eq" id="cvFinesEq" title="Тот же общий порог в другой единице: сторона 0,2 мм = объём 0,006 мм³ — кристаллы делятся одинаково"></span>
-                </div>
                 </div>
                 <div class="micro-vol__grid" id="cvVolGrid">
                   <span></span>
@@ -1057,6 +1050,14 @@
                   <div class="micro-curve__row" id="cvCurveBox">
                     <input type="text" id="cvCurve" spellcheck="false" autocomplete="off" title="Точки «минута с заводки : порог муки, мкм» через запятую. Между точками порог растёт линейно, до первой и после последней — крайнее значение. По умолчанию две точки: 20 мкм (10 % от общего порога) в начале и 203 мкм (общий порог) на 81-й минуте — среднее время старта «готовности» по 22 варкам Кира." />
                   </div>
+                </div>
+                <!-- единица порога муки (к полю «Мука, мм»): справа в ряду полей -->
+                <div class="micro-vol__unit">
+                  <span class="micro-seg2" id="cvFinesModeSeg" role="group" aria-label="Чем мерить муку">
+                    <button type="button" data-mode="side" title="Мерить муку по стороне квадрата, мм (по площади кристалла)">мм</button>
+                    <button type="button" data-mode="volume" title="Мерить муку по объёму кристалла, мм³ (шар эквивалентного диаметра)">мм³</button>
+                  </span>
+                  <span class="micro-vol__eq" id="cvFinesEq" title="Тот же общий порог в другой единице: сторона 0,2 мм = объём 0,006 мм³ — кристаллы делятся одинаково"></span>
                 </div>
                   </div>
                 </div>

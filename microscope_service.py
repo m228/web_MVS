@@ -15,7 +15,7 @@ from logger import log_event
 
 
 # поля ПЛК (sv_source), которые пишем в запись пробы CV — режим варки на момент пробы
-PLC_KEYS = ("temp_app", "level", "current", "press_top", "cook_time", "substage", "v_syrup", "v_water", "recipe")
+PLC_KEYS = ("temp_app", "level", "current", "press_top", "cook_time", "substage", "v_syrup", "v_water", "v_product")
 
 
 class MicroscopeService:
@@ -634,8 +634,8 @@ class MicroscopeService:
             vals = [s[k] for s in run.get("plc", []) if s.get(k) is not None]
             if not vals:
                 continue
-            # разрежение — до тысячных (на экране так же), остальное до десятых; время варки, подстадия, рецепт — последнее
-            out[k] = (int(vals[-1]) if k in ("cook_time", "substage", "recipe")
+            # разрежение — до тысячных (на экране так же), остальное до десятых; время варки и подстадия — последнее
+            out[k] = (int(vals[-1]) if k in ("cook_time", "substage")
                       else round(sum(vals) / len(vals), 3 if k == "press_top" else 1))
         try:                                                    # доза клапанов с прошлой записанной пробы (sv_source копит каждую секунду)
             out.update(self.sv_source.take_valves() if self.sv_source else {})

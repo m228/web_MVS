@@ -1211,7 +1211,7 @@
       set("pcTemp", pv.temp_app == null ? "(—)" : pv.temp_app + " °C");
       set("pcSyrup", pv.v_syrup == null ? "(—)" : Math.round(pv.v_syrup) + " %");
       set("pcWater", pv.v_water == null ? "(—)" : Math.round(pv.v_water) + " %");
-      set("pcRecipe", pv.recipe == null ? "(—)" : pv.recipe);
+      set("pcProduct", pv.v_product == null ? "(—)" : Math.round(pv.v_product) + " %");
       // разрежение теперь в press_top (с фолбэком на старое поле vacuum) — как на мнемосхеме
       { const vac = pv.press_top != null ? pv.press_top : pv.vacuum;
         set("pcVacuum", vac == null ? "(—)" : vac); }

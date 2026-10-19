@@ -218,9 +218,10 @@ def _hist_row(result: dict) -> Optional[dict]:
         # режим варки на момент пробы (ПЛК): для разбора «почему слиплось» по серии проб
         "temp": plc.get("temp_app"), "level": plc.get("level"), "current": plc.get("current"),
         "vac": plc.get("press_top"), "cook_time": plc.get("cook_time"), "substage": plc.get("substage"), "seed_age": plc.get("seed_age_s"),
-        # клапаны подачи (обратка %, среднее по кадрам) и доза с прошлой пробы (%·с, секунд открыт), номер рецепта
-        "v_syrup": plc.get("v_syrup"), "v_water": plc.get("v_water"), "recipe": plc.get("recipe"),
+        # клапаны подачи (обратка %, среднее по кадрам) и доза с прошлой пробы (%·с, секунд открыт)
+        "v_syrup": plc.get("v_syrup"), "v_water": plc.get("v_water"), "v_product": plc.get("v_product"),
         "syrup_dose": plc.get("syrup_dose"), "syrup_s": plc.get("syrup_s"), "water_dose": plc.get("water_dose"), "water_s": plc.get("water_s"),
+        "product_dose": plc.get("product_dose"), "product_s": plc.get("product_s"),
         # чем снята проба: имя модели и imgsz — пробы разных моделей сравнивать нельзя (абсолютные цифры мелочи сдвигаются)
         "model": _model_tag(result.get("detector")),
         "count": s.get("count"), "mean": sz.get("mean"), "median": sz.get("median"),
@@ -403,7 +404,7 @@ EXPORT_COLUMNS = ["ts", "t", "stage", "substage", "phase", "sv", "temp", "level"
                   "agg_m1", "agg_m2", "agg_m3", "agg_area", "agg_n", "vtot_m1", "vtot_m2", "vtot_m3", "fines_side_mm", "fines_um", "k_thick", "fines_from_sv",
                   "n_needle", "n_aggregate", "n_crooked", "n_tiny", "n_huge", "suspect",
                   "frac_zones", "frac_pct", "frames",
-                  "v_syrup", "v_water", "syrup_dose", "syrup_s", "water_dose", "water_s", "recipe", "model"]
+                  "v_syrup", "v_water", "v_product", "syrup_dose", "syrup_s", "water_dose", "water_s", "product_dose", "product_s", "model"]
 
 
 def sieve_avg(r: dict, i: int) -> Optional[float]:

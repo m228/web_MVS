@@ -188,6 +188,83 @@ def finish_probes(fin: list, fin_sv: float = 2.0) -> tuple[list, Optional[float]
     return (sel or fin[-4:]), ref
 
 
+POINT_SV = 86.0         # контрольная точка СВ по умолчанию (настройка cv.point_sv): к ней итог варки уже предопределён
+POINT_WIN_S = 150       # размер на точке — среднее проб за столько секунд до неё (включая её)
+WATER_FROM_SV = 85.5    # вода на стабилизации: ищем после того, как СВ дошло до этого
+WATER_DIP_SV = 1.0      # варки без клапанов: провал СВ на столько после роста до WATER_FROM_SV — это вода
+
+
+def _recipe_stage(r: dict) -> Optional[int]:
+    """Стадия рецепта пробы; неизвестна или УНВ/пауза (не этап рецепта) — None."""
+    st = r.get("stage")
+    return None if st is None or st in PAUSE_STAGES else st
+
+
+def water_by_valve(g: list, from_sv: float = WATER_FROM_SV) -> Optional[tuple[int, int]]:
+    """Вода на стабилизации по клапану: (доза %·с, секунд открытия) с пробы, где СВ дошло до from_sv, до уваривания (стадия 8).
+    Доза в пробе — за отрезок до неё, и только при открытом клапане продукта (sv_source). Клапан воды не читается — None."""
+    if all(r.get("water_s") is None for r in g):
+        return None
+    on, dose, secs = False, 0, 0
+    for r in g:
+        st = _recipe_stage(r)
+        if not on:
+            on = st is not None and st < 8 and (r.get("sv") or 0) >= from_sv
+            continue
+        dose += r.get("water_dose") or 0
+        secs += r.get("water_s") or 0
+        if st is not None and st >= 8:
+            break
+    return dose, secs
+
+
+def water_by_sv(g: list, from_sv: float = WATER_FROM_SV, dip: float = WATER_DIP_SV) -> Optional[tuple[dict, dict]]:
+    """Вода по СВ (варки без клапанов): после роста СВ до ≥ from_sv провал на ≥ dip до уваривания. (проба пика, проба дна) или None."""
+    peak, ip = 0.0, None
+    for i, r in enumerate(g):
+        sv, st = r.get("sv"), _recipe_stage(r)
+        if sv is None or st is None:
+            continue
+        if st >= 8:
+            return None
+        if sv >= peak:
+            peak, ip = sv, i
+        elif peak >= from_sv and peak - sv >= dip:
+            j = i                                       # дно — пока СВ дальше падает
+            while j + 1 < len(g) and g[j + 1].get("sv") is not None and g[j + 1]["sv"] <= g[j]["sv"]:
+                j += 1
+            return g[ip], g[j]
+    return None
+
+
+def boil_metrics(g: list, point_sv: float = POINT_SV, fin_sv: float = 2.0) -> dict:
+    """Показатели для сравнения варок: вода на стабилизации (по клапану, а без него — по провалу СВ, water_by = "sv"), размер на контрольной
+    точке СВ (первая проба до уваривания с СВ ≥ point_sv), размер на финише, прирост от точки до финиша (мкм), минут от точки до готовности."""
+    def avg(v):
+        v = [x for x in v if x is not None]
+        return round(sum(v) / len(v), 1) if v else None
+    out = {"water": None, "water_by": None, "water_dose": None, "water_s": None, "water_dip": None,
+           "point_um": None, "fin_um": None, "grow_um": None, "to_ready_min": None}
+    v = water_by_valve(g)
+    if v is not None:
+        out.update(water=v[1] > 0, water_by="valve", water_dose=v[0], water_s=v[1])
+    elif any(_recipe_stage(r) is not None and (r.get("sv") or 0) >= WATER_FROM_SV for r in g):     # СВ до стабилизации не дошло — не знаем
+        d = water_by_sv(g)
+        out.update(water=d is not None, water_by="sv", water_dip=[d[0]["sv"], d[1]["sv"]] if d else None)
+    fin, _ = finish_probes([r for r in g if r.get("fines_m3") is not None], fin_sv)
+    out["fin_um"] = avg([r.get("mean") for r in fin])
+    p = next((r for r in g if (_recipe_stage(r) or 0) and _recipe_stage(r) < 8 and (r.get("sv") or 0) >= point_sv), None)
+    if p is None:
+        return out
+    out["point_um"] = avg([r.get("mean") for r in g if p["t"] - POINT_WIN_S <= r["t"] <= p["t"]])
+    if out["point_um"] is not None and out["fin_um"] is not None:
+        out["grow_um"] = round(out["fin_um"] - out["point_um"], 1)
+    ready = next((r["t"] for r in g if (_recipe_stage(r) or 0) >= 9), None)
+    if ready is not None and ready > p["t"]:
+        out["to_ready_min"] = round((ready - p["t"]) / 60.0, 1)
+    return out
+
+
 def _model_tag(det: Optional[dict]) -> Optional[str]:
     """«26x_1280.pt@1280» из паспорта модели пробы; старые пробы без паспорта — None."""
     if not det or not det.get("name"):

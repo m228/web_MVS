@@ -35,12 +35,12 @@ powershell -NoProfile -Command "Compress-Archive -Path 'dist\web_MVS\*' -Destina
 
 echo [build] Packing CV add-on (cv_service, code only) ...
 copy /Y VERSION "cv_service\VERSION" >nul
-powershell -NoProfile -Command "$f=Get-ChildItem 'cv_service' -Recurse -File | Where-Object { $_.FullName -notmatch '\\\.venv\\' -and $_.FullName -notmatch '\\model\\' -and $_.FullName -notmatch '__pycache__' }; Compress-Archive -Path $f.FullName -DestinationPath 'dist\cv_service_v%VER%.zip' -Force" || exit /b 1
+powershell -NoProfile -Command "$f=Get-ChildItem 'cv_service' -Recurse -File | Where-Object { $_.FullName -notmatch '\\\.venv\\' -and $_.FullName -notmatch '\\model\\' -and $_.FullName -notmatch '__pycache__' -and $_.Name -notlike 'service.log*' }; Compress-Archive -Path $f.FullName -DestinationPath 'dist\cv_service_v%VER%.zip' -Force" || exit /b 1
 
 rem top-level items, not a flat file list: assets\ must keep its folder in the zip
 echo [build] Packing video add-on (video_service, code only) ...
 copy /Y VERSION "video_service\VERSION" >nul
-powershell -NoProfile -Command "$f=Get-ChildItem 'video_service' | Where-Object { $_.Name -notin @('.venv','venv','video','__pycache__') }; Compress-Archive -Path $f.FullName -DestinationPath 'dist\video_service_v%VER%.zip' -Force" || exit /b 1
+powershell -NoProfile -Command "$f=Get-ChildItem 'video_service' | Where-Object { $_.Name -notin @('.venv','venv','video','__pycache__') -and $_.Name -notlike 'service.log*' }; Compress-Archive -Path $f.FullName -DestinationPath 'dist\video_service_v%VER%.zip' -Force" || exit /b 1
 
 echo.
 echo [build] Done:

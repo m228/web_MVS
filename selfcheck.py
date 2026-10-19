@@ -350,7 +350,7 @@ MODULES = [
     "camera_core.base_worker", "camera_core.gige_worker", "camera_core.rtsp_worker", "camera_core.camera_manager",
     "sdk_gige", "dahua_control", "net_tools", "rtsp_store",
     "save_settings", "plate_config", "sv_source", "microscope_plc", "microscope_fsm",
-    "microscope_service", "cv_analyzer", "cv_volume", "substages", "db", "report", "boil_compare", "cv_fracture", "cv_client", "video_client", "cv_store", "boil_archive", "fracture_lab",
+    "microscope_service", "cv_analyzer", "cv_volume", "substages", "db", "report", "boil_compare", "cv_fracture", "cv_client", "video_client", "services", "cv_store", "boil_archive", "fracture_lab",
     "updater", "autostart", "diag", "app", "mvsdk",
 ]
 THIRD_PARTY = ["cv2", "numpy", "fastapi", "starlette", "uvicorn", "pymodbus", "harvesters", "genicam",
@@ -996,6 +996,84 @@ def _video_service():
     assert re.search(r'id="teleVideoBtn"[^>]*\bhidden\b', html) and 'id="teleStripVideo"' in html, "кнопка «Ролик» скрыта по умолчанию, панель на месте"
     assert html.index("07-video.js") < html.index("04-init.js") and "wireVideo()" in init and "/api/video/health" in js, "07-video.js подключён до init"
     return "варок %d: на диске %d и %d проб; без сервиса — None" % (len(res), res[0]["on_disk"], res[1]["on_disk"])
+
+
+@check("Служебные", "сервисы: web_MVS сам поднимает установленные cv_service / video_service; нет .venv — пропуск, уже отвечает — "
+                    "не трогает, не localhost — не наш, CV — по тумблеру; сторож ждёт грузящийся процесс и не долбит упавший")
+def _services_supervisor():
+    import services
+    base = SANDBOX / "svc"
+    cvd = base / "cv_service"
+    (cvd / ".venv" / "Scripts").mkdir(parents=True, exist_ok=True)
+    (cvd / ".venv" / "Scripts" / "python.exe").write_bytes(b"")
+    (cvd / "server.py").write_text("", encoding="utf-8")
+    cfg = {"cv": {"enabled": False, "service_url": "http://127.0.0.1:8766"}, "video": {"service_url": "http://127.0.0.1:8767"}}
+    clock, spawned, healthy = [1000.0], [], {"cv": False, "video": False}
+
+    class Proc:                                       # вместо настоящего процесса: poll() — None, пока «жив»
+        code = None
+
+        def poll(self):
+            return self.code
+
+    def fake_spawn(launch):
+        p = Proc()
+        spawned.append((launch, p))
+        return p
+
+    orig = {n: services.SPECS[n]["health"] for n in services.SPECS}
+    for n in services.SPECS:
+        services.SPECS[n]["health"] = (lambda nn: (lambda url: healthy[nn]))(n)
+    try:
+        sup = services.Supervisor(base=base, spawn_fn=fake_spawn, now=lambda: clock[0], load_cfg=lambda: cfg)
+        r = sup.check_once()
+        assert r == {"cv": "off", "video": "absent"}, "CV выключен тумблером, видео не установлено: %s" % r
+        cfg["cv"]["enabled"] = True
+        import logger
+
+        def last_ev():
+            ev = [e for e in logger.get_events()["items"] if e["source"] == "services"]
+            return ev[-1]["level"], ev[-1]["message"]
+        assert sup.check_once()["cv"] == "started" and len(spawned) == 1, "CV включили — запуск"
+        lv, msg = last_ev()
+        assert lv == "info" and "перезапуск" not in msg, "первый запуск — не «перезапуск»: %s %s" % (lv, msg)
+        env = spawned[0][0]["env"]
+        assert (env["CV_PORT"], env["CV_HOST"], env["CV_MODEL"], spawned[0][0]["cwd"]) == ("8766", "127.0.0.1", "classic", str(cvd)), \
+            "порт из service_url, модели нет — classic: %s" % env
+        assert sup.check_once()["cv"] == "starting" and len(spawned) == 1, "наш процесс жив (грузит модель) — второй не запускаем"
+        healthy["cv"] = True
+        assert sup.check_once()["cv"] == "healthy" and len(spawned) == 1, "отвечает — не трогаем"
+        healthy["cv"] = False                         # упал: процесс завершился, /health молчит
+        for _ in range(2):
+            spawned[-1][1].code, clock[0] = 1, clock[0] + 60
+            assert sup.check_once()["cv"] == "started", "упал — поднимаем снова"
+            lv, msg = last_ev()
+            assert lv == "warn" and "перезапуск" in msg, "повторный запуск — «перезапуск»: %s %s" % (lv, msg)
+        spawned[-1][1].code, clock[0] = 1, clock[0] + 60
+        assert sup.check_once()["cv"] == "gave_up" and len(spawned) == 3, "3 запуска за 10 мин — дальше не долбим"
+        clock[0] += 601
+        assert sup.check_once()["cv"] == "started" and len(spawned) == 4, "через 10 мин — снова пробуем"
+        (cvd / "model").mkdir(exist_ok=True)
+        (cvd / "model" / "best.pt").write_bytes(b"")
+        assert services.decide("cv", cfg, base)[2]["env"]["CV_MODEL"] == "model\\best.pt", "есть model\\best.pt — как в run.bat"
+        assert services.decide("cv", {"cv": {"enabled": True, "service_url": "http://192.168.1.50:8765"}}, base)[0] == "remote", "чужой адрес — не наш"
+        assert services.decide("cv", dict(cfg, services={"cv": {"autostart": False}}), base)[0] == "off", "autostart: false — руками"
+        assert services.decide("video", cfg, base)[0] == "absent", "нет video_service\\.venv — пропуск"
+    finally:
+        for n, h in orig.items():
+            services.SPECS[n]["health"] = h
+    old = {k: os.environ.get(k) for k in ("PYTHONHOME", "_MEIPASS2")}
+    os.environ["PYTHONHOME"], os.environ["_MEIPASS2"] = r"C:\bad", "x"
+    try:
+        e = services.child_env({"CV_PORT": "1"})
+    finally:
+        for k, v in old.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+    assert "PYTHONHOME" not in e and "_MEIPASS2" not in e and e["CV_PORT"] == "1", "окружение exe не утекает в venv сервиса"
+    return "запусков %d (лимит %d за %d мин), остальное — пропуск/ожидание" % (len(spawned), services.RESTART_MAX, services.RESTART_WIN_S // 60)
 
 
 @check("CV", "тренд «мука без порога»: доля муки по общему порогу из поля «Мука» (226 мкм), виден с начала варки (порог СВ не гасит), плавная мука при этом гасится")

@@ -2301,6 +2301,39 @@ def _trend_sieve_groups():
     return "9 линий = 21 фракция, переключатель и таблица на месте"
 
 
+@check("CV", "тренд «Рассев» → «по пробе»: рассев одной пробы из журнала (probe_sieve) — порог «Мука с СВ» как у линий, проба фазы с начала, чужой ts — None; кнопки «финиш» больше нет")
+def _probe_sieve():
+    import cv_store
+    N = cv_store.cv_volume.FINE_N
+    def row(hh, mm, sv, phase=None, k=0):
+        ts = "2026-10-06_%02d_%02d_00" % (hh, mm)
+        r = {"ts": ts, "t": cv_store._ts_epoch(ts) + 0.4, "sv": sv, "stage": 7 if phase else 8, "phase": phase}    # t в журнале — с долями секунды
+        for m in ("m1", "m2", "m3", "area"):
+            r["vtot_" + m] = 1.0
+            for i in range(N):
+                r["fsieve_%s_b%d" % (m, i)] = 100.0 if i == k else 0.0
+        return r
+    rows = [row(10, 0, 80.0), row(10, 30, 82.0, "g1", k=1), row(11, 0, 88.5, k=5)]
+    orig = (cv_store._hist_backfill, cv_store._hist_days, cv_store._hist_read)
+    cv_store._hist_backfill = lambda serial: None
+    cv_store._hist_days = lambda serial: ["2026-10-06"]
+    cv_store._hist_read = lambda serial, day: [dict(r) for r in rows]
+    try:
+        pre, ph, fin = (cv_store.probe_sieve("X", r["ts"]) for r in rows)
+        miss = (cv_store.probe_sieve("X", "2026-10-06_12_00_00"), cv_store.probe_sieve("X", "мусор"))
+    finally:
+        cv_store._hist_backfill, cv_store._hist_days, cv_store._hist_read = orig
+    assert pre and pre["fsieve"] is None and pre["sv"] == 80.0, "до порога «Мука с СВ» рассев пробы не считается (как линии тренда)"
+    assert ph["phase"] == "g1" and ph["fsieve"]["m3"][1] == 100.0, "проба фазы — рассев с самого начала"
+    assert fin["fsieve"]["m1"][5] == 100.0 and sum(fin["fsieve"]["area"]) == 100.0 and len(fin["fsieve"]["m2"]) == N, "рассев пробы — её 21 фракция"
+    assert miss == (None, None), "нет такой пробы / битая метка — None"
+    js = (Path(BUNDLE_DIR) / "page" / "static" / "js" / "microscope" / "02-cv.js").read_text(encoding="utf-8")
+    html = (Path(BUNDLE_DIR) / "page" / "microscope.html").read_text(encoding="utf-8")
+    assert 'id="cvTrSieveSrc"' in html and 'data-src="probe"' in html and "/api/cv/probe_sieve" in js, "нет переключателя «по варке | по пробе» в рассеве тренда"
+    assert 'data-vmode="tail"' not in html and 'cvVolMode === "tail"' not in js, "кнопка/режим «финиш» вернулись — «по варке» и так по последним ~2 СВ"
+    return "до порога — нет, фаза — есть, финиш — есть; переключатель на месте"
+
+
 @check("UI", "тренд: «мука среднее» (fines_avg) на общей шкале 0–100 %, без авто-шкалы по видимому участку (иначе при приближении 30 % рисовалось у верха)")
 def _trend_fines_fixed_scale():
     import re

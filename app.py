@@ -936,6 +936,12 @@ def cv_result(serial: str | None = None, ts: str = ""):
     return cv_store.get_result(_cv_serial(serial), ts) or {"empty": True}
 
 
+@app.get("/api/cv/probe_sieve")
+def cv_probe_sieve(serial: str | None = None, ts: str = ""):
+    """Рассев одной пробы из журнала (тренд, «по пробе»): работает и для старых проб, у которых кадры уже стёрты."""
+    return cv_store.probe_sieve(_cv_serial(serial), ts) or {"empty": True}
+
+
 @app.get("/api/cv/thumb")
 def cv_thumb(serial: str | None = None, ts: str = ""):
     """Миниатюра пробы (кадр 0) для ленты проб."""

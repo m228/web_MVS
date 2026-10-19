@@ -438,12 +438,9 @@ def _trend_val(r: dict, name: str):
     return r.get(name)
 
 
-def trend_range(serial: str, t_from: float, t_to: float, series: Optional[list[str]] = None,
-                limit: int = 5000) -> dict:
-    """Тренд по реальному времени: пробы с t_from по t_to (epoch, сек) из журнала по дням.
-    Возвращает {t:[...], ts:[...], stage:[...], series:{name:[...]}}; не больше limit точек."""
-    _hist_backfill(serial)
-    series = series or ["small", "medium", "large", "reject", "mean", "median"]
+def _gated_rows(serial: str, t_from: float, t_to: float) -> list[dict]:
+    """Строки журнала по времени, до t_to, из дней окна и дня перед ним (варка могла начаться до окна — нужно для порога СВ):
+    с плоской мукой и порогом «Мука с СВ» по варке. Строки раньше t_from тоже в списке — отрезает вызывающий."""
     rows = []
     # перебираем только существующие дни (а не все даты в диапазоне): запрос «с 1970» не падает
     for day in _hist_days(serial):
@@ -457,7 +454,29 @@ def trend_range(serial: str, t_from: float, t_to: float, series: Optional[list[s
     rows.sort(key=lambda r: r["t"])
     for r in rows:                                   # плоская мука — ДО порога СВ (гейт обнуляет fsieve_*): видно всю варку с начала
         r["_fines_flat"] = fines_flat(r)
-    _apply_fines_gate(rows)
+    return _apply_fines_gate(rows)
+
+
+def probe_sieve(serial: str, ts: str) -> Optional[dict]:
+    """Рассев одной пробы из журнала — для тренда «по пробе»: кадры старых проб стёрты ротацией, а журнал помнит рассев любой.
+    Порог «Мука с СВ» тот же, что у линий тренда (до него рассев не считается — fsieve None). Нет такой пробы — None."""
+    t = _ts_epoch(ts)
+    if t is None:
+        return None
+    _hist_backfill(serial)
+    r = next((x for x in reversed(_gated_rows(serial, t, t + 60)) if x.get("ts") == ts), None)   # +60 с: t в журнале с долями секунды, ts — без
+    if r is None:
+        return None
+    return {"ts": ts, "t": r["t"], "sv": r.get("sv"), "stage": r.get("stage"), "phase": r.get("phase"), "fsieve": _fsieve([r])}
+
+
+def trend_range(serial: str, t_from: float, t_to: float, series: Optional[list[str]] = None,
+                limit: int = 5000) -> dict:
+    """Тренд по реальному времени: пробы с t_from по t_to (epoch, сек) из журнала по дням.
+    Возвращает {t:[...], ts:[...], stage:[...], series:{name:[...]}}; не больше limit точек."""
+    _hist_backfill(serial)
+    series = series or ["small", "medium", "large", "reject", "mean", "median"]
+    rows = _gated_rows(serial, t_from, t_to)
     bid, prev = 0, None                      # номер варки каждой точки — по тем же правилам, что в журнале (JS границу сам не ищет)
     for r in rows:
         if prev is None or _is_new_boil(prev, r):

@@ -4154,3 +4154,7 @@ input.micro-cam-num { width: 56px; min-width: 0; flex: 0 0 auto; padding: 4px 5p
 .micro-vol__side .micro-vol__unit { margin-left: auto; }
 .micro-vol__side .micro-vol__unit .micro-seg2 { font-size: 1em; }
 .micro-vol__side .micro-vol__unit .micro-seg2 button { padding: 3px 10px; }
+
+/* рассев тренда: «по варке | по пробе» сразу за заголовком; в «по пробе» плиток фаз нет (hidden сильнее inline-flex карточки) */
+.micro-sieve-card .micro-sieve__tiles[hidden] { display: none; }
+#cvTrSieveSrc { font-weight: 400; }

@@ -1411,6 +1411,44 @@ def _plc_valves():
     return "доза 402 %·с / 4 с открыт, обрыв не считается; 659–661 одним блоком; проба и журнал"
 
 
+@check("Микроскоп", "Показатели варки: вода по клапану (только при открытом клапане продукта) и по провалу СВ, УНВ не вода, размер на СВ 86, прирост, минут до готовности")
+def _boil_metrics():
+    import cv_store, report
+    from sv_source import SvSource
+    # 1. сироп и вода идут в аппарат только через клапан продукта: закрыт — в дозу не идут, сам клапан продукта считается
+    src = SvSource({"host": "x"})
+    for t, p in [(0, 0), (1, 0), (2, 0), (3, 50), (4, 50), (5, 50)]:
+        src._accumulate_valves({"v_water": 100, "v_syrup": 40, "v_product": p}, 1000.0 + t)
+    got = src.take_valves()
+    assert got == {"water_dose": 200, "water_s": 2, "syrup_dose": 80, "syrup_s": 2, "product_dose": 100, "product_s": 2}, got
+    # 2. синтетическая варка, проба раз в минуту: рост СВ, на 86,4 УНВ (СВ 84 — не вода), вода 86,4 → 84,6, уваривание, готовность
+    plan = [(7, 84.0), (7, 84.5), (7, 85.0), (7, 85.5), (7, 86.0), (20, 84.0), (7, 86.4), (7, 85.6), (7, 84.6), (7, 85.2),
+            (7, 86.5), (8, 88.0), (8, 88.6), (9, 89.0), (9, 89.2), (9, 89.3)]
+    g = [{"t": 60.0 * i, "stage": st, "sv": sv, "mean": 150.0 + 5 * i, "fines_m3": 5.0 if i >= 12 else None} for i, (st, sv) in enumerate(plan)]
+    m = cv_store.boil_metrics(g)
+    assert (m["water"], m["water_by"], m["water_dip"]) == (True, "sv", [86.4, 84.6]), m
+    assert m["point_um"] == 165.0, "размер на 86: пробы за 150 с до первой с СВ ≥ 86 (2, 3, 4-я) — %s" % m["point_um"]
+    assert m["fin_um"] == 217.5 and m["grow_um"] == 52.5, "финиш — пробы в 2 СВ от конечного (12–15-я): %s" % m
+    assert m["to_ready_min"] == 9.0, "готовность (стадия 9) через 9 мин после точки: %s" % m["to_ready_min"]
+    dry = [dict(r, sv=86.5) if 7 <= i <= 9 else r for i, r in enumerate(g)]
+    assert cv_store.boil_metrics(dry)["water"] is False, "без провала — без воды; УНВ с СВ 84 не вода"
+    # 3. клапан читается — решает он, а не СВ: доза до СВ 85,5 и после уваривания не в счёт
+    wet = [dict(r, water_dose=0, water_s=0) for r in g]
+    wet[2].update(water_dose=5000, water_s=60)          # до 85,5 — не стабилизация
+    wet[8].update(water_dose=3000, water_s=40)
+    wet[13].update(water_dose=7000, water_s=70)         # после уваривания
+    m = cv_store.boil_metrics(wet)
+    assert (m["water"], m["water_by"], m["water_dose"], m["water_s"]) == (True, "valve", 3000, 40), m
+    wet[8].update(water_dose=0, water_s=0)
+    assert cv_store.boil_metrics(wet)["water"] is False, "клапан не открывался — воды нет, хоть СВ и провалилось"
+    # 4. СВ не дошло до стабилизации — про воду не знаем; точки 86 нет — размера на ней нет
+    low = [dict(r, sv=min(r["sv"], 85.0)) for r in g]
+    m = cv_store.boil_metrics(low)
+    assert m["water"] is None and m["point_um"] is None and m["to_ready_min"] is None, m
+    assert report._cell({"water": True, "water_by": "sv"}, "water") == "да (по СВ)" and report._cell({"water": False, "water_by": "valve"}, "water") == "нет"
+    return "доза только при открытом продукте; провал 86,4 → 84,6 — вода, УНВ нет; на 86: 165 мкм, +52,5 до финиша, 9 мин до готовности"
+
+
 @check("CV", "cv_store: разовый сбой СВ (0,0 или 58 при 87) обнуляется при чтении журнала, граница варок 88 → 80 остаётся")
 def _cv_sv_outliers():
     import cv_store

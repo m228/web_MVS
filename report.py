@@ -119,6 +119,15 @@ def _totals(rows: list[dict]) -> dict:
 MIN_PROBES = 5      # варки короче (обрывки, пробы без варки) в отчёт не берём
 
 
+def _point_sv() -> float:
+    """Контрольная точка СВ завода (cv.point_sv); конфига нет — 86."""
+    try:
+        import plate_config
+        return float((plate_config.load().get("cv") or {}).get("point_sv") or cv_store.POINT_SV)
+    except Exception:
+        return cv_store.POINT_SV
+
+
 def build(serial: str, t_from: float, t_to: float, min_probes: int = MIN_PROBES, fin_sv: float = FIN_SV) -> dict:
     """Отчёт за период [t_from, t_to] (epoch, сек). Варка входит по времени начала; обрывки короче min_probes проб пропускаются.
     fin_sv — «финиш» для муки/рассева: пробы в пределах стольких СВ от конечного."""
@@ -126,10 +135,12 @@ def build(serial: str, t_from: float, t_to: float, min_probes: int = MIN_PROBES,
     avg_n = cv_volume.volume_cfg(cv_store._volume_cfg_now())["avg_n"]
     now = time.time()
     sel = [g for g in groups if t_from <= g[0]["t"] <= t_to and len(g) >= min_probes]
+    point_sv = _point_sv()
     rows = []
     for g in sel:
         finished = not (g is groups[-1] and now - g[-1]["t"] <= cv_store.BOIL_OPEN_S)
         row = _boil_row(g, cv_store._boil_summary(g, finished, avg_n), fin_sv)
+        row.update(cv_store.boil_metrics(g, point_sv, fin_sv))
         row["finished"] = finished
         rows.append(row)
     weeks = {}
@@ -137,7 +148,7 @@ def build(serial: str, t_from: float, t_to: float, min_probes: int = MIN_PROBES,
         y, w, _ = time.localtime(r["t_start"]).tm_year, time.strftime("%W", time.localtime(r["t_start"])), 0
         weeks.setdefault("%s-W%s" % (y, w), []).append(r)
     return {
-        "serial": serial, "from": t_from, "to": t_to, "generated": now, "min_probes": min_probes, "fin_sv": fin_sv, "fines_from_sv": cv_volume.volume_cfg(cv_store._volume_cfg_now())["fines_from_sv"],
+        "serial": serial, "from": t_from, "to": t_to, "generated": now, "min_probes": min_probes, "fin_sv": fin_sv, "point_sv": point_sv, "fines_from_sv": cv_volume.volume_cfg(cv_store._volume_cfg_now())["fines_from_sv"],
         "sieve_labels": list(SIEVE_LABELS),
         "boils": rows, "totals": _totals(rows),
         "weeks": [{"week": k, **_totals(v)} for k, v in sorted(weeks.items())],
@@ -150,7 +161,16 @@ _BOIL_COLS = [("start", "начало"), ("end", "конец"), ("duration_min",
               ("fines_lo", "мука финиша, 95% от"), ("fines_hi", "мука финиша, 95% до"), ("fines_min", "мука мин, % (финиш)"), ("fines_max", "мука макс, % (финиш)"),
               ("fines_all", "мука, % (все пробы после «Мука с СВ»)"), ("reject_pct", "брак, %"),
               ("needle", "иглы, шт/кадр"), ("aggregate", "сростки, шт/кадр"), ("crooked", "кривые, шт/кадр"), ("frac_zones", "разломов, зон"),
-              ("frac_pct", "разлом, % площади"), ("mean_um", "средний размер, мкм")]
+              ("frac_pct", "разлом, % площади"), ("mean_um", "средний размер, мкм"),
+              ("water", "вода на стабилизации"), ("water_dose", "доза воды, %·с"), ("point_um", "размер на контрольной точке СВ, мкм"),
+              ("fin_um", "размер на финише, мкм"), ("grow_um", "прирост от точки до финиша, мкм"), ("to_ready_min", "от точки до готовности, мин")]
+
+
+def _cell(r: dict, k: str):
+    v = r.get(k)
+    if k == "water" and v is not None:
+        return ("да" if v else "нет") + (" (по СВ)" if r.get("water_by") == "sv" else "")
+    return "" if v is None else v
 
 
 def to_csv(rep: dict, cols: Optional[list] = None) -> bytes:
@@ -163,7 +183,7 @@ def to_csv(rep: dict, cols: Optional[list] = None) -> bytes:
     with_sieve = cols is None or "fines_avg" in cols                                                   # рассев и мука идут вместе
     w.writerow([h for _, h in bc] + (["рассев " + s + ", %" for s in rep["sieve_labels"]] if with_sieve else []))
     for r in rep["boils"]:
-        w.writerow([("" if r.get(k) is None else r.get(k)) for k, _ in bc] + (["" if v is None else v for v in r["sieve"]] if with_sieve else []))
+        w.writerow([_cell(r, k) for k, _ in bc] + (["" if v is None else v for v in r["sieve"]] if with_sieve else []))
     w.writerow([])
     t = rep["totals"]
     want = (lambda k: cols is None or k in cols)                 # итоги — только по выбранным столбцам

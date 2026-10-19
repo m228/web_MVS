@@ -173,7 +173,8 @@ class SvSource:
     VALVE_GAP_S = 10.0    # опросов не было дольше (обрыв связи) — этот отрезок в дозу не идёт: что было с клапаном, не знаем
 
     def _accumulate_valves(self, values, now):
-        """Доза и время открытия клапанов (поля v_*) за отрезок от прошлого опроса до этого — по прошлому значению."""
+        """Доза и время открытия клапанов (поля v_*) за отрезок от прошлого опроса до этого — по прошлому значению.
+        Сироп и вода идут через коллектор и головной клапан продукта: если он читается и закрыт, в аппарат они не попадают — в дозу не идут."""
         cur = {k: float(v) for k, v in values.items() if k.startswith("v_") and v is not None}
         with self._valves_lock:
             prev = self._valves_prev
@@ -183,8 +184,11 @@ class SvSource:
             dt = now - prev[0]
             if dt <= 0 or dt > self.VALVE_GAP_S:
                 return
+            shut = prev[1].get("v_product", 100.0) <= self.VALVE_OPEN_PCT
             for k, v in prev[1].items():
                 acc = self._valves_acc.setdefault(k, [0.0, 0.0])
+                if shut and k in ("v_water", "v_syrup"):
+                    continue
                 acc[0] += max(0.0, min(100.0, v)) * dt
                 if v > self.VALVE_OPEN_PCT:
                     acc[1] += dt

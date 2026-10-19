@@ -64,6 +64,11 @@ class SvSource:
         self._sv_good, self._sv_bad_n = None, 0
         self._stage_cur, self._stage_cand, self._stage_n = None, None, 0
         self._last_glitch_log = 0.0
+        # клапаны (поля «v_*», 0–100 %): копим между пробами дозу (∫ открытие·dt, %·с) и время открытия — проба раз в 1–2 мин,
+        # а клапан открывают на минуты; по мгновенному снимку на пробе дозу не увидеть. Забирает take_valves() при записи пробы.
+        self._valves_lock = threading.Lock()
+        self._valves_acc = {}                 # name -> [доза %·с, секунд открыт]
+        self._valves_prev = None              # (время опроса, {name: %}) — прошлое значение держится до следующего опроса
 
     # ---------- жизненный цикл ----------
 
@@ -164,6 +169,37 @@ class SvSource:
         self._sock_up = False
         return False
 
+    VALVE_OPEN_PCT = 2.0  # клапан «открыт», если обратка больше этого (обратка закрытого клапана не всегда ровно 0)
+    VALVE_GAP_S = 10.0    # опросов не было дольше (обрыв связи) — этот отрезок в дозу не идёт: что было с клапаном, не знаем
+
+    def _accumulate_valves(self, values, now):
+        """Доза и время открытия клапанов (поля v_*) за отрезок от прошлого опроса до этого — по прошлому значению."""
+        cur = {k: float(v) for k, v in values.items() if k.startswith("v_") and v is not None}
+        with self._valves_lock:
+            prev = self._valves_prev
+            self._valves_prev = (now, cur)
+            if not prev or not cur:
+                return
+            dt = now - prev[0]
+            if dt <= 0 or dt > self.VALVE_GAP_S:
+                return
+            for k, v in prev[1].items():
+                acc = self._valves_acc.setdefault(k, [0.0, 0.0])
+                acc[0] += max(0.0, min(100.0, v)) * dt
+                if v > self.VALVE_OPEN_PCT:
+                    acc[1] += dt
+
+    def take_valves(self):
+        """Накопленное с прошлого вызова: {"water_dose": %·с, "water_s": с, "syrup_dose": …} (имя без «v_») и обнуление.
+        Клапаны не настроены — {}."""
+        with self._valves_lock:
+            acc, self._valves_acc = self._valves_acc, {}
+        out = {}
+        for k, (dose, open_s) in acc.items():
+            out[k[2:] + "_dose"] = round(dose)
+            out[k[2:] + "_s"] = round(open_s)
+        return out
+
     BLOCK_MAX = 100       # блок длиннее — читаем по одному
 
     def _read_all(self):
@@ -208,6 +244,7 @@ class SvSource:
                     values[name] = raw if scale == 1 else raw / scale   # scale=1 -> целое (стадия)
                 values = self._sanitize(values)
                 self._values = values
+                self._accumulate_valves(values, time.time())
                 if self.on_update is not None:
                     self.on_update(values.get("sv"), values.get("stage"))
                 backoff_i = 0

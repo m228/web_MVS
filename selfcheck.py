@@ -1405,6 +1405,9 @@ def _cv_phases():
     assert got == [None, None, "p1", "p1", "g1", "g1", "g1", "p2", "p2", "g2", "g2", None, None], got
     assert cv_store.phases_for_boil([5, 7, 5, 7, 5, 7]) == ["p1", "g1", "p2", "g2", "p2", "g2"], "третья подкачка/рост вливаются во вторую"
     assert cv_store.phases_for_boil([5, None, 5, 7]) == ["p1", "p1", "p1", "g1"], "стадия неизвестна — как у предыдущей пробы"
+    # УНВ (20) / пауза (21) посреди роста — не новый рост (Кир 17.10 06:20: 7 → 20 → 7 давало g1 → None → g2)
+    assert cv_store.phases_for_boil([5, 7, 20, 7, 8]) == ["p1", "g1", "g1", "g1", None], cv_store.phases_for_boil([5, 7, 20, 7, 8])
+    assert cv_store.phases_for_boil([5, 7, 21, 20, 7, 5, 7]) == ["p1", "g1", "g1", "g1", "g1", "p2", "g2"], "пауза и УНВ подряд — тот же рост"
     # 2. масштаб фаз: порог муки и сита
     base = cv_volume.volume_cfg(None)["fines_um"]
     cfg = {"volume": {}}
@@ -1986,6 +1989,11 @@ def _service_phases():
         ms._note_stage(st)
         got.append(ms._current_phase(st))
     assert got == [None, None, None, "p1", "p1", "g1", "g1", "p2", "p2", "g2", None, None, None, None, None, "p1", "g1"], got
+    got = []                                                     # УНВ посреди роста: проба на 20 — фаза роста, после неё рост тот же
+    for st in (7, 20, 20, 7, 5):
+        ms._note_stage(st)
+        got.append(ms._current_phase(st))
+    assert got == ["g1", "g1", "g1", "g1", "p2"], got
     # перезапуск посреди варки: счётчики берём из журнала идущей варки (иначе вторая подкачка стала бы первой)
     import tempfile, shutil
     from pathlib import Path
@@ -1994,7 +2002,7 @@ def _service_phases():
     db.set_path(tmp)
     try:
         now = time.time()
-        stages = [4, 5, 5, 7, 7, 7, 5, 5]
+        stages = [4, 5, 5, 7, 20, 7, 5, 5]                       # УНВ посреди роста не добавляет рост
         rows = [{"ts": time.strftime(cv_store.TS_FMT, time.localtime(now - (len(stages) - i) * 90)), "t": now - (len(stages) - i) * 90, "stage": st,
                  "sv": 82.0 + i * 0.1, "cook_time": 600 + 90 * i, "seed_age": 10 + 90 * i} for i, st in enumerate(stages)]
         db.upsert_many("PHSER", rows)

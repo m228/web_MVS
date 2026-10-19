@@ -83,15 +83,19 @@ def _volume_cols(s: dict, vp: dict, n_frames: int) -> dict:
     return out
 
 
+PAUSE_STAGES = (20, 21)     # УНВ / пауза: приходят посреди роста, это не этап рецепта — фазу не обрывают, подкачки/росты не считают
+
+
 def phases_for_boil(stages: list) -> list:
     """Фаза каждой пробы варки по ПОРЯДКУ стадий (рецепт идёт строго по порядку): стадия 5 = подкачка, 7 = рост. 1-я «5» → p1,
     1-я «7» → g1, 2-я «5» → p2, 2-я «7» → g2 (3-я и далее вливаются во 2-ю). Прочие стадии (сгущение, затравка, уваривание…) — None.
+    УНВ / пауза (PAUSE_STAGES) посреди роста — как у предыдущей пробы: рост 7 → 20 → 7 остаётся одним ростом.
     Стадия пробы — на момент её начала: проба, начатая в подкачке, остаётся в подкачке, даже если к концу стадия сменилась."""
     pump = grow = 0
     last, prev, out = None, None, []
     for st in stages:
-        if st is None:
-            out.append(prev)                                   # стадия неизвестна — как у предыдущей пробы
+        if st is None or int(st) in PAUSE_STAGES:
+            out.append(prev)                                   # стадия неизвестна или УНВ/пауза — как у предыдущей пробы
             continue
         st = int(st)
         if st == 5:
@@ -143,7 +147,7 @@ def phase_state(serial: str, max_idle_s: float = 20 * 60) -> dict:
     last = None
     for r in g:
         st = r.get("stage")
-        if st is None:
+        if st is None or st in PAUSE_STAGES:
             continue
         if st == 5 and last != 5:
             pump += 1

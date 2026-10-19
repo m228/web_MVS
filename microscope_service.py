@@ -583,7 +583,11 @@ class MicroscopeService:
             self._grow_runs += 1
 
     def _current_phase(self, stage):
-        """Фаза пробы, начатой на стадии stage: p1/p2 (подкачка), g1/g2 (рост) или None. 3-я и далее вливаются во 2-ю."""
+        """Фаза пробы, начатой на стадии stage: p1/p2 (подкачка), g1/g2 (рост) или None. 3-я и далее вливаются во 2-ю.
+        УНВ / пауза посреди варки — фаза последней настоящей стадии."""
+        import cv_store
+        if stage in cv_store.PAUSE_STAGES:
+            stage = self._phase_last
         if stage == 5:
             return "p%d" % min(max(self._pump_runs, 1), 2)
         if stage == 7:
@@ -592,8 +596,10 @@ class MicroscopeService:
 
     def _note_stage(self, stage):
         """Заводка = переход из «Сгущения»(3) в 4..9 (затравка и далее). Вход в 2/3 из другой стадии —
-        новая варка, отсчёт сбрасывается. Перезапуск приложения посреди варки момент заводки теряет (None)."""
-        if stage is None:
+        новая варка, отсчёт сбрасывается. Перезапуск приложения посреди варки момент заводки теряет (None).
+        УНВ / пауза (cv_store.PAUSE_STAGES) пропускаются: иначе рост 7 → 20 → 7 считался вторым ростом."""
+        import cv_store
+        if stage is None or stage in cv_store.PAUSE_STAGES:
             return
         self._count_phases(stage)
         prev, self._last_stage = self._last_stage, stage

@@ -600,9 +600,11 @@
       try { localStorage.setItem("microCvVolMode", m); } catch (e) { }
       document.querySelectorAll("#cvVolNav [data-vmode]").forEach((b) => b.classList.toggle("is-active", b.dataset.vmode === m));
       const bx = $("cvBoilBox"); if (bx) bx.hidden = m === "probe";
+      const aw = $("cvVolAutoWrap"); if (aw) aw.hidden = m !== "probe";
       if (m !== "probe") { cvRenderBoil(); cvLoadBoils(true); } else cvRenderScatter();
     };
     document.querySelectorAll("#cvVolNav [data-vmode]").forEach((b) => b.addEventListener("click", () => setMode(b.dataset.vmode)));
+    const va = $("cvVolAuto"); if (va) va.addEventListener("change", () => cvSetFollow(va.checked));
     const step = async (d) => {
       const i = cvBoilIdx(), j = i + d; if (i < 0 || j < 0) return;
       if (j >= cvBoils.length && !(await cvLoadMoreBoils())) { cvRenderBoil(); return; }
@@ -1096,6 +1098,7 @@
   function cvShowFrame() {
     const ov = $("cvOverlay"); if (!ov) return;
     const pager = $("cvPager"), posEl = $("cvGalPos");
+    cvSyncFollowBtn();
     const frames = cvViewFrames();
     if (!frames.length) { if (pager) pager.hidden = true; if (cvWinOn) applyWinMode(); return; }
     cvGalIdx = Math.max(0, Math.min(cvGalIdx, frames.length - 1));
@@ -1110,7 +1113,6 @@
     }
     if (posEl) posEl.textContent = cvTsLabel(ts) + " · " + (cvGalIdx + 1) + "/" + frames.length;
     if (pager) pager.hidden = false;
-    cvSyncFollowBtn();
     if (cvWinOn) applyWinMode();
     cvDrawOverlay();
   }
@@ -1288,6 +1290,18 @@
   }
   function cvSyncFollowBtn() {
     const b = $("cvFollowBtn"); if (b) b.classList.toggle("is-on", !cvViewPinned);
+    ["cvVolAuto", "cvTrAuto"].forEach((id) => { const c = $(id); if (c) c.checked = !cvViewPinned; });
+  }
+  // «авто» = следить за самой свежей пробой. Кнопка «авто» в окне CV и галочки «авто» у «по пробе» («Объём и мука», рассев тренда) —
+  // одно состояние: окно может стоять на «Камере», а цифры «по пробе» меняются с каждой новой пробой
+  function cvSetFollow(on) {
+    cvViewPinned = !on;
+    if (on && cvLastResult) {                     // включили слежение — сразу к самой свежей пробе
+      cvView = cvLastResult; cvGalIdx = 0;
+      cvRenderScatter(); cvRenderStrip(); cvShowFrame();
+    }
+    cvSyncFollowBtn();
+    cvTrFollowLatest();
   }
   function wireGallery() {
     // «В разметку»: чистый кадр без контуров → PNG в папку to_label на этой машине (Shift — все кадры пробы)
@@ -1305,14 +1319,7 @@
       cvGalNote(saved, msg);
     });
     const fb = $("cvFollowBtn");
-    if (fb) fb.addEventListener("click", () => {
-      cvViewPinned = !cvViewPinned;
-      if (!cvViewPinned && cvLastResult) {         // включили слежение — сразу к самой свежей пробе
-        cvView = cvLastResult; cvGalIdx = 0;
-        cvRenderScatter(); cvRenderStrip(); cvShowFrame();
-      }
-      cvSyncFollowBtn();
-    });
+    if (fb) fb.addEventListener("click", () => cvSetFollow(cvViewPinned));
     const prev = $("cvGalPrev"), next = $("cvGalNext");
     if (prev) prev.addEventListener("click", () => { if (cvGalIdx > 0) cvViewFrame(cvGalIdx - 1); });
     if (next) next.addEventListener("click", () => { if (cvGalIdx < cvViewFrames().length - 1) cvViewFrame(cvGalIdx + 1); });
@@ -1671,14 +1678,22 @@
   function cvTrSieveSetSrc(src) {
     cvTrSieveSrc = src;
     try { localStorage.setItem("microCvTrSieveSrc", src); } catch (e) { }
-    if (src === "probe" && !cvTrProbe && cvTrendData && cvTrendView) {      // проба ещё не выбрана — берём последнюю видимую на графике
+    if (src === "probe" && !cvViewPinned) cvTrFollowLatest();          // «авто» — самая свежая проба
+    else if (src === "probe" && !cvTrProbe && cvTrendData && cvTrendView) {      // проба ещё не выбрана — берём последнюю видимую на графике
       const d = cvTrendData; let i = d.t.length - 1;
       while (i >= 0 && d.t[i] > cvTrendView.end) i--;
       if (i >= 0 && d.t[i] >= cvTrendView.start) cvTrLoadProbe(d.ts[i]);
     }
     cvTrSieveSig = ""; cvDrawTrend();
   }
+  let cvTrAsked = null;                  // последняя запрошенная проба: не просим ту же снова (нет в журнале — не долбим сервер)
+  function cvTrFollowLatest() {          // «по пробе» + «авто»: в таблице самая свежая проба (нет пробы в окне CV — последняя на тренде)
+    if (cvTrSieveSrc !== "probe" || cvViewPinned) return;
+    const d = cvTrendData, ts = (cvLastResult && cvLastResult.ts) || (d && d.ts && d.ts.length ? d.ts[d.ts.length - 1] : null);
+    if (ts && ts !== cvTrAsked && (!cvTrProbe || cvTrProbe.ts !== ts)) cvTrLoadProbe(ts);
+  }
   async function cvTrLoadProbe(ts) {
+    cvTrAsked = ts;
     let p = null;
     try { const r = await api("/api/cv/probe_sieve?" + [cvSerialQ(), "ts=" + encodeURIComponent(ts)].filter(Boolean).join("&")); p = r && !r.empty ? r : null; } catch (e) { }
     cvTrProbe = p; cvTrSieveSig = ""; cvDrawTrend();
@@ -1703,6 +1718,7 @@
     if (sig === cvTrSieveSig) return;                      // та же варка/проба и фаза — не перерисовываем на каждое движение мыши
     cvTrSieveSig = sig;
     document.querySelectorAll("#cvTrSieveSrc button").forEach((bt) => bt.classList.toggle("is-active", bt.dataset.src === cvTrSieveSrc));
+    const tw = $("cvTrAutoWrap"); if (tw) tw.hidden = !probe;
     const box = $("cvTrSieveTiles");
     box.innerHTML = ""; box.hidden = probe;              // у одной пробы фаз нет — вместо плиток её время и СВ
     if (probe) {
@@ -1796,6 +1812,8 @@
     } catch (e) { }
     document.querySelectorAll("#cvTrendModeSeg button").forEach((b) => b.addEventListener("click", () => cvTrendSetMode(b.dataset.m)));
     document.querySelectorAll("#cvTrSieveSrc button").forEach((b) => b.addEventListener("click", () => cvTrSieveSetSrc(b.dataset.src)));
+    const ta = $("cvTrAuto"); if (ta) ta.addEventListener("change", () => cvSetFollow(ta.checked));
+    cvSyncFollowBtn();
     cvTrendSetMode(cvTrendMode);
     document.querySelectorAll("#cvSeries input").forEach((c) => c.addEventListener("change", () => {
       try { localStorage.setItem(CV_TREND_KEY, JSON.stringify([...document.querySelectorAll("#cvSeries input:checked")].map((c) => c.value))); } catch (e) { }
@@ -1875,7 +1893,9 @@
       // клик без сдвига по пробе → открыть её в окне CV (если кадры ещё не стёрты ротацией)
       const i = nearest(e.clientX); if (i < 0) return;
       const ts = cvTrendData.ts[i];
-      if (cvTrendMode === "sieve" && cvTrSieveSrc === "probe") cvTrLoadProbe(ts);      // «по пробе»: её рассев — в таблицу под графиком
+      if (cvTrendMode === "sieve" && cvTrSieveSrc === "probe") {         // «по пробе»: её рассев — в таблицу под графиком, «авто» выкл
+        cvViewPinned = true; cvSyncFollowBtn(); cvTrLoadProbe(ts);
+      }
       try {
         const r = await api("/api/cv/result?" + [cvSerialQ(), "ts=" + encodeURIComponent(ts)].filter(Boolean).join("&"));
         if (r && !r.empty) cvSelectProbe(ts);
@@ -1920,6 +1940,7 @@
       cvRenderStrip();
       cvShowFrame();
       cvLoadTrend();
+      cvTrFollowLatest();
     } catch (e) { /* CV необязателен */ }
   }
 

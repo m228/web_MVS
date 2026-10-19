@@ -2331,7 +2331,10 @@ def _probe_sieve():
     html = (Path(BUNDLE_DIR) / "page" / "microscope.html").read_text(encoding="utf-8")
     assert 'id="cvTrSieveSrc"' in html and 'data-src="probe"' in html and "/api/cv/probe_sieve" in js, "нет переключателя «по варке | по пробе» в рассеве тренда"
     assert 'data-vmode="tail"' not in html and 'cvVolMode === "tail"' not in js, "кнопка/режим «финиш» вернулись — «по варке» и так по последним ~2 СВ"
-    return "до порога — нет, фаза — есть, финиш — есть; переключатель на месте"
+    # «авто» у «по пробе» (самая свежая проба при окне «Камера») — одно состояние с кнопкой «авто» окна CV
+    assert 'id="cvVolAuto"' in html and 'id="cvTrAuto"' in html, "нет галочек «авто» у «по пробе»"
+    assert re.search(r'\["cvVolAuto",\s*"cvTrAuto"\]', js) and "cvSetFollow(" in js and "cvTrFollowLatest();" in js, "галочки «авто» не связаны со слежением за свежей пробой"
+    return "до порога — нет, фаза — есть, финиш — есть; переключатель и «авто» на месте"
 
 
 @check("UI", "тренд: «мука среднее» (fines_avg) на общей шкале 0–100 %, без авто-шкалы по видимому участку (иначе при приближении 30 % рисовалось у верха)")

@@ -977,6 +977,7 @@
                     <button type="button" data-vmode="boil" class="is-active" title="Итог варки: среднее по пробам её конца — СВ в пределах 2 от конечного (последние ~2 СВ), как во вкладке «Отчёт»">по варке</button>
                     <button type="button" data-vmode="probe" title="Числа по одной пробе — той, что открыта в окне CV">по пробе</button>
                   </div>
+                  <label class="micro-auto" id="cvVolAutoWrap" hidden title="Авто: самая свежая проба — цифры меняются сами с каждой новой пробой, даже когда окно показывает «Камеру». То же, что кнопка «авто» в окне «Комп. зрение». Клик по пробе (тренд, лента) — выключает"><input type="checkbox" id="cvVolAuto" /><span>авто</span></label>
                   <button type="button" class="micro-vol__models" id="cvVolModelsBtn" title="Показать отдельные модели объёма M1 шар · M2 сфероид · M3 призма (по умолчанию — только среднее и площадь)">M1–M3</button>
                   <span class="micro-vol__boil" id="cvBoilBox">
                     <button type="button" id="cvBoilOlder" title="Более старая варка (предыдущая, пред-предыдущая…)">‹</button>
@@ -1147,7 +1148,7 @@
                 </div>
                 <!-- рассев по ситам для варки, выбранной на тренде: плитки варка / фазы + таблица (заполняет 02-cv.js, режим «Рассев») -->
                 <div class="micro-sieve-card" id="cvTrSieveCard" hidden>
-                  <div class="micro-cv-block__title micro-sieve__title">Рассев, %<span class="micro-vol__mode" id="cvTrSieveSrc" role="tablist" aria-label="Откуда рассев"><button type="button" data-src="boil" class="is-active" title="Рассев варки, выбранной на тренде: пробы её конца (последние ~2 СВ) или пробы фазы">по варке</button><button type="button" data-src="probe" title="Рассев одной пробы: кликни пробу на графике (работает и для старых проб — берётся из журнала)">по пробе</button></span><div class="micro-sieve__tiles" id="cvTrSieveTiles" role="tablist" aria-label="Фаза варки для рассева"></div><span class="micro-sieve__sv" id="cvTrSieveSv"></span></div>
+                  <div class="micro-cv-block__title micro-sieve__title">Рассев, %<span class="micro-vol__mode" id="cvTrSieveSrc" role="tablist" aria-label="Откуда рассев"><button type="button" data-src="boil" class="is-active" title="Рассев варки, выбранной на тренде: пробы её конца (последние ~2 СВ) или пробы фазы">по варке</button><button type="button" data-src="probe" title="Рассев одной пробы: кликни пробу на графике (работает и для старых проб — берётся из журнала)">по пробе</button></span><label class="micro-auto" id="cvTrAutoWrap" hidden title="Авто: самая свежая проба — цифры меняются сами с каждой новой пробой, даже когда окно показывает «Камеру». То же, что кнопка «авто» в окне «Комп. зрение». Клик по пробе (тренд, лента) — выключает"><input type="checkbox" id="cvTrAuto" /><span>авто</span></label><div class="micro-sieve__tiles" id="cvTrSieveTiles" role="tablist" aria-label="Фаза варки для рассева"></div><span class="micro-sieve__sv" id="cvTrSieveSv"></span></div>
                   <div class="micro-vol__grid micro-sieve" id="cvTrSieveGrid"></div>
                 </div>
               </div>

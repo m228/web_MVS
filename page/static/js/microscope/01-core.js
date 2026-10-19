@@ -1502,6 +1502,7 @@
         const key = tab.dataset.ptab;
         document.querySelectorAll(".micro-ptab").forEach((x) => x.classList.toggle("is-active", x === tab));
         document.querySelectorAll(".micro-ppane").forEach((p) => p.classList.toggle("hidden", p.dataset.ppane !== key));
+        cvPultBlocksSync(key);   // «Рассев» / «Тренды»: блок из нижней полосы — в пульт и обратно
         if (key === "cv") { cvRefresh(); setTimeout(cvDrawTrend, 30); }   // канвас рисуем, когда пане видима
         if (key === "frac") { fracRefresh(); }
       });

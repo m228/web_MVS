@@ -188,7 +188,38 @@
     });
     lbl.addEventListener("dblclick", () => { show(""); inp.value = saved; fit(); inp.focus(); inp.select(); });
   }
-  function isTeleCvVisible() { return ["teleStripCv", "teleStripTrend", "teleStripCfg"].some((id) => { const e = $(id); return e && !e.hidden; }); }
+  function isTeleCvVisible() {
+    return ["teleStripCv", "teleStripTrend", "teleStripCfg"].some((id) => { const e = $(id); return e && !e.hidden; })
+      || Object.keys(CV_PULT_BLOCKS).some((k) => { const p = cvPultPane(k); return p && !p.classList.contains("hidden"); });
+  }
+
+  // вкладки пульта «Рассев» и «Тренды»: блок из нижней полосы переезжает в пульт — рядом с картинкой, без прокрутки вниз.
+  // Переносим сам узел, а не копию: кнопки, листалки, зум тренда, id и состояние те же. Другая вкладка пульта — блок
+  // возвращается вниз; пока он в пульте, внизу на его месте заглушка (#<id>Home), клик по ней — вернуть.
+  const CV_PULT_BLOCKS = { sieve: "cvVol", trend: "cvTrendBlock" };
+  const cvPultPane = (k) => document.querySelector('.micro-ppane[data-ppane="' + k + '"]');
+  function cvPultBlocksSync(key) {
+    let moved = false;
+    Object.entries(CV_PULT_BLOCKS).forEach(([k, id]) => {
+      const blk = $(id), home = $(id + "Home"), pane = cvPultPane(k);
+      if (!blk || !home || !pane) return;
+      const toPult = k === key;
+      if (toPult === (blk.parentNode === pane)) return;
+      if (toPult) pane.appendChild(blk); else home.after(blk);
+      home.hidden = !toPult;
+      moved = true;
+    });
+    if (!moved) return;
+    cvRefresh();
+    cvPlaceSievePill(true);              // ползунок фазы и canvas берут размеры на новом месте
+    setTimeout(cvDrawTrend, 30);
+  }
+  function wirePultBlocks() {
+    Object.values(CV_PULT_BLOCKS).forEach((id) => {
+      const home = $(id + "Home");
+      if (home) home.addEventListener("click", () => document.querySelector('.micro-ptab[data-ptab="cam"]')?.click());
+    });
+  }
 
   // модель пробы: в плитке имя и imgsz прогона, в подсказке — хеш, обучение и параметры распознавания.
   // Старые пробы без паспорта — как раньше: текущая модель сайдкара.
@@ -1474,7 +1505,7 @@
   function cvDrawTrend() {
     const cv = $("cvTrend"); if (!cv) return;
     const ctx = cv.getContext("2d");
-    const W = cv.width = cv.clientWidth || 620, H = cv.height;
+    const W = cv.width = cv.clientWidth || 620, H = cv.height = cv.clientHeight || 360;   // высота из CSS: в пульте тренд ниже, чем внизу
     ctx.clearRect(0, 0, W, H);
     const muted = getCss("--muted", "#8a94a6"), border = getCss("--border", "rgba(131,151,179,.28)");
     const d = cvTrendData, v = cvTrendView;
@@ -1896,6 +1927,7 @@
   function wireCV() {
     wireWindow();
     wireTeleToggle();
+    wirePultBlocks();
     wireGallery();
     wireTrend();
     wireModelUpload();

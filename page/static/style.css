@@ -4154,3 +4154,11 @@ input.micro-cam-num { width: 56px; min-width: 0; flex: 0 0 auto; padding: 4px 5p
 .micro-vol__side .micro-vol__unit { margin-left: auto; }
 .micro-vol__side .micro-vol__unit .micro-seg2 { font-size: 1em; }
 .micro-vol__side .micro-vol__unit .micro-seg2 button { padding: 3px 10px; }
+
+/* рассев тренда: «по варке | по пробе» сразу за заголовком; в «по пробе» плиток фаз нет (hidden сильнее inline-flex карточки) */
+.micro-sieve-card .micro-sieve__tiles[hidden] { display: none; }
+#cvTrSieveSrc { font-weight: 400; }
+/* галочка «авто» у «по пробе» (самая свежая проба): компактная, 15 px */
+.micro-auto { display: inline-flex; flex-direction: row; align-items: center; gap: 5px; margin: 0; font-size: .78em; font-weight: 400; color: var(--muted); cursor: pointer; white-space: nowrap; }
+.micro-auto input { width: 15px; height: 15px; min-height: 0; margin: 0; padding: 0; accent-color: var(--accent, #2563eb); }
+.micro-auto[hidden] { display: none; }

@@ -14,6 +14,10 @@
 2. **`setup.bat`** — создаст `.venv` и поставит зависимости (OpenCV, Pillow, FastAPI, ffmpeg через imageio-ffmpeg).
    GPU не нужен. Системный прокси подхватит сам.
 
+На машине с релизным web_MVS (без git) — **`UpdaterVideo.bat`** в папке web_MVS: скачает `video_service_v*.zip`
+из последнего релиза в `video_service\` и при первом запуске сам вызовет `setup.bat`. GitHub отдаёт релиз, но файл
+не качается — скачать архив на другом компе и `UpdaterVideo.bat -ZipPath "D:\video_service_v….zip"`.
+
 ## Запуск
 
 **`run.bat`** — сервис на `127.0.0.1:8767`. В web_MVS на странице микроскопа в нижней полосе появится вкладка

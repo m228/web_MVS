@@ -26,6 +26,7 @@ import updater
 from microscope_service import micro
 import cv_client
 import video_client
+import services
 import fracture_lab
 import cv_store
 import autostart
@@ -45,6 +46,8 @@ def _is_rtsp_scheme(url: str) -> bool:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     api_log("app", "Запуск приложения")
+    # сайдкары (cv_service, video_service), если установлены рядом: поднимаем фоном сразу — CV-модель грузится долго
+    services.start()
     # версии Python/genicam/harvesters + дата .cti — видно, не обновилась ли
     # библиотека (типовая причина "драйвер раньше работал, теперь нет")
     manager.log_environment()

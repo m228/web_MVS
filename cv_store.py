@@ -750,6 +750,23 @@ def boils(serial: str, limit: int = 6, now: Optional[float] = None, offset: int 
     return out
 
 
+def video_boils(serial: str, limit: int = 10, now: Optional[float] = None) -> list[dict]:
+    """Варки для ролика (видео-сервис), новые первыми: время, СВ, проб в журнале и сколько папок проб ещё на диске —
+    кадры старых варок стёрты ротацией («Варок в архиве»), по ним ролик не собрать. "dirs" — пути к этим папкам (их читает
+    видео-сервис на том же компе), "rows" — пробы варки (для имени файла); в браузер их не отдаём."""
+    groups = boil_groups(serial)
+    sd = _serial_dir(serial)
+    now = time.time() if now is None else now
+    out = []
+    for i, g in enumerate(reversed(groups[-limit:])):
+        dirs = [str(sd / r["ts"]) for r in g if (sd / r["ts"]).is_dir()]
+        svs = [r["sv"] for r in g if r.get("sv") is not None]
+        out.append({"id": g[0]["ts"], "t_from": g[0]["t"], "t_to": g[-1]["t"], "n": len(g), "on_disk": len(dirs),
+                    "sv_min": min(svs) if svs else None, "sv_max": max(svs) if svs else None,
+                    "finished": not (i == 0 and now - g[-1]["t"] <= BOIL_OPEN_S), "dirs": dirs, "rows": g})
+    return out
+
+
 def _probe_dir(serial: str, ts: str) -> Optional[Path]:
     """Папка пробы по метке времени. ts приходит из запроса — пускаем только «цифры/_/-»,
     чтобы через него нельзя было выйти из каталога проб."""

@@ -15,4 +15,5 @@
     wireCV();
     wireFrac();
     wireFracLab();
+    wireVideo();
   });

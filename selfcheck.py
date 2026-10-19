@@ -350,7 +350,7 @@ MODULES = [
     "camera_core.base_worker", "camera_core.gige_worker", "camera_core.rtsp_worker", "camera_core.camera_manager",
     "sdk_gige", "dahua_control", "net_tools", "rtsp_store",
     "save_settings", "plate_config", "sv_source", "microscope_plc", "microscope_fsm",
-    "microscope_service", "cv_analyzer", "cv_volume", "substages", "db", "report", "boil_compare", "cv_fracture", "cv_client", "cv_store", "boil_archive", "fracture_lab",
+    "microscope_service", "cv_analyzer", "cv_volume", "substages", "db", "report", "boil_compare", "cv_fracture", "cv_client", "video_client", "cv_store", "boil_archive", "fracture_lab",
     "updater", "autostart", "diag", "app", "mvsdk",
 ]
 THIRD_PARTY = ["cv2", "numpy", "fastapi", "starlette", "uvicorn", "pymodbus", "harvesters", "genicam",
@@ -959,6 +959,43 @@ def _cv_boils():
     assert res[1]["all"]["probes"] == 2 and res[1]["tail"]["probes"] == 2, "прошлая варка: 2 пробы финиша (avg_n=4 ≥ 2)"
     assert res[1]["all"]["fines"]["m3"] == 3.0 and res[1]["tail"]["fines"]["m3"] == 3.0
     return "варок %d, мелочь прошлой %.1f %%" % (len(res), res[1]["fines"]["m3"])
+
+
+@check("CV", "видео-сервис (ролик варки): варки для вкладки «Ролик» — новые первыми, сколько папок проб ещё на диске; "
+             "без сервиса клиент не падает; вкладка видна только при онлайне")
+def _video_service():
+    import cv_store
+    import plate_config
+    import video_client
+    rows = [{"ts": "2026-10-06_%02d_%02d_00" % (t // 60, t % 60), "t": t * 60.0, "sv": 80 + t * 0.1, "stage": 7, "cook_time": t * 60}
+            for t in list(range(0, 20, 2)) + list(range(300, 320, 2))]          # две варки: пауза 4,5 ч между пробами
+    vd = SANDBOX / "video_probes"
+    for r in rows[3:6] + rows[-2:]:                                              # кадры живы у 3 проб старой варки и 2 — новой
+        (vd / r["ts"]).mkdir(parents=True, exist_ok=True)
+    orig = (cv_store._hist_backfill, cv_store._hist_days, cv_store._hist_read, cv_store._serial_dir)
+    cv_store._hist_backfill = lambda serial: None
+    cv_store._hist_days = lambda serial: ["d"]
+    cv_store._hist_read = lambda serial, day: [dict(r) for r in rows]
+    cv_store._serial_dir = lambda serial: vd
+    try:
+        res = cv_store.video_boils("X", limit=5, now=319 * 60.0)
+        one = cv_store.video_boils("X", limit=1, now=319 * 60.0 + 7200)
+    finally:
+        cv_store._hist_backfill, cv_store._hist_days, cv_store._hist_read, cv_store._serial_dir = orig
+    assert [b["id"] for b in res] == [rows[10]["ts"], rows[0]["ts"]], "новая варка первой: %s" % [b["id"] for b in res]
+    assert [(b["n"], b["on_disk"]) for b in res] == [(10, 2), (10, 3)], "проб в журнале / на диске: %s" % [(b["n"], b["on_disk"]) for b in res]
+    assert not res[0]["finished"] and res[1]["finished"] and one[0]["finished"], "идущая варка — пока последняя проба свежая"
+    assert res[1]["dirs"] == [str(vd / r["ts"]) for r in rows[3:6]], "пути к папкам проб для сервиса"
+    assert len(one) == 1 and one[0]["id"] == rows[10]["ts"], "limit — сколько последних варок"
+    assert plate_config.DEFAULTS["video"]["service_url"] == video_client.DEFAULT_URL, "адрес сервиса по умолчанию"
+    assert video_client.health("http://127.0.0.1:1", timeout=0.5) is None, "сервис не запущен — None, без исключения"
+    assert "error" in video_client.build("http://127.0.0.1:1", ["x"], "x.mp4"), "сборка без сервиса — {error}"
+    html = (Path(BUNDLE_DIR) / "page" / "microscope.html").read_text(encoding="utf-8")
+    js = (Path(BUNDLE_DIR) / "page" / "static" / "js" / "microscope" / "07-video.js").read_text(encoding="utf-8")
+    init = (Path(BUNDLE_DIR) / "page" / "static" / "js" / "microscope" / "04-init.js").read_text(encoding="utf-8")
+    assert re.search(r'id="teleVideoBtn"[^>]*\bhidden\b', html) and 'id="teleStripVideo"' in html, "кнопка «Ролик» скрыта по умолчанию, панель на месте"
+    assert html.index("07-video.js") < html.index("04-init.js") and "wireVideo()" in init and "/api/video/health" in js, "07-video.js подключён до init"
+    return "варок %d: на диске %d и %d проб; без сервиса — None" % (len(res), res[0]["on_disk"], res[1]["on_disk"])
 
 
 @check("CV", "тренд «мука без порога»: доля муки по общему порогу из поля «Мука» (226 мкм), виден с начала варки (порог СВ не гасит), плавная мука при этом гасится")

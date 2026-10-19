@@ -25,6 +25,7 @@ import net_tools
 import updater
 from microscope_service import micro
 import cv_client
+import video_client
 import fracture_lab
 import cv_store
 import autostart
@@ -845,6 +846,72 @@ def cv_boil_zip_file(name: str):
     if name not in {f["name"] for f in boil_archive.listing(dest)}:
         return Response(status_code=404)
     return FileResponse(str(dest / name), media_type="application/zip", filename=name)
+
+
+# --- видео-сервис (video_service/): ролик варки. Сервис отвечает — на странице микроскопа видна вкладка «Ролик» ---
+def _video_url() -> str:
+    return ((micro.config() or {}).get("video") or {}).get("service_url") or video_client.DEFAULT_URL
+
+
+@app.get("/api/video/health")
+def video_health():
+    url = _video_url()
+    h = video_client.health(url)
+    return {"service_url": url, "online": h is not None, "service": h}
+
+
+@app.get("/api/video/boils")
+def video_boils(serial: str | None = None, limit: int = 10):
+    """Варки для вкладки «Ролик» (новые первыми): сколько проб ещё с кадрами на диске — по стёртым ролик не собрать."""
+    bl = cv_store.video_boils(_cv_serial(serial), limit=max(1, min(int(limit), 40)))
+    return {"boils": [{k: v for k, v in b.items() if k not in ("dirs", "rows")} for b in bl]}
+
+
+@app.get("/api/video/build")
+def video_build(boil: str, serial: str | None = None):
+    """Собрать ролик варки: пути к папкам её проб уходят в видео-сервис (он на том же компе) → {"id"} или {"error"}."""
+    import boil_archive
+    ser = _cv_serial(serial)
+    b = next((x for x in cv_store.video_boils(ser, limit=40) if x["id"] == boil), None)
+    if not b:
+        return {"error": "варка не найдена"}
+    if not b["dirs"]:
+        return {"error": "кадры этой варки уже стёрты — ролик не собрать"}
+    name = boil_archive.archive_name(ser, b["rows"]).rsplit(".", 1)[0] + ".mp4"
+    r = video_client.build(_video_url(), b["dirs"], name)
+    if "id" in r:
+        log_event("video", "Ролик варки: сборка " + name, "info", {"probes": len(b["dirs"])})
+    return r
+
+
+@app.get("/api/video/job")
+def video_job(id: str):
+    return video_client.job(_video_url(), id)
+
+
+@app.get("/api/video/files")
+def video_files():
+    return video_client.files(_video_url())
+
+
+@app.get("/api/video/file")
+def video_file(name: str):
+    """Скачать ролик через web_MVS: браузер ходит только на порт приложения, сервис слушает localhost."""
+    r = video_client.open_file(_video_url(), name)
+    if r is None:
+        return Response(status_code=404)
+    headers = {k: r.headers[k] for k in ("Content-Length", "Content-Disposition") if r.headers.get(k)}
+
+    def chunks():
+        try:
+            while True:
+                b = r.read(1 << 20)
+                if not b:
+                    break
+                yield b
+        finally:
+            r.close()
+    return StreamingResponse(chunks(), media_type="video/mp4", headers=headers)
 
 
 @app.post("/api/cv/fracture/edit")

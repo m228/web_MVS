@@ -4162,3 +4162,34 @@ input.micro-cam-num { width: 56px; min-width: 0; flex: 0 0 auto; padding: 4px 5p
 .micro-auto { display: inline-flex; flex-direction: row; align-items: center; gap: 5px; margin: 0; font-size: .78em; font-weight: 400; color: var(--muted); cursor: pointer; white-space: nowrap; }
 .micro-auto input { width: 15px; height: 15px; min-height: 0; margin: 0; padding: 0; accent-color: var(--accent, #2563eb); }
 .micro-auto[hidden] { display: none; }
+
+/* вкладка «Ролик» (видео-сервис, 07-video.js): шестая кнопка нижней полосы — только пока сервис отвечает (класс has-video) */
+.micro-tele-seg .micro-win-btn[hidden] { display: none; }
+.micro-tele-seg.has-video { width: 760px; grid-template-columns: repeat(6, 1fr); }
+.micro-tele-seg.has-video .micro-win-pill { width: calc((100% - 6px) / 6); }
+.micro-tele-seg.has-video.cv .micro-win-pill { left: calc(3px + (100% - 6px) / 6); }
+.micro-tele-seg.has-video.trend .micro-win-pill { left: calc(3px + 2 * (100% - 6px) / 6); }
+.micro-tele-seg.has-video.cfg .micro-win-pill { left: calc(3px + 3 * (100% - 6px) / 6); }
+.micro-tele-seg.has-video.report .micro-win-pill { left: calc(3px + 4 * (100% - 6px) / 6); }
+.micro-tele-seg.has-video.video .micro-win-pill { left: calc(3px + 5 * (100% - 6px) / 6); }
+#teleStripVideo[hidden], .micro-vid-prog[hidden] { display: none; }
+.micro-vid-head { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 14px; margin: 4px 0 12px; }
+.micro-vid-title { font-weight: 600; }
+.micro-vid-sub { font-size: .8em; color: var(--muted); }
+.micro-vid-msg { margin-left: auto; font-size: .82em; color: var(--muted); }
+.micro-vid-msg.is-bad { color: var(--danger); }
+.micro-vid-prog { display: flex; align-items: center; gap: 12px; margin: 0 0 12px; font-size: .82em; color: var(--muted); }
+.micro-vid-bar { flex: 1 1 auto; height: 8px; border-radius: 4px; background: var(--surface-muted); overflow: hidden; }
+.micro-vid-bar i { display: block; width: 0; height: 100%; background: var(--accent); transition: width .4s; }
+.micro-vid-cols { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 18px; align-items: start; }
+@media (max-width: 900px) { .micro-vid-cols { grid-template-columns: 1fr; } }
+.micro-vid-list { display: flex; flex-direction: column; gap: 6px; }
+.micro-vid-row { display: flex; align-items: center; gap: 12px; padding: 8px 10px; border-radius: 10px; background: var(--surface-muted); }
+.micro-vid-row.is-gone { opacity: .55; }
+.micro-vid-main { display: flex; flex-direction: column; gap: 2px; flex: 1 1 auto; min-width: 0; }
+.micro-vid-main b { font-size: .9em; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.micro-vid-main span { font-size: .78em; color: var(--muted); }
+.micro-vid-tag { margin-left: 6px; padding: 1px 7px; border-radius: 999px; background: var(--accent-soft); color: var(--accent); font-size: .78em; font-weight: 500; }
+.micro-vid-note { font-size: .78em; color: var(--muted); white-space: nowrap; }
+.micro-vid-row .toolbar-btn { flex: 0 0 auto; white-space: nowrap; text-decoration: none; }
+.micro-vid-empty { padding: 6px 2px; font-size: .82em; color: var(--muted); }

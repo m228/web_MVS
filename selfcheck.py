@@ -1359,6 +1359,58 @@ def _sv_glitch():
     return "0,0/58,4/«3» отброшены, скачок и смена стадии проходят"
 
 
+@check("Микроскоп", "Клапаны сиропа/воды и номер рецепта из ПЛК: доза между пробами (%·с), время открытия, обрыв связи не считается, запись в пробу и журнал")
+def _plc_valves():
+    import plate_config, cv_store
+    from sv_source import SvSource
+    from microscope_service import MicroscopeService
+    f = plate_config.DEFAULTS["sv_source"]["fields"]
+    assert all(f[k]["reg"] == 0 for k in ("v_syrup", "v_water", "recipe")), "по умолчанию клапаны не читаются (адреса свои на заводе)"
+    # 1. доза: вода 100 % 4 с, потом 1 % (закрыт — обратка не ровно 0); сироп 50 %; разрыв опросов 30 с в дозу не идёт
+    src = SvSource({"host": "x"})
+    t = 1000.0
+    for dt, w, sy in [(0, 100, 50), (1, 100, 50), (1, 100, 50), (1, 100, 50), (1, 1, 50), (1, 1, 50), (30, 1, 50), (1, 0, 0)]:
+        t += dt
+        src._accumulate_valves({"sv": 85.0, "v_water": w, "v_syrup": sy, "recipe": 2}, t)
+    got = src.take_valves()
+    assert got == {"water_dose": 100 * 4 + 1 * 2, "water_s": 4, "syrup_dose": 50 * 6, "syrup_s": 6}, got
+    assert src.take_valves() == {}, "после take_valves накопленное обнуляется"
+    assert SvSource({"host": "x"}).take_valves() == {}, "клапаны не настроены — пусто"
+    # 2. чтение с Modbus-эмулятора: адреса Кира 659/660/661 одним блоком с остальными
+    fake = fake_modbus()
+    scfg = plate_config._deep_merge(plate_config.load()["sv_source"],
+                                    {"fields": {"v_syrup": {"reg": 659}, "v_water": {"reg": 660}, "recipe": {"reg": 661}}})
+    scfg["host"], scfg["port"], scfg["period_s"] = "127.0.0.1", fake.port, 0.1
+    fake.regs[659], fake.regs[660], fake.regs[661] = 37, 100, 2
+    src2 = SvSource(scfg)
+    src2.start()
+    try:
+        assert _wait(lambda: src2.status()["connected"] and src2.status()["values"].get("recipe") is not None, 5), src2.status()
+        v = src2.status()["values"]
+        assert (v["v_syrup"], v["v_water"], v["recipe"]) == (37, 100, 2), v
+        time.sleep(0.5)
+        d = src2.take_valves()
+        assert d["water_s"] >= 0 and d["water_dose"] > 0 and d["syrup_dose"] > 0, d
+        assert src2._block_ok, "блок 650–661 читается одним запросом"
+    finally:
+        src2.stop()
+    # 3. сервис: в сводку ПЛК пробы — среднее обратки, последний рецепт и доза с прошлой пробы
+    ms = MicroscopeService()
+    ms.sv_source = src
+    src._accumulate_valves({"v_water": 80, "v_syrup": 0}, 2000.0)
+    src._accumulate_valves({"v_water": 80, "v_syrup": 0}, 2002.0)
+    pl = ms._plc_summary({"plc": [{"v_water": 80, "v_syrup": 0, "recipe": 3}, {"v_water": 60, "v_syrup": 0, "recipe": 3}]})
+    assert pl["v_water"] == 70 and pl["recipe"] == 3 and pl["water_dose"] == 160 and pl["water_s"] == 2, pl
+    # 4. журнал: поля и модель, которой снята проба
+    row = cv_store._hist_row({"ts": "2026-10-19_10_00_00", "summary": {}, "frames": [1], "plc": pl,
+                              "detector": {"name": "yolo:26x_1280.pt", "imgsz": 1280}})
+    assert (row["v_water"], row["recipe"], row["water_dose"], row["model"]) == (70, 3, 160, "26x_1280.pt@1280"), row
+    assert cv_store._hist_row({"ts": "2026-10-19_10_00_00", "summary": {}})["model"] is None, "старая проба без паспорта модели"
+    for k in ("v_syrup", "v_water", "water_dose", "recipe", "model"):
+        assert k in cv_store.EXPORT_COLUMNS, "нет в выгрузке: " + k
+    return "доза 402 %·с / 4 с открыт, обрыв не считается; 659–661 одним блоком; проба и журнал"
+
+
 @check("CV", "cv_store: разовый сбой СВ (0,0 или 58 при 87) обнуляется при чтении журнала, граница варок 88 → 80 остаётся")
 def _cv_sv_outliers():
     import cv_store

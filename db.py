@@ -61,7 +61,9 @@ def null_sv_outliers(rows: list[dict]) -> list[dict]:
 
 
 # --- столбцы журнала: ключи строки (cv_store._hist_row) → типизированные столбцы ---
-_INT_COLS = ("stage", "substage", "frames", "frac_zones", "cook_time", "seed_age", "good_n", "rej_n")
+_INT_COLS = ("stage", "substage", "frames", "frac_zones", "cook_time", "seed_age", "good_n", "rej_n", "recipe",
+             "syrup_dose", "syrup_s", "water_dose", "water_s")
+_TEXT_COLS = ("phase", "model")
 _SIEVE = ["sieve_%s_b%d" % (m, i) for m in ("m1", "m2", "m3", "area") for i in range(7)]
 ROW_COLS = (
     ["t", "stage", "substage", "phase", "sv", "count", "mean", "median", "small", "medium", "large", "reject", "reject_pct",
@@ -69,12 +71,13 @@ ROW_COLS = (
      "temp", "level", "current", "vac", "cook_time", "seed_age",
      "fines_m1", "fines_m2", "fines_m3", "fines_area", "fines_n", "agg_m1", "agg_m2", "agg_m3", "agg_area", "agg_n",
      "vtot_m1", "vtot_m2", "vtot_m3", "good_n", "rej_n", "fines_um", "fines_side_mm", "k_thick", "fines_from_sv",
-     "frac_zones", "frac_pct", "frames"] + _SIEVE
+     "frac_zones", "frac_pct", "frames",
+     "v_syrup", "v_water", "syrup_dose", "syrup_s", "water_dose", "water_s", "recipe", "model"] + _SIEVE
 )
 
 
 def _col_type(c: str) -> str:
-    return "INTEGER" if c in _INT_COLS else ("TEXT" if c == "phase" else "REAL")
+    return "INTEGER" if c in _INT_COLS else ("TEXT" if c in _TEXT_COLS else "REAL")
 
 
 _local = threading.local()

@@ -239,12 +239,16 @@ def water_by_sv(g: list, from_sv: float = WATER_FROM_SV, dip: float = WATER_DIP_
 
 def boil_metrics(g: list, point_sv: float = POINT_SV, fin_sv: float = 2.0) -> dict:
     """Показатели для сравнения варок: вода на стабилизации (по клапану, а без него — по провалу СВ, water_by = "sv"), размер на контрольной
-    точке СВ (первая проба до уваривания с СВ ≥ point_sv), размер на финише, прирост от точки до финиша (мкм), минут от точки до готовности."""
+    точке СВ (первая проба до уваривания с СВ ≥ point_sv), размер на финише, прирост от точки до финиша (мкм), минут от точки до готовности,
+    модель распознавания (самая частая у проб варки)."""
     def avg(v):
         v = [x for x in v if x is not None]
         return round(sum(v) / len(v), 1) if v else None
     out = {"water": None, "water_by": None, "water_dose": None, "water_s": None, "water_dip": None,
-           "point_um": None, "fin_um": None, "grow_um": None, "to_ready_min": None}
+           "point_um": None, "fin_um": None, "grow_um": None, "to_ready_min": None, "model": None}
+    models = [r["model"] for r in g if r.get("model")]
+    if models:                                          # модель распознавания варки (пробы до 1.9.76 её не пишут — None)
+        out["model"] = max(set(models), key=models.count)
     v = water_by_valve(g)
     if v is not None:
         out.update(water=v[1] > 0, water_by="valve", water_dose=v[0], water_s=v[1])

@@ -350,7 +350,7 @@ MODULES = [
     "camera_core.base_worker", "camera_core.gige_worker", "camera_core.rtsp_worker", "camera_core.camera_manager",
     "sdk_gige", "dahua_control", "net_tools", "rtsp_store",
     "save_settings", "plate_config", "sv_source", "microscope_plc", "microscope_fsm",
-    "microscope_service", "cv_analyzer", "cv_volume", "substages", "db", "report", "cv_fracture", "cv_client", "cv_store", "boil_archive", "fracture_lab",
+    "microscope_service", "cv_analyzer", "cv_volume", "substages", "db", "report", "boil_compare", "cv_fracture", "cv_client", "cv_store", "boil_archive", "fracture_lab",
     "updater", "autostart", "diag", "app", "mvsdk",
 ]
 THIRD_PARTY = ["cv2", "numpy", "fastapi", "starlette", "uvicorn", "pymodbus", "harvesters", "genicam",
@@ -1447,6 +1447,46 @@ def _boil_metrics():
     assert m["water"] is None and m["point_um"] is None and m["to_ready_min"] is None, m
     assert report._cell({"water": True, "water_by": "sv"}, "water") == "да (по СВ)" and report._cell({"water": False, "water_by": "valve"}, "water") == "нет"
     return "доза только при открытом продукте; провал 86,4 → 84,6 — вода, УНВ нет; на 86: 165 мкм, +52,5 до финиша, 9 мин до готовности"
+
+
+@check("Микроскоп", "Сравнение групп варок: перестановочный тест, разница при равном размере на точке, вердикт, запрет разных моделей, затянутые варки не в счёт")
+def _boil_compare():
+    import boil_compare as bc
+    assert abs(bc.perm_p([1, 2], [3, 4]) - 2 / 6) < 1e-9, "полный перебор 6 разбиений: крайние два"
+    assert bc.perm_p([30.0] * 6, [21.0] * 10) < 0.001, "полностью разделённые группы — p ≈ 1/8008 (по медианам было 0,12)"
+    assert bc.perm_p([1, 2, 3], [1, 2, 3]) == 1.0
+    assert bc.need_per_group(10, 10) == 16 and bc.need_per_group(10, 0) is None
+    jit = [1.5, -2.0, 0.5, 2.5, -1.0, -0.5, 1.0, -2.5, 2.0, -1.5]
+
+    def mk(i, water, point, grow, model="26x_1280.pt@1280", dur=80.0):
+        return {"t_start": 1000.0 * i, "start": "b%d" % i, "finished": True, "duration_min": dur, "water": water, "model": model,
+                "point_um": point, "fin_um": point + grow, "grow_um": grow, "to_ready_min": 30.0 if water else 21.0, "fines_avg": 12 - point / 20}
+    # вода: старт крупнее на ~10 мкм, прирост при равном старте −8 мкм; без поправки разница финиша почти не видна
+    wet = [mk(i, True, 190 + 5 * i, 50 - 8 - 0.2 * (5 * i) + jit[i]) for i in range(6)]
+    dry = [mk(10 + i, False, 175 + 5 * i, 50 - 0.2 * (5 * i - 15) + jit[i]) for i in range(10)]
+    a, b = {"from": 0, "to": 1e9, "water": True}, {"from": 0, "to": 1e9, "water": False}
+    r = bc.compare_rows(wet + dry, a, b)
+    assert r["ok"] and len(r["a"]["boils"]) == 6 and len(r["b"]["boils"]) == 10, r
+    m = {x["key"]: x for x in r["metrics"]}
+    e = m["grow_um"]["adj"]
+    assert -10 < e["eff"] < -6 and e["hi"] < 0 and e["verdict"] == "real", "прирост при равном старте −8: %s" % e
+    assert m["to_ready_min"]["verdict"] == "real" and m["to_ready_min"]["diff"] == 9.0, m["to_ready_min"]
+    assert m["fines_avg"]["adj"]["verdict"] == "noise", "мука зависит только от старта — при равном старте разницы нет: %s" % m["fines_avg"]["adj"]
+    # затянутая варка (простой) не в счёт и видна в ответе
+    r = bc.compare_rows(wet + dry + [mk(30, False, 180, 90, dur=220.0)], a, b)
+    assert [x["start"] for x in r["excluded"]] == ["b30"] and len(r["b"]["boils"]) == 10, r["excluded"]
+    # мало варок, разные модели, пересечение групп, модель не записана
+    r = bc.compare_rows(wet[:3] + dry, a, b)
+    assert all(x["verdict"] == "few" for x in r["metrics"]), "3 варки в группе — «мало варок»"
+    r = bc.compare_rows(wet + [dict(x, model="best.pt@640") for x in dry], a, b)
+    assert not r["ok"] and "разные модели" in r["error"], r
+    r = bc.compare_rows(wet + dry, {"from": 0, "to": 13000}, {"from": 12000, "to": 1e9})
+    assert not r["ok"] and "пересекаются" in r["error"], r
+    r = bc.compare_rows(wet + [dict(x, model=None) for x in dry], a, b)
+    assert r["ok"] and r["unknown_model"] == 10 and "другой (старой)" in r["warnings"][0], r["warnings"]
+    assert bc.parse_t("2026-10-19 11:20") == time.mktime((2026, 10, 19, 11, 20, 0, 0, 0, -1))
+    assert bc.parse_t("2026-10-19", True) - bc.parse_t("2026-10-19") == 86399
+    return "p 2/6 перебором; −8 мкм при равном старте — «реальная»; затянутая выкинута; разные модели — отказ"
 
 
 @check("CV", "cv_store: разовый сбой СВ (0,0 или 58 при 87) обнуляется при чтении журнала, граница варок 88 → 80 остаётся")

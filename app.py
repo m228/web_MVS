@@ -814,6 +814,20 @@ def cv_report_csv(serial: str | None = None, frm: str | None = Query(None, alias
                     headers={"Content-Disposition": 'attachment; filename="%s"' % name})
 
 
+@app.get("/api/cv/compare")
+def cv_compare(serial: str | None = None, a_from: str | None = None, a_to: str | None = None, a_water: str | None = None,
+               b_from: str | None = None, b_to: str | None = None, b_water: str | None = None):
+    """Сравнение двух групп варок (опыт / контроль): период «YYYY-MM-DD[ HH:MM]» или epoch, вода 1/0 (пусто — любая). См. boil_compare.py."""
+    import boil_compare as bc
+    water = {"1": True, "0": False}
+    try:
+        a = {"from": bc.parse_t(a_from), "to": bc.parse_t(a_to, True), "water": water.get(a_water or "")}
+        b = {"from": bc.parse_t(b_from), "to": bc.parse_t(b_to, True), "water": water.get(b_water or "")}
+    except ValueError:
+        return {"ok": False, "error": "время группы: YYYY-MM-DD, YYYY-MM-DD HH:MM или epoch"}
+    return bc.build(_cv_serial(serial), a, b)
+
+
 @app.get("/api/cv/boil-zips")
 def cv_boil_zips():
     """Архивы варок (boil_archive): готовые ZIP (новые первыми), папка и настройки."""

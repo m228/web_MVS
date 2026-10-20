@@ -3936,29 +3936,106 @@ input.micro-cam-num { width: 56px; min-width: 0; flex: 0 0 auto; padding: 4px 5p
 .micro-rep-dates { display: inline-flex; align-items: center; gap: 6px; }
 .micro-rep-dates[hidden] { display: none; }
 .micro-rep-dates input { padding: 4px 8px; font-size: 0.85em; }
-.micro-rep-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 10px; margin-bottom: 14px; }
-.micro-rep-card { background: var(--surface-muted, rgba(255,255,255,.04)); border: 1px solid var(--border, rgba(131,151,179,.28)); border-radius: 10px; padding: 10px 12px; }
+/* цвета графиков отчёта: серии — слоты 1–3 проверенной палитры (синий, оранжевый, аква), рассев — порядковая шкала одного синего
+   (мелкие — самые заметные: тёмные на светлом, светлые на тёмном); палитры прогнаны валидатором для светлой, тёмной и navy */
+.micro-rep-out { --rep-s1: #2a78d6; --rep-s2: #eb6834; --rep-s3: #1baf7a; --rep-ink2: #52514e; --rep-ring: var(--surface-strong, #fff);
+  --rep-sv0: #104281; --rep-sv1: #256abf; --rep-sv2: #5598e7; --rep-sv3: #86b6ef; }
+html[data-theme="navy"] .micro-rep-out, html[data-theme="dark"] .micro-rep-out { --rep-s1: #3987e5; --rep-s2: #d95926; --rep-s3: #199e70; --rep-ink2: #c3c2b7;
+  --rep-sv0: #9ec5f4; --rep-sv1: #5598e7; --rep-sv2: #2a78d6; --rep-sv3: #184f95; }
+.micro-rep-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
+.micro-rep-title { font-size: 1.15em; font-weight: 600; }
+.micro-rep-sub { color: var(--muted); font-size: 0.8em; margin-top: 2px; }
+.micro-rep-logo { display: none; height: 30px; width: auto; }
+.micro-rep-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; margin-bottom: 12px; }
+.micro-rep-card { background: var(--surface-muted, rgba(255,255,255,.04)); border: 1px solid var(--border, rgba(131,151,179,.28)); border-radius: 10px; padding: 8px 12px; }
 .micro-rep-card span { display: block; color: var(--muted); font-size: 0.78em; }
-.micro-rep-card b { display: block; font-size: 1.25em; margin-top: 2px; font-variant-numeric: tabular-nums; }
-.micro-rep-card small { color: var(--muted); font-size: 0.78em; }
+.micro-rep-card b { display: block; font-size: 1.3em; font-weight: 600; margin-top: 2px; }
+.micro-rep-card small { color: var(--muted); font-size: 0.76em; }
+.micro-rep-card.micro-rep-link { cursor: pointer; }
+.micro-rep-card.micro-rep-link:hover { border-color: var(--accent, #2563eb); }
+.micro-rep-warn { border-left: 3px solid var(--warning, #d97706); background: var(--warning-soft, rgba(217,119,6,.12)); padding: 8px 12px; border-radius: 0 8px 8px 0; font-size: 0.85em; margin: 0 0 6px; }
+.micro-rep-table--models { width: auto; min-width: 60%; margin-bottom: 12px; }
+.micro-rep-charts { display: grid; gap: 10px; margin-bottom: 4px; }
+.micro-rep-chart__head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 14px; font-size: 0.85em; margin-bottom: 2px; }
+.micro-rep-chart__head b { font-weight: 600; }
+.micro-rep-chart svg { display: block; width: 100%; height: auto; overflow: visible; font-variant-numeric: tabular-nums; }
+.micro-rep-chart text { font-size: 10.5px; fill: var(--muted); }
+.micro-rep-chart .ylab { text-anchor: end; }
+.micro-rep-chart .xlab { text-anchor: middle; }
+.micro-rep-chart .grid, .micro-rep-chart .vgrid { stroke: var(--border, rgba(131,151,179,.2)); stroke-width: 1; }
+.micro-rep-chart .vgrid { opacity: 0.6; }
+.micro-rep-chart .axis { stroke: var(--border-strong, rgba(118,142,178,.45)); stroke-width: 1; }
+.micro-rep-chart .wband { fill: var(--rep-s3); opacity: 0.12; }
+.micro-rep-chart .mline { stroke: var(--text); stroke-width: 1; opacity: 0.55; }
+.micro-rep-chart .mlab { fill: var(--text); font-size: 10px; opacity: 0.75; }
+.micro-rep-chart .whisk { stroke: var(--rep-s1); stroke-width: 1; opacity: 0.35; }
+.micro-rep-chart .dline { fill: none; stroke: var(--rep-ink2); stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+.micro-rep-chart .dot { stroke: var(--rep-ring); stroke-width: 1.5; }
+.micro-rep-chart .dot.s1 { fill: var(--rep-s1); }
+.micro-rep-chart .dot.s2 { fill: var(--rep-s2); }
+.micro-rep-chart .dot.is-off { fill: var(--rep-ring); stroke-width: 1.5; }
+.micro-rep-chart .dot.s1.is-off { stroke: var(--rep-s1); }
+.micro-rep-chart .dot.s2.is-off { stroke: var(--rep-s2); }
+.micro-rep-chart .hit { fill: transparent; }
+.micro-rep-chart .pt { cursor: pointer; }
+.micro-rep-chart .pt:hover .dot { r: 5px; }
+.micro-rep-chart .sv:hover .s0, .micro-rep-chart .sv:hover .s1, .micro-rep-chart .sv:hover .s2, .micro-rep-chart .sv:hover .s3 { opacity: 0.8; }
+.micro-rep-chart .s0, .micro-rep-sbar .s0, .micro-rep-legend .lg-sv0 { fill: var(--rep-sv0); background: var(--rep-sv0); }
+.micro-rep-chart .s1:not(.dot), .micro-rep-sbar .s1, .micro-rep-legend .lg-sv1 { fill: var(--rep-sv1); background: var(--rep-sv1); }
+.micro-rep-chart .s2:not(.dot), .micro-rep-sbar .s2, .micro-rep-legend .lg-sv2 { fill: var(--rep-sv2); background: var(--rep-sv2); }
+.micro-rep-chart .s3, .micro-rep-sbar .s3, .micro-rep-legend .lg-sv3 { fill: var(--rep-sv3); background: var(--rep-sv3); }
+.micro-rep-legend { display: inline-flex; flex-wrap: wrap; gap: 2px 12px; color: var(--muted); font-size: 0.92em; }
+.micro-rep-legend > span { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; }
+.micro-rep-legend .lg { display: inline-block; width: 9px; height: 9px; border-radius: 2px; }
+.micro-rep-legend .lg-dot1, .micro-rep-legend .lg-dot2, .micro-rep-legend .lg-off { border-radius: 50%; }
+.micro-rep-legend .lg-dot1 { background: var(--rep-s1); }
+.micro-rep-legend .lg-dot2 { background: var(--rep-s2); }
+.micro-rep-legend .lg-off { border: 1.5px solid var(--rep-s1); }
+.micro-rep-legend .lg-line { width: 14px; height: 2px; border-radius: 1px; background: var(--rep-ink2); }
+.micro-rep-legend .lg-whisk { width: 1px; height: 11px; border-radius: 0; background: var(--rep-s1); opacity: 0.5; }
+.micro-rep-legend .lg-water { width: 12px; background: var(--rep-s3); opacity: 0.3; }
+.micro-rep-legend .lg-model { width: 1px; height: 12px; border-radius: 0; background: var(--text); opacity: 0.55; }
+.micro-rep-sbar { display: inline-flex; gap: 2px; width: 110px; height: 9px; vertical-align: middle; }
+.micro-rep-sbar i { display: block; flex-basis: 0; min-width: 2px; border-radius: 1px; }
 .micro-rep-h { margin: 16px 0 6px; font-size: 0.9em; font-weight: 600; }
-.micro-rep-title { font-size: 1.05em; font-weight: 600; margin-bottom: 10px; }
+.micro-rep-h small { color: var(--muted); font-weight: 400; margin-left: 6px; }
 .micro-rep-wrap { overflow-x: auto; }
 .micro-rep-table { width: 100%; border-collapse: collapse; font-size: 0.85em; font-variant-numeric: tabular-nums; }
-.micro-rep-table th, .micro-rep-table td { padding: 5px 8px; text-align: right; border-bottom: 1px solid var(--border, rgba(131,151,179,.2)); white-space: nowrap; }
+.micro-rep-table th, .micro-rep-table td { padding: 4px 8px; text-align: right; border-bottom: 1px solid var(--border, rgba(131,151,179,.2)); white-space: nowrap; }
 .micro-rep-table th:first-child, .micro-rep-table td:first-child { text-align: left; }
 .micro-rep-table th { color: var(--muted); font-weight: 500; font-size: 0.9em; }
 .micro-rep-table td.micro-rep-link { cursor: pointer; }
 .micro-rep-table td.micro-rep-link:hover { color: var(--accent, #2563eb); text-decoration: underline; }
+.micro-rep-table .micro-ci { color: var(--muted); font-size: 0.85em; }
+.micro-rep-table tr.micro-rep-day td { padding-top: 10px; font-weight: 600; font-size: 0.92em; text-align: left; border-bottom-color: var(--border-strong, rgba(118,142,178,.45)); }
+.micro-rep-table tr.micro-rep-empty td { color: var(--muted); text-align: left; font-style: italic; }
+.micro-rep-table tr.is-off td { color: var(--muted); }
 .micro-rep-table tr.is-open td { color: var(--muted); font-style: italic; }
+.micro-rep-flag { display: inline-block; margin-left: 6px; padding: 0 6px; border-radius: 6px; font-size: 0.82em; font-style: normal; color: var(--muted);
+  border: 1px solid var(--border-strong, rgba(118,142,178,.45)); }
+.micro-rep-note { margin-top: 14px; font-size: 0.8em; color: var(--muted); }
+.micro-rep-note b { color: var(--text); font-weight: 600; }
+.micro-rep-note ul { margin: 4px 0 0; padding-left: 18px; }
+.micro-rep-note li { margin: 1px 0; }
+.micro-rep-tip { position: fixed; z-index: 1000; pointer-events: none; white-space: pre-line; max-width: 320px; padding: 6px 9px; border-radius: 8px; font-size: 12px; line-height: 1.4;
+  background: var(--surface-elevated, #fff); color: var(--text); border: 1px solid var(--border-strong, rgba(118,142,178,.45)); box-shadow: var(--shadow-soft); }
+.micro-rep-tip[hidden] { display: none; }
+
+/* PDF: отчёт печатается отдельным документом (iframe из 05-report.js) — страница приложения в печать не попадает */
+body.micro-rep-doc { background: #fff; color: #111; margin: 0; font-size: 12px; }
+body.micro-rep-doc .micro-rep-logo { display: block; }
+body.micro-rep-doc .micro-rep-card { background: #fff; }
+body.micro-rep-doc .micro-rep-cards { grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); gap: 6px; }
+body.micro-rep-doc .micro-rep-wrap { overflow: visible; }
+body.micro-rep-doc .micro-rep-sbar { width: 90px; }
 @media print {
-  body * { visibility: hidden !important; }
-  #repOut, #repOut * { visibility: visible !important; }
-  #repOut { position: absolute; left: 0; top: 0; width: 100%; background: #fff; color: #111; padding: 12mm; }
-  #repOut .micro-rep-card, #repOut .micro-rep-table th, #repOut .micro-rep-table td { color: #111 !important; border-color: #bbb !important; background: #fff !important; }
-  #repOut .micro-rep-card span, #repOut .micro-rep-card small, #repOut .micro-rep-table th { color: #555 !important; }
-  .micro-rep-wrap { overflow: visible; }
-  @page { size: A4 landscape; margin: 10mm; }
+  @page { size: A4 landscape; margin: 9mm 10mm; }
+  body.micro-rep-doc { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  body.micro-rep-doc .micro-rep-chart, body.micro-rep-doc .micro-rep-cards, body.micro-rep-doc .micro-rep-head, body.micro-rep-doc .micro-rep-note { break-inside: avoid; }
+  body.micro-rep-doc .micro-rep-h { break-after: avoid; }
+  body.micro-rep-doc tr { break-inside: avoid; }
+  body.micro-rep-doc thead { display: table-header-group; }
+  body.micro-rep-doc .micro-rep-chart text { fill: #555; }
 }
 
 

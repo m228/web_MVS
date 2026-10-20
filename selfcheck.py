@@ -2108,9 +2108,43 @@ def _report():
         only = report.to_csv(rep, ["fines_avg", "probes"]).decode("utf-8-sig")
         assert "мука на финише" in only and "длительность" not in only and "разломов" not in only and "брак" not in only, "CSV — только выбранные столбцы"
         assert len(report.build("REP", t0 + 2 * 86400, t0 + 3 * 86400)["boils"]) == 0 or True
+        assert len(rep["days"]) == 2 and rep["days"][0]["day"] == "2026-10-06" and rep["days"][0]["boils"] == 1, rep["days"]
+        assert len(rep["segments"]) == 1 and rep["segments"][0]["model"] is None, "модель не записана — один отрезок"
     finally:
         db.set_path(old_path)
     return "варок %d, мука с порога, подстадии, CSV" % len(rep["boils"])
+
+
+@check("CV", "report: итоги без нетипичных варок — короткая/затянутая/идущая помечены, медиана и 25–75 %, лучшая/худшая, дни, отрезки по модели")
+def _report_summary():
+    import report
+
+    def row(i, dur, fines, model=None, finished=True, water=None, day="2026-10-13"):
+        return {"start": "%s_%02d_00_00" % (day, i), "t_start": float(i), "duration_min": dur, "probes": 10, "frac_zones": 0, "finished": finished,
+                "fines_avg": fines, "fin_um": 150.0 + i, "point_um": 120.0, "grow_um": 30.0 + i, "model": model, "water": water,
+                "sieve": [5.0, 80.0, 10.0, 5.0, None, None]}
+    rows = [row(0, 80, 6.0), row(1, 82, 4.0, water=True), row(2, 40, 39.0), row(3, 78, 8.0, water=False), row(4, 200, 1.0),     # 40 — короткая, 200 — затянутая
+            row(5, 79, 5.0, model="26x_1280.pt@1280"), row(6, 81, 7.0, model="26x_1280.pt@1280"), row(7, 30, 2.0, model="26x_1280.pt@1280", finished=False)]
+    report._mark_flags(rows)
+    assert [r["flag"] for r in rows] == [None, None, "short", None, "long", None, None, "open"], [r["flag"] for r in rows]
+    t = report._totals(rows)
+    assert t["boils"] == 8 and t["typical"] == 5 and t["short"] == 1 and t["long"] == 1, t
+    f = t["fines_avg"]
+    assert (f["n"], f["median"], f["q1"], f["q3"], f["min"], f["max"]) == (5, 6.0, 5.0, 7.0, 4.0, 8.0), "мука по типичным 4, 5, 6, 7, 8: %r" % (f,)
+    assert t["best"]["fines_avg"] == 4.0 and t["worst"]["fines_avg"] == 8.0, "обрывок 39 % и затянутая 1 % — не лучшая/худшая: %r / %r" % (t["best"], t["worst"])
+    assert (t["water"], t["water_known"]) == (1, 2) and t["sieve"][:4] == [5.0, 80.0, 10.0, 5.0] and t["sieve"][4] is None, (t["water"], t["sieve"])
+    assert report._quantile([1.0, 2.0, 3.0, 4.0], 0.25) == 1.75, "квантиль — как ПРОЦЕНТИЛЬ.ВКЛ"
+    seg = report._segments(rows)
+    assert [(s["model"], s["boils"], s["typical"]) for s in seg] == [(None, 5, 3), ("26x_1280.pt@1280", 3, 2)], [(s["model"], s["boils"], s["typical"]) for s in seg]
+    gap = [row(0, 80, 6.0, model="A"), row(1, 80, 6.0), row(2, 80, 6.0, model="A"), row(3, 80, 6.0, model="B")]
+    assert [(s["model"], s["boils"]) for s in report._segments(gap)] == [("A", 3), ("B", 1)], "A, без записи, A — одна модель, не смена"
+    few = [row(0, 80, 6.0), row(1, 20, 6.0)]
+    report._mark_flags(few)
+    assert [r["flag"] for r in few] == [None, None], "меньше 3 законченных варок — короткие не ищем"
+    csv = report.to_csv({"serial": "X", "from": 0.0, "to": 0.0, "sieve_labels": list(report.SIEVE_LABELS), "boils": rows, "totals": t,
+                         "weeks": [], "substages": []}, ["fines_avg"]).decode("utf-8-sig")
+    assert "пометка" in csv and "короткая" in csv and "затянутая" in csv and "медиана" in csv and "рассев" not in csv, "CSV: пометка всегда, рассев — только если выбран"
+    return "5 типичных из 8, мука 6 (5–7), лучшая 4 / худшая 8, 2 отрезка модели"
 
 
 import db as _db_for_path

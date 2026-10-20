@@ -202,20 +202,21 @@ def _recipe_stage(r: dict) -> Optional[int]:
 
 def water_by_valve(g: list, from_sv: float = WATER_FROM_SV) -> Optional[tuple[int, int]]:
     """Вода на стабилизации по клапану: (доза %·с, секунд открытия) с пробы, где СВ дошло до from_sv, до уваривания (стадия 8).
-    Доза в пробе — за отрезок до неё, и только при открытом клапане продукта (sv_source). Клапан воды не читается — None."""
-    if all(r.get("water_s") is None for r in g):
-        return None
-    on, dose, secs = False, 0, 0
+    Доза в пробе — за отрезок до неё, и только при открытом клапане продукта (sv_source). Клапан воды не читается или неизвестен на всём
+    этом окне (мусор регистра, 65535) — None: тогда решает провал СВ, а не «воды нет»."""
+    on, dose, secs, known = False, 0, 0, False
     for r in g:
         st = _recipe_stage(r)
         if not on:
             on = st is not None and st < 8 and (r.get("sv") or 0) >= from_sv
             continue
-        dose += r.get("water_dose") or 0
-        secs += r.get("water_s") or 0
+        if r.get("water_s") is not None:
+            known = True
+            dose += r.get("water_dose") or 0
+            secs += r["water_s"]
         if st is not None and st >= 8:
             break
-    return dose, secs
+    return (dose, secs) if known else None
 
 
 def water_by_sv(g: list, from_sv: float = WATER_FROM_SV, dip: float = WATER_DIP_SV) -> Optional[tuple[dict, dict]]:
@@ -329,6 +330,20 @@ def _hist_append(serial: str, result: dict):
 
 _null_sv_outliers = db.null_sv_outliers      # правило сбойного СВ — в db.py (там же считается boil_id)
 
+_VALVES = {"v_syrup": "syrup", "v_water": "water", "v_product": "product"}
+
+
+def _null_valve_garbage(rows: list) -> list:
+    """Обратка клапана в пробе вне 0–100 % — не настоящая (пробы до 1.9.87: клапан воды Кира отдавал 65535, среднее по кадрам — 26222,
+    58982…): клапан и его доза за отрезок до пробы → None (sv_source тогда копил мусор как «открыт на 100 %»). Правило — sv_source.valve_pct.
+    Сами данные в базе не меняем."""
+    from sv_source import valve_pct
+    for r in rows:
+        for k, name in _VALVES.items():
+            if r.get(k) is not None and valve_pct(r[k]) is None:
+                r[k] = r[name + "_dose"] = r[name + "_s"] = None
+    return rows
+
 
 def _hist_days(serial: str) -> list[str]:
     """Даты (YYYY-MM-DD), за которые есть пробы в журнале, по возрастанию."""
@@ -337,7 +352,7 @@ def _hist_days(serial: str) -> list[str]:
 
 def _hist_read(serial: str, day: str, clean: bool = True) -> list[dict]:
     rows = db.read_rows(_serial_dir(serial).name, day=day)
-    return _null_sv_outliers(rows) if clean else rows       # clean=False — сырые строки (для перезаписи журнала)
+    return _null_valve_garbage(_null_sv_outliers(rows)) if clean else rows       # clean=False — сырые строки (для перезаписи журнала)
 
 
 def import_legacy_journal(serial: str) -> int:

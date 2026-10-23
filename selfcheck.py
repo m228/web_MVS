@@ -3096,6 +3096,22 @@ def _net():
     return "ok"
 
 
+@check("Служебные", "net_tools: имя адаптера с типографской кавычкой не вырывается из PowerShell-строки (анти-инъекция)")
+def _net_adapter_quote():
+    import net_tools
+    # обычные имена проходят, ASCII-апостроф удваивается (безопасно внутри '...')
+    assert net_tools._ps_adapter("Ethernet") == "Ethernet"
+    assert net_tools._ps_adapter("O'Brien") == "O''Brien"
+    # пустое/управляющие — отвергаются
+    for bad in ("", "   ", "a\nb", "a\x00b"):
+        assert net_tools._ps_adapter(bad) is None, "должно отвергаться: %r" % bad
+    # КЛЮЧЕВОЕ: PowerShell трактует U+2018…U+201B как разделители строки — их удвоение `'`
+    # не экранирует, поэтому имя с такой кавычкой отвергаем (иначе инъекция команды)
+    for q in ("‘", "’", "‚", "‛"):
+        assert net_tools._ps_adapter("a%s; cmd; %sb" % (q, q)) is None, "smart-quote %r прошёл" % q
+    return "ok"
+
+
 @check("Служебные", "logger: события пишутся и читаются")
 def _logger():
     from logger import log_event, get_events

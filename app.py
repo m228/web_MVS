@@ -1916,6 +1916,10 @@ def _update_rtsp_store_url(old_url, new_url, new_ip):
         "ip": new_ip,
         "scale": entry.get("scale", 100),
         "fps": entry.get("fps", 0),
+        # serial (ключ воркера и настроек автосохранения) и autostart переносим со старой записи:
+        # иначе после смены IP камера теряет проект/серийник, а галочка автоподключения сбрасывается
+        "serial": entry.get("serial", ""),
+        "autostart": entry.get("autostart", False),
     })
 
 

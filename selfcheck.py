@@ -1571,6 +1571,84 @@ def _boil_metrics():
     return "доза только при открытом продукте; провал 86,4 → 84,6 — вода, УНВ нет; на 86: 165 мкм; заводка → готовность 15 мин, CV 53,5, сростки 12,5 %"
 
 
+@check("Микроскоп", "Мусор в регистре клапана (Кир, вода: 65535): значение неизвестно — не доза и не «вода да», решает провал СВ; старые пробы в базе тоже")
+def _plc_valve_garbage():
+    import tempfile
+    import plate_config, cv_store, db
+    from sv_source import SvSource, valve_pct
+    from microscope_service import MicroscopeService
+    # 1. правило: 0–100 как есть, шум на пару % — к краю, дальше — значения нет
+    got = [valve_pct(v) for v in (0, 36, 100, -1, 103, 65535, 26222, -10, 120, None, float("nan"))]
+    assert got == [0, 36, 100, 0, 100, None, None, None, None, None, None], got
+    # 2. поток опросов раз в секунду, продукт открыт: вода 65535 и мусор — ни дозы, ни секунд; сироп и продукт считаются как раньше
+    src = SvSource({"host": "x"})
+    for i, w in enumerate([65535, 65535, 26222, 65535, 58982, 65535]):
+        src._accumulate_valves({"v_water": w, "v_syrup": 40, "v_product": 50}, 1000.0 + i)
+    got = src.take_valves()
+    assert got == {"syrup_dose": 200, "syrup_s": 5, "product_dose": 250, "product_s": 5}, "вода неизвестна — её ключей нет: %s" % got
+    for i, w in enumerate([65535, 36, 36, 65535, 65535]):                  # настоящие 36 % посреди мусора считаются: 2 с
+        src._accumulate_valves({"v_water": w, "v_syrup": 0, "v_product": 40}, 2000.0 + i)
+    got = src.take_valves()
+    assert (got["water_dose"], got["water_s"], got["syrup_s"]) == (72, 2, 0), got
+    for i in range(3):                                                      # продукт неизвестен — попала ли вода в аппарат, не знаем
+        src._accumulate_valves({"v_water": 36, "v_syrup": 40, "v_product": 65535}, 3000.0 + i)
+    assert src.take_valves() == {}, "клапан продукта неизвестен — вода и сироп не считаются"
+    # 3. ПЛК (Modbus-эмулятор) отдаёт 65535 в регистре воды 660: на странице «(—)», в пробу не идёт, дозы воды нет
+    fake = fake_modbus()
+    old_regs = [fake.regs[r] for r in (659, 660, 661)]
+    fake.regs[659], fake.regs[660], fake.regs[661] = 40, 65535, 50
+    scfg = plate_config._deep_merge(plate_config.load()["sv_source"],
+                                    {"fields": {"v_syrup": {"reg": 659}, "v_water": {"reg": 660}, "v_product": {"reg": 661}}})
+    scfg["host"], scfg["port"], scfg["period_s"] = "127.0.0.1", fake.port, 0.1
+    src2 = SvSource(scfg)
+    src2.start()
+    try:
+        assert _wait(lambda: src2.status()["connected"] and src2.status()["values"].get("v_product") is not None, 5), src2.status()
+        v = src2.status()["values"]
+        assert v["v_water"] is None and (v["v_syrup"], v["v_product"]) == (40, 50), v
+        ms = MicroscopeService()
+        ms.sv_source = src2
+        snap = ms._plc_snapshot()
+        assert "v_water" not in snap and snap["v_syrup"] == 40, snap
+        time.sleep(0.5)
+        d = src2.take_valves()
+        assert "water_dose" not in d and "water_s" not in d and d["syrup_dose"] > 0, d
+    finally:
+        src2.stop()
+        fake.regs[659], fake.regs[660], fake.regs[661] = old_regs
+    # 4. варка: клапан воды читался только на подкачке (до СВ 85,5), на стабилизации неизвестен — решает провал СВ, а не «воды нет»
+    plan = [(5, 82.0), (7, 84.0), (7, 85.6), (7, 86.0), (7, 86.3), (7, 86.5), (8, 88.0), (9, 89.0)]
+    g = [{"t": 60.0 * i, "stage": st, "sv": sv} for i, (st, sv) in enumerate(plan)]
+    g[0].update(v_water=36.0, water_dose=1200, water_s=33)
+    m = cv_store.boil_metrics(g)
+    assert (m["water"], m["water_by"], m["water_dose"]) == (False, "sv", None), m
+    dip = [dict(r, sv=84.8) if i == 4 else r for i, r in enumerate(g)]    # 86,0 → 84,8 — провал на стабилизации
+    assert (cv_store.boil_metrics(dip)["water"], cv_store.boil_metrics(dip)["water_by"]) == (True, "sv")
+    # 5. старые пробы в базе (до 1.9.87): 65535 и среднее по кадрам с ним (26222), доза — мусор «открыт на 100 %».
+    #    При чтении — None, «вода да» по клапану нет; сироп и подкачка (36 %) как есть, в базе данные не меняются
+    tmp = Path(tempfile.mkdtemp(prefix="mvs_valve_")) / "v.db"
+    old_path = db.DB_PATH
+    db.set_path(tmp)
+    try:
+        t0 = time.mktime(time.strptime("2026-10-19 12:12", "%Y-%m-%d %H:%M"))
+        for i, r in enumerate(g):
+            row = dict(r, ts=time.strftime(cv_store.TS_FMT, time.localtime(t0 + r["t"])), t=t0 + r["t"], v_syrup=45.0, syrup_dose=4500, syrup_s=100)
+            if i:
+                row.update(v_water=26222.0 if i == 1 else 65535.0, water_dose=10000, water_s=100)
+            db.upsert_row("SELFVALVE", row)
+        raw = cv_store._hist_read("SELFVALVE", "2026-10-19", clean=False)
+        assert cv_store.boil_metrics(raw)["water_by"] == "valve" and cv_store.boil_metrics(raw)["water"] is True, "без чистки — та самая ложная вода"
+        rows = cv_store._hist_read("SELFVALVE", "2026-10-19")
+        assert [r["v_water"] for r in rows] == [36.0] + [None] * 7 and all(r["water_dose"] is None and r["water_s"] is None for r in rows[1:]), rows
+        assert rows[0]["water_s"] == 33 and all(r["v_syrup"] == 45.0 and r["syrup_s"] == 100 for r in rows), "нормальные клапаны не трогаем"
+        m = cv_store.boil_metrics(rows)
+        assert (m["water"], m["water_by"]) == (False, "sv"), m
+        assert cv_store._hist_read("SELFVALVE", "2026-10-19", clean=False)[2]["v_water"] == 65535.0, "в базе как было"
+    finally:
+        db.set_path(old_path)
+    return "65535/мусор — None, дозы нет; 36 % посреди мусора — 2 с; стабилизация без клапана → по СВ; старые пробы «вода да» → «нет (по СВ)»"
+
+
 @check("Микроскоп", "Сравнение варок целиком: перестановочный тест, разброс между варками, итог по правилам (качество важнее времени), варка на границе / короткая / затянутая не в счёт, запрет разных моделей")
 def _boil_compare():
     import boil_compare as bc

@@ -1658,9 +1658,23 @@ def _changes_journal():
         assert report.changes("CHG", t + 120) == [], "период после изменения — пусто"
         tg = report.seed_target()
         assert set(tg) == {"fines_max", "size_min_um", "size_max_um"} and tg["size_min_um"] < tg["size_max_um"], tg
+        # группы «до / после»: варки 08:00, 10:00, 12:00 (по 8 проб); изменения 09:00, 11:00 и 11:05 — между 11:00 и 11:05 целой варки
+        # нет, это одно изменение: «до» кончается в 11:00 и начинается с прошлого изменения (09:00)
+        import boil_compare as bc
+        day = time.mktime((2026, 10, 6, 0, 0, 0, 0, 0, -1))
+        rows = []
+        for h in (8, 10, 12):
+            for i in range(8):
+                ts = "2026-10-06_%02d_%02d_00" % (h, i)
+                rows.append({"ts": ts, "t": day + h * 3600 + i * 60, "stage": 7, "sv": 84.0 + i * 0.5, "mean": 150.0, "count": 100.0})
+        db.upsert_many("AR", rows)
+        for hm, text in ((9 * 60, "подкачка"), (11 * 60, "вода"), (11 * 60 + 5, "рецепт")):
+            db.change_save("AR", day + hm * 60, text, 1.0)
+        ar = bc.around("AR", day + (11 * 60 + 5) * 60, now=day + 86400)
+        assert (ar["b_from"], ar["b_to"], ar["a_from"], ar["together"]) == (day + 9 * 3600, day + 11 * 3600, day + (11 * 60 + 5) * 60, [day + 11 * 3600]), ar
     finally:
         db.set_path(old_path)
-    return "2 изменения по времени, правка своего, чужое не трогается; цели %s" % report.seed_target()
+    return "2 изменения по времени, правка своего, чужое не трогается; 11:00 и 11:05 — одно изменение; цели %s" % report.seed_target()
 
 
 @check("CV", "cv_store: разовый сбой СВ (0,0 или 58 при 87) обнуляется при чтении журнала, граница варок 88 → 80 остаётся")

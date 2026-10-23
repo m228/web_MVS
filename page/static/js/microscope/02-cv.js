@@ -125,7 +125,7 @@
   }
   // статус сервиса + статус последнего разбора (чтобы отказ был виден, а не молчал).
   // Возвращает состояние разбора (running/ok/…): по нему кнопка «Разобрать пробу» ждёт конца.
-  const CV_FAIL = ["no_camera", "no_frames", "sidecar_offline", "error"];
+  const CV_FAIL = ["no_camera", "no_frames", "overexposed", "sidecar_offline", "error"];
   // версия CV-сервиса внизу шапки: номер релиза, «старый» (сервис без версии — нужен UpdaterCV), «нет связи»
   function setVerCv(text, cls, title) {
     const e = $("verCv"); if (!e) return;

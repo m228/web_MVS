@@ -27,7 +27,7 @@ from PyInstaller.utils.hooks import collect_all, collect_submodules
 datas = [('page', 'page'), ('Driver', 'Driver'), ('VERSION', '.')]
 binaries = []
 hiddenimports = ['app', 'camera_core', 'rtsp_store', 'net_tools', 'paths', 'logger', 'updater', 'diag',
-                 'dahua_control', 'sdk_gige',
+                 'dahua_control', 'sdk_gige', 'camera_params',
                  # микроскоп (страница /microscope): плата по Modbus TCP + автомат
                  'microscope_service', 'microscope_plc', 'microscope_fsm', 'plate_config', 'sv_source']
 # selfcheck.py грузит модули по имени строкой (importlib) — PyInstaller их не увидит сам

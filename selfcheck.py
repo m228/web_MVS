@@ -1561,7 +1561,14 @@ def _boil_metrics():
     m = cv_store.boil_metrics(low)
     assert m["water"] is None and m["point_um"] is None and m["to_ready_min"] is None, m
     assert report._cell({"water": True, "water_by": "sv"}, "water") == "да (по СВ)" and report._cell({"water": False, "water_by": "valve"}, "water") == "нет"
-    return "доза только при открытом продукте; провал 86,4 → 84,6 — вода, УНВ нет; на 86: 165 мкм, +52,5 до финиша, 9 мин до готовности"
+    # 5. маточник целиком: заводка за 2 мин до первой пробы (время с заводки из ПЛК), однородность и сростки — по пробам финиша (12–15-я)
+    full = [dict(r, seed_age=r["t"] + 120, cv_pct=40.0 + i, n_aggregate=20.0 if i == 15 else 10.0, count=100.0) for i, r in enumerate(g)]
+    m = cv_store.boil_metrics(full)
+    assert (m["seed_t"], m["seed_ready_min"], m["seed_end_min"]) == (-120.0, 15.0, 17.0), "готовность (780 с) и последняя проба (900 с) от заводки: %s" % m
+    assert m["fin_cv"] == 53.5 and m["fin_agg_pct"] == 12.5, "CV 52…55 → 53,5; сростков 50 на 400 кристаллов: %s / %s" % (m["fin_cv"], m["fin_agg_pct"])
+    bui = cv_store.boil_metrics([dict(r, stage=8) if r["stage"] == 9 else r for r in full])
+    assert bui["seed_ready_min"] is None and bui["seed_end_min"] == 17.0, "нет «готовности» в пробах (Буи) — только заводка → последняя проба"
+    return "доза только при открытом продукте; провал 86,4 → 84,6 — вода, УНВ нет; на 86: 165 мкм; заводка → готовность 15 мин, CV 53,5, сростки 12,5 %"
 
 
 @check("Микроскоп", "Мусор в регистре клапана (Кир, вода: 65535): значение неизвестно — не доза и не «вода да», решает провал СВ; старые пробы в базе тоже")
@@ -1642,7 +1649,7 @@ def _plc_valve_garbage():
     return "65535/мусор — None, дозы нет; 36 % посреди мусора — 2 с; стабилизация без клапана → по СВ; старые пробы «вода да» → «нет (по СВ)»"
 
 
-@check("Микроскоп", "Сравнение групп варок: перестановочный тест, разница при равном размере на точке, вердикт, запрет разных моделей, затянутые варки не в счёт")
+@check("Микроскоп", "Сравнение варок целиком: перестановочный тест, разброс между варками, итог по правилам (качество важнее времени), варка на границе / короткая / затянутая не в счёт, запрет разных моделей")
 def _boil_compare():
     import boil_compare as bc
     assert abs(bc.perm_p([1, 2], [3, 4]) - 2 / 6) < 1e-9, "полный перебор 6 разбиений: крайние два"
@@ -1651,35 +1658,101 @@ def _boil_compare():
     assert bc.need_per_group(10, 10) == 16 and bc.need_per_group(10, 0) is None
     jit = [1.5, -2.0, 0.5, 2.5, -1.0, -0.5, 1.0, -2.5, 2.0, -1.5]
 
-    def mk(i, water, point, grow, model="26x_1280.pt@1280", dur=80.0):
-        return {"t_start": 1000.0 * i, "start": "b%d" % i, "finished": True, "duration_min": dur, "water": water, "model": model,
-                "point_um": point, "fin_um": point + grow, "grow_um": grow, "to_ready_min": 30.0 if water else 21.0, "fines_avg": 12 - point / 20}
-    # вода: старт крупнее на ~10 мкм, прирост при равном старте −8 мкм; без поправки разница финиша почти не видна
-    wet = [mk(i, True, 190 + 5 * i, 50 - 8 - 0.2 * (5 * i) + jit[i]) for i in range(6)]
-    dry = [mk(10 + i, False, 175 + 5 * i, 50 - 0.2 * (5 * i - 15) + jit[i]) for i in range(10)]
-    a, b = {"from": 0, "to": 1e9, "water": True}, {"from": 0, "to": 1e9, "water": False}
-    r = bc.compare_rows(wet + dry, a, b)
-    assert r["ok"] and len(r["a"]["boils"]) == 6 and len(r["b"]["boils"]) == 10, r
-    m = {x["key"]: x for x in r["metrics"]}
-    e = m["grow_um"]["adj"]
-    assert -10 < e["eff"] < -6 and e["hi"] < 0 and e["verdict"] == "real", "прирост при равном старте −8: %s" % e
-    assert m["to_ready_min"]["verdict"] == "real" and m["to_ready_min"]["diff"] == 9.0, m["to_ready_min"]
-    assert m["fines_avg"]["adj"]["verdict"] == "noise", "мука зависит только от старта — при равном старте разницы нет: %s" % m["fines_avg"]["adj"]
-    # затянутая варка (простой) не в счёт и видна в ответе
-    r = bc.compare_rows(wet + dry + [mk(30, False, 180, 90, dur=220.0)], a, b)
-    assert [x["start"] for x in r["excluded"]] == ["b30"] and len(r["b"]["boils"]) == 10, r["excluded"]
+    def mk(i, model="26x_1280.pt@1280", dur=80.0, **kw):
+        j = lambda k: jit[(i + k) % 10]       # noqa: E731
+        b = {"t_start": 10000.0 * i, "start": "b%d" % i, "finished": True, "duration_min": dur, "flag": None, "water": None, "model": model,
+             "fin_um": 240 + 2 * j(0), "fines_avg": 7 + 0.3 * j(0), "fin_agg_pct": 10 + 0.2 * j(0), "fin_cv": 41 + 0.3 * j(3),
+             "seed_ready_min": 60 + j(5), "seed_end_min": 70 + j(5)}
+        b.update({k: (v(i) if callable(v) else v) for k, v in kw.items()})
+        b.setdefault("t_end", b["t_start"] + dur * 60)
+        return b
+
+    def grp_a(n=6, **kw):
+        return [mk(i, **kw) for i in range(n)]
+    gb = [mk(10 + i) for i in range(10)]
+    a, b = {"from": 0, "to": 95000}, {"from": 100000, "to": 1e9}
+
+    def run(ga, mode="groups", extra=()):
+        r = bc.compare_rows(ga + gb + list(extra), a, b, mode=mode)
+        assert r["ok"], r
+        return r, {x["key"]: x for x in r["metrics"]}, r["summary"]
+    # ничего не меняли — разницы нет; разброс между варками на 6 варках не поймать — строкой, но итог не «мало варок»
+    r, m, s = run(grp_a())
+    assert s["verdict"] == "none" and m["fin_um_spread"]["verdict"] == "few", s
+    # муки меньше — плюс; плюс, но дольше — «решать технологу»; хуже по сросткам — минус, даже если быстрее
+    r, m, s = run(grp_a(fines_avg=lambda i: 4 + 0.3 * jit[i]))
+    assert m["fines_avg"]["verdict"] == "real" and s["verdict"] == "plus" and s["text"] == "Итог: изменение в плюс — муки меньше.", s
+    r, m, s = run(grp_a(fines_avg=lambda i: 4 + 0.3 * jit[i], seed_ready_min=lambda i: 75 + jit[(i + 5) % 10]))
+    assert s["verdict"] == "mixed" and "дольше на 15 мин" in s["text"], s
+    r, m, s = run(grp_a(fin_agg_pct=lambda i: 14 + 0.2 * jit[i], seed_ready_min=lambda i: 50 + jit[(i + 5) % 10]), mode="change")
+    assert s["verdict"] == "minus" and "сростков больше" in s["text"] and "короче на 10 мин" in s["text"] and s["caveat"], s
+    # крупнее и муки меньше — одна строка и один плюс (у нас это почти один сигнал)
+    r, m, s = run(grp_a(fines_avg=lambda i: 4 + 0.3 * jit[i], fin_um=lambda i: 260 + 2 * jit[i]))
+    assert s["text"] == "Итог: изменение в плюс — кристалл крупнее и муки меньше." and sum("один сигнал" in x for x in s["lines"]) == 1, s
+    # порог муки 8 %: медиана группы выше — минус; вне коридора размера — минус
+    r, m, s = run(grp_a(fines_avg=lambda i: 9 + 0.3 * jit[i]))
+    assert m["fines_avg"]["off"] == {"a": True, "b": False} and "мука выше порога 8 %" in s["text"], s
+    r, m, s = run(grp_a(fin_um=lambda i: 320 + 2 * jit[i]))
+    assert m["fin_um"]["off"]["a"] and "вне коридора 200–300" in s["text"] and s["verdict"] == "minus", s
+    # разброс между варками: 8 варок с размером ±20 мкм против ±4 — гуляет сильнее, реально
+    r, m, s = run(grp_a(8, fin_um=lambda i: 240 + 10 * jit[i]))
+    assert m["fin_um_spread"]["verdict"] == "real" and "гуляет сильнее" in s["text"], (m["fin_um_spread"], s)
+    # на границе групп (шла в момент изменения), короткая и затянутая — не в счёт, видны в ответе
+    r, m, s = run(grp_a(), extra=[mk(7, t_start=90000.0, t_end=101000.0), mk(8, flag="short", dur=30.0), mk(25, dur=220.0)])
+    assert {x["start"]: x["why"] for x in r["excluded"]} == {"b7": "edge", "b8": "short", "b25": "long"} and len(r["a"]["boils"]) == 6 and len(r["b"]["boils"]) == 10, r["excluded"]
+    # «готовности» в пробах нет (Буи) — время от заводки до последней пробы
+    r = bc.compare_rows([dict(x, seed_ready_min=None) for x in grp_a() + gb], a, b)
+    assert "seed_end_min" in {x["key"] for x in r["metrics"]} and "seed_ready_min" not in {x["key"] for x in r["metrics"]}
     # мало варок, разные модели, пересечение групп, модель не записана
-    r = bc.compare_rows(wet[:3] + dry, a, b)
-    assert all(x["verdict"] == "few" for x in r["metrics"]), "3 варки в группе — «мало варок»"
-    r = bc.compare_rows(wet + [dict(x, model="best.pt@640") for x in dry], a, b)
+    r, m, s = run(grp_a(3))
+    assert all(x["verdict"] == "few" for x in r["metrics"]) and s["verdict"] == "few", "3 варки в группе — «мало варок»"
+    r = bc.compare_rows(grp_a() + [dict(x, model="best.pt@640") for x in gb], a, b)
     assert not r["ok"] and "разные модели" in r["error"], r
-    r = bc.compare_rows(wet + dry, {"from": 0, "to": 13000}, {"from": 12000, "to": 1e9})
+    r = bc.compare_rows(grp_a() + gb, {"from": 0, "to": 130000}, {"from": 20000, "to": 1e9})
     assert not r["ok"] and "пересекаются" in r["error"], r
-    r = bc.compare_rows(wet + [dict(x, model=None) for x in dry], a, b)
+    r = bc.compare_rows(grp_a() + [dict(x, model=None) for x in gb], a, b)
     assert r["ok"] and r["unknown_model"] == 10 and "другой (старой)" in r["warnings"][0], r["warnings"]
     assert bc.parse_t("2026-10-19 11:20") == time.mktime((2026, 10, 19, 11, 20, 0, 0, 0, -1))
     assert bc.parse_t("2026-10-19", True) - bc.parse_t("2026-10-19") == 86399
-    return "p 2/6 перебором; −8 мкм при равном старте — «реальная»; затянутая выкинута; разные модели — отказ"
+    return "плюс / минус / «решать технологу» по правилам; крупнее и муки меньше — один плюс; порог 8 % и коридор; граница, короткая, затянутая — не в счёт"
+
+
+@check("Микроскоп", "Журнал изменений: добавить, поправить, удалить; чужой серийник не трогается; отчёт отдаёт изменения периода и цели маточника")
+def _changes_journal():
+    import tempfile
+    import db, report
+    old_path = db.DB_PATH
+    db.set_path(Path(tempfile.mkdtemp(prefix="mvs_chg_")) / "c.db")
+    try:
+        t = time.mktime((2026, 10, 19, 12, 0, 0, 0, 0, -1))
+        i1 = db.change_save("CHG", t, "рецепт 2", 1.0)
+        i2 = db.change_save("CHG", t - 2400, "подкачка 40 %", 2.0)
+        db.change_save("OTHER", t, "чужой", 3.0)
+        assert [c["text"] for c in db.changes("CHG")] == ["подкачка 40 %", "рецепт 2"], "по времени"
+        assert db.change_save("CHG", t + 60, "рецепт 2 — стабилизация 82,5", 4.0, i1) == i1 and db.change_save("OTHER", t, "x", 5.0, i1) is None
+        assert db.change_delete("OTHER", i2) is False and db.change_delete("CHG", i2) is True
+        ch = report.changes("CHG")
+        assert len(ch) == 1 and ch[0]["text"] == "рецепт 2 — стабилизация 82,5" and ch[0]["label"] == "19.10 12:01", ch
+        assert report.changes("CHG", t + 120) == [], "период после изменения — пусто"
+        tg = report.seed_target()
+        assert set(tg) == {"fines_max", "size_min_um", "size_max_um"} and tg["size_min_um"] < tg["size_max_um"], tg
+        # группы «до / после»: варки 08:00, 10:00, 12:00 (по 8 проб); изменения 09:00, 11:00 и 11:05 — между 11:00 и 11:05 целой варки
+        # нет, это одно изменение: «до» кончается в 11:00 и начинается с прошлого изменения (09:00)
+        import boil_compare as bc
+        day = time.mktime((2026, 10, 6, 0, 0, 0, 0, 0, -1))
+        rows = []
+        for h in (8, 10, 12):
+            for i in range(8):
+                ts = "2026-10-06_%02d_%02d_00" % (h, i)
+                rows.append({"ts": ts, "t": day + h * 3600 + i * 60, "stage": 7, "sv": 84.0 + i * 0.5, "mean": 150.0, "count": 100.0})
+        db.upsert_many("AR", rows)
+        for hm, text in ((9 * 60, "подкачка"), (11 * 60, "вода"), (11 * 60 + 5, "рецепт")):
+            db.change_save("AR", day + hm * 60, text, 1.0)
+        ar = bc.around("AR", day + (11 * 60 + 5) * 60, now=day + 86400)
+        assert (ar["b_from"], ar["b_to"], ar["a_from"], ar["together"]) == (day + 9 * 3600, day + 11 * 3600, day + (11 * 60 + 5) * 60, [day + 11 * 3600]), ar
+    finally:
+        db.set_path(old_path)
+    return "2 изменения по времени, правка своего, чужое не трогается; 11:00 и 11:05 — одно изменение; цели %s" % report.seed_target()
 
 
 @check("CV", "cv_store: разовый сбой СВ (0,0 или 58 при 87) обнуляется при чтении журнала, граница варок 88 → 80 остаётся")
@@ -2186,9 +2259,43 @@ def _report():
         only = report.to_csv(rep, ["fines_avg", "probes"]).decode("utf-8-sig")
         assert "мука на финише" in only and "длительность" not in only and "разломов" not in only and "брак" not in only, "CSV — только выбранные столбцы"
         assert len(report.build("REP", t0 + 2 * 86400, t0 + 3 * 86400)["boils"]) == 0 or True
+        assert len(rep["days"]) == 2 and rep["days"][0]["day"] == "2026-10-06" and rep["days"][0]["boils"] == 1, rep["days"]
+        assert len(rep["segments"]) == 1 and rep["segments"][0]["model"] is None, "модель не записана — один отрезок"
     finally:
         db.set_path(old_path)
     return "варок %d, мука с порога, подстадии, CSV" % len(rep["boils"])
+
+
+@check("CV", "report: итоги без нетипичных варок — короткая/затянутая/идущая помечены, медиана и 25–75 %, лучшая/худшая, дни, отрезки по модели")
+def _report_summary():
+    import report
+
+    def row(i, dur, fines, model=None, finished=True, water=None, day="2026-10-13"):
+        return {"start": "%s_%02d_00_00" % (day, i), "t_start": float(i), "duration_min": dur, "probes": 10, "frac_zones": 0, "finished": finished,
+                "fines_avg": fines, "fin_um": 150.0 + i, "point_um": 120.0, "grow_um": 30.0 + i, "model": model, "water": water,
+                "sieve": [5.0, 80.0, 10.0, 5.0, None, None]}
+    rows = [row(0, 80, 6.0), row(1, 82, 4.0, water=True), row(2, 40, 39.0), row(3, 78, 8.0, water=False), row(4, 200, 1.0),     # 40 — короткая, 200 — затянутая
+            row(5, 79, 5.0, model="26x_1280.pt@1280"), row(6, 81, 7.0, model="26x_1280.pt@1280"), row(7, 30, 2.0, model="26x_1280.pt@1280", finished=False)]
+    report._mark_flags(rows)
+    assert [r["flag"] for r in rows] == [None, None, "short", None, "long", None, None, "open"], [r["flag"] for r in rows]
+    t = report._totals(rows)
+    assert t["boils"] == 8 and t["typical"] == 5 and t["short"] == 1 and t["long"] == 1, t
+    f = t["fines_avg"]
+    assert (f["n"], f["median"], f["q1"], f["q3"], f["min"], f["max"]) == (5, 6.0, 5.0, 7.0, 4.0, 8.0), "мука по типичным 4, 5, 6, 7, 8: %r" % (f,)
+    assert t["best"]["fines_avg"] == 4.0 and t["worst"]["fines_avg"] == 8.0, "обрывок 39 % и затянутая 1 % — не лучшая/худшая: %r / %r" % (t["best"], t["worst"])
+    assert (t["water"], t["water_known"]) == (1, 2) and t["sieve"][:4] == [5.0, 80.0, 10.0, 5.0] and t["sieve"][4] is None, (t["water"], t["sieve"])
+    assert report._quantile([1.0, 2.0, 3.0, 4.0], 0.25) == 1.75, "квантиль — как ПРОЦЕНТИЛЬ.ВКЛ"
+    seg = report._segments(rows)
+    assert [(s["model"], s["boils"], s["typical"]) for s in seg] == [(None, 5, 3), ("26x_1280.pt@1280", 3, 2)], [(s["model"], s["boils"], s["typical"]) for s in seg]
+    gap = [row(0, 80, 6.0, model="A"), row(1, 80, 6.0), row(2, 80, 6.0, model="A"), row(3, 80, 6.0, model="B")]
+    assert [(s["model"], s["boils"]) for s in report._segments(gap)] == [("A", 3), ("B", 1)], "A, без записи, A — одна модель, не смена"
+    few = [row(0, 80, 6.0), row(1, 20, 6.0)]
+    report._mark_flags(few)
+    assert [r["flag"] for r in few] == [None, None], "меньше 3 законченных варок — короткие не ищем"
+    csv = report.to_csv({"serial": "X", "from": 0.0, "to": 0.0, "sieve_labels": list(report.SIEVE_LABELS), "boils": rows, "totals": t,
+                         "weeks": [], "substages": []}, ["fines_avg"]).decode("utf-8-sig")
+    assert "пометка" in csv and "короткая" in csv and "затянутая" in csv and "медиана" in csv and "рассев" not in csv, "CSV: пометка всегда, рассев — только если выбран"
+    return "5 типичных из 8, мука 6 (5–7), лучшая 4 / худшая 8, 2 отрезка модели"
 
 
 import db as _db_for_path

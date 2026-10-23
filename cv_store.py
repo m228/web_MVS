@@ -241,12 +241,16 @@ def water_by_sv(g: list, from_sv: float = WATER_FROM_SV, dip: float = WATER_DIP_
 def boil_metrics(g: list, point_sv: float = POINT_SV, fin_sv: float = 2.0) -> dict:
     """Показатели для сравнения варок: вода на стабилизации (по клапану, а без него — по провалу СВ, water_by = "sv"), размер на контрольной
     точке СВ (первая проба до уваривания с СВ ≥ point_sv), размер на финише, прирост от точки до финиша (мкм), минут от точки до готовности,
-    модель распознавания (самая частая у проб варки)."""
+    модель распознавания (самая частая у проб варки).
+    Маточник целиком (сравнение варок, tasks/seed-quality-criteria.md): seed_t — момент заводки, seed_ready_min — заводка → готовность
+    (стадия 9), seed_end_min — заводка → последняя проба (у Буи «готовность» в пробы почти не попадает), fin_cv — однородность (разброс
+    размера CV %, среднее проб финиша), fin_agg_pct — сростки на финише, % по числу кристаллов."""
     def avg(v):
         v = [x for x in v if x is not None]
         return round(sum(v) / len(v), 1) if v else None
     out = {"water": None, "water_by": None, "water_dose": None, "water_s": None, "water_dip": None,
-           "point_um": None, "fin_um": None, "grow_um": None, "to_ready_min": None, "model": None}
+           "point_um": None, "fin_um": None, "grow_um": None, "to_ready_min": None, "model": None,
+           "seed_t": None, "seed_ready_min": None, "seed_end_min": None, "fin_cv": None, "fin_agg_pct": None}
     models = [r["model"] for r in g if r.get("model")]
     if models:                                          # модель распознавания варки (пробы до 1.9.76 её не пишут — None)
         out["model"] = max(set(models), key=models.count)
@@ -258,6 +262,18 @@ def boil_metrics(g: list, point_sv: float = POINT_SV, fin_sv: float = 2.0) -> di
         out.update(water=d is not None, water_by="sv", water_dip=[d[0]["sv"], d[1]["sv"]] if d else None)
     fin, _ = finish_probes([r for r in g if r.get("fines_m3") is not None], fin_sv)
     out["fin_um"] = avg([r.get("mean") for r in fin])
+    out["fin_cv"] = avg([r.get("cv_pct") for r in fin])
+    agg = [r for r in fin if r.get("n_aggregate") is not None and r.get("count")]     # сростков на кадр / кристаллов на кадр
+    if agg:
+        out["fin_agg_pct"] = round(100.0 * sum(r["n_aggregate"] for r in agg) / sum(r["count"] for r in agg), 1)
+    seed = _est_seed_ts(g)
+    ready = next((r["t"] for r in g if (_recipe_stage(r) or 0) >= 9), None)
+    if seed is not None:
+        out["seed_t"] = seed
+        if ready is not None and ready > seed:
+            out["seed_ready_min"] = round((ready - seed) / 60.0, 1)
+        if g[-1]["t"] > seed:
+            out["seed_end_min"] = round((g[-1]["t"] - seed) / 60.0, 1)
     p = next((r for r in g if (_recipe_stage(r) or 0) and _recipe_stage(r) < 8 and (r.get("sv") or 0) >= point_sv), None)
     if p is None:
         return out

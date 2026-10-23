@@ -363,19 +363,28 @@ def build(serial: str, a: dict, b: dict, mode: str = "groups") -> dict:
 
 def around(serial: str, t: float, now: Optional[float] = None) -> dict:
     """Группы по умолчанию для изменения в момент t: А — от t до следующего изменения (или до сейчас), Б — от прошлого изменения до t,
-    но не раньше смены модели распознавания и не длиннее AROUND_MAX_S."""
+    но не раньше смены модели распознавания и не длиннее AROUND_MAX_S. Изменения, между которыми не уместилась ни одна целая варка
+    (19.10: подкачка 40 % в 11:20, рецепт 2 в 12:00), — одно изменение: Б кончается на первом из них, в ответе — together."""
     now = time.time() if now is None else now
-    ch = [c["t"] for c in report.changes(serial)]
+    ch = sorted(c["t"] for c in report.changes(serial))
     nxt = min([x for x in ch if x > t + 60], default=None)
-    prv = max([x for x in ch if x < t - 60], default=None)
+    groups = cv_store.boil_groups(serial)
+    rows = report.build(serial, t - AROUND_MAX_S - 86400, t, groups=groups)["boils"]
+    b_to, together = t, []
+    while True:
+        prv = max([x for x in ch if x < b_to - 60], default=None)
+        if prv is None or any(prv <= r["t_start"] and r["t_end"] <= b_to for r in rows if r.get("finished")):
+            break
+        together.append(prv)                # между prv и b_to целой варки нет — это одно изменение
+        b_to = prv
     b_from = max(x for x in (prv, t - AROUND_MAX_S) if x is not None)
-    rows = report.build(serial, b_from, t)["boils"]
-    segs = report._segments(rows)
+    segs = report._segments([r for r in rows if b_from <= r["t_start"] <= b_to])
     if len(segs) > 1:                       # модель меняли внутри «до» — Б только с последнего отрезка
         first = next((r for r in rows if r["start"] == segs[-1]["from"]), None)
         if first is not None:
             b_from = first["t_start"]
-    return {"a_from": t, "a_to": nxt if nxt is not None else now, "b_from": b_from, "b_to": t, "next_change": nxt, "prev_change": prv}
+    return {"a_from": t, "a_to": nxt if nxt is not None else now, "b_from": b_from, "b_to": b_to, "next_change": nxt, "prev_change": prv,
+            "together": together}
 
 
 def _place(v: Optional[float], ref: list) -> Optional[float]:

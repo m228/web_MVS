@@ -841,6 +841,7 @@
               <button type="button" class="micro-win-btn" id="teleTrendBtn" data-tele="trend">Тренды</button>
               <button type="button" class="micro-win-btn" id="teleCfgBtn" data-tele="cfg">CV</button>
               <button type="button" class="micro-win-btn" id="teleReportBtn" data-tele="report">Отчёт</button>
+              <button type="button" class="micro-win-btn" id="teleCompareBtn" data-tele="compare" title="Варки до и после изменения, одна варка против обычных; журнал изменений">Сравнение</button>
               <button type="button" class="micro-win-btn" id="teleVideoBtn" data-tele="video" hidden title="Ролик варки: фото проб с контурами, рассев и графики (видео-сервис)">Ролик</button>
             </div>
             <!-- название проекта для скриншотов (вкладки «Распознавание» и «Тренды»): Enter — фиксируется, двойной клик — править -->
@@ -1168,7 +1169,11 @@
                   <input type="date" id="repFrom" /> — <input type="date" id="repTo" />
                 </span>
                 <label class="micro-rep-fin" title="Мука и рассев варки считаются на ФИНИШЕ: берутся все пробы, где СВ в пределах этого числа от конечного (последние 1,5–2 СВ). Начало варки, где кристаллы ещё мелкие, в среднее не входит">финиш, СВ <input type="number" id="repFinSv" min="0.5" max="10" step="0.5" value="2" /></label>
-              <button type="button" id="repGoBtn" class="toolbar-btn toolbar-btn--primary" title="Собрать отчёт по варкам за выбранный период">Сформировать отчёт</button>
+                <span class="micro-seg2" id="repViewSeg" role="group" aria-label="Вид отчёта">
+                  <button type="button" data-v="charts" class="is-active" title="Графики по варкам: точки, медиана, «обычно», цели маточника">графики</button>
+                  <button type="button" data-v="numbers" title="Числа: таблицы по дням и по каждой варке">числа</button>
+                </span>
+              <button type="button" id="repGoBtn" class="toolbar-btn toolbar-btn--primary" title="Собрать отчёт по варкам за выбранный период">Сформировать</button>
                 <button type="button" id="repColsBtn" class="toolbar-btn toolbar-btn--neutral" title="Какие столбцы показывать в отчёте (запоминается, действует и на CSV)">Столбцы</button>
               <button type="button" id="repCsvBtn" class="toolbar-btn toolbar-btn--neutral" title="Скачать отчёт в CSV (открывается в Excel)" disabled>CSV</button>
                 <button type="button" id="repPdfBtn" class="toolbar-btn toolbar-btn--neutral" title="Печать → «Сохранить как PDF»" disabled>PDF</button>
@@ -1176,6 +1181,45 @@
               </div>
               <div class="micro-rep-cols" id="repColsPanel" hidden></div>
               <div class="micro-rep-out" id="repOut"><div class="micro-conn-hint">Выбери период и нажми «Сформировать отчёт».</div></div>
+          </div>
+
+          <!-- «Сравнение» — варки после изменения против варок до него, одна варка против обычных, журнал изменений (08-compare.js, boil_compare.py) -->
+          <div class="micro-tele-compare" id="teleStripCompare" hidden>
+            <div class="micro-rep-bar">
+              <span class="micro-seg2" id="cmpModeSeg" role="group" aria-label="Что сравнить">
+                <button type="button" data-m="change" class="is-active" title="Варки после изменения против варок до него">до / после</button>
+                <button type="button" data-m="one" title="Одна варка против обычных: 20 предыдущих варок той же модели">одна варка</button>
+              </span>
+              <span class="micro-cmp-pick" id="cmpChangeBox">
+                <select id="cmpChange" title="Изменение из журнала — или свой момент"></select>
+                <input type="datetime-local" id="cmpAt" title="Момент изменения: группы «до» и «после» подставятся сами" />
+              </span>
+              <span class="micro-cmp-pick" id="cmpOneBox" hidden>
+                <select id="cmpBoil" title="Какую варку сравнить с обычными"></select>
+              </span>
+              <button type="button" id="cmpGoBtn" class="toolbar-btn toolbar-btn--primary" title="Сравнить варки">Сравнить</button>
+              <button type="button" id="cmpPdfBtn" class="toolbar-btn toolbar-btn--neutral" title="Печать → «Сохранить как PDF»" disabled>PDF</button>
+              <span class="micro-conn-hint" id="cmpHint"></span>
+            </div>
+            <div class="micro-cmp-groups" id="cmpGroups">
+              <span class="micro-cmp-g is-a" title="Группа А — варки после изменения. Варка, которая шла в момент изменения, не идёт ни в одну группу"><i></i><b>А · после</b>
+                <input type="datetime-local" id="cmpAFrom" /> — <input type="datetime-local" id="cmpATo" />
+                <select id="cmpAWater" title="Вода на стабилизации"><option value="">вода: любая</option><option value="1">с водой</option><option value="0">без воды</option></select></span>
+              <span class="micro-cmp-g is-b" title="Группа Б — варки до изменения: от прошлого изменения, но не раньше смены модели и не длиннее двух недель"><i></i><b>Б · до</b>
+                <input type="datetime-local" id="cmpBFrom" /> — <input type="datetime-local" id="cmpBTo" />
+                <select id="cmpBWater" title="Вода на стабилизации"><option value="">вода: любая</option><option value="1">с водой</option><option value="0">без воды</option></select></span>
+            </div>
+            <div class="micro-rep-out" id="cmpOut"><div class="micro-conn-hint">Выбери изменение из журнала (или свой момент) и нажми «Сравнить».</div></div>
+            <section class="micro-cmp-journal">
+              <div class="micro-rep-h">Журнал изменений <small>что меняли в процессе: рецепт, подкачку, воду — отметки на графиках отчёта и «до / после» здесь</small></div>
+              <div class="micro-cmp-add">
+                <input type="datetime-local" id="chgAt" title="Когда изменили" />
+                <input type="text" id="chgText" maxlength="200" placeholder="Что изменили: рецепт 2, подкачка 40 %…" autocomplete="off" />
+                <button type="button" id="chgSaveBtn" class="toolbar-btn toolbar-btn--neutral">Добавить</button>
+                <button type="button" id="chgCancelBtn" class="toolbar-btn toolbar-btn--neutral" hidden>Отмена</button>
+              </div>
+              <div class="micro-cmp-list" id="chgList"></div>
+            </section>
           </div>
 
           <!-- «Ролик» — ролик варки через видео-сервис (video_service/); вкладка видна, только пока сервис отвечает (07-video.js) -->
@@ -1267,6 +1311,12 @@
           <div class="micro-zip-list" id="cvZipList"></div>
               </section>
               <section class="micro-cfg-card">
+                <h4>Цели маточника</h4>
+          <label class="micro-cycle-f" title="Мука на финише выше этого — плохо: красным на графиках отчёта, минус в итоге сравнения. 3–4 % — хорошо, 15–16 % — много."><span>Мука не выше, %</span><input type="number" id="cvSeedFines" step="0.5" min="0" max="50" /></label>
+          <label class="micro-cycle-f" title="Средний размер на финише ниже этого — плохо (по книгам затравка для утфеля I — 180–220 мкм, общее 180–300)."><span>Размер от, мкм</span><input type="number" id="cvSeedMin" step="10" min="0" /></label>
+          <label class="micro-cycle-f" title="Средний размер на финише выше этого — плохо: крупнее при той же дозе — меньше кристаллов в утфеле I, сахар крупнее."><span>Размер до, мкм</span><input type="number" id="cvSeedMax" step="10" min="0" /></label>
+              </section>
+              <section class="micro-cfg-card">
                 <h4>Склейка и края</h4>
           <label class="micro-cycle-f" title="Маски кристаллов с зазором не больше этого (px) считаются срослись и склеиваются в ОДИН сросток; маска, лежащая внутри другой, убирается как лишнее обнаружение. 0 — не склеивать. Применяется со следующего разбора."><span>Сросток: зазор, px</span><input type="number" id="cvClusterGap" step="1" min="0" /></label>
           <label class="micro-cycle-f" title="Кристалл ближе этого расстояния (px) к краю кадра считается обрезанным (серый слой, в рассев не идёт). Увеличь, если на краях остаются обрубки. 0 — выкл. Применяется со следующего разбора."><span>Край кадра, px</span><input type="number" id="cvEdgeMargin" step="2" min="0" /></label>
@@ -1303,6 +1353,7 @@
       <script src="/static/js/microscope/05-report.js"></script>
       <script src="/static/js/microscope/06-update.js"></script>
       <script src="/static/js/microscope/07-video.js"></script>
+      <script src="/static/js/microscope/08-compare.js"></script>
       <script src="/static/js/microscope/04-init.js"></script>
     </main>
   </div>

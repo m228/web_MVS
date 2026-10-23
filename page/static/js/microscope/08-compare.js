@@ -160,7 +160,7 @@ let cmpShown = null;         // 02-cv.js зовёт при открытии вк
     } else {
       lines.forEach((l) => { s += poly(l.pts, "cthin c" + l.k); });
       ["b", "a"].forEach((k) => { s += poly(cur[k].band.map((p) => [p[0], p[1]]), "cmed c" + k); });
-      s += readyMark(xf, T, H, cur.a.end, "ca", "А · " + fmt(cur.a.end, 0) + " мин", 0) + readyMark(xf, T, H, cur.b.end, "cb", "Б · " + fmt(cur.b.end, 0) + " мин", 1);
+      [["a", "ca", "А", 0], ["b", "cb", "Б", 1]].forEach(([k, cls, lbl, row]) => { if (cur[k].boils.length) s += readyMark(xf, T, H, cur[k].end, cls, lbl + " · " + fmt(cur[k].end, 0) + " мин", row); });     // пустая группа — без отметки
     }
     const items = one ? [["dota", "эта варка"], ["dotb", "медиана обычных"], ["qband", "обычно (25–75 %)"]] : [["dota", "А · после"], ["dotb", "Б · до"]];
     return '<div class="micro-rep-chart">' + chartHead("Средний размер кристалла, мкм", items) + (one ? "" : '<small class="micro-cmp-note">тонкие — варки, толстые — медиана группы, пунктир — обычный конец варки</small>') +

@@ -21,6 +21,7 @@ from typing import Optional
 
 import cv_store
 import cv_volume
+import db
 import substages
 
 SIEVE_LABELS = ("дно <0,2", "0,2–0,5", "0,5–0,7", "0,7–0,8", "0,8–1", ">1")      # >1 = 1–1,2 + больше 1,2 (у маточника крупных нет)
@@ -146,6 +147,7 @@ def _totals(rows: list[dict]) -> dict:
             "frac_zones": sum(r["frac_zones"] for r in rows), "frac_boils": sum(1 for r in rows if r["frac_zones"]),
             "mean_um": mm("mean_um"), "sv_max": mm("sv_max"),
             "point_um": mm("point_um"), "fin_um": mm("fin_um"), "grow_um": mm("grow_um"), "to_ready_min": mm("to_ready_min"),
+            "fin_cv": mm("fin_cv"), "fin_agg_pct": mm("fin_agg_pct"), "seed_ready_min": mm("seed_ready_min"), "seed_end_min": mm("seed_end_min"),
             "water": sum(1 for r in typ if r.get("water") is True), "water_known": sum(1 for r in typ if r.get("water") is not None),
             "sieve": [_mean([s[i] for s in sv]) for i in range(len(SIEVE_LABELS))] if sv else None,     # средний рассев (каждая варка с равным весом)
             "best": {"start": best["start"], "fines_avg": best["fines_avg"]} if best else None,
@@ -182,10 +184,32 @@ def _point_sv() -> float:
         return cv_store.POINT_SV
 
 
-def build(serial: str, t_from: float, t_to: float, min_probes: int = MIN_PROBES, fin_sv: float = FIN_SV) -> dict:
+SEED_TARGET = {"fines_max": 8.0, "size_min_um": 200.0, "size_max_um": 300.0}
+
+
+def seed_target() -> dict:
+    """Цели маточника (cv.seed_target): мука на финише не выше fines_max, %; размер на финише в коридоре size_min_um…size_max_um, мкм."""
+    try:
+        import plate_config
+        cfg = (plate_config.load().get("cv") or {}).get("seed_target") or {}
+    except Exception:
+        cfg = {}
+    return {k: float(cfg[k]) if cfg.get(k) is not None else v for k, v in SEED_TARGET.items()}
+
+
+def changes(serial: str, t_from: Optional[float] = None, t_to: Optional[float] = None) -> list[dict]:
+    """Журнал изменений процесса (db.changes) по серийнику, с подписью времени «дд.мм чч:мм»."""
+    out = db.changes(cv_store._serial_dir(serial).name, t_from, t_to)
+    for c in out:
+        c["label"] = time.strftime("%d.%m %H:%M", time.localtime(c["t"]))
+    return out
+
+
+def build(serial: str, t_from: float, t_to: float, min_probes: int = MIN_PROBES, fin_sv: float = FIN_SV, groups: Optional[list] = None) -> dict:
     """Отчёт за период [t_from, t_to] (epoch, сек). Варка входит по времени начала; обрывки короче min_probes проб пропускаются.
-    fin_sv — «финиш» для муки/рассева: пробы в пределах стольких СВ от конечного."""
-    groups = cv_store.boil_groups(serial)
+    fin_sv — «финиш» для муки/рассева: пробы в пределах стольких СВ от конечного. groups — уже прочитанные cv_store.boil_groups (сравнение
+    берёт по ним ещё и кривые роста — журнал читается один раз)."""
+    groups = cv_store.boil_groups(serial) if groups is None else groups
     avg_n = cv_volume.volume_cfg(cv_store._volume_cfg_now())["avg_n"]
     now = time.time()
     sel = [g for g in groups if t_from <= g[0]["t"] <= t_to and len(g) >= min_probes]
@@ -211,6 +235,7 @@ def build(serial: str, t_from: float, t_to: float, min_probes: int = MIN_PROBES,
         "days": [{"day": k, **_totals(v)} for k, v in sorted(days.items())],
         "segments": _segments(rows),
         "substages": _substage_rows(sel),
+        "targets": seed_target(), "changes": changes(serial, t_from, t_to),
     }
 
 
@@ -222,6 +247,8 @@ _BOIL_COLS = [("start", "начало"), ("end", "конец"), ("duration_min",
               ("frac_pct", "разлом, % площади"), ("mean_um", "средний размер, мкм"),
               ("water", "вода на стабилизации"), ("water_dose", "доза воды, %·с"), ("point_um", "размер на контрольной точке СВ, мкм"),
               ("fin_um", "размер на финише, мкм"), ("grow_um", "прирост от точки до финиша, мкм"), ("to_ready_min", "от точки до готовности, мин"),
+              ("seed_ready_min", "заводка → готовность, мин"), ("seed_end_min", "заводка → последняя проба, мин"),
+              ("fin_cv", "однородность: разброс размера на финише, %"), ("fin_agg_pct", "сростки на финише, % по числу"),
               ("model", "модель распознавания"), ("flag", "пометка (в итоги не идёт)")]
 _FLAG_NAMES = {"open": "идёт", "short": "короткая", "long": "затянутая"}
 
@@ -241,7 +268,9 @@ def to_csv(rep: dict, cols: Optional[list] = None) -> bytes:
     w = csv.writer(buf, delimiter=";")
     w.writerow(["Отчёт по варкам", rep["serial"], time.strftime("%d.%m.%Y", time.localtime(rep["from"])) + " — " + time.strftime("%d.%m.%Y", time.localtime(rep["to"]))])
     w.writerow([])
-    bc = [(k, h) for k, h in _BOIL_COLS if k in ("start", "end", "flag") or cols is None or k in cols]       # cols — выбранные в интерфейсе столбцы
+    legacy = ("point_um", "grow_um", "to_ready_min")         # контрольная точка СВ 86 (опыт Кира с водой): с экрана убрана, в CSV — если есть данные
+    old = any(r.get("point_um") is not None for r in rep["boils"])
+    bc = [(k, h) for k, h in _BOIL_COLS if k in ("start", "end", "flag") or cols is None or k in cols or (old and k in legacy)]     # cols — выбранные в интерфейсе
     with_sieve = cols is None or "sieve" in cols
     w.writerow([h for _, h in bc] + (["рассев " + s + ", %" for s in rep["sieve_labels"]] if with_sieve else []))
     for r in rep["boils"]:
@@ -254,7 +283,9 @@ def to_csv(rep: dict, cols: Optional[list] = None) -> bytes:
     for key, name, ck in (("duration_min", "длительность, мин", "duration_min"), ("fines_avg", "мука на финише, %", "fines_avg"),
                           ("reject_pct", "брак, %", "reject_pct"), ("mean_um", "размер, мкм", "mean_um"), ("sv_max", "СВ макс", "sv_max"),
                           ("point_um", "размер на контрольной точке СВ, мкм", "point_um"), ("fin_um", "размер на финише, мкм", "fin_um"),
-                          ("grow_um", "прирост от точки до финиша, мкм", "grow_um")):
+                          ("grow_um", "прирост от точки до финиша, мкм", "grow_um"),
+                          ("fin_cv", "однородность: разброс размера на финише, %", "fin_cv"), ("fin_agg_pct", "сростки на финише, %", "fin_agg_pct"),
+                          ("seed_ready_min", "заводка → готовность, мин", "seed_ready_min"), ("seed_end_min", "заводка → последняя проба, мин", "seed_end_min")):
         if want(ck):
             m = t[key]
             w.writerow([name] + [x for k, h in stat for x in (h, "" if m[k] is None else m[k])])

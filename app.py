@@ -29,6 +29,7 @@ import video_client
 import services
 import fracture_lab
 import cv_store
+import db
 import autostart
 from paths import read_version, BUNDLE_DIR, DATA_DIR
 
@@ -820,8 +821,9 @@ def cv_report_csv(serial: str | None = None, frm: str | None = Query(None, alias
 
 @app.get("/api/cv/compare")
 def cv_compare(serial: str | None = None, a_from: str | None = None, a_to: str | None = None, a_water: str | None = None,
-               b_from: str | None = None, b_to: str | None = None, b_water: str | None = None):
-    """Сравнение двух групп варок (опыт / контроль): период «YYYY-MM-DD[ HH:MM]» или epoch, вода 1/0 (пусто — любая). См. boil_compare.py."""
+               b_from: str | None = None, b_to: str | None = None, b_water: str | None = None, mode: str = "groups"):
+    """Сравнение двух групп варок (опыт / контроль): период «YYYY-MM-DD[ HH:MM]» или epoch, вода 1/0 (пусто — любая); mode «change» —
+    А после изменения, Б до (слова итога). См. boil_compare.py."""
     import boil_compare as bc
     water = {"1": True, "0": False}
     try:
@@ -829,7 +831,66 @@ def cv_compare(serial: str | None = None, a_from: str | None = None, a_to: str |
         b = {"from": bc.parse_t(b_from), "to": bc.parse_t(b_to, True), "water": water.get(b_water or "")}
     except ValueError:
         return {"ok": False, "error": "время группы: YYYY-MM-DD, YYYY-MM-DD HH:MM или epoch"}
-    return bc.build(_cv_serial(serial), a, b)
+    return bc.build(_cv_serial(serial), a, b, "change" if mode == "change" else "groups")
+
+
+@app.get("/api/cv/compare/around")
+def cv_compare_around(t: str, serial: str | None = None):
+    """Группы «до / после» по умолчанию для изменения в момент t (epoch или «YYYY-MM-DD HH:MM»)."""
+    import boil_compare as bc
+    try:
+        tt = bc.parse_t(t)
+    except ValueError:
+        return {"ok": False, "error": "время: YYYY-MM-DD HH:MM или epoch"}
+    return {"ok": True, **bc.around(_cv_serial(serial), tt)}
+
+
+@app.get("/api/cv/compare/boil")
+def cv_compare_boil(boil: str, serial: str | None = None, ref_from: str | None = None, ref_to: str | None = None):
+    """Одна варка (ts начала) против обычных: по умолчанию — 20 предыдущих типичных варок той же модели, или все типичные за период."""
+    import boil_compare as bc
+    try:
+        f, t = bc.parse_t(ref_from), bc.parse_t(ref_to, True)
+    except ValueError:
+        return {"ok": False, "error": "период: YYYY-MM-DD, YYYY-MM-DD HH:MM или epoch"}
+    return bc.one(_cv_serial(serial), boil, f, t)
+
+
+@app.get("/api/cv/changes")
+def cv_changes(serial: str | None = None):
+    """Журнал изменений процесса (рецепт, подкачка, опыт): отметки на графиках отчёта, «до / после» в сравнении."""
+    import report
+    return {"changes": report.changes(_cv_serial(serial))}
+
+
+@app.post("/api/cv/changes")
+def cv_change_save(body: dict = Body(...), serial: str | None = None):
+    """Добавить изменение {t, text} или поправить своё {id, t, text}; t — epoch или «YYYY-MM-DD HH:MM»."""
+    import time as _t
+    import boil_compare as bc
+    import report
+    text = str(body.get("text") or "").strip()[:200]
+    try:
+        t = bc.parse_t(body.get("t"))
+    except ValueError:
+        t = None
+    if t is None or not text:
+        return {"ok": False, "error": "нужны время и текст изменения"}
+    tag = cv_store._serial_dir(_cv_serial(serial)).name
+    cid = db.change_save(tag, t, text, _t.time(), int(body["id"]) if body.get("id") is not None else None)
+    if cid is None:
+        return {"ok": False, "error": "такого изменения нет"}
+    api_log("api.cv.changes", "Журнал изменений: " + ("правка" if body.get("id") is not None else "добавлено"), payload={"id": cid, "t": t, "text": text})
+    return {"ok": True, "id": cid, "changes": report.changes(_cv_serial(serial))}
+
+
+@app.delete("/api/cv/changes/{cid}")
+def cv_change_delete(cid: int, serial: str | None = None):
+    import report
+    ok = db.change_delete(cv_store._serial_dir(_cv_serial(serial)).name, cid)
+    if ok:
+        api_log("api.cv.changes", "Журнал изменений: удалено", payload={"id": cid})
+    return {"ok": ok, "changes": report.changes(_cv_serial(serial))}
 
 
 @app.get("/api/cv/boil-zips")

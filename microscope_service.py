@@ -15,7 +15,7 @@ from logger import log_event
 
 
 # поля ПЛК (sv_source), которые пишем в запись пробы CV — режим варки на момент пробы
-PLC_KEYS = ("temp_app", "level", "current", "press_top", "cook_time", "substage")
+PLC_KEYS = ("temp_app", "level", "current", "press_top", "cook_time", "substage", "v_syrup", "v_water", "v_product")
 
 
 class MicroscopeService:
@@ -583,7 +583,11 @@ class MicroscopeService:
             self._grow_runs += 1
 
     def _current_phase(self, stage):
-        """Фаза пробы, начатой на стадии stage: p1/p2 (подкачка), g1/g2 (рост) или None. 3-я и далее вливаются во 2-ю."""
+        """Фаза пробы, начатой на стадии stage: p1/p2 (подкачка), g1/g2 (рост) или None. 3-я и далее вливаются во 2-ю.
+        УНВ / пауза посреди варки — фаза последней настоящей стадии."""
+        import cv_store
+        if stage in cv_store.PAUSE_STAGES:
+            stage = self._phase_last
         if stage == 5:
             return "p%d" % min(max(self._pump_runs, 1), 2)
         if stage == 7:
@@ -592,8 +596,10 @@ class MicroscopeService:
 
     def _note_stage(self, stage):
         """Заводка = переход из «Сгущения»(3) в 4..9 (затравка и далее). Вход в 2/3 из другой стадии —
-        новая варка, отсчёт сбрасывается. Перезапуск приложения посреди варки момент заводки теряет (None)."""
-        if stage is None:
+        новая варка, отсчёт сбрасывается. Перезапуск приложения посреди варки момент заводки теряет (None).
+        УНВ / пауза (cv_store.PAUSE_STAGES) пропускаются: иначе рост 7 → 20 → 7 считался вторым ростом."""
+        import cv_store
+        if stage is None or stage in cv_store.PAUSE_STAGES:
             return
         self._count_phases(stage)
         prev, self._last_stage = self._last_stage, stage
@@ -628,9 +634,13 @@ class MicroscopeService:
             vals = [s[k] for s in run.get("plc", []) if s.get(k) is not None]
             if not vals:
                 continue
-            # разрежение — до тысячных (на экране так же), остальное до десятых; время варки — последнее
+            # разрежение — до тысячных (на экране так же), остальное до десятых; время варки и подстадия — последнее
             out[k] = (int(vals[-1]) if k in ("cook_time", "substage")
                       else round(sum(vals) / len(vals), 3 if k == "press_top" else 1))
+        try:                                                    # доза клапанов с прошлой записанной пробы (sv_source копит каждую секунду)
+            out.update(self.sv_source.take_valves() if self.sv_source else {})
+        except Exception as e:
+            log_event("microscope_service", "Доза клапанов не снята", "warn", {"error": str(e)})
         if self._seed_ts is not None:
             out["seed_age_s"] = max(0, int(run.get("t0", time.time()) - self._seed_ts))
         return out or None

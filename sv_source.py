@@ -20,6 +20,19 @@ from logger import log_event
 
 _RECONNECT_BACKOFF = [1, 2, 5, 10, 30]
 
+VALVE_SLACK = 5.0     # обратка чуть за 0–100 % — шум датчика (у закрытого клапана в знаковом регистре бывает −1): это 0 / 100 %
+
+
+def valve_pct(v):
+    """Обратка клапана, % (0–100). Дальше VALVE_SLACK за пределами — не положение клапана, а мусор регистра (Кир, клапан воды: 65535,
+    похоже −1 в беззнаковом чтении): значения нет — None, в дозу и «открыт» не идёт. Нет значения — None."""
+    if v is None:
+        return None
+    v = float(v)
+    if not -VALVE_SLACK <= v <= 100.0 + VALVE_SLACK:      # NaN тоже сюда
+        return None
+    return max(0.0, min(100.0, v))
+
 
 class SvSource:
     def __init__(self, cfg, on_update=None, fallback_host=""):
@@ -64,6 +77,11 @@ class SvSource:
         self._sv_good, self._sv_bad_n = None, 0
         self._stage_cur, self._stage_cand, self._stage_n = None, None, 0
         self._last_glitch_log = 0.0
+        # клапаны (поля «v_*», 0–100 %): копим между пробами дозу (∫ открытие·dt, %·с) и время открытия — проба раз в 1–2 мин,
+        # а клапан открывают на минуты; по мгновенному снимку на пробе дозу не увидеть. Забирает take_valves() при записи пробы.
+        self._valves_lock = threading.Lock()
+        self._valves_acc = {}                 # name -> [доза %·с, секунд открыт]
+        self._valves_prev = None              # (время опроса, {name: %}) — прошлое значение держится до следующего опроса
 
     # ---------- жизненный цикл ----------
 
@@ -164,6 +182,46 @@ class SvSource:
         self._sock_up = False
         return False
 
+    VALVE_OPEN_PCT = 2.0  # клапан «открыт», если обратка больше этого (обратка закрытого клапана не всегда ровно 0)
+    VALVE_GAP_S = 10.0    # опросов не было дольше (обрыв связи) — этот отрезок в дозу не идёт: что было с клапаном, не знаем
+
+    def _accumulate_valves(self, values, now):
+        """Доза и время открытия клапанов (поля v_*) за отрезок от прошлого опроса до этого — по прошлому значению.
+        Сироп и вода идут через коллектор и головной клапан продукта: если он читается и закрыт, в аппарат они не попадают — в дозу не идут.
+        Значение клапана неизвестно (мусор регистра, valve_pct → None) — отрезок для него пропускаем, как обрыв связи: не «закрыт» и не «открыт»;
+        неизвестен клапан продукта — пропускаем и воду с сиропом (попали ли они в аппарат, не знаем)."""
+        cur = {k: valve_pct(v) for k, v in values.items() if k.startswith("v_")}
+        with self._valves_lock:
+            prev = self._valves_prev
+            self._valves_prev = (now, cur)
+            if not prev or not cur:
+                return
+            dt = now - prev[0]
+            if dt <= 0 or dt > self.VALVE_GAP_S:
+                return
+            pv = prev[1].get("v_product", 100.0)          # клапан продукта не настроен — как открыт
+            for k, v in prev[1].items():
+                feed = k in ("v_water", "v_syrup")
+                if v is None or (feed and pv is None):
+                    continue
+                acc = self._valves_acc.setdefault(k, [0.0, 0.0])
+                if feed and pv <= self.VALVE_OPEN_PCT:
+                    continue
+                acc[0] += v * dt
+                if v > self.VALVE_OPEN_PCT:
+                    acc[1] += dt
+
+    def take_valves(self):
+        """Накопленное с прошлого вызова: {"water_dose": %·с, "water_s": с, "syrup_dose": …} (имя без «v_») и обнуление.
+        Клапаны не настроены — {}; клапан весь отрезок неизвестен — его ключей нет (в журнале None, а не «0 — закрыт»)."""
+        with self._valves_lock:
+            acc, self._valves_acc = self._valves_acc, {}
+        out = {}
+        for k, (dose, open_s) in acc.items():
+            out[k[2:] + "_dose"] = round(dose)
+            out[k[2:] + "_s"] = round(open_s)
+        return out
+
     BLOCK_MAX = 100       # блок длиннее — читаем по одному
 
     def _read_all(self):
@@ -206,8 +264,11 @@ class SvSource:
                     if signed and raw >= 0x8000:        # int16 в доп. коде -> отрицательное
                         raw -= 0x10000
                     values[name] = raw if scale == 1 else raw / scale   # scale=1 -> целое (стадия)
+                    if name.startswith("v_"):
+                        values[name] = valve_pct(values[name])     # обратка вне 0–100 % (65535) — значения нет: на странице «(—)», в пробу не идёт
                 values = self._sanitize(values)
                 self._values = values
+                self._accumulate_valves(values, time.time())
                 if self.on_update is not None:
                     self.on_update(values.get("sv"), values.get("stage"))
                 backoff_i = 0

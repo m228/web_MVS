@@ -61,7 +61,9 @@ def null_sv_outliers(rows: list[dict]) -> list[dict]:
 
 
 # --- столбцы журнала: ключи строки (cv_store._hist_row) → типизированные столбцы ---
-_INT_COLS = ("stage", "substage", "frames", "frac_zones", "cook_time", "seed_age", "good_n", "rej_n")
+_INT_COLS = ("stage", "substage", "frames", "frac_zones", "cook_time", "seed_age", "good_n", "rej_n",
+             "syrup_dose", "syrup_s", "water_dose", "water_s", "product_dose", "product_s")
+_TEXT_COLS = ("phase", "model")
 _SIEVE = ["sieve_%s_b%d" % (m, i) for m in ("m1", "m2", "m3", "area") for i in range(7)]
 ROW_COLS = (
     ["t", "stage", "substage", "phase", "sv", "count", "mean", "median", "small", "medium", "large", "reject", "reject_pct",
@@ -69,12 +71,14 @@ ROW_COLS = (
      "temp", "level", "current", "vac", "cook_time", "seed_age",
      "fines_m1", "fines_m2", "fines_m3", "fines_area", "fines_n", "agg_m1", "agg_m2", "agg_m3", "agg_area", "agg_n",
      "vtot_m1", "vtot_m2", "vtot_m3", "good_n", "rej_n", "fines_um", "fines_side_mm", "k_thick", "fines_from_sv",
-     "frac_zones", "frac_pct", "frames"] + _SIEVE
+     "frac_zones", "frac_pct", "frames",
+     "v_syrup", "v_water", "v_product", "syrup_dose", "syrup_s", "water_dose", "water_s", "product_dose", "product_s",
+     "model"] + _SIEVE
 )
 
 
 def _col_type(c: str) -> str:
-    return "INTEGER" if c in _INT_COLS else ("TEXT" if c == "phase" else "REAL")
+    return "INTEGER" if c in _INT_COLS else ("TEXT" if c in _TEXT_COLS else "REAL")
 
 
 _local = threading.local()
@@ -135,6 +139,10 @@ def _init(c: sqlite3.Connection) -> None:
         c.execute("CREATE TABLE IF NOT EXISTS fracture_edits (id INTEGER PRIMARY KEY AUTOINCREMENT, serial TEXT NOT NULL, "
                   "ts TEXT NOT NULL, at REAL NOT NULL, action TEXT NOT NULL, zid TEXT, frame_idx INTEGER)")
         c.execute("CREATE INDEX IF NOT EXISTS ix_fedit ON fracture_edits (serial, ts)")
+        # журнал изменений процесса (рецепт, подкачка, опыт): отметки на графиках отчёта и «до / после» во вкладке «Сравнение»
+        c.execute("CREATE TABLE IF NOT EXISTS changes (id INTEGER PRIMARY KEY AUTOINCREMENT, serial TEXT NOT NULL, t REAL NOT NULL, "
+                  "text TEXT NOT NULL, at REAL NOT NULL)")
+        c.execute("CREATE INDEX IF NOT EXISTS ix_changes ON changes (serial, t)")
         c.execute("INSERT OR IGNORE INTO meta (key, value) VALUES ('schema_version', ?)", (str(SCHEMA_VERSION),))
         c.commit()
 
@@ -275,6 +283,38 @@ def patch_row(serial: str, ts: str, fields: dict) -> bool:
         c.execute("UPDATE journal SET %s WHERE serial=? AND ts=?" % ", ".join(sets), args)
         c.commit()
         return True
+
+
+def changes(serial: str, t_from: Optional[float] = None, t_to: Optional[float] = None) -> list[dict]:
+    """Журнал изменений серийника по времени: [{id, t, text, at}]."""
+    sql, args = "SELECT id, t, text, at FROM changes WHERE serial=?", [serial]
+    if t_from is not None:
+        sql += " AND t>=?"
+        args.append(t_from)
+    if t_to is not None:
+        sql += " AND t<=?"
+        args.append(t_to)
+    return [dict(r) for r in conn().execute(sql + " ORDER BY t, id", args)]
+
+
+def change_save(serial: str, t: float, text: str, at: float, cid: Optional[int] = None) -> Optional[int]:
+    """Добавить изменение (cid None) или поправить своё (время, текст). Возвращает id; правка чужого или несуществующего — None."""
+    with _wlock:
+        c = conn()
+        if cid is None:
+            cid = c.execute("INSERT INTO changes (serial, t, text, at) VALUES (?, ?, ?, ?)", (serial, t, text, at)).lastrowid
+        elif not c.execute("UPDATE changes SET t=?, text=?, at=? WHERE id=? AND serial=?", (t, text, at, cid, serial)).rowcount:
+            return None
+        c.commit()
+        return cid
+
+
+def change_delete(serial: str, cid: int) -> bool:
+    with _wlock:
+        c = conn()
+        n = c.execute("DELETE FROM changes WHERE id=? AND serial=?", (cid, serial)).rowcount
+        c.commit()
+        return n > 0
 
 
 def log_fracture_edit(serial: str, ts: str, action: str, zid: Optional[str], frame_idx: int, at: float) -> None:

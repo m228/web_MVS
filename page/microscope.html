@@ -224,6 +224,14 @@
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7l5 3-2 4 6 1 1 5 3-4 4 1-2-5 3-4-6-2 1-4-5 3-3-3z"/></svg>
                 <span>Разломы</span>
               </button>
+              <button type="button" class="micro-ptab" data-ptab="sieve" title="Объём, мука и рассев по ситам — рядом с картинкой (тот же блок, что внизу на «Распознавании»)" aria-label="Рассев">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 10h18M4.5 10l1.7 7.4A2 2 0 0 0 8.2 19h7.6a2 2 0 0 0 2-1.6l1.7-7.4M9.5 10l.6 9M14.5 10l-.6 9M5.4 14.5h13.2"/><circle cx="8" cy="5.5" r=".9"/><circle cx="12" cy="3.8" r=".9"/><circle cx="16" cy="5.8" r=".9"/></svg>
+                <span>Рассев</span>
+              </button>
+              <button type="button" class="micro-ptab" data-ptab="trend" title="Тренд по пробам — рядом с картинкой (тот же тренд, что внизу на «Трендах»)" aria-label="Тренды">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 3v18h18"/><path d="M6.5 15.5l3.8-4.5 3.2 2.8 5-6.3"/></svg>
+                <span>Тренды</span>
+              </button>
             </div>
 
 
@@ -814,6 +822,10 @@
                 </div>
               </div>
 
+              <!-- «Рассев» и «Тренды»: пустые — блок из нижней полосы переезжает сюда, пока вкладка открыта (02-cv.js, cvPultBlocksSync) -->
+              <div class="micro-ppane hidden" data-ppane="sieve"></div>
+              <div class="micro-ppane hidden" data-ppane="trend"></div>
+
             </div>
 
           </section>
@@ -829,6 +841,8 @@
               <button type="button" class="micro-win-btn" id="teleTrendBtn" data-tele="trend">Тренды</button>
               <button type="button" class="micro-win-btn" id="teleCfgBtn" data-tele="cfg">CV</button>
               <button type="button" class="micro-win-btn" id="teleReportBtn" data-tele="report">Отчёт</button>
+              <button type="button" class="micro-win-btn" id="teleCompareBtn" data-tele="compare" title="Варки до и после изменения, одна варка против обычных; журнал изменений">Сравнение</button>
+              <button type="button" class="micro-win-btn" id="teleVideoBtn" data-tele="video" hidden title="Ролик варки: фото проб с контурами, рассев и графики (видео-сервис)">Ролик</button>
             </div>
             <!-- название проекта для скриншотов (вкладки «Распознавание» и «Тренды»): Enter — фиксируется, двойной клик — править -->
             <span class="micro-proj" id="projWrap" hidden>
@@ -878,6 +892,9 @@
                 <div class="micro-tile"><span>Разрежение</span><b id="pcVacuum">(—)</b></div>
                 <div class="micro-tile"><span>Ток циркулятора</span><b id="maCurrent">—</b></div>
                 <div class="micro-tile"><span>Уровень</span><b id="maLevel">—</b></div>
+                <div class="micro-tile" title="Обратка клапана сиропа в коллектор, %"><span>Клапан сиропа</span><b id="pcSyrup">(—)</b></div>
+                <div class="micro-tile" title="Обратка клапана воды в коллектор, %"><span>Клапан воды</span><b id="pcWater">(—)</b></div>
+                <div class="micro-tile" title="Головной клапан продукта: из коллектора в аппарат, обратка %"><span>Клапан продукта</span><b id="pcProduct">(—)</b></div>
               </div>
               <p class="micro-plc-note">адреса Modbus в <code>plate_config.json → sv_source</code></p>
             </div>
@@ -934,6 +951,8 @@
                 </div>
               </div>
 
+              <!-- заглушка на месте блока, пока он открыт во вкладке пульта «Рассев»; клик — вернуть сюда -->
+              <button type="button" class="micro-pult-stub" id="cvVolHome" hidden title="Вернуть блок сюда, вниз">Объём, мука и рассев открыты в пульте справа · <u>вернуть сюда</u></button>
               <!-- объём и доля муки: три модели рядом + площадь; поля — как считать (применяются со следующей пробы) -->
               <div class="micro-cv-block micro-vol" id="cvVol">
                 <div class="micro-cv-block__title">Объём и мука
@@ -945,7 +964,7 @@
                       <div class="in"><i>M3</i> призма: <code>объём = площадь · толщина</code> <em>плоский кристалл на грани — рабочая</em></div>
                       <small><b>Длина</b> и <b>ширина</b> — длинная и короткая сторона кристалла на кадре. <b>Толщины</b> на кадре не видно, поэтому <b>толщина = k · ширина</b> (k — поле справа). Пример: ширина 500 мкм, k = 0,88 → толщина 440 мкм. В M1 толщина не нужна.</small>
                       <small><b>Откуда k = 0,88.</b> Сапронов, с. 294: оси кристалла сахарозы a : b : c = 1,2595 : 1 : 0,8782 (у молекулы, нм: a = 1,089; b = 0,869; c = 0,777). Допущение: ширина на кадре ≈ ось b, толщина ≈ ось c, значит c/b = 0,8782 ≈ 0,88.</small>
-                      <small><b>По варке / по пробе.</b> «По варке» — числа за всю варку; стрелками ‹ › листаются предыдущая, пред-предыдущая и т.д. (до 6 варок). Мука в варке считается по пробам финиша, когда СВ дошёл до поля «Мука с СВ», среднее взвешено по объёму пробы. Новая варка начинается, когда стадия откатилась на заводку, время варки сбросилось или была пауза больше 45 минут. «По пробе» — одна проба, открытая в окне CV.</small>
+                      <small><b>По варке / по пробе.</b> «По варке» — итог варки по пробам её конца: СВ в пределах 2 от конечного (последние ~2 СВ, как во вкладке «Отчёт»); стрелками ‹ › листаются предыдущая, пред-предыдущая и т.д. (до 6 варок). Среднее взвешено по объёму пробы. Новая варка начинается, когда стадия откатилась на заводку, время варки сбросилось или была пауза больше 45 минут. «По пробе» — одна проба, открытая в окне CV.</small>
                       <small><b>Как читать.</b> «По числу» — сколько кристаллов штуками мелкие (например, 53 из 100). «По объёму» — какая доля всего вещества сидит в мелких (объём пропорционален массе). Мелких кристаллов много, а весят они мало — поэтому по числу цифра большая, а по объёму маленькая. Для сахара важна цифра по объёму. «Площадь» — промежуточный вариант: какую долю площади на кадре занимают мелкие.</small>
                       <small>Мука % = объём кристаллов мельче порога ÷ объём хороших кристаллов × 100. Брак по форме (сростки, иглы, кривые), обрезанные краем и пузыри в расчёт не берутся — отсеяны.</small>
                       <small>Мука считается только на финише варки: с СВ ≥ поля «Мука с СВ» (88). Раньше кристаллы ещё растут, и мука — неактуальная информация (прочерк). Площадь считается всегда. Поля пересчитывают сохранённые пробы (по кадрам, которые ещё лежат в архиве); пробы, у которых кадры уже стёрты, остаются с прежним порогом.</small>
@@ -957,23 +976,16 @@
                 <!-- откуда числа: по варке (законченная, листается стрелками) или по выбранной пробе -->
                 <div class="micro-vol__nav" id="cvVolNav">
                   <div class="micro-vol__mode" role="tablist" aria-label="Источник чисел">
-                    <button type="button" data-vmode="tail" class="is-active" title="Финиш варки: среднее по пробам последних ~2 СВ (пробы набираются часто, их хватает на надёжную оценку). Раньше было «последние N проб»">финиш</button>
-                    <button type="button" data-vmode="boil" title="Среднее по всем пробам финиша варки">по варке</button>
+                    <button type="button" data-vmode="boil" class="is-active" title="Итог варки: среднее по пробам её конца — СВ в пределах 2 от конечного (последние ~2 СВ), как во вкладке «Отчёт»">по варке</button>
                     <button type="button" data-vmode="probe" title="Числа по одной пробе — той, что открыта в окне CV">по пробе</button>
                   </div>
+                  <label class="micro-auto" id="cvVolAutoWrap" hidden title="Авто: самая свежая проба — цифры меняются сами с каждой новой пробой, даже когда окно показывает «Камеру». То же, что кнопка «авто» в окне «Комп. зрение». Клик по пробе (тренд, лента) — выключает"><input type="checkbox" id="cvVolAuto" /><span>авто</span></label>
                   <button type="button" class="micro-vol__models" id="cvVolModelsBtn" title="Показать отдельные модели объёма M1 шар · M2 сфероид · M3 призма (по умолчанию — только среднее и площадь)">M1–M3</button>
                   <span class="micro-vol__boil" id="cvBoilBox">
                     <button type="button" id="cvBoilOlder" title="Более старая варка (предыдущая, пред-предыдущая…)">‹</button>
                     <span id="cvBoilLbl">—</span>
                     <button type="button" id="cvBoilNewer" title="Более новая варка">›</button>
                   </span>
-                <div class="micro-vol__unit">
-                  <span class="micro-seg2" id="cvFinesModeSeg" role="group" aria-label="Чем мерить муку">
-                    <button type="button" data-mode="side" title="Мерить муку по стороне квадрата, мм (по площади кристалла)">мм</button>
-                    <button type="button" data-mode="volume" title="Мерить муку по объёму кристалла, мм³ (шар эквивалентного диаметра)">мм³</button>
-                  </span>
-                  <span class="micro-vol__eq" id="cvFinesEq" title="Тот же общий порог в другой единице: сторона 0,2 мм = объём 0,006 мм³ — кристаллы делятся одинаково"></span>
-                </div>
                 </div>
                 <div class="micro-vol__grid" id="cvVolGrid">
                   <span></span>
@@ -1041,13 +1053,21 @@
                     <input type="text" id="cvCurve" spellcheck="false" autocomplete="off" title="Точки «минута с заводки : порог муки, мкм» через запятую. Между точками порог растёт линейно, до первой и после последней — крайнее значение. По умолчанию две точки: 20 мкм (10 % от общего порога) в начале и 203 мкм (общий порог) на 81-й минуте — среднее время старта «готовности» по 22 варкам Кира." />
                   </div>
                 </div>
+                <!-- единица порога муки (к полю «Мука, мм»): справа в ряду полей -->
+                <div class="micro-vol__unit">
+                  <span class="micro-seg2" id="cvFinesModeSeg" role="group" aria-label="Чем мерить муку">
+                    <button type="button" data-mode="side" title="Мерить муку по стороне квадрата, мм (по площади кристалла)">мм</button>
+                    <button type="button" data-mode="volume" title="Мерить муку по объёму кристалла, мм³ (шар эквивалентного диаметра)">мм³</button>
+                  </span>
+                  <span class="micro-vol__eq" id="cvFinesEq" title="Тот же общий порог в другой единице: сторона 0,2 мм = объём 0,006 мм³ — кристаллы делятся одинаково"></span>
+                </div>
                   </div>
                 </div>
                 <!-- что стоит за цифрами: штуки, доля по числу и по объёму, общий объём (заполняет 02-cv.js) -->
                 <div class="micro-vol__note" id="cvVolNote"></div>
                 <!-- рассев по ситам, как в лаборатории: размер отверстий, мм; доля фракции в общем объёме (100 % — сумма всех) -->
                 <div class="micro-sieve-card">
-                  <div class="micro-cv-block__title micro-sieve__title">Рассев, %  <span class="micro-info" tabindex="0" aria-label="Как считается рассев">ⓘ<span class="micro-info__pop micro-vol__pop" role="tooltip"><b>Рассев в процентах</b><div class="in">Фракции по 0,05 мм от 0 до 1 мм и «больше 1 мм», одна шкала для всех фаз варки: так видно, где сидит основная масса кристаллов. Полоска — доля относительно самой большой в столбце.</div><small>Берутся только хорошие кристаллы (брак по форме — сростки, иглы, кривые — отсеян). Доля — от их общего объёма (объём ~ масса), сумма 100 %; «Площадь» — доля по площади на кадре. Размер — эквивалентный диаметр. «Варка» — пробы финиша, плитки фаз — пробы этой фазы. Считается, как и мука, когда СВ дошёл до поля «Мука с СВ» (на фазах — с самого начала).</small></span></span><div class="micro-sieve__tiles" id="cvSieveTiles" role="tablist" aria-label="Фаза варки для рассева" hidden></div><span class="micro-sieve__sv" id="cvSieveSv" title="В каком диапазоне СВ сняты пробы, по которым посчитан этот рассев, и сколько длилась выбранная фаза"></span><label class="micro-sieve__hide" title="Скрыть строки крупнее 0,20 мм: остаётся только диапазон муки (0–0,20 мм) и одна итоговая строка «≥ 0,20»"><input type="checkbox" id="cvSieveHide" /><span>скрыть</span></label></div>
+                  <div class="micro-cv-block__title micro-sieve__title">Рассев, %  <span class="micro-info" tabindex="0" aria-label="Как считается рассев">ⓘ<span class="micro-info__pop micro-vol__pop" role="tooltip"><b>Рассев в процентах</b><div class="in">Фракции по 0,05 мм от 0 до 1 мм и «больше 1 мм», одна шкала для всех фаз варки: так видно, где сидит основная масса кристаллов. Полоска — доля относительно самой большой в столбце.</div><small>Берутся только хорошие кристаллы (брак по форме — сростки, иглы, кривые — отсеян). Доля — от их общего объёма (объём ~ масса), сумма 100 %; «Площадь» — доля по площади на кадре. Размер — эквивалентный диаметр. «Варка» — пробы конца варки (последние ~2 СВ), плитки фаз — пробы этой фазы. Считается, как и мука, когда СВ дошёл до поля «Мука с СВ» (на фазах — с самого начала).</small></span></span><div class="micro-sieve__tiles" id="cvSieveTiles" role="tablist" aria-label="Фаза варки для рассева" hidden></div><span class="micro-sieve__sv" id="cvSieveSv" title="В каком диапазоне СВ сняты пробы, по которым посчитан этот рассев, и сколько длилась выбранная фаза"></span><label class="micro-sieve__hide" title="Скрыть строки крупнее 0,20 мм: остаётся только диапазон муки (0–0,20 мм) и одна итоговая строка «≥ 0,20»"><input type="checkbox" id="cvSieveHide" /><span>скрыть</span></label></div>
                   <div class="micro-vol__grid micro-sieve" id="cvSieveGrid"></div>
                 </div>
               </div>
@@ -1059,7 +1079,9 @@
           <!-- Тренды по пробам — третья вкладка нижней полосы -->
           <div class="micro-tele-trend" id="teleStripTrend" hidden>
             <div class="micro-tele-cv__col">
-              <div class="micro-cv-block micro-trend">
+              <!-- заглушка на месте тренда, пока он открыт во вкладке пульта «Тренды»; клик — вернуть сюда -->
+              <button type="button" class="micro-pult-stub" id="cvTrendBlockHome" hidden title="Вернуть тренд сюда, вниз">Тренд открыт в пульте справа · <u>вернуть сюда</u></button>
+              <div class="micro-cv-block micro-trend" id="cvTrendBlock">
                 <div class="micro-cv-block__title">Тренд по пробам
                   <span class="micro-cv-hint">наведи — проба, тащи — сдвиг по времени, колесо — масштаб, 2× — вся дата, клик — открыть пробу</span>
                 </div>
@@ -1128,7 +1150,7 @@
                 </div>
                 <!-- рассев по ситам для варки, выбранной на тренде: плитки варка / фазы + таблица (заполняет 02-cv.js, режим «Рассев») -->
                 <div class="micro-sieve-card" id="cvTrSieveCard" hidden>
-                  <div class="micro-cv-block__title micro-sieve__title">Рассев, %<div class="micro-sieve__tiles" id="cvTrSieveTiles" role="tablist" aria-label="Фаза варки для рассева"></div><span class="micro-sieve__sv" id="cvTrSieveSv"></span></div>
+                  <div class="micro-cv-block__title micro-sieve__title">Рассев, %<span class="micro-vol__mode" id="cvTrSieveSrc" role="tablist" aria-label="Откуда рассев"><button type="button" data-src="boil" class="is-active" title="Рассев варки, выбранной на тренде: пробы её конца (последние ~2 СВ) или пробы фазы">по варке</button><button type="button" data-src="probe" title="Рассев одной пробы: кликни пробу на графике (работает и для старых проб — берётся из журнала)">по пробе</button></span><label class="micro-auto" id="cvTrAutoWrap" hidden title="Авто: самая свежая проба — цифры меняются сами с каждой новой пробой, даже когда окно показывает «Камеру». То же, что кнопка «авто» в окне «Комп. зрение». Клик по пробе (тренд, лента) — выключает"><input type="checkbox" id="cvTrAuto" /><span>авто</span></label><div class="micro-sieve__tiles" id="cvTrSieveTiles" role="tablist" aria-label="Фаза варки для рассева"></div><span class="micro-sieve__sv" id="cvTrSieveSv"></span></div>
                   <div class="micro-vol__grid micro-sieve" id="cvTrSieveGrid"></div>
                 </div>
               </div>
@@ -1147,7 +1169,11 @@
                   <input type="date" id="repFrom" /> — <input type="date" id="repTo" />
                 </span>
                 <label class="micro-rep-fin" title="Мука и рассев варки считаются на ФИНИШЕ: берутся все пробы, где СВ в пределах этого числа от конечного (последние 1,5–2 СВ). Начало варки, где кристаллы ещё мелкие, в среднее не входит">финиш, СВ <input type="number" id="repFinSv" min="0.5" max="10" step="0.5" value="2" /></label>
-              <button type="button" id="repGoBtn" class="toolbar-btn toolbar-btn--primary" title="Собрать отчёт по варкам за выбранный период">Сформировать отчёт</button>
+                <span class="micro-seg2" id="repViewSeg" role="group" aria-label="Вид отчёта">
+                  <button type="button" data-v="charts" class="is-active" title="Графики по варкам: точки, медиана, «обычно», цели маточника">графики</button>
+                  <button type="button" data-v="numbers" title="Числа: таблицы по дням и по каждой варке">числа</button>
+                </span>
+              <button type="button" id="repGoBtn" class="toolbar-btn toolbar-btn--primary" title="Собрать отчёт по варкам за выбранный период">Сформировать</button>
                 <button type="button" id="repColsBtn" class="toolbar-btn toolbar-btn--neutral" title="Какие столбцы показывать в отчёте (запоминается, действует и на CSV)">Столбцы</button>
               <button type="button" id="repCsvBtn" class="toolbar-btn toolbar-btn--neutral" title="Скачать отчёт в CSV (открывается в Excel)" disabled>CSV</button>
                 <button type="button" id="repPdfBtn" class="toolbar-btn toolbar-btn--neutral" title="Печать → «Сохранить как PDF»" disabled>PDF</button>
@@ -1155,6 +1181,68 @@
               </div>
               <div class="micro-rep-cols" id="repColsPanel" hidden></div>
               <div class="micro-rep-out" id="repOut"><div class="micro-conn-hint">Выбери период и нажми «Сформировать отчёт».</div></div>
+          </div>
+
+          <!-- «Сравнение» — варки после изменения против варок до него, одна варка против обычных, журнал изменений (08-compare.js, boil_compare.py) -->
+          <div class="micro-tele-compare" id="teleStripCompare" hidden>
+            <div class="micro-rep-bar">
+              <span class="micro-seg2" id="cmpModeSeg" role="group" aria-label="Что сравнить">
+                <button type="button" data-m="change" class="is-active" title="Варки после изменения против варок до него">до / после</button>
+                <button type="button" data-m="one" title="Одна варка против обычных: 20 предыдущих варок той же модели">одна варка</button>
+              </span>
+              <span class="micro-cmp-pick" id="cmpChangeBox">
+                <select id="cmpChange" title="Изменение из журнала — или свой момент"></select>
+                <input type="datetime-local" id="cmpAt" title="Момент изменения: группы «до» и «после» подставятся сами" />
+              </span>
+              <span class="micro-cmp-pick" id="cmpOneBox" hidden>
+                <select id="cmpBoil" title="Какую варку сравнить с обычными"></select>
+              </span>
+              <button type="button" id="cmpGoBtn" class="toolbar-btn toolbar-btn--primary" title="Сравнить варки">Сравнить</button>
+              <button type="button" id="cmpPdfBtn" class="toolbar-btn toolbar-btn--neutral" title="Печать → «Сохранить как PDF»" disabled>PDF</button>
+              <span class="micro-conn-hint" id="cmpHint"></span>
+            </div>
+            <div class="micro-cmp-groups" id="cmpGroups">
+              <span class="micro-cmp-g is-a" title="Группа А — варки после изменения. Варка, которая шла в момент изменения, не идёт ни в одну группу"><i></i><b>А · после</b>
+                <input type="datetime-local" id="cmpAFrom" /> — <input type="datetime-local" id="cmpATo" />
+                <select id="cmpAWater" title="Вода на стабилизации"><option value="">вода: любая</option><option value="1">с водой</option><option value="0">без воды</option></select></span>
+              <span class="micro-cmp-g is-b" title="Группа Б — варки до изменения: от прошлого изменения, но не раньше смены модели и не длиннее двух недель"><i></i><b>Б · до</b>
+                <input type="datetime-local" id="cmpBFrom" /> — <input type="datetime-local" id="cmpBTo" />
+                <select id="cmpBWater" title="Вода на стабилизации"><option value="">вода: любая</option><option value="1">с водой</option><option value="0">без воды</option></select></span>
+            </div>
+            <div class="micro-rep-out" id="cmpOut"><div class="micro-conn-hint">Выбери изменение из журнала (или свой момент) и нажми «Сравнить».</div></div>
+            <section class="micro-cmp-journal">
+              <div class="micro-rep-h">Журнал изменений <small>что меняли в процессе: рецепт, подкачку, воду — отметки на графиках отчёта и «до / после» здесь</small></div>
+              <div class="micro-cmp-add">
+                <input type="datetime-local" id="chgAt" title="Когда изменили" />
+                <input type="text" id="chgText" maxlength="200" placeholder="Что изменили: рецепт 2, подкачка 40 %…" autocomplete="off" />
+                <button type="button" id="chgSaveBtn" class="toolbar-btn toolbar-btn--neutral">Добавить</button>
+                <button type="button" id="chgCancelBtn" class="toolbar-btn toolbar-btn--neutral" hidden>Отмена</button>
+              </div>
+              <div class="micro-cmp-list" id="chgList"></div>
+            </section>
+          </div>
+
+          <!-- «Ролик» — ролик варки через видео-сервис (video_service/); вкладка видна, только пока сервис отвечает (07-video.js) -->
+          <div class="micro-tele-video" id="teleStripVideo" hidden>
+            <div class="micro-vid-head">
+              <span class="micro-vid-title">Ролик варки</span>
+              <span class="micro-vid-sub">фото проб с контурами, рассев и графики · 1920×1080 · 0,5 с на пробу</span>
+              <span class="micro-vid-msg" id="vidMsg"></span>
+            </div>
+            <div class="micro-vid-prog" id="vidProg" hidden>
+              <div class="micro-vid-bar"><i id="vidBar"></i></div>
+              <span id="vidProgTxt"></span>
+            </div>
+            <div class="micro-vid-cols">
+              <div>
+                <p class="micro-tele-group">Варки</p>
+                <div class="micro-vid-list" id="vidBoils"><div class="micro-vid-empty">—</div></div>
+              </div>
+              <div>
+                <p class="micro-tele-group">Готовые ролики</p>
+                <div class="micro-vid-list" id="vidFiles"><div class="micro-vid-empty">—</div></div>
+              </div>
+            </div>
           </div>
 
           <!-- «CV» — настройки распознавания (4-я вкладка нижней полосы) -->
@@ -1223,6 +1311,12 @@
           <div class="micro-zip-list" id="cvZipList"></div>
               </section>
               <section class="micro-cfg-card">
+                <h4>Цели маточника</h4>
+          <label class="micro-cycle-f" title="Мука на финише выше этого — плохо: красным на графиках отчёта, минус в итоге сравнения. 3–4 % — хорошо, 15–16 % — много."><span>Мука не выше, %</span><input type="number" id="cvSeedFines" step="0.5" min="0" max="50" /></label>
+          <label class="micro-cycle-f" title="Средний размер на финише ниже этого — плохо (по книгам затравка для утфеля I — 180–220 мкм, общее 180–300)."><span>Размер от, мкм</span><input type="number" id="cvSeedMin" step="10" min="0" /></label>
+          <label class="micro-cycle-f" title="Средний размер на финише выше этого — плохо: крупнее при той же дозе — меньше кристаллов в утфеле I, сахар крупнее."><span>Размер до, мкм</span><input type="number" id="cvSeedMax" step="10" min="0" /></label>
+              </section>
+              <section class="micro-cfg-card">
                 <h4>Склейка и края</h4>
           <label class="micro-cycle-f" title="Маски кристаллов с зазором не больше этого (px) считаются срослись и склеиваются в ОДИН сросток; маска, лежащая внутри другой, убирается как лишнее обнаружение. 0 — не склеивать. Применяется со следующего разбора."><span>Сросток: зазор, px</span><input type="number" id="cvClusterGap" step="1" min="0" /></label>
           <label class="micro-cycle-f" title="Кристалл ближе этого расстояния (px) к краю кадра считается обрезанным (серый слой, в рассев не идёт). Увеличь, если на краях остаются обрубки. 0 — выкл. Применяется со следующего разбора."><span>Край кадра, px</span><input type="number" id="cvEdgeMargin" step="2" min="0" /></label>
@@ -1258,6 +1352,8 @@
       <script src="/static/js/microscope/03-frac.js"></script>
       <script src="/static/js/microscope/05-report.js"></script>
       <script src="/static/js/microscope/06-update.js"></script>
+      <script src="/static/js/microscope/07-video.js"></script>
+      <script src="/static/js/microscope/08-compare.js"></script>
       <script src="/static/js/microscope/04-init.js"></script>
     </main>
   </div>

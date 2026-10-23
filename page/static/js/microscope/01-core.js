@@ -1209,6 +1209,9 @@
       set("pcStage", stageLabel(pv.stage));
       set("pcSubstage", substageLabel(pv.substage));
       set("pcTemp", pv.temp_app == null ? "(—)" : pv.temp_app + " °C");
+      set("pcSyrup", pv.v_syrup == null ? "(—)" : Math.round(pv.v_syrup) + " %");
+      set("pcWater", pv.v_water == null ? "(—)" : Math.round(pv.v_water) + " %");
+      set("pcProduct", pv.v_product == null ? "(—)" : Math.round(pv.v_product) + " %");
       // разрежение теперь в press_top (с фолбэком на старое поле vacuum) — как на мнемосхеме
       { const vac = pv.press_top != null ? pv.press_top : pv.vacuum;
         set("pcVacuum", vac == null ? "(—)" : vac); }
@@ -1499,6 +1502,7 @@
         const key = tab.dataset.ptab;
         document.querySelectorAll(".micro-ptab").forEach((x) => x.classList.toggle("is-active", x === tab));
         document.querySelectorAll(".micro-ppane").forEach((p) => p.classList.toggle("hidden", p.dataset.ppane !== key));
+        cvPultBlocksSync(key);   // «Рассев» / «Тренды»: блок из нижней полосы — в пульт и обратно
         if (key === "cv") { cvRefresh(); setTimeout(cvDrawTrend, 30); }   // канвас рисуем, когда пане видима
         if (key === "frac") { fracRefresh(); }
       });

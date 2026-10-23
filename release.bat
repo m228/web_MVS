@@ -3,7 +3,7 @@ rem Publish the built archives as a GitHub Release (called at the end of build.b
 rem   release.bat        - checks, asks "Y/N", then gh release create
 rem   release.bat dry    - only checks and prints what would be published
 rem Factory machines update from the "Latest" release, so nothing is published unless:
-rem   branch is main, tree is clean, main == origin/main, tag v<VERSION> is free, both zips exist.
+rem   branch is main, tree is clean, main == origin/main, tag v<VERSION> is free, all three zips exist.
 setlocal
 cd /d "%~dp0"
 
@@ -11,6 +11,7 @@ set /p VER=<VERSION
 set "TAG=v%VER%"
 set "ZIP1=dist\web_MVS_v%VER%.zip"
 set "ZIP2=dist\cv_service_v%VER%.zip"
+set "ZIP3=dist\video_service_v%VER%.zip"
 
 where gh >nul 2>&1 || (echo [release] gh CLI not found - install GitHub CLI and run "gh auth login" & exit /b 1)
 
@@ -33,16 +34,18 @@ if not errorlevel 1 (echo [release] STOP: release %TAG% already exists - bump VE
 
 if not exist "%ZIP1%" (echo [release] STOP: %ZIP1% not found - run build.bat first. & exit /b 1)
 if not exist "%ZIP2%" (echo [release] STOP: %ZIP2% not found - run build.bat first. & exit /b 1)
+if not exist "%ZIP3%" (echo [release] STOP: %ZIP3% not found - run build.bat first. & exit /b 1)
 
 echo [release] Ready to publish %TAG% from main (%LOC:~0,7%):
 echo           %ZIP1%
 echo           %ZIP2%
+echo           %ZIP3%
 echo [release] Factory machines (Bui, Kir) will pick it up as "Latest".
 if /i "%~1"=="dry" (echo [release] dry run - nothing published. & exit /b 0)
 
 choice /c YN /n /m "Publish release %TAG% to GitHub? [Y/N] "
 if errorlevel 2 (echo [release] cancelled - nothing published. & exit /b 0)
 
-gh release create %TAG% "%ZIP1%" "%ZIP2%" -t %TAG% --generate-notes || (echo [release] FAILED & exit /b 1)
+gh release create %TAG% "%ZIP1%" "%ZIP2%" "%ZIP3%" -t %TAG% --generate-notes || (echo [release] FAILED & exit /b 1)
 echo [release] Published %TAG%.
 endlocal

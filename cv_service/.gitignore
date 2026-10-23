@@ -5,3 +5,5 @@ model/
 *.pt
 *.onnx
 __pycache__/
+# лог сервиса, когда его поднимает web_MVS (services.py)
+service.log*

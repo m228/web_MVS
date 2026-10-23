@@ -83,15 +83,19 @@ def _volume_cols(s: dict, vp: dict, n_frames: int) -> dict:
     return out
 
 
+PAUSE_STAGES = (20, 21)     # УНВ / пауза: приходят посреди роста, это не этап рецепта — фазу не обрывают, подкачки/росты не считают
+
+
 def phases_for_boil(stages: list) -> list:
     """Фаза каждой пробы варки по ПОРЯДКУ стадий (рецепт идёт строго по порядку): стадия 5 = подкачка, 7 = рост. 1-я «5» → p1,
     1-я «7» → g1, 2-я «5» → p2, 2-я «7» → g2 (3-я и далее вливаются во 2-ю). Прочие стадии (сгущение, затравка, уваривание…) — None.
+    УНВ / пауза (PAUSE_STAGES) посреди роста — как у предыдущей пробы: рост 7 → 20 → 7 остаётся одним ростом.
     Стадия пробы — на момент её начала: проба, начатая в подкачке, остаётся в подкачке, даже если к концу стадия сменилась."""
     pump = grow = 0
     last, prev, out = None, None, []
     for st in stages:
-        if st is None:
-            out.append(prev)                                   # стадия неизвестна — как у предыдущей пробы
+        if st is None or int(st) in PAUSE_STAGES:
+            out.append(prev)                                   # стадия неизвестна или УНВ/пауза — как у предыдущей пробы
             continue
         st = int(st)
         if st == 5:
@@ -143,7 +147,7 @@ def phase_state(serial: str, max_idle_s: float = 20 * 60) -> dict:
     last = None
     for r in g:
         st = r.get("stage")
-        if st is None:
+        if st is None or st in PAUSE_STAGES:
             continue
         if st == 5 and last != 5:
             pump += 1
@@ -184,6 +188,122 @@ def finish_probes(fin: list, fin_sv: float = 2.0) -> tuple[list, Optional[float]
     return (sel or fin[-4:]), ref
 
 
+POINT_SV = 86.0         # контрольная точка СВ по умолчанию (настройка cv.point_sv): к ней итог варки уже предопределён
+POINT_WIN_S = 150       # размер на точке — среднее проб за столько секунд до неё (включая её)
+WATER_FROM_SV = 85.5    # вода на стабилизации: ищем после того, как СВ дошло до этого
+WATER_DIP_SV = 1.0      # варки без клапанов: провал СВ на столько после роста до WATER_FROM_SV — это вода
+
+
+def _recipe_stage(r: dict) -> Optional[int]:
+    """Стадия рецепта пробы; неизвестна или УНВ/пауза (не этап рецепта) — None."""
+    st = r.get("stage")
+    return None if st is None or st in PAUSE_STAGES else st
+
+
+def water_by_valve(g: list, from_sv: float = WATER_FROM_SV) -> Optional[tuple[int, int]]:
+    """Вода на стабилизации по клапану: (доза %·с, секунд открытия) с пробы, где СВ дошло до from_sv, до уваривания (стадия 8).
+    Доза в пробе — за отрезок до неё, и только при открытом клапане продукта (sv_source). Клапан воды не читается или неизвестен на всём
+    этом окне (мусор регистра, 65535) — None: тогда решает провал СВ, а не «воды нет»."""
+    on, dose, secs, known = False, 0, 0, False
+    for r in g:
+        st = _recipe_stage(r)
+        if not on:
+            on = st is not None and st < 8 and (r.get("sv") or 0) >= from_sv
+            continue
+        if r.get("water_s") is not None:
+            known = True
+            dose += r.get("water_dose") or 0
+            secs += r["water_s"]
+        if st is not None and st >= 8:
+            break
+    return (dose, secs) if known else None
+
+
+def water_by_sv(g: list, from_sv: float = WATER_FROM_SV, dip: float = WATER_DIP_SV) -> Optional[tuple[dict, dict]]:
+    """Вода по СВ (варки без клапанов): после роста СВ до ≥ from_sv провал на ≥ dip до уваривания. (проба пика, проба дна) или None."""
+    peak, ip = 0.0, None
+    for i, r in enumerate(g):
+        sv, st = r.get("sv"), _recipe_stage(r)
+        if sv is None or st is None:
+            continue
+        if st >= 8:
+            return None
+        if sv >= peak:
+            peak, ip = sv, i
+        elif peak >= from_sv and peak - sv >= dip:
+            j = i                                       # дно — пока СВ дальше падает
+            while j + 1 < len(g) and g[j + 1].get("sv") is not None and g[j + 1]["sv"] <= g[j]["sv"]:
+                j += 1
+            return g[ip], g[j]
+    return None
+
+
+def boil_metrics(g: list, point_sv: float = POINT_SV, fin_sv: float = 2.0) -> dict:
+    """Показатели для сравнения варок: вода на стабилизации (по клапану, а без него — по провалу СВ, water_by = "sv"), размер на контрольной
+    точке СВ (первая проба до уваривания с СВ ≥ point_sv), размер на финише, прирост от точки до финиша (мкм), минут от точки до готовности,
+    модель распознавания (самая частая у проб варки).
+    Маточник целиком (сравнение варок, tasks/seed-quality-criteria.md): seed_t — момент заводки, seed_ready_min — заводка → готовность
+    (стадия 9), seed_end_min — заводка → последняя проба (у Буи «готовность» в пробы почти не попадает), fin_cv — однородность (разброс
+    размера CV %, среднее проб финиша), fin_agg_pct — сростки на финише, % по числу кристаллов."""
+    def avg(v):
+        v = [x for x in v if x is not None]
+        return round(sum(v) / len(v), 1) if v else None
+    out = {"water": None, "water_by": None, "water_dose": None, "water_s": None, "water_dip": None,
+           "point_um": None, "fin_um": None, "grow_um": None, "to_ready_min": None, "model": None,
+           "seed_t": None, "seed_ready_min": None, "seed_end_min": None, "fin_cv": None, "fin_agg_pct": None}
+    models = [r["model"] for r in g if r.get("model")]
+    if models:                                          # модель распознавания варки (пробы до 1.9.76 её не пишут — None)
+        out["model"] = max(set(models), key=models.count)
+    v = water_by_valve(g)
+    if v is not None:
+        out.update(water=v[1] > 0, water_by="valve", water_dose=v[0], water_s=v[1])
+    elif any(_recipe_stage(r) is not None and (r.get("sv") or 0) >= WATER_FROM_SV for r in g):     # СВ до стабилизации не дошло — не знаем
+        d = water_by_sv(g)
+        out.update(water=d is not None, water_by="sv", water_dip=[d[0]["sv"], d[1]["sv"]] if d else None)
+    fin, _ = finish_probes([r for r in g if r.get("fines_m3") is not None], fin_sv)
+    out["fin_um"] = avg([r.get("mean") for r in fin])
+    out["fin_cv"] = avg([r.get("cv_pct") for r in fin])
+    agg = [r for r in fin if r.get("n_aggregate") is not None and r.get("count")]     # сростков на кадр / кристаллов на кадр
+    if agg:
+        out["fin_agg_pct"] = round(100.0 * sum(r["n_aggregate"] for r in agg) / sum(r["count"] for r in agg), 1)
+    seed = _est_seed_ts(g)
+    ready = next((r["t"] for r in g if (_recipe_stage(r) or 0) >= 9), None)
+    if seed is not None:
+        out["seed_t"] = seed
+        if ready is not None and ready > seed:
+            out["seed_ready_min"] = round((ready - seed) / 60.0, 1)
+        if g[-1]["t"] > seed:
+            out["seed_end_min"] = round((g[-1]["t"] - seed) / 60.0, 1)
+    p = next((r for r in g if (_recipe_stage(r) or 0) and _recipe_stage(r) < 8 and (r.get("sv") or 0) >= point_sv), None)
+    if p is None:
+        return out
+    out["point_um"] = avg([r.get("mean") for r in g if p["t"] - POINT_WIN_S <= r["t"] <= p["t"]])
+    if out["point_um"] is not None and out["fin_um"] is not None:
+        out["grow_um"] = round(out["fin_um"] - out["point_um"], 1)
+    ready = next((r["t"] for r in g if (_recipe_stage(r) or 0) >= 9), None)
+    if ready is not None and ready > p["t"]:
+        out["to_ready_min"] = round((ready - p["t"]) / 60.0, 1)
+    return out
+
+
+CONF_PLAIN = 0.55      # порог conf, на котором сняты все пробы с паспортом модели до 1.9.92 (Кир) — в метке его не пишем
+
+
+def _model_tag(det: Optional[dict], infer: Optional[dict] = None) -> Optional[str]:
+    """«26x_1280.pt@1280» из паспорта модели пробы; старые пробы без паспорта — None. Порог conf, отличный от CONF_PLAIN, входит в метку
+    («26x_1280.pt@1280 conf 0.25»): он сдвигает муку так же, как смена модели (Кир, эталон 23.10: 0,55 → 0,25 — мука финиша +22 %),
+    поэтому сравнение варок разводит такие периоды, как разные модели. 0,55 не пишем, чтобы старые варки (их кадры уже стёрты, conf
+    в журнале нет) остались той же «моделью», что и новые на 0,55."""
+    if not det or not det.get("name"):
+        return None
+    name = str(det["name"]).split(":", 1)[-1]
+    tag = "%s@%s" % (name, det["imgsz"]) if det.get("imgsz") else name
+    conf = (infer or {}).get("conf")
+    if conf is not None and abs(float(conf) - CONF_PLAIN) > 1e-6:
+        tag += " conf %g" % float(conf)
+    return tag
+
+
 def _hist_row(result: dict) -> Optional[dict]:
     """Одна строка журнала из result.json пробы: только числа для тренда (без кадров и объектов)."""
     t = _ts_epoch(result.get("ts", ""))
@@ -206,6 +326,12 @@ def _hist_row(result: dict) -> Optional[dict]:
         # режим варки на момент пробы (ПЛК): для разбора «почему слиплось» по серии проб
         "temp": plc.get("temp_app"), "level": plc.get("level"), "current": plc.get("current"),
         "vac": plc.get("press_top"), "cook_time": plc.get("cook_time"), "substage": plc.get("substage"), "seed_age": plc.get("seed_age_s"),
+        # клапаны подачи (обратка %, среднее по кадрам) и доза с прошлой пробы (%·с, секунд открыт)
+        "v_syrup": plc.get("v_syrup"), "v_water": plc.get("v_water"), "v_product": plc.get("v_product"),
+        "syrup_dose": plc.get("syrup_dose"), "syrup_s": plc.get("syrup_s"), "water_dose": plc.get("water_dose"), "water_s": plc.get("water_s"),
+        "product_dose": plc.get("product_dose"), "product_s": plc.get("product_s"),
+        # чем снята проба: имя модели и imgsz — пробы разных моделей сравнивать нельзя (абсолютные цифры мелочи сдвигаются)
+        "model": _model_tag(result.get("detector"), result.get("infer")),
         "count": s.get("count"), "mean": sz.get("mean"), "median": sz.get("median"),
         "size_min": sz.get("min"), "size_max": sz.get("max"), "len_max": sz.get("len_max"),
         "small": pct.get("small"), "medium": pct.get("medium"),
@@ -230,6 +356,20 @@ def _hist_append(serial: str, result: dict):
 
 _null_sv_outliers = db.null_sv_outliers      # правило сбойного СВ — в db.py (там же считается boil_id)
 
+_VALVES = {"v_syrup": "syrup", "v_water": "water", "v_product": "product"}
+
+
+def _null_valve_garbage(rows: list) -> list:
+    """Обратка клапана в пробе вне 0–100 % — не настоящая (пробы до 1.9.87: клапан воды Кира отдавал 65535, среднее по кадрам — 26222,
+    58982…): клапан и его доза за отрезок до пробы → None (sv_source тогда копил мусор как «открыт на 100 %»). Правило — sv_source.valve_pct.
+    Сами данные в базе не меняем."""
+    from sv_source import valve_pct
+    for r in rows:
+        for k, name in _VALVES.items():
+            if r.get(k) is not None and valve_pct(r[k]) is None:
+                r[k] = r[name + "_dose"] = r[name + "_s"] = None
+    return rows
+
 
 def _hist_days(serial: str) -> list[str]:
     """Даты (YYYY-MM-DD), за которые есть пробы в журнале, по возрастанию."""
@@ -238,7 +378,7 @@ def _hist_days(serial: str) -> list[str]:
 
 def _hist_read(serial: str, day: str, clean: bool = True) -> list[dict]:
     rows = db.read_rows(_serial_dir(serial).name, day=day)
-    return _null_sv_outliers(rows) if clean else rows       # clean=False — сырые строки (для перезаписи журнала)
+    return _null_valve_garbage(_null_sv_outliers(rows)) if clean else rows       # clean=False — сырые строки (для перезаписи журнала)
 
 
 def import_legacy_journal(serial: str) -> int:
@@ -339,12 +479,9 @@ def _trend_val(r: dict, name: str):
     return r.get(name)
 
 
-def trend_range(serial: str, t_from: float, t_to: float, series: Optional[list[str]] = None,
-                limit: int = 5000) -> dict:
-    """Тренд по реальному времени: пробы с t_from по t_to (epoch, сек) из журнала по дням.
-    Возвращает {t:[...], ts:[...], stage:[...], series:{name:[...]}}; не больше limit точек."""
-    _hist_backfill(serial)
-    series = series or ["small", "medium", "large", "reject", "mean", "median"]
+def _gated_rows(serial: str, t_from: float, t_to: float) -> list[dict]:
+    """Строки журнала по времени, до t_to, из дней окна и дня перед ним (варка могла начаться до окна — нужно для порога СВ):
+    с плоской мукой и порогом «Мука с СВ» по варке. Строки раньше t_from тоже в списке — отрезает вызывающий."""
     rows = []
     # перебираем только существующие дни (а не все даты в диапазоне): запрос «с 1970» не падает
     for day in _hist_days(serial):
@@ -358,7 +495,29 @@ def trend_range(serial: str, t_from: float, t_to: float, series: Optional[list[s
     rows.sort(key=lambda r: r["t"])
     for r in rows:                                   # плоская мука — ДО порога СВ (гейт обнуляет fsieve_*): видно всю варку с начала
         r["_fines_flat"] = fines_flat(r)
-    _apply_fines_gate(rows)
+    return _apply_fines_gate(rows)
+
+
+def probe_sieve(serial: str, ts: str) -> Optional[dict]:
+    """Рассев одной пробы из журнала — для тренда «по пробе»: кадры старых проб стёрты ротацией, а журнал помнит рассев любой.
+    Порог «Мука с СВ» тот же, что у линий тренда (до него рассев не считается — fsieve None). Нет такой пробы — None."""
+    t = _ts_epoch(ts)
+    if t is None:
+        return None
+    _hist_backfill(serial)
+    r = next((x for x in reversed(_gated_rows(serial, t, t + 60)) if x.get("ts") == ts), None)   # +60 с: t в журнале с долями секунды, ts — без
+    if r is None:
+        return None
+    return {"ts": ts, "t": r["t"], "sv": r.get("sv"), "stage": r.get("stage"), "phase": r.get("phase"), "fsieve": _fsieve([r])}
+
+
+def trend_range(serial: str, t_from: float, t_to: float, series: Optional[list[str]] = None,
+                limit: int = 5000) -> dict:
+    """Тренд по реальному времени: пробы с t_from по t_to (epoch, сек) из журнала по дням.
+    Возвращает {t:[...], ts:[...], stage:[...], series:{name:[...]}}; не больше limit точек."""
+    _hist_backfill(serial)
+    series = series or ["small", "medium", "large", "reject", "mean", "median"]
+    rows = _gated_rows(serial, t_from, t_to)
     bid, prev = 0, None                      # номер варки каждой точки — по тем же правилам, что в журнале (JS границу сам не ищет)
     for r in rows:
         if prev is None or _is_new_boil(prev, r):
@@ -385,7 +544,8 @@ EXPORT_COLUMNS = ["ts", "t", "stage", "substage", "phase", "sv", "temp", "level"
                   "sieve_area_b0", "sieve_area_b1", "sieve_area_b2", "sieve_area_b3", "sieve_area_b4", "sieve_area_b5", "sieve_area_b6",
                   "agg_m1", "agg_m2", "agg_m3", "agg_area", "agg_n", "vtot_m1", "vtot_m2", "vtot_m3", "fines_side_mm", "fines_um", "k_thick", "fines_from_sv",
                   "n_needle", "n_aggregate", "n_crooked", "n_tiny", "n_huge", "suspect",
-                  "frac_zones", "frac_pct", "frames"]
+                  "frac_zones", "frac_pct", "frames",
+                  "v_syrup", "v_water", "v_product", "syrup_dose", "syrup_s", "water_dose", "water_s", "product_dose", "product_s", "model"]
 
 
 def sieve_avg(r: dict, i: int) -> Optional[float]:
@@ -628,6 +788,23 @@ def boils(serial: str, limit: int = 6, now: Optional[float] = None, offset: int 
     for i, g in enumerate(list(reversed(groups))[offset:offset + limit], start=offset):
         finished = not (i == 0 and now - g[-1]["t"] <= BOIL_OPEN_S)
         out.append(_boil_summary(g, finished, avg_n))
+    return out
+
+
+def video_boils(serial: str, limit: int = 10, now: Optional[float] = None) -> list[dict]:
+    """Варки для ролика (видео-сервис), новые первыми: время, СВ, проб в журнале и сколько папок проб ещё на диске —
+    кадры старых варок стёрты ротацией («Варок в архиве»), по ним ролик не собрать. "dirs" — пути к этим папкам (их читает
+    видео-сервис на том же компе), "rows" — пробы варки (для имени файла); в браузер их не отдаём."""
+    groups = boil_groups(serial)
+    sd = _serial_dir(serial)
+    now = time.time() if now is None else now
+    out = []
+    for i, g in enumerate(reversed(groups[-limit:])):
+        dirs = [str(sd / r["ts"]) for r in g if (sd / r["ts"]).is_dir()]
+        svs = [r["sv"] for r in g if r.get("sv") is not None]
+        out.append({"id": g[0]["ts"], "t_from": g[0]["t"], "t_to": g[-1]["t"], "n": len(g), "on_disk": len(dirs),
+                    "sv_min": min(svs) if svs else None, "sv_max": max(svs) if svs else None,
+                    "finished": not (i == 0 and now - g[-1]["t"] <= BOIL_OPEN_S), "dirs": dirs, "rows": g})
     return out
 
 

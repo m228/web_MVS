@@ -8,6 +8,7 @@ import numpy as np
 import cv2
 from logger import log_event
 import sdk_gige
+import camera_params
 
 from .gentl_env import (
     FRAME_FETCH_TIMEOUT,
@@ -55,6 +56,7 @@ class CameraWorker(BaseCameraWorker):
         # (читается с камеры после применения настроек) — для значка «инфо»
         self.current_config = None
         self.advanced_settings = False
+        self._params_warned = False      # предупреждение «параметры не сохранены» — один раз
 
         # GenTL ID сетевого интерфейса (вспомогательный фильтр)
         self.interface_id = None
@@ -382,7 +384,8 @@ class CameraWorker(BaseCameraWorker):
         return min_value <= value <= max_value
 
     def apply_settings(self, node_map, width=None, height=None, offset_x=None, offset_y=None,
-                       fps=None, exposure_auto=None, exposure_time=None, pixel_format=None):
+                       fps=None, exposure_auto=None, exposure_time=None, pixel_format=None,
+                       gain_auto=None, gain=None):
         limits = self.data_limit
         try:
             # пиксельный формат задаём первым: он меняет размер кадра/каналы,
@@ -430,6 +433,16 @@ class CameraWorker(BaseCameraWorker):
             ):
                 node_map.ExposureTime.value = int(exposure_time)
 
+            # усиление: узлы есть не у всех камер — сбой не роняет поток (его покажет обратное чтение)
+            try:
+                if gain_auto is not None and gain_auto in node_map.GainAuto.symbolics:
+                    node_map.GainAuto.value = gain_auto
+                if gain is not None and gain_auto in (None, "Off"):
+                    node_map.Gain.value = float(gain)
+            except Exception as e:
+                log_event("camera_core.apply_settings_camera", "Не удалось задать усиление", "warn",
+                          {"error": str(e), "gain_auto": gain_auto, "gain": gain})
+
             return True, None
 
         except Exception as e:
@@ -437,6 +450,18 @@ class CameraWorker(BaseCameraWorker):
             return False, e
 
     # ---------- стрим ----------
+
+    def _resolve_settings(self, requested, save):
+        """Параметры для записи в камеру: сохранённые (камера микроскопа) или присланные страницей."""
+        settings = camera_params.resolve(self.serial_number, requested, save)
+        if (not save and not self._params_warned and camera_params.is_microscope(self.serial_number)
+                and camera_params.saved(self.serial_number) is None):
+            self._params_warned = True
+            log_event("camera_core.generate_stream",
+                      "Параметры камеры микроскопа не сохранены: после отключения питания камера возьмёт свои. "
+                      "Настрой и нажми «Применить» на вкладке «Камера»", "warn",
+                      {"serial_number": self.serial_number})
+        return settings
 
     def get_frame(self, ia, node_map):
         try:
@@ -493,14 +518,19 @@ class CameraWorker(BaseCameraWorker):
             "offset_x": rv("OffsetX", int),
             "offset_y": rv("OffsetY", int),
             "exposure_auto": rv("ExposureAuto"),
-            "exposure_time": rv("ExposureTime", lambda v: int(float(v))),
+            "exposure_time": rv("ExposureTime", lambda v: round(float(v), 2)),
+            "gain_auto": rv("GainAuto"),
+            "gain": rv("Gain", lambda v: round(float(v), 2)),
             "pixel_format": rv("PixelFormat"),
             "fps": rv("AcquisitionFrameRate", lambda v: round(float(v), 2)),
         }
         return {k: v for k, v in config.items() if v is not None}
 
     def generate(self, width=None, height=None, offset_x=None, offset_y=None,
-                 fps=None, exposure_auto=None, exposure_time=None, pixel_format=None, client_id=None):
+                 fps=None, exposure_auto=None, exposure_time=None, pixel_format=None, client_id=None,
+                 save=False):
+        """save — нажали «Применить»: пишем присланное и сохраняем то, что камера приняла.
+        Иначе для камеры микроскопа пишем сохранённые параметры (см. camera_params)."""
         ia = None
         last_frame_time = None
 
@@ -532,17 +562,17 @@ class CameraWorker(BaseCameraWorker):
                       "info" if sdk_ok else "warn",
                       {"serial_number": self.serial_number, "sdk": sdk_gige.available(),
                        "device_info": device_info is not None})
-        except BaseException:
-            self._start_lock.release()
-            raise
-        if sdk_ok:
-            settings = {
+            settings = self._resolve_settings({
                 "width": width, "height": height,
                 "offset_x": offset_x, "offset_y": offset_y,
                 "fps": fps, "exposure_auto": exposure_auto,
                 "exposure_time": exposure_time, "pixel_format": pixel_format,
-            }
-            yield from self._generate_sdk(device_info, settings, token)      # лок отпустит сам
+            }, save)
+        except BaseException:
+            self._start_lock.release()
+            raise
+        if sdk_ok:
+            yield from self._generate_sdk(device_info, settings, token, save)      # лок отпустит сам
             return
         self._start_lock.release()           # harvesters-путь: прежнее поведение (лок только на предстартовые проверки)
 
@@ -551,17 +581,7 @@ class CameraWorker(BaseCameraWorker):
                 "camera_core.generate_stream",
                 "Запрошен старт потока",
                 "info",
-                {
-                    "serial_number": self.serial_number,
-                    "width": width,
-                    "height": height,
-                    "offset_x": offset_x,
-                    "offset_y": offset_y,
-                    "fps": fps,
-                    "exposure_auto": exposure_auto,
-                    "exposure_time": exposure_time,
-                    "pixel_format": pixel_format,
-                },
+                {"serial_number": self.serial_number, **settings},
             )
 
             node_map, ia = self.open_node_map()
@@ -569,25 +589,24 @@ class CameraWorker(BaseCameraWorker):
                 # подробная причина уже в логе open_node_map — здесь только статус потока
                 return
 
-            ok, err = self.apply_settings(
-                node_map,
-                width=width,
-                height=height,
-                offset_x=offset_x,
-                offset_y=offset_y,
-                fps=fps,
-                exposure_auto=exposure_auto,
-                exposure_time=exposure_time,
-                pixel_format=pixel_format,
-            )
-
-            if not ok:
-                log_event("camera_core.generate_stream", "Ошибка применения настроек камеры", "warn", {"error": str(err)})
-                return
-
-            # запоминаем фактический конфиг (читаем с камеры ПОСЛЕ применения,
-            # пока держим node_map) — для значка «инфо» на странице камеры
-            self.current_config = self._read_current_config(node_map)
+            # запись + обратное чтение: камера могла молча не принять значение
+            for attempt in range(1, camera_params.APPLY_TRIES + 1):
+                ok, err = self.apply_settings(node_map, **settings)
+                if not ok:
+                    log_event("camera_core.generate_stream", "Ошибка применения настроек камеры", "warn", {"error": str(err)})
+                    return
+                # фактический конфиг (читаем с камеры ПОСЛЕ применения, пока держим node_map) —
+                # для сверки, значка «инфо» и сохранения по «Применить»
+                self.current_config = self._read_current_config(node_map)
+                mismatch = camera_params.mismatches(settings, self.current_config)
+                if not mismatch:
+                    break
+                last = attempt == camera_params.APPLY_TRIES
+                log_event("camera_core.generate_stream", "Камера не приняла настройки (попытка %d из %d)%s" % (
+                              attempt, camera_params.APPLY_TRIES, ": поток идёт с тем, что стоит в камере" if last else ", повторяю"),
+                          "error" if last else "warn", {"serial_number": self.serial_number, "mismatch": mismatch})
+            if save:
+                camera_params.store(self.serial_number, self.current_config)
 
             # num_buffers НЕ трогаем — оставляем дефолт harvesters, как было до
             # multicam-рефактора (тогда поток одиночной камеры был стабилен).
@@ -705,7 +724,7 @@ class CameraWorker(BaseCameraWorker):
 
     # GigE-поток через MVS SDK (resend): применяет settings, отдаёт MJPEG теми же чанками,
     # что и harvesters-путь.
-    def _generate_sdk(self, device_info, settings=None, token=None):
+    def _generate_sdk(self, device_info, settings=None, token=None, save=False):
         stream = None
         lock_held = True                   # _start_lock взят в generate(); отпускаем, как только камера открыта (или не открылась)
 
@@ -733,6 +752,10 @@ class CameraWorker(BaseCameraWorker):
                     time.sleep(0.5)
             if stream is None:
                 raise RuntimeError("open не удался после ретраев: %r" % open_err)
+            # фактический конфиг с камеры (после сверки в open) — значок «инфо» и сохранение по «Применить»
+            self.current_config = stream.read_config()
+            if save:
+                camera_params.store(self.serial_number, self.current_config)
 
             with self._ia_lock:
                 self._sdk_stream = stream

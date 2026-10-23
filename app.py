@@ -19,6 +19,7 @@ from logger import get_events, log_event
 
 from camera_core import manager, build_rtsp_url, replace_host_in_url
 import plate_config
+import camera_params
 import rtsp_store
 import save_settings
 import net_tools
@@ -1376,6 +1377,7 @@ def camera_stream(
     exposure_time: float | None = Query(None, gt=0),
     pixel_format: str | None = None,
     cid: str | None = Query(None, alias="_"),      # метка окна, открывшего поток (см. client_id в метриках)
+    save: int = 0,                                 # 1 — кнопка «Применить»: сохранить то, что камера приняла (camera_params)
 ):
     worker = manager.get(serial_number)
     if interface_id:
@@ -1396,6 +1398,7 @@ def camera_stream(
             "exposure_auto": exposure_auto,
             "exposure_time": exposure_time,
             "pixel_format": pixel_format,
+            "save": save,
         },
     )
     return StreamingResponse(
@@ -1409,9 +1412,16 @@ def camera_stream(
             exposure_time=exposure_time,
             pixel_format=pixel_format,
             client_id=cid,
+            save=bool(save),
         ),
         media_type="multipart/x-mixed-replace; boundary=frame",
     )
+
+
+# сохранённые параметры камеры микроскопа (кнопка «Применить») — ими заполняются поля вкладки «Камера»
+@app.get("/api/camera/saved_params")
+def camera_saved_params(serial_number: str):
+    return camera_params.saved(serial_number) or {}
 
 
 @app.get("/api/camera/close_stream")

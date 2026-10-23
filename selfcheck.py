@@ -348,7 +348,7 @@ def _js_api_routes():
 MODULES = [
     "paths", "logger", "camera_core", "camera_core.gentl_env", "camera_core.utils", "camera_core.imaging",
     "camera_core.base_worker", "camera_core.gige_worker", "camera_core.rtsp_worker", "camera_core.camera_manager",
-    "sdk_gige", "dahua_control", "net_tools", "rtsp_store",
+    "sdk_gige", "camera_params", "dahua_control", "net_tools", "rtsp_store",
     "save_settings", "plate_config", "sv_source", "microscope_plc", "microscope_fsm",
     "microscope_service", "cv_analyzer", "cv_volume", "substages", "db", "report", "boil_compare", "cv_fracture", "cv_client", "video_client", "services", "cv_store", "boil_archive", "fracture_lab",
     "updater", "autostart", "diag", "app", "mvsdk",
@@ -382,6 +382,7 @@ API = {
     "net_tools": ["status", "enable_jumbo", "disable_jumbo", "enable_filter", "disable_filter"],
     "dahua_control": ["parse_rtsp_credentials", "get_capabilities", "set_white_light"],
     "sdk_gige": ["init", "available", "enum_gige", "GigeSdkStream", "read_ranges"],
+    "camera_params": ["saved", "resolve", "store", "mismatches", "overexposure"],
     "logger": ["log_event", "get_events"],
     "paths": ["BUNDLE_DIR", "DATA_DIR", "read_version"],
     "app": ["app"],
@@ -614,6 +615,168 @@ def _sdk():
     sdk_gige.init()
     assert sdk_gige.available(), "SDK недоступен"
     return "ok"
+
+
+class _FakeGigeCam:
+    """Фейковая GigE-камера для sdk_gige: узлы живут «в камере» (общие для всех хэндлов), как в
+    настоящей; power_cycle() — отключение питания: камера грузится со своего UserSet."""
+    BOOT = {"Width": 64, "Height": 48, "OffsetX": 0, "OffsetY": 0, "PixelFormat": "Mono8",
+            "ExposureAuto": "Off", "ExposureTime": 5000.0, "GainAuto": "Off", "Gain": 0.0,
+            "AcquisitionFrameRate": 1.0}
+    nodes = dict(BOOT)
+    writes = []
+    ignore_exposure = 0          # столько следующих записей ExposureTime камера «молча» не примет
+
+    @classmethod
+    def power_cycle(cls):
+        cls.nodes = dict(cls.BOOT)
+        cls.writes = []
+
+    def _set(self, name, val):
+        type(self).writes.append(name)
+        if name == "ExposureTime" and type(self).ignore_exposure:
+            type(self).ignore_exposure -= 1
+            return 0
+        type(self).nodes[name] = val
+        return 0
+
+    def MV_CC_CreateHandle(self, info): return 0
+    def MV_CC_OpenDevice(self): return 0
+    def MV_CC_CloseDevice(self): return 0
+    def MV_CC_DestroyHandle(self): return 0
+    def MV_CC_StartGrabbing(self): return 0
+    def MV_CC_StopGrabbing(self): return 0
+    def MV_CC_GetOptimalPacketSize(self): return 1500
+    def MV_GIGE_SetResend(self, *a): return 0
+    def MV_CC_SetBoolValue(self, name, val): return 0
+    def MV_CC_SetIntValue(self, name, val):
+        return self._set(name, int(val)) if name in type(self).nodes else 0
+    def MV_CC_SetFloatValue(self, name, val): return self._set(name, float(val))
+    def MV_CC_SetEnumValueByString(self, name, val): return self._set(name, str(val))
+
+
+def _fake_gige_sdk():
+    """Подменить SDK в sdk_gige на фейковую камеру; возвращает функцию отката."""
+    import types
+    import numpy as np
+    import sdk_gige
+    from camera_core import gige_worker
+    nodes = lambda: _FakeGigeCam.nodes
+    saved = {k: getattr(sdk_gige, k) for k in ("_sdk", "available", "_int_node", "_float_node", "_enum_node")}
+    saved_grab, saved_info = sdk_gige.GigeSdkStream.grab, gige_worker._sdk_device_info
+    sdk_gige._sdk = types.SimpleNamespace(MvCamera=_FakeGigeCam)
+    sdk_gige.available = lambda: True
+    sdk_gige._int_node = lambda c, k: {"value": int(nodes()[k])} if k in nodes() else None
+    sdk_gige._float_node = lambda c, k: {"value": float(nodes()[k])} if k in nodes() else None
+    sdk_gige._enum_node = lambda c, k: {"value": nodes()[k], "options": []} if k in nodes() else None
+    sdk_gige.GigeSdkStream.grab = lambda self, timeout_ms=1000: (8, 8, "Mono8", np.full(64, 100, np.uint8))
+    gige_worker._sdk_device_info = lambda serial: object()
+
+    def undo():
+        for k, v in saved.items():
+            setattr(sdk_gige, k, v)
+        sdk_gige.GigeSdkStream.grab = saved_grab
+        gige_worker._sdk_device_info = saved_info
+    return undo
+
+
+def _one_frame(worker, **kw):
+    """Открыть поток воркера (как /api/camera/stream), взять один кадр и закрыть."""
+    gen = worker.generate(**kw)
+    chunk = next(gen)
+    gen.close()
+    assert chunk.startswith(b"--frame"), chunk[:20]
+
+
+@check("Камеры", "настройки камеры: «Применить» сохраняет то, что камера приняла; после отключения питания пишутся обратно")
+def _camera_params_restore():
+    import types
+    import camera_params
+    import plate_config
+    from camera_core import CameraWorker
+    serial = "SELFCAM-PARAMS"
+    plate_config.save({"camera_serial": serial, "camera_params": {}})
+    undo = _fake_gige_sdk()
+    try:
+        _FakeGigeCam.power_cycle()
+        w = CameraWorker(serial, types.SimpleNamespace(check=lambda: True))
+        # Макс настроил: экспозиция 170 на странице, усиление 6 дБ (в камере) → «Применить»
+        _FakeGigeCam.nodes["Gain"] = 6.0
+        _one_frame(w, exposure_auto="Off", exposure_time=170, fps=1, save=True)
+        s = camera_params.saved(serial)
+        assert s and s["exposure_time"] == 170 and s["gain"] == 6.0 and s["exposure_auto"] == "Off", s
+        # отключение питания: камера грузится с 5000 / 0 дБ; страница при автоподключении шлёт то,
+        # что прочитала с камеры (5000) — в камеру всё равно должно уйти сохранённое
+        _FakeGigeCam.power_cycle()
+        assert _FakeGigeCam.nodes["ExposureTime"] == 5000.0
+        _one_frame(w, exposure_auto="Off", exposure_time=5000, fps=1)
+        n = _FakeGigeCam.nodes
+        assert n["ExposureTime"] == 170 and n["Gain"] == 6.0, "после перезапуска в камере %s / %s" % (n["ExposureTime"], n["Gain"])
+        assert camera_params.saved(serial)["exposure_time"] == 170, "автоподключение перезаписало сохранённое"
+        assert w.current_config.get("exposure_time") == 170, w.current_config
+        # камера молча не приняла первую запись выдержки → обратное чтение ловит и повторяет
+        _FakeGigeCam.power_cycle()
+        _FakeGigeCam.ignore_exposure = 1
+        _one_frame(w)
+        assert _FakeGigeCam.nodes["ExposureTime"] == 170, "повтор не сработал"
+        assert _FakeGigeCam.writes.count("ExposureTime") == 2, _FakeGigeCam.writes
+        # не принимает совсем → после всех попыток ошибка, поток всё равно идёт
+        _FakeGigeCam.power_cycle()
+        _FakeGigeCam.ignore_exposure = 99
+        import sdk_gige
+        st = sdk_gige.GigeSdkStream(object())
+        st.open(camera_params.resolve(serial, {}))
+        assert st.mismatch.get("exposure_time") == [170, 5000.0], st.mismatch
+        assert _FakeGigeCam.writes.count("ExposureTime") == camera_params.APPLY_TRIES
+        st.close()
+        _FakeGigeCam.ignore_exposure = 0
+        # замена камеры: чужие сохранённые значения не пишутся
+        assert camera_params.resolve("OTHER-CAM", {"exposure_time": 900}) == {"exposure_time": 900}
+        plate_config.save({"camera_serial": "OTHER-CAM"})
+        assert camera_params.saved("OTHER-CAM") is None
+    finally:
+        undo()
+        plate_config.save({"camera_serial": "", "camera_params": {}})
+    return "170 мкс / 6 дБ пережили «отключение питания»; повтор при молчаливом отказе; ошибка после %d попыток" % camera_params.APPLY_TRIES
+
+
+@check("CV", "пересвет: белый кадр не идёт в пробу, статус «пересвет», обычный кадр проходит")
+def _cv_overexposed():
+    import cv2
+    import numpy as np
+    import camera_params
+    import cv_client
+    import cv_store
+    from camera_core import manager
+    from microscope_service import MicroscopeService
+    normal, _ = synth_frame()
+    white = np.full((480, 640, 3), 252, np.uint8)
+    cv2.circle(white, (200, 200), 40, (90, 90, 90), -1)          # силуэты кристаллов на белом поле
+    assert not camera_params.overexposure(normal)[0], camera_params.overexposure(normal)
+    over, med, _ = camera_params.overexposure(white)
+    assert over and med >= camera_params.OVER_MEDIAN, med
+    serial = "SELF-OVER"
+    worker = manager.get(serial)
+    worker.running = True
+    orig = (cv_client.infer, cv_client.health)
+    cv_client.health = lambda url, timeout=1.5: {"ok": True}
+    cv_client.infer = lambda *a, **k: {"objects": [], "timing": {}}
+    try:
+        ms = MicroscopeService()                 # не start(): ни платы, ни сокетов
+        ms.cfg = {"camera_serial": serial, "cv": {"frames_per_probe": 3, "dwell_timeout_sec": 10}}
+        ms._probe_at_glass = lambda: True
+        ms._grab_frame = lambda *a, **k: white
+        ms._cv_probe_session()
+        st = ms.cv_status()
+        assert st["state"] == "overexposed", st
+        assert cv_store.get_last(serial) is None, "пересвеченная проба сохранилась"
+        ms._grab_frame = lambda *a, **k: normal
+        ms._cv_probe_session()
+        assert cv_store.get_last(serial), "обычная проба не сохранилась: %s" % ms.cv_status()
+    finally:
+        worker.running = False
+        cv_client.infer, cv_client.health = orig
+    return "медиана белого кадра %d, обычного %d" % (med, camera_params.overexposure(normal)[1])
 
 
 # =====================================================================================
@@ -2482,6 +2645,9 @@ def _stream_double_request_race():
                 raise RuntimeError("MV_CC_OpenDevice ret=0x80000203")
             opened.append(self)
             self.mine = True
+
+        def read_config(self):
+            return {}
 
         def grab(self, timeout_ms=300):
             time.sleep(0.02)

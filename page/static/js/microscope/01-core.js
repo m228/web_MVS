@@ -372,6 +372,19 @@
       fillOpts("camPixFmt", d.pixel_format);
       fillOpts("camExpAuto", d.exposure_auto);
     } catch (e) { /* камера ещё не запускалась — диапазоны появятся после старта */ }
+    await loadSavedCamParams();
+  }
+
+  // сохранённые по «Применить» параметры главнее текущих с камеры: после отключения питания камера
+  // грузится со своими (так вышла экспозиция 5000 вместо 170), а в полях должно быть то, что настроено
+  async function loadSavedCamParams() {
+    if (!camSerial) return;
+    try {
+      const p = await api("/api/camera/saved_params", { serial_number: camSerial });
+      const setV = (id, v) => { const el = $(id); if (el && v != null && v !== "") el.value = v; };
+      setV("camWidth", p.width); setV("camHeight", p.height); setV("camOffX", p.offset_x); setV("camOffY", p.offset_y);
+      setV("camFps", p.fps); setV("camExpAuto", p.exposure_auto); setV("camExpTime", p.exposure_time); setV("camPixFmt", p.pixel_format);
+    } catch (e) { /* не сохранены — остаются значения с камеры */ }
   }
 
   // spec: либо массив вариантов, либо объект {value, options} (как отдаёт бэкенд для
@@ -407,12 +420,13 @@
     return q;
   }
 
-  function camConnect() {
+  function camConnect(save) {             // save — кнопка «Применить»: сервер сохранит то, что камера приняла
     if (!camSerial) return;
     const img = $("microCamStream"), ph = $("camPlaceholder");
     // _ = метка времени: без неё тот же адрес браузер берёт из своей памяти и НЕ ходит на сервер — картинка остаётся прежней, потока нет
     const cid = Date.now() + "-" + Math.floor(Math.random() * 1000);      // метка этого окна: сервер отдаёт её в метриках — так видно, кто владеет потоком
     const sq = camBuildQuery(); sq.set("_", cid); camWd.cid = cid; camWd.taken = 0;
+    if (save === true) sq.set("save", "1");
     img.src = "/api/camera/stream?" + sq.toString();
     img.hidden = false;
     camWd.at = Date.now(); camWd.img = null; camWd.imgAt = camWd.at; camWd.badSince = 0;
@@ -695,8 +709,8 @@
 
   function camApply() {
     if (!camSerial) return;
-    if (camConnected) camConnect();   // перезапуск потока с новыми параметрами
-    sentCmd("Камера: применены параметры");
+    camConnect(true);   // (пере)запуск потока с новыми параметрами; сервер запомнит их и будет ставить при каждом открытии
+    sentCmd("Камера: параметры применены и сохранены");
   }
 
   // единые сеттеры UI фото/видео (кнопка + флажок телеметрии + флаг состояния),

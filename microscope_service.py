@@ -223,7 +223,7 @@ class MicroscopeService:
     PROBE_MODE_DWELL = 23      # режим автомата «выдержка у стекла» (см. microscope_fsm)
 
     def _set_cv_status(self, state, message=""):
-        """Статус разбора для UI: idle / running / ok / no_camera / no_frames /
+        """Статус разбора для UI: idle / running / ok / no_camera / no_frames / overexposed /
         sidecar_offline / error. Любой отказ виден на странице, а не только в логе."""
         self._cv_status = {"state": state, "message": message, "ts": time.strftime("%H:%M:%S")}
 
@@ -277,6 +277,19 @@ class MicroscopeService:
         worker.snap_once = False     # кадра нет — снять запрос, чтобы он не сработал позже
         return None
 
+    def _overexposed(self, img, worker, serial):
+        """Пересвеченный кадр (белое поле — экспозиция не та) в пробу не идёт: статус «пересвет»
+        на странице и ошибка в журнал с тем, что сейчас стоит в камере."""
+        import camera_params
+        over, med, sat = camera_params.overexposure(img)
+        if over:
+            cur = getattr(worker, "current_config", None) or {}
+            self._set_cv_status("overexposed", "проба пропущена: кадр пересвечен (яркость %d из 255, экспозиция %s мкс) — проверь камеру" % (
+                med, cur.get("exposure_time", "?")))
+            log_event("microscope_service", "CV: кадр пробы пересвечен — в пробу не идёт", "error",
+                      {"serial": serial, "median": round(med), "saturated_pct": round(sat * 100, 1), "camera": cur})
+        return over
+
     def _cv_probe_session(self):
         """Сессия пробы (фон): у стекла «снять кадр → разобрать → следующий», пока не разобрано
         frames_per_probe кадров. Затем автомату — «отводи» (cv_release), а проба досохраняется
@@ -320,11 +333,15 @@ class MicroscopeService:
             need = self._cv_frames_per_probe(cv, stage)
             deadline = time.time() + max(10, int(cv.get("dwell_timeout_sec", 120)))   # страховка
             run = self._cv_begin(cfg)
+            overexposed = False
             while (self._probe_at_glass() and len(run["overlays"]) < need
                    and time.time() < deadline):
                 img = self._grab_frame(worker, save_raw, fmt)
                 if img is None or not self._probe_at_glass():
                     break      # камера молчит / кадр пришёл уже после начала отвода (в движении)
+                if self._overexposed(img, worker, serial):
+                    overexposed = True
+                    break      # экспозиция та же — следующие кадры будут такими же белыми
                 self._cv_analyze_one(run, img)
                 done = len(run["overlays"])
                 if fsm:
@@ -337,7 +354,7 @@ class MicroscopeService:
             released = True
             if done:
                 self._cv_finish(run, stage, serial)
-            else:
+            elif not overexposed:      # пересвет: статус и запись в журнал уже есть
                 self._set_cv_status("no_frames", "нет кадров пробы: камера не отдала кадр")
                 log_event("microscope_service", "CV: кадры пробы не получены", "warn",
                           {"serial": serial})
@@ -401,6 +418,8 @@ class MicroscopeService:
             if img is None:
                 self._set_cv_status("no_frames", "камера не отдала кадр за 5 с")
                 log_event("microscope_service", "CV: живой кадр не получен за 5 с", "warn")
+                return
+            if self._overexposed(img, worker, serial):
                 return
             run = self._cv_begin(self.cfg or {})
             self._cv_analyze_one(run, img)

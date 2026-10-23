@@ -286,12 +286,22 @@ def boil_metrics(g: list, point_sv: float = POINT_SV, fin_sv: float = 2.0) -> di
     return out
 
 
-def _model_tag(det: Optional[dict]) -> Optional[str]:
-    """«26x_1280.pt@1280» из паспорта модели пробы; старые пробы без паспорта — None."""
+CONF_PLAIN = 0.55      # порог conf, на котором сняты все пробы с паспортом модели до 1.9.92 (Кир) — в метке его не пишем
+
+
+def _model_tag(det: Optional[dict], infer: Optional[dict] = None) -> Optional[str]:
+    """«26x_1280.pt@1280» из паспорта модели пробы; старые пробы без паспорта — None. Порог conf, отличный от CONF_PLAIN, входит в метку
+    («26x_1280.pt@1280 conf 0.25»): он сдвигает муку так же, как смена модели (Кир, эталон 23.10: 0,55 → 0,25 — мука финиша +22 %),
+    поэтому сравнение варок разводит такие периоды, как разные модели. 0,55 не пишем, чтобы старые варки (их кадры уже стёрты, conf
+    в журнале нет) остались той же «моделью», что и новые на 0,55."""
     if not det or not det.get("name"):
         return None
     name = str(det["name"]).split(":", 1)[-1]
-    return "%s@%s" % (name, det["imgsz"]) if det.get("imgsz") else name
+    tag = "%s@%s" % (name, det["imgsz"]) if det.get("imgsz") else name
+    conf = (infer or {}).get("conf")
+    if conf is not None and abs(float(conf) - CONF_PLAIN) > 1e-6:
+        tag += " conf %g" % float(conf)
+    return tag
 
 
 def _hist_row(result: dict) -> Optional[dict]:
@@ -321,7 +331,7 @@ def _hist_row(result: dict) -> Optional[dict]:
         "syrup_dose": plc.get("syrup_dose"), "syrup_s": plc.get("syrup_s"), "water_dose": plc.get("water_dose"), "water_s": plc.get("water_s"),
         "product_dose": plc.get("product_dose"), "product_s": plc.get("product_s"),
         # чем снята проба: имя модели и imgsz — пробы разных моделей сравнивать нельзя (абсолютные цифры мелочи сдвигаются)
-        "model": _model_tag(result.get("detector")),
+        "model": _model_tag(result.get("detector"), result.get("infer")),
         "count": s.get("count"), "mean": sz.get("mean"), "median": sz.get("median"),
         "size_min": sz.get("min"), "size_max": sz.get("max"), "len_max": sz.get("len_max"),
         "small": pct.get("small"), "medium": pct.get("medium"),

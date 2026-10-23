@@ -1712,6 +1712,14 @@ def _boil_compare():
     assert not r["ok"] and "пересекаются" in r["error"], r
     r = bc.compare_rows(grp_a() + [dict(x, model=None) for x in gb], a, b)
     assert r["ok"] and r["unknown_model"] == 10 and "другой (старой)" in r["warnings"][0], r["warnings"]
+    # порог conf — часть «модели»: 0,55 не пишется (старые варки той же модели), другой — разводит периоды
+    import cv_store
+    det = {"name": "yolo:26x_1280.pt", "imgsz": 1280}
+    assert cv_store._model_tag(det) == cv_store._model_tag(det, {"conf": 0.55}) == "26x_1280.pt@1280"
+    assert cv_store._model_tag(det, {"conf": 0.25}) == "26x_1280.pt@1280 conf 0.25" and cv_store._model_tag(None, {"conf": 0.25}) is None
+    ga = [dict(x, model="26x_1280.pt@1280") for x in grp_a()]
+    r = bc.compare_rows(ga + [dict(x, model="26x_1280.pt@1280 conf 0.25") for x in gb], a, b)
+    assert not r["ok"] and "conf 0.25" in r["error"], r
     assert bc.parse_t("2026-10-19 11:20") == time.mktime((2026, 10, 19, 11, 20, 0, 0, 0, -1))
     assert bc.parse_t("2026-10-19", True) - bc.parse_t("2026-10-19") == 86399
     return "плюс / минус / «решать технологу» по правилам; крупнее и муки меньше — один плюс; порог 8 % и коридор; граница, короткая, затянутая — не в счёт"

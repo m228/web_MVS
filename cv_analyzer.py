@@ -48,6 +48,10 @@ DEFAULTS = {
     "seam_in_sieve": True,     # «обрезанный» у шва, но целый по геометрии (шов не режет его ровным срезом) — в рассев
     "tiles": 6, "overlap": 0.15,   # как в настройках CV (их же получает сайдкар) — нужны, чтобы знать, где швы
     "min_size_um": 20.0,   # мельче — считаем пылью/шумом, не кристаллом
+    # порог уверенности по размеру: объект от conf_big_um мкм нужен с conf ≥ conf_big (0 — выкл). Низкий общий conf (0,25) возвращает
+    # средне-мелкие кристаллы в кучах, а крупный ложный объект (складка растёкшейся жидкости, тень) с conf 0,4–0,5 отсекается. Эталон Кира
+    # 23.10 (70 кадров + проверка Макса): 0,25 до 300 мкм / 0,55 крупнее — мука финиша −29 % → 0…+6 %, крупный мусор 15 → 4 объектов
+    "conf_big": 0.0, "conf_big_um": 300.0,
     "blur_min": 8.0,       # variance of Laplacian ниже — кадр смазан (тюним под камеру на Server)
 }
 
@@ -105,6 +109,8 @@ def _cfg(cv_cfg: Optional[dict]) -> dict:
         for k in ("bubble_radial_cv", "bubble_aspect", "bubble_solidity", "bubble_min_um"):
             c[k] = float(cv_cfg.get(k, c[k]))
         c["refine_max"] = float(cv_cfg.get("refine_max", c["refine_max"]))
+        c["conf_big"] = float(cv_cfg.get("conf_big") or 0.0)
+        c["conf_big_um"] = float(cv_cfg.get("conf_big_um") or c["conf_big_um"])
         for key in ("groups", "shape", "size_reject", "volume"):
             if cv_cfg.get(key):
                 c[key] = {**c[key], **cv_cfg[key]}
@@ -799,6 +805,8 @@ def measure_objects(objects: list[dict], cv_cfg: Optional[dict] = None,
         size_um = eq_d_px * upp
         if size_um < min_size:
             continue
+        if cfg["conf_big"] > 0 and size_um >= cfg["conf_big_um"] and float(obj.get("conf", 1.0)) < cfg["conf_big"]:
+            continue                      # крупный объект с низкой уверенностью — ложный (складка жидкости, тень), см. conf_big
         (_, _), (rw, rh), _ = cv2.minAreaRect(cnt)
         length_um = max(rw, rh) * upp
         width_um = min(rw, rh) * upp

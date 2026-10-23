@@ -69,6 +69,8 @@
     if ($("cvZipDir")) $("cvZipDir").value = bz.dir || "";
     set("cvZipGb", bz.max_gb != null ? bz.max_gb : 50); set("cvZipQ", bz.early_jpeg_quality != null ? bz.early_jpeg_quality : 90);
     cvLoadZips();
+    const st = cv.seed_target || {};                                    // цели маточника: порог муки и коридор размера (отчёт, сравнение)
+    set("cvSeedFines", st.fines_max != null ? st.fines_max : 8); set("cvSeedMin", st.size_min_um != null ? st.size_min_um : 200); set("cvSeedMax", st.size_max_um != null ? st.size_max_um : 300);
     set("cvClusterGap", cv.cluster_gap_px); set("cvEdgeMargin", cv.edge_margin_px); set("cvMaskSmooth", cv.mask_smooth === false ? 0 : cv.mask_smooth_pct);
     if ($("cvSeamMerge")) $("cvSeamMerge").checked = cv.seam_merge !== false;
     if ($("cvSeamRefine")) $("cvSeamRefine").checked = cv.seam_refine !== false;
@@ -92,6 +94,7 @@
       seam_refine: $("cvSeamRefine") ? $("cvSeamRefine").checked : undefined,
       seam_in_sieve: $("cvSeamInSieve") ? $("cvSeamInSieve").checked : undefined,
       bubble_filter: $("cvBubble") ? $("cvBubble").checked : undefined, reject_always: $("cvRejectAlways") ? $("cvRejectAlways").checked : undefined,
+      seed_target: $("cvSeedFines") ? { fines_max: num("cvSeedFines"), size_min_um: num("cvSeedMin"), size_max_um: num("cvSeedMax") } : undefined,
       boil_zip: $("cvZipOn") ? { enabled: $("cvZipOn").checked, dir: ($("cvZipDir").value || "").trim(), max_gb: num("cvZipGb"), early_jpeg_quality: num("cvZipQ") } : undefined,
     };
   }
@@ -152,11 +155,11 @@
   // переключатель нижней секции: телеметрия платы ↔ распознавание
   function wireTeleToggle() {
     const seg = document.querySelector(".micro-tele-seg");
-    const btns = { plate: $("telePlateBtn"), cv: $("teleCvBtn"), trend: $("teleTrendBtn"), cfg: $("teleCfgBtn"), report: $("teleReportBtn"), video: $("teleVideoBtn") };
-    const panes = { plate: $("teleStripPlate"), cv: $("teleStripCv"), trend: $("teleStripTrend"), cfg: $("teleStripCfg"), report: $("teleStripReport"), video: $("teleStripVideo") };
+    const btns = { plate: $("telePlateBtn"), cv: $("teleCvBtn"), trend: $("teleTrendBtn"), cfg: $("teleCfgBtn"), report: $("teleReportBtn"), compare: $("teleCompareBtn"), video: $("teleVideoBtn") };
+    const panes = { plate: $("teleStripPlate"), cv: $("teleStripCv"), trend: $("teleStripTrend"), cfg: $("teleStripCfg"), report: $("teleStripReport"), compare: $("teleStripCompare"), video: $("teleStripVideo") };
     if (!btns.plate || !btns.cv) return;
     function set(mode) {
-      if (seg) ["cv", "trend", "cfg", "report", "video"].forEach((k) => seg.classList.toggle(k, mode === k));
+      if (seg) ["cv", "trend", "cfg", "report", "compare", "video"].forEach((k) => seg.classList.toggle(k, mode === k));
       Object.keys(btns).forEach((k) => {
         if (btns[k]) btns[k].classList.toggle("is-active", k === mode);
         if (panes[k]) panes[k].hidden = k !== mode;
@@ -164,6 +167,7 @@
       const pw = $("projWrap"); if (pw) pw.hidden = mode !== "cv" && mode !== "trend";    // название проекта — только на «Распознавании» и «Трендах»
       if (mode !== "plate") cvRefresh();
       if (mode === "trend") setTimeout(cvDrawTrend, 30);     // canvas берёт ширину у показанной вкладки
+      if (mode === "compare" && typeof cmpShown === "function") cmpShown();      // журнал изменений и группы — при первом открытии (08-compare.js)
     }
     Object.keys(btns).forEach((k) => { if (btns[k]) btns[k].addEventListener("click", () => set(k)); });
     cvWireProject();

@@ -139,6 +139,10 @@ def _init(c: sqlite3.Connection) -> None:
         c.execute("CREATE TABLE IF NOT EXISTS fracture_edits (id INTEGER PRIMARY KEY AUTOINCREMENT, serial TEXT NOT NULL, "
                   "ts TEXT NOT NULL, at REAL NOT NULL, action TEXT NOT NULL, zid TEXT, frame_idx INTEGER)")
         c.execute("CREATE INDEX IF NOT EXISTS ix_fedit ON fracture_edits (serial, ts)")
+        # журнал изменений процесса (рецепт, подкачка, опыт): отметки на графиках отчёта и «до / после» во вкладке «Сравнение»
+        c.execute("CREATE TABLE IF NOT EXISTS changes (id INTEGER PRIMARY KEY AUTOINCREMENT, serial TEXT NOT NULL, t REAL NOT NULL, "
+                  "text TEXT NOT NULL, at REAL NOT NULL)")
+        c.execute("CREATE INDEX IF NOT EXISTS ix_changes ON changes (serial, t)")
         c.execute("INSERT OR IGNORE INTO meta (key, value) VALUES ('schema_version', ?)", (str(SCHEMA_VERSION),))
         c.commit()
 
@@ -279,6 +283,38 @@ def patch_row(serial: str, ts: str, fields: dict) -> bool:
         c.execute("UPDATE journal SET %s WHERE serial=? AND ts=?" % ", ".join(sets), args)
         c.commit()
         return True
+
+
+def changes(serial: str, t_from: Optional[float] = None, t_to: Optional[float] = None) -> list[dict]:
+    """Журнал изменений серийника по времени: [{id, t, text, at}]."""
+    sql, args = "SELECT id, t, text, at FROM changes WHERE serial=?", [serial]
+    if t_from is not None:
+        sql += " AND t>=?"
+        args.append(t_from)
+    if t_to is not None:
+        sql += " AND t<=?"
+        args.append(t_to)
+    return [dict(r) for r in conn().execute(sql + " ORDER BY t, id", args)]
+
+
+def change_save(serial: str, t: float, text: str, at: float, cid: Optional[int] = None) -> Optional[int]:
+    """Добавить изменение (cid None) или поправить своё (время, текст). Возвращает id; правка чужого или несуществующего — None."""
+    with _wlock:
+        c = conn()
+        if cid is None:
+            cid = c.execute("INSERT INTO changes (serial, t, text, at) VALUES (?, ?, ?, ?)", (serial, t, text, at)).lastrowid
+        elif not c.execute("UPDATE changes SET t=?, text=?, at=? WHERE id=? AND serial=?", (t, text, at, cid, serial)).rowcount:
+            return None
+        c.commit()
+        return cid
+
+
+def change_delete(serial: str, cid: int) -> bool:
+    with _wlock:
+        c = conn()
+        n = c.execute("DELETE FROM changes WHERE id=? AND serial=?", (cid, serial)).rowcount
+        c.commit()
+        return n > 0
 
 
 def log_fracture_edit(serial: str, ts: str, action: str, zid: Optional[str], frame_idx: int, at: float) -> None:

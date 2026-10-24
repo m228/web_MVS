@@ -183,7 +183,8 @@ def summary(rows: list, mode: str = "groups", targets: Optional[dict] = None) ->
     """Итог сравнения фразой по правилам tasks/seed-quality-criteria.md, без ИИ: одни и те же цифры — всегда одна и та же фраза.
     Качество (сростки, мука, однородность, разброс между варками, порог муки, коридор размера) важнее времени: хоть один показатель
     качества реально хуже — «в минус», даже если варка короче. Мука и размер сдвинулись вместе — одна строка (у нас это почти один
-    сигнал, r −0,93). verdict: plus / minus / mixed (лучше, но дольше) / few / none."""
+    сигнал, r −0,93). verdict: plus / minus / mixed (лучше, но дольше) / few / none. mode «change» — слова про изменение (А после, Б до),
+    иначе — про группу А против Б (две свободные группы: опыт / контроль)."""
     tg = targets or report.SEED_TARGET
     who = "после изменения" if mode == "change" else "в группе А"
     by = {r["key"]: r for r in rows}
@@ -232,17 +233,22 @@ def summary(rows: list, mode: str = "groups", targets: Optional[dict] = None) ->
     calm = [r["name"] for r in rows if r["verdict"] == "noise"]
     if calm:
         lines.append("без разницы: " + ", ".join(calm))
+    # слова итога: «до / после» — про изменение, две свободные группы (опыт / контроль, вода / без воды) — про группу А против Б
+    w = ({"minus": "изменение в минус — ", "mixed": "лучше по качеству", "plus": "изменение в плюс — ", "faster": "в плюс — варка короче на %d мин при том же качестве",
+          "slower": "варка дольше на %d мин при том же качестве — изменение не окупается"} if mode == "change" else
+         {"minus": "А хуже Б — ", "mixed": "А лучше Б по качеству", "plus": "А лучше Б — ", "faster": "А лучше Б — варка короче на %d мин при том же качестве",
+          "slower": "А хуже Б — варка дольше на %d мин при том же качестве"})
     if minus:
-        verdict, text = "minus", "изменение в минус — " + ", ".join(minus) + ("; лучше: " + ", ".join(plus) if plus else "") + \
+        verdict, text = "minus", w["minus"] + ", ".join(minus) + ("; лучше: " + ", ".join(plus) if plus else "") + \
             ("; варка при этом короче на %d мин" % -tmin if tmin < 0 else "; и варка дольше на %d мин" % tmin if tmin > 0 else "")
     elif plus and tmin > 0:
-        verdict, text = "mixed", "лучше по качеству (%s), но варка дольше на %d мин — решать технологу" % (", ".join(plus), tmin)
+        verdict, text = "mixed", "%s (%s), но варка дольше на %d мин — решать технологу" % (w["mixed"], ", ".join(plus), tmin)
     elif plus:
-        verdict, text = "plus", "изменение в плюс — " + ", ".join(plus) + (", и варка короче на %d мин" % -tmin if tmin < 0 else "")
+        verdict, text = "plus", w["plus"] + ", ".join(plus) + (", и варка короче на %d мин" % -tmin if tmin < 0 else "")
     elif tmin < 0:
-        verdict, text = "plus", "в плюс — варка короче на %d мин при том же качестве" % -tmin
+        verdict, text = "plus", w["faster"] % -tmin
     elif tmin > 0:
-        verdict, text = "minus", "варка дольше на %d мин при том же качестве — изменение не окупается" % tmin
+        verdict, text = "minus", w["slower"] % tmin
     elif [r for r in few if r["key"] != "fin_um_spread"]:          # разброс между варками ловится только от 8 варок — итог им не держим
         verdict, text = "few", "пока не сказать — мало варок"
     else:

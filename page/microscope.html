@@ -1183,11 +1183,12 @@
               <div class="micro-rep-out" id="repOut"><div class="micro-conn-hint">Выбери период и нажми «Сформировать отчёт».</div></div>
           </div>
 
-          <!-- «Сравнение» — варки после изменения против варок до него, одна варка против обычных, журнал изменений (08-compare.js, boil_compare.py) -->
+          <!-- «Сравнение» — варки после изменения против варок до него, две свободные группы (опыт / контроль), одна варка против обычных, журнал изменений (08-compare.js, boil_compare.py) -->
           <div class="micro-tele-compare" id="teleStripCompare" hidden>
             <div class="micro-rep-bar">
               <span class="micro-seg2" id="cmpModeSeg" role="group" aria-label="Что сравнить">
                 <button type="button" data-m="change" class="is-active" title="Варки после изменения против варок до него">до / после</button>
+                <button type="button" data-m="groups" title="Две группы варок по своим периодам и воде: опыт против контроля">две группы</button>
                 <button type="button" data-m="one" title="Одна варка против обычных: 20 предыдущих варок той же модели">одна варка</button>
               </span>
               <span class="micro-cmp-pick" id="cmpChangeBox">
@@ -1202,10 +1203,10 @@
               <span class="micro-conn-hint" id="cmpHint"></span>
             </div>
             <div class="micro-cmp-groups" id="cmpGroups">
-              <span class="micro-cmp-g is-a" title="Группа А — варки после изменения. Варка, которая шла в момент изменения, не идёт ни в одну группу"><i></i><b>А · после</b>
+              <span class="micro-cmp-g is-a" id="cmpAGroup"><i></i><b id="cmpALbl">А · после</b>
                 <input type="datetime-local" id="cmpAFrom" /> — <input type="datetime-local" id="cmpATo" />
                 <select id="cmpAWater" title="Вода на стабилизации"><option value="">вода: любая</option><option value="1">с водой</option><option value="0">без воды</option></select></span>
-              <span class="micro-cmp-g is-b" title="Группа Б — варки до изменения: от прошлого изменения, но не раньше смены модели и не длиннее двух недель"><i></i><b>Б · до</b>
+              <span class="micro-cmp-g is-b" id="cmpBGroup"><i></i><b id="cmpBLbl">Б · до</b>
                 <input type="datetime-local" id="cmpBFrom" /> — <input type="datetime-local" id="cmpBTo" />
                 <select id="cmpBWater" title="Вода на стабилизации"><option value="">вода: любая</option><option value="1">с водой</option><option value="0">без воды</option></select></span>
             </div>

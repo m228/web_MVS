@@ -1,5 +1,5 @@
-// Страница микроскопа — вкладка «Сравнение»: варки после изменения против варок до него, одна варка против обычных, журнал изменений
-// процесса (рецепт, подкачка, вода). Данные — /api/cv/compare, /api/cv/compare/around, /api/cv/compare/boil, /api/cv/changes (boil_compare.py).
+// Страница микроскопа — вкладка «Сравнение»: варки после изменения против варок до него, две свободные группы (опыт / контроль: свои
+// периоды и вода), одна варка против обычных, журнал изменений процесса (рецепт, подкачка, вода). Данные — /api/cv/compare, /api/cv/compare/around, /api/cv/compare/boil, /api/cv/changes (boil_compare.py).
 // Что считать «лучше» и как собирается итог фразой — tasks/seed-quality-criteria.md. Графики, подсказка и печать — помощники отчёта
 // (window.microRep из 05-report.js). Кривые роста — от заводки: у варок разной длины общий ноль — момент заводки.
 "use strict";
@@ -23,6 +23,12 @@ let cmpShown = null;         // 02-cv.js зовёт при открытии вк
   const hint = (t) => { g("cmpHint").textContent = t || ""; };
   const unit = (r) => (r.unit === "%" ? " %" : " " + r.unit);
   const signed = (v, d) => (v == null ? "—" : (v > 0 ? "+" : "") + fmt(v, d));
+  // подписи групп: «до / после» — А после изменения, Б до; две группы — просто А и Б
+  const LBL = { change: { a: "А · после", b: "Б · до" }, groups: { a: "А", b: "Б" } };
+  const TIP = { change: { a: "Группа А — варки после изменения. Варка, которая шла в момент изменения, не идёт ни в одну группу",
+    b: "Группа Б — варки до изменения: от прошлого изменения, но не раньше смены модели и не длиннее двух недель" },
+  groups: { a: "Группа А (опыт) — варки целиком внутри периода; вода — по клапану или по провалу СВ", b: "Группа Б (контроль) — варки целиком внутри периода" } };
+  const waterTxt = (w) => (w === true ? "с водой" : w === false ? "без воды" : "");
 
   // ===== журнал изменений =====
   async function loadChanges() {
@@ -102,9 +108,16 @@ let cmpShown = null;         // 02-cv.js зовёт при открытии вк
   }
 
   function setMode(m) {
-    mode = m === "one" ? "one" : "change";
+    mode = m === "one" || m === "groups" ? m : "change";
     document.querySelectorAll("#cmpModeSeg button").forEach((x) => x.classList.toggle("is-active", x.dataset.m === mode));
-    g("cmpChangeBox").hidden = mode !== "change"; g("cmpGroups").hidden = mode !== "change"; g("cmpOneBox").hidden = mode !== "one";
+    g("cmpChangeBox").hidden = mode !== "change"; g("cmpGroups").hidden = mode === "one"; g("cmpOneBox").hidden = mode !== "one";
+    if (mode !== "one") {
+      ["a", "b"].forEach((k) => { g(k === "a" ? "cmpALbl" : "cmpBLbl").textContent = LBL[mode][k]; g(k === "a" ? "cmpAGroup" : "cmpBGroup").title = TIP[mode][k]; });
+      if (mode === "groups" && !g("cmpAFrom").value && !g("cmpBFrom").value) {      // пусто — А последние двое суток, Б двое суток перед ними
+        const now = Math.floor(Date.now() / 60000) * 60, day = 86400;
+        g("cmpAFrom").value = toLocal(now - 2 * day); g("cmpATo").value = toLocal(now); g("cmpBFrom").value = toLocal(now - 4 * day); g("cmpBTo").value = toLocal(now - 2 * day);
+      }
+    }
     if (mode === "one") loadBoils();
   }
 
@@ -112,14 +125,18 @@ let cmpShown = null;         // 02-cv.js зовёт при открытии вк
     const v = (id) => g(id).value.replace("T", " ");
     hint("считаю…"); g("cmpGoBtn").disabled = true;
     try {
-      if (mode === "change") {
-        if (!g("cmpAFrom").value || !g("cmpBTo").value) { hint("выбери изменение или свой момент"); return; }
-        const r = await api("/api/cv/compare?" + qs({ a_from: v("cmpAFrom"), a_to: v("cmpATo"), a_water: g("cmpAWater").value,
-          b_from: v("cmpBFrom"), b_to: v("cmpBTo"), b_water: g("cmpBWater").value, mode: "change" }));
-        const c = changes.find((x) => String(x.id) === g("cmpChange").value);
+      if (mode === "change" || mode === "groups") {
+        if (!g("cmpAFrom").value || !g("cmpBTo").value) { hint(mode === "change" ? "выбери изменение или свой момент" : "задай периоды групп А и Б"); return; }
+        // режим и поля — на момент запроса: пока считается, их могут переключить или поправить
+        const kind = mode, c = changes.find((x) => String(x.id) === g("cmpChange").value);
         const at = fromLocal(g("cmpAFrom").value), bTo = fromLocal(g("cmpBTo").value);
-        last = { kind: "change", r, change: c && Math.abs(c.t - at) < 61 ? c : null, at,
-          together: together.filter((x) => Math.abs(x - bTo) < 61 || (x > bTo && x < at)).map((x) => changes.find((y) => Math.abs(y.t - x) < 61)).filter(Boolean) };
+        const r = await api("/api/cv/compare?" + qs({ a_from: v("cmpAFrom"), a_to: v("cmpATo"), a_water: g("cmpAWater").value,
+          b_from: v("cmpBFrom"), b_to: v("cmpBTo"), b_water: g("cmpBWater").value, mode: kind }));
+        if (kind === "groups") last = { kind, r };
+        else {
+          last = { kind, r, change: c && Math.abs(c.t - at) < 61 ? c : null, at,
+            together: together.filter((x) => Math.abs(x - bTo) < 61 || (x > bTo && x < at)).map((x) => changes.find((y) => Math.abs(y.t - x) < 61)).filter(Boolean) };
+        }
       } else {
         const boil = g("cmpBoil").value; if (!boil) { hint("выбери варку"); return; }
         last = { kind: "one", r: await api("/api/cv/compare/boil?" + qs({ boil })) };
@@ -130,7 +147,7 @@ let cmpShown = null;         // 02-cv.js зовёт при открытии вк
 
   // ===== графики =====
   // кривые роста от заводки: тонкие — варки, толстые — медиана группы; one — одна варка поверх «обычно» (25–75 %) обычных
-  function curves(cur, w, one) {
+  function curves(cur, w, one, lbl) {
     const L = 44, R = 14, T = 22, H = 210, W = w - L - R, hh = T + H + 30;
     const lines = one ? [] : ["a", "b"].flatMap((k) => cur[k].boils.map((b) => ({ k, pts: b.pts })));
     const ends = one ? [cur.me.end] : [cur.a.end, cur.b.end];
@@ -162,7 +179,7 @@ let cmpShown = null;         // 02-cv.js зовёт при открытии вк
       ["b", "a"].forEach((k) => { s += poly(cur[k].band.map((p) => [p[0], p[1]]), "cmed c" + k); });
       [["a", "ca", "А", 0], ["b", "cb", "Б", 1]].forEach(([k, cls, lbl, row]) => { if (cur[k].boils.length) s += readyMark(xf, T, H, cur[k].end, cls, lbl + " · " + fmt(cur[k].end, 0) + " мин", row); });     // пустая группа — без отметки
     }
-    const items = one ? [["dota", "эта варка"], ["dotb", "медиана обычных"], ["qband", "обычно (25–75 %)"]] : [["dota", "А · после"], ["dotb", "Б · до"]];
+    const items = one ? [["dota", "эта варка"], ["dotb", "медиана обычных"], ["qband", "обычно (25–75 %)"]] : [["dota", lbl.a], ["dotb", lbl.b]];
     return '<div class="micro-rep-chart">' + chartHead("Средний размер кристалла, мкм", items) + (one ? "" : '<small class="micro-cmp-note">тонкие — варки, толстые — медиана группы, пунктир — обычный конец варки</small>') +
       '<svg viewBox="0 0 ' + w + " " + hh + '" width="' + w + '" height="' + hh + '" role="img" aria-label="Средний размер кристалла по минутам от заводки">' + s + "</svg></div>";
   }
@@ -207,28 +224,32 @@ let cmpShown = null;         // 02-cv.js зовёт при открытии вк
     (s.caveat ? "<small>" + esc(s.caveat) + "</small>" : "") + "</div>";
   const docHead = (title, sub, print) => '<div class="micro-rep-head"><div><div class="micro-rep-title">' + title + '</div><div class="micro-rep-sub">' + sub + "</div></div>" +
     (print ? '<img class="micro-rep-logo" src="/static/icon/Logo_Black.png" alt="Maximum Automation">' : "") + "</div>";
-  const span = (spec) => tLbl(spec.from) + " – " + tLbl(spec.to);
+  const span = (spec) => tLbl(spec.from) + " – " + tLbl(spec.to) + (waterTxt(spec.water) ? ", " + waterTxt(spec.water) : "");
   const WHY = { edge: "шла в момент изменения", long: "затянутая", short: "короткая" };
+  // ячейка группы: медиана крупно, под ней среднее (вывод и «А − Б» — по средним); разброс между варками — одно число
+  const cell = (s, nd) => fmt(s.median, nd) + (s.mean != null && s.mean !== s.median ? "<small>ср. " + fmt(s.mean, nd) + "</small>" : "");
 
-  function changeHtml(L, opt) {
-    const r = L.r, title = "Сравнение варок: до и после " + (L.change ? "изменения «" + esc(L.change.text) + "»" : "момента " + (L.at ? tLbl(L.at) : ""));
+  // «до / после» (kind change) и две свободные группы (kind groups): одна страница, разные слова
+  function groupsHtml(L, opt) {
+    const r = L.r, ch = L.kind === "change", lbl = LBL[L.kind];
+    const title = ch ? "Сравнение варок: до и после " + (L.change ? "изменения «" + esc(L.change.text) + "»" : "момента " + (L.at ? tLbl(L.at) : "")) : "Сравнение варок: А против Б";
     if (!r.ok) return docHead(title, "", opt.print) + '<div class="micro-rep-warn">' + esc(r.error || "не получилось") + "</div>";
-    const nA = r.a.boils.length, nB = r.b.boils.length;
-    const meta = ["А — после: " + nA + " " + plural(nA, "варка", "варки", "варок") + " (" + span(r.a.spec) + ")", "Б — до: " + nB + " " + plural(nB, "варка", "варки", "варок") + " (" + span(r.b.spec) + ")",
+    const nA = r.a.boils.length, nB = r.b.boils.length, why = ch ? WHY : { ...WHY, edge: "шла на границе периода" };
+    const meta = [(ch ? "А — после: " : "А: ") + nA + " " + plural(nA, "варка", "варки", "варок") + " (" + span(r.a.spec) + ")", (ch ? "Б — до: " : "Б: ") + nB + " " + plural(nB, "варка", "варки", "варок") + " (" + span(r.b.spec) + ")",
       r.models && r.models.length ? "модель " + esc(modelName(r.models[0])) : "", "сформировано " + dmy(r.generated) + " " + new Date(r.generated * 1000).toTimeString().slice(0, 5)].filter(Boolean).join(" · ");
     let h = docHead(title, meta, opt.print);
     if (L.together && L.together.length) h += '<div class="micro-rep-warn">Вместе с ним: ' + L.together.map((c) => esc(c.label + " · " + c.text)).join("; ") +
       " — между изменениями не было целой варки, поэтому «до» — варки до " + esc(L.together[L.together.length - 1].label) + ", а эффект общий.</div>";
     (r.warnings || []).forEach((w) => { h += '<div class="micro-rep-warn">' + esc(w) + "</div>"; });
     h += sumBox(r.summary);
-    const rows = r.metrics.map((m) => "<tr><td>" + esc(m.name) + '</td><td class="' + (m.off && m.off.a ? "is-bad" : "") + '">' + fmt(m.a.mean, m.nd) + '</td><td class="' + (m.off && m.off.b ? "is-bad" : "") + '">' + fmt(m.b.mean, m.nd) +
+    const rows = r.metrics.map((m) => "<tr><td>" + esc(m.name) + '</td><td class="' + (m.off && m.off.a ? "is-bad" : "") + '">' + cell(m.a, m.nd) + '</td><td class="' + (m.off && m.off.b ? "is-bad" : "") + '">' + cell(m.b, m.nd) +
       "</td><td>" + signed(m.diff, m.nd) + "</td><td>" + badge(m) + "</td></tr>").join("");
     const cw = opt.width >= 1100 || opt.print ? Math.round((opt.width - 16) * 1.25 / 2.25) : opt.width;
-    h += '<div class="micro-cmp-grid">' + (r.curves ? curves(r.curves, cw, false) : "<div></div>") +
+    h += '<div class="micro-cmp-grid">' + (r.curves ? curves(r.curves, cw, false, lbl) : "<div></div>") +
       '<div><div class="micro-rep-wrap"><table class="micro-rep-table micro-cmp-table"><thead><tr><th>показатель</th><th>● А</th><th>● Б</th><th>А − Б</th><th>вывод</th></tr></thead><tbody>' + rows + "</tbody></table></div>" +
-      '<div class="micro-rep-note">Средние по группам; красным — за целью маточника (мука выше ' + fmt(r.targets.fines_max, 0) + " %, размер вне " + fmt(r.targets.size_min_um, 0) + "–" + fmt(r.targets.size_max_um, 0) + " мкм). " +
+      '<div class="micro-rep-note">Медиана группы, под ней — среднее; «А − Б» и вывод — по средним. Красным — за целью маточника (мука выше ' + fmt(r.targets.fines_max, 0) + " %, размер вне " + fmt(r.targets.size_min_um, 0) + "–" + fmt(r.targets.size_max_um, 0) + " мкм). " +
       "Вывод — перестановочный тест: «лучше / хуже» — разница реальная; «мало варок» — разница может быть, но варок не хватает; «шум» — разницы не видно." +
-      (r.excluded && r.excluded.length ? "<br>Не в счёт: " + r.excluded.map((x) => tsLbl(x.start) + " (" + (WHY[x.why] || x.why) + ")").join(", ") + "." : "") + "</div></div></div>";
+      (r.excluded && r.excluded.length ? "<br>Не в счёт: " + r.excluded.map((x) => tsLbl(x.start) + " (" + (why[x.why] || x.why) + ")").join(", ") + "." : "") + "</div></div></div>";
     h += '<div class="micro-cmp-strips">' + r.metrics.filter((m) => m.pts).map((m) => strip(m, r.targets)).join("") + "</div>";
     return h;
   }
@@ -261,13 +282,14 @@ let cmpShown = null;         // 02-cv.js зовёт при открытии вк
     const out = g("cmpOut"); if (!last) return;
     lastW = out.clientWidth; hideTip();
     const opt = { width: Math.max(320, Math.min(1400, lastW || 900)) };
-    out.innerHTML = last.kind === "change" ? changeHtml(last, opt) : oneHtml(last, opt);
+    out.innerHTML = last.kind === "one" ? oneHtml(last, opt) : groupsHtml(last, opt);
   }
   function printCompare() {
     if (!last || !last.r.ok) return;
     const ser = last.r.serial ? " " + last.r.serial : "";
-    const name = last.kind === "change" ? "Сравнение варок" + ser + " " + (last.change ? last.change.label : last.at ? tLbl(last.at) : "") : "Варка " + tsLbl(last.r.boil.start) + " против обычных" + ser;
-    printDoc(name, (last.kind === "change" ? changeHtml : oneHtml)(last, { width: 1000, print: true }));
+    const name = last.kind === "change" ? "Сравнение варок" + ser + " " + (last.change ? last.change.label : last.at ? tLbl(last.at) : "")
+      : last.kind === "groups" ? "Сравнение варок" + ser + " А против Б" : "Варка " + tsLbl(last.r.boil.start) + " против обычных" + ser;
+    printDoc(name, (last.kind === "one" ? oneHtml : groupsHtml)(last, { width: 1000, print: true }));
   }
 
   cmpShown = async function () {

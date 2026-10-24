@@ -7,7 +7,7 @@
   const CV_GROUPS = ["small", "medium", "large", "reject"];
   const CV_SERIES_COLOR = { small: "#1d9e75", medium: "#378add", large: "#ba7517", reject: "#e24b4a", mean: "#7f77dd", median: "#d16fb8", sv: "#f2c94c",
     temp: "#ff8a4c", vac: "#4fd1e8", level: "#8aa4c8", current: "#a3d95b", cook_time: "#b9a98f", seed_age: "#ffb347", fines_avg: "#e8c547", fines_flat: "#ff5c5c",
-    fsv0: "#fff0a8", fsv1: "#f5d861", fsv2: "#e8b93c", fsv3: "#c98a1e", fsv4: "#1d9e75", fsv5: "#378add", fsv6: "#7f77dd", fsv7: "#d16fb8", fsv8: "#ba7517" };   // fsv0–8 — фракции рассева в режиме «Рассев» тренда
+    fsv0: "#fff0a8", fsv1: "#f5d861", fsv2: "#e8b93c", fsv3: "#c98a1e", fsv4: "#1d9e75", fsv5: "#2bb3a3", fsv6: "#378add", fsv7: "#5b6fe0", fsv8: "#7f77dd", fsv9: "#a46fd6", fsv10: "#d16fb8", fsv11: "#e0708a", fsv12: "#ba7517" };   // fsv0–12 — фракции рассева в режиме «Рассев» тренда
   let cvWinOn = false;          // окно показывает CV (true) или камеру (false)
   let cvLastResult = null;      // последняя проба (result.json)
   let cvPrevResult = null;      // предыдущая проба (для Δ к прошлой)
@@ -1381,9 +1381,9 @@
       cvPostSettings({ trend_style: cvTrendStyle }); cvBuildStylePanel(); cvApplyStyleToRows(); cvDrawTrend();
     });
   }
-  const CV_TREND_KEY = "microCvTrendSeries6";   // 3: добавлены «стадия» и «СВ»; 5: в список попадают и скрытые режимом серии; 6: рассев разбит на 9 линий (fsv0–8) — прежние номера fsv не переносим
-  const CV_TREND_KEY_OLD = "microCvTrendSeries5";
-  const CV_PCT_SERIES = ["small", "medium", "large", "reject", "sv", "fsv0", "fsv1", "fsv2", "fsv3", "fsv4", "fsv5", "fsv6", "fsv7", "fsv8"];   // шкала слева, % (СВ тоже в % — те же 0–100)
+  const CV_TREND_KEY = "microCvTrendSeries7";   // 3: добавлены «стадия» и «СВ»; 5: в список попадают и скрытые режимом серии; 6: рассев разбит на 9 линий (fsv0–8); 7: крупные по 0,1 мм — 13 линий (fsv0–12) — прежние номера fsv не переносим
+  const CV_TREND_KEY_OLD = "microCvTrendSeries6";   // из прошлого ключа переносим всё, кроме fsv
+  const CV_PCT_SERIES = ["small", "medium", "large", "reject", "sv", "fsv0", "fsv1", "fsv2", "fsv3", "fsv4", "fsv5", "fsv6", "fsv7", "fsv8", "fsv9", "fsv10", "fsv11", "fsv12"];   // шкала слева, % (СВ тоже в % — те же 0–100)
   const CV_UM_SERIES = ["mean", "median"];                        // шкала справа, мкм
   // режим варки из ПЛК (рисуется пунктиром). Уровень — в %, на общей шкале 0–100; остальные — каждая на своей шкале
   // по видимому участку, но не уже «минимального размаха» (иначе шум на 0,2 °C выглядел бы бурей)
@@ -1418,7 +1418,7 @@
   }
   async function cvTrendFetch(a, b) {            // загрузить пробы [a,b] (epoch, сек)
     const seq = ++cvTrendSeq;
-    const q = [cvSerialQ(), "series=small,medium,large,reject,mean,median,count,stage,sv,fsv0,fsv1,fsv2,fsv3,fsv4,fsv5,fsv6,fsv7,fsv8," + CV_REGIME.join(","), "from=" + Math.floor(a), "to=" + Math.ceil(b), "limit=5000"].filter(Boolean).join("&");
+    const q = [cvSerialQ(), "series=small,medium,large,reject,mean,median,count,stage,sv,fsv0,fsv1,fsv2,fsv3,fsv4,fsv5,fsv6,fsv7,fsv8,fsv9,fsv10,fsv11,fsv12," + CV_REGIME.join(","), "from=" + Math.floor(a), "to=" + Math.ceil(b), "limit=5000"].filter(Boolean).join("&");
     const d = await api("/api/cv/trend?" + q);
     if (seq !== cvTrendSeq) return false;        // пока грузили, запросили другое — это устарело
     CV_MIN_SERIES.forEach((k) => { if (d.series && d.series[k]) d.series[k] = d.series[k].map((x) => (x == null ? null : x / 60)); });
@@ -1804,7 +1804,7 @@
     const names = { small: "малая", medium: "средняя", large: "большая", reject: "брак" };
     const groups = CV_GROUPS.map((g) => val(g) == null ? "" :
       '<span class="dot" style="background:' + CV_SERIES_COLOR[g] + '"></span>' + names[g] + " " + val(g) + "%").filter(Boolean).join("<br>");
-    const fsv = cvTrendMode !== "sieve" ? "" : ["0–0,05", "0,05–0,10", "0,10–0,15", "0,15–0,20", "0,20–0,40", "0,40–0,60", "0,60–0,80", "0,80–1,0", "&gt; 1,0"].map((n, k) => val("fsv" + k) == null ? "" :
+    const fsv = cvTrendMode !== "sieve" ? "" : ["0–0,05", "0,05–0,10", "0,10–0,15", "0,15–0,20", "0,20–0,30", "0,30–0,40", "0,40–0,50", "0,50–0,60", "0,60–0,70", "0,70–0,80", "0,80–0,90", "0,90–1,0", "&gt; 1,0"].map((n, k) => val("fsv" + k) == null ? "" :
       '<span class="dot" style="background:' + CV_SERIES_COLOR["fsv" + k] + '"></span>' + n + " мм " + val("fsv" + k) + "%").filter(Boolean).join("<br>");
     tip.innerHTML = head + (line2 ? "<br>" + line2 : "") + (line3 ? "<br>" + line3 : "") + (fsv ? "<br>" + fsv : (groups ? "<br>" + groups : "")) + (msg ? "<br><i>" + msg + "</i>" : "");
     tip.hidden = false;

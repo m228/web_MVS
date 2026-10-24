@@ -1514,6 +1514,7 @@ def _cv_model_passport():
     import hashlib
     import importlib.util
     import tempfile
+    import numpy as np
     import cv_client
     import cv_store
     from microscope_service import MicroscopeService
@@ -1577,6 +1578,27 @@ def _cv_model_passport():
         os.environ.pop("CV_IMGSZ", None)
         if old_env is not None:
             os.environ["CV_IMGSZ"] = old_env
+    # лимит находок за проход: по умолчанию 1000 (у ultralytics 300 — густой кадр Кира обрезался), CV_MAX_DET переопределяет; уходит в predict
+    old_md = os.environ.pop("CV_MAX_DET", None)
+    try:
+        assert mod.UltralyticsDetector._pick_max_det() == 1000
+        os.environ["CV_MAX_DET"] = "2000"
+        assert mod.UltralyticsDetector._pick_max_det() == 2000
+        os.environ["CV_MAX_DET"] = "мусор"
+        assert mod.UltralyticsDetector._pick_max_det() == 1000
+    finally:
+        os.environ.pop("CV_MAX_DET", None)
+        if old_md is not None:
+            os.environ["CV_MAX_DET"] = old_md
+    seen = {}
+
+    class _FakeYolo:
+        def predict(self, image, **kw):
+            seen.update(kw)
+            return [type("R", (), {"boxes": None, "masks": None})()]
+    d = object.__new__(mod.UltralyticsDetector)
+    d.model, d.imgsz, d._device, d.max_det = _FakeYolo(), 1280, "cpu", 1000
+    assert d.infer(np.zeros((8, 8, 3), np.uint8), conf=0.25) == [] and seen.get("max_det") == 1000, seen
     return "модель %s, sha %s, imgsz %s, conf %s, частей %s" % (det["name"], det["sha"], det["imgsz"], inf["conf"], inf["tiles"])
 
 

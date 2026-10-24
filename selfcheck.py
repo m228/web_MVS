@@ -2766,7 +2766,7 @@ def _phase_durations():
     return "p1 20 мин, g1 30, g2 20, p2 (два отрезка) сложены; пустая варка — {}"
 
 
-@check("CV", "тренд «Рассев»: группы фракций fsv0…fsv8 (мука по 0,05 мм + 5 крупных) — сумма 0,05-мм фракций, среднее M1–M3; пропуски и нет рассева → None; серия отдаётся trend_range")
+@check("CV", "тренд «Рассев»: группы фракций fsv0…fsv12 (мука по 0,05 мм + крупные по 0,1 мм и > 1,0) — сумма 0,05-мм фракций, среднее M1–M3; пропуски и нет рассева → None; серия отдаётся trend_range")
 def _trend_sieve_groups():
     import cv_store
     r = {}
@@ -2774,16 +2774,17 @@ def _trend_sieve_groups():
         for i in range(cv_store.cv_volume.FINE_N):
             r["fsieve_%s_b%d" % (m, i)] = 1.0 if m != "m3" else 4.0       # среднее по моделям на фракцию = 2.0
     assert [cv_store.fsieve_group(r, k) for k in range(4)] == [2.0] * 4, "мука 0–0,20 — четыре отдельные фракции по 0,05 мм"
-    assert cv_store.fsieve_group(r, 4) == 8.0 and cv_store.fsieve_group(r, 7) == 8.0 and cv_store.fsieve_group(r, 8) == 2.0, "0,20–0,40 и 0,80–1,0 — по 4 фракции, «> 1,0» — одна"
-    assert sum(cv_store.fsieve_group(r, k) for k in range(9)) == 42.0, "21 фракция × 2 % — группы покрывают все"
+    assert [cv_store.fsieve_group(r, k) for k in range(4, 12)] == [4.0] * 8 and cv_store.fsieve_group(r, 12) == 2.0, "0,20–0,30 … 0,90–1,0 — по 2 фракции, «> 1,0» — одна"
+    assert [(g.start, g.stop) for g in cv_store.FSV_GROUPS[4:]] == [(4, 6), (6, 8), (8, 10), (10, 12), (12, 14), (14, 16), (16, 18), (18, 20), (20, 21)], "шаг крупных не 0,1 мм"
+    assert sum(cv_store.fsieve_group(r, k) for k in range(13)) == 42.0, "21 фракция × 2 % — группы покрывают все"
     assert cv_store.fsieve_group({}, 0) is None and cv_store._trend_val({}, "fsv3") is None, "нет рассева — None"
-    assert cv_store._trend_val(r, "fsv9") is None and cv_store._trend_val(r, "fsv8") == 2.0 and cv_store._trend_val({"sv": 5}, "sv") == 5, "лишний номер не падает, обычные серии как раньше"
+    assert cv_store._trend_val(r, "fsv13") is None and cv_store._trend_val(r, "fsv12") == 2.0 and cv_store._trend_val({"sv": 5}, "sv") == 5, "лишний номер не падает, обычные серии как раньше"
     js = (Path(BUNDLE_DIR) / "page" / "static" / "js" / "microscope" / "02-cv.js").read_text(encoding="utf-8")
     html = (Path(BUNDLE_DIR) / "page" / "microscope.html").read_text(encoding="utf-8")
-    for k in range(9):
+    for k in range(13):
         assert 'value="fsv%d"' % k in html and '"fsv%d"' % k in js, "серия fsv%d не в странице/скрипте" % k
     assert 'id="cvTrendModeSeg"' in html and 'id="cvTrSieveGrid"' in html, "нет переключателя режима или таблицы рассева на тренде"
-    return "9 линий = 21 фракция, переключатель и таблица на месте"
+    return "13 линий = 21 фракция, переключатель и таблица на месте"
 
 
 @check("CV", "тренд «Рассев» → «по пробе»: рассев одной пробы из журнала (probe_sieve) — порог «Мука с СВ» как у линий, проба фазы с начала, чужой ts — None; кнопки «финиш» больше нет")

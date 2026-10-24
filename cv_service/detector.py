@@ -172,6 +172,9 @@ class UltralyticsDetector(Detector):
     """
 
     DEFAULT_IMGSZ = 640        # если размер обучения не известен (onnx/engine, битый чекпойнт) и CV_IMGSZ не задан
+    # Лимит находок за один проход модели. У ultralytics по умолчанию 300 — на густом кадре Кира проход по всему кадру
+    # находит до 377 объектов уже на conf 0,55 и до 457 на 0,25, лишние молча отбрасывались (остаются самые уверенные).
+    DEFAULT_MAX_DET = 1000
 
     def __init__(self, model_path: str, device: Optional[str] = None, imgsz: Optional[int] = None):
         from ultralytics import YOLO   # тяжёлый импорт — только когда реально нужен
@@ -183,6 +186,17 @@ class UltralyticsDetector(Detector):
         self.is_seg = getattr(self.model, "task", "") == "segment"
         self._meta = self._file_meta(model_path, getattr(self.model, "ckpt", None))
         self.imgsz = self._pick_imgsz(imgsz, self._meta.get("train_imgsz"))
+        self.max_det = self._pick_max_det()
+
+    @classmethod
+    def _pick_max_det(cls) -> int:
+        """Лимит находок за проход: CV_MAX_DET или 1000."""
+        import os
+        try:
+            n = int(float(os.environ.get("CV_MAX_DET", "")))
+        except ValueError:
+            n = 0
+        return n if n > 0 else cls.DEFAULT_MAX_DET
 
     @classmethod
     def _pick_imgsz(cls, explicit=None, train=None) -> int:
@@ -241,7 +255,7 @@ class UltralyticsDetector(Detector):
 
     def infer(self, image: np.ndarray, conf: float = 0.25) -> list[Detection]:
         res = self.model.predict(image, conf=conf, imgsz=self.imgsz, device=self._device,
-                                 verbose=False)[0]
+                                 max_det=self.max_det, verbose=False)[0]
         dets: list[Detection] = []
         boxes = getattr(res, "boxes", None)
         masks = getattr(res, "masks", None)

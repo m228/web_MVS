@@ -62,7 +62,7 @@
     set("cvSmallMax", g.small_max_um); set("cvMediumMax", g.medium_max_um);
     set("cvUmPerPx", cv.um_per_px); set("cvTiles", cv.tiles);
     set("cvMinCirc", sh.min_circularity); set("cvMinSol", sh.min_solidity);
-    set("cvMaxAspect", sh.max_aspect); set("cvConf", cv.conf); set("cvConfBig", cv.conf_big != null ? cv.conf_big : 0); set("cvConfBigUm", cv.conf_big_um != null ? cv.conf_big_um : 300);
+    set("cvMaxAspect", sh.max_aspect); set("cvConf", cv.conf); set("cvConfBig", cv.conf_big != null ? cv.conf_big : 0); set("cvConfBigK", cv.conf_big_k != null ? cv.conf_big_k : 4);
     set("cvKeepBoils", cv.keep_boils != null ? cv.keep_boils : 10); set("cvArchiveGb", cv.archive_max_gb != null ? cv.archive_max_gb : 30); if ($("cvFramePng")) $("cvFramePng").checked = (cv.frame_format || "png") === "png"; set("cvSuspect", sh.suspect_aspect); set("cvShapeMin", sh.min_um != null ? sh.min_um : 100); set("cvSmoothK", sh.smooth_k != null ? sh.smooth_k : 5); set("cvRejectSv", cv.reject_to_sv != null ? cv.reject_to_sv : 85);
     const bz = cv.boil_zip || {};                                       // архив варок в ZIP (boil_archive)
     if ($("cvZipOn")) $("cvZipOn").checked = !!bz.enabled;
@@ -88,7 +88,7 @@
     return {
       groups: { small_max_um: num("cvSmallMax"), medium_max_um: num("cvMediumMax") },
       shape: { min_circularity: num("cvMinCirc"), min_solidity: num("cvMinSol"), max_aspect: num("cvMaxAspect"), suspect_aspect: num("cvSuspect"), min_um: num("cvShapeMin"), smooth_k: num("cvSmoothK") },
-      um_per_px: num("cvUmPerPx"), tiles: num("cvTiles"), conf: num("cvConf"), conf_big: num("cvConfBig"), conf_big_um: num("cvConfBigUm"),
+      um_per_px: num("cvUmPerPx"), tiles: num("cvTiles"), conf: num("cvConf"), conf_big: num("cvConfBig"), conf_big_k: num("cvConfBigK"),
       reject_to_sv: num("cvRejectSv"), keep_boils: num("cvKeepBoils"), archive_max_gb: num("cvArchiveGb"), frame_format: $("cvFramePng") ? ($("cvFramePng").checked ? "png" : "jpg") : undefined, cluster_gap_px: num("cvClusterGap"), edge_margin_px: num("cvEdgeMargin"), mask_smooth: num("cvMaskSmooth") === undefined ? undefined : num("cvMaskSmooth") > 0, mask_smooth_pct: num("cvMaskSmooth") > 0 ? num("cvMaskSmooth") : undefined,
       seam_merge: $("cvSeamMerge") ? $("cvSeamMerge").checked : undefined,
       seam_refine: $("cvSeamRefine") ? $("cvSeamRefine").checked : undefined,
@@ -829,12 +829,22 @@
   // порог уверенности из поля вкладки CV: кристаллы с conf ниже него скрываем (живой предпросмотр «а если поднять?»)
   function cvConfThr() { const e = $("cvConf"); const v = e && e.value !== "" ? parseFloat(e.value) : NaN; return isNaN(v) ? 0 : v; }
   // скрыт порогом уверенности: общий порог или (крупный объект) порог для крупных — как в разборе (cv_analyzer, conf_big)
+  // граница «крупного» для защиты — как в разборе (cv_analyzer._drop_big_unsure): k × медиана уверенных целых объектов кадра, не меньше 150 мкм
+  function cvBigLimit(big, k) {
+    const whole = cvCurObjects.filter((o) => o.group !== "cut" && o.size_um != null);
+    let base = whole.filter((o) => o.conf != null && o.conf >= big).map((o) => o.size_um);
+    if (!base.length) base = whole.map((o) => o.size_um);
+    if (!base.length) return Infinity;
+    base.sort((a, b) => a - b);
+    const m = base.length % 2 ? base[(base.length - 1) / 2] : (base[base.length / 2 - 1] + base[base.length / 2]) / 2;
+    return Math.max(k * m, 150);
+  }
   function cvConfHidden(o) {
     if (o.conf == null) return false;
     if (o.conf < cvConfThr()) return true;
     const n = (id) => { const e = $(id); const v = e && e.value !== "" ? parseFloat(e.value) : NaN; return isNaN(v) ? 0 : v; };
-    const big = n("cvConfBig"), bigUm = n("cvConfBigUm") || 300;
-    return big > 0 && o.size_um != null && o.size_um >= bigUm && o.conf < big;
+    const big = n("cvConfBig");
+    return big > 0 && o.size_um != null && o.conf < big && o.size_um >= cvBigLimit(big, n("cvConfBigK") || 4);
   }
   let cvCurClean = false;       // текущий кадр чистый (контуры рисуем сами); false — старая проба с «впечёнными»
   let cvHoverObj = null;        // кристалл под мышкой (подсвечиваем форму)
@@ -991,7 +1001,7 @@
       });
     });
     // пороги на вкладке «CV» → оверлей перекрашивается сразу
-    ["cvMinCirc", "cvMinSol", "cvMaxAspect", "cvSuspect", "cvSmallMax", "cvMediumMax", "cvConf", "cvConfBig", "cvConfBigUm"].forEach((id) => {
+    ["cvMinCirc", "cvMinSol", "cvMaxAspect", "cvSuspect", "cvSmallMax", "cvMediumMax", "cvConf", "cvConfBig", "cvConfBigK"].forEach((id) => {
       const e = $(id); if (e) e.addEventListener("input", cvDrawOverlay);
     });
     const ov = $("cvOverlay");

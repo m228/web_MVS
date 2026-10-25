@@ -302,8 +302,8 @@ def _model_tag(det: Optional[dict], infer: Optional[dict] = None) -> Optional[st
     if conf is not None and abs(float(conf) - CONF_PLAIN) > 1e-6:
         tag += " conf %g" % float(conf)
     big = float((infer or {}).get("conf_big") or 0)
-    if big > 0:                     # порог по размеру: крупные от conf_big_um мкм — с conf ≥ conf_big
-        tag += ", крупные от %g мкм %g" % (float(infer.get("conf_big_um") or 300), big)
+    if big > 0:                     # защита от крупного мусора: крупнее conf_big_k медиан кадра — с conf ≥ conf_big
+        tag += ", крупные >%g медиан %g" % (float(infer.get("conf_big_k") or 4), big)
     return tag
 
 

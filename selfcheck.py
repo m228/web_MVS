@@ -1880,17 +1880,21 @@ def _boil_compare():
     det = {"name": "yolo:26x_1280.pt", "imgsz": 1280}
     assert cv_store._model_tag(det) == cv_store._model_tag(det, {"conf": 0.55}) == "26x_1280.pt@1280"
     assert cv_store._model_tag(det, {"conf": 0.25}) == "26x_1280.pt@1280 conf 0.25" and cv_store._model_tag(None, {"conf": 0.25}) is None
-    assert cv_store._model_tag(det, {"conf": 0.25, "conf_big": 0.55, "conf_big_um": 300}) == "26x_1280.pt@1280 conf 0.25, крупные от 300 мкм 0.55"
-    # порог по размеру: крупный объект с низкой уверенностью отбрасывается, мелкий с той же уверенностью и крупный уверенный — остаются
+    assert cv_store._model_tag(det, {"conf": 0.25, "conf_big": 0.55, "conf_big_k": 4}) == "26x_1280.pt@1280 conf 0.25, крупные >4 медиан 0.55"
+    # защита от крупного мусора — граница от медианы кадра: на старте (мелкие ~80 мкм) неуверенный объект ~550 мкм (складка) отсекается,
+    # в конце (кристаллы ~330 мкм) такой же неуверенный объект — настоящая кучка и остаётся; уверенный крупный и мелкий неуверенный — всегда
     import cv_analyzer
-    def sq(x, side_px, conf):
-        return {"polygon": [[x, 500], [x + side_px, 500], [x + side_px, 500 + side_px], [x, 500 + side_px]],
-                "bbox": [x, 500, x + side_px, 500 + side_px], "conf": conf}
-    objs = [sq(100, 300, 0.45), sq(600, 60, 0.30), sq(900, 300, 0.60)]   # ~550 мкм / ~110 мкм / ~550 мкм
-    cfg = {"um_per_px": 1.629, "cluster_gap_px": 0.0}
-    on = cv_analyzer.measure_objects(objs, {**cfg, "conf_big": 0.55, "conf_big_um": 300}, img_shape=(2048, 2448, 3))
-    off = cv_analyzer.measure_objects(objs, cfg, img_shape=(2048, 2448, 3))
-    assert len(off) == 3 and sorted(round(m.conf, 2) for m in on) == [0.3, 0.6], [(m.size_um, m.conf) for m in on]
+    def sq(x, y, side_px, conf):
+        return {"polygon": [[x, y], [x + side_px, y], [x + side_px, y + side_px], [x, y + side_px]],
+                "bbox": [x, y, x + side_px, y + side_px], "conf": conf}
+    small = [sq(100 + 70 * i, 1500, 44, 0.7) for i in range(10)]              # ~80 мкм, уверенные
+    start = small + [sq(100, 500, 300, 0.45), sq(600, 500, 60, 0.30), sq(900, 500, 300, 0.60)]   # складка ~550 / мелкий / уверенный ~550
+    end = [sq(100 + 230 * i, 1500, 180, 0.7) for i in range(8)] + [sq(100, 500, 300, 0.45)]    # кристаллы ~330 мкм + неуверенная кучка ~550
+    cfg = {"um_per_px": 1.629, "cluster_gap_px": 0.0, "conf_big": 0.55, "conf_big_k": 4}
+    on = cv_analyzer.measure_objects(start, cfg, img_shape=(2048, 2448, 3))
+    assert len(on) == 12 and not any(abs(m.conf - 0.45) < 1e-6 for m in on), [(round(m.size_um), m.conf) for m in on]
+    assert len(cv_analyzer.measure_objects(start, {**cfg, "conf_big": 0}, img_shape=(2048, 2448, 3))) == 13
+    assert len(cv_analyzer.measure_objects(end, cfg, img_shape=(2048, 2448, 3))) == 9
     ga = [dict(x, model="26x_1280.pt@1280") for x in grp_a()]
     r = bc.compare_rows(ga + [dict(x, model="26x_1280.pt@1280 conf 0.25") for x in gb], a, b)
     assert not r["ok"] and "conf 0.25" in r["error"], r

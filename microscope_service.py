@@ -475,7 +475,7 @@ class MicroscopeService:
                 run["detector"] = resp.get("detector")
                 run["infer"] = {**inf, "seam_refine": bool(cv.get("seam_refine", True)) and inf["tiles"] > 1}
                 if float(cv.get("conf_big") or 0) > 0:      # порог для крупных (cv_analyzer) — тоже «как снята проба»
-                    run["infer"].update(conf_big=float(cv["conf_big"]), conf_big_um=float(cv.get("conf_big_um") or 300.0))
+                    run["infer"].update(conf_big=float(cv["conf_big"]), conf_big_k=float(cv.get("conf_big_k") or 4.0))
                 sv = self.fsm.sv if self.fsm else None
                 run["svs"].append(sv)
                 objs = resp.get("objects", [])

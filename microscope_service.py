@@ -49,6 +49,8 @@ class MicroscopeService:
         self._af_running = False
         self._af_status = {"running": False, "phase": "idle", "table": [], "best": None, "message": ""}
         self._zip_thread = None                   # фоновый сборщик архивов варок (один на процесс, переживает reload)
+        self._mc_thread = None                    # фоновый автозапуск проверки модели (вне варки)
+        self._mc_failed_sig = None                # подпись настроек, на которой проверка упала с ошибкой: автозапуск её не долбит
 
     def start(self):
         with self._lock:
@@ -82,6 +84,9 @@ class MicroscopeService:
             if self._zip_thread is None or not self._zip_thread.is_alive():
                 self._zip_thread = threading.Thread(target=self._boil_zip_loop, name="boil-zip", daemon=True)
                 self._zip_thread.start()
+            if self._mc_thread is None or not self._mc_thread.is_alive():
+                self._mc_thread = threading.Thread(target=self._model_check_loop, name="model-check-auto", daemon=True)
+                self._mc_thread.start()
             log_event("microscope_service", "Микроскоп запущен",
                       "info", {"host": self.cfg.get("host"), "port": self.cfg.get("port"),
                                "sv_source": bool(svc.get("enabled"))})
@@ -132,6 +137,60 @@ class MicroscopeService:
                         log_event("microscope_service", "Старые архивы варок удалены (лимит места)", "info", {"files": gone})
             except Exception as e:
                 log_event("microscope_service", "Сборщик архивов варок: сбой", "warn", {"error": repr(e)})
+
+    MODEL_CHECK_TICK_S = 60      # раз во столько смотрим, не устарела ли проверка модели и нет ли окна между варками
+
+    def _mc_health(self):
+        import cv_client
+        cv = self.cv_config()
+        return cv_client.health(cv.get("service_url", "http://127.0.0.1:8765")) if cv.get("enabled") else None
+
+    def model_check_status(self):
+        import model_check
+        return model_check.status(self.cv_config(), self._mc_health())
+
+    def model_check_run(self, by="manual"):
+        """Запуск проверки модели по эталону. Идёт варка (проба, стадия цикла) — отказ: прогон ~70 кадров грузит видеокарту и мешает пробам."""
+        import model_check
+        if not self._boil_quiet():
+            return {"started": False, "reason": "boil"}
+        cv = self.cv_config()
+        return model_check.start(cv, cv.get("service_url", "http://127.0.0.1:8765"), self._mc_health(),
+                                 stop=lambda: not (self._started and self._boil_quiet()), by=by)
+
+    def _model_check_loop(self):
+        """Фон: настройки CV / модель сменились после последней проверки — прогнать эталон, но только в перерыве между варками.
+        Варка началась посреди прогона — он прерывается (ничего не пишется) и повторится в следующий перерыв."""
+        while True:
+            time.sleep(self.MODEL_CHECK_TICK_S)
+            try:
+                self._model_check_tick()
+            except Exception as e:
+                log_event("microscope_service", "Автозапуск проверки модели: сбой", "warn", {"error": repr(e)})
+
+    def _model_check_tick(self):
+        """Один заход автозапуска. Возвращает True, если проверка запущена (и дождалась конца)."""
+        import cv_client
+        import model_check
+        cv = self.cv_config()
+        if not (self._started and cv.get("enabled") and cv.get("model_check_auto", True) and self._boil_quiet()) or model_check.STATE["running"]:
+            return False
+        h = cv_client.health(cv.get("service_url", "http://127.0.0.1:8765"))
+        st = model_check.status(cv, h)
+        if not (st["ref"]["present"] and st["online"] and st["stale"]):
+            return False
+        sig = model_check.signature(cv, (h or {}).get("detector"), (h or {}).get("model_path"))
+        if sig == self._mc_failed_sig:
+            return False
+        r = self.model_check_run(by="auto")
+        if not r.get("started"):
+            return False
+        log_event("microscope_service", "Проверка модели запущена автоматически (настройки изменились)", "info", {"sig": sig})
+        while model_check.STATE["running"]:
+            time.sleep(2)
+        if model_check.STATE["error"]:
+            self._mc_failed_sig = sig
+        return True
 
     def _photo_suffix(self):
         """Суффикс в конец имени сырого скрина: стадия варки + СВ (напр. «st7_SV82_2» = стадия 7,
@@ -456,8 +515,8 @@ class MicroscopeService:
         разломов. Результат копится в run; сырой кадр нигде не сохраняется."""
         import cv2
         import cv_analyzer
-        import cv_client
         import cv_fracture
+        import cv_pipeline
         cv = run["cv"]
         snap = self._plc_snapshot()
         if snap:
@@ -465,34 +524,17 @@ class MicroscopeService:
         # --- кристаллы (сайдкар YOLO), если он поднят ---
         summary, objects = None, []
         if run["sidecar_ok"]:
-            ok, enc = cv2.imencode(".png", img)
-            inf = {"tiles": int(cv.get("tiles", 6)), "conf": float(cv.get("conf", 0.25)),
-                   "iou": float(cv.get("iou", 0.45)), "overlap": float(cv.get("overlap", 0.15))}
-            resp = cv_client.infer(run["url"], enc.tobytes(), **inf) if ok else None
-            if resp:
+            det = cv_pipeline.detect(run["url"], img, cv)
+            if det:
+                resp = det["resp"]
                 run["answered"] += 1
-                run["timing"] = resp.get("timing", {})
+                run["timing"] = det["timing"]
                 # чем и как снята проба: паспорт модели от сайдкара + параметры, что реально ушли в infer
                 run["detector"] = resp.get("detector")
-                run["infer"] = {**inf, "seam_refine": bool(cv.get("seam_refine", True)) and inf["tiles"] > 1}
-                if float(cv.get("conf_big") or 0) > 0:      # порог для крупных (cv_analyzer) — тоже «как снята проба»
-                    run["infer"].update(conf_big=float(cv["conf_big"]), conf_big_k=float(cv.get("conf_big_k") or 4.0))
+                run["infer"] = det["meta"]
                 sv = self.fsm.sv if self.fsm else None
                 run["svs"].append(sv)
-                objs = resp.get("objects", [])
-                if run["infer"]["seam_refine"]:
-                    # обрубки у шва нарезки — повторный проход модели по окну вокруг них (целый кристалл
-                    # идёт в рассев). Сбой запроса = обрубок остаётся как был.
-                    def _infer_window(crop, _url=run["url"], _inf=inf):
-                        okw, encw = cv2.imencode(".png", crop)
-                        rw = cv_client.infer(_url, encw.tobytes(), **{**_inf, "tiles": 1},
-                                             timeout=30.0) if okw else None
-                        return rw.get("objects") if rw else None
-                    t_ref = time.time()
-                    ref = {}
-                    objs = cv_analyzer.refine_seam_stubs(img, objs, cv, _infer_window, ref)
-                    run["timing"] = {**run["timing"], "refine_ms": round((time.time() - t_ref) * 1000),
-                                     "refine_stubs": ref.get("stubs", 0), "refine_fixed": ref.get("fixed", 0)}
+                objs = det["objs"]
                 seed_age_s = (max(0, int(run.get("t0", time.time()) - self._seed_ts)) if self._seed_ts is not None else None)   # время с заводки — для плавного порога муки
                 if seed_age_s is not None and run.get("stage") == 9 and self._boil_t_s is None:
                     self._boil_t_s = seed_age_s       # первая проба «готовности»: длительность варки известна — эта и все следующие пробы сразу считаются по растянутой кривой

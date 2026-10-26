@@ -143,6 +143,10 @@ def _init(c: sqlite3.Connection) -> None:
         c.execute("CREATE TABLE IF NOT EXISTS changes (id INTEGER PRIMARY KEY AUTOINCREMENT, serial TEXT NOT NULL, t REAL NOT NULL, "
                   "text TEXT NOT NULL, at REAL NOT NULL)")
         c.execute("CREATE INDEX IF NOT EXISTS ix_changes ON changes (serial, t)")
+        # проверки CV-модели по эталону (model_check): подпись настроек, вердикт и полный результат (JSON)
+        c.execute("CREATE TABLE IF NOT EXISTS model_checks (id INTEGER PRIMARY KEY AUTOINCREMENT, t REAL NOT NULL, sig TEXT NOT NULL, "
+                  "tag TEXT, ok INTEGER NOT NULL, data TEXT NOT NULL)")
+        c.execute("CREATE INDEX IF NOT EXISTS ix_model_checks ON model_checks (t)")
         c.execute("INSERT OR IGNORE INTO meta (key, value) VALUES ('schema_version', ?)", (str(SCHEMA_VERSION),))
         c.commit()
 
@@ -315,6 +319,20 @@ def change_delete(serial: str, cid: int) -> bool:
         n = c.execute("DELETE FROM changes WHERE id=? AND serial=?", (cid, serial)).rowcount
         c.commit()
         return n > 0
+
+
+def check_save(t: float, sig: str, tag: Optional[str], ok: bool, data: str) -> int:
+    """Записать проверку модели (model_check): время, подпись настроек, метка модели, прошла ли, результат JSON."""
+    with _wlock:
+        c = conn()
+        cid = c.execute("INSERT INTO model_checks (t, sig, tag, ok, data) VALUES (?, ?, ?, ?, ?)", (t, sig, tag, int(ok), data)).lastrowid
+        c.commit()
+        return cid
+
+
+def checks(limit: int = 10) -> list[dict]:
+    """Последние проверки модели, новые первыми: [{id, t, sig, tag, ok, data}]."""
+    return [dict(r) for r in conn().execute("SELECT id, t, sig, tag, ok, data FROM model_checks ORDER BY t DESC, id DESC LIMIT ?", (int(limit),))]
 
 
 def log_fracture_edit(serial: str, ts: str, action: str, zid: Optional[str], frame_idx: int, at: float) -> None:

@@ -362,7 +362,7 @@ MODULES = [
     "camera_core.base_worker", "camera_core.gige_worker", "camera_core.rtsp_worker", "camera_core.camera_manager",
     "sdk_gige", "camera_params", "dahua_control", "net_tools", "rtsp_store",
     "save_settings", "plate_config", "sv_source", "microscope_plc", "microscope_fsm",
-    "microscope_service", "cv_analyzer", "cv_volume", "substages", "db", "report", "boil_compare", "cv_fracture", "cv_client", "video_client", "services", "cv_store", "boil_archive", "fracture_lab",
+    "microscope_service", "cv_analyzer", "cv_volume", "substages", "db", "report", "boil_compare", "cv_fracture", "cv_client", "video_client", "services", "cv_store", "boil_archive", "fracture_lab", "cv_pipeline", "model_check",
     "updater", "autostart", "diag", "app", "mvsdk",
 ]
 THIRD_PARTY = ["cv2", "numpy", "fastapi", "starlette", "uvicorn", "pymodbus", "harvesters", "genicam",
@@ -2142,6 +2142,119 @@ def _boil_compare():
     assert bc.parse_t("2026-10-19 11:20") == time.mktime((2026, 10, 19, 11, 20, 0, 0, 0, -1))
     assert bc.parse_t("2026-10-19", True) - bc.parse_t("2026-10-19") == 86399
     return "плюс / минус / «решать технологу» по правилам; крупнее и муки меньше — один плюс; порог 8 % и коридор; граница, короткая, затянутая — не в счёт"
+
+
+@check("Микроскоп", "Проверка модели по эталону: допуск (в допуске / сдвиг муки / размера / мало найдено), нет эталона, подпись настроек, запись и «устарела»")
+def _model_check():
+    import json
+    import tempfile
+    import cv2
+    import numpy as np
+    import cv_pipeline
+    import db
+    import model_check as mc
+    # допуск — чистая функция: берём финиш, нет финиша — все кадры; нет цифр — не годится
+    ok_z = {"fin": {"fines_rel": -9.0, "size_rel": 1.4, "found": 87.7}}
+    assert mc.evaluate(ok_z)["ok"] and mc.evaluate({"all": ok_z["fin"]})["zone"] == "all"
+    r = mc.evaluate({"fin": {"fines_rel": -17.0, "size_rel": 3.7, "found": 83.0}})
+    assert not r["ok"] and len(r["reasons"]) == 3, r                     # порог 0,35 с эталона 26.10: все три мимо допуска
+    assert not mc.evaluate({"fin": {"fines_rel": None, "size_rel": None, "found": None}})["ok"] and not mc.evaluate({})["ok"]
+    # эталон из 3 кадров: по 10 мелких (130 мкм) и крупных (260 мкм) квадратов, порог муки 150 мкм
+    d = Path(tempfile.mkdtemp(prefix="mvs_mc_"))
+    upp, small, big = 1.629, 80, 160
+    polys = []
+    for i in range(10):
+        for side, y in ((small, 60), (big, 300)):
+            x = 20 + i * 190
+            polys.append([[x, y], [x + side, y], [x + side, y + side], [x, y + side]])
+    fr = []
+    for n in range(3):
+        cv2.imwrite(str(d / ("f%d.png" % n)), np.full((600, 2000, 3), 128, np.uint8))
+        (d / ("f%d.json" % n)).write_text(json.dumps({"polys": polys}), encoding="utf-8")
+        fr.append({"name": "f%d" % n, "image": "f%d.png" % n, "polys": "f%d.json" % n, "zone": "fin", "boil": n, "sv": 88.0, "stage": 8, "fines_um": 150.0})
+    cfg0 = {"um_per_px": upp, "tiles": 2, "overlap": 0.15, "iou": 0.45, "conf": 0.25, "cluster_gap_px": 0.0, "mask_smooth": False,
+            "groups": {"small_max_um": 250.0, "medium_max_um": 400.0}}
+    (d / "manifest.json").write_text(json.dumps({"version": 1, "created": "2026-10-26", "measure_cfg": cfg0, "k_thick": 0.88, "frames": fr}), encoding="utf-8")
+    ref = mc.load_ref(d)
+    assert ref and len(ref["frames"]) == 3 and ref["missing"] == 0 and mc.load_ref(d / "нет") is None
+    (d / "f2.png").unlink()
+    assert mc.load_ref(d) is ref or mc.load_ref(d)["missing"] in (0, 1)       # кэш по манифесту; пропавший файл виден после пересборки
+    mc._ref_cache.clear()
+    assert mc.load_ref(d)["missing"] == 1 and len(mc.load_ref(d)["frames"]) == 2
+    cv2.imwrite(str(d / "f2.png"), np.full((600, 2000, 3), 128, np.uint8))
+    mc._ref_cache.clear()
+    ref = mc.load_ref(d)
+
+    def objs_of(pl):
+        return [{"polygon": p, "bbox": [min(a for a, _ in p), min(b for _, b in p), max(a for a, _ in p), max(b for _, b in p)], "conf": 0.9} for p in pl]
+
+    def run(pl, scale=1.0):
+        def grow(p):
+            cx, cy = sum(a for a, _ in p) / 4, sum(b for _, b in p) / 4
+            return [[cx + (a - cx) * scale, cy + (b - cy) * scale] for a, b in p]
+        orig = cv_pipeline.detect
+        cv_pipeline.detect = lambda url, img, cv: {"resp": {}, "inf": {}, "meta": {}, "timing": {}, "objs": objs_of([grow(p) for p in pl])}
+        try:
+            return mc.run_check(cfg0, "http://x", ref, {"name": "yolo:fake.pt", "imgsz": 1280}, None)
+        finally:
+            cv_pipeline.detect = orig
+    same = run(polys)
+    z = same["zones"]["fin"]
+    assert same["ok"] and abs(z["fines_rel"]) < 2 and abs(z["size_rel"]) < 2 and z["found"] > 99 and same["n_frames"] == 3, z
+    no_small = run([p for p in polys if p[1][0] - p[0][0] != small])
+    assert not no_small["ok"] and no_small["zones"]["fin"]["fines_rel"] < -90 and any("мука" in x for x in no_small["verdict"]["reasons"]), no_small["verdict"]
+    half = run(polys[::2])
+    assert not half["ok"] and half["zones"]["fin"]["found"] < 60 and any("найдено" in x for x in half["verdict"]["reasons"]), half["zones"]["fin"]
+    grown = run(polys, 1.05)
+    assert not grown["ok"] and grown["zones"]["fin"]["size_rel"] > 3 and any("размер" in x for x in grown["verdict"]["reasons"]), grown["zones"]["fin"]
+    stopped = False
+    orig = cv_pipeline.detect
+    cv_pipeline.detect = lambda *a, **k: None
+    try:
+        mc.run_check(cfg0, "http://x", ref, None, None)
+    except RuntimeError as e:
+        stopped = "сайдкар не отвечает" in str(e)          # 3 кадра подряд без ответа — ошибка, а не молчаливый «ноль»
+    finally:
+        cv_pipeline.detect = orig
+    assert stopped and run(polys) and mc.run_check(cfg0, "http://x", ref, None, None, stop=lambda: True) is None
+    # подпись: порог / модель меняют её, несущественное — нет
+    det = {"name": "yolo:fake.pt", "imgsz": 1280, "sha": "a"}
+    s1 = mc.signature(cfg0, det)
+    assert s1 == mc.signature(dict(cfg0, service_url="x", keep_boils=3), det) and s1 != mc.signature(dict(cfg0, conf=0.35), det)
+    assert s1 != mc.signature(cfg0, dict(det, sha="b")) and s1 != mc.signature(dict(cfg0, conf_big=0.55), det)
+    # запись и статус: последняя проверка, «устарела» после смены порога, нет эталона
+    old_path = db.DB_PATH
+    db.set_path(Path(tempfile.mkdtemp(prefix="mvs_mc_db_")) / "m.db")
+    try:
+        assert mc.last() is None
+        cvc = dict(cfg0, ref_set_dir=str(d))
+        health = {"detector": det, "model_path": None}
+        st = mc.status(cvc, health)
+        assert st["ref"]["present"] and st["ref"]["n"] == 3 and st["last"] is None and st["stale"] and not st["state"]["running"], st
+        res = dict(same, sig=mc.signature(cvc, det))
+        mc.save(res)
+        st = mc.status(cvc, health)
+        assert st["last"]["ok"] and abs(st["last"]["zone"]["fines_rel"]) < 2 and not st["stale"] and len(st["history"]) == 1, st
+        assert mc.status(dict(cvc, conf=0.35), health)["stale"], "порог сменили — проверка устарела"
+        assert mc.status(dict(cvc, ref_set_dir=str(d / "нет")), health)["ref"]["present"] is False
+        assert mc.status(cvc, None)["online"] is False
+    finally:
+        db.set_path(old_path)
+    # запуск в фоне: варка началась (stop) — прогон прерывается, ничего не пишется и это не ошибка; нет эталона / сайдкара — отказ с причиной
+    old_path = db.DB_PATH
+    db.set_path(Path(tempfile.mkdtemp(prefix="mvs_mc_db2_")) / "m.db")
+    try:
+        cvc = dict(cfg0, ref_set_dir=str(d))
+        assert mc.start(dict(cvc, ref_set_dir=str(d / "нет")), "http://x", {"detector": det}, lambda: False) == {"started": False, "reason": "no_ref"}
+        assert mc.start(cvc, "http://x", None, lambda: False) == {"started": False, "reason": "sidecar_offline"}
+        assert mc.start(cvc, "http://x", {"detector": det}, lambda: True, by="auto") == {"started": True}
+        t0 = time.time()
+        while mc.STATE["running"] and time.time() - t0 < 10:
+            time.sleep(0.05)
+        assert not mc.STATE["running"] and mc.STATE["error"] is None and mc.last() is None and mc.STATE["by"] == "auto", mc.STATE
+    finally:
+        db.set_path(old_path)
+    return "допуск ±10 % / ±3 % / ≥85 %; сдвиг муки, размера, мало найдено ловятся; нет ответа сайдкара — ошибка; подпись, запись, «устарела»"
 
 
 @check("Микроскоп", "Журнал изменений: добавить, поправить, удалить; чужой серийник не трогается; отчёт отдаёт изменения периода и цели маточника")

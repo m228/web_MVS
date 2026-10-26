@@ -3636,6 +3636,13 @@ input.micro-cam-num { width: 56px; min-width: 0; flex: 0 0 auto; padding: 4px 5p
 .micro-cv-status.off { color: var(--danger, #dc2626); }
 /* строка «Модель …» под шапкой и нижний ряд компактных кнопок вкладки CV */
 .micro-cv-model { font-size: 0.88em; font-weight: 600; }
+/* проверка модели по эталону (model_check): одна строка под шапкой настроек CV */
+.micro-mcheck { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 0 0 10px; font-size: 0.84em; }
+.micro-mcheck__txt { flex: 1 1 260px; min-width: 0; color: var(--muted, #5b6b81); }
+.micro-mcheck__txt.ok { color: var(--success, #16a34a); }
+.micro-mcheck__txt.warn { color: var(--warning, #d97706); }
+.micro-mcheck__txt.off { color: var(--danger, #dc2626); }
+.micro-mcheck .toolbar-btn { min-width: 0; padding: 5px 12px; font-size: 0.95em; }
 .micro-cv-foot { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
 .micro-cv-foot .toolbar-btn { min-width: 0; padding: 6px 12px; font-size: 0.85em; }
 .micro-cv-foot__right { margin-left: auto; }

@@ -869,61 +869,209 @@ def _sv_source():
     return "sv=52.5 stage=7, 1 запрос на опрос"
 
 
-@check("Микроскоп", "Автокалибровка нуля М1: энкодер 0±5 + аналог → set_zero → отвод; 3 попытки; провал не трогает ноль")
+class _FwM1:
+    """Мотор М1 так, как его ведёт прошивка платы (разбор fw-crc-l.bin, tasks/todo.md п. 2b): x — где он на самом деле
+    (датчик = gain·x + s_off), упор у стекла x_stop (дальше шаги теряются), calc — расчётная (шаги, не ниже 0),
+    enc — энкодер (реальный ход). «Поиск 0» — ход в расчётную 0 на 600 шаг/с (из 0 — дожим ещё 2000 шагов), ноль в
+    конце штатного хода; команды на ходу — в очередь; стоп флаг поиска не снимает, «шаги 0» снимает; блокировки
+    бит 0 (у стекла расчётная := датчик при расхождении > 100) и бит 5 (энкодер < 0 → оба 0). Шаг 2,5 мкм."""
+    STEP = 2.5
+
+    def __init__(self, x=2000.0, calc=2000.0, enc=2000.0, x_stop=-30.0, gain=1.0, noise=0.0):
+        import random
+        self.x, self.calc, self.enc, self.x_stop, self.gain, self.noise = x, calc, enc, x_stop, gain, noise
+        self.flag, self.queue, self.run, self.fwd, self.pos_set = False, [], None, True, 0
+        self.pending, self.calls, self.bad = [], [], []
+        self.status = {"connected": True}
+        self.rnd = random.Random(1)
+        self._tele()
+
+    def __getattr__(self, n):                      # LED, клапаны, М2 — только запоминаем
+        return lambda *a, **k: self.calls.append((n, a))
+
+    def _c(self, m, op, arg=None):
+        self.calls.append(("motor_" + op, (m, arg)))
+        if m == 1:
+            self.pending.append((op, arg))
+
+    def motor_enable(self, m, on): self.calls.append(("motor_enable", (m, on)))
+    def motor_direction(self, m, fwd): self.fwd = bool(fwd) if m == 1 else self.fwd
+    def write_m1_sp(self, um): self.pos_set = int(um) // 10 * 10
+    def write_m2_sp(self, um): pass
+    def motor_find_zero(self, m): self._c(m, "find_zero")
+    def motor_set_zero(self, m): self._c(m, "set_zero")
+    def motor_stop(self, m): self._c(m, "stop")
+    def motor_steps(self, m, n): self._c(m, "steps", int(n))
+    def motor_shift(self, m, um): self._c(m, "shift", (int(um) // 10 * 10) * (1 if self.fwd else -1))
+    def cmd1(self, code): self._c(1, "goto", self.pos_set)
+
+    def sensor(self):
+        return self.gain * self.x
+
+    def _start(self, op, arg):
+        if op == "find_zero":
+            if self.calc < self.STEP:
+                self.calc = 2000 * self.STEP
+            self.flag, self.run = True, [-self.calc, 1500.0]
+        elif op == "goto":
+            self.run = [arg - self.calc, 1500.0 if self.flag else 1000.0]
+        elif op == "shift":
+            self.run = [float(arg), 1000.0]
+        elif op == "steps":
+            self.run = [arg * self.STEP * (1 if self.fwd else -1), 1000.0]
+        if abs(self.run[0]) < self.STEP:
+            self.run, self.flag = None, False
+
+    def step(self):
+        cmds, self.pending = ([] if not self.status["connected"] else self.pending), []
+        if len(cmds) > 1:
+            self.bad.append("две команды в 1248 за такт: %s" % cmds)
+        for op, arg in cmds:
+            if op == "stop":
+                self.run, self.queue = None, []
+            elif op == "set_zero":
+                if self.run:
+                    self.bad.append("«Установить 0» на ходу")
+                self.calc = self.enc = 0.0
+            elif self.run:
+                if op == "find_zero":
+                    self.bad.append("«Поиск 0» на ходу")
+                self.queue.append((op, arg))
+            else:
+                self._start(op, arg)
+        if self.run:
+            d = max(-self.run[1] * 0.1, min(self.run[1] * 0.1, self.run[0]))
+            self.run[0] -= d
+            self.calc = max(0.0, self.calc + d)
+            nx = max(self.x_stop, self.x + d)
+            self.enc += nx - self.x
+            self.x = nx
+            if abs(self.run[0]) < 1e-6:
+                self.run = None
+                if self.flag:
+                    self.calc = self.enc = 0.0
+                    self.flag = False
+        if self.enc < 0:
+            self.enc = self.calc = 0.0
+        s = self.sensor()
+        if s < 1000 and abs(self.calc - s) > 100:
+            self.calc = s if s >= 0 else 1e7
+        if not self.run and self.queue:
+            self._start(*self.queue.pop(0))
+        self._tele()
+
+    def _tele(self):
+        ai = round(self.sensor() + self.rnd.uniform(-self.noise, self.noise)) * 10
+        self.telemetry = {"pos1": int(self.calc / 10) * 10, "pos1_enc": int(self.enc / 10) * 10, "pos2": 0,
+                          "pos1_ai": None if self.__dict__.get("no_ai") else ai}   # __getattr__ ловит всё — только __dict__
+
+
+@check("Микроскоп", "Автокалибровка нуля М1 на модели прошивки: команды только стоя, сдвиг по датчику, «все три "
+                    "одинаковые», масштаб на отводе, стоп/нет связи/проба поверх, пропарка")
 def _autocal():
     import copy
     import plate_config
-    from microscope_fsm import MicroscopeFSM, CAL_ATTEMPTS
+    from microscope_fsm import MicroscopeFSM
 
-    class _Plate:
-        def __init__(self):
-            self.telemetry = {"pos1": 0, "pos1_ai": 0, "pos1_enc": 0}
-            self.status = {"connected": True}
-            self.calls = []
-
-        def __getattr__(self, n):
-            return lambda *a, **k: self.calls.append(n)
-
-    def run(enc_at_attempt, ai):
-        cfg = copy.deepcopy(plate_config.load())
-        cfg.setdefault("autocal", {})["enabled"] = True
-        pl = _Plate()
+    def mk(manual=False, **kw):
+        cfg = copy.deepcopy(plate_config.DEFAULTS)
+        cfg["probe_cycle"]["retract_pos"] = 2000
+        cfg["autocal"].update(enabled=True, timeout_sec=5)
+        pl = _FwM1(**kw)
         fsm = MicroscopeFSM(pl, cfg)
-        fsm.set_manual(False)
-        assert fsm.start_autocal()["status"] == "started"
-        for t in range(2000):
-            n = pl.calls.count("motor_find_zero")
-            if "motor_set_zero" in pl.calls or (n >= CAL_ATTEMPTS and t > 200):
-                enc = min(fsm._retract_pos, pl.telemetry["pos1_enc"] + 400)     # едем в отвод
-            else:
-                enc = enc_at_attempt(n)
-            pl.telemetry.update(pos1_enc=enc, pos1=enc, pos1_ai=ai * 10)        # ×0.1 внутри FSM
+        fsm.set_manual(manual)
+        return fsm, pl
+
+    def run(fsm, pl, hook=None, start=True):
+        if start:
+            assert fsm.start_autocal()["status"] == "started"
+        tail = None
+        for t in range(1500):
+            if hook:
+                hook(t, fsm, pl)
             fsm.tick()
-            if t > 3 and not fsm.state["autocal"]["active"]:
+            pl.step()
+            if tail is None and t > 3 and not fsm.state["autocal"]["active"]:
+                tail = t + 60                       # хвост: «шаги 0» после стопа, команды из очереди
+            if tail is not None and t >= tail:
                 break
         st = fsm.state["autocal"]
-        assert not st["active"], "калибровка не завершилась: %s" % st
-        return pl.calls.count("motor_find_zero"), pl.calls.count("motor_set_zero"), st["failed"]
+        assert not st["active"], "калибровка не закончилась: %s" % st
+        assert not pl.bad, "команды не вовремя: %s" % pl.bad[:3]
+        return st
 
-    # из ручного режима: кнопка снимает ручной, калибровка проходит целиком, потом ручной возвращается
-    cfg = copy.deepcopy(plate_config.load())
-    pl = _Plate()
-    fsm = MicroscopeFSM(pl, cfg)
-    fsm.set_manual(True)
-    st0 = fsm.start_autocal()
-    assert st0["status"] == "started" and st0["was_manual"] and not fsm.manual, "из ручного калибровка должна стартовать: %s" % st0
-    for t in range(2000):
-        n = pl.calls.count("motor_find_zero")
-        enc = min(fsm._retract_pos, pl.telemetry["pos1_enc"] + 400) if "motor_set_zero" in pl.calls else 0
-        pl.telemetry.update(pos1_enc=enc, pos1=enc, pos1_ai=200)
+    n = lambda pl, op: sum(1 for c in pl.calls if c[0] == "motor_" + op and c[1][0] == 1)
+
+    fsm, pl = mk()                                                   # ноль в порядке
+    st = run(fsm, pl)
+    assert st["result"] == "готово" and n(pl, "set_zero") == 1 and n(pl, "find_zero") == 1, st
+    assert abs(pl.sensor() - pl.enc) <= 30 and abs(pl.enc - 2000) <= 50, (pl.x, pl.enc)
+    fsm, pl = mk(x=2200)                                             # ноль уполз: у нуля датчик +200 -> сдвиг к стеклу
+    st = run(fsm, pl)
+    assert st["result"] == "готово" and st["attempt"] == 1 and abs(pl.sensor() - pl.enc) <= 50, (st, pl.x, pl.enc)
+    assert st["last"]["diff_before"] == 200 and abs(st["last"]["diff_after"]) <= 50, st["last"]
+    fsm, pl = mk(x=1800)                                             # уполз вниз: упор ниже нуля датчика -> сдвиг от стекла
+    st = run(fsm, pl)
+    assert st["result"] == "готово" and abs(pl.sensor() - pl.enc) <= 50, (st, pl.x, pl.enc)
+    fsm, pl = mk(x=2150, noise=60)                                   # шум датчика ±60: медиана стоя
+    st = run(fsm, pl)
+    assert st["result"] == "готово" and abs(pl.sensor() - pl.enc) <= 50, (st, pl.x, pl.enc)
+    fsm, pl = mk(gain=0.92)                                          # масштаб датчика: случай «датчик на ~160 меньше»
+    st = run(fsm, pl)
+    assert st["result"].startswith("готово, на отводе расхождение") and st["failed"] and "масштаб" in st["fail_msg"], st
+    fsm, pl = mk(x=2120, x_stop=120)                                 # упор выше зоны 0..50: не лечится -> не удалось
+    st = run(fsm, pl)
+    assert st["result"] == "не удалось" and st["failed"] and n(pl, "set_zero") == 0, st
+    fsm, pl = mk()                                                   # датчик не приходит: не виснем, «не удалось»
+    pl.no_ai = True
+    pl._tele()
+    st = run(fsm, pl)
+    assert st["result"] == "не удалось" and "датчика" in st["fail_msg"] and n(pl, "set_zero") == 0, st
+
+    fsm, pl = mk(x=2200)                                             # «Стоп движения» посреди «Поиска 0»
+    st = run(fsm, pl, hook=lambda t, f, p: f.set_movement_inhibit(True) if t == 40 else None)
+    assert st["result"] == "прервано (стоп движения)" and n(pl, "stop") == 1 and n(pl, "steps") == 1 and not pl.flag, st
+    assert fsm.start_autocal()["status"] == "blocked", "при «Стоп движения» калибровка не стартует"
+
+    fsm, pl = mk(x=2200)                                             # пропала связь: прервано, счётчик цел
+    fsm.set_autocal(count=7)
+
+    def drop(t, f, p):
+        p.status["connected"] = not 30 <= t < 80
+    st = run(fsm, pl, hook=drop)
+    assert st["result"] == "прервано (нет связи)" and st["count"] == 7 and n(pl, "steps") == 1, st
+
+    fsm, pl = mk()                                                   # проба поверх калибровки — нельзя
+    fsm.start_autocal()
+    fsm.tick()
+    assert fsm.start_sample()["status"] == "busy_cal"
+
+    fsm, pl = mk(manual=True)                                        # из Ручного: калибровка целиком, потом снова Ручной
+    st = run(fsm, pl)
+    assert st["result"] == "готово" and fsm.manual, st
+
+    # пропарка: перезапуск программы на стадии 11 — не новая варка; фронт входа +1; идёт проба — ждём её конца
+    fsm, pl = mk()
+    fsm.set_autocal(count=2)
+    fsm.set_stage(11)
+    fsm.tick(); pl.step()
+    assert fsm.state["autocal"]["count"] == 2 and not fsm.state["autocal"]["active"], "перезапуск на пропарке посчитан"
+    fsm.set_stage(10); fsm.tick(); pl.step()
+    fsm.mode = 24                                                    # проба ещё возвращается
+    fsm.set_stage(11); fsm.tick(); pl.step()
+    assert fsm.state["autocal"]["count"] == 3 and not fsm.state["autocal"]["active"], "старт поверх пробы"
+    fsm.mode = 0
+    fsm.tick(); pl.step()
+    assert fsm.state["autocal"]["active"], "проба кончилась на пропарке — калибровка должна стартовать"
+    st = run(fsm, pl, start=False)
+    assert st["result"] == "готово" and st["count"] == 0, st
+
+    fsm, pl = mk(manual=True)                                        # стоп с пульта -> «шаги 0» через 0,5 с (и в Ручном)
+    fsm.request_unflag(1)
+    for _ in range(8):
         fsm.tick()
-        if t > 3 and not fsm.state["autocal"]["active"]:
-            break
-    assert pl.calls.count("motor_set_zero") == 1 and fsm.manual, "после калибровки из ручного — set_zero и снова ручной режим"
-    assert run(lambda n: 0, 20) == (1, 1, False), "успех с 1-й попытки"
-    assert run(lambda n: 330 if n < 3 else 0, 20) == (3, 1, False), "успех на 3-й попытке"
-    assert run(lambda n: 330, 89) == (3, 0, True), "провал: set_zero слать нельзя, failed=True"
-    return "1-я / 3-я попытка / провал (3×Поиск 0, без set_zero)"
+    assert n(pl, "steps") == 1, pl.calls
+    return "7 случаев нуля (и без датчика) + стоп / нет связи / проба поверх / из Ручного / пропарка — ни одной команды на ходу"
 
 
 @check("Микроскоп", "Страховка разбора CV: по умолчанию 120 с, значение из настроек доходит до автомата, меньше 10 с не бывает")

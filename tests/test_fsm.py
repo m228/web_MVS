@@ -35,6 +35,7 @@ class FakePlate:
     def motor_stop(self, m): self.stop_calls.append(m)
     def motor_find_zero(self, m): pass
     def motor_set_zero(self, m): pass
+    def motor_steps(self, m, n): pass       # снятие флага «Поиск 0» после автокалибровки (1.9.98)
     def set_led(self, b, on): self.leds.append((b, on))
     def set_valve_tube(self, on): self.valves.append(("tube", on))
     def set_valve_glass(self, on): self.valves.append(("glass", on))

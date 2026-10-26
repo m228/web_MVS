@@ -23,6 +23,7 @@ import time
 import cv2
 import numpy as np
 from fastapi import FastAPI, Request
+from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import JSONResponse
 
 from detector import build_detector
@@ -47,6 +48,7 @@ def _read_version() -> str:
 SERVICE_VERSION = _read_version()
 app = FastAPI(title="web_MVS CV service", version=SERVICE_VERSION)
 _lock = threading.Lock()                       # защита на время горячей замены модели
+_infer_lock = threading.Lock()                 # модель — по одному кадру: два разбора разом удвоили бы видеопамять
 _started = time.time()
 LAST_FILE = os.path.join(MODEL_DIR, "last_model.json")   # какую модель грузили последней — её же берём при старте
 
@@ -159,6 +161,11 @@ async def model_upload(request: Request, name: str = "best.pt"):
         return JSONResponse({"error": str(e)}, status_code=400)
 
 
+def _run_locked(det, img, tiles, conf, iou, overlap):
+    with _infer_lock:
+        return run_tiled(det, img, tiles=tiles, conf=conf, iou_thr=iou, overlap=overlap)
+
+
 @app.post("/infer")
 async def infer(request: Request, tiles: int = 6, conf: float = 0.25,
                 iou: float = 0.45, overlap: float = 0.15):
@@ -172,7 +179,8 @@ async def infer(request: Request, tiles: int = 6, conf: float = 0.25,
 
     with _lock:
         det = _detector
-    dets, timing = run_tiled(det, img, tiles=tiles, conf=conf, iou_thr=iou, overlap=overlap)
+    # модель — в потоке: пока кадр разбирается (секунды), /health отвечает, и web_MVS не считает сервис упавшим
+    dets, timing = await run_in_threadpool(_run_locked, det, img, tiles, conf, iou, overlap)
     h, w = img.shape[:2]
     return {
         "image": {"w": w, "h": h},

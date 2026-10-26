@@ -61,6 +61,7 @@ class MicroscopeService:
             self.fsm.on_photo = self._auto_photo   # кадры пробы в выдержке (см. _auto_photo)
             self.fsm.on_video = self._auto_video   # запись видео пробы на выдержку (см. _auto_video)
             self.fsm.on_varka_count = self._persist_varka   # persist счётчика варок (автокалибровка)
+            self.fsm.on_autocal_done = self._log_autocal    # итог автокалибровки -> autocal.log + «последняя»
             self.fsm.on_approach_fail = self._log_approach_fail   # «довод не сошёлся» -> отдельный лог
             # довод по абсолютнику ушёл в прошивку — гасим в рантайме (конфиг не перезаписываем),
             # доезд цикла идёт по энкодеру. Автокалибровка нуля работает в ПК (см. set_autocal).
@@ -223,7 +224,7 @@ class MicroscopeService:
     PROBE_MODE_DWELL = 23      # режим автомата «выдержка у стекла» (см. microscope_fsm)
 
     def _set_cv_status(self, state, message=""):
-        """Статус разбора для UI: idle / running / ok / no_camera / no_frames /
+        """Статус разбора для UI: idle / running / ok / no_camera / no_frames / overexposed /
         sidecar_offline / error. Любой отказ виден на странице, а не только в логе."""
         self._cv_status = {"state": state, "message": message, "ts": time.strftime("%H:%M:%S")}
 
@@ -277,6 +278,19 @@ class MicroscopeService:
         worker.snap_once = False     # кадра нет — снять запрос, чтобы он не сработал позже
         return None
 
+    def _overexposed(self, img, worker, serial):
+        """Пересвеченный кадр (белое поле — экспозиция не та) в пробу не идёт: статус «пересвет»
+        на странице и ошибка в журнал с тем, что сейчас стоит в камере."""
+        import camera_params
+        over, med, sat = camera_params.overexposure(img)
+        if over:
+            cur = getattr(worker, "current_config", None) or {}
+            self._set_cv_status("overexposed", "проба пропущена: кадр пересвечен (яркость %d из 255, экспозиция %s мкс) — проверь камеру" % (
+                med, cur.get("exposure_time", "?")))
+            log_event("microscope_service", "CV: кадр пробы пересвечен — в пробу не идёт", "error",
+                      {"serial": serial, "median": round(med), "saturated_pct": round(sat * 100, 1), "camera": cur})
+        return over
+
     def _cv_probe_session(self):
         """Сессия пробы (фон): у стекла «снять кадр → разобрать → следующий», пока не разобрано
         frames_per_probe кадров. Затем автомату — «отводи» (cv_release), а проба досохраняется
@@ -320,11 +334,15 @@ class MicroscopeService:
             need = self._cv_frames_per_probe(cv, stage)
             deadline = time.time() + max(10, int(cv.get("dwell_timeout_sec", 120)))   # страховка
             run = self._cv_begin(cfg)
+            overexposed = False
             while (self._probe_at_glass() and len(run["overlays"]) < need
                    and time.time() < deadline):
                 img = self._grab_frame(worker, save_raw, fmt)
                 if img is None or not self._probe_at_glass():
                     break      # камера молчит / кадр пришёл уже после начала отвода (в движении)
+                if self._overexposed(img, worker, serial):
+                    overexposed = True
+                    break      # экспозиция та же — следующие кадры будут такими же белыми
                 self._cv_analyze_one(run, img)
                 done = len(run["overlays"])
                 if fsm:
@@ -337,7 +355,7 @@ class MicroscopeService:
             released = True
             if done:
                 self._cv_finish(run, stage, serial)
-            else:
+            elif not overexposed:      # пересвет: статус и запись в журнал уже есть
                 self._set_cv_status("no_frames", "нет кадров пробы: камера не отдала кадр")
                 log_event("microscope_service", "CV: кадры пробы не получены", "warn",
                           {"serial": serial})
@@ -402,6 +420,8 @@ class MicroscopeService:
                 self._set_cv_status("no_frames", "камера не отдала кадр за 5 с")
                 log_event("microscope_service", "CV: живой кадр не получен за 5 с", "warn")
                 return
+            if self._overexposed(img, worker, serial):
+                return
             run = self._cv_begin(self.cfg or {})
             self._cv_analyze_one(run, img)
             self._cv_finish(run, stage, serial)
@@ -455,6 +475,8 @@ class MicroscopeService:
                 # чем и как снята проба: паспорт модели от сайдкара + параметры, что реально ушли в infer
                 run["detector"] = resp.get("detector")
                 run["infer"] = {**inf, "seam_refine": bool(cv.get("seam_refine", True)) and inf["tiles"] > 1}
+                if float(cv.get("conf_big") or 0) > 0:      # порог для крупных (cv_analyzer) — тоже «как снята проба»
+                    run["infer"].update(conf_big=float(cv["conf_big"]), conf_big_k=float(cv.get("conf_big_k") or 4.0))
                 sv = self.fsm.sv if self.fsm else None
                 run["svs"].append(sv)
                 objs = resp.get("objects", [])
@@ -1009,6 +1031,30 @@ class MicroscopeService:
         if self.cfg is not None:
             self.cfg.setdefault("autocal", {})["count"] = int(count)
 
+    def _log_autocal(self, info):
+        """Колбэк FSM: калибровка нуля закончилась. Строка в autocal.log (каталог данных) — по журналу видно, на сколько
+        уползает ноль между калибровками (датчик − энкодер ДО) и сошлось ли ПОСЛЕ; краткий итог — в конфиг для UI."""
+        from paths import DATA_DIR
+
+        def pos(d):
+            return "-" if not d else "calc=%s enc=%s sensor=%s diff=%s" % (
+                d["calc"], d["enc"], d["sensor"], d["sensor"] - d["enc"])
+        try:
+            line = "%s\t%s\t%s\tfixes=%s\tzero_sensor=%s\tbefore: %s\tafter: %s\t%s\n" % (
+                info.get("ts"), info.get("trigger"), info.get("result"), info.get("fixes"),
+                info.get("zero_sensor"), pos(info.get("before")), pos(info.get("after")), info.get("reason") or "")
+            path = DATA_DIR / "autocal.log"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with open(path, "a", encoding="utf-8") as f:
+                f.write(line)
+        except Exception as e:
+            log_event("microscope_service", "Не удалось записать журнал автокалибровки", "warn", {"error": str(e)})
+        last = info.get("last")
+        if last:
+            plate_config.save({"autocal": {"last": last}})
+            if self.cfg is not None:
+                self.cfg.setdefault("autocal", {})["last"] = last
+
     def _log_approach_fail(self, info):
         """Колбэк FSM: подгон по датчику не сошёлся — пошли на след. этап. Пишем момент в
         ОТДЕЛЬНЫЙ файл (approach_fails.log в каталоге данных), чтобы разобрать/починить потом."""
@@ -1257,6 +1303,10 @@ class MicroscopeService:
         if op in ("goto", "steps", "shift", "home_start", "home_end", "find_zero"):
             p.motor_enable(m, True)
         fn()
+        if op == "stop":
+            # стоп не снимает в прошивке флаг «Поиска 0»: иначе следующий законченный ход обнулит координаты там,
+            # где кончился. Через 0,5 с автомат пошлёт «шаги 0» (мотор не едет)
+            self.fsm.request_unflag(m)
         return {"status": "ok", "m": m, "op": op, "value": value}
 
     def led_native(self, bright=None, freq=None, on=None):

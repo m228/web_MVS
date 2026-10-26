@@ -3,8 +3,10 @@
 // отданы в window.microRep — ими пользуется и «Сравнение» (08-compare.js).
 // Графики: точка — варка, ось X — варки подряд (дни — разделителями, без дыр на ночь и простой), линия — скользящая медиана по 7 варкам,
 // серая полоса — «обычно» (25–75 %) за период, красный пунктир — цели маточника (порог муки, коридор размера: cv.seed_target), точки за
-// ними — красные; отметки — смена модели и журнал изменений (вкладка «Сравнение»). Свои SVG без библиотек (на заводе CDN может не
-// открываться). PDF — тот же вид отдельным документом в скрытом iframe: страница приложения в печать не попадает, пустых листов нет.
+// ними — красные; отметки — смена модели и журнал изменений (вкладка «Сравнение»). Только на экране: фон — часть суток по началу варки
+// (значок над полосой), галочки в шапке графика — средние температура / разрежение варки поверх точек, своя шкала справа; под графиками —
+// табличка по частям суток. Свои SVG без библиотек (на заводе CDN может не открываться). PDF — тот же вид отдельным документом в скрытом
+// iframe: страница приложения в печать не попадает, пустых листов нет.
 "use strict";
 
   (function () {
@@ -13,7 +15,7 @@
     try { if (localStorage.getItem("microRepView") === "numbers") view = "numbers"; } catch (e) { }
     const dstr = (d) => d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0");
     const fmt = (v, d) => (v == null ? "—" : Number(v).toFixed(d == null ? 1 : d).replace(".", ",").replace(/^-/, "−"));
-    const range = (a, b, d) => (a == null ? "—" : fmt(a, d) + "–" + fmt(b, d));
+    const range = (a, b, d) => (a == null ? "—" : fmt(a, d) + (a < 0 || b < 0 ? " … " : "–") + fmt(b, d));     // «−0,80 … −0,79», а не «−0,80–−0,79»
     const esc = (s) => String(s == null ? "" : s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
     // ts «2026-10-05_17_21_24» → «05.10 17:21» / «17:21»; день «2026-10-05» → «вс 05.10»
     const tsLbl = (ts) => { const m = String(ts || "").match(/^\d{4}-(\d\d)-(\d\d)_(\d\d)_(\d\d)/); return m ? m[2] + "." + m[1] + " " + m[3] + ":" + m[4] : (ts || "—"); };
@@ -127,15 +129,48 @@
       return { ticks, step, d: d == null ? 2 : d, lo: y0, hi: y1, f: (v) => top + h - ((v - y0) / (y1 - y0)) * h };
     }
     const legend = (items) => '<span class="micro-rep-legend">' + items.map((it) => '<span><i class="lg lg-' + it[0] + '"></i>' + it[1] + "</span>").join("") + "</span>";
-    function chartHead(title, items) { return '<div class="micro-rep-chart__head"><b>' + title + "</b>" + legend(items) + "</div>"; }
+    function chartHead(title, items, extra) { return '<div class="micro-rep-chart__head"><b>' + title + "</b>" + legend(items) + (extra || "") + "</div>"; }
     const median = (v) => { const s = v.slice().sort((a, b) => a - b), n = s.length; return n ? (n % 2 ? s[(n - 1) / 2] : (s[n / 2 - 1] + s[n / 2]) / 2) : null; };
     const quant = (s, p) => { if (!s.length) return null; const k = (s.length - 1) * p, i = Math.floor(k); return s[i] + (s[Math.min(i + 1, s.length - 1)] - s[i]) * (k - i); };
     const MED_N = 7;            // скользящая медиана — по стольким типичным варкам (3 до, 3 после)
 
-    // общая рамка графиков по варкам: ось X — варки подряд; дни — разделителями и подписями, вода — полосой, смена модели и изменения — линиями
-    function seqFrame(rep, x, y, L, T, W, H) {
+    // части суток (report.DAY_PARTS: утро 08–14, день 14–20, вечер 20–02, ночь 02–08): значок 12×12 вокруг (0, 0) — рассвет, солнце, закат, луна
+    const PART_ICON = {
+      morning: '<path class="dpi-f" d="M-3,3.5A3,3 0 0 1 3,3.5Z"></path><path class="dpi-l" d="M-5.5,3.5H5.5M0,-1V-3.4M-3.4,0L-4.8,-1.3M3.4,0L4.8,-1.3"></path>',
+      day: '<circle class="dpi-f" r="2.6"></circle><path class="dpi-l" d="M0,-4.3V-5.8M0,4.3V5.8M-4.3,0H-5.8M4.3,0H5.8M3,-3L4.1,-4.1M-3,-3L-4.1,-4.1M3,3L4.1,4.1M-3,3L-4.1,4.1"></path>',
+      evening: '<path class="dpi-f" d="M-3,3.5A3,3 0 0 1 3,3.5Z"></path><path class="dpi-l" d="M-5.5,3.5H5.5M-2,-3.6L0,-1.6L2,-3.6"></path>',
+      night: '<path class="dpi-f" d="M-0.09,-4.6A4.6,4.6 0 1 0 4.21,1.85A3.9,3.9 0 0 1 -0.09,-4.6Z"></path>',
+    };
+    const partOf = (rep, key) => (rep.day_parts || []).find((p) => p.key === key);
+    const partHours = (p) => String(p.from).padStart(2, "0") + ":00–" + String(p.to).padStart(2, "0") + ":00";
+    const partIcon = (key) => '<svg class="micro-rep-dpi" viewBox="-6 -6 12 12" width="12" height="12" aria-hidden="true">' + (PART_ICON[key] || "") + "</svg>";
+    // наложение режима варки на графики по варкам: галочки в шапке, у каждого графика свои, запоминаются; только на экране.
+    // span — наименьший размах правой шкалы: шум ниже точности ПЛК (разрежение — шаг 0,1 бар) не растягивается в «скачки»
+    const OVER = [
+      { key: "temp", field: "temp_avg", name: "температура", unit: "°C", d: 1, span: 4, tip: "Средняя температура в аппарате за варку (по пробам стадий 3–9), шкала справа" },
+      { key: "vac", field: "vac_avg", name: "разрежение", unit: "бар", d: 2, span: 0.2, tip: "Среднее разрежение сверху за варку (по пробам стадий 3–9; ПЛК отдаёт с шагом 0,1 бар), шкала справа" },
+    ];
+    const OVER_KEY = "microRepOver1";
+    let over = {};
+    try { over = JSON.parse(localStorage.getItem(OVER_KEY) || "{}") || {}; } catch (e) { }
+    const overOn = (ck, ok) => !!(over[ck] && over[ck][ok]);
+    const OV_W = 44;            // ширина правой шкалы одного наложения, px
+
+    // общая рамка графиков по варкам: ось X — варки подряд; дни — разделителями и подписями, вода — полосой, смена модели и изменения — линиями;
+    // parts — фон частей суток со значками над полосами (на экране)
+    function seqFrame(rep, x, y, L, T, W, H, parts) {
       const B = rep.boils, n = B.length, step = W / n;
       let s = "";
+      for (let i = 0; parts && i < n;) {                  // части суток: подряд идущие варки одной части — одна полоса, значок — если полоса шире 14 px
+        let j = i; while (j + 1 < n && B[j + 1].part === B[i].part) j++;
+        const p = partOf(rep, B[i].part), x0 = L + i * step, bw = (j - i + 1) * step;
+        if (p) {
+          s += '<rect class="dp dp-' + p.key + '" x="' + x0.toFixed(1) + '" y="' + T + '" width="' + bw.toFixed(1) + '" height="' + H + '"></rect>';
+          if (bw >= 14) s += '<g class="dpi" transform="translate(' + (x0 + bw / 2).toFixed(1) + "," + (T - 13) + ')" data-tip="' + esc(p.name + " " + partHours(p) + " — по началу варки") + '">' +
+            '<rect class="hit" x="-7" y="-7" width="14" height="14"></rect>' + PART_ICON[p.key] + "</g>";
+        }
+        i = j + 1;
+      }
       for (let i = 0; i < n;) {                           // вода: подряд идущие варки с водой — одна полоса
         if (B[i].water !== true) { i++; continue; }
         let j = i; while (j + 1 < n && B[j + 1].water === true) j++;
@@ -177,17 +212,21 @@
       return tsLbl(b.start) + " · " + dur(b.duration_min) + "\nмука финиша " + fmt(b.fines_avg, 1) + " %" + (b.fines_lo != null ? " (95 %: " + range(b.fines_lo, b.fines_hi, 1) + ")" : "") +
         "\nразмер финиша " + fmt(b.fin_um, 0) + " мкм · однородность " + fmt(b.fin_cv, 1) + " % · сростки " + fmt(b.fin_agg_pct, 1) + " %" +
         (b[sk] != null ? "\n" + seedName(rep) + " " + fmt(b[sk], 0) + " мин" : "") +
-        (b.water != null ? "\nвода: " + (b.water ? "да" : "нет") : "") + (b.flag ? "\n" + FLAG[b.flag][0] + " — в итоги не входит" : "");
+        (b.water != null ? "\nвода: " + (b.water ? "да" : "нет") : "") +
+        (b.temp_avg != null || b.vac_avg != null ? "\n" + OVER.filter((o) => b[o.field] != null).map((o) => o.name + " " + fmt(b[o.field], o.d) + " " + o.unit).join(" · ") : "") +
+        (b.flag ? "\n" + FLAG[b.flag][0] + " — в итоги не входит" : "");
     }
     const extras = (rep) => [].concat(rep.boils.some((b) => b.water === true) ? [["water", "вода на стабилизации"]] : [], (rep.segments || []).length > 1 ? [["model", "смена модели"]] : [],
       (rep.changes || []).length ? [["change", "изменение"]] : []);
 
-    // график одного показателя по варкам: точки, «обычно» периода, скользящая медиана, цели маточника
-    function chartMetric(rep, w, c) {
+    // график одного показателя по варкам: точки, «обычно» периода, скользящая медиана, цели маточника; на экране — части суток и наложения
+    function chartMetric(rep, w, c, opt) {
       const val = c.val ? (b) => c.val(b, rep) : (b) => b[c.key];
       const B = rep.boils, P = B.map((b, i) => ({ b, i, v: val(b) })).filter((p) => p.v != null);
       if (P.length < 2) return "";
-      const L = 44, R = 12, T = 26, H = 130, W = w - L - R, hh = T + H + 22, step = W / B.length;
+      const screen = !(opt && opt.print), have = OVER.filter((o) => B.filter((b) => b[o.field] != null).length >= 2);
+      const ovs = screen ? have.filter((o) => overOn(c.key, o.key)) : [];
+      const L = 44, R = 12 + ovs.length * OV_W, T = 26, H = 130, W = w - L - R, hh = T + H + 22, step = W / B.length;
       const x = (i) => L + (i + 0.5) * step, t = tg(rep);
       const typ = P.filter((p) => !p.b.flag), tv = typ.map((p) => p.v).sort((a, b) => a - b);
       const lim = c.key === "fines_avg" ? [t.fines_max] : c.corridor ? [t.size_min_um, t.size_max_um] : [];
@@ -197,7 +236,7 @@
       let lo = Math.min(...ext), hi = Math.max(...ext); const pad = (hi - lo) * 0.08 || 1;
       lo = c.zero ? 0 : lo - pad; hi += pad;
       const y = yScale(lo, hi, T, H, 4);
-      let s = seqFrame(rep, x, y, L, T, W, H);
+      let s = seqFrame(rep, x, y, L, T, W, H, screen);
       if (tv.length >= 4) {                               // «обычно» за период: 25–75 % типичных варок
         const q1 = quant(tv, 0.25), q3 = quant(tv, 0.75);
         s += '<rect class="qband" x="' + L + '" y="' + y.f(q3).toFixed(1) + '" width="' + W + '" height="' + Math.max(1, y.f(q1) - y.f(q3)).toFixed(1) + '"><title>обычно ' + range(q1, q3, c.d) + "</title></rect>";
@@ -213,6 +252,24 @@
         const pts = typ.map((p, k) => x(p.i).toFixed(1) + "," + y.f(median(typ.slice(Math.max(0, k - h), k + h + 1).map((q) => q.v))).toFixed(1));
         s += '<polyline class="dline" points="' + pts.join(" ") + '"></polyline>';
       }
+      ovs.forEach((o, k) => {                             // наложение под точками: своя шкала справа (числа — приглушённые, цвет ряда — у значка над шкалой)
+        const v = B.map((b) => b[o.field]), vv = v.filter((a) => a != null);
+        const lo = Math.min(...vv), hi = Math.max(...vv), mid = (lo + hi) / 2, half = Math.max((hi - lo) * 0.6, o.span / 2);
+        const oy = yScale(mid - half, mid + half, T, H, 4), ax = L + W + k * OV_W;
+        s += '<line class="axis" x1="' + ax + '" x2="' + ax + '" y1="' + T + '" y2="' + (T + H) + '"></line>' +
+          '<path class="ovm ov-' + o.key + '" d="M' + (ax + 7) + "," + (T - 12) + "l3,3l-3,3l-3,-3z\"></path><text class=\"olab\" x=\"" + (ax + 13) + '" y="' + (T - 9) + '" dy="0.32em">' + o.unit + "</text>";
+        oy.ticks.forEach((tk) => { const yy = oy.f(tk).toFixed(1); s += '<line class="axis" x1="' + ax + '" x2="' + (ax + 3) + '" y1="' + yy + '" y2="' + yy + '"></line><text class="olab" x="' + (ax + 5) + '" y="' + yy + '" dy="0.32em">' + fmt(tk, oy.d) + "</text>"; });
+        let seg = [];
+        const flush = () => { if (seg.length > 1) s += '<polyline class="ov ov-' + o.key + '" points="' + seg.join(" ") + '"></polyline>'; seg = []; };
+        v.forEach((a, i) => { if (a == null) flush(); else seg.push(x(i).toFixed(1) + "," + oy.f(a).toFixed(1)); });
+        flush();
+        v.forEach((a, i) => {
+          if (a == null) return;
+          const xx = x(i), yy = oy.f(a);
+          s += '<g data-tip="' + esc(tsLbl(B[i].start) + " · " + o.name + " " + fmt(a, o.d) + " " + o.unit) + '"><path class="ovm ov-' + o.key + '" d="M' + xx.toFixed(1) + "," + (yy - 3).toFixed(1) +
+            'l3,3l-3,3l-3,-3z"></path><circle class="hit" cx="' + xx.toFixed(1) + '" cy="' + yy.toFixed(1) + '" r="6"></circle></g>';
+        });
+      });
       const r = Math.max(1.8, Math.min(3.5, step * 0.4));
       P.forEach((p) => {
         const xx = x(p.i).toFixed(1), yy = y.f(p.v).toFixed(1), cls = "dot s1" + (p.b.flag ? " is-off" : "") + (isBad(p.v) ? " bad" : "");
@@ -220,7 +277,9 @@
       });
       const items = [["dot1", "варка"]].concat(P.some((p) => p.b.flag) ? [["off", "не в итогах"]] : [], [["line", "медиана по " + MED_N + " варкам"], ["qband", "обычно"]],
         c.whisk ? [["whisk", "95 %"]] : [], lim.length ? [["lim", c.key === "fines_avg" ? "порог" : "коридор"], ["bad", "за целью"]] : [], extras(rep));
-      return '<div class="micro-rep-chart">' + chartHead(titleOf(c, rep), items) +
+      const box = screen && have.length ? '<span class="micro-rep-over">' + have.map((o) => '<label title="' + esc(o.tip) + '"><input type="checkbox" data-over="' + c.key + ":" + o.key + '"' +
+        (overOn(c.key, o.key) ? " checked" : "") + ' /><i class="lg-ov ov-' + o.key + '"></i>' + o.name + "</label>").join("") + "</span>" : "";
+      return '<div class="micro-rep-chart">' + chartHead(titleOf(c, rep), items, box) +
         '<svg viewBox="0 0 ' + w + " " + hh + '" width="' + w + '" height="' + hh + '" role="img" aria-label="' + esc(titleOf(c, rep)) + '">' + s + "</svg></div>";
     }
 
@@ -286,7 +345,8 @@
       }
       if (view === "charts") {
         const w = opt.width;
-        h += '<div class="micro-rep-charts">' + stateOf(CHARTS, CHARTS_KEY).filter((c) => c.on).map((c) => (c.key === "sieve" ? chartSieve(rep, w) : chartMetric(rep, w, c))).join("") + "</div>";
+        h += '<div class="micro-rep-charts">' + stateOf(CHARTS, CHARTS_KEY).filter((c) => c.on).map((c) => (c.key === "sieve" ? chartSieve(rep, w) : chartMetric(rep, w, c, opt))).join("") + "</div>";
+        if (!opt.print) h += partsHtml(rep);
       } else h += numbersHtml(rep, opt, cols, vis, on);
 
       h += '<div class="micro-rep-note"><b>Как читать</b><ul>' +
@@ -294,6 +354,8 @@
         "<li>Главное число — медиана, то есть типичная варка; «обычно» — половина варок лежит между этими числами (25–75 %).</li>" +
         (view === "charts" ? "<li>На графиках: точка — варка (подряд, дни — разделителями), линия — медиана по " + MED_N + " соседним варкам, серая полоса — «обычно» за период. " +
           "Точка ниже или выше полосы — варка не как все; линия ушла из полосы — процесс сдвинулся.</li>" : "") +
+        (view === "charts" && !opt.print ? "<li>Фон — часть суток по началу варки (смены 08–20 и 20–08 пополам): утро, день, вечер, ночь — значок над полосой. " +
+          "Галочки «температура» / «разрежение» в шапке графика — средние за варку по пробам, шкала справа; в PDF не идут.</li>" : "") +
         "<li>Цели маточника: мука не выше " + fmt(T.fines_max, 0) + " %, размер на финише " + fmt(T.size_min_um, 0) + "–" + fmt(T.size_max_um, 0) + " мкм — красным всё, что за ними (меняются на вкладке «CV»).</li>" +
         "<li>Усы у муки — 95 % интервал варки: если интервалы двух варок перекрываются, разница между ними — шум пробы, а не процесс.</li>" +
         "<li>Однородность — разброс размера кристаллов в пробе: меньше — кристалл ровнее. Сростки — доля сросшихся кристаллов по числу.</li>" +
@@ -304,6 +366,21 @@
         (segs.length === 1 && !segs[0].model ? "<li>Модель распознавания в пробах не записана (пробы до 1.9.76): если модель в этом периоде меняли, цифры до и после смены не сравнивать.</li>" : "") +
         "<li>Варка входит в период по времени начала; учитываются варки не короче " + rep.min_probes + " проб.</li></ul></div>";
       return h;
+    }
+
+    // под графиками (только на экране): итоги по частям суток — честная проверка «день / ночь» вместо разглядывания фона
+    function partsHtml(rep) {
+      const P = (rep.day_parts || []).filter((p) => p.boils);
+      if (P.length < 2) return "";
+      const cell = (m, d, isBad) => (!m || m.median == null ? "—" : bad(isBad, fmt(m.median, d)) + (m.n >= 4 ? ' <small class="micro-ci">' + range(m.q1, m.q3, d) + "</small>" : ""));
+      const cols = [["варок", (p) => p.boils], ["мука финиша, %", (p) => cell(p.fines_avg, 1, finesBad(rep, p.fines_avg.median))],
+        ["размер финиша, мкм", (p) => cell(p.fin_um, 0, sizeBad(rep, p.fin_um.median))]].concat(
+        OVER.filter((o) => P.some((p) => p[o.field] && p[o.field].n)).map((o) => [o.name + ", " + o.unit, (p) => cell(p[o.field], o.d, false)]));
+      return '<section class="micro-rep-sec"><div class="micro-rep-h">По частям суток <small>по началу варки · медиана по типичным варкам, серым — «обычно» (25–75 %): ' +
+        "перекрываются — разница частей суток в шуме пробы, а не в процессе</small></div>" +
+        '<div class="micro-rep-wrap"><table class="micro-rep-table micro-rep-table--parts"><thead><tr><th>часть суток</th>' + cols.map((c) => "<th>" + c[0] + "</th>").join("") + "</tr></thead><tbody>" +
+        P.map((p) => "<tr><td>" + partIcon(p.key) + p.name + ' <small class="micro-ci">' + partHours(p) + "</small></td>" + cols.map((c) => "<td>" + c[1](p) + "</td>").join("") + "</tr>").join("") +
+        "</tbody></table></div></section>";
     }
 
     // вид «числа»: по дням (по неделям — для длинного периода) и все варки
@@ -450,6 +527,13 @@
       if (!g("repGoBtn")) return;
       const out = g("repOut");
       out.addEventListener("click", (e) => { const td = e.target.closest("[data-boil]"); if (td) openBoil(td.dataset.boil, g("repHint")); });
+      out.addEventListener("change", (e) => {                       // галочка наложения в шапке графика: запомнить и перерисовать без запроса
+        const i = e.target.closest("input[data-over]"); if (!i) return;
+        const [ck, ok] = i.dataset.over.split(":");
+        over[ck] = { ...(over[ck] || {}), [ok]: i.checked };
+        try { localStorage.setItem(OVER_KEY, JSON.stringify(over)); } catch (e2) { }
+        if (lastRep && lastRep.boils.length) render(lastRep);
+      });
       attachTip(out);
       // графики по ширине панели: вкладку открыли (была 0) или окно растянули — перерисовать
       if (typeof ResizeObserver === "function") {

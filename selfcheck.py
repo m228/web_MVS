@@ -179,6 +179,18 @@ class FakeModbus:
             except OSError:
                 break
 
+    def reboot(self, addrs):
+        """«Перезагрузка платы»: регистры addrs — в умолчания (0), открытые соединения рвутся."""
+        for a in addrs:
+            self.regs[a] = 0
+        conns, self._conns = self._conns, []
+        for c in conns:
+            try:
+                c.shutdown(socket.SHUT_RDWR)
+                c.close()
+            except OSError:
+                pass
+
     def close(self):
         self._running = False
         try:
@@ -348,7 +360,7 @@ def _js_api_routes():
 MODULES = [
     "paths", "logger", "camera_core", "camera_core.gentl_env", "camera_core.utils", "camera_core.imaging",
     "camera_core.base_worker", "camera_core.gige_worker", "camera_core.rtsp_worker", "camera_core.camera_manager",
-    "sdk_gige", "dahua_control", "net_tools", "rtsp_store",
+    "sdk_gige", "camera_params", "dahua_control", "net_tools", "rtsp_store",
     "save_settings", "plate_config", "sv_source", "microscope_plc", "microscope_fsm",
     "microscope_service", "cv_analyzer", "cv_volume", "substages", "db", "report", "boil_compare", "cv_fracture", "cv_client", "video_client", "services", "cv_store", "boil_archive", "fracture_lab",
     "updater", "autostart", "diag", "app", "mvsdk",
@@ -382,6 +394,7 @@ API = {
     "net_tools": ["status", "enable_jumbo", "disable_jumbo", "enable_filter", "disable_filter"],
     "dahua_control": ["parse_rtsp_credentials", "get_capabilities", "set_white_light"],
     "sdk_gige": ["init", "available", "enum_gige", "GigeSdkStream", "read_ranges"],
+    "camera_params": ["saved", "resolve", "store", "mismatches", "overexposure"],
     "logger": ["log_event", "get_events"],
     "paths": ["BUNDLE_DIR", "DATA_DIR", "read_version"],
     "app": ["app"],
@@ -616,6 +629,168 @@ def _sdk():
     return "ok"
 
 
+class _FakeGigeCam:
+    """Фейковая GigE-камера для sdk_gige: узлы живут «в камере» (общие для всех хэндлов), как в
+    настоящей; power_cycle() — отключение питания: камера грузится со своего UserSet."""
+    BOOT = {"Width": 64, "Height": 48, "OffsetX": 0, "OffsetY": 0, "PixelFormat": "Mono8",
+            "ExposureAuto": "Off", "ExposureTime": 5000.0, "GainAuto": "Off", "Gain": 0.0,
+            "AcquisitionFrameRate": 1.0}
+    nodes = dict(BOOT)
+    writes = []
+    ignore_exposure = 0          # столько следующих записей ExposureTime камера «молча» не примет
+
+    @classmethod
+    def power_cycle(cls):
+        cls.nodes = dict(cls.BOOT)
+        cls.writes = []
+
+    def _set(self, name, val):
+        type(self).writes.append(name)
+        if name == "ExposureTime" and type(self).ignore_exposure:
+            type(self).ignore_exposure -= 1
+            return 0
+        type(self).nodes[name] = val
+        return 0
+
+    def MV_CC_CreateHandle(self, info): return 0
+    def MV_CC_OpenDevice(self): return 0
+    def MV_CC_CloseDevice(self): return 0
+    def MV_CC_DestroyHandle(self): return 0
+    def MV_CC_StartGrabbing(self): return 0
+    def MV_CC_StopGrabbing(self): return 0
+    def MV_CC_GetOptimalPacketSize(self): return 1500
+    def MV_GIGE_SetResend(self, *a): return 0
+    def MV_CC_SetBoolValue(self, name, val): return 0
+    def MV_CC_SetIntValue(self, name, val):
+        return self._set(name, int(val)) if name in type(self).nodes else 0
+    def MV_CC_SetFloatValue(self, name, val): return self._set(name, float(val))
+    def MV_CC_SetEnumValueByString(self, name, val): return self._set(name, str(val))
+
+
+def _fake_gige_sdk():
+    """Подменить SDK в sdk_gige на фейковую камеру; возвращает функцию отката."""
+    import types
+    import numpy as np
+    import sdk_gige
+    from camera_core import gige_worker
+    nodes = lambda: _FakeGigeCam.nodes
+    saved = {k: getattr(sdk_gige, k) for k in ("_sdk", "available", "_int_node", "_float_node", "_enum_node")}
+    saved_grab, saved_info = sdk_gige.GigeSdkStream.grab, gige_worker._sdk_device_info
+    sdk_gige._sdk = types.SimpleNamespace(MvCamera=_FakeGigeCam)
+    sdk_gige.available = lambda: True
+    sdk_gige._int_node = lambda c, k: {"value": int(nodes()[k])} if k in nodes() else None
+    sdk_gige._float_node = lambda c, k: {"value": float(nodes()[k])} if k in nodes() else None
+    sdk_gige._enum_node = lambda c, k: {"value": nodes()[k], "options": []} if k in nodes() else None
+    sdk_gige.GigeSdkStream.grab = lambda self, timeout_ms=1000: (8, 8, "Mono8", np.full(64, 100, np.uint8))
+    gige_worker._sdk_device_info = lambda serial: object()
+
+    def undo():
+        for k, v in saved.items():
+            setattr(sdk_gige, k, v)
+        sdk_gige.GigeSdkStream.grab = saved_grab
+        gige_worker._sdk_device_info = saved_info
+    return undo
+
+
+def _one_frame(worker, **kw):
+    """Открыть поток воркера (как /api/camera/stream), взять один кадр и закрыть."""
+    gen = worker.generate(**kw)
+    chunk = next(gen)
+    gen.close()
+    assert chunk.startswith(b"--frame"), chunk[:20]
+
+
+@check("Камеры", "настройки камеры: «Применить» сохраняет то, что камера приняла; после отключения питания пишутся обратно")
+def _camera_params_restore():
+    import types
+    import camera_params
+    import plate_config
+    from camera_core import CameraWorker
+    serial = "SELFCAM-PARAMS"
+    plate_config.save({"camera_serial": serial, "camera_params": {}})
+    undo = _fake_gige_sdk()
+    try:
+        _FakeGigeCam.power_cycle()
+        w = CameraWorker(serial, types.SimpleNamespace(check=lambda: True))
+        # Макс настроил: экспозиция 170 на странице, усиление 6 дБ (в камере) → «Применить»
+        _FakeGigeCam.nodes["Gain"] = 6.0
+        _one_frame(w, exposure_auto="Off", exposure_time=170, fps=1, save=True)
+        s = camera_params.saved(serial)
+        assert s and s["exposure_time"] == 170 and s["gain"] == 6.0 and s["exposure_auto"] == "Off", s
+        # отключение питания: камера грузится с 5000 / 0 дБ; страница при автоподключении шлёт то,
+        # что прочитала с камеры (5000) — в камеру всё равно должно уйти сохранённое
+        _FakeGigeCam.power_cycle()
+        assert _FakeGigeCam.nodes["ExposureTime"] == 5000.0
+        _one_frame(w, exposure_auto="Off", exposure_time=5000, fps=1)
+        n = _FakeGigeCam.nodes
+        assert n["ExposureTime"] == 170 and n["Gain"] == 6.0, "после перезапуска в камере %s / %s" % (n["ExposureTime"], n["Gain"])
+        assert camera_params.saved(serial)["exposure_time"] == 170, "автоподключение перезаписало сохранённое"
+        assert w.current_config.get("exposure_time") == 170, w.current_config
+        # камера молча не приняла первую запись выдержки → обратное чтение ловит и повторяет
+        _FakeGigeCam.power_cycle()
+        _FakeGigeCam.ignore_exposure = 1
+        _one_frame(w)
+        assert _FakeGigeCam.nodes["ExposureTime"] == 170, "повтор не сработал"
+        assert _FakeGigeCam.writes.count("ExposureTime") == 2, _FakeGigeCam.writes
+        # не принимает совсем → после всех попыток ошибка, поток всё равно идёт
+        _FakeGigeCam.power_cycle()
+        _FakeGigeCam.ignore_exposure = 99
+        import sdk_gige
+        st = sdk_gige.GigeSdkStream(object())
+        st.open(camera_params.resolve(serial, {}))
+        assert st.mismatch.get("exposure_time") == [170, 5000.0], st.mismatch
+        assert _FakeGigeCam.writes.count("ExposureTime") == camera_params.APPLY_TRIES
+        st.close()
+        _FakeGigeCam.ignore_exposure = 0
+        # замена камеры: чужие сохранённые значения не пишутся
+        assert camera_params.resolve("OTHER-CAM", {"exposure_time": 900}) == {"exposure_time": 900}
+        plate_config.save({"camera_serial": "OTHER-CAM"})
+        assert camera_params.saved("OTHER-CAM") is None
+    finally:
+        undo()
+        plate_config.save({"camera_serial": "", "camera_params": {}})
+    return "170 мкс / 6 дБ пережили «отключение питания»; повтор при молчаливом отказе; ошибка после %d попыток" % camera_params.APPLY_TRIES
+
+
+@check("CV", "пересвет: белый кадр не идёт в пробу, статус «пересвет», обычный кадр проходит")
+def _cv_overexposed():
+    import cv2
+    import numpy as np
+    import camera_params
+    import cv_client
+    import cv_store
+    from camera_core import manager
+    from microscope_service import MicroscopeService
+    normal, _ = synth_frame()
+    white = np.full((480, 640, 3), 252, np.uint8)
+    cv2.circle(white, (200, 200), 40, (90, 90, 90), -1)          # силуэты кристаллов на белом поле
+    assert not camera_params.overexposure(normal)[0], camera_params.overexposure(normal)
+    over, med, _ = camera_params.overexposure(white)
+    assert over and med >= camera_params.OVER_MEDIAN, med
+    serial = "SELF-OVER"
+    worker = manager.get(serial)
+    worker.running = True
+    orig = (cv_client.infer, cv_client.health)
+    cv_client.health = lambda url, timeout=1.5: {"ok": True}
+    cv_client.infer = lambda *a, **k: {"objects": [], "timing": {}}
+    try:
+        ms = MicroscopeService()                 # не start(): ни платы, ни сокетов
+        ms.cfg = {"camera_serial": serial, "cv": {"frames_per_probe": 3, "dwell_timeout_sec": 10}}
+        ms._probe_at_glass = lambda: True
+        ms._grab_frame = lambda *a, **k: white
+        ms._cv_probe_session()
+        st = ms.cv_status()
+        assert st["state"] == "overexposed", st
+        assert cv_store.get_last(serial) is None, "пересвеченная проба сохранилась"
+        ms._grab_frame = lambda *a, **k: normal
+        ms._cv_probe_session()
+        assert cv_store.get_last(serial), "обычная проба не сохранилась: %s" % ms.cv_status()
+    finally:
+        worker.running = False
+        cv_client.infer, cv_client.health = orig
+    return "медиана белого кадра %d, обычного %d" % (med, camera_params.overexposure(normal)[1])
+
+
 # =====================================================================================
 # 5. Микроскоп: плата и ПЛК = встроенный Modbus-сервер, автомат живой
 # =====================================================================================
@@ -679,6 +854,54 @@ def _plate_client():
     return "поллов=%d, %s=123" % (client.status["poll_count"], name)
 
 
+@check("Микроскоп", "PlateClient: после перезагрузки платы / обрыва TCP блок OUT переписывается, goto не уходит раньше цели 1253")
+def _plate_out_resync():
+    from microscope_plc import PlateClient
+    fake = fake_modbus()
+    cfg = _plate_cfg(fake)
+    base = cfg["write_base"]
+    out_regs = range(base, base + cfg["block_len"])
+    sp = base + int(cfg["out"]["m1_sp"])
+    led = base + int(cfg["out"]["led_bright"])
+    cmd = int(cfg["motor"]["cmd_reg"]["1"])
+    # 1) живой цикл: плата перезагрузилась (регистры 0, TCP порван) — pymodbus переподключается сам,
+    #    _connected не падает; цель М1 и яркость должны вернуться в плату без новых команд
+    client = PlateClient(cfg)
+    client.start()
+    try:
+        assert _wait(lambda: client.status["connected"]), "нет связи: %s" % client.status.get("error")
+        client.write_m1_sp(40000)
+        client.set_led(bright=37)
+        assert _wait(lambda: fake.regs[sp] == 4000 and fake.regs[led] == 37), "OUT не записан до перезагрузки"
+        n = len(fake.writes)
+        fake.reboot(out_regs)
+        assert _wait(lambda: fake.regs[sp] == 4000 and fake.regs[led] == 37), \
+            "после переподключения OUT не переписан: 1253=%s 1257=%s" % (fake.regs[sp], fake.regs[led])
+        owned = {base + int(i) for i in cfg["out"].values()}
+        alien = [w for w in fake.writes[n:] if w[0] in out_regs and w[0] not in owned]
+        assert not alien, "переписаны слова OUT вне карты out (смысл в прошивке не разобран): %s" % alien
+    finally:
+        client.stop()
+    # 2) сокет закрыт сбоем чтения, а переподключится уже сама команда goto: цель в 1253 — раньше 1248
+    c2 = PlateClient(cfg)
+    try:
+        assert c2._ensure_connected(), "нет TCP"
+        c2.write_m1_sp(30000)
+        c2._write_changed_out()
+        fake.reboot(out_regs)
+        c2._client.close()          # как pymodbus после неудачного чтения: сокета нет
+        c2._write_changed_out()     # без сокета менять нечего — ничего не пишет
+        n = len(fake.writes)
+        c2.cmd1(0x1006)
+        c2._flush_pending()
+        tail = fake.writes[n:]
+        assert (cmd, 0x1006) in tail, "goto не ушёл: %s" % tail
+        assert (sp, 3000) in tail[:tail.index((cmd, 0x1006))], "goto ушёл раньше цели в 1253: %s" % tail
+    finally:
+        c2._close_client()
+    return "1253/1257 вернулись после обрыва; goto после цели"
+
+
 @check("Микроскоп", "SvSource: читает СВ и стадию из ПЛК (Modbus-эмулятор)")
 def _sv_source():
     from sv_source import SvSource
@@ -706,61 +929,209 @@ def _sv_source():
     return "sv=52.5 stage=7, 1 запрос на опрос"
 
 
-@check("Микроскоп", "Автокалибровка нуля М1: энкодер 0±5 + аналог → set_zero → отвод; 3 попытки; провал не трогает ноль")
+class _FwM1:
+    """Мотор М1 так, как его ведёт прошивка платы (разбор fw-crc-l.bin, tasks/todo.md п. 2b): x — где он на самом деле
+    (датчик = gain·x + s_off), упор у стекла x_stop (дальше шаги теряются), calc — расчётная (шаги, не ниже 0),
+    enc — энкодер (реальный ход). «Поиск 0» — ход в расчётную 0 на 600 шаг/с (из 0 — дожим ещё 2000 шагов), ноль в
+    конце штатного хода; команды на ходу — в очередь; стоп флаг поиска не снимает, «шаги 0» снимает; блокировки
+    бит 0 (у стекла расчётная := датчик при расхождении > 100) и бит 5 (энкодер < 0 → оба 0). Шаг 2,5 мкм."""
+    STEP = 2.5
+
+    def __init__(self, x=2000.0, calc=2000.0, enc=2000.0, x_stop=-30.0, gain=1.0, noise=0.0):
+        import random
+        self.x, self.calc, self.enc, self.x_stop, self.gain, self.noise = x, calc, enc, x_stop, gain, noise
+        self.flag, self.queue, self.run, self.fwd, self.pos_set = False, [], None, True, 0
+        self.pending, self.calls, self.bad = [], [], []
+        self.status = {"connected": True}
+        self.rnd = random.Random(1)
+        self._tele()
+
+    def __getattr__(self, n):                      # LED, клапаны, М2 — только запоминаем
+        return lambda *a, **k: self.calls.append((n, a))
+
+    def _c(self, m, op, arg=None):
+        self.calls.append(("motor_" + op, (m, arg)))
+        if m == 1:
+            self.pending.append((op, arg))
+
+    def motor_enable(self, m, on): self.calls.append(("motor_enable", (m, on)))
+    def motor_direction(self, m, fwd): self.fwd = bool(fwd) if m == 1 else self.fwd
+    def write_m1_sp(self, um): self.pos_set = int(um) // 10 * 10
+    def write_m2_sp(self, um): pass
+    def motor_find_zero(self, m): self._c(m, "find_zero")
+    def motor_set_zero(self, m): self._c(m, "set_zero")
+    def motor_stop(self, m): self._c(m, "stop")
+    def motor_steps(self, m, n): self._c(m, "steps", int(n))
+    def motor_shift(self, m, um): self._c(m, "shift", (int(um) // 10 * 10) * (1 if self.fwd else -1))
+    def cmd1(self, code): self._c(1, "goto", self.pos_set)
+
+    def sensor(self):
+        return self.gain * self.x
+
+    def _start(self, op, arg):
+        if op == "find_zero":
+            if self.calc < self.STEP:
+                self.calc = 2000 * self.STEP
+            self.flag, self.run = True, [-self.calc, 1500.0]
+        elif op == "goto":
+            self.run = [arg - self.calc, 1500.0 if self.flag else 1000.0]
+        elif op == "shift":
+            self.run = [float(arg), 1000.0]
+        elif op == "steps":
+            self.run = [arg * self.STEP * (1 if self.fwd else -1), 1000.0]
+        if abs(self.run[0]) < self.STEP:
+            self.run, self.flag = None, False
+
+    def step(self):
+        cmds, self.pending = ([] if not self.status["connected"] else self.pending), []
+        if len(cmds) > 1:
+            self.bad.append("две команды в 1248 за такт: %s" % cmds)
+        for op, arg in cmds:
+            if op == "stop":
+                self.run, self.queue = None, []
+            elif op == "set_zero":
+                if self.run:
+                    self.bad.append("«Установить 0» на ходу")
+                self.calc = self.enc = 0.0
+            elif self.run:
+                if op == "find_zero":
+                    self.bad.append("«Поиск 0» на ходу")
+                self.queue.append((op, arg))
+            else:
+                self._start(op, arg)
+        if self.run:
+            d = max(-self.run[1] * 0.1, min(self.run[1] * 0.1, self.run[0]))
+            self.run[0] -= d
+            self.calc = max(0.0, self.calc + d)
+            nx = max(self.x_stop, self.x + d)
+            self.enc += nx - self.x
+            self.x = nx
+            if abs(self.run[0]) < 1e-6:
+                self.run = None
+                if self.flag:
+                    self.calc = self.enc = 0.0
+                    self.flag = False
+        if self.enc < 0:
+            self.enc = self.calc = 0.0
+        s = self.sensor()
+        if s < 1000 and abs(self.calc - s) > 100:
+            self.calc = s if s >= 0 else 1e7
+        if not self.run and self.queue:
+            self._start(*self.queue.pop(0))
+        self._tele()
+
+    def _tele(self):
+        ai = round(self.sensor() + self.rnd.uniform(-self.noise, self.noise)) * 10
+        self.telemetry = {"pos1": int(self.calc / 10) * 10, "pos1_enc": int(self.enc / 10) * 10, "pos2": 0,
+                          "pos1_ai": None if self.__dict__.get("no_ai") else ai}   # __getattr__ ловит всё — только __dict__
+
+
+@check("Микроскоп", "Автокалибровка нуля М1 на модели прошивки: команды только стоя, сдвиг по датчику, «все три "
+                    "одинаковые», масштаб на отводе, стоп/нет связи/проба поверх, пропарка")
 def _autocal():
     import copy
     import plate_config
-    from microscope_fsm import MicroscopeFSM, CAL_ATTEMPTS
+    from microscope_fsm import MicroscopeFSM
 
-    class _Plate:
-        def __init__(self):
-            self.telemetry = {"pos1": 0, "pos1_ai": 0, "pos1_enc": 0}
-            self.status = {"connected": True}
-            self.calls = []
-
-        def __getattr__(self, n):
-            return lambda *a, **k: self.calls.append(n)
-
-    def run(enc_at_attempt, ai):
-        cfg = copy.deepcopy(plate_config.load())
-        cfg.setdefault("autocal", {})["enabled"] = True
-        pl = _Plate()
+    def mk(manual=False, **kw):
+        cfg = copy.deepcopy(plate_config.DEFAULTS)
+        cfg["probe_cycle"]["retract_pos"] = 2000
+        cfg["autocal"].update(enabled=True, timeout_sec=5)
+        pl = _FwM1(**kw)
         fsm = MicroscopeFSM(pl, cfg)
-        fsm.set_manual(False)
-        assert fsm.start_autocal()["status"] == "started"
-        for t in range(2000):
-            n = pl.calls.count("motor_find_zero")
-            if "motor_set_zero" in pl.calls or (n >= CAL_ATTEMPTS and t > 200):
-                enc = min(fsm._retract_pos, pl.telemetry["pos1_enc"] + 400)     # едем в отвод
-            else:
-                enc = enc_at_attempt(n)
-            pl.telemetry.update(pos1_enc=enc, pos1=enc, pos1_ai=ai * 10)        # ×0.1 внутри FSM
+        fsm.set_manual(manual)
+        return fsm, pl
+
+    def run(fsm, pl, hook=None, start=True):
+        if start:
+            assert fsm.start_autocal()["status"] == "started"
+        tail = None
+        for t in range(1500):
+            if hook:
+                hook(t, fsm, pl)
             fsm.tick()
-            if t > 3 and not fsm.state["autocal"]["active"]:
+            pl.step()
+            if tail is None and t > 3 and not fsm.state["autocal"]["active"]:
+                tail = t + 60                       # хвост: «шаги 0» после стопа, команды из очереди
+            if tail is not None and t >= tail:
                 break
         st = fsm.state["autocal"]
-        assert not st["active"], "калибровка не завершилась: %s" % st
-        return pl.calls.count("motor_find_zero"), pl.calls.count("motor_set_zero"), st["failed"]
+        assert not st["active"], "калибровка не закончилась: %s" % st
+        assert not pl.bad, "команды не вовремя: %s" % pl.bad[:3]
+        return st
 
-    # из ручного режима: кнопка снимает ручной, калибровка проходит целиком, потом ручной возвращается
-    cfg = copy.deepcopy(plate_config.load())
-    pl = _Plate()
-    fsm = MicroscopeFSM(pl, cfg)
-    fsm.set_manual(True)
-    st0 = fsm.start_autocal()
-    assert st0["status"] == "started" and st0["was_manual"] and not fsm.manual, "из ручного калибровка должна стартовать: %s" % st0
-    for t in range(2000):
-        n = pl.calls.count("motor_find_zero")
-        enc = min(fsm._retract_pos, pl.telemetry["pos1_enc"] + 400) if "motor_set_zero" in pl.calls else 0
-        pl.telemetry.update(pos1_enc=enc, pos1=enc, pos1_ai=200)
+    n = lambda pl, op: sum(1 for c in pl.calls if c[0] == "motor_" + op and c[1][0] == 1)
+
+    fsm, pl = mk()                                                   # ноль в порядке
+    st = run(fsm, pl)
+    assert st["result"] == "готово" and n(pl, "set_zero") == 1 and n(pl, "find_zero") == 1, st
+    assert abs(pl.sensor() - pl.enc) <= 30 and abs(pl.enc - 2000) <= 50, (pl.x, pl.enc)
+    fsm, pl = mk(x=2200)                                             # ноль уполз: у нуля датчик +200 -> сдвиг к стеклу
+    st = run(fsm, pl)
+    assert st["result"] == "готово" and st["attempt"] == 1 and abs(pl.sensor() - pl.enc) <= 50, (st, pl.x, pl.enc)
+    assert st["last"]["diff_before"] == 200 and abs(st["last"]["diff_after"]) <= 50, st["last"]
+    fsm, pl = mk(x=1800)                                             # уполз вниз: упор ниже нуля датчика -> сдвиг от стекла
+    st = run(fsm, pl)
+    assert st["result"] == "готово" and abs(pl.sensor() - pl.enc) <= 50, (st, pl.x, pl.enc)
+    fsm, pl = mk(x=2150, noise=60)                                   # шум датчика ±60: медиана стоя
+    st = run(fsm, pl)
+    assert st["result"] == "готово" and abs(pl.sensor() - pl.enc) <= 50, (st, pl.x, pl.enc)
+    fsm, pl = mk(gain=0.92)                                          # масштаб датчика: случай «датчик на ~160 меньше»
+    st = run(fsm, pl)
+    assert st["result"].startswith("готово, на отводе расхождение") and st["failed"] and "масштаб" in st["fail_msg"], st
+    fsm, pl = mk(x=2120, x_stop=120)                                 # упор выше зоны 0..50: не лечится -> не удалось
+    st = run(fsm, pl)
+    assert st["result"] == "не удалось" and st["failed"] and n(pl, "set_zero") == 0, st
+    fsm, pl = mk()                                                   # датчик не приходит: не виснем, «не удалось»
+    pl.no_ai = True
+    pl._tele()
+    st = run(fsm, pl)
+    assert st["result"] == "не удалось" and "датчика" in st["fail_msg"] and n(pl, "set_zero") == 0, st
+
+    fsm, pl = mk(x=2200)                                             # «Стоп движения» посреди «Поиска 0»
+    st = run(fsm, pl, hook=lambda t, f, p: f.set_movement_inhibit(True) if t == 40 else None)
+    assert st["result"] == "прервано (стоп движения)" and n(pl, "stop") == 1 and n(pl, "steps") == 1 and not pl.flag, st
+    assert fsm.start_autocal()["status"] == "blocked", "при «Стоп движения» калибровка не стартует"
+
+    fsm, pl = mk(x=2200)                                             # пропала связь: прервано, счётчик цел
+    fsm.set_autocal(count=7)
+
+    def drop(t, f, p):
+        p.status["connected"] = not 30 <= t < 80
+    st = run(fsm, pl, hook=drop)
+    assert st["result"] == "прервано (нет связи)" and st["count"] == 7 and n(pl, "steps") == 1, st
+
+    fsm, pl = mk()                                                   # проба поверх калибровки — нельзя
+    fsm.start_autocal()
+    fsm.tick()
+    assert fsm.start_sample()["status"] == "busy_cal"
+
+    fsm, pl = mk(manual=True)                                        # из Ручного: калибровка целиком, потом снова Ручной
+    st = run(fsm, pl)
+    assert st["result"] == "готово" and fsm.manual, st
+
+    # пропарка: перезапуск программы на стадии 11 — не новая варка; фронт входа +1; идёт проба — ждём её конца
+    fsm, pl = mk()
+    fsm.set_autocal(count=2)
+    fsm.set_stage(11)
+    fsm.tick(); pl.step()
+    assert fsm.state["autocal"]["count"] == 2 and not fsm.state["autocal"]["active"], "перезапуск на пропарке посчитан"
+    fsm.set_stage(10); fsm.tick(); pl.step()
+    fsm.mode = 24                                                    # проба ещё возвращается
+    fsm.set_stage(11); fsm.tick(); pl.step()
+    assert fsm.state["autocal"]["count"] == 3 and not fsm.state["autocal"]["active"], "старт поверх пробы"
+    fsm.mode = 0
+    fsm.tick(); pl.step()
+    assert fsm.state["autocal"]["active"], "проба кончилась на пропарке — калибровка должна стартовать"
+    st = run(fsm, pl, start=False)
+    assert st["result"] == "готово" and st["count"] == 0, st
+
+    fsm, pl = mk(manual=True)                                        # стоп с пульта -> «шаги 0» через 0,5 с (и в Ручном)
+    fsm.request_unflag(1)
+    for _ in range(8):
         fsm.tick()
-        if t > 3 and not fsm.state["autocal"]["active"]:
-            break
-    assert pl.calls.count("motor_set_zero") == 1 and fsm.manual, "после калибровки из ручного — set_zero и снова ручной режим"
-    assert run(lambda n: 0, 20) == (1, 1, False), "успех с 1-й попытки"
-    assert run(lambda n: 330 if n < 3 else 0, 20) == (3, 1, False), "успех на 3-й попытке"
-    assert run(lambda n: 330, 89) == (3, 0, True), "провал: set_zero слать нельзя, failed=True"
-    return "1-я / 3-я попытка / провал (3×Поиск 0, без set_zero)"
+    assert n(pl, "steps") == 1, pl.calls
+    return "7 случаев нуля (и без датчика) + стоп / нет связи / проба поверх / из Ручного / пропарка — ни одной команды на ходу"
 
 
 @check("Микроскоп", "Страховка разбора CV: по умолчанию 120 с, значение из настроек доходит до автомата, меньше 10 с не бывает")
@@ -1351,6 +1722,7 @@ def _cv_model_passport():
     import hashlib
     import importlib.util
     import tempfile
+    import numpy as np
     import cv_client
     import cv_store
     from microscope_service import MicroscopeService
@@ -1414,6 +1786,27 @@ def _cv_model_passport():
         os.environ.pop("CV_IMGSZ", None)
         if old_env is not None:
             os.environ["CV_IMGSZ"] = old_env
+    # лимит находок за проход: по умолчанию 1000 (у ultralytics 300 — густой кадр Кира обрезался), CV_MAX_DET переопределяет; уходит в predict
+    old_md = os.environ.pop("CV_MAX_DET", None)
+    try:
+        assert mod.UltralyticsDetector._pick_max_det() == 1000
+        os.environ["CV_MAX_DET"] = "2000"
+        assert mod.UltralyticsDetector._pick_max_det() == 2000
+        os.environ["CV_MAX_DET"] = "мусор"
+        assert mod.UltralyticsDetector._pick_max_det() == 1000
+    finally:
+        os.environ.pop("CV_MAX_DET", None)
+        if old_md is not None:
+            os.environ["CV_MAX_DET"] = old_md
+    seen = {}
+
+    class _FakeYolo:
+        def predict(self, image, **kw):
+            seen.update(kw)
+            return [type("R", (), {"boxes": None, "masks": None})()]
+    d = object.__new__(mod.UltralyticsDetector)
+    d.model, d.imgsz, d._device, d.max_det = _FakeYolo(), 1280, "cpu", 1000
+    assert d.infer(np.zeros((8, 8, 3), np.uint8), conf=0.25) == [] and seen.get("max_det") == 1000, seen
     return "модель %s, sha %s, imgsz %s, conf %s, частей %s" % (det["name"], det["sha"], det["imgsz"], inf["conf"], inf["tiles"])
 
 
@@ -1681,14 +2074,18 @@ def _boil_compare():
     assert s["verdict"] == "none" and m["fin_um_spread"]["verdict"] == "few", s
     # муки меньше — плюс; плюс, но дольше — «решать технологу»; хуже по сросткам — минус, даже если быстрее
     r, m, s = run(grp_a(fines_avg=lambda i: 4 + 0.3 * jit[i]))
-    assert m["fines_avg"]["verdict"] == "real" and s["verdict"] == "plus" and s["text"] == "Итог: изменение в плюс — муки меньше.", s
+    assert m["fines_avg"]["verdict"] == "real" and s["verdict"] == "plus" and s["text"] == "Итог: А лучше Б — муки меньше.", s
+    r, m, s = run(grp_a(fines_avg=lambda i: 4 + 0.3 * jit[i]), mode="change")          # «до / после» — слова про изменение
+    assert s["text"] == "Итог: изменение в плюс — муки меньше.", s
+    r, m, s = run(grp_a(seed_ready_min=lambda i: 75 + jit[(i + 5) % 10]))                 # две группы: качество то же, А дольше
+    assert s["verdict"] == "minus" and s["text"] == "Итог: А хуже Б — варка дольше на 15 мин при том же качестве.", s
     r, m, s = run(grp_a(fines_avg=lambda i: 4 + 0.3 * jit[i], seed_ready_min=lambda i: 75 + jit[(i + 5) % 10]))
     assert s["verdict"] == "mixed" and "дольше на 15 мин" in s["text"], s
     r, m, s = run(grp_a(fin_agg_pct=lambda i: 14 + 0.2 * jit[i], seed_ready_min=lambda i: 50 + jit[(i + 5) % 10]), mode="change")
     assert s["verdict"] == "minus" and "сростков больше" in s["text"] and "короче на 10 мин" in s["text"] and s["caveat"], s
     # крупнее и муки меньше — одна строка и один плюс (у нас это почти один сигнал)
     r, m, s = run(grp_a(fines_avg=lambda i: 4 + 0.3 * jit[i], fin_um=lambda i: 260 + 2 * jit[i]))
-    assert s["text"] == "Итог: изменение в плюс — кристалл крупнее и муки меньше." and sum("один сигнал" in x for x in s["lines"]) == 1, s
+    assert s["text"] == "Итог: А лучше Б — кристалл крупнее и муки меньше." and sum("один сигнал" in x for x in s["lines"]) == 1, s
     # порог муки 8 %: медиана группы выше — минус; вне коридора размера — минус
     r, m, s = run(grp_a(fines_avg=lambda i: 9 + 0.3 * jit[i]))
     assert m["fines_avg"]["off"] == {"a": True, "b": False} and "мука выше порога 8 %" in s["text"], s
@@ -1717,6 +2114,21 @@ def _boil_compare():
     det = {"name": "yolo:26x_1280.pt", "imgsz": 1280}
     assert cv_store._model_tag(det) == cv_store._model_tag(det, {"conf": 0.55}) == "26x_1280.pt@1280"
     assert cv_store._model_tag(det, {"conf": 0.25}) == "26x_1280.pt@1280 conf 0.25" and cv_store._model_tag(None, {"conf": 0.25}) is None
+    assert cv_store._model_tag(det, {"conf": 0.25, "conf_big": 0.55, "conf_big_k": 4}) == "26x_1280.pt@1280 conf 0.25, крупные >4 медиан 0.55"
+    # защита от крупного мусора — граница от медианы кадра: на старте (мелкие ~80 мкм) неуверенный объект ~550 мкм (складка) отсекается,
+    # в конце (кристаллы ~330 мкм) такой же неуверенный объект — настоящая кучка и остаётся; уверенный крупный и мелкий неуверенный — всегда
+    import cv_analyzer
+    def sq(x, y, side_px, conf):
+        return {"polygon": [[x, y], [x + side_px, y], [x + side_px, y + side_px], [x, y + side_px]],
+                "bbox": [x, y, x + side_px, y + side_px], "conf": conf}
+    small = [sq(100 + 70 * i, 1500, 44, 0.7) for i in range(10)]              # ~80 мкм, уверенные
+    start = small + [sq(100, 500, 300, 0.45), sq(600, 500, 60, 0.30), sq(900, 500, 300, 0.60)]   # складка ~550 / мелкий / уверенный ~550
+    end = [sq(100 + 230 * i, 1500, 180, 0.7) for i in range(8)] + [sq(100, 500, 300, 0.45)]    # кристаллы ~330 мкм + неуверенная кучка ~550
+    cfg = {"um_per_px": 1.629, "cluster_gap_px": 0.0, "conf_big": 0.55, "conf_big_k": 4}
+    on = cv_analyzer.measure_objects(start, cfg, img_shape=(2048, 2448, 3))
+    assert len(on) == 12 and not any(abs(m.conf - 0.45) < 1e-6 for m in on), [(round(m.size_um), m.conf) for m in on]
+    assert len(cv_analyzer.measure_objects(start, {**cfg, "conf_big": 0}, img_shape=(2048, 2448, 3))) == 13
+    assert len(cv_analyzer.measure_objects(end, cfg, img_shape=(2048, 2448, 3))) == 9
     ga = [dict(x, model="26x_1280.pt@1280") for x in grp_a()]
     r = bc.compare_rows(ga + [dict(x, model="26x_1280.pt@1280 conf 0.25") for x in gb], a, b)
     assert not r["ok"] and "conf 0.25" in r["error"], r
@@ -2163,9 +2575,18 @@ def _db_core():
         db.upsert_many("S2", rows + rows)
         assert db.count("S2") == 5 and [g["boil_id"] for g in db.read_rows("S2", with_boil=True)] == [1, 1, 1, 1, 2]
         assert db.meta_get("schema_version") == str(db.SCHEMA_VERSION)
+        # чтение по дню — диапазон по ключу (serial, ts), а не LIKE (LIKE индекс не берёт: чтение по дням росло квадратично); результат тот же
+        db.upsert_many("S3", [row(i, 80.0 + i, 600 + i * 90, day=d) for d in ("2026-10-05", "2026-10-06", "2026-10-31") for i in range(3)])
+        sel = lambda d: [r["ts"] for r in db.read_rows("S3", day=d)]
+        like = lambda d: [x[0] for x in db.conn().execute("SELECT ts FROM journal WHERE serial='S3' AND ts LIKE ? ORDER BY t, ts", (d + "%",))]
+        assert db.days("S3") == ["2026-10-05", "2026-10-06", "2026-10-31"]
+        assert all(sel(d) == like(d) and len(sel(d)) == 3 for d in db.days("S3")) and sel("2026-10-07") == [], "день: те же пробы, что и по LIKE"
+        assert sel("2026-10-06") == [r["ts"] for r in db.read_rows("S3") if r["ts"].startswith("2026-10-06")], "день 06 — только свои пробы"
+        plan = " ".join(str(x[-1]) for x in db.conn().execute("EXPLAIN QUERY PLAN SELECT row_json FROM journal WHERE serial=? AND ts>=? AND ts<?", ("S3", "2026-10-06", "2026-10-06\x7f")))
+        assert "AND ts>" in plan and "ix_journal_t" not in plan, "день читается по ключу (serial, ts), а не сканом серийника: %s" % plan
     finally:
         db.set_path(old_path)
-    return "boil_id/sv_max_run при записи, миграция идемпотентна, строки читаются как были"
+    return "boil_id/sv_max_run при записи, миграция идемпотентна, строки читаются как были, день читается по индексу"
 
 
 @check("CV", "cv_store: журнал проб только в SQLite — запись пробы, тренд, CSV, варки, подстадия; файл jsonl не пишется")
@@ -2231,7 +2652,7 @@ def _report():
             ts = "%s_%02d_%02d_00" % (day, 8 + i // 60, i % 60)
             t = time.mktime(time.strptime(ts, cv_store.TS_FMT))
             r = {"ts": ts, "t": t, "stage": 7, "sv": sv, "cook_time": cook, "substage": sub, "count": 100.0, "mean": 150.0, "reject_pct": 2.0,
-                 "frac_zones": 1, "frac_pct": 0.5, "good_n": 100, "rej_n": 2, "fines_um": 226.0, "fines_from_sv": 86.0}
+                 "frac_zones": 1, "frac_pct": 0.5, "good_n": 100, "rej_n": 2, "fines_um": 226.0, "fines_from_sv": 86.0, "temp": 70.0 + i, "vac": -0.8}
             for m in ("m1", "m2", "m3"):
                 r["fines_" + m], r["vtot_" + m] = fines, 1.0
             for m in ("m1", "m2", "m3", "area"):
@@ -2240,6 +2661,7 @@ def _report():
         rows = []
         for i in range(8):                  # варка 1: СВ растёт 80 → 90,5; мука только с проб, где СВ уже ≥ 88 (порог по варке)
             rows.append(probe("2026-10-06", i, 80.0 + 1.5 * i, 72 if i < 4 else 73, 600 + 90 * i, 5.0 + i))
+        rows[-1].update(stage=11, temp=99.0, vac=0.0)     # ручная проба на пропарке: в среднюю температуру / разрежение варки не идёт
         for i in range(6):                  # варка 2 — на следующий день, подкачка
             rows.append(probe("2026-10-07", i, 81.0 + i * 1.2, 52, 600 + 90 * i, 3.0))
         for i in range(2):                  # обрывок (2 пробы) — в отчёт не попадает
@@ -2269,9 +2691,16 @@ def _report():
         assert len(report.build("REP", t0 + 2 * 86400, t0 + 3 * 86400)["boils"]) == 0 or True
         assert len(rep["days"]) == 2 and rep["days"][0]["day"] == "2026-10-06" and rep["days"][0]["boils"] == 1, rep["days"]
         assert len(rep["segments"]) == 1 and rep["segments"][0]["model"] is None, "модель не записана — один отрезок"
+        # режим варки: среднее по пробам стадий 3–9 (пропарка 99 °C / 0 бар — мимо); часть суток — по началу варки (обе в 08:00 — утро)
+        assert (b1["temp_avg"], b1["vac_avg"], b2["temp_avg"]) == (73.0, -0.8, 72.5), (b1["temp_avg"], b1["vac_avg"], b2["temp_avg"])
+        assert (b1["part"], b2["part"]) == ("morning", "morning") and rep["totals"]["temp_avg"]["median"] == 72.75, (b1["part"], rep["totals"]["temp_avg"])
+        assert [(p["key"], p["boils"]) for p in rep["day_parts"]] == [("morning", 2), ("day", 0), ("evening", 0), ("night", 0)], rep["day_parts"]
+        hour = lambda hm: time.mktime(time.strptime("2026-10-06 " + hm, "%Y-%m-%d %H:%M"))
+        parts = {hm: report._day_part(hour(hm)) for hm in ("07:59", "08:00", "13:59", "14:00", "19:59", "20:00", "00:30", "01:59", "02:00")}
+        assert list(parts.values()) == ["night", "morning", "morning", "day", "day", "evening", "evening", "evening", "night"], parts
     finally:
         db.set_path(old_path)
-    return "варок %d, мука с порога, подстадии, CSV" % len(rep["boils"])
+    return "варок %d, мука с порога, подстадии, CSV, режим варки и части суток" % len(rep["boils"])
 
 
 @check("CV", "report: итоги без нетипичных варок — короткая/затянутая/идущая помечены, медиана и 25–75 %, лучшая/худшая, дни, отрезки по модели")
@@ -2483,6 +2912,9 @@ def _stream_double_request_race():
             opened.append(self)
             self.mine = True
 
+        def read_config(self):
+            return {}
+
         def grab(self, timeout_ms=300):
             time.sleep(0.02)
             return 8, 8, "BayerRG8", np.zeros((8, 8), np.uint8)
@@ -2589,7 +3021,7 @@ def _phase_durations():
     return "p1 20 мин, g1 30, g2 20, p2 (два отрезка) сложены; пустая варка — {}"
 
 
-@check("CV", "тренд «Рассев»: группы фракций fsv0…fsv8 (мука по 0,05 мм + 5 крупных) — сумма 0,05-мм фракций, среднее M1–M3; пропуски и нет рассева → None; серия отдаётся trend_range")
+@check("CV", "тренд «Рассев»: группы фракций fsv0…fsv12 (мука по 0,05 мм + крупные по 0,1 мм и > 1,0) — сумма 0,05-мм фракций, среднее M1–M3; пропуски и нет рассева → None; серия отдаётся trend_range")
 def _trend_sieve_groups():
     import cv_store
     r = {}
@@ -2597,16 +3029,17 @@ def _trend_sieve_groups():
         for i in range(cv_store.cv_volume.FINE_N):
             r["fsieve_%s_b%d" % (m, i)] = 1.0 if m != "m3" else 4.0       # среднее по моделям на фракцию = 2.0
     assert [cv_store.fsieve_group(r, k) for k in range(4)] == [2.0] * 4, "мука 0–0,20 — четыре отдельные фракции по 0,05 мм"
-    assert cv_store.fsieve_group(r, 4) == 8.0 and cv_store.fsieve_group(r, 7) == 8.0 and cv_store.fsieve_group(r, 8) == 2.0, "0,20–0,40 и 0,80–1,0 — по 4 фракции, «> 1,0» — одна"
-    assert sum(cv_store.fsieve_group(r, k) for k in range(9)) == 42.0, "21 фракция × 2 % — группы покрывают все"
+    assert [cv_store.fsieve_group(r, k) for k in range(4, 12)] == [4.0] * 8 and cv_store.fsieve_group(r, 12) == 2.0, "0,20–0,30 … 0,90–1,0 — по 2 фракции, «> 1,0» — одна"
+    assert [(g.start, g.stop) for g in cv_store.FSV_GROUPS[4:]] == [(4, 6), (6, 8), (8, 10), (10, 12), (12, 14), (14, 16), (16, 18), (18, 20), (20, 21)], "шаг крупных не 0,1 мм"
+    assert sum(cv_store.fsieve_group(r, k) for k in range(13)) == 42.0, "21 фракция × 2 % — группы покрывают все"
     assert cv_store.fsieve_group({}, 0) is None and cv_store._trend_val({}, "fsv3") is None, "нет рассева — None"
-    assert cv_store._trend_val(r, "fsv9") is None and cv_store._trend_val(r, "fsv8") == 2.0 and cv_store._trend_val({"sv": 5}, "sv") == 5, "лишний номер не падает, обычные серии как раньше"
+    assert cv_store._trend_val(r, "fsv13") is None and cv_store._trend_val(r, "fsv12") == 2.0 and cv_store._trend_val({"sv": 5}, "sv") == 5, "лишний номер не падает, обычные серии как раньше"
     js = (Path(BUNDLE_DIR) / "page" / "static" / "js" / "microscope" / "02-cv.js").read_text(encoding="utf-8")
     html = (Path(BUNDLE_DIR) / "page" / "microscope.html").read_text(encoding="utf-8")
-    for k in range(9):
+    for k in range(13):
         assert 'value="fsv%d"' % k in html and '"fsv%d"' % k in js, "серия fsv%d не в странице/скрипте" % k
     assert 'id="cvTrendModeSeg"' in html and 'id="cvTrSieveGrid"' in html, "нет переключателя режима или таблицы рассева на тренде"
-    return "9 линий = 21 фракция, переключатель и таблица на месте"
+    return "13 линий = 21 фракция, переключатель и таблица на месте"
 
 
 @check("CV", "тренд «Рассев» → «по пробе»: рассев одной пробы из журнала (probe_sieve) — порог «Мука с СВ» как у линий, проба фазы с начала, чужой ts — None; кнопки «финиш» больше нет")

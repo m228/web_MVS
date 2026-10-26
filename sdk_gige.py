@@ -10,6 +10,7 @@ import threading
 
 import numpy as np
 
+import camera_params
 from logger import log_event
 
 _sdk = None          # модуль mvsdk после успешной загрузки
@@ -104,6 +105,7 @@ class GigeSdkStream:
         self._cam = _sdk.MvCamera()
         self._grabbing = False
         self._lock = threading.Lock()
+        self.mismatch = {}   # что камера не приняла после всех попыток (пусто — всё встало)
 
     def open(self, settings=None):
         c = self._cam
@@ -115,9 +117,19 @@ class GigeSdkStream:
             c.MV_CC_DestroyHandle()
             # 0x80000203 = камера занята (предыдущий handle не отпущен)
             raise RuntimeError("MV_CC_OpenDevice ret=0x%x" % (r & 0xffffffff))
-        # настройки — ДО StartGrabbing (размер/формат на ходу не менять)
+        # настройки — ДО StartGrabbing (размер/формат на ходу не менять). Каждую запись проверяем
+        # обратным чтением: камера могла отклонить значение молча (тогда кадры шли с её UserSet)
+        self.mismatch = {}
         if settings:
-            self._apply_settings(settings)
+            for attempt in range(1, camera_params.APPLY_TRIES + 1):
+                self._apply_settings(settings)
+                self.mismatch = camera_params.mismatches(settings, self.read_config())
+                if not self.mismatch:
+                    break
+                last = attempt == camera_params.APPLY_TRIES
+                log_event("sdk_gige", "Камера не приняла настройки (попытка %d из %d)%s" % (
+                              attempt, camera_params.APPLY_TRIES, ": поток идёт с тем, что стоит в камере" if last else ", повторяю"),
+                          "error" if last else "warn", {"mismatch": self.mismatch})
         # оптимальный пакет (как MVS): без сквозного jumbo вернёт 1500 — надёжно
         try:
             opt = c.MV_CC_GetOptimalPacketSize()
@@ -173,6 +185,9 @@ class GigeSdkStream:
         # выдержку задаём только при ручном режиме (в авто камера её игнорирует/отклонит)
         if str(s.get("exposure_auto") or "").lower() in ("off", ""):
             sf("ExposureTime", s.get("exposure_time"))
+        se("GainAuto", s.get("gain_auto"))
+        if str(s.get("gain_auto") or "").lower() in ("off", ""):
+            sf("Gain", s.get("gain"))
         # частота кадров: включаем лимит и ставим значение
         if s.get("fps"):
             try:
@@ -185,6 +200,27 @@ class GigeSdkStream:
         failed = {k: "0x%x" % v for k, v in res.items() if v != 0}
         log_event("sdk_gige", "Настройки камеры применены (SDK)", "info",
                   {"applied": applied, "failed": failed})
+
+    def read_config(self):
+        """Фактические значения с камеры (обратное чтение после записи), ключи как в camera_params."""
+        c = self._cam
+        out = {}
+        try:
+            for key, name in (("Width", "width"), ("Height", "height"), ("OffsetX", "offset_x"), ("OffsetY", "offset_y")):
+                r = _int_node(c, key)
+                if r is not None:
+                    out[name] = r["value"]
+            for key, name in (("ExposureTime", "exposure_time"), ("Gain", "gain"), ("AcquisitionFrameRate", "fps")):
+                r = _float_node(c, key)
+                if r is not None:
+                    out[name] = round(r["value"], 2)
+            for key, name in (("PixelFormat", "pixel_format"), ("ExposureAuto", "exposure_auto"), ("GainAuto", "gain_auto")):
+                r = _enum_node(c, key)
+                if r is not None and r["value"]:
+                    out[name] = r["value"]
+        except Exception as e:
+            log_event("sdk_gige", "Обратное чтение настроек камеры: частично не прочитано", "warn", {"error": str(e)})
+        return out
 
     def grab(self, timeout_ms=1000):
         """Один кадр: (width, height, pixel_format_str, raw_uint8) или None по таймауту."""
@@ -222,6 +258,44 @@ class GigeSdkStream:
                 pass
 
 
+def _int_node(c, key):
+    v = _sdk.MVCC_INTVALUE_EX()
+    _sdk.memset(_sdk.byref(v), 0, _sdk.sizeof(v))
+    if c.MV_CC_GetIntValueEx(key, v) == 0:
+        return {"value": int(v.nCurValue), "min": int(v.nMin),
+                "max": int(v.nMax), "step": int(v.nInc)}
+    return None
+
+
+def _float_node(c, key):
+    v = _sdk.MVCC_FLOATVALUE()
+    _sdk.memset(_sdk.byref(v), 0, _sdk.sizeof(v))
+    if c.MV_CC_GetFloatValue(key, v) == 0:
+        return {"value": float(v.fCurValue), "min": float(v.fMin), "max": float(v.fMax)}
+    return None
+
+
+def _enum_node(c, key):
+    v = _sdk.MVCC_ENUMVALUE()
+    _sdk.memset(_sdk.byref(v), 0, _sdk.sizeof(v))
+    if c.MV_CC_GetEnumValue(key, v) != 0:
+        return None
+
+    def sym(code):
+        e = _sdk.MVCC_ENUMENTRY()
+        _sdk.memset(_sdk.byref(e), 0, _sdk.sizeof(e))
+        e.nValue = int(code)
+        if c.MV_CC_GetEnumEntrySymbolic(key, e) == 0:
+            return bytes(e.chSymbolic).split(b"\x00")[0].decode("ascii", "replace")
+        return None
+    options = []
+    for i in range(int(v.nSupportedNum)):
+        s = sym(v.nSupportValue[i])
+        if s:
+            options.append(s)
+    return {"value": sym(v.nCurValue), "options": options}
+
+
 def read_ranges(device_info):
     """Прочитать параметры камеры по SDK (без genicam): диапазоны Width/Height/Offset/
     ExposureTime + текущие/список PixelFormat и ExposureAuto. Открывает короткий хэндл и
@@ -240,50 +314,16 @@ def read_ranges(device_info):
         return None
     data = {}
     try:
-        def int_range(key):
-            v = _sdk.MVCC_INTVALUE_EX()
-            _sdk.memset(_sdk.byref(v), 0, _sdk.sizeof(v))
-            if c.MV_CC_GetIntValueEx(key, v) == 0:
-                return {"value": int(v.nCurValue), "min": int(v.nMin),
-                        "max": int(v.nMax), "step": int(v.nInc)}
-            return None
-
-        def float_range(key):
-            v = _sdk.MVCC_FLOATVALUE()
-            _sdk.memset(_sdk.byref(v), 0, _sdk.sizeof(v))
-            if c.MV_CC_GetFloatValue(key, v) == 0:
-                return {"value": float(v.fCurValue), "min": float(v.fMin), "max": float(v.fMax)}
-            return None
-
-        def enum_field(key):
-            v = _sdk.MVCC_ENUMVALUE()
-            _sdk.memset(_sdk.byref(v), 0, _sdk.sizeof(v))
-            if c.MV_CC_GetEnumValue(key, v) != 0:
-                return None
-            def sym(code):
-                e = _sdk.MVCC_ENUMENTRY()
-                _sdk.memset(_sdk.byref(e), 0, _sdk.sizeof(e))
-                e.nValue = int(code)
-                if c.MV_CC_GetEnumEntrySymbolic(key, e) == 0:
-                    return bytes(e.chSymbolic).split(b"\x00")[0].decode("ascii", "replace")
-                return None
-            options = []
-            for i in range(int(v.nSupportedNum)):
-                s = sym(v.nSupportValue[i])
-                if s:
-                    options.append(s)
-            return {"value": sym(v.nCurValue), "options": options}
-
         for key, name in (("Width", "width"), ("Height", "height"),
                           ("OffsetX", "offset_x"), ("OffsetY", "offset_y")):
-            r = int_range(key)
+            r = _int_node(c, key)
             if r is not None:
                 data[name] = r
-        r = float_range("ExposureTime")
+        r = _float_node(c, "ExposureTime")
         if r is not None:
             data["exposure_time"] = r
         for key, name in (("ExposureAuto", "exposure_auto"), ("PixelFormat", "pixel_format")):
-            r = enum_field(key)
+            r = _enum_node(c, key)
             if r is not None:
                 data[name] = r
     except Exception as e:

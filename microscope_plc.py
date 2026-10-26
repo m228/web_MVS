@@ -41,6 +41,11 @@ class PlateClient:
         self._out = [0] * self._block_len
         self._out_last = [0] * self._block_len   # что реально записано в плату
         self._out_lock = threading.Lock()
+        # сокет, в который записан _out_last: новый сокет = плата могла перезагрузиться (см. _write_changed_out)
+        self._out_sock = None
+        # слова OUT из карты "out" — их ПК и переписывает после переподключения. Остальные
+        # (1251/1252/1255/1256/1259) ПК не пишет: их смысл в прошивке не разобран, нули туда не льём.
+        self._out_owned = sorted({int(i) for i in config.get("out", {}).values() if 0 <= int(i) < self._block_len})
         self._last_write_warn = 0.0
         self._last_read_warn = 0.0
 
@@ -376,6 +381,15 @@ class PlateClient:
             log_event("microscope_plc", msg, "warn", payload)
 
     def _write_changed_out(self):
+        # pymodbus 3.x после сбоя сам переоткрывает сокет внутри execute() — _connected и
+        # _ensure_connected перезагрузку платы не видят. А плата после неё стоит с умолчаниями
+        # (1253 = 0): повтор goto (cmd1) повёл бы М1 в 0, к стеклу. Поэтому на НОВЫЙ сокет
+        # забываем, что записано, — наши слова OUT перепишутся целиком в этом же проходе.
+        sock = getattr(self._client, "socket", None)
+        if sock is not None and sock is not self._out_sock:
+            self._out_sock = sock
+            for i in self._out_owned:
+                self._out_last[i] = None
         with self._out_lock:
             out = list(self._out)
         for i, v in enumerate(out):
@@ -400,6 +414,12 @@ class PlateClient:
             self._pending = []
         for addr, value in pending:
             try:
+                # если сокет переоткроется на самой команде, goto уйдёт в свежую плату раньше цели
+                # в 1253 — поэтому подключаемся заранее и на новый сокет сперва пишем блок OUT
+                if not self._client.connect():
+                    raise IOError("нет соединения с платой")
+                if self._client.socket is not self._out_sock:
+                    self._write_changed_out()
                 wr = self._client.write_register(int(addr), value, slave=self._unit)
                 if wr.isError():
                     raise IOError("isError")

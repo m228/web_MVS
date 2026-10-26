@@ -36,14 +36,24 @@ ARRIVE_TOL_UM = 50   # доезд: энкодер в пределах ±50 мк�
 GLASS_AI = 20        # pos1_ai < GLASS_AI = аналог «у стекла» (страховка на подводе)
 ARRIVE_HOLD_TICKS = 20   # держать в диапазоне ±50 перед переходом (2 с при такте 100 мс)
 
-# автокалибровка нуля М1 (зашито): «в нуле» = энкодер в ±CAL_ENC_TOL_UM И аналог в зоне [lo..hi];
-# «Поиск 0» повторяем до CAL_ATTEMPTS раз, перед проверкой даём плате тронуться (1 с на первой
-# попытке, 0,1 с на повторах), после set_zero ждём 1 с и отводим в retract_pos.
-CAL_ENC_TOL_UM = 5
-CAL_ATTEMPTS = 3
-CAL_GRACE_FIRST_TICKS = 10
-CAL_GRACE_RETRY_TICKS = 1
-CAL_ZERO_SETTLE_TICKS = 10
+# автокалибровка нуля М1 по датчику 1271 (зашито). Как это делает прошивка платы (разбор fw, tasks/todo.md п. 2b):
+# «Поиск 0» = ход в РАСЧЁТНУЮ 0 (если она уже 0 — дожим ещё 2000 шагов к стеклу), в конце ШТАТНОГО хода прошивка
+# сама обнуляет расчётную и энкодер; команды во время хода встают в очередь (повторный «Поиск 0» выполнится
+# следом и дожмёт ещё); «Установить 0» обнуляет расчётную+энкодер сразу, мотор не останавливает, датчик не трогает;
+# стоп НЕ снимает флаг поиска — тогда следующий законченный ход обнулит координаты в своей конечной точке
+# (снимает его команда «шаги 0»). Поэтому: каждую команду шлём только когда мотор СТОИТ, датчик меряем стоя
+# (медиана), не в зоне — сдвиг на разницу и замер заново, ноль ставим при датчике в зоне и проверяем, что все три
+# (расчётная, энкодер, датчик) сошлись; на отводе сверяем их ещё раз.
+CAL_ATTEMPTS = 3          # замеров с коррекцией сдвигом (и повторов «Установить 0»)
+CAL_ZERO_TOL_UM = 30      # после «Установить 0»: |расчётная| и |энкодер| не больше (шаг регистров 10 мкм)
+CAL_FAR_TOL_UM = 100      # на отводе: |датчик − энкодер| и |датчик − расчётная| не больше, иначе красная плашка
+CAL_FIX_MAX_UM = 3000     # датчик дальше от нуля — механика/датчик не в порядке, сдвигом не лечим
+CAL_STILL_TICKS = 15      # «мотор стоит»: расчётная и энкодер не сдвинулись больше 10 мкм за 1,5 с
+CAL_MEASURE_TICKS = 20    # замер стоя: медиана за 2 с (датчик шумит ±50–70 мкм)
+CAL_MOVE_MIN_TICKS = 10   # после команды движения 1 с не смотрим — телеметрия ещё старая
+CAL_SHIFT_MIN_TICKS = 20  # сдвиг ниже нуля не виден по расчётной/энкодеру (прошивка держит их в 0) — ждём хотя бы 2 с
+CAL_MOVE_MIN_S = 15       # таймаут хода не короче, даже если в настройке меньше
+CAL_CMD_GAP_TICKS = 3     # пауза между командами в один командный регистр: две записи подряд плата может слить в одну
 
 # Повтор команды «идти» в цикле: плата за ОДИН goto делает лишь шаг к цели (как ручная
 # кнопка «Идти»), поэтому в шагах движения цикла повторяем импульс каждые REDRIVE_TICKS
@@ -161,23 +171,45 @@ class MicroscopeFSM:
         self._ac_every_n = max(1, int(ac.get("every_n", 3)))
         self._ac_sensor_lo = int(ac.get("sensor_lo", 0))
         self._ac_sensor_hi = int(ac.get("sensor_hi", 50))
-        self._ac_timeout_ticks = max(1, int(ac.get("timeout_sec", 5)) * 10)   # ожидание схождения в 0 на попытку
+        self._ac_timeout_s = max(1, int(ac.get("timeout_sec", 30)))   # таймаут хода мотора (не меньше CAL_MOVE_MIN_S)
         self._varka_count = int(ac.get("count", 0))   # счётчик варок (persist через колбэк)
+        # фронт входа в пропарку считаем только после первой стадии из ПЛК: перезапуск программы посреди пропарки —
+        # не новая варка
+        self._stage_seen = False
         self._stage11_prev = False   # был ли на прошлом такте на стадии 11 (для фронта)
+        self._ac_armed = False       # эта пропарка ещё может запустить калибровку (ждём, пока автомат освободится)
         # состояние процедуры калибровки
         self._cal_active = False
-        self._cal_phase = None       # None / 'find_zero' / 'wait' / 'zero_settle' / 'retract'
-        self._cal_attempt = 1        # номер попытки Поиска 0 (из CAL_ATTEMPTS)
+        self._cal_phase = None       # None / pre / find_zero / move / measure / verify / unflag / retract_go / retract / after
+        self._cal_step = ""          # что делаем сейчас — для инфо-строки и статуса
+        self._cal_trigger = ""       # кто запустил: "пропарка" / "кнопка"
+        self._cal_attempt = 0        # сделано коррекций (сдвиг или повтор «Установить 0»), до CAL_ATTEMPTS
         self._cal_wait = 0           # таймаут текущей фазы (тики)
+        self._cal_move_min = 0       # ещё столько тиков не проверяем остановку после команды движения
         self._cal_redrive = 0        # счётчик повтора goto на отводе после калибровки
-        self._cal_grace = 0          # пауза перед проверкой/после set_zero (тики)
+        self._cal_grace = 0          # пауза перед следующей командой/замером (тики)
+        self._cal_emit = None        # команда калибровки на плату в этом такте: ("find_zero",) / ("shift", мкм) / ...
+        self._cal_still = 0          # тиков подряд мотор стоит
+        self._cal_anchor = None      # (расчётная, энкодер) в начале окна «стоит»
+        self._cal_samples = []       # замер стоя: [(расчётная, энкодер, датчик)]
+        self._cal_view = (None, None, None)   # последние расчётная/энкодер/датчик — в инфо-строку
+        self._cal_ok = False         # ноль поставлен и проверен
+        self._cal_reason = ""        # почему не удалось
+        self._cal_before = None      # замер стоя ДО калибровки {calc, enc, sensor}
+        self._cal_zero_s = None      # датчик сразу после «Поиска 0» (где прошивка поставила свой ноль)
+        self._cal_after = None       # замер стоя на отводе ПОСЛЕ калибровки
         self._cal_failed = False     # последняя калибровка не удалась — UI мигает красным до успешной
+        self._cal_fail_msg = ""      # текст красной плашки
         self._cal_return_manual = False   # калибровку запустили кнопкой из РУЧНОГО режима — по окончании вернуть ручной
-        self._cal_result = ""        # итог последней калибровки: "готово"/"не удалось"/"прервано (ручной)"
-        self._cal_emit_findzero = False
-        self._cal_emit_setzero = False
+        self._cal_result = ""        # итог последней калибровки: "готово"/"не удалось"/"прервано (...)"
+        self._cal_last = ac.get("last") or None   # краткий итог последней калибровки (persist) — строка в UI
+        self._cal_varka_reset = False   # ноль проверен -> обнулить счётчик варок (persist в такте)
+        # снять в прошивке висящий флаг «Поиска 0» командой «шаги 0» (мотор → тиков до отправки); см. CAL_* выше
+        self._unflag = {1: 0, 2: 0}
         # колбэк persist счётчика варок (ставит microscope_service): on_varka_count(count)
         self.on_varka_count = None
+        # колбэк итога калибровки -> журнал autocal.log + persist «последней» (ставит microscope_service)
+        self.on_autocal_done = None
         # колбэк «довод не сошёлся» -> запись в отдельный лог-файл (ставит microscope_service)
         self.on_approach_fail = None
         self._fa_approach_fail = None
@@ -266,6 +298,10 @@ class MicroscopeFSM:
     def set_stage(self, stage):
         with self._lock:
             self.stage = int(stage)
+            if not self._stage_seen:
+                # первая стадия после запуска программы — не фронт пропарки (иначе перезапуск на пропарке = +1 варка)
+                self._stage_seen = True
+                self._stage11_prev = (self.stage == 11)
 
     def set_led(self, bright=None, on=None):
         with self._lock:
@@ -382,6 +418,8 @@ class MicroscopeFSM:
                 return {"status": "blocked", "hint": "снимите «Стоп движения»"}
             if self.mode != 0:
                 return {"status": "busy", "mode": self.mode}
+            if self._cal_active:
+                return {"status": "busy_cal", "hint": "идёт автокалибровка нуля"}
             was_manual = self.manual
             if self.manual:
                 self._drop_manual_locked()   # снять ручной безопасно (зеркало set_manual(True))
@@ -555,33 +593,270 @@ class MicroscopeFSM:
             if sensor_hi is not None:
                 self._ac_sensor_hi = int(sensor_hi)
             if timeout_sec is not None:
-                self._ac_timeout_ticks = max(1, int(timeout_sec) * 10)
+                self._ac_timeout_s = max(1, int(timeout_sec))
             if count is not None:
                 self._varka_count = max(0, int(count))
             return {"enabled": self._ac_enabled, "every_n": self._ac_every_n,
                     "sensor_lo": self._ac_sensor_lo, "sensor_hi": self._ac_sensor_hi,
-                    "timeout_sec": self._ac_timeout_ticks // 10, "count": self._varka_count}
+                    "timeout_sec": self._ac_timeout_s, "count": self._varka_count}
 
     def start_autocal(self):
         """Ручной запуск автокалибровки (кнопка). Только когда цикл в простое. Можно и из РУЧНОГО режима
         (как «Взять пробу»): ручной снимается безопасно, калибровка идёт как в автомате, по окончании
-        ручной режим возвращается — пульт снова у человека."""
+        ручной режим возвращается — пульт снова у человека. При «Стоп движения» и без связи — не стартуем."""
+        connected = self.plate.status.get("connected", False)
         with self._lock:
             if self._cal_active:
                 return {"status": "busy"}
             if self.mode != 0:
                 return {"status": "busy_cycle", "mode": self.mode}
+            if self.sw3:
+                return {"status": "blocked", "hint": "снимите «Стоп движения»"}
+            if not connected:
+                return {"status": "no_link", "hint": "нет связи с платой"}
             was_manual = self.manual
             if self.manual:
                 self._drop_manual_locked()
                 self._cal_return_manual = True
-            self._cal_active = True
-            self._cal_phase = "find_zero"
-            self._cal_attempt = 1
-            self._cal_wait = 0
-            self._cal_grace = 0
-            self._cal_result = ""
+            self._cal_begin("кнопка")
             return {"status": "started", "was_manual": was_manual}
+
+    def request_unflag(self, m):
+        """Снять в прошивке возможный висящий флаг «Поиска 0» мотора m (после стопа): через 0,5 с шлём «шаги 0» —
+        мотор не едет, а следующий законченный ход не обнулит координаты в своей конечной точке. Пауза — чтобы
+        не слить со стопом в одну запись командного регистра."""
+        with self._lock:
+            self._unflag[int(m)] = CAL_CMD_GAP_TICKS + 2
+
+    # ---------- автокалибровка нуля М1 (вызывается ПОД локом) ----------
+
+    def _cal_begin(self, trigger):
+        self._cal_active = True
+        self._cal_trigger = trigger
+        self._cal_phase = "pre"
+        self._cal_step = "замер до калибровки"
+        self._cal_attempt = 0
+        self._cal_wait = 60                    # замер «до» — если мотор не встал за 6 с, идём без него
+        self._cal_grace = 0
+        self._cal_emit = None
+        self._cal_still = 0
+        self._cal_anchor = None
+        self._cal_samples = []
+        self._cal_ok = False
+        self._cal_reason = ""
+        self._cal_before = None
+        self._cal_zero_s = None
+        self._cal_after = None
+        self._cal_result = ""
+
+    def _cal_move_ticks(self):
+        return max(CAL_MOVE_MIN_S, self._ac_timeout_s) * 10
+
+    def _cal_track_still(self, calc, enc):
+        """«Мотор стоит»: расчётная и энкодер не ушли больше чем на 10 мкм (шаг регистров) от начала окна."""
+        a = self._cal_anchor
+        if calc is None or enc is None:
+            self._cal_still, self._cal_anchor = 0, None
+        elif a is None or abs(calc - a[0]) > 10 or abs(enc - a[1]) > 10:
+            self._cal_still, self._cal_anchor = 0, (calc, enc)
+        else:
+            self._cal_still += 1
+        return self._cal_still >= CAL_STILL_TICKS
+
+    def _cal_measure(self, calc, enc, sensor):
+        """Замер стоя: копим CAL_MEASURE_TICKS тиков, отдаём медианы {calc, enc, sensor} (иначе None)."""
+        if calc is None or enc is None or sensor is None:
+            return None
+        self._cal_samples.append((calc, enc, sensor))
+        if len(self._cal_samples) < CAL_MEASURE_TICKS:
+            return None
+        med = [sorted(col)[len(col) // 2] for col in zip(*self._cal_samples)]
+        self._cal_samples = []
+        return {"calc": int(round(med[0])), "enc": int(round(med[1])), "sensor": int(round(med[2]))}
+
+    def _cal_go(self, phase, step, grace=0):
+        self._cal_phase = phase
+        self._cal_step = step
+        self._cal_grace = grace
+        self._cal_samples = []
+        if phase in ("measure", "verify"):
+            self._cal_wait = 80                # замер стоя — не дольше 8 с (нет датчика / мотор не встал)
+
+    def _cal_fail(self, reason):
+        """Ноль не сошёлся — дальше всё равно снимаем флаг поиска и отводим (у стекла не стоим)."""
+        self._cal_ok = False
+        self._cal_reason = reason
+        log_event("microscope_fsm", "Автокалибровка: не удалось — " + reason, "warn",
+                  {"attempt": self._cal_attempt, "view": list(self._cal_view)})
+        self._cal_go("unflag", "отвожу")
+
+    def _cal_finish(self, result):
+        """Закончить калибровку: итог, плашка, краткая запись для UI. Возвращает данные для журнала."""
+        failed = self._cal_failed
+        msg = self._cal_fail_msg
+        after, before = self._cal_after, self._cal_before
+        if result == "готово":
+            failed, msg = False, ""
+            if after:
+                worst = max(abs(after["sensor"] - after["enc"]), abs(after["sensor"] - after["calc"]))
+                if worst > CAL_FAR_TOL_UM:
+                    failed = True
+                    result = "готово, на отводе расхождение %d мкм" % worst
+                    msg = ("ноль поставлен, но на отводе датчик расходится с энкодером/расчётной на %d мкм — "
+                           "похоже на масштаб датчика" % worst)
+        elif result == "не удалось":
+            failed, msg = True, "автокалибровка не удалась: %s" % self._cal_reason
+        self._cal_failed, self._cal_fail_msg = failed, msg
+        self._cal_result = result
+        self._cal_active = False
+        self._cal_phase = None
+        self._cal_step = ""
+        self._cal_emit = None
+        diff = lambda d: None if not d else d["sensor"] - d["enc"]
+        self._cal_last = {"ts": datetime.now().isoformat(timespec="seconds"), "result": result,
+                          "diff_before": diff(before), "diff_after": diff(after)}
+        return {"ts": self._cal_last["ts"], "trigger": self._cal_trigger, "result": result,
+                "reason": self._cal_reason, "fixes": self._cal_attempt, "zero_sensor": self._cal_zero_s,
+                "before": before, "after": after, "last": dict(self._cal_last)}
+
+    def _cal_tick(self, pos1, pos_enc, pos1_ai):
+        """Один такт процедуры калибровки. Возвращает итог (для журнала), когда закончили, иначе None."""
+        self._cal_view = (pos1, pos_enc, pos1_ai)
+        still = self._cal_track_still(pos1, pos_enc)
+        if self._cal_grace > 0:
+            self._cal_grace -= 1
+            return None
+        ph = self._cal_phase
+        lo, hi = self._ac_sensor_lo, self._ac_sensor_hi
+        if not still and ph in ("pre", "after"):
+            self._cal_samples = []                 # замер только стоя: поехал — копим заново
+        if ph == "pre":
+            # замер ДО: на сколько разошлись датчик и энкодер (обычно на отводе) — видно, сколько уполз ноль
+            self._cal_wait -= 1
+            got = self._cal_measure(pos1, pos_enc, pos1_ai) if still else None
+            if got or self._cal_wait <= 0:
+                self._cal_before = got
+                self._cal_go("find_zero", "«Поиск 0»")
+        elif ph == "find_zero":
+            self._cal_emit = ("find_zero",)
+            self._cal_move_min = CAL_MOVE_MIN_TICKS
+            self._cal_wait = self._cal_move_ticks()
+            self._cal_go("move", "«Поиск 0» — жду, пока мотор встанет")
+        elif ph == "move":
+            self._cal_wait -= 1
+            if self._cal_move_min > 0:
+                self._cal_move_min -= 1
+            elif still:
+                self._cal_go("measure", "замер датчика стоя")
+            elif self._cal_wait <= 0:
+                self._cal_fail("мотор не встал за %d с" % (self._cal_move_ticks() // 10))
+        elif ph == "measure":
+            if not still:                          # поехал (например, доделывает команду из очереди) — ждём заново
+                self._cal_samples = []
+                self._cal_move_min = 0
+                self._cal_wait = self._cal_move_ticks()
+                self._cal_go("move", "мотор ещё едет — жду остановку")
+                return None
+            got = self._cal_measure(pos1, pos_enc, pos1_ai)
+            if not got:
+                self._cal_wait -= 1
+                if self._cal_wait <= 0:
+                    self._cal_fail("нет устойчивых данных датчика/энкодера стоя")
+                return None
+            s = got["sensor"]
+            if self._cal_zero_s is None:
+                self._cal_zero_s = s               # где прошивка поставила свой ноль (для журнала)
+            if lo <= s <= hi:
+                self._cal_emit = ("set_zero",)
+                self._cal_go("verify", "«Установить 0» — проверка", grace=10)
+            elif self._cal_attempt >= CAL_ATTEMPTS:
+                self._cal_fail("датчик %d мкм не вошёл в зону %d–%d за %d сдвига" % (s, lo, hi, CAL_ATTEMPTS))
+            else:
+                # датчик вне зоны: сдвиг на разницу до середины зоны. Выше зоны — к стеклу, ниже (продавил) — от стекла
+                d = int(round((s - (lo + hi) / 2.0) / 10.0)) * 10 or (10 if s > hi else -10)
+                if abs(d) > CAL_FIX_MAX_UM:
+                    self._cal_fail("датчик %d мкм — слишком далеко от нуля, сдвигом не лечим" % s)
+                else:
+                    self._cal_attempt += 1
+                    self._cal_emit = ("shift", -d)  # минус — к стеклу
+                    self._cal_move_min = CAL_SHIFT_MIN_TICKS + abs(d) // 100
+                    self._cal_wait = self._cal_move_ticks()
+                    self._cal_go("move", "сдвиг %+d мкм по датчику — жду остановку" % -d)
+                    log_event("microscope_fsm", "Автокалибровка: датчик %d мкм вне зоны %d–%d — сдвиг %+d мкм" %
+                              (s, lo, hi, -d), "info", got)
+        elif ph == "verify":
+            self._cal_wait -= 1
+            if self._cal_wait <= 0:
+                self._cal_fail("после «Установить 0» нет устойчивых данных стоя")
+                return None
+            if not still:
+                self._cal_samples = []
+                return None
+            got = self._cal_measure(pos1, pos_enc, pos1_ai)
+            if not got:
+                return None
+            if (abs(got["calc"]) <= CAL_ZERO_TOL_UM and abs(got["enc"]) <= CAL_ZERO_TOL_UM
+                    and lo <= got["sensor"] <= hi):
+                self._cal_ok = True
+                self._varka_count = 0
+                self._cal_varka_reset = True
+                log_event("microscope_fsm", "Автокалибровка: ноль установлен, все три сошлись", "success", got)
+                self._cal_go("unflag", "отвожу")
+            elif self._cal_attempt >= CAL_ATTEMPTS:
+                self._cal_fail("после «Установить 0» не сошлось: расчётная %d, энкодер %d, датчик %d" %
+                               (got["calc"], got["enc"], got["sensor"]))
+            else:
+                self._cal_attempt += 1             # запись могла не дойти — замер и «Установить 0» ещё раз
+                self._cal_go("measure", "повтор: замер датчика стоя")
+        elif ph == "unflag":
+            # «шаги 0»: мотор не едет, а висящий флаг «Поиска 0» снят — отвод не обнулит координаты в своей точке
+            self._cal_emit = ("steps0",)
+            self._cal_go("retract_go", "отвожу в %d мкм" % self._retract_pos, grace=CAL_CMD_GAP_TICKS)
+        elif ph == "retract_go":
+            # отвод в retract_pos обычным путём (цель + повтор goto до доезда), движение снова разрешено
+            self.m1_sp = self._retract_pos
+            self.m1_sp_old = self._retract_pos             # без побочки блока 6 (клапан трубки и т.п.)
+            self._step_start = pos_enc
+            self._cal_redrive = 0
+            self._emit_cmd1 = True
+            self._cal_wait = self._step_timeout_ticks
+            self._cal_go("retract", "отвожу в %d мкм" % self._retract_pos, grace=10)
+        elif ph == "retract":
+            self.m1_sp = self._retract_pos
+            self._cal_wait -= 1
+            if self._reached_retract(pos_enc, self._retract_pos) or self._cal_wait <= 0:
+                self._cal_wait = 60                        # замер на отводе — не дольше 6 с
+                self._cal_go("after", "сверяю датчик с энкодером на отводе")
+            else:
+                # повтор goto до доезда (плата за один goto делает шаг). Свой счётчик: в mode 0
+                # общий _redrive обнуляется каждый такт
+                self._cal_redrive += 1
+                if self._cal_redrive >= REDRIVE_TICKS:
+                    self._cal_redrive = 0
+                    self._emit_cmd1 = True
+        elif ph == "after":
+            self.m1_sp = self._retract_pos
+            self._cal_wait -= 1
+            got = self._cal_measure(pos1, pos_enc, pos1_ai) if still else None
+            if got or self._cal_wait <= 0:
+                self._cal_after = got
+                return self._cal_finish("готово" if self._cal_ok else "не удалось")
+        return None
+
+    def _cal_send(self, what):
+        """Команда калибровки на плату (ВНЕ лока). Движение — только с разрешением мотора."""
+        p, op = self.plate, what[0]
+        if op == "find_zero":
+            p.motor_enable(1, True)
+            p.motor_find_zero(1)
+        elif op == "shift":
+            p.motor_enable(1, True)
+            p.motor_direction(1, what[1] > 0)          # прошивка берёт направление сдвига из #1240
+            p.motor_shift(1, abs(what[1]))
+        elif op == "set_zero":
+            p.motor_set_zero(1)
+        elif op == "steps0":
+            p.motor_steps(1, 0)
 
     def _enter_manual_locked(self):
         """Вернуть РУЧНОЙ режим (под локом) — зеркало set_manual(True): автомат не пишет плату, залипшие команды погашены,
@@ -702,14 +977,11 @@ class MicroscopeFSM:
             if self._fault:
                 label = "⚠ АВАРИЯ: %s — снимите на вкладке «Настр»" % self._fault_msg
             elif self._cal_active:
-                # калибровка идёт в автомате (mode=0) — показываем на инфо-строке, что делает алгоритм
-                if self._cal_phase == "zero_settle":
-                    label = "Автокалибровка нуля: ноль установлен, сейчас отведу"
-                elif self._cal_phase == "retract":
-                    label = "Автокалибровка нуля: отвожу в %d мкм" % self._retract_pos
-                else:
-                    what = "Поиск 0" if self._cal_phase == "find_zero" else "жду энкодер 0±%d и аналог в зоне" % CAL_ENC_TOL_UM
-                    label = "Автокалибровка нуля (попытка %d/%d): %s" % (self._cal_attempt, CAL_ATTEMPTS, what)
+                # калибровка идёт в автомате (mode=0) — что делает алгоритм и живые цифры (видно, почему не сходится)
+                num = lambda v: "—" if v is None else "%d" % round(v)
+                c, e, s = self._cal_view
+                label = "Автокалибровка нуля: %s · энкодер %s · расчётная %s · датчик %s (зона %d–%d)" % (
+                    self._cal_step, num(e), num(c), num(s), self._ac_sensor_lo, self._ac_sensor_hi)
             elif m in (20, 22, 24) and self._settle > 0:
                 # приехал, идёт пауза осадки датчика (сравнить энкодер/аналог в статике)
                 left = (max(0, self._settle_ticks - self._settle) + 9) // 10
@@ -790,14 +1062,17 @@ class MicroscopeFSM:
                     "every_n": self._ac_every_n,
                     "sensor_lo": self._ac_sensor_lo,
                     "sensor_hi": self._ac_sensor_hi,
-                    "timeout_sec": self._ac_timeout_ticks // 10,
+                    "timeout_sec": self._ac_timeout_s,
                     "count": self._varka_count,
                     "active": self._cal_active,
                     "phase": self._cal_phase,
+                    "step": self._cal_step,
                     "attempt": self._cal_attempt,
                     "attempts": CAL_ATTEMPTS,
                     "failed": self._cal_failed,
+                    "fail_msg": self._cal_fail_msg,
                     "result": self._cal_result,
+                    "last": self._cal_last,
                 },
                 "cyclic": self.sw0,
                 "inhibit": self.sw3,
@@ -884,6 +1159,7 @@ class MicroscopeFSM:
         pos_sel = pos1 if sel == "calc" else (pos1_ai if sel == "ai" else pos_enc)
         if pos_sel is None:
             pos_sel = pos_enc
+        connected = self.plate.status.get("connected", False)
 
         with self._lock:
             # 0) подтверждение перехода из ручного: фронт входа стадии в рабочую зону (3..9),
@@ -896,106 +1172,43 @@ class MicroscopeFSM:
                 self._manual_confirm = False
             self._stage_prev_in = stage_in
 
-            # 0.5) АВТОКАЛИБРОВКА нуля М1 (только в АВТОМАТЕ): фронт входа в стадию 11 (пропарка) ->
-            # счётчик варок +1; дошёл до every_n -> старт. Процедура: жмём «Поиск 0» (find_zero),
-            # ждём, пока расчётная 1274 И аналог 1271 оба в зоне [lo..hi] -> set_zero. Не сошлось за
-            # таймаут -> ВТОРАЯ попытка Поиск 0 (там ждём ТОЛЬКО аналог, т.к. 1274 тоже может сбиться).
-            # Не сошлось и во 2-й -> «не удалось», ноль не трогаем. Статус пишем в инфо-строку.
+            # 0.5) АВТОКАЛИБРОВКА нуля М1 (см. CAL_* вверху и _cal_tick): фронт входа в стадию 11 (пропарка) ->
+            # счётчик варок +1; дошёл до every_n -> калибруем на этой пропарке, как только автомат свободен
+            # (не Ручной, проба не идёт, нет «Стоп движения», есть связь). Ход пишем в инфо-строку.
             varka_persist = None   # не None -> сохранить счётчик варок (вне лока, через колбэк)
+            cal_done = None        # не None -> итог калибровки (журнал вне лока, через колбэк)
             stage11 = (self.stage == 11)
-            if stage11 and not self._stage11_prev:
-                self._varka_count += 1
-                varka_persist = self._varka_count
-                if (self._ac_enabled and not self._cal_active and not self.manual
-                        and self._varka_count >= self._ac_every_n):
-                    self._cal_active = True
-                    self._cal_phase = "find_zero"
-                    self._cal_attempt = 1
-                    self._cal_wait = 0
-                    self._cal_grace = 0
-                    self._cal_result = ""
-                    log_event("microscope_fsm", "Автокалибровка: старт (варок %d/%d)" %
-                              (self._varka_count, self._ac_every_n), "info")
-            self._stage11_prev = stage11
+            if self._stage_seen:
+                if stage11 and not self._stage11_prev:
+                    self._varka_count += 1
+                    varka_persist = self._varka_count
+                    self._ac_armed = True
+                if not stage11:
+                    self._ac_armed = False
+                self._stage11_prev = stage11
+            if (self._ac_armed and self._ac_enabled and self._varka_count >= self._ac_every_n
+                    and not self._cal_active and not self.manual and self.mode == 0 and not self.sw3 and connected):
+                self._ac_armed = False
+                self._cal_begin("пропарка")
+                log_event("microscope_fsm", "Автокалибровка: старт (варок %d/%d)" %
+                          (self._varka_count, self._ac_every_n), "info")
 
-            # калибровка идёт только в автомате; если увели в ручной — прерываем
-            if self._cal_active and self.manual:
-                self._cal_active = False
-                self._cal_phase = None
-                self._cal_result = "прервано (ручной)"
-                self._cal_return_manual = False
+            # калибровка идёт только в автомате, без «Стоп движения» и со связью — иначе прерываем. «Поиск 0» мог
+            # остаться в прошивке с флагом — снимаем его «шагами 0», когда плата снова доступна
+            if self._cal_active:
+                why = ("ручной" if self.manual else "стоп движения" if self.sw3
+                       else "нет связи" if not connected else None)
+                if why:
+                    self._cal_return_manual = False
+                    self._unflag[1] = CAL_CMD_GAP_TICKS + 2
+                    log_event("microscope_fsm", "Автокалибровка прервана: " + why, "warn")
+                    cal_done = self._cal_finish("прервано (%s)" % why)
 
             if self._cal_active:
-                ph = self._cal_phase
-                if ph == "find_zero":
-                    self._cal_emit_findzero = True                 # жмём «Поиск 0» (дальше прошивка сама)
-                    self._cal_phase = "wait"
-                    self._cal_wait = self._ac_timeout_ticks
-                    # даём плате тронуться: 1 с на первой попытке, 0,1 с на повторах
-                    self._cal_grace = CAL_GRACE_FIRST_TICKS if self._cal_attempt == 1 else CAL_GRACE_RETRY_TICKS
-                elif ph == "wait":
-                    if self._cal_grace > 0:
-                        self._cal_grace -= 1                       # телеметрия ещё старая — не смотрим
-                    else:
-                        # «в нуле»: энкодер в ±CAL_ENC_TOL_UM И аналог в зоне [lo..hi]; хватает одного такта
-                        enc_ok = pos_enc is not None and abs(pos_enc) <= CAL_ENC_TOL_UM
-                        ai_ok = pos1_ai is not None and self._ac_sensor_lo <= pos1_ai <= self._ac_sensor_hi
-                        if enc_ok and ai_ok:
-                            self._cal_emit_setzero = True          # всё в нуле -> установить 0
-                            self._cal_phase = "zero_settle"
-                            self._cal_grace = CAL_ZERO_SETTLE_TICKS
-                            self._cal_failed = False
-                            self._cal_result = "готово"
-                            self._varka_count = 0
-                            varka_persist = 0
-                            log_event("microscope_fsm", "Автокалибровка: ноль установлен", "success",
-                                      {"enc": pos_enc, "sensor": round(pos1_ai, 1), "attempt": self._cal_attempt})
-                        else:
-                            self._cal_wait -= 1
-                            if self._cal_wait <= 0:
-                                if self._cal_attempt < CAL_ATTEMPTS:
-                                    self._cal_attempt += 1
-                                    self._cal_phase = "find_zero"  # ещё раз «Поиск 0»
-                                    log_event("microscope_fsm", "Автокалибровка: попытка %d/%d" %
-                                              (self._cal_attempt, CAL_ATTEMPTS), "warn",
-                                              {"enc": pos_enc, "sensor": None if pos1_ai is None else round(pos1_ai, 1)})
-                                else:
-                                    # не вышло — ноль не трогаем, отводим, работаем дальше; UI мигает красным
-                                    self._cal_failed = True
-                                    self._cal_result = "не удалось"
-                                    self._cal_phase = "retract_go"
-                                    log_event("microscope_fsm", "Автокалибровка: не удалось за %d попытки — "
-                                              "ноль не трогаем, отвожу" % CAL_ATTEMPTS, "warn",
-                                              {"enc": pos_enc, "sensor": None if pos1_ai is None else round(pos1_ai, 1)})
-                elif ph == "zero_settle":
-                    self._cal_grace -= 1                           # после set_zero плате нужна секунда
-                    if self._cal_grace <= 0:
-                        self._cal_phase = "retract_go"
-                if self._cal_phase == "retract_go":
-                    # отвод в retract_pos обычным путём (цель + повтор goto до доезда), движение снова разрешено
-                    self.m1_sp = self._retract_pos
-                    self.m1_sp_old = self._retract_pos             # без побочки блока 6 (клапан трубки и т.п.)
-                    self._step_start = pos_enc
-                    self._cal_redrive = 0
-                    self._emit_cmd1 = True
-                    self._cal_phase = "retract"
-                    self._cal_wait = self._step_timeout_ticks
-                    self._cal_grace = 10                           # пауза: телеметрия после set_zero/Поиска 0 устаревшая
-                elif self._cal_phase == "retract":
-                    self.m1_sp = self._retract_pos
-                    if self._cal_grace > 0:
-                        self._cal_grace -= 1
-                    self._cal_wait -= 1
-                    if (self._cal_grace <= 0 and self._reached_retract(pos_enc, self._retract_pos))                             or self._cal_wait <= 0:
-                        self._cal_active = False
-                        self._cal_phase = None
-                    else:
-                        # повтор goto до доезда (плата за один goto делает шаг). Свой счётчик: в mode 0
-                        # общий _redrive обнуляется каждый такт
-                        self._cal_redrive += 1
-                        if self._cal_redrive >= REDRIVE_TICKS:
-                            self._cal_redrive = 0
-                            self._emit_cmd1 = True
+                cal_done = self._cal_tick(pos1, pos_enc, pos1_ai)
+            if self._cal_varka_reset:
+                self._cal_varka_reset = False
+                varka_persist = 0
 
             # калибровка, запущенная кнопкой из ручного режима, закончилась — вернуть ручной
             if self._cal_return_manual and not self._cal_active:
@@ -1077,7 +1290,9 @@ class MicroscopeFSM:
             # «запустить цикл») не даёт фронта и не срабатывает второй раз.
             if self.cmd != self.cmd_old:
                 c = self.cmd // 100
-                if c == 1:
+                if c in (1, 2) and self._cal_active:
+                    pass                               # идёт автокалибровка — М1 занят, пробу/отвод не начинаем
+                elif c == 1:
                     self.mode = 20                     # «Взять пробу» / произвести цикл
                 elif c == 2:
                     self.m1_sp = self.SP[0]            # отвести на 40 мм
@@ -1248,14 +1463,34 @@ class MicroscopeFSM:
             sample_done = self._sample_done_request; self._sample_done_request = False
             goto_target = self._fa_goto_target; self._fa_goto_target = None   # цель подгона (goto за раз)
             approach_fail = self._fa_approach_fail; self._fa_approach_fail = None
-            cal_active = self._cal_active
-            # на фазе отвода после калибровки движение пишем обычным путём (цель + goto), поэтому «калибровка рулит сама» — только до неё
-            cal_owns = self._cal_active and self._cal_phase != "retract"
-            cal_findzero = self._cal_emit_findzero; self._cal_emit_findzero = False
-            cal_setzero = self._cal_emit_setzero; self._cal_emit_setzero = False
+            cal_emit = self._cal_emit; self._cal_emit = None
+            # на отводе после калибровки движение пишем обычным путём (цель + goto), поэтому «калибровка рулит сама» — только до него
+            cal_owns = self._cal_active and self._cal_phase not in ("retract", "after")
+            # «шаги 0» после стопа: отсчёт идёт, а последний тик ждёт связи
+            unflag = []
+            for m in (1, 2):
+                if self._unflag[m] > 1 or (self._unflag[m] == 1 and connected):
+                    self._unflag[m] -= 1
+                    if self._unflag[m] == 0:
+                        unflag.append(m)
 
         pos2 = telem.get("pos2")
-        connected = self.plate.status.get("connected", False)
+
+        # persist счётчика варок и итог калибровки — и в Ручном (калибровку могли прервать переходом в ручной)
+        if varka_persist is not None and self.on_varka_count:
+            try:
+                self.on_varka_count(varka_persist)
+            except Exception as e:
+                log_event("microscope_fsm", "Ошибка persist счётчика варок", "warn", {"error": str(e)})
+        if cal_done is not None and self.on_autocal_done:
+            try:
+                self.on_autocal_done(cal_done)
+            except Exception as e:
+                log_event("microscope_fsm", "Ошибка журнала автокалибровки", "warn", {"error": str(e)})
+
+        # снять висящий флаг «Поиска 0» в прошивке («шаги 0» — мотор не едет, поэтому можно и в Ручном)
+        for m in unflag:
+            self.plate.motor_steps(m, 0)
 
         # РУЧНОЙ РЕЖИМ: автомат не трогает плату — всем (моторы/LED/клапаны) рулит пульт.
         # (защита хода М1 у стекла — аппаратная, в прошивке по регистру 1234, см. m1_stop_sensor)
@@ -1283,13 +1518,6 @@ class MicroscopeFSM:
             except Exception as e:
                 log_event("microscope_fsm", "Ошибка колбэка «проба завершена»", "warn", {"error": str(e)})
 
-        # persist счётчика варок (изменился на этом такте) — через колбэк сервиса
-        if varka_persist is not None and self.on_varka_count:
-            try:
-                self.on_varka_count(varka_persist)
-            except Exception as e:
-                log_event("microscope_fsm", "Ошибка persist счётчика варок", "warn", {"error": str(e)})
-
         # «довод не сошёлся» — в отдельный лог-файл (для разбора/починки потом)
         if approach_fail is not None and self.on_approach_fail:
             try:
@@ -1304,21 +1532,18 @@ class MicroscopeFSM:
             self.plate.motor_stop(1)
             self.plate.motor_stop(2)
             with self._lock:
+                # стоп не снимает в прошивке флаг «Поиска 0» — снимем «шагами 0» после паузы
+                self._unflag[1] = self._unflag[2] = CAL_CMD_GAP_TICKS + 2
                 if pos1 is not None:
                     self.m1_sp = pos1
                     self.m1_sp_old = pos1
                 if pos2 is not None:
                     self.m2_sp = pos2
                     self.m2_sp_old = pos2
-        elif connected and (cal_owns or cal_findzero or cal_setzero):
-            # автокалибровка рулит М1 сама — обычное движение не пишем. Только «Поиск 0» (плата
-            # сама доводит мотор в 0) и, когда оба датчика в нуле, «Установить 0».
-            # (set_zero шлём даже если cal_active уже снят на этом же такте — иначе ноль не запишется)
-            if cal_findzero:
-                self.plate.motor_enable(1, True)
-                self.plate.motor_find_zero(1)
-            if cal_setzero:
-                self.plate.motor_set_zero(1)
+        elif connected and (cal_owns or cal_emit):
+            # автокалибровка рулит М1 сама — обычное движение не пишем, только её команды (по одной, мотор стоит)
+            if cal_emit:
+                self._cal_send(cal_emit)
         elif connected and not out["inhibit"]:
             # движение обоих моторов — только при связи и снятом запрете.
             if goto_target is not None:

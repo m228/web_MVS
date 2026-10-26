@@ -1159,20 +1159,28 @@
       const faCF = $("faClearFault"); if (faCF) faCF.hidden = !f.fault;
       const cl = $("cycLabel"); if (cl) cl.classList.toggle("is-fault", !!f.fault);
 
-      // автокалибровка: счётчик варок + статус (простой/поиск 0/жду датчик)
+      // автокалибровка: счётчик варок + что делает сейчас (подробно с цифрами — в инфо-строке «Цикл»)
       const ac = f.autocal || {};
       set("acCount", ac.count == null ? "—" : ac.count);
       set("acEveryNShow", ac.every_n == null ? "—" : ac.every_n);
-      const acN = ac.attempts || 3;
-      const acStatusTxt = ac.active
-        ? (ac.phase === "find_zero" ? ("Поиск 0 (" + (ac.attempt || 1) + "/" + acN + ")")
-          : ac.phase === "wait" ? ("жду ноль (" + (ac.attempt || 1) + "/" + acN + ")")
-          : ac.phase === "zero_settle" ? "ноль установлен"
-          : "отвод")
-        : (ac.result || "ждёт пропарки");
-      set("acStatus", acStatusTxt);
-      // «не удалось» — красная мигающая плашка на вкладках «Цикл» и «Настройки моторов» до первой успешной калибровки
-      ["acFail", "cycAcFail"].forEach((id) => { const el = $(id); if (el) el.hidden = !ac.failed; });
+      set("acStatus", ac.active ? (ac.step || "идёт") : (ac.result || "ждёт пропарки"));
+      // последняя: когда, итог, датчик − энкодер до → после (на сколько уполз ноль и сошлось ли)
+      const acL = ac.last;
+      let acLastTxt = "—";
+      if (acL && acL.ts) {
+        const d = new Date(acL.ts);
+        const p2 = (n) => String(n).padStart(2, "0");
+        const um = (v) => (v == null ? "—" : (v > 0 ? "+" : "") + v);
+        acLastTxt = p2(d.getDate()) + "." + p2(d.getMonth() + 1) + " " + p2(d.getHours()) + ":" + p2(d.getMinutes())
+          + " · " + acL.result + " · датчик − энкодер " + um(acL.diff_before) + " → " + um(acL.diff_after) + " мкм";
+      }
+      set("acLast", acLastTxt);
+      // «не удалось» — красная мигающая плашка с причиной на вкладках «Цикл» и «Настройки моторов» до первой успешной
+      ["acFail", "cycAcFail"].forEach((id) => {
+        const el = $(id); if (!el) return;
+        el.hidden = !ac.failed;
+        if (ac.failed) el.textContent = "⚠ " + (ac.fail_msg || "автокалибровка не удалась") + " — работаем дальше";
+      });
       set("cycSv", f.sv == null ? "—" : Number(f.sv).toFixed(1));
       // СВ рядом с видео камеры (телеметрия камеры) — чтобы было видно при просмотре потока
       set("camSv_v", f.sv == null ? "—" : Number(f.sv).toFixed(1));
@@ -1386,7 +1394,7 @@
     if (acStart) acStart.addEventListener("click", () => {
       api("/api/micro/autocal/start").then((r) => {
         const h = $("acHint");
-        if (h) { h.textContent = r && r.status === "started" ? (r.was_manual ? "калибровка запущена из ручного — потом вернётся ручной" : "калибровка запущена") : "занято (" + (r && r.status) + ")"; setTimeout(() => { h.textContent = ""; }, 3000); }
+        if (h) { h.textContent = r && r.status === "started" ? (r.was_manual ? "калибровка запущена из ручного — потом вернётся ручной" : "калибровка запущена") : (r && r.hint) || ("занято (" + (r && r.status) + ")"); setTimeout(() => { h.textContent = ""; }, 3000); }
       }).catch(() => {});
     });
     const acReset = $("acReset");

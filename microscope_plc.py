@@ -321,7 +321,10 @@ class PlateClient:
             off = int(spec["off"])
             scale = spec.get("scale", 1)
             if 0 <= off < len(regs):
-                result[name] = regs[off] * scale
+                raw = regs[off]
+                if spec.get("signed") and raw >= 0x8000:   # знаковый int16: у нуля позиция уходит в минус, а не в 655350
+                    raw -= 0x10000
+                result[name] = raw * scale
         # датчик перемещения 1271 (pos1_ai): signed + фильтр в одной точке (перекрывает сырой расчёт выше)
         ai_spec = self.cfg["in"].get("pos1_ai")
         if ai_spec is not None:

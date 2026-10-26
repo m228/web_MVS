@@ -2299,6 +2299,45 @@ def _boil_anomaly():
     return "забор Тьюки K=3 в обе стороны; <8 опорных / другая модель — «мало данных»; изменение в журнале обрывает опору; идущая и короткая не оцениваются"
 
 
+@check("Микроскоп", "Варка идёт не как обычные: коридор по СВ, 3 пробы подряд в одну сторону, одиночный выброс и пустая проба не в счёт, нет коридора — не оцениваем")
+def _anomaly_live():
+    import boil_anomaly as ba
+    jit = [0.4, -0.3, 0.1, 0.5, -0.5, 0.2, -0.1, 0.3, -0.4, 0.0]
+
+    def probe(i, sv, **kw):
+        j = jit[i % 10]
+        r = {"ts": "p%d" % i, "t": 100.0 * i, "sv": sv, "count": 200, "mean": 40 + (sv - 82) * 25 + 4 * j, "fines_m1": 6 + j, "fines_m2": 6 + j, "fines_m3": 6 + j,
+             "n_aggregate": 20 + j}
+        r.update(kw)
+        return r
+    svs = [82 + 0.5 * k for k in range(17)]
+    ref = [[probe(10 * b + k, sv) for k, sv in enumerate(svs)] for b in range(10)]
+    cor = ba.corridor(ref)
+    assert all(len(cor[k][round(86 / ba.SV_BIN)]) == 10 for k in cor), "по 10 проб на бин СВ"
+
+    def cur(n_bad, bad_kw, n=14):
+        c = [probe(900 + k, sv) for k, sv in enumerate(svs[:n])]
+        for k in range(n - n_bad, n):
+            c[k] = probe(900 + k, svs[k], **bad_kw)
+        return c
+    hi = {"fines_m1": 20.0, "fines_m2": 20.0, "fines_m3": 20.0}
+    r = ba.judge(cur(3, hi), cor)
+    assert [(i["key"], i["dir"], i["n"]) for i in r] == [("fines", "high", 3)] and r[0]["value"] == 20.0 and r[0]["sv"] == svs[13], r      # мука 3 пробы подряд выше коридора
+    assert ba.judge(cur(2, hi), cor) == [], "две пробы — ещё не тревога"
+    c = cur(3, hi)
+    c[-2] = probe(900 + 12, svs[12])
+    assert ba.judge(c, cor) == [], "одна проба вернулась в коридор — серия оборвана"
+    c = cur(3, hi)
+    c[-2] = probe(900 + 12, svs[12], count=5)
+    assert ba.judge(c, cor) == [], "пустая проба (мало кристаллов) обрывает серию"
+    lo = {"mean": 20.0}
+    r = ba.judge(cur(4, lo), cor)
+    assert [(i["key"], i["dir"], i["n"]) for i in r] == [("mean", "low", 4)], r                                                  # слишком мелкие кристаллы при этом СВ
+    assert ba.judge(cur(3, hi, n=12)[:3], cor) == [] and ba.judge([probe(1, 95.0)] * 4, cor) == [], "нет коридора на этом СВ — не оцениваем"
+    assert ba.judge(cur(3, hi), ba.corridor(ref[:2])) == [], "опорных проб в окне меньше BIN_MIN — коридора нет"
+    return "коридор по СВ (по 10 проб на бин), 3 пробы подряд в одну сторону; одиночная, пустая проба и СВ без коридора не тревожат"
+
+
 @check("Микроскоп", "Журнал изменений: добавить, поправить, удалить; чужой серийник не трогается; отчёт отдаёт изменения периода и цели маточника")
 def _changes_journal():
     import tempfile

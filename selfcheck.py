@@ -2074,14 +2074,18 @@ def _boil_compare():
     assert s["verdict"] == "none" and m["fin_um_spread"]["verdict"] == "few", s
     # муки меньше — плюс; плюс, но дольше — «решать технологу»; хуже по сросткам — минус, даже если быстрее
     r, m, s = run(grp_a(fines_avg=lambda i: 4 + 0.3 * jit[i]))
-    assert m["fines_avg"]["verdict"] == "real" and s["verdict"] == "plus" and s["text"] == "Итог: изменение в плюс — муки меньше.", s
+    assert m["fines_avg"]["verdict"] == "real" and s["verdict"] == "plus" and s["text"] == "Итог: А лучше Б — муки меньше.", s
+    r, m, s = run(grp_a(fines_avg=lambda i: 4 + 0.3 * jit[i]), mode="change")          # «до / после» — слова про изменение
+    assert s["text"] == "Итог: изменение в плюс — муки меньше.", s
+    r, m, s = run(grp_a(seed_ready_min=lambda i: 75 + jit[(i + 5) % 10]))                 # две группы: качество то же, А дольше
+    assert s["verdict"] == "minus" and s["text"] == "Итог: А хуже Б — варка дольше на 15 мин при том же качестве.", s
     r, m, s = run(grp_a(fines_avg=lambda i: 4 + 0.3 * jit[i], seed_ready_min=lambda i: 75 + jit[(i + 5) % 10]))
     assert s["verdict"] == "mixed" and "дольше на 15 мин" in s["text"], s
     r, m, s = run(grp_a(fin_agg_pct=lambda i: 14 + 0.2 * jit[i], seed_ready_min=lambda i: 50 + jit[(i + 5) % 10]), mode="change")
     assert s["verdict"] == "minus" and "сростков больше" in s["text"] and "короче на 10 мин" in s["text"] and s["caveat"], s
     # крупнее и муки меньше — одна строка и один плюс (у нас это почти один сигнал)
     r, m, s = run(grp_a(fines_avg=lambda i: 4 + 0.3 * jit[i], fin_um=lambda i: 260 + 2 * jit[i]))
-    assert s["text"] == "Итог: изменение в плюс — кристалл крупнее и муки меньше." and sum("один сигнал" in x for x in s["lines"]) == 1, s
+    assert s["text"] == "Итог: А лучше Б — кристалл крупнее и муки меньше." and sum("один сигнал" in x for x in s["lines"]) == 1, s
     # порог муки 8 %: медиана группы выше — минус; вне коридора размера — минус
     r, m, s = run(grp_a(fines_avg=lambda i: 9 + 0.3 * jit[i]))
     assert m["fines_avg"]["off"] == {"a": True, "b": False} and "мука выше порога 8 %" in s["text"], s

@@ -268,6 +268,9 @@ DEFAULTS = {
         "service_url": "http://127.0.0.1:8765",
         "um_per_px": 1.629,
         "tiles": 6, "conf": 0.25, "iou": 0.45, "overlap": 0.15,
+        # проверка модели по эталону (model_check): сама запускается в перерыве между варками, когда сменились модель / порог / нарезка;
+        # эталон — папка ref_set рядом с mvs.db (ref_set_dir — другая папка)
+        "model_check_auto": True, "ref_set_dir": "",
         # защита от крупного мусора: объект крупнее conf_big_k медиан кадра (не мельче conf_big_um мкм) — только с conf ≥ conf_big (0 — выкл)
         "conf_big": 0.0, "conf_big_k": 4.0, "conf_big_um": 150.0,
         "groups": {"small_max_um": 500.0, "medium_max_um": 900.0},

@@ -771,6 +771,27 @@ def cv_model_load(path: str):
     return res or {"error": "load_failed"}
 
 
+@app.get("/api/cv/model_check")
+def cv_model_check_get():
+    """Проверка модели по эталону: есть ли эталон, последний результат, устарел ли он, идёт ли прогон."""
+    return micro.model_check_status()
+
+
+@app.post("/api/cv/model_check/run")
+def cv_model_check_run():
+    """Запустить проверку (~70 кадров). Идёт варка — отказ (reason=boil): проверка грузит видеокарту."""
+    res = micro.model_check_run(by="manual")
+    api_log("api.cv.model_check", "Проверка модели: запуск", payload=res)
+    return res
+
+
+@app.post("/api/cv/model_check/cancel")
+def cv_model_check_cancel():
+    import model_check
+    model_check.cancel()
+    return {"status": "ok"}
+
+
 @app.get("/api/cv/approach/settings")
 def cv_approach_get():
     return micro.approach_config()

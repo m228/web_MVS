@@ -1974,6 +1974,44 @@
       el.textContent = (m.name || "—") + (m.seg ? " · seg" : "") + " · " + (m.device === "cpu" ? "CPU" : "GPU") + (names ? " · [" + names + "]" : "");
     }).catch(() => { el.textContent = "—"; });
   }
+  // проверка модели по эталону (model_check): одна строка статуса + кнопка. Автозапуск после смены модели/порога делает сервер в перерыве между варками
+  const mcFmt = (v, d) => (v === null || v === undefined ? "—" : (v > 0 ? "+" : v < 0 ? "−" : "") + Math.abs(v).toFixed(d).replace(".", ","));
+  const mcWhen = (t) => { const d = new Date(t * 1000), p = (n) => String(n).padStart(2, "0"); return p(d.getDate()) + "." + p(d.getMonth() + 1) + " " + p(d.getHours()) + ":" + p(d.getMinutes()); };
+  let mcRunning = false;
+  async function mcRefresh() {
+    const el = $("mcText"), btn = $("mcRunBtn"); if (!el || !btn) return;
+    let s = null;
+    try { s = await api("/api/cv/model_check"); } catch (e) { }
+    if (!s) return;
+    const set = (txt, cls) => { el.textContent = txt; el.className = "micro-mcheck__txt" + (cls ? " " + cls : ""); };
+    mcRunning = !!(s.state && s.state.running);
+    btn.textContent = mcRunning ? "Остановить" : "Проверить модель";
+    btn.disabled = !mcRunning && (!s.ref.present || !s.online);
+    if (mcRunning) { set("Проверка модели: идёт, кадр " + s.state.done + " из " + s.state.total + (s.state.by === "auto" ? " (запущена сама, настройки изменились)" : ""), ""); return; }
+    if (!s.online) { set("Проверка модели: сервис распознавания не отвечает", "warn"); return; }
+    if (!s.ref.present) { set("Проверка модели: эталона нет — положи папку ref_set рядом с базой (" + s.ref.dir + ")", "warn"); return; }
+    if (s.state && s.state.error) { set("Проверка модели не удалась: " + s.state.error, "off"); return; }
+    const l = s.last;
+    if (!l) { set("Модель ещё не проверялась" + (s.current_tag ? " (" + s.current_tag + ")" : "") + " — проверится сама в перерыве между варками", "warn"); return; }
+    const z = l.zone || {};
+    const nums = "мука " + mcFmt(z.fines_rel, 0) + " %, размер " + mcFmt(z.size_rel, 1) + " %, найдено " + (z.found === null || z.found === undefined ? "—" : Math.round(z.found)) + " %";
+    const verdict = l.ok ? "в допуске" : "вне допуска: " + ((l.verdict && l.verdict.reasons) || []).join("; ");
+    const stale = s.stale ? " · настройки изменились — проверка устарела, повторится в перерыве между варками" : "";
+    set("Проверена " + mcWhen(l.t) + " (" + (l.tag || "—") + "): " + nums + " — " + verdict + stale, !l.ok ? "off" : s.stale ? "warn" : "ok");
+  }
+  function wireModelCheck() {
+    const btn = $("mcRunBtn"); if (!btn) return;
+    btn.addEventListener("click", async () => {
+      btn.disabled = true;
+      try {
+        const r = await fetch(mcRunning ? "/api/cv/model_check/cancel" : "/api/cv/model_check/run", { method: "POST" }).then((x) => x.json());
+        const why = { boil: "идёт варка — проверка запустится сама после неё", no_ref: "нет эталонной папки ref_set", sidecar_offline: "сервис распознавания не отвечает", running: "уже идёт" };
+        if (r && r.started === false && why[r.reason]) { const el = $("mcText"); if (el) { el.textContent = "Проверка модели: " + why[r.reason]; el.className = "micro-mcheck__txt warn"; } btn.disabled = false; return; }
+      } catch (e) { }
+      setTimeout(mcRefresh, 600);
+    });
+    mcRefresh();
+  }
   function wireModelUpload() {
     const btn = $("cvModelBtn"), file = $("cvModelFile"), hint = $("cvModelHint");
     if (!btn || !file) return;
@@ -2011,6 +2049,7 @@
     wireGallery();
     wireTrend();
     wireModelUpload();
+    wireModelCheck();
     wireHoverTip();
     wireFracEdit();
     wireLayers();
@@ -2045,6 +2084,7 @@
     cvRefresh();
     setInterval(() => {
       cvHealth(); if (cvWinOn || isCvPaneVisible() || isTeleCvVisible()) cvRefresh();
+      if (isCvPaneVisible() || mcRunning) mcRefresh();
       const mi = $("cvModelInfo");                       // модель не подтянулась при старте — пробуем снова
       if (mi && (mi.textContent === "—" || mi.textContent === "сервис офлайн")) cvModelRefresh();
     }, 5000);

@@ -829,6 +829,13 @@ def cv_report(serial: str | None = None, frm: str | None = Query(None, alias="fr
     return report.build(_cv_serial(serial), t0, t1, fin_sv=max(0.2, min(fin_sv, 20.0)), anomalies=True)
 
 
+@app.get("/api/cv/anomaly/live")
+def cv_anomaly_live(serial: str | None = None):
+    """Идущая варка против обычных (boil_anomaly.live): state idle / few / ok / anomaly + что именно не как обычно."""
+    import boil_anomaly
+    return boil_anomaly.live(_cv_serial(serial))
+
+
 @app.get("/api/cv/report.csv")
 def cv_report_csv(serial: str | None = None, frm: str | None = Query(None, alias="from"), to: str | None = None, fin_sv: float = 2.0,
                   cols: str | None = None):

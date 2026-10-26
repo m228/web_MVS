@@ -2012,6 +2012,18 @@
     });
     mcRefresh();
   }
+  // плашка «варка идёт не как обычные» (boil_anomaly.live): только когда ≥ 3 проб подряд вышли за коридор обычных варок при их СВ; иначе скрыта
+  async function anomRefresh() {
+    const bar = $("anomBar"); if (!bar) return;
+    let a = null;
+    try { a = await api("/api/cv/anomaly/live"); } catch (e) { }
+    if (!a || a.state !== "anomaly" || !(a.items || []).length) { bar.hidden = true; return; }
+    const f = (v, d) => Number(v).toFixed(d).replace(".", ",");
+    const txt = a.items.map((i) => i.name + " " + f(i.value, i.nd) + " " + i.unit + " — " + (i.dir === "high" ? "выше" : "ниже") + " обычного (" + f(i.q1, i.nd) + "–" + f(i.q3, i.nd) + ")").join("; ");
+    bar.textContent = "Варка идёт не как обычные: " + txt + " · при СВ " + f(a.items[0].sv, 1) + ", " + a.n + " пробы подряд";
+    bar.title = "Сравнение с " + a.n_ref + " прошлыми варками той же модели и порога" + (a.since_change ? " (после последнего изменения в журнале)" : "") + ". Тревога — только при заметном выходе за обычное.";
+    bar.hidden = false;
+  }
   function wireModelUpload() {
     const btn = $("cvModelBtn"), file = $("cvModelFile"), hint = $("cvModelHint");
     if (!btn || !file) return;
@@ -2050,6 +2062,7 @@
     wireTrend();
     wireModelUpload();
     wireModelCheck();
+    anomRefresh(); setInterval(anomRefresh, 20000);
     wireHoverTip();
     wireFracEdit();
     wireLayers();

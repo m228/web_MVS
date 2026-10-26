@@ -3636,6 +3636,10 @@ input.micro-cam-num { width: 56px; min-width: 0; flex: 0 0 auto; padding: 4px 5p
 .micro-cv-status.off { color: var(--danger, #dc2626); }
 /* строка «Модель …» под шапкой и нижний ряд компактных кнопок вкладки CV */
 .micro-cv-model { font-size: 0.88em; font-weight: 600; }
+/* плашка «варка идёт не как обычные» под заголовком страницы (boil_anomaly.live): только экран, без звука */
+.micro-anom { margin: 8px 0 0; padding: 7px 12px; border-radius: 9px; font-size: 0.88em; font-weight: 500;
+  color: var(--warning, #d97706); background: var(--warning-soft, rgba(217,119,6,.16)); border: 1px solid var(--warning, #d97706); }
+.micro-anom[hidden] { display: none; }
 /* проверка модели по эталону (model_check): одна строка под шапкой настроек CV */
 .micro-mcheck { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 0 0 10px; font-size: 0.84em; }
 .micro-mcheck__txt { flex: 1 1 260px; min-width: 0; color: var(--muted, #5b6b81); }

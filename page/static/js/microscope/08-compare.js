@@ -236,7 +236,7 @@ let cmpShown = null;         // 02-cv.js зовёт при открытии вк
     if (!r.ok) return docHead(title, "", opt.print) + '<div class="micro-rep-warn">' + esc(r.error || "не получилось") + "</div>";
     const nA = r.a.boils.length, nB = r.b.boils.length, why = ch ? WHY : { ...WHY, edge: "шла на границе периода" };
     const meta = [(ch ? "А — после: " : "А: ") + nA + " " + plural(nA, "варка", "варки", "варок") + " (" + span(r.a.spec) + ")", (ch ? "Б — до: " : "Б: ") + nB + " " + plural(nB, "варка", "варки", "варок") + " (" + span(r.b.spec) + ")",
-      r.models && r.models.length ? "модель " + esc(modelName(r.models[0])) : "", "сформировано " + dmy(r.generated) + " " + new Date(r.generated * 1000).toTimeString().slice(0, 5)].filter(Boolean).join(" · ");
+      r.models && r.models.length ? (r.models.length > 1 ? "модели " : "модель ") + r.models.map((m) => esc(modelName(m))).join(" и ") : "", "сформировано " + dmy(r.generated) + " " + new Date(r.generated * 1000).toTimeString().slice(0, 5)].filter(Boolean).join(" · ");
     let h = docHead(title, meta, opt.print);
     if (L.together && L.together.length) h += '<div class="micro-rep-warn">Вместе с ним: ' + L.together.map((c) => esc(c.label + " · " + c.text)).join("; ") +
       " — между изменениями не было целой варки, поэтому «до» — варки до " + esc(L.together[L.together.length - 1].label) + ", а эффект общий.</div>";

@@ -2086,9 +2086,9 @@ def _boil_compare():
     # крупнее и муки меньше — одна строка и один плюс (у нас это почти один сигнал)
     r, m, s = run(grp_a(fines_avg=lambda i: 4 + 0.3 * jit[i], fin_um=lambda i: 260 + 2 * jit[i]))
     assert s["text"] == "Итог: А лучше Б — кристалл крупнее и муки меньше." and sum("один сигнал" in x for x in s["lines"]) == 1, s
-    # порог муки 8 %: медиана группы выше — минус; вне коридора размера — минус
-    r, m, s = run(grp_a(fines_avg=lambda i: 9 + 0.3 * jit[i]))
-    assert m["fines_avg"]["off"] == {"a": True, "b": False} and "мука выше порога 8 %" in s["text"], s
+    # порог муки 10 %: медиана группы выше — минус; вне коридора размера — минус
+    r, m, s = run(grp_a(fines_avg=lambda i: 11 + 0.3 * jit[i]))
+    assert m["fines_avg"]["off"] == {"a": True, "b": False} and "мука выше порога 10 %" in s["text"], s
     r, m, s = run(grp_a(fin_um=lambda i: 320 + 2 * jit[i]))
     assert m["fin_um"]["off"]["a"] and "вне коридора 200–300" in s["text"] and s["verdict"] == "minus", s
     # разброс между варками: 8 варок с размером ±20 мкм против ±4 — гуляет сильнее, реально

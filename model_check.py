@@ -282,6 +282,44 @@ def history(limit: int = 10) -> list:
     return out
 
 
+# --- предупреждение «модель проверялась с разным результатом» (отчёт и «Сравнение») ---
+DRIFT_FINES_PP = 5.0        # между проверками мука финиша сдвинулась больше чем на столько п.п. — результат «разный» даже при одинаковом вердикте
+DRIFT_SIZE_PP = 2.0         # то же для размера
+
+
+def _brief(r: dict) -> dict:
+    z = (r.get("zones") or {}).get((r.get("verdict") or {}).get("zone")) or {}
+    return {"t": r.get("t"), "ok": bool(r.get("ok")), "tag": r.get("tag"), "fines_rel": z.get("fines_rel"), "size_rel": z.get("size_rel"), "found": z.get("found")}
+
+
+def _differs(a: dict, b: dict) -> bool:
+    if a["ok"] != b["ok"]:
+        return True
+    for k, lim in (("fines_rel", DRIFT_FINES_PP), ("size_rel", DRIFT_SIZE_PP)):
+        if a.get(k) is not None and b.get(k) is not None and abs(a[k] - b[k]) > lim:
+            return True
+    return False
+
+
+def drift(t_from: float, t_to: float, rows: Optional[list] = None) -> Optional[dict]:
+    """Проверки модели, действующие в периоде [t_from, t_to]: последняя ДО него (так модель стояла в начале) и все внутри. Две соседние дали разный
+    результат (вердикт или сдвиг муки / размера) — {text, checks}: цифры муки и размера до и после нельзя сравнивать напрямую. Иначе None."""
+    import time
+    allr = rows if rows is not None else history(200)                # новые первыми
+    inside = [_brief(r) for r in reversed(allr) if t_from <= r["t"] <= t_to]
+    before = next((_brief(r) for r in allr if r["t"] < t_from), None)
+    seq = ([before] if before else []) + inside
+    if len(seq) < 2 or not any(_differs(a, b) for a, b in zip(seq, seq[1:])):
+        return None
+    seq = seq[-5:]
+    f = lambda t: time.strftime("%d.%m %H:%M", time.localtime(t))                      # noqa: E731
+    n = lambda v, d: ("—" if v is None else ("%+." + str(d) + "f") % v).replace(".", ",").replace("-", "−")   # noqa: E731
+    parts = ["%s%s — %s (мука %s %%, размер %s %%)" % (f(c["t"]), " (до периода)" if c is before else "", "в допуске" if c["ok"] else "вне допуска",
+                                                       n(c["fines_rel"], 0), n(c["size_rel"], 1)) for c in seq]
+    return {"checks": seq, "detail": "; ".join(parts), "text": "Проверка модели по эталону давала разный результат: " + "; ".join(parts) +
+            ". Цифры муки и размера до и после нельзя сравнивать напрямую — часть разницы от настройки распознавания, а не от процесса."}
+
+
 # --- состояние и запуск ---
 def status(cv: dict, health: Optional[dict]) -> dict:
     """Всё для строки на вкладке «CV»: есть ли эталон, последняя проверка, устарела ли она, идёт ли сейчас."""

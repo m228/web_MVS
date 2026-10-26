@@ -221,6 +221,15 @@ def changes(serial: str, t_from: Optional[float] = None, t_to: Optional[float] =
     return out
 
 
+def _model_drift(t_from: float, t_to: float) -> Optional[dict]:
+    """Предупреждение «проверка модели давала разный результат» за период (model_check.drift); нет базы / проверок — None."""
+    try:
+        import model_check
+        return model_check.drift(t_from, t_to)
+    except Exception:
+        return None
+
+
 def build(serial: str, t_from: float, t_to: float, min_probes: int = MIN_PROBES, fin_sv: float = FIN_SV, groups: Optional[list] = None,
           anomalies: bool = False) -> dict:
     """Отчёт за период [t_from, t_to] (epoch, сек). Варка входит по времени начала; обрывки короче min_probes проб пропускаются.
@@ -266,7 +275,7 @@ def build(serial: str, t_from: float, t_to: float, min_probes: int = MIN_PROBES,
         "segments": _segments(rows),
         "day_parts": [{"key": k, "name": n, "from": a, "to": b, **_totals([r for r in rows if r["part"] == k])} for k, n, a, b in DAY_PARTS],
         "substages": _substage_rows(sel),
-        "targets": seed_target(), "changes": changes(serial, t_from, t_to), "anomalies": anom,
+        "targets": seed_target(), "changes": changes(serial, t_from, t_to), "anomalies": anom, "model_check": _model_drift(t_from, t_to),
     }
 
 

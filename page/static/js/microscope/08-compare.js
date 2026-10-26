@@ -262,6 +262,7 @@ let cmpShown = null;         // 02-cv.js зовёт при открытии вк
     let h = docHead("Варка " + tsLbl(r.boil.start) + " против обычных", meta, opt.print);
     const txt = r.summary.text, verdict = /^Итог: хуже/.test(txt) ? "minus" : /^Итог: лучше/.test(txt) ? "plus" : /мало/.test(txt) ? "few" : "none";
     h += sumBox({ verdict, text: txt, lines: r.summary.lines });
+    (r.warnings || []).forEach((w) => { h += '<div class="micro-rep-warn">' + esc(w) + "</div>"; });
     const B1 = { worse: ["is-bad", "хуже обычного"], better: ["is-good", "лучше обычного"], high: ["is-real", "крупнее обычного"], low: ["is-real", "мельче обычного"], usual: ["", "как обычно"], few: ["is-few", "мало варок"] };
     const tg = r.targets;
     const rows = r.metrics.map((m) => {

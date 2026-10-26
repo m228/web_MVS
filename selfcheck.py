@@ -2356,6 +2356,39 @@ def _anomaly_live():
     return "коридор по СВ (по 10 проб на бин), 3 пробы подряд в одну сторону; одиночная, пустая проба и СВ без коридора не тревожат"
 
 
+@check("Микроскоп", "Проверки модели с разным результатом в периоде: предупреждение (вердикт или сдвиг муки / размера разный), одна проверка и одинаковые — тихо, отчёт и «Сравнение» его несут")
+def _model_drift():
+    import json
+    import tempfile
+    import db
+    import model_check as mc
+    import report
+    old_path = db.DB_PATH
+    db.set_path(Path(tempfile.mkdtemp(prefix="mvs_drift_")) / "d.db")
+    try:
+        def put(t, ok, fines, size=1.0):
+            res = {"t": t, "sig": "s%d" % t, "tag": "26x@1280", "ok": ok, "verdict": {"ok": ok, "zone": "fin", "reasons": []}, "zones": {"fin": {"fines_rel": fines, "size_rel": size, "found": 88.0}}}
+            db.check_save(t, res["sig"], res["tag"], ok, json.dumps(res))
+        D = 86400.0
+        assert mc.drift(0, 10 * D) is None and report._model_drift(0, 10 * D) is None, "проверок нет"
+        put(2 * D, True, -9.0)
+        assert mc.drift(0, 10 * D) is None, "одна проверка — сравнивать не с чем"
+        put(4 * D, True, -8.0, 1.5)
+        assert mc.drift(0, 10 * D) is None, "две проверки, сдвиг в пределах (1 п.п. муки, 0,5 размера) — тихо"
+        put(6 * D, True, -1.0)
+        w = mc.drift(0, 10 * D)
+        assert w and len(w["checks"]) == 3 and "−9 %" in w["text"] and "−1 %" in w["text"] and "в допуске" in w["text"], w                 # мука уехала на 7 п.п. при том же вердикте
+        put(8 * D, False, -17.0, 3.7)
+        w = mc.drift(7 * D, 10 * D)
+        assert w and w["checks"][0]["ok"] and not w["checks"][1]["ok"] and "(до периода)" in w["text"] and "вне допуска" in w["text"], w   # до периода + внутри: вердикт сменился
+        assert mc.drift(0, 5 * D) is None, "в окне только 2 и 4 день — одинаково"
+        assert mc.drift(9 * D, 10 * D) is None, "до окна одна (последняя) и внутри нет — нечего сравнивать"
+        assert report._model_drift(0, 10 * D)["text"].startswith("Проверка модели по эталону давала разный результат")
+    finally:
+        db.set_path(old_path)
+    return "две проверки в периоде с разным вердиктом или сдвигом (> 5 п.п. муки / 2 п.п. размера) — предупреждение; одна и одинаковые — тихо; последняя до периода учитывается"
+
+
 @check("Микроскоп", "Журнал изменений: добавить, поправить, удалить; чужой серийник не трогается; отчёт отдаёт изменения периода и цели маточника")
 def _changes_journal():
     import tempfile

@@ -175,6 +175,9 @@ class UltralyticsDetector(Detector):
 
     def __init__(self, model_path: str, device: Optional[str] = None, imgsz: Optional[int] = None):
         from ultralytics import YOLO   # тяжёлый импорт — только когда реально нужен
+        from ultralytics.utils import ops
+        if callable(getattr(ops, "process_mask", None)) and not getattr(ops.process_mask, "chunked", False):
+            ops.process_mask = chunked_process_mask(ops.process_mask)
         self.model_path = model_path
         self.model = YOLO(model_path)
         self._device = device or self._auto_device()
@@ -242,6 +245,9 @@ class UltralyticsDetector(Detector):
     def infer(self, image: np.ndarray, conf: float = 0.25) -> list[Detection]:
         res = self.model.predict(image, conf=conf, imgsz=self.imgsz, device=self._device,
                                  verbose=False)[0]
+        if str(self._device) != "cpu":
+            import torch
+            torch.cuda.empty_cache()   # кэш torch не копится между проходами разного размера (до 4,5 ГБ на 1050 Ti 4 ГБ → вылет в общую память)
         dets: list[Detection] = []
         boxes = getattr(res, "boxes", None)
         masks = getattr(res, "masks", None)
@@ -261,6 +267,27 @@ class UltralyticsDetector(Detector):
     def info(self) -> dict:
         return {"name": self.name, "seg": self.is_seg, "device": str(self._device),
                 "imgsz": self.imgsz, **self._meta}
+
+
+def chunked_process_mask(orig, chunk: int = 32):
+    """Обёртка ultralytics ops.process_mask: маски порциями по chunk объектов.
+
+    ultralytics разворачивает маски ВСЕХ объектов прохода разом (N×H×W float32 на входе 1280 — до 1,7 ГБ),
+    пик видеопамяти 2,5 ГБ: на GTX 1050 Ti (4 ГБ) лишнее уходит в общую память, кадр 16–20 с вместо 2.
+    Каждая маска считается сама по себе, поэтому порциями — побайтно то же, а пик вдвое меньше.
+    Тип и форма выхода — от первой порции (torch тут не импортируем: модуль грузит и selfcheck без torch)."""
+    def process_mask(protos, masks_in, bboxes, shape, upsample=False, **kw):
+        n = masks_in.shape[0]
+        if not upsample or n <= chunk:
+            return orig(protos, masks_in, bboxes, shape, upsample, **kw)
+        first = orig(protos, masks_in[:chunk], bboxes[:chunk], shape, upsample, **kw)
+        out = first.new_empty((n, *first.shape[1:]))
+        out[:chunk] = first
+        for i in range(chunk, n, chunk):
+            out[i:i + chunk] = orig(protos, masks_in[i:i + chunk], bboxes[i:i + chunk], shape, upsample, **kw)
+        return out
+    process_mask.chunked = True
+    return process_mask
 
 
 def build_detector(model_path: Optional[str] = None, avg_count: int = 40) -> Detector:

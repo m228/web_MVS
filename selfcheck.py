@@ -179,6 +179,18 @@ class FakeModbus:
             except OSError:
                 break
 
+    def reboot(self, addrs):
+        """«Перезагрузка платы»: регистры addrs — в умолчания (0), открытые соединения рвутся."""
+        for a in addrs:
+            self.regs[a] = 0
+        conns, self._conns = self._conns, []
+        for c in conns:
+            try:
+                c.shutdown(socket.SHUT_RDWR)
+                c.close()
+            except OSError:
+                pass
+
     def close(self):
         self._running = False
         try:
@@ -840,6 +852,54 @@ def _plate_client():
     finally:
         client.stop()
     return "поллов=%d, %s=123" % (client.status["poll_count"], name)
+
+
+@check("Микроскоп", "PlateClient: после перезагрузки платы / обрыва TCP блок OUT переписывается, goto не уходит раньше цели 1253")
+def _plate_out_resync():
+    from microscope_plc import PlateClient
+    fake = fake_modbus()
+    cfg = _plate_cfg(fake)
+    base = cfg["write_base"]
+    out_regs = range(base, base + cfg["block_len"])
+    sp = base + int(cfg["out"]["m1_sp"])
+    led = base + int(cfg["out"]["led_bright"])
+    cmd = int(cfg["motor"]["cmd_reg"]["1"])
+    # 1) живой цикл: плата перезагрузилась (регистры 0, TCP порван) — pymodbus переподключается сам,
+    #    _connected не падает; цель М1 и яркость должны вернуться в плату без новых команд
+    client = PlateClient(cfg)
+    client.start()
+    try:
+        assert _wait(lambda: client.status["connected"]), "нет связи: %s" % client.status.get("error")
+        client.write_m1_sp(40000)
+        client.set_led(bright=37)
+        assert _wait(lambda: fake.regs[sp] == 4000 and fake.regs[led] == 37), "OUT не записан до перезагрузки"
+        n = len(fake.writes)
+        fake.reboot(out_regs)
+        assert _wait(lambda: fake.regs[sp] == 4000 and fake.regs[led] == 37), \
+            "после переподключения OUT не переписан: 1253=%s 1257=%s" % (fake.regs[sp], fake.regs[led])
+        owned = {base + int(i) for i in cfg["out"].values()}
+        alien = [w for w in fake.writes[n:] if w[0] in out_regs and w[0] not in owned]
+        assert not alien, "переписаны слова OUT вне карты out (смысл в прошивке не разобран): %s" % alien
+    finally:
+        client.stop()
+    # 2) сокет закрыт сбоем чтения, а переподключится уже сама команда goto: цель в 1253 — раньше 1248
+    c2 = PlateClient(cfg)
+    try:
+        assert c2._ensure_connected(), "нет TCP"
+        c2.write_m1_sp(30000)
+        c2._write_changed_out()
+        fake.reboot(out_regs)
+        c2._client.close()          # как pymodbus после неудачного чтения: сокета нет
+        c2._write_changed_out()     # без сокета менять нечего — ничего не пишет
+        n = len(fake.writes)
+        c2.cmd1(0x1006)
+        c2._flush_pending()
+        tail = fake.writes[n:]
+        assert (cmd, 0x1006) in tail, "goto не ушёл: %s" % tail
+        assert (sp, 3000) in tail[:tail.index((cmd, 0x1006))], "goto ушёл раньше цели в 1253: %s" % tail
+    finally:
+        c2._close_client()
+    return "1253/1257 вернулись после обрыва; goto после цели"
 
 
 @check("Микроскоп", "SvSource: читает СВ и стадию из ПЛК (Modbus-эмулятор)")

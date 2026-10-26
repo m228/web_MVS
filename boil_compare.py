@@ -368,6 +368,9 @@ def build(serial: str, a: dict, b: dict, mode: str = "groups") -> dict:
     rep = report.build(serial, min(a["from"], b["from"]), max(a["to"], b["to"]), groups=groups)
     out = compare_rows(rep["boils"], a, b, rep["targets"], mode)
     out.update(serial=serial, generated=now, changes=report.changes(serial, min(a["from"], b["from"]), max(a["to"], b["to"])))
+    w = report._model_drift(min(a["from"], b["from"]), max(a["to"], b["to"]))
+    if out["ok"] and w:
+        out["warnings"].append(w["text"])
     if out["ok"]:
         out["curves"] = {k: _curves(groups, rep["boils"], out[k]["boils"]) for k in ("a", "b")}
     return out
@@ -462,7 +465,8 @@ def one(serial: str, boil: str, ref_from: Optional[float] = None, ref_to: Option
     by_ts = {x[0]["ts"]: x for x in groups}
     ref_c = [_curve(by_ts[x["start"]], x) for x in ref if x["start"] in by_ts]
     mine = _curve(g, me)
-    return {"ok": True, "serial": serial, "boil": me, "metrics": rows, "targets": tg, "model": me.get("model"),
+    w = report._model_drift(ref[0]["t_start"] if ref else me["t_start"], me["t_end"])
+    return {"ok": True, "serial": serial, "boil": me, "metrics": rows, "targets": tg, "model": me.get("model"), "warnings": [w["text"]] if w else [],
             "ref": {"n": len(ref), "from": ref[0]["start"] if ref else None, "to": ref[-1]["start"] if ref else None},
             "summary": {"text": "Итог: " + text + ".", "lines": lines},
             "curves": {"me": mine, "band": _band([c["pts"] for c in ref_c], max([c["end"] for c in ref_c] + [mine["end"]]))},     # полоса кончается сама там, где кривых меньше половины

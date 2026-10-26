@@ -346,6 +346,7 @@
           segs.map((s) => "<tr><td>" + esc(modelName(s.model)) + "</td><td>" + tsLbl(s.from) + " – " + tsLbl(s.to) + "</td><td>" + s.boils + "</td><td>" + fmt(s.fines_avg.median, 1) +
             ' <small class="micro-ci">' + (s.fines_avg.n >= 4 ? range(s.fines_avg.q1, s.fines_avg.q3, 1) : "") + "</small></td><td>" + fmt(s.fin_um.median, 0) + "</td></tr>").join("") + "</tbody></table></div>";
       }
+      if (rep.model_check) h += '<div class="micro-rep-warn"><b>Модель проверялась с разным результатом.</b> ' + esc(rep.model_check.detail) + ". Цифры муки и размера до и после нельзя сравнивать напрямую." + "</div>";
       if (view === "charts") {
         const w = opt.width;
         h += '<div class="micro-rep-charts">' + stateOf(CHARTS, CHARTS_KEY).filter((c) => c.on).map((c) => (c.key === "sieve" ? chartSieve(rep, w) : chartMetric(rep, w, c, opt))).join("") + "</div>";

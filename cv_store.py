@@ -302,8 +302,8 @@ def _model_tag(det: Optional[dict], infer: Optional[dict] = None) -> Optional[st
     if conf is not None and abs(float(conf) - CONF_PLAIN) > 1e-6:
         tag += " conf %g" % float(conf)
     big = float((infer or {}).get("conf_big") or 0)
-    if big > 0:                     # порог по размеру: крупные от conf_big_um мкм — с conf ≥ conf_big
-        tag += ", крупные от %g мкм %g" % (float(infer.get("conf_big_um") or 300), big)
+    if big > 0:                     # защита от крупного мусора: крупнее conf_big_k медиан кадра — с conf ≥ conf_big
+        tag += ", крупные >%g медиан %g" % (float(infer.get("conf_big_k") or 4), big)
     return tag
 
 
@@ -557,9 +557,9 @@ def sieve_avg(r: dict, i: int) -> Optional[float]:
     return round(sum(v) / len(v), 3) if v else None
 
 
-# серии рассева для тренда: fsv0…fsv8 — доли по объёму (среднее M1–M3): диапазон муки по 0,05 мм (fsv0–3: 0–0,05 … 0,15–0,20),
-# дальше 0,20–0,40 / 0,40–0,60 / 0,60–0,80 / 0,80–1,00 / >1,0 мм (fsv4–8)
-FSV_GROUPS = [range(i, i + 1) for i in range(4)] + [range(4, 8), range(8, 12), range(12, 16), range(16, 20), range(20, 21)]
+# серии рассева для тренда: fsv0…fsv12 — доли по объёму (среднее M1–M3): диапазон муки по 0,05 мм (fsv0–3: 0–0,05 … 0,15–0,20),
+# дальше по 0,1 мм — 0,20–0,30 … 0,90–1,00 (fsv4–11), как строки таблицы рассева, и >1,0 мм (fsv12)
+FSV_GROUPS = [range(i, i + 1) for i in range(4)] + [range(i, i + 2) for i in range(4, 20, 2)] + [range(20, 21)]
 
 
 def fsieve_total(r: dict, i0: int, i1: int) -> Optional[float]:

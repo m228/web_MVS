@@ -48,10 +48,11 @@ DEFAULTS = {
     "seam_in_sieve": True,     # «обрезанный» у шва, но целый по геометрии (шов не режет его ровным срезом) — в рассев
     "tiles": 6, "overlap": 0.15,   # как в настройках CV (их же получает сайдкар) — нужны, чтобы знать, где швы
     "min_size_um": 20.0,   # мельче — считаем пылью/шумом, не кристаллом
-    # порог уверенности по размеру: объект от conf_big_um мкм нужен с conf ≥ conf_big (0 — выкл). Низкий общий conf (0,25) возвращает
-    # средне-мелкие кристаллы в кучах, а крупный ложный объект (складка растёкшейся жидкости, тень) с conf 0,4–0,5 отсекается. Эталон Кира
-    # 23.10 (70 кадров + проверка Макса): 0,25 до 300 мкм / 0,55 крупнее — мука финиша −29 % → 0…+6 %, крупный мусор 15 → 4 объектов
-    "conf_big": 0.0, "conf_big_um": 300.0,
+    # защита от крупного мусора: объект крупнее conf_big_k × медианы размера уверенных объектов кадра (и не мельче conf_big_um мкм) нужен
+    # с conf ≥ conf_big (0 — выкл). Низкий общий conf (0,25) возвращает средне-мелкие кристаллы в кучах, а складка растёкшейся жидкости
+    # на старте (conf ~0,45, в ~10 раз больше кристаллов кадра) отсекается. Граница от кадра, не фиксированная: в конце варки кучки
+    # 300–550 мкм настоящие (живые пробы 24.10: из 36 тыс. объектов при 4 медианах не отсечено ни одного; эталон — точность без изменений)
+    "conf_big": 0.0, "conf_big_k": 4.0, "conf_big_um": 150.0,
     "blur_min": 8.0,       # variance of Laplacian ниже — кадр смазан (тюним под камеру на Server)
 }
 
@@ -110,6 +111,7 @@ def _cfg(cv_cfg: Optional[dict]) -> dict:
             c[k] = float(cv_cfg.get(k, c[k]))
         c["refine_max"] = float(cv_cfg.get("refine_max", c["refine_max"]))
         c["conf_big"] = float(cv_cfg.get("conf_big") or 0.0)
+        c["conf_big_k"] = float(cv_cfg.get("conf_big_k") or c["conf_big_k"])
         c["conf_big_um"] = float(cv_cfg.get("conf_big_um") or c["conf_big_um"])
         for key in ("groups", "shape", "size_reject", "volume"):
             if cv_cfg.get(key):
@@ -770,6 +772,17 @@ def refine_seam_stubs(image: np.ndarray, objects: list[dict], cv_cfg: Optional[d
     return result
 
 
+def _drop_big_unsure(ms: list, cfg: dict) -> list:
+    """Защита от крупного мусора (conf_big): объект крупнее max(conf_big_k × медиана, conf_big_um) с conf ниже conf_big — ложный.
+    Медиана — по уверенным (conf ≥ conf_big) целым объектам кадра; уверенных нет — по всем целым."""
+    whole = [m for m in ms if m.group != CUT_GROUP]
+    base = [m.size_um for m in whole if m.conf >= cfg["conf_big"]] or [m.size_um for m in whole]
+    if not base:
+        return ms
+    lim = max(cfg["conf_big_k"] * float(np.median(base)), cfg["conf_big_um"])
+    return [m for m in ms if m.conf >= cfg["conf_big"] or m.size_um < lim]
+
+
 def measure_objects(objects: list[dict], cv_cfg: Optional[dict] = None,
                     sv: Optional[float] = None, img_shape: Optional[tuple] = None) -> list[CrystalMeasure]:
     """Посчитать геометрию/форму/группу для каждого объекта. Мелочь < min_size_um отсекаем.
@@ -805,8 +818,6 @@ def measure_objects(objects: list[dict], cv_cfg: Optional[dict] = None,
         size_um = eq_d_px * upp
         if size_um < min_size:
             continue
-        if cfg["conf_big"] > 0 and size_um >= cfg["conf_big_um"] and float(obj.get("conf", 1.0)) < cfg["conf_big"]:
-            continue                      # крупный объект с низкой уверенностью — ложный (складка жидкости, тень), см. conf_big
         (_, _), (rw, rh), _ = cv2.minAreaRect(cnt)
         length_um = max(rw, rh) * upp
         width_um = min(rw, rh) * upp
@@ -849,6 +860,8 @@ def measure_objects(objects: list[dict], cv_cfg: Optional[dict] = None,
             seam_merged=int(obj.get("seam_merged", 0)),
             outline=(_outline(cnt, eq_d_px) if obj.get("polygon") else cnt),
         ))
+    if cfg["conf_big"] > 0:
+        out = _drop_big_unsure(out, cfg)
     return out
 
 

@@ -61,6 +61,7 @@ class MicroscopeService:
             self.fsm.on_photo = self._auto_photo   # кадры пробы в выдержке (см. _auto_photo)
             self.fsm.on_video = self._auto_video   # запись видео пробы на выдержку (см. _auto_video)
             self.fsm.on_varka_count = self._persist_varka   # persist счётчика варок (автокалибровка)
+            self.fsm.on_autocal_done = self._log_autocal    # итог автокалибровки -> autocal.log + «последняя»
             self.fsm.on_approach_fail = self._log_approach_fail   # «довод не сошёлся» -> отдельный лог
             # довод по абсолютнику ушёл в прошивку — гасим в рантайме (конфиг не перезаписываем),
             # доезд цикла идёт по энкодеру. Автокалибровка нуля работает в ПК (см. set_autocal).
@@ -475,7 +476,7 @@ class MicroscopeService:
                 run["detector"] = resp.get("detector")
                 run["infer"] = {**inf, "seam_refine": bool(cv.get("seam_refine", True)) and inf["tiles"] > 1}
                 if float(cv.get("conf_big") or 0) > 0:      # порог для крупных (cv_analyzer) — тоже «как снята проба»
-                    run["infer"].update(conf_big=float(cv["conf_big"]), conf_big_um=float(cv.get("conf_big_um") or 300.0))
+                    run["infer"].update(conf_big=float(cv["conf_big"]), conf_big_k=float(cv.get("conf_big_k") or 4.0))
                 sv = self.fsm.sv if self.fsm else None
                 run["svs"].append(sv)
                 objs = resp.get("objects", [])
@@ -1030,6 +1031,30 @@ class MicroscopeService:
         if self.cfg is not None:
             self.cfg.setdefault("autocal", {})["count"] = int(count)
 
+    def _log_autocal(self, info):
+        """Колбэк FSM: калибровка нуля закончилась. Строка в autocal.log (каталог данных) — по журналу видно, на сколько
+        уползает ноль между калибровками (датчик − энкодер ДО) и сошлось ли ПОСЛЕ; краткий итог — в конфиг для UI."""
+        from paths import DATA_DIR
+
+        def pos(d):
+            return "-" if not d else "calc=%s enc=%s sensor=%s diff=%s" % (
+                d["calc"], d["enc"], d["sensor"], d["sensor"] - d["enc"])
+        try:
+            line = "%s\t%s\t%s\tfixes=%s\tzero_sensor=%s\tbefore: %s\tafter: %s\t%s\n" % (
+                info.get("ts"), info.get("trigger"), info.get("result"), info.get("fixes"),
+                info.get("zero_sensor"), pos(info.get("before")), pos(info.get("after")), info.get("reason") or "")
+            path = DATA_DIR / "autocal.log"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with open(path, "a", encoding="utf-8") as f:
+                f.write(line)
+        except Exception as e:
+            log_event("microscope_service", "Не удалось записать журнал автокалибровки", "warn", {"error": str(e)})
+        last = info.get("last")
+        if last:
+            plate_config.save({"autocal": {"last": last}})
+            if self.cfg is not None:
+                self.cfg.setdefault("autocal", {})["last"] = last
+
     def _log_approach_fail(self, info):
         """Колбэк FSM: подгон по датчику не сошёлся — пошли на след. этап. Пишем момент в
         ОТДЕЛЬНЫЙ файл (approach_fails.log в каталоге данных), чтобы разобрать/починить потом."""
@@ -1278,6 +1303,10 @@ class MicroscopeService:
         if op in ("goto", "steps", "shift", "home_start", "home_end", "find_zero"):
             p.motor_enable(m, True)
         fn()
+        if op == "stop":
+            # стоп не снимает в прошивке флаг «Поиска 0»: иначе следующий законченный ход обнулит координаты там,
+            # где кончился. Через 0,5 с автомат пошлёт «шаги 0» (мотор не едет)
+            self.fsm.request_unflag(m)
         return {"status": "ok", "m": m, "op": op, "value": value}
 
     def led_native(self, bright=None, freq=None, on=None):

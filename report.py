@@ -5,11 +5,13 @@
 
 Состав:
   boils   — по каждой варке: начало/конец, длительность, проб, СВ мин/макс, мука НА ФИНИШЕ (пробы в пределах последних 1,5–2 СВ: среднее, 95% интервал, мин, макс), брак %,
-            причины брака, разломы (зон / % площади, с учётом правок оператора), средний размер, рассев, подстадии.
+            причины брака, разломы (зон / % площади, с учётом правок оператора), средний размер, рассев, подстадии,
+            средние температура / разрежение по пробам стадий 3–9, часть суток по началу (part).
   totals  — итоги: число варок, медиана / «обычно» (25–75 %) / среднее / мин / макс по основным показателям, лучшая/худшая варка (по муке).
             Показатели — только по типичным варкам: законченная, не короткая и не затянутая (flag). Число варок и проб — по всем.
   days    — те же итоги по дням (+ вода, средний рассев); weeks — по неделям.
   segments — отрезки периода по модели распознавания: разные модели по-разному видят мелочь, их цифры не сравнивают.
+  day_parts — те же итоги по частям суток (утро / день / вечер / ночь — половины смен 08–20 и 20–08): день и ночь на неделе.
   substages — по группам подстадий (подкачка / рост 1 / рост 2 / прочие): проб, время, средняя мука.
 """
 from __future__ import annotations
@@ -52,10 +54,12 @@ FIN_SV = 2.0        # «финиш» варки: пробы, у которых �
 
 
 _finish_probes = cv_store.finish_probes      # одно правило «финиша» для отчёта и окна «Объём и мука»
+PROC_STAGES = (3, 9)    # стадии варки, где идут авто-пробы (microscope_fsm.CYCLE_STAGE_MIN/MAX): ручные пробы на останове и пропарке (99 °C, вакуума нет) в режим варки не идут
 
 
 def _boil_row(g: list, summary: dict, fin_sv: float = FIN_SV) -> dict:
     ok_sv = [r["sv"] for r in g if r.get("sv") is not None and r["sv"] >= 5]
+    proc = [r for r in g if r.get("stage") is None or PROC_STAGES[0] <= r["stage"] <= PROC_STAGES[1]]
     fin = [r for r in g if r.get("fines_m3") is not None]
     # мука варки = ФИНИШ: все пробы, где СВ в пределах fin_sv от конечного (последние 1,5–2 СВ). Среднее по ВСЕМ пробам после порога
     # «Мука с СВ» завышено: при низком пороге туда попадает начало варки, где кристаллы ещё мелкие (мука до 100 %)
@@ -78,6 +82,8 @@ def _boil_row(g: list, summary: dict, fin_sv: float = FIN_SV) -> dict:
         "frac_zones": sum(int(r.get("frac_zones") or 0) for r in g), "frac_pct": _mean([r.get("frac_pct") for r in g]),
         "mean_um": _mean([r.get("mean") for r in g]), "cv_pct": _mean([r.get("cv_pct") for r in g]),
         "sieve": _sieve_rows(block.get("sieve") or {}),
+        # режим варки (ПЛК на момент проб; другой истории ПЛК нет): средняя температура в аппарате, °C, и разрежение сверху, бар
+        "temp_avg": _mean([r.get("temp") for r in proc]), "vac_avg": _mean([r.get("vac") for r in proc]),
     }
 
 
@@ -148,6 +154,7 @@ def _totals(rows: list[dict]) -> dict:
             "mean_um": mm("mean_um"), "sv_max": mm("sv_max"),
             "point_um": mm("point_um"), "fin_um": mm("fin_um"), "grow_um": mm("grow_um"), "to_ready_min": mm("to_ready_min"),
             "fin_cv": mm("fin_cv"), "fin_agg_pct": mm("fin_agg_pct"), "seed_ready_min": mm("seed_ready_min"), "seed_end_min": mm("seed_end_min"),
+            "temp_avg": mm("temp_avg"), "vac_avg": mm("vac_avg"),
             "water": sum(1 for r in typ if r.get("water") is True), "water_known": sum(1 for r in typ if r.get("water") is not None),
             "sieve": [_mean([s[i] for s in sv]) for i in range(len(SIEVE_LABELS))] if sv else None,     # средний рассев (каждая варка с равным весом)
             "best": {"start": best["start"], "fines_avg": best["fines_avg"]} if best else None,
@@ -173,6 +180,15 @@ def _segments(rows: list[dict]) -> list[dict]:
 
 
 MIN_PROBES = 5      # варки короче (обрывки, пробы без варки) в отчёт не берём
+
+# части суток (фон графиков и табличка на экране): смены 08–20 и 20–08, каждая пополам; одинаково на Буи и Кире. (ключ, имя, с часа, до часа)
+DAY_PARTS = (("morning", "утро", 8, 14), ("day", "день", 14, 20), ("evening", "вечер", 20, 2), ("night", "ночь", 2, 8))
+
+
+def _day_part(t: float) -> str:
+    """Часть суток по местному часу момента t (варка — по началу: заводка решает больше всего)."""
+    h = time.localtime(t).tm_hour
+    return next(k for k, _, a, b in DAY_PARTS if (a <= h < b if a < b else h >= a or h < b))
 
 
 def _point_sv() -> float:
@@ -220,6 +236,7 @@ def build(serial: str, t_from: float, t_to: float, min_probes: int = MIN_PROBES,
         row = _boil_row(g, cv_store._boil_summary(g, finished, avg_n), fin_sv)
         row.update(cv_store.boil_metrics(g, point_sv, fin_sv))
         row["finished"] = finished
+        row["part"] = _day_part(row["t_start"])
         rows.append(row)
     _mark_flags(rows)
     weeks, days = {}, {}
@@ -234,6 +251,7 @@ def build(serial: str, t_from: float, t_to: float, min_probes: int = MIN_PROBES,
         "weeks": [{"week": k, **_totals(v)} for k, v in sorted(weeks.items())],
         "days": [{"day": k, **_totals(v)} for k, v in sorted(days.items())],
         "segments": _segments(rows),
+        "day_parts": [{"key": k, "name": n, "from": a, "to": b, **_totals([r for r in rows if r["part"] == k])} for k, n, a, b in DAY_PARTS],
         "substages": _substage_rows(sel),
         "targets": seed_target(), "changes": changes(serial, t_from, t_to),
     }

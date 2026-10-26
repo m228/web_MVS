@@ -36,7 +36,8 @@ MOT = CFG["motor"]                  # нативная карта команд (
 
 # шаг мотора за такт (в единицах регистра = 10 мкм). 200 -> ~2 мм/такт
 MOTOR_STEP = 200
-HOME_END = 65000                    # «в конец» — условный дальний предел (ед. 10 мкм)
+HOME_END = 2000                     # «в конец» — ход 20 мм (ед. 10 мкм); позиции читаются со знаком, > 32767 нельзя
+FZ_PUSH = 500                       # «Поиск 0» из нуля: прошивка дожимает ещё 2000 шагов = 5 мм (K 50, делитель 1/8)
 
 
 def _reg(mapping, m):
@@ -78,6 +79,33 @@ def sim_loop(ctx, period):
     той же кнопки (одинаковый код) снова триггерит команду, как на реальной плате."""
     pos = {1: 0, 2: 0}
     target = {1: 0, 2: 0}
+    # как прошивка: команды на ходу — в очередь; «Поиск 0» ставит флаг, ноль — в конце штатного хода;
+    # стоп флаг не снимает (снимает ход «в ноль шагов», напр. «шаги 0»); «Установить 0» — сразу, ход не трогает
+    queue = {1: [], 2: []}
+    fz_flag = {1: False, 2: False}
+
+    def start(m, op):
+        """Начать команду op мотора m (мотор стоит)."""
+        if op == "goto":
+            target[m] = _read_word(ctx, _reg(MOT["pos_set"], m))
+        elif op in ("shift", "steps"):
+            val = _read_word(ctx, _reg(MOT[op], m))
+            if op == "steps":
+                val = val // 4                     # шаги -> ед. 10 мкм (2,5 мкм на шаг)
+            fwd = _read_word(ctx, _reg(MOT["dir"], m)) & 1
+            target[m] = max(0, pos[m] + (val if fwd else -val))
+        elif op == "find_zero":
+            if pos[m] == 0:
+                pos[m] = FZ_PUSH                   # уже в нуле — дожим ещё на 2000 шагов
+            fz_flag[m] = True
+            target[m] = 0
+        elif op == "home_start":
+            fz_flag[m] = False
+            target[m] = 0
+        elif op == "home_end":
+            target[m] = HOME_END
+        if target[m] == pos[m]:
+            fz_flag[m] = False                     # ход «в ноль шагов» снимает флаг поиска
 
     _write_word(ctx, 1520, 6)      # версия софта (чтобы пробник нашёл unit)
     _write_word(ctx, 1521, 32)     # версия модуля (hw2.0)
@@ -92,25 +120,26 @@ def sim_loop(ctx, period):
             if code:
                 mm, op = _decode_cmd(code)
                 if mm == m and op:
-                    if op == "goto":
-                        target[m] = _read_word(ctx, _reg(MOT["pos_set"], m))
-                    elif op == "shift":
-                        target[m] = pos[m] + _read_word(ctx, _reg(MOT["shift"], m))
-                    elif op == "steps":
-                        target[m] = pos[m] + _read_word(ctx, _reg(MOT["steps"], m))
-                    elif op == "home_start" or op == "find_zero":
-                        target[m] = 0
-                    elif op == "home_end":
-                        target[m] = HOME_END
-                    elif op == "stop":
+                    if op == "stop":
                         target[m] = pos[m]
+                        queue[m].clear()
                     elif op == "set_zero":
+                        target[m] -= pos[m]            # обнулить координаты, ход продолжается
                         pos[m] = 0
-                        target[m] = 0
+                    elif pos[m] != target[m]:
+                        if len(queue[m]) < 8:
+                            queue[m].append(op)
+                    else:
+                        start(m, op)
                 _write_word(ctx, creg, 0)   # потребить команду
 
+            was_moving = pos[m] != target[m]
             pos[m] = _move_toward(pos[m], target[m], MOTOR_STEP)
             moving = pos[m] != target[m]
+            if was_moving and not moving and fz_flag[m]:
+                fz_flag[m] = False                     # конец штатного хода «Поиска 0» -> ноль (здесь и так 0)
+            if not moving and queue[m]:
+                start(m, queue[m].pop(0))
             _write_word(ctx, _reg(MOT["pos_read"], m), pos[m])       # абс. позиция (1274/1275)
             _write_word(ctx, _reg(MOT["enable"], m), 1 if moving else _read_word(ctx, _reg(MOT["enable"], m)))
 
@@ -119,7 +148,7 @@ def sim_loop(ctx, period):
         # 2) основной входной блок IN (1270..1279): позиции, темп, 12В, датчик
         _write_word(ctx, READ_BASE + IN["pos1"]["off"], pos1)   # 1274
         _write_word(ctx, READ_BASE + IN["pos2"]["off"], pos2)   # 1275
-        _write_word(ctx, READ_BASE + IN["pos1_ai"]["off"], pos1)  # 1271 датчик ~ позиция М1
+        _write_word(ctx, READ_BASE + IN["pos1_ai"]["off"], pos1 * 10)  # 1271 датчик ~ позиция М1, в мкм (как плата)
         _write_word(ctx, READ_BASE + IN["temp"]["off"], 39 + random.randint(-1, 1))    # 1273 °C
         _write_word(ctx, READ_BASE + IN["u12v"]["off"], 12030 + random.randint(-10, 10))  # 1272 мВ
         _write_word(ctx, READ_BASE + IN["di"]["off"], 0)

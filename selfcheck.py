@@ -2617,7 +2617,7 @@ def _report():
             ts = "%s_%02d_%02d_00" % (day, 8 + i // 60, i % 60)
             t = time.mktime(time.strptime(ts, cv_store.TS_FMT))
             r = {"ts": ts, "t": t, "stage": 7, "sv": sv, "cook_time": cook, "substage": sub, "count": 100.0, "mean": 150.0, "reject_pct": 2.0,
-                 "frac_zones": 1, "frac_pct": 0.5, "good_n": 100, "rej_n": 2, "fines_um": 226.0, "fines_from_sv": 86.0}
+                 "frac_zones": 1, "frac_pct": 0.5, "good_n": 100, "rej_n": 2, "fines_um": 226.0, "fines_from_sv": 86.0, "temp": 70.0 + i, "vac": -0.8}
             for m in ("m1", "m2", "m3"):
                 r["fines_" + m], r["vtot_" + m] = fines, 1.0
             for m in ("m1", "m2", "m3", "area"):
@@ -2626,6 +2626,7 @@ def _report():
         rows = []
         for i in range(8):                  # варка 1: СВ растёт 80 → 90,5; мука только с проб, где СВ уже ≥ 88 (порог по варке)
             rows.append(probe("2026-10-06", i, 80.0 + 1.5 * i, 72 if i < 4 else 73, 600 + 90 * i, 5.0 + i))
+        rows[-1].update(stage=11, temp=99.0, vac=0.0)     # ручная проба на пропарке: в среднюю температуру / разрежение варки не идёт
         for i in range(6):                  # варка 2 — на следующий день, подкачка
             rows.append(probe("2026-10-07", i, 81.0 + i * 1.2, 52, 600 + 90 * i, 3.0))
         for i in range(2):                  # обрывок (2 пробы) — в отчёт не попадает
@@ -2655,9 +2656,16 @@ def _report():
         assert len(report.build("REP", t0 + 2 * 86400, t0 + 3 * 86400)["boils"]) == 0 or True
         assert len(rep["days"]) == 2 and rep["days"][0]["day"] == "2026-10-06" and rep["days"][0]["boils"] == 1, rep["days"]
         assert len(rep["segments"]) == 1 and rep["segments"][0]["model"] is None, "модель не записана — один отрезок"
+        # режим варки: среднее по пробам стадий 3–9 (пропарка 99 °C / 0 бар — мимо); часть суток — по началу варки (обе в 08:00 — утро)
+        assert (b1["temp_avg"], b1["vac_avg"], b2["temp_avg"]) == (73.0, -0.8, 72.5), (b1["temp_avg"], b1["vac_avg"], b2["temp_avg"])
+        assert (b1["part"], b2["part"]) == ("morning", "morning") and rep["totals"]["temp_avg"]["median"] == 72.75, (b1["part"], rep["totals"]["temp_avg"])
+        assert [(p["key"], p["boils"]) for p in rep["day_parts"]] == [("morning", 2), ("day", 0), ("evening", 0), ("night", 0)], rep["day_parts"]
+        hour = lambda hm: time.mktime(time.strptime("2026-10-06 " + hm, "%Y-%m-%d %H:%M"))
+        parts = {hm: report._day_part(hour(hm)) for hm in ("07:59", "08:00", "13:59", "14:00", "19:59", "20:00", "00:30", "01:59", "02:00")}
+        assert list(parts.values()) == ["night", "morning", "morning", "day", "day", "evening", "evening", "evening", "night"], parts
     finally:
         db.set_path(old_path)
-    return "варок %d, мука с порога, подстадии, CSV" % len(rep["boils"])
+    return "варок %d, мука с порога, подстадии, CSV, режим варки и части суток" % len(rep["boils"])
 
 
 @check("CV", "report: итоги без нетипичных варок — короткая/затянутая/идущая помечены, медиана и 25–75 %, лучшая/худшая, дни, отрезки по модели")

@@ -826,7 +826,7 @@ def cv_report(serial: str | None = None, frm: str | None = Query(None, alias="fr
     """Отчёт по варкам за период: по каждой варке, итоги, недели, подстадии (см. report.py)."""
     import report
     t0, t1 = _report_range(frm, to)
-    return report.build(_cv_serial(serial), t0, t1, fin_sv=max(0.2, min(fin_sv, 20.0)))
+    return report.build(_cv_serial(serial), t0, t1, fin_sv=max(0.2, min(fin_sv, 20.0)), anomalies=True)
 
 
 @app.get("/api/cv/report.csv")

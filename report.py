@@ -221,24 +221,37 @@ def changes(serial: str, t_from: Optional[float] = None, t_to: Optional[float] =
     return out
 
 
-def build(serial: str, t_from: float, t_to: float, min_probes: int = MIN_PROBES, fin_sv: float = FIN_SV, groups: Optional[list] = None) -> dict:
+def build(serial: str, t_from: float, t_to: float, min_probes: int = MIN_PROBES, fin_sv: float = FIN_SV, groups: Optional[list] = None,
+          anomalies: bool = False) -> dict:
     """Отчёт за период [t_from, t_to] (epoch, сек). Варка входит по времени начала; обрывки короче min_probes проб пропускаются.
     fin_sv — «финиш» для муки/рассева: пробы в пределах стольких СВ от конечного. groups — уже прочитанные cv_store.boil_groups (сравнение
-    берёт по ним ещё и кривые роста — журнал читается один раз)."""
+    берёт по ним ещё и кривые роста — журнал читается один раз). anomalies — пометить нетипичные варки (boil_anomaly): нужен запас прошлых варок
+    для опоры, поэтому журнал за месяц до периода тоже разбирается."""
     groups = cv_store.boil_groups(serial) if groups is None else groups
     avg_n = cv_volume.volume_cfg(cv_store._volume_cfg_now())["avg_n"]
     now = time.time()
     sel = [g for g in groups if t_from <= g[0]["t"] <= t_to and len(g) >= min_probes]
     point_sv = _point_sv()
-    rows = []
-    for g in sel:
-        finished = not (g is groups[-1] and now - g[-1]["t"] <= cv_store.BOIL_OPEN_S)
-        row = _boil_row(g, cv_store._boil_summary(g, finished, avg_n), fin_sv)
-        row.update(cv_store.boil_metrics(g, point_sv, fin_sv))
-        row["finished"] = finished
-        row["part"] = _day_part(row["t_start"])
-        rows.append(row)
+
+    def _rows(gs: list) -> list:
+        out = []
+        for g in gs:
+            finished = not (g is groups[-1] and now - g[-1]["t"] <= cv_store.BOIL_OPEN_S)
+            row = _boil_row(g, cv_store._boil_summary(g, finished, avg_n), fin_sv)
+            row.update(cv_store.boil_metrics(g, point_sv, fin_sv))
+            row["finished"] = finished
+            row["part"] = _day_part(row["t_start"])
+            out.append(row)
+        return out
+    rows = _rows(sel)
     _mark_flags(rows)
+    anom = None
+    if anomalies:
+        import boil_anomaly
+        pre = _rows([g for g in groups if t_from - boil_anomaly.LOOKBACK_S <= g[0]["t"] < t_from and len(g) >= min_probes])
+        _mark_flags(pre)                       # своя медиана длительности у прошлых варок: опорными идут только типичные
+        boil_anomaly.mark(rows, pre, changes(serial, t_from - boil_anomaly.LOOKBACK_S, t_to))
+        anom = boil_anomaly.summary(rows)
     weeks, days = {}, {}
     for r in rows:
         y, w, _ = time.localtime(r["t_start"]).tm_year, time.strftime("%W", time.localtime(r["t_start"])), 0
@@ -253,7 +266,7 @@ def build(serial: str, t_from: float, t_to: float, min_probes: int = MIN_PROBES,
         "segments": _segments(rows),
         "day_parts": [{"key": k, "name": n, "from": a, "to": b, **_totals([r for r in rows if r["part"] == k])} for k, n, a, b in DAY_PARTS],
         "substages": _substage_rows(sel),
-        "targets": seed_target(), "changes": changes(serial, t_from, t_to),
+        "targets": seed_target(), "changes": changes(serial, t_from, t_to), "anomalies": anom,
     }
 
 

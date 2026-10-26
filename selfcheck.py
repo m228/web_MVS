@@ -2103,8 +2103,15 @@ def _boil_compare():
     # мало варок, разные модели, пересечение групп, модель не записана
     r, m, s = run(grp_a(3))
     assert all(x["verdict"] == "few" for x in r["metrics"]) and s["verdict"] == "few", "3 варки в группе — «мало варок»"
-    r = bc.compare_rows(grp_a() + [dict(x, model="best.pt@640") for x in gb], a, b)
-    assert not r["ok"] and "разные модели" in r["error"], r
+    mixed = grp_a() + [dict(x, model="best.pt@640") for x in gb]
+    r = bc.compare_rows(mixed, a, b)                                              # сейчас запрет выключен (MODEL_GUARD = False): сравнение идёт, с предупреждением
+    assert r["ok"] and any("разные модели" in w for w in r["warnings"]) and len(r["models"]) == 2, r.get("error") or r["warnings"]
+    bc.MODEL_GUARD = True
+    try:
+        r = bc.compare_rows(mixed, a, b)
+        assert not r["ok"] and "разные модели" in r["error"], r
+    finally:
+        bc.MODEL_GUARD = False
     r = bc.compare_rows(grp_a() + gb, {"from": 0, "to": 130000}, {"from": 20000, "to": 1e9})
     assert not r["ok"] and "пересекаются" in r["error"], r
     r = bc.compare_rows(grp_a() + [dict(x, model=None) for x in gb], a, b)
@@ -2131,7 +2138,7 @@ def _boil_compare():
     assert len(cv_analyzer.measure_objects(end, cfg, img_shape=(2048, 2448, 3))) == 9
     ga = [dict(x, model="26x_1280.pt@1280") for x in grp_a()]
     r = bc.compare_rows(ga + [dict(x, model="26x_1280.pt@1280 conf 0.25") for x in gb], a, b)
-    assert not r["ok"] and "conf 0.25" in r["error"], r
+    assert r["ok"] and any("conf 0.25" in w for w in r["warnings"]), r.get("error") or r["warnings"]       # смена порога — предупреждение, не запрет
     assert bc.parse_t("2026-10-19 11:20") == time.mktime((2026, 10, 19, 11, 20, 0, 0, 0, -1))
     assert bc.parse_t("2026-10-19", True) - bc.parse_t("2026-10-19") == 86399
     return "плюс / минус / «решать технологу» по правилам; крупнее и муки меньше — один плюс; порог 8 % и коридор; граница, короткая, затянутая — не в счёт"

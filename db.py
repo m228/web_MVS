@@ -232,9 +232,9 @@ def read_rows(serial: str, t_from: Optional[float] = None, t_to: Optional[float]
               with_boil: bool = False) -> list[dict]:
     """Строки журнала по времени — те же словари, что раньше в jsonl (из row_json). with_boil добавляет boil_id и sv_max_run."""
     sql, args = "SELECT row_json, boil_id, sv_max_run FROM journal WHERE serial=?", [serial]
-    if day:
-        sql += " AND ts LIKE ?"
-        args.append(day + "%")
+    if day:         # диапазон по ключу (serial, ts), а не LIKE: LIKE индекс не берёт и читает ВСЕ пробы серийника — чтение по дням росло квадратично
+        sql += " AND ts>=? AND ts<?"
+        args += [day, day + "\x7f"]
     if t_from is not None:
         sql += " AND t>=?"
         args.append(t_from)

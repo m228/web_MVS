@@ -2549,9 +2549,18 @@ def _db_core():
         db.upsert_many("S2", rows + rows)
         assert db.count("S2") == 5 and [g["boil_id"] for g in db.read_rows("S2", with_boil=True)] == [1, 1, 1, 1, 2]
         assert db.meta_get("schema_version") == str(db.SCHEMA_VERSION)
+        # чтение по дню — диапазон по ключу (serial, ts), а не LIKE (LIKE индекс не берёт: чтение по дням росло квадратично); результат тот же
+        db.upsert_many("S3", [row(i, 80.0 + i, 600 + i * 90, day=d) for d in ("2026-10-05", "2026-10-06", "2026-10-31") for i in range(3)])
+        sel = lambda d: [r["ts"] for r in db.read_rows("S3", day=d)]
+        like = lambda d: [x[0] for x in db.conn().execute("SELECT ts FROM journal WHERE serial='S3' AND ts LIKE ? ORDER BY t, ts", (d + "%",))]
+        assert db.days("S3") == ["2026-10-05", "2026-10-06", "2026-10-31"]
+        assert all(sel(d) == like(d) and len(sel(d)) == 3 for d in db.days("S3")) and sel("2026-10-07") == [], "день: те же пробы, что и по LIKE"
+        assert sel("2026-10-06") == [r["ts"] for r in db.read_rows("S3") if r["ts"].startswith("2026-10-06")], "день 06 — только свои пробы"
+        plan = " ".join(str(x[-1]) for x in db.conn().execute("EXPLAIN QUERY PLAN SELECT row_json FROM journal WHERE serial=? AND ts>=? AND ts<?", ("S3", "2026-10-06", "2026-10-06\x7f")))
+        assert "AND ts>" in plan and "ix_journal_t" not in plan, "день читается по ключу (serial, ts), а не сканом серийника: %s" % plan
     finally:
         db.set_path(old_path)
-    return "boil_id/sv_max_run при записи, миграция идемпотентна, строки читаются как были"
+    return "boil_id/sv_max_run при записи, миграция идемпотентна, строки читаются как были, день читается по индексу"
 
 
 @check("CV", "cv_store: журнал проб только в SQLite — запись пробы, тренд, CSV, варки, подстадия; файл jsonl не пишется")

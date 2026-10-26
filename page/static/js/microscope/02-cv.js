@@ -2018,8 +2018,8 @@
     let a = null;
     try { a = await api("/api/cv/anomaly/live"); } catch (e) { }
     if (!a || a.state !== "anomaly" || !(a.items || []).length) { bar.hidden = true; return; }
-    const f = (v, d) => Number(v).toFixed(d).replace(".", ",");
-    const txt = a.items.map((i) => i.name + " " + f(i.value, i.nd) + " " + i.unit + " — " + (i.dir === "high" ? "выше" : "ниже") + " обычного (" + f(i.q1, i.nd) + "–" + f(i.q3, i.nd) + ")").join("; ");
+    const f = (v, d) => Number(v).toFixed(d).replace(".", ",").replace(/^-/, "−");
+    const txt = a.items.map((i) => i.name + " " + f(i.value, i.nd) + " " + i.unit + " — " + (i.word || (i.dir === "high" ? "выше" : "ниже")) + " обычного (" + (i.q1 === i.q3 ? f(i.q1, i.nd) : f(i.q1, i.nd) + (i.q1 < 0 ? " … " : "–") + f(i.q3, i.nd)) + ")").join("; ");
     bar.textContent = "Варка идёт не как обычные: " + txt + " · при СВ " + f(a.items[0].sv, 1) + ", " + a.n + " пробы подряд";
     bar.title = "Сравнение с " + a.n_ref + " прошлыми варками той же модели и порога" + (a.since_change ? " (после последнего изменения в журнале)" : "") + ". Тревога — только при заметном выходе за обычное.";
     bar.hidden = false;

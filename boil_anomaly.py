@@ -16,7 +16,17 @@ REF_N = 20                    # опорных варок (последние т
 MIN_REF = 8                   # меньше — «мало данных» (как в «одной варке»: 2 × MIN_N)
 K = 3.0                       # ширина забора Тьюки, в IQR
 LOOKBACK_S = 30 * 86400       # на сколько дней до начала периода искать опорные варки
-KEYS = (("fines_avg", "мука на финише", "%", 1), ("fin_um", "размер на финише", "мкм", 0), ("fin_agg_pct", "сростки на финише", "%", 1))
+KEYS = (("fines_avg", "мука на финише", "%", 1), ("fin_um", "размер на финише", "мкм", 0), ("fin_agg_pct", "сростки на финише", "%", 1),
+        ("temp_avg", "температура", "°C", 1), ("vac_avg", "разрежение", "бар", 2))        # режим (ПЛК): среднее по варке
+# режим меняется мало (Кир: разрежение −0,80 бар в 95 % проб, IQR = 0): ширина коридора — не меньше шага, который уже считается отклонением
+FLOOR = {"temp_avg": 0.3, "vac_avg": 0.02, "temp": 0.5, "vac": 0.02}
+# слова направления: разрежение хранится отрицательным (−0,80 бар), «выше» по числу = слабее по смыслу
+WORDS = {"vac_avg": ("слабее", "глубже"), "vac": ("слабее", "глубже")}
+
+
+def _word(key: str, d: str) -> str:
+    w = WORDS.get(key) or ("выше", "ниже")
+    return w[0] if d == "high" else w[1]
 
 
 def _typical(r: dict) -> bool:
@@ -35,10 +45,14 @@ def assess(r: dict, ref: list) -> dict:
         if v is None or len(rv) < MIN_REF:
             continue
         q1, q3 = report._quantile(rv, 0.25), report._quantile(rv, 0.75)
-        lo, hi = max(0.0, q1 - K * (q3 - q1)), q3 + K * (q3 - q1)         # мука, размер, сростки не бывают отрицательными
+        w = max(q3 - q1, FLOOR.get(key, 0.0))
+        lo, hi = q1 - K * w, q3 + K * w
+        if key not in FLOOR:
+            lo = max(0.0, lo)                                              # мука, размер, сростки не бывают отрицательными
         if v > hi or v < lo:
+            d = "high" if v > hi else "low"
             out["items"].append({"key": key, "name": name, "unit": unit, "nd": nd, "value": v, "low": round(lo, 2), "high": round(hi, 2),
-                                 "q1": q1, "q3": q3, "dir": "high" if v > hi else "low"})
+                                 "q1": q1, "q3": q3, "dir": d, "word": _word(key, d)})
     if out["items"]:
         out["state"] = "anomaly"
     return out
@@ -72,16 +86,19 @@ LIVE_N = 3                    # проб подряд за границей, в 
 SV_BIN = 0.5                  # шаг коридора по СВ; в коридор берём соседние бины тоже (СВ у пробы дрожит)
 BIN_MIN = 30                  # меньше опорных проб в окне СВ — коридора нет, проба не оценивается
 MIN_COUNT = 20                # кристаллов в пробе: меньше — проба пустая (сгущение, переход), не оцениваем
-LIVE_KEYS = (("mean", "размер", "мкм", 0), ("fines", "мука", "%", 1), ("agg", "сростки", "%", 1))
+LIVE_KEYS = (("mean", "размер", "мкм", 0), ("fines", "мука", "%", 1), ("agg", "сростки", "%", 1), ("temp", "температура", "°C", 1), ("vac", "разрежение", "бар", 2))
 _live_cache: dict = {}
 
 
 def _feat(r: dict) -> Optional[dict]:
     """Показатели одной пробы для коридора: размер (мкм), мука по объёму (%), сростки по числу кристаллов (%). None — проба пустая."""
     import cv_store
-    if r.get("sv") is None or not r.get("count") or r["count"] < MIN_COUNT:
+    if r.get("sv") is None:
         return None
-    return {"mean": r.get("mean"), "fines": cv_store.fines_avg(r), "agg": 100.0 * (r.get("n_aggregate") or 0) / r["count"]}
+    f = {"temp": r.get("temp"), "vac": r.get("vac"), "mean": None, "fines": None, "agg": None}       # режим — у любой пробы, кристаллы — если их хватает
+    if r.get("count") and r["count"] >= MIN_COUNT:
+        f.update(mean=r.get("mean"), fines=cv_store.fines_avg(r), agg=100.0 * (r.get("n_aggregate") or 0) / r["count"])
+    return f
 
 
 def corridor(ref_groups: list) -> dict:
@@ -114,7 +131,10 @@ def judge(probes: list, cor: dict) -> list:
                 continue
             ref.sort()
             q1, q3 = report._quantile(ref, 0.25), report._quantile(ref, 0.75)
-            lo, hi = max(0.0, q1 - K * (q3 - q1)), q3 + K * (q3 - q1)
+            w = max(q3 - q1, FLOOR.get(key, 0.0))
+            lo, hi = q1 - K * w, q3 + K * w
+            if key not in FLOOR:
+                lo = max(0.0, lo)
             d = "high" if v > hi else ("low" if v < lo else None)
             if d and run and run[-1][0] == d:
                 run.append((d, v, lo, hi, q1, q3, r["sv"]))
@@ -125,7 +145,7 @@ def judge(probes: list, cor: dict) -> list:
         if len(run) >= LIVE_N:
             last = run[-LIVE_N:]
             vals = sorted(x[1] for x in last)
-            out.append({"key": key, "name": name, "unit": unit, "nd": nd, "dir": last[-1][0], "n": len(run), "value": vals[len(vals) // 2],
+            out.append({"key": key, "name": name, "unit": unit, "nd": nd, "dir": last[-1][0], "word": _word(key, last[-1][0]), "n": len(run), "value": vals[len(vals) // 2],
                         "lo": round(last[-1][2], 2), "hi": round(last[-1][3], 2), "q1": last[-1][4], "q3": last[-1][5], "sv": last[-1][6]})
     return out
 

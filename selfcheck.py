@@ -2296,6 +2296,16 @@ def _boil_anomaly():
     allr = [mk(i) for i in range(12)] + [mk(12, fines_avg=18.0)] + [mk(13, fines_avg=9.0)]
     ba.mark(allr, [], [])
     assert allr[11]["anom"]["state"] == "ok" and allr[12]["anom"]["state"] == "anomaly" and allr[0]["anom"]["state"] == "few" and allr[13]["anom"]["state"] == "ok"
+    # режим (ПЛК): среднее по варке; разрежение почти не меняется (IQR = 0) — ширина коридора не меньше шага FLOOR; слова — «слабее / глубже»
+    reg = [mk(i, temp_avg=70.0 + 0.2 * jit[i % 10], vac_avg=-0.80) for i in range(20)]
+    c = [mk(30, temp_avg=70.1, vac_avg=-0.79), mk(31, temp_avg=73.0, vac_avg=-0.70), mk(32, temp_avg=67.0, vac_avg=-0.95)]
+    ba.mark(c, reg, [])
+    assert c[0]["anom"]["state"] == "ok", "−0,79 при −0,80 — в пределах шага, не тревога: %r" % (c[0]["anom"],)
+    it = {i["key"]: i for i in c[1]["anom"]["items"]}
+    assert set(it) == {"temp_avg", "vac_avg"} and (it["temp_avg"]["word"], it["vac_avg"]["word"]) == ("выше", "слабее"), it
+    it = {i["key"]: i for i in c[2]["anom"]["items"]}
+    assert (it["temp_avg"]["word"], it["vac_avg"]["word"]) == ("ниже", "глубже"), it
+    assert it["vac_avg"]["low"] < 0 and it["temp_avg"]["low"] > 60, "граница режима не обрезается нулём"
     return "забор Тьюки K=3 в обе стороны; <8 опорных / другая модель — «мало данных»; изменение в журнале обрывает опору; идущая и короткая не оцениваются"
 
 
@@ -2313,7 +2323,7 @@ def _anomaly_live():
     svs = [82 + 0.5 * k for k in range(17)]
     ref = [[probe(10 * b + k, sv) for k, sv in enumerate(svs)] for b in range(10)]
     cor = ba.corridor(ref)
-    assert all(len(cor[k][round(86 / ba.SV_BIN)]) == 10 for k in cor), "по 10 проб на бин СВ"
+    assert all(len(cor[k][round(86 / ba.SV_BIN)]) == 10 for k in ("mean", "fines", "agg")) and not cor["temp"], "по 10 проб на бин СВ; режима в пробах нет"
 
     def cur(n_bad, bad_kw, n=14):
         c = [probe(900 + k, sv) for k, sv in enumerate(svs[:n])]
@@ -2335,6 +2345,14 @@ def _anomaly_live():
     assert [(i["key"], i["dir"], i["n"]) for i in r] == [("mean", "low", 4)], r                                                  # слишком мелкие кристаллы при этом СВ
     assert ba.judge(cur(3, hi, n=12)[:3], cor) == [] and ba.judge([probe(1, 95.0)] * 4, cor) == [], "нет коридора на этом СВ — не оцениваем"
     assert ba.judge(cur(3, hi), ba.corridor(ref[:2])) == [], "опорных проб в окне меньше BIN_MIN — коридора нет"
+    # режим: температура и разрежение — у любой пробы (и у «пустой» по кристаллам тоже), своя ширина коридора не меньше шага
+    reg_ref = [[dict(probe(10 * b + k, sv), temp=70.0 + 0.3 * jit[k % 10], vac=-0.80) for k, sv in enumerate(svs)] for b in range(10)]
+    rc = ba.corridor(reg_ref)
+    bad = [dict(probe(900 + k, sv), temp=70.0, vac=-0.70, count=5) for k, sv in enumerate(svs[:14])]
+    r = ba.judge(bad, rc)
+    assert [(i["key"], i["word"]) for i in r] == [("vac", "слабее")], r                  # разрежение просело, пробы пустые по кристаллам — всё равно видно; температура в норме
+    bad[-2]["vac"] = -0.80
+    assert ba.judge(bad, rc) == [], "проба с нормальным разрежением обрывает серию"
     return "коридор по СВ (по 10 проб на бин), 3 пробы подряд в одну сторону; одиночная, пустая проба и СВ без коридора не тревожат"
 
 

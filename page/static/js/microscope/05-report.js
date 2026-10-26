@@ -33,7 +33,7 @@
       long: ["затянутая", "Длиннее обычной (простой или две варки слились) — в итоги не входит"] };
     // нетипичная варка (boil_anomaly): выходит за «обычное» по муке, размеру или сросткам — по сравнению с 20 прошлыми варками той же модели
     const anomOf = (b) => (b && b.anom && b.anom.state === "anomaly" ? b.anom : null);
-    const anomText = (b, sep) => anomOf(b).items.map((i) => i.name + " " + fmt(i.value, i.nd) + " " + i.unit + " — " + (i.dir === "high" ? "выше" : "ниже") + " обычного (" + range(i.q1, i.q3, i.nd) + ")").join(sep || "; ");
+    const anomText = (b, sep) => anomOf(b).items.map((i) => i.name + " " + fmt(i.value, i.nd) + " " + i.unit + " — " + (i.word || (i.dir === "high" ? "выше" : "ниже")) + " обычного (" + (i.q1 === i.q3 ? fmt(i.q1, i.nd) : range(i.q1, i.q3, i.nd)) + ")").join(sep || "; ");
     const TG0 = { fines_max: 10, size_min_um: 200, size_max_um: 300 };
     const tg = (rep) => (rep && rep.targets) || TG0;
     // время от заводки: у Буи «готовность» (стадия 9) в пробы почти не попадает — тогда до последней пробы (как в сравнении)

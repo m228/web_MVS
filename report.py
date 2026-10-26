@@ -200,7 +200,7 @@ def _point_sv() -> float:
         return cv_store.POINT_SV
 
 
-SEED_TARGET = {"fines_max": 8.0, "size_min_um": 200.0, "size_max_um": 300.0}
+SEED_TARGET = {"fines_max": 10.0, "size_min_um": 200.0, "size_max_um": 300.0}
 
 
 def seed_target() -> dict:

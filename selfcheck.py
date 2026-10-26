@@ -362,7 +362,7 @@ MODULES = [
     "camera_core.base_worker", "camera_core.gige_worker", "camera_core.rtsp_worker", "camera_core.camera_manager",
     "sdk_gige", "camera_params", "dahua_control", "net_tools", "rtsp_store",
     "save_settings", "plate_config", "sv_source", "microscope_plc", "microscope_fsm",
-    "microscope_service", "cv_analyzer", "cv_volume", "substages", "db", "report", "boil_compare", "cv_fracture", "cv_client", "video_client", "services", "cv_store", "boil_archive", "fracture_lab", "cv_pipeline", "model_check",
+    "microscope_service", "cv_analyzer", "cv_volume", "substages", "db", "report", "boil_compare", "cv_fracture", "cv_client", "video_client", "services", "cv_store", "boil_archive", "fracture_lab", "cv_pipeline", "model_check", "boil_anomaly",
     "updater", "autostart", "diag", "app", "mvsdk",
 ]
 THIRD_PARTY = ["cv2", "numpy", "fastapi", "starlette", "uvicorn", "pymodbus", "harvesters", "genicam",
@@ -2255,6 +2255,48 @@ def _model_check():
     finally:
         db.set_path(old_path)
     return "допуск ±10 % / ±3 % / ≥85 %; сдвиг муки, размера, мало найдено ловятся; нет ответа сайдкара — ошибка; подпись, запись, «устарела»"
+
+
+@check("Микроскоп", "Нетипичные варки: забор Тьюки в обе стороны, мало опоры, смена модели, опора только после последнего изменения, не оцениваем идущие / короткие")
+def _boil_anomaly():
+    import boil_anomaly as ba
+    jit = [0.4, -0.3, 0.1, 0.5, -0.5, 0.2, -0.1, 0.3, -0.4, 0.0]
+
+    def mk(i, model="26x@1280", **kw):
+        j = jit[i % 10]
+        r = {"start": "b%d" % i, "t_start": 1000.0 * i, "finished": True, "flag": None, "model": model,
+             "fines_avg": 9.0 + j, "fin_um": 240.0 + 4 * j, "fin_agg_pct": 10.0 + j}
+        r.update(kw)
+        return r
+    pre = [mk(i) for i in range(20)]
+    cand = [mk(20), mk(21, fines_avg=16.0), mk(22, fin_um=180.0), mk(23, fin_agg_pct=0.5, fines_avg=0.0), mk(24, flag="short"), mk(25, finished=False, fin_um=None)]
+    ba.mark(cand, pre, [])
+    a = [r["anom"] for r in cand]
+    assert a[0]["state"] == "ok" and a[0]["n"] == 20 and not a[0]["items"], a[0]
+    assert a[1]["state"] == "anomaly" and [(i["key"], i["dir"]) for i in a[1]["items"]] == [("fines_avg", "high")], a[1]          # слишком много муки
+    assert a[2]["state"] == "anomaly" and [(i["key"], i["dir"]) for i in a[2]["items"]] == [("fin_um", "low")], a[2]               # слишком мелкий
+    assert {(i["key"], i["dir"]) for i in a[3]["items"]} == {("fin_agg_pct", "low"), ("fines_avg", "low")} and all(i["low"] >= 0 for i in a[3]["items"]), a[3]  # мало — тоже «не как обычно»; граница не уходит в минус
+    assert a[4] is None and a[5] is None, "короткая и идущая не оцениваются"
+    sm = ba.summary(cand)
+    assert (sm["judged"], sm["anomalies"], sm["few"]) == (4, 3, 0), sm
+    # опора: мало прошлых — «мало данных»; другая модель / порог — не опора; изменение в журнале обрывает опору
+    c = [mk(30, fines_avg=16.0)]
+    ba.mark(c, pre[:7], [])
+    assert c[0]["anom"]["state"] == "few" and not c[0]["anom"]["items"], c[0]["anom"]
+    c = [mk(30, model="26x@1280 conf 0.25", fines_avg=16.0)]
+    ba.mark(c, pre, [])
+    assert c[0]["anom"]["state"] == "few" and c[0]["anom"]["n"] == 0
+    c = [mk(30, fines_avg=16.0)]
+    ba.mark(c, pre, [{"t": 15500.0, "text": "рецепт 3"}])          # изменение после 15-й варки: опорных 4 (16…19) — мало
+    assert c[0]["anom"]["state"] == "few" and c[0]["anom"]["n"] == 4 and c[0]["anom"]["since_change"], c[0]["anom"]
+    c = [mk(30, fines_avg=16.0)]
+    ba.mark(c, pre, [{"t": 5500.0, "text": "рецепт 3"}])            # изменение после 5-й: опорных 14 — оценка идёт
+    assert c[0]["anom"]["state"] == "anomaly" and c[0]["anom"]["n"] == 14
+    # опорные берутся из варок периода тоже, но только ПРЕДЫДУЩИЕ по времени
+    allr = [mk(i) for i in range(12)] + [mk(12, fines_avg=18.0)] + [mk(13, fines_avg=9.0)]
+    ba.mark(allr, [], [])
+    assert allr[11]["anom"]["state"] == "ok" and allr[12]["anom"]["state"] == "anomaly" and allr[0]["anom"]["state"] == "few" and allr[13]["anom"]["state"] == "ok"
+    return "забор Тьюки K=3 в обе стороны; <8 опорных / другая модель — «мало данных»; изменение в журнале обрывает опору; идущая и короткая не оцениваются"
 
 
 @check("Микроскоп", "Журнал изменений: добавить, поправить, удалить; чужой серийник не трогается; отчёт отдаёт изменения периода и цели маточника")

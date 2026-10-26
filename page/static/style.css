@@ -4012,6 +4012,7 @@ html[data-theme="navy"] .micro-rep-out, html[data-theme="dark"] .micro-rep-out {
 .micro-rep-legend .lg-qband { width: 12px; background: var(--text); opacity: 0.12; }
 .micro-rep-legend .lg-lim { width: 14px; height: 0; border-radius: 0; border-top: 1.5px dashed var(--rep-bad); }
 .micro-rep-legend .lg-bad { border-radius: 50%; background: var(--rep-bad); }
+.micro-rep-legend .lg-anom { border-radius: 50%; border: 1.5px solid var(--rep-bad); }
 .micro-rep-legend .lg-change { width: 1px; height: 12px; border-radius: 0; border-left: 1.5px dashed var(--rep-s2); }
 .micro-rep-legend .lg-dota { border-radius: 50%; background: var(--rep-s1); }
 .micro-rep-legend .lg-dotb { border-radius: 50%; background: var(--rep-s2); }
@@ -4060,8 +4061,12 @@ html[data-theme="navy"] .micro-rep-out, html[data-theme="dark"] .micro-rep-out {
 .micro-rep-table tr.micro-rep-empty td { color: var(--muted); text-align: left; font-style: italic; }
 .micro-rep-table tr.is-off td { color: var(--muted); }
 .micro-rep-table tr.is-open td { color: var(--muted); font-style: italic; }
+.micro-rep-chart .dot.anom { stroke: var(--rep-bad); stroke-width: 1.6; }
+.micro-rep-anom { margin: 4px 0 0; padding-left: 18px; font-size: 0.86em; line-height: 1.7; }
+.micro-rep-anom a { cursor: pointer; }
 .micro-rep-flag { display: inline-block; margin-left: 6px; padding: 0 6px; border-radius: 6px; font-size: 0.82em; font-style: normal; color: var(--muted);
   border: 1px solid var(--border-strong, rgba(118,142,178,.45)); }
+.micro-rep-flag--anom { color: var(--rep-bad); border-color: var(--rep-bad); }
 .micro-rep-note { margin-top: 14px; font-size: 0.8em; color: var(--muted); }
 .micro-rep-note b { color: var(--text); font-weight: 600; }
 .micro-rep-note ul { margin: 4px 0 0; padding-left: 18px; }

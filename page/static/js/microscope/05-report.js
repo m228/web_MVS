@@ -31,7 +31,10 @@
     const modelName = (m) => (m ? String(m).replace(/\.pt(?=@|$)/, "") : "не записана");
     const FLAG = { open: ["идёт", "Варка ещё идёт — в итоги не входит"], short: ["короткая", "Короче обычной (оборвали, остановка) — в итоги не входит"],
       long: ["затянутая", "Длиннее обычной (простой или две варки слились) — в итоги не входит"] };
-    const TG0 = { fines_max: 8, size_min_um: 200, size_max_um: 300 };
+    // нетипичная варка (boil_anomaly): выходит за «обычное» по муке, размеру или сросткам — по сравнению с 20 прошлыми варками той же модели
+    const anomOf = (b) => (b && b.anom && b.anom.state === "anomaly" ? b.anom : null);
+    const anomText = (b, sep) => anomOf(b).items.map((i) => i.name + " " + fmt(i.value, i.nd) + " " + i.unit + " — " + (i.dir === "high" ? "выше" : "ниже") + " обычного (" + range(i.q1, i.q3, i.nd) + ")").join(sep || "; ");
+    const TG0 = { fines_max: 10, size_min_um: 200, size_max_um: 300 };
     const tg = (rep) => (rep && rep.targets) || TG0;
     // время от заводки: у Буи «готовность» (стадия 9) в пробы почти не попадает — тогда до последней пробы (как в сравнении)
     function seedKey(rep) {
@@ -214,7 +217,7 @@
         (b[sk] != null ? "\n" + seedName(rep) + " " + fmt(b[sk], 0) + " мин" : "") +
         (b.water != null ? "\nвода: " + (b.water ? "да" : "нет") : "") +
         (b.temp_avg != null || b.vac_avg != null ? "\n" + OVER.filter((o) => b[o.field] != null).map((o) => o.name + " " + fmt(b[o.field], o.d) + " " + o.unit).join(" · ") : "") +
-        (b.flag ? "\n" + FLAG[b.flag][0] + " — в итоги не входит" : "");
+        (b.flag ? "\n" + FLAG[b.flag][0] + " — в итоги не входит" : "") + (anomOf(b) ? "\nне как обычно: " + anomText(b) : "");
     }
     const extras = (rep) => [].concat(rep.boils.some((b) => b.water === true) ? [["water", "вода на стабилизации"]] : [], (rep.segments || []).length > 1 ? [["model", "смена модели"]] : [],
       (rep.changes || []).length ? [["change", "изменение"]] : []);
@@ -272,10 +275,10 @@
       });
       const r = Math.max(1.8, Math.min(3.5, step * 0.4));
       P.forEach((p) => {
-        const xx = x(p.i).toFixed(1), yy = y.f(p.v).toFixed(1), cls = "dot s1" + (p.b.flag ? " is-off" : "") + (isBad(p.v) ? " bad" : "");
+        const xx = x(p.i).toFixed(1), yy = y.f(p.v).toFixed(1), cls = "dot s1" + (p.b.flag ? " is-off" : "") + (isBad(p.v) ? " bad" : "") + (screen && anomOf(p.b) ? " anom" : "");
         s += '<g class="pt" data-boil="' + esc(p.b.start) + '" data-tip="' + esc(boilTip(rep, p.b)) + '"><circle class="' + cls + '" cx="' + xx + '" cy="' + yy + '" r="' + r.toFixed(1) + '"></circle><circle class="hit" cx="' + xx + '" cy="' + yy + '" r="8"></circle></g>';
       });
-      const items = [["dot1", "варка"]].concat(P.some((p) => p.b.flag) ? [["off", "не в итогах"]] : [], [["line", "медиана по " + MED_N + " варкам"], ["qband", "обычно"]],
+      const items = [["dot1", "варка"]].concat(P.some((p) => p.b.flag) ? [["off", "не в итогах"]] : [], screen && P.some((p) => anomOf(p.b)) ? [["anom", "не как обычно"]] : [], [["line", "медиана по " + MED_N + " варкам"], ["qband", "обычно"]],
         c.whisk ? [["whisk", "95 %"]] : [], lim.length ? [["lim", c.key === "fines_avg" ? "порог" : "коридор"], ["bad", "за целью"]] : [], extras(rep));
       const box = screen && have.length ? '<span class="micro-rep-over">' + have.map((o) => '<label title="' + esc(o.tip) + '"><input type="checkbox" data-over="' + c.key + ":" + o.key + '"' +
         (overOn(c.key, o.key) ? " checked" : "") + ' /><i class="lg-ov ov-' + o.key + '"></i>' + o.name + "</label>").join("") + "</span>" : "";
@@ -346,7 +349,7 @@
       if (view === "charts") {
         const w = opt.width;
         h += '<div class="micro-rep-charts">' + stateOf(CHARTS, CHARTS_KEY).filter((c) => c.on).map((c) => (c.key === "sieve" ? chartSieve(rep, w) : chartMetric(rep, w, c, opt))).join("") + "</div>";
-        if (!opt.print) h += partsHtml(rep);
+        if (!opt.print) h += anomHtml(rep) + partsHtml(rep);
       } else h += numbersHtml(rep, opt, cols, vis, on);
 
       h += '<div class="micro-rep-note"><b>Как читать</b><ul>' +
@@ -366,6 +369,17 @@
         (segs.length === 1 && !segs[0].model ? "<li>Модель распознавания в пробах не записана (пробы до 1.9.76): если модель в этом периоде меняли, цифры до и после смены не сравнивать.</li>" : "") +
         "<li>Варка входит в период по времени начала; учитываются варки не короче " + rep.min_probes + " проб.</li></ul></div>";
       return h;
+    }
+
+    // нетипичные варки периода (только на экране): список с причиной; «мало данных» — честно, без тревоги
+    function anomHtml(rep) {
+      const A = rep.anomalies; if (!A) return "";
+      const bad = rep.boils.filter(anomOf);
+      const note = "сравнение с " + A.ref_n + " прошлыми варками той же модели и порога, начатыми после последнего изменения в журнале; " +
+        "тревога — только при заметном выходе за обычное. Варок без опоры (меньше " + A.min_ref + " прошлых): " + A.few;
+      if (!bad.length) return '<section class="micro-rep-sec"><div class="micro-rep-h">Нетипичные варки <small>' + (A.judged ? "не найдено — " + A.judged + " " + plural(A.judged, "варка оценена", "варки оценены", "варок оценено") : "мало данных для оценки") + " · " + note + "</small></div></section>";
+      return '<section class="micro-rep-sec"><div class="micro-rep-h">Нетипичные варки <small>' + bad.length + " из " + A.judged + " оценённых · " + note + "</small></div>" +
+        '<ul class="micro-rep-anom">' + bad.map((b) => '<li><a class="micro-rep-link" data-boil="' + esc(b.start) + '" title="Открыть эту варку на «Трендах»">' + tsLbl(b.start) + "</a> — " + esc(anomText(b)) + "</li>").join("") + "</ul></section>";
     }
 
     // под графиками (только на экране): итоги по частям суток — честная проверка «день / ночь» вместо разглядывания фона
@@ -417,7 +431,8 @@
         if (day !== prevDay) { h += '<tr class="micro-rep-day"><td colspan="' + ncol + '">' + dayLbl(day) + "</td></tr>"; prevDay = day; }
         const link = opt.print ? "" : ' class="micro-rep-link" title="Открыть эту варку на «Трендах»" data-boil="' + esc(b.start) + '"';
         const flag = b.flag ? ' <span class="micro-rep-flag" title="' + FLAG[b.flag][1] + '">' + FLAG[b.flag][0] + "</span>" : "";
-        h += '<tr class="' + (b.flag ? "is-off" : "") + (b.finished ? "" : " is-open") + '"><td' + link + ">" + hmLbl(b.start) + flag + "</td>" +
+        const anomTag = !opt.print && anomOf(b) ? ' <span class="micro-rep-flag micro-rep-flag--anom" title="' + esc(anomText(b, "\n")) + '">не как обычно</span>' : "";
+        h += '<tr class="' + (b.flag ? "is-off" : "") + (b.finished ? "" : " is-open") + '"><td' + link + ">" + hmLbl(b.start) + flag + anomTag + "</td>" +
           vis.map((c) => "<td" + (LINKED.includes(c.key) && !opt.print ? link : "") + ">" + c.cell(b, rep) + "</td>").join("") + "</tr>";
         i++;
       }

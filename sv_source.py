@@ -74,7 +74,7 @@ class SvSource:
         # чтение одним запросом на весь блок регистров (согласованный снимок, 1 запрос вместо 9); не получилось — по одному
         self._block_ok = bool(cfg.get("block_read", True))
         self.requests = 0                     # счётчик запросов к ПЛК (для проверки)
-        self._sv_good, self._sv_bad_n = None, 0
+        self._sv_good, self._sv_bad_n, self._sv_bad_raw = None, 0, None
         self._stage_cur, self._stage_cand, self._stage_n = None, None, 0
         self._last_glitch_log = 0.0
         # клапаны (поля «v_*», 0–100 %): копим между пробами дозу (∫ открытие·dt, %·с) и время открытия — проба раз в 1–2 мин,
@@ -126,17 +126,21 @@ class SvSource:
         sv = v.get("sv")
         if sv is not None:
             if self._sv_good is None or not (sv < 5 or abs(sv - self._sv_good) > self.SV_JUMP):
-                self._sv_good, self._sv_bad_n = sv, 0                 # нормальное значение
+                if self._sv_bad_n and self._sv_bad_raw is not None:    # странное значение не удержалось — это был сбой
+                    self._note_glitch("СВ", self._sv_bad_raw, sv)
+                self._sv_good, self._sv_bad_n, self._sv_bad_raw = sv, 0, None   # нормальное значение
             else:
                 self._sv_bad_n += 1
                 if self._sv_bad_n >= self.SV_CONFIRM:                  # продержалось — это не сбой, а настоящий скачок
-                    self._sv_good, self._sv_bad_n = sv, 0
+                    self._sv_good, self._sv_bad_n, self._sv_bad_raw = sv, 0, None
                 else:
+                    self._sv_bad_raw = sv
                     v["sv"] = self._sv_good                            # пока держим последнее хорошее
-                    self._note_glitch("СВ", sv, self._sv_good)
         st = v.get("stage")
         if st is not None:
             if self._stage_cur is None or st == self._stage_cur:
+                if self._stage_cand is not None:                       # новая стадия не удержалась — это был сбой
+                    self._note_glitch("стадия", self._stage_cand, st)
                 self._stage_cur, self._stage_cand, self._stage_n = st, None, 0
             else:
                 self._stage_n = self._stage_n + 1 if st == self._stage_cand else 1
@@ -144,8 +148,7 @@ class SvSource:
                 if self._stage_n >= self.STAGE_CONFIRM:
                     self._stage_cur, self._stage_cand, self._stage_n = st, None, 0
                 else:
-                    v["stage"] = self._stage_cur
-                    self._note_glitch("стадия", st, self._stage_cur)
+                    v["stage"] = self._stage_cur                       # пока держим прежнюю; в журнал — только если не удержится
         return v
 
     def _note_glitch(self, what, raw, kept):

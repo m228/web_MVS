@@ -53,6 +53,7 @@ CAL_MEASURE_TICKS = 20    # замер стоя: медиана за 2 с (да�
 CAL_MOVE_MIN_TICKS = 10   # после команды движения 1 с не смотрим — телеметрия ещё старая
 CAL_SHIFT_MIN_TICKS = 20  # сдвиг ниже нуля не виден по расчётной/энкодеру (прошивка держит их в 0) — ждём хотя бы 2 с
 CAL_MOVE_MIN_S = 15       # таймаут хода не короче, даже если в настройке меньше
+CAL_RECHECK_TICKS = 50    # расхождение на отводе: перемерить через 5 с (датчик мог не устояться), плашка — если держится
 CAL_CMD_GAP_TICKS = 3     # пауза между командами в один командный регистр: две записи подряд плата может слить в одну
 
 # Повтор команды «идти» в цикле: плата за ОДИН goto делает лишь шаг к цели (как ручная
@@ -198,6 +199,7 @@ class MicroscopeFSM:
         self._cal_before = None      # замер стоя ДО калибровки {calc, enc, sensor}
         self._cal_zero_s = None      # датчик сразу после «Поиска 0» (где прошивка поставила свой ноль)
         self._cal_after = None       # замер стоя на отводе ПОСЛЕ калибровки
+        self._cal_after1 = None      # первый замер на отводе, если он разошёлся и пришлось перемерять
         self._cal_failed = False     # последняя калибровка не удалась — UI мигает красным до успешной
         self._cal_fail_msg = ""      # текст красной плашки
         self._cal_return_manual = False   # калибровку запустили кнопкой из РУЧНОГО режима — по окончании вернуть ручной
@@ -647,6 +649,7 @@ class MicroscopeFSM:
         self._cal_before = None
         self._cal_zero_s = None
         self._cal_after = None
+        self._cal_after1 = None
         self._cal_result = ""
 
     def _cal_move_ticks(self):
@@ -698,7 +701,7 @@ class MicroscopeFSM:
         if result == "готово":
             failed, msg = False, ""
             if after:
-                worst = max(abs(after["sensor"] - after["enc"]), abs(after["sensor"] - after["calc"]))
+                worst = self._far_gap(after)
                 if worst > CAL_FAR_TOL_UM:
                     failed = True
                     result = "готово, на отводе расхождение %d мкм" % worst
@@ -715,9 +718,11 @@ class MicroscopeFSM:
         diff = lambda d: None if not d else d["sensor"] - d["enc"]
         self._cal_last = {"ts": datetime.now().isoformat(timespec="seconds"), "result": result,
                           "diff_before": diff(before), "diff_after": diff(after)}
+        log_event("microscope_fsm", "Автокалибровка закончена: " + result,
+                  "warn" if failed else "info", {"before": before, "after": after, "after_first": self._cal_after1})
         return {"ts": self._cal_last["ts"], "trigger": self._cal_trigger, "result": result,
                 "reason": self._cal_reason, "fixes": self._cal_attempt, "zero_sensor": self._cal_zero_s,
-                "before": before, "after": after, "last": dict(self._cal_last)}
+                "before": before, "after": after, "after_first": self._cal_after1, "last": dict(self._cal_last)}
 
     def _cal_tick(self, pos1, pos_enc, pos1_ai):
         """Один такт процедуры калибровки. Возвращает итог (для журнала), когда закончили, иначе None."""
@@ -838,10 +843,30 @@ class MicroscopeFSM:
             self.m1_sp = self._retract_pos
             self._cal_wait -= 1
             got = self._cal_measure(pos1, pos_enc, pos1_ai) if still else None
-            if got or self._cal_wait <= 0:
-                self._cal_after = got
+            if got and self._cal_ok and self._far_gap(got) > CAL_FAR_TOL_UM and self._cal_after1 is None:
+                # датчик на отводе разошёлся с энкодером: замер мог попасть на неустоявшийся датчик — меряем ещё раз
+                # через CAL_RECHECK_TICKS; плашка только если расхождение держится
+                self._cal_after1 = got
+                log_event("microscope_fsm", "Автокалибровка: на отводе датчик расходится на %d мкм — перемеряю" %
+                          self._far_gap(got), "warn", got)
+                self._cal_wait = CAL_RECHECK_TICKS + 60
+                self._cal_go("after", "на отводе расхождение %d мкм — перемеряю" % self._far_gap(got), grace=CAL_RECHECK_TICKS)
+            elif got or self._cal_wait <= 0:
+                self._cal_after = got or self._cal_after1
                 return self._cal_finish("готово" if self._cal_ok else "не удалось")
         return None
+
+    @staticmethod
+    def _far_gap(m):
+        """Худшее расхождение датчика с энкодером и расчётной (мкм) в замере {calc, enc, sensor}."""
+        return max(abs(m["sensor"] - m["enc"]), abs(m["sensor"] - m["calc"]))
+
+    def clear_autocal_fail(self):
+        """Сбросить красную плашку автокалибровки (кнопка на странице). Итог и журнал не трогаем."""
+        with self._lock:
+            had = self._cal_failed
+            self._cal_failed, self._cal_fail_msg = False, ""
+            return {"status": "ok", "was_failed": had}
 
     def _cal_send(self, what):
         """Команда калибровки на плату (ВНЕ лока). Движение — только с разрешением мотора."""

@@ -48,13 +48,16 @@ _ref_cache: dict = {}
 
 
 def load_ref(d: Path) -> Optional[dict]:
-    """Манифест эталона + маска светлой зоны (кэш по папке и дате манифеста — статус опрашивается каждые секунды).
+    """Манифест эталона + маска светлой зоны (кэш по папке, дате манифеста и числу файлов в папке — статус опрашивается каждые секунды;
+    число файлов — чтобы недокопированный набор подхватывался, когда остальное докопировали, без перезапуска).
     None — набора нет / он битый; кадров, чьих файлов не хватает, — в ref['missing']."""
     f = Path(d) / "manifest.json"
     if not f.exists():
         _ref_cache.pop(str(d), None)
         return None
-    key = (f.stat().st_mtime, f.stat().st_size)
+    with os.scandir(d) as it:
+        n_files = sum(1 for _ in it)
+    key = (f.stat().st_mtime, f.stat().st_size, n_files)
     hit = _ref_cache.get(str(d))
     if hit and hit[0] == key:
         return hit[1]

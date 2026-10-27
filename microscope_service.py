@@ -1142,6 +1142,12 @@ class MicroscopeService:
             return self.fsm.start_autocal()
         return {"status": "no_fsm"}
 
+    def clear_autocal_fail(self):
+        """Сбросить красную плашку автокалибровки (кнопка)."""
+        if self.fsm:
+            return self.fsm.clear_autocal_fail()
+        return {"status": "no_fsm"}
+
     def reset_varka_count(self):
         """Сбросить счётчик варок в 0 (кнопка)."""
         if self.fsm:

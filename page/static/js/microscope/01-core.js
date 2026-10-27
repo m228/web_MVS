@@ -1179,7 +1179,8 @@
       ["acFail", "cycAcFail"].forEach((id) => {
         const el = $(id); if (!el) return;
         el.hidden = !ac.failed;
-        if (ac.failed) el.textContent = "⚠ " + (ac.fail_msg || "автокалибровка не удалась") + " — работаем дальше";
+        const tx = el.querySelector(".micro-ac-fail__txt");
+        if (ac.failed && tx) tx.textContent = "⚠ " + (ac.fail_msg || "автокалибровка не удалась") + " — работаем дальше";
       });
       set("cycSv", f.sv == null ? "—" : Number(f.sv).toFixed(1));
       // СВ рядом с видео камеры (телеметрия камеры) — чтобы было видно при просмотре потока
@@ -1397,6 +1398,11 @@
         if (h) { h.textContent = r && r.status === "started" ? (r.was_manual ? "калибровка запущена из ручного — потом вернётся ручной" : "калибровка запущена") : (r && r.hint) || ("занято (" + (r && r.status) + ")"); setTimeout(() => { h.textContent = ""; }, 3000); }
       }).catch(() => {});
     });
+    // красная плашка «не удалось»: кнопка «сбросить» (на вкладках «Цикл» и «Настр») — прячем сразу, не дожидаясь опроса
+    document.querySelectorAll("[data-ac-clear]").forEach((btn) => btn.addEventListener("click", () => {
+      ["acFail", "cycAcFail"].forEach((id) => { const el = $(id); if (el) el.hidden = true; });
+      api("/api/micro/autocal/clear_fail").catch(() => {});
+    }));
     const acReset = $("acReset");
     if (acReset) acReset.addEventListener("click", () => {
       api("/api/micro/autocal/reset").then(() => sentCmd("Счётчик варок сброшен")).catch(() => {});

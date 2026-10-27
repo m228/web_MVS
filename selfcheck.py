@@ -1079,6 +1079,19 @@ def _autocal():
     fsm, pl = mk(gain=0.92)                                          # масштаб датчика: случай «датчик на ~160 меньше»
     st = run(fsm, pl)
     assert st["result"].startswith("готово, на отводе расхождение") and st["failed"] and "масштаб" in st["fail_msg"], st
+    assert fsm.clear_autocal_fail()["was_failed"] and not fsm.state["autocal"]["failed"], "плашку можно сбросить"
+    assert fsm.state["autocal"]["result"].startswith("готово"), "сброс плашки итог не трогает"
+    fsm, pl = mk()                                                   # неустоявшийся датчик на отводе: 1-й замер врёт, 2-й чистый
+    flaky = {"n": 0}
+    real_tele = pl._tele
+
+    def tele():
+        real_tele()
+        if fsm._cal_phase == "after" and flaky["n"] < 400 and fsm._cal_after1 is None:
+            pl.telemetry["pos1_ai"] += 5610                          # +561 мкм, пока идёт первый замер (датчик ×0,1 в FSM)
+    pl._tele = tele
+    st = run(fsm, pl)
+    assert st["result"] == "готово" and not st["failed"], "разовое расхождение должно пережить перемер: %s" % st
     fsm, pl = mk(x=2120, x_stop=120)                                 # упор выше зоны 0..50: не лечится -> не удалось
     st = run(fsm, pl)
     assert st["result"] == "не удалось" and st["failed"] and n(pl, "set_zero") == 0, st
@@ -1864,7 +1877,23 @@ def _sv_glitch():
     assert st == [7, 7, 7, 7, 8, 8], "смена стадии принята не вовремя: %s" % st
     off = SvSource({"host": "x", "glitch_filter": False})
     assert off._sanitize({"sv": 0.0, "stage": 3}) == {"sv": 0.0, "stage": 3}, "фильтр выключен — значения как есть"
-    return "0,0/58,4/«3» отброшены, скачок и смена стадии проходят"
+    # в журнал — только настоящий сбой (значение не удержалось), а не каждая смена стадии
+    import sv_source
+    logged = []
+    orig = sv_source.log_event
+    sv_source.log_event = lambda src_, msg, level="info", payload=None: logged.append(msg)
+    try:
+        real = SvSource({"host": "x"})
+        for x in [7, 7, 8, 8, 8, 8, 9, 9, 9]:
+            real._sanitize({"sv": 87.0, "stage": x})
+        assert not logged, "настоящая смена стадии попала в журнал как сбой: %s" % logged
+        glitch = SvSource({"host": "x"})
+        for x in [7, 7, 100, 7, 7]:
+            glitch._sanitize({"sv": 87.0, "stage": x})
+        assert len(logged) == 1 and "100" in logged[0], "сбой «100» должен быть в журнале ровно раз: %s" % logged
+    finally:
+        sv_source.log_event = orig
+    return "0,0/58,4/«3» отброшены, скачок и смена стадии проходят; в журнал только настоящий сбой"
 
 
 @check("Микроскоп", "Клапаны сиропа, воды и продукта из ПЛК: доза между пробами (%·с), время открытия, обрыв связи не считается, запись в пробу и журнал")

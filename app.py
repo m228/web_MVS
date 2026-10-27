@@ -339,6 +339,14 @@ def micro_autocal_start():
     return res
 
 
+@app.get("/api/micro/autocal/clear_fail")
+def micro_autocal_clear_fail():
+    # сброс красной плашки автокалибровки
+    res = micro.clear_autocal_fail()
+    api_log("api.micro.autocal.clear_fail", "Автокалибровка: плашка ошибки сброшена", payload=res)
+    return res
+
+
 @app.get("/api/micro/autocal/reset")
 def micro_autocal_reset():
     # сброс счётчика варок в 0

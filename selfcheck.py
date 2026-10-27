@@ -2178,12 +2178,11 @@ def _model_check():
     ref = mc.load_ref(d)
     assert ref and len(ref["frames"]) == 3 and ref["missing"] == 0 and mc.load_ref(d / "нет") is None
     (d / "f2.png").unlink()
-    assert mc.load_ref(d) is ref or mc.load_ref(d)["missing"] in (0, 1)       # кэш по манифесту; пропавший файл виден после пересборки
-    mc._ref_cache.clear()
-    assert mc.load_ref(d)["missing"] == 1 and len(mc.load_ref(d)["frames"]) == 2
+    assert mc.load_ref(d)["missing"] == 1 and len(mc.load_ref(d)["frames"]) == 2       # кэш учитывает число файлов: пропажу видно без перезапуска
     cv2.imwrite(str(d / "f2.png"), np.full((600, 2000, 3), 128, np.uint8))
-    mc._ref_cache.clear()
     ref = mc.load_ref(d)
+    assert ref["missing"] == 0 and len(ref["frames"]) == 3, "докопированный эталон должен подхватиться без перезапуска"
+    assert mc.load_ref(d) is ref, "без изменений в папке — из кэша"
 
     def objs_of(pl):
         return [{"polygon": p, "bbox": [min(a for a, _ in p), min(b for _, b in p), max(a for a, _ in p), max(b for _, b in p)], "conf": 0.9} for p in pl]

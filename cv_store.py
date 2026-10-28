@@ -449,14 +449,15 @@ _FINES_KEYS = ("fsieve_", "fines_m1", "fines_m2", "fines_m3", "fines_area", "fin
                "sieve_m1_b", "sieve_m2_b", "sieve_m3_b", "sieve_area_b")
 
 
-def _apply_fines_gate(rows: list[dict]) -> list[dict]:
+def _apply_fines_gate(rows: list[dict], thr: Optional[float] = None) -> list[dict]:
     """Порог «Мука с СВ» по варке: мука и рассев считаются с первой пробы, где СВ достигло порога, и ДО КОНЦА варки — даже если на
     подкачке СВ проседает ниже порога (раньше в такие пробы мука не считалась, и линия рвалась). До первого достижения порога
     значения обнуляются. Строки — все пробы по времени (из разных дней), варки режутся теми же правилами, что в boils()."""
-    try:
-        thr = float(cv_volume.volume_cfg(_volume_cfg_now())["fines_from_sv"])
-    except Exception:
-        thr = 88.0
+    if thr is None:
+        try:
+            thr = float(cv_volume.volume_cfg(_volume_cfg_now())["fines_from_sv"])
+        except Exception:
+            thr = 88.0
     latched, prev = False, None
     for r in rows:
         if prev is None or _is_new_boil(prev, r):

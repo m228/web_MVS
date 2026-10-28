@@ -57,3 +57,5 @@ bug.txt
 mvs.db
 mvs.db-wal
 mvs.db-shm
+
+database/

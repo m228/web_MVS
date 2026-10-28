@@ -158,6 +158,21 @@
     try { over = JSON.parse(localStorage.getItem(OVER_KEY) || "{}") || {}; } catch (e) { }
     const overOn = (ck, ok) => !!(over[ck] && over[ck][ok]);
     const OV_W = 44;            // ширина правой шкалы одного наложения, px
+    // другие заводы (папка database/<завод>/mvs.db рядом с приложением): галочка у графика, поверх — медиана и «обычно» (25–75 %) их варок за тот же период;
+    // только на экране. Нет папки — rep.others_available пуст и галочки нет
+    let othersData = null, othersQ = null;
+    const othersStat = (rep, c, pl) => {
+      const val = c.val ? (b) => c.val(b, rep) : (b) => b[c.key];
+      const v = (pl.boils || []).filter((b) => !b.flag).map(val).filter((a) => a != null).sort((a, b) => a - b);
+      return v.length >= 3 ? { q1: quant(v, 0.25), med: quant(v, 0.5), q3: quant(v, 0.75), n: v.length } : null;
+    };
+    const othersFor = (rep, ck) => (overOn(ck, "others") && othersData && othersQ === lastQ ? othersData.filter((p) => p.boils && p.boils.length) : []);
+    const anyOthersOn = () => Object.keys(over).some((k) => over[k] && over[k].others);
+    async function loadOthers() {
+      if (!lastQ || !lastRep || !(lastRep.others_available || []).length || !anyOthersOn()) return;
+      if (othersData && othersQ === lastQ) return;
+      try { othersData = (await (await fetch("/api/cv/others/report?" + lastQ)).json()).plants || []; othersQ = lastQ; } catch (e) { othersData = null; }
+    }
 
     // общая рамка графиков по варкам: ось X — варки подряд; дни — разделителями и подписями, вода — полосой, смена модели и изменения — линиями;
     // parts — фон частей суток со значками над полосами (на экране)
@@ -235,7 +250,8 @@
       const lim = c.key === "fines_avg" ? [t.fines_max] : c.corridor ? [t.size_min_um, t.size_max_um] : [];
       const isBad = (v) => (c.key === "fines_avg" ? finesBad(rep, v) : c.corridor ? sizeBad(rep, v) : false);
       // шкала — по точкам, усам типичных варок и целям: широкий интервал обрывка не сжимает остальные
-      const ext = P.map((p) => p.v).concat(c.whisk ? typ.filter((p) => p.b.fines_hi != null).map((p) => p.b.fines_hi) : [], lim);
+      const oth = screen ? othersFor(rep, c.key).map((pl, k) => ({ pl, k, st: othersStat(rep, c, pl) })).filter((o) => o.st) : [];
+      const ext = P.map((p) => p.v).concat(c.whisk ? typ.filter((p) => p.b.fines_hi != null).map((p) => p.b.fines_hi) : [], lim, oth.flatMap((o) => [o.st.q1, o.st.q3]));
       let lo = Math.min(...ext), hi = Math.max(...ext); const pad = (hi - lo) * 0.08 || 1;
       lo = c.zero ? 0 : lo - pad; hi += pad;
       const y = yScale(lo, hi, T, H, 4);
@@ -244,6 +260,16 @@
         const q1 = quant(tv, 0.25), q3 = quant(tv, 0.75);
         s += '<rect class="qband" x="' + L + '" y="' + y.f(q3).toFixed(1) + '" width="' + W + '" height="' + Math.max(1, y.f(q1) - y.f(q3)).toFixed(1) + '"><title>обычно ' + range(q1, q3, c.d) + "</title></rect>";
       }
+      oth.forEach((o) => {                             // другой завод: «обычно» полосой на всю ширину, медиана пунктиром, подпись у правого края
+        const yq3 = y.f(o.st.q3), yq1 = y.f(o.st.q1), ym = y.f(o.st.med).toFixed(1), nm = o.pl.name.charAt(0).toUpperCase() + o.pl.name.slice(1);
+        const tipT = nm + ": медиана " + fmt(o.st.med, c.d) + ", обычно " + range(o.st.q1, o.st.q3, c.d) + " (" + o.st.n + " варок)" +
+          (o.pl.models && o.pl.models.length ? "\nмодель " + o.pl.models.map(modelName).join(", ") : "") + (o.pl.fines_from_sv != null ? "\nмука с СВ " + fmt(o.pl.fines_from_sv, 0) : "") +
+          "\nдругой завод: цифры муки и размера сравнимы приблизительно (модель и порог могут быть другими)";
+        s += '<g data-tip="' + esc(tipT) + '"><rect class="oband oth-' + o.k + '" x="' + L + '" y="' + yq3.toFixed(1) + '" width="' + W + '" height="' + Math.max(1, yq1 - yq3).toFixed(1) + '"></rect>' +
+          '<line class="oline oth-' + o.k + '" x1="' + L + '" x2="' + (L + W) + '" y1="' + ym + '" y2="' + ym + '"></line>' +
+          '<text class="olabx oth-' + o.k + '" x="' + (L + 4) + '" y="' + ym + '" dy="-0.35em">' + esc(nm) + " " + fmt(o.st.med, c.d) + '</text>' +
+          '<rect class="hit" x="' + L + '" y="' + (Math.min(yq3, +ym) - 2).toFixed(1) + '" width="' + W + '" height="' + (Math.max(yq1, +ym) - Math.min(yq3, +ym) + 4).toFixed(1) + '"></rect></g>';
+      });
       lim.forEach((v, k) => {
         const yy = y.f(v).toFixed(1);
         s += '<line class="lim" x1="' + L + '" x2="' + (L + W) + '" y1="' + yy + '" y2="' + yy + '"></line><text class="limlab" x="' + (L + W - 2) + '" y="' + yy + '" dy="' + (k || c.key === "fines_avg" ? "-0.35em" : "1.05em") + '">' +
@@ -280,7 +306,9 @@
       });
       const items = [["dot1", "варка"]].concat(P.some((p) => p.b.flag) ? [["off", "не в итогах"]] : [], screen && P.some((p) => anomOf(p.b)) ? [["anom", "не как обычно"]] : [], [["line", "медиана по " + MED_N + " варкам"], ["qband", "обычно"]],
         c.whisk ? [["whisk", "95 %"]] : [], lim.length ? [["lim", c.key === "fines_avg" ? "порог" : "коридор"], ["bad", "за целью"]] : [], extras(rep));
-      const box = screen && have.length ? '<span class="micro-rep-over">' + have.map((o) => '<label title="' + esc(o.tip) + '"><input type="checkbox" data-over="' + c.key + ":" + o.key + '"' +
+      const plants = screen ? rep.others_available || [] : [];
+      const box = screen && (have.length || plants.length) ? '<span class="micro-rep-over">' + (plants.length ? '<label title="Показать на графике варки других заводов из папки database (' + esc(plants.join(", ")) + '): медиана и «обычно» за тот же период. Только на экране"><input type="checkbox" data-over="' + c.key + ':others"' +
+        (overOn(c.key, "others") ? " checked" : "") + ' /><i class="lg-oth"></i>другие заводы</label>' : "") + have.map((o) => '<label title="' + esc(o.tip) + '"><input type="checkbox" data-over="' + c.key + ":" + o.key + '"' +
         (overOn(c.key, o.key) ? " checked" : "") + ' /><i class="lg-ov ov-' + o.key + '"></i>' + o.name + "</label>").join("") + "</span>" : "";
       return '<div class="micro-rep-chart">' + chartHead(titleOf(c, rep), items, box) +
         '<svg viewBox="0 0 ' + w + " " + hh + '" width="' + w + '" height="' + hh + '" role="img" aria-label="' + esc(titleOf(c, rep)) + '">' + s + "</svg></div>";
@@ -520,8 +548,9 @@
       hint.textContent = "считаю…"; g("repGoBtn").disabled = true;
       try {
         const rep = await (await fetch("/api/cv/report?" + qq.q)).json();
-        lastRep = rep;
+        lastRep = rep; lastQ = qq.q;
         render(rep);
+        if (anyOthersOn() && (rep.others_available || []).length) loadOthers().then(() => { if (lastRep === rep) render(rep); });
         renderColsPanel();
         lastQ = qq.q; g("repCsvBtn").disabled = false; g("repPdfBtn").disabled = !rep.boils.length; hint.textContent = "";
       } catch (e) { hint.textContent = "не получилось: " + e.message; }
@@ -543,11 +572,12 @@
       if (!g("repGoBtn")) return;
       const out = g("repOut");
       out.addEventListener("click", (e) => { const td = e.target.closest("[data-boil]"); if (td) openBoil(td.dataset.boil, g("repHint")); });
-      out.addEventListener("change", (e) => {                       // галочка наложения в шапке графика: запомнить и перерисовать без запроса
+      out.addEventListener("change", async (e) => {                 // галочка наложения в шапке графика: запомнить и перерисовать (другие заводы — с одним запросом на период)
         const i = e.target.closest("input[data-over]"); if (!i) return;
         const [ck, ok] = i.dataset.over.split(":");
         over[ck] = { ...(over[ck] || {}), [ok]: i.checked };
         try { localStorage.setItem(OVER_KEY, JSON.stringify(over)); } catch (e2) { }
+        if (ok === "others" && i.checked) await loadOthers();
         if (lastRep && lastRep.boils.length) render(lastRep);
       });
       attachTip(out);

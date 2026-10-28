@@ -834,7 +834,18 @@ def cv_report(serial: str | None = None, frm: str | None = Query(None, alias="fr
     """Отчёт по варкам за период: по каждой варке, итоги, недели, подстадии (см. report.py)."""
     import report
     t0, t1 = _report_range(frm, to)
-    return report.build(_cv_serial(serial), t0, t1, fin_sv=max(0.2, min(fin_sv, 20.0)), anomalies=True)
+    rep = report.build(_cv_serial(serial), t0, t1, fin_sv=max(0.2, min(fin_sv, 20.0)), anomalies=True)
+    import other_plants
+    rep["others_available"] = other_plants.names()          # папка database/<завод>: нет её — в отчёте нет и галочки
+    return rep
+
+
+@app.get("/api/cv/others/report")
+def cv_others_report(frm: str | None = Query(None, alias="from"), to: str | None = None, fin_sv: float = 2.0):
+    """Варки других заводов (database/<завод>/mvs.db, только чтение) за тот же период — для сравнения на графиках отчёта."""
+    import other_plants
+    t0, t1 = _report_range(frm, to)
+    return {"plants": other_plants.report_all(t0, t1, max(0.2, min(fin_sv, 20.0)))}
 
 
 @app.get("/api/cv/anomaly/live")

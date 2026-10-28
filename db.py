@@ -13,6 +13,7 @@
 """
 from __future__ import annotations
 
+import contextlib
 import json
 import sqlite3
 import threading
@@ -102,11 +103,41 @@ def close() -> None:
     _local.conns = {}
 
 
+@contextlib.contextmanager
+def read_only_at(path):
+    """Чужая база (database/<завод>/mvs.db) только на чтение — для этого потока; своя база и другие потоки не затрагиваются.
+    Схему не создаёт и не меняет, файл не пишет."""
+    prev = getattr(_local, "ro_path", None)
+    _local.ro_path = Path(path)
+    try:
+        yield
+    finally:
+        _local.ro_path = prev
+
+
+def _open_ro(path: Path) -> sqlite3.Connection:
+    uri = path.resolve().as_uri()
+    try:
+        c = sqlite3.connect(uri + "?mode=ro", uri=True, timeout=30, check_same_thread=False)
+        c.execute("SELECT 1 FROM journal LIMIT 1")
+    except sqlite3.Error:                      # база без -shm рядом: mode=ro не может создать WAL-индекс — читаем как есть
+        c = sqlite3.connect(uri + "?immutable=1", uri=True, timeout=30, check_same_thread=False)
+    c.row_factory = sqlite3.Row
+    return c
+
+
 def conn() -> sqlite3.Connection:
     """Соединение этого потока с текущей базой (создаёт файл и схему при первом обращении)."""
     conns = getattr(_local, "conns", None)
     if conns is None:
         conns = _local.conns = {}
+    ro = getattr(_local, "ro_path", None)
+    if ro is not None:
+        key = "ro:" + str(ro)
+        c = conns.get(key)
+        if c is None:
+            c = conns[key] = _open_ro(ro)
+        return c
     key = str(DB_PATH)
     c = conns.get(key)
     if c is None:

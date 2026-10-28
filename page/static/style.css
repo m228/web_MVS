@@ -4027,9 +4027,9 @@ html[data-theme="navy"] .micro-rep-out, html[data-theme="dark"] .micro-rep-out {
    на тёмных темах день чуть светлее поля, вечер и ночь — темнее. Наложения: температура и разрежение — слоты 5 и 7 палитры (проверены
    валидатором вместе с синими точками, светлая и тёмная), числа шкалы — приглушённые, цвет ряда — только у значков */
 .micro-rep-out { --rep-dp-morning: rgba(0,0,0,.028); --rep-dp-day: transparent; --rep-dp-evening: rgba(0,0,0,.055); --rep-dp-night: rgba(0,0,0,.09);
-  --rep-ov-temp: #e87ba4; --rep-ov-vac: #6250d6; }
+  --rep-ov-temp: #e87ba4; --rep-ov-vac: #6250d6; --rep-oth-0: #d9822b; --rep-oth-1: #2a9d8f; --rep-oth-2: #8e6bd1; --rep-oth-3: #c2477a; }
 html[data-theme="navy"] .micro-rep-out, html[data-theme="dark"] .micro-rep-out { --rep-dp-morning: rgba(255,255,255,.022); --rep-dp-day: rgba(255,255,255,.045);
-  --rep-dp-evening: rgba(0,0,0,.14); --rep-dp-night: rgba(0,0,0,.26); --rep-ov-temp: #d55181; --rep-ov-vac: #9085e9; }
+  --rep-dp-evening: rgba(0,0,0,.14); --rep-dp-night: rgba(0,0,0,.26); --rep-ov-temp: #d55181; --rep-ov-vac: #9085e9; --rep-oth-0: #f0a050; --rep-oth-1: #4fc3b3; --rep-oth-2: #b49bea; --rep-oth-3: #e56a9f; }
 .micro-rep-chart .dp-morning { fill: var(--rep-dp-morning); }
 .micro-rep-chart .dp-day { fill: var(--rep-dp-day); }
 .micro-rep-chart .dp-evening { fill: var(--rep-dp-evening); }
@@ -4043,6 +4043,19 @@ html[data-theme="navy"] .micro-rep-out, html[data-theme="dark"] .micro-rep-out {
 .micro-rep-chart .ovm.ov-temp { fill: var(--rep-ov-temp); }
 .micro-rep-chart .ovm.ov-vac { fill: var(--rep-ov-vac); }
 .micro-rep-chart .olab { text-anchor: start; }
+/* другие заводы: «обычно» полосой, медиана пунктиром, подпись у левого края; цвет по порядку завода */
+.micro-rep-chart .oband { opacity: 0.16; }
+.micro-rep-chart .oline { fill: none; stroke-width: 1.5; stroke-dasharray: 5 4; }
+.micro-rep-chart .olabx { text-anchor: start; font-size: 0.9em; font-weight: 600; }
+.micro-rep-chart .oth-0.oband, .micro-rep-over .lg-oth { fill: var(--rep-oth-0); }
+.micro-rep-chart .oth-1.oband { fill: var(--rep-oth-1); }
+.micro-rep-chart .oth-2.oband { fill: var(--rep-oth-2); }
+.micro-rep-chart .oth-3.oband { fill: var(--rep-oth-3); }
+.micro-rep-chart .oth-0.oline { stroke: var(--rep-oth-0); } .micro-rep-chart .oth-0.olabx { fill: var(--rep-oth-0); }
+.micro-rep-chart .oth-1.oline { stroke: var(--rep-oth-1); } .micro-rep-chart .oth-1.olabx { fill: var(--rep-oth-1); }
+.micro-rep-chart .oth-2.oline { stroke: var(--rep-oth-2); } .micro-rep-chart .oth-2.olabx { fill: var(--rep-oth-2); }
+.micro-rep-chart .oth-3.oline { stroke: var(--rep-oth-3); } .micro-rep-chart .oth-3.olabx { fill: var(--rep-oth-3); }
+.micro-rep-over .lg-oth { display: inline-block; width: 12px; height: 6px; border-radius: 2px; background: var(--rep-oth-0); opacity: 0.6; }
 .micro-rep-over { display: inline-flex; flex-wrap: wrap; gap: 2px 14px; margin-left: auto; color: var(--muted); font-size: 0.92em; }
 .micro-rep-over label { display: inline-flex; flex-direction: row; align-items: center; gap: 5px; cursor: pointer; white-space: nowrap; font-size: inherit; font-weight: 400; }
 .micro-rep-over input[type="checkbox"] { width: 15px; height: 15px; min-height: 0; margin: 0; padding: 0; flex: 0 0 auto; accent-color: var(--accent, #2563eb); }

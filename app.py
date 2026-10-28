@@ -27,6 +27,7 @@ import updater
 from microscope_service import micro
 import cv_client
 import video_client
+import motion_client
 import services
 import fracture_lab
 import cv_store
@@ -958,6 +959,74 @@ def cv_boil_zip_file(name: str):
     if name not in {f["name"] for f in boil_archive.listing(dest)}:
         return Response(status_code=404)
     return FileResponse(str(dest / name), media_type="application/zip", filename=name)
+
+
+# --- сервис движения (motion_service/): датчик вращения, шахта, лента по IP-камерам → Modbus. Интерфейс — страница «Движение» ---
+def _motion_url() -> str:
+    return (plate_config.load().get("motion") or {}).get("service_url") or motion_client.DEFAULT_URL
+
+
+@app.get("/motion")
+def motion_page():
+    return _page("motion.html")
+
+
+@app.get("/api/motion/health")
+def motion_health():
+    url = _motion_url()
+    h = motion_client.health(url)
+    return {"service_url": url, "online": h is not None, "service": h}
+
+
+@app.get("/api/motion/config")
+def motion_get_config():
+    return motion_client.get_config(_motion_url())
+
+
+@app.put("/api/motion/config")
+def motion_put_config(cfg: dict = Body(...)):
+    r = motion_client.put_config(_motion_url(), cfg)
+    if "error" not in r:
+        log_event("motion", "Настройки сервиса движения сохранены", "info", {"cameras": len(r.get("cameras") or [])})
+    else:
+        log_event("motion", "Настройки сервиса движения отклонены: " + str(r["error"]), "warn")
+    return r
+
+
+@app.get("/api/motion/state")
+def motion_state():
+    return motion_client.state(_motion_url())
+
+
+@app.get("/api/motion/snapshot")
+def motion_snapshot(camera: str, w: int = 0):
+    """Последний кадр камеры из сервиса (для просмотра и разметки зон). Размер оригинала — в заголовках X-Frame-W/H."""
+    r = motion_client.snapshot(_motion_url(), camera, w)
+    if r is None:
+        return Response(status_code=404)
+    data, fw, fh = r
+    return Response(content=data, media_type="image/jpeg", headers={"X-Frame-W": str(fw), "X-Frame-H": str(fh), "Cache-Control": "no-store"})
+
+
+@app.get("/api/motion/history")
+def motion_history(camera: str, n: int = 300):
+    return motion_client.history(_motion_url(), camera, n)
+
+
+@app.post("/api/motion/record")
+def motion_record(req: dict = Body(...)):
+    return motion_client.record(_motion_url(), str(req.get("camera") or ""), bool(req.get("on")))
+
+
+@app.post("/api/motion/modbus_ping")
+def motion_modbus_ping(req: dict = Body(...)):
+    """Проверка связи с ПЛК: сервис читает ОДИН регистр, ничего не пишет."""
+    return motion_client.modbus_ping(_motion_url(), req)
+
+
+@app.get("/api/motion/logs")
+def motion_logs(n: int = 100):
+    return motion_client.logs(_motion_url(), n)
 
 
 # --- видео-сервис (video_service/): ролик варки. Сервис отвечает — на странице микроскопа видна вкладка «Ролик» ---

@@ -1489,7 +1489,7 @@ def _motion_service():
     for el in ("multiMotionBtn", "motionDock", "mdSwitch", "mdMark", "mdBody", "motionMarkModal", "mmCanvas"):
         assert 'id="%s"' % el in mh, "в мультипросмотре нет #%s" % el
     assert mh.index("10-motion.js") < mh.index("11-motion-dock.js") < mh.index("09-init.js"), "модули КЗ подключены до init"
-    assert ">КЗ<" in mh and all(('data-md-tab="%s"' % t) in mh for t in ("zones", "groups", "camera", "trends", "plc")), "кнопка «КЗ» и вкладки панели"
+    assert ">КЗ<" in mh and all(('data-md-tab="%s"' % t) in mh for t in ("zones", "plc")), "кнопка «КЗ» и вкладки панели (зоны+тренды, ПЛК+сценарии+группы)"
     assert all(('data-layout="%d"' % n) in mh for n in (1, 2, 4, 6, 8)), "раскладки 1/2/4/6/8"
     mj = (Path(BUNDLE_DIR) / "page" / "static" / "js" / "multi")
     assert "initMotionVision()" in (mj / "09-init.js").read_text(encoding="utf-8") and "updateMotionButton(source)" in (mj / "04-stream.js").read_text(encoding="utf-8") and "data-tile-motion" in (mj / "03-layout.js").read_text(encoding="utf-8"), "CV вшит в init, меню и ячейки"

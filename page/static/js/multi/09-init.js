@@ -5,6 +5,16 @@ function initLayoutButtons() {
   });
 }
 
+// клик мимо ячеек (по промежутку между ними или по фону рабочей области) снимает фокус:
+// меню камеры гаснет, а панель КЗ показывает общий вид — все камеры сразу
+function initFocusClear() {
+  const clear = (event) => {
+    if (event.target === event.currentTarget) setFocus(-1);
+  };
+  document.getElementById('multiGrid')?.addEventListener('click', clear);
+  document.querySelector('.multi-workspace')?.addEventListener('click', clear);
+}
+
 function initToolbar() {
   document.getElementById('multiConnectBtn')?.addEventListener('click', () => startStream(state.focused));
   document.getElementById('multiDisconnectBtn')?.addEventListener('click', () => disconnectTile(state.focused));
@@ -140,6 +150,7 @@ async function initMultiPage() {
   log.info('Инициализация страницы мультипоточности');
 
   initLayoutButtons();
+  initFocusClear();
   initToolbar();
   initModals();
   document.getElementById('multiRefreshBtn')?.addEventListener('click', loadCameras);

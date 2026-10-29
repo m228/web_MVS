@@ -1,5 +1,19 @@
-// ---------- КЗ: нижняя панель со вкладками (Зоны · Группы · Камера · Тренды · ПЛК/сценарии) + окно разметки зоны ----------
-// Камера — та, что в фокусе (только RTSP). Правки применяются сразу (автосохранение с задержкой, PUT /api/motion/config).
+// ---------- КЗ: нижняя панель — «Зоны · тренды» и «ПЛК · сценарии · группы» + окно разметки зоны ----------
+// Фокус на RTSP-камере — панель этой камеры; фокуса нет (пустая ячейка или клик мимо ячеек) — общий вид: все камеры с КЗ.
+// Правки применяются сразу (автосохранение с задержкой, PUT /api/motion/config).
+const MD_WIN_KEY = 'mvTrendWin';
+const MD_WIN_MIN = 30;
+const MD_WIN_MAX = 7200;
+
+// окно трендов, секунд (колесо мыши над графиком); запоминаем между перезапусками страницы
+function mdLoadWin() {
+  try {
+    const v = Number(localStorage.getItem(MD_WIN_KEY));
+    if (v >= MD_WIN_MIN && v <= MD_WIN_MAX) return v;
+  } catch (e) { /* без памяти браузера — по умолчанию */ }
+  return 1200;
+}
+
 const MD = {
   tab: 'zones',
   key: '',
@@ -7,18 +21,45 @@ const MD = {
   rev: 0,
   saveLabel: '',
   saveCls: '',
-  editGrp: null,        // индекс редактируемой группы, -1 — новая
+  editGrp: null,        // { cam, i } — редактируемая группа (i = -1 — новая)
   trendBusy: false,
+  trendDirty: false,
+  win: mdLoadWin(),
+  winTimer: null,
   mark: null,           // { cam, pts, cursor, fw, fh, closed }
   markBusy: false,
 };
 const MD_THR = { flow: [0.9, 0.6], diff: [4.0, 2.0] };
 const mdEl = (id) => document.getElementById(id);
 
+// 'cam' — в фокусе RTSP-камера; 'all' — фокуса нет (пустая ячейка / клик мимо): все камеры; 'none' — в фокусе GigE (панели нет)
+function mdMode() {
+  const s = focusedSource();
+  if (!s) return 'all';
+  return s.kind === 'rtsp' ? 'cam' : 'none';
+}
+
 function mdCamera() {
   const source = focusedSource();
   if (!source || source.kind !== 'rtsp') return { source: null, cam: null };
   return { source, cam: mvCam(source.serial) };
+}
+
+const mdCfgCams = () => (MV.cfg && MV.cfg.cameras) || [];
+
+// камеры, чьи зоны и тренды показываем: в фокусе — одна, иначе все с включённым КЗ
+function mdShownCams() {
+  if (mdMode() === 'cam') {
+    const { cam } = mdCamera();
+    return cam && cam.enabled ? [cam] : [];
+  }
+  return mdCfgCams().filter((c) => c.enabled);
+}
+
+function mdFmtWin(s) {
+  if (s < 120) return Math.round(s) + ' с';
+  if (s < 3600) return Math.round(s / 60) + ' мин';
+  return (Math.round(s / 360) / 10).toString().replace('.', ',') + ' ч';
 }
 
 function setMotionDock(open) {
@@ -74,7 +115,7 @@ function mdEdit(mutate, rerender) {
 // ---------- каркас панели ----------
 function mdPill(st, conn) {
   if (!MV.online) return ['сервис КЗ не запущен', 'is-bad'];
-  if (!conn) return ['анализ выключен', ''];
+  if (!conn) return ['КЗ выключено', ''];
   if (!st) return ['нет данных', 'is-bad'];
   if (st.result && st.result.corrupt) return ['битый поток — результаты не учитываются', 'is-warn'];
   if (!st.connected) return ['нет связи с камерой', 'is-bad'];
@@ -82,19 +123,42 @@ function mdPill(st, conn) {
   return ['жива · ' + st.fps + ' к/с', 'is-ok'];
 }
 
+// общий вид: сколько камер с КЗ и все ли живы
+function mdAllPill() {
+  if (!MV.online) return ['сервис КЗ не запущен', 'is-bad'];
+  const on = mdCfgCams().filter((c) => c.enabled);
+  if (!on.length) return ['КЗ нигде не включено', ''];
+  const bad = on.filter((c) => mdPill(MV.states[c.id], true)[1] !== 'is-ok').length;
+  return [on.length + ' с КЗ' + (bad ? ' · проблем: ' + bad : ''), bad ? 'is-warn' : 'is-ok'];
+}
+
 function renderMotionDock() {
   const dock = mdEl('motionDock');
   if (!dock) return;
-  const { source, cam } = mdCamera();
-  dock.hidden = !MV.dockOpen || !source;           // фокус на GigE-ячейке — панель прячется и возвращается сама
+  const mode = mdMode();
+  dock.hidden = !MV.dockOpen || mode === 'none';   // фокус на GigE-ячейке — панель прячется и возвращается сама
   if (dock.hidden) return;
-  const key = [source.serial, MD.tab, MV.online, cam ? cam.enabled : 'x', cam ? cam.zones.length : 0, cam ? (cam.groups || []).length : 0,
-    ((MV.cfg && MV.cfg.scenarios) || []).length, MD.editGrp].join('|');
-  mdEl('mdCamName').textContent = source.label || source.serial;
+  const { source, cam } = mdCamera();
+  const all = mode === 'all';
+  if (MD.tab !== 'zones' && MD.tab !== 'plc') MD.tab = 'zones';
+
+  const cams = mdCfgCams();
+  const camKey = all
+    ? cams.map((c) => c.id + (c.enabled ? '1' : '0') + c.zones.length + '/' + (c.groups || []).length).join(',')
+    : (cam ? [cam.enabled ? 1 : 0, cam.zones.length, (cam.groups || []).length].join('/') : 'x');
+  const key = [mode, source ? source.serial : '', MD.tab, MV.online, camKey, JSON.stringify(MD.editGrp),
+    ((MV.cfg && MV.cfg.scenarios) || []).length, state.cameras.length].join('|');
+
+  // шапка: название, тумблер КЗ (серый, когда выключено), разметка, запись
+  dock.classList.toggle('is-cv-off', all ? !cams.some((c) => c.enabled) : !(cam && cam.enabled));
+  mdEl('mdCamName').textContent = all ? 'Все камеры' : (source.label || source.serial);
   const sw = mdEl('mdSwitch');
   sw.disabled = !MV.online;
   sw.checked = !!(cam && cam.enabled);
-  mdEl('mdSwitchLabel').textContent = cam && cam.enabled ? 'Анализ включён' : 'Выкл';
+  mdEl('mdSwitchWrap').hidden = all;
+  mdEl('mdMark').hidden = all;
+  mdEl('mdRec').hidden = all;
+  mdEl('mdAll').hidden = all;
   mdEl('mdMark').disabled = !(cam && cam.enabled);
   mdEl('mdRec').disabled = !(cam && cam.enabled);
   dock.querySelectorAll('[data-md-tab]').forEach((b) => b.classList.toggle('is-active', b.dataset.mdTab === MD.tab));
@@ -103,44 +167,101 @@ function renderMotionDock() {
   mdPaintSave();
   if (key === MD.key) return;
   MD.key = key;
+
   const body = mdEl('mdBody');
-  if (MD.tab !== 'plc' && !(cam && cam.enabled)) {
-    body.innerHTML = '<p class="net-hint">Включите «Анализ» переключателем справа сверху — для этой камеры появятся зоны, тренды и вывод в ПЛК.</p>';
-    return;
+  if (MD.tab === 'plc') {
+    body.innerHTML = mdPlcHtml();
+    mdBindPlc();
+    if (MD.editGrp) mdSyncGroupEditor();
+  } else {
+    body.innerHTML = mdZonesTabHtml(mode, cam);
+    mdDrawTrends();
   }
-  body.innerHTML = { zones: mdZonesHtml, groups: mdGroupsHtml, camera: mdCameraHtml, trends: mdTrendsHtml, plc: mdPlcHtml }[MD.tab](cam);
-  if (MD.tab === 'plc') mdBindPlc();
-  if (MD.tab === 'trends') mdDrawTrends();
   paintMotionDockLive();
 }
 
 const mdSel = (opts, cur) => opts.map(([v, t]) => `<option value="${v}"${String(v) === String(cur) ? ' selected' : ''}>${t}</option>`).join('');
 const mdNum = (attrs, v, extra) => `<input type="number" ${attrs} value="${escapeHtml(v)}" ${extra || ''} />`;
+// поле «подпись слева — значение справа» для сеток настроек
+const mdField = (label, ctl, title, cls) => `<label${title ? ` title="${escapeHtml(title)}"` : ''}${cls ? ` class="${cls}"` : ''}><span>${label}</span>${ctl}</label>`;
 
-// ---------- вкладка «Зоны» ----------
+// ---------- вкладка «Зоны · тренды» ----------
 function mdOutCell(o, attrs) {
   // адрес нужен только когда вывод включён — иначе поле лишь теснит соседей по строке
   return `<div class="md-out"><select ${attrs} data-f="okind">${mdSel([['', 'нет'], ['holding', 'регистр'], ['coil', 'coil']], o ? o.kind : '')}</select>` +
     (o && o.kind ? `<input type="number" min="0" max="65535" ${attrs} data-f="oaddr" value="${o.address}" title="Адрес регистра / coil" placeholder="адрес" />` : '') + '</div>';
 }
 
-function mdZonesHtml(cam) {
-  if (!cam.zones.length) return '<p class="net-hint">Зон нет. Нажмите «Разметить зону» и обведите на кадре то, что должно двигаться (лента, шнек).</p>';
-  const rows = cam.zones.map((z, i) => {
-    const a = `data-md="z" data-i="${i}"`;
-    return `<tr>
-      <td><input type="text" ${a} data-f="name" value="${escapeHtml(z.name)}" title="${escapeHtml(z.id)}" /></td>
-      <td><span class="cv-bit" id="md-zb-${escapeHtml(z.id)}">–</span></td>
-      <td class="md-num" id="md-zv-${escapeHtml(z.id)}">–</td>
-      <td><select ${a} data-f="type">${mdSel([['motion', 'motion'], ['presence', 'presence']], z.type)}</select></td>
-      <td><select ${a} data-f="metric">${mdSel([['diff', 'diff'], ['flow', 'flow']], z.metric)}</select></td>
-      <td>${mdNum(a + ' data-f="on"', z.on, 'step="0.05" min="0" title="Включить при значении ' + (z.invert ? 'НИЖЕ off' : 'ВЫШЕ on') + '"')}</td>
-      <td>${mdNum(a + ' data-f="off"', z.off, 'step="0.05" min="0"')}</td>
-      <td>${mdOutCell(z.out, a)}</td>
-      <td><button type="button" class="btn-secondary md-x" ${a} data-f="del" title="Удалить зону">✕</button></td></tr>`;
-  }).join('');
-  return `<div class="md-scroll"><table class="md-table"><thead><tr><th>Зона</th><th>Бит</th><th title="Значение метрики, по которой зона принимает решение">Знач.</th><th>Тип</th><th>Метрика</th><th>on</th><th>off</th><th>Вывод в ПЛК</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>
-    <p class="net-hint">Значения идут сразу, вывод в ПЛК не обязателен. Правки сохраняются сами. diff и flow — при наведении на зону в ячейке.</p>`;
+// зона слева, её тренд справа
+function mdZoneCardHtml(cam, z, i) {
+  const a = `data-md="z" data-cam="${escapeHtml(cam.id)}" data-i="${i}"`;
+  const k = escapeHtml(cam.id + '-' + z.id);
+  return `<div class="md-zone">
+    <div class="md-zone__ctl">
+      <div class="md-zone__row"><input type="text" ${a} data-f="name" value="${escapeHtml(z.name)}" title="${escapeHtml(z.id)}" />
+        <span class="cv-bit" id="md-zb-${k}" title="Бит зоны">–</span><span class="md-num" id="md-zv-${k}" title="Значение метрики">–</span><span class="md-sp"></span>
+        <button type="button" class="btn-secondary md-x" ${a} data-f="del" title="Удалить зону">✕</button></div>
+      <div class="md-zone__row"><select ${a} data-f="type">${mdSel([['motion', 'motion'], ['presence', 'presence']], z.type)}</select>
+        <select ${a} data-f="metric">${mdSel([['diff', 'diff'], ['flow', 'flow']], z.metric)}</select>
+        <span class="md-lbl">on</span>${mdNum(a + ' data-f="on"', z.on, 'step="0.05" min="0" title="Включить при значении ' + (z.invert ? 'НИЖЕ off' : 'ВЫШЕ on') + '"')}
+        <span class="md-lbl">off</span>${mdNum(a + ' data-f="off"', z.off, 'step="0.05" min="0"')}</div>
+      <div class="md-zone__row"><span class="md-lbl">вывод в ПЛК</span>${mdOutCell(z.out, a)}</div>
+    </div>
+    <div class="md-zone__chart"><canvas id="md-ch-${k}" height="84"></canvas></div>
+  </div>`;
+}
+
+// параметры камеры: поля в 2–3 колонки
+function mdCameraParamsHtml(cam) {
+  const so = cam.status_out;
+  const a = `data-md="c" data-cam="${escapeHtml(cam.id)}"`;
+  return `<details class="md-det" open><summary>Параметры камеры</summary>
+    <div class="md-fields">
+      ${mdField('Название', `<input type="text" ${a} data-f="name" value="${escapeHtml(cam.name)}" />`)}
+      ${mdField('Адрес потока', `<input type="text" ${a} data-f="url" value="${escapeHtml(cam.url)}" />`, '', 'md-wide')}
+      ${mdField('Кадров/с в анализ', mdNum(a + ' data-f="proc_fps"', cam.proc_fps, 'min="0.2" max="30" step="0.5"'))}
+      ${mdField('Шаг сравнения, кадров', mdNum(a + ' data-f="frame_gap"', cam.frame_gap, 'min="1" max="10"'), 'Сравнивать кадр не с соседним, а через N кадров: медленное движение виднее')}
+      ${mdField('Зависла через, с', mdNum(a + ' data-f="freeze_timeout_s"', cam.freeze_timeout_s, 'min="1"'), 'Картинка не меняется дольше — камера зависла: в ПЛК нули и статус 0')}
+      ${mdField('Серая каша: доля кадра', mdNum(a + ' data-f="corrupt_ratio"', cam.corrupt_ratio == null ? 0.3 : cam.corrupt_ratio, 'min="0" max="1" step="0.05"'), 'Доля кадра, залитая ровным серым (так выглядит битый H.264). 0 — не проверять')}
+      ${mdField('Пауза после каши, с', mdNum(a + ' data-f="corrupt_hold_s"', cam.corrupt_hold_s == null ? 2 : cam.corrupt_hold_s, 'min="0" max="60" step="0.5"'), 'Сколько секунд после каши результаты ещё не учитываются')}
+      ${mdField('Статус «камера жива»', `<span class="md-out"><select ${a} data-f="skind">${mdSel([['', 'нет'], ['holding', 'регистр'], ['coil', 'coil']], so ? so.kind : '')}</select>` +
+        (so && so.kind ? `<input type="number" ${a} data-f="saddr" min="0" max="65535" value="${so.address}" title="Адрес" placeholder="адрес" />` : '') + '</span>')}
+    </div>
+    <p class="net-hint">При смене настроек камеры сервис переподключается к потоку (несколько секунд без данных).</p></details>`;
+}
+
+// общий вид: все RTSP-камеры с тумблером КЗ
+function mdCamerasListHtml() {
+  const rtsp = state.cameras.filter((c) => c.kind === 'rtsp');
+  if (!rtsp.length) return '';
+  return `<details class="md-det" open><summary>Камеры</summary><div class="md-camlist">${rtsp.map((c) =>
+    `<label class="md-camrow"><span class="switch"><input type="checkbox" data-md="cs" data-serial="${escapeHtml(c.serial)}"${mvEnabled(c.serial) ? ' checked' : ''}${MV.online ? '' : ' disabled'} /><span class="switch-track"></span></span>` +
+    `<span>${escapeHtml(c.label)}</span><span class="motion-dock__pill" id="md-cp-${escapeHtml(c.serial)}"></span></label>`).join('')}</div></details>`;
+}
+
+function mdZonesTabHtml(mode, cam) {
+  const all = mode === 'all';
+  if (!all && !(cam && cam.enabled)) {
+    return '<p class="net-hint">Включите КЗ переключателем справа сверху — для этой камеры появятся зоны, тренды и вывод в ПЛК.</p>';
+  }
+  const shown = mdShownCams();
+  let html = '';
+  if (!shown.length) {
+    html += '<p class="net-hint">КЗ ещё ни у одной камеры не включено. Включите его ниже или выберите ячейку с RTSP-камерой и нажмите тумблер справа сверху.</p>';
+  } else if (shown.every((c) => !c.zones.length)) {
+    html += '<p class="net-hint">Зон нет. Нажмите «Разметить зону» и обведите на кадре то, что должно двигаться (лента, шнек).</p>';
+  } else {
+    html += `<div class="md-trendbar"><span>Тренды за последние <b id="mdWinLbl">${mdFmtWin(MD.win)}</b></span>
+      <span class="net-hint">колесо мыши над графиком — масштаб по времени, правый край всегда «сейчас»</span></div><div class="md-zones">`;
+    shown.forEach((c) => {
+      if (!c.zones.length) return;
+      if (all) html += `<div class="md-camhead"><b>${escapeHtml(c.name)}</b><span class="motion-dock__pill" id="md-cp-${escapeHtml(c.id)}"></span></div>`;
+      html += c.zones.map((z, i) => mdZoneCardHtml(c, z, i)).join('');
+    });
+    html += `</div><p class="net-hint">Линия — метрика зоны. Пунктир: красный — порог «on», оранжевый — «off». Нижняя полоска: зелёная — крутится, красная — стоит, серая — нет данных или битый поток. Серый фон — кадры, которые не учитывались.</p>`;
+  }
+  html += all ? mdCamerasListHtml() : mdCameraParamsHtml(cam);
+  return html;
 }
 
 function mdOnZone(t, cam) {
@@ -166,92 +287,6 @@ function mdOnZone(t, cam) {
   }, f === 'type' || f === 'metric' || f === 'okind');
 }
 
-// ---------- вкладка «Группы» ----------
-function mdGroupsHtml(cam) {
-  const groups = cam.groups || [];
-  const list = groups.length ? groups.map((g, i) => {
-    const out = g.out ? ({ holding: 'регистр', bits: 'биты в регистр', coils: 'coil на зону' }[g.out.kind] + ' @' + g.out.address) : 'без вывода';
-    const names = g.zones.map((id) => { const z = cam.zones.find((q) => q.id === id); return escapeHtml(z ? z.name : id); }).join(', ');
-    return `<div class="md-card"><b>${escapeHtml(g.name)}</b><span class="net-hint">${g.type} · ${names} · ${out}</span><span class="md-sp"></span>
-      <span class="cv-bit" id="md-gv-${escapeHtml(g.id)}">–</span>
-      <button type="button" class="btn-secondary md-x" data-md="g" data-f="edit" data-i="${i}">Изменить</button>
-      <button type="button" class="btn-secondary md-x" data-md="g" data-f="del" data-i="${i}">✕</button></div>`;
-  }).join('') : '<p class="net-hint">Групп нет — каждая зона пишется в ПЛК сама (колонка «Вывод в ПЛК» на вкладке «Зоны»). Группа складывает зоны одной камеры: sum — сколько активно, monotonic — уровень снизу вверх (шахта), worktimer — наработка в % за окно (лента жома). Зоны из РАЗНЫХ камер объединяйте в «ПЛК · сценарии».</p>';
-  return list + '<button type="button" class="md-add" data-md="g" data-f="add" title="Добавить группу" aria-label="Добавить группу">+</button><div id="mdGrpEd">' + (MD.editGrp !== null ? mdGroupEditorHtml(cam) : '') + '</div>';
-}
-
-function mdGroupEditorHtml(cam) {
-  const g = MD.editGrp >= 0 ? cam.groups[MD.editGrp] : { id: '', name: '', type: 'sum', zones: [], out: { kind: 'holding', address: 0 }, window_s: 60, min_active: 1, agg: 'any', scale: 100 };
-  const zs = cam.zones.map((z) => `<label class="md-chk"><input type="checkbox" value="${escapeHtml(z.id)}"${g.zones.includes(z.id) ? ' checked' : ''} />${escapeHtml(z.name)}</label>`).join('');
-  // сетка 2–3 колонки: подпись слева, поле справа; зоны, подсказка и кнопки — на всю ширину
-  return `<div class="md-card md-ge" id="mdGe">
-    <label><span>Название</span><input type="text" id="geName" value="${escapeHtml(g.name)}" placeholder="Уровень шахты / Наработка" /></label>
-    <label><span>Тип</span><select id="geType">${mdSel([['sum', 'sum — сколько зон активно'], ['monotonic', 'monotonic — уровень снизу вверх'], ['worktimer', 'worktimer — наработка за окно']], g.type)}</select></label>
-    <label><span>Вывод</span><span class="md-ge__pair"><select id="geKind">${mdSel([['', 'нет'], ['holding', 'значение в регистр'], ['bits', 'биты зон в один регистр'], ['coils', 'coil на каждую зону']], g.out ? g.out.kind : '')}</select>
-      <input type="number" id="geAddr" min="0" max="65535" value="${(g.out && g.out.address) || 0}" title="Адрес регистра / coil" placeholder="адрес" /></span></label>
-    <label class="md-gt" data-for="worktimer"><span>Окно, с</span><input type="number" id="geWin" min="1" value="${g.window_s || 60}" /></label>
-    <label class="md-gt" data-for="worktimer"><span>Мин. зон</span><input type="number" id="geMin" min="1" value="${g.min_active || 1}" title="Минимум активных зон" /></label>
-    <label class="md-gt" data-for="worktimer"><span>Шкала</span><input type="number" id="geScale" min="1" value="${g.scale || 100}" title="100 = проценты; 1000 или 4095 — для аналогового выхода" /></label>
-    <label class="md-gt" data-for="worktimer"><span>Рабочая, если</span><select id="geAgg">${mdSel([['any', 'хоть один кадр активен'], ['majority', 'не меньше половины кадров'], ['all', 'все кадры активны']], g.agg || 'any')}</select></label>
-    <div class="md-ge__zones"><span>Зоны</span><span class="md-ge__chk">${zs}</span></div>
-    <p class="net-hint md-gt md-ge__full" data-for="monotonic">Порядок «снизу вверх» = порядок зон в списке (первая зона — низ шахты).</p>
-    <div class="md-ge__btns"><button type="button" class="btn-primary" data-md="g" data-f="ok">Готово</button><button type="button" class="btn-secondary" data-md="g" data-f="cancel">Отмена</button></div></div>`;
-}
-
-function mdSyncGroupEditor() {
-  const t = mdEl('geType');
-  if (!t) return;
-  document.querySelectorAll('#mdGe .md-gt').forEach((n) => { n.hidden = n.dataset.for !== t.value; });
-}
-
-function mdOnGroup(t, cam) {
-  const f = t.dataset.f, i = Number(t.dataset.i);
-  if (f === 'add') { MD.editGrp = -1; MD.key = ''; renderMotionDock(); mdSyncGroupEditor(); return; }
-  if (f === 'edit') { MD.editGrp = i; MD.key = ''; renderMotionDock(); mdSyncGroupEditor(); return; }
-  if (f === 'cancel') { MD.editGrp = null; MD.key = ''; renderMotionDock(); return; }
-  if (f === 'del') {
-    if (!confirm('Удалить группу «' + cam.groups[i].name + '»?')) return;
-    mdEdit(() => { cam.groups.splice(i, 1); }, true);
-    return;
-  }
-  if (f === 'ok') {
-    const ids = [...document.querySelectorAll('#mdGe input[type=checkbox]:checked')].map((x) => x.value);
-    if (!ids.length) { alert('Выберите хотя бы одну зону'); return; }
-    const type = mdEl('geType').value;
-    const old = MD.editGrp >= 0 ? cam.groups[MD.editGrp] : null;
-    const ng = { id: old ? old.id : '', name: mdEl('geName').value.trim() || 'Группа', type, zones: ids,
-      out: mdEl('geKind').value ? { kind: mdEl('geKind').value, address: parseInt(mdEl('geAddr').value, 10) || 0 } : null };
-    if (!ng.id) { let n = 1; while ((cam.groups || []).some((q) => q.id === 'g' + n)) n += 1; ng.id = 'g' + n; }
-    if (type === 'monotonic') ng.order = cam.zones.map((z) => z.id).filter((id) => ids.includes(id));
-    if (type === 'worktimer') {
-      Object.assign(ng, { window_s: parseInt(mdEl('geWin').value, 10) || 60, min_active: Math.min(ids.length, parseInt(mdEl('geMin').value, 10) || 1),
-        agg: mdEl('geAgg').value, scale: parseInt(mdEl('geScale').value, 10) || 100 });
-    }
-    mdEdit(() => {
-      cam.groups = cam.groups || [];
-      if (MD.editGrp >= 0) cam.groups[MD.editGrp] = ng; else cam.groups.push(ng);
-      MD.editGrp = null;
-    }, true);
-  }
-}
-
-// ---------- вкладка «Камера» ----------
-function mdCameraHtml(cam) {
-  const so = cam.status_out;
-  const a = 'data-md="c"';
-  return `<div class="md-form">
-    <label>Название</label><input type="text" ${a} data-f="name" value="${escapeHtml(cam.name)}" />
-    <label>Адрес потока</label><input type="text" ${a} data-f="url" value="${escapeHtml(cam.url)}" />
-    <label>Кадров/с в анализ</label>${mdNum(a + ' data-f="proc_fps"', cam.proc_fps, 'min="0.2" max="30" step="0.5"')}
-    <label title="Сравнивать кадр не с соседним, а через N кадров: медленное движение виднее">Шаг сравнения, кадров</label>${mdNum(a + ' data-f="frame_gap"', cam.frame_gap, 'min="1" max="10"')}
-    <label title="Картинка не меняется дольше — камера зависла: в ПЛК нули и статус 0">Камера зависла через, с</label>${mdNum(a + ' data-f="freeze_timeout_s"', cam.freeze_timeout_s, 'min="1"')}
-    <label title="Доля кадра, залитая ровным серым (так выглядит битый H.264). 0 — не проверять">Серая каша: доля кадра</label>${mdNum(a + ' data-f="corrupt_ratio"', cam.corrupt_ratio == null ? 0.3 : cam.corrupt_ratio, 'min="0" max="1" step="0.05"')}
-    <label title="Сколько секунд после каши результаты ещё не учитываются">Пауза после каши, с</label>${mdNum(a + ' data-f="corrupt_hold_s"', cam.corrupt_hold_s == null ? 2 : cam.corrupt_hold_s, 'min="0" max="60" step="0.5"')}
-    <label>Статус «камера жива»</label><div><select ${a} data-f="skind">${mdSel([['', 'нет'], ['holding', 'регистр'], ['coil', 'coil']], so ? so.kind : '')}</select>
-      адрес <input type="number" ${a} data-f="saddr" min="0" max="65535" value="${so ? so.address : 0}" /></div>
-  </div><p class="net-hint">При смене настроек камеры сервис переподключается к потоку (несколько секунд без данных).</p>`;
-}
-
 function mdOnCamera(t, cam) {
   const f = t.dataset.f;
   mdEdit(() => {
@@ -260,67 +295,85 @@ function mdOnCamera(t, cam) {
     else if (f === 'saddr') { if (cam.status_out) cam.status_out.address = parseInt(t.value, 10) || 0; }
     else if (f === 'frame_gap') cam[f] = parseInt(t.value, 10) || 1;
     else cam[f] = parseFloat(t.value) || 0;
-  });
+  }, f === 'skind');
 }
 
-// ---------- вкладка «Тренды» ----------
-function mdTrendsHtml(cam) {
-  if (!cam.zones.length) return '<p class="net-hint">Зон нет — графику нечего показывать.</p>';
-  return cam.zones.map((z) => `<div class="md-chart"><span class="md-chart__lbl" title="${escapeHtml(z.name)}">${escapeHtml(z.name)} <small>(${z.metric})</small></span>
-    <canvas id="md-ch-${escapeHtml(z.id)}" height="96"></canvas></div>`).join('') +
-    '<p class="net-hint">Линия — метрика зоны. Пунктир: красный — порог «on», оранжевый — «off». Нижняя полоска: зелёная — крутится, красная — стоит, серая — нет данных или битый поток. Серый фон — кадры, которые не учитывались.</p>';
-}
-
+// ---------- тренды ----------
 async function mdDrawTrends() {
-  if (MD.tab !== 'trends' || !MV.dockOpen || MD.trendBusy) return;
-  const { cam } = mdCamera();
-  if (!cam || !cam.enabled || !cam.zones.length) return;
+  if (MD.tab !== 'zones' || !MV.dockOpen) return;
+  if (MD.trendBusy) { MD.trendDirty = true; return; }
+  const cams = mdShownCams().filter((c) => c.zones.length);
+  if (!cams.length) return;
+  const first = document.querySelector('.md-zone__chart canvas');
+  const pts = Math.max(60, Math.min(1200, first ? first.clientWidth : 500));
   MD.trendBusy = true;
-  const h = await mvApi('/api/motion/history?camera=' + encodeURIComponent(cam.id) + '&n=600');
+  const res = await Promise.all(cams.map((c) => mvApi('/api/motion/history?camera=' + encodeURIComponent(c.id) + '&window=' + MD.win + '&points=' + pts)));
   MD.trendBusy = false;
-  if (!h || h.error || !h.zones) return;
-  cam.zones.forEach((z) => mdDrawChart(z, h.zones[z.id], h.t || [], h.ok || []));
+  res.forEach((h, k) => {
+    if (!h || h.error || !h.zones) return;
+    cams[k].zones.forEach((z) => mdDrawChart(cams[k], z, h.zones[z.id], h.t || [], h.ok || []));
+  });
+  if (MD.trendDirty) { MD.trendDirty = false; mdDrawTrends(); }
 }
 
-function mdDrawChart(z, d, t, ok) {
-  const cv = mdEl('md-ch-' + z.id);
+// график зоны: ось X — время, правый край — «сейчас», левый — «сейчас − окно»
+function mdDrawChart(cam, z, d, t, ok) {
+  const cv = mdEl('md-ch-' + cam.id + '-' + z.id);
   if (!cv || !d) return;
-  const w = cv.clientWidth, hh = 96, strip = 8;
+  const w = cv.clientWidth, hh = 84, strip = 7;
+  if (!w) return;
   if (cv.width !== w) cv.width = w;
   const g = cv.getContext('2d');
   g.clearRect(0, 0, w, hh);
   const ys = z.metric === 'flow' ? d.flow : d.diff, n = ys.length;
-  if (n < 2) return;
-  const plotH = hh - strip - 14;
+  const win = MD.win;
+  const plotH = hh - strip - 13;
   const top = Math.max(z.on * 1.6, ...ys, 0.0001);
-  const X = (i) => (i / (n - 1)) * (w - 2) + 1;
   const Y = (v) => plotH - (v / top) * (plotH - 6) - 1;
-  const bw = w / n + 1;
+  g.fillStyle = '#94a3b8'; g.font = '10px sans-serif';
+  g.fillText(top.toFixed(top < 10 ? 2 : 0), 3, 10);
+  g.fillText('−' + mdFmtWin(win), 3, hh - 1);
+  g.textAlign = 'right'; g.fillText('сейчас', w - 3, hh - 1); g.textAlign = 'left';
+  if (n < 2) return;
+  const tEnd = t[n - 1];
+  const X = (i) => w - 1 - ((tEnd - t[i]) / win) * (w - 2);
+  const dt = (t[n - 1] - t[0]) / (n - 1);
+  const bw = Math.max(1.5, (dt / win) * w + 1);
+  const gap = Math.max(dt * 3, 5);   // разрыв в данных (камера молчала) — линию не тянем
   for (let i = 0; i < n; i += 1) {
     const bad = ok[i] === 0;
-    if (bad) { g.fillStyle = 'rgba(156,163,175,.30)'; g.fillRect(X(i) - bw / 2, 0, bw, plotH); }
-    else if (d.bit[i]) { g.fillStyle = 'rgba(74,222,128,.20)'; g.fillRect(X(i) - bw / 2, 0, bw, plotH); }
+    const x = X(i) - bw;
+    if (bad) { g.fillStyle = 'rgba(156,163,175,.30)'; g.fillRect(x, 0, bw, plotH); }
+    else if (d.bit[i]) { g.fillStyle = 'rgba(74,222,128,.20)'; g.fillRect(x, 0, bw, plotH); }
     g.fillStyle = bad ? '#9ca3af' : (d.bit[i] ? '#4ade80' : '#f87171');
-    g.fillRect(X(i) - bw / 2, plotH + 3, bw, strip);
+    g.fillRect(x, plotH + 3, bw, strip);
   }
   g.setLineDash([4, 3]); g.lineWidth = 1;
   g.strokeStyle = '#ef4444'; g.beginPath(); g.moveTo(0, Y(z.on)); g.lineTo(w, Y(z.on)); g.stroke();
   g.strokeStyle = '#f59e0b'; g.beginPath(); g.moveTo(0, Y(z.off)); g.lineTo(w, Y(z.off)); g.stroke();
   g.setLineDash([]);
   g.strokeStyle = '#38bdf8'; g.lineWidth = 1.6; g.beginPath();
-  ys.forEach((v, i) => (i ? g.lineTo(X(i), Y(v)) : g.moveTo(X(i), Y(v))));
+  ys.forEach((v, i) => (i && t[i] - t[i - 1] <= gap ? g.lineTo(X(i), Y(v)) : g.moveTo(X(i), Y(v))));
   g.stroke();
-  g.fillStyle = '#94a3b8'; g.font = '10px sans-serif';
-  g.fillText(top.toFixed(top < 10 ? 2 : 0), 3, 10);
-  const span = t.length > 1 ? Math.round(t[t.length - 1] - t[0]) : 0;
-  g.fillText('−' + (span >= 120 ? Math.round(span / 60) + ' мин' : span + ' с'), 3, hh - 1);
-  g.textAlign = 'right'; g.fillText('сейчас', w - 3, hh - 1); g.textAlign = 'left';
 }
 
-// ---------- вкладка «ПЛК · сценарии» ----------
+// колесо мыши над графиком: вверх — ближе (короче окно), вниз — дальше; окно общее для всех графиков
+function mdOnWheel(e) {
+  const cv = e.target.closest && e.target.closest('.md-zone__chart canvas');
+  if (!cv) return;
+  e.preventDefault();
+  MD.win = Math.max(MD_WIN_MIN, Math.min(MD_WIN_MAX, Math.round(MD.win * (e.deltaY < 0 ? 0.8 : 1.25))));
+  try { localStorage.setItem(MD_WIN_KEY, String(MD.win)); } catch (err) { /* не критично */ }
+  const lbl = mdEl('mdWinLbl');
+  if (lbl) lbl.textContent = mdFmtWin(MD.win);
+  clearTimeout(MD.winTimer);
+  MD.winTimer = setTimeout(mdDrawTrends, 120);
+}
+
+// ---------- вкладка «ПЛК · сценарии · группы» ----------
 function mdSourceOptions() {
   const out = [];
-  ((MV.cfg && MV.cfg.cameras) || []).forEach((c) => c.zones.forEach((z) => out.push({ camera: c.id, zone: z.id, label: c.name + ' · ' + z.name })));
+  mdCfgCams().forEach((c) => c.zones.forEach((z) => out.push({ camera: c.id, zone: z.id, label: c.name + ' · ' + z.name })));
   return out;
 }
 
@@ -329,16 +382,16 @@ function mdPlcHtml() {
   const a = 'data-md="p"';
   const scens = ((MV.cfg && MV.cfg.scenarios) || []).map((s, i) => mdScenarioHtml(s, i)).join('') || '<p class="net-hint">Сценариев нет. Сценарий берёт зоны любых камер, считает «хоть одна крутится» / «все крутятся» / «сколько крутится» и пишет ОДНО значение в регистр или coil.</p>';
   return `<div class="md-cols">
-    <div><h3 class="md-h">Подключение к ПЛК</h3><div class="md-form">
-      <label>Писать в ПЛК</label><input type="checkbox" ${a} data-f="enable"${m.enable ? ' checked' : ''} />
-      <label>IP контроллера</label><input type="text" ${a} data-f="host" value="${escapeHtml(m.host)}" />
-      <label>Порт / Unit ID</label><div>${mdNum(a + ' data-f="port"', m.port, 'min="1" max="65535"')} ${mdNum(a + ' data-f="device_id"', m.device_id, 'min="0" max="255"')}</div>
-      <label title="Значения пишутся сразу при изменении и ещё раз с этим периодом">Обновлять не реже, с</label>${mdNum(a + ' data-f="write_period_s"', m.write_period_s, 'min="0.1" step="0.1"')}
-      <label>Проверка связи</label><div>регистр ${mdNum('id="mdPingAddr"', 0, 'min="0" max="65535"')} <button type="button" class="btn-secondary" id="mdPing">Прочитать</button></div>
+    <div><h3 class="md-h">Подключение к ПЛК</h3><div class="md-fields md-fields--one">
+      ${mdField('Писать в ПЛК', `<input type="checkbox" ${a} data-f="enable"${m.enable ? ' checked' : ''} />`)}
+      ${mdField('IP контроллера', `<input type="text" ${a} data-f="host" value="${escapeHtml(m.host)}" />`)}
+      ${mdField('Порт / Unit ID', `<span class="md-out">${mdNum(a + ' data-f="port"', m.port, 'min="1" max="65535"')} ${mdNum(a + ' data-f="device_id"', m.device_id, 'min="0" max="255"')}</span>`)}
+      ${mdField('Обновлять не реже, с', mdNum(a + ' data-f="write_period_s"', m.write_period_s, 'min="0.1" step="0.1"'), 'Значения пишутся сразу при изменении и ещё раз с этим периодом')}
+      ${mdField('Проверка связи', `<span class="md-out">регистр ${mdNum('id="mdPingAddr"', 0, 'min="0" max="65535"')} <button type="button" class="btn-secondary md-x" id="mdPing">Прочитать</button></span>`)}
     </div><p class="net-hint" id="mdPingInfo">Проверка только читает один регистр, в ПЛК ничего не пишется.</p>
     <div id="mdPlcCams"></div></div>
-    <div><h3 class="md-h">Сценарии записи</h3>${scens}
-      <div class="popup-actions"><button type="button" class="btn-secondary" data-md="s" data-f="add">+ Сценарий</button></div></div></div>`;
+    <div><h3 class="md-h md-h--row"><button type="button" class="md-add" data-md="s" data-f="add" title="Добавить сценарий" aria-label="Добавить сценарий">+</button>Сценарии записи</h3>${scens}</div></div>
+    ${mdGroupsSectionHtml()}`;
 }
 
 function mdScenarioHtml(s, i) {
@@ -408,27 +461,142 @@ function mdBindPlc() {
   });
 }
 
+// ---------- группы зон (ниже сценариев; по всем камерам) ----------
+function mdGroupRowHtml(cam, g, i) {
+  const out = g.out ? ({ holding: 'регистр', bits: 'биты в регистр', coils: 'coil на зону' }[g.out.kind] + ' @' + g.out.address) : 'без вывода';
+  const names = g.zones.map((id) => { const z = cam.zones.find((q) => q.id === id); return escapeHtml(z ? z.name : id); }).join(', ');
+  const a = `data-md="g" data-cam="${escapeHtml(cam.id)}" data-i="${i}"`;
+  return `<div class="md-card"><b>${escapeHtml(cam.name)}</b><span class="md-dim">·</span><b>${escapeHtml(g.name)}</b><span class="net-hint">${g.type} · ${names} · ${out}</span><span class="md-sp"></span>
+    <span class="cv-bit" id="md-gv-${escapeHtml(cam.id + '-' + g.id)}">–</span>
+    <button type="button" class="btn-secondary md-x" ${a} data-f="edit">Изменить</button>
+    <button type="button" class="btn-secondary md-x" ${a} data-f="del" title="Удалить группу">✕</button></div>`;
+}
+
+function mdGroupsSectionHtml() {
+  const rows = [];
+  mdCfgCams().forEach((cam) => (cam.groups || []).forEach((g, i) => rows.push(mdGroupRowHtml(cam, g, i))));
+  const list = rows.length ? rows.join('') : '<p class="net-hint">Групп нет — каждая зона пишется в ПЛК сама (вывод в ПЛК у зоны). Группа складывает зоны одной камеры: sum — сколько активно, monotonic — уровень снизу вверх (шахта), worktimer — наработка в % за окно (лента жома). Зоны из РАЗНЫХ камер объединяйте в сценарии выше.</p>';
+  return `<div class="md-groups"><h3 class="md-h md-h--row"><button type="button" class="md-add" data-md="g" data-f="add" title="Добавить группу" aria-label="Добавить группу">+</button>Группы зон</h3>${list}<div id="mdGrpEd">${MD.editGrp ? mdGroupEditorHtml() : ''}</div></div>`;
+}
+
+function mdGeZonesHtml(cam, g) {
+  if (!cam.zones.length) return '<span class="net-hint">у камеры нет зон</span>';
+  return cam.zones.map((z) => `<label class="md-chk"><input type="checkbox" value="${escapeHtml(z.id)}"${g.zones.includes(z.id) ? ' checked' : ''} />${escapeHtml(z.name)}</label>`).join('');
+}
+
+function mdGroupEditorHtml() {
+  const e = MD.editGrp;
+  const cam = e && mvCam(e.cam);
+  if (!cam) return '';
+  const g = e.i >= 0 ? cam.groups[e.i] : { id: '', name: '', type: 'sum', zones: [], out: { kind: 'holding', address: 0 }, window_s: 60, min_active: 1, agg: 'any', scale: 100 };
+  if (!g) return '';
+  const camOpts = mdCfgCams().filter((c) => c.zones.length).map((c) => [c.id, escapeHtml(c.name)]);
+  // сетка 2–3 колонки: подпись слева, поле справа; зоны, подсказка и кнопки — на всю ширину
+  return `<div class="md-card md-ge" id="mdGe">
+    ${mdField('Камера', `<select id="geCam"${e.i >= 0 ? ' disabled' : ''}>${mdSel(camOpts, cam.id)}</select>`)}
+    ${mdField('Название', `<input type="text" id="geName" value="${escapeHtml(g.name)}" placeholder="Уровень шахты / Наработка" />`)}
+    ${mdField('Тип', `<select id="geType">${mdSel([['sum', 'sum — сколько зон активно'], ['monotonic', 'monotonic — уровень снизу вверх'], ['worktimer', 'worktimer — наработка за окно']], g.type)}</select>`)}
+    ${mdField('Вывод', `<span class="md-ge__pair"><select id="geKind">${mdSel([['', 'нет'], ['holding', 'значение в регистр'], ['bits', 'биты зон в один регистр'], ['coils', 'coil на каждую зону']], g.out ? g.out.kind : '')}</select>
+      <input type="number" id="geAddr" min="0" max="65535" value="${(g.out && g.out.address) || 0}" title="Адрес регистра / coil" placeholder="адрес" /></span>`)}
+    <label class="md-gt" data-for="worktimer"><span>Окно, с</span><input type="number" id="geWin" min="1" value="${g.window_s || 60}" /></label>
+    <label class="md-gt" data-for="worktimer" title="Минимум активных зон"><span>Мин. зон</span><input type="number" id="geMin" min="1" value="${g.min_active || 1}" /></label>
+    <label class="md-gt" data-for="worktimer" title="100 = проценты; 1000 или 4095 — для аналогового выхода"><span>Шкала</span><input type="number" id="geScale" min="1" value="${g.scale || 100}" /></label>
+    <label class="md-gt" data-for="worktimer"><span>Рабочая, если</span><select id="geAgg">${mdSel([['any', 'хоть один кадр активен'], ['majority', 'не меньше половины кадров'], ['all', 'все кадры активны']], g.agg || 'any')}</select></label>
+    <div class="md-ge__zones"><span>Зоны</span><span class="md-ge__chk" id="geZones">${mdGeZonesHtml(cam, g)}</span></div>
+    <p class="net-hint md-gt md-ge__full" data-for="monotonic">Порядок «снизу вверх» = порядок зон в списке (первая зона — низ шахты).</p>
+    <div class="md-ge__btns"><button type="button" class="btn-primary" data-md="g" data-f="ok">Готово</button><button type="button" class="btn-secondary" data-md="g" data-f="cancel">Отмена</button></div></div>`;
+}
+
+function mdSyncGroupEditor() {
+  const t = mdEl('geType');
+  if (!t) return;
+  document.querySelectorAll('#mdGe .md-gt').forEach((n) => { n.hidden = n.dataset.for !== t.value; });
+}
+
+function mdOnGroup(t) {
+  const f = t.dataset.f;
+  if (f === 'add') {
+    const { cam: focused } = mdCamera();
+    const first = focused && focused.zones.length ? focused : mdCfgCams().find((c) => c.zones.length);
+    if (!first) { alert('Сначала разметьте хотя бы одну зону'); return; }
+    MD.editGrp = { cam: first.id, i: -1 };
+    MD.key = '';
+    renderMotionDock();
+    return;
+  }
+  if (f === 'edit') { MD.editGrp = { cam: t.dataset.cam, i: Number(t.dataset.i) }; MD.key = ''; renderMotionDock(); return; }
+  if (f === 'cancel') { MD.editGrp = null; MD.key = ''; renderMotionDock(); return; }
+  const cam = mvCam(f === 'ok' ? (MD.editGrp && MD.editGrp.cam) : t.dataset.cam);
+  if (!cam) return;
+  if (f === 'del') {
+    const i = Number(t.dataset.i);
+    if (!confirm('Удалить группу «' + cam.groups[i].name + '»?')) return;
+    mdEdit(() => { cam.groups.splice(i, 1); }, true);
+    return;
+  }
+  if (f === 'ok') {
+    const ids = [...document.querySelectorAll('#mdGe #geZones input[type=checkbox]:checked')].map((x) => x.value);
+    if (!ids.length) { alert('Выберите хотя бы одну зону'); return; }
+    const type = mdEl('geType').value;
+    const idx = MD.editGrp.i;
+    const old = idx >= 0 ? cam.groups[idx] : null;
+    const ng = { id: old ? old.id : '', name: mdEl('geName').value.trim() || 'Группа', type, zones: ids,
+      out: mdEl('geKind').value ? { kind: mdEl('geKind').value, address: parseInt(mdEl('geAddr').value, 10) || 0 } : null };
+    if (!ng.id) { let n = 1; while ((cam.groups || []).some((q) => q.id === 'g' + n)) n += 1; ng.id = 'g' + n; }
+    if (type === 'monotonic') ng.order = cam.zones.map((z) => z.id).filter((id) => ids.includes(id));
+    if (type === 'worktimer') {
+      Object.assign(ng, { window_s: parseInt(mdEl('geWin').value, 10) || 60, min_active: Math.min(ids.length, parseInt(mdEl('geMin').value, 10) || 1),
+        agg: mdEl('geAgg').value, scale: parseInt(mdEl('geScale').value, 10) || 100 });
+    }
+    mdEdit(() => {
+      cam.groups = cam.groups || [];
+      if (idx >= 0) cam.groups[idx] = ng; else cam.groups.push(ng);
+      MD.editGrp = null;
+    }, true);
+  }
+}
+
 // ---------- живые значения ----------
 function paintMotionDockLive() {
   if (!MV.dockOpen) return;
+  const mode = mdMode();
+  if (mode === 'none') return;
   const { source, cam } = mdCamera();
-  if (!source) return;
-  const st = MV.states[source.serial];
-  const [pill, cls] = mdPill(st, cam && cam.enabled);
   const pe = mdEl('mdPill');
-  if (pe) { pe.textContent = pill; pe.className = 'motion-dock__pill ' + cls; }
+  if (pe) {
+    const [pill, cls] = mode === 'all' ? mdAllPill() : mdPill(MV.states[source.serial], cam && cam.enabled);
+    pe.textContent = pill;
+    pe.className = 'motion-dock__pill ' + cls;
+  }
+  const st0 = source && MV.states[source.serial];
   const rec = mdEl('mdRec');
-  if (rec) rec.textContent = st && st.recording ? '■ остановить запись' : '● запись CSV';
-  const res = st && st.result;
-  ((res && res.zones) || []).forEach((z) => {
-    const bit = mdEl('md-zb-' + z.id);
-    if (bit) { bit.textContent = z.bit; bit.classList.toggle('on', z.bit === 1); }
-    const val = mdEl('md-zv-' + z.id);
-    if (val) val.textContent = Number(z.value).toFixed(2);
+  if (rec) {
+    const on = !!(st0 && st0.recording);
+    rec.textContent = on ? '■' : '●';
+    rec.classList.toggle('is-rec', on);
+    rec.title = on ? 'Остановить запись метрик в CSV' : 'Писать метрики каждого кадра в CSV (для калибровки порогов)';
+  }
+  mdCfgCams().forEach((c) => {
+    const st = MV.states[c.id];
+    const res = st && st.result;
+    ((res && res.zones) || []).forEach((z) => {
+      const bit = mdEl('md-zb-' + c.id + '-' + z.id);
+      if (bit) { bit.textContent = z.bit; bit.classList.toggle('on', z.bit === 1); }
+      const val = mdEl('md-zv-' + c.id + '-' + z.id);
+      if (val) val.textContent = Number(z.value).toFixed(2);
+    });
+    ((res && res.groups) || []).forEach((g) => {
+      const b = mdEl('md-gv-' + c.id + '-' + g.id);
+      if (b) { b.textContent = g.value; b.classList.toggle('on', g.value > 0); }
+    });
   });
-  ((res && res.groups) || []).forEach((g) => {
-    const b = mdEl('md-gv-' + g.id);
-    if (b) { b.textContent = g.value; b.classList.toggle('on', g.value > 0); }
+  // статус каждой камеры (заголовки зон и список камер в общем виде)
+  state.cameras.filter((c) => c.kind === 'rtsp').forEach((c) => {
+    const p = mdEl('md-cp-' + c.serial);
+    if (!p) return;
+    const [txt, cls] = mdPill(MV.states[c.serial], mvEnabled(c.serial));
+    p.textContent = txt;
+    p.className = 'motion-dock__pill ' + cls;
   });
   (MV.scen || []).forEach((s) => {
     const b = mdEl('md-sv-' + s.id);
@@ -446,18 +614,16 @@ function paintMotionDockLive() {
       return `<div class="md-card"><b>${escapeHtml(c.name)}</b><span class="md-sp"></span><span class="net-hint">${!MV.cfg.modbus.enable ? 'запись выключена' : p.ok === null || p.ok === undefined ? 'ПЛК: ждёт' : p.ok ? 'ПЛК: ок' : 'ПЛК: ошибка ' + escapeHtml(p.error || '')}</span></div>`;
     }).join('');
   }
-  if (MD.tab === 'trends' && (MV.tick % 2 === 0)) mdDrawTrends();
+  if (MD.tab === 'zones' && (MV.tick % 2 === 0)) mdDrawTrends();
 }
 
-// ---------- включение анализа и запись CSV ----------
-async function mdOnSwitch(event) {
-  const { source } = mdCamera();
-  if (!source) return;
-  const want = event.target.checked;
-  const r = await mvJson('/api/motion/vision', { serial: source.serial, enabled: want, name: source.label, url: (source.connection && source.connection.url) || '' });
-  if (r && r.error) { alert('КЗ: ' + r.error); event.target.checked = !want; return; }
+// ---------- включение КЗ и запись CSV ----------
+async function mdSetEnabled(serial, want, onFail) {
+  const src = getSource(serial);
+  const r = await mvJson('/api/motion/vision', { serial, enabled: want, name: src ? src.label : serial, url: (src && src.connection && src.connection.url) || '' });
+  if (r && r.error) { alert('КЗ: ' + r.error); if (onFail) onFail(); return; }
   if (r && r.cameras) MV.cfg = r;
-  log.info('КЗ: анализ движения ' + (want ? 'включён' : 'выключен'), { serial: source.serial });
+  log.info('КЗ: анализ движения ' + (want ? 'включён' : 'выключен'), { serial });
   MD.key = '';
   renderMotionDock();
   drawAllMotionTiles();
@@ -601,10 +767,13 @@ function initMotionDock() {
   tip.hidden = true;
   document.body.appendChild(tip);
 
-  mdEl('mdSwitch')?.addEventListener('change', mdOnSwitch);
+  mdEl('mdSwitch')?.addEventListener('change', (e) => {
+    const { source } = mdCamera();
+    if (source) mdSetEnabled(source.serial, e.target.checked, () => { e.target.checked = !e.target.checked; });
+  });
+  mdEl('mdAll')?.addEventListener('click', () => setFocus(-1));   // общий вид: фокус снимаем
   mdEl('mdMark')?.addEventListener('click', openMarkModal);
   mdEl('mdRec')?.addEventListener('click', mdOnRec);
-  mdEl('mdClose')?.addEventListener('click', () => setMotionDock(false));
   document.querySelectorAll('[data-md-tab]').forEach((b) => b.addEventListener('click', () => {
     MD.tab = b.dataset.mdTab;
     MD.key = '';
@@ -616,16 +785,25 @@ function initMotionDock() {
     const t = e.target;
     const kind = t.dataset && t.dataset.md;
     if (!kind) return;
-    const { cam } = mdCamera();
-    if (kind === 'z' && cam) mdOnZone(t, cam);
-    else if (kind === 'g' && cam) mdOnGroup(t, cam);
-    else if (kind === 'c' && cam) mdOnCamera(t, cam);
+    if (kind === 'z') { const cam = mvCam(t.dataset.cam); if (cam) mdOnZone(t, cam); }
+    else if (kind === 'g') mdOnGroup(t);
+    else if (kind === 'c') { const cam = mvCam(t.dataset.cam); if (cam) mdOnCamera(t, cam); }
     else if (kind === 'p') mdOnPlc(t);
     else if (kind === 's') mdOnScenario(t);
+    else if (kind === 'cs') mdSetEnabled(t.dataset.serial, t.checked, () => { t.checked = !t.checked; });
   };
   body?.addEventListener('change', (e) => { if (e.target.tagName !== 'BUTTON') dispatch(e); });
   body?.addEventListener('click', (e) => { if (e.target.tagName === 'BUTTON' && e.target.dataset.md) dispatch(e); });
-  body?.addEventListener('change', (e) => { if (e.target.id === 'geType') mdSyncGroupEditor(); });
+  body?.addEventListener('change', (e) => {
+    if (e.target.id === 'geType') mdSyncGroupEditor();
+    // другая камера в редакторе группы — перечитываем её зоны, не трогая остальные поля
+    if (e.target.id === 'geCam' && MD.editGrp) {
+      MD.editGrp.cam = e.target.value;
+      const cam = mvCam(e.target.value);
+      if (cam) mdEl('geZones').innerHTML = mdGeZonesHtml(cam, { zones: [] });
+    }
+  });
+  body?.addEventListener('wheel', mdOnWheel, { passive: false });
 
   // окно разметки
   const cv = mdEl('mmCanvas');

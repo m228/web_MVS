@@ -45,6 +45,8 @@
     const saved = await api("/api/rtsp/saved");
     S.saved = saved.items || [];
     S.cam = cams().length ? cams()[0].id : null;
+    const want = new URLSearchParams(location.search).get("camera");        // ссылка «Все настройки» из мультипросмотра
+    if (want && cams().some((c) => c.id === want)) S.cam = want;
     renderAll();
     loopState();
     loopFrame();

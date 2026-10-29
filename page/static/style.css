@@ -4408,3 +4408,35 @@ body.micro-rep-doc .micro-cmp-strips { grid-template-columns: repeat(6, 1fr); ga
 .micro-cmp-pick select, .micro-cmp-pick input, .micro-cmp-g input, .micro-cmp-g select, .micro-cmp-add input[type="datetime-local"] { width: auto; flex: 0 0 auto; }
 .micro-cmp-groups .micro-cmp-g { flex-wrap: nowrap; }
 @media (max-width: 760px) { .micro-cmp-groups .micro-cmp-g { flex-wrap: wrap; } }
+
+/* --- CV (анализ движения) в мультипросмотре --- */
+.motion-card-popup {
+  position: fixed; display: none; width: 400px; max-width: calc(100vw - 24px); padding: 18px 20px;
+  background: var(--surface-strong); border: 1px solid var(--border); border-radius: 20px; box-shadow: var(--shadow); z-index: 9999;
+}
+.motion-card-popup.show { display: block; }
+.motion-card-popup h2 { margin-top: 0; margin-bottom: 12px; }
+.toolbar-btn--cv { background: linear-gradient(135deg, #14b8a6, #0ea5e9); color: #fff; box-shadow: 0 14px 30px rgba(20, 184, 166, 0.22); position: relative; }
+.toolbar-btn--cv[hidden] { display: none; }
+.toolbar-btn--cv .cv-mark { display: inline-block; border: 2px solid currentColor; border-radius: 5px; padding: 0 4px; font-size: 12px; font-weight: 800; line-height: 1.5; letter-spacing: .02em; }
+.toolbar-btn--cv.is-on { box-shadow: 0 0 0 2px rgba(34, 197, 94, .8), 0 14px 34px rgba(34, 197, 94, .35); }
+.cv-zones { margin: 12px 0 4px; display: flex; flex-direction: column; gap: 6px; max-height: 280px; overflow-y: auto; }
+.cv-zone { display: grid; grid-template-columns: 1fr auto; gap: 4px 8px; align-items: center; padding: 6px 8px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface-muted); font-size: 13px; }
+.cv-zone input[type=text], .cv-zone input[type=number], .cv-zone select { background: var(--input-bg); border: 1px solid var(--input-border); color: var(--text); border-radius: 6px; padding: 3px 6px; font: inherit; min-height: 0; }
+.cv-zone input[type=text] { width: 100%; box-sizing: border-box; }
+.cv-zone input[type=number] { width: 62px; }
+.cv-zone .cv-row { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; grid-column: 1 / 3; color: var(--muted); font-size: 12px; }
+.cv-bit { display: inline-block; min-width: 24px; text-align: center; border-radius: 10px; padding: 1px 8px; font-weight: 700; background: var(--surface-strong); color: var(--muted); }
+.cv-bit.on { background: var(--success-soft); color: var(--success); }
+.cv-link { display: inline-flex; align-items: center; text-decoration: none; }
+.tile-cv-badge { font-size: 12px; font-weight: 800; padding: 1px 7px; border: 2px solid currentColor; border-radius: 6px; color: var(--muted); white-space: nowrap; }
+.tile-cv-badge[hidden] { display: none; }
+.tile-cv-badge.is-active { color: var(--success); }
+.tile-cv-badge.is-bad { color: var(--danger); }
+.tile-motion-layer { position: absolute; inset: 0; width: 100%; height: 100%; z-index: 4; pointer-events: none; }
+.tile-motion-layer.is-marking { pointer-events: auto; cursor: crosshair; z-index: 6; }
+.tile-cv-hint { position: absolute; left: 8px; right: 8px; bottom: 8px; z-index: 7; display: flex; gap: 8px; align-items: center; flex-wrap: wrap;
+  padding: 6px 10px; border-radius: 10px; background: rgba(5, 8, 13, .82); color: #e7eefb; font-size: 12px; }
+.tile-cv-hint[hidden] { display: none; }
+.tile-cv-hint button { min-height: 0; padding: 3px 10px; font-size: 12px; }
+.toolbar-btn--cv .mode-indicator { top: -4px; right: -4px; background: var(--success); }

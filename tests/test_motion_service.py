@@ -439,3 +439,34 @@ def test_server_end_to_end_with_video_file(tmp_path):
     finally:
         server.should_exit = True
         th.join(8)
+
+
+# ───────────────────────────── «CV» в мультипросмотре: включение камеры ─────────────────────────────
+def test_vision_endpoint_enables_rtsp_camera_in_motion_service(monkeypatch, data_dir):
+    import app as appmod
+    import motion_client
+    import rtsp_store
+
+    cfg = {"version": 1, "modbus": {"enable": False}, "cameras": []}
+    puts = []
+    monkeypatch.setattr(rtsp_store, "load", lambda: [{"serial": "rtsp_1", "url": "rtsp://u:p@10.0.0.5:554/x", "label": "Лента"}])
+    monkeypatch.setattr(motion_client, "get_config", lambda url: json.loads(json.dumps(cfg)))
+    monkeypatch.setattr(motion_client, "put_config", lambda url, c: puts.append(c) or c)
+
+    r = appmod.motion_vision({"serial": "rtsp_1", "enabled": True, "name": "Лента"})
+    cam = r["cameras"][0]
+    assert cam["id"] == "rtsp_1" and cam["enabled"] is True and cam["url"] == "rtsp://u:p@10.0.0.5:554/x" and cam["name"] == "Лента"
+
+    cfg["cameras"] = [dict(cam, zones=[{"id": "z1", "name": "A", "points": LEFT}])]       # зона уже размечена
+    r = appmod.motion_vision({"serial": "rtsp_1", "enabled": False})
+    assert r["cameras"][0]["enabled"] is False and len(r["cameras"][0]["zones"]) == 1, "выключили — зоны остались"
+
+    assert "error" in appmod.motion_vision({"serial": "../x", "enabled": True}), "серийник проверяется"
+    monkeypatch.setattr(rtsp_store, "load", lambda: [])
+    assert "error" in appmod.motion_vision({"serial": "rtsp_9", "enabled": True, "url": "file:///etc/passwd"}), "только rtsp://"
+    n = len(puts)
+    cfg["cameras"] = []
+    assert appmod.motion_vision({"serial": "rtsp_9", "enabled": False})["cameras"] == [] and len(puts) == n, "выключать нечего — в сервис не пишем"
+    monkeypatch.setattr(rtsp_store, "load", lambda: [{"serial": "rtsp_1", "url": "rtsp://u:p@10.0.0.5:554/x"}])
+    monkeypatch.setattr(motion_client, "get_config", lambda url: {"error": "сервис не отвечает"})
+    assert appmod.motion_vision({"serial": "rtsp_1", "enabled": True})["error"] == "сервис не отвечает"

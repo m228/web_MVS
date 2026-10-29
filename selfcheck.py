@@ -1481,7 +1481,7 @@ def _motion_service():
     import app as _app
     paths = {getattr(r, "path", "") for r in _app.app.routes}
     need = {"/motion", "/api/motion/health", "/api/motion/config", "/api/motion/state", "/api/motion/snapshot", "/api/motion/history",
-            "/api/motion/record", "/api/motion/modbus_ping", "/api/motion/logs"}
+            "/api/motion/record", "/api/motion/modbus_ping", "/api/motion/logs", "/api/motion/vision"}
     assert need <= paths, "нет маршрутов: %s" % sorted(need - paths)
     html = (Path(BUNDLE_DIR) / "page" / "motion.html").read_text(encoding="utf-8")
     js = (Path(BUNDLE_DIR) / "page" / "static" / "js" / "motion.js").read_text(encoding="utf-8")
@@ -1489,6 +1489,12 @@ def _motion_service():
         assert 'id="%s"' % el in html, "на странице нет #%s" % el
     assert "/static/js/motion.js" in html and "/api/motion/config" in js, "скрипт подключён и ходит в API"
     assert 'href="/motion"' in (Path(BUNDLE_DIR) / "page" / "index.html").read_text(encoding="utf-8"), "кнопка «Движение» на главной"
+    mh = (Path(BUNDLE_DIR) / "page" / "multi.html").read_text(encoding="utf-8")
+    for el in ("multiMotionBtn", "multiMotionCard", "multiMotionSwitch", "multiMotionZones", "multiMotionMark"):
+        assert 'id="%s"' % el in mh, "в мультипросмотре нет #%s" % el
+    assert mh.index("10-motion.js") < mh.index("09-init.js"), "модуль CV подключён до init"
+    mj = (Path(BUNDLE_DIR) / "page" / "static" / "js" / "multi")
+    assert "initMotionVision()" in (mj / "09-init.js").read_text(encoding="utf-8") and "updateMotionButton(source)" in (mj / "04-stream.js").read_text(encoding="utf-8") and "data-tile-motion" in (mj / "03-layout.js").read_text(encoding="utf-8"), "CV вшит в init, меню и ячейки"
     ms = Path(BUNDLE_DIR) / "motion_service"
     if str(ms) not in sys.path:
         sys.path.insert(0, str(ms))

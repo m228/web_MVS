@@ -21,6 +21,7 @@ from typing import Callable, Optional
 from urllib.parse import urlparse
 
 import cv_client
+import motion_client
 import plate_config
 import video_client
 from logger import log_event
@@ -40,6 +41,11 @@ SPECS = {
               "url": lambda cfg: (cfg.get("video") or {}).get("service_url"),
               "enabled": lambda cfg: True,
               "health": lambda url: video_client.health(url, timeout=1.0) is not None},
+    "motion": {"title": "Сервис движения", "dir": "motion_service", "default_url": motion_client.DEFAULT_URL, "port_env": "MOTION_PORT",
+               "host_env": "MOTION_HOST",
+               "url": lambda cfg: (cfg.get("motion") or {}).get("service_url"),
+               "enabled": lambda cfg: True,
+               "health": lambda url: motion_client.health(url, timeout=1.0) is not None},
 }
 
 

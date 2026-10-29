@@ -30,6 +30,7 @@ __pycache__/
 /fracture_lab
 /cv_service/VERSION
 /video_service/VERSION
+/motion_service/VERSION
 
 # --- временная папка самообновления ---
 /.update

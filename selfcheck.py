@@ -362,7 +362,7 @@ MODULES = [
     "camera_core.base_worker", "camera_core.gige_worker", "camera_core.rtsp_worker", "camera_core.camera_manager",
     "sdk_gige", "camera_params", "dahua_control", "net_tools", "rtsp_store",
     "save_settings", "plate_config", "sv_source", "microscope_plc", "microscope_fsm",
-    "microscope_service", "cv_analyzer", "cv_volume", "substages", "db", "report", "boil_compare", "cv_fracture", "cv_client", "video_client", "services", "cv_store", "boil_archive", "fracture_lab", "cv_pipeline", "model_check", "boil_anomaly",
+    "microscope_service", "cv_analyzer", "cv_volume", "substages", "db", "report", "boil_compare", "cv_fracture", "cv_client", "video_client", "motion_client", "services", "cv_store", "boil_archive", "fracture_lab", "cv_pipeline", "model_check", "boil_anomaly", "other_plants",
     "updater", "autostart", "diag", "app", "mvsdk",
 ]
 THIRD_PARTY = ["cv2", "numpy", "fastapi", "starlette", "uvicorn", "pymodbus", "harvesters", "genicam",
@@ -1392,7 +1392,7 @@ def _services_supervisor():
     (cvd / ".venv" / "Scripts" / "python.exe").write_bytes(b"")
     (cvd / "server.py").write_text("", encoding="utf-8")
     cfg = {"cv": {"enabled": False, "service_url": "http://127.0.0.1:8766"}, "video": {"service_url": "http://127.0.0.1:8767"}}
-    clock, spawned, healthy = [1000.0], [], {"cv": False, "video": False}
+    clock, spawned, healthy = [1000.0], [], {"cv": False, "video": False, "motion": False}
 
     class Proc:                                       # вместо настоящего процесса: poll() — None, пока «жив»
         code = None
@@ -1411,7 +1411,7 @@ def _services_supervisor():
     try:
         sup = services.Supervisor(base=base, spawn_fn=fake_spawn, now=lambda: clock[0], load_cfg=lambda: cfg)
         r = sup.check_once()
-        assert r == {"cv": "off", "video": "absent"}, "CV выключен тумблером, видео не установлено: %s" % r
+        assert r == {"cv": "off", "video": "absent", "motion": "absent"}, "CV выключен тумблером, видео и движение не установлены: %s" % r
         cfg["cv"]["enabled"] = True
         import logger
 
@@ -1443,6 +1443,15 @@ def _services_supervisor():
         assert services.decide("cv", {"cv": {"enabled": True, "service_url": "http://192.168.1.50:8765"}}, base)[0] == "remote", "чужой адрес — не наш"
         assert services.decide("cv", dict(cfg, services={"cv": {"autostart": False}}), base)[0] == "off", "autostart: false — руками"
         assert services.decide("video", cfg, base)[0] == "absent", "нет video_service\\.venv — пропуск"
+        mot = base / "motion_service"
+        (mot / ".venv" / "Scripts").mkdir(parents=True, exist_ok=True)
+        (mot / ".venv" / "Scripts" / "python.exe").write_bytes(b"")
+        (mot / "server.py").write_text("", encoding="utf-8")
+        act, url, launch = services.decide("motion", cfg, base)
+        assert act == "start" and url == "http://127.0.0.1:8768", "сервис движения установлен — поднимаем без тумблера: %s %s" % (act, url)
+        assert (launch["env"]["MOTION_PORT"], launch["env"]["MOTION_HOST"], launch["cwd"]) == ("8768", "127.0.0.1", str(mot)), "порт из адреса по умолчанию"
+        assert services.decide("motion", dict(cfg, motion={"service_url": "http://10.0.0.7:8768"}), base)[0] == "remote", "чужой адрес — не наш"
+        assert services.decide("motion", dict(cfg, services={"motion": {"autostart": False}}), base)[0] == "off", "autostart: false — руками"
     finally:
         for n, h in orig.items():
             services.SPECS[n]["health"] = h
@@ -1457,6 +1466,51 @@ def _services_supervisor():
             else:
                 os.environ[k] = v
     assert "PYTHONHOME" not in e and "_MEIPASS2" not in e and e["CV_PORT"] == "1", "окружение exe не утекает в venv сервиса"
+
+
+@check("Служебные", "сервис движения (motion_service): адрес по умолчанию; клиент без сервиса не падает; страница и маршруты на месте; "
+                    "ядро: конфиг проверяется, бегущая текстура → 1, неподвижная → 0")
+def _motion_service():
+    import numpy as np
+    import motion_client
+    import plate_config
+    assert plate_config.DEFAULTS["motion"]["service_url"] == motion_client.DEFAULT_URL == "http://127.0.0.1:8768", "адрес по умолчанию"
+    assert motion_client.health("http://127.0.0.1:1", timeout=0.5) is None, "сервис не запущен — None, без исключения"
+    assert "error" in motion_client.put_config("http://127.0.0.1:1", {}) and "error" in motion_client.state("http://127.0.0.1:1"), "без сервиса — {error}"
+    assert motion_client.snapshot("http://127.0.0.1:1", "c", 0, timeout=0.5) is None, "кадра нет — None"
+    import app as _app
+    paths = {getattr(r, "path", "") for r in _app.app.routes}
+    need = {"/motion", "/api/motion/health", "/api/motion/config", "/api/motion/state", "/api/motion/snapshot", "/api/motion/history",
+            "/api/motion/record", "/api/motion/modbus_ping", "/api/motion/logs"}
+    assert need <= paths, "нет маршрутов: %s" % sorted(need - paths)
+    html = (Path(BUNDLE_DIR) / "page" / "motion.html").read_text(encoding="utf-8")
+    js = (Path(BUNDLE_DIR) / "page" / "static" / "js" / "motion.js").read_text(encoding="utf-8")
+    for el in ("camSel", "btnMark", "btnSave", "zonesTbl", "charts", "plcForm", "grpEd", "ov", "frame"):
+        assert 'id="%s"' % el in html, "на странице нет #%s" % el
+    assert "/static/js/motion.js" in html and "/api/motion/config" in js, "скрипт подключён и ходит в API"
+    assert 'href="/motion"' in (Path(BUNDLE_DIR) / "page" / "index.html").read_text(encoding="utf-8"), "кнопка «Движение» на главной"
+    ms = Path(BUNDLE_DIR) / "motion_service"
+    if str(ms) not in sys.path:
+        sys.path.insert(0, str(ms))
+    import motion_engine as me
+    try:
+        me.normalize_camera({"id": "c", "zones": [{"id": "z", "points": [[0, 0], [1, 1]]}]})
+        raise AssertionError("полигон из двух точек должен отклоняться")
+    except ValueError:
+        pass
+    rng = np.random.default_rng(3)
+    tex = rng.integers(0, 256, (120, 320)).astype(np.uint8)
+    pts = [[10, 10], [150, 10], [150, 110], [10, 110]]
+    cfg = me.normalize_camera({"id": "c", "zones": [{"id": "m", "points": pts, "metric": "diff", "smooth": 2, "frames_to_on": 2},
+                                                    {"id": "s", "points": [[170, 10], [310, 10], [310, 110], [170, 110]], "metric": "diff", "smooth": 2, "frames_to_on": 2}]})
+    eng, st = me.CameraEngine(cfg), None
+    for i in range(14):
+        f = tex.copy()
+        f[:, :160] = np.roll(tex, 5 * i, axis=1)[:, :160]
+        st = eng.process(f, 100.0 + i / 3) or st
+    bits = {z["id"]: z["bit"] for z in st["zones"]}
+    assert bits == {"m": 1, "s": 0}, "бегущая текстура → 1, неподвижная → 0: %s" % bits
+    return "маршрутов %d, зоны: %s" % (len(need), bits)
     return "запусков %d (лимит %d за %d мин), остальное — пропуск/ожидание" % (len(spawned), services.RESTART_MAX, services.RESTART_WIN_S // 60)
 
 

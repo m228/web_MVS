@@ -43,7 +43,7 @@ DEFAULT_MODBUS = {"enable": False, "host": "192.168.1.20", "port": 502, "device_
 
 
 def default_config() -> dict:
-    return {"version": 1, "modbus": dict(DEFAULT_MODBUS), "cameras": []}
+    return {"version": 1, "modbus": dict(DEFAULT_MODBUS), "cameras": [], "scenarios": []}
 
 
 # ───────────────────────────── конфиг: проверка и значения по умолчанию ─────────────────────────────
@@ -147,6 +147,26 @@ def _norm_group(g: dict, cam_id: str, zone_ids: list) -> dict:
     return out
 
 
+def _norm_scenario(sc: dict, cams: list) -> dict:
+    sid = str(sc.get("id") or "")
+    if not ID_RE.match(sid):
+        raise ValueError("сценарий %r: id — только латиница, цифры, _ и -" % sid)
+    where = "сценарий %s" % sid
+    rule = sc.get("rule", "or")
+    if rule not in ("or", "and", "sum"):
+        raise ValueError("%s: правило %r не из or/and/sum" % (where, rule))
+    zones = {c["id"]: {z["id"] for z in c["zones"]} for c in cams}
+    srcs = []
+    for s in sc.get("sources") or []:     # источники удалённых камер/зон тихо отбрасываем: сценарий не должен ломать весь конфиг
+        cam, zone = str(s.get("camera", "")), str(s.get("zone", ""))
+        if zone in zones.get(cam, ()) and not any(x["camera"] == cam and x["zone"] == zone for x in srcs):
+            srcs.append({"camera": cam, "zone": zone})
+    mb = sc.get("modbus")
+    return {"id": sid, "name": str(sc.get("name") or sid), "rule": rule, "sources": srcs,
+            "out": _out(sc.get("out"), ZONE_OUT_KINDS, where + ".out"),
+            "modbus": normalize_modbus(mb, base=None) if mb else None}
+
+
 def normalize_camera(c: dict) -> dict:
     cid = str(c.get("id") or "")
     if not ID_RE.match(cid):
@@ -210,7 +230,11 @@ def normalize_config(cfg: dict) -> dict:
     ids = [c["id"] for c in cams]
     if len(set(ids)) != len(ids):
         raise ValueError("id камер повторяются")
-    return {"version": 1, "modbus": normalize_modbus(cfg.get("modbus")), "cameras": cams}
+    scs = [_norm_scenario(s, cams) for s in (cfg.get("scenarios") or [])]
+    sids = [s["id"] for s in scs]
+    if len(set(sids)) != len(sids):
+        raise ValueError("id сценариев повторяются")
+    return {"version": 1, "modbus": normalize_modbus(cfg.get("modbus")), "cameras": cams, "scenarios": scs}
 
 
 # ───────────────────────────── метрики зоны ─────────────────────────────

@@ -129,13 +129,13 @@ class CameraWorker(threading.Thread):
         with self._lock:
             pts = list(self._history)[-max(1, n):]
         zones: dict = {}
-        for _, z in pts:
+        for _, z, _ok in pts:
             for zid, (fl, df, bit) in z.items():
                 d = zones.setdefault(zid, {"flow": [], "diff": [], "bit": []})
                 d["flow"].append(fl)
                 d["diff"].append(df)
                 d["bit"].append(bit)
-        return {"t": [round(t, 2) for t, _ in pts], "zones": zones}
+        return {"t": [round(t, 2) for t, _, _ in pts], "ok": [ok for _, _, ok in pts], "zones": zones}
 
     def start_record(self) -> str:
         """Писать метрики каждого кадра в CSV (data/records) — для калибровки порогов по реальной ленте."""
@@ -173,7 +173,7 @@ class CameraWorker(threading.Thread):
                 self._frame = frame
             if count_frame:
                 self._stamps.append(state["ts"])
-                self._history.append((state["ts"], {z["id"]: (z["flow"], z["diff"], z["bit"]) for z in state["zones"]}))
+                self._history.append((state["ts"], {z["id"]: (z["flow"], z["diff"], z["bit"]) for z in state["zones"]}, 1 if state["alive"] else 0))
             self._writes = writes
             if self._rec_csv:
                 row = [time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(state["ts"])) + ".%03d" % int(state["ts"] % 1 * 1000)]
@@ -198,6 +198,8 @@ class CameraWorker(threading.Thread):
             st["ts"] = now
             with self._lock:
                 self._state = st
+                self._stamps.append(now)
+                self._history.append((now, {z["id"]: (z["flow"], z["diff"], z["bit"]) for z in st["zones"]}, 0))
 
     def _plc_loop(self):
         """Поток записи: пишет, когда значения изменились или прошло write_period_s. Недоступный ПЛК тормозит только его."""
@@ -313,7 +315,7 @@ class CameraWorker(threading.Thread):
                 was_bad = True
                 if now - bad_since >= timeout:
                     frozen = True              # после выхода из каши — состояния с нуля (как после фриза)
-                    self._publish(self.engine.dead_state(now, "битый поток"), frame, False)
+                    self._publish(self.engine.dead_state(now, "битый поток"), frame, True)
                 else:
                     self._publish_held(now, frame)
                 continue

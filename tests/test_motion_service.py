@@ -378,6 +378,67 @@ def test_worker_long_mush_becomes_dead_state(tmp_path):
         w.stop()
 
 
+# ───────────────────────────── сценарии записи в ПЛК ─────────────────────────────
+def _two_cams_cfg(scenarios):
+    zone = {"id": "z1", "points": LEFT, "out": None}
+    return {"cameras": [{"id": "a", "url": "x", "zones": [zone]}, {"id": "b", "url": "y", "zones": [zone]}],
+            "modbus": {"enable": True, "host": "plc", "write_period_s": 0.2}, "scenarios": scenarios}
+
+
+def test_scenario_rules_or_and_sum_and_dead_camera_gives_zero():
+    import motion_scenarios as sc
+    st = {"a": {"result": {"alive": True, "zones": [{"id": "z1", "bit": 1}]}},
+          "b": {"result": {"alive": False, "zones": [{"id": "z1", "bit": 1}]}}}   # камера b мертва — её бит не считается
+    srcs = [{"camera": "a", "zone": "z1"}, {"camera": "b", "zone": "z1"}, {"camera": "c", "zone": "z9"}]
+    bits = sc.source_bits(srcs, st)
+    assert bits == [1, 0, 0]
+    assert (sc.evaluate("or", bits), sc.evaluate("and", bits), sc.evaluate("sum", bits)) == (1, 0, 1)
+    assert sc.evaluate("and", []) == 0 and sc.evaluate("or", []) == 0
+
+
+def test_scenario_normalize_drops_missing_sources_and_validates():
+    cfg = me.normalize_config(_two_cams_cfg([{"id": "s1", "rule": "or", "out": {"kind": "holding", "address": 5},
+                                              "sources": [{"camera": "a", "zone": "z1"}, {"camera": "b", "zone": "zz"}, {"camera": "q", "zone": "z1"}]}]))
+    assert cfg["scenarios"][0]["sources"] == [{"camera": "a", "zone": "z1"}] and cfg["scenarios"][0]["out"]["address"] == 5
+    with pytest.raises(ValueError, match="правило"):
+        me.normalize_config(_two_cams_cfg([{"id": "s1", "rule": "xor"}]))
+    with pytest.raises(ValueError, match="повторяются"):
+        me.normalize_config(_two_cams_cfg([{"id": "s1"}, {"id": "s1"}]))
+
+
+def test_scenario_runner_writes_one_register_for_two_cameras(tmp_path):
+    clients = []
+
+    def factory(host, port):
+        c = FakeClientNew(host, port)
+        clients.append(c)
+        return c
+
+    import motion_scenarios as sc
+
+    class W:  # камера a крутится, b нет
+        def __init__(self, bit):
+            self.bit = bit
+
+        def state(self):
+            return {"result": {"alive": True, "zones": [{"id": "z1", "bit": self.bit}]}}
+
+    class M:
+        links = mm.LinkRegistry(factory)
+        workers = {"a": W(0), "b": W(1)}
+        cfg = me.normalize_config(_two_cams_cfg([{"id": "s1", "rule": "or", "out": {"kind": "holding", "address": 7},
+                                                  "sources": [{"camera": "a", "zone": "z1"}, {"camera": "b", "zone": "z1"}]}]))
+    r = sc.ScenarioRunner(M)
+    r.tick(100.0)
+    assert ("holding", 7, 1, 1) in clients[0].log
+    n = len(clients[0].log)
+    r.tick(100.05)                            # значение то же и период не вышел — повторной записи нет
+    assert len(clients[0].log) == n
+    M.workers["b"].bit = 0
+    r.tick(100.1)
+    assert ("holding", 7, 0, 1) in clients[0].log and r.snapshot()[0]["value"] == 0
+
+
 # ───────────────────────────── HTTP-сервер целиком ─────────────────────────────
 def _load_server():
     spec = importlib.util.spec_from_file_location("motion_server", MS / "server.py")

@@ -1236,6 +1236,82 @@ function initMicroGate() {
     .then((d) => reflectMicroEnabled(!!d.enabled)).catch(() => {});
 }
 
+// ---------- что обновлять: основное приложение + дополнения (cv_service, video_service, motion_service) ----------
+let updateComponents = [];
+
+async function loadUpdateComponents() {
+  const list = document.getElementById('updateComponentsList');
+  if (!list) return;
+  const data = await UpdateApi.components();
+  if (!data || !Array.isArray(data.components)) {
+    list.innerHTML = '<span class="update-components__hint">Список недоступен</span>';
+    return;
+  }
+  updateComponents = data.components;
+  // по умолчанию — прошлый выбор; его нет — основное приложение и уже установленные дополнения
+  const chosen = data.remembered && data.remembered.length
+    ? data.remembered
+    : data.components.filter((c) => c.key === 'main' || c.installed).map((c) => c.key);
+  list.innerHTML = data.components.map((c) => {
+    const state = c.key === 'main' ? `v${escapeHtml(c.version || '?')}` : (c.installed ? `v${escapeHtml(c.version || '?')}` : 'не установлено');
+    return `<label class="update-components__row"><input type="checkbox" value="${escapeHtml(c.key)}"${chosen.includes(c.key) ? ' checked' : ''} />`
+      + `<span>${escapeHtml(c.title)}</span><em>${state}</em></label>`;
+  }).join('');
+  reflectUpdateComponentsHint();
+}
+
+function setUpdateModal(open) {
+  const modal = document.getElementById('updateModal');
+  if (!modal) return;
+  modal.classList.toggle('show', open);
+  modal.setAttribute('aria-hidden', open ? 'false' : 'true');
+  document.body.classList.toggle('modal-open', open || !!document.querySelector('.modal-backdrop.show'));
+}
+
+function selectedUpdateComponents() {
+  return [...document.querySelectorAll('#updateComponentsList input[type=checkbox]:checked')].map((i) => i.value);
+}
+
+function reflectUpdateComponentsHint() {
+  const hint = document.getElementById('updateComponentsHint');
+  const btn = document.getElementById('updateSelectedBtn');
+  const sel = selectedUpdateComponents();
+  if (btn) btn.disabled = sel.length === 0;
+  if (!hint) return;
+  const heavy = updateComponents.find((c) => c.key === 'cv' && sel.includes('cv') && !c.installed);
+  hint.textContent = heavy
+    ? 'CV микроскопа ставится впервые: скачается несколько ГБ (torch), это долго.'
+    : (sel.includes('main') ? 'Основное приложение перезапустится (около минуты).' : '');
+}
+
+async function applySelectedUpdate() {
+  const sel = selectedUpdateComponents();
+  if (!sel.length) return;
+  const needsCv = updateComponents.some((c) => c.key === 'cv' && sel.includes('cv') && !c.installed);
+  const titles = sel.map((k) => (updateComponents.find((c) => c.key === k) || {}).title || k).join('\n • ');
+  let msg = 'Обновить:\n • ' + titles + '\n\n';
+  msg += sel.includes('main') ? 'Основное приложение закроется, заменит файлы и запустится заново.' : 'Приложение продолжит работать; сервисы дополнений перезапустятся.';
+  if (needsCv) msg += '\n\nCV микроскопа ставится ВПЕРВЫЕ: скачается несколько ГБ (torch) — это надолго. Продолжить?';
+  if (!confirm(msg)) return;
+
+  setUpdateModal(false);
+  clearUpdateActions();
+  setUpdateStatus('Запускаю обновление…');
+  const data = await UpdateApi.run(sel, needsCv);
+  if (!data || !data.ok) {
+    setUpdateStatus(data?.error || 'Не удалось запустить обновление', 'status-chip--error');
+    return;
+  }
+  log.warn('Запущено обновление', { components: data.components });
+  if (data.restart) {
+    setUpdateStatus('Обновление… приложение перезапускается, подождите', 'status-chip--warn');
+    await pollUntilBack();
+  } else {
+    setUpdateStatus('Дополнения обновляются в фоне; сервисы поднимутся сами в течение минуты', 'status-chip--ok');
+    setTimeout(() => loadUpdateComponents().catch(() => {}), 20000);
+  }
+}
+
 function initUpdateCard() {
   const els = getUpdateEls();
   if (!els.card) return;
@@ -1243,6 +1319,16 @@ function initUpdateCard() {
   if (els.checkBtn) {
     els.checkBtn.addEventListener('click', checkUpdates);
   }
+  document.getElementById('updateSelectedBtn')?.addEventListener('click', applySelectedUpdate);
+  document.getElementById('updateChooseBtn')?.addEventListener('click', () => {
+    loadUpdateComponents().catch(() => {});
+    setUpdateModal(true);
+  });
+  document.getElementById('updateModalClose')?.addEventListener('click', () => setUpdateModal(false));
+  document.getElementById('updateModalCancel')?.addEventListener('click', () => setUpdateModal(false));
+  document.getElementById('updateModal')?.addEventListener('click', (e) => { if (e.target.id === 'updateModal') setUpdateModal(false); });
+  document.getElementById('updateComponentsList')?.addEventListener('change', reflectUpdateComponentsHint);
+  loadUpdateComponents().catch(() => {});
 
   // показать текущую версию сразу при загрузке
   loadCurrentVersion().catch(() => {});

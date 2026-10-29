@@ -420,7 +420,47 @@ Remove-Item -LiteralPath $PSCommandPath -Force -ErrorAction SilentlyContinue
     return {"ok": True}
 
 
-def run_update_script(port: int = 8000, staged: bool = False) -> dict:
+# дополнения (сервисы рядом с приложением), которые update.ps1 умеет обновлять из того же релиза
+ADDONS = [
+    {"key": "cv", "title": "CV микроскопа (cv_service)", "dir": "cv_service", "marker": "detector.py", "heavy": True},
+    {"key": "video", "title": "Видео-ролик микроскопа (video_service)", "dir": "video_service", "marker": "render.py", "heavy": False},
+    {"key": "motion", "title": "CV RTSP / движение (motion_service)", "dir": "motion_service", "marker": "motion_engine.py", "heavy": False},
+]
+_COMPONENT_KEYS = {"main"} | {a["key"] for a in ADDONS}
+
+
+def components_info() -> dict:
+    """Что можно обновить: основное приложение + дополнения (стоят ли рядом, какой версии) и прошлый выбор из update_choice.json."""
+    items = [{"key": "main", "title": "Основное приложение (web_MVS)", "installed": True, "version": read_version(), "heavy": False}]
+    for a in ADDONS:
+        d = DATA_DIR / a["dir"]
+        ver = ""
+        try:
+            ver = (d / "VERSION").read_text(encoding="utf-8").strip().lstrip("vV")
+        except OSError:
+            pass
+        items.append({"key": a["key"], "title": a["title"], "installed": (d / a["marker"]).is_file(), "version": ver,
+                      "venv": (d / ".venv" / "Scripts" / "python.exe").is_file(), "heavy": a["heavy"]})
+    remembered = []
+    try:
+        data = json.loads((DATA_DIR / "update_choice.json").read_text(encoding="utf-8-sig"))
+        remembered = [k for k in (data.get("components") or []) if k in _COMPONENT_KEYS]
+    except (OSError, ValueError, AttributeError):
+        pass
+    return {"components": items, "remembered": remembered}
+
+
+def parse_components(value) -> list:
+    """'main,cv' -> ['main', 'cv'] (только известные ключи, без повторов); пусто -> []."""
+    out = []
+    for k in re.split(r"[,;\s]+", str(value or "")):
+        k = k.strip().lower()
+        if k in _COMPONENT_KEYS and k not in out:
+            out.append(k)
+    return out
+
+
+def run_update_script(port: int = 8000, staged: bool = False, components=None, yes: bool = False) -> dict:
     """Запустить update.ps1 из папки установки (тот же апдейтер, что update.bat): он сам остановит приложение, заменит файлы из
     последнего релиза, запустит приложение и дождётся ответа (при сбое откатит). Здесь только отвязанный запуск: сам скрипт
     приложение останавливает — выходить из процесса тут не нужно. Приложение работает с правами админа (манифест exe), поэтому
@@ -435,8 +475,13 @@ def run_update_script(port: int = 8000, staged: bool = False) -> dict:
     ps_exe = os.path.expandvars(r"%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe")
     if not os.path.isfile(ps_exe):
         ps_exe = "powershell"
+    comps = parse_components(components) or ["main"]            # без выбора — как раньше, только основное приложение
+    if staged and "main" not in comps:
+        return {"ok": False, "error": "Скачанный архив — это основное приложение; отметьте его или обновляйте дополнения отдельно"}
     cmd = [ps_exe, "-NoProfile", "-ExecutionPolicy", "Bypass", "-WindowStyle", "Hidden", "-File", str(script),
-           "-Root", str(app_dir), "-Port", str(int(port))]
+           "-Root", str(app_dir), "-Port", str(int(port)), "-NoMenu", "-Components", ",".join(comps)]
+    if yes:                                      # тяжёлую первую установку CV пользователь подтвердил на странице
+        cmd.append("-Yes")
     if staged:                                   # быстрый перезапуск: архив уже скачан в фоне — скрипт не качает, только распаковывает и меняет
         zp = staged_zip()
         if zp is None:
@@ -448,5 +493,6 @@ def run_update_script(port: int = 8000, staged: bool = False) -> dict:
         subprocess.Popen(cmd, creationflags=base | CREATE_BREAKAWAY_FROM_JOB, close_fds=True, cwd=str(app_dir))
     except OSError:                                              # job не разрешает breakaway (или job нет) — без него
         subprocess.Popen(cmd, creationflags=base, close_fds=True, cwd=str(app_dir))
-    log_event("updater.run", "Запущен update.ps1 из папки установки; приложение будет остановлено и запущено заново", "warn", {"script": str(script)})
-    return {"ok": True, "message": "обновление запущено"}
+    log_event("updater.run", "Запущен update.ps1 из папки установки" + ("; приложение будет остановлено и запущено заново" if "main" in comps else ""),
+              "warn", {"script": str(script), "components": comps})
+    return {"ok": True, "message": "обновление запущено", "components": comps, "restart": "main" in comps}

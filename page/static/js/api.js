@@ -497,6 +497,16 @@ const UpdateApi = {
     return apiGet('/api/update/apply', 'Ошибка применения обновления:',
       { source: 'api.update' });
   },
+  // что можно обновить: основное приложение + дополнения (версии, стоят ли рядом) и прошлый выбор
+  components() {
+    return apiGet('/api/update/components', 'Ошибка списка компонентов:',
+      { source: 'api.update', logRequest: false, logSuccess: false });
+  },
+  // запустить update.ps1 для выбранных компонентов (components — ключи через запятую; yes — подтверждена тяжёлая установка CV)
+  run(components, yes) {
+    const q = new URLSearchParams({ components: components.join(','), yes: yes ? '1' : '0' });
+    return apiGet('/api/update/run?' + q.toString(), 'Ошибка запуска обновления:', { source: 'api.update' });
+  },
   // текущая версия + окружение (используем для показа версии при загрузке)
   info() {
     return apiGet('/api/debug/info', 'Ошибка получения версии:',

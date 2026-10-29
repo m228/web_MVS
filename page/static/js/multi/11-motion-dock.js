@@ -119,8 +119,9 @@ const mdNum = (attrs, v, extra) => `<input type="number" ${attrs} value="${escap
 
 // ---------- вкладка «Зоны» ----------
 function mdOutCell(o, attrs) {
-  return `<select ${attrs} data-f="okind">${mdSel([['', 'нет'], ['holding', 'регистр'], ['coil', 'coil']], o ? o.kind : '')}</select>` +
-    ` <input type="number" min="0" max="65535" ${attrs} data-f="oaddr" value="${o ? o.address : 0}" title="Адрес регистра / coil" />`;
+  // адрес нужен только когда вывод включён — иначе поле лишь теснит соседей по строке
+  return `<div class="md-out"><select ${attrs} data-f="okind">${mdSel([['', 'нет'], ['holding', 'регистр'], ['coil', 'coil']], o ? o.kind : '')}</select>` +
+    (o && o.kind ? `<input type="number" min="0" max="65535" ${attrs} data-f="oaddr" value="${o.address}" title="Адрес регистра / coil" placeholder="адрес" />` : '') + '</div>';
 }
 
 function mdZonesHtml(cam) {
@@ -162,7 +163,7 @@ function mdOnZone(t, cam) {
     else if (f === 'on' || f === 'off') z[f] = parseFloat(t.value) || 0;
     else if (f === 'okind') z.out = t.value ? { kind: t.value, address: (z.out && z.out.address) || 0 } : null;
     else if (f === 'oaddr' && z.out) z.out.address = parseInt(t.value, 10) || 0;
-  }, f === 'type' || f === 'metric');
+  }, f === 'type' || f === 'metric' || f === 'okind');
 }
 
 // ---------- вкладка «Группы» ----------

@@ -4499,6 +4499,13 @@ body.micro-rep-doc .micro-cmp-strips { grid-template-columns: repeat(6, 1fr); ga
   background: var(--input-bg); border: 1px solid var(--input-border); color: var(--text); border-radius: 6px; padding: 3px 6px; font: inherit; min-height: 0; }
 .md-table input[type=number], .md-form input[type=number] { width: 72px; }
 .md-table input[type=text] { width: 150px; }
+/* вкладка «Зоны»: всё в одну строку, без растягивания колонок и наложений */
+.md-table { width: auto; }
+.md-table td, .md-table th { padding: 4px 10px; }
+.md-table select { width: auto; min-width: 0; }
+.md-out { display: flex; align-items: center; gap: 6px; }
+.md-out input[type=number] { width: 84px; flex: none; }
+.md-table .md-x { width: 28px; height: 28px; padding: 0; line-height: 1; display: inline-flex; align-items: center; justify-content: center; flex: none; }
 .md-form input[type=checkbox] { width: 18px; height: 18px; min-height: 0; padding: 0; justify-self: start; }
 .md-num { font-variant-numeric: tabular-nums; color: var(--muted); }
 .md-x { min-height: 0; padding: 2px 10px; font-size: 12px; }

@@ -119,8 +119,9 @@ const mdNum = (attrs, v, extra) => `<input type="number" ${attrs} value="${escap
 
 // ---------- вкладка «Зоны» ----------
 function mdOutCell(o, attrs) {
-  return `<select ${attrs} data-f="okind">${mdSel([['', 'нет'], ['holding', 'регистр'], ['coil', 'coil']], o ? o.kind : '')}</select>` +
-    ` <input type="number" min="0" max="65535" ${attrs} data-f="oaddr" value="${o ? o.address : 0}" title="Адрес регистра / coil" />`;
+  // адрес нужен только когда вывод включён — иначе поле лишь теснит соседей по строке
+  return `<div class="md-out"><select ${attrs} data-f="okind">${mdSel([['', 'нет'], ['holding', 'регистр'], ['coil', 'coil']], o ? o.kind : '')}</select>` +
+    (o && o.kind ? `<input type="number" min="0" max="65535" ${attrs} data-f="oaddr" value="${o.address}" title="Адрес регистра / coil" placeholder="адрес" />` : '') + '</div>';
 }
 
 function mdZonesHtml(cam) {
@@ -162,7 +163,7 @@ function mdOnZone(t, cam) {
     else if (f === 'on' || f === 'off') z[f] = parseFloat(t.value) || 0;
     else if (f === 'okind') z.out = t.value ? { kind: t.value, address: (z.out && z.out.address) || 0 } : null;
     else if (f === 'oaddr' && z.out) z.out.address = parseInt(t.value, 10) || 0;
-  }, f === 'type' || f === 'metric');
+  }, f === 'type' || f === 'metric' || f === 'okind');
 }
 
 // ---------- вкладка «Группы» ----------
@@ -176,24 +177,25 @@ function mdGroupsHtml(cam) {
       <button type="button" class="btn-secondary md-x" data-md="g" data-f="edit" data-i="${i}">Изменить</button>
       <button type="button" class="btn-secondary md-x" data-md="g" data-f="del" data-i="${i}">✕</button></div>`;
   }).join('') : '<p class="net-hint">Групп нет — каждая зона пишется в ПЛК сама (колонка «Вывод в ПЛК» на вкладке «Зоны»). Группа складывает зоны одной камеры: sum — сколько активно, monotonic — уровень снизу вверх (шахта), worktimer — наработка в % за окно (лента жома). Зоны из РАЗНЫХ камер объединяйте в «ПЛК · сценарии».</p>';
-  return list + '<div class="popup-actions"><button type="button" class="btn-secondary" data-md="g" data-f="add">+ Группа</button></div><div id="mdGrpEd">' + (MD.editGrp !== null ? mdGroupEditorHtml(cam) : '') + '</div>';
+  return list + '<button type="button" class="md-add" data-md="g" data-f="add" title="Добавить группу" aria-label="Добавить группу">+</button><div id="mdGrpEd">' + (MD.editGrp !== null ? mdGroupEditorHtml(cam) : '') + '</div>';
 }
 
 function mdGroupEditorHtml(cam) {
   const g = MD.editGrp >= 0 ? cam.groups[MD.editGrp] : { id: '', name: '', type: 'sum', zones: [], out: { kind: 'holding', address: 0 }, window_s: 60, min_active: 1, agg: 'any', scale: 100 };
   const zs = cam.zones.map((z) => `<label class="md-chk"><input type="checkbox" value="${escapeHtml(z.id)}"${g.zones.includes(z.id) ? ' checked' : ''} />${escapeHtml(z.name)}</label>`).join('');
-  return `<div class="md-card md-card--col" id="mdGe">
-    <label>Название <input type="text" id="geName" value="${escapeHtml(g.name)}" placeholder="Уровень шахты / Наработка" /></label>
-    <label>Тип <select id="geType">${mdSel([['sum', 'sum — сколько зон активно'], ['monotonic', 'monotonic — уровень снизу вверх'], ['worktimer', 'worktimer — наработка за окно']], g.type)}</select></label>
-    <div>Зоны: ${zs}</div>
-    <label>Вывод <select id="geKind">${mdSel([['', 'нет'], ['holding', 'значение в регистр'], ['bits', 'биты зон в один регистр'], ['coils', 'coil на каждую зону']], g.out ? g.out.kind : '')}</select>
-      адрес <input type="number" id="geAddr" min="0" max="65535" value="${(g.out && g.out.address) || 0}" /></label>
-    <p class="net-hint md-gt" data-for="monotonic">Порядок «снизу вверх» = порядок зон в списке (первая зона — низ шахты).</p>
-    <label class="md-gt" data-for="worktimer">Окно, с <input type="number" id="geWin" min="1" value="${g.window_s || 60}" /></label>
-    <label class="md-gt" data-for="worktimer">Мин. активных зон <input type="number" id="geMin" min="1" value="${g.min_active || 1}" /></label>
-    <label class="md-gt" data-for="worktimer">Секунда рабочая, если <select id="geAgg">${mdSel([['any', 'хоть один кадр активен'], ['majority', 'не меньше половины кадров'], ['all', 'все кадры активны']], g.agg || 'any')}</select></label>
-    <label class="md-gt" data-for="worktimer">Шкала <input type="number" id="geScale" min="1" value="${g.scale || 100}" title="100 = проценты; 1000 или 4095 — для аналогового выхода" /></label>
-    <div class="popup-actions"><button type="button" class="btn-primary" data-md="g" data-f="ok">Готово</button><button type="button" class="btn-secondary" data-md="g" data-f="cancel">Отмена</button></div></div>`;
+  // сетка 2–3 колонки: подпись слева, поле справа; зоны, подсказка и кнопки — на всю ширину
+  return `<div class="md-card md-ge" id="mdGe">
+    <label><span>Название</span><input type="text" id="geName" value="${escapeHtml(g.name)}" placeholder="Уровень шахты / Наработка" /></label>
+    <label><span>Тип</span><select id="geType">${mdSel([['sum', 'sum — сколько зон активно'], ['monotonic', 'monotonic — уровень снизу вверх'], ['worktimer', 'worktimer — наработка за окно']], g.type)}</select></label>
+    <label><span>Вывод</span><span class="md-ge__pair"><select id="geKind">${mdSel([['', 'нет'], ['holding', 'значение в регистр'], ['bits', 'биты зон в один регистр'], ['coils', 'coil на каждую зону']], g.out ? g.out.kind : '')}</select>
+      <input type="number" id="geAddr" min="0" max="65535" value="${(g.out && g.out.address) || 0}" title="Адрес регистра / coil" placeholder="адрес" /></span></label>
+    <label class="md-gt" data-for="worktimer"><span>Окно, с</span><input type="number" id="geWin" min="1" value="${g.window_s || 60}" /></label>
+    <label class="md-gt" data-for="worktimer"><span>Мин. зон</span><input type="number" id="geMin" min="1" value="${g.min_active || 1}" title="Минимум активных зон" /></label>
+    <label class="md-gt" data-for="worktimer"><span>Шкала</span><input type="number" id="geScale" min="1" value="${g.scale || 100}" title="100 = проценты; 1000 или 4095 — для аналогового выхода" /></label>
+    <label class="md-gt" data-for="worktimer"><span>Рабочая, если</span><select id="geAgg">${mdSel([['any', 'хоть один кадр активен'], ['majority', 'не меньше половины кадров'], ['all', 'все кадры активны']], g.agg || 'any')}</select></label>
+    <div class="md-ge__zones"><span>Зоны</span><span class="md-ge__chk">${zs}</span></div>
+    <p class="net-hint md-gt md-ge__full" data-for="monotonic">Порядок «снизу вверх» = порядок зон в списке (первая зона — низ шахты).</p>
+    <div class="md-ge__btns"><button type="button" class="btn-primary" data-md="g" data-f="ok">Готово</button><button type="button" class="btn-secondary" data-md="g" data-f="cancel">Отмена</button></div></div>`;
 }
 
 function mdSyncGroupEditor() {

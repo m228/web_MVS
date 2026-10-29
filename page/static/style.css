@@ -2934,6 +2934,25 @@ body.modal-open {
   border-color: var(--danger);
 }
 
+.camera-chip__edit {
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  border: 1px solid var(--border-strong);
+  background: var(--surface);
+  color: var(--muted);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: color 0.18s ease, border-color 0.18s ease;
+}
+
+.camera-chip__edit:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
 /* иконочная кнопка обновления списка камер (в шапке секции «Камеры») */
 .icon-btn {
   width: 42px;
@@ -4422,7 +4441,7 @@ body.micro-rep-doc .micro-cmp-strips { grid-template-columns: repeat(6, 1fr); ga
 /* --- CV (анализ движения) в мультипросмотре --- */
 .toolbar-btn--cv { background: linear-gradient(135deg, #14b8a6, #0ea5e9); color: #fff; box-shadow: 0 14px 30px rgba(20, 184, 166, 0.22); position: relative; }
 .toolbar-btn--cv[hidden] { display: none; }
-.toolbar-btn--cv .cv-mark { display: inline-flex; align-items: center; justify-content: center; border: 3px solid currentColor; border-radius: 8px; min-width: 34px; height: 30px; padding: 0 5px; box-sizing: border-box; font-size: 19px; font-weight: 900; line-height: 1; letter-spacing: .01em; }
+.toolbar-btn--cv .cv-mark { display: inline-flex; align-items: center; justify-content: center; border: 2.5px solid currentColor; border-radius: 7px; width: 28px; height: 28px; padding: 0; box-sizing: border-box; font-size: 14px; font-weight: 900; line-height: 1; letter-spacing: 0; }
 .toolbar-btn--cv.is-on { box-shadow: 0 0 0 2px rgba(34, 197, 94, .8), 0 14px 34px rgba(34, 197, 94, .35); }
 .cv-bit { display: inline-block; min-width: 24px; text-align: center; border-radius: 10px; padding: 1px 8px; font-weight: 700; background: var(--surface-strong); color: var(--muted); }
 .cv-bit.on { background: var(--success-soft); color: var(--success); }
@@ -4480,6 +4499,13 @@ body.micro-rep-doc .micro-cmp-strips { grid-template-columns: repeat(6, 1fr); ga
   background: var(--input-bg); border: 1px solid var(--input-border); color: var(--text); border-radius: 6px; padding: 3px 6px; font: inherit; min-height: 0; }
 .md-table input[type=number], .md-form input[type=number] { width: 72px; }
 .md-table input[type=text] { width: 150px; }
+/* вкладка «Зоны»: всё в одну строку, без растягивания колонок и наложений */
+.md-table { width: auto; }
+.md-table td, .md-table th { padding: 4px 10px; }
+.md-table select { width: auto; min-width: 0; }
+.md-out { display: flex; align-items: center; gap: 6px; }
+.md-out input[type=number] { width: 84px; flex: none; }
+.md-table .md-x { width: 28px; height: 28px; padding: 0; line-height: 1; display: inline-flex; align-items: center; justify-content: center; flex: none; }
 .md-form input[type=checkbox] { width: 18px; height: 18px; min-height: 0; padding: 0; justify-self: start; }
 .md-num { font-variant-numeric: tabular-nums; color: var(--muted); }
 .md-x { min-height: 0; padding: 2px 10px; font-size: 12px; }
@@ -4492,6 +4518,24 @@ body.micro-rep-doc .micro-cmp-strips { grid-template-columns: repeat(6, 1fr); ga
 .md-card--col { flex-direction: column; align-items: stretch; }
 .md-card--col label { display: flex; align-items: center; gap: 8px; }
 .md-card .md-row { display: flex; align-items: center; gap: 10px; }
+/* кнопка «+» добавления группы: маленькая, слева */
+.md-add { width: 28px; height: 28px; padding: 0; margin: 6px 0; border-radius: 8px; border: 1px solid var(--border-strong); background: var(--surface-elevated); color: var(--accent); font-size: 20px; font-weight: 700; line-height: 1; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; transition: border-color 0.18s ease; }
+.md-add:hover { border-color: var(--accent); }
+/* редактор группы: колонки «подпись — поле», без растягивания на всю ширину */
+.md-ge { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 380px)); gap: 8px 22px; align-items: center; justify-content: start; }
+.md-ge [hidden] { display: none; }
+.md-ge label { display: grid; grid-template-columns: 110px minmax(0, 1fr); align-items: center; gap: 8px; font-size: 13px; }
+.md-ge label.md-chk { display: inline-flex; flex-direction: row; align-items: center; gap: 4px; margin: 0 6px 0 0; }
+.md-ge label > span:first-child, .md-ge__zones > span:first-child { color: var(--muted); font-weight: 600; }
+.md-ge input[type=text], .md-ge input[type=number], .md-ge select { width: 100%; box-sizing: border-box; min-width: 0; }
+.md-ge__pair { display: flex; gap: 6px; min-width: 0; }
+.md-ge__pair select { flex: 1; }
+.md-ge__pair input[type=number] { width: 78px; flex: none; }
+.md-ge__zones { grid-column: 1 / -1; display: flex; align-items: center; gap: 8px 12px; flex-wrap: wrap; font-size: 13px; }
+.md-ge__chk { display: flex; flex-wrap: wrap; gap: 4px 4px; }
+.md-ge__full { grid-column: 1 / -1; margin: 0; }
+.md-ge__btns { grid-column: 1 / -1; display: flex; gap: 8px; }
+.md-ge__btns .btn-primary, .md-ge__btns .btn-secondary { flex: none; width: auto; min-height: 0; padding: 6px 18px; }
 .md-sp { flex: 1; }
 .md-chk { display: inline-flex; align-items: center; gap: 4px; margin-right: 10px; }
 .md-chk input { width: 16px; height: 16px; min-height: 0; }

@@ -73,6 +73,8 @@ function initToolbar() {
       });
   });
 
+  initMotionVision();
+
   // сеть: popup под иконкой + смена IP
   multiNetworkPopup = UIHelpers.createPopupController(
     document.getElementById('multiNetworkCard'), document.getElementById('multiNetworkBtn'));
@@ -146,6 +148,7 @@ async function initMultiPage() {
   await loadCameras();
   await loadSavedRtsp();
   startMetricsPolling();
+  startMotionPolling();
 
   window.addEventListener('beforeunload', () => {
     if (metricsTimer) clearInterval(metricsTimer);

@@ -1024,6 +1024,38 @@ def motion_modbus_ping(req: dict = Body(...)):
     return motion_client.modbus_ping(_motion_url(), req)
 
 
+@app.post("/api/motion/vision")
+def motion_vision(req: dict = Body(...)):
+    """«CV» в мультипросмотре: включить/выключить анализ движения для RTSP-камеры ячейки. Камера в сервисе движения живёт под
+    тем же серийником (rtsp_N), адрес потока — из мини-базы RTSP (если камера там ещё не сохранена — тот, что прислала страница).
+    Зоны и пороги правятся обычным PUT /api/motion/config; тут только заводим/гасим камеру. Ответ — весь конфиг или {"error"}."""
+    serial = str(req.get("serial") or "")
+    if not re.fullmatch(r"[A-Za-z0-9_\-]{1,40}", serial):
+        return {"error": "недопустимый серийник камеры"}
+    enabled = bool(req.get("enabled"))
+    saved = next((i for i in rtsp_store.load() if i.get("serial") == serial), None)
+    url = (saved or {}).get("url") or str(req.get("url") or "")
+    if enabled and not _is_rtsp_scheme(url):
+        return {"error": "анализ движения работает только с RTSP-камерами"}
+    service = _motion_url()
+    cfg = motion_client.get_config(service)
+    if "error" in cfg:
+        return cfg
+    cam = next((c for c in cfg.get("cameras") or [] if c.get("id") == serial), None)
+    if cam is None:
+        if not enabled:
+            return cfg
+        cam = {"id": serial, "name": str(req.get("name") or serial), "url": url, "zones": [], "groups": []}
+        cfg.setdefault("cameras", []).append(cam)
+    cam["enabled"] = enabled
+    if enabled and url:
+        cam["url"] = url
+    r = motion_client.put_config(service, cfg)
+    if "error" not in r:
+        log_event("motion", "CV (мультипросмотр): камера %s — анализ движения %s" % (serial, "включён" if enabled else "выключен"), "info")
+    return r
+
+
 @app.get("/api/motion/logs")
 def motion_logs(n: int = 100):
     return motion_client.logs(_motion_url(), n)

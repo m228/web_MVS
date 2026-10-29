@@ -19,6 +19,8 @@ function updateToolbar() {
   setDisabled('multiLightBtn', !rtspOn);
   setDisabled('multiImageBtn', !rtspOn);
   setDisabled('multiNetworkBtn', !rtspOn);
+  // CV (анализ движения) — только RTSP: у GigE значка в меню нет вовсе
+  updateMotionButton(source);
   // конфиг — только для GigE (у RTSP его нет); доступен и после остановки
   setDisabled('multiConfigBtn', !hasSource || source.kind !== 'gige');
 

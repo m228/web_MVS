@@ -87,7 +87,11 @@
             <button type="button" id="multiNetworkBtn" class="toolbar-btn toolbar-btn--neutral" disabled title="Сеть — сменить IP камеры" aria-label="Сеть — сменить IP камеры">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9.2"/><path d="M12 2.8a14 14 0 0 1 0 18.4a14 14 0 0 1 0-18.4z"/><path d="M3.4 8.7h17.2M3.4 15.3h17.2"/></svg>
             </button>
-            <button type="button" id="multiConfigBtn" class="toolbar-btn toolbar-btn--secondary" disabled title="Конфиг запуска камеры (GigE)" aria-label="Конфиг">
+            <button type="button" id="multiMotionBtn" class="toolbar-btn toolbar-btn--cv" disabled hidden title="КЗ — компьютерное зрение: движение (зоны, пороги, включение)" aria-label="КЗ — компьютерное зрение">
+              <span class="cv-mark">КЗ</span>
+              <span class="mode-indicator hidden" id="multiMotionIndicator"></span>
+            </button>
+            <button type="button" id="multiConfigBtn"class="toolbar-btn toolbar-btn--secondary" disabled title="Конфиг запуска камеры (GigE)" aria-label="Конфиг">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><path d="M14 3v6h6M8 13h8M8 17h5"/></svg>
             </button>
           </div>
@@ -278,6 +282,27 @@
     <p class="net-hint">После смены камера уедет на новый адрес: IP в базе обновится, поток переподключится.</p>
   </div>
 
+  <!-- popup КЗ (компьютерное зрение, под иконкой): режимы анализа камеры в фокусе — только RTSP; пока один режим — «Движение» -->
+  <div class="card motion-card-popup" id="multiMotionCard">
+    <h2>Компьютерное зрение</h2>
+    <div class="cv-modes" role="tablist" aria-label="Режим компьютерного зрения">
+      <button type="button" class="cv-mode is-active" role="tab" aria-selected="true" data-cv-mode="motion">Движение</button>
+    </div>
+    <p class="cap-line" id="multiMotionCap" data-state="unknown"><span class="cap-dot"></span><span class="cap-text">Проверяю…</span></p>
+    <label class="switch-toggle" title="Включить анализ движения для этой камеры">
+      <span class="switch"><input type="checkbox" id="multiMotionSwitch" /><span class="switch-track"></span></span>
+      <span class="switch-label" id="multiMotionLabel">Выкл</span>
+    </label>
+    <div id="multiMotionBody" hidden>
+      <div class="cv-zones" id="multiMotionZones"></div>
+      <div class="popup-actions">
+        <button type="button" class="btn-primary" id="multiMotionMark">Разметить зону</button>
+        <a class="btn-secondary cv-link" id="multiMotionFull" href="/motion" target="_blank" rel="noopener" title="Группы зон, вывод в ПЛК, графики">Все настройки →</a>
+      </div>
+      <p class="net-hint">Зоны обводятся прямо на картинке ячейки. Группы, адреса ПЛК и графики калибровки — на странице «Движение».</p>
+    </div>
+  </div>
+
   <!-- модалка: текущий конфиг запуска камеры (read-only) -->
   <div class="modal-backdrop" id="multiConfigModal" aria-hidden="true">
     <div class="network-modal__card" role="dialog" aria-modal="true">
@@ -369,6 +394,7 @@
   <script src="/static/js/multi/06-optics-net.js"></script>
   <script src="/static/js/multi/07-popups.js"></script>
   <script src="/static/js/multi/08-region-info.js"></script>
+  <script src="/static/js/multi/10-motion.js"></script>
   <script src="/static/js/multi/09-init.js"></script>
 </body>
 </html>

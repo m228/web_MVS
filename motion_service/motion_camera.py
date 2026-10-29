@@ -38,6 +38,19 @@ def is_stream_url(url: str) -> bool:
     return str(url).lower().startswith(("rtsp://", "rtsps://", "rtmp://", "http://", "https://"))
 
 
+def garbage_ratio(gray: np.ndarray, bs: int = 16) -> float:
+    """Доля блоков bs×bs, залитых ровным серым ~128: так декодер H.264 «стирает» кадр при потере пакетов (серая каша).
+    Живой кадр (даже тёмный/засвеченный) такого не даёт: у него есть шум матрицы или яркость далеко от 128."""
+    h, w = gray.shape[:2]
+    h -= h % bs
+    w -= w % bs
+    if h < bs or w < bs:
+        return 0.0
+    b = gray[:h, :w].reshape(h // bs, bs, w // bs, bs).astype(np.float32).transpose(0, 2, 1, 3).reshape(-1, bs * bs)
+    flat = (b.std(axis=1) < 1.5) & (np.abs(b.mean(axis=1) - 128.0) <= 10.0)
+    return float(flat.mean())
+
+
 def open_capture(url: str, transport: str = "tcp"):
     """cv2.VideoCapture с таймаутами открытия/чтения (без них мёртвая камера вешает поток надолго)."""
     with _OPEN_LOCK:
@@ -175,6 +188,17 @@ class CameraWorker(threading.Thread):
                     self._rec_path = None
         self._writes_evt.set()
 
+    def _publish_held(self, now: float, frame: np.ndarray):
+        """Каша: показываем последнее состояние с отметкой corrupt, историю и запись в ПЛК не двигаем."""
+        with self._lock:
+            st = dict(self._state) if self._state else None
+            self._frame = frame
+        if st is not None:
+            st["corrupt"] = True
+            st["ts"] = now
+            with self._lock:
+                self._state = st
+
     def _plc_loop(self):
         """Поток записи: пишет, когда значения изменились или прошло write_period_s. Недоступный ПЛК тормозит только его."""
         link = None
@@ -220,6 +244,9 @@ class CameraWorker(threading.Thread):
         last_gray = None
         freeze_time = 0.0
         frozen = False
+        bad_since = 0.0                        # когда началась «серая каша» (0 — кадр нормальный)
+        bad_until = 0.0                        # пока не истечёт — кадры после каши не считаем
+        was_bad = False
         next_t = 0.0                           # темп чтения файла
         while not self._halt.is_set():
             now = time.time()
@@ -272,6 +299,27 @@ class CameraWorker(threading.Thread):
                 else:
                     freeze_time = 0.0
             last_gray = gray
+            # серая каша: результаты не берём, держим последнее состояние; если затянулось — как мёртвая камера
+            cr = cfg["corrupt_ratio"]
+            if cr > 0 and garbage_ratio(gray) >= cr:
+                if not bad_since:
+                    bad_since = now
+                    log.warning("[%s] битый кадр (серая каша) — результаты не учитываются", self.id)
+                bad_until = now + cfg["corrupt_hold_s"]
+            elif bad_since and now >= bad_until:
+                log.info("[%s] кадры в норме (каша %.1f с)", self.id, now - bad_since)
+                bad_since = 0.0
+            if bad_since:
+                was_bad = True
+                if now - bad_since >= timeout:
+                    frozen = True              # после выхода из каши — состояния с нуля (как после фриза)
+                    self._publish(self.engine.dead_state(now, "битый поток"), frame, False)
+                else:
+                    self._publish_held(now, frame)
+                continue
+            if was_bad:                        # после каши первый кадр сравнивать не с чем — буфер с нуля, гистерезис не трогаем
+                was_bad = False
+                self.engine.buf.clear()
             now_frozen = freeze_time >= timeout
             if now_frozen:
                 frozen = True

@@ -22,7 +22,7 @@ sys.path.insert(0, str(MS))
 
 import motion_engine as me  # noqa: E402
 import motion_modbus as mm  # noqa: E402
-from motion_camera import CameraWorker  # noqa: E402
+from motion_camera import CameraWorker, garbage_ratio  # noqa: E402
 
 W, H = 320, 240
 LEFT = [[10, 40], [150, 40], [150, 200], [10, 200]]
@@ -343,6 +343,37 @@ def test_worker_frozen_camera_gives_zeros_and_status_zero(tmp_path):
         st = w.state()["result"]
         assert st["reason"] == "картинка застыла" and all(z["bit"] == 0 for z in st["zones"])
         assert _wait(lambda: clients and ("holding", 9, 0, 1) in clients[0].log), "в ПЛК ушёл status=0"
+    finally:
+        w.stop()
+
+
+def test_garbage_ratio_detects_grey_mush_not_live_frames():
+    rng = np.random.default_rng(3)
+    live = np.clip(rng.normal(60, 6, (H, W)), 0, 255).astype(np.uint8)      # тёмная лента с шумом матрицы
+    white = np.full((H, W), 250, np.uint8)
+    mush = np.full((H, W), 128, np.uint8)
+    mush[:H // 5, :W // 3] = live[:H // 5, :W // 3]                         # кусок картинки уцелел
+    assert garbage_ratio(live) < 0.05 and garbage_ratio(white) < 0.05
+    assert garbage_ratio(mush) > 0.6
+
+
+def test_worker_ignores_grey_mush_and_keeps_last_state(tmp_path):
+    mush = np.full((H, W), 128, np.uint8)
+    w, _ = _worker(tmp_path, make_frames(40) + [mush] * 12, freeze_timeout_s=3, corrupt_hold_s=0.1)
+    try:
+        assert _wait(lambda: (w.state()["result"] or {}).get("corrupt") is True, 10)
+        st = w.state()["result"]
+        assert st["alive"] and [z["bit"] for z in st["zones"]] == [1, 0], "результаты не сбрасываются, держим последние"
+        assert _wait(lambda: not (w.state()["result"] or {}).get("corrupt") and w.state()["result"]["zones"][0]["bit"] == 1, 10)
+    finally:
+        w.stop()
+
+
+def test_worker_long_mush_becomes_dead_state(tmp_path):
+    mush = np.full((H, W), 128, np.uint8)
+    w, _ = _worker(tmp_path, [mush], freeze_timeout_s=1)
+    try:
+        assert _wait(lambda: (w.state()["result"] or {}).get("reason") == "битый поток", 10)
     finally:
         w.stop()
 

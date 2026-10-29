@@ -179,6 +179,8 @@ def normalize_camera(c: dict) -> dict:
         "reconnect_delay_s": _num(c.get("reconnect_delay_s", 3.0), "камера %s.reconnect_delay_s" % cid, 0.5, 300),
         "freeze_timeout_s": _num(c.get("freeze_timeout_s", 10), "камера %s.freeze_timeout_s" % cid, 1, 3600),
         "freeze_eps": _num(c.get("freeze_eps", 1.0), "камера %s.freeze_eps" % cid, 0),
+        "corrupt_ratio": _num(c.get("corrupt_ratio", 0.3), "камера %s.corrupt_ratio" % cid, 0, 1),
+        "corrupt_hold_s": _num(c.get("corrupt_hold_s", 2.0), "камера %s.corrupt_hold_s" % cid, 0, 60),
         "loop": bool(c.get("loop", True)),
         "frame_size": fs,
         "status_out": _out(c.get("status_out"), ZONE_OUT_KINDS, "камера %s.status_out" % cid),

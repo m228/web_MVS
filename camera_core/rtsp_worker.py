@@ -274,11 +274,16 @@ class RtspCameraWorker(BaseCameraWorker):
                 else:
                     img = zoomed
 
-                ok_jpeg, encoded = cv2.imencode(".jpg", img)
-                if not ok_jpeg:
-                    self.metrics["errors"] += 1
-                    continue
-                frame = encoded.tobytes()
+                # JPEG нужен только зрителям: пока никто не смотрит (ячейка скрыта «глазиком»
+                # или вкладка закрыта, а захват держат автосохранение/КЗ) — не кодируем
+                watched = self._viewers > 0
+                frame = None
+                if watched:
+                    ok_jpeg, encoded = cv2.imencode(".jpg", img)
+                    if not ok_jpeg:
+                        self.metrics["errors"] += 1
+                        continue
+                    frame = encoded.tobytes()
 
                 self.metrics["image_number"] += 1
                 self.metrics["width"] = img.shape[1]
@@ -289,15 +294,23 @@ class RtspCameraWorker(BaseCameraWorker):
                     if dt > 0:
                         self.metrics["fps"] = 1.0 / dt
 
-                if self.metrics["fps"] > 0:
+                if frame is not None and self.metrics["fps"] > 0:
                     self.metrics["bandwidth_mbps"] = (len(frame) * 8 * self.metrics["fps"]) / 1_000_000
+                elif frame is None:
+                    # в браузер ничего не уходит — не показываем старую цифру
+                    self.metrics["bandwidth_mbps"] = 0.0
 
                 last_frame_time = now
 
                 # автофото + запись видео (тот же механизм, что и у GigE)
                 self._maybe_save(img, self.target_fps or source_fps)
 
-                self._publish(frame)
+                if frame is not None:
+                    self._publish(frame)
+                elif self._latest_jpeg is not None:
+                    # зрителей нет: сбрасываем устаревший кадр, чтобы вернувшийся зритель
+                    # не получил картинку минутной давности, а дождался свежего кадра
+                    self._publish(None)
 
         except Exception as e:
             log_event("camera_core.rtsp_stream", "Ошибка фонового захвата RTSP", "error",

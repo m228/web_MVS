@@ -207,7 +207,7 @@ function applyChipParam(cam, param, value) {
   if (param === 'fps') c.fps = (value && +value > 0) ? +value : null;
   else if (param === 'scale') c.scale = (value && +value > 0) ? Math.min(100, Math.max(1, +value)) : 100;
   const idx = state.tiles.findIndex((t) => t.serial === cam.serial);
-  if (idx >= 0 && state.tiles[idx].connected) {
+  if (idx >= 0 && state.tiles[idx].connected && !state.tiles[idx].hidden) {
     const el = getTileEl(idx);
     const frame = el?.querySelector('[data-tile-frame]');
     if (frame) frame.src = buildStreamUrl(cam);

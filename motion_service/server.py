@@ -1,13 +1,13 @@
 """Сервис движения: анализ видео с IP-камер по зонам (датчик вращения, уровень шахты, жом на ленте) → Modbus.
 
 Запускается РЯДОМ с web_MVS (как cv_service и video_service), своим venv; web_MVS раз в минуту спрашивает /health.
-Настройки (камеры, зоны, выводы в ПЛК) лежат в data\\motion_config.json и правятся со страницы «Движение» web_MVS
+Настройки (камеры, зоны, выводы в ПЛК) лежат в data\\motion_config.json и правятся в мультипросмотре web_MVS (кнопка «КЗ», нижняя панель)
 (или PUT /config). Каждая камера — свой поток; изменили одну — перезапускается только она.
 
 Эндпоинты:
   GET  /health                    — жив, версия, сколько камер и сколько из них «живы».
   GET  /config   PUT /config      — весь конфиг (проверяется; ошибка → 400 с текстом по-русски).
-  GET  /state                     — состояние всех камер (биты зон, метрики flow/diff, группы, ПЛК).
+  GET  /state                     — состояние всех камер (биты зон, метрики flow/diff, группы, ПЛК) и сценариев записи.
   GET  /cameras/{id}/state        — то же по одной камере.
   GET  /cameras/{id}/snapshot     — последний кадр JPEG (?w=1280 — уменьшить; заголовки X-Frame-W/H — размер оригинала).
   GET  /cameras/{id}/history      — ряды flow/diff/bit для графиков калибровки (?n=300).
@@ -40,6 +40,7 @@ os.environ.setdefault("OPENCV_LOG_LEVEL", "ERROR")
 import motion_engine as engine  # noqa: E402
 from motion_camera import CameraWorker, open_capture  # noqa: E402
 from motion_modbus import LinkRegistry, ModbusLink  # noqa: E402
+from motion_scenarios import ScenarioRunner  # noqa: E402
 
 log = logging.getLogger("motion")
 
@@ -80,11 +81,12 @@ class Manager:
         self.workers: dict[str, CameraWorker] = {}
         self.cfg = engine.default_config()
         self._lock = threading.RLock()
+        self.scenarios = ScenarioRunner(self)
 
     # --- конфиг ---
     def load(self):
         if not self.path.is_file():
-            log.info("Конфига нет — пустой (камеры добавляются на странице «Движение»)")
+            log.info("Конфига нет — пустой (камеры включаются кнопкой «КЗ» в мультипросмотре web_MVS)")
             return
         try:
             self.cfg = engine.normalize_config(json.loads(self.path.read_text(encoding="utf-8-sig")))
@@ -139,8 +141,10 @@ class Manager:
     def start(self):
         self.load()
         self.apply(self.cfg, save=False)
+        self.scenarios.start()
 
     def shutdown(self):
+        self.scenarios.stop()
         with self._lock:
             for w in self.workers.values():
                 w.stop()
@@ -192,7 +196,7 @@ def create_app(data_dir: Optional[Path] = None, capture_factory: Callable = open
 
     @app.get("/state")
     def state():
-        return {"cameras": [w.state() for w in mgr.workers.values()]}
+        return {"cameras": [w.state() for w in mgr.workers.values()], "scenarios": mgr.scenarios.snapshot()}
 
     @app.get("/cameras/{cid}/state")
     def cam_state(cid: str):

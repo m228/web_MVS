@@ -1483,17 +1483,14 @@ def _motion_service():
     need = {"/motion", "/api/motion/health", "/api/motion/config", "/api/motion/state", "/api/motion/snapshot", "/api/motion/history",
             "/api/motion/record", "/api/motion/modbus_ping", "/api/motion/logs", "/api/motion/vision"}
     assert need <= paths, "нет маршрутов: %s" % sorted(need - paths)
-    html = (Path(BUNDLE_DIR) / "page" / "motion.html").read_text(encoding="utf-8")
-    js = (Path(BUNDLE_DIR) / "page" / "static" / "js" / "motion.js").read_text(encoding="utf-8")
-    for el in ("camSel", "btnMark", "btnSave", "zonesTbl", "charts", "plcForm", "grpEd", "ov", "frame"):
-        assert 'id="%s"' % el in html, "на странице нет #%s" % el
-    assert "/static/js/motion.js" in html and "/api/motion/config" in js, "скрипт подключён и ходит в API"
-    assert 'href="/motion"' in (Path(BUNDLE_DIR) / "page" / "index.html").read_text(encoding="utf-8"), "кнопка «Движение» на главной"
+    assert not (Path(BUNDLE_DIR) / "page" / "motion.html").exists(), "отдельной страницы «Движение» больше нет — всё в мультипросмотре"
+    assert 'href="/motion"' not in (Path(BUNDLE_DIR) / "page" / "index.html").read_text(encoding="utf-8"), "кнопки «Движение» на главной нет"
     mh = (Path(BUNDLE_DIR) / "page" / "multi.html").read_text(encoding="utf-8")
-    for el in ("multiMotionBtn", "multiMotionCard", "multiMotionSwitch", "multiMotionZones", "multiMotionMark"):
+    for el in ("multiMotionBtn", "motionDock", "mdSwitch", "mdMark", "mdBody", "motionMarkModal", "mmCanvas"):
         assert 'id="%s"' % el in mh, "в мультипросмотре нет #%s" % el
-    assert mh.index("10-motion.js") < mh.index("09-init.js"), "модуль КЗ подключён до init"
-    assert ">КЗ<" in mh and "Компьютерное зрение" in mh and 'data-cv-mode="motion"' in mh, "кнопка «КЗ», окно «Компьютерное зрение», режим «Движение»"
+    assert mh.index("10-motion.js") < mh.index("11-motion-dock.js") < mh.index("09-init.js"), "модули КЗ подключены до init"
+    assert ">КЗ<" in mh and all(('data-md-tab="%s"' % t) in mh for t in ("zones", "groups", "camera", "trends", "plc")), "кнопка «КЗ» и вкладки панели"
+    assert all(('data-layout="%d"' % n) in mh for n in (1, 2, 4, 6, 8)), "раскладки 1/2/4/6/8"
     mj = (Path(BUNDLE_DIR) / "page" / "static" / "js" / "multi")
     assert "initMotionVision()" in (mj / "09-init.js").read_text(encoding="utf-8") and "updateMotionButton(source)" in (mj / "04-stream.js").read_text(encoding="utf-8") and "data-tile-motion" in (mj / "03-layout.js").read_text(encoding="utf-8"), "CV вшит в init, меню и ячейки"
     ms = Path(BUNDLE_DIR) / "motion_service"

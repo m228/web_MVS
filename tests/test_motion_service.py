@@ -22,7 +22,7 @@ sys.path.insert(0, str(MS))
 
 import motion_engine as me  # noqa: E402
 import motion_modbus as mm  # noqa: E402
-from motion_camera import CameraWorker  # noqa: E402
+from motion_camera import CameraWorker, garbage_ratio  # noqa: E402
 
 W, H = 320, 240
 LEFT = [[10, 40], [150, 40], [150, 200], [10, 200]]
@@ -345,6 +345,98 @@ def test_worker_frozen_camera_gives_zeros_and_status_zero(tmp_path):
         assert _wait(lambda: clients and ("holding", 9, 0, 1) in clients[0].log), "в ПЛК ушёл status=0"
     finally:
         w.stop()
+
+
+def test_garbage_ratio_detects_grey_mush_not_live_frames():
+    rng = np.random.default_rng(3)
+    live = np.clip(rng.normal(60, 6, (H, W)), 0, 255).astype(np.uint8)      # тёмная лента с шумом матрицы
+    white = np.full((H, W), 250, np.uint8)
+    mush = np.full((H, W), 128, np.uint8)
+    mush[:H // 5, :W // 3] = live[:H // 5, :W // 3]                         # кусок картинки уцелел
+    assert garbage_ratio(live) < 0.05 and garbage_ratio(white) < 0.05
+    assert garbage_ratio(mush) > 0.6
+
+
+def test_worker_ignores_grey_mush_and_keeps_last_state(tmp_path):
+    mush = np.full((H, W), 128, np.uint8)
+    w, _ = _worker(tmp_path, make_frames(40) + [mush] * 12, freeze_timeout_s=3, corrupt_hold_s=0.1)
+    try:
+        assert _wait(lambda: (w.state()["result"] or {}).get("corrupt") is True, 10)
+        st = w.state()["result"]
+        assert st["alive"] and [z["bit"] for z in st["zones"]] == [1, 0], "результаты не сбрасываются, держим последние"
+        assert _wait(lambda: not (w.state()["result"] or {}).get("corrupt") and w.state()["result"]["zones"][0]["bit"] == 1, 10)
+    finally:
+        w.stop()
+
+
+def test_worker_long_mush_becomes_dead_state(tmp_path):
+    mush = np.full((H, W), 128, np.uint8)
+    w, _ = _worker(tmp_path, [mush], freeze_timeout_s=1)
+    try:
+        assert _wait(lambda: (w.state()["result"] or {}).get("reason") == "битый поток", 10)
+    finally:
+        w.stop()
+
+
+# ───────────────────────────── сценарии записи в ПЛК ─────────────────────────────
+def _two_cams_cfg(scenarios):
+    zone = {"id": "z1", "points": LEFT, "out": None}
+    return {"cameras": [{"id": "a", "url": "x", "zones": [zone]}, {"id": "b", "url": "y", "zones": [zone]}],
+            "modbus": {"enable": True, "host": "plc", "write_period_s": 0.2}, "scenarios": scenarios}
+
+
+def test_scenario_rules_or_and_sum_and_dead_camera_gives_zero():
+    import motion_scenarios as sc
+    st = {"a": {"result": {"alive": True, "zones": [{"id": "z1", "bit": 1}]}},
+          "b": {"result": {"alive": False, "zones": [{"id": "z1", "bit": 1}]}}}   # камера b мертва — её бит не считается
+    srcs = [{"camera": "a", "zone": "z1"}, {"camera": "b", "zone": "z1"}, {"camera": "c", "zone": "z9"}]
+    bits = sc.source_bits(srcs, st)
+    assert bits == [1, 0, 0]
+    assert (sc.evaluate("or", bits), sc.evaluate("and", bits), sc.evaluate("sum", bits)) == (1, 0, 1)
+    assert sc.evaluate("and", []) == 0 and sc.evaluate("or", []) == 0
+
+
+def test_scenario_normalize_drops_missing_sources_and_validates():
+    cfg = me.normalize_config(_two_cams_cfg([{"id": "s1", "rule": "or", "out": {"kind": "holding", "address": 5},
+                                              "sources": [{"camera": "a", "zone": "z1"}, {"camera": "b", "zone": "zz"}, {"camera": "q", "zone": "z1"}]}]))
+    assert cfg["scenarios"][0]["sources"] == [{"camera": "a", "zone": "z1"}] and cfg["scenarios"][0]["out"]["address"] == 5
+    with pytest.raises(ValueError, match="правило"):
+        me.normalize_config(_two_cams_cfg([{"id": "s1", "rule": "xor"}]))
+    with pytest.raises(ValueError, match="повторяются"):
+        me.normalize_config(_two_cams_cfg([{"id": "s1"}, {"id": "s1"}]))
+
+
+def test_scenario_runner_writes_one_register_for_two_cameras(tmp_path):
+    clients = []
+
+    def factory(host, port):
+        c = FakeClientNew(host, port)
+        clients.append(c)
+        return c
+
+    import motion_scenarios as sc
+
+    class W:  # камера a крутится, b нет
+        def __init__(self, bit):
+            self.bit = bit
+
+        def state(self):
+            return {"result": {"alive": True, "zones": [{"id": "z1", "bit": self.bit}]}}
+
+    class M:
+        links = mm.LinkRegistry(factory)
+        workers = {"a": W(0), "b": W(1)}
+        cfg = me.normalize_config(_two_cams_cfg([{"id": "s1", "rule": "or", "out": {"kind": "holding", "address": 7},
+                                                  "sources": [{"camera": "a", "zone": "z1"}, {"camera": "b", "zone": "z1"}]}]))
+    r = sc.ScenarioRunner(M)
+    r.tick(100.0)
+    assert ("holding", 7, 1, 1) in clients[0].log
+    n = len(clients[0].log)
+    r.tick(100.05)                            # значение то же и период не вышел — повторной записи нет
+    assert len(clients[0].log) == n
+    M.workers["b"].bit = 0
+    r.tick(100.1)
+    assert ("holding", 7, 0, 1) in clients[0].log and r.snapshot()[0]["value"] == 0
 
 
 # ───────────────────────────── HTTP-сервер целиком ─────────────────────────────

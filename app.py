@@ -12,7 +12,7 @@ from contextlib import asynccontextmanager
 from urllib.parse import urlparse
 
 from fastapi import FastAPI, Query, Body, Request
-from fastapi.responses import FileResponse, StreamingResponse, Response, HTMLResponse
+from fastapi.responses import FileResponse, StreamingResponse, Response, HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 from logger import get_events, log_event
@@ -974,7 +974,8 @@ def _motion_url() -> str:
 
 @app.get("/motion")
 def motion_page():
-    return _page("motion.html")
+    """Отдельной страницы больше нет: всё в мультипросмотре (кнопка «КЗ»). Старые закладки ведут туда."""
+    return RedirectResponse("/multi")
 
 
 @app.get("/api/motion/health")

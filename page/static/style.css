@@ -4418,7 +4418,7 @@ body.micro-rep-doc .micro-cmp-strips { grid-template-columns: repeat(6, 1fr); ga
 .motion-card-popup h2 { margin-top: 0; margin-bottom: 12px; }
 .toolbar-btn--cv { background: linear-gradient(135deg, #14b8a6, #0ea5e9); color: #fff; box-shadow: 0 14px 30px rgba(20, 184, 166, 0.22); position: relative; }
 .toolbar-btn--cv[hidden] { display: none; }
-.toolbar-btn--cv .cv-mark { display: inline-block; border: 2px solid currentColor; border-radius: 5px; padding: 0 4px; font-size: 12px; font-weight: 800; line-height: 1.5; letter-spacing: .02em; }
+.toolbar-btn--cv .cv-mark { display: inline-flex; align-items: center; justify-content: center; border: 3px solid currentColor; border-radius: 8px; min-width: 34px; height: 30px; padding: 0 5px; box-sizing: border-box; font-size: 19px; font-weight: 900; line-height: 1; letter-spacing: .01em; }
 .toolbar-btn--cv.is-on { box-shadow: 0 0 0 2px rgba(34, 197, 94, .8), 0 14px 34px rgba(34, 197, 94, .35); }
 .cv-zones { margin: 12px 0 4px; display: flex; flex-direction: column; gap: 6px; max-height: 280px; overflow-y: auto; }
 .cv-zone { display: grid; grid-template-columns: 1fr auto; gap: 4px 8px; align-items: center; padding: 6px 8px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface-muted); font-size: 13px; }
@@ -4440,3 +4440,10 @@ body.micro-rep-doc .micro-cmp-strips { grid-template-columns: repeat(6, 1fr); ga
 .tile-cv-hint[hidden] { display: none; }
 .tile-cv-hint button { min-height: 0; padding: 3px 10px; font-size: 12px; }
 .toolbar-btn--cv .mode-indicator { top: -4px; right: -4px; background: var(--success); }
+
+
+/* режимы компьютерного зрения в окне КЗ: пока «Движение», дальше добавятся другие */
+.cv-modes { display: flex; gap: 6px; flex-wrap: wrap; margin: 0 0 12px; }
+.cv-mode { min-height: 0; padding: 4px 12px; border-radius: 999px; border: 1px solid var(--border-strong); background: var(--surface-muted); color: var(--text); font: inherit; font-size: 13px; cursor: pointer; }
+.cv-mode.is-active { background: var(--accent); color: var(--accent-contrast); border-color: var(--accent); font-weight: 700; }
+.tile-cv-badge { font-size: 13px; padding: 1px 8px; }

@@ -1,5 +1,5 @@
-// ---------- CV: анализ движения RTSP-камер в ячейках ----------
-// Камера в сервисе движения живёт под тем же серийником (rtsp_N), что и в ячейке. Тут: кнопка «CV» в меню (только RTSP),
+// ---------- КЗ (компьютерное зрение): режим «Движение» для RTSP-камер в ячейках ----------
+// Камера в сервисе движения живёт под тем же серийником (rtsp_N), что и в ячейке. Тут: кнопка «КЗ» в меню (только RTSP),
 // всплывающее окно (включить, зоны, пороги), слой с зонами поверх кадра ячейки и разметка зоны кликами по кадру.
 // Настройки лежат в сервисе (/api/motion/config); группы и вывод в ПЛК — на странице «Движение».
 const MV = {
@@ -36,7 +36,7 @@ async function mvRefreshConfig() {
   if (cfg && !cfg.error) MV.cfg = cfg;
 }
 
-// значок «CV» виден только у RTSP; у GigE его нет совсем
+// значок «КЗ» виден только у RTSP; у GigE его нет совсем
 function updateMotionButton(source) {
   const btn = document.getElementById('multiMotionBtn');
   if (!btn) return;
@@ -82,7 +82,7 @@ function renderMotionPopup() {
     'Сервис движения не запущен (motion_service\\setup.bat, потом перезапуск web_MVS)');
   sw.disabled = !MV.online;
   sw.checked = on;
-  document.getElementById('multiMotionLabel').textContent = on ? 'Анализ движения включён' : 'Выкл';
+  document.getElementById('multiMotionLabel').textContent = on ? 'Движение: анализ включён' : 'Выкл';
   body.hidden = !(MV.online && on);
   document.getElementById('multiMotionFull').href = '/motion?camera=' + encodeURIComponent(source.serial);
   if (!body.hidden) renderMotionZones(source.serial);
@@ -142,7 +142,7 @@ async function onMotionZoneEdit(event) {
   });
   if (r && r.error) {
     alert('Не сохранено: ' + r.error);
-    log.warn('CV: зона не сохранена', r);
+    log.warn('КЗ: зона не сохранена', r);
   }
   renderMotionZones(source.serial);
   drawAllMotionTiles();
@@ -156,13 +156,13 @@ async function onMotionSwitch(event) {
     serial: source.serial, enabled: want, name: source.label, url: (source.connection && source.connection.url) || '',
   });
   if (r && r.error) {
-    alert('CV: ' + r.error);
+    alert('КЗ: ' + r.error);
     event.target.checked = !want;
     return;
   }
   if (r && r.cameras) MV.cfg = r;
   if (!want) cancelMotionMarking();
-  log.info('CV: анализ движения ' + (want ? 'включён' : 'выключен'), { serial: source.serial });
+  log.info('КЗ: анализ движения ' + (want ? 'включён' : 'выключен'), { serial: source.serial });
   renderMotionPopup();
   drawAllMotionTiles();
 }
@@ -203,7 +203,7 @@ function drawMotionTile(index) {
       const total = (st && st.zones ? st.zones.filter((z) => z.enabled !== false).length : cam.zones.length);
       const act = st && st.zones ? st.zones.filter((z) => z.bit === 1).length : 0;
       const dead = !MV.online || (st && !st.alive) || !st;
-      badge.textContent = dead ? 'CV · нет данных' : 'CV ' + act + '/' + total;
+      badge.textContent = dead ? 'КЗ · нет данных' : 'КЗ ' + act + '/' + total;
       badge.classList.toggle('is-active', !dead && act > 0);
       badge.classList.toggle('is-bad', dead);
     }
@@ -333,7 +333,7 @@ async function closeMotionPolygon() {
     alert('Зона не сохранена: ' + r.error);
     return;
   }
-  log.success('CV: зона добавлена', { serial: tile.serial });
+  log.success('КЗ: зона добавлена', { serial: tile.serial });
   drawAllMotionTiles();
   openMotionPopup();
 }

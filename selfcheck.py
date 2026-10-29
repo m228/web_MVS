@@ -1492,7 +1492,8 @@ def _motion_service():
     mh = (Path(BUNDLE_DIR) / "page" / "multi.html").read_text(encoding="utf-8")
     for el in ("multiMotionBtn", "multiMotionCard", "multiMotionSwitch", "multiMotionZones", "multiMotionMark"):
         assert 'id="%s"' % el in mh, "в мультипросмотре нет #%s" % el
-    assert mh.index("10-motion.js") < mh.index("09-init.js"), "модуль CV подключён до init"
+    assert mh.index("10-motion.js") < mh.index("09-init.js"), "модуль КЗ подключён до init"
+    assert ">КЗ<" in mh and "Компьютерное зрение" in mh and 'data-cv-mode="motion"' in mh, "кнопка «КЗ», окно «Компьютерное зрение», режим «Движение»"
     mj = (Path(BUNDLE_DIR) / "page" / "static" / "js" / "multi")
     assert "initMotionVision()" in (mj / "09-init.js").read_text(encoding="utf-8") and "updateMotionButton(source)" in (mj / "04-stream.js").read_text(encoding="utf-8") and "data-tile-motion" in (mj / "03-layout.js").read_text(encoding="utf-8"), "CV вшит в init, меню и ячейки"
     ms = Path(BUNDLE_DIR) / "motion_service"

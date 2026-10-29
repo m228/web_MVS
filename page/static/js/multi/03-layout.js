@@ -45,7 +45,7 @@ function createTileEl() {
     <div class="multi-tile__head">
       <select class="multi-tile__serial" data-tile-serial title="Камера в ячейке"></select>
       <span class="multi-tile__badge" data-tile-badge></span>
-      <span class="tile-cv-badge" data-tile-cv hidden>CV</span>
+      <span class="tile-cv-badge" data-tile-cv hidden title="КЗ — компьютерное зрение">КЗ</span>
       <button type="button" class="tile-region-btn" data-tile-region title="Зум областью — выделите рамку" aria-label="Зум областью" hidden>${REGION_SVG}</button>
     </div>
     <div class="multi-tile__screen" data-tile-screen>

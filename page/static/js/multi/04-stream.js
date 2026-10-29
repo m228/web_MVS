@@ -75,6 +75,7 @@ function doStartStream(index) {
   if (!frame) return;
 
   tile.connected = true;
+  tile.hidden = false;
   tile.live = true;
   tile._lastImages = undefined;
   tile._lastFrameTs = Date.now();
@@ -83,6 +84,27 @@ function doStartStream(index) {
   renderTile(index);
   updateToolbar();
   log.success('Старт потока в ячейке', { tile: index, serial: tile.serial, kind: tile.kind });
+}
+
+// «глазик»: скрыть/показать картинку RTSP-камеры. Закрывается только HTTP-поток в браузер
+// (ни трафика MJPEG, ни декодирования у зрителя); сам захват камеры не гасим — его держат
+// автосохранение фото/видео, автостарт и КЗ. Без них захват остановится сам, при показе поднимется заново.
+function toggleTileHidden(index) {
+  const tile = state.tiles[index];
+  const source = tile && tile.serial ? getSource(tile.serial) : null;
+  if (!tile || !source || source.kind !== 'rtsp' || !tile.connected) return;
+
+  tile.hidden = !tile.hidden;
+  tile.regionMode = false;
+  const frame = getTileEl(index)?.querySelector('[data-tile-frame]');
+  if (frame) frame.src = tile.hidden ? '' : buildStreamUrl(source);
+  if (!tile.hidden) {
+    tile.live = true;
+    tile._lastImages = undefined;
+    tile._lastFrameTs = Date.now();
+  }
+  renderTile(index);
+  log.info(tile.hidden ? 'Картинка ячейки скрыта' : 'Картинка ячейки показана', { tile: index, serial: tile.serial });
 }
 
 async function stopStream(serial, kind) {
@@ -188,6 +210,9 @@ function startMetricsPolling() {
         const zf = Number(metrics.zoom_factor) || 1;
         if (zf !== tile.zoomFactor) { tile.zoomFactor = zf; renderTile(i); }
       }
+
+      // скрытая ячейка кадров в браузер не получает — «живость» по ним не считаем
+      if (tile.hidden) continue;
 
       updateTileMetrics(i, metrics);
 

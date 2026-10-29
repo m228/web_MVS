@@ -1476,6 +1476,11 @@ input[type="range"] {
   flex: none;
 }
 .tile-region-btn:hover { color: var(--text); }
+/* кнопки поверх картинки ячейки: зум областью и «глазик» столбиком в правом верхнем углу */
+.multi-tile__tools { position: absolute; top: 8px; right: 8px; z-index: 7; display: flex; flex-direction: column; gap: 6px; }
+.multi-tile__tools .tile-region-btn { background: rgba(5, 8, 13, 0.6); color: #e7eefb; border-color: rgba(231, 238, 251, 0.25); }
+.multi-tile__tools .tile-region-btn:hover { background: rgba(5, 8, 13, 0.85); }
+.multi-tile__tools .tile-eye-btn.is-eye-off { background: linear-gradient(135deg, #ffb300, #ff8f00); color: #1a1a1a; border-color: transparent; }
 .tile-region-btn[hidden] { display: none; }
 
 .tile-marquee-layer {

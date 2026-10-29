@@ -40,8 +40,15 @@ function applyTileRegionUI(index) {
   const layer = el.querySelector('[data-tile-marquee]');
   const box = el.querySelector('[data-tile-marquee-box]');
   if (btn) {
-    btn.hidden = !(isRtsp && tile.connected);
+    btn.hidden = !(isRtsp && tile.connected && !tile.hidden);   // рамку не нарисовать на скрытой картинке
     btn.classList.toggle('is-region-active', !!tile.regionMode || Number(tile.zoomFactor) > 1);
+  }
+  const eye = el.querySelector('[data-tile-eye]');
+  if (eye) {
+    eye.hidden = !(isRtsp && tile.connected);
+    eye.classList.toggle('is-eye-off', !!tile.hidden);
+    eye.innerHTML = tile.hidden ? EYE_OFF_SVG : EYE_SVG;
+    eye.title = tile.hidden ? 'Показать картинку' : 'Скрыть картинку (поток, фото и КЗ продолжают работать)';
   }
   if (layer) layer.hidden = !tile.regionMode;
   if (box && !tile.regionMode) box.hidden = true;
@@ -335,7 +342,7 @@ async function applyRtspEdit(fd, form, error) {
 
   // эфир: перезапускаем поток с новыми параметрами
   state.tiles.forEach((tile, i) => {
-    if (tile.serial === cam.serial && tile.connected) {
+    if (tile.serial === cam.serial && tile.connected && !tile.hidden) {
       const frame = getTileEl(i)?.querySelector('[data-tile-frame]');
       if (frame) frame.src = buildStreamUrl(cam);
       tile._lastImages = undefined;
@@ -398,7 +405,7 @@ function addRtspSource() {
     existing.connection = connection;
     // если уже в эфире — перезапускаем поток с новыми настройками
     state.tiles.forEach((tile, i) => {
-      if (tile.serial === existing.serial && tile.connected) {
+      if (tile.serial === existing.serial && tile.connected && !tile.hidden) {
         const el = getTileEl(i);
         const frame = el?.querySelector('[data-tile-frame]');
         if (frame) frame.src = buildStreamUrl(existing);

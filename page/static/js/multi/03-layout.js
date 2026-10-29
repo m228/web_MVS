@@ -1,6 +1,6 @@
 // ---------- раскладка ----------
 function newTile() {
-  return { serial: null, kind: null, connected: false, photo: false, video: false, light: false, zoomFactor: 1, live: true, el: null };
+  return { serial: null, kind: null, connected: false, photo: false, video: false, light: false, zoomFactor: 1, live: true, hidden: false, el: null };
 }
 
 function setLayout(n) {
@@ -46,9 +46,12 @@ function createTileEl() {
       <select class="multi-tile__serial" data-tile-serial title="Камера в ячейке"></select>
       <span class="multi-tile__badge" data-tile-badge></span>
       <span class="tile-cv-badge" data-tile-cv hidden title="КЗ — компьютерное зрение">КЗ</span>
-      <button type="button" class="tile-region-btn" data-tile-region title="Зум областью — выделите рамку" aria-label="Зум областью" hidden>${REGION_SVG}</button>
     </div>
     <div class="multi-tile__screen" data-tile-screen>
+      <div class="multi-tile__tools">
+        <button type="button" class="tile-region-btn" data-tile-region title="Зум областью — выделите рамку" aria-label="Зум областью" hidden>${REGION_SVG}</button>
+        <button type="button" class="tile-region-btn tile-eye-btn" data-tile-eye title="Скрыть картинку (поток, фото и КЗ продолжают работать)" aria-label="Скрыть картинку" hidden>${EYE_SVG}</button>
+      </div>
       <img class="multi-tile__frame hidden" alt="Кадр камеры" data-tile-frame />
       <div class="multi-tile__placeholder" data-tile-placeholder>NO CAMERA</div>
       <canvas class="tile-motion-layer" data-tile-motion></canvas>
@@ -99,6 +102,13 @@ function createTileEl() {
     event.stopPropagation();
     setFocus(idx());
     onTileRegionClick(idx());
+  });
+  // «глазик»: скрыть картинку (поток в браузер закрывается, захват/фото/КЗ идут дальше)
+  const eyeBtn = el.querySelector('[data-tile-eye]');
+  eyeBtn.addEventListener('click', (event) => {
+    event.stopPropagation();
+    setFocus(idx());
+    toggleTileHidden(idx());
   });
   const marquee = el.querySelector('[data-tile-marquee]');
   marquee.addEventListener('mousedown', (event) => {
@@ -161,12 +171,13 @@ function renderTile(index) {
   const select = el.querySelector('[data-tile-serial]');
 
   if (select) select.value = tile.serial || '';
-  const stalled = tile.connected && tile.live === false;
+  // скрытая ячейка кадров в браузер не получает — «нет кадров» для неё не тревога
+  const stalled = tile.connected && !tile.hidden && tile.live === false;
   if (badge) {
     // «переподключение…» приоритетнее «нет кадров»: это не зависшая камера,
     // а идущее восстановление связи (бэкенд сам переоткрывает поток)
     badge.textContent = tile.connected
-      ? (tile.reconnecting ? '● переподключение…' : (stalled ? '● нет кадров' : '● в эфире'))
+      ? (tile.hidden ? '● скрыта' : (tile.reconnecting ? '● переподключение…' : (stalled ? '● нет кадров' : '● в эфире')))
       : (source ? 'готова' : 'пусто');
   }
 
@@ -194,13 +205,19 @@ function renderTile(index) {
   if (recZoom) recZoom.classList.toggle('is-active', zoomOn && tile.connected);
 
   if (!tile.connected) {
+    tile.hidden = false;
     if (frame) { frame.classList.add('hidden'); frame.src = ''; }
-    if (placeholder) placeholder.classList.remove('hidden');
+    if (placeholder) { placeholder.textContent = 'NO CAMERA'; placeholder.classList.remove('hidden'); }
+    tile.regionMode = false;
+  } else if (tile.hidden) {
+    if (frame) frame.classList.add('hidden');
+    if (placeholder) { placeholder.textContent = 'КАРТИНКА СКРЫТА'; placeholder.classList.remove('hidden'); }
     tile.regionMode = false;
   } else {
     if (placeholder) placeholder.classList.add('hidden');
     if (frame) frame.classList.remove('hidden');
   }
+  el.classList.toggle('is-view-hidden', !!tile.hidden);
 
   applyTileRegionUI(index); // кнопка «зум областью» и слой рамки
 }

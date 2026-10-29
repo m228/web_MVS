@@ -4441,7 +4441,7 @@ body.micro-rep-doc .micro-cmp-strips { grid-template-columns: repeat(6, 1fr); ga
 /* --- CV (анализ движения) в мультипросмотре --- */
 .toolbar-btn--cv { background: linear-gradient(135deg, #14b8a6, #0ea5e9); color: #fff; box-shadow: 0 14px 30px rgba(20, 184, 166, 0.22); position: relative; }
 .toolbar-btn--cv[hidden] { display: none; }
-.toolbar-btn--cv .cv-mark { display: inline-flex; align-items: center; justify-content: center; border: 3px solid currentColor; border-radius: 8px; min-width: 34px; height: 30px; padding: 0 5px; box-sizing: border-box; font-size: 19px; font-weight: 900; line-height: 1; letter-spacing: .01em; }
+.toolbar-btn--cv .cv-mark { display: inline-flex; align-items: center; justify-content: center; border: 2.5px solid currentColor; border-radius: 7px; width: 28px; height: 28px; padding: 0; box-sizing: border-box; font-size: 14px; font-weight: 900; line-height: 1; letter-spacing: 0; }
 .toolbar-btn--cv.is-on { box-shadow: 0 0 0 2px rgba(34, 197, 94, .8), 0 14px 34px rgba(34, 197, 94, .35); }
 .cv-bit { display: inline-block; min-width: 24px; text-align: center; border-radius: 10px; padding: 1px 8px; font-weight: 700; background: var(--surface-strong); color: var(--muted); }
 .cv-bit.on { background: var(--success-soft); color: var(--success); }

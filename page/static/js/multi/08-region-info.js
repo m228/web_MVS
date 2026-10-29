@@ -196,11 +196,161 @@ async function openConfigModal() {
   });
 }
 
-// --- добавить RTSP ---
-function openRtspModal() {
+// --- добавить / изменить RTSP (одна и та же модалка) ---
+// серийник камеры, которую правим; null — режим «добавить»
+let rtspEditSerial = null;
+// поля URL на момент открытия правки: по ним видно, что пользователь реально поменял
+let rtspEditOrig = null;
+
+// разбор rtsp://user:pass@host:port/path?channel=1&subtype=0 на поля формы
+function parseRtspUrl(url) {
+  try {
+    const u = new URL(url);
+    return {
+      ip: u.hostname,
+      port: u.port ? Number(u.port) : 554,
+      username: decodeURIComponent(u.username),
+      password: decodeURIComponent(u.password),
+      channel: Number(u.searchParams.get('channel')) || 1,
+      subtype: u.searchParams.has('subtype') ? Number(u.searchParams.get('subtype')) || 0 : 0,
+    };
+  } catch (e) {
+    return null;
+  }
+}
+
+// применить к исходному URL только те поля, что поменял пользователь (путь и прочее не трогаем)
+function patchRtspUrl(url, next, orig) {
+  try {
+    const u = new URL(url);
+    if (next.ip !== orig.ip) u.hostname = next.ip;
+    if (next.port !== orig.port) u.port = String(next.port);
+    if (next.username !== orig.username) u.username = next.username;
+    if (next.password !== orig.password) u.password = next.password;
+    if (next.channel !== orig.channel && u.searchParams.has('channel')) u.searchParams.set('channel', next.channel);
+    if (next.subtype !== orig.subtype && u.searchParams.has('subtype')) u.searchParams.set('subtype', next.subtype);
+    return u.toString();
+  } catch (e) {
+    return url;
+  }
+}
+
+function openRtspModal(editSerial) {
+  const form = document.getElementById('multiRtspForm');
   const error = document.getElementById('multiRtspError');
   if (error) { error.textContent = ''; error.classList.remove('show'); }
+  if (form) form.reset();
+
+  const cam = editSerial ? getSource(editSerial) : null;
+  rtspEditSerial = cam && cam.kind === 'rtsp' ? cam.serial : null;
+  rtspEditOrig = null;
+
+  const title = document.getElementById('multiRtspTitle');
+  const submit = document.getElementById('multiRtspAdd');
+  if (title) title.textContent = rtspEditSerial ? 'Изменить RTSP-камеру' : 'RTSP-камера';
+  if (submit) submit.textContent = rtspEditSerial ? 'ОК' : 'Добавить';
+
+  if (rtspEditSerial && form) {
+    const c = cam.connection || {};
+    const parsed = parseRtspUrl(c.url || '');
+    rtspEditOrig = parsed;
+    const set = (name, value) => { if (form.elements[name]) form.elements[name].value = value ?? ''; };
+    set('name', cam.label);
+    set('url', c.url || '');
+    set('ip', (parsed && parsed.ip) || cam.ip || '');
+    if (parsed) {
+      set('port', parsed.port);
+      set('username', parsed.username);
+      set('password', parsed.password);
+      set('channel', parsed.channel);
+      set('subtype', parsed.subtype);
+    }
+    set('scale', c.scale ?? 100);
+    set('fps', c.fps || '');
+  }
   openModal('multiRtspModal');
+}
+
+// сохранить правку: обновить карточку, базу (rtsp_cameras.json) и перезапустить эфир при смене адреса/параметров
+async function applyRtspEdit(fd, form, error) {
+  const cam = getSource(rtspEditSerial);
+  if (!cam) { closeModal('multiRtspModal'); return; }
+
+  const orig = rtspEditOrig;
+  const oldUrl = (cam.connection && cam.connection.url) || '';
+  const typedUrl = String(fd.get('url') || '').trim();
+  const next = {
+    ip: String(fd.get('ip') || '').trim(),
+    port: Number(fd.get('port')) || 554,
+    username: String(fd.get('username') || '').trim(),
+    password: String(fd.get('password') || ''),
+    channel: Number(fd.get('channel')) || 1,
+    subtype: Number(fd.get('subtype')) || 0,
+  };
+
+  let newUrl = typedUrl;
+  if (!newUrl) {
+    if (!next.ip) {
+      if (error) { error.textContent = 'Укажите RTSP URL или IP-адрес'; error.classList.add('show'); }
+      return;
+    }
+    const cred = next.username ? `${next.username}:${next.password}@` : '';
+    newUrl = `rtsp://${cred}${next.ip}:${next.port}/cam/realmonitor?channel=${next.channel}&subtype=${next.subtype}`;
+  } else if (typedUrl === oldUrl && orig) {
+    // URL не трогали — правки в полях IP/порта/логина/канала вносим в него
+    newUrl = patchRtspUrl(oldUrl, next, orig);
+  }
+
+  // если ввели другой URL — IP берём из него, а не из поля
+  const parsedNew = parseRtspUrl(newUrl);
+  const newIp = (parsedNew && parsedNew.ip) || next.ip || null;
+  const scale = Math.min(100, Math.max(1, Number(fd.get('scale')) || 100));
+  const fps = Number(fd.get('fps')) || 0;
+  const name = String(fd.get('name') || '').trim();
+
+  if (newUrl !== oldUrl && state.cameras.some((c) => c !== cam && c.kind === 'rtsp' && c.connection && c.connection.url === newUrl)) {
+    if (error) { error.textContent = 'Камера с таким URL уже есть в списке'; error.classList.add('show'); }
+    return;
+  }
+
+  const urlChanged = newUrl !== oldUrl;
+  cam.label = name || cam.label;
+  cam.ip = newIp;
+  cam.connection = { url: newUrl, scale, fps: fps || null };
+
+  // смена адреса: старый захват держит прежний URL — гасим его до перезаписи базы
+  if (urlChanged) await stopStream(cam.serial, 'rtsp');
+
+  // в базу пишем только то, что там уже есть (не подключённая камера сохранится сама при первом кадре)
+  if (cam.saved) {
+    const data = await RtspApi.saveCam({ url: newUrl, label: cam.label, ip: newIp, serial: cam.serial, scale, fps: cam.connection.fps });
+    if (!data || data.error) {
+      log.warn('Не удалось сохранить правку RTSP-камеры в базу', { serial: cam.serial, error: data?.error });
+    } else if (urlChanged) {
+      // запись ключуется по URL: автостарт переносим на новую, старую убираем
+      if (cam.autostart) await RtspApi.setAutostart(newUrl, true, cam.serial);
+      await RtspApi.removeSaved(oldUrl);
+    }
+  }
+
+  // эфир: перезапускаем поток с новыми параметрами
+  state.tiles.forEach((tile, i) => {
+    if (tile.serial === cam.serial && tile.connected) {
+      const frame = getTileEl(i)?.querySelector('[data-tile-frame]');
+      if (frame) frame.src = buildStreamUrl(cam);
+      tile._lastImages = undefined;
+      tile._lastFrameTs = Date.now();
+    }
+  });
+
+  renderDrawer();
+  refreshTileSelects();
+  updateToolbar();
+  closeModal('multiRtspModal');
+  form.reset();
+  rtspEditSerial = null;
+  rtspEditOrig = null;
+  log.success('RTSP-камера изменена', { serial: cam.serial, url: newUrl });
 }
 
 function addRtspSource() {
@@ -209,6 +359,8 @@ function addRtspSource() {
   if (!form) return;
 
   const fd = new FormData(form);
+  if (rtspEditSerial) { applyRtspEdit(fd, form, error); return; }
+
   const url = String(fd.get('url') || '').trim();
   const ip = String(fd.get('ip') || '').trim();
 

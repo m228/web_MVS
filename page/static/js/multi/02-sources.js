@@ -113,6 +113,7 @@ function renderDrawer() {
         </div>
         <div class="camera-chip__actions">
           ${cam.kind === 'gige' ? `<button type="button" class="camera-chip__info-btn" data-chip-info title="Информация о камере" aria-label="Информация о камере">${INFO_SVG}</button>` : ''}
+          ${cam.kind === 'rtsp' ? `<button type="button" class="camera-chip__edit" data-chip-edit title="Изменить название и адрес" aria-label="Изменить">${EDIT_SVG}</button>` : ''}
           ${cam.kind === 'rtsp' ? `<button type="button" class="camera-chip__remove" data-chip-remove title="Удалить камеру" aria-label="Удалить">×</button>` : ''}
         </div>
       </div>
@@ -129,7 +130,7 @@ function renderDrawer() {
       main.addEventListener('dragend', () => chip.classList.remove('is-dragging'));
     }
     main.addEventListener('click', (event) => {
-      if (event.target.closest('[data-chip-info]') || event.target.closest('[data-chip-remove]')) return;
+      if (event.target.closest('[data-chip-info]') || event.target.closest('[data-chip-remove]') || event.target.closest('[data-chip-edit]')) return;
       toggleChipSettings(cam.serial);
     });
 
@@ -138,6 +139,14 @@ function renderDrawer() {
       infoBtn.addEventListener('click', (event) => {
         event.stopPropagation();
         openInfoModal(cam.serial);
+      });
+    }
+
+    const editBtn = chip.querySelector('[data-chip-edit]');
+    if (editBtn) {
+      editBtn.addEventListener('click', (event) => {
+        event.stopPropagation();
+        openRtspModal(cam.serial);
       });
     }
 

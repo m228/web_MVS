@@ -119,7 +119,7 @@ function initModals() {
   document.getElementById('multiConfigClose')?.addEventListener('click', () => closeModal('multiConfigModal'));
   document.getElementById('multiConfigCloseFooter')?.addEventListener('click', () => closeModal('multiConfigModal'));
 
-  document.getElementById('multiAddRtspBtn')?.addEventListener('click', openRtspModal);
+  document.getElementById('multiAddRtspBtn')?.addEventListener('click', () => openRtspModal());
   document.getElementById('multiRtspClose')?.addEventListener('click', () => closeModal('multiRtspModal'));
   document.getElementById('multiRtspCancel')?.addEventListener('click', () => closeModal('multiRtspModal'));
   document.getElementById('multiRtspAdd')?.addEventListener('click', addRtspSource);

@@ -2934,6 +2934,25 @@ body.modal-open {
   border-color: var(--danger);
 }
 
+.camera-chip__edit {
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  border: 1px solid var(--border-strong);
+  background: var(--surface);
+  color: var(--muted);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: color 0.18s ease, border-color 0.18s ease;
+}
+
+.camera-chip__edit:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
 /* иконочная кнопка обновления списка камер (в шапке секции «Камеры») */
 .icon-btn {
   width: 42px;

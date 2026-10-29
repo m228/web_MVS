@@ -362,7 +362,7 @@ MODULES = [
     "camera_core.base_worker", "camera_core.gige_worker", "camera_core.rtsp_worker", "camera_core.camera_manager",
     "sdk_gige", "camera_params", "dahua_control", "net_tools", "rtsp_store",
     "save_settings", "plate_config", "sv_source", "microscope_plc", "microscope_fsm",
-    "microscope_service", "cv_analyzer", "cv_volume", "substages", "db", "report", "boil_compare", "cv_fracture", "cv_client", "video_client", "motion_client", "services", "cv_store", "boil_archive", "fracture_lab", "cv_pipeline", "model_check", "boil_anomaly", "other_plants",
+    "microscope_service", "cv_analyzer", "cv_volume", "substages", "db", "report", "boil_compare", "cv_fracture", "cv_client", "video_client", "motion_client", "services", "delta_update", "cv_store", "boil_archive", "fracture_lab", "cv_pipeline", "model_check", "boil_anomaly", "other_plants",
     "updater", "autostart", "diag", "app", "mvsdk",
 ]
 THIRD_PARTY = ["cv2", "numpy", "fastapi", "starlette", "uvicorn", "pymodbus", "harvesters", "genicam",

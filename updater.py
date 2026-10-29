@@ -26,6 +26,7 @@ import urllib.request
 import zipfile
 from pathlib import Path
 
+import delta_update
 from logger import log_event
 from paths import DATA_DIR, read_version
 
@@ -55,10 +56,12 @@ def staged_zip():
 def staged_version() -> str:
     """Версия скачанного обновления (из _internal/VERSION внутри архива) или пустая строка."""
     z = staged_zip()
-    if z is None:
-        return ""
+    return _zip_version(z) if z is not None else ""
+
+
+def _zip_version(path: Path) -> str:
     try:
-        with zipfile.ZipFile(z) as zf:
+        with zipfile.ZipFile(path) as zf:
             for name in zf.namelist():
                 if name.replace("\\", "/") == "_internal/VERSION":
                     return _norm(zf.read(name).decode("utf-8", "replace").strip())
@@ -234,6 +237,26 @@ def download_latest(extract: bool = True):
         _DL_LOCK.release()
 
 
+def _try_delta(asset: dict, tag: str, size: int, part_path: Path, deadline: float):
+    """Докачать только изменившиеся файлы (см. delta_update). None — не вышло или не выгодно: вызывающий качает архив целиком."""
+    try:
+        st = delta_update.fetch_delta(asset["browser_download_url"], size, _app_dir(), part_path, deadline)
+        ver = _zip_version(part_path)
+        if ver != _norm(tag):                            # собранный архив обязан быть именно той версии, что в релизе
+            raise delta_update.DeltaError("версия в собранном архиве %r, ожидалась %r" % (ver, _norm(tag)))
+    except Exception as exc:
+        log_event("updater.download", "Дельта-обновление не вышло — качаю архив целиком", "info", {"reason": str(exc)})
+        try:
+            part_path.unlink()
+        except OSError:
+            pass
+        return None
+    log_event("updater.download", "Дельта-обновление: докачано %.1f МБ из %.1f МБ (%d из %d файлов)" % (
+        st["fetched"] / 1e6, size / 1e6, st["changed"], st["files"]), "success", st)
+    st["full_size"] = size
+    return st
+
+
 def _download_latest_locked(extract: bool):
     try:
         # переиспользуем свежий ответ от check_latest (последние 2 минуты),
@@ -253,15 +276,17 @@ def _download_latest_locked(extract: bool):
 
     try:
         log_event("updater.download", "Скачиваю релиз", "info", {"name": asset.get("name")})
-        req = urllib.request.Request(asset["browser_download_url"],
-                                     headers={"User-Agent": "web_MVS-update"})
         size = int(asset.get("size") or 0)
-        # лимит: заявленный размер +5% на расхождения, иначе — страховочный потолок
-        max_bytes = int(size * 1.05) if size > 0 else _MAX_DOWNLOAD_FALLBACK
         deadline = time.time() + _DOWNLOAD_DEADLINE
-        with urllib.request.urlopen(req, timeout=60) as resp, open(part_path, "wb") as out:
-            _download_stream(resp, out, max_bytes, deadline)
-        _verify_download(part_path, asset)
+        delta = _try_delta(asset, tag, size, part_path, deadline)
+        if delta is None:
+            req = urllib.request.Request(asset["browser_download_url"],
+                                         headers={"User-Agent": "web_MVS-update"})
+            # лимит: заявленный размер +5% на расхождения, иначе — страховочный потолок
+            max_bytes = int(size * 1.05) if size > 0 else _MAX_DOWNLOAD_FALLBACK
+            with urllib.request.urlopen(req, timeout=60) as resp, open(part_path, "wb") as out:
+                _download_stream(resp, out, max_bytes, deadline)
+            _verify_download(part_path, asset)
         os.replace(part_path, zip_path)                  # готово: только теперь архив считается скачанным
         if extract:
             with zipfile.ZipFile(zip_path) as zf:
@@ -280,8 +305,11 @@ def _download_latest_locked(extract: bool):
             staged_ver = (STAGED / "_internal" / "VERSION").read_text(encoding="utf-8").strip()
         except Exception:
             pass
-    log_event("updater.download", "Релиз скачан и проверен", "success", {"version": staged_ver, "extracted": extract})
-    return {"ok": True, "version": staged_ver or _norm(tag)}
+    log_event("updater.download", "Релиз скачан и проверен", "success", {"version": staged_ver, "extracted": extract, "delta": delta})
+    res = {"ok": True, "version": staged_ver or _norm(tag)}
+    if delta:
+        res["delta"] = delta
+    return res
 
 
 def _ps_quote(value) -> str:

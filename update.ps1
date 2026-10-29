@@ -11,6 +11,11 @@
 #   -Port <порт>      порт приложения для проверки запуска (по умолчанию 8000)
 #   -Root <папка>     папка установки (по умолчанию — рядом со скриптом)
 #   -NoElevate        не запрашивать права администратора (для проверок)
+#   -Components <список>  что обновлять: main (основное приложение), cv (CV микроскопа), video (видео-ролик), motion (CV RTSP / движение),
+#                     через запятую или all. Без параметра — меню с выбором (прошлый выбор помнится в update_choice.json)
+#   -ZipDir <папка>   папка с готовыми архивами релиза (web_MVS_v*.zip, cv_service_v*.zip, ...) вместо скачивания
+#   -Yes              подтвердить тяжёлую первую установку CV (torch, несколько ГБ) без вопроса
+#   -NoMenu           меню не показывать (без -Components обновляется только основное приложение, как раньше)
 [CmdletBinding()]
 param(
     [string]$Root = '',
@@ -20,7 +25,11 @@ param(
     [switch]$Force,
     [switch]$NoRestart,
     [switch]$NoElevate,
-    [switch]$Elevated
+    [switch]$Elevated,
+    [string]$Components = '',
+    [string]$ZipDir = '',
+    [switch]$Yes,
+    [switch]$NoMenu
 )
 $ErrorActionPreference = 'Stop'
 try { [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 } catch {}   # GitHub требует TLS 1.2
@@ -55,6 +64,10 @@ if (-not $NoElevate -and -not (Test-Admin)) {
     if ($ZipPath) { $argList += @('-ZipPath', "`"$ZipPath`"") }
     if ($Force) { $argList += '-Force' }
     if ($NoRestart) { $argList += '-NoRestart' }
+    if ($Components) { $argList += @('-Components', "$Components") }
+    if ($ZipDir) { $argList += @('-ZipDir', "`"$ZipDir`"") }
+    if ($Yes) { $argList += '-Yes' }
+    if ($NoMenu) { $argList += '-NoMenu' }
     try {
         $p = Start-Process -FilePath 'powershell.exe' -ArgumentList $argList -Verb RunAs -Wait -PassThru
         exit $p.ExitCode
@@ -276,7 +289,289 @@ function Invoke-Update {
     Log "ГОТОВО: было $current  →  стало $installed" 'Green'
 }
 
-try { Invoke-Update }
+# ---------- компоненты: основное приложение + дополнения (сервисы рядом) ----------
+# Один релиз GitHub несёт все архивы одной версии: web_MVS_v*.zip, cv_service_v*.zip, video_service_v*.zip, motion_service_v*.zip.
+# Что обновлять — выбирает меню (или -Components main,cv,video,motion); прошлый выбор помнится в update_choice.json.
+$ComponentDefs = @(
+    @{ Key = 'main';   Title = 'Основное приложение (web_MVS)';           Dir = '';               Asset = 'web_MVS_*.zip';       Marker = '';                Heavy = $false },
+    @{ Key = 'cv';     Title = 'CV микроскопа (cv_service)';               Dir = 'cv_service';     Asset = 'cv_service_*.zip';    Marker = 'detector.py';     Heavy = $true },
+    @{ Key = 'video';  Title = 'Видео-ролик микроскопа (video_service)';   Dir = 'video_service';  Asset = 'video_service_*.zip'; Marker = 'render.py';       Heavy = $false },
+    @{ Key = 'motion'; Title = 'CV RTSP / движение (motion_service)';      Dir = 'motion_service'; Asset = 'motion_service_*.zip'; Marker = 'motion_engine.py'; Heavy = $false }
+)
+$script:addonResults = New-Object System.Collections.ArrayList
+$script:relCache = $null
+$script:relTried = $false
+
+function Get-ComponentDef([string]$key) { return ($ComponentDefs | Where-Object { $_.Key -eq $key } | Select-Object -First 1) }
+function Test-AddonInstalled($d) { return (Test-Path -LiteralPath (Join-Path (Join-Path $Root $d.Dir) $d.Marker)) }
+function Get-AddonVersion($d) {
+    $f = Join-Path (Join-Path $Root $d.Dir) 'VERSION'
+    if (Test-Path -LiteralPath $f) {
+        try { $v = ((Get-Content -LiteralPath $f -Raw -ErrorAction Stop) -as [string]).Trim().TrimStart('v', 'V'); if (Test-VersionString $v) { return $v } } catch {}
+    }
+    return 'NaN'
+}
+
+function Get-Release {
+    # последний релиз GitHub (один запрос на запуск); $null — недоступен
+    if ($script:relTried) { return $script:relCache }
+    $script:relTried = $true
+    try { $script:relCache = Invoke-WithRetry { Invoke-RestMethod -Uri "https://api.github.com/repos/$repo/releases/latest" -Headers @{ 'User-Agent' = 'web_MVS-update' } -UseBasicParsing } }
+    catch { $script:relCache = $null; Log ("релиз GitHub недоступен: " + $_.Exception.Message) 'Yellow' }
+    return $script:relCache
+}
+
+function Get-ZipDirVersion([string]$zip) {
+    # версия внутри архива: у основного приложения _internal/VERSION, у дополнений VERSION
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    $za = [System.IO.Compression.ZipFile]::OpenRead($zip)
+    try {
+        $ent = $za.Entries | Where-Object { $n = $_.FullName.Replace([string][char]92, '/'); $n -eq 'VERSION' -or $n -eq '_internal/VERSION' } | Select-Object -First 1
+        if (-not $ent) { return 'NaN' }
+        $sr = New-Object System.IO.StreamReader($ent.Open()); try { $v = $sr.ReadToEnd().Trim().TrimStart('v', 'V') } finally { $sr.Close() }
+        if (Test-VersionString $v) { return $v } else { return 'NaN' }
+    } finally { $za.Dispose() }
+}
+
+function Find-ZipInDir($d) {
+    if (-not $ZipDir -or -not (Test-Path -LiteralPath $ZipDir)) { return $null }
+    $pat = $d.Asset -replace '_\*', '_v*'
+    return (Get-ChildItem -LiteralPath $ZipDir -Filter $pat -File -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending | Select-Object -First 1)
+}
+
+function Get-LatestVersionFor($d) {
+    # что доступно: из папки с архивами (-ZipDir) или из релиза GitHub; 'NaN', если неизвестно
+    $z = Find-ZipInDir $d
+    if ($z) { return (Get-ZipDirVersion $z.FullName) }
+    if ($ZipDir) { return 'NaN' }
+    $rel = Get-Release
+    if ($rel) { $v = ([string]$rel.tag_name).Trim().TrimStart('v', 'V'); if (Test-VersionString $v) { return $v } }
+    return 'NaN'
+}
+
+function Get-ChoiceFile { return (Join-Path $Root 'update_choice.json') }
+function Read-Choice {
+    try { return @((Get-Content -LiteralPath (Get-ChoiceFile) -Raw -Encoding UTF8 | ConvertFrom-Json).components) } catch { return @() }
+}
+function Save-Choice($keys) {
+    try { (@{ components = @($keys) } | ConvertTo-Json -Compress) | Out-File -FilePath (Get-ChoiceFile) -Encoding utf8 } catch {}
+}
+
+function Read-ComponentList([string]$text) {
+    # "main,cv" / "main cv" / "all" -> список ключей (только известные)
+    $keys = @()
+    foreach ($t in ($text -split '[,;\s]+')) {
+        $t = $t.Trim().ToLower()
+        if (-not $t) { continue }
+        if ($t -eq 'all') { return @($ComponentDefs | ForEach-Object { $_.Key }) }
+        if (Get-ComponentDef $t) { $keys += $t } else { throw "неизвестный компонент '$t' (допустимо: main, cv, video, motion, all)" }
+    }
+    return @($keys | Select-Object -Unique)
+}
+
+function Show-Menu {
+    # интерактивный выбор; возвращает список ключей или $null (выход)
+    $remembered = @(Read-Choice | Where-Object { Get-ComponentDef $_ })
+    if ($remembered.Count -gt 0) { $sel = $remembered }
+    else { $sel = @('main') + @($ComponentDefs | Where-Object { $_.Key -ne 'main' -and (Test-AddonInstalled $_) } | ForEach-Object { $_.Key }) }
+    Write-Host ''
+    Log 'смотрю версии (GitHub)...'
+    $rows = @()
+    $i = 0
+    foreach ($d in $ComponentDefs) {
+        $i++
+        if ($d.Key -eq 'main') { $cur = Get-InstalledVersion $Root; $have = $true }
+        else { $have = Test-AddonInstalled $d; $cur = if ($have) { Get-AddonVersion $d } else { 'не установлено' } }
+        $rows += [pscustomobject]@{ N = $i; Def = $d; Cur = $cur; Latest = (Get-LatestVersionFor $d) }
+    }
+    while ($true) {
+        Write-Host ''
+        Write-Host 'Что обновить?' -ForegroundColor Cyan
+        foreach ($r in $rows) {
+            $mark = if ($sel -contains $r.Def.Key) { 'x' } else { ' ' }
+            Write-Host ("  [{0}] {1}. {2,-46} {3} → {4}" -f $mark, $r.N, $r.Def.Title, $r.Cur, $r.Latest)
+        }
+        Write-Host ''
+        $ans = Read-Host 'Номера через пробел (напр. 1 4), A — всё, Enter — как отмечено, Q — выход'
+        $a = ([string]$ans).Trim().ToLower()
+        if ($a -eq '') { if ($sel.Count -eq 0) { Write-Host 'Ничего не отмечено.' -ForegroundColor Yellow; continue } return $sel }
+        if ($a -eq 'q') { return $null }
+        if ($a -eq 'a') { $sel = @($ComponentDefs | ForEach-Object { $_.Key }); continue }
+        $picked = @()
+        $bad = $false
+        foreach ($t in ($a -split '[,;\s]+')) {
+            if (-not $t) { continue }
+            if ($t -match '^\d+$' -and [int]$t -ge 1 -and [int]$t -le $rows.Count) { $picked += $rows[[int]$t - 1].Def.Key } else { $bad = $true }
+        }
+        if ($bad -or $picked.Count -eq 0) { Write-Host 'Не понял. Пример: 1 4' -ForegroundColor Yellow; continue }
+        $sel = @($picked | Select-Object -Unique)
+    }
+}
+
+function Stop-Addon([string]$dir) {
+    # останавливает сервис дополнения (процессы из его .venv и их дочерние) — файлы можно заменять;
+    # web_MVS (сторож services.py) сам поднимет сервис заново в течение минуты, а при перезапуске приложения — сразу
+    $venv = (Join-Path $dir '.venv') + '\'
+    $procs = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object { $_.ExecutablePath -and $_.ExecutablePath.StartsWith($venv, [StringComparison]::OrdinalIgnoreCase) })
+    if ($procs.Count -eq 0) { return }
+    Log ("останавливаю сервис в {0} (процессов: {1})..." -f (Split-Path -Leaf $dir), $procs.Count)
+    foreach ($pr in $procs) {
+        Get-CimInstance Win32_Process -Filter ("ParentProcessId = {0}" -f $pr.ProcessId) -ErrorAction SilentlyContinue | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+        Stop-Process -Id $pr.ProcessId -Force -ErrorAction SilentlyContinue
+    }
+    Start-Sleep -Seconds 2
+}
+
+function Add-AddonResult([string]$key, [string]$status, [string]$text) {
+    [void]$script:addonResults.Add([pscustomobject]@{ Key = $key; Status = $status; Text = $text })
+}
+
+function Update-Addon($d) {
+    $dir = Join-Path $Root $d.Dir
+    $title = $d.Title
+    Write-Host ''
+    Log "=== $title ==="
+    try {
+        $installed = Test-AddonInstalled $d
+        $cur = if ($installed) { Get-AddonVersion $d } else { 'не установлено' }
+        Log "установлено: $cur"
+
+        # --- источник: папка с архивами или релиз GitHub ---
+        $zip = $null; $asset = $null; $latest = 'NaN'
+        $zf = Find-ZipInDir $d
+        if ($zf) { $zip = $zf.FullName; $latest = Get-ZipDirVersion $zip; Log "архив: $($zf.Name) (версия $latest)" }
+        elseif ($ZipDir) { throw "в папке $ZipDir нет архива $($d.Asset -replace '_\*', '_v*')" }
+        else {
+            $rel = Get-Release
+            if (-not $rel) { throw 'не удалось получить релиз GitHub (нет связи?). Скачайте архивы на другом компьютере и запустите с -ZipDir <папка>' }
+            $asset = $rel.assets | Where-Object { $_.name -like $d.Asset } | Select-Object -First 1
+            if (-not $asset) { throw "в последнем релизе нет файла $($d.Asset)" }
+            $latest = ([string]$rel.tag_name).Trim().TrimStart('v', 'V')
+        }
+        Log "доступно: $latest"
+        if ($installed -and (Test-VersionString $latest) -and (Test-VersionString $cur) -and -not $Force) {
+            if (([version]$latest).CompareTo([version]$cur) -le 0) {
+                Log 'уже последняя версия ✓' 'Green'
+                Add-AddonResult $d.Key 'ok' "$cur (без изменений)"
+                return
+            }
+        }
+
+        # --- тяжёлая первая установка — только с подтверждением ---
+        if (-not $installed -and $d.Heavy -and -not $Yes) {
+            if ($NoMenu) { throw 'первая установка тяжёлая (несколько ГБ: torch) — подтвердите её (галочка/ключ -Yes)' }
+            $ans = Read-Host 'Первая установка CV тянет несколько ГБ (torch, ultralytics) и занимает время. Установить сейчас? [y/N]'
+            if ($ans.Trim().ToLower() -notin @('y', 'yes', 'д', 'да')) { Log 'пропускаю по вашему решению'; Add-AddonResult $d.Key 'skip' 'пропущено'; return }
+        }
+
+        # --- скачать и проверить ---
+        if (-not $zip) {
+            $zip = Join-Path $tmp $asset.name
+            Log ("скачиваю {0} ({1:N1} МБ)..." -f $asset.name, ($asset.size / 1MB))
+            Invoke-WithRetry { Invoke-WebRequest -Uri $asset.browser_download_url -OutFile $zip -Headers @{ 'User-Agent' = 'web_MVS-update' } -UseBasicParsing } | Out-Null
+            if ($asset.size -and ((Get-Item -LiteralPath $zip).Length -ne [int64]$asset.size)) { throw 'размер архива не совпал — скачивание повреждено' }
+            $digest = [string]$asset.digest
+            if ($digest.StartsWith('sha256:')) {
+                if ((Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash.ToLower() -ne $digest.Substring(7).ToLower()) { throw 'контрольная сумма архива не совпала' }
+                Log 'контрольная сумма подтверждена' 'Green'
+            }
+        }
+        Add-Type -AssemblyName System.IO.Compression.FileSystem
+        $za = [System.IO.Compression.ZipFile]::OpenRead($zip)
+        try { $ok = @($za.Entries | Where-Object { $_.FullName.Replace([string][char]92, '/') -eq $d.Marker }).Count -gt 0 } finally { $za.Dispose() }
+        if (-not $ok) { throw "в архиве нет $($d.Marker) — это не архив $($d.Dir)" }
+
+        $stage = Join-Path $tmp ('stage_' + $d.Key)
+        Expand-Archive -LiteralPath $zip -DestinationPath $stage -Force
+        $reqOld = if (Test-Path -LiteralPath (Join-Path $dir 'requirements.txt')) { (Get-FileHash -LiteralPath (Join-Path $dir 'requirements.txt')).Hash } else { '' }
+
+        # --- остановить сервис, заменить с откатом (.venv, data, model, video в архиве нет — не затрагиваются) ---
+        Stop-Addon $dir
+        New-Item -ItemType Directory -Force -Path $dir | Out-Null
+        $bk = Join-Path (Join-Path $Root '.update_backup') $d.Dir
+        if (Test-Path -LiteralPath $bk) { Remove-Item -LiteralPath $bk -Recurse -Force -ErrorAction SilentlyContinue }
+        New-Item -ItemType Directory -Force -Path $bk | Out-Null
+        $names = @(Get-ChildItem -LiteralPath $stage -Force | ForEach-Object { $_.Name })
+        foreach ($n in $names) { $s = Join-Path $dir $n; if (Test-Path -LiteralPath $s) { Copy-Item -LiteralPath $s -Destination $bk -Recurse -Force } }
+        try {
+            Get-ChildItem -LiteralPath $stage -Force | Copy-Item -Destination $dir -Recurse -Force -ErrorAction Stop
+        } catch {
+            Log ("ошибка копирования: " + $_.Exception.Message + " — возвращаю прежние файлы") 'Red'
+            Get-ChildItem -LiteralPath $bk -Force | Copy-Item -Destination $dir -Recurse -Force -ErrorAction SilentlyContinue
+            throw
+        }
+        Remove-Item -LiteralPath $bk -Recurse -Force -ErrorAction SilentlyContinue
+        $now = Get-AddonVersion $d
+        Log "файлы заменены, версия в папке: $now" 'Green'
+
+        # --- окружение (venv): первый раз — setup.bat; потом — только если изменился requirements.txt ---
+        $py = Join-Path $dir '.venv\Scripts\python.exe'
+        $reqNew = if (Test-Path -LiteralPath (Join-Path $dir 'requirements.txt')) { (Get-FileHash -LiteralPath (Join-Path $dir 'requirements.txt')).Hash } else { '' }
+        if (-not (Test-Path -LiteralPath $py)) {
+            Log 'первая установка: создаю окружение и ставлю зависимости (setup.bat) — это может занять время...' 'Cyan'
+            $nul = Join-Path $tmp 'empty_stdin.txt'; New-Item -ItemType File -Force -Path $nul | Out-Null
+            # stdin из пустого файла: pause в конце setup.bat не ждёт нажатия клавиши; внешние кавычки снимет сам cmd /c
+            $cmdLine = '/c ""' + (Join-Path $dir 'setup.bat') + '" < "' + $nul + '""'
+            $pr = Start-Process -FilePath 'cmd.exe' -ArgumentList $cmdLine -WorkingDirectory $dir -Wait -PassThru -NoNewWindow
+            if (-not (Test-Path -LiteralPath $py)) { throw "setup.bat не создал окружение (код $($pr.ExitCode)); запустите $($d.Dir)\setup.bat вручную и посмотрите ошибку" }
+            Log 'окружение готово' 'Green'
+        } elseif ($reqOld -ne $reqNew) {
+            if ($d.Heavy) { Log "requirements.txt изменился — запустите $($d.Dir)\setup.bat вручную (там тяжёлые пакеты)" 'Yellow' }
+            else {
+                Log 'зависимости изменились — обновляю пакеты...' 'Cyan'
+                & $py -m pip install -q -r (Join-Path $dir 'requirements.txt')
+                if ($LASTEXITCODE -ne 0) { throw 'pip не смог обновить зависимости (смотрите вывод выше)' }
+            }
+        }
+        Add-AddonResult $d.Key 'updated' "$cur → $now"
+    } catch {
+        Log ("ОШИБКА ($title): " + $_.Exception.Message) 'Red'
+        Add-AddonResult $d.Key 'fail' $_.Exception.Message
+        $script:exitCode = 1
+    }
+}
+
+function Invoke-All {
+    New-Item -ItemType Directory -Force -Path $tmp | Out-Null
+    # 1) что обновлять
+    $sel = @()
+    if ($Components) { $sel = Read-ComponentList $Components }
+    elseif ($ZipPath) { $sel = @('main') }                       # прежнее поведение: архив основного приложения
+    elseif ($NoMenu -or -not [Environment]::UserInteractive) { $sel = @('main') }
+    else {
+        $sel = Show-Menu
+        if ($null -eq $sel) { Log 'выход без изменений'; $script:exitCode = 0; return }
+    }
+    if ($sel.Count -eq 0) { Log 'не выбрано ни одного компонента'; return }
+    Save-Choice $sel
+    Log ("обновляю: " + (($sel | ForEach-Object { (Get-ComponentDef $_).Key }) -join ', '))
+
+    # 2) основное приложение из папки с архивами (-ZipDir), если архив не указан явно
+    if (($sel -contains 'main') -and -not $ZipPath -and $ZipDir) {
+        $mz = Find-ZipInDir (Get-ComponentDef 'main')
+        if ($mz) { $script:ZipPath = $mz.FullName; Log "основное приложение из папки: $($mz.Name)" }
+    }
+
+    # 3) сначала дополнения (их сервисы остановятся и сразу поднимутся новыми при запуске обновлённого приложения), потом основное
+    foreach ($d in $ComponentDefs) { if ($d.Key -ne 'main' -and ($sel -contains $d.Key)) { Update-Addon $d } }
+    $mainResult = $null
+    if ($sel -contains 'main') {
+        $before = $script:exitCode
+        Invoke-Update
+        $mainResult = if ($script:exitCode -eq 2) { 'без изменений' } else { 'обновлено' }
+    }
+
+    # 4) итог
+    Write-Host ''
+    Log '--- итог ---'
+    if ($mainResult) { Log "основное приложение: $mainResult" }
+    foreach ($r in $script:addonResults) { $c = switch ($r.Status) { 'updated' { 'Green' } 'fail' { 'Red' } default { '' } }; Log ("{0}: {1}" -f (Get-ComponentDef $r.Key).Title, $r.Text) $c }
+    $changed = @($script:addonResults | Where-Object { $_.Status -eq 'updated' }).Count
+    if ($script:exitCode -eq 2 -and $changed -gt 0) { $script:exitCode = 0 }
+    if ($changed -gt 0 -and -not ($sel -contains 'main')) { Log 'сервисы дополнений поднимет web_MVS (в течение минуты); если приложение закрыто — запустите его' }
+}
+
+try { Invoke-All }
 catch {
     Log ("ОШИБКА: " + $_.Exception.Message) 'Red'
     if ($script:swapped) {

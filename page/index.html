@@ -100,6 +100,7 @@
             <div class="update-status" id="updateStatus"></div>
             <div class="update-actions" id="updateActions"></div>
             <button type="button" id="updateCheckBtn" class="btn-secondary update-check-btn">Проверить обновления</button>
+            <button type="button" id="updateChooseBtn" class="btn-secondary update-check-btn" title="Выбрать, что обновлять: основное приложение и дополнения">Что обновить…</button>
           </article>
         </section>
 
@@ -279,6 +280,27 @@
 
       <div class="network-modal__footer">
         <button type="button" class="btn-secondary" id="cameraInfoCloseFooterBtn">Закрыть</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- модалка: что обновлять (основное приложение + дополнения) -->
+  <div class="modal-backdrop" id="updateModal" aria-hidden="true">
+    <div class="network-modal__card update-modal__card" role="dialog" aria-modal="true" aria-labelledby="updateModalTitle">
+      <div class="network-modal__header">
+        <div class="network-modal__title-group">
+          <h2 id="updateModalTitle">Что обновить</h2>
+          <span class="network-modal__serial">Основное приложение и дополнения из последнего релиза</span>
+        </div>
+        <button type="button" class="modal-close-btn" id="updateModalClose" aria-label="Закрыть">×</button>
+      </div>
+      <div class="network-modal__body">
+        <div id="updateComponentsList" class="update-components__list"></div>
+        <p class="update-components__hint" id="updateComponentsHint"></p>
+      </div>
+      <div class="network-modal__footer">
+        <button type="button" class="btn-secondary" id="updateModalCancel">Отмена</button>
+        <button type="button" class="btn-primary" id="updateSelectedBtn">Обновить выбранное</button>
       </div>
     </div>
   </div>

@@ -4518,6 +4518,24 @@ body.micro-rep-doc .micro-cmp-strips { grid-template-columns: repeat(6, 1fr); ga
 .md-card--col { flex-direction: column; align-items: stretch; }
 .md-card--col label { display: flex; align-items: center; gap: 8px; }
 .md-card .md-row { display: flex; align-items: center; gap: 10px; }
+/* кнопка «+» добавления группы: маленькая, слева */
+.md-add { width: 28px; height: 28px; padding: 0; margin: 6px 0; border-radius: 8px; border: 1px solid var(--border-strong); background: var(--surface-elevated); color: var(--accent); font-size: 20px; font-weight: 700; line-height: 1; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; transition: border-color 0.18s ease; }
+.md-add:hover { border-color: var(--accent); }
+/* редактор группы: колонки «подпись — поле», без растягивания на всю ширину */
+.md-ge { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 380px)); gap: 8px 22px; align-items: center; justify-content: start; }
+.md-ge [hidden] { display: none; }
+.md-ge label { display: grid; grid-template-columns: 110px minmax(0, 1fr); align-items: center; gap: 8px; font-size: 13px; }
+.md-ge label.md-chk { display: inline-flex; flex-direction: row; align-items: center; gap: 4px; margin: 0 6px 0 0; }
+.md-ge label > span:first-child, .md-ge__zones > span:first-child { color: var(--muted); font-weight: 600; }
+.md-ge input[type=text], .md-ge input[type=number], .md-ge select { width: 100%; box-sizing: border-box; min-width: 0; }
+.md-ge__pair { display: flex; gap: 6px; min-width: 0; }
+.md-ge__pair select { flex: 1; }
+.md-ge__pair input[type=number] { width: 78px; flex: none; }
+.md-ge__zones { grid-column: 1 / -1; display: flex; align-items: center; gap: 8px 12px; flex-wrap: wrap; font-size: 13px; }
+.md-ge__chk { display: flex; flex-wrap: wrap; gap: 4px 4px; }
+.md-ge__full { grid-column: 1 / -1; margin: 0; }
+.md-ge__btns { grid-column: 1 / -1; display: flex; gap: 8px; }
+.md-ge__btns .btn-primary, .md-ge__btns .btn-secondary { flex: none; width: auto; min-height: 0; padding: 6px 18px; }
 .md-sp { flex: 1; }
 .md-chk { display: inline-flex; align-items: center; gap: 4px; margin-right: 10px; }
 .md-chk input { width: 16px; height: 16px; min-height: 0; }

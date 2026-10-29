@@ -49,22 +49,24 @@ function mvZoneMode(st, zoneLive) {
   return zoneLive.bit === 1 ? 'on' : 'off';
 }
 
-// значок «КЗ» в меню виден только у RTSP; у GigE его нет совсем
+// значок «КЗ» в меню виден у RTSP-камеры в фокусе и в общем виде (фокуса нет, но RTSP-камеры есть); у GigE его нет совсем
 function updateMotionButton(source) {
   const btn = document.getElementById('multiMotionBtn');
   if (!btn) return;
   const rtsp = !!source && source.kind === 'rtsp';
-  btn.hidden = !rtsp;
-  btn.disabled = !rtsp;
-  btn.classList.toggle('is-on', rtsp && mvEnabled(source.serial));
+  const overview = !source && state.cameras.some((c) => c.kind === 'rtsp');
+  const on = rtsp ? mvEnabled(source.serial) : (overview && ((MV.cfg && MV.cfg.cameras) || []).some((c) => c.enabled));
+  btn.hidden = !(rtsp || overview);
+  btn.disabled = !(rtsp || overview);
+  btn.classList.toggle('is-on', !!on);
   const ind = document.getElementById('multiMotionIndicator');
-  if (ind) ind.classList.toggle('hidden', !(rtsp && mvEnabled(source.serial)));
+  if (ind) ind.classList.toggle('hidden', !on);
   if (typeof renderMotionDock === 'function') renderMotionDock();
 }
 
 function toggleMotionDock() {
   const source = focusedSource();
-  if (!source || source.kind !== 'rtsp') return;
+  if (source && source.kind !== 'rtsp') return;
   setMotionDock(!MV.dockOpen);
 }
 

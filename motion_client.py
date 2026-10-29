@@ -55,8 +55,8 @@ def state(service_url: str) -> dict:
     return _call(service_url, "/state")
 
 
-def history(service_url: str, cam: str, n: int = 300) -> dict:
-    return _call(service_url, "/cameras/%s/history?n=%d" % (urllib.parse.quote(cam, safe=""), int(n)))
+def history(service_url: str, cam: str, n: int = 300, window: float = 0, points: int = 600) -> dict:
+    return _call(service_url, "/cameras/%s/history?n=%d&window=%s&points=%d" % (urllib.parse.quote(cam, safe=""), int(n), float(window), int(points)))
 
 
 def record(service_url: str, cam: str, on: bool) -> dict:

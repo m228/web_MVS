@@ -562,3 +562,23 @@ def test_vision_endpoint_enables_rtsp_camera_in_motion_service(monkeypatch, data
     monkeypatch.setattr(rtsp_store, "load", lambda: [{"serial": "rtsp_1", "url": "rtsp://u:p@10.0.0.5:554/x"}])
     monkeypatch.setattr(motion_client, "get_config", lambda url: {"error": "сервис не отвечает"})
     assert appmod.motion_vision({"serial": "rtsp_1", "enabled": True})["error"] == "сервис не отвечает"
+
+def test_long_history_window_squeeze_and_max_keeps_bursts(tmp_path):
+    """Длинная история: по точке в секунду, окно режется от «сейчас», ужимается максимумом (всплеск не теряется)."""
+    w, _ = _worker(tmp_path, make_frames(2))
+    w.stop()
+    base = 1_000_000.0
+    with w._lock:
+        for i in range(0, 3000):             # 150 с по 20 кадров/с: в длинную историю идёт по точке в секунду
+            ts = base + i * 0.05
+            w._push_history(ts, {"z1": (0.1, 1.0 if i == 1234 else 0.2, 1 if i == 1234 else 0)}, 1)
+    full = w.history(window_s=7200, points=40)
+    assert len(full["t"]) <= 40 and full["t"][-1] > full["t"][0]
+    assert max(full["zones"]["z1"]["diff"]) == 1.0, "всплеск в одном кадре переживает ужатие"
+    assert 1 in full["zones"]["z1"]["bit"]
+    last_ts = full["t"][-1]
+    win = w.history(window_s=30, points=600)
+    assert win["t"][-1] == last_ts, "правый край окна — «сейчас»"
+    assert win["t"][-1] - win["t"][0] <= 31
+    # старый режим по числу кадров не сломан
+    assert len(w.history(10)["t"]) == 10

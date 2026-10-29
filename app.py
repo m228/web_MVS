@@ -1016,8 +1016,8 @@ def motion_snapshot(camera: str, w: int = 0):
 
 
 @app.get("/api/motion/history")
-def motion_history(camera: str, n: int = 300):
-    return motion_client.history(_motion_url(), camera, n)
+def motion_history(camera: str, n: int = 300, window: float = 0, points: int = 600):
+    return motion_client.history(_motion_url(), camera, n, window, points)
 
 
 @app.post("/api/motion/record")

@@ -30,8 +30,28 @@ from motion_modbus import LinkRegistry
 log = logging.getLogger("motion.camera")
 
 HISTORY_LEN = 900                # точек истории на камеру (~5 мин при 3 fps)
+LONG_STEP_S = 1.0                # длинная история: одна точка в секунду (максимум за секунду — всплеск не теряется)
+LONG_LEN = 7200                  # ... на 2 часа назад
 RECORD_MAX_BYTES = 100 * 1024 * 1024
 _OPEN_LOCK = threading.Lock()    # OPENCV_FFMPEG_CAPTURE_OPTIONS — переменная окружения процесса, выставляем под замком
+
+
+def _squeeze(rows: list, points: int) -> list:
+    """[(ts, {зона: (flow, diff, bit)}, ok)] → не больше points строк: корзины по k штук, внутри максимум по зонам,
+    ok — минимум (хоть один плохой кадр делает корзину «нет данных»), время — последней строки корзины."""
+    if len(rows) <= points:
+        return rows
+    k = -(-len(rows) // points)
+    out = []
+    for i in range(0, len(rows), k):
+        chunk = rows[i:i + k]
+        zones: dict = {}
+        for _, z, _ok in chunk:
+            for zid, (fl, df, bit) in z.items():
+                old = zones.get(zid)
+                zones[zid] = (fl, df, bit) if old is None else (max(old[0], fl), max(old[1], df), max(old[2], bit))
+        out.append((chunk[-1][0], zones, min(r[2] for r in chunk)))
+    return out
 
 
 def is_stream_url(url: str) -> bool:
@@ -89,6 +109,8 @@ class CameraWorker(threading.Thread):
         self._last_good = 0.0                 # когда последний раз пришёл кадр
         self._stamps: deque = deque(maxlen=12)
         self._history: deque = deque(maxlen=HISTORY_LEN)
+        self._long: deque = deque(maxlen=LONG_LEN)
+        self._bucket: Optional[list] = None   # [ts, {зона: (flow, diff, bit)}, ok] — набирающаяся секунда длинной истории
         self._writes: Optional[list] = None   # что должно лежать в ПЛК (последнее)
         self._writes_evt = threading.Event()
         self._rec_fh = self._rec_csv = None
@@ -125,9 +147,20 @@ class CameraWorker(threading.Thread):
         ok, buf = cv2.imencode(".jpg", f, [cv2.IMWRITE_JPEG_QUALITY, 80])
         return (buf.tobytes(), (w, h)) if ok else None
 
-    def history(self, n: int = 300) -> dict:
+    def history(self, n: int = 300, window_s: float = 0, points: int = 600) -> dict:
+        """Ряды для графиков. n — последние n кадров (калибровка); window_s > 0 — последние window_s секунд
+        из длинной истории (до 2 ч), ужатые до ~points точек (максимум в корзине), правый край — «сейчас»."""
         with self._lock:
-            pts = list(self._history)[-max(1, n):]
+            if window_s and window_s > 0:
+                rows = list(self._long)
+                if self._bucket is not None:
+                    rows.append(tuple(self._bucket))
+                if rows:
+                    edge = rows[-1][0] - float(window_s)
+                    rows = [r for r in rows if r[0] >= edge]
+                pts = _squeeze(rows, max(10, int(points)))
+            else:
+                pts = list(self._history)[-max(1, n):]
         zones: dict = {}
         for _, z, _ok in pts:
             for zid, (fl, df, bit) in z.items():
@@ -165,6 +198,21 @@ class CameraWorker(threading.Thread):
             self._rec_path = None
 
     # ─────────── внутреннее ───────────
+    def _push_history(self, ts: float, zones: dict, ok: int):
+        """Точка в обычную (по кадрам) и в длинную (по секундам) историю. Звать под self._lock."""
+        self._history.append((ts, zones, ok))
+        b = self._bucket
+        if b is None:
+            self._bucket = [ts, dict(zones), ok]
+        elif ts - b[0] >= LONG_STEP_S:
+            self._long.append((b[0], b[1], b[2]))
+            self._bucket = [ts, dict(zones), ok]
+        else:
+            for zid, (fl, df, bit) in zones.items():
+                old = b[1].get(zid)
+                b[1][zid] = (fl, df, bit) if old is None else (max(old[0], fl), max(old[1], df), max(old[2], bit))
+            b[2] = min(b[2], ok)
+
     def _publish(self, state: dict, frame: Optional[np.ndarray], count_frame: bool):
         writes = self.engine.compute_writes(state)
         with self._lock:
@@ -173,7 +221,7 @@ class CameraWorker(threading.Thread):
                 self._frame = frame
             if count_frame:
                 self._stamps.append(state["ts"])
-                self._history.append((state["ts"], {z["id"]: (z["flow"], z["diff"], z["bit"]) for z in state["zones"]}, 1 if state["alive"] else 0))
+                self._push_history(state["ts"], {z["id"]: (z["flow"], z["diff"], z["bit"]) for z in state["zones"]}, 1 if state["alive"] else 0)
             self._writes = writes
             if self._rec_csv:
                 row = [time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(state["ts"])) + ".%03d" % int(state["ts"] % 1 * 1000)]
@@ -199,7 +247,7 @@ class CameraWorker(threading.Thread):
             with self._lock:
                 self._state = st
                 self._stamps.append(now)
-                self._history.append((now, {z["id"]: (z["flow"], z["diff"], z["bit"]) for z in st["zones"]}, 0))
+                self._push_history(now, {z["id"]: (z["flow"], z["diff"], z["bit"]) for z in st["zones"]}, 0)
 
     def _plc_loop(self):
         """Поток записи: пишет, когда значения изменились или прошло write_period_s. Недоступный ПЛК тормозит только его."""

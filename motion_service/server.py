@@ -212,8 +212,9 @@ def create_app(data_dir: Optional[Path] = None, capture_factory: Callable = open
                         headers={"X-Frame-W": str(fw), "X-Frame-H": str(fh), "Cache-Control": "no-store"})
 
     @app.get("/cameras/{cid}/history")
-    def history(cid: str, n: int = 300):
-        return mgr.worker(cid).history(max(1, min(int(n), 900)))
+    def history(cid: str, n: int = 300, window: float = 0, points: int = 600):
+        # window > 0 — последние window секунд из длинной истории (до 2 ч), ужатые до points точек; иначе последние n кадров
+        return mgr.worker(cid).history(max(1, min(int(n), 900)), max(0.0, min(float(window), 7200.0)), max(10, min(int(points), 2000)))
 
     @app.post("/cameras/{cid}/record")
     def record(cid: str, req: dict = Body(...)):

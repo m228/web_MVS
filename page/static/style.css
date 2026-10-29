@@ -2532,6 +2532,14 @@ body.modal-open {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
+.multi-grid--6 {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.multi-grid--8 {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
 .multi-tile {
   display: flex;
   flex-direction: column;
@@ -2653,7 +2661,9 @@ body.modal-open {
   }
 
   .multi-grid--2,
-  .multi-grid--4 {
+  .multi-grid--4,
+  .multi-grid--6,
+  .multi-grid--8 {
     grid-template-columns: 1fr;
   }
 }
@@ -4410,42 +4420,21 @@ body.micro-rep-doc .micro-cmp-strips { grid-template-columns: repeat(6, 1fr); ga
 @media (max-width: 760px) { .micro-cmp-groups .micro-cmp-g { flex-wrap: wrap; } }
 
 /* --- CV (анализ движения) в мультипросмотре --- */
-.motion-card-popup {
-  position: fixed; display: none; width: 400px; max-width: calc(100vw - 24px); padding: 18px 20px;
-  background: var(--surface-strong); border: 1px solid var(--border); border-radius: 20px; box-shadow: var(--shadow); z-index: 9999;
-}
-.motion-card-popup.show { display: block; }
-.motion-card-popup h2 { margin-top: 0; margin-bottom: 12px; }
 .toolbar-btn--cv { background: linear-gradient(135deg, #14b8a6, #0ea5e9); color: #fff; box-shadow: 0 14px 30px rgba(20, 184, 166, 0.22); position: relative; }
 .toolbar-btn--cv[hidden] { display: none; }
 .toolbar-btn--cv .cv-mark { display: inline-flex; align-items: center; justify-content: center; border: 3px solid currentColor; border-radius: 8px; min-width: 34px; height: 30px; padding: 0 5px; box-sizing: border-box; font-size: 19px; font-weight: 900; line-height: 1; letter-spacing: .01em; }
 .toolbar-btn--cv.is-on { box-shadow: 0 0 0 2px rgba(34, 197, 94, .8), 0 14px 34px rgba(34, 197, 94, .35); }
-.cv-zones { margin: 12px 0 4px; display: flex; flex-direction: column; gap: 6px; max-height: 280px; overflow-y: auto; }
-.cv-zone { display: grid; grid-template-columns: 1fr auto; gap: 4px 8px; align-items: center; padding: 6px 8px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface-muted); font-size: 13px; }
-.cv-zone input[type=text], .cv-zone input[type=number], .cv-zone select { background: var(--input-bg); border: 1px solid var(--input-border); color: var(--text); border-radius: 6px; padding: 3px 6px; font: inherit; min-height: 0; }
-.cv-zone input[type=text] { width: 100%; box-sizing: border-box; }
-.cv-zone input[type=number] { width: 62px; }
-.cv-zone .cv-row { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; grid-column: 1 / 3; color: var(--muted); font-size: 12px; }
 .cv-bit { display: inline-block; min-width: 24px; text-align: center; border-radius: 10px; padding: 1px 8px; font-weight: 700; background: var(--surface-strong); color: var(--muted); }
 .cv-bit.on { background: var(--success-soft); color: var(--success); }
-.cv-link { display: inline-flex; align-items: center; text-decoration: none; }
 .tile-cv-badge { font-size: 12px; font-weight: 800; padding: 1px 7px; border: 2px solid currentColor; border-radius: 6px; color: var(--muted); white-space: nowrap; }
 .tile-cv-badge[hidden] { display: none; }
 .tile-cv-badge.is-active { color: var(--success); }
 .tile-cv-badge.is-bad { color: var(--danger); }
 .tile-motion-layer { position: absolute; inset: 0; width: 100%; height: 100%; z-index: 4; pointer-events: none; }
 .tile-motion-layer.is-marking { pointer-events: auto; cursor: crosshair; z-index: 6; }
-.tile-cv-hint { position: absolute; left: 8px; right: 8px; bottom: 8px; z-index: 7; display: flex; gap: 8px; align-items: center; flex-wrap: wrap;
-  padding: 6px 10px; border-radius: 10px; background: rgba(5, 8, 13, .82); color: #e7eefb; font-size: 12px; }
-.tile-cv-hint[hidden] { display: none; }
-.tile-cv-hint button { min-height: 0; padding: 3px 10px; font-size: 12px; }
 .toolbar-btn--cv .mode-indicator { top: -4px; right: -4px; background: var(--success); }
 
 
-/* режимы компьютерного зрения в окне КЗ: пока «Движение», дальше добавятся другие */
-.cv-modes { display: flex; gap: 6px; flex-wrap: wrap; margin: 0 0 12px; }
-.cv-mode { min-height: 0; padding: 4px 12px; border-radius: 999px; border: 1px solid var(--border-strong); background: var(--surface-muted); color: var(--text); font: inherit; font-size: 13px; cursor: pointer; }
-.cv-mode.is-active { background: var(--accent); color: var(--accent-contrast); border-color: var(--accent); font-weight: 700; }
 .tile-cv-badge { font-size: 13px; padding: 1px 8px; }
 
 /* --- выбор компонентов обновления (модалка на главной) --- */
@@ -4456,3 +4445,67 @@ body.micro-rep-doc .micro-cmp-strips { grid-template-columns: repeat(6, 1fr); ga
 .update-components__row span { flex: 1; font-weight: 600; }
 .update-components__row em { color: var(--muted); font-style: normal; white-space: nowrap; font-size: 13px; }
 .update-components__hint { color: var(--muted); margin: 4px 0 0; min-height: 18px; font-size: 13px; }
+
+/* --- КЗ: бейдж на ячейке, подсказка, нижняя панель, окно разметки --- */
+.tile-cv-badge.is-active { color: var(--success); text-shadow: 0 0 8px rgba(74, 222, 128, .55); box-shadow: 0 0 8px rgba(74, 222, 128, .35); }
+.mv-tip { position: fixed; z-index: 10000; pointer-events: none; padding: 5px 10px; border-radius: 8px; background: rgba(5, 8, 13, .92); color: #e7eefb; font-size: 12px; white-space: nowrap; }
+.mv-tip[hidden] { display: none; }
+.toolbar-btn--cv.is-dock { box-shadow: 0 0 0 2px rgba(56, 189, 248, .9), 0 14px 34px rgba(56, 189, 248, .3); }
+
+.motion-dock { flex: 1 1 100%; width: 100%; margin-top: 16px; padding: 14px 18px 16px; display: flex; flex-direction: column; gap: 10px; box-sizing: border-box; }
+.motion-dock[hidden] { display: none; }
+.motion-dock__head { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.motion-dock__title { display: flex; align-items: center; gap: 10px; font-size: 16px; }
+.cv-mark-sm { border: 2px solid var(--success); color: var(--success); border-radius: 6px; padding: 0 6px; font-weight: 900; font-size: 14px; text-shadow: 0 0 8px rgba(74, 222, 128, .5); }
+.motion-dock__pill { font-size: 12px; padding: 2px 10px; border-radius: 999px; background: var(--surface-muted); color: var(--muted); }
+.motion-dock__pill.is-ok { color: var(--success); background: var(--success-soft); }
+.motion-dock__pill.is-warn { color: #f59e0b; }
+.motion-dock__pill.is-bad { color: var(--danger); }
+.motion-dock__tools { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.motion-dock__tools .btn-primary, .motion-dock__tools .btn-secondary { min-height: 0; padding: 6px 14px; }
+.motion-dock__save { font-size: 12px; color: var(--muted); }
+.motion-dock__save.is-ok { color: var(--success); }
+.motion-dock__save.is-bad { color: var(--danger); }
+.motion-dock__tabs { display: flex; gap: 4px; flex-wrap: wrap; padding: 4px; border-radius: 12px; background: var(--surface-muted); align-self: flex-start; }
+.md-tab { min-height: 0; padding: 6px 16px; border: 0; border-radius: 9px; background: transparent; color: var(--muted); font: inherit; font-size: 14px; font-weight: 600; cursor: pointer; }
+.md-tab:hover { color: var(--text); }
+.md-tab.is-active { background: var(--accent); color: var(--accent-contrast, #fff); }
+.motion-dock .cap-line { margin: 0; }
+.motion-dock__body { min-height: 120px; }
+.md-scroll { overflow-x: auto; }
+.md-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.md-table th { text-align: left; color: var(--muted); font-weight: 600; padding: 4px 6px; white-space: nowrap; }
+.md-table td { padding: 4px 6px; white-space: nowrap; }
+.md-table input[type=text], .md-table input[type=number], .md-table select, .md-card input, .md-card select, .md-form input[type=text], .md-form input[type=number], .md-form select {
+  background: var(--input-bg); border: 1px solid var(--input-border); color: var(--text); border-radius: 6px; padding: 3px 6px; font: inherit; min-height: 0; }
+.md-table input[type=number], .md-form input[type=number] { width: 72px; }
+.md-table input[type=text] { width: 150px; }
+.md-form input[type=checkbox] { width: 18px; height: 18px; min-height: 0; padding: 0; justify-self: start; }
+.md-num { font-variant-numeric: tabular-nums; color: var(--muted); }
+.md-x { min-height: 0; padding: 2px 10px; font-size: 12px; }
+.md-form { display: grid; grid-template-columns: minmax(160px, 240px) minmax(0, 1fr); gap: 8px 12px; align-items: center; font-size: 13px; max-width: 760px; }
+.md-form input[type=text] { width: 100%; box-sizing: border-box; }
+.md-cols { display: grid; grid-template-columns: minmax(300px, 1fr) minmax(360px, 1.4fr); gap: 20px; }
+@media (max-width: 1100px) { .md-cols { grid-template-columns: 1fr; } }
+.md-h { margin: 0 0 8px; font-size: 14px; }
+.md-card { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 8px 10px; margin: 6px 0; border: 1px solid var(--border); border-radius: 12px; background: var(--surface-muted); font-size: 13px; }
+.md-card--col { flex-direction: column; align-items: stretch; }
+.md-card--col label { display: flex; align-items: center; gap: 8px; }
+.md-card .md-row { display: flex; align-items: center; gap: 10px; }
+.md-sp { flex: 1; }
+.md-chk { display: inline-flex; align-items: center; gap: 4px; margin-right: 10px; }
+.md-chk input { width: 16px; height: 16px; min-height: 0; }
+.md-flow { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.md-flow__src { display: flex; flex-direction: column; gap: 4px; padding: 6px 10px; border: 1px dashed var(--border-strong); border-radius: 10px; }
+.md-flow__rule, .md-flow__out { padding: 6px 10px; border: 1px solid var(--border-strong); border-radius: 10px; background: var(--surface-strong); }
+.md-flow__arrow { color: var(--muted); font-size: 18px; }
+.md-chart { display: grid; grid-template-columns: 120px minmax(0, 1fr); gap: 10px; align-items: center; margin: 4px 0 8px; }
+.md-chart__lbl { font-size: 13px; overflow: hidden; text-overflow: ellipsis; }
+.md-chart canvas { width: 100%; height: 96px; background: var(--surface-muted); border-radius: 10px; }
+
+.motion-mark__card { width: min(1100px, 96vw); max-width: 96vw; }
+.motion-mark__stage { position: relative; display: block; background: #000; border-radius: 12px; overflow: hidden; line-height: 0; }
+.motion-mark__stage img { width: 100%; height: auto; max-height: 68vh; object-fit: contain; display: block; margin: 0 auto; }
+.motion-mark__stage canvas { position: absolute; inset: 0; width: 100%; height: 100%; cursor: crosshair; }
+.motion-mark__form { display: flex; gap: 14px; flex-wrap: wrap; margin-top: 10px; font-size: 13px; }
+.motion-mark__form input, .motion-mark__form select { background: var(--input-bg); border: 1px solid var(--input-border); color: var(--text); border-radius: 6px; padding: 4px 8px; font: inherit; }

@@ -101,6 +101,8 @@
             <button type="button" class="layout-btn is-active" data-layout="1">1</button>
             <button type="button" class="layout-btn" data-layout="2">2</button>
             <button type="button" class="layout-btn" data-layout="4">4</button>
+            <button type="button" class="layout-btn" data-layout="6">6</button>
+            <button type="button" class="layout-btn" data-layout="8">8</button>
           </div>
         </div>
 
@@ -122,6 +124,31 @@
           <!-- сетка ячеек (заполняется из multi.js) -->
           <div class="multi-grid multi-grid--1" id="multiGrid"></div>
         </div>
+        <!-- нижняя панель КЗ (компьютерное зрение): вкладки как на микроскопе; камера — та, что в фокусе (только RTSP) -->
+        <section class="card motion-dock" id="motionDock" hidden>
+          <div class="motion-dock__head">
+            <div class="motion-dock__title"><span class="cv-mark-sm">КЗ</span><strong id="mdCamName">—</strong><span class="motion-dock__pill" id="mdPill"></span></div>
+            <div class="motion-dock__tools">
+              <span class="motion-dock__save" id="mdSave"></span>
+              <label class="switch-toggle" title="Включить анализ движения для этой камеры">
+                <span class="switch"><input type="checkbox" id="mdSwitch" /><span class="switch-track"></span></span>
+                <span class="switch-label" id="mdSwitchLabel">Выкл</span>
+              </label>
+              <button type="button" class="btn-primary" id="mdMark">Разметить зону</button>
+              <button type="button" class="btn-secondary" id="mdRec" title="Писать метрики каждого кадра в CSV (для калибровки порогов)">● запись CSV</button>
+              <button type="button" class="btn-secondary" id="mdClose" title="Свернуть панель" aria-label="Свернуть">×</button>
+            </div>
+          </div>
+          <div class="motion-dock__tabs" role="tablist" aria-label="Разделы КЗ">
+            <button type="button" class="md-tab is-active" role="tab" data-md-tab="zones">Зоны</button>
+            <button type="button" class="md-tab" role="tab" data-md-tab="groups">Группы</button>
+            <button type="button" class="md-tab" role="tab" data-md-tab="camera">Камера</button>
+            <button type="button" class="md-tab" role="tab" data-md-tab="trends">Тренды</button>
+            <button type="button" class="md-tab" role="tab" data-md-tab="plc">ПЛК · сценарии</button>
+          </div>
+          <p class="cap-line" id="mdCap" data-state="unknown"><span class="cap-dot"></span><span class="cap-text">Проверяю…</span></p>
+          <div class="motion-dock__body" id="mdBody"></div>
+        </section>
 
         <section class="card debug-console hidden" id="debugConsoleSection" aria-live="polite">
           <div class="debug-console__header">
@@ -282,27 +309,6 @@
     <p class="net-hint">После смены камера уедет на новый адрес: IP в базе обновится, поток переподключится.</p>
   </div>
 
-  <!-- popup КЗ (компьютерное зрение, под иконкой): режимы анализа камеры в фокусе — только RTSP; пока один режим — «Движение» -->
-  <div class="card motion-card-popup" id="multiMotionCard">
-    <h2>Компьютерное зрение</h2>
-    <div class="cv-modes" role="tablist" aria-label="Режим компьютерного зрения">
-      <button type="button" class="cv-mode is-active" role="tab" aria-selected="true" data-cv-mode="motion">Движение</button>
-    </div>
-    <p class="cap-line" id="multiMotionCap" data-state="unknown"><span class="cap-dot"></span><span class="cap-text">Проверяю…</span></p>
-    <label class="switch-toggle" title="Включить анализ движения для этой камеры">
-      <span class="switch"><input type="checkbox" id="multiMotionSwitch" /><span class="switch-track"></span></span>
-      <span class="switch-label" id="multiMotionLabel">Выкл</span>
-    </label>
-    <div id="multiMotionBody" hidden>
-      <div class="cv-zones" id="multiMotionZones"></div>
-      <div class="popup-actions">
-        <button type="button" class="btn-primary" id="multiMotionMark">Разметить зону</button>
-        <a class="btn-secondary cv-link" id="multiMotionFull" href="/motion" target="_blank" rel="noopener" title="Группы зон, вывод в ПЛК, графики">Все настройки →</a>
-      </div>
-      <p class="net-hint">Зоны обводятся прямо на картинке ячейки. Группы, адреса ПЛК и графики калибровки — на странице «Движение».</p>
-    </div>
-  </div>
-
   <!-- модалка: текущий конфиг запуска камеры (read-only) -->
   <div class="modal-backdrop" id="multiConfigModal" aria-hidden="true">
     <div class="network-modal__card" role="dialog" aria-modal="true">
@@ -384,6 +390,34 @@
     </div>
   </div>
 
+  <!-- модалка: разметка зоны КЗ на большом кадре (кадр берётся у сервиса движения, сетка и потоки ячеек не трогаются) -->
+  <div class="modal-backdrop" id="motionMarkModal" aria-hidden="true">
+    <div class="network-modal__card motion-mark__card" role="dialog" aria-modal="true">
+      <div class="network-modal__header">
+        <div class="network-modal__title-group">
+          <h2>Разметка зоны</h2>
+          <span class="network-modal__serial">Камера: <strong id="mmCam">—</strong></span>
+        </div>
+        <button type="button" class="modal-close-btn" id="mmX" aria-label="Закрыть">×</button>
+      </div>
+      <div class="network-modal__body">
+        <div class="motion-mark__stage" id="mmStage"><img id="mmImg" alt="Кадр камеры" /><canvas id="mmCanvas"></canvas></div>
+        <p class="net-hint" id="mmHint">Кликайте по углам зоны. ПКМ — убрать точку. «Замкнуть» или Enter — готово (минимум 3 точки).</p>
+        <div class="motion-mark__form" id="mmForm" hidden>
+          <label>Название <input type="text" id="mmName" placeholder="Лента 1" /></label>
+          <label>Тип <select id="mmType"><option value="motion">motion — движется (датчик вращения)</option><option value="presence">presence — жом идёт (низкий поток)</option></select></label>
+          <label>Метрика <select id="mmMetric"><option value="diff">diff — разность кадров</option><option value="flow">flow — оптический поток</option></select></label>
+        </div>
+      </div>
+      <div class="network-modal__footer">
+        <button type="button" class="btn-secondary" id="mmUndo">Убрать точку</button>
+        <button type="button" class="btn-secondary" id="mmCancel">Отмена (Esc)</button>
+        <button type="button" class="btn-primary" id="mmClose" disabled>Замкнуть (Enter)</button>
+        <button type="button" class="btn-primary" id="mmOk" hidden>Добавить зону</button>
+      </div>
+    </div>
+  </div>
+
   <script src="/static/js/api.js"></script>
   <script src="/static/js/ui.js"></script>
   <script src="/static/js/multi/01-core.js"></script>
@@ -395,6 +429,7 @@
   <script src="/static/js/multi/07-popups.js"></script>
   <script src="/static/js/multi/08-region-info.js"></script>
   <script src="/static/js/multi/10-motion.js"></script>
+  <script src="/static/js/multi/11-motion-dock.js"></script>
   <script src="/static/js/multi/09-init.js"></script>
 </body>
 </html>

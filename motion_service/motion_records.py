@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import csv
 import io
+import re
 import statistics
 import time
 import zipfile
@@ -132,8 +133,9 @@ def _clock(ts: float) -> str:
 
 
 def camera_of(path: Path) -> str:
-    """rtsp_1_20261030_190000.csv → rtsp_1"""
-    return path.stem.rsplit("_", 2)[0]
+    """rtsp_1_20261030_190000.csv → rtsp_1 (и rtsp_1_20261030_190000_b.csv — перезапуск в ту же секунду)"""
+    m = re.fullmatch(r"(.*)_\d{8}_\d{6}(?:_b)*", path.stem)
+    return m.group(1) if m else path.stem.rsplit("_", 2)[0]
 
 
 def summary_text(files: list, names: Optional[dict] = None) -> str:
@@ -142,6 +144,7 @@ def summary_text(files: list, names: Optional[dict] = None) -> str:
     names = names or {}
     blocks: list = []
     trouble: list = []
+    spans: dict = {}                                   # камера → [(начало, конец)] файлов: между ними — перерывы (перезапуск сервиса, обновление)
     for p in files:
         try:
             a = analyze(read_rows(p))
@@ -151,6 +154,7 @@ def summary_text(files: list, names: Optional[dict] = None) -> str:
         if a is None:
             blocks.append("%s — строк нет (запись только началась или камера ничего не отдала)" % p.name)
             continue
+        spans.setdefault(camera_of(p), []).append((a["t0"], a["t1"]))
         span = a["t1"] - a["t0"]
         lost = sum(e - s for s, e, _ in a["bad"])
         share = 100.0 if span <= 0 else max(0.0, 100.0 * (1 - lost / span))
@@ -181,6 +185,14 @@ def summary_text(files: list, names: Optional[dict] = None) -> str:
             if len(a["events"]) > MAX_LISTED:
                 out.append("    … и ещё %d" % (len(a["events"]) - MAX_LISTED))
         blocks.append("\n".join(out))
+    breaks = []
+    for cam, sp in spans.items():
+        sp.sort()
+        for (_s0, e0), (s1, _e1) in zip(sp, sp[1:]):
+            if s1 - e0 > GAP_MIN_S:
+                breaks.append("  %s: %s → %s (%s)" % (cam, _clock(e0), _clock(s1), _dur(s1 - e0)))
+    if breaks:
+        blocks.append("Перерывы между файлами записи (сервис перезапускался — обновление, сбой; запись сама продолжается в новом файле):\n" + "\n".join(breaks[:MAX_LISTED]))
     head = ["Сводка записей КЗ — %s" % _clock(time.time()),
             "Файлов: %d. %s" % (len(files), "Сбои были: " + ", ".join(trouble) if trouble else "Сбоев не найдено: камеры работали без перебоев."),
             "Сбой = статус не «ok» (картинка застыла, битый поток, нет кадров) или пропуск в строках дольше %d с / %d обычных интервалов." % (GAP_MIN_S, GAP_K),

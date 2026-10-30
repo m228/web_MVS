@@ -400,6 +400,67 @@ def test_records_summary_zone_values_names_and_rotating_share(tmp_path):
     assert "z1: diff" in mr.summary_text([path]), "без имён — по id"
 
 
+def test_recording_survives_service_restart_and_summary_shows_break(tmp_path, monkeypatch):
+    """Включённая запись (все камеры и одной камеры) после перезапуска сервиса (обновление) продолжается сама в новом файле;
+    выключили вручную — после перезапуска не пишется; перерыв между файлами виден в сводке."""
+    import motion_records as mr
+    srv = _load_server()
+    data = tmp_path / "data"
+    raw = {"id": "w", "name": "Лента", "url": "fake", "proc_fps": 20, "freeze_timeout_s": 1, "zones": [
+        {"id": "z1", "points": LEFT, "metric": "diff", "smooth": 2, "frames_to_on": 2, "frames_to_off": 2}]}
+    factory = lambda u, t: FakeCap(make_frames(200))
+
+    def boot():
+        m = srv.Manager(data, capture_factory=factory)
+        m.start()
+        return m
+
+    m1 = boot()
+    try:
+        m1.apply({"cameras": [raw]})
+        assert not m1.workers["w"].state()["recording"]
+        m1.record_all(True)
+        assert _wait(lambda: m1.workers["w"].state()["recording"], 5)
+        first = m1.workers["w"].state()["recording"]
+        time.sleep(0.8)
+    finally:
+        m1.shutdown()
+    assert json.loads((data / "recording.json").read_text())["all"] is True, "включённая запись запомнена на диске"
+
+    time.sleep(1.2)                                           # новый сервис — новый файл (имя с секундами)
+    m2 = boot()
+    try:
+        assert _wait(lambda: m2.workers["w"].state()["recording"], 5), "после перезапуска запись пошла сама"
+        second = m2.workers["w"].state()["recording"]
+        assert second != first
+        time.sleep(0.8)
+        m2.record_all(False)
+        assert not m2.workers["w"].state()["recording"]
+        assert m2.record_camera("w", True) and m2.workers["w"].state()["recording"]      # запись одной камеры
+    finally:
+        m2.shutdown()
+
+    m3 = boot()
+    try:
+        assert _wait(lambda: m3.workers["w"].state()["recording"], 5), "запись одной камеры тоже переживает перезапуск"
+        assert m3.record_camera("w", False) is None
+    finally:
+        m3.shutdown()
+    m4 = boot()
+    try:
+        time.sleep(0.6)
+        assert not m4.workers["w"].state()["recording"], "выключили вручную — после перезапуска не пишется"
+    finally:
+        m4.shutdown()
+
+    files = sorted((data / "records").glob("w_*.csv"))
+    assert len(files) >= 3
+    assert {mr.camera_of(p) for p in files} == {"w"}
+    monkeypatch.setattr(mr, "GAP_MIN_S", 0.5)                 # в тесте перезапуски идут секунду-две
+    txt = mr.summary_text(files)
+    assert "Перерывы между файлами записи" in txt and "  w: " in txt
+
+
 def _rec_row(t0, dt, alive, status, zones=1):
     ts = t0 + dt
     cells = ["", "", ""] * zones if alive is None else ["0.5", "0.4", "1"] * zones

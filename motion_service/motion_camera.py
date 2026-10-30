@@ -35,6 +35,7 @@ LONG_LEN = 7200                  # ... на 2 часа назад
 STATS_STEP_S = 10                # статистика зон (среднее/мин/макс): корзина на 10 с ...
 STATS_LEN = 8640                 # ... и сутки назад (8640 × 10 с)
 RECORD_MAX_BYTES = 100 * 1024 * 1024
+RECORD_FLUSH_S = 5.0             # буфер записи уходит на диск не реже чем раз в 5 с: при остановке сервиса теряется не больше этого хвоста
 _OPEN_LOCK = threading.Lock()    # OPENCV_FFMPEG_CAPTURE_OPTIONS — переменная окружения процесса, выставляем под замком
 
 
@@ -119,6 +120,7 @@ class CameraWorker(threading.Thread):
         self._writes_evt = threading.Event()
         self._rec_fh = self._rec_csv = None
         self._rec_path: Optional[Path] = None
+        self._rec_flushed = 0.0
         self._rec_ids: list = []
         self._writer: Optional[threading.Thread] = None
         self.plc = {"enabled": bool(self.mb.get("enable")), "ok": None, "error": ""}
@@ -209,6 +211,8 @@ class CameraWorker(threading.Thread):
             d = self.data_dir / "records"
             d.mkdir(parents=True, exist_ok=True)
             self._rec_path = d / ("%s_%s.csv" % (self.id, time.strftime("%Y%m%d_%H%M%S")))
+            while self._rec_path.exists():                    # перезапуск в ту же секунду не затирает прежний файл
+                self._rec_path = d / (self._rec_path.stem + "_b.csv")
             self._rec_ids = [z["id"] for z in self.cfg["zones"] if z["enabled"]]
             self._rec_fh = open(self._rec_path, "w", newline="", encoding="utf-8-sig")
             self._rec_csv = csv.writer(self._rec_fh, delimiter=";")
@@ -234,8 +238,9 @@ class CameraWorker(threading.Thread):
             z = byid.get(zid) or {}
             row += ["", "", ""] if event else [z.get("flow", 0), z.get("diff", 0), z.get("bit", 0)]
         self._rec_csv.writerow(row + ["" if event else int(status == "ok"), status])
-        if status != "ok":                        # сбой — сразу на диск: при отключении питания это самые нужные строки
+        if status != "ok" or ts - self._rec_flushed >= RECORD_FLUSH_S:   # сбой — сразу на диск: при отключении питания это самые нужные строки
             self._rec_fh.flush()
+            self._rec_flushed = ts
         if self._rec_fh.tell() > RECORD_MAX_BYTES:
             self._rec_fh.close()
             self._rec_fh = self._rec_csv = None

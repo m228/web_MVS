@@ -85,6 +85,7 @@ class Manager:
         self.workers: dict[str, CameraWorker] = {}
         self.cfg = engine.default_config()
         self.rec_all = False                    # «писать все»: камера, перезапущенная правкой настроек, продолжает писать в новый файл
+        self.rec_cams: set = set()              # камеры, у которых запись включена по одной (кнопка «●» камеры)
         self._lock = threading.RLock()
         self.scenarios = ScenarioRunner(self)
 
@@ -103,6 +104,23 @@ class Manager:
                 pass
             log.error("Конфиг не прочитан (%s) — файл сохранён как %s, стартуем пустыми", e, bad.name)
             self.cfg = engine.default_config()
+
+    # --- запись CSV переживает перезапуск сервиса (обновление, сбой): что включили — то после старта пишется дальше, в новый файл ---
+    def _load_rec(self):
+        try:
+            d = json.loads((self.dir / "recording.json").read_text(encoding="utf-8-sig"))
+            self.rec_all = bool(d.get("all"))
+            self.rec_cams = {str(c) for c in (d.get("cams") or [])}
+        except (OSError, ValueError, AttributeError):
+            pass
+
+    def _save_rec(self):
+        try:
+            tmp = self.dir / "recording.json.tmp"
+            tmp.write_text(json.dumps({"all": self.rec_all, "cams": sorted(self.rec_cams)}), encoding="utf-8")
+            os.replace(tmp, self.dir / "recording.json")
+        except OSError as e:
+            log.warning("Не удалось запомнить, что запись включена: %s", e)
 
     def _save(self, cfg: dict):
         tmp = self.path.with_name(self.path.name + ".tmp")
@@ -140,7 +158,7 @@ class Manager:
                 if c["id"] not in self.workers:
                     w = CameraWorker(c, new["modbus"], self.links, self.dir, self.capture_factory)
                     self.workers[c["id"]] = w
-                    if self.rec_all and c["enabled"] and c["url"]:
+                    if (self.rec_all or c["id"] in self.rec_cams) and c["enabled"] and c["url"]:
                         w.start_record()
                     w.start()
             return new
@@ -149,6 +167,9 @@ class Manager:
         """Запись метрик СРАЗУ по всем включённым камерам (по файлу на камеру) или остановка всех. {камера: имя файла}."""
         with self._lock:
             self.rec_all = bool(on)
+            if not on:
+                self.rec_cams.clear()
+            self._save_rec()
             out = {}
             for cid, w in self.workers.items():
                 if not on:
@@ -157,8 +178,23 @@ class Manager:
                     out[cid] = w.start_record()
             return out
 
+    def record_camera(self, cid: str, on: bool):
+        """Запись одной камеры; имя файла или None. Включённая запись запоминается (см. _load_rec)."""
+        w = self.worker(cid)
+        with self._lock:
+            if on:
+                self.rec_cams.add(cid)
+            else:
+                self.rec_cams.discard(cid)
+            self._save_rec()
+        if on:
+            return w.start_record()
+        w.stop_record()
+        return None
+
     def start(self):
         self.load()
+        self._load_rec()
         self.apply(self.cfg, save=False)
         self.scenarios.start()
 
@@ -242,11 +278,7 @@ def create_app(data_dir: Optional[Path] = None, capture_factory: Callable = open
 
     @app.post("/cameras/{cid}/record")
     def record(cid: str, req: dict = Body(...)):
-        wk = mgr.worker(cid)
-        if req.get("on"):
-            return {"recording": wk.start_record()}
-        wk.stop_record()
-        return {"recording": None}
+        return {"recording": mgr.record_camera(cid, bool(req.get("on")))}
 
     @app.post("/record")
     def record_all(req: dict = Body(...)):

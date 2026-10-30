@@ -474,13 +474,18 @@ function mdPlcHtml() {
   const a = 'data-md="p"';
   const scens = ((MV.cfg && MV.cfg.scenarios) || []).map((s, i) => mdScenarioHtml(s, i)).join('') || '<p class="net-hint">Сценариев нет. Сценарий берёт зоны любых камер, считает «хоть одна крутится» / «все крутятся» / «сколько крутится» и пишет ОДНО значение в регистр или coil.</p>';
   return `<div class="md-cols">
-    <div><h3 class="md-h">Подключение к ПЛК</h3><div class="md-fields md-fields--one">
-      ${mdField('Писать в ПЛК', `<input type="checkbox" ${a} data-f="enable"${m.enable ? ' checked' : ''} />`)}
-      ${mdField('IP контроллера', `<input type="text" ${a} data-f="host" value="${escapeHtml(m.host)}" />`)}
-      ${mdField('Порт / Unit ID', `<span class="md-out">${mdNum(a + ' data-f="port"', m.port, 'min="1" max="65535"')} ${mdNum(a + ' data-f="device_id"', m.device_id, 'min="0" max="255"')}</span>`)}
-      ${mdField('Обновлять не реже, с', mdNum(a + ' data-f="write_period_s"', m.write_period_s, 'min="0.1" step="0.1"'), 'Значения пишутся сразу при изменении и ещё раз с этим периодом')}
-      ${mdField('Проверка связи', `<span class="md-out">регистр ${mdNum('id="mdPingAddr"', 0, 'min="0" max="65535"')} <button type="button" class="btn-secondary md-x" id="mdPing">Прочитать</button></span>`)}
-    </div><p class="net-hint" id="mdPingInfo">Проверка только читает один регистр, в ПЛК ничего не пишется.</p>
+    <div><div class="md-card md-card--col md-plc ${m.enable ? 'is-on' : 'is-off'}" id="mdPlcBlock">
+      <div class="md-row"><label class="md-plc__head" title="Включить связь с ПЛК: значения зон и сценариев начнут записываться в контроллер">
+        <span class="switch-toggle md-sw"><span class="switch"><input type="checkbox" ${a} data-f="enable"${m.enable ? ' checked' : ''} /><span class="switch-track"></span></span></span>
+        <b>Подключение к ПЛК</b></label><span class="md-sp"></span><span class="net-hint" id="mdPlcState">${m.enable ? 'включено' : 'выключено — в ПЛК ничего не пишется'}</span></div>
+      <div class="md-plc__grid">
+        <label><span>IP контроллера</span><input type="text" class="md-plc__ip" ${a} data-f="host" value="${escapeHtml(m.host)}" placeholder="192.168.0.10" /></label>
+        <label><span>Порт</span>${mdNum(a + ' data-f="port"', m.port, 'min="1" max="65535"')}</label>
+        <label title="Значения пишутся сразу при изменении и ещё раз с этим периодом"><span>Обновлять не реже, с</span>${mdNum(a + ' data-f="write_period_s"', m.write_period_s, 'min="0.1" step="0.1"')}</label>
+        <label><span>Unit ID</span>${mdNum(a + ' data-f="device_id"', m.device_id, 'min="0" max="255"')}</label>
+        <label class="md-plc__ping"><span>Проверка связи, регистр</span>${mdNum('id="mdPingAddr"', 0, 'min="0" max="65535"')}<button type="button" class="btn-secondary md-x" id="mdPing">Прочитать</button></label>
+      </div>
+      <span class="net-hint" id="mdPingInfo">Проверка только читает один регистр, в ПЛК ничего не пишется.</span></div>
     <div id="mdPlcCams"></div></div>
     <div><h3 class="md-h md-h--row"><button type="button" class="md-add" data-md="s" data-f="add" title="Добавить сценарий" aria-label="Добавить сценарий">+</button>Сценарии записи</h3>${scens}</div></div>
     ${mdGroupsSectionHtml()}`;
@@ -508,7 +513,14 @@ function mdOnPlc(t) {
   const m = MV.cfg.modbus;
   const f = t.dataset.f;
   mdEdit(() => {
-    if (f === 'enable') m.enable = t.checked;
+    if (f === 'enable') {
+      m.enable = t.checked;
+      // блок «загорается» сразу, без перерисовки вкладки
+      mdEl('mdPlcBlock')?.classList.toggle('is-on', m.enable);
+      mdEl('mdPlcBlock')?.classList.toggle('is-off', !m.enable);
+      const st = mdEl('mdPlcState');
+      if (st) st.textContent = m.enable ? 'включено' : 'выключено — в ПЛК ничего не пишется';
+    }
     else if (f === 'host') m.host = t.value.trim();
     else if (f === 'write_period_s') m.write_period_s = parseFloat(t.value) || 1;
     else m[f] = parseInt(t.value, 10) || (f === 'port' ? 502 : 0);
@@ -707,10 +719,10 @@ function paintMotionDockLive() {
   });
   const box = mdEl('mdPlcCams');
   if (box && MD.tab === 'plc' && MV.cfg) {
-    box.innerHTML = '<h3 class="md-h">Камеры и запись</h3>' + MV.cfg.cameras.filter((c) => c.enabled).map((c) => {
+    box.innerHTML = '<h3 class="md-h">Камеры и запись</h3><div class="md-camgrid">' + MV.cfg.cameras.filter((c) => c.enabled).map((c) => {
       const s = MV.states[c.id], p = (s && s.plc) || {};
-      return `<div class="md-card"><b>${escapeHtml(c.name)}${mdIpTag(c.url)}</b><span class="md-sp"></span><span class="net-hint">${!MV.cfg.modbus.enable ? 'запись выключена' : p.ok === null || p.ok === undefined ? 'ПЛК: ждёт' : p.ok ? 'ПЛК: ок' : 'ПЛК: ошибка ' + escapeHtml(p.error || '')}</span></div>`;
-    }).join('');
+      return `<div class="md-card md-card--sq"><b>${escapeHtml(c.name)}</b>${mdIpTag(c.url)}<span class="net-hint">${!MV.cfg.modbus.enable ? 'запись выключена' : p.ok === null || p.ok === undefined ? 'ПЛК: ждёт' : p.ok ? 'ПЛК: ок' : 'ПЛК: ошибка ' + escapeHtml(p.error || '')}</span></div>`;
+    }).join('') + '</div>';
   }
   if (MD.tab === 'zones') mdPaintZoneStats();
   if (MD.tab === 'zones' && (MV.tick % 2 === 0)) mdDrawTrends();

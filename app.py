@@ -1120,6 +1120,12 @@ def motion_history(camera: str, n: int = 300, window: float = 0, points: int = 6
     return motion_client.history(_motion_url(), camera, n, window, points)
 
 
+@app.get("/api/motion/stats")
+def motion_stats(camera: str, window: float = 10800.0):
+    # среднее / мин / макс flow и diff по зонам камеры за последние window секунд — для настройки порогов по реальной работе
+    return motion_client.stats(_motion_url(), camera, window)
+
+
 @app.post("/api/motion/record")
 def motion_record(req: dict = Body(...)):
     return motion_client.record(_motion_url(), str(req.get("camera") or ""), bool(req.get("on")))

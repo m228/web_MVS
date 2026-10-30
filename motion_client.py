@@ -59,6 +59,10 @@ def history(service_url: str, cam: str, n: int = 300, window: float = 0, points:
     return _call(service_url, "/cameras/%s/history?n=%d&window=%s&points=%d" % (urllib.parse.quote(cam, safe=""), int(n), float(window), int(points)))
 
 
+def stats(service_url: str, cam: str, window: float = 10800.0) -> dict:
+    return _call(service_url, "/cameras/%s/stats?window=%s" % (urllib.parse.quote(cam, safe=""), float(window)))
+
+
 def record(service_url: str, cam: str, on: bool) -> dict:
     return _call(service_url, "/cameras/%s/record" % urllib.parse.quote(cam, safe=""), {"on": bool(on)})
 

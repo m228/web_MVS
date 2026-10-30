@@ -4635,3 +4635,11 @@ body.micro-rep-doc .micro-cmp-strips { grid-template-columns: repeat(6, 1fr); ga
 .mu-status--warn { background: var(--warning-soft); color: var(--warning); }
 .mu-status--error { background: var(--danger-soft); color: var(--danger); }
 .mu-status__cancel { border: 1px solid currentColor; background: transparent; color: inherit; border-radius: 8px; padding: 2px 10px; font: inherit; cursor: pointer; }
+
+/* ---------- панель КЗ: значения зоны — сейчас / среднее / мин / макс ---------- */
+.md-statwin { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); }
+.md-statwin select { padding: 2px 6px; font-size: 12px; min-height: 0; width: auto; }
+.md-zstat { font-size: 12px; line-height: 1.5; font-variant-numeric: tabular-nums; color: var(--muted); }
+.md-zstat__row.is-main { color: var(--text); }
+.md-zstat__cur { color: var(--text); }
+.md-zstat__note { font-size: 11px; opacity: .8; }

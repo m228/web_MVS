@@ -355,6 +355,51 @@ def test_record_has_status_column_and_connection_events(tmp_path):
         w.stop()
 
 
+def test_worker_stats_avg_min_max_per_zone_only_good_frames(tmp_path):
+    """Среднее / мин / макс flow и diff по зоне за окно: в норме avg между min и max, движущаяся зона сильнее неподвижной;
+    застывшая камера в статистику не идёт."""
+    w, _ = _worker(tmp_path, make_frames(40))
+    try:
+        assert _wait(lambda: (w.state()["result"] or {}).get("zones") and w.state()["result"]["zones"][0]["bit"] == 1)
+        assert _wait(lambda: w.stats(600)["zones"].get("z1", {}).get("n", 0) > 5)
+        st = w.stats(600)
+        assert st["window_s"] == 600 and 0 < st["span_s"] <= 600
+        for z in ("z1", "z2"):
+            for m in ("flow", "diff"):
+                v = st["zones"][z][m]
+                assert v["min"] <= v["avg"] <= v["max"], (z, m, v)
+        assert st["zones"]["z1"]["diff"]["max"] > st["zones"]["z2"]["diff"]["max"], "в левой зоне движение, в правой нет"
+        assert w.stats(1)["window_s"] == 10.0, "окно не короче одной корзины"
+    finally:
+        w.stop()
+    w, _ = _worker(tmp_path, make_frames(40), frozen=True)
+    try:
+        assert _wait(lambda: (w.state()["result"] or {}).get("alive") is False, 10)
+        n0 = sum(z["n"] for z in w.stats(600)["zones"].values())
+        time.sleep(0.5)
+        assert sum(z["n"] for z in w.stats(600)["zones"].values()) == n0, "застывшие кадры в среднее не идут"
+    finally:
+        w.stop()
+
+
+def test_records_summary_zone_values_names_and_rotating_share(tmp_path):
+    import motion_records as mr
+    t0 = time.mktime((2026, 10, 30, 19, 0, 0, 0, 0, -1))
+    path = tmp_path / "cam_1_20261030_190000.csv"
+    stamp = lambda i: time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(t0 + i)) + ".000"
+    rows = ["time;z1_flow;z1_diff;z1_bit;alive;status"]
+    rows += ["%s;1.0;2.0;1;1;ok" % stamp(0), "%s;3.0;6.0;1;1;ok" % stamp(1), "%s;0.2;0.4;0;1;ok" % stamp(2),
+             "%s;9.0;99.0;1;0;картинка застыла" % stamp(3), "%s;;;;;событие: поток оборвался" % stamp(4)]
+    path.write_text("\n".join(rows) + "\n", encoding="utf-8-sig")
+    zs = mr.zone_stats(path)["z1"]
+    assert zs["n"] == 3, "строки со сбоем и события не считаются"
+    assert zs["flow"] == pytest.approx((1.4, 0.2, 3.0)) and zs["diff"] == pytest.approx((2.8, 0.4, 6.0))
+    assert zs["bit"] == pytest.approx(2 / 3)
+    txt = mr.summary_text([path], {"cam_1": {"name": "Лента", "zones": {"z1": "Шнек"}}})
+    assert "Шнек (z1): diff ср 2.80 мин 0.40 макс 6.00 · flow ср 1.40 мин 0.20 макс 3.00 · крутится 67 %" in txt
+    assert "z1: diff" in mr.summary_text([path]), "без имён — по id"
+
+
 def _rec_row(t0, dt, alive, status, zones=1):
     ts = t0 + dt
     cells = ["", "", ""] * zones if alive is None else ["0.5", "0.4", "1"] * zones

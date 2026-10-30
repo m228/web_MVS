@@ -32,6 +32,8 @@ log = logging.getLogger("motion.camera")
 HISTORY_LEN = 900                # точек истории на камеру (~5 мин при 3 fps)
 LONG_STEP_S = 1.0                # длинная история: одна точка в секунду (максимум за секунду — всплеск не теряется)
 LONG_LEN = 7200                  # ... на 2 часа назад
+STATS_STEP_S = 10                # статистика зон (среднее/мин/макс): корзина на 10 с ...
+STATS_LEN = 8640                 # ... и сутки назад (8640 × 10 с)
 RECORD_MAX_BYTES = 100 * 1024 * 1024
 _OPEN_LOCK = threading.Lock()    # OPENCV_FFMPEG_CAPTURE_OPTIONS — переменная окружения процесса, выставляем под замком
 
@@ -111,6 +113,8 @@ class CameraWorker(threading.Thread):
         self._history: deque = deque(maxlen=HISTORY_LEN)
         self._long: deque = deque(maxlen=LONG_LEN)
         self._bucket: Optional[list] = None   # [ts, {зона: (flow, diff, bit)}, ok] — набирающаяся секунда длинной истории
+        self._stats: deque = deque(maxlen=STATS_LEN)   # корзины статистики: [номер 10-секундки, {зона: [n, Σflow, min, max, Σdiff, min, max]}]
+        self._sbucket: Optional[list] = None  # набирающаяся корзина статистики
         self._writes: Optional[list] = None   # что должно лежать в ПЛК (последнее)
         self._writes_evt = threading.Event()
         self._rec_fh = self._rec_csv = None
@@ -169,6 +173,33 @@ class CameraWorker(threading.Thread):
                 d["diff"].append(df)
                 d["bit"].append(bit)
         return {"t": [round(t, 2) for t, _, _ in pts], "ok": [ok for _, _, ok in pts], "zones": zones}
+
+    def stats(self, window_s: float) -> dict:
+        """Среднее / минимум / максимум flow и diff по каждой зоне за последние window_s секунд (до суток), только по кадрам в норме
+        (битые, застывшие и «каша» не считаются). Значения — те же, что в графиках и CSV (сглаженные по `smooth` кадров).
+        span_s — сколько реально накоплено (меньше window_s, если сервис недавно стартовал или камера пересоздавалась)."""
+        window_s = max(float(STATS_STEP_S), min(float(window_s), STATS_STEP_S * STATS_LEN))
+        edge = int((time.time() - window_s) // STATS_STEP_S)
+        with self._lock:
+            rows = [r for r in self._stats if r[0] >= edge]
+            if self._sbucket is not None and self._sbucket[0] >= edge:      # набирающуюся корзину копируем: её правит поток камеры
+                rows.append([self._sbucket[0], {k: list(v) for k, v in self._sbucket[1].items()}])
+            first = rows[0][0] if rows else None
+        acc: dict = {}
+        for _key, zs in rows:
+            for zid, v in zs.items():
+                a = acc.get(zid)
+                if a is None:
+                    acc[zid] = list(v)
+                else:
+                    a[0] += v[0]; a[1] += v[1]; a[2] = min(a[2], v[2]); a[3] = max(a[3], v[3])
+                    a[4] += v[4]; a[5] = min(a[5], v[5]); a[6] = max(a[6], v[6])
+        zones = {zid: {"n": a[0],
+                       "flow": {"avg": round(a[1] / a[0], 4), "min": round(a[2], 4), "max": round(a[3], 4)},
+                       "diff": {"avg": round(a[4] / a[0], 4), "min": round(a[5], 4), "max": round(a[6], 4)}}
+                 for zid, a in acc.items() if a[0]}
+        span = round(min(window_s, time.time() - first * STATS_STEP_S), 1) if first is not None else 0.0
+        return {"window_s": window_s, "span_s": max(0.0, span), "zones": zones}
 
     def start_record(self) -> str:
         """Писать метрики каждого кадра в CSV (data/records) — для калибровки порогов по реальной ленте."""
@@ -236,6 +267,22 @@ class CameraWorker(threading.Thread):
                 b[1][zid] = (fl, df, bit) if old is None else (max(old[0], fl), max(old[1], df), max(old[2], bit))
             b[2] = min(b[2], ok)
 
+    def _stats_add(self, ts: float, zones: dict):
+        """Кадр в норме — в 10-секундную корзину статистики. Звать под self._lock."""
+        key = int(ts // STATS_STEP_S)
+        b = self._sbucket
+        if b is None or b[0] != key:
+            if b is not None:
+                self._stats.append(b)
+            b = self._sbucket = [key, {}]
+        for zid, (fl, df, _bit) in zones.items():
+            a = b[1].get(zid)
+            if a is None:
+                b[1][zid] = [1, fl, fl, fl, df, df, df]
+            else:
+                a[0] += 1; a[1] += fl; a[2] = min(a[2], fl); a[3] = max(a[3], fl)
+                a[4] += df; a[5] = min(a[5], df); a[6] = max(a[6], df)
+
     def _publish(self, state: dict, frame: Optional[np.ndarray], count_frame: bool):
         writes = self.engine.compute_writes(state)
         with self._lock:
@@ -244,7 +291,10 @@ class CameraWorker(threading.Thread):
                 self._frame = frame
             if count_frame:
                 self._stamps.append(state["ts"])
-                self._push_history(state["ts"], {z["id"]: (z["flow"], z["diff"], z["bit"]) for z in state["zones"]}, 1 if state["alive"] else 0)
+                zones = {z["id"]: (z["flow"], z["diff"], z["bit"]) for z in state["zones"]}
+                self._push_history(state["ts"], zones, 1 if state["alive"] else 0)
+                if state["alive"]:
+                    self._stats_add(state["ts"], zones)
             self._writes = writes
             self._rec_write(state["ts"], {z["id"]: z for z in state["zones"]}, "ok" if state["alive"] else (state["reason"] or "нет данных"))
         self._writes_evt.set()

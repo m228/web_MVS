@@ -50,6 +50,8 @@
               <span class="micro-check__text">Автостарт</span>
             </label>
             <a href="/" class="btn btn-secondary">К списку камер</a>
+            <button type="button" id="multiUpdateBtn" class="btn btn-secondary" title="Обновить программу до последней версии: основное приложение и дополнения. Через 5 секунд (можно отменить) запустится апдейтер, камеры отключатся примерно на минуту и поднимутся сами">Обновить</button>
+            <span class="mu-status" id="multiUpdateStatus" role="status" hidden></span>
             <button type="button" id="cameraJournalBtn" class="btn btn-secondary" title="Журнал камер: обрывы связи, серые кадры, сбои КЗ, зоны крутится/стоит">Журнал камер</button>
             <button type="button" id="logsBtn" class="btn toolbar-btn--logs" title="Открыть журнал">
               Логи
@@ -478,6 +480,7 @@
   <script src="/static/js/multi/11-motion-dock.js"></script>
   <script src="/static/js/multi/12-autostart.js"></script>
   <script src="/static/js/multi/13-journal.js"></script>
+  <script src="/static/js/multi/14-update.js"></script>
   <script src="/static/js/multi/09-init.js"></script>
 </body>
 </html>

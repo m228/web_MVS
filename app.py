@@ -222,11 +222,12 @@ def api_update_components():
 
 
 @app.get("/api/update/run")
-def api_update_run(request: Request, staged: int = 0, components: str = "", yes: int = 0):
+def api_update_run(request: Request, staged: int = 0, components: str = "", yes: int = 0, no_browser: int = 0):
     """Кнопка «обновить» в шапке: запускает update.ps1 из папки установки (останавливает приложение, ставит последнюю версию, запускает снова).
     staged=1 — архив уже скачан в фоне (/api/update/download?extract=0): быстрая замена без скачивания."""
     api_log("api.update", "Запуск обновления (update.ps1)" + (", из скачанного архива" if staged else ""))
-    return updater.run_update_script(request.url.port or 8000, staged=bool(staged), components=components, yes=bool(yes))
+    return updater.run_update_script(request.url.port or 8000, staged=bool(staged), components=components, yes=bool(yes),
+                                     no_browser=bool(no_browser))
 
 
 @app.get("/api/update/apply")

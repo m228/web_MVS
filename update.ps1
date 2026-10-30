@@ -16,6 +16,7 @@
 #   -ZipDir <папка>   папка с готовыми архивами релиза (web_MVS_v*.zip, cv_service_v*.zip, ...) вместо скачивания
 #   -Yes              подтвердить тяжёлую первую установку CV (torch, несколько ГБ) без вопроса
 #   -NoMenu           меню не показывать (без -Components обновляется только основное приложение, как раньше)
+#   -NoBrowser        запускать приложение с --no-open: страницу в браузере оно не открывает (её перезагружает вкладка, с которой нажали «обновить»)
 [CmdletBinding()]
 param(
     [string]$Root = '',
@@ -29,7 +30,8 @@ param(
     [string]$Components = '',
     [string]$ZipDir = '',
     [switch]$Yes,
-    [switch]$NoMenu
+    [switch]$NoMenu,
+    [switch]$NoBrowser
 )
 $ErrorActionPreference = 'Stop'
 try { [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 } catch {}   # GitHub требует TLS 1.2
@@ -68,6 +70,7 @@ if (-not $NoElevate -and -not (Test-Admin)) {
     if ($ZipDir) { $argList += @('-ZipDir', "`"$ZipDir`"") }
     if ($Yes) { $argList += '-Yes' }
     if ($NoMenu) { $argList += '-NoMenu' }
+    if ($NoBrowser) { $argList += '-NoBrowser' }
     try {
         $p = Start-Process -FilePath 'powershell.exe' -ArgumentList $argList -Verb RunAs -Wait -PassThru
         exit $p.ExitCode
@@ -147,7 +150,8 @@ function Start-AppAndWait([string]$root, [string]$expectVersion) {
     $exe = Join-Path $root 'web_MVS.exe'
     if (-not (Test-Path -LiteralPath $exe)) { Log 'ОШИБКА: web_MVS.exe не найден' 'Red'; return $false }
     Log 'запускаю приложение...'
-    Start-Process -FilePath $exe -WorkingDirectory $root | Out-Null
+    if ($NoBrowser) { Start-Process -FilePath $exe -WorkingDirectory $root -ArgumentList '--no-open' | Out-Null }
+    else { Start-Process -FilePath $exe -WorkingDirectory $root | Out-Null }
     $deadline = (Get-Date).AddSeconds(90)
     while ((Get-Date) -lt $deadline) {
         Start-Sleep -Seconds 2

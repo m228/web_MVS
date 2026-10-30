@@ -50,6 +50,22 @@ def test_run_update_script_passes_selection(tmp_path, monkeypatch):
     assert r["ok"] is False and "основное приложение" in r["error"], "скачанный архив — это основное приложение"
 
 
+def test_run_update_script_no_browser_only_if_script_knows_it(tmp_path, monkeypatch):
+    """Первое обновление идёт СТАРЫМ update.ps1: незнакомый -NoBrowser уронил бы запуск, поэтому ключ передаётся только знающему его скрипту."""
+    monkeypatch.setattr(updater, "is_frozen", lambda: True)
+    monkeypatch.setattr(updater, "_app_dir", lambda: tmp_path)
+    calls = []
+    monkeypatch.setattr(updater.subprocess, "Popen", lambda cmd, **kw: calls.append(cmd))
+    (tmp_path / "update.ps1").write_text("param([switch]$Force)", encoding="utf-8")
+    r = updater.run_update_script(8000, no_browser=True)
+    assert r["ok"] and r["no_browser"] is False and "-NoBrowser" not in calls[-1]
+    (tmp_path / "update.ps1").write_text("param([switch]$Force, [switch]$NoBrowser)", encoding="utf-8")
+    r = updater.run_update_script(8000, no_browser=True)
+    assert r["ok"] and r["no_browser"] is True and "-NoBrowser" in calls[-1]
+    r = updater.run_update_script(8000)                                    # без просьбы — ключа нет
+    assert r["no_browser"] is False and "-NoBrowser" not in calls[-1]
+
+
 # ───────────────────────────── update.ps1 на песочнице ─────────────────────────────
 pytestmark_win = pytest.mark.skipif(sys.platform != "win32", reason="update.ps1 — только Windows PowerShell")
 

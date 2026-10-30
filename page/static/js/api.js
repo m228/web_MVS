@@ -503,8 +503,9 @@ const UpdateApi = {
       { source: 'api.update', logRequest: false, logSuccess: false });
   },
   // запустить update.ps1 для выбранных компонентов (components — ключи через запятую; yes — подтверждена тяжёлая установка CV)
-  run(components, yes) {
-    const q = new URLSearchParams({ components: components.join(','), yes: yes ? '1' : '0' });
+  // noBrowser — после обновления не открывать новую вкладку (страница сама дождётся и перезагрузится)
+  run(components, yes, noBrowser) {
+    const q = new URLSearchParams({ components: components.join(','), yes: yes ? '1' : '0', no_browser: noBrowser ? '1' : '0' });
     return apiGet('/api/update/run?' + q.toString(), 'Ошибка запуска обновления:', { source: 'api.update' });
   },
   // текущая версия + окружение (используем для показа версии при загрузке)

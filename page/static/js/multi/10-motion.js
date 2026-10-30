@@ -10,8 +10,6 @@ const MV = {
   dockOpen: false,
   tick: 0,
   dirty: false,       // есть несохранённые правки конфига (опрос не затирает их)
-  mini: {},           // id камеры -> короткая история для мини-трендов на ячейках
-  miniBusy: false,
 };
 
 const MV_COLORS = {
@@ -75,12 +73,19 @@ function toggleMotionDock() {
 // ---------- геометрия: кадр в ячейке (object-fit: contain) ----------
 function tileFrameGeom(index) {
   const el = getTileEl(index);
-  if (!el) return null;
+  const tile = state.tiles[index];
+  if (!el || !tile) return null;
   const screen = el.querySelector('[data-tile-screen]');
   const frame = el.querySelector('[data-tile-frame]');
-  if (!screen || !frame || !frame.naturalWidth) return null;
+  if (!screen || !frame) return null;
+  // картинка скрыта «глазиком» (src пустой): геометрию берём по последнему кадру или по размеру разметки зон,
+  // чтобы зоны остались на чёрном экране там же, где были на картинке
+  if (frame.naturalWidth) tile._nat = [frame.naturalWidth, frame.naturalHeight];
+  let nat = frame.naturalWidth ? tile._nat : null;
+  if (!nat && tile.hidden) nat = tile._nat || (tile.serial && (mvCam(tile.serial) || {}).frame_size) || null;
+  if (!nat) return null;
   const w = screen.clientWidth, h = screen.clientHeight;
-  const nw = frame.naturalWidth, nh = frame.naturalHeight;
+  const nw = nat[0], nh = nat[1];
   const k = Math.min(w / nw, h / nh);
   return { w, h, nw, nh, k, ox: (w - nw * k) / 2, oy: (h - nh * k) / 2 };
 }
@@ -110,6 +115,10 @@ function drawMotionTile(index) {
   const on = !!(cam && cam.enabled);
   const st = on ? (MV.states[tile.serial] || {}).result : null;
   const problem = on ? tileMotionStatusText(st) : '';
+
+  // картинка скрыта, а зоны КЗ есть — на чёрном экране только они (с названием и значением), надпись «картинка скрыта» не мешает
+  const ph = el.querySelector('[data-tile-placeholder]');
+  if (ph && tile.connected && tile.hidden) ph.classList.toggle('hidden', !!(on && cam.zones.some((z) => z.enabled !== false)));
 
   if (badge) {
     badge.hidden = !on;
@@ -147,47 +156,7 @@ function drawMotionTile(index) {
     const label = z.name + (lz && !problem ? '  ' + Number(lz.value).toFixed(2) : '');
     ctx.lineWidth = 3; ctx.strokeStyle = '#000'; ctx.strokeText(label, pts[0][0] + 4, pts[0][1] + 15);
     ctx.fillStyle = '#fff'; ctx.fillText(label, pts[0][0] + 4, pts[0][1] + 15); ctx.lineWidth = 2;
-    drawMiniTrend(ctx, g, cam, z, pts[0][0] + 4, pts[0][1] + 20, stroke);
   });
-}
-
-// ---------- мини-тренд зоны на ячейке: последние минуты метрики под её подписью (крупный — в нижней панели) ----------
-const MV_MINI = { win: 600, w: 104, h: 28, minTileW: 240 };     // окно, с; размер, px; в узких ячейках не рисуем
-
-// историю запрашиваем раз в несколько секунд по камерам, которые сейчас в ячейках с включённым КЗ
-async function mvMiniRefresh() {
-  if (MV.miniBusy) return;
-  const ids = [...new Set(state.tiles.filter((t) => t.serial && t.kind === 'rtsp' && t.connected && !t.hidden && mvEnabled(t.serial)).map((t) => t.serial))];
-  if (!ids.length) return;
-  MV.miniBusy = true;
-  try {
-    const res = await Promise.all(ids.map((id) => mvApi('/api/motion/history?camera=' + encodeURIComponent(id) + '&window=' + MV_MINI.win + '&points=64')));
-    res.forEach((h, k) => { if (h && !h.error && h.zones) MV.mini[ids[k]] = h; });
-  } finally { MV.miniBusy = false; }
-}
-
-function drawMiniTrend(ctx, g, cam, z, x, y, color) {
-  const h = MV.mini[cam.id];
-  const d = h && h.zones && h.zones[z.id];
-  if (!d || g.w < MV_MINI.minTileW) return;
-  const ys = z.metric === 'flow' ? d.flow : d.diff, t = h.t || [], n = ys.length;
-  if (n < 2) return;
-  const { w, h: hh } = MV_MINI;
-  x = Math.max(2, Math.min(x, g.w - w - 2));
-  y = Math.max(2, Math.min(y, g.h - hh - 2));
-  ctx.save();
-  ctx.fillStyle = 'rgba(0,0,0,.38)'; ctx.fillRect(x, y, w, hh);
-  const top = Math.max(z.on * 1.6, ...ys, 0.0001);
-  const Y = (v) => y + hh - 3 - (v / top) * (hh - 6);
-  const tEnd = t[n - 1], X = (i) => x + w - 1 - ((tEnd - t[i]) / MV_MINI.win) * (w - 2);
-  const gap = Math.max(((t[n - 1] - t[0]) / (n - 1)) * 3, 5);     // разрыв в данных — линию не тянем
-  ctx.setLineDash([3, 3]); ctx.lineWidth = 1; ctx.strokeStyle = 'rgba(255,255,255,.45)';
-  ctx.beginPath(); ctx.moveTo(x, Y(z.on)); ctx.lineTo(x + w, Y(z.on)); ctx.stroke();      // порог «on»
-  ctx.setLineDash([]); ctx.lineWidth = 1.5; ctx.strokeStyle = color;
-  ctx.beginPath();
-  ys.forEach((v, i) => (i && t[i] - t[i - 1] <= gap ? ctx.lineTo(X(i), Y(v)) : ctx.moveTo(X(i), Y(v))));
-  ctx.stroke();
-  ctx.restore();
 }
 
 function drawAllMotionTiles() {
@@ -240,7 +209,6 @@ function startMotionPolling() {
         if (st && st.cameras) st.cameras.forEach((c) => { MV.states[c.id] = c; });
         if (st && st.scenarios) MV.scen = st.scenarios;
         if (typeof paintMotionDockLive === 'function') paintMotionDockLive();
-        if (MV.tick % 5 === 0) mvMiniRefresh();                  // мини-тренды на ячейках: раз в ~5 с
       }
       drawAllMotionTiles();
       updateMotionButton(focusedSource());

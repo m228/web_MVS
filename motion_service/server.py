@@ -12,6 +12,8 @@
   GET  /cameras/{id}/snapshot     — последний кадр JPEG (?w=1280 — уменьшить; заголовки X-Frame-W/H — размер оригинала).
   GET  /cameras/{id}/history      — ряды flow/diff/bit для графиков калибровки (?n=300).
   POST /cameras/{id}/record       — {"on": true|false}: писать метрики каждого кадра в CSV (data\\records).
+  POST /record                    — то же сразу для всех включённых камер.
+  GET  /records.zip               — все CSV записи за последние дни (?days=7) + summary.txt со сводкой сбоев, одним архивом.
   POST /modbus/ping               — {"host","port","device_id","address"}: прочитать один регистр (только чтение).
   GET  /logs                      — последние строки журнала сервиса.
 
@@ -38,6 +40,7 @@ sys.path.insert(0, str(HERE))
 os.environ.setdefault("OPENCV_LOG_LEVEL", "ERROR")
 
 import motion_engine as engine  # noqa: E402
+import motion_records  # noqa: E402
 from motion_camera import CameraWorker, open_capture  # noqa: E402
 from motion_modbus import LinkRegistry, ModbusLink  # noqa: E402
 from motion_scenarios import ScenarioRunner  # noqa: E402
@@ -80,6 +83,7 @@ class Manager:
         self.client_factory = client_factory
         self.workers: dict[str, CameraWorker] = {}
         self.cfg = engine.default_config()
+        self.rec_all = False                    # «писать все»: камера, перезапущенная правкой настроек, продолжает писать в новый файл
         self._lock = threading.RLock()
         self.scenarios = ScenarioRunner(self)
 
@@ -135,8 +139,22 @@ class Manager:
                 if c["id"] not in self.workers:
                     w = CameraWorker(c, new["modbus"], self.links, self.dir, self.capture_factory)
                     self.workers[c["id"]] = w
+                    if self.rec_all and c["enabled"] and c["url"]:
+                        w.start_record()
                     w.start()
             return new
+
+    def record_all(self, on: bool) -> dict:
+        """Запись метрик СРАЗУ по всем включённым камерам (по файлу на камеру) или остановка всех. {камера: имя файла}."""
+        with self._lock:
+            self.rec_all = bool(on)
+            out = {}
+            for cid, w in self.workers.items():
+                if not on:
+                    w.stop_record()
+                elif w.cfg["enabled"] and w.cfg["url"]:
+                    out[cid] = w.start_record()
+            return out
 
     def start(self):
         self.load()
@@ -223,6 +241,21 @@ def create_app(data_dir: Optional[Path] = None, capture_factory: Callable = open
             return {"recording": wk.start_record()}
         wk.stop_record()
         return {"recording": None}
+
+    @app.post("/record")
+    def record_all(req: dict = Body(...)):
+        return {"recording": mgr.record_all(bool(req.get("on")))}
+
+    @app.get("/records.zip")
+    def records_zip(days: float = 7.0):
+        """Все CSV записи за последние days суток + summary.txt (когда и на сколько камеры пропадали) — одним архивом."""
+        for w in list(mgr.workers.values()):
+            w.flush_record()
+        data = motion_records.build_zip(mgr.dir / "records", max(0.01, min(float(days), 365.0)))
+        if data is None:
+            raise HTTPException(404, "записей ещё нет — включите запись («● все» в общем виде панели КЗ)")
+        return Response(content=data, media_type="application/zip",
+                        headers={"Content-Disposition": 'attachment; filename="motion_records_%s.zip"' % time.strftime("%Y%m%d_%H%M")})
 
     @app.post("/modbus/ping")
     def modbus_ping(req: dict = Body(...)):

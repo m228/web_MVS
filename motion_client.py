@@ -63,6 +63,24 @@ def record(service_url: str, cam: str, on: bool) -> dict:
     return _call(service_url, "/cameras/%s/record" % urllib.parse.quote(cam, safe=""), {"on": bool(on)})
 
 
+def record_all(service_url: str, on: bool) -> dict:
+    return _call(service_url, "/record", {"on": bool(on)})
+
+
+def records_zip(service_url: str, days: float = 7.0, timeout: float = 120.0):
+    """(байты zip, None) или (None, текст ошибки): архив записей метрик (CSV + summary.txt)."""
+    try:
+        with _opener.open(_base(service_url) + "/records.zip?days=%s" % float(days), timeout=timeout) as r:
+            return r.read(), None
+    except urllib.error.HTTPError as e:
+        try:
+            return None, json.loads(e.read().decode("utf-8")).get("detail") or "HTTP %d" % e.code
+        except Exception:
+            return None, "HTTP %d" % e.code
+    except Exception:
+        return None, "сервис движения не отвечает (%s)" % _base(service_url)
+
+
 def modbus_ping(service_url: str, body: dict) -> dict:
     return _call(service_url, "/modbus/ping", body, timeout=8.0)
 

@@ -136,7 +136,8 @@ function mdAllPill() {
   const on = mdCfgCams().filter((c) => c.enabled);
   if (!on.length) return ['КЗ нигде не включено', ''];
   const bad = on.filter((c) => mdPill(MV.states[c.id], true)[1] !== 'is-ok').length;
-  return [on.length + ' с КЗ' + (bad ? ' · проблем: ' + bad : ''), bad ? 'is-warn' : 'is-ok'];
+  const rec = on.filter((c) => (MV.states[c.id] || {}).recording).length;
+  return [on.length + ' с КЗ' + (bad ? ' · проблем: ' + bad : '') + (rec ? ' · пишется: ' + rec : ''), bad ? 'is-warn' : 'is-ok'];
 }
 
 function renderMotionDock() {
@@ -168,6 +169,9 @@ function renderMotionDock() {
   mdEl('mdAll').hidden = all;
   mdEl('mdMark').disabled = !(cam && cam.enabled);
   mdEl('mdRec').disabled = !(cam && cam.enabled);
+  mdEl('mdRecAll').hidden = !all;
+  mdEl('mdRecZip').hidden = !all;
+  mdEl('mdRecAll').disabled = !cams.some((c) => c.enabled);
   dock.querySelectorAll('[data-md-tab]').forEach((b) => b.classList.toggle('is-active', b.dataset.mdTab === MD.tab));
   const cap = mdEl('mdCap');
   setCapLine(cap, MV.online, 'Сервис движения работает', 'Сервис движения не запущен (motion_service\\setup.bat, потом перезапуск web_MVS)');
@@ -593,6 +597,12 @@ function paintMotionDockLive() {
     rec.classList.toggle('is-rec', on);
     rec.title = on ? 'Остановить запись метрик в CSV' : 'Писать метрики каждого кадра в CSV (для калибровки порогов)';
   }
+  const recAll = mdEl('mdRecAll');
+  if (recAll && mode === 'all') {
+    const n = mdCfgCams().filter((c) => c.enabled && (MV.states[c.id] || {}).recording).length;
+    recAll.textContent = n ? '■ все (' + n + ')' : '● все';
+    recAll.classList.toggle('is-rec', n > 0);
+  }
   mdCfgCams().forEach((c) => {
     const st = MV.states[c.id];
     const res = st && st.result;
@@ -652,6 +662,30 @@ async function mdOnRec() {
   const st = MV.states[source.serial];
   const r = await mvJson('/api/motion/record', { camera: source.serial, on: !(st && st.recording) });
   if (r && r.error) alert('Запись CSV: ' + r.error);
+}
+
+// запись СРАЗУ по всем камерам с КЗ: «● все» включает у всех (если у части уже идёт — досоздаёт остальным), «■ все» гасит всех
+async function mdOnRecAll() {
+  const on = mdCfgCams().filter((c) => c.enabled);
+  const rec = on.filter((c) => (MV.states[c.id] || {}).recording).length;
+  const r = await mvJson('/api/motion/record_all', { on: rec < on.length });
+  if (r && r.error) alert('Запись CSV: ' + r.error);
+}
+
+// все записи одним архивом (CSV по камерам + summary.txt); через fetch, чтобы ошибку («записей нет») показать, а не скачать пустышку
+async function mdOnRecZip() {
+  try {
+    const r = await fetch('/api/motion/records.zip');
+    if (!r.ok) { alert('Архив записей: ' + (await r.text())); return; }
+    const m = /filename="([^"]+)"/.exec(r.headers.get('Content-Disposition') || '');
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(await r.blob());
+    a.download = m ? m[1] : 'motion_records.zip';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 10000);
+  } catch (e) { alert('Архив записей: ' + e); }
 }
 
 // ---------- окно разметки зоны ----------
@@ -791,6 +825,8 @@ function initMotionDock() {
   mdEl('mdAll')?.addEventListener('click', () => setFocus(-1));   // общий вид: фокус снимаем
   mdEl('mdMark')?.addEventListener('click', openMarkModal);
   mdEl('mdRec')?.addEventListener('click', mdOnRec);
+  mdEl('mdRecAll')?.addEventListener('click', mdOnRecAll);
+  mdEl('mdRecZip')?.addEventListener('click', mdOnRecZip);
   document.querySelectorAll('[data-md-tab]').forEach((b) => b.addEventListener('click', () => {
     MD.tab = b.dataset.mdTab;
     MD.key = '';

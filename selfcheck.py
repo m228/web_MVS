@@ -1478,15 +1478,16 @@ def _motion_service():
     assert motion_client.health("http://127.0.0.1:1", timeout=0.5) is None, "сервис не запущен — None, без исключения"
     assert "error" in motion_client.put_config("http://127.0.0.1:1", {}) and "error" in motion_client.state("http://127.0.0.1:1"), "без сервиса — {error}"
     assert motion_client.snapshot("http://127.0.0.1:1", "c", 0, timeout=0.5) is None, "кадра нет — None"
+    assert "error" in motion_client.record_all("http://127.0.0.1:1", True) and motion_client.records_zip("http://127.0.0.1:1", timeout=0.5)[0] is None, "запись всех и архив без сервиса — ошибка, не исключение"
     import app as _app
     paths = {getattr(r, "path", "") for r in _app.app.routes}
     need = {"/motion", "/api/motion/health", "/api/motion/config", "/api/motion/state", "/api/motion/snapshot", "/api/motion/history",
-            "/api/motion/record", "/api/motion/modbus_ping", "/api/motion/logs", "/api/motion/vision"}
+            "/api/motion/record", "/api/motion/record_all", "/api/motion/records.zip", "/api/motion/modbus_ping", "/api/motion/logs", "/api/motion/vision"}
     assert need <= paths, "нет маршрутов: %s" % sorted(need - paths)
     assert not (Path(BUNDLE_DIR) / "page" / "motion.html").exists(), "отдельной страницы «Движение» больше нет — всё в мультипросмотре"
     assert 'href="/motion"' not in (Path(BUNDLE_DIR) / "page" / "index.html").read_text(encoding="utf-8"), "кнопки «Движение» на главной нет"
     mh = (Path(BUNDLE_DIR) / "page" / "multi.html").read_text(encoding="utf-8")
-    for el in ("multiMotionBtn", "motionDock", "mdSwitch", "mdMark", "mdBody", "motionMarkModal", "mmCanvas"):
+    for el in ("multiMotionBtn", "motionDock", "mdSwitch", "mdMark", "mdBody", "motionMarkModal", "mmCanvas", "mdRecAll", "mdRecZip"):
         assert 'id="%s"' % el in mh, "в мультипросмотре нет #%s" % el
     assert mh.index("10-motion.js") < mh.index("11-motion-dock.js") < mh.index("09-init.js"), "модули КЗ подключены до init"
     assert 'id="multiAutostartToggle"' in mh and mh.index("12-autostart.js") < mh.index("09-init.js"), "галочка автостарта мультипросмотра и её модуль до init"

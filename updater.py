@@ -448,6 +448,37 @@ Remove-Item -LiteralPath $PSCommandPath -Force -ErrorAction SilentlyContinue
     return {"ok": True}
 
 
+_LOG_LINE = re.compile(r"^\ufeff?(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d) (.*)$")
+
+
+def update_log_tail(since: float = 0.0, limit: int = 40) -> list:
+    """Строки update.log (рядом с exe), записанные не раньше since (секунды Unix, местное время машины), без метки времени.
+    Страница по ним показывает ход обновления (скачиваю… / ОШИБКА…): update.ps1 идёт минутами, а на скачивании и стопе приложения
+    сама страница ничего не знает. Из исходников и без файла — пусто."""
+    if not is_frozen():
+        return []
+    try:
+        with open(_app_dir() / "update.log", "rb") as f:
+            f.seek(0, os.SEEK_END)
+            size = f.tell()
+            f.seek(max(0, size - 65536))
+            raw = f.read()
+    except OSError:
+        return []
+    out = []
+    for line in raw.decode("utf-8", "replace").splitlines():
+        m = _LOG_LINE.match(line.strip())
+        if not m:
+            continue
+        try:
+            ts = time.mktime(time.strptime(m.group(1), "%Y-%m-%d %H:%M:%S"))
+        except (ValueError, OverflowError):
+            continue
+        if ts >= since:
+            out.append(m.group(2))
+    return out[-max(1, int(limit)):]
+
+
 # дополнения (сервисы рядом с приложением), которые update.ps1 умеет обновлять из того же релиза
 ADDONS = [
     {"key": "cv", "title": "CV микроскопа (cv_service)", "dir": "cv_service", "marker": "detector.py", "heavy": True},

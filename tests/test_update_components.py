@@ -66,6 +66,23 @@ def test_run_update_script_no_browser_only_if_script_knows_it(tmp_path, monkeypa
     assert r["no_browser"] is False and "-NoBrowser" not in calls[-1]
 
 
+def test_update_log_tail_since(tmp_path, monkeypatch):
+    """Страница ловит ход и ошибку апдейтера по update.log: только строки с момента запуска, без метки времени, BOM и мусор пропускаются."""
+    import time as _t
+    monkeypatch.setattr(updater, "is_frozen", lambda: True)
+    monkeypatch.setattr(updater, "_app_dir", lambda: tmp_path)
+    assert updater.update_log_tail() == [], "файла нет — пусто"
+    since = _t.mktime(_t.strptime("2026-10-30 12:00:00", "%Y-%m-%d %H:%M:%S"))
+    (tmp_path / "update.log").write_bytes(("﻿2026-10-30 11:59:00 старая строка\r\n"
+                                           "2026-10-30 12:00:01 скачиваю web_MVS_v2.0.27.zip (77,0 МБ)...\r\n"
+                                           "не строка лога\r\n"
+                                           "2026-10-30 12:03:10 ОШИБКА: не удалось узнать последнюю версию\r\n").encode("utf-8"))
+    assert updater.update_log_tail(since) == ["скачиваю web_MVS_v2.0.27.zip (77,0 МБ)...", "ОШИБКА: не удалось узнать последнюю версию"]
+    assert len(updater.update_log_tail(0)) == 3 and updater.update_log_tail(0, limit=1) == ["ОШИБКА: не удалось узнать последнюю версию"]
+    monkeypatch.setattr(updater, "is_frozen", lambda: False)
+    assert updater.update_log_tail(since) == [], "из исходников — пусто"
+
+
 # ───────────────────────────── update.ps1 на песочнице ─────────────────────────────
 pytestmark_win = pytest.mark.skipif(sys.platform != "win32", reason="update.ps1 — только Windows PowerShell")
 

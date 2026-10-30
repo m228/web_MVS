@@ -541,6 +541,11 @@ const MultiApi = {
   setAutostart(on) {
     return apiGet(`/api/multi/autostart?on=${on ? 1 : 0}`, 'Ошибка смены автостарта мультипросмотра:', { source: 'api.multi' });
   },
+  // журнал камер: эпизоды обрывов, серых кадров, сбоев КЗ и зон (params — cam, hours, kinds, min_s, limit)
+  events(params) {
+    return apiGet(`/api/cam/events?${new URLSearchParams(params).toString()}`, 'Ошибка чтения журнала камер:',
+      { source: 'api.multi', logRequest: false, logSuccess: false });
+  },
   saveLayout(layout, tiles) {
     const q = new URLSearchParams({ layout: String(layout), tiles: JSON.stringify(tiles) });
     return apiGet(`/api/multi/layout?${q.toString()}`, 'Ошибка сохранения раскладки:',

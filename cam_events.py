@@ -14,9 +14,13 @@
 """
 from __future__ import annotations
 
+import re
+import shutil
 import sqlite3
 import threading
 import time
+from datetime import datetime
+from pathlib import Path
 from typing import Iterable, Optional
 
 from logger import log_event
@@ -49,6 +53,8 @@ def _db() -> sqlite3.Connection:
         c.execute("PRAGMA synchronous=NORMAL")
         c.execute("CREATE TABLE IF NOT EXISTS episodes (id INTEGER PRIMARY KEY AUTOINCREMENT, cam TEXT NOT NULL, "
                   "kind TEXT NOT NULL, zone TEXT NOT NULL DEFAULT '', info TEXT NOT NULL DEFAULT '', t0 REAL NOT NULL, t1 REAL)")
+        if "shot" not in {r["name"] for r in c.execute("PRAGMA table_info(episodes)")}:     # кадр события (путь внутри event_shots)
+            c.execute("ALTER TABLE episodes ADD COLUMN shot TEXT NOT NULL DEFAULT ''")
         c.execute("CREATE INDEX IF NOT EXISTS ix_ep_cam ON episodes (cam, t0)")
         c.execute("CREATE INDEX IF NOT EXISTS ix_ep_t1 ON episodes (t1)")
         c.execute("CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT)")
@@ -112,8 +118,9 @@ def purge(now: float) -> int:
         c = _db()
         n = c.execute("DELETE FROM episodes WHERE t1 IS NOT NULL AND t1 < ?", (now - RETENTION_DAYS * 86400,)).rowcount
         c.commit()
-    if n:
-        log_event("cam_events", "Старые события камер удалены", "info", {"count": n, "days": RETENTION_DAYS})
+    n_shots = purge_shots(now)
+    if n or n_shots:
+        log_event("cam_events", "Старые события камер удалены", "info", {"count": n, "shot_days": n_shots, "days": RETENTION_DAYS})
     return n
 
 
@@ -146,5 +153,54 @@ def episodes(cam: Optional[str] = None, t_from: Optional[float] = None, t_to: Op
     for r in rows:
         t1 = r["t1"]
         out.append({"id": r["id"], "cam": r["cam"], "kind": r["kind"], "zone": r["zone"], "info": r["info"],
-                    "t0": r["t0"], "t1": t1, "dur": round((t1 if t1 is not None else now) - r["t0"], 1)})
+                    "t0": r["t0"], "t1": t1, "dur": round((t1 if t1 is not None else now) - r["t0"], 1),
+                    "shot": bool(r["shot"])})
     return out
+
+
+# ---------- кадры событий (снимок в момент остановки зоны / зависания) ----------
+def shots_dir() -> Path:
+    return DB_PATH.parent / "event_shots"
+
+
+def open_id(cam: str, kind: str, zone: str = "") -> Optional[int]:
+    """id идущего эпизода (чтобы привязать к нему снимок)."""
+    with _lock:
+        _db()
+        return _open.get((cam, kind, zone))
+
+
+def set_shot(ep_id: int, rel: str) -> None:
+    with _lock:
+        c = _db()
+        c.execute("UPDATE episodes SET shot=? WHERE id=?", (rel, ep_id))
+        c.commit()
+
+
+def shot_file(ep_id: int) -> Optional[Path]:
+    """Файл кадра эпизода или None. Путь строго внутри event_shots: из базы берём только относительный путь."""
+    with _lock:
+        row = _db().execute("SELECT shot FROM episodes WHERE id=?", (ep_id,)).fetchone()
+    if not row or not row["shot"]:
+        return None
+    base = shots_dir().resolve()
+    p = (base / row["shot"]).resolve()
+    return p if base in p.parents and p.is_file() else None
+
+
+_DAY_DIR = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+
+def purge_shots(now: float) -> int:
+    """Удалить папки кадров старше RETENTION_DAYS. Трогаем только папки event_shots/<камера>/<ГГГГ-ММ-ДД> со строгим именем-датой."""
+    base = shots_dir()
+    if not base.is_dir():
+        return 0
+    cutoff = datetime.fromtimestamp(now - RETENTION_DAYS * 86400).strftime("%Y-%m-%d")
+    n = 0
+    for cam_dir in (p for p in base.iterdir() if p.is_dir()):
+        for day in (p for p in cam_dir.iterdir() if p.is_dir() and _DAY_DIR.match(p.name)):
+            if day.name < cutoff:
+                shutil.rmtree(day, ignore_errors=True)
+                n += 1
+    return n

@@ -63,3 +63,4 @@ database/
 cam_events.db
 cam_events.db-wal
 cam_events.db-shm
+/event_shots/

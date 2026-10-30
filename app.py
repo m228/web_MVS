@@ -56,7 +56,8 @@ def _rtsp_workers_snapshot() -> dict:
         return dict(manager.rtsp_workers)
 
 
-monitor = cam_monitor.Monitor(_rtsp_workers_snapshot, lambda: _motion_url(), motion_client.state)
+monitor = cam_monitor.Monitor(_rtsp_workers_snapshot, lambda: _motion_url(), motion_client.state,
+                              shot_fn=motion_client.snapshot, cfg_fn=lambda: plate_config.load().get("cam_snapshots"))
 
 
 @asynccontextmanager
@@ -334,6 +335,15 @@ def cam_events_list(cam: str = "", hours: float = 24, kinds: str = "", min_s: fl
     for it in items:
         it["label"] = labels.get(it["cam"]) or it["cam"]
     return {"now": now, "events": items}
+
+
+@app.get("/api/cam/shot")
+def cam_shot(id: int):
+    # кадр, снятый в момент события (остановка зоны / зависание картинки)
+    p = cam_events.shot_file(id)
+    if p is None:
+        return Response(status_code=404)
+    return FileResponse(str(p), media_type="image/jpeg")
 
 
 @app.get("/api/cam/report")

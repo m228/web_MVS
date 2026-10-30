@@ -4598,6 +4598,7 @@ body.micro-rep-doc .micro-cmp-strips { grid-template-columns: repeat(6, 1fr); ga
 .cj-dot--ok { background: #4ade80; }
 .cj-dot--stop { background: #f87171; }
 .cj-dot--warn { background: #fbbf24; }
+.cj-shot { flex: none; margin-left: auto; padding: 0 8px; font-size: 12px; color: var(--accent); text-decoration: underline dotted; }
 @media (max-width: 720px) { .cj-row { grid-template-columns: 1fr 1fr; } }
 .network-modal__body[hidden] { display: none; }
 /* «?» с подсказкой и подзаголовки групп полей в нижней панели КЗ */

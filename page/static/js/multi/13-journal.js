@@ -114,7 +114,8 @@ async function cjLoad() {
     return `<div class="cj-row"><span class="cj-t">${cjFmtTime(e.t0)}</span>` +
       `<span class="cj-d${running ? ' is-run' : ''}">${running ? 'идёт · ' : ''}${cjFmtDur(e.dur)}</span>` +
       `<span class="cj-c" title="${escapeHtml(e.cam)}">${escapeHtml(e.label)}</span>` +
-      `<span class="cj-x"><i class="cj-dot cj-dot--${cjTone(e.kind)}"></i>${escapeHtml(cjText(e))}</span></div>`;
+      `<span class="cj-x"><i class="cj-dot cj-dot--${cjTone(e.kind)}"></i>${escapeHtml(cjText(e))}` +
+      (e.shot ? `<a class="cj-shot" href="/api/cam/shot?id=${e.id}" target="_blank" rel="noopener" title="Кадр в момент события">кадр</a>` : '') + '</span></div>';
   }).join('');
 }
 

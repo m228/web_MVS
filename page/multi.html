@@ -50,6 +50,7 @@
               <span class="micro-check__text">Автостарт</span>
             </label>
             <a href="/" class="btn btn-secondary">К списку камер</a>
+            <button type="button" id="cameraJournalBtn" class="btn btn-secondary" title="Журнал камер: обрывы связи, серые кадры, сбои КЗ, зоны крутится/стоит">Журнал камер</button>
             <button type="button" id="logsBtn" class="btn toolbar-btn--logs" title="Открыть журнал">
               Логи
               <span class="log-counter" id="logCounter">0</span>
@@ -230,6 +231,35 @@
       <label class="field-row"><span>Экспокоррекция</span><input type="range" id="multiImageCompensation" class="light-brightness" min="0" max="100" value="50" title="Экспокоррекция" /></label>
       <label class="field-row"><span>Усиление, мин</span><input type="range" id="multiImageGainMin" class="light-brightness" min="0" max="100" value="0" title="Минимум усиления" /></label>
       <label class="field-row"><span>Усиление, макс</span><input type="range" id="multiImageGainMax" class="light-brightness" min="0" max="100" value="50" title="Максимум усиления" /></label>
+    </div>
+  </div>
+
+  <!-- модалка: журнал камер (обрывы связи, серые кадры, сбои КЗ, зоны) — из cam_events -->
+  <div class="modal-backdrop" id="cameraJournalModal" aria-hidden="true">
+    <div class="network-modal__card settings-card" role="dialog" aria-modal="true">
+      <div class="network-modal__header">
+        <div class="network-modal__title-group">
+          <h2>Журнал камер</h2>
+          <span class="network-modal__serial" id="cjCount">—</span>
+        </div>
+        <button type="button" class="modal-close-btn" id="cjClose" aria-label="Закрыть">×</button>
+      </div>
+      <div class="network-modal__body">
+        <div class="cj-bar">
+          <span class="cj-f">Камера <select id="cjCam"></select></span>
+          <span class="cj-f">За <select id="cjHours">
+            <option value="1">1 час</option><option value="8">8 часов</option><option value="24" selected>сутки</option>
+            <option value="168">неделю</option><option value="720">30 суток</option></select></span>
+          <span class="cj-f" title="Короткие вспышки (мигание зоны на границе порога) скрываются">Не короче <select id="cjMin">
+            <option value="0">любые</option><option value="5" selected>5 с</option><option value="30">30 с</option><option value="300">5 мин</option></select></span>
+          <label class="micro-check"><input type="checkbox" data-cj-kind="link" checked /><span class="micro-check__text">Связь</span></label>
+          <label class="micro-check"><input type="checkbox" data-cj-kind="gray" checked /><span class="micro-check__text">Серые кадры</span></label>
+          <label class="micro-check"><input type="checkbox" data-cj-kind="cv" checked /><span class="micro-check__text">Сбои КЗ</span></label>
+          <label class="micro-check"><input type="checkbox" data-cj-kind="zone" checked /><span class="micro-check__text">Зоны</span></label>
+        </div>
+        <div class="cj-list" id="cjList"></div>
+      </div>
+      <div class="network-modal__footer"></div>
     </div>
   </div>
 
@@ -431,6 +461,7 @@
   <script src="/static/js/multi/10-motion.js"></script>
   <script src="/static/js/multi/11-motion-dock.js"></script>
   <script src="/static/js/multi/12-autostart.js"></script>
+  <script src="/static/js/multi/13-journal.js"></script>
   <script src="/static/js/multi/09-init.js"></script>
 </body>
 </html>

@@ -1490,6 +1490,7 @@ def _motion_service():
         assert 'id="%s"' % el in mh, "в мультипросмотре нет #%s" % el
     assert mh.index("10-motion.js") < mh.index("11-motion-dock.js") < mh.index("09-init.js"), "модули КЗ подключены до init"
     assert 'id="multiAutostartToggle"' in mh and mh.index("12-autostart.js") < mh.index("09-init.js"), "галочка автостарта мультипросмотра и её модуль до init"
+    assert all(('id="%s"' % el) in mh for el in ("cameraJournalBtn", "cameraJournalModal", "cjList")) and mh.index("13-journal.js") < mh.index("09-init.js"), "журнал камер и его модуль до init"
     assert ">КЗ<" in mh and all(('data-md-tab="%s"' % t) in mh for t in ("zones", "plc")), "кнопка «КЗ» и вкладки панели (зоны+тренды, ПЛК+сценарии+группы)"
     assert all(('data-layout="%d"' % n) in mh for n in (1, 2, 4, 6, 8)), "раскладки 1/2/4/6/8"
     mj = (Path(BUNDLE_DIR) / "page" / "static" / "js" / "multi")

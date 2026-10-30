@@ -47,6 +47,13 @@ function mdCamera() {
 
 const mdCfgCams = () => (MV.cfg && MV.cfg.cameras) || [];
 
+// IP камеры из адреса потока — подпись справа в скобках, чтобы отличать камеры с похожими именами (логин и пароль не показываем)
+function mdIp(url) {
+  const m = /^[a-z]+:\/\/(?:[^@/]*@)?([^:/?#]+)/i.exec(String(url || ''));
+  return m ? m[1] : '';
+}
+const mdIpTag = (url) => { const ip = mdIp(url); return ip ? ` <span class="md-ip">(${escapeHtml(ip)})</span>` : ''; };
+
 // камеры, чьи зоны и тренды показываем: в фокусе — одна, иначе все с включённым КЗ
 function mdShownCams() {
   if (mdMode() === 'cam') {
@@ -211,6 +218,9 @@ function mdZoneCardHtml(cam, z, i) {
         <select ${a} data-f="metric">${mdSel([['diff', 'diff'], ['flow', 'flow']], z.metric)}</select>
         <span class="md-lbl">on</span>${mdNum(a + ' data-f="on"', z.on, 'step="0.05" min="0" title="Включить при значении ' + (z.invert ? 'НИЖЕ off' : 'ВЫШЕ on') + '"')}
         <span class="md-lbl">off</span>${mdNum(a + ' data-f="off"', z.off, 'step="0.05" min="0"')}</div>
+      <div class="md-zone__row"><span class="md-lbl" title="Защита от одиночных всплесков: бит зоны меняется, только когда порог выполнен столько кадров анализа ПОДРЯД. Один проскочивший кадр счёт сбрасывает.">кадров подряд</span>
+        <span class="md-lbl">вкл</span>${mdNum(a + ' data-f="fon"', z.frames_to_on == null ? 3 : z.frames_to_on, 'min="1" max="1000" title="Сколько кадров подряд выше порога on, чтобы бит включился"')}
+        <span class="md-lbl">выкл</span>${mdNum(a + ' data-f="foff"', z.frames_to_off == null ? 4 : z.frames_to_off, 'min="1" max="1000" title="Сколько кадров подряд ниже порога off, чтобы бит выключился"')}</div>
       <div class="md-zone__row"><span class="md-lbl">вывод в ПЛК</span>${mdOutCell(z.out, a)}</div>
     </div>
     <div class="md-zone__chart"><canvas id="md-ch-${k}" height="84"></canvas></div>
@@ -243,7 +253,7 @@ function mdCamerasListHtml() {
   if (!rtsp.length) return '';
   return `<details class="md-det" open><summary>Камеры</summary><div class="md-camlist">${rtsp.map((c) =>
     `<label class="md-camrow"><span class="switch"><input type="checkbox" data-md="cs" data-serial="${escapeHtml(c.serial)}"${mvEnabled(c.serial) ? ' checked' : ''}${MV.online ? '' : ' disabled'} /><span class="switch-track"></span></span>` +
-    `<span>${escapeHtml(c.label)}</span><span class="motion-dock__pill" id="md-cp-${escapeHtml(c.serial)}"></span></label>`).join('')}</div></details>`;
+    `<span>${escapeHtml(c.label)}${mdIpTag(c.connection && c.connection.url)}</span><span class="motion-dock__pill" id="md-cp-${escapeHtml(c.serial)}"></span></label>`).join('')}</div></details>`;
 }
 
 function mdZonesTabHtml(mode, cam) {
@@ -261,7 +271,7 @@ function mdZonesTabHtml(mode, cam) {
     html += `<div class="md-trendbar"><span>Тренды за последние <b id="mdWinLbl">${mdFmtWin(MD.win)}</b> ${mdHelp(MD_TREND_HELP)}</span></div><div class="md-zones">`;
     shown.forEach((c) => {
       if (!c.zones.length) return;
-      if (all) html += `<div class="md-camhead"><b>${escapeHtml(c.name)}</b><span class="motion-dock__pill" id="md-cp-${escapeHtml(c.id)}"></span></div>`;
+      if (all) html += `<div class="md-camhead"><b>${escapeHtml(c.name)}${mdIpTag(c.url)}</b><span class="motion-dock__pill" id="md-cp-${escapeHtml(c.id)}"></span></div>`;
       html += c.zones.map((z, i) => mdZoneCardHtml(c, z, i)).join('');
     });
     html += '</div>';
@@ -288,6 +298,7 @@ function mdOnZone(t, cam) {
     else if (f === 'type') { z.type = t.value; z.invert = t.value === 'presence'; }
     else if (f === 'metric') { z.metric = t.value; z.on = MD_THR[z.metric][0]; z.off = MD_THR[z.metric][1]; }
     else if (f === 'on' || f === 'off') z[f] = parseFloat(t.value) || 0;
+    else if (f === 'fon' || f === 'foff') z[f === 'fon' ? 'frames_to_on' : 'frames_to_off'] = Math.max(1, Math.min(1000, parseInt(t.value, 10) || 1));
     else if (f === 'okind') z.out = t.value ? { kind: t.value, address: (z.out && z.out.address) || 0 } : null;
     else if (f === 'oaddr' && z.out) z.out.address = parseInt(t.value, 10) || 0;
   }, f === 'type' || f === 'metric' || f === 'okind');
@@ -379,7 +390,7 @@ function mdOnWheel(e) {
 // ---------- вкладка «ПЛК · сценарии · группы» ----------
 function mdSourceOptions() {
   const out = [];
-  mdCfgCams().forEach((c) => c.zones.forEach((z) => out.push({ camera: c.id, zone: z.id, label: c.name + ' · ' + z.name })));
+  mdCfgCams().forEach((c) => c.zones.forEach((z) => out.push({ camera: c.id, zone: z.id, label: c.name + ' · ' + z.name, ip: mdIpTag(c.url) })));
   return out;
 }
 
@@ -404,7 +415,7 @@ function mdScenarioHtml(s, i) {
   const a = `data-md="s" data-i="${i}"`;
   const opts = mdSourceOptions();
   const chosen = new Set(s.sources.map((x) => x.camera + '/' + x.zone));
-  const src = opts.length ? opts.map((o) => `<label class="md-chk"><input type="checkbox" ${a} data-f="src" value="${escapeHtml(o.camera + '/' + o.zone)}"${chosen.has(o.camera + '/' + o.zone) ? ' checked' : ''} />${escapeHtml(o.label)}</label>`).join('')
+  const src = opts.length ? opts.map((o) => `<label class="md-chk"><input type="checkbox" ${a} data-f="src" value="${escapeHtml(o.camera + '/' + o.zone)}"${chosen.has(o.camera + '/' + o.zone) ? ' checked' : ''} /><span>${escapeHtml(o.label)}${o.ip}</span></label>`).join('')
     : '<span class="net-hint">нет размеченных зон</span>';
   return `<div class="md-card md-card--col">
     <div class="md-row"><input type="text" ${a} data-f="name" value="${escapeHtml(s.name)}" /><span class="md-sp"></span>
@@ -472,7 +483,7 @@ function mdGroupRowHtml(cam, g, i) {
   const out = g.out ? ({ holding: 'регистр', bits: 'биты в регистр', coils: 'coil на зону' }[g.out.kind] + ' @' + g.out.address) : 'без вывода';
   const names = g.zones.map((id) => { const z = cam.zones.find((q) => q.id === id); return escapeHtml(z ? z.name : id); }).join(', ');
   const a = `data-md="g" data-cam="${escapeHtml(cam.id)}" data-i="${i}"`;
-  return `<div class="md-card"><b>${escapeHtml(cam.name)}</b><span class="md-dim">·</span><b>${escapeHtml(g.name)}</b><span class="net-hint">${g.type} · ${names} · ${out}</span><span class="md-sp"></span>
+  return `<div class="md-card"><b>${escapeHtml(cam.name)}${mdIpTag(cam.url)}</b><span class="md-dim">·</span><b>${escapeHtml(g.name)}</b><span class="net-hint">${g.type} · ${names} · ${out}</span><span class="md-sp"></span>
     <span class="cv-bit" id="md-gv-${escapeHtml(cam.id + '-' + g.id)}">–</span>
     <button type="button" class="btn-secondary md-x" ${a} data-f="edit">Изменить</button>
     <button type="button" class="btn-secondary md-x" ${a} data-f="del" title="Удалить группу">✕</button></div>`;
@@ -617,7 +628,7 @@ function paintMotionDockLive() {
   if (box && MD.tab === 'plc' && MV.cfg) {
     box.innerHTML = '<h3 class="md-h">Камеры и запись</h3>' + MV.cfg.cameras.filter((c) => c.enabled).map((c) => {
       const s = MV.states[c.id], p = (s && s.plc) || {};
-      return `<div class="md-card"><b>${escapeHtml(c.name)}</b><span class="md-sp"></span><span class="net-hint">${!MV.cfg.modbus.enable ? 'запись выключена' : p.ok === null || p.ok === undefined ? 'ПЛК: ждёт' : p.ok ? 'ПЛК: ок' : 'ПЛК: ошибка ' + escapeHtml(p.error || '')}</span></div>`;
+      return `<div class="md-card"><b>${escapeHtml(c.name)}${mdIpTag(c.url)}</b><span class="md-sp"></span><span class="net-hint">${!MV.cfg.modbus.enable ? 'запись выключена' : p.ok === null || p.ok === undefined ? 'ПЛК: ждёт' : p.ok ? 'ПЛК: ок' : 'ПЛК: ошибка ' + escapeHtml(p.error || '')}</span></div>`;
     }).join('');
   }
   if (MD.tab === 'zones' && (MV.tick % 2 === 0)) mdDrawTrends();

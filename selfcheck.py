@@ -1495,7 +1495,8 @@ def _motion_service():
     assert all(('data-layout="%d"' % n) in mh for n in (1, 2, 4, 6, 8)), "раскладки 1/2/4/6/8"
     mj = (Path(BUNDLE_DIR) / "page" / "static" / "js" / "multi")
     assert "mdHelp(MD_TREND_HELP)" in (mj / "11-motion-dock.js").read_text(encoding="utf-8"), "в панели КЗ пояснения к трендам — в значке «?», а не абзацами"
-    assert "drawMiniTrend(ctx, g, cam, z," in (mj / "10-motion.js").read_text(encoding="utf-8") and "mvMiniRefresh()" in (mj / "10-motion.js").read_text(encoding="utf-8"), "мини-тренд зоны на ячейке вшит в рисование и опрос КЗ"
+    assert all(x in (mj / "11-motion-dock.js").read_text(encoding="utf-8") for x in ("data-f=\"fon\"", "data-f=\"foff\"", "mdIpTag(")), "в панели КЗ: кадров подряд (вкл/выкл) у зоны и IP камеры в скобках"
+    assert "drawMiniTrend" not in (mj / "10-motion.js").read_text(encoding="utf-8") and "tile._nat" in (mj / "10-motion.js").read_text(encoding="utf-8") and "drawMotionTile(index)" in (mj / "03-layout.js").read_text(encoding="utf-8"), "мини-тренда на ячейке нет; при скрытой «глазиком» картинке зоны КЗ рисуются на чёрном экране"
     assert "initMotionVision()" in (mj / "09-init.js").read_text(encoding="utf-8") and "updateMotionButton(source)" in (mj / "04-stream.js").read_text(encoding="utf-8") and "data-tile-motion" in (mj / "03-layout.js").read_text(encoding="utf-8"), "CV вшит в init, меню и ячейки"
     assert "rtspStreamWatchdog(i, tile, now, metrics)" in (mj / "04-stream.js").read_text(encoding="utf-8"), "автовосстановление RTSP-ячейки вшито в опрос метрик"
     ms = Path(BUNDLE_DIR) / "motion_service"

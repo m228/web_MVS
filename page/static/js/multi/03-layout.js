@@ -221,6 +221,7 @@ function renderTile(index) {
   el.classList.toggle('is-view-hidden', !!tile.hidden);
 
   applyTileRegionUI(index); // кнопка «зум областью» и слой рамки
+  if (typeof drawMotionTile === 'function') drawMotionTile(index); // скрытая картинка: зоны КЗ остаются на чёрном экране
 }
 
 function renderAllTiles() {

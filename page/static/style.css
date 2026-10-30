@@ -4541,8 +4541,8 @@ body.micro-rep-doc .micro-cmp-strips { grid-template-columns: repeat(6, 1fr); ga
 .md-h--row .md-add { margin: 0; }
 .md-groups { margin-top: 14px; }
 .md-card { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 8px 10px; margin: 6px 0; border: 1px solid var(--border); border-radius: 12px; background: var(--surface-muted); font-size: 13px; }
-.md-card--col { flex-direction: column; align-items: stretch; }
-.md-card--col label { display: flex; align-items: center; gap: 8px; }
+.md-card--col { flex-direction: column; align-items: stretch; gap: 6px; padding: 6px 8px; }
+.md-card--col label { display: flex; flex-direction: row; align-items: center; gap: 6px; }
 .md-card .md-row { display: flex; align-items: center; gap: 10px; }
 /* кнопка «+»: маленькая, слева */
 .md-add { width: 28px; height: 28px; padding: 0; margin: 6px 0; border-radius: 8px; border: 1px solid var(--border-strong); background: var(--surface-elevated); color: var(--accent); font-size: 20px; font-weight: 700; line-height: 1; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; transition: border-color 0.18s ease; }
@@ -4567,12 +4567,15 @@ body.micro-rep-doc .micro-cmp-strips { grid-template-columns: repeat(6, 1fr); ga
 .md-ge__btns { grid-column: 1 / -1; display: flex; gap: 8px; }
 .md-ge__btns .btn-primary, .md-ge__btns .btn-secondary { flex: none; width: auto; min-height: 0; padding: 6px 18px; }
 .md-sp { flex: 1; }
-.md-chk { display: inline-flex; align-items: center; gap: 4px; margin-right: 10px; }
+.md-chk { display: inline-flex; flex-direction: row; align-items: center; gap: 6px; margin-right: 10px; font-size: 12px; font-weight: 400; color: var(--text); }
+.md-ip { color: var(--muted); font-weight: 400; font-size: 11px; white-space: nowrap; }
 .md-chk input { width: 16px; height: 16px; min-height: 0; }
-.md-flow { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
-.md-flow__src { display: flex; flex-direction: column; gap: 4px; padding: 6px 10px; border: 1px dashed var(--border-strong); border-radius: 10px; }
-.md-flow__rule, .md-flow__out { padding: 6px 10px; border: 1px solid var(--border-strong); border-radius: 10px; background: var(--surface-strong); }
-.md-flow__arrow { color: var(--muted); font-size: 18px; }
+.md-flow { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.md-flow__src { flex: 1 1 260px; display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 2px 12px; padding: 5px 8px; border: 1px dashed var(--border-strong); border-radius: 10px; }
+.md-flow__src .md-chk { margin: 0; min-width: 0; }
+.md-flow__rule, .md-flow__out { padding: 4px 8px; border: 1px solid var(--border-strong); border-radius: 10px; background: var(--surface-strong); }
+.md-flow__rule select, .md-flow__out select, .md-flow__out input { font-size: 12px; }
+.md-flow__arrow { color: var(--muted); font-size: 16px; }
 
 .motion-mark__card { width: min(1100px, 96vw); max-width: 96vw; }
 .motion-mark__stage { position: relative; display: block; background: #000; border-radius: 12px; overflow: hidden; line-height: 0; }

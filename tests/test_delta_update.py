@@ -160,6 +160,44 @@ def test_updater_rejects_delta_zip_of_wrong_version(server, tmp_path, monkeypatc
     assert st and st["changed"] == 4 and updater._zip_version(part) == "1.0.1"
 
 
+def _updater_on(server, tmp_path, monkeypatch, files_new=NEW, ignore_range=False):
+    import updater
+    app = tmp_path / "app"
+    _install(app, OLD)
+    _mkzip(server.root / "web_MVS_v1.0.1.zip", files_new)
+    server.ignore_range = ignore_range
+    asset = {"name": "web_MVS_v1.0.1.zip", "browser_download_url": server.base + "/web_MVS_v1.0.1.zip",
+             "size": (server.root / "web_MVS_v1.0.1.zip").stat().st_size}
+    monkeypatch.setattr(updater, "_app_dir", lambda: app)
+    monkeypatch.setattr(updater, "is_frozen", lambda: True)
+    monkeypatch.setattr(updater, "STAGING", tmp_path / "stg")
+    monkeypatch.setattr(updater, "STAGED", tmp_path / "stg" / "staged")
+    monkeypatch.setattr(updater, "_fetch_latest_meta", lambda max_age=0.0: ("v1.0.1", asset, ""))
+    return updater, asset
+
+
+def test_download_latest_delta_only_fetches_just_changed_files(server, tmp_path, monkeypatch):
+    """Кнопка «Обновить» сначала просит докачку: качается малая часть архива, а не весь; обновление встаёт как готовое."""
+    updater, asset = _updater_on(server, tmp_path, monkeypatch)
+    r = updater.download_latest(extract=False, delta_only=True)
+    assert r["ok"] and r["version"] == "1.0.1" and r["delta"]["changed"] == 4
+    assert r["delta"]["fetched"] < asset["size"], "по сети пришла только часть архива"
+    assert updater.staged_version() == "1.0.1"
+
+
+def test_download_latest_delta_only_does_not_fall_back_to_full_download(server, tmp_path, monkeypatch):
+    """Докачка не вышла (сервер без Range): ответ delta_failed БЕЗ полной загрузки urllib — полную потом делает update.ps1."""
+    updater, asset = _updater_on(server, tmp_path, monkeypatch, ignore_range=True)
+
+    def boom(*a, **k):
+        raise AssertionError("полная загрузка urllib при delta_only не нужна")
+    monkeypatch.setattr(updater.urllib.request, "urlopen", boom)
+    sent = server.sent
+    r = updater.download_latest(extract=False, delta_only=True)
+    assert r["ok"] is False and r["delta_failed"] is True
+    assert updater.staged_zip() is None and not (tmp_path / "stg").exists()
+
+
 REAL_OLD, REAL_NEW = ROOT / "dist" / "web_MVS_v2.0.3.zip", ROOT / "dist" / "web_MVS_v2.0.6.zip"
 
 

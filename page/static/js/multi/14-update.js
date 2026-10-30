@@ -81,9 +81,10 @@ function muDropFlag() {
 
 async function muVersion() {
   try {
-    const r = await fetch('/api/debug/info', { cache: 'no-store' });
+    // /api/version — лёгкий: /api/debug/info при каждом вызове пишет «Версии окружения» в журнал (раз в 3 с он забивался этим)
+    const r = await fetch('/api/version', { cache: 'no-store' });
     if (!r.ok) return null;
-    return (await r.json()).version || null;
+    return (await r.json()).app || null;
   } catch (e) {
     return null;
   }
@@ -186,10 +187,24 @@ async function onMultiUpdate() {
     muSay('Обновление отменено.', 'ok', { ms: 3000 }); muFinish(); return;
   }
 
-  muSay('Запускаю апдейтер…', 'warn');
   muSaveFlag(chk.current);
+  // сначала докачка: приложение берёт из релиза только изменившиеся файлы (несколько МБ вместо ~77), камеры работают.
+  // Не вышла — ничего страшного: update.ps1 скачает архив целиком сам (системный прокси, повторы)
+  muSay('Докачиваю изменившиеся файлы (камеры работают)…', 'warn');
+  let staged = false;
+  try {
+    const d = await (await fetch('/api/update/download?extract=0&delta_only=1', { cache: 'no-store' })).json();
+    if (d && d.ok) {
+      staged = true;
+      const st = d.delta || {};
+      log.info('Обновление докачано', st);
+      if (st.fetched && st.full_size) muSay(`Докачано ${(st.fetched / 1048576).toFixed(1)} МБ из ${(st.full_size / 1048576).toFixed(0)} МБ. Запускаю апдейтер…`, 'warn');
+    }
+  } catch (e) { /* докачки нет — полная загрузка в update.ps1 */ }
+  if (!staged) muSay('Запускаю апдейтер (архив целиком)…', 'warn');
   const since = Math.floor(Date.now() / 1000) - 2;      // строки update.log с этого момента — наш запуск
-  const r = await UpdateApi.run(keys, false, true);
+  let r = await UpdateApi.run(keys, false, true, staged);
+  if (staged && (!r || !r.ok)) r = await UpdateApi.run(keys, false, true, false);   // скачанный архив не подошёл — пусть update.ps1 скачает сам
   if (!r || !r.ok) {
     muDropFlag();
     muSay((r && r.error) || 'Не удалось запустить обновление.', 'error');

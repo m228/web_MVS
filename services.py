@@ -49,6 +49,19 @@ SPECS = {
 }
 
 
+def installed(name: str, base: Path = DATA_DIR) -> bool:
+    """Сервис стоит рядом: есть <папка>\\server.py и .venv\\Scripts\\python.exe (setup.bat отработал)."""
+    d = Path(base) / SPECS[name]["dir"]
+    return (d / ".venv" / "Scripts" / "python.exe").is_file() and (d / "server.py").is_file()
+
+
+def micro_enabled(cfg: dict, base: Path = DATA_DIR) -> bool:
+    """Микроскоп включён? Галочка на главной (micro_enabled в конфиге) главнее; не нажимали (None) — включён только там,
+    где стоит CV-сервис: нет его — нет и микроскопа, плату/ПЛК на 192.168.1.128 незачем долбить."""
+    v = cfg.get("micro_enabled")
+    return installed("cv", base) if v is None else bool(v)
+
+
 def decide(name: str, cfg: dict, base: Path = DATA_DIR) -> tuple[str, str, Optional[dict]]:
     """Что делать с сервисом: ("off" | "absent" | "remote", почему, None) или ("start", адрес, как запускать).
     "start" значит «должен работать» — отвечает ли он уже, проверяет Supervisor."""
@@ -57,7 +70,7 @@ def decide(name: str, cfg: dict, base: Path = DATA_DIR) -> tuple[str, str, Optio
     if not ((cfg.get("services") or {}).get(name) or {}).get("autostart", True):
         return "off", "автозапуск выключен (services.%s.autostart)" % name, None
     py = d / ".venv" / "Scripts" / "python.exe"
-    if not (py.is_file() and (d / "server.py").is_file()):
+    if not installed(name, base):
         return "absent", "не установлен (нет %s\\.venv — один раз запусти %s\\setup.bat)" % (sp["dir"], sp["dir"]), None
     if not sp["enabled"](cfg):
         return "off", "выключен тумблером на вкладке «CV»", None

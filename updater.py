@@ -488,7 +488,7 @@ def parse_components(value) -> list:
     return out
 
 
-def run_update_script(port: int = 8000, staged: bool = False, components=None, yes: bool = False) -> dict:
+def run_update_script(port: int = 8000, staged: bool = False, components=None, yes: bool = False, no_browser: bool = False) -> dict:
     """Запустить update.ps1 из папки установки (тот же апдейтер, что update.bat): он сам остановит приложение, заменит файлы из
     последнего релиза, запустит приложение и дождётся ответа (при сбое откатит). Здесь только отвязанный запуск: сам скрипт
     приложение останавливает — выходить из процесса тут не нужно. Приложение работает с правами админа (манифест exe), поэтому
@@ -510,6 +510,16 @@ def run_update_script(port: int = 8000, staged: bool = False, components=None, y
            "-Root", str(app_dir), "-Port", str(int(port)), "-NoMenu", "-Components", ",".join(comps)]
     if yes:                                      # тяжёлую первую установку CV пользователь подтвердил на странице
         cmd.append("-Yes")
+    # no_browser: после обновления не открывать новую вкладку — страница, с которой нажали, сама дождётся и перезагрузится.
+    # Первое обновление идёт СТАРЫМ update.ps1 (он заменяется последним) — незнакомый ключ уронил бы запуск, поэтому передаём его, только если скрипт его знает
+    no_browser_applied = False
+    if no_browser:
+        try:
+            no_browser_applied = "NoBrowser" in script.read_text(encoding="utf-8-sig", errors="replace")
+        except OSError:
+            pass
+        if no_browser_applied:
+            cmd.append("-NoBrowser")
     if staged:                                   # быстрый перезапуск: архив уже скачан в фоне — скрипт не качает, только распаковывает и меняет
         zp = staged_zip()
         if zp is None:
@@ -523,4 +533,5 @@ def run_update_script(port: int = 8000, staged: bool = False, components=None, y
         subprocess.Popen(cmd, creationflags=base, close_fds=True, cwd=str(app_dir))
     log_event("updater.run", "Запущен update.ps1 из папки установки" + ("; приложение будет остановлено и запущено заново" if "main" in comps else ""),
               "warn", {"script": str(script), "components": comps})
-    return {"ok": True, "message": "обновление запущено", "components": comps, "restart": "main" in comps}
+    return {"ok": True, "message": "обновление запущено", "components": comps, "restart": "main" in comps,
+            "no_browser": no_browser_applied}

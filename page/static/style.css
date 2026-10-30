@@ -4627,3 +4627,11 @@ body.micro-rep-doc .micro-cmp-strips { grid-template-columns: repeat(6, 1fr); ga
 .cr-stop { background: #f87171; }
 .cr-zt, .cr-zs { color: var(--muted); font-variant-numeric: tabular-nums; }
 @media (max-width: 720px) { .cr-zone { grid-template-columns: 1fr 1fr; } .cr-bar { grid-column: 1 / -1; } }
+
+/* ---------- строка состояния кнопки «Обновить» на странице мультипросмотра ---------- */
+.mu-status { display: inline-flex; align-items: center; gap: 10px; padding: 7px 12px; border-radius: 12px; font-size: 13px; font-weight: 800; }
+.mu-status[hidden] { display: none; }
+.mu-status--ok { background: var(--success-soft); color: var(--success); }
+.mu-status--warn { background: var(--warning-soft); color: var(--warning); }
+.mu-status--error { background: var(--danger-soft); color: var(--danger); }
+.mu-status__cancel { border: 1px solid currentColor; background: transparent; color: inherit; border-radius: 8px; padding: 2px 10px; font: inherit; cursor: pointer; }

@@ -159,6 +159,7 @@ async function initMultiPage() {
   initCameraJournal();
   setLayout(1);
   await loadMultiAutostart();
+  initMultiUpdate().catch(() => {});
   // быстро: сохранённые RTSP-камеры (локальный файл) — сразу в ячейки; долгий опрос GigE после, их ячейки добираем в конце
   await loadSavedRtsp();
   restoreMultiLayout();

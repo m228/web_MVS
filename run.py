@@ -122,9 +122,14 @@ def main():
         cycle_autostart = False
         multi_autostart = False
     no_browser = "--no-browser" in sys.argv or bool(os.environ.get("WEB_MVS_NO_BROWSER"))
+    # --no-open: вообще ничего не открывать (даже при автостарте): так перезапускает update.ps1 по кнопке «Обновить» —
+    # страницу перезагрузит та вкладка, с которой нажали, а вторая вкладка не нужна
+    no_open = "--no-open" in sys.argv
     # --no-browser: автозапуск при входе в Windows (задача планировщика, см. autostart.py)
     # не должен открывать окно каждый раз — КРОМЕ случая автостарта цикла.
-    if cycle_autostart:
+    if no_open:
+        pass
+    elif cycle_autostart:
         try:
             webbrowser.open(f"http://localhost:{PORT}/microscope")
         except Exception:

@@ -183,6 +183,12 @@ function renderMotionDock() {
 const mdSel = (opts, cur) => opts.map(([v, t]) => `<option value="${v}"${String(v) === String(cur) ? ' selected' : ''}>${t}</option>`).join('');
 const mdNum = (attrs, v, extra) => `<input type="number" ${attrs} value="${escapeHtml(v)}" ${extra || ''} />`;
 // поле «подпись слева — значение справа» для сеток настроек
+const MD_TREND_HELP = 'Колесо мыши над графиком — масштаб по времени, правый край всегда «сейчас».\n' +
+  'Линия — метрика зоны. Пунктир: красный — порог «on», оранжевый — «off».\n' +
+  'Нижняя полоска: зелёная — крутится, красная — стоит, серая — нет данных или битый поток. Серый фон — кадры, которые не учитывались.';
+
+// значок «?» с подсказкой при наведении — вместо абзацев пояснений под блоками
+const mdHelp = (text) => `<span class="md-help" title="${escapeHtml(text)}">?</span>`;
 const mdField = (label, ctl, title, cls) => `<label${title ? ` title="${escapeHtml(title)}"` : ''}${cls ? ` class="${cls}"` : ''}><span>${label}</span>${ctl}</label>`;
 
 // ---------- вкладка «Зоны · тренды» ----------
@@ -215,19 +221,20 @@ function mdZoneCardHtml(cam, z, i) {
 function mdCameraParamsHtml(cam) {
   const so = cam.status_out;
   const a = `data-md="c" data-cam="${escapeHtml(cam.id)}"`;
-  return `<details class="md-det" open><summary>Параметры камеры</summary>
+  return `<details class="md-det" open><summary>Параметры камеры ${mdHelp('При смене настроек камеры сервис переподключается к потоку (несколько секунд без данных).')}</summary>
     <div class="md-fields">
       ${mdField('Название', `<input type="text" ${a} data-f="name" value="${escapeHtml(cam.name)}" />`)}
       ${mdField('Адрес потока', `<input type="text" ${a} data-f="url" value="${escapeHtml(cam.url)}" />`, '', 'md-wide')}
+      <div class="md-sub">Анализ движения</div>
       ${mdField('Кадров/с в анализ', mdNum(a + ' data-f="proc_fps"', cam.proc_fps, 'min="0.2" max="30" step="0.5"'))}
       ${mdField('Шаг сравнения, кадров', mdNum(a + ' data-f="frame_gap"', cam.frame_gap, 'min="1" max="10"'), 'Сравнивать кадр не с соседним, а через N кадров: медленное движение виднее')}
+      <div class="md-sub">Защита от сбоев</div>
       ${mdField('Зависла через, с', mdNum(a + ' data-f="freeze_timeout_s"', cam.freeze_timeout_s, 'min="1"'), 'Картинка не меняется дольше — камера зависла: в ПЛК нули и статус 0')}
       ${mdField('Серая каша: доля кадра', mdNum(a + ' data-f="corrupt_ratio"', cam.corrupt_ratio == null ? 0.3 : cam.corrupt_ratio, 'min="0" max="1" step="0.05"'), 'Доля кадра, залитая ровным серым (так выглядит битый H.264). 0 — не проверять')}
       ${mdField('Пауза после каши, с', mdNum(a + ' data-f="corrupt_hold_s"', cam.corrupt_hold_s == null ? 2 : cam.corrupt_hold_s, 'min="0" max="60" step="0.5"'), 'Сколько секунд после каши результаты ещё не учитываются')}
       ${mdField('Статус «камера жива»', `<span class="md-out"><select ${a} data-f="skind">${mdSel([['', 'нет'], ['holding', 'регистр'], ['coil', 'coil']], so ? so.kind : '')}</select>` +
         (so && so.kind ? `<input type="number" ${a} data-f="saddr" min="0" max="65535" value="${so.address}" title="Адрес" placeholder="адрес" />` : '') + '</span>')}
-    </div>
-    <p class="net-hint">При смене настроек камеры сервис переподключается к потоку (несколько секунд без данных).</p></details>`;
+    </div></details>`;
 }
 
 // общий вид: все RTSP-камеры с тумблером КЗ
@@ -251,14 +258,13 @@ function mdZonesTabHtml(mode, cam) {
   } else if (shown.every((c) => !c.zones.length)) {
     html += '<p class="net-hint">Зон нет. Нажмите «Разметить зону» и обведите на кадре то, что должно двигаться (лента, шнек).</p>';
   } else {
-    html += `<div class="md-trendbar"><span>Тренды за последние <b id="mdWinLbl">${mdFmtWin(MD.win)}</b></span>
-      <span class="net-hint">колесо мыши над графиком — масштаб по времени, правый край всегда «сейчас»</span></div><div class="md-zones">`;
+    html += `<div class="md-trendbar"><span>Тренды за последние <b id="mdWinLbl">${mdFmtWin(MD.win)}</b> ${mdHelp(MD_TREND_HELP)}</span></div><div class="md-zones">`;
     shown.forEach((c) => {
       if (!c.zones.length) return;
       if (all) html += `<div class="md-camhead"><b>${escapeHtml(c.name)}</b><span class="motion-dock__pill" id="md-cp-${escapeHtml(c.id)}"></span></div>`;
       html += c.zones.map((z, i) => mdZoneCardHtml(c, z, i)).join('');
     });
-    html += `</div><p class="net-hint">Линия — метрика зоны. Пунктир: красный — порог «on», оранжевый — «off». Нижняя полоска: зелёная — крутится, красная — стоит, серая — нет данных или битый поток. Серый фон — кадры, которые не учитывались.</p>`;
+    html += '</div>';
   }
   html += all ? mdCamerasListHtml() : mdCameraParamsHtml(cam);
   return html;

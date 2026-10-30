@@ -4600,6 +4600,10 @@ body.micro-rep-doc .micro-cmp-strips { grid-template-columns: repeat(6, 1fr); ga
 .cj-dot--warn { background: #fbbf24; }
 @media (max-width: 720px) { .cj-row { grid-template-columns: 1fr 1fr; } }
 .network-modal__body[hidden] { display: none; }
+/* «?» с подсказкой и подзаголовки групп полей в нижней панели КЗ */
+.md-help { display: inline-flex; align-items: center; justify-content: center; width: 15px; height: 15px; margin-left: 6px; border-radius: 50%; border: 1px solid var(--border); color: var(--muted); font-size: 10px; font-weight: 600; cursor: help; vertical-align: 1px; }
+.md-help:hover { color: var(--accent); border-color: var(--accent); }
+.md-fields .md-sub { grid-column: 1 / -1; margin-top: 4px; font-size: 11px; letter-spacing: .04em; text-transform: uppercase; color: var(--muted); }
 .cj-tabs { padding: 0 24px; }
 .cj-bar .md-icon { min-width: 30px; }
 .cj-bar input[type=date] { width: auto; min-height: 0; padding: 4px 8px; font-size: 13px; }

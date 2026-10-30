@@ -1494,6 +1494,7 @@ def _motion_service():
     assert all(('data-layout="%d"' % n) in mh for n in (1, 2, 4, 6, 8)), "раскладки 1/2/4/6/8"
     mj = (Path(BUNDLE_DIR) / "page" / "static" / "js" / "multi")
     assert "initMotionVision()" in (mj / "09-init.js").read_text(encoding="utf-8") and "updateMotionButton(source)" in (mj / "04-stream.js").read_text(encoding="utf-8") and "data-tile-motion" in (mj / "03-layout.js").read_text(encoding="utf-8"), "CV вшит в init, меню и ячейки"
+    assert "rtspStreamWatchdog(i, tile, now, metrics)" in (mj / "04-stream.js").read_text(encoding="utf-8"), "автовосстановление RTSP-ячейки вшито в опрос метрик"
     ms = Path(BUNDLE_DIR) / "motion_service"
     if str(ms) not in sys.path:
         sys.path.insert(0, str(ms))

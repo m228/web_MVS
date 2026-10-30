@@ -112,17 +112,27 @@ def main():
     # --no-browser (страница сама подключит камеру и включит «Автомат», см. microscope.js),
     # т.к. GigE-камера стримит только при открытой странице.
     cycle_autostart = False
+    multi_autostart = False
     try:
         import plate_config
-        cycle_autostart = bool(plate_config.load().get("cycle_autostart", False))
+        _cfg = plate_config.load()
+        cycle_autostart = bool(_cfg.get("cycle_autostart", False))
+        multi_autostart = bool(_cfg.get("multi_autostart", False))
     except Exception:
         cycle_autostart = False
+        multi_autostart = False
     no_browser = "--no-browser" in sys.argv or bool(os.environ.get("WEB_MVS_NO_BROWSER"))
     # --no-browser: автозапуск при входе в Windows (задача планировщика, см. autostart.py)
     # не должен открывать окно каждый раз — КРОМЕ случая автостарта цикла.
     if cycle_autostart:
         try:
             webbrowser.open(f"http://localhost:{PORT}/microscope")
+        except Exception:
+            pass
+    elif multi_autostart:
+        # то же для мультипросмотра: страница сама восстановит раскладку и подключит камеры
+        try:
+            webbrowser.open(f"http://localhost:{PORT}/multi")
         except Exception:
             pass
     elif not no_browser:

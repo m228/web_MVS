@@ -276,6 +276,38 @@ def micro_cycle_autostart(on: int):
     return micro.set_cycle_autostart(bool(on))
 
 
+@app.get("/api/multi/config")
+def multi_config():
+    # галочка «Автостарт мультипросмотра» и последняя раскладка ячеек (для быстрого восстановления страницы)
+    cfg = plate_config.load()
+    return {"autostart": bool(cfg.get("multi_autostart")), "layout": cfg.get("multi_layout") or {}}
+
+
+@app.get("/api/multi/autostart")
+def multi_autostart(on: int):
+    # включение гасит «Автостарт цикла» микроскопа (и наоборот, см. set_cycle_autostart): открывается что-то одно
+    on = bool(on)
+    plate_config.save({"multi_autostart": on})
+    if on:
+        micro.set_cycle_autostart(False)
+    api_log("api.multi", "Автостарт мультипросмотра: " + ("вкл" if on else "выкл"))
+    return {"status": "ok", "autostart": on}
+
+
+@app.get("/api/multi/layout")
+def multi_layout(layout: int, tiles: str = "[]"):
+    # запомнить, какая камера в какой ячейке; tiles — JSON-массив серийников (null — пустая ячейка)
+    try:
+        items = json.loads(tiles)
+    except ValueError:
+        return {"status": "error", "error": "tiles: ожидается JSON-массив"}
+    if not isinstance(items, list) or not (1 <= layout <= 16):
+        return {"status": "error", "error": "layout: 1..16, tiles: массив"}
+    items = [str(s) if s else None for s in items[:layout]]
+    plate_config.save({"multi_layout": {"layout": layout, "tiles": items}})
+    return {"status": "ok"}
+
+
 @app.get("/api/micro/arrive_sensor")
 def micro_arrive_sensor(mode: str):
     # датчик прихода мотора для цикла: enc (энкодер 1285) / calc (расчётная 1274) / ai (аналог 1271)

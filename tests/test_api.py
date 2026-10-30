@@ -83,3 +83,30 @@ def test_version_payload(data_dir):
     import json
     status, body = get("/api/version")
     assert status == 200 and "app" in json.loads(body)
+
+
+def test_multi_autostart_excludes_cycle_autostart(data_dir):
+    # при запуске открывается что-то одно: включение одного автостарта гасит другой
+    import plate_config
+    get("/api/micro/cycle_autostart", "on=1")
+    assert plate_config.load()["cycle_autostart"] is True
+    get("/api/multi/autostart", "on=1")
+    cfg = plate_config.load()
+    assert cfg["multi_autostart"] is True and cfg["cycle_autostart"] is False
+    get("/api/micro/cycle_autostart", "on=1")
+    cfg = plate_config.load()
+    assert cfg["cycle_autostart"] is True and cfg["multi_autostart"] is False
+    get("/api/multi/autostart", "on=0")
+    assert plate_config.load()["cycle_autostart"] is True, "выключение мульти не трогает микроскоп"
+
+
+def test_multi_layout_roundtrip_and_validation(data_dir):
+    import json
+    import urllib.parse
+    q = "layout=4&tiles=" + urllib.parse.quote(json.dumps(["rtsp_1", None, "A1", ""]))
+    assert json.loads(get("/api/multi/layout", q)[1])["status"] == "ok"
+    saved = json.loads(get("/api/multi/config")[1])
+    assert saved["layout"] == {"layout": 4, "tiles": ["rtsp_1", None, "A1", None]}
+    assert saved["autostart"] is False
+    assert "error" in json.loads(get("/api/multi/layout", "layout=2&tiles=oops")[1])
+    assert "error" in json.loads(get("/api/multi/layout", "layout=0&tiles=[]")[1])

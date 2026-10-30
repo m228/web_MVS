@@ -24,6 +24,7 @@ function setLayout(n) {
   updateLayoutButtons();
   updateToolbar();
   log.info('Раскладка изменена', { layout: n });
+  saveMultiLayoutSoon();
 }
 
 function updateLayoutButtons() {
@@ -253,6 +254,7 @@ function assignSource(index, serial) {
   renderTile(index);
   setFocus(index);
   log.info('Камера назначена на ячейку', { tile: index, serial });
+  saveMultiLayoutSoon();
 }
 
 // ---------- фокус ----------

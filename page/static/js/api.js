@@ -531,3 +531,21 @@ const AutostartApi = {
 };
 
 window.AutostartApi = AutostartApi;
+
+// мультипросмотр: галочка автостарта и запомненная раскладка ячеек (plate_config)
+const MultiApi = {
+  config() {
+    return apiGet('/api/multi/config', 'Ошибка чтения автостарта мультипросмотра:',
+      { source: 'api.multi', logRequest: false, logSuccess: false });
+  },
+  setAutostart(on) {
+    return apiGet(`/api/multi/autostart?on=${on ? 1 : 0}`, 'Ошибка смены автостарта мультипросмотра:', { source: 'api.multi' });
+  },
+  saveLayout(layout, tiles) {
+    const q = new URLSearchParams({ layout: String(layout), tiles: JSON.stringify(tiles) });
+    return apiGet(`/api/multi/layout?${q.toString()}`, 'Ошибка сохранения раскладки:',
+      { source: 'api.multi', logRequest: false, logSuccess: false });
+  },
+};
+
+window.MultiApi = MultiApi;

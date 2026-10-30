@@ -244,7 +244,21 @@
         </div>
         <button type="button" class="modal-close-btn" id="cjClose" aria-label="Закрыть">×</button>
       </div>
-      <div class="network-modal__body">
+      <div class="motion-dock__tabs cj-tabs" role="tablist" aria-label="Журнал камер">
+        <button type="button" class="md-tab is-active" role="tab" data-cj-tab="journal">События</button>
+        <button type="button" class="md-tab" role="tab" data-cj-tab="report">Отчёт смены</button>
+      </div>
+      <div class="network-modal__body" id="cjReport" hidden>
+        <div class="cj-bar">
+          <button type="button" class="btn-secondary md-icon" id="crPrev" title="Предыдущая смена" aria-label="Предыдущая смена">‹</button>
+          <span class="cj-f"><input type="date" id="crDate" /></span>
+          <span class="cj-f"><select id="crPart"><option value="day">день 08–20</option><option value="night">ночь 20–08</option><option value="all">сутки 08–08</option></select></span>
+          <button type="button" class="btn-secondary md-icon" id="crNext" title="Следующая смена" aria-label="Следующая смена">›</button>
+          <button type="button" class="md-link" id="crNow" title="Вернуться к идущей смене">сейчас</button>
+        </div>
+        <div class="cr-list" id="crList"></div>
+      </div>
+      <div class="network-modal__body" id="cjJournal">
         <div class="cj-bar">
           <span class="cj-f">Камера <select id="cjCam"></select></span>
           <span class="cj-f">За <select id="cjHours">

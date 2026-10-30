@@ -136,8 +136,10 @@ def episodes(cam: Optional[str] = None, t_from: Optional[float] = None, t_to: Op
     if kinds:
         where.append("kind IN (%s)" % ",".join("?" * len(kinds)))
         args += kinds
-    sql = "SELECT * FROM episodes WHERE %s ORDER BY t0 DESC, id DESC LIMIT ?" % " AND ".join(where)
-    args.append(max(1, min(int(limit), 5000)))
+    sql = "SELECT * FROM episodes WHERE %s ORDER BY t0 DESC, id DESC" % " AND ".join(where)
+    if limit and int(limit) > 0:                # limit=0 — без ограничения (для отчёта нужны все эпизоды окна)
+        sql += " LIMIT ?"
+        args.append(min(int(limit), 5000))
     with _lock:
         rows = _db().execute(sql, args).fetchall()
     out = []

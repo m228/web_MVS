@@ -34,6 +34,7 @@ param(
     [switch]$NoBrowser
 )
 $ErrorActionPreference = 'Stop'
+$ProgressPreference = 'SilentlyContinue'   # без полосы прогресса: в Windows PowerShell 5.1 она сильно тормозит скачивание
 try { [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 } catch {}   # GitHub требует TLS 1.2
 try { [Console]::OutputEncoding = [System.Text.Encoding]::UTF8 } catch {}
 
@@ -130,6 +131,35 @@ function Invoke-WithRetry([scriptblock]$Action, [int]$Tries = 3) {
             Start-Sleep -Seconds 5
         }
     }
+}
+
+function Save-Download([string]$url, [string]$out, [int64]$size = 0, [int]$logEverySec = 10, [int]$stallSec = 120) {
+    # Скачивание WebClient-ом вместо Invoke-WebRequest (в Windows PowerShell 5.1 тот на крупных файлах в разы медленнее).
+    # Пока качает, раз в $logEverySec пишем в update.log «скачано X из Y МБ» (страница «Обновить» показывает последнюю строку лога);
+    # если файл $stallSec секунд не растёт (связь «повисла» без обрыва) — отмена, и Invoke-WithRetry пробует снова.
+    $wc = New-Object System.Net.WebClient
+    $wc.Proxy = [System.Net.WebRequest]::DefaultWebProxy
+    $wc.Headers.Add('User-Agent', 'web_MVS-update')
+    try {
+        $task = $wc.DownloadFileTaskAsync([Uri]$url, $out)
+        $lastLog = Get-Date; $lastGrow = Get-Date; $prev = -1
+        while (-not $task.IsCompleted) {
+            Start-Sleep -Milliseconds 500
+            $len = 0
+            if (Test-Path -LiteralPath $out) { $len = (Get-Item -LiteralPath $out).Length }
+            if ($len -ne $prev) { $prev = $len; $lastGrow = Get-Date }
+            if (((Get-Date) - $lastGrow).TotalSeconds -ge $stallSec) {
+                $wc.CancelAsync()
+                throw ("скачивание остановилось: нет данных {0} секунд" -f $stallSec)
+            }
+            if (((Get-Date) - $lastLog).TotalSeconds -ge $logEverySec) {
+                $lastLog = Get-Date
+                if ($size -gt 0) { Log ("скачано {0:N1} из {1:N1} МБ" -f ($len / 1MB), ($size / 1MB)) } else { Log ("скачано {0:N1} МБ" -f ($len / 1MB)) }
+            }
+        }
+        if ($task.IsFaulted) { throw $task.Exception.InnerException }
+        if ($task.IsCanceled) { throw 'скачивание отменено' }
+    } finally { $wc.Dispose() }
 }
 
 # ---------- запуск и остановка приложения ----------
@@ -233,7 +263,7 @@ function Invoke-Update {
     if (-not $zipFile) {
         $zipFile = Join-Path $tmp $asset.name
         Log ("скачиваю {0} ({1:N1} МБ)..." -f $asset.name, ($asset.size / 1MB))
-        Invoke-WithRetry { Invoke-WebRequest -Uri $asset.browser_download_url -OutFile $zipFile -Headers @{ 'User-Agent' = 'web_MVS-update' } -UseBasicParsing } | Out-Null
+        Invoke-WithRetry { Save-Download $asset.browser_download_url $zipFile ([int64]$asset.size) } | Out-Null
         if ($asset.size -and ((Get-Item -LiteralPath $zipFile).Length -ne [int64]$asset.size)) { throw "размер архива не совпал ($((Get-Item -LiteralPath $zipFile).Length) вместо $($asset.size))" }
         $digest = [string]$asset.digest
         if ($digest.StartsWith('sha256:')) {
@@ -472,7 +502,7 @@ function Update-Addon($d) {
         if (-not $zip) {
             $zip = Join-Path $tmp $asset.name
             Log ("скачиваю {0} ({1:N1} МБ)..." -f $asset.name, ($asset.size / 1MB))
-            Invoke-WithRetry { Invoke-WebRequest -Uri $asset.browser_download_url -OutFile $zip -Headers @{ 'User-Agent' = 'web_MVS-update' } -UseBasicParsing } | Out-Null
+            Invoke-WithRetry { Save-Download $asset.browser_download_url $zip ([int64]$asset.size) } | Out-Null
             if ($asset.size -and ((Get-Item -LiteralPath $zip).Length -ne [int64]$asset.size)) { throw 'размер архива не совпал — скачивание повреждено' }
             $digest = [string]$asset.digest
             if ($digest.StartsWith('sha256:')) {

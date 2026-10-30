@@ -1134,7 +1134,7 @@ async function pollUntilBack(timeoutMs = 180000) {
     try {
       // лёгкий health-check: /api/debug/info отвечает локально и мгновенно.
       // /api/update/check синхронно ходит на GitHub (timeout 15 c) — для «сервер уже поднялся?» не годится
-      const resp = await fetch('/api/debug/info', { cache: 'no-store' });
+      const resp = await fetch('/api/version', { cache: 'no-store' });
       if (resp.ok) {
         setUpdateStatus('Готово! Перезагружаю страницу…', 'status-chip--ok');
         await new Promise((r) => setTimeout(r, 1200));

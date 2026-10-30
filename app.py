@@ -209,10 +209,10 @@ def api_update_check():
 
 
 @app.get("/api/update/download")
-def api_update_download(extract: int = 1):
+def api_update_download(extract: int = 1, delta_only: int = 0):
     """Скачать обновление в фоне (работа не прерывается). extract=0 — без распаковки (для «перезапустить» на странице микроскопа)."""
     api_log("api.update", "Скачивание обновления")
-    return updater.download_latest(extract=bool(extract))
+    return updater.download_latest(extract=bool(extract), delta_only=bool(delta_only))
 
 
 @app.get("/api/update/components")

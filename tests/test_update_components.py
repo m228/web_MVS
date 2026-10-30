@@ -4,6 +4,7 @@
 дополнительный сервис в zip (с маркером, VERSION и своим setup.bat, который создаёт .venv), без сети и без админа.
 """
 import subprocess
+import time
 import sys
 import zipfile
 from pathlib import Path
@@ -142,3 +143,53 @@ def test_update_ps1_installs_updates_and_skips_addon(tmp_path):
         z.writestr("VERSION", "2.0.1\r\n")
     code, out = _run_update(root, zips, "-Components", "cv")                       # тяжёлая первая установка без -Yes
     assert code == 1 and "-Yes" in out, out
+
+
+@pytestmark_win
+def test_update_ps1_save_download_progress_and_stall(tmp_path):
+    """Save-Download (WebClient вместо медленного Invoke-WebRequest): файл скачивается целиком, ход пишется в лог, «повисшая» связь отменяется."""
+    import http.server
+    import threading
+
+    class H(http.server.BaseHTTPRequestHandler):
+        def log_message(self, *a):
+            pass
+
+        def do_GET(self):
+            n = 6 * 1024 * 1024
+            self.send_response(200)
+            self.send_header("Content-Length", str(n))
+            self.end_headers()
+            if self.path == "/ok":
+                for _ in range(6):
+                    self.wfile.write(b"x" * (1024 * 1024))
+                    self.wfile.flush()
+                    time.sleep(0.5)
+            else:                                           # /stall: отдал мегабайт и замолчал
+                self.wfile.write(b"x" * (1024 * 1024))
+                self.wfile.flush()
+                time.sleep(15)
+
+    srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), H)
+    srv.daemon_threads = True
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    port = srv.server_address[1]
+    try:
+        src = (ROOT / "update.ps1").read_text(encoding="utf-8-sig")
+        func = src[src.index("function Save-Download"):src.index("# ---------- запуск и остановка приложения")]
+        out_ok, out_stall = tmp_path / "ok.bin", tmp_path / "stall.bin"
+        script = ('$ErrorActionPreference="Stop"\n[Console]::OutputEncoding=[Text.Encoding]::UTF8\n'
+                  'function Log([string]$m,[string]$c=""){ Write-Host ("LOG: "+$m) }\n' + func +
+                  "\nSave-Download 'http://127.0.0.1:%d/ok' '%s' (6MB) 1 20\n" % (port, out_ok) +
+                  "'DONE ' + (Get-Item '%s').Length\n" % out_ok +
+                  "try { Save-Download 'http://127.0.0.1:%d/stall' '%s' (6MB) 1 3; 'NOSTALL' } catch { 'STALL ' + $_.Exception.Message }\n" % (port, out_stall))
+        ps1 = tmp_path / "t.ps1"
+        ps1.write_text(script, encoding="utf-8-sig")
+        p = subprocess.run(["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(ps1)], capture_output=True, text=True,
+                           encoding="utf-8", errors="replace", timeout=90, stdin=subprocess.DEVNULL)
+        out = p.stdout + p.stderr
+        assert "DONE %d" % (6 * 1024 * 1024) in out, out
+        assert "LOG: скачано" in out and "из 6,0 МБ" in out.replace(".", ","), "ход скачивания пишется в лог: " + out
+        assert "STALL скачивание остановилось" in out, out
+    finally:
+        srv.shutdown()

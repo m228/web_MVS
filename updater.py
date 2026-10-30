@@ -222,17 +222,19 @@ def _download_stream(resp, out, max_bytes, deadline):
     return total
 
 
-def download_latest(extract: bool = True):
+def download_latest(extract: bool = True, delta_only: bool = False):
     """Скачать последний релиз (и распаковать во временную папку — для apply_update; для кнопки «перезапустить» на странице
     микроскопа распаковка не нужна: update.ps1 сам распакует архив, extract=False). Только в бандле. Работает в фоне, приложение
     при этом не останавливается. Скачивание идёт в *.part и переименовывается только после проверки размера и sha256 —
-    недокачанный файл не принимается за готовое обновление."""
+    недокачанный файл не принимается за готовое обновление.
+    delta_only — только докачка изменившихся файлов (несколько МБ вместо ~77): не вышла — сразу ответ delta_failed, без полной загрузки
+    этим же способом (её тогда делает update.ps1, у него системный прокси и повторы)."""
     if not is_frozen():
         return {"ok": False, "error": "Обновление доступно только в собранной версии (.exe)"}
     if not _DL_LOCK.acquire(blocking=False):
         return {"ok": False, "busy": True, "error": "Скачивание уже идёт"}
     try:
-        return _download_latest_locked(extract)
+        return _download_latest_locked(extract, delta_only)
     finally:
         _DL_LOCK.release()
 
@@ -257,7 +259,7 @@ def _try_delta(asset: dict, tag: str, size: int, part_path: Path, deadline: floa
     return st
 
 
-def _download_latest_locked(extract: bool):
+def _download_latest_locked(extract: bool, delta_only: bool = False):
     try:
         # переиспользуем свежий ответ от check_latest (последние 2 минуты),
         # чтобы не делать второй запрос и скачать ту же версию, что в UI
@@ -279,6 +281,9 @@ def _download_latest_locked(extract: bool):
         size = int(asset.get("size") or 0)
         deadline = time.time() + _DOWNLOAD_DEADLINE
         delta = _try_delta(asset, tag, size, part_path, deadline)
+        if delta is None and delta_only:
+            shutil.rmtree(STAGING, ignore_errors=True)
+            return {"ok": False, "delta_failed": True, "error": "докачка изменившихся файлов не вышла"}
         if delta is None:
             req = urllib.request.Request(asset["browser_download_url"],
                                          headers={"User-Agent": "web_MVS-update"})

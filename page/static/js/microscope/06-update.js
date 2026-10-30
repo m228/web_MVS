@@ -68,7 +68,7 @@
       let camWas = false;
       try { if (camConnected) { say("закрываю камеру…"); camWas = await camCloseGracefully(); if (camWas) { try { localStorage.setItem("microCamReconnect", "1"); } catch (e) { } } } } catch (e) { }
       say("запускаю…");
-      try { window.__verBefore = (await (await fetch("/api/debug/info", { cache: "no-store" })).json()).version; } catch (e) { window.__verBefore = ""; }   // версию «до» берём ДО запуска
+      try { window.__verBefore = (await (await fetch("/api/version", { cache: "no-store" })).json()).app; } catch (e) { window.__verBefore = ""; }   // версию «до» берём ДО запуска
       let r;
       try { r = await (await fetch("/api/update/run?staged=1")).json(); } catch (e) { r = null; }
       if (!r || !r.ok) {
@@ -81,8 +81,8 @@
       const started = Date.now();
       const poll = async () => {
         try {
-          const i = await (await fetch("/api/debug/info", { cache: "no-store" })).json();
-          if (i && i.version && i.version !== (window.__verBefore || "")) { window.location.reload(); return; }
+          const i = await (await fetch("/api/version", { cache: "no-store" })).json();
+          if (i && i.app && i.app !== (window.__verBefore || "")) { window.location.reload(); return; }
         } catch (e) { /* приложение перезапускается */ }
         if (Date.now() - started > 8 * 60 * 1000) { say("долго — проверь update.log", 0); btn.classList.remove("is-busy"); return; }
         setTimeout(poll, 3000);

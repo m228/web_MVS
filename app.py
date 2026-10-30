@@ -31,6 +31,7 @@ import video_client
 import motion_client
 import cam_events
 import cam_monitor
+import cam_report
 import services
 import fracture_lab
 import cv_store
@@ -333,6 +334,29 @@ def cam_events_list(cam: str = "", hours: float = 24, kinds: str = "", min_s: fl
     for it in items:
         it["label"] = labels.get(it["cam"]) or it["cam"]
     return {"now": now, "events": items}
+
+
+@app.get("/api/cam/report")
+def cam_report_api(date: str = "", part: str = "", min_stop: float = cam_report.MIN_STOP_S):
+    # отчёт камер за смену: date — дата начала смены ГГГГ-ММ-ДД, part — day (08–20) | night (20–08) | all (сутки 08–08);
+    # без них — идущая смена. По каждой камере: связь, серые кадры, сбои КЗ, зоны крутится/стоит, записано фото и видео
+    now = time.time()
+    cur_date, cur_part = cam_report.current_shift(now)
+    date, part = date or cur_date, part or cur_part
+    try:
+        t0, t1 = cam_report.shift_window(date, part)
+    except ValueError as e:
+        return {"error": str(e)}
+    eps = cam_events.episodes(None, t0, t1, None, 0, 0, now)
+    summary = cam_report.summarize(eps, t0, t1, now, max(0.0, float(min_stop)))
+    labels = {e.get("serial"): e.get("label") for e in rtsp_store.load() if e.get("serial")}
+    empty = {"link": {"lost_s": 0.0, "n": 0}, "gray": {"s": 0.0, "n": 0}, "cv": {"s": 0.0, "n": 0}, "zones": []}
+    cams = []
+    for cam in sorted(set(labels) | set(summary["cams"])):
+        item = dict(summary["cams"].get(cam) or empty)
+        item.update(cam=cam, label=labels.get(cam) or cam, files=cam_report.count_files(cam, t0, min(t1, now)))
+        cams.append(item)
+    return {"date": date, "part": part, "t0": t0, "t1": t1, "now": now, "window_s": summary["window_s"], "cameras": cams}
 
 
 @app.get("/api/micro/arrive_sensor")

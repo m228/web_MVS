@@ -546,6 +546,11 @@ const MultiApi = {
     return apiGet(`/api/cam/events?${new URLSearchParams(params).toString()}`, 'Ошибка чтения журнала камер:',
       { source: 'api.multi', logRequest: false, logSuccess: false });
   },
+  // отчёт камер за смену (params — date ГГГГ-ММ-ДД и part day|night|all; без них — идущая смена)
+  report(params) {
+    return apiGet(`/api/cam/report?${new URLSearchParams(params || {}).toString()}`, 'Ошибка построения отчёта камер:',
+      { source: 'api.multi', logRequest: false, logSuccess: false });
+  },
   saveLayout(layout, tiles) {
     const q = new URLSearchParams({ layout: String(layout), tiles: JSON.stringify(tiles) });
     return apiGet(`/api/multi/layout?${q.toString()}`, 'Ошибка сохранения раскладки:',

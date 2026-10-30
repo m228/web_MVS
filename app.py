@@ -74,10 +74,10 @@ async def lifespan(app: FastAPI):
     manager.scan_cams()
     # плата микроскопа + автомат (пытается подключиться к плате; без неё — тихий реконнект).
     # Поднимаем ТОЛЬКО если микроскоп включён галочкой на главной (micro_enabled).
-    if plate_config.load().get("micro_enabled", True):
+    if services.micro_enabled(plate_config.load()):
         micro.start()
     else:
-        api_log("app", "Микроскоп выключен галочкой — плата/ПЛК не поднимаются")
+        api_log("app", "Микроскоп выключен (галочка или нет CV-сервиса рядом) — плата/ПЛК не поднимаются")
     # RTSP-камеры с галочкой «автоподключение» поднимаем сами: захват фоновый,
     # поэтому съёмка/автосохранение идут без открытого браузера (см. camera_core)
     manager.resume_rtsp_autostart()
@@ -149,7 +149,7 @@ def network_page():
 @app.get("/microscope")
 def microscope_page():
     # если микроскоп выключен галочкой на главной — заглушка вместо страницы
-    if not plate_config.load().get("micro_enabled", True):
+    if not services.micro_enabled(plate_config.load()):
         return HTMLResponse(
             "<!doctype html><html lang=ru><head><meta charset=utf-8>"
             "<meta name=viewport content='width=device-width,initial-scale=1'>"
@@ -162,13 +162,13 @@ def microscope_page():
             "background:#3b5bdb;color:#fff;text-decoration:none;font-weight:600}</style>"
             "</head><body><div class=b><h1>Микроскоп выключен</h1>"
             "<p>Включите его галочкой на главной странице.</p>"
-            "<a href='/'>На главную</a></div></body></html>")
+            "<a href='/'>На главную</a></div></body></html>", headers=_NOCACHE)
     return _page("microscope.html")
 
 
 @app.get("/api/micro/enabled")
 def micro_enabled_get():
-    return {"enabled": bool(plate_config.load().get("micro_enabled", True))}
+    return {"enabled": services.micro_enabled(plate_config.load())}
 
 
 @app.post("/api/micro/enabled")

@@ -138,6 +138,8 @@
               <span class="motion-dock__save" id="mdSave"></span>
               <button type="button" class="btn-primary" id="mdMark">Разметить зону</button>
               <button type="button" class="btn-secondary md-icon" id="mdRec" title="Писать метрики каждого кадра в CSV (для калибровки порогов)">●</button>
+              <button type="button" class="btn-secondary md-icon md-wide" id="mdRecAll" hidden title="Писать метрики всех камер с КЗ в CSV сразу (по файлу на камеру) — чтобы потом разобрать, когда и какая камера пропадала">● все</button>
+              <button type="button" class="btn-secondary md-icon md-wide" id="mdRecZip" hidden title="Скачать все записи одним архивом: CSV по камерам + summary.txt (сводка: когда и на сколько камеры пропадали)">⤓ архив</button>
               <label class="switch-toggle md-sw" id="mdSwitchWrap" title="КЗ — компьютерное зрение: включить / выключить для этой камеры">
                 <span class="switch"><input type="checkbox" id="mdSwitch" /><span class="switch-track"></span></span>
               </label>

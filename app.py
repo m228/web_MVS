@@ -1118,6 +1118,22 @@ def motion_record(req: dict = Body(...)):
     return motion_client.record(_motion_url(), str(req.get("camera") or ""), bool(req.get("on")))
 
 
+@app.post("/api/motion/record_all")
+def motion_record_all(req: dict = Body(...)):
+    """Запись метрик сразу по всем включённым камерам (по CSV на камеру) или остановка всех."""
+    return motion_client.record_all(_motion_url(), bool(req.get("on")))
+
+
+@app.get("/api/motion/records.zip")
+def motion_records_zip(days: float = 7.0):
+    """Все CSV записи за последние дни + summary.txt (когда и на сколько камеры пропадали) — одним архивом для скачивания."""
+    data, err = motion_client.records_zip(_motion_url(), days)
+    if data is None:
+        return Response(content=err or "нет данных", status_code=404, media_type="text/plain; charset=utf-8")
+    return Response(content=data, media_type="application/zip",
+                    headers={"Content-Disposition": 'attachment; filename="motion_records_%s.zip"' % time.strftime("%Y%m%d_%H%M")})
+
+
 @app.post("/api/motion/modbus_ping")
 def motion_modbus_ping(req: dict = Body(...)):
     """Проверка связи с ПЛК: сервис читает ОДИН регистр, ничего не пишет."""

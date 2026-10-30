@@ -4,6 +4,7 @@
 Сервис поднимается настоящим uvicorn на свободном порту, источник — mp4, записанный тут же.
 """
 import importlib.util
+import io
 import socket
 import sys
 import threading
@@ -11,6 +12,7 @@ import time
 import urllib.error
 import urllib.request
 import json
+import zipfile
 from pathlib import Path
 
 import cv2
@@ -336,6 +338,57 @@ def test_worker_detects_motion_writes_plc_and_reports_snapshot(tmp_path):
         w.stop()
 
 
+def test_record_has_status_column_and_connection_events(tmp_path):
+    w, _ = _worker(tmp_path, make_frames(40), frozen=True)
+    try:
+        assert _wait(lambda: (w.state()["result"] or {}).get("alive") is False, 10)
+        name = w.start_record()
+        w._note_conn(False, "поток оборвался")                     # как при обрыве RTSP: кадров нет, но событие в файле остаётся
+        time.sleep(0.5)
+        w.stop_record()
+        lines = (tmp_path / "records" / name).read_text(encoding="utf-8-sig").splitlines()
+        assert lines[0].endswith(";alive;status")
+        assert any(l.endswith(";0;картинка застыла") for l in lines[1:]), "причина по каждой строке сбоя"
+        ev = [l.split(";") for l in lines if l.endswith("событие: поток оборвался")]
+        assert ev and ev[0][-2] == "" and ev[0][1] == "", "у события alive и значения зон пустые"
+    finally:
+        w.stop()
+
+
+def _rec_row(t0, dt, alive, status, zones=1):
+    ts = t0 + dt
+    cells = ["", "", ""] * zones if alive is None else ["0.5", "0.4", "1"] * zones
+    return ";".join([time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(ts)) + ".%03d" % int(ts % 1 * 1000)] + cells + ["" if alive is None else str(alive), status])
+
+
+def test_records_summary_finds_frozen_gap_and_events_and_zip(tmp_path):
+    import io
+    import zipfile
+    import motion_records as mr
+    rec = tmp_path / "records"
+    rec.mkdir()
+    t0 = time.mktime((2026, 10, 30, 19, 0, 0, 0, 0, -1))
+    rows = [_rec_row(t0, i, 1, "ok") for i in range(10)]
+    rows += [_rec_row(t0, i, 0, "картинка застыла") for i in range(10, 15)]
+    rows += [_rec_row(t0, i, 1, "ok") for i in range(15, 25)]
+    rows += [_rec_row(t0, 24.5, None, "событие: поток оборвался")]
+    rows += [_rec_row(t0, i, 1, "ok") for i in range(45, 50)]                # 20 с без единой строки — пропуск
+    path = rec / "cam_1_20261030_190000.csv"
+    path.write_text("\n".join(["time;z1_flow;z1_diff;z1_bit;alive;status"] + rows + ["2026-10-30 19:00:5"]) + "\n", encoding="utf-8-sig")
+    a = mr.analyze(mr.read_rows(path))
+    assert a["rows"] == 30 and [(round(e - s), what) for s, e, what in a["bad"]] == [(5, "картинка застыла"), (21, "нет данных (кадров и строк не было)")]
+    assert a["events"][0][1] == "поток оборвался"
+    txt = mr.summary_text([path])
+    assert "Сбои были: cam_1 (2)" in txt and "картинка застыла" in txt and "поток оборвался" in txt
+    (rec / "cam_2_20261030_190000.csv").write_text("time;z1_flow;z1_diff;z1_bit;alive;status\n" + "\n".join(_rec_row(t0, i, 1, "ok") for i in range(30)) + "\n", encoding="utf-8-sig")
+    assert "cam_2 — файл" in mr.summary_text(sorted(rec.glob("*.csv"))) and "в норме: 100.0 %" in mr.summary_text(sorted(rec.glob("*.csv")))
+    z = mr.build_zip(rec, now=time.time())
+    with zipfile.ZipFile(io.BytesIO(z)) as zf:
+        assert sorted(zf.namelist()) == ["cam_1_20261030_190000.csv", "cam_2_20261030_190000.csv", "summary.txt"]
+    assert mr.build_zip(rec, days=1, now=time.time() + 5 * 86400) is None, "старше days — в архив не идут"
+    assert mr.build_zip(tmp_path / "нет_такой") is None
+
+
 def test_worker_frozen_camera_gives_zeros_and_status_zero(tmp_path):
     w, clients = _worker(tmp_path, make_frames(40), frozen=True)
     try:
@@ -514,6 +567,23 @@ def test_server_end_to_end_with_video_file(tmp_path):
         code, rec, _ = _http(port, "/cameras/belt/record", {"on": True})
         assert code == 200 and rec["recording"].endswith(".csv")
         assert _http(port, "/cameras/belt/record", {"on": False})[1]["recording"] is None
+
+        # запись сразу по всем камерам, правка настроек не рвёт её, архив = CSV + summary.txt
+        code, ra, _ = _http(port, "/record", {"on": True})
+        assert code == 200 and list(ra["recording"]) == ["belt"] and ra["recording"]["belt"].endswith(".csv")
+        cfg2 = json.loads(json.dumps(cfg))
+        cfg2["cameras"][0]["name"] = "Лента 2"
+        assert _http(port, "/config", cfg2, "PUT")[0] == 200
+        assert _wait(lambda: app.state.mgr.workers["belt"].state()["recording"], 5), "камера перезапущена правкой — запись продолжилась"
+        time.sleep(0.6)
+        code, zbytes, zh = _http(port, "/records.zip")
+        assert code == 200 and zbytes[:2] == b"PK" and "motion_records_" in {k.lower(): v for k, v in zh.items()}["content-disposition"]
+        with zipfile.ZipFile(io.BytesIO(zbytes)) as z:
+            names = z.namelist()
+            assert "summary.txt" in names and any(n.startswith("belt_") and n.endswith(".csv") for n in names)
+            assert "belt" in z.read("summary.txt").decode("utf-8-sig")
+        assert _http(port, "/record", {"on": False})[1]["recording"] == {} and not app.state.mgr.rec_all
+        assert _wait(lambda: not app.state.mgr.workers["belt"].state()["recording"], 3)
 
         bad = json.loads(json.dumps(cfg))
         bad["cameras"][0]["zones"][0]["on"], bad["cameras"][0]["zones"][0]["off"] = 1, 5

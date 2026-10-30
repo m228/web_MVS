@@ -184,8 +184,31 @@ class CameraWorker(threading.Thread):
             head = ["time"]
             for zid in self._rec_ids:
                 head += ["%s_flow" % zid, "%s_diff" % zid, "%s_bit" % zid]
-            self._rec_csv.writerow(head + ["alive"])
+            self._rec_csv.writerow(head + ["alive", "status"])
             return self._rec_path.name
+
+    def flush_record(self):
+        """Дописать буфер на диск (перед выдачей файла: иначе последние секунды лежат в памяти)."""
+        with self._lock:
+            if self._rec_fh:
+                self._rec_fh.flush()
+
+    def _rec_write(self, ts: float, byid: dict, status: str, event: bool = False):
+        """Строка в CSV записи. Звать под self._lock. status — «ok» или причина (картинка застыла, каша…); event — разовое
+        событие связи (alive пустой, значения зон пустые): объясняет дыру в строках, когда поток оборвался и кадров не было."""
+        if not self._rec_csv:
+            return
+        row = [time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(ts)) + ".%03d" % int(ts % 1 * 1000)]
+        for zid in self._rec_ids:
+            z = byid.get(zid) or {}
+            row += ["", "", ""] if event else [z.get("flow", 0), z.get("diff", 0), z.get("bit", 0)]
+        self._rec_csv.writerow(row + ["" if event else int(status == "ok"), status])
+        if status != "ok":                        # сбой — сразу на диск: при отключении питания это самые нужные строки
+            self._rec_fh.flush()
+        if self._rec_fh.tell() > RECORD_MAX_BYTES:
+            self._rec_fh.close()
+            self._rec_fh = self._rec_csv = None
+            self._rec_path = None
 
     def stop_record(self):
         with self._lock:
@@ -223,17 +246,7 @@ class CameraWorker(threading.Thread):
                 self._stamps.append(state["ts"])
                 self._push_history(state["ts"], {z["id"]: (z["flow"], z["diff"], z["bit"]) for z in state["zones"]}, 1 if state["alive"] else 0)
             self._writes = writes
-            if self._rec_csv:
-                row = [time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(state["ts"])) + ".%03d" % int(state["ts"] % 1 * 1000)]
-                byid = {z["id"]: z for z in state["zones"]}
-                for zid in self._rec_ids:
-                    z = byid.get(zid) or {}
-                    row += [z.get("flow", 0), z.get("diff", 0), z.get("bit", 0)]
-                self._rec_csv.writerow(row + [int(state["alive"])])
-                if self._rec_fh.tell() > RECORD_MAX_BYTES:
-                    self._rec_fh.close()
-                    self._rec_fh = self._rec_csv = None
-                    self._rec_path = None
+            self._rec_write(state["ts"], {z["id"]: z for z in state["zones"]}, "ok" if state["alive"] else (state["reason"] or "нет данных"))
         self._writes_evt.set()
 
     def _publish_held(self, now: float, frame: np.ndarray):
@@ -248,6 +261,7 @@ class CameraWorker(threading.Thread):
                 self._state = st
                 self._stamps.append(now)
                 self._push_history(now, {z["id"]: (z["flow"], z["diff"], z["bit"]) for z in st["zones"]}, 0)
+                self._rec_write(now, {z["id"]: z for z in st["zones"]}, "битый кадр (серая каша)")
 
     def _plc_loop(self):
         """Поток записи: пишет, когда значения изменились или прошло write_period_s. Недоступный ПЛК тормозит только его."""
@@ -395,6 +409,8 @@ class CameraWorker(threading.Thread):
                 log.info("[%s] источник открыт: %s", self.id, src)
             else:
                 log.warning("[%s] %s: %s", self.id, err, src)
+            with self._lock:
+                self._rec_write(time.time(), {}, "событие: " + ("источник открыт" if ok else err), event=True)
         self._conn_logged = ok
         self._connected, self._error = ok, err
 

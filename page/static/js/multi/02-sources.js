@@ -199,6 +199,7 @@ function removeSource(serial) {
   refreshTileSelects();
   updateToolbar();
   log.info('Источник удалён', { serial });
+  saveMultiLayoutSoon();
 }
 
 // применить FPS/масштаб RTSP-камеры прямо из карточки (перезапуск потока при эфире)

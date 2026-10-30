@@ -1205,11 +1205,17 @@ class MicroscopeService:
         return {"status": "ok", "reg": reg, "value": new}
 
     def set_cycle_autostart(self, on):
-        """Запомнить галочку «Автостарт цикла» в конфиг БЕЗ перезапуска платы."""
+        """Запомнить галочку «Автостарт цикла» в конфиг БЕЗ перезапуска платы.
+        Включение гасит «Автостарт мультипросмотра»: при запуске открывается что-то одно."""
         on = bool(on)
-        plate_config.save({"cycle_autostart": on})
+        patch = {"cycle_autostart": on}
+        if on:
+            patch["multi_autostart"] = False
+        plate_config.save(patch)
         if self.cfg is not None:
             self.cfg["cycle_autostart"] = on
+            if on:
+                self.cfg["multi_autostart"] = False
         log_event("microscope_service", "Автостарт цикла после перезапуска: " + ("вкл" if on else "выкл"),
                   "info", {"cycle_autostart": on})
         return {"status": "ok", "cycle_autostart": on}

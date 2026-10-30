@@ -155,9 +155,15 @@ async function initMultiPage() {
   initModals();
   document.getElementById('multiRefreshBtn')?.addEventListener('click', loadCameras);
 
+  initMultiAutostart();
   setLayout(1);
-  await loadCameras();
+  await loadMultiAutostart();
+  // быстро: сохранённые RTSP-камеры (локальный файл) — сразу в ячейки; долгий опрос GigE после, их ячейки добираем в конце
   await loadSavedRtsp();
+  restoreMultiLayout();
+  await loadCameras();
+  restoreMultiLayout();
+  AS.ready = true;
   startMetricsPolling();
   startMotionPolling();
 

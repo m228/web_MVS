@@ -8,6 +8,7 @@ import json
 import re
 import os
 import threading
+import time
 from contextlib import asynccontextmanager
 from urllib.parse import urlparse
 
@@ -28,6 +29,8 @@ from microscope_service import micro
 import cv_client
 import video_client
 import motion_client
+import cam_events
+import cam_monitor
 import services
 import fracture_lab
 import cv_store
@@ -44,6 +47,15 @@ def _is_rtsp_scheme(url: str) -> bool:
     # только rtsp(s): иначе cv2.VideoCapture открыл бы file://, http:// и пр.
     # (чтение локальных файлов / запросы во внутреннюю сеть — SSRF)
     return urlparse(url or "").scheme.lower() in ("rtsp", "rtsps")
+
+
+def _rtsp_workers_snapshot() -> dict:
+    # копия реестра под его замком: воркеры создаются из запросов, итерация по живому словарю могла бы упасть
+    with manager._registry_lock:
+        return dict(manager.rtsp_workers)
+
+
+monitor = cam_monitor.Monitor(_rtsp_workers_snapshot, lambda: _motion_url(), motion_client.state)
 
 
 @asynccontextmanager
@@ -67,7 +79,10 @@ async def lifespan(app: FastAPI):
     # RTSP-камеры с галочкой «автоподключение» поднимаем сами: захват фоновый,
     # поэтому съёмка/автосохранение идут без открытого браузера (см. camera_core)
     manager.resume_rtsp_autostart()
+    # журнал событий камер (связь, серые кадры, КЗ, зоны) пишется в фоне — без открытой страницы
+    monitor.start()
     yield
+    monitor.stop()
     micro.stop()
     api_log("app", "Остановка приложения")
 
@@ -306,6 +321,18 @@ def multi_layout(layout: int, tiles: str = "[]"):
     items = [str(s) if s else None for s in items[:layout]]
     plate_config.save({"multi_layout": {"layout": layout, "tiles": items}})
     return {"status": "ok"}
+
+
+@app.get("/api/cam/events")
+def cam_events_list(cam: str = "", hours: float = 24, kinds: str = "", min_s: float = 0, limit: int = 500):
+    # эпизоды камер за последние hours часов (до 30 суток), новые сверху; идущие имеют t1 = null
+    now = time.time()
+    hours = max(0.01, min(float(hours), cam_events.RETENTION_DAYS * 24))
+    items = cam_events.episodes(cam or None, now - hours * 3600, now, [k for k in kinds.split(",") if k], min_s, limit, now)
+    labels = {e.get("serial"): e.get("label") for e in rtsp_store.load() if e.get("serial")}
+    for it in items:
+        it["label"] = labels.get(it["cam"]) or it["cam"]
+    return {"now": now, "events": items}
 
 
 @app.get("/api/micro/arrive_sensor")
@@ -1890,6 +1917,9 @@ def rtsp_metrics(serial_number: str):
             "reconnecting": worker.reconnecting,
             "autostart": worker.autostart,
             "viewers": worker.viewer_count(),
+            # качество кадров с запуска приложения: проверено выборок и из них «серая каша»
+            "gray_samples": worker.gray_samples,
+            "gray_frames": worker.gray_frames,
             **worker.photo_status()}
 
 

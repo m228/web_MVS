@@ -10,6 +10,7 @@ import dahua_control
 
 from .utils import DEFAULT_VIDEO_FPS, RTSP_RECONNECT_BACKOFF, RTSP_RECONNECT_LOG_EVERY, RTSP_STALL_SECONDS
 from .base_worker import BaseCameraWorker
+from .frame_quality import GARBAGE_THRESHOLD, SAMPLE_PERIOD_S, frame_garbage
 
 
 class RtspCameraWorker(BaseCameraWorker):
@@ -63,8 +64,29 @@ class RtspCameraWorker(BaseCameraWorker):
         # параметры отдачи: масштаб кадра (%) и целевой fps — задаёт подключающийся зритель
         self.stream_scale = 100
         self.target_fps = None
+        # качество кадров (выборка раз в секунду): gray_now — последний кадр «серая каша»; счётчики — с запуска приложения
+        self.gray_now = False
+        self.gray_ratio = 0.0
+        self.gray_samples = 0
+        self.gray_frames = 0
+        self._quality_at = 0.0
 
     # ---------- фоновый захват ----------
+
+    # проверка кадра на «серую кашу» — не чаще раза в секунду, ошибка проверки захват не роняет
+    def _sample_quality(self, raw, now):
+        if now - self._quality_at < SAMPLE_PERIOD_S:
+            return
+        self._quality_at = now
+        try:
+            ratio = frame_garbage(raw)
+        except Exception:
+            return
+        self.gray_ratio = ratio
+        self.gray_now = ratio >= GARBAGE_THRESHOLD
+        self.gray_samples += 1
+        if self.gray_now:
+            self.gray_frames += 1
 
     # сколько браузеров смотрит поток прямо сейчас
     def viewer_count(self):
@@ -256,6 +278,7 @@ class RtspCameraWorker(BaseCameraWorker):
                 self.last_frame = raw
 
                 now = time.time()
+                self._sample_quality(raw, now)
                 # троттлинг отдачи/записи: читаем всё (иначе растёт буфер), но
                 # кодируем и сохраняем не чаще целевого fps
                 min_interval = (1.0 / self.target_fps) if self.target_fps else 0.0
@@ -320,6 +343,7 @@ class RtspCameraWorker(BaseCameraWorker):
         finally:
             self.running = False
             self.reconnecting = False
+            self.gray_now = False
             self._stall_reported = False
 
             if capture is not None:

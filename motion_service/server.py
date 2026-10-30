@@ -11,6 +11,7 @@
   GET  /cameras/{id}/state        — то же по одной камере.
   GET  /cameras/{id}/snapshot     — последний кадр JPEG (?w=1280 — уменьшить; заголовки X-Frame-W/H — размер оригинала).
   GET  /cameras/{id}/history      — ряды flow/diff/bit для графиков калибровки (?n=300).
+  GET  /cameras/{id}/stats        — среднее / мин / макс flow и diff по зонам за последние ?window=10800 секунд (до суток).
   POST /cameras/{id}/record       — {"on": true|false}: писать метрики каждого кадра в CSV (data\\records).
   POST /record                    — то же сразу для всех включённых камер.
   GET  /records.zip               — все CSV записи за последние дни (?days=7) + summary.txt со сводкой сбоев, одним архивом.
@@ -234,6 +235,11 @@ def create_app(data_dir: Optional[Path] = None, capture_factory: Callable = open
         # window > 0 — последние window секунд из длинной истории (до 2 ч), ужатые до points точек; иначе последние n кадров
         return mgr.worker(cid).history(max(1, min(int(n), 900)), max(0.0, min(float(window), 7200.0)), max(10, min(int(points), 2000)))
 
+    @app.get("/cameras/{cid}/stats")
+    def cam_stats(cid: str, window: float = 10800.0):
+        # среднее / мин / макс flow и diff по каждой зоне за последние window секунд (до суток), только по кадрам в норме
+        return mgr.worker(cid).stats(window)
+
     @app.post("/cameras/{cid}/record")
     def record(cid: str, req: dict = Body(...)):
         wk = mgr.worker(cid)
@@ -251,7 +257,8 @@ def create_app(data_dir: Optional[Path] = None, capture_factory: Callable = open
         """Все CSV записи за последние days суток + summary.txt (когда и на сколько камеры пропадали) — одним архивом."""
         for w in list(mgr.workers.values()):
             w.flush_record()
-        data = motion_records.build_zip(mgr.dir / "records", max(0.01, min(float(days), 365.0)))
+        names = {c["id"]: {"name": c.get("name"), "zones": {z["id"]: z.get("name") for z in c.get("zones", [])}} for c in mgr.cfg.get("cameras", [])}
+        data = motion_records.build_zip(mgr.dir / "records", max(0.01, min(float(days), 365.0)), names=names)
         if data is None:
             raise HTTPException(404, "записей ещё нет — включите запись («● все» в общем виде панели КЗ)")
         return Response(content=data, media_type="application/zip",

@@ -3,7 +3,8 @@
 Запись камеры (motion_camera.start_record) пишет строку на каждый обработанный кадр: время, значения зон, alive (1/0) и status
 («ok» или причина: картинка застыла, битый поток, нет кадров…). Отдельные строки-события («событие: поток оборвался») имеют
 пустой alive. Здесь по таким файлам считается сводка: сколько времени камера была в норме, когда и на сколько пропадала.
-Архив = summary.txt + все CSV за последние дни — его и кладут «на разбор».
+Архив = summary.txt + все CSV за последние дни — его и кладут «на разбор». В сводке по каждой зоне — среднее / мин / макс
+flow и diff и доля времени «крутится» (по кадрам в норме): по ним ставят пороги on/off.
 """
 from __future__ import annotations
 
@@ -49,6 +50,41 @@ def read_rows(path: Path) -> list:
             status = r[ist] if ist is not None and len(r) > ist and r[ist] else ("ok" if alive else "не жива")
             rows.append((ts, alive, status))
     return rows
+
+
+def zone_stats(path: Path) -> dict:
+    """{зона: {"n", "flow": (ср, мин, макс), "diff": (ср, мин, макс), "bit": доля 0..1}} по строкам, где камера жива и status = ok
+    (застывшие/битые кадры в среднее не идут). Файлы без зон или без status (старые) — по alive."""
+    out: dict = {}
+    with open(path, newline="", encoding="utf-8-sig") as fh:
+        rd = csv.reader(fh, delimiter=";")
+        head = next(rd, None)
+        if not head or "alive" not in head:
+            return out
+        ia = head.index("alive")
+        ist = head.index("status") if "status" in head else None
+        cols = []                                       # (зона, индекс flow, индекс diff, индекс bit)
+        for i, h in enumerate(head):
+            if h.endswith("_flow") and h[:-5] + "_diff" in head and h[:-5] + "_bit" in head:
+                z = h[:-5]
+                cols.append((z, i, head.index(z + "_diff"), head.index(z + "_bit")))
+        acc = {z: [0, 0.0, 1e30, -1e30, 0.0, 1e30, -1e30, 0] for z, *_ in cols}
+        need = max([ia] + [c for _, a, b, c2 in cols for c in (a, b, c2)] + ([ist] if ist is not None else []))
+        for r in rd:
+            if len(r) <= need or r[ia] != "1" or (ist is not None and r[ist] != "ok"):
+                continue
+            for z, i_f, i_d, i_b in cols:
+                try:
+                    fl, df, bit = float(r[i_f]), float(r[i_d]), int(float(r[i_b]))
+                except ValueError:
+                    continue
+                a = acc[z]
+                a[0] += 1; a[1] += fl; a[2] = min(a[2], fl); a[3] = max(a[3], fl)
+                a[4] += df; a[5] = min(a[5], df); a[6] = max(a[6], df); a[7] += bit
+    for z, a in acc.items():
+        if a[0]:
+            out[z] = {"n": a[0], "flow": (a[1] / a[0], a[2], a[3]), "diff": (a[4] / a[0], a[5], a[6]), "bit": a[7] / a[0]}
+    return out
 
 
 def analyze(rows: list) -> Optional[dict]:
@@ -100,8 +136,10 @@ def camera_of(path: Path) -> str:
     return path.stem.rsplit("_", 2)[0]
 
 
-def summary_text(files: list) -> str:
-    """Человекочитаемая сводка по файлам записи: вердикт сверху, дальше по файлу — сколько в норме и список сбоев."""
+def summary_text(files: list, names: Optional[dict] = None) -> str:
+    """Человекочитаемая сводка по файлам записи: вердикт сверху, дальше по файлу — сколько в норме, список сбоев и значения зон.
+    names — {id камеры: {"name": ..., "zones": {id зоны: название}}} из конфига: подписи вместо id (необязательно)."""
+    names = names or {}
     blocks: list = []
     trouble: list = []
     for p in files:
@@ -126,6 +164,17 @@ def summary_text(files: list) -> str:
             out += ["    %s  %s  %s" % (_clock(s), _dur(e - s).rjust(9), what) for s, e, what in a["bad"][:MAX_LISTED]]
             if len(a["bad"]) > MAX_LISTED:
                 out.append("    … и ещё %d" % (len(a["bad"]) - MAX_LISTED))
+        try:
+            zs = zone_stats(p)
+        except (OSError, csv.Error) as e:
+            zs = {}
+            out.append("  значения зон не прочитаны: %s" % e)
+        if zs:
+            zn = (names.get(camera_of(p)) or {}).get("zones") or {}
+            out.append("  зоны (только кадры в норме; значения сглажены, как в графиках; «крутится» — доля времени с битом 1):")
+            for z, s in zs.items():
+                out.append("    %s: diff ср %.2f мин %.2f макс %.2f · flow ср %.2f мин %.2f макс %.2f · крутится %.0f %% (кадров %d)" % (
+                    (zn.get(z) + " (" + z + ")") if zn.get(z) else z, *s["diff"], *s["flow"], 100.0 * s["bit"], s["n"]))
         if a["events"]:
             out.append("  события связи (%d):" % len(a["events"]))
             out += ["    %s  %s" % (_clock(t), what) for t, what in a["events"][:MAX_LISTED]]
@@ -139,7 +188,7 @@ def summary_text(files: list) -> str:
     return "\n".join(head) + "\n" + "\n\n".join(blocks) + "\n"
 
 
-def build_zip(rec_dir: Path, days: float = 7.0, now: Optional[float] = None) -> Optional[bytes]:
+def build_zip(rec_dir: Path, days: float = 7.0, now: Optional[float] = None, names: Optional[dict] = None) -> Optional[bytes]:
     """Архив: summary.txt + CSV из rec_dir, изменённые за последние days суток. Файлов нет — None."""
     now = time.time() if now is None else now
     rec_dir = Path(rec_dir)
@@ -148,7 +197,7 @@ def build_zip(rec_dir: Path, days: float = 7.0, now: Optional[float] = None) -> 
         return None
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
-        z.writestr("summary.txt", summary_text(files).encode("utf-8-sig"))
+        z.writestr("summary.txt", summary_text(files, names).encode("utf-8-sig"))
         for p in files:
             z.write(p, p.name)
     return buf.getvalue()

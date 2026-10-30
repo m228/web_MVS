@@ -4,6 +4,10 @@
 const MD_WIN_KEY = 'mvTrendWin';
 const MD_WIN_MIN = 30;
 const MD_WIN_MAX = 7200;
+// статистика зон (ср / мин / макс за окно): считает сервис движения, окно до суток
+const MD_STAT_KEY = 'mvStatWin';
+const MD_STAT_WINS = [[300, '5 мин'], [900, '15 мин'], [3600, '1 ч'], [10800, '3 ч'], [28800, '8 ч'], [86400, '24 ч']];
+const MD_STAT_EVERY_MS = 5000;
 
 // окно трендов, секунд (колесо мыши над графиком); запоминаем между перезапусками страницы
 function mdLoadWin() {
@@ -14,7 +18,19 @@ function mdLoadWin() {
   return 1200;
 }
 
+function mdLoadStatWin() {
+  try {
+    const v = Number(localStorage.getItem(MD_STAT_KEY));
+    if (MD_STAT_WINS.some(([s]) => s === v)) return v;
+  } catch (e) { /* без памяти браузера — по умолчанию */ }
+  return 10800;
+}
+
 const MD = {
+  statWin: mdLoadStatWin(),
+  stats: {},            // id камеры → ответ /api/motion/stats
+  statAt: 0,
+  statBusy: false,
   tab: 'zones',
   key: '',
   saveTimer: null,
@@ -218,6 +234,7 @@ function mdZoneCardHtml(cam, z, i) {
       <div class="md-zone__row"><input type="text" ${a} data-f="name" value="${escapeHtml(z.name)}" title="${escapeHtml(z.id)}" />
         <span class="cv-bit" id="md-zb-${k}" title="Бит зоны">–</span><span class="md-num" id="md-zv-${k}" title="Значение метрики">–</span><span class="md-sp"></span>
         <button type="button" class="btn-secondary md-x" ${a} data-f="del" title="Удалить зону">✕</button></div>
+      <div class="md-zstat" id="md-st-${k}" title="Значения диффа и потока по зоне: сейчас, среднее, минимум и максимум за выбранный период (только кадры в норме). Жирным — метрика, по которой решает зона."></div>
       <div class="md-zone__row"><select ${a} data-f="type">${mdSel([['motion', 'motion'], ['presence', 'presence']], z.type)}</select>
         <select ${a} data-f="metric">${mdSel([['diff', 'diff'], ['flow', 'flow']], z.metric)}</select>
         <span class="md-lbl">on</span>${mdNum(a + ' data-f="on"', z.on, 'step="0.05" min="0" title="Включить при значении ' + (z.invert ? 'НИЖЕ off' : 'ВЫШЕ on') + '"')}
@@ -272,7 +289,8 @@ function mdZonesTabHtml(mode, cam) {
   } else if (shown.every((c) => !c.zones.length)) {
     html += '<p class="net-hint">Зон нет. Нажмите «Разметить зону» и обведите на кадре то, что должно двигаться (лента, шнек).</p>';
   } else {
-    html += `<div class="md-trendbar"><span>Тренды за последние <b id="mdWinLbl">${mdFmtWin(MD.win)}</b> ${mdHelp(MD_TREND_HELP)}</span></div><div class="md-zones">`;
+    html += `<div class="md-trendbar"><span>Тренды за последние <b id="mdWinLbl">${mdFmtWin(MD.win)}</b> ${mdHelp(MD_TREND_HELP)}</span>` +
+      `<span class="md-statwin">Среднее / мин / макс за <select id="mdStatWin">${mdSel(MD_STAT_WINS, MD.statWin)}</select> ${mdHelp('Среднее, минимум и максимум diff и flow каждой зоны за выбранный период, только по кадрам в норме. Копятся в сервисе движения, пока он работает (после перезапуска сервиса — с нуля; для долгой истории — CSV-запись и архив). Значения сглажены, как на графиках.')}</span></div><div class="md-zones">`;
     shown.forEach((c) => {
       if (!c.zones.length) return;
       if (all) html += `<div class="md-camhead"><b>${escapeHtml(c.name)}${mdIpTag(c.url)}</b><span class="motion-dock__pill" id="md-cp-${escapeHtml(c.id)}"></span></div>`;
@@ -335,6 +353,59 @@ async function mdDrawTrends() {
     cams[k].zones.forEach((z) => mdDrawChart(cams[k], z, h.zones[z.id], h.t || [], h.ok || []));
   });
   if (MD.trendDirty) { MD.trendDirty = false; mdDrawTrends(); }
+}
+
+// ---------- значения зон: сейчас / среднее / мин / макс ----------
+const mdNumFmt = (v) => (v >= 100 ? v.toFixed(0) : v >= 10 ? v.toFixed(1) : v.toFixed(2));
+
+function mdZoneStatHtml(z, cur, st) {
+  const row = (m) => {
+    const c = cur ? mdNumFmt(Number(cur[m])) : '–';
+    const s = st && st[m];
+    const txt = `${m}: сейчас <b class="md-zstat__cur">${c}</b>` + (s ? ` · ср ${mdNumFmt(s.avg)} · мин ${mdNumFmt(s.min)} · макс ${mdNumFmt(s.max)}` : ' · ср – · мин – · макс –');
+    return `<div class="md-zstat__row${z.metric === m ? ' is-main' : ''}">${txt}</div>`;
+  };
+  return row('diff') + row('flow');
+}
+
+function mdPaintZoneStats() {
+  mdLoadStats();
+  mdShownCams().forEach((c) => {
+    const res = (MV.states[c.id] || {}).result;
+    const sr = MD.stats[c.id];
+    const live = {};
+    ((res && res.zones) || []).forEach((z) => { live[z.id] = z; });
+    c.zones.forEach((z) => {
+      const el = mdEl('md-st-' + c.id + '-' + z.id);
+      if (!el) return;
+      el.innerHTML = mdZoneStatHtml(z, live[z.id], sr && sr.zones && sr.zones[z.id]);
+      // накоплено меньше, чем просили (сервис недавно стартовал): честно говорим, за сколько на самом деле
+      if (sr && sr.zones && sr.zones[z.id] && sr.span_s < sr.window_s * 0.9) {
+        const n = document.createElement('div');
+        n.className = 'md-zstat__note';
+        n.textContent = 'накоплено за ' + mdFmtWin(sr.span_s);
+        el.appendChild(n);
+      }
+    });
+  });
+}
+
+// раз в несколько секунд (и сразу после смены периода) спрашиваем сервис движения; по одному запросу на камеру
+async function mdLoadStats(force) {
+  if (MD.statBusy || MD.tab !== 'zones' || !MV.dockOpen) return;
+  if (!force && Date.now() - MD.statAt < MD_STAT_EVERY_MS) return;
+  const cams = mdShownCams().filter((c) => c.zones.length);
+  if (!cams.length) return;
+  MD.statBusy = true;
+  MD.statAt = Date.now();
+  const win = MD.statWin;
+  try {
+    const res = await Promise.all(cams.map((c) => mvApi('/api/motion/stats?camera=' + encodeURIComponent(c.id) + '&window=' + win)));
+    res.forEach((r, i) => { if (r && !r.error && r.zones && win === MD.statWin) MD.stats[cams[i].id] = r; });
+  } finally {
+    MD.statBusy = false;
+  }
+  mdPaintZoneStats();
 }
 
 // график зоны: ось X — время, правый край — «сейчас», левый — «сейчас − окно»
@@ -641,6 +712,7 @@ function paintMotionDockLive() {
       return `<div class="md-card"><b>${escapeHtml(c.name)}${mdIpTag(c.url)}</b><span class="md-sp"></span><span class="net-hint">${!MV.cfg.modbus.enable ? 'запись выключена' : p.ok === null || p.ok === undefined ? 'ПЛК: ждёт' : p.ok ? 'ПЛК: ок' : 'ПЛК: ошибка ' + escapeHtml(p.error || '')}</span></div>`;
     }).join('');
   }
+  if (MD.tab === 'zones') mdPaintZoneStats();
   if (MD.tab === 'zones' && (MV.tick % 2 === 0)) mdDrawTrends();
 }
 
@@ -857,6 +929,14 @@ function initMotionDock() {
     }
   });
   body?.addEventListener('wheel', mdOnWheel, { passive: false });
+  body?.addEventListener('change', (e) => {
+    if (e.target.id !== 'mdStatWin') return;
+    MD.statWin = Number(e.target.value);
+    MD.stats = {};
+    try { localStorage.setItem(MD_STAT_KEY, String(MD.statWin)); } catch (err) { /* не критично */ }
+    mdPaintZoneStats();
+    mdLoadStats(true);
+  });
 
   // окно разметки
   const cv = mdEl('mmCanvas');

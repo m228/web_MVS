@@ -230,6 +230,12 @@ def api_update_run(request: Request, staged: int = 0, components: str = "", yes:
                                      no_browser=bool(no_browser))
 
 
+@app.get("/api/update/log")
+def api_update_log(since: float = 0.0):
+    """Строки update.log с момента since (секунды Unix): страница мультипросмотра показывает по ним ход обновления и ловит ошибку апдейтера."""
+    return {"lines": updater.update_log_tail(since)}
+
+
 @app.get("/api/update/apply")
 def api_update_apply():
     api_log("api.update", "Применение обновления (перезапуск)")

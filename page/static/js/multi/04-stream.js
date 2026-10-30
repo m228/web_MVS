@@ -168,6 +168,37 @@ function resetTileMetrics(index) {
 // рывками; маленькое окно мигало "нет кадров" при редких просадках. 10 c терпимо.
 const LIVENESS_MS = 10000;
 
+// автовосстановление RTSP-ячейки. Сервер сам переподключается к камере, но HTTP-поток MJPEG в браузер
+// может закончиться насовсем: камера не ответила за первые 15 с (камера включалась позже страницы),
+// перезапуск приложения, обрыв сети. Тогда <img> остаётся мёртвым, пока его не запросить заново.
+// Паузы между попытками нарастают (с) — без шторма запросов к камере.
+const RTSP_RETRY_S = [5, 10, 30, 60];
+
+function rtspStreamWatchdog(index, tile, now, metrics) {
+  if (tile.kind !== 'rtsp' || !tile.connected || tile.hidden) return;
+  const live = (now - (tile._lastFrameTs || now)) < LIVENESS_MS;
+  if (live) { tile._retryN = 0; tile._retryAt = 0; return; }
+  // сервер переподключается, а наш HTTP-поток ещё жив и сам подхватит кадры — не мешаем
+  if (metrics && metrics.reconnecting && Number(metrics.viewers) > 0) return;
+  if (now < (tile._retryAt || 0)) return;
+  const n = tile._retryN || 0;
+  tile._retryN = n + 1;
+  tile._retryAt = now + RTSP_RETRY_S[Math.min(n, RTSP_RETRY_S.length - 1)] * 1000;
+  reopenTileStream(index, n);
+}
+
+function reopenTileStream(index, attempt) {
+  const tile = state.tiles[index];
+  const source = tile && tile.serial ? getSource(tile.serial) : null;
+  const frame = getTileEl(index)?.querySelector('[data-tile-frame]');
+  if (!source || !frame) return;
+  frame.src = '';
+  frame.src = buildStreamUrl(source) + '&r=' + Date.now();
+  if (attempt === 0 || attempt % 5 === 0) {
+    log.warn('Поток ячейки не отвечает — запрашиваем заново', { tile: index, serial: tile.serial, attempt: attempt + 1 });
+  }
+}
+
 let metricsTimer = null;
 function startMetricsPolling() {
   metricsTimer = setInterval(async () => {
@@ -177,7 +208,15 @@ function startMetricsPolling() {
       if (!tile.connected || !tile.serial) continue;
 
       const metrics = await apiFor(tile.kind).getMetrics(tile.serial);
-      if (!metrics || metrics.error) continue;
+      if (!metrics || metrics.error) {
+        // сервер не отвечает (перезапуск): новых кадров нет — показываем «нет кадров» и пробуем поднять поток заново
+        if (tile.kind === 'rtsp' && !tile.hidden) {
+          const live = (now - (tile._lastFrameTs || now)) < LIVENESS_MS;
+          if (live !== tile.live) { tile.live = live; renderTile(i); }
+          rtspStreamWatchdog(i, tile, now, null);
+        }
+        continue;
+      }
 
       // синхронизируем статус фото/видео с РЕАЛЬНЫМ состоянием бэкенда:
       // авто-запись видео могла сама завершиться по длительности (save_video=0),
@@ -229,6 +268,7 @@ function startMetricsPolling() {
         tile.live = live;
         renderTile(i);
       }
+      rtspStreamWatchdog(i, tile, now, metrics);
     }
   }, 1000);
 }

@@ -122,6 +122,16 @@ try {
     [System.Net.WebRequest]::DefaultWebProxy = $sysProxy
 } catch {}
 
+# sha256 из метаданных релиза GitHub ('sha256:<hex>'); пусто — у релиза нет дайджеста, проверяется только размер
+function Get-AssetSha($asset) {
+    $d = [string]$asset.digest
+    if ($d.StartsWith('sha256:')) { return $d.Substring(7) }
+    return ''
+}
+
+# недокачанные архивы (*.part) лежат тут и переживают обрывы и перезапуск апдейтера: слабый интернет докачивается по частям
+$script:DlDir = Join-Path $Root '.update_dl'
+
 function Invoke-WithRetry([scriptblock]$Action, [int]$Tries = 3) {
     for ($i = 1; $i -le $Tries; $i++) {
         try { return & $Action }
@@ -133,33 +143,98 @@ function Invoke-WithRetry([scriptblock]$Action, [int]$Tries = 3) {
     }
 }
 
-function Save-Download([string]$url, [string]$out, [int64]$size = 0, [int]$logEverySec = 10, [int]$stallSec = 120) {
-    # Скачивание WebClient-ом вместо Invoke-WebRequest (в Windows PowerShell 5.1 тот на крупных файлах в разы медленнее).
-    # Пока качает, раз в $logEverySec пишем в update.log «скачано X из Y МБ» (страница «Обновить» показывает последнюю строку лога);
-    # если файл $stallSec секунд не растёт (связь «повисла» без обрыва) — отмена, и Invoke-WithRetry пробует снова.
-    $wc = New-Object System.Net.WebClient
-    $wc.Proxy = [System.Net.WebRequest]::DefaultWebProxy
-    $wc.Headers.Add('User-Agent', 'web_MVS-update')
-    try {
-        $task = $wc.DownloadFileTaskAsync([Uri]$url, $out)
-        $lastLog = Get-Date; $lastGrow = Get-Date; $prev = -1
-        while (-not $task.IsCompleted) {
-            Start-Sleep -Milliseconds 500
-            $len = 0
-            if (Test-Path -LiteralPath $out) { $len = (Get-Item -LiteralPath $out).Length }
-            if ($len -ne $prev) { $prev = $len; $lastGrow = Get-Date }
-            if (((Get-Date) - $lastGrow).TotalSeconds -ge $stallSec) {
-                $wc.CancelAsync()
-                throw ("скачивание остановилось: нет данных {0} секунд" -f $stallSec)
-            }
-            if (((Get-Date) - $lastLog).TotalSeconds -ge $logEverySec) {
-                $lastLog = Get-Date
-                if ($size -gt 0) { Log ("скачано {0:N1} из {1:N1} МБ" -f ($len / 1MB), ($size / 1MB)) } else { Log ("скачано {0:N1} МБ" -f ($len / 1MB)) }
-            }
+function Receive-Part([string]$url, [string]$part, [int64]$size, [int]$logEverySec, [int]$stallSec) {
+    # Одна попытка скачивания: дописывает $part с того места, где он оборвался (HTTP Range). Ответ без Range (200) — пишем с начала.
+    # Оборвалась связь — исключение, но всё, что успело прийти, остаётся в $part: следующая попытка продолжит оттуда.
+    $have = 0
+    if (Test-Path -LiteralPath $part) { $have = (Get-Item -LiteralPath $part).Length }
+    $req = [System.Net.HttpWebRequest]::Create($url)
+    $req.UserAgent = 'web_MVS-update'
+    $req.Proxy = [System.Net.WebRequest]::DefaultWebProxy
+    $req.Timeout = 60000                                  # ждать ответ сервера
+    $req.ReadWriteTimeout = $stallSec * 1000              # «повисшая» связь без обрыва: чтение оборвётся, и попытка начнётся снова
+    if ($have -gt 0) { $req.AddRange([int64]$have) }
+    try { $resp = $req.GetResponse() }
+    catch [System.Net.WebException] {
+        $r = $_.Exception.Response
+        if ($r -and [int]$r.StatusCode -eq 416) {          # файл на сервере не такой, как наш обрывок
+            Remove-Item -LiteralPath $part -Force -ErrorAction SilentlyContinue
+            throw 'сервер не принял докачку (416) — начну заново'
         }
-        if ($task.IsFaulted) { throw $task.Exception.InnerException }
-        if ($task.IsCanceled) { throw 'скачивание отменено' }
-    } finally { $wc.Dispose() }
+        throw
+    }
+    try {
+        if ($have -gt 0) {
+            $cr = [string]$resp.Headers['Content-Range']
+            if ([int]$resp.StatusCode -ne 206 -or $cr -notmatch ('^bytes ' + $have + '-')) { $have = 0 }   # сервер не умеет докачку — пишем с начала
+            else { Log ("докачиваю с {0:N1} МБ" -f ($have / 1MB)) }
+        }
+        $mode = [System.IO.FileMode]::Create
+        if ($have -gt 0) { $mode = [System.IO.FileMode]::Append }
+        $fs = New-Object System.IO.FileStream($part, $mode, [System.IO.FileAccess]::Write, [System.IO.FileShare]::Read)
+        $in = $resp.GetResponseStream()
+        try {
+            $buf = New-Object byte[] 262144
+            $total = $have; $lastLog = Get-Date
+            while (($n = $in.Read($buf, 0, $buf.Length)) -gt 0) {
+                $fs.Write($buf, 0, $n); $total += $n
+                if (((Get-Date) - $lastLog).TotalSeconds -ge $logEverySec) {
+                    $lastLog = Get-Date
+                    if ($size -gt 0) { Log ("скачано {0:N1} из {1:N1} МБ" -f ($total / 1MB), ($size / 1MB)) } else { Log ("скачано {0:N1} МБ" -f ($total / 1MB)) }
+                }
+            }
+        } finally { $in.Close(); $fs.Close() }
+    } finally { $resp.Close() }
+}
+
+function Save-Download([string]$url, [string]$out, [int64]$size = 0, [string]$sha256 = '', [int]$logEverySec = 10, [int]$stallSec = 60, [int]$maxIdle = 15, [int]$maxPauseSec = 60) {
+    # Скачивание с докачкой для слабого интернета. Недокачанный файл лежит в $script:DlDir как *.part и переживает обрывы, повторы и
+    # даже новый запуск апдейтера: каждая попытка продолжает с места обрыва. Попытки, в которых хоть что-то пришло, не считаются:
+    # сдаёмся только после $maxIdle подряд без единого байта (паузы 5, 10, 20, 40, 60... с). Размер и sha256 сверяются в конце;
+    # не сошлась сумма — один раз качаем заново с нуля.
+    New-Item -ItemType Directory -Force -Path $script:DlDir | Out-Null
+    $part = Join-Path $script:DlDir ((Split-Path -Leaf $out) + '.part')
+    Get-ChildItem -LiteralPath $script:DlDir -Filter '*.part' -ErrorAction SilentlyContinue |
+        Where-Object { $_.FullName -ne $part } | Remove-Item -Force -ErrorAction SilentlyContinue     # обрывки от других версий не копим
+    $idle = 0; $fresh = $false
+    while ($true) {
+        $have = 0
+        if (Test-Path -LiteralPath $part) { $have = (Get-Item -LiteralPath $part).Length }
+        if ($size -gt 0 -and $have -gt $size) { Remove-Item -LiteralPath $part -Force; $have = 0 }
+        $err = ''
+        if ($size -le 0 -or $have -lt $size) {
+            try { Receive-Part $url $part $size $logEverySec $stallSec } catch { $err = $_.Exception.Message }
+        }
+        $now = 0
+        if (Test-Path -LiteralPath $part) { $now = (Get-Item -LiteralPath $part).Length }
+        $complete = if ($size -gt 0) { $now -eq $size } else { -not $err -and $now -gt 0 }
+        if ($complete) {
+            if ($sha256) {
+                $actual = (Get-FileHash -LiteralPath $part -Algorithm SHA256).Hash.ToLower()
+                if ($actual -ne $sha256.ToLower()) {
+                    Remove-Item -LiteralPath $part -Force -ErrorAction SilentlyContinue
+                    if ($fresh) { throw 'контрольная сумма архива не совпала — скачивание повреждено' }
+                    $fresh = $true
+                    Log 'контрольная сумма не совпала — качаю заново с нуля' 'Yellow'
+                    continue
+                }
+                Log 'контрольная сумма подтверждена' 'Green'
+            }
+            Move-Item -LiteralPath $part -Destination $out -Force
+            if (-not (Get-ChildItem -LiteralPath $script:DlDir -Force -ErrorAction SilentlyContinue)) { Remove-Item -LiteralPath $script:DlDir -Force -ErrorAction SilentlyContinue }
+            return
+        }
+        if ($now -gt $have) { $idle = 0 } else { $idle++ }
+        $szText = ''
+        if ($size -gt 0) { $szText = " из {0:N1}" -f ($size / 1MB) }
+        if ($idle -ge $maxIdle) {
+            throw ("не удалось докачать: {0} попыток подряд без данных ({1}). Скачано {2:N1}{3} МБ сохранено в {4} — следующий запуск продолжит" -f $idle, $err, ($now / 1MB), $szText, $script:DlDir)
+        }
+        $pause = [Math]::Min($maxPauseSec, 5 * [Math]::Pow(2, [Math]::Max(0, $idle - 1)))
+        if (-not $err) { $err = 'соединение закрыто раньше времени' }
+        Log ("связь оборвалась: {0} — скачано {1:N1}{2} МБ, продолжу с этого места через {3} с" -f $err, ($now / 1MB), $szText, $pause) 'Yellow'
+        Start-Sleep -Seconds $pause
+    }
 }
 
 # ---------- запуск и остановка приложения ----------
@@ -263,14 +338,8 @@ function Invoke-Update {
     if (-not $zipFile) {
         $zipFile = Join-Path $tmp $asset.name
         Log ("скачиваю {0} ({1:N1} МБ)..." -f $asset.name, ($asset.size / 1MB))
-        Invoke-WithRetry { Save-Download $asset.browser_download_url $zipFile ([int64]$asset.size) } | Out-Null
+        Save-Download $asset.browser_download_url $zipFile ([int64]$asset.size) (Get-AssetSha $asset)
         if ($asset.size -and ((Get-Item -LiteralPath $zipFile).Length -ne [int64]$asset.size)) { throw "размер архива не совпал ($((Get-Item -LiteralPath $zipFile).Length) вместо $($asset.size))" }
-        $digest = [string]$asset.digest
-        if ($digest.StartsWith('sha256:')) {
-            $actual = (Get-FileHash -LiteralPath $zipFile -Algorithm SHA256).Hash.ToLower()
-            if ($actual -ne $digest.Substring(7).ToLower()) { throw 'контрольная сумма архива не совпала — скачивание повреждено' }
-            Log 'контрольная сумма подтверждена' 'Green'
-        }
     }
     $stage = Join-Path $tmp 'stage'
     Log 'распаковываю архив...'
@@ -502,13 +571,8 @@ function Update-Addon($d) {
         if (-not $zip) {
             $zip = Join-Path $tmp $asset.name
             Log ("скачиваю {0} ({1:N1} МБ)..." -f $asset.name, ($asset.size / 1MB))
-            Invoke-WithRetry { Save-Download $asset.browser_download_url $zip ([int64]$asset.size) } | Out-Null
+            Save-Download $asset.browser_download_url $zip ([int64]$asset.size) (Get-AssetSha $asset)
             if ($asset.size -and ((Get-Item -LiteralPath $zip).Length -ne [int64]$asset.size)) { throw 'размер архива не совпал — скачивание повреждено' }
-            $digest = [string]$asset.digest
-            if ($digest.StartsWith('sha256:')) {
-                if ((Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash.ToLower() -ne $digest.Substring(7).ToLower()) { throw 'контрольная сумма архива не совпала' }
-                Log 'контрольная сумма подтверждена' 'Green'
-            }
         }
         Add-Type -AssemblyName System.IO.Compression.FileSystem
         $za = [System.IO.Compression.ZipFile]::OpenRead($zip)

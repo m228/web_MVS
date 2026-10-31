@@ -146,29 +146,52 @@ def test_update_ps1_installs_updates_and_skips_addon(tmp_path):
 
 
 @pytestmark_win
-def test_update_ps1_save_download_progress_and_stall(tmp_path):
-    """Save-Download (WebClient вместо медленного Invoke-WebRequest): файл скачивается целиком, ход пишется в лог, «повисшая» связь отменяется."""
+def test_update_ps1_save_download_resumes_after_drops(tmp_path):
+    """Save-Download докачивает с места обрыва (HTTP Range): обрыв связи, редирект, сервер без Range, зависание, неверная sha256."""
+    import hashlib
     import http.server
     import threading
+
+    data = bytes(i % 251 for i in range(4 * 1024 * 1024))
+    sha = hashlib.sha256(data).hexdigest()
+    hits = {}
 
     class H(http.server.BaseHTTPRequestHandler):
         def log_message(self, *a):
             pass
 
         def do_GET(self):
-            n = 6 * 1024 * 1024
-            self.send_response(200)
-            self.send_header("Content-Length", str(n))
+            path = self.path
+            n = hits[path] = hits.get(path, 0) + 1
+            if path == "/redir":
+                self.send_response(302)
+                self.send_header("Location", "/drop2")
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
+            rng = self.headers.get("Range")
+            start = 0
+            if rng and path != "/norange":
+                start = int(rng.split("=")[1].split("-")[0])
+                self.send_response(206)
+                self.send_header("Content-Range", "bytes %d-%d/%d" % (start, len(data) - 1, len(data)))
+            else:
+                self.send_response(200)
+            self.send_header("Content-Length", str(len(data) - start))
             self.end_headers()
-            if self.path == "/ok":
-                for _ in range(6):
-                    self.wfile.write(b"x" * (1024 * 1024))
-                    self.wfile.flush()
-                    time.sleep(0.5)
-            else:                                           # /stall: отдал мегабайт и замолчал
-                self.wfile.write(b"x" * (1024 * 1024))
+            body = data[start:]
+            if path in ("/drop", "/drop2", "/norange") and n == 1:      # первая попытка: мегабайт и обрыв
+                self.wfile.write(body[:1024 * 1024])
                 self.wfile.flush()
-                time.sleep(15)
+                self.close_connection = True
+                return
+            if path == "/stall":                                        # в первый раз отдал полмегабайта, дальше молчит
+                if n == 1:
+                    self.wfile.write(body[:512 * 1024])
+                    self.wfile.flush()
+                time.sleep(20)
+                return
+            self.wfile.write(body)
 
     srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), H)
     srv.daemon_threads = True
@@ -176,20 +199,34 @@ def test_update_ps1_save_download_progress_and_stall(tmp_path):
     port = srv.server_address[1]
     try:
         src = (ROOT / "update.ps1").read_text(encoding="utf-8-sig")
-        func = src[src.index("function Save-Download"):src.index("# ---------- запуск и остановка приложения")]
-        out_ok, out_stall = tmp_path / "ok.bin", tmp_path / "stall.bin"
+        func = src[src.index("function Receive-Part"):src.index("# ---------- запуск и остановка приложения")]
+        dl = tmp_path / "dl"
+        base = "http://127.0.0.1:%d" % port
+        size = len(data)
+        calls = []
+        for name, path, sh in [("a_drop", "/drop", sha), ("b_redir", "/redir", sha), ("c_norange", "/norange", sha)]:
+            calls.append("Save-Download '%s%s' '%s' %d '%s' 1 10 3 1\n'%s ' + (Get-FileHash '%s' -Algorithm SHA256).Hash.ToLower()" % (
+                base, path, tmp_path / (name + ".bin"), size, sh, name, tmp_path / (name + ".bin")))
+        calls.append("try { Save-Download '%s/bad' '%s' %d '%s' 1 10 3 1; 'NOBAD' } catch { 'BAD ' + $_.Exception.Message }" % (
+            base, tmp_path / "bad.bin", size, "0" * 64))
+        calls.append("try { Save-Download '%s/stall' '%s' %d '' 1 2 2 1; 'NOSTALL' } catch { 'STALL ' + $_.Exception.Message }" % (
+            base, tmp_path / "stall.bin", size))
         script = ('$ErrorActionPreference="Stop"\n[Console]::OutputEncoding=[Text.Encoding]::UTF8\n'
-                  'function Log([string]$m,[string]$c=""){ Write-Host ("LOG: "+$m) }\n' + func +
-                  "\nSave-Download 'http://127.0.0.1:%d/ok' '%s' (6MB) 1 20\n" % (port, out_ok) +
-                  "'DONE ' + (Get-Item '%s').Length\n" % out_ok +
-                  "try { Save-Download 'http://127.0.0.1:%d/stall' '%s' (6MB) 1 3; 'NOSTALL' } catch { 'STALL ' + $_.Exception.Message }\n" % (port, out_stall))
+                  'function Log([string]$m,[string]$c=""){ Write-Host ("LOG: "+$m) }\n'
+                  "$script:DlDir = '%s'\n" % dl + func + "\n" + "\n".join(calls) + "\n")
         ps1 = tmp_path / "t.ps1"
-        ps1.write_text(script, encoding="utf-8-sig")
+        ps1.write_text(script.replace("\\n", "\n"), encoding="utf-8-sig")
         p = subprocess.run(["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(ps1)], capture_output=True, text=True,
-                           encoding="utf-8", errors="replace", timeout=90, stdin=subprocess.DEVNULL)
+                           encoding="utf-8", errors="replace", timeout=180, stdin=subprocess.DEVNULL)
         out = p.stdout + p.stderr
-        assert "DONE %d" % (6 * 1024 * 1024) in out, out
-        assert "LOG: скачано" in out and "из 6,0 МБ" in out.replace(".", ","), "ход скачивания пишется в лог: " + out
-        assert "STALL скачивание остановилось" in out, out
+        for name in ("a_drop", "b_redir", "c_norange"):
+            assert "%s %s" % (name, sha) in out, out                    # файл целиком и sha256 сходится
+        assert "докачиваю с 1,0 МБ" in out.replace(".", ","), "после обрыва докачка идёт с места обрыва: " + out
+        assert hits.get("/drop2", 0) >= 2, "редирект + Range: " + str(hits)
+        assert "LOG: контрольная сумма подтверждена" in out, out
+        assert "BAD контрольная сумма архива не совпала" in out, out
+        assert "STALL не удалось докачать" in out and "следующий запуск продолжит" in out, out
+        assert (dl / "stall.bin.part").is_file(), "недокачанное сохраняется для следующего запуска"
+        assert not (tmp_path / "stall.bin").exists()
     finally:
         srv.shutdown()

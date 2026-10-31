@@ -24,7 +24,7 @@ sys.path.insert(0, str(MS))
 
 import motion_engine as me  # noqa: E402
 import motion_modbus as mm  # noqa: E402
-from motion_camera import CameraWorker, garbage_ratio  # noqa: E402
+from motion_camera import CameraWorker, decoder_kind, garbage_ratio, hw_params, stream_url  # noqa: E402
 
 W, H = 320, 240
 LEFT = [[10, 40], [150, 40], [150, 200], [10, 200]]
@@ -758,3 +758,133 @@ def test_long_history_window_squeeze_and_max_keeps_bursts(tmp_path):
     assert win["t"][-1] - win["t"][0] <= 31
     # старый режим по числу кадров не сломан
     assert len(w.history(10)["t"]) == 10
+
+
+# ───────────────────── аппаратное декодирование и подпоток ─────────────────────
+def test_camera_config_hw_accel_and_substream_defaults_and_validation():
+    c = me.normalize_camera({"id": "c1", "url": "x"})
+    assert c["hw_accel"] == "off" and c["substream"] is False
+    c = me.normalize_camera({"id": "c1", "url": "x", "hw_accel": "AUTO", "substream": True})
+    assert c["hw_accel"] == "auto" and c["substream"] is True
+    with pytest.raises(ValueError, match="hw_accel"):
+        me.normalize_camera({"id": "c1", "url": "x", "hw_accel": "cuda"})
+
+
+def test_stream_url_swaps_dahua_subtype_only_when_asked():
+    u = "rtsp://admin:pw@10.0.0.5:554/cam/realmonitor?channel=1&subtype=0"
+    assert stream_url(u, True).endswith("channel=1&subtype=1")
+    assert stream_url(u, False) == u
+    assert stream_url("rtsp://10.0.0.5/live", True) == "rtsp://10.0.0.5/live", "без subtype= адрес не трогаем"
+    assert stream_url("C:/video/a.mp4?subtype=0", True) == "C:/video/a.mp4?subtype=0", "не RTSP — не трогаем"
+
+
+def test_hw_params_only_for_hardware_modes():
+    assert hw_params("off") == []
+    for mode in ("auto", "d3d11"):
+        p = hw_params(mode)
+        assert p[0] == cv2.CAP_PROP_HW_ACCELERATION and p[1] > 0
+        assert cv2.CAP_PROP_HW_DEVICE not in p, "устройство без явного режима OpenCV не принимает"
+
+
+def test_decoder_kind_reads_capture_property():
+    class C:
+        def __init__(self, v):
+            self.v = v
+
+        def get(self, *_):
+            return self.v
+    assert decoder_kind(C(0.0)) == "cpu" and decoder_kind(C(2.0)) == "gpu" and decoder_kind(C(25.0)) == ""
+
+
+class _Cap:
+    def __init__(self, opened):
+        self.opened = opened
+
+    def isOpened(self):
+        return self.opened
+
+    def release(self):
+        pass
+
+
+def _plain_worker(tmp_path, factory, **cam):
+    cfg = me.normalize_camera(dict({"id": "w", "url": "rtsp://h/cam?subtype=0"}, **cam))
+    return CameraWorker(cfg, me.normalize_modbus({}), mm.LinkRegistry(lambda h, p: None), tmp_path, factory)
+
+
+def test_worker_open_passes_substream_and_hw_mode_to_factory(tmp_path):
+    calls = []
+
+    def factory(url, tr, hw=None):
+        calls.append((url, hw))
+        return _Cap(True)
+    w = _plain_worker(tmp_path, factory, hw_accel="d3d11", substream=True)
+    assert w._open(w.cfg["url"], w.cfg).isOpened()
+    assert calls == [("rtsp://h/cam?subtype=1", "d3d11")]
+
+
+def test_worker_falls_back_to_cpu_when_hardware_open_fails(tmp_path):
+    calls = []
+
+    def factory(url, tr, hw=None):
+        calls.append(hw)
+        return _Cap(hw is None)                     # с аппаратным режимом не открывается, программно — да
+    w = _plain_worker(tmp_path, factory, hw_accel="auto")
+    assert w._open(w.cfg["url"], w.cfg).isOpened() and w._hw_off
+    assert calls == ["auto", None]
+    calls.clear()
+    assert w._open(w.cfg["url"], w.cfg).isOpened()
+    assert calls == [None], "после отката воркер больше не просит аппаратный режим"
+
+
+def test_worker_dead_camera_does_not_disable_hardware(tmp_path):
+    w = _plain_worker(tmp_path, lambda url, tr, hw=None: _Cap(False), hw_accel="auto")
+    assert not w._open(w.cfg["url"], w.cfg).isOpened() and not w._hw_off, "камера мертва и так, дело не в видеоядре"
+
+
+def test_worker_gives_up_hardware_after_three_opens_without_frames(tmp_path):
+    w = _plain_worker(tmp_path, lambda url, tr, hw=None: _Cap(True), hw_accel="auto")
+    w._hw_giveup_check(False)
+    w._hw_giveup_check(False)
+    assert not w._hw_off
+    w._hw_giveup_check(True)                        # кадры были — это обычный обрыв связи, счётчик не растёт
+    assert w._hw_fail == 2 and not w._hw_off
+    w._hw_giveup_check(False)
+    assert w._hw_off
+    w2 = _plain_worker(tmp_path, lambda url, tr, hw=None: _Cap(True))   # аппаратное не запрошено — не трогаем
+    for _ in range(5):
+        w2._hw_giveup_check(False)
+    assert not w2._hw_off
+
+
+def test_worker_state_reports_decoder(tmp_path):
+    w, _ = _worker(tmp_path, make_frames(10))
+    try:
+        assert _wait(lambda: w.state()["connected"])
+        assert w.state()["decoder"] == "", "подменённый источник способ декодирования не сообщает"
+    finally:
+        w.stop()
+
+
+def test_track_flow_off_skips_optical_flow_for_diff_zone(monkeypatch):
+    """Оптический поток — самая дорогая часть анализа: зона на diff с выключенным track_flow его не считает (flow = 0)."""
+    calls = []
+    real = me.flow_metric
+    monkeypatch.setattr(me, "flow_metric", lambda *a, **k: calls.append(1) or real(*a, **k))
+    f0, f1 = make_frames(2)
+
+    def zone(**kw):
+        z = me.normalize_camera({"id": "t", "url": "x", "zones": [dict({"id": "z1", "points": LEFT, "smooth": 2}, **kw)]})["zones"][0]
+        return z, me.ZoneRT(z, None, (W, H))
+
+    z, zr = zone(metric="diff")
+    assert z["track_flow"] is True, "по умолчанию как раньше: flow считается"
+    zr.step(f0, f1, 0.3)
+    assert calls and zr.flow > 0
+    calls.clear()
+    z, zr = zone(metric="diff", track_flow=False)
+    zr.step(f0, f1, 0.3)
+    assert z["track_flow"] is False and not calls and zr.flow == 0.0 and zr.diff > 0
+    z, zr = zone(metric="flow", track_flow=False)
+    zr.step(f0, f1, 0.3)
+    assert calls and zr.flow > 0, "зона на flow считает его всегда, даже при track_flow=false"

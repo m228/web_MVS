@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Мониторинг</title>
+  <link rel="stylesheet" href="/static/style.css" />
+  <script src="/static/js/logger.js"></script>
+  <script src="/static/js/theme.js" defer></script>
+</head>
+<body>
+  <div class="layout">
+    <main class="content">
+      <div class="app-shell">
+        <header class="topbar">
+          <div class="theme-panel">
+            <span class="theme-panel__label">Тема интерфейса</span>
+            <div class="theme-switcher" data-theme-switcher></div>
+          </div>
+
+          <div class="brand-slot" aria-label="Логотип компании">
+            <div class="brand-slot__logo-wrap">
+              <a class="brand-link" href="https://max-automation.ru/" target="_blank" rel="noopener" title="Перейти на сайт Maximum Automation">
+                <img
+                  class="brand-logo"
+                  data-theme-logo
+                  data-logo-light="/static/icon/Logo_Black.png"
+                  data-logo-dark="/static/icon/Logo_White.png"
+                  src="/static/icon/Logo_Black.png"
+                  alt="MA logo"
+                />
+              </a>
+            </div>
+          </div>
+        </header>
+
+        <section class="card page-hero">
+          <div class="page-hero__content">
+            <p class="page-hero__eyebrow">Удалённый мониторинг</p>
+            <h1 class="page-hero__title">Мониторинг</h1>
+            <p class="page-hero__subtitle">
+              Пульс этого ПК уходит на сервер: работает ли, перезапускался ли, что сломалось.
+            </p>
+          </div>
+
+          <div class="page-hero__actions">
+            <a href="/" class="btn btn-secondary">На главную</a>
+            <button type="button" id="logsBtn" class="btn toolbar-btn--logs" title="Открыть журнал">
+              Логи
+              <span class="log-counter" id="logCounter">0</span>
+            </button>
+          </div>
+        </section>
+
+        <section class="card mon-card">
+          <div class="section-header">
+            <div>
+              <p class="section-subtitle">Сейчас</p>
+              <h2>Как дела</h2>
+            </div>
+            <span id="monLink" class="mon-chip">…</span>
+          </div>
+          <pre id="monText" class="mon-text">Загрузка…</pre>
+          <div id="monAlerts" class="mon-alerts"></div>
+        </section>
+
+        <section class="card mon-card">
+          <div class="section-header">
+            <div>
+              <p class="section-subtitle">Связь с сервером</p>
+              <h2>Отправка</h2>
+            </div>
+            <label class="micro-switch" for="monEnabled" title="Включить отправку пульса на сервер">
+              <input type="checkbox" id="monEnabled" />
+              <span class="micro-switch__track"><span class="micro-switch__thumb"></span></span>
+              <span class="micro-switch__label">Отправлять</span>
+            </label>
+          </div>
+          <div class="mon-form">
+            <label class="mon-f"><span>Завод</span><input id="monPlant" class="field-input" type="text" maxlength="40" placeholder="Кир" autocomplete="off" /></label>
+            <label class="mon-f"><span>Адрес сервера</span><input id="monUrl" class="field-input" type="text" placeholder="https://monitor.example.ru" autocomplete="off" /></label>
+            <label class="mon-f"><span>Токен</span><input id="monToken" class="field-input" type="password" autocomplete="new-password" placeholder="" /></label>
+            <label class="mon-f"><span>Пульс раз в</span>
+              <select id="monInterval" class="field-select">
+                <option value="1">1 мин</option>
+                <option value="5">5 мин</option>
+                <option value="10">10 мин</option>
+                <option value="15">15 мин</option>
+                <option value="30">30 мин</option>
+              </select>
+            </label>
+          </div>
+          <div class="mon-actions">
+            <button type="button" id="monSave" class="btn btn-primary">Сохранить</button>
+            <button type="button" id="monTest" class="btn btn-secondary">Проверить связь</button>
+            <span id="monMsg" class="mon-msg"></span>
+          </div>
+          <p id="monSendInfo" class="mon-info"></p>
+        </section>
+
+        <section class="card mon-card">
+          <div class="section-header">
+            <div>
+              <p class="section-subtitle">Перезапуски и тревоги</p>
+              <h2>Журнал</h2>
+            </div>
+          </div>
+          <div id="monLog" class="mon-log"></div>
+        </section>
+
+        <section class="card debug-console hidden" id="debugConsoleSection" aria-live="polite">
+          <div class="debug-console__header">
+            <div>
+              <p class="section-subtitle">Отладка</p>
+              <h2>История событий</h2>
+            </div>
+            <div class="debug-console__actions">
+              <span class="debug-console__state">JS + backend</span>
+              <button type="button" id="debugSaveBtn" class="btn-secondary">Сохранить логи</button>
+              <button type="button" id="debugClearBtn" class="btn-secondary">Очистить</button>
+            </div>
+          </div>
+          <div class="debug-console__list" id="debugConsoleList"></div>
+        </section>
+      </div>
+    </main>
+  </div>
+
+  <script src="/static/js/api.js"></script>
+  <script src="/static/js/monitor.js"></script>
+</body>
+</html>

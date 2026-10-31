@@ -187,6 +187,11 @@ class Supervisor:
 _sup: Optional[Supervisor] = None
 
 
+def states() -> dict:
+    """Последнее известное состояние сервисов {имя: healthy | started | gave_up | spawn_error | off | absent | remote} — для мониторинга (sysmon)."""
+    return dict(_sup.state) if _sup is not None else {}
+
+
 def start():
     """Поднять установленные сервисы и запустить сторожа (фоном — старт web_MVS не ждёт). Повторный вызов ничего не делает."""
     global _sup

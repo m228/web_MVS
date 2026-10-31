@@ -15,6 +15,7 @@ from __future__ import annotations
 import csv
 import logging
 import os
+import re
 import threading
 import time
 from collections import deque
@@ -74,14 +75,46 @@ def garbage_ratio(gray: np.ndarray, bs: int = 16) -> float:
     return float(flat.mean())
 
 
-def open_capture(url: str, transport: str = "tcp"):
-    """cv2.VideoCapture с таймаутами открытия/чтения (без них мёртвая камера вешает поток надолго)."""
+def stream_url(url: str, substream: bool = False) -> str:
+    """Адрес потока для анализа. substream — вместо основного потока взять дополнительный: у камер Dahua это subtype=1 вместо
+    subtype=0 (картинка в разы меньше — декодер нагружается на порядок слабее). Адрес без subtype= не трогаем."""
+    if substream and str(url).lower().startswith("rtsp") and re.search(r"subtype=\d+", url):
+        return re.sub(r"subtype=\d+", "subtype=1", url, count=1)
+    return url
+
+
+def hw_params(hw_accel: str) -> list:
+    """Параметры VideoCapture для аппаратного декодирования; [] — программное (или OpenCV без поддержки).
+    CAP_PROP_HW_DEVICE не передаём: OpenCV отказывается открывать поток, если устройство указано без явного режима."""
+    prop = getattr(cv2, "CAP_PROP_HW_ACCELERATION", None)
+    mode = {"auto": getattr(cv2, "VIDEO_ACCELERATION_ANY", None), "d3d11": getattr(cv2, "VIDEO_ACCELERATION_D3D11", None)}.get(hw_accel)
+    return [prop, mode] if prop is not None and mode is not None else []
+
+
+def cfg_hw(cfg: dict) -> str:
+    return cfg.get("hw_accel", "off")
+
+
+def decoder_kind(cap) -> str:
+    """'gpu' — поток реально декодируется на видеоядре, 'cpu' — программно, '' — неизвестно (подмена в тестах)."""
+    try:
+        v = cap.get(cv2.CAP_PROP_HW_ACCELERATION)
+    except Exception:
+        return ""
+    if v == 0:
+        return "cpu"
+    return "gpu" if 0 < v <= 5 else ""         # VIDEO_ACCELERATION_*: 1..5; иное (подмена) — неизвестно
+
+
+def open_capture(url: str, transport: str = "tcp", hw_accel: str = "off"):
+    """cv2.VideoCapture с таймаутами открытия/чтения (без них мёртвая камера вешает поток надолго).
+    hw_accel: off — декодирует процессор; auto/d3d11 — видеоядро (Intel UHD и т.п.), нагрузка на процессор падает в разы."""
     with _OPEN_LOCK:
         if str(url).lower().startswith("rtsp") and transport in ("tcp", "udp"):
             os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "rtsp_transport;%s" % transport
         try:
             cap = cv2.VideoCapture(url, cv2.CAP_FFMPEG, [cv2.CAP_PROP_OPEN_TIMEOUT_MSEC, 5000,
-                                                         cv2.CAP_PROP_READ_TIMEOUT_MSEC, 5000])
+                                                         cv2.CAP_PROP_READ_TIMEOUT_MSEC, 5000] + hw_params(hw_accel))
         except Exception:
             cap = cv2.VideoCapture(url, cv2.CAP_FFMPEG)
     try:
@@ -101,6 +134,9 @@ class CameraWorker(threading.Thread):
         self.links = links
         self.data_dir = Path(data_dir)
         self.capture_factory = capture_factory
+        self._hw_off = False                   # аппаратное декодирование не вышло — до остановки воркера декодируем процессором
+        self._hw_fail = 0                      # сколько открытий подряд с аппаратным декодированием не дали ни одного кадра
+        self._decoder = ""                     # 'gpu' | 'cpu' | '' — чем декодируется поток сейчас
         self.engine = CameraEngine(cam_cfg)
         self._halt = threading.Event()
         self._lock = threading.Lock()
@@ -125,6 +161,31 @@ class CameraWorker(threading.Thread):
         self._writer: Optional[threading.Thread] = None
         self.plc = {"enabled": bool(self.mb.get("enable")), "ok": None, "error": ""}
 
+    def _open(self, url: str, cfg: dict):
+        """Открыть поток: подпоток вместо основного (substream) и аппаратное декодирование (hw_accel). Не открылось с аппаратным —
+        один раз пробуем программно: если так открылось, дальше этот воркер декодирует процессором (до перезапуска сервиса)."""
+        url = stream_url(url, cfg.get("substream", False))
+        hw = "off" if self._hw_off else cfg.get("hw_accel", "off")
+        if hw == "off":
+            return self.capture_factory(url, cfg["transport"])
+        cap = self.capture_factory(url, cfg["transport"], hw)
+        if not cap.isOpened():
+            cap.release()
+            cap = self.capture_factory(url, cfg["transport"])
+            if cap.isOpened():
+                self._hw_off = True
+                log.warning("[%s] с аппаратным декодированием поток не открылся, а программно открылся — дальше декодирую процессором", self.id)
+        return cap
+
+    def _hw_giveup_check(self, got_frame: bool):
+        """Поток с аппаратным декодированием оборвался, не дав ни одного кадра. Три раза подряд — видеоядро его не тянет, возвращаемся на процессор."""
+        if self._hw_off or cfg_hw(self.cfg) == "off" or got_frame:
+            return
+        self._hw_fail += 1
+        if self._hw_fail >= 3:
+            self._hw_off = True
+            log.warning("[%s] аппаратное декодирование не дало ни одного кадра за %d открытий — дальше декодирую процессором", self.id, self._hw_fail)
+
     # ─────────── внешний API ───────────
     def stop(self):
         self._halt.set()
@@ -138,7 +199,7 @@ class CameraWorker(threading.Thread):
             if len(self._stamps) >= 2 and self._stamps[-1] > self._stamps[0]:
                 fps = (len(self._stamps) - 1) / (self._stamps[-1] - self._stamps[0])
             return {"id": self.id, "name": self.cfg["name"], "enabled": self.cfg["enabled"], "connected": self._connected,
-                    "error": self._error, "fps": round(fps, 2), "age_s": round(time.time() - self._last_good, 1) if self._last_good else None,
+                    "error": self._error, "decoder": self._decoder, "fps": round(fps, 2), "age_s": round(time.time() - self._last_good, 1) if self._last_good else None,
                     "recording": self._rec_path.name if self._rec_path else None, "plc": dict(self.plc), "result": st}
 
     def snapshot_jpeg(self, max_w: int = 0) -> Optional[tuple]:
@@ -366,19 +427,22 @@ class CameraWorker(threading.Thread):
         bad_since = 0.0                        # когда началась «серая каша» (0 — кадр нормальный)
         bad_until = 0.0                        # пока не истечёт — кадры после каши не считаем
         was_bad = False
+        got_frame = False                      # с этого открытия потока уже пришёл хоть один кадр
         next_t = 0.0                           # темп чтения файла
         while not self._halt.is_set():
             now = time.time()
             if cap is None or not cap.isOpened():
                 if cap is not None:
                     cap.release()
-                cap = self.capture_factory(url, cfg["transport"])
+                cap = self._open(url, cfg)
                 if not cap.isOpened():
                     self._note_conn(False, "нет связи с источником")
                     self._dead(now, timeout, "нет кадров")
                     self._halt.wait(cfg["reconnect_delay_s"])
                     continue
                 self._note_conn(True, "")
+                self._decoder = decoder_kind(cap)
+                got_frame = False
                 self.engine.reset()
                 last_gray, last_proc, freeze_time, frozen = None, 0.0, 0.0, False
                 if file_src:
@@ -392,6 +456,7 @@ class CameraWorker(threading.Thread):
                     last_gray = None
                     continue
                 self._note_conn(False, "поток оборвался")
+                self._hw_giveup_check(got_frame)
                 cap.release()
                 cap = None
                 self._dead(time.time(), timeout, "поток оборвался")
@@ -411,6 +476,8 @@ class CameraWorker(threading.Thread):
             dt = now - last_proc if last_proc else interval
             last_proc = now
             self._last_good = now
+            got_frame = True
+            self._hw_fail = 0
             # детектор зависшей картинки: живой поток всегда чуть «дышит» (шум матрицы)
             if last_gray is not None and last_gray.shape == gray.shape:
                 if float(cv2.absdiff(last_gray, gray).mean()) < cfg["freeze_eps"]:

@@ -1,0 +1,4 @@
+# Monitoring receiver (plant pulses -> panel). Installed into its OWN venv on Max's PC, not on plant machines.
+# Versions are not pinned hard (>=) so it installs on Python 3.10 / 3.11 / 3.12.
+fastapi>=0.110
+uvicorn>=0.27

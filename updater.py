@@ -13,6 +13,7 @@
 Зависимостей нет — только стандартная библиотека (urllib, zipfile, shutil).
 """
 import hashlib
+import http.client
 import json
 import os
 import re
@@ -22,6 +23,7 @@ import sys
 import tempfile
 import threading
 import time
+import urllib.error
 import urllib.request
 import zipfile
 from pathlib import Path
@@ -201,7 +203,7 @@ _MAX_DOWNLOAD_FALLBACK = 500 * 1024 * 1024   # 500 МБ
 _DOWNLOAD_DEADLINE = 900                       # сек на весь трансфер (не на сокет)
 
 
-def _download_stream(resp, out, max_bytes, deadline):
+def _download_stream(resp, out, max_bytes, deadline, chunk_size=1 << 20):
     """Читать ответ чанками с лимитом размера и общим дедлайном.
 
     urlopen(timeout=) — таймаут сокета (на одно чтение), он НЕ ограничивает общее
@@ -212,7 +214,7 @@ def _download_stream(resp, out, max_bytes, deadline):
     while True:
         if time.time() > deadline:
             raise TimeoutError("превышено общее время скачивания")
-        chunk = resp.read(1 << 20)
+        chunk = resp.read(chunk_size)
         if not chunk:
             break
         total += len(chunk)
@@ -220,6 +222,54 @@ def _download_stream(resp, out, max_bytes, deadline):
             raise ValueError(f"размер загрузки превысил лимит {max_bytes} байт")
         out.write(chunk)
     return total
+
+
+def _download_resumable(url: str, dl_path: Path, size: int, deadline: float, max_idle: int = 6) -> None:
+    """Скачать url в dl_path с докачкой (HTTP Range) для слабого интернета.
+
+    Недокачанный dl_path сохраняется между попытками и между вызовами: обрыв или таймаут не сбрасывает прогресс, следующая
+    попытка (в этом же вызове или при повторном нажатии) продолжает с места обрыва. Сдаёмся после max_idle попыток подряд
+    без единого байта или по общему дедлайну (TimeoutError); файл при этом остаётся.
+    """
+    max_bytes = int(size * 1.05) if size > 0 else _MAX_DOWNLOAD_FALLBACK
+    idle, last = 0, None
+    while True:
+        have = dl_path.stat().st_size if dl_path.exists() else 0
+        if size > 0 and have > size:
+            dl_path.unlink()
+            have = 0
+        if size > 0 and have == size:
+            return
+        headers = {"User-Agent": "web_MVS-update"}
+        if have:
+            headers["Range"] = "bytes=%d-" % have
+        try:
+            if time.time() > deadline:
+                raise TimeoutError("превышено общее время скачивания")
+            req = urllib.request.Request(url, headers=headers)
+            with urllib.request.urlopen(req, timeout=60) as resp:
+                if have and resp.status != 206:               # сервер не умеет докачку — пишем с начала
+                    have = 0
+                with open(dl_path, "ab" if have else "wb") as out:
+                    _download_stream(resp, out, max_bytes - have, deadline, 1 << 16)    # мелкие куски: обрыв на слабой связи не теряет мегабайт
+            if size <= 0 or dl_path.stat().st_size >= size:
+                return
+            last = OSError("соединение закрыто раньше времени")
+        except urllib.error.HTTPError as exc:
+            last = exc
+            if exc.code == 416:                              # на сервере не тот файл, что у нас в обрывке
+                dl_path.unlink(missing_ok=True)
+        except TimeoutError:
+            raise
+        except (OSError, urllib.error.URLError, http.client.HTTPException) as exc:
+            last = exc
+        now = dl_path.stat().st_size if dl_path.exists() else 0
+        idle = 0 if now > have else idle + 1
+        if idle >= max_idle:
+            raise OSError("нет связи: %s (скачано %.1f из %.1f МБ, продолжу с этого места при повторе)" % (last, now / 1e6, size / 1e6))
+        log_event("updater.download", "Связь оборвалась — докачаю с места обрыва", "warn",
+                  {"have": now, "size": size, "error": str(last)})
+        time.sleep(min(30, 2 * (idle + 1)))
 
 
 def download_latest(extract: bool = True, delta_only: bool = False):
@@ -269,12 +319,23 @@ def _download_latest_locked(extract: bool, delta_only: bool = False):
     if asset is None:
         return {"ok": False, "error": "В последнем релизе нет файла web_MVS_*.zip"}
 
-    if STAGING.exists():
-        shutil.rmtree(STAGING, ignore_errors=True)
-    STAGING.mkdir(parents=True, exist_ok=True)
     # имя приходит из GitHub API — берём только basename, чтобы оно не увело файл из STAGING
     zip_path = STAGING / Path(str(asset.get("name") or "web_MVS_new.zip")).name
     part_path = zip_path.with_name(zip_path.name + ".part")
+    dl_path = zip_path.with_name(zip_path.name + ".dl")        # недокачанный полный архив: переживает обрывы и повторные нажатия
+    keep = dl_path if dl_path.is_file() else None
+    stash = None
+    if keep:
+        stash = STAGING.with_name(STAGING.name + "_dl")
+        shutil.rmtree(stash, ignore_errors=True)
+        stash.mkdir(parents=True, exist_ok=True)
+        os.replace(keep, stash / keep.name)
+    if STAGING.exists():
+        shutil.rmtree(STAGING, ignore_errors=True)
+    STAGING.mkdir(parents=True, exist_ok=True)
+    if stash:
+        os.replace(stash / dl_path.name, dl_path)
+        shutil.rmtree(stash, ignore_errors=True)
 
     try:
         log_event("updater.download", "Скачиваю релиз", "info", {"name": asset.get("name")})
@@ -285,13 +346,13 @@ def _download_latest_locked(extract: bool, delta_only: bool = False):
             shutil.rmtree(STAGING, ignore_errors=True)
             return {"ok": False, "delta_failed": True, "error": "докачка изменившихся файлов не вышла"}
         if delta is None:
-            req = urllib.request.Request(asset["browser_download_url"],
-                                         headers={"User-Agent": "web_MVS-update"})
-            # лимит: заявленный размер +5% на расхождения, иначе — страховочный потолок
-            max_bytes = int(size * 1.05) if size > 0 else _MAX_DOWNLOAD_FALLBACK
-            with urllib.request.urlopen(req, timeout=60) as resp, open(part_path, "wb") as out:
-                _download_stream(resp, out, max_bytes, deadline)
-            _verify_download(part_path, asset)
+            _download_resumable(asset["browser_download_url"], dl_path, size, deadline)
+            try:
+                _verify_download(dl_path, asset)
+            except ValueError:                           # битый архив докачивать бессмысленно — в следующий раз с нуля
+                dl_path.unlink(missing_ok=True)
+                raise
+            os.replace(dl_path, part_path)
         os.replace(part_path, zip_path)                  # готово: только теперь архив считается скачанным
         if extract:
             with zipfile.ZipFile(zip_path) as zf:
@@ -302,7 +363,10 @@ def _download_latest_locked(extract: bool, delta_only: bool = False):
             part_path.unlink()
         except OSError:
             pass
-        return {"ok": False, "error": "Ошибка скачивания: " + str(exc)}
+        msg = "Ошибка скачивания: " + str(exc)
+        if dl_path.is_file() and dl_path.stat().st_size > 0:
+            msg += " Скачанное сохранено (%.1f МБ) — повторное нажатие продолжит." % (dl_path.stat().st_size / 1e6)
+        return {"ok": False, "error": msg}
 
     staged_ver = staged_version()
     if not staged_ver and extract:

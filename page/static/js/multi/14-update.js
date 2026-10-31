@@ -5,10 +5,11 @@
 // сервера и перезагружается, а 12-autostart.js по метке MU_FLAG возвращает раскладку и поднимает те камеры, что были подключены.
 const MU = { busy: false, resetT: null };
 const MU_COUNTDOWN_S = 5;
-// Скачивание релиза (77 МБ) на объекте идёт 2–4 минуты, но бывает и ~30 (обрыв связи и повтор, update.log 30.10): таймауты — только
-// страховка от молчаливого зависания, ошибку апдейтера страница ловит по update.log сразу
-const MU_NO_RESTART_MS = 45 * 60 * 1000;     // если за это время приложение так и не остановилось — апдейтер не сработал
-const MU_TOTAL_MS = 60 * 60 * 1000;
+// Скачивание релиза (77 МБ) на объекте идёт 2–4 минуты, а при слабом интернете докачивается с места обрыва часами: пока в update.log
+// появляются новые строки («скачано…», «связь оборвалась…»), апдейтер жив и страница ждёт. Таймауты — только страховка от молчаливого
+// зависания, ошибку апдейтера страница ловит по update.log сразу
+const MU_NO_RESTART_MS = 45 * 60 * 1000;     // если за это время лог не менялся и приложение не остановилось — апдейтер не сработал
+const MU_TOTAL_MS = 24 * 60 * 60 * 1000;
 
 function muEls() {
   return { btn: document.getElementById('multiUpdateBtn'), box: document.getElementById('multiUpdateStatus') };
@@ -109,6 +110,8 @@ async function muWatch(before, latest, noBrowser, since) {
   const started = Date.now();
   let wentDown = false;
   let lg = { failed: '', done: false, summary: '', last: '' };
+  let lastLine = '';
+  let lastMove = started;
   while (Date.now() - started < MU_TOTAL_MS) {
     await muSleep(3000);
     const v = await muVersion();
@@ -155,7 +158,8 @@ async function muWatch(before, latest, noBrowser, since) {
       muFinish();
       return;
     }
-    if (Date.now() - started > MU_NO_RESTART_MS) break;
+    if (lg.last !== lastLine) { lastLine = lg.last; lastMove = Date.now(); }
+    if (Date.now() - lastMove > MU_NO_RESTART_MS) break;
     muSay(`Обновляю${latest ? ' до v' + latest : ''}: ${lg.last || 'запускаю апдейтер'} (камеры пока работают)`, 'warn');
   }
   muDropFlag();

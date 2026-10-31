@@ -28,9 +28,9 @@ class _Handler(BaseHTTPRequestHandler):
         name = self.path.split("/")[-1]
         data = (srv.root / name).read_bytes()
         rng = self.headers.get("Range")
-        m = re.fullmatch(r"bytes=(\d+)-(\d+)", rng or "")
+        m = re.fullmatch(r"bytes=(\d+)-(\d*)", rng or "")
         if m and not srv.ignore_range:
-            a, b = int(m.group(1)), min(int(m.group(2)), len(data) - 1)
+            a, b = int(m.group(1)), min(int(m.group(2) or len(data) - 1), len(data) - 1)
             part = data[a:b + 1]
             self.send_response(206)
             self.send_header("Content-Range", "bytes %d-%d/%d" % (a, b, len(data)))
@@ -42,6 +42,13 @@ class _Handler(BaseHTTPRequestHandler):
             self.send_response(200)
             self.send_header("Content-Length", str(len(data)))
             self.end_headers()
+            if srv.drop_after:                              # оборвать соединение на середине (один раз)
+                cut, srv.drop_after = srv.drop_after, 0
+                self.wfile.write(data[:cut])
+                self.wfile.flush()
+                self.close_connection = True
+                srv.sent += cut
+                return
             self.wfile.write(data)
             srv.sent += len(data)
 
@@ -49,7 +56,7 @@ class _Handler(BaseHTTPRequestHandler):
 @pytest.fixture
 def server(tmp_path):
     srv = ThreadingHTTPServer(("127.0.0.1", 0), _Handler)
-    srv.root, srv.ignore_range, srv.redirect, srv.sent = tmp_path / "www", False, False, 0
+    srv.root, srv.ignore_range, srv.redirect, srv.sent, srv.drop_after = tmp_path / "www", False, False, 0, 0
     srv.root.mkdir()
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     srv.base = "http://127.0.0.1:%d" % srv.server_address[1]
@@ -214,3 +221,75 @@ def test_real_release_archives_2_0_3_to_2_0_6(server, tmp_path):
         assert {i.filename: (i.CRC, i.file_size) for i in a.infolist()} == {i.filename: (i.CRC, i.file_size) for i in b.infolist()}
     assert st["fetched"] < 25_000_000 < REAL_NEW.stat().st_size, st
     print("real 2.0.3->2.0.6: fetched %.1f MB of %.1f MB, files changed %d of %d" % (st["fetched"] / 1e6, REAL_NEW.stat().st_size / 1e6, st["changed"], st["files"]))
+
+
+def _big_blob(server, name="web_MVS_v1.0.1.zip", size=700_000):
+    import hashlib
+    data = bytes(i * 7 % 251 for i in range(size))
+    (server.root / name).write_bytes(data)
+    return data, {"name": name, "browser_download_url": server.base + "/" + name, "size": size, "digest": "sha256:" + hashlib.sha256(data).hexdigest()}
+
+
+def test_download_resumable_continues_from_partial_file(server, tmp_path):
+    """Недокачанный файл не качается заново: Range с места обрыва, по сети приходит только остаток."""
+    import time
+    import updater
+    data, asset = _big_blob(server)
+    dl = tmp_path / "a.zip.dl"
+    dl.write_bytes(data[:250_000])
+    updater._download_resumable(asset["browser_download_url"], dl, asset["size"], time.time() + 30)
+    assert dl.read_bytes() == data and server.sent == len(data) - 250_000
+
+
+def test_download_resumable_survives_dropped_connection(server, tmp_path, monkeypatch):
+    """Обрыв посреди скачивания: следующая попытка в том же вызове продолжает с места обрыва, прогресс не теряется."""
+    import time
+    import updater
+    monkeypatch.setattr(updater.time, "sleep", lambda s: None)
+    data, asset = _big_blob(server)
+    server.drop_after = 300_000
+    dl = tmp_path / "a.zip.dl"
+    updater._download_resumable(asset["browser_download_url"], dl, asset["size"], time.time() + 30)
+    assert dl.read_bytes() == data
+    assert server.sent < len(data) + 70_000, "заново целиком не качали (потеряно не больше последнего куска)"
+
+
+def test_download_resumable_server_without_range_starts_over(server, tmp_path):
+    import time
+    import updater
+    data, asset = _big_blob(server)
+    server.ignore_range = True
+    dl = tmp_path / "a.zip.dl"
+    dl.write_bytes(data[:100_000])
+    updater._download_resumable(asset["browser_download_url"], dl, asset["size"], time.time() + 30)
+    assert dl.read_bytes() == data
+
+
+def test_download_resumable_gives_up_without_progress_but_keeps_file(tmp_path, monkeypatch):
+    import time
+    import updater
+    monkeypatch.setattr(updater.time, "sleep", lambda s: None)
+    dl = tmp_path / "a.zip.dl"
+    dl.write_bytes(b"x" * 1000)
+    with pytest.raises(OSError, match="нет связи"):
+        updater._download_resumable("http://127.0.0.1:9/none.zip", dl, 5000, time.time() + 30, max_idle=3)
+    assert dl.read_bytes() == b"x" * 1000, "недокачанное сохранено для повторного нажатия"
+
+
+def test_download_latest_full_resumes_saved_partial_and_verifies_sha(server, tmp_path, monkeypatch):
+    """Полная загрузка (страница микроскопа): .dl от прошлой попытки переживает вызов, докачивается и проверяется по sha256."""
+    updater, _ = _updater_on(server, tmp_path, monkeypatch)
+    data, asset = _big_blob(server)
+    monkeypatch.setattr(updater, "_fetch_latest_meta", lambda max_age=0.0: ("v1.0.1", asset, ""))
+    monkeypatch.setattr(updater, "_try_delta", lambda *a, **k: None)
+    stg = tmp_path / "stg"
+    stg.mkdir(exist_ok=True)
+    (stg / "web_MVS_v1.0.1.zip.dl").write_bytes(data[:200_000])
+    (stg / "junk.txt").write_text("x")
+    with zipfile.ZipFile(stg / "stub.zip", "w"):
+        pass
+    server.sent = 0
+    r = updater.download_latest(extract=False)
+    assert r["ok"] and (stg / "web_MVS_v1.0.1.zip").read_bytes() == data, r
+    assert server.sent == len(data) - 200_000 and not (stg / "junk.txt").exists()
+    assert not (stg / "web_MVS_v1.0.1.zip.dl").exists()

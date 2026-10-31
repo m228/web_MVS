@@ -46,7 +46,9 @@ def load_password(data: Path) -> str:
     pw = secrets.token_urlsafe(12)
     data.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps({"password": pw}, ensure_ascii=False, indent=2), encoding="utf-8")
-    print("Пароль панели создан и сохранён в %s: %s" % (path, pw), flush=True)
+    # в окне run.bat пароль показываем, чтобы его можно было сразу взять; в файл журнала (службу, перенаправленный вывод) он не попадает
+    shown = pw if sys.stdout is not None and sys.stdout.isatty() else "(смотри файл)"
+    print("Пароль панели создан и сохранён в %s: %s" % (path, shown), flush=True)
     return pw
 
 

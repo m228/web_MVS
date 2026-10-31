@@ -281,7 +281,7 @@ def _version():
 
 @check("Ресурсы", "страницы page/*.html на месте")
 def _pages():
-    names = ["index", "camera", "rtsp", "multi", "network", "microscope"]
+    names = ["index", "camera", "rtsp", "multi", "network", "microscope", "monitor"]
     miss = [n for n in names if not (BUNDLE_DIR / "page" / (n + ".html")).is_file()]
     assert not miss, "нет страниц: %s" % miss
     return "%d страниц" % len(names)
@@ -362,7 +362,7 @@ MODULES = [
     "camera_core.base_worker", "camera_core.gige_worker", "camera_core.rtsp_worker", "camera_core.camera_manager",
     "sdk_gige", "camera_params", "dahua_control", "net_tools", "rtsp_store",
     "save_settings", "plate_config", "sv_source", "microscope_plc", "microscope_fsm",
-    "microscope_service", "cv_analyzer", "cv_volume", "substages", "db", "report", "boil_compare", "cv_fracture", "cv_client", "video_client", "motion_client", "services", "delta_update", "cv_store", "boil_archive", "fracture_lab", "cv_pipeline", "model_check", "boil_anomaly", "other_plants", "cam_events", "cam_monitor", "cam_report",
+    "microscope_service", "cv_analyzer", "cv_volume", "substages", "db", "report", "boil_compare", "cv_fracture", "cv_client", "video_client", "motion_client", "services", "delta_update", "cv_store", "boil_archive", "fracture_lab", "cv_pipeline", "model_check", "boil_anomaly", "other_plants", "cam_events", "cam_monitor", "cam_report", "sysmon",
     "updater", "autostart", "diag", "app", "mvsdk",
 ]
 THIRD_PARTY = ["cv2", "numpy", "fastapi", "starlette", "uvicorn", "pymodbus", "harvesters", "genicam",
@@ -3942,6 +3942,50 @@ def _tcp(host, port, timeout=2.0):
         return False
     finally:
         s.close()
+
+
+@check("Служебные", "мониторинг (sysmon): причина старта; тревоги камеры и пересвета; токена нет в снимке и в API; страница и маршруты на месте")
+def _sysmon():
+    import tempfile
+    import sysmon
+    old_db, old_cfg = sysmon.DB_PATH, sysmon.CONFIG_PATH
+    tmp = Path(tempfile.mkdtemp(prefix="sysmon_chk_"))
+    try:
+        sysmon.close()
+        sysmon.DB_PATH, sysmon.CONFIG_PATH = tmp / "sysmon.db", tmp / "monitor.json"
+        r = [sysmon.register_start(1000.0, 500.0, "1.0.0")["reason"], sysmon.register_start(2000.0, 500.0, "1.0.0")["reason"],
+             sysmon.register_start(3000.0, 500.0, "1.0.1")["reason"], sysmon.register_start(4000.0, 3900.0, "1.0.1")["reason"]]
+        assert r == ["first", "app_restart", "app_update", "pc_reboot"], "причины старта: %s" % r
+        cfg = sysmon.save_config({"enabled": True, "url": "http://127.0.0.1:1", "token": "SECRET-TOKEN-1234567", "plant": "Тест", "interval_s": 300})
+        assert cfg["token"] == "SECRET-TOKEN-1234567" and "token" not in sysmon.public_config(cfg), "токен не должен уходить на страницу"
+        try:
+            sysmon.save_config({"url": "http://example.com"})
+            raise AssertionError("http:// на внешний адрес должен отклоняться")
+        except ValueError:
+            pass
+        src = {"cfg": lambda: {"camera_serial": "S1", "cv": {"enabled": True}}, "micro_on": lambda: True,
+               "state": lambda: {"stage": 7, "stage_ok": True, "cyclic": True, "cycle_params": {"trigger_mode": "time"}},
+               "status": lambda: {"connected": True}, "ext": lambda: {"uptime_s": 100}, "cv": lambda: {"state": "overexposed", "message": "пересвет"},
+               "services": lambda: {"cv": "healthy"},
+               "camera": lambda: {"serial": "S1", "streaming": True, "current": {"exposure_time": 5000.0}, "saved": {"exposure_time": 170.0, "exposure_auto": "Off"}},
+               "probes": lambda serial, since: {"last_t": 1.0, "today": 0}}
+        ag = sysmon.Agent(sources=src, clock=lambda: 10000.0)
+        ag.tick(10000.0)
+        ag.tick(10015.0)                                  # камера подтверждается со второй проверки
+        codes = {a["code"] for a in ag.snapshot()["alerts"]}
+        assert {"camera_exposure", "overexposed"} <= codes, "тревоги: %s" % sorted(codes)
+        blob = json.dumps(ag.snapshot(), ensure_ascii=False)
+        assert "SECRET-TOKEN" not in blob, "токен попал в снимок"
+        import app as _app
+        paths = {getattr(x, "path", "") for x in _app.app.routes}
+        need = {"/monitor", "/api/sysmon/state", "/api/sysmon/starts", "/api/sysmon/config", "/api/sysmon/send_test"}
+        assert need <= paths, "нет маршрутов: %s" % sorted(need - paths)
+        assert 'href="/monitor"' in (Path(BUNDLE_DIR) / "page" / "index.html").read_text(encoding="utf-8"), "на главной нет кнопки «Мониторинг»"
+        return "тревог %d" % len(codes)
+    finally:
+        sysmon.close()
+        sysmon.DB_PATH, sysmon.CONFIG_PATH = old_db, old_cfg
+        shutil.rmtree(tmp, ignore_errors=True)
 
 
 @check("Железо", "GigE: драйвер грузится, камеры перечисляются (главный поток)", hw=True)

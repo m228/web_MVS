@@ -33,6 +33,7 @@ import cam_events
 import cam_monitor
 import cam_report
 import services
+import sysmon
 import fracture_lab
 import cv_store
 import db
@@ -63,6 +64,11 @@ monitor = cam_monitor.Monitor(_rtsp_workers_snapshot, lambda: _motion_url(), mot
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     api_log("app", "Запуск приложения")
+    # удалённый мониторинг: запись старта (перезагрузка ПК / перезапуск приложения) и «пульс» на сервер Макса; не должен мешать запуску
+    try:
+        sysmon.start()
+    except Exception as e:
+        api_log("app", "Мониторинг не запустился: %s" % e, "error")
     # сайдкары (cv_service, video_service), если установлены рядом: поднимаем фоном сразу — CV-модель грузится долго
     services.start()
     # версии Python/genicam/harvesters + дата .cti — видно, не обновилась ли
@@ -87,6 +93,7 @@ async def lifespan(app: FastAPI):
     monitor.stop()
     micro.stop()
     api_log("app", "Остановка приложения")
+    sysmon.stop()                                      # последним: отметка «штатная остановка» для следующего старта
 
 
 # фронтенд лежит в бандле (под заморозкой — в _internal, см. paths.BUNDLE_DIR),
@@ -144,6 +151,55 @@ def multi_page():
 @app.get("/network")
 def network_page():
     return _page("network.html")
+
+
+@app.get("/monitor")
+def monitor_page():
+    return _page("monitor.html")
+
+
+# ---------- Удалённый мониторинг (sysmon): «пульс» ПК на сервер Макса ----------
+
+@app.get("/api/sysmon/state")
+def sysmon_state():
+    """Всё для страницы «Мониторинг»: снимок «как дела», тревоги, состояние отправки, настройки (без токена), последние старты."""
+    ag = sysmon.agent()
+    if ag is None:
+        return {"error": "мониторинг не запущен"}
+    return ag.state()
+
+
+@app.get("/api/sysmon/starts")
+def sysmon_starts(limit: int = 50):
+    """Журнал запусков приложения: перезагрузка ПК / перезапуск / обновление, сколько не работало."""
+    return {"items": sysmon.starts(max(1, min(limit, 500)))}
+
+
+@app.get("/api/sysmon/config")
+def sysmon_config():
+    return sysmon.public_config()
+
+
+@app.post("/api/sysmon/config")
+def sysmon_config_save(payload: dict = Body(...)):
+    """Сохранить настройки отправки (адрес, токен, имя завода, интервал, галочка). POST, а не GET: токен не должен попадать в адрес запроса."""
+    try:
+        cfg = sysmon.save_config(payload)
+    except ValueError as e:
+        return {"status": "error", "error": str(e)}
+    return {"status": "ok", "config": sysmon.public_config(cfg)}
+
+
+@app.get("/api/sysmon/send_test")
+def sysmon_send_test():
+    """Отправить пульс прямо сейчас и вернуть ответ сервера («Проверить связь»)."""
+    ag = sysmon.agent()
+    if ag is None:
+        return {"ok": False, "error": "мониторинг не запущен"}
+    res = ag.send(force=True)
+    api_log("api.sysmon.send_test", "Проверка связи с сервером мониторинга: " + ("ок" if res.get("ok") else res.get("error", "ошибка")),
+            "info" if res.get("ok") else "warn")
+    return res
 
 
 @app.get("/microscope")

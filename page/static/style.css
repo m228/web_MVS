@@ -4658,3 +4658,30 @@ body.micro-rep-doc .micro-cmp-strips { grid-template-columns: repeat(6, 1fr); ga
 .md-plc.is-on { border-color: var(--accent); background: var(--surface-strong); box-shadow: 0 0 0 1px var(--accent) inset; }
 .md-camgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px; }
 .md-card.md-card--sq { flex-direction: column; align-items: flex-start; justify-content: center; gap: 3px; margin: 0; padding: 12px; min-height: 76px; }
+
+/* ====================== Страница «Мониторинг» ====================== */
+.mon-card { display: flex; flex-direction: column; gap: 14px; }
+.mon-chip { padding: 4px 12px; border-radius: 999px; font-size: 12px; font-weight: 800; background: var(--surface-muted); color: var(--muted); white-space: nowrap; }
+.mon-chip.is-ok { background: var(--success-soft); color: var(--success); }
+.mon-chip.is-warn { background: var(--warning-soft); color: var(--warning); }
+.mon-chip.is-bad { background: var(--danger-soft); color: var(--danger); }
+.mon-text { margin: 0; font: inherit; font-size: 14.5px; line-height: 1.7; white-space: pre-line; }
+.mon-alerts { display: flex; flex-direction: column; gap: 8px; align-items: flex-start; }
+.mon-alert { display: flex; gap: 12px; align-items: baseline; padding: 8px 14px; border-radius: 12px; border: 1px solid var(--border); border-left-width: 4px; }
+.mon-alert small { color: var(--muted); }
+.mon-alert.is-bad { border-color: var(--danger); background: var(--danger-soft); }
+.mon-alert.is-warn { border-color: var(--warning); background: var(--warning-soft); }
+/* форма: подпись слева, поле справа, не на всю ширину (общий label в style.css — flex-колонка, здесь сбрасываем) */
+.mon-form { display: flex; flex-direction: column; gap: 10px; }
+.mon-f { display: grid; grid-template-columns: 130px minmax(0, 380px); align-items: center; gap: 12px; font-size: 13px; color: var(--muted); }
+.mon-f .field-input { width: 100%; box-sizing: border-box; }
+.mon-f .field-select { justify-self: start; }
+.mon-actions { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.mon-msg, .mon-info { font-size: 13px; color: var(--muted); margin: 0; }
+.mon-msg.is-bad, .mon-info.is-bad { color: var(--danger); }
+.mon-info:empty { display: none; }
+.mon-log { display: flex; flex-direction: column; gap: 4px; max-height: 360px; overflow-y: auto; }
+.mon-log__row { display: grid; grid-template-columns: 110px 1fr; gap: 12px; padding: 4px 0; font-size: 13.5px; border-bottom: 1px solid var(--border); }
+.mon-log__t { color: var(--muted); font-variant-numeric: tabular-nums; }
+.mon-log__row.is-bad { color: var(--danger); }
+.mon-log__row.is-warn { color: var(--warning); }

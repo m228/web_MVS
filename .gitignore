@@ -64,3 +64,10 @@ cam_events.db
 cam_events.db-wal
 cam_events.db-shm
 /event_shots/
+
+# мониторинг (sysmon): токен и журнал стартов — только локально
+/monitor.json
+/monitor.json.tmp
+sysmon.db
+sysmon.db-wal
+sysmon.db-shm

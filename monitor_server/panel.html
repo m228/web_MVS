@@ -49,6 +49,24 @@ pre.text { margin: 0; font: inherit; font-size: 14px; white-space: pre-wrap; lin
 .alert { border-left: 4px solid var(--warn); background: var(--warn-bg); border-radius: 8px; padding: 6px 12px; font-size: 14px; }
 .alert.bad { border-color: var(--bad); background: var(--bad-bg); }
 .alert small { color: var(--muted); margin-left: 8px; }
+.alert:not(.bad)::before { content: "\26A0"; color: var(--warn); margin-right: 8px; }
+.pos { display: none; border-top: 1px solid var(--line); padding-top: 6px; }
+.pos.open { display: block; }
+.pt-wrap { overflow-x: auto; }
+table.pt { width: 100%; border-collapse: collapse; font-size: 12px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+table.pt th { color: var(--muted); font-weight: 600; text-align: right; padding: 2px 4px; }
+table.pt td { text-align: right; padding: 2px 4px; border-bottom: 1px solid var(--line); }
+table.pt th:nth-child(-n+2), table.pt td:nth-child(-n+2) { text-align: left; }
+.dot { font-size: 10px; }
+.dot.ok { color: var(--ok); }
+.dot.no { color: var(--bad); }
+details.chart { margin-top: 8px; }
+details.chart summary { cursor: pointer; color: var(--muted); font-size: 13px; }
+.legend { font-size: 12px; color: var(--muted); margin-top: 6px; }
+.legend i { display: inline-block; width: 12px; height: 3px; margin: 0 4px 2px 12px; border-radius: 2px; }
+.legend i:first-child { margin-left: 0; }
+.charts { display: grid; gap: 10px; margin-top: 6px; }
+canvas.pc { width: 100%; height: 130px; display: block; }
 .tools { display: flex; gap: 14px; flex-wrap: wrap; }
 .tools button { border: 0; background: none; padding: 2px 0; color: var(--muted); font-size: 13px; }
 .tools button:hover { color: var(--accent); }
@@ -97,6 +115,9 @@ const STATUS = {online: 'в сети', offline: 'нет связи', waiting: '�
 const RANK = {offline: 0, checking: 2, waiting: 3, online: 4};
 // строку «Тревоги: …» из текста завода не показываем: ниже те же тревоги отдельными плашками с временем
 const opened = new Set();           // у каких заводов раскрыт журнал
+const openedPos = new Set();        // у каких раскрыты «Датчики»
+const openedChart = new Set();      // у каких внутри раскрыт график (по умолчанию свёрнут)
+const posCache = {};                // id завода -> последние положения датчиков (новые первыми)
 let plants = [], serverT = Date.now() / 1000;
 
 const fmt = (t) => new Date(t * 1000).toLocaleString('ru-RU', {day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit'});
@@ -114,6 +135,63 @@ async function api(path, opts = {}) {
   return j;
 }
 
+const num = (v) => (v === null || v === undefined ? '—' : String(Math.round(v)));
+const SERIES = [['calc', '--muted', 'расчётная'], ['enc', '--accent', 'энкодер'], ['ai', '--ok', 'датчик']];
+
+function posBlock(id) {
+  const rows = posCache[id];
+  if (!rows) return '<div class="sub">Загрузка…</div>';
+  if (!rows.length) return '<div class="sub">Проб с положениями датчиков пока не было.</div>';
+  const body = rows.slice(0, 20).map((r) => '<tr title="цель ' + num(r.target) + ' мкм' + (r.why ? ' — ' + esc(r.why) : '') + '"><td>' + fmt(r.t) +
+    '</td><td>' + esc(r.step) + '</td><td>' + num(r.calc) + '</td><td>' + num(r.enc) + '</td><td>' + num(r.ai) + '</td><td>' +
+    (r.timeout ? 'таймаут' : num(r.gap)) + '</td><td><span class="dot ' + (r.ok ? 'ok' : 'no') + '">&#9679;</span></td></tr>').join('');
+  const legend = SERIES.map(([, c, n]) => '<i style="background:var(' + c + ')"></i>' + n).join('');
+  return '<div class="pt-wrap"><table class="pt"><thead><tr><th>Время</th><th>Шаг</th><th>Расч.</th><th>Энк.</th><th>Датч.</th><th>Δ мкм</th><th></th></tr></thead><tbody>' +
+    body + '</tbody></table></div>' +
+    '<details class="chart" data-id="' + id + '"' + (openedChart.has(id) ? ' open' : '') + '><summary>График</summary><div class="legend">' + legend +
+    '</div><div class="charts"><canvas class="pc" data-step="отвод"></canvas><canvas class="pc" data-step="подвод"></canvas></div></details>';
+}
+
+function drawChart(cv) {
+  const id = Number(cv.closest('.card').dataset.id);
+  const rows = (posCache[id] || []).filter((r) => r.step === cv.dataset.step && r.target !== null).slice(0, 40).reverse();
+  const w = cv.clientWidth, h = cv.clientHeight, dpr = window.devicePixelRatio || 1;
+  if (!w || !h) return;
+  cv.width = Math.round(w * dpr); cv.height = Math.round(h * dpr);
+  const g = cv.getContext('2d');
+  g.scale(dpr, dpr);
+  const css = getComputedStyle(document.documentElement), col = (n) => css.getPropertyValue(n).trim();
+  g.font = '11px system-ui, sans-serif';
+  g.fillStyle = col('--muted');
+  g.fillText(cv.dataset.step.charAt(0).toUpperCase() + cv.dataset.step.slice(1) + ': отклонение от цели, мкм', 4, 12);
+  if (rows.length < 2) { g.fillText('мало проб для графика', 4, h / 2); return; }
+  const vals = rows.flatMap((r) => SERIES.map(([k]) => (r[k] === null ? null : r[k] - r.target))).filter((v) => v !== null);
+  let lo = Math.min(0, ...vals), hi = Math.max(0, ...vals);
+  if (hi - lo < 20) { hi += 10; lo -= 10; }
+  const L = 40, R = 6, T = 20, B = 8;
+  const x = (i) => L + (w - L - R) * i / (rows.length - 1), y = (v) => T + (h - T - B) * (hi - v) / (hi - lo);
+  g.strokeStyle = col('--line'); g.lineWidth = 1;
+  g.beginPath(); g.moveTo(L, y(0)); g.lineTo(w - R, y(0)); g.stroke();
+  g.fillStyle = col('--muted');
+  g.fillText(String(Math.round(hi)), 2, y(hi) + 8); g.fillText(String(Math.round(lo)), 2, y(lo)); g.fillText('0', 2, y(0) + 4);
+  SERIES.forEach(([k, c]) => {
+    g.strokeStyle = col(c); g.lineWidth = 1.6; g.beginPath();
+    let pen = false;
+    rows.forEach((r, i) => {
+      if (r[k] === null) { pen = false; return; }
+      if (pen) g.lineTo(x(i), y(r[k] - r.target)); else g.moveTo(x(i), y(r[k] - r.target));
+      pen = true;
+    });
+    g.stroke();
+  });
+  g.fillStyle = col('--bad');
+  rows.forEach((r, i) => { if (!r.ok) { g.beginPath(); g.arc(x(i), h - 4, 3, 0, 6.3); g.fill(); } });
+}
+
+function drawCharts() {
+  document.querySelectorAll('details.chart[open] canvas.pc').forEach(drawChart);
+}
+
 function card(p) {
   const snap = p.snapshot || {};
   const bad = p.alerts.some((a) => a.level === 'critical' || a.level === 'high');
@@ -128,7 +206,9 @@ function card(p) {
     '<div class="sub">' + sub + '</div>' +
     (snap.text ? '<pre class="text">' + esc(snap.text.split('\n').filter((l) => !l.startsWith('Тревоги:')).join('\n')) + '</pre>' : '') +
     (alerts ? '<div class="alerts">' + alerts + '</div>' : '') +
-    '<div class="tools"><button data-a="log">Журнал</button><button data-a="token">Новый токен</button><button data-a="del">Удалить</button></div>' +
+    '<div class="tools"><button data-a="log">Журнал</button>' + (snap.micro ? '<button data-a="pos">Датчики</button>' : '') +
+    '<button data-a="token">Новый токен</button><button data-a="del">Удалить</button></div>' +
+    '<div class="pos' + (openedPos.has(p.id) ? ' open' : '') + '" id="pos' + p.id + '">' + (openedPos.has(p.id) ? posBlock(p.id) : '') + '</div>' +
     '<div class="log' + (opened.has(p.id) ? ' open' : '') + '" id="log' + p.id + '"></div></article>';
 }
 
@@ -148,6 +228,17 @@ function render() {
   const box = $('cards');
   box.innerHTML = plants.length ? sorted().map(card).join('') : '<div class="empty">Заводов пока нет. Нажми «+ Завод», чтобы выдать токен.</div>';
   opened.forEach((id) => loadLog(id));
+  openedPos.forEach((id) => loadPos(id));
+  drawCharts();
+}
+
+async function loadPos(id) {
+  try {
+    const j = await api('/api/plants/' + id + '/positions?limit=60');
+    posCache[id] = j.positions;
+    const el = $('pos' + id);
+    if (el && openedPos.has(id)) { el.innerHTML = posBlock(id); drawCharts(); }
+  } catch (e) { /* таблица догрузится на следующем опросе */ }
 }
 
 async function loadLog(id) {
@@ -202,16 +293,28 @@ $('cards').onclick = async (ev) => {
     if (opened.has(id)) opened.delete(id); else opened.add(id);
     $('log' + id).classList.toggle('open', opened.has(id));
     if (opened.has(id)) loadLog(id);
+  } else if (btn.dataset.a === 'pos') {
+    if (openedPos.has(id)) openedPos.delete(id); else openedPos.add(id);
+    $('pos' + id).classList.toggle('open', openedPos.has(id));
+    if (openedPos.has(id)) { $('pos' + id).innerHTML = posBlock(id); loadPos(id); }
   } else if (btn.dataset.a === 'token') {
     if (!confirm('Выдать «' + p.name + '» новый токен? Старый перестанет работать — его нужно заново ввести в приложении завода.')) return;
     try { const j = await api('/api/plants/' + id + '/token', {method: 'POST'}); showToken('Новый токен', p.name, j.token); }
     catch (e) { alert(e.message); }
   } else if (btn.dataset.a === 'del') {
     if (!confirm('Удалить завод «' + p.name + '» вместе с журналом? Это нельзя отменить.')) return;
-    try { await api('/api/plants/' + id, {method: 'DELETE'}); opened.delete(id); load(); }
+    try { await api('/api/plants/' + id, {method: 'DELETE'}); opened.delete(id); openedPos.delete(id); openedChart.delete(id); delete posCache[id]; load(); }
     catch (e) { alert(e.message); }
   }
 };
+
+$('cards').addEventListener('toggle', (ev) => {       // график свёрнут по умолчанию; запоминаем, у кого его раскрыли
+  const d = ev.target;
+  if (!d.classList || !d.classList.contains('chart')) return;
+  const id = Number(d.dataset.id);
+  if (d.open) { openedChart.add(id); drawCharts(); } else openedChart.delete(id);
+}, true);
+window.addEventListener('resize', drawCharts);
 
 load();
 setInterval(() => { if (!document.hidden) load(); }, 10000);

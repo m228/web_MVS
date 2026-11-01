@@ -465,3 +465,101 @@ def test_entry_listen_address_from_json_and_env(tmp_path, monkeypatch):
     monkeypatch.delenv("MONITOR_HOST")
     monkeypatch.delenv("MONITOR_PORT")
     assert entry.load_listen(tmp_path) == ("127.0.0.1", 8769)
+
+
+# --------------------------------------------------------------------------------------- датчики: положения на отводе/подводе
+
+def pos_ev(eid, t, step="подвод", ok=True, **kw):
+    d = {"step": step, "target": 400, "calc": 401, "enc": 399, "ai": 405, "gap": 6, "ok": ok, "timeout": False, "why": "", "sv": 88.0, "stage": 7}
+    d.update(kw)
+    return ev(eid, t, "Подвод: цель 400", kind="positions", level="info", **d)
+
+
+def test_positions_go_to_own_table_not_to_events(store):
+    pid, _ = store.create_plant("Кир")
+    t = store.clk.t
+    store.ingest(pid, pulse(events=[pos_ev("p1", t - 60), pos_ev("p2", t - 30, step="отвод", ai=20300, gap=299, ok=False, why="датчики разошлись"),
+                                    ev("a1", t - 10, "Тревога", kind="alert")]))
+    assert [e["kind"] for e in store.events(pid)] == ["alert"], "положения не засоряют журнал событий"
+    rows = store.positions(pid)
+    assert [r["step"] for r in rows] == ["отвод", "подвод"], "новые первыми"
+    assert rows[0]["ok"] is False and rows[0]["gap"] == 299 and rows[0]["why"] == "датчики разошлись" and rows[0]["ai"] == 20300
+    assert rows[1] == {"t": t - 60, "step": "подвод", "target": 400.0, "calc": 401.0, "enc": 399.0, "ai": 405.0, "gap": 6.0, "ok": True,
+                       "timeout": False, "why": "", "sv": 88.0, "stage": 7}
+
+
+def test_positions_dedup_by_eid_and_ignore_garbage(store):
+    pid, _ = store.create_plant("Кир")
+    t = store.clk.t
+    r = store.ingest(pid, pulse(events=[pos_ev("p1", t - 5), pos_ev("p1", t - 5), pos_ev("p2", t - 4, step="возврат"),
+                                        pos_ev("p3", t - 3, ai="мусор", enc=None), ev("p4", t - 2, kind="positions")]))
+    assert r["new_events"] == 0, "положения не считаются событиями журнала"
+    rows = store.positions(pid)
+    assert len(rows) == 2 and rows[0]["ai"] is None and rows[0]["enc"] is None, "нечисла — пусто, неизвестный шаг — не пишем"
+    store.ingest(pid, pulse(events=[pos_ev("p1", t - 5)]))
+    assert len(store.positions(pid)) == 2, "повторная доставка после обрыва дублей не даёт"
+
+
+def test_positions_limit_purge_and_delete(store):
+    pid, _ = store.create_plant("Кир")
+    other, _ = store.create_plant("Буи")
+    t = store.clk.t
+    store.ingest(pid, pulse(events=[pos_ev("old", t - 86400)] + [pos_ev("n%d" % i, t - 3600 + i) for i in range(5)]))
+    store.ingest(other, pulse(events=[pos_ev("o1", t - 10)]))
+    assert len(store.positions(pid, limit=3)) == 3 and len(store.positions(other)) == 1
+    store.clk.t += 91 * 86400 - 3600 + 100
+    store.ingest(pid, pulse(events=[pos_ev("fresh", store.clk.t - 5)]))
+    store.purge()
+    assert [r["t"] for r in store.positions(pid)] == [store.clk.t - 5], "старше срока хранения — удаляются"
+    assert store.delete_plant(pid) is True
+    cnt = store.db.execute("SELECT COUNT(*) n FROM positions WHERE plant_id=?", (pid,)).fetchone()["n"]
+    assert cnt == 0, "удалили завод — положения тоже"
+
+
+def test_positions_api_needs_password(srv, store):
+    pid, token = store.create_plant("Буи")
+    t = time.time()
+    srv.call("POST", "/ingest", raw=json.dumps(pulse(events=[pos_ev("p1", t - 20), pos_ev("p2", t - 10, step="отвод")])).encode(), bearer=token)
+    assert srv.call("GET", "/api/plants/%d/positions" % pid, password=None)[0] == 401
+    code, j = srv.json("GET", "/api/plants/%d/positions?limit=1" % pid)
+    assert code == 200 and [p["step"] for p in j["positions"]] == ["отвод"]
+    assert srv.json("GET", "/api/plants/%d/positions" % pid)[1]["positions"][1]["ok"] is True
+    assert srv.json("GET", "/api/plants/999/positions")[1] == {"positions": []}
+
+
+def test_sysmon_positions_and_yellow_to_red_end_to_end(srv, store, tmp_path, monkeypatch):
+    import sysmon
+    pid, token = store.create_plant("Кир")
+    sysmon.close()
+    monkeypatch.setattr(sysmon, "DB_PATH", tmp_path / "sysmon.db")
+    monkeypatch.setattr(sysmon, "CONFIG_PATH", tmp_path / "monitor.json")
+    try:
+        sysmon.save_config({"enabled": True, "url": srv.base, "token": token, "plant": "Кир", "system_proxy": False})
+        src = {"cfg": lambda: {"camera_serial": "S1", "cv": {"enabled": False}}, "micro_on": lambda: True,
+               "state": lambda: {"stage": 7, "stage_ok": True, "cyclic": True, "cycle_params": {"trigger_mode": "time"}},
+               "status": lambda: {"connected": True}, "ext": lambda: {"uptime_s": 1000}, "cv": lambda: {"state": "ok"},
+               "services": lambda: {}, "camera": lambda: {"serial": ""}, "probes": lambda serial, since: {"last_t": time.time(), "today": 7}}
+        ag = sysmon.Agent(sources=src)
+        ag._cfg = sysmon.load_config()
+        now = time.time()
+        rec = {"t": now, "step": "подвод", "target": 400, "calc": 401, "enc": 399, "ai": 500, "timeout": False, "sv": 88.0, "stage": 7}
+        ag.add_positions(rec)
+        ag.tick(now)
+        assert ag._kick.is_set(), "жёлтое предупреждение просит отправку сразу"
+        assert ag.send()["ok"] is True
+        v = store.plants_view()[0]
+        assert [(a["code"], a["level"]) for a in v["alerts"]] == [("pos_approach", "medium")]
+        assert "Подвод: датчики разошлись на 101" in v["alerts"][0]["text"]
+        assert "в норме" not in v["snapshot"]["text"] and v["snapshot"]["micro"]["positions"]["approach"]["ok"] is False
+        assert [r["gap"] for r in store.positions(pid)] == [101.0] and "positions" not in [e["kind"] for e in store.events(pid)]
+        ag.add_positions(dict(rec, t=now + 60))                      # повтор — жёлтое становится красным
+        ag.tick(now + 60)
+        assert ag.send()["ok"] is True
+        assert [(a["code"], a["level"]) for a in store.plants_view()[0]["alerts"]] == [("pos_approach", "high")]
+        assert [e["level"] for e in store.events(pid) if e["code"] == "pos_approach"].count("high") == 1
+        ag.add_positions(dict(rec, t=now + 120, ai=405))             # хорошая проба — тревога снята
+        ag.tick(now + 120)
+        assert ag.send()["ok"] is True
+        assert store.plants_view()[0]["alerts"] == [] and len(store.positions(pid)) == 3
+    finally:
+        sysmon.close()

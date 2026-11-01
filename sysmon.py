@@ -30,6 +30,7 @@ import urllib.error
 import urllib.request
 import uuid
 from collections import deque
+from datetime import datetime
 from pathlib import Path
 from typing import Callable, Optional
 from urllib.parse import urlparse
@@ -41,7 +42,11 @@ DB_PATH = DATA_DIR / "sysmon.db"
 CONFIG_PATH = DATA_DIR / "monitor.json"
 
 SCHEMA = 1
-DEFAULTS = {"enabled": False, "url": "", "token": "", "plant": "", "interval_s": 300, "system_proxy": True, "no_probe_min": 30, "allow_http": False}
+DEFAULTS = {"enabled": False, "url": "", "token": "", "plant": "", "interval_s": 300, "system_proxy": True, "no_probe_min": 30, "allow_http": False,
+            # датчики микроскопа (правятся в monitor.json): допуски расхождения трёх датчиков, мкм — на отводе и на подводе
+            # (как CAL_FAR_TOL_UM и ARRIVE_TOL_UM в microscope_fsm); «ноль уполз» — |датчик − энкодер| до автокалибровки, мкм;
+            # автокалибровки нет дольше overdue_h часов работы; bad_streak плохих проб подряд — жёлтое предупреждение становится красной тревогой
+            "gap_far_um": 100, "gap_near_um": 50, "drift_um": 100, "overdue_h": 24, "bad_streak": 2}
 
 BOOT_TOL_S = 120            # время загрузки Windows у двух запусков расходится больше — это была перезагрузка ПК
 BEAT_EVERY_S = 30           # как часто пишем на диск «я жив» (по нему считаем, сколько не работали)
@@ -53,6 +58,11 @@ HTTP_TIMEOUT_S = 10
 BATCH_MAX = 100             # событий в одном запросе
 OUTBOX_MAX = 500            # дольше сервер не отвечает — самые старые события отбрасываем
 RECENT_MAX = 50
+POS_KEEP = 200              # записей положений датчиков в outbox: поток проб не должен вытеснить важные события при долгом обрыве
+POS_MEM = 20                # последних записей положений держим в памяти для правил
+POS_STALE_S = 6 * 3600      # плохая проба старше — уже не повод держать тревогу
+STEP_KEYS = {"отвод": "retract", "подвод": "approach"}
+PUSH_CODES = ("pos_", "autocal_drift")     # жёлтые (не срочные) предупреждения, которые всё равно уходят сразу
 URGENT = ("critical", "high")
 # сколько проверок подряд правило должно срабатывать, чтобы тревога открылась (плата, например, молча переподключается)
 CONFIRM = {"service_cv": 2, "service_video": 2, "service_motion": 2, "plate_down": 4, "camera_exposure": 2}
@@ -112,6 +122,38 @@ def _num(v, nd=None):
     if isinstance(v, bool) or not isinstance(v, (int, float)):
         return None
     return round(v, nd) if nd is not None else v
+
+
+def _iso_ts(v) -> Optional[float]:
+    """Время из ISO-строки без пояса (так пишет автокалибровка: локальное время ПК) -> unix-время; None, если не разобрать."""
+    try:
+        return datetime.fromisoformat(str(v)).timestamp()
+    except (TypeError, ValueError, OverflowError, OSError):
+        return None
+
+
+def position_verdict(rec: dict, cfg: dict) -> dict:
+    """Оценка положений на отводе/подводе: доехал ли и сходятся ли датчики.
+    gap — худшее расхождение аналогового датчика с энкодером и с расчётной (мкм), как `_far_gap` в автокалибровке;
+    нет аналогового — сравниваем расчётную с энкодером."""
+    enc, calc, ai = _num(rec.get("enc")), _num(rec.get("calc")), _num(rec.get("ai"))
+    pairs = [(ai, enc), (ai, calc)] if ai is not None else [(calc, enc)]
+    gaps = [abs(a - b) for a, b in pairs if a is not None and b is not None]
+    gap = round(max(gaps)) if gaps else None
+    tol = cfg["gap_far_um"] if rec.get("step") == "отвод" else cfg["gap_near_um"]
+    why = ""
+    if rec.get("timeout"):
+        why = "не доехал за отведённое время"
+    elif gap is not None and gap > tol:
+        why = "датчики разошлись на %d мкм (допуск %d)" % (gap, tol)
+    return {"gap": gap, "ok": not why, "why": why}
+
+
+def position_text(rec: dict) -> str:
+    """Запись положений одной строкой для человека."""
+    parts = [("цель", rec.get("target")), ("расчётная", rec.get("calc")), ("энкодер", rec.get("enc")), ("датчик", rec.get("ai"))]
+    txt = "%s: %s мкм" % (str(rec.get("step") or "?").capitalize(), " · ".join("%s %s" % (k, _fmt_val(v)) for k, v in parts if v is not None))
+    return txt + ("" if rec.get("ok") else " — " + str(rec.get("why") or "не в норме"))
 
 
 def _safe(fn, default=None, errors: Optional[list] = None, name: str = ""):
@@ -174,7 +216,8 @@ def _clean_cfg(cfg: dict) -> dict:
     out["plant"] = str(cfg.get("plant") or "").strip()[:40]
     out["system_proxy"] = bool(cfg.get("system_proxy", True))
     out["allow_http"] = bool(cfg.get("allow_http", False))
-    for k, lo, hi in (("interval_s", 60, 3600), ("no_probe_min", 5, 240)):
+    for k, lo, hi in (("interval_s", 60, 3600), ("no_probe_min", 5, 240), ("gap_far_um", 10, 2000), ("gap_near_um", 10, 2000),
+                      ("drift_um", 10, 5000), ("overdue_h", 1, 168), ("bad_streak", 1, 10)):
         try:
             out[k] = max(lo, min(hi, int(cfg.get(k, DEFAULTS[k]))))
         except (TypeError, ValueError):
@@ -344,6 +387,8 @@ def outbox_add(kind: str, level: str, text: str, data: Optional[dict] = None, t:
         c.execute("INSERT INTO outbox (eid, t, kind, level, text, data) VALUES (?,?,?,?,?,?)",
                   (ev["eid"], ev["t"], kind, level, ev["text"], json.dumps(ev["data"], ensure_ascii=False)))
         c.execute("DELETE FROM outbox WHERE rowid <= (SELECT MAX(rowid) FROM outbox) - ?", (OUTBOX_MAX,))
+        if kind == "positions":
+            c.execute("DELETE FROM outbox WHERE kind='positions' AND rowid <= (SELECT MAX(rowid) FROM outbox WHERE kind='positions') - ?", (POS_KEEP,))
         c.commit()
     return ev
 
@@ -419,7 +464,11 @@ class Agent:
         self.active: dict = {}              # code -> {level, text, since}
         self._seen: dict = {}               # code -> сколько проверок подряд правило срабатывало
         self._ready_since: Optional[float] = None
+        self._work_since: Optional[float] = None      # с какого момента автомат в работе (для «автокалибровки давно не было»)
         self._plate_up: Optional[float] = None
+        self.positions: deque = deque(maxlen=POS_MEM)  # положения датчиков на отводе/подводе (с оценкой), старые — слева
+        self._ac_seen_ts: Optional[float] = None       # какую по счёту автокалибровку уже учли в истории дрейфа нуля
+        self._ac_drift: deque = deque(maxlen=5)        # (ноль уползал больше допуска?, на сколько мкм) по последним калибровкам
         self.recent: deque = deque(maxlen=RECENT_MAX)
         self.last_data: Optional[dict] = None
         self.status = {"ok": None, "last_ok_t": None, "last_try_t": None, "error": "", "http": None, "fails": 0}
@@ -483,15 +532,29 @@ class Agent:
         return self._kick.is_set() or now >= self._next_send
 
     # ---- события
-    def _emit(self, kind: str, level: str, text: str, data: Optional[dict] = None, t: Optional[float] = None) -> dict:
+    def _emit(self, kind: str, level: str, text: str, data: Optional[dict] = None, t: Optional[float] = None, push: bool = False) -> dict:
         t = self.clock() if t is None else t
         ev = {"t": t, "kind": kind, "level": level, "text": text, "data": data or {}}
         self.recent.appendleft(ev)
         if configured(self._cfg):
             outbox_add(kind, level, text, data, t)
-            if level in URGENT:
+            if level in URGENT or push:          # push — жёлтое предупреждение: не тревога, но знать надо сразу
                 self._kick.set()
         return ev
+
+    def add_positions(self, info: dict) -> None:
+        """Положения трёх датчиков на доезде отвода/подвода (колбэк автомата): оценить, запомнить для правил и положить в очередь —
+        уйдёт с ближайшим пульсом. Срочно не отправляем: срочное — это тревога по плохой пробе (см. _position_rules)."""
+        if not isinstance(info, dict) or info.get("step") not in STEP_KEYS:
+            return
+        cfg = self._cfg
+        rec = {k: info.get(k) for k in ("t", "step", "target", "calc", "enc", "ai", "timeout", "sv", "stage")}
+        rec["t"] = _num(rec["t"]) or self.clock()
+        rec["timeout"] = bool(rec["timeout"])
+        rec.update(position_verdict(rec, cfg))
+        self.positions.append(rec)
+        if configured(cfg):
+            outbox_add("positions", "info", position_text(rec), rec, rec["t"])
 
     # ---- сбор и правила
     def collect(self) -> dict:
@@ -514,6 +577,7 @@ class Agent:
                 d["probes"] = _safe(probes, None, errs, "probes")
         d["camera"] = g("camera", {}) or {}
         d["services"] = g("services", {}) or {}
+        d["positions"] = list(self.positions)
         return d
 
     def _rules(self, d: dict, now: float) -> tuple[dict, set]:
@@ -554,6 +618,9 @@ class Agent:
             if state.get("fault"):
                 found["fault"] = ("high", "Авария автомата: " + str(state.get("fault_msg") or "")[:120])
 
+            self._position_rules(found, d, now)
+            self._autocal_rules(found, state, now)
+
             cp = state.get("cycle_params") or {}
             in_range = (cp.get("trigger_mode") == "time" or state.get("stage") == 5
                         or (cp.get("sv_from") is not None and cp["sv_from"] <= (state.get("sv") or 0) <= cp.get("sv_to", 1e9)))
@@ -573,6 +640,58 @@ class Agent:
                         found["no_probes"] = ("medium", "Варка идёт, а проб нет уже %s" % fmt_dur(now - ref))
         return found, keep
 
+    def _position_rules(self, found: dict, d: dict, now: float) -> None:
+        """Отвод и подвод: плохая проба (не доехал / датчики разошлись) — жёлтое предупреждение сразу;
+        bad_streak плохих подряд на этом шаге — красная тревога. Хорошая проба снимает."""
+        need = self._cfg["bad_streak"]
+        for step, key in STEP_KEYS.items():
+            recs = [r for r in (d.get("positions") or []) if r.get("step") == step and now - (r.get("t") or 0) <= POS_STALE_S]
+            run = 0
+            for r in reversed(recs):
+                if r.get("ok"):
+                    break
+                run += 1
+            if run:
+                text = "%s: %s" % (step.capitalize(), recs[-1].get("why") or "не в норме")
+                if run > 1:
+                    text += " · проб подряд: %d" % run
+                found["pos_" + key] = ("high" if run >= need else "medium", text)
+
+    def _autocal_rules(self, found: dict, state: dict, now: float) -> None:
+        """Автокалибровка нуля: не удалась — красная сразу; «ноль уполз» — жёлтая сразу, красная при повторе; давно не было — жёлтая."""
+        ac = state.get("autocal") or {}
+        if not ac:
+            return
+        cfg = self._cfg
+        if ac.get("failed"):
+            found["autocal_failed"] = ("high", "Автокалибровка нуля: " + str(ac.get("fail_msg") or "не удалась")[:140])
+        last = ac.get("last") or {}
+        ts = _iso_ts(last.get("ts"))
+        if ts is not None and ts != self._ac_seen_ts:                   # новая калибровка — в историю дрейфа нуля
+            self._ac_seen_ts = ts
+            diff = _num(last.get("diff_before"))
+            self._ac_drift.append((diff is not None and abs(diff) > cfg["drift_um"], abs(diff) if diff is not None else 0))
+        if ts is not None and now - ts <= cfg["overdue_h"] * 3600 and self._ac_drift and self._ac_drift[-1][0]:
+            run = 0
+            for bad, _ in reversed(self._ac_drift):
+                if not bad:
+                    break
+                run += 1
+            text = "Ноль уползал на %d мкм до автокалибровки (допуск %d)" % (self._ac_drift[-1][1], cfg["drift_um"])
+            if run > 1:
+                text += " · калибровок подряд: %d" % run
+            found["autocal_drift"] = ("high" if run >= cfg["bad_streak"] else "medium", text)
+        working = bool(state.get("stage_ok") and state.get("cyclic") and not state.get("manual"))
+        if not working:
+            self._work_since = None
+        else:
+            self._work_since = self._work_since or now
+            if ac.get("enabled"):
+                ok_ts = ts if ts is not None and str(last.get("result") or "").startswith("готово") else 0
+                ref = max(self._work_since, ok_ts)
+                if now - ref >= cfg["overdue_h"] * 3600:
+                    found["autocal_overdue"] = ("medium", "Автокалибровка включена, а успешной не было уже %s" % fmt_dur(now - ref))
+
     def evaluate(self, d: dict, now: float) -> list[dict]:
         """Применить правила: открыть/снять тревоги, отметить перезагрузку платы. Возвращает новые события."""
         events: list = []
@@ -582,11 +701,15 @@ class Agent:
         for code in [c for c in self._seen if c not in found and c not in keep]:
             self._seen.pop(code, None)
         for code, (level, text) in found.items():
+            push = code.startswith(PUSH_CODES)
             if code not in self.active:
                 if self._seen[code] < CONFIRM.get(code, 1):
                     continue
                 self.active[code] = {"level": level, "text": text, "since": now}
-                events.append(self._emit("alert", level, text, {"code": code, "state": "open"}, t=now))
+                events.append(self._emit("alert", level, text, {"code": code, "state": "open"}, t=now, push=push))
+            elif self.active[code]["level"] != level:         # жёлтое предупреждение стало красной тревогой (повтор) — сообщаем ещё раз
+                self.active[code].update(level=level, text=text)
+                events.append(self._emit("alert", level, text, {"code": code, "state": "open"}, t=now, push=push))
             else:
                 self.active[code]["text"] = text
         for code in [c for c in self.active if c not in found and c not in keep]:
@@ -698,7 +821,19 @@ def _micro_block(d: dict, now: float) -> dict:
     state, status, ext, cv = d.get("state") or {}, d.get("status") or {}, d.get("ext") or {}, d.get("cv") or {}
     pr = d.get("probes") or {}
     u12 = _num(ext.get("u12v"))
+    ac = state.get("autocal") or {}
+    last = ac.get("last") or {}
+    pos = {}
+    for step, key in STEP_KEYS.items():                  # по последней свежей записи на каждый шаг
+        recs = [r for r in (d.get("positions") or []) if r.get("step") == step and now - (r.get("t") or 0) <= POS_STALE_S]
+        if recs:
+            r = recs[-1]
+            pos[key] = {k: r.get(k) for k in ("t", "ok", "gap", "why", "target", "calc", "enc", "ai", "timeout")}
     return {
+        "autocal": {"enabled": ac.get("enabled"), "every_n": ac.get("every_n"), "count": ac.get("count"), "failed": ac.get("failed"),
+                    "fail_msg": ac.get("fail_msg"), "last_ts": _iso_ts(last.get("ts")), "last_result": last.get("result"),
+                    "diff_before": _num(last.get("diff_before")), "diff_after": _num(last.get("diff_after"))} if ac else None,
+        "positions": pos,
         "plate_connected": status.get("connected"),
         "stage": state.get("stage"), "stage_name": stage_name(state.get("stage")), "stage_ok": state.get("stage_ok"),
         "step": state.get("step"), "manual": state.get("manual"), "auto": state.get("cyclic"), "fault": state.get("fault"),
@@ -732,6 +867,20 @@ def summary_text(s: dict) -> str:
             if m.get("probes_today") is not None:
                 part += " · проб сегодня %d" % m["probes_today"]
             lines.append(part)
+            ac = m.get("autocal")
+            if ac and ac.get("failed"):
+                lines.append("Автокалибровка: не удалась — %s" % (ac.get("fail_msg") or "причина неизвестна"))
+            elif ac and ac.get("last_ts"):
+                txt = "Автокалибровка: %s, %s назад" % (ac.get("last_result") or "—", fmt_dur(s["t"] - ac["last_ts"]))
+                if ac.get("diff_before") is not None:
+                    txt += ", ноль уползал на %d мкм" % abs(ac["diff_before"])
+                lines.append(txt)
+            pos = m.get("positions") or {}
+            names = {"retract": "Отвод", "approach": "Подвод"}
+            if pos and all(v.get("ok") for v in pos.values()):      # плохая проба видна тревогой (жёлтой или красной), здесь не дублируем
+                gaps = [v["gap"] for v in pos.values() if v.get("gap") is not None]
+                lines.append("%s в норме%s" % (" и ".join(names[k].lower() for k in pos),
+                                               ", расхождение датчиков до %d мкм" % max(gaps) if gaps else ""))
     cam = s.get("camera") or {}
     if cam.get("set"):
         if not cam.get("streaming"):
@@ -795,3 +944,10 @@ def stop() -> None:
 
 def agent() -> Optional[Agent]:
     return _agent
+
+
+def record_positions(info: dict) -> None:
+    """Положения датчиков на отводе/подводе — из колбэка автомата. Агент не запущен — молча ничего (мониторинг не обязателен)."""
+    ag = _agent
+    if ag is not None:
+        ag.add_positions(info)

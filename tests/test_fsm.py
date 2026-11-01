@@ -88,6 +88,49 @@ def test_full_probe_cycle_runs_to_completion(fsm):
     assert fsm.mode == 0, "цикл не вернулся в ожидание, mode=%d" % fsm.mode
 
 
+def _start_cycle(fsm):
+    fsm.set_cyclic(True)
+    fsm.set_stage(7)
+    fsm.set_sv(88.0)
+
+
+def test_probe_positions_reported_for_retract_and_approach(fsm):
+    # мониторинг: на доезде отвода и подвода уходит запись с тремя датчиками — ровно по одной на шаг
+    recs = []
+    fsm.on_probe_positions = recs.append
+    _start_cycle(fsm)
+    _run_until(fsm, lambda: fsm.mode == 23)
+    _run_until(fsm, lambda: fsm.mode == 0, max_ticks=400)
+    assert [r["step"] for r in recs] == ["отвод", "подвод"], recs
+    for r in recs:
+        assert r["timeout"] is False
+        assert r["calc"] == r["enc"] == r["target"], r
+        assert isinstance(r["ai"], float) and r["sv"] == 88.0 and r["stage"] == 7 and r["t"] > 0
+    assert recs[0]["target"] == fsm._retract_pos
+
+
+def test_probe_positions_flag_timeout_when_motor_does_not_arrive(fsm):
+    # мотор «не едет» (телеметрия стоит на нуле): шаг уходит по таймауту, в записи timeout=True
+    recs = []
+    fsm.on_probe_positions = recs.append
+    fsm._step_timeout_ticks = 5
+    _start_cycle(fsm)
+    _run_until(fsm, lambda: len(recs) >= 2, max_ticks=300, track_arrival=False)
+    assert [r["step"] for r in recs[:2]] == ["отвод", "подвод"], recs
+    assert all(r["timeout"] is True for r in recs[:2]), recs
+    assert recs[0]["enc"] == 0 and recs[0]["target"] == fsm._retract_pos
+
+
+def test_probe_positions_callback_error_does_not_break_cycle(fsm):
+    def boom(_):
+        raise RuntimeError("упал приёмник записей")
+    fsm.on_probe_positions = boom
+    _start_cycle(fsm)
+    _run_until(fsm, lambda: fsm.mode == 23)
+    _run_until(fsm, lambda: fsm.mode == 0, max_ticks=400)
+    assert fsm.mode == 0, "цикл встал из-за ошибки в колбэке положений"
+
+
 def test_estop_stops_both_motors(fsm):
     fsm.set_cyclic(True)
     fsm.set_stage(7)

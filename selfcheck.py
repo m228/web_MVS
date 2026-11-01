@@ -3944,7 +3944,7 @@ def _tcp(host, port, timeout=2.0):
         s.close()
 
 
-@check("Служебные", "мониторинг (sysmon): причина старта; тревоги камеры и пересвета; токена нет в снимке и в API; страница и маршруты на месте")
+@check("Служебные", "мониторинг (sysmon): причина старта; тревоги камеры и пересвета; датчики: жёлтое → красное → снято; токена нет в снимке и в API; страница и маршруты на месте")
 def _sysmon():
     import tempfile
     import sysmon
@@ -3976,6 +3976,16 @@ def _sysmon():
         assert {"camera_exposure", "overexposed"} <= codes, "тревоги: %s" % sorted(codes)
         blob = json.dumps(ag.snapshot(), ensure_ascii=False)
         assert "SECRET-TOKEN" not in blob, "токен попал в снимок"
+        # датчики микроскопа: плохая проба подвода — жёлтое предупреждение, повтор — красная тревога; хорошая снимает
+        ag.add_positions({"t": 10020.0, "step": "подвод", "target": 400, "calc": 401, "enc": 399, "ai": 500, "timeout": False})
+        ag.tick(10020.0)
+        assert ag.active.get("pos_approach", {}).get("level") == "medium", "плохая проба подвода: ожидалось жёлтое предупреждение"
+        ag.add_positions({"t": 10030.0, "step": "подвод", "target": 400, "calc": 401, "enc": 399, "ai": 500, "timeout": False})
+        ag.tick(10030.0)
+        assert ag.active.get("pos_approach", {}).get("level") == "high", "две плохие подряд: ожидалась красная тревога"
+        ag.add_positions({"t": 10040.0, "step": "подвод", "target": 400, "calc": 401, "enc": 399, "ai": 405, "timeout": False})
+        ag.tick(10040.0)
+        assert "pos_approach" not in ag.active, "хорошая проба должна снять тревогу"
         import app as _app
         paths = {getattr(x, "path", "") for x in _app.app.routes}
         need = {"/monitor", "/api/sysmon/state", "/api/sysmon/starts", "/api/sysmon/config", "/api/sysmon/send_test"}

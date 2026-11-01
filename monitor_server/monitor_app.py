@@ -200,6 +200,13 @@ def create_app(store: monitor_store.Store, password: str, version: str, panel_ht
             return bad
         return {"events": store.events(plant_id, limit, before or None)}
 
+    @app.get("/api/plants/{plant_id}/positions")
+    def plant_positions(plant_id: int, request: Request, limit: int = 60):
+        bad = panel_denied(request)
+        if bad is not None:
+            return bad
+        return {"positions": store.positions(plant_id, limit)}
+
     @app.post("/api/plants/{plant_id}/token")
     def plant_token(plant_id: int, request: Request):
         bad = write_denied(request)

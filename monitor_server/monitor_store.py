@@ -5,6 +5,8 @@
   * события из пульса пишутся по паре (завод, eid): повторная доставка после обрыва связи дублей не даёт;
   * если завод прислал снимок, а события про старт/тревогу потерялись (отправка ещё не была включена), они достраиваются
     из снимка: «start» из snapshot.start, открытие/снятие тревоги по сравнению snapshot.alerts с уже открытыми;
+  * положения датчиков на отводе/подводе (события kind="positions") идут не в журнал событий, а в свою таблицу positions —
+    по ним панель показывает таблицу проб и график; тревоги по плохим пробам завод присылает сам, обычными тревогами;
   * «нет пульса»: прошло больше 2 интервалов + OFFLINE_GRACE_S — критичное событие; вернулся пульс — событие «связь восстановилась».
     После запуска самого приёмника ждём такой же срок, прежде чем объявлять заводы недоступными (сервер сам мог не работать).
 """
@@ -68,6 +70,11 @@ class Store:
             CREATE TABLE IF NOT EXISTS alerts (
                 plant_id INTEGER NOT NULL, code TEXT NOT NULL, level TEXT NOT NULL, text TEXT NOT NULL, since_t REAL NOT NULL,
                 PRIMARY KEY (plant_id, code));
+            CREATE TABLE IF NOT EXISTS positions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT, plant_id INTEGER NOT NULL, eid TEXT NOT NULL, t REAL NOT NULL, step TEXT NOT NULL,
+                target REAL, calc REAL, enc REAL, ai REAL, gap REAL, ok INTEGER NOT NULL DEFAULT 1, timeout INTEGER NOT NULL DEFAULT 0,
+                why TEXT NOT NULL DEFAULT '', sv REAL, stage INTEGER, UNIQUE (plant_id, eid));
+            CREATE INDEX IF NOT EXISTS ix_positions_plant ON positions (plant_id, t);
         """)
         self.db.commit()
 
@@ -104,6 +111,7 @@ class Store:
         with self._lock, self.db:
             self.db.execute("DELETE FROM events WHERE plant_id=?", (plant_id,))
             self.db.execute("DELETE FROM alerts WHERE plant_id=?", (plant_id,))
+            self.db.execute("DELETE FROM positions WHERE plant_id=?", (plant_id,))
             return self.db.execute("DELETE FROM plants WHERE id=?", (plant_id,)).rowcount > 0
 
     def plant_by_token(self, token: str) -> Optional[sqlite3.Row]:
@@ -127,10 +135,24 @@ class Store:
             "INSERT OR IGNORE INTO events (plant_id, eid, t, recv_t, kind, level, text, code, state, data) VALUES (?,?,?,?,?,?,?,?,?,?)",
             (plant_id, eid[:64], t, now, kind[:24], level if level in LEVELS else "info", text[:TEXT_MAX], code[:40], state[:12], data_json)).rowcount
 
+    def _insert_position(self, plant_id: int, eid: str, t: float, d: dict) -> None:
+        step = d.get("step")
+        if step not in ("отвод", "подвод"):
+            return
+        stage = d.get("stage")
+        self.db.execute(
+            "INSERT OR IGNORE INTO positions (plant_id, eid, t, step, target, calc, enc, ai, gap, ok, timeout, why, sv, stage) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (plant_id, eid[:64], t, step, _num(d.get("target")), _num(d.get("calc")), _num(d.get("enc")), _num(d.get("ai")), _num(d.get("gap")),
+             0 if d.get("ok") is False else 1, 1 if d.get("timeout") else 0, str(d.get("why") or "")[:TEXT_MAX], _num(d.get("sv")),
+             int(stage) if isinstance(stage, int) and not isinstance(stage, bool) else None))
+
     def _client_event(self, plant_id: int, e, now: float) -> int:
         if not isinstance(e, dict) or not e.get("eid"):
             return 0
         data = e.get("data") if isinstance(e.get("data"), dict) else {}
+        if e.get("kind") == "positions":                # не событие журнала: запись для таблицы и графика проб
+            self._insert_position(plant_id, str(e["eid"]), self._clamp_t(e.get("t"), now), data)
+            return 0
         return self._insert_event(plant_id, str(e["eid"]), self._clamp_t(e.get("t"), now), now, str(e.get("kind") or "event"),
                                   str(e.get("level") or "info"), str(e.get("text") or ""), str(data.get("code") or ""),
                                   str(data.get("state") or ""), data)
@@ -232,7 +254,9 @@ class Store:
 
     def purge(self) -> int:
         with self._lock, self.db:
-            return self.db.execute("DELETE FROM events WHERE t < ?", (self.clock() - self.retention_days * 86400,)).rowcount
+            cutoff = self.clock() - self.retention_days * 86400
+            self.db.execute("DELETE FROM positions WHERE t < ?", (cutoff,))
+            return self.db.execute("DELETE FROM events WHERE t < ?", (cutoff,)).rowcount
 
     # ------------------------------------------------------------------------------------------------------------- чтение
 
@@ -250,6 +274,14 @@ class Store:
             else:
                 rows = self.db.execute("SELECT * FROM events WHERE plant_id=? ORDER BY t DESC, id DESC LIMIT ?", (plant_id, limit)).fetchall()
         return [self._event_row(r) for r in rows]
+
+    def positions(self, plant_id: int, limit: int = 100) -> list[dict]:
+        """Последние положения датчиков на отводе/подводе: новые первыми."""
+        limit = max(1, min(int(limit), 500))
+        with self._lock:
+            rows = self.db.execute("SELECT * FROM positions WHERE plant_id=? ORDER BY t DESC, id DESC LIMIT ?", (plant_id, limit)).fetchall()
+        return [{"t": r["t"], "step": r["step"], "target": r["target"], "calc": r["calc"], "enc": r["enc"], "ai": r["ai"], "gap": r["gap"],
+                 "ok": bool(r["ok"]), "timeout": bool(r["timeout"]), "why": r["why"], "sv": r["sv"], "stage": r["stage"]} for r in rows]
 
     def plants_view(self) -> list[dict]:
         """Карточки для панели: статус, последний снимок, открытые тревоги, несколько последних событий."""

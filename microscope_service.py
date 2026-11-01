@@ -65,6 +65,7 @@ class MicroscopeService:
             self.fsm.on_varka_count = self._persist_varka   # persist счётчика варок (автокалибровка)
             self.fsm.on_autocal_done = self._log_autocal    # итог автокалибровки -> autocal.log + «последняя»
             self.fsm.on_approach_fail = self._log_approach_fail   # «довод не сошёлся» -> отдельный лог
+            self.fsm.on_probe_positions = self._on_probe_positions   # три датчика на отводе/подводе -> мониторинг
             # довод по абсолютнику ушёл в прошивку — гасим в рантайме (конфиг не перезаписываем),
             # доезд цикла идёт по энкодеру. Автокалибровка нуля работает в ПК (см. set_autocal).
             self.fsm.set_fine_approach(enabled=False)
@@ -1113,6 +1114,11 @@ class MicroscopeService:
                 f.write(line)
         except Exception as e:
             log_event("microscope_service", "Не удалось записать лог довода", "warn", {"error": str(e)})
+
+    def _on_probe_positions(self, info):
+        """Колбэк FSM: три датчика на доезде отвода/подвода -> мониторинг заводских ПК (sysmon). Только чтение."""
+        import sysmon
+        sysmon.record_positions(info)
 
     def set_autocal(self, enabled=None, every_n=None, sensor_lo=None, sensor_hi=None, timeout_sec=None):
         """Автокалибровка нуля М1: вкл/выкл + через сколько варок + пороги датчика + таймаут.

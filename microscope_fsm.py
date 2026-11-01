@@ -215,6 +215,9 @@ class MicroscopeFSM:
         # колбэк «довод не сошёлся» -> запись в отдельный лог-файл (ставит microscope_service)
         self.on_approach_fail = None
         self._fa_approach_fail = None
+        # колбэк «положения трёх датчиков на доезде отвода/подвода» -> мониторинг (ставит microscope_service)
+        self.on_probe_positions = None
+        self._pp_emit = None
 
         self._period = max(0.02, int(config["poll_interval_ms"]) / 1000.0)
         # предохранитель шага цикла (тики по 100мс): нормальный выход — «доехал», а это
@@ -480,6 +483,12 @@ class MicroscopeFSM:
         else:
             self._in_range = 0
         return self._in_range >= ARRIVE_HOLD_TICKS
+
+    def _note_positions(self, step, target, pos1, pos_enc, pos1_ai, timed_out):
+        """Запомнить положения трёх датчиков на доезде (под локом, только чтение): отдаём после выхода из лока."""
+        num = lambda v: round(v, 1) if isinstance(v, (int, float)) and not isinstance(v, bool) else None
+        self._pp_emit = {"t": time.time(), "step": step, "target": num(target), "calc": num(pos1), "enc": num(pos_enc),
+                         "ai": num(pos1_ai), "timeout": bool(timed_out), "sv": num(self.sv), "stage": self.stage}
 
     def _settle_wait(self):
         """Пауза ПОСЛЕ доезда движения (мотор стоит, датчик оседает — сравнить с энкодером).
@@ -1343,6 +1352,8 @@ class MicroscopeFSM:
                 # отвод: стоп СРАЗУ, как выбранный датчик перешёл черту retract_pos (не ждём выдержки)
                 if self._reached_retract(pos_sel, self._retract_pos) or self.t > self._step_timeout_ticks:
                     if self._settle_wait():        # приехал → пауза settle (осадка датчика) → дальше
+                        self._note_positions("отвод", self._retract_pos, pos1, pos_enc, pos1_ai,
+                                             not self._reached_retract(pos_sel, self._retract_pos))
                         self.t = 0
                         self.mode = 21
                 else:
@@ -1389,6 +1400,7 @@ class MicroscopeFSM:
                 if arrived or self.t > self._step_timeout_ticks:
                     self.cw0 = False                   # по приходу к стеклу — закрыть трубку
                     if self._settle_wait():            # приехал → пауза settle (осадка датчика) → выдержка
+                        self._note_positions("подвод", self.m1_sp, pos1, pos_enc, pos1_ai, not arrived)
                         self.t = 0
                         self._fa_phase = None; self._fa_retry = 0; self._fa_wait = 0
                         self._dwell_left = self._dwell_sec * 10
@@ -1488,6 +1500,7 @@ class MicroscopeFSM:
             sample_done = self._sample_done_request; self._sample_done_request = False
             goto_target = self._fa_goto_target; self._fa_goto_target = None   # цель подгона (goto за раз)
             approach_fail = self._fa_approach_fail; self._fa_approach_fail = None
+            pos_rec = self._pp_emit; self._pp_emit = None
             cal_emit = self._cal_emit; self._cal_emit = None
             # на отводе после калибровки движение пишем обычным путём (цель + goto), поэтому «калибровка рулит сама» — только до него
             cal_owns = self._cal_active and self._cal_phase not in ("retract", "after")
@@ -1512,6 +1525,11 @@ class MicroscopeFSM:
                 self.on_autocal_done(cal_done)
             except Exception as e:
                 log_event("microscope_fsm", "Ошибка журнала автокалибровки", "warn", {"error": str(e)})
+        if pos_rec is not None and self.on_probe_positions:        # положения датчиков на отводе/подводе -> мониторинг
+            try:
+                self.on_probe_positions(pos_rec)
+            except Exception as e:
+                log_event("microscope_fsm", "Ошибка колбэка положений датчиков", "warn", {"error": str(e)})
 
         # снять висящий флаг «Поиска 0» в прошивке («шаги 0» — мотор не едет, поэтому можно и в Ручном)
         for m in unflag:

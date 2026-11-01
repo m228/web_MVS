@@ -68,6 +68,7 @@ function fillForm(cfg) {
   $('monEnabled').checked = !!cfg.enabled;
   $('monPlant').value = cfg.plant || '';
   $('monUrl').value = cfg.url || '';
+  $('monHttp').checked = !!cfg.allow_http;
   $('monToken').value = '';
   $('monToken').placeholder = cfg.token_set ? 'задан' + (cfg.token_tail ? ' · …' + cfg.token_tail : '') + ' — оставь пустым, чтобы не менять' : 'вставь токен завода';
   const min = String(Math.round((cfg.interval_s || 300) / 60));
@@ -100,6 +101,7 @@ async function save() {
     enabled: $('monEnabled').checked,
     plant: $('monPlant').value.trim(),
     url: $('monUrl').value.trim(),
+    allow_http: $('monHttp').checked,
     interval_s: Number($('monInterval').value) * 60,
   };
   const token = $('monToken').value.trim();

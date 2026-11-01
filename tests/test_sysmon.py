@@ -101,6 +101,40 @@ def test_config_defaults_and_validation(sm):
     assert sm.load_config()["url"] == "https://mon.example.ru", "отклонённый адрес файл не меняет"
 
 
+def test_http_in_closed_network_needs_explicit_switch(sm):
+    zt = "http://11.11.11.12:8769"                                      # адрес внутри ZeroTier: формально «белый», но сеть закрытая
+    with pytest.raises(ValueError, match="ZeroTier"):
+        sm.save_config({"url": zt, "token": TOKEN})
+    cfg = sm.save_config({"url": zt, "token": TOKEN, "allow_http": True, "enabled": True})
+    assert cfg["url"] == zt and cfg["allow_http"] is True and sm.public_config()["allow_http"] is True
+    with pytest.raises(ValueError):
+        sm.save_config({"allow_http": False})                           # сняли галочку при http-адресе — сохранить нельзя
+    assert sm.load_config()["allow_http"] is True, "отклонённая правка файл не меняет"
+    assert sm.validate_url("https://mon.example.ru", False) == "https://mon.example.ru"
+
+
+def test_closed_network_goes_direct_not_through_proxy(sm, monkeypatch):
+    for url, allow, expect in (("http://11.11.11.12:8769", True, True), ("http://11.11.11.12:8769", False, False),
+                               ("http://192.168.1.5:8769", False, True), ("http://127.0.0.1:8769", False, True),
+                               ("https://monitor.example.ru", False, False), ("https://monitor.example.ru", True, False),
+                               ("https://11.11.11.12", False, False), ("http://localhost:8769", False, True)):
+        assert sm.closed_network(url, allow) is expect, (url, allow)
+    seen = []
+    monkeypatch.setattr(sm, "_post", lambda url, token, body, via_proxy=True, timeout=10: (seen.append(via_proxy) or True, 200, ""))
+    sm.save_config({"enabled": True, "url": "http://11.11.11.12:8769", "token": TOKEN, "allow_http": True, "system_proxy": True})
+    ag = sm.Agent(sources=make_sources(), clock=Clock())
+    assert ag.send()["ok"] is True and seen == [False], "ZeroTier-адрес: напрямую, как бы ни был настроен системный прокси"
+    sm.save_config({"url": "https://monitor.example.ru", "allow_http": False})
+    ag.send()
+    assert seen == [False, True], "HTTPS-домен: через системный прокси, как и раньше"
+
+
+def test_send_refuses_public_http_even_if_file_edited_by_hand(sm):
+    sm.CONFIG_PATH.write_text(json.dumps({"enabled": True, "url": "http://example.com", "token": TOKEN}), encoding="utf-8")
+    res = sm.Agent(sources=make_sources(), clock=Clock()).send()
+    assert res["ok"] is False and "https" in res["error"], "токен по открытому http в интернет не уходит"
+
+
 def test_config_survives_broken_file(sm):
     sm.CONFIG_PATH.write_text("{не json", encoding="utf-8")
     assert sm.load_config()["interval_s"] == 300

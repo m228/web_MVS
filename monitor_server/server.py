@@ -6,18 +6,18 @@
 """
 from __future__ import annotations
 
+import ctypes
 import json
 import logging
 import os
 import secrets
 import sys
+import threading
+import time
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
-
-import monitor_app  # noqa: E402
-import monitor_store  # noqa: E402
 
 log = logging.getLogger("monitor")
 
@@ -78,7 +78,45 @@ def load_assets() -> dict:
     return out
 
 
+def pid_alive(pid: int) -> bool:
+    """Жив ли процесс с таким номером (для «осиротевшего» сервера: надзор в трее пропал — сервер не должен висеть на порту без управления)."""
+    if os.name != "nt":
+        try:
+            os.kill(pid, 0)
+            return True
+        except OSError:
+            return False
+    k32 = ctypes.windll.kernel32
+    k32.OpenProcess.restype = ctypes.c_void_p
+    h = k32.OpenProcess(0x00100000 | 0x1000, False, pid)         # SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION
+    if not h:
+        return False
+    try:
+        return k32.WaitForSingleObject(ctypes.c_void_p(h), 0) == 0x102     # WAIT_TIMEOUT: ещё работает
+    finally:
+        k32.CloseHandle(ctypes.c_void_p(h))
+
+
+def watch_parent(pid: int, interval_s: float = 5.0, on_gone=None) -> threading.Thread:
+    """Если процесс-надзор (tray.py) исчез, сервер выходит сам."""
+    gone = on_gone or (lambda: os._exit(0))
+
+    def loop():
+        while True:
+            time.sleep(interval_s)
+            if not pid_alive(pid):
+                log.warning("надзор (pid %d) пропал — завершаюсь", pid)
+                gone()
+                return
+
+    t = threading.Thread(target=loop, name="parent-watch", daemon=True)
+    t.start()
+    return t
+
+
 def build_app():
+    import monitor_app
+    import monitor_store
     data = Path(os.environ.get("MONITOR_DATA") or HERE / "data")
     store = monitor_store.Store(data / "monitor.db")
     html = (HERE / "panel.html").read_text(encoding="utf-8")
@@ -92,6 +130,8 @@ def main():
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     host, port = load_listen(Path(os.environ.get("MONITOR_DATA") or HERE / "data"))
     log.info("Приёмник мониторинга v%s: http://%s:%d", read_version(), host, port)
+    if os.environ.get("MONITOR_PARENT_PID", "").isdigit():
+        watch_parent(int(os.environ["MONITOR_PARENT_PID"]))
     uvicorn.run(build_app(), host=host, port=port, log_level="warning")
 
 

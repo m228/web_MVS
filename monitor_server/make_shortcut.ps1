@@ -1,15 +1,27 @@
 ﻿# Creates a desktop shortcut "web_MVS панель": the panel opens in its own small window (Edge or Chrome in app mode: no tabs, no address bar).
-# Usage:  make_shortcut.bat                          -> panel on this PC (http://127.0.0.1:8769/)
+# Usage:  make_shortcut.bat                          -> panel at the address the receiver listens on (data\server.json, else http://127.0.0.1:8769/)
 #         make_shortcut.bat https://monitor.example.ru/   -> panel by its domain (from any PC)
 # The icon is copied to %LOCALAPPDATA%\web_MVS_panel, so the shortcut keeps working if this folder is moved.
 param(
-    [string]$Url = "http://127.0.0.1:8769/",
+    [string]$Url = "",
     [string]$Name = "web_MVS панель",
     [string]$OutDir = [Environment]::GetFolderPath("Desktop"),
     [int]$Width = 560,
     [int]$Height = 820
 )
 $ErrorActionPreference = "Stop"
+
+if (-not $Url) {
+    # no address given: the one the receiver listens on (data\server.json: host/port), else this PC
+    $Url = "http://127.0.0.1:8769/"
+    $cfgPath = Join-Path $PSScriptRoot "data\server.json"
+    if (Test-Path $cfgPath) {
+        try {
+            $j = Get-Content $cfgPath -Raw -Encoding UTF8 | ConvertFrom-Json
+            if ($j.host) { $Url = "http://" + $j.host + ":" + $(if ($j.port) { $j.port } else { 8769 }) + "/" }
+        } catch { }
+    }
+}
 
 $pf86 = ${env:ProgramFiles(x86)}
 $candidates = @(

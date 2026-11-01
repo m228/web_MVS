@@ -7,6 +7,8 @@
     из снимка: «start» из snapshot.start, открытие/снятие тревоги по сравнению snapshot.alerts с уже открытыми;
   * положения датчиков на отводе/подводе (события kind="positions") идут не в журнал событий, а в свою таблицу positions —
     по ним панель показывает таблицу проб и график; тревоги по плохим пробам завод присылает сам, обычными тревогами;
+  * очередь уведомлений в Telegram (таблица notify): в неё попадают только свежие критичные и красные события и «восстановилось»
+    (жёлтые — нет); отправляет monitor_telegram.Notifier, очередь переживает перезапуск и обрыв связи;
   * «нет пульса»: прошло больше 2 интервалов + OFFLINE_GRACE_S — критичное событие; вернулся пульс — событие «связь восстановилась».
     После запуска самого приёмника ждём такой же срок, прежде чем объявлять заводы недоступными (сервер сам мог не работать).
 """
@@ -31,6 +33,9 @@ RETENTION_DAYS = 90
 SKEW_MAX_S = 7 * 86400           # время события от завода дальше недели от сейчас — часы врут, берём время приёма
 NAME_MAX = 40
 ALERT_DEDUP_S = 120              # событие тревоги от завода и достроенное из снимка — одно и то же, если время рядом
+NOTIFY_LEVELS = ("critical", "high")                              # в Telegram идут только они (жёлтое «medium» — только в панели)
+NOTIFY_KINDS = ("start", "alert", "plate_reboot", "offline")      # какие события бывают «открытием» тревоги
+OFFLINE_KINDS = ("offline", "offline_repeat")
 
 
 def hash_token(token: str) -> str:
@@ -47,7 +52,9 @@ def _num(v) -> Optional[float]:
 
 
 class Store:
-    def __init__(self, path, clock: Callable[[], float] = time.time, retention_days: int = RETENTION_DAYS):
+    def __init__(self, path, clock: Callable[[], float] = time.time, retention_days: int = RETENTION_DAYS, notify: Optional[dict] = None):
+        """notify — настройки уведомлений ({"fresh_s": 900}); None — очередь в Telegram не ведётся (ничего не копится)."""
+        self.notify_cfg = notify
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.clock = clock
@@ -70,6 +77,12 @@ class Store:
             CREATE TABLE IF NOT EXISTS alerts (
                 plant_id INTEGER NOT NULL, code TEXT NOT NULL, level TEXT NOT NULL, text TEXT NOT NULL, since_t REAL NOT NULL,
                 PRIMARY KEY (plant_id, code));
+            CREATE TABLE IF NOT EXISTS notify (
+                id INTEGER PRIMARY KEY AUTOINCREMENT, plant_id INTEGER NOT NULL, plant_name TEXT NOT NULL, eid TEXT NOT NULL,
+                t REAL NOT NULL, created_t REAL NOT NULL, level TEXT NOT NULL, kind TEXT NOT NULL, code TEXT NOT NULL DEFAULT '',
+                state TEXT NOT NULL DEFAULT '', text TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pending', reason TEXT NOT NULL DEFAULT '',
+                tries INTEGER NOT NULL DEFAULT 0, next_try_t REAL NOT NULL DEFAULT 0, sent_t REAL, UNIQUE (plant_id, eid));
+            CREATE INDEX IF NOT EXISTS ix_notify_status ON notify (status, id);
             CREATE TABLE IF NOT EXISTS positions (
                 id INTEGER PRIMARY KEY AUTOINCREMENT, plant_id INTEGER NOT NULL, eid TEXT NOT NULL, t REAL NOT NULL, step TEXT NOT NULL,
                 target REAL, calc REAL, enc REAL, ai REAL, gap REAL, ok INTEGER NOT NULL DEFAULT 1, timeout INTEGER NOT NULL DEFAULT 0,
@@ -112,6 +125,7 @@ class Store:
             self.db.execute("DELETE FROM events WHERE plant_id=?", (plant_id,))
             self.db.execute("DELETE FROM alerts WHERE plant_id=?", (plant_id,))
             self.db.execute("DELETE FROM positions WHERE plant_id=?", (plant_id,))
+            self.db.execute("DELETE FROM notify WHERE plant_id=?", (plant_id,))
             return self.db.execute("DELETE FROM plants WHERE id=?", (plant_id,)).rowcount > 0
 
     def plant_by_token(self, token: str) -> Optional[sqlite3.Row]:
@@ -131,9 +145,79 @@ class Store:
         data_json = json.dumps(data or {}, ensure_ascii=False)
         if len(data_json) > 2000:
             data_json = "{}"
-        return self.db.execute(
+        level = level if level in LEVELS else "info"
+        n = self.db.execute(
             "INSERT OR IGNORE INTO events (plant_id, eid, t, recv_t, kind, level, text, code, state, data) VALUES (?,?,?,?,?,?,?,?,?,?)",
-            (plant_id, eid[:64], t, now, kind[:24], level if level in LEVELS else "info", text[:TEXT_MAX], code[:40], state[:12], data_json)).rowcount
+            (plant_id, eid[:64], t, now, kind[:24], level, text[:TEXT_MAX], code[:40], state[:12], data_json)).rowcount
+        if n and self.notify_cfg is not None:
+            self._maybe_notify(plant_id, eid[:64], t, now, kind[:24], level, state[:12], code[:40], text[:TEXT_MAX])
+        return n
+
+    # ------------------------------------------------------------------------------------------------ очередь уведомлений в Telegram
+
+    def _last_notified(self, plant_id: int, kinds: tuple, code: Optional[str] = None) -> Optional[sqlite3.Row]:
+        marks = ",".join("?" * len(kinds))
+        sql = "SELECT * FROM notify WHERE plant_id=? AND kind IN (%s) AND status IN ('pending','sent')" % marks
+        args = [plant_id, *kinds]
+        if code is not None:
+            sql += " AND code=?"
+            args.append(code)
+        return self.db.execute(sql + " ORDER BY id DESC LIMIT 1", args).fetchone()
+
+    def _maybe_notify(self, plant_id: int, eid: str, t: float, now: float, kind: str, level: str, state: str, code: str, text: str) -> None:
+        """Нужно ли сообщить об этом событии в Telegram. Шлём: свежие критичные и красные события (старт ПК/приложения, «нет пульса»,
+        красные тревоги, перезагрузка платы), «снято» и «связь восстановилась» — только если об открытии мы сообщали. Жёлтое — никогда.
+        Старое событие (после обрыва связи пришла пачка) — только в журнал."""
+        if now - t > self.notify_cfg.get("fresh_s", 900):
+            return
+        if level in NOTIFY_LEVELS and kind in NOTIFY_KINDS and state != "closed":
+            pass
+        elif kind == "alert" and state == "closed":
+            last = self._last_notified(plant_id, ("alert",), code)
+            if last is None or last["state"] != "open":
+                return
+        elif kind == "online":
+            last = self._last_notified(plant_id, OFFLINE_KINDS + ("online",))
+            if last is None or last["kind"] == "online":
+                return
+        else:
+            return
+        row = self.db.execute("SELECT name FROM plants WHERE id=?", (plant_id,)).fetchone()
+        self.db.execute("INSERT OR IGNORE INTO notify (plant_id, plant_name, eid, t, created_t, level, kind, code, state, text) VALUES (?,?,?,?,?,?,?,?,?,?)",
+                        (plant_id, row["name"] if row else "?", eid, t, now, level, kind, code, state, text))
+
+    def notify_pending(self, now: float, limit: int = 100) -> list:
+        with self._lock:
+            return [dict(r) for r in self.db.execute("SELECT * FROM notify WHERE status='pending' AND next_try_t<=? ORDER BY id LIMIT ?", (now, limit))]
+
+    def notify_count(self) -> int:
+        with self._lock:
+            return self.db.execute("SELECT COUNT(*) n FROM notify WHERE status='pending'").fetchone()["n"]
+
+    def notify_mark(self, ids: list, status: str, now: float, reason: str = "") -> None:
+        with self._lock, self.db:
+            self.db.executemany("UPDATE notify SET status=?, reason=?, sent_t=? WHERE id=?",
+                                [(status, reason, now if status == "sent" else None, i) for i in ids])
+
+    def notify_retry(self, ids: list, next_try_t: float, reason: str) -> None:
+        with self._lock, self.db:
+            self.db.executemany("UPDATE notify SET tries=tries+1, next_try_t=?, reason=? WHERE id=?", [(next_try_t, reason[:200], i) for i in ids])
+
+    def notify_offline_reminders(self, now: float, every_s: float) -> int:
+        """Завод всё ещё без связи, а об этом уже писали: раз в every_s напоминаем (иначе после одного сообщения ночью про него забудут)."""
+        n = 0
+        with self._lock, self.db:
+            for p in self.db.execute("SELECT * FROM plants WHERE offline_since IS NOT NULL").fetchall():
+                last = self._last_notified(p["id"], OFFLINE_KINDS)
+                if last is None or last["status"] != "sent" or now - (last["sent_t"] or now) < every_s:
+                    continue
+                if self.db.execute("SELECT 1 FROM notify WHERE plant_id=? AND kind IN ('offline','offline_repeat') AND status='pending'", (p["id"],)).fetchone():
+                    continue
+                hours = (now - p["offline_since"]) / 3600
+                text = "Всё ещё нет пульса (уже %s)" % ("%d ч" % round(hours) if hours >= 1.5 else "%d мин" % round(hours * 60))
+                n += self.db.execute("INSERT OR IGNORE INTO notify (plant_id, plant_name, eid, t, created_t, level, kind, code, state, text) VALUES (?,?,?,?,?,?,?,?,?,?)",
+                                     (p["id"], p["name"], "srv-offline-rep-%d" % int(now), now, now, "critical", "offline_repeat", "", "open", text)).rowcount
+        return n
 
     def _insert_position(self, plant_id: int, eid: str, t: float, d: dict) -> None:
         step = d.get("step")
@@ -256,6 +340,7 @@ class Store:
         with self._lock, self.db:
             cutoff = self.clock() - self.retention_days * 86400
             self.db.execute("DELETE FROM positions WHERE t < ?", (cutoff,))
+            self.db.execute("DELETE FROM notify WHERE t < ? AND status!='pending'", (cutoff,))
             return self.db.execute("DELETE FROM events WHERE t < ?", (cutoff,)).rowcount
 
     # ------------------------------------------------------------------------------------------------------------- чтение

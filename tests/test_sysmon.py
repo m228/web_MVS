@@ -426,3 +426,237 @@ def test_state_for_page(sm):
     st = ag.state()
     assert set(st) >= {"snapshot", "alerts", "send", "config", "recent", "starts"}
     assert "token" not in st["config"] and st["send"]["configured"] is False
+
+
+# ------------------------------------------------------------------------------------- датчики: положения и автокалибровка
+
+def pos(step="подвод", t=1_000_000.0, target=400, calc=401, enc=399, ai=405, timeout=False):
+    return {"t": t, "step": step, "target": target, "calc": calc, "enc": enc, "ai": ai, "timeout": timeout, "sv": 88.0, "stage": 7}
+
+
+def configured_agent(sm, rx_url="http://127.0.0.1:1", **src):
+    sm.save_config({"enabled": True, "url": rx_url, "token": TOKEN, "system_proxy": False})
+    ag = sm.Agent(sources=make_sources(**src), clock=Clock())
+    ag._cfg = sm.load_config()
+    return ag
+
+
+def test_position_verdict(sm):
+    cfg = sm.load_config()
+    assert sm.position_verdict(pos("подвод", ai=420), cfg) == {"gap": 21, "ok": True, "why": ""}
+    bad = sm.position_verdict(pos("подвод", ai=470), cfg)                       # 71 мкм на подводе — допуск 50
+    assert bad["ok"] is False and bad["gap"] == 71 and "разошлись на 71" in bad["why"]
+    assert sm.position_verdict(pos("отвод", ai=470), cfg)["ok"] is True, "на отводе допуск 100"
+    assert sm.position_verdict(pos("отвод", ai=520), cfg)["ok"] is False
+    to = sm.position_verdict(pos("подвод", timeout=True), cfg)
+    assert to["ok"] is False and "не доехал" in to["why"]
+    assert sm.position_verdict(pos(ai=None, calc=401, enc=399), cfg) == {"gap": 2, "ok": True, "why": ""}, "нет аналогового — расчётная против энкодера"
+    assert sm.position_verdict(pos(ai=None, calc=None, enc=None), cfg)["ok"] is True, "нет значений — не придираемся"
+
+
+def test_position_config_has_defaults_and_is_clamped(sm):
+    cfg = sm.load_config()
+    assert (cfg["gap_far_um"], cfg["gap_near_um"], cfg["drift_um"], cfg["overdue_h"], cfg["bad_streak"]) == (100, 50, 100, 24, 2)
+    sm.CONFIG_PATH.write_text(json.dumps({"gap_near_um": 1, "bad_streak": 99, "overdue_h": "x"}), encoding="utf-8")
+    cfg = sm.load_config()
+    assert cfg["gap_near_um"] == 10 and cfg["bad_streak"] == 10 and cfg["overdue_h"] == 24
+
+
+def test_bad_probe_is_yellow_and_sent_at_once_then_red_on_repeat_then_cleared(sm):
+    ag = configured_agent(sm)
+    ag.add_positions(pos("подвод", ai=500))                                     # расхождение 101 > 50
+    ev = ag.tick(ag.clock())
+    assert [(e["data"]["code"], e["level"]) for e in ev] == [("pos_approach", "medium")]
+    assert "Подвод: датчики разошлись" in ev[0]["text"]
+    assert ag._kick.is_set(), "жёлтое предупреждение не срочное, но уходит сразу"
+    ag._kick.clear()
+    assert ag.tick(ag.clock()) == [], "ничего нового — без повторов"
+    ag.add_positions(pos("подвод", ai=500))                                     # вторая плохая подряд
+    ev = ag.tick(ag.clock())
+    assert [(e["data"]["code"], e["level"]) for e in ev] == [("pos_approach", "high")]
+    assert "проб подряд: 2" in ev[0]["text"] and ag._kick.is_set()
+    ag.add_positions(pos("подвод"))                                             # хорошая проба снимает
+    ev = ag.tick(ag.clock())
+    assert [(e["data"]["code"], e["data"]["state"]) for e in ev] == [("pos_approach", "closed")]
+    assert ag.active == {}
+
+
+def test_retract_and_approach_are_counted_separately(sm):
+    ag = configured_agent(sm)
+    ag.add_positions(pos("отвод", target=20000, calc=20001, enc=20002, ai=20300))   # 300 мкм > 100
+    ag.add_positions(pos("подвод"))                                                 # хорошая проба подвода не снимает тревогу отвода
+    ev = ag.tick(ag.clock())
+    assert [(e["data"]["code"], e["level"]) for e in ev] == [("pos_retract", "medium")]
+    ag.add_positions(pos("подвод", timeout=True))                                   # другой шаг — своя серия, красной ещё нет
+    ev = ag.tick(ag.clock())
+    assert [(e["data"]["code"], e["level"]) for e in ev] == [("pos_approach", "medium")]
+    assert ag.active["pos_retract"]["level"] == "medium"
+
+
+def test_old_bad_probe_does_not_keep_alert(sm):
+    ag = configured_agent(sm)
+    ag.add_positions(pos("подвод", ai=500))
+    ag.tick(ag.clock())
+    assert "pos_approach" in ag.active
+    ev = ag.tick(ag.clock() + sm.POS_STALE_S + 60)
+    assert [e["data"]["state"] for e in ev] == ["closed"], "через несколько часов без проб плохая проба уже не держит тревогу"
+
+
+def test_bad_streak_from_config(sm):
+    sm.save_config({"bad_streak": 1})
+    ag = configured_agent(sm)
+    ag.add_positions(pos("подвод", ai=500))
+    ev = ag.tick(ag.clock())
+    assert ev[0]["level"] == "high", "bad_streak=1 — красная с первой плохой пробы"
+
+
+def test_good_probes_raise_no_alert(sm):
+    ag = configured_agent(sm)
+    ag.add_positions(pos("отвод", target=20000, calc=20001, enc=20002, ai=20010))
+    ag.add_positions(pos("подвод"))
+    assert ag.tick(ag.clock()) == []
+
+
+def test_positions_ride_with_pulse_and_do_not_wake_sender(sm, rx):
+    ag = configured_agent(sm, rx.url)
+    ag.add_positions(pos("подвод"))
+    assert not ag._kick.is_set(), "хорошая проба не будит отправку, уйдёт с ближайшим пульсом"
+    assert ag.send()["ok"] is True
+    evs = rx.requests[0]["body"]["events"]
+    assert [e["kind"] for e in evs] == ["positions"] and evs[0]["level"] == "info"
+    d = evs[0]["data"]
+    assert d["step"] == "подвод" and d["ok"] is True and d["gap"] == 6 and d["enc"] == 399 and d["target"] == 400
+    assert "Подвод: цель 400" in evs[0]["text"]
+
+
+def test_positions_not_queued_when_not_configured(sm):
+    ag = sm.Agent(sources=make_sources(), clock=Clock())
+    ag.add_positions(pos())
+    assert sm.outbox_count() == 0 and len(ag.positions) == 1, "не настроено — в очередь не копим, но для правил помним"
+
+
+def test_positions_do_not_push_out_important_events(sm, monkeypatch):
+    monkeypatch.setattr(sm, "POS_KEEP", 5)
+    ag = configured_agent(sm)
+    ag._emit("start", "critical", "ПК перезагрузился")
+    for i in range(12):
+        ag.add_positions(pos(t=1_000_000.0 + i))
+    kinds = [e["kind"] for e in sm.outbox_batch()]
+    assert kinds.count("positions") == 5 and kinds.count("start") == 1
+
+
+def test_add_positions_ignores_garbage(sm):
+    ag = configured_agent(sm)
+    ag.add_positions(None)
+    ag.add_positions({"step": "возврат"})
+    ag.add_positions("x")
+    assert len(ag.positions) == 0 and sm.outbox_count() == 0
+
+
+def test_record_positions_without_agent_is_silent(sm, monkeypatch):
+    monkeypatch.setattr(sm, "_agent", None)
+    sm.record_positions(pos())
+
+
+def test_record_positions_reaches_agent(sm, monkeypatch):
+    ag = configured_agent(sm)
+    monkeypatch.setattr(sm, "_agent", ag)
+    sm.record_positions(pos())
+    assert len(ag.positions) == 1
+
+
+def autocal_state(**ac):
+    base = {"enabled": True, "every_n": 1, "count": 0, "failed": False, "fail_msg": "", "result": "готово"}
+    base.update(ac)
+    return lambda: {"stage": 7, "stage_ok": True, "cyclic": True, "manual": False, "fault": False, "cycle_params": {"trigger_mode": "time"},
+                    "autocal": base}
+
+
+def iso(t):
+    from datetime import datetime
+    return datetime.fromtimestamp(t).isoformat(timespec="seconds")
+
+
+def ac_ev(events):
+    return [e for e in events if str(e["data"].get("code", "")).startswith("autocal")]
+
+
+def test_autocal_failed_is_red_at_once(sm):
+    ag = configured_agent(sm, state=autocal_state(failed=True, fail_msg="автокалибровка не удалась: датчик не сошёлся"))
+    ev = ac_ev(ag.tick(ag.clock()))
+    assert [(e["data"]["code"], e["level"]) for e in ev] == [("autocal_failed", "high")]
+    assert "датчик не сошёлся" in ev[0]["text"] and ag._kick.is_set()
+
+
+def test_autocal_drift_yellow_then_red_on_second_calibration(sm):
+    now = time.time()
+    last = {"v": {"ts": iso(now - 600), "result": "готово", "diff_before": 150, "diff_after": 3}}
+
+    def state():
+        return autocal_state(last=last["v"])()
+    ag = configured_agent(sm, state=state)
+    ag.clock = Clock(now)
+    ev = ac_ev(ag.tick(now))
+    assert [(e["data"]["code"], e["level"]) for e in ev] == [("autocal_drift", "medium")]
+    assert "150 мкм" in ev[0]["text"] and ag._kick.is_set(), "«ноль уполз» — жёлтое, уходит сразу"
+    assert ac_ev(ag.tick(now + 15)) == [], "та же калибровка не считается дважды"
+    last["v"] = {"ts": iso(now + 3600), "result": "готово", "diff_before": -130, "diff_after": 2}
+    ev = ac_ev(ag.tick(now + 3700))
+    assert [(e["data"]["code"], e["level"]) for e in ev] == [("autocal_drift", "high")], "второй раз подряд — красная"
+    last["v"] = {"ts": iso(now + 7200), "result": "готово", "diff_before": 12, "diff_after": 1}
+    ev = ac_ev(ag.tick(now + 7300))
+    assert [e["data"]["state"] for e in ev] == ["closed"]
+
+
+def test_autocal_small_drift_is_quiet_and_old_result_ignored(sm):
+    now = time.time()
+    ag = configured_agent(sm, state=autocal_state(last={"ts": iso(now - 300), "result": "готово", "diff_before": 40, "diff_after": 1}))
+    assert ac_ev(ag.tick(now)) == []
+    ag2 = configured_agent(sm, state=autocal_state(last={"ts": iso(now - 3 * 86400), "result": "готово", "diff_before": 900, "diff_after": 1}))
+    assert ac_ev(ag2.tick(now)) == [], "результат трёхдневной давности — не повод"
+
+
+def test_autocal_overdue_counts_from_start_of_work(sm):
+    now = time.time()
+    old = {"ts": iso(now - 5 * 86400), "result": "готово", "diff_before": 5, "diff_after": 1}
+    ag = configured_agent(sm, state=autocal_state(last=old))
+    assert ac_ev(ag.tick(now)) == [], "варка только началась — отсчёт с этого момента, не с прошлой калибровки"
+    ev = ac_ev(ag.tick(now + 25 * 3600))
+    assert [(e["data"]["code"], e["level"]) for e in ev] == [("autocal_overdue", "medium")]
+    assert "успешной не было уже 1 д" in ev[0]["text"]
+
+
+def test_autocal_overdue_off_when_disabled_or_idle(sm):
+    now = time.time()
+    ag = configured_agent(sm, state=autocal_state(enabled=False))
+    ag.tick(now)
+    assert ac_ev(ag.tick(now + 30 * 3600)) == []
+    idle = lambda: {"stage": 1, "stage_ok": False, "cyclic": False, "manual": False, "fault": False,
+                    "autocal": {"enabled": True, "failed": False}}
+    ag2 = configured_agent(sm, state=idle)
+    ag2.tick(now)
+    assert ac_ev(ag2.tick(now + 30 * 3600)) == [], "аппарат стоит — калибровки и не ждём"
+
+
+def test_snapshot_has_autocal_and_positions_text(sm):
+    now = time.time()
+    ag = configured_agent(sm, state=autocal_state(last={"ts": iso(now - 7200), "result": "готово", "diff_before": 12, "diff_after": 1}))
+    ag.clock = Clock(now)
+    ag.add_positions(pos("отвод", t=now, target=20000, calc=20001, enc=20002, ai=20012))
+    ag.add_positions(pos("подвод", t=now))
+    snap = ag.snapshot()
+    m = snap["micro"]
+    assert m["autocal"]["diff_before"] == 12 and m["autocal"]["failed"] is False and m["autocal"]["last_result"] == "готово"
+    assert set(m["positions"]) == {"retract", "approach"} and m["positions"]["approach"]["ok"] is True
+    assert "Автокалибровка: готово, 2 ч 0 мин назад, ноль уползал на 12 мкм" in snap["text"]
+    assert "отвод и подвод в норме, расхождение датчиков до 11 мкм" in snap["text"].lower()
+    ag.add_positions(pos("подвод", t=now, ai=500))
+    ag.tick(now)
+    text = ag.snapshot()["text"]
+    assert "в норме" not in text and "Подвод: датчики разошлись" in text, "плохая проба: строка «в норме» уходит, остаётся тревога"
+
+
+def test_snapshot_without_autocal_state_still_works(sm):
+    ag = sm.Agent(sources=make_sources(), clock=Clock())
+    m = ag.snapshot()["micro"]
+    assert m["autocal"] is None and m["positions"] == {}

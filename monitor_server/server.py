@@ -122,9 +122,13 @@ def build_app():
     tg = monitor_telegram.load_config(data)                    # блок "telegram" в data\server.json; нет — приёмник работает без уведомлений
     store = monitor_store.Store(data / "monitor.db", notify={"fresh_s": tg["fresh_s"]} if tg else None)
     notifier = monitor_telegram.Notifier(store, monitor_telegram.TelegramClient(tg["token"], tg["api_base"]), tg) if tg else None
+    bot = None
+    if tg:                                                    # тот же бот отвечает на кнопки заводов (длинный опрос, наружу порты не открываем)
+        bot = monitor_telegram.Bot(store, monitor_telegram.TelegramClient(tg["token"], tg["api_base"]),
+                                   monitor_telegram.TelegramClient(tg["token"], tg["api_base"], timeout=monitor_telegram.Bot.POLL_S + 10), tg["chat_ids"])
     log.info("Telegram: %s", "подключён, чатов: %d" % len(tg["chat_ids"]) if tg else "не настроен (telegram_setup.bat)")
     html = (HERE / "panel.html").read_text(encoding="utf-8")
-    return monitor_app.create_app(store, load_password(data), read_version(), html, assets=load_assets(), notifier=notifier)
+    return monitor_app.create_app(store, load_password(data), read_version(), html, assets=load_assets(), notifier=notifier, bot=bot)
 
 
 def main():

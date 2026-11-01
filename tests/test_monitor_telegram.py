@@ -66,6 +66,8 @@ class FakeTelegram:
                     code, resp = 500, {"ok": False}
                 elif outer.mode == "429":
                     code, resp = 429, {"ok": False, "parameters": {"retry_after": outer.retry_after}}
+                elif outer.mode == "409":
+                    code, resp = 409, {"ok": False, "description": "Conflict: terminated by other getUpdates request"}
                 elif outer.mode == "401":
                     code, resp = 401, {"ok": False, "description": "Unauthorized " + parts[0]}
                 elif outer.mode == "400":
@@ -73,7 +75,12 @@ class FakeTelegram:
                 elif method == "getMe":
                     resp = {"ok": True, "result": {"username": "monitor_test_bot", "is_bot": True}}
                 elif method == "getUpdates":
-                    resp = {"ok": True, "result": outer.updates}
+                    ups = [dict(u, update_id=u.get("update_id", i + 1)) for i, u in enumerate(outer.updates)]
+                    off = body.get("offset")
+                    ups = ups[-1:] if off == -1 else ([u for u in ups if u["update_id"] >= off] if off is not None else ups)
+                    if not ups and body.get("timeout"):
+                        time.sleep(0.2)                                 # «длинный опрос» без пустого цикла в тестах
+                    resp = {"ok": True, "result": ups}
                 outer.requests[-1]["code"] = code
                 data = json.dumps(resp).encode("utf-8")
                 self.send_response(code)
@@ -520,3 +527,162 @@ def test_wizard_bad_token_stops(tmp_path, tg, monkeypatch, capsys):
 
 def test_panel_has_telegram_chip_and_test_button():
     assert 'id="tg"' in PANEL and 'id="tgTest"' in PANEL and "/api/telegram" in PANEL and "Telegram: не настроен" in PANEL
+
+
+# ------------------------------------------------------------------------------------------------- бот: кнопки заводов и сводка
+
+def snap_pulse(plant, text, alerts=None, micro=None, events=None):
+    snap = {"plant": plant, "app_version": "2.0.46", "interval_s": 300, "text": text, "alerts": alerts or []}
+    if micro:
+        snap["micro"] = micro
+    return {"schema": 1, "sent_t": 0, "snapshot": snap, "events": events or []}
+
+
+KIR_TEXT = ("kir · ПК работает 3 ч 20 мин · приложение 1 ч (v2.0.46)\nВарка: стадия 7 Рост · проб сегодня 12\n"
+            "Автокалибровка: готово, 2 ч 0 мин назад, ноль уползал на 12 мкм\nКамера: стримит, экспозиция 322\nТревоги: нет")
+KIR_MICRO = {"positions": {
+    "retract": {"t": 1_000_000.0 - 120, "ok": True, "gap": 11, "target": 20000, "calc": 20010, "enc": 19990, "ai": 20001, "timeout": False, "why": ""},
+    "approach": {"t": 1_000_000.0 - 60, "ok": False, "gap": 214, "target": 500, "calc": 500, "enc": 500, "ai": 714.2, "timeout": False,
+                 "why": "датчики разошлись на 214 мкм (допуск 200)"}}}
+
+
+@pytest.fixture
+def bot_env(env):
+    e = env
+    e.bot = mt.Bot(e.store, mt.TelegramClient(TOKEN, e.tg.url, timeout=5), mt.TelegramClient(TOKEN, e.tg.url, timeout=5), [CHAT], clock=e.clk)
+    e.kir, _ = e.store.create_plant("Кир")
+    e.bui, _ = e.store.create_plant("Буи")
+    e.store.ingest(e.kir, snap_pulse("kir", KIR_TEXT, micro=KIR_MICRO, alerts=[
+        {"code": "pos_approach", "level": "high", "text": "Подвод: датчики разошлись на 214 мкм · проб подряд: 2", "since": e.clk.t - 600},
+        {"code": "x", "level": "medium", "text": "Что-то жёлтое", "since": e.clk.t - 300}],
+        events=[ev("e1", e.clk.t - 900, "Приложение обновлено до v2.0.46", kind="start", level="info")]))
+    return e
+
+
+def msg(text, chat=CHAT, ctype="private", uid=None):
+    u = {"message": {"chat": {"id": chat, "type": ctype}, "text": text}}
+    if uid:
+        u["update_id"] = uid
+    return u
+
+
+def test_keyboard_has_plant_buttons_in_rows_of_two_and_all_button(bot_env):
+    kb = bot_env.bot.keyboard()
+    assert kb["keyboard"] == [[{"text": "Буи"}, {"text": "Кир"}], [{"text": "Все заводы"}]]
+    assert kb["resize_keyboard"] is True and kb["is_persistent"] is True
+    bot_env.store.create_plant("Третий")
+    assert bot_env.bot.keyboard()["keyboard"][1] == [{"text": "Третий"}], "новый завод появляется на кнопках сам"
+
+
+def test_plant_button_gives_full_text_report(bot_env):
+    e = bot_env
+    reply = e.bot.handle(msg("Кир"))
+    lines = reply.split("\n")
+    assert lines[0] == "🟢 Кир — в сети, пульс только что"
+    assert "ПК работает 3 ч 20 мин · приложение 1 ч (v2.0.46)" in lines[1] and "kir ·" not in lines[1], "имя завода не дублируется"
+    assert "Варка: стадия 7 Рост · проб сегодня 12" in lines and "Камера: стримит, экспозиция 322" in lines
+    assert not any(ln.startswith("Тревоги: нет") for ln in lines), "строка снимка «Тревоги: нет» заменяется настоящим списком"
+    assert "Тревоги:" in lines
+    assert any(ln.startswith("🔴 Подвод: датчики разошлись на 214 мкм · проб подряд: 2 (с ") for ln in lines)
+    assert any(ln.startswith("🟡 Что-то жёлтое (с ") for ln in lines)
+    assert "Датчики последней пробы, мкм:" in lines
+    assert any(ln.startswith("Отвод (") and "расчётная 20010 · энкодер 19990 · датчик 20001, разница 11" in ln for ln in lines)
+    assert any(ln.startswith("⚠ Подвод (") and "расчётная 500 · энкодер 500 · датчик 714, разница 214" in ln for ln in lines)
+    assert "Последние события:" in lines and any("Приложение обновлено до v2.0.46" in ln for ln in lines)
+    sent = e.tg.requests[-1]["body"]
+    assert sent["chat_id"] == CHAT and sent["text"] == reply and sent["reply_markup"]["keyboard"][-1] == [{"text": "Все заводы"}]
+
+
+def test_plant_without_alerts_says_so_and_waiting_plant_is_short(bot_env):
+    e = bot_env
+    e.store.ingest(e.kir, snap_pulse("kir", KIR_TEXT, micro=None))
+    assert "Тревог нет" in e.bot.handle(msg("кир")).split("\n"), "название можно писать с маленькой буквы"
+    assert e.bot.handle(msg("Буи")) == "⚪ Буи — ещё не выходил на связь"
+
+
+def test_offline_plant_is_red_in_report_and_summary(bot_env):
+    e = bot_env
+    e.clk.t += 13 * 60
+    e.store.check_offline()
+    rep = e.bot.handle(msg("Кир"))
+    assert rep.startswith("🔴 Кир — нет связи, пульс 13 мин назад")
+    allr = e.bot.handle(msg("Все заводы"))
+    assert allr.split("\n")[0].startswith("Заводы на ") and "🔴 Кир — нет связи, пульс 13 мин назад, тревог: 2" in allr and "⚪ Буи — ещё не выходил на связь" in allr
+
+
+def test_menu_words_and_unknown_text(bot_env):
+    e = bot_env
+    for w in ("/start", "/start@monitor_microscope_test_bot", "/help", "Меню"):
+        assert "Нажми кнопку с названием завода" in e.bot.handle(msg(w)), w
+    assert e.bot.handle(msg("/все")).startswith("Заводы на "), "«все» и «все заводы» — общая сводка"
+    assert e.bot.handle(msg("что там у нас?")) == "Не понял. Нажми кнопку с названием завода внизу."
+    assert e.bot.handle(msg("   ")) is None and e.bot.handle({"message": {"chat": {"id": CHAT, "type": "private"}}}) is None
+
+
+def test_bot_answers_only_the_owner_private_chat(bot_env):
+    e = bot_env
+    before = len(e.tg.requests)
+    assert e.bot.handle(msg("Кир", chat=999)) is None, "чужой чат — молчим"
+    assert e.bot.handle(msg("Кир", chat=CHAT, ctype="group")) is None, "группа — молчим, даже если id совпал бы"
+    assert e.bot.handle({"edited_message": {}}) is None and e.bot.handle({}) is None
+    assert len(e.tg.requests) == before
+
+
+def test_old_questions_after_downtime_are_not_answered(bot_env):
+    e = bot_env
+    e.tg.updates = [msg("Кир", uid=10), msg("Буи", uid=11)]                # спросили, пока приёмник не работал
+    e.bot.skip_backlog()
+    assert e.bot.offset == 12
+    assert e.bot.poll_once(timeout=0) == (True, 0.0) and not e.tg.sent(), "старые вопросы не отвечаются"
+    e.tg.updates.append(msg("Кир", uid=12))
+    assert e.bot.poll_once(timeout=0)[0] and len(e.tg.sent()) == 1 and e.tg.sent()[0].startswith("🟢 Кир")
+    assert e.bot.offset == 13
+    assert e.bot.poll_once(timeout=0)[0] and len(e.tg.sent()) == 1, "тот же вопрос второй раз не отвечается"
+
+
+def test_poll_errors_are_reported_and_do_not_raise(bot_env):
+    e = bot_env
+    e.tg.mode = "500"
+    ok, wait = e.bot.poll_once(timeout=0)
+    assert ok is False and "HTTP 500" in e.bot.state["last_error"]
+    e.tg.mode = "409"
+    ok, _ = e.bot.poll_once(timeout=0)
+    assert ok is False and "уже слушает другая программа" in e.bot.state["last_error"] and TOKEN not in e.bot.state["last_error"]
+    e.tg.mode = "ok"
+    assert e.bot.poll_once(timeout=0)[0] and e.bot.state["last_error"] == ""
+
+
+def test_failed_reply_is_recorded_not_raised(bot_env):
+    e = bot_env
+    e.tg.mode = "500"
+    assert e.bot.handle(msg("Кир")) is not None
+    assert "HTTP 500" in e.bot.state["last_error"] and e.bot.state["answered"] == 0
+
+
+def test_long_report_is_cut_to_telegram_limit(bot_env):
+    e = bot_env
+    e.store.ingest(e.kir, snap_pulse("kir", "kir · " + "очень длинная строка " * 400))
+    assert len(e.bot.handle(msg("Кир"))) <= mt.MESSAGE_MAX
+
+
+def test_bot_thread_answers_a_question_end_to_end(tmp_path, tg, monkeypatch):
+    monkeypatch.setenv("MONITOR_DATA", str(tmp_path))
+    monkeypatch.setenv("MONITOR_PASSWORD", PASSWORD)
+    monkeypatch.setenv("MONITOR_TELEGRAM_API", tg.url)
+    (tmp_path / "server.json").write_text(json.dumps({"telegram": {"token": TOKEN, "chat_ids": [CHAT]}}), encoding="utf-8")
+    tg.updates = [msg("Кир", uid=1)]                                        # вопрос до запуска — не отвечаем
+    srv = Srv(None, None, app=entry.build_app())                            # watchdog включён: поднимаются отправщик и бот
+    try:
+        time.sleep(0.5)
+        assert not tg.sent(), "старый вопрос пропущен при старте"
+        code, _ = srv.call("POST", "/api/plants", {"name": "Кир"}, headers={"X-Panel": "1"})
+        assert code == 200
+        tg.updates.append(msg("Кир", uid=2))
+        end = time.time() + 10
+        while time.time() < end and not tg.sent():
+            time.sleep(0.1)
+        assert tg.sent() and tg.sent()[0].startswith("⚪ Кир — ещё не выходил на связь")
+        last_send = [r for r in tg.requests if r["method"] == "sendMessage"][-1]
+        assert last_send["body"]["reply_markup"]["keyboard"][0] == [{"text": "Кир"}]
+    finally:
+        srv.close()

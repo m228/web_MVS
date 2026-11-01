@@ -54,7 +54,7 @@ def manifest() -> dict:
 
 
 def create_app(store: monitor_store.Store, password: str, version: str, panel_html: str, watchdog: bool = True,
-               clock: Callable[[], float] = time.time, assets: Optional[dict] = None, notifier=None) -> FastAPI:
+               clock: Callable[[], float] = time.time, assets: Optional[dict] = None, notifier=None, bot=None) -> FastAPI:
     if not password:
         raise ValueError("пароль панели не задан")
     fails: dict = {}
@@ -83,10 +83,14 @@ def create_app(store: monitor_store.Store, password: str, version: str, panel_ht
             t.start()
         if notifier is not None and watchdog:
             notifier.start()
+        if bot is not None and watchdog:
+            bot.start()
         yield
         stop.set()
         if notifier is not None:
             notifier.stop()
+        if bot is not None:
+            bot.stop()
 
     app = FastAPI(lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
 

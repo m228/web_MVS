@@ -74,6 +74,8 @@ def build_app():
 
 def main():
     import uvicorn
+    if sys.stdout is None or sys.stderr is None:         # запуск без окна (pythonw из автозапуска): консоли нет, uvicorn на ней падает
+        sys.stdout = sys.stderr = open(HERE / "service.log", "a", encoding="utf-8", buffering=1)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     host = os.environ.get("MONITOR_HOST", "127.0.0.1")
     port = int(os.environ.get("MONITOR_PORT", "8769"))

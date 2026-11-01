@@ -4685,3 +4685,6 @@ body.micro-rep-doc .micro-cmp-strips { grid-template-columns: repeat(6, 1fr); ga
 .mon-log__t { color: var(--muted); font-variant-numeric: tabular-nums; }
 .mon-log__row.is-bad { color: var(--danger); }
 .mon-log__row.is-warn { color: var(--warning); }
+.mon-check { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--muted); }
+.mon-check input { width: 15px; height: 15px; padding: 0; margin: 0; accent-color: var(--accent); }
+.mon-f--check { margin-top: -4px; }

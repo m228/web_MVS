@@ -41,7 +41,7 @@ DB_PATH = DATA_DIR / "sysmon.db"
 CONFIG_PATH = DATA_DIR / "monitor.json"
 
 SCHEMA = 1
-DEFAULTS = {"enabled": False, "url": "", "token": "", "plant": "", "interval_s": 300, "system_proxy": True, "no_probe_min": 30}
+DEFAULTS = {"enabled": False, "url": "", "token": "", "plant": "", "interval_s": 300, "system_proxy": True, "no_probe_min": 30, "allow_http": False}
 
 BOOT_TOL_S = 120            # время загрузки Windows у двух запусков расходится больше — это была перезагрузка ПК
 BEAT_EVERY_S = 30           # как часто пишем на диск «я жив» (по нему считаем, сколько не работали)
@@ -126,8 +126,10 @@ def _safe(fn, default=None, errors: Optional[list] = None, name: str = ""):
 
 # --------------------------------------------------------------------------------------------------------------------- настройки
 
-def validate_url(url: str) -> str:
-    """Адрес сервера: https://…; http:// только для этого ПК и локальных сетей (проверка у себя). Возвращает адрес без хвостового «/»."""
+def validate_url(url: str, allow_http: bool = False) -> str:
+    """Адрес сервера: https://…; http:// только для этого ПК и локальных сетей (проверка у себя) или если явно разрешено галочкой
+    allow_http — для закрытых сетей вроде ZeroTier, где трафик и так зашифрован (адрес там бывает «белым», но чужие в сеть не попадают).
+    Возвращает адрес без хвостового «/»."""
     url = (url or "").strip().rstrip("/")
     if not url:
         return ""
@@ -143,8 +145,8 @@ def validate_url(url: str) -> str:
                 local = ip.is_loopback or ip.is_private
             except ValueError:
                 local = False
-        if not local:
-            raise ValueError("Токен нельзя слать по http:// через интернет — нужен https://")
+        if not local and not allow_http:
+            raise ValueError("Токен нельзя слать по http:// через интернет — нужен https:// (для ZeroTier или VPN включи «http в закрытой сети»)")
     return url
 
 
@@ -155,6 +157,7 @@ def _clean_cfg(cfg: dict) -> dict:
     out["token"] = str(cfg.get("token") or "").strip()
     out["plant"] = str(cfg.get("plant") or "").strip()[:40]
     out["system_proxy"] = bool(cfg.get("system_proxy", True))
+    out["allow_http"] = bool(cfg.get("allow_http", False))
     for k, lo, hi in (("interval_s", 60, 3600), ("no_probe_min", 5, 240)):
         try:
             out[k] = max(lo, min(hi, int(cfg.get(k, DEFAULTS[k]))))
@@ -186,9 +189,8 @@ def save_config(patch: dict) -> dict:
         if k == "token" and not str(patch[k]).strip():
             continue
         new[k] = patch[k]
-    if "url" in patch and patch["url"] is not None:
-        new["url"] = validate_url(str(patch["url"]))
     new = _clean_cfg(new)
+    new["url"] = validate_url(new["url"], new["allow_http"])        # и при смене только галочки: без неё прежний http-адрес уже не годится
     CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
     tmp = CONFIG_PATH.with_name(CONFIG_PATH.name + ".tmp")
     tmp.write_text(json.dumps(new, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -627,6 +629,10 @@ class Agent:
             self._cfg = cfg
             if not (cfg["url"] and cfg["token"]):
                 return {"ok": False, "error": "Не заданы адрес сервера и токен"}
+            try:
+                validate_url(cfg["url"], cfg["allow_http"])
+            except ValueError as e:                              # файл правили руками: токен по открытому http не уходит
+                return {"ok": False, "error": str(e)}
             if not cfg["enabled"] and not force:
                 return {"ok": False, "error": "Отправка выключена"}
             events = outbox_batch()

@@ -31,6 +31,19 @@ def read_version() -> str:
     return "dev"
 
 
+def load_listen(data: Path) -> tuple[str, int]:
+    """Где слушать: MONITOR_HOST / MONITOR_PORT главнее; иначе host / port из data\\server.json (удобно для автозапуска, где окружения нет); иначе 127.0.0.1:8769.
+    Для ZeroTier в host пишется адрес этого ПК в сети ZeroTier (например 11.11.11.12): тогда приёмник виден только там и на самом ПК через этот адрес."""
+    host, port = "127.0.0.1", 8769
+    try:
+        cfg = json.loads((data / "server.json").read_text(encoding="utf-8"))
+        host = str(cfg.get("host") or host).strip()
+        port = int(cfg.get("port") or port)
+    except (OSError, ValueError, AttributeError):
+        pass
+    return os.environ.get("MONITOR_HOST") or host, int(os.environ.get("MONITOR_PORT") or port)
+
+
 def load_password(data: Path) -> str:
     """Пароль панели: MONITOR_PASSWORD главнее; иначе data\\server.json; иначе создаём случайный и сохраняем."""
     env = os.environ.get("MONITOR_PASSWORD", "").strip()
@@ -77,8 +90,7 @@ def main():
     if sys.stdout is None or sys.stderr is None:         # запуск без окна (pythonw из автозапуска): консоли нет, uvicorn на ней падает
         sys.stdout = sys.stderr = open(HERE / "service.log", "a", encoding="utf-8", buffering=1)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-    host = os.environ.get("MONITOR_HOST", "127.0.0.1")
-    port = int(os.environ.get("MONITOR_PORT", "8769"))
+    host, port = load_listen(Path(os.environ.get("MONITOR_DATA") or HERE / "data"))
     log.info("Приёмник мониторинга v%s: http://%s:%d", read_version(), host, port)
     uvicorn.run(build_app(), host=host, port=port, log_level="warning")
 

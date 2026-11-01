@@ -9,7 +9,6 @@ if not exist ".venv\Scripts\python.exe" (
   pause & exit /b 1
 )
 
-set "MONITOR_PORT=8769"
-set "MONITOR_HOST=127.0.0.1"
+REM Listen address/port: env MONITOR_HOST / MONITOR_PORT, else "host"/"port" in data\server.json, else 127.0.0.1:8769
 .venv\Scripts\python.exe server.py
 pause

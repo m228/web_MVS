@@ -450,3 +450,18 @@ def test_panel_script_has_valid_javascript(tmp_path):
     f.write_text(code, encoding="utf-8")
     r = subprocess.run([node, "--check", str(f)], capture_output=True, text=True, timeout=30)
     assert r.returncode == 0, r.stderr
+
+
+def test_entry_listen_address_from_json_and_env(tmp_path, monkeypatch):
+    monkeypatch.delenv("MONITOR_HOST", raising=False)
+    monkeypatch.delenv("MONITOR_PORT", raising=False)
+    assert entry.load_listen(tmp_path) == ("127.0.0.1", 8769), "по умолчанию — только этот ПК"
+    (tmp_path / "server.json").write_text(json.dumps({"password": "x", "host": "11.11.11.12", "port": 8800}), encoding="utf-8")
+    assert entry.load_listen(tmp_path) == ("11.11.11.12", 8800)
+    monkeypatch.setenv("MONITOR_HOST", "127.0.0.1")
+    monkeypatch.setenv("MONITOR_PORT", "9000")
+    assert entry.load_listen(tmp_path) == ("127.0.0.1", 9000), "окружение главнее файла"
+    (tmp_path / "server.json").write_text("{битый", encoding="utf-8")
+    monkeypatch.delenv("MONITOR_HOST")
+    monkeypatch.delenv("MONITOR_PORT")
+    assert entry.load_listen(tmp_path) == ("127.0.0.1", 8769)

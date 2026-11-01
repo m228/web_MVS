@@ -103,7 +103,9 @@ dialog code { color: var(--text); word-break: break-all; }
   <h3 id="dlgTitle">Токен завода</h3>
   <p>Токен показывается один раз. В приложении завода: страница «Мониторинг» →</p>
   <p>Адрес сервера: <code id="dlgUrl"></code><br>Завод: <code id="dlgName"></code></p>
+  <p>Если завод ходит через ретранслятор, в приложении завода вписывай адрес ретранслятора, а не этот.</p>
   <div class="tok"><input id="dlgTok" readonly><button id="dlgCopy">Копировать</button></div>
+  <p>Токен — <b id="dlgLen"></b> символа. Не копируй двойным щелчком: он режется на «-» и берётся только кусок. Нажми «Копировать» или кликни в поле и Ctrl+A, Ctrl+C.</p>
   <div class="err" id="dlgErr"></div>
   <div style="text-align:right"><button id="dlgClose">Закрыть</button></div>
 </dialog>
@@ -264,6 +266,7 @@ function showToken(title, name, token) {
   $('dlgUrl').textContent = location.origin;
   $('dlgName').textContent = name;
   $('dlgTok').value = token;
+  $('dlgLen').textContent = token.length;
   $('dlgErr').textContent = '';
   $('dlg').showModal();
   $('dlgTok').select();
@@ -280,8 +283,13 @@ $('add').onclick = async () => {
 };
 $('dlgClose').onclick = () => $('dlg').close();
 $('dlgCopy').onclick = async () => {
-  try { await navigator.clipboard.writeText($('dlgTok').value); $('dlgErr').textContent = 'Скопировано'; }
-  catch (e) { $('dlgTok').select(); $('dlgErr').textContent = 'Выделено — нажми Ctrl+C'; }
+  // по http (ZeroTier) у браузера нет navigator.clipboard — копируем старым способом через выделение
+  const inp = $('dlgTok');
+  inp.focus(); inp.select();
+  let ok = false;
+  try { if (navigator.clipboard && window.isSecureContext) { await navigator.clipboard.writeText(inp.value); ok = true; } } catch (e) { ok = false; }
+  if (!ok) { try { ok = document.execCommand('copy'); } catch (e) { ok = false; } }
+  $('dlgErr').textContent = ok ? 'Скопировано целиком (' + inp.value.length + ' симв.)' : 'Выделено — нажми Ctrl+C';
 };
 
 $('cards').onclick = async (ev) => {

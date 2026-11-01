@@ -660,3 +660,49 @@ def test_snapshot_without_autocal_state_still_works(sm):
     ag = sm.Agent(sources=make_sources(), clock=Clock())
     m = ag.snapshot()["micro"]
     assert m["autocal"] is None and m["positions"] == {}
+
+
+# ------------------------------------------------------------------------------------------------ токен: неверный не сохраняем
+
+REAL_TOKEN = "Xk3_9aQ-LmP7vT2uYb8NcZ4wRhJd5sEg"            # как выдаёт панель: 32 символа, есть «-» и «_»
+
+
+def test_token_problem_catches_typical_copy_mistakes(sm):
+    assert sm.token_problem(REAL_TOKEN) == "" and sm.token_problem(TOKEN) == ""
+    addr = sm.token_problem("http://192.168.2.198:8769")
+    assert "похоже на адрес" in addr and "Ctrl+A" in addr
+    assert "похоже на адрес" in sm.token_problem("192.168.2.198:8769"), "адрес без http:// тоже"
+    assert "слишком короткий (3 симв." in sm.token_problem("kir")
+    assert "слишком короткий" in sm.token_problem(REAL_TOKEN.split("-")[0]), "обрубок после двойного щелчка"
+    assert "лишние символы" in sm.token_problem(REAL_TOKEN + " " + REAL_TOKEN)
+    assert "слишком короткий (0" in sm.token_problem("")
+
+
+def test_save_config_refuses_bad_token_and_keeps_old(sm):
+    sm.save_config({"url": "https://mon.example.ru", "token": REAL_TOKEN})
+    for bad in ("http://192.168.2.198:8769", "kir", REAL_TOKEN[:9]):
+        with pytest.raises(ValueError, match="Токен неверный"):
+            sm.save_config({"token": bad})
+    assert sm.load_config()["token"] == REAL_TOKEN, "неверный токен не должен затирать рабочий"
+    assert sm.save_config({"token": "  "})["token"] == REAL_TOKEN, "пусто = не менять"
+    assert sm.save_config({"token": " " + REAL_TOKEN[::-1] + " "})["token"] == REAL_TOKEN[::-1], "пробелы по краям срезаются"
+
+
+def test_public_config_shows_token_length_and_tail_not_token(sm):
+    sm.save_config({"url": "https://mon.example.ru", "token": REAL_TOKEN})
+    pub = sm.public_config()
+    assert pub["token_set"] is True and pub["token_len"] == 32 and pub["token_tail"] == REAL_TOKEN[-4:] and "token" not in pub
+    sm.CONFIG_PATH.write_text(json.dumps({"url": "https://mon.example.ru", "token": "http://192.168.2.198:8769"}), encoding="utf-8")
+    pub = sm.public_config()
+    assert pub["token_len"] == 25 and pub["token_tail"] == "8769", "по хвосту «8769» видно, что в поле попал адрес"
+
+
+def test_send_with_garbage_saved_token_says_why_and_does_not_hammer(sm, rx):
+    sm.CONFIG_PATH.write_text(json.dumps({"enabled": True, "url": rx.url, "token": "http://192.168.2.198:8769", "system_proxy": False}),
+                              encoding="utf-8")
+    clk = Clock()
+    ag = sm.Agent(sources=make_sources(), clock=clk)
+    res = ag.send(force=True)
+    assert res["ok"] is False and "похоже на адрес" in res["error"] and not rx.requests, "на сервер с таким токеном даже не ходим"
+    assert "похоже на адрес" in ag.status["error"] and ag.status["ok"] is False
+    assert ag._next_send >= clk.t + 60, "следующая попытка не через 5 секунд: без бесконечного цикла"

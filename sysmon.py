@@ -22,6 +22,7 @@ import ctypes
 import ipaddress
 import json
 import os
+import re
 import socket
 import sqlite3
 import threading
@@ -208,6 +209,24 @@ def validate_url(url: str, allow_http: bool = False) -> str:
     return url
 
 
+TOKEN_RE = re.compile(r"^[A-Za-z0-9_-]{20,128}$")
+
+
+def token_problem(token: str) -> str:
+    """Почему строка не похожа на токен завода ('' — похожа). Токен выдаёт панель: 32 символа из букв, цифр, «-» и «_».
+    Ловим типичные промахи при копировании: вместо токена вставился адрес, скопировался только кусок (двойной щелчок режет по «-»)."""
+    t = token or ""
+    if TOKEN_RE.match(t):
+        return ""
+    if any(c in t for c in ":/."):
+        what = "это похоже на адрес, а не на токен"
+    elif len(t) < 20:
+        what = "слишком короткий (%d симв., настоящий — 32)" % len(t)
+    else:
+        what = "в нём лишние символы (бывают только буквы, цифры, «-» и «_»)"
+    return "Токен неверный: %s. Скопируй его заново из окна «Токен завода» в панели: клик в поле, Ctrl+A, Ctrl+C." % what
+
+
 def _clean_cfg(cfg: dict) -> dict:
     out = dict(DEFAULTS)
     out["enabled"] = bool(cfg.get("enabled", False))
@@ -245,8 +264,12 @@ def save_config(patch: dict) -> dict:
     for k in DEFAULTS:
         if k not in patch or patch[k] is None:
             continue
-        if k == "token" and not str(patch[k]).strip():
-            continue
+        if k == "token":
+            if not str(patch[k]).strip():
+                continue
+            problem = token_problem(str(patch[k]).strip())
+            if problem:
+                raise ValueError(problem)
         new[k] = patch[k]
     new = _clean_cfg(new)
     new["url"] = validate_url(new["url"], new["allow_http"])        # и при смене только галочки: без неё прежний http-адрес уже не годится
@@ -264,6 +287,7 @@ def public_config(cfg: Optional[dict] = None) -> dict:
     cfg = dict(cfg or load_config())
     tok = cfg.pop("token", "")
     cfg["token_set"] = bool(tok)
+    cfg["token_len"] = len(tok)
     cfg["token_tail"] = tok[-4:] if len(tok) >= 12 else ""
     return cfg
 
@@ -774,6 +798,12 @@ class Agent:
                 return {"ok": False, "error": str(e)}
             if not cfg["enabled"] and not force:
                 return {"ok": False, "error": "Отправка выключена"}
+            bad = token_problem(cfg["token"])              # сохранённый раньше «токен» мог быть адресом или обрубком: понятнее, чем 401
+            if bad:
+                self.status.update({"last_try_t": now, "http": None, "ok": False, "error": bad})
+                self._next_send = now + cfg["interval_s"]
+                self._kick.clear()
+                return {"ok": False, "error": bad}
             events = outbox_batch()
             body = {"schema": SCHEMA, "sent_t": now, "snapshot": self.snapshot(None, cfg), "events": events}
             via_proxy = cfg["system_proxy"] and not closed_network(cfg["url"], cfg["allow_http"])

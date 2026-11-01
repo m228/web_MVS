@@ -563,3 +563,10 @@ def test_sysmon_positions_and_yellow_to_red_end_to_end(srv, store, tmp_path, mon
         assert store.plants_view()[0]["alerts"] == [] and len(store.positions(pid)) == 3
     finally:
         sysmon.close()
+
+
+def test_panel_token_dialog_copies_over_plain_http_and_shows_length():
+    # по http (ZeroTier) navigator.clipboard у браузера нет: без запасного способа кнопка «Копировать» молча не копирует
+    assert "document.execCommand('copy')" in PANEL and "window.isSecureContext" in PANEL
+    assert 'id="dlgLen"' in PANEL and "dlgLen').textContent = token.length" in PANEL
+    assert "двойным щелчком" in PANEL

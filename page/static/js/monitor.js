@@ -70,7 +70,7 @@ function fillForm(cfg) {
   $('monUrl').value = cfg.url || '';
   $('monHttp').checked = !!cfg.allow_http;
   $('monToken').value = '';
-  $('monToken').placeholder = cfg.token_set ? 'задан' + (cfg.token_tail ? ' · …' + cfg.token_tail : '') + ' — оставь пустым, чтобы не менять' : 'вставь токен завода';
+  $('monToken').placeholder = cfg.token_set ? 'задан · ' + cfg.token_len + ' симв.' + (cfg.token_tail ? ' · …' + cfg.token_tail : '') + ' — оставь пустым, чтобы не менять' : 'вставь токен завода';
   const min = String(Math.round((cfg.interval_s || 300) / 60));
   if (![...$('monInterval').options].some((o) => o.value === min)) $('monInterval').add(new Option(min + ' мин', min));
   $('monInterval').value = min;

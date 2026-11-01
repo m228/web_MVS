@@ -368,6 +368,10 @@ class Store:
         return [{"t": r["t"], "step": r["step"], "target": r["target"], "calc": r["calc"], "enc": r["enc"], "ai": r["ai"], "gap": r["gap"],
                  "ok": bool(r["ok"]), "timeout": bool(r["timeout"]), "why": r["why"], "sv": r["sv"], "stage": r["stage"]} for r in rows]
 
+    def plant_names(self) -> list:
+        with self._lock:
+            return [r["name"] for r in self.db.execute("SELECT name FROM plants ORDER BY name")]
+
     def plants_view(self) -> list[dict]:
         """Карточки для панели: статус, последний снимок, открытые тревоги, несколько последних событий."""
         now = self.clock()

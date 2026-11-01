@@ -5,6 +5,10 @@
 Старые события (пачка после обрыва связи) в чат не идут. Несколько событий одного завода в одном проходе — одно сообщение. Не больше
 max_per_hour сообщений в час: остальное одной строкой «ещё N событий, смотри панель».
 
+Кроме уведомлений бот отвечает на вопросы: кнопки с названиями заводов (Кир, Буи, «Все заводы») — нажал, пришла текстовая сводка
+по заводу: статус, тревоги, датчики последней пробы, последние события. Отвечает только чатам из chat_ids; вопросы, заданные пока приёмник
+не работал, не отвечаются (старое не новость).
+
 Очередь живёт в monitor.db (таблица notify): перезапуск приёмника и обрыв Telegram ничего не теряют и не дублируют.
 Настройки — data\\server.json, блок "telegram": {"token": "...", "chat_ids": [123456789]} (вне git). Токен бота в логах и ответах панели маскируется.
 """
@@ -83,6 +87,8 @@ class TelegramClient:
                 err = "Telegram не принял токен бота (HTTP %d)" % e.code
             elif e.code == 429:
                 err = "Telegram просит подождать %d с (HTTP 429)" % wait
+            elif e.code == 409:
+                err = "Этого бота уже слушает другая программа (HTTP 409): закрой второй приёмник или мастер"
             elif e.code in (400, 403):
                 desc = str(body.get("description") or "")
                 if "chat not found" in desc.lower():
@@ -100,8 +106,11 @@ class TelegramClient:
         except Exception as e:
             return False, None, 0.0, mask("Ошибка отправки в Telegram: %s" % e, self.token)
 
-    def send(self, chat_id, text: str) -> tuple:
-        ok, _, wait, err = self.call("sendMessage", {"chat_id": chat_id, "text": text[:4000], "disable_web_page_preview": True})
+    def send(self, chat_id, text: str, markup: Optional[dict] = None) -> tuple:
+        payload = {"chat_id": chat_id, "text": text[:4000], "disable_web_page_preview": True}
+        if markup:
+            payload["reply_markup"] = markup
+        ok, _, wait, err = self.call("sendMessage", payload)
         return ok, wait, err
 
 
@@ -219,3 +228,188 @@ class Notifier:
         """Для панели: без токена и без chat id."""
         return {"configured": True, "ok": not self.state["last_error"], "last_ok_t": self.state["last_ok_t"],
                 "last_error": self.state["last_error"], "pending": self.store.notify_count()}
+
+
+# ------------------------------------------------------------------------------------------------------- вопросы к боту: сводка по заводу
+
+STATUS_RU = {"online": "в сети", "offline": "нет связи", "waiting": "ещё не выходил на связь", "checking": "проверяю связь"}
+STATUS_ICON = {"online": "🟢", "offline": "🔴", "waiting": "⚪", "checking": "🟡"}
+ALL_BUTTON = "Все заводы"
+MENU_WORDS = ("start", "help", "menu", "заводы", "меню", "помощь")
+ALL_WORDS = ("all", "status", "все", "всё", "все заводы")
+MESSAGE_MAX = 3800
+
+
+def _hm(t: float) -> str:
+    return time.strftime("%H:%M", time.localtime(t))
+
+
+def _dhm(t: float) -> str:
+    return time.strftime("%d.%m %H:%M", time.localtime(t))
+
+
+def _ago(sec: float) -> str:
+    sec = max(0, sec)
+    if sec < 90:
+        return "только что"
+    if sec < 5400:
+        return "%d мин назад" % round(sec / 60)
+    if sec < 172800:
+        return "%d ч назад" % round(sec / 3600)
+    return "%d д назад" % round(sec / 86400)
+
+
+def _head(p: dict, now: float) -> str:
+    st = p.get("status") or "waiting"
+    head = "%s %s — %s" % (STATUS_ICON.get(st, "⚪"), p["name"], STATUS_RU.get(st, st))
+    if p.get("last_seen_t"):
+        head += ", пульс " + _ago(now - p["last_seen_t"])
+    return head
+
+
+def format_all(plants: list, now: float) -> str:
+    """Коротко по каждому заводу: статус, когда был пульс, сколько тревог."""
+    if not plants:
+        return "Заводов пока нет."
+    lines = ["Заводы на %s:" % _hm(now)]
+    for p in plants:
+        n = len(p.get("alerts") or [])
+        lines.append(_head(p, now) + (", тревог: %d" % n if n else ""))
+    return "\n".join(lines)[:MESSAGE_MAX]
+
+
+def format_plant(p: dict, now: float) -> str:
+    """Вся текстовая сводка по заводу: статус, строка «как дела» из снимка, тревоги с временем, датчики последней пробы, последние события."""
+    lines = [_head(p, now)]
+    snap = p.get("snapshot") or {}
+    if p.get("status") == "waiting" or not snap:
+        return "\n".join(lines)
+    body = [ln for ln in str(snap.get("text") or "").split("\n") if ln and not ln.startswith("Тревоги:")]
+    if body and snap.get("plant") and body[0].startswith(str(snap["plant"]) + " · "):
+        body[0] = body[0][len(str(snap["plant"])) + 3:]           # имя завода уже в заголовке
+    lines += body
+    alerts = p.get("alerts") or []
+    if alerts:
+        lines.append("Тревоги:")
+        lines += ["%s %s (с %s)" % ("🔴" if a.get("level") in ("critical", "high") else "🟡", a["text"], _hm(a["since"])) for a in alerts]
+    else:
+        lines.append("Тревог нет")
+    pos = ((snap.get("micro") or {}).get("positions")) or {}
+    shown = [(name, pos[key]) for key, name in (("retract", "Отвод"), ("approach", "Подвод")) if pos.get(key)]
+    if shown:
+        lines.append("Датчики последней пробы, мкм:")
+        for name, r in shown:
+            vals = " · ".join("%s %s" % (lbl, round(r[k])) for lbl, k in (("расчётная", "calc"), ("энкодер", "enc"), ("датчик", "ai")) if r.get(k) is not None)
+            lines.append("%s%s (%s): %s%s" % ("" if r.get("ok") else "⚠ ", name, _hm(r["t"]) if r.get("t") else "—", vals,
+                                              ", разница %s" % round(r["gap"]) if r.get("gap") is not None else ""))
+    events = p.get("events") or []
+    if events:
+        lines.append("Последние события:")
+        lines += ["• %s %s" % (_dhm(e["t"]), e["text"]) for e in events]
+    return "\n".join(lines)[:MESSAGE_MAX]
+
+
+class Bot:
+    """Отвечает на сообщения в Telegram: кнопки заводов → сводка по заводу. Свой поток, длинный опрос getUpdates (наружу порты не открываем).
+    Отвечает только чатам из chat_ids: чужим — молчание (в журнал только номер чата)."""
+
+    POLL_S = 25
+
+    def __init__(self, store, client: TelegramClient, poll_client: TelegramClient, chat_ids: list, clock: Callable[[], float] = time.time):
+        self.store, self.client, self.poll_client, self.clock = store, client, poll_client, clock
+        self.allowed = {str(c) for c in chat_ids}
+        self.offset: Optional[int] = None
+        self.state = {"last_error": "", "answered": 0}
+        self._stop = threading.Event()
+        self._thread: Optional[threading.Thread] = None
+
+    def keyboard(self) -> dict:
+        names = self.store.plant_names()
+        rows = [[{"text": n} for n in names[i:i + 2]] for i in range(0, len(names), 2)]
+        rows.append([{"text": ALL_BUTTON}])
+        return {"keyboard": rows, "resize_keyboard": True, "is_persistent": True}
+
+    def handle(self, update: dict) -> Optional[str]:
+        """Один входящий апдейт. Возвращает текст ответа (или None, если отвечать не надо)."""
+        m = update.get("message") or {}
+        chat = m.get("chat") or {}
+        if chat.get("id") is None:
+            return None
+        if str(chat["id"]) not in self.allowed or chat.get("type") != "private":
+            log.info("Telegram: сообщение из чужого чата %s проигнорировано", chat["id"])
+            return None
+        text = " ".join(str(m.get("text") or "").split())
+        if not text:
+            return None
+        key = text.lstrip("/").split("@")[0].strip().lower()
+        plants = self.store.plants_view()
+        by_name = {p["name"].lower(): p for p in plants}
+        now = self.clock()
+        if key in MENU_WORDS:
+            reply = "Нажми кнопку с названием завода внизу — пришлю всё по нему текстом. «%s» — коротко по каждому." % ALL_BUTTON
+        elif key in ALL_WORDS:
+            reply = format_all(plants, now)
+        elif key in by_name:
+            reply = format_plant(by_name[key], now)
+        else:
+            reply = "Не понял. Нажми кнопку с названием завода внизу."
+        ok, _, err = self.client.send(chat["id"], reply, self.keyboard())
+        if ok:
+            self.state["answered"] += 1
+        else:
+            self.state["last_error"] = err
+            log.warning("Telegram: ответ не ушёл — %s", err)
+        return reply
+
+    def skip_backlog(self) -> None:
+        """Вопросы, заданные пока приёмник не работал, не отвечаем: после простоя они уже не новость и ответ придёт не вовремя."""
+        ok, body, _, _ = self.poll_client.call("getUpdates", {"offset": -1, "timeout": 0, "allowed_updates": ["message"]})
+        res = (body or {}).get("result") if ok else None
+        if res:
+            self.offset = res[-1]["update_id"] + 1
+
+    def poll_once(self, timeout: int = POLL_S) -> tuple:
+        """Один длинный опрос. (успех, сколько секунд подождать до следующего)."""
+        payload = {"timeout": timeout, "allowed_updates": ["message"]}
+        if self.offset is not None:
+            payload["offset"] = self.offset
+        ok, body, wait, err = self.poll_client.call("getUpdates", payload)
+        if not ok:
+            self.state["last_error"] = err
+            return False, wait
+        self.state["last_error"] = ""
+        for u in (body or {}).get("result", []):
+            self.offset = u["update_id"] + 1
+            try:
+                self.handle(u)
+            except Exception:
+                log.exception("Telegram: ошибка при ответе боту")
+        return True, 0.0
+
+    def start(self) -> None:
+        if self._thread is None:
+            self._thread = threading.Thread(target=self._loop, name="monitor-telegram-bot", daemon=True)
+            self._thread.start()
+
+    def stop(self) -> None:
+        self._stop.set()
+
+    def _loop(self) -> None:
+        try:
+            self.skip_backlog()
+        except Exception:
+            log.exception("Telegram: не удалось пропустить старые вопросы")
+        fails = 0
+        while not self._stop.is_set():
+            try:
+                ok, wait = self.poll_once()
+            except Exception:
+                log.exception("Telegram: опрос бота")
+                ok, wait = False, 0.0
+            if ok:
+                fails = 0
+                continue
+            fails += 1
+            if fails == 1 or fails % 20 == 0:
+                log.warning("Telegram: бот не опрашивается — %s", self.state["last_error"])
+            self._stop.wait(max(wait, min(60, 2 ** min(fails, 6))))

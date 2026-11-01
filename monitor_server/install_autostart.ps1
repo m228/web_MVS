@@ -2,7 +2,9 @@
 # Usage:  install_autostart.bat            - create the task and start it now
 #         install_autostart.bat -Remove    - delete the task
 #         install_autostart.bat -DryRun    - only show what would be created
-param([switch]$Remove, [switch]$DryRun, [string]$TaskName = "web_MVS monitor")
+#         install_autostart.bat -NoTray    - old way: server.py without the tray icon
+# By default the task runs tray.py: an icon in the tray (open the panel / restart the server / exit) that keeps server.py running.
+param([switch]$Remove, [switch]$DryRun, [switch]$NoTray, [string]$TaskName = "web_MVS monitor")
 $ErrorActionPreference = "Stop"
 
 if ($Remove) {
@@ -17,7 +19,8 @@ if (-not (Test-Path $py)) {
     exit 1
 }
 $user = "$env:USERDOMAIN\$env:USERNAME"
-$action = New-ScheduledTaskAction -Execute $py -Argument "server.py" -WorkingDirectory $PSScriptRoot
+$script = if ($NoTray) { "server.py" } else { "tray.py" }
+$action = New-ScheduledTaskAction -Execute $py -Argument $script -WorkingDirectory $PSScriptRoot
 $trigger = New-ScheduledTaskTrigger -AtLogOn -User $user
 $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable `
     -RestartCount 5 -RestartInterval (New-TimeSpan -Minutes 1) -ExecutionTimeLimit ([TimeSpan]::Zero)
@@ -26,11 +29,14 @@ $principal = New-ScheduledTaskPrincipal -UserId $user -LogonType Interactive -Ru
 if ($DryRun) {
     Write-Host "Task:     $TaskName"
     Write-Host "User:     $user (at logon)"
-    Write-Host "Command:  $py server.py"
+    Write-Host "Command:  $py $script"
     Write-Host "Folder:   $PSScriptRoot"
     exit 0
 }
 
+# the old instance (server.py or tray.py) holds the port: stop it first, otherwise the new one cannot start
+$old = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
+if ($old -and $old.State -eq "Running") { Stop-ScheduledTask -TaskName $TaskName; Start-Sleep -Seconds 2 }
 Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger -Settings $settings -Principal $principal -Force | Out-Null
 Start-ScheduledTask -TaskName $TaskName
 Write-Host "Task created and started: $TaskName"

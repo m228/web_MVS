@@ -94,6 +94,7 @@ dialog code { color: var(--text); word-break: break-all; }
 <body>
 <header>
   <h1><img src="/icon-192.png" alt="">Мониторинг заводов</h1>
+  <span id="tg" class="chip" hidden></span><button id="tgTest" hidden>Тест</button>
   <span id="upd"></span>
   <button id="add" class="primary">+ Завод</button>
 </header>
@@ -252,12 +253,25 @@ async function loadLog(id) {
   } catch (e) { /* журнал догрузится на следующем опросе */ }
 }
 
+async function loadTg() {
+  // одна метка про Telegram: подключён / не настроен / нет связи; кнопка «Тест» только когда он настроен
+  try {
+    const j = await api('/api/telegram'), el = $('tg');
+    el.hidden = false;
+    $('tgTest').hidden = !j.configured;
+    if (!j.configured) { el.className = 'chip'; el.textContent = 'Telegram: не настроен'; el.title = 'Запусти telegram_setup.bat'; }
+    else if (j.ok) { el.className = 'chip s-online'; el.textContent = 'Telegram: подключён'; el.title = j.pending ? 'В очереди: ' + j.pending : ''; }
+    else { el.className = 'chip s-checking'; el.textContent = 'Telegram: нет связи'; el.title = j.last_error || ''; }
+  } catch (e) { /* метка обновится на следующем опросе */ }
+}
+
 async function load() {
   try {
     const j = await api('/api/plants');
     plants = j.plants; serverT = j.server_t;
     $('upd').textContent = 'обновлено ' + new Date().toLocaleTimeString('ru-RU');
     render();
+    loadTg();
   } catch (e) { $('upd').textContent = 'нет связи с сервером: ' + e.message; }
 }
 
@@ -280,6 +294,15 @@ $('add').onclick = async () => {
     showToken('Завод «' + name + '» добавлен', name, j.token);
     load();
   } catch (e) { alert(e.message); }
+};
+$('tgTest').onclick = async () => {
+  const btn = $('tgTest');
+  btn.disabled = true;
+  try {
+    const j = await api('/api/telegram/test', {method: 'POST'});
+    alert(j.ok ? 'Тестовое сообщение отправлено — проверь Telegram.' : 'Не ушло: ' + j.error);
+  } catch (e) { alert(e.message); }
+  finally { btn.disabled = false; loadTg(); }
 };
 $('dlgClose').onclick = () => $('dlg').close();
 $('dlgCopy').onclick = async () => {

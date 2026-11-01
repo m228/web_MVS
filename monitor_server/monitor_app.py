@@ -8,6 +8,7 @@
   GET  /api/plants/{id}/events  — журнал завода (?limit=100&before=<id>).
   POST /api/plants/{id}/token   — выдать новый токен (старый перестаёт работать).
   DELETE /api/plants/{id}       — удалить завод вместе с журналом.
+  GET  /api/telegram            — состояние уведомлений в Telegram (без токена и chat id); POST /api/telegram/test — тестовое сообщение.
   GET  /health                  — жив ли (без пароля, без данных).
   GET  /manifest.webmanifest, /icon-192.png, /icon-512.png, /favicon.ico — иконка и описание приложения (без пароля, секретов нет):
                                   по ним браузер ставит панель отдельным окном («Установить как приложение»).
@@ -53,7 +54,7 @@ def manifest() -> dict:
 
 
 def create_app(store: monitor_store.Store, password: str, version: str, panel_html: str, watchdog: bool = True,
-               clock: Callable[[], float] = time.time, assets: Optional[dict] = None) -> FastAPI:
+               clock: Callable[[], float] = time.time, assets: Optional[dict] = None, notifier=None) -> FastAPI:
     if not password:
         raise ValueError("пароль панели не задан")
     fails: dict = {}
@@ -69,6 +70,8 @@ def create_app(store: monitor_store.Store, password: str, version: str, panel_ht
                 try:
                     for ev in store.check_offline():
                         log.warning("%s: %s", ev["plant"], ev["text"])
+                        if notifier is not None:
+                            notifier.kick()
                     if clock() - last_purge > PURGE_EVERY_S:
                         store.purge()
                         last_purge = clock()
@@ -78,8 +81,12 @@ def create_app(store: monitor_store.Store, password: str, version: str, panel_ht
         t = threading.Thread(target=loop, name="monitor-watch", daemon=True)
         if watchdog:
             t.start()
+        if notifier is not None and watchdog:
+            notifier.start()
         yield
         stop.set()
+        if notifier is not None:
+            notifier.stop()
 
     app = FastAPI(lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
 
@@ -167,7 +174,26 @@ def create_app(store: monitor_store.Store, password: str, version: str, panel_ht
             return JSONResponse({"ok": False, "error": "пульс не разобран: %s" % e}, status_code=400)
         except LookupError:
             return JSONResponse({"ok": False, "error": "токен не принят"}, status_code=401)
+        if notifier is not None:
+            notifier.kick()
         return {"ok": True, **res}
+
+    @app.get("/api/telegram")
+    def telegram_state(request: Request):
+        bad = panel_denied(request)
+        if bad is not None:
+            return bad
+        return notifier.public_state() if notifier is not None else {"configured": False}
+
+    @app.post("/api/telegram/test")
+    async def telegram_test(request: Request):
+        bad = write_denied(request)
+        if bad is not None:
+            return bad
+        if notifier is None:
+            return JSONResponse({"ok": False, "error": "Telegram не настроен: запусти telegram_setup.bat"}, status_code=400)
+        ok, err = await run_in_threadpool(notifier.send_test)
+        return {"ok": ok, "error": err}
 
     @app.get("/", response_class=HTMLResponse)
     def panel(request: Request):

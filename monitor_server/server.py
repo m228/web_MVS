@@ -117,10 +117,14 @@ def watch_parent(pid: int, interval_s: float = 5.0, on_gone=None) -> threading.T
 def build_app():
     import monitor_app
     import monitor_store
+    import monitor_telegram
     data = Path(os.environ.get("MONITOR_DATA") or HERE / "data")
-    store = monitor_store.Store(data / "monitor.db")
+    tg = monitor_telegram.load_config(data)                    # блок "telegram" в data\server.json; нет — приёмник работает без уведомлений
+    store = monitor_store.Store(data / "monitor.db", notify={"fresh_s": tg["fresh_s"]} if tg else None)
+    notifier = monitor_telegram.Notifier(store, monitor_telegram.TelegramClient(tg["token"], tg["api_base"]), tg) if tg else None
+    log.info("Telegram: %s", "подключён, чатов: %d" % len(tg["chat_ids"]) if tg else "не настроен (telegram_setup.bat)")
     html = (HERE / "panel.html").read_text(encoding="utf-8")
-    return monitor_app.create_app(store, load_password(data), read_version(), html, assets=load_assets())
+    return monitor_app.create_app(store, load_password(data), read_version(), html, assets=load_assets(), notifier=notifier)
 
 
 def main():

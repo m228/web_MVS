@@ -1,0 +1,221 @@
+"""monitor_telegram — уведомления приёмника в Telegram: тревоги заводов приходят Максу в личный чат с ботом.
+
+Что шлём (правила — monitor_store.Store._maybe_notify): свежие критичные и красные события — перезапуск ПК/приложения, «нет пульса»,
+красные тревоги, перезагрузка платы — и «снято» / «связь восстановилась», если об открытии мы сообщали. Жёлтые предупреждения — только в панели.
+Старые события (пачка после обрыва связи) в чат не идут. Несколько событий одного завода в одном проходе — одно сообщение. Не больше
+max_per_hour сообщений в час: остальное одной строкой «ещё N событий, смотри панель».
+
+Очередь живёт в monitor.db (таблица notify): перезапуск приёмника и обрыв Telegram ничего не теряют и не дублируют.
+Настройки — data\\server.json, блок "telegram": {"token": "...", "chat_ids": [123456789]} (вне git). Токен бота в логах и ответах панели маскируется.
+"""
+from __future__ import annotations
+
+import json
+import logging
+import os
+import threading
+import time
+import urllib.error
+import urllib.request
+from collections import deque
+from pathlib import Path
+from typing import Callable, Optional
+
+log = logging.getLogger("monitor.telegram")
+
+API_BASE = "https://api.telegram.org"
+HTTP_TIMEOUT_S = 10
+RETRY_MAX_S = 1800
+WATCH_EVERY_S = 30
+DEFAULTS = {"fresh_s": 900, "max_per_hour": 20, "offline_repeat_s": 7200, "max_age_s": 7200}
+TEST_TEXT = "✅ web_MVS панель: Telegram подключён. Сюда придут тревоги заводов: перезапуск ПК или приложения, нет связи, красные тревоги."
+
+
+def load_config(data: Path) -> Optional[dict]:
+    """Настройки из data\\server.json (блок "telegram"). None — не настроено (нет токена или чата): тогда приёмник работает как раньше."""
+    try:
+        t = json.loads((Path(data) / "server.json").read_text(encoding="utf-8")).get("telegram")
+    except (OSError, ValueError, AttributeError):
+        return None
+    if not isinstance(t, dict):
+        return None
+    token = str(t.get("token") or "").strip()
+    ids = t.get("chat_ids")
+    ids = [ids] if isinstance(ids, (int, str)) else ids
+    chats = [c for c in (ids or []) if isinstance(c, (int, str)) and str(c).strip() and not isinstance(c, bool)]
+    if not token or not chats:
+        return None
+    cfg = dict(DEFAULTS, token=token, chat_ids=chats, api_base=os.environ.get("MONITOR_TELEGRAM_API") or API_BASE)
+    for key, src, mult in (("fresh_s", "fresh_min", 60), ("offline_repeat_s", "offline_repeat_min", 60)):
+        if isinstance(t.get(src), (int, float)) and t[src] > 0:
+            cfg[key] = int(t[src] * mult)
+    if isinstance(t.get("max_per_hour"), int) and t["max_per_hour"] > 0:
+        cfg["max_per_hour"] = t["max_per_hour"]
+    return cfg
+
+
+def mask(text: str, token: str) -> str:
+    return str(text).replace(token, "***") if token else str(text)
+
+
+class TelegramClient:
+    """Минимальный клиент Bot API: sendMessage, getMe, getUpdates. Токен нигде не светится: ошибки возвращаются уже замаскированными."""
+
+    def __init__(self, token: str, api_base: str = API_BASE, timeout: float = HTTP_TIMEOUT_S):
+        self.token, self.api_base, self.timeout = token, api_base.rstrip("/"), timeout
+
+    def call(self, method: str, payload: Optional[dict] = None) -> tuple:
+        """(успех, ответ-словарь или None, секунд ждать до повтора, текст ошибки по-русски)."""
+        url = "%s/bot%s/%s" % (self.api_base, self.token, method)
+        data = json.dumps(payload or {}, ensure_ascii=False).encode("utf-8")
+        req = urllib.request.Request(url, data=data, method="POST", headers={"Content-Type": "application/json; charset=utf-8"})
+        try:
+            with urllib.request.urlopen(req, timeout=self.timeout) as r:
+                body = json.loads(r.read().decode("utf-8"))
+            return bool(body.get("ok")), body, 0.0, "" if body.get("ok") else mask(body.get("description") or "Telegram ответил отказом", self.token)
+        except urllib.error.HTTPError as e:
+            try:
+                body = json.loads(e.read().decode("utf-8"))
+            except Exception:
+                body = {}
+            wait = float((body.get("parameters") or {}).get("retry_after") or 0)
+            if e.code in (401, 404):
+                err = "Telegram не принял токен бота (HTTP %d)" % e.code
+            elif e.code == 429:
+                err = "Telegram просит подождать %d с (HTTP 429)" % wait
+            elif e.code in (400, 403):
+                desc = str(body.get("description") or "")
+                if "chat not found" in desc.lower():
+                    reason = "чат не найден — открой бота и нажми Start"
+                elif "blocked" in desc.lower():
+                    reason = "бот заблокирован в этом чате"
+                else:
+                    reason = mask(desc or "чат недоступен", self.token)
+                err = "Telegram отказал: %s (HTTP %d)" % (reason, e.code)
+            else:
+                err = "Telegram ответил ошибкой HTTP %d" % e.code
+            return False, body or None, wait, err
+        except urllib.error.URLError as e:
+            return False, None, 0.0, mask("Нет связи с Telegram: %s" % (e.reason,), self.token)
+        except Exception as e:
+            return False, None, 0.0, mask("Ошибка отправки в Telegram: %s" % e, self.token)
+
+    def send(self, chat_id, text: str) -> tuple:
+        ok, _, wait, err = self.call("sendMessage", {"chat_id": chat_id, "text": text[:4000], "disable_web_page_preview": True})
+        return ok, wait, err
+
+
+def format_line(r: dict) -> str:
+    """Одна строка сообщения: «🔴 Кир — текст · 19:40». Снятие и восстановление — зелёные."""
+    hm = time.strftime("%H:%M", time.localtime(r["t"]))
+    text = r["text"].strip()
+    if r["kind"] == "online":
+        return "🟢 %s — %s · %s" % (r["plant_name"], text[:1].lower() + text[1:], hm)
+    if r["state"] == "closed":
+        text = text[len("Снято: "):] if text.startswith("Снято: ") else text
+        return "🟢 %s — снято: %s · %s" % (r["plant_name"], text, hm)
+    return "🔴 %s — %s · %s" % (r["plant_name"], text, hm)
+
+
+class Notifier:
+    """Забирает очередь notify из хранилища и отправляет в Telegram. Свой поток; kick() — «проверь очередь сейчас» (после пульса)."""
+
+    def __init__(self, store, client: TelegramClient, cfg: dict, clock: Callable[[], float] = time.time):
+        self.store, self.client, self.cfg, self.clock = store, client, cfg, clock
+        self.state = {"last_ok_t": None, "last_error": "", "last_try_t": None, "sent_messages": 0}
+        self._sent_times: deque = deque()       # когда ушли последние сообщения (потолок max_per_hour)
+        self._summary_t = 0.0
+        self._kick = threading.Event()
+        self._stop = threading.Event()
+        self._thread: Optional[threading.Thread] = None
+        self._lock = threading.Lock()
+
+    def kick(self) -> None:
+        self._kick.set()
+
+    def start(self) -> None:
+        if self._thread is None:
+            self._thread = threading.Thread(target=self._loop, name="monitor-telegram", daemon=True)
+            self._thread.start()
+
+    def stop(self) -> None:
+        self._stop.set()
+        self._kick.set()
+
+    def _loop(self) -> None:
+        while not self._stop.is_set():
+            try:
+                self.flush()
+            except Exception:
+                log.exception("отправка в Telegram")
+            self._kick.wait(WATCH_EVERY_S)
+            self._kick.clear()
+
+    def _send_all(self, text: str) -> tuple:
+        wait, err = 0.0, ""
+        for chat in self.cfg["chat_ids"]:
+            ok, w, e = self.client.send(chat, text)
+            if not ok:
+                return False, max(wait, w), e
+        return True, 0.0, ""
+
+    def _recent(self, now: float) -> int:
+        while self._sent_times and now - self._sent_times[0] > 3600:
+            self._sent_times.popleft()
+        return len(self._sent_times)
+
+    def flush(self) -> int:
+        """Один проход: напоминания «нет связи», затем отправка очереди. Возвращает, сколько сообщений ушло."""
+        with self._lock:
+            now = self.clock()
+            self.store.notify_offline_reminders(now, self.cfg["offline_repeat_s"])
+            rows = self.store.notify_pending(now, 100)
+            if not rows:
+                return 0
+            old = [r["id"] for r in rows if now - r["t"] > self.cfg["max_age_s"]]
+            if old:                                              # Telegram долго не отвечал — давнее уже не новость
+                self.store.notify_mark(old, "muted", now, "устарело")
+                rows = [r for r in rows if r["id"] not in old]
+            by_plant: dict = {}
+            for r in rows:
+                by_plant.setdefault(r["plant_id"], []).append(r)
+            sent, muted = 0, 0
+            for plant_rows in by_plant.values():
+                ids = [r["id"] for r in plant_rows]
+                if self._recent(now) >= self.cfg["max_per_hour"]:
+                    self.store.notify_mark(ids, "muted", now, "потолок сообщений в час")
+                    muted += len(ids)
+                    continue
+                ok, wait, err = self._send_all("\n".join(format_line(r) for r in plant_rows))
+                self.state["last_try_t"] = now
+                if ok:
+                    self.store.notify_mark(ids, "sent", now)
+                    self._sent_times.append(now)
+                    self.state.update(last_ok_t=now, last_error="", sent_messages=self.state["sent_messages"] + 1)
+                    sent += 1
+                else:
+                    tries = max(r["tries"] for r in plant_rows) + 1
+                    delay = max(wait, min(RETRY_MAX_S, 30 * 2 ** (tries - 1)))
+                    self.store.notify_retry(ids, now + delay, err)
+                    self.state["last_error"] = err
+                    log.warning("Telegram: %s (повтор через %d с)", err, delay)
+                    break                                        # связи нет — остальные заводы тоже не уйдут, не долбим
+            if muted and now - self._summary_t > 3600:
+                self._summary_t = now
+                ok, _, err = self._send_all("⚠ Слишком много событий за час: ещё %d не отправлено. Смотри панель." % muted)
+                if ok:
+                    sent += 1
+            return sent
+
+    def send_test(self) -> tuple:
+        ok, _, err = self._send_all(TEST_TEXT)
+        if ok:
+            self.state.update(last_ok_t=self.clock(), last_error="")
+        else:
+            self.state["last_error"] = err
+        return ok, err
+
+    def public_state(self) -> dict:
+        """Для панели: без токена и без chat id."""
+        return {"configured": True, "ok": not self.state["last_error"], "last_ok_t": self.state["last_ok_t"],
+                "last_error": self.state["last_error"], "pending": self.store.notify_count()}

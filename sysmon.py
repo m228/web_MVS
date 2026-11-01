@@ -45,9 +45,11 @@ CONFIG_PATH = DATA_DIR / "monitor.json"
 SCHEMA = 1
 DEFAULTS = {"enabled": False, "url": "", "token": "", "plant": "", "interval_s": 300, "system_proxy": True, "no_probe_min": 30, "allow_http": False,
             # датчики микроскопа (правятся в monitor.json): допуски расхождения трёх датчиков, мкм — на отводе и на подводе
-            # (как CAL_FAR_TOL_UM и ARRIVE_TOL_UM в microscope_fsm); «ноль уполз» — |датчик − энкодер| до автокалибровки, мкм;
-            # автокалибровки нет дольше overdue_h часов работы; bad_streak плохих проб подряд — жёлтое предупреждение становится красной тревогой
-            "gap_far_um": 100, "gap_near_um": 50, "drift_um": 100, "overdue_h": 24, "bad_streak": 2}
+            # (150/150 по решению Макса 01.11: у Kir на подводе реально расходятся на ~106 мкм); «ноль уполз» — |датчик − энкодер|
+            # до автокалибровки, мкм; автокалибровки нет дольше overdue_h часов работы; bad_streak плохих проб подряд —
+            # жёлтое предупреждение становится красной тревогой
+            "gap_far_um": 150, "gap_near_um": 150, "drift_um": 100, "overdue_h": 24, "bad_streak": 2}
+TUNING = ("gap_far_um", "gap_near_um", "drift_um", "overdue_h", "bad_streak")      # пороги: в файл пишем только то, что изменили руками
 
 BOOT_TOL_S = 120            # время загрузки Windows у двух запусков расходится больше — это была перезагрузка ПК
 BEAT_EVERY_S = 30           # как часто пишем на диск «я жив» (по нему считаем, сколько не работали)
@@ -250,6 +252,9 @@ def load_config() -> dict:
         data = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
         if isinstance(data, dict):
             cfg = data
+            # 2.0.42–2.0.43 писали допуски в файл при каждом «Сохранить»: пара 100/50 — прежние значения по умолчанию, не выбор человека
+            if cfg.get("gap_far_um") == 100 and cfg.get("gap_near_um") == 50:
+                cfg = {k: v for k, v in cfg.items() if k not in ("gap_far_um", "gap_near_um")}
     except FileNotFoundError:
         pass
     except Exception as e:
@@ -275,7 +280,8 @@ def save_config(patch: dict) -> dict:
     new["url"] = validate_url(new["url"], new["allow_http"])        # и при смене только галочки: без неё прежний http-адрес уже не годится
     CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
     tmp = CONFIG_PATH.with_name(CONFIG_PATH.name + ".tmp")
-    tmp.write_text(json.dumps(new, ensure_ascii=False, indent=2), encoding="utf-8")
+    out = {k: v for k, v in new.items() if k not in TUNING or v != DEFAULTS[k]}       # пороги по умолчанию в файл не пишем: смена умолчаний дойдёт до заводов
+    tmp.write_text(json.dumps(out, ensure_ascii=False, indent=2), encoding="utf-8")
     os.replace(tmp, CONFIG_PATH)
     log_event("sysmon", "Настройки мониторинга сохранены (%s)" % ("включён" if new["enabled"] else "выключен"), "info",
               {"url": new["url"], "plant": new["plant"], "interval_s": new["interval_s"]})

@@ -3977,10 +3977,10 @@ def _sysmon():
         blob = json.dumps(ag.snapshot(), ensure_ascii=False)
         assert "SECRET-TOKEN" not in blob, "токен попал в снимок"
         # датчики микроскопа: плохая проба подвода — жёлтое предупреждение, повтор — красная тревога; хорошая снимает
-        ag.add_positions({"t": 10020.0, "step": "подвод", "target": 400, "calc": 401, "enc": 399, "ai": 500, "timeout": False})
+        ag.add_positions({"t": 10020.0, "step": "подвод", "target": 400, "calc": 401, "enc": 399, "ai": 620, "timeout": False})
         ag.tick(10020.0)
         assert ag.active.get("pos_approach", {}).get("level") == "medium", "плохая проба подвода: ожидалось жёлтое предупреждение"
-        ag.add_positions({"t": 10030.0, "step": "подвод", "target": 400, "calc": 401, "enc": 399, "ai": 500, "timeout": False})
+        ag.add_positions({"t": 10030.0, "step": "подвод", "target": 400, "calc": 401, "enc": 399, "ai": 620, "timeout": False})
         ag.tick(10030.0)
         assert ag.active.get("pos_approach", {}).get("level") == "high", "две плохие подряд: ожидалась красная тревога"
         ag.add_positions({"t": 10040.0, "step": "подвод", "target": 400, "calc": 401, "enc": 399, "ai": 405, "timeout": False})

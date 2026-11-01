@@ -126,6 +126,22 @@ def _safe(fn, default=None, errors: Optional[list] = None, name: str = ""):
 
 # --------------------------------------------------------------------------------------------------------------------- настройки
 
+def closed_network(url: str, allow_http: bool = False) -> bool:
+    """Адрес в закрытой сети (ZeroTier, VPN, локалка): туда идём напрямую, мимо системного прокси. Прокси, который раздаёт соседний сервер,
+    до таких адресов не дотянется, а HTTPS-домен в интернете без него как раз не откроется — поэтому решаем по адресу."""
+    u = urlparse((url or "").strip())
+    host = u.hostname or ""
+    if host == "localhost" or host.endswith(".localhost"):
+        return True
+    try:
+        ip = ipaddress.ip_address(host)
+        if ip.is_loopback or ip.is_private or ip.is_link_local:
+            return True
+    except ValueError:
+        pass
+    return u.scheme == "http" and bool(allow_http)
+
+
 def validate_url(url: str, allow_http: bool = False) -> str:
     """Адрес сервера: https://…; http:// только для этого ПК и локальных сетей (проверка у себя) или если явно разрешено галочкой
     allow_http — для закрытых сетей вроде ZeroTier, где трафик и так зашифрован (адрес там бывает «белым», но чужие в сеть не попадают).
@@ -637,7 +653,8 @@ class Agent:
                 return {"ok": False, "error": "Отправка выключена"}
             events = outbox_batch()
             body = {"schema": SCHEMA, "sent_t": now, "snapshot": self.snapshot(None, cfg), "events": events}
-            ok, code, err = _post(cfg["url"] + "/ingest", cfg["token"], body, cfg["system_proxy"])
+            via_proxy = cfg["system_proxy"] and not closed_network(cfg["url"], cfg["allow_http"])
+            ok, code, err = _post(cfg["url"] + "/ingest", cfg["token"], body, via_proxy)
             st = self.status
             st.update({"last_try_t": now, "http": code})
             if ok:

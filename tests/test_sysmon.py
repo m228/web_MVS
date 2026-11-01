@@ -444,10 +444,12 @@ def configured_agent(sm, rx_url="http://127.0.0.1:1", **src):
 def test_position_verdict(sm):
     cfg = sm.load_config()
     assert sm.position_verdict(pos("подвод", ai=420), cfg) == {"gap": 21, "ok": True, "why": ""}
-    bad = sm.position_verdict(pos("подвод", ai=470), cfg)                       # 71 мкм на подводе — допуск 50
-    assert bad["ok"] is False and bad["gap"] == 71 and "разошлись на 71" in bad["why"]
-    assert sm.position_verdict(pos("отвод", ai=470), cfg)["ok"] is True, "на отводе допуск 100"
-    assert sm.position_verdict(pos("отвод", ai=520), cfg)["ok"] is False
+    bad = sm.position_verdict(pos("подвод", ai=620), cfg)                       # 221 мкм на подводе — допуск 150
+    assert bad["ok"] is False and bad["gap"] == 221 and "разошлись на 221" in bad["why"] and "допуск 150" in bad["why"]
+    assert sm.position_verdict(pos("подвод", ai=540), cfg)["ok"] is True, "141 мкм — ещё в допуске 150"
+    assert sm.position_verdict(pos("подвод", ai=506), cfg)["ok"] is True, "реальные ~107 мкм у Kir на подводе — без предупреждения"
+    assert sm.position_verdict(pos("отвод", ai=540), cfg)["ok"] is True, "на отводе допуск тоже 150"
+    assert sm.position_verdict(pos("отвод", ai=600), cfg)["ok"] is False
     to = sm.position_verdict(pos("подвод", timeout=True), cfg)
     assert to["ok"] is False and "не доехал" in to["why"]
     assert sm.position_verdict(pos(ai=None, calc=401, enc=399), cfg) == {"gap": 2, "ok": True, "why": ""}, "нет аналогового — расчётная против энкодера"
@@ -456,7 +458,7 @@ def test_position_verdict(sm):
 
 def test_position_config_has_defaults_and_is_clamped(sm):
     cfg = sm.load_config()
-    assert (cfg["gap_far_um"], cfg["gap_near_um"], cfg["drift_um"], cfg["overdue_h"], cfg["bad_streak"]) == (100, 50, 100, 24, 2)
+    assert (cfg["gap_far_um"], cfg["gap_near_um"], cfg["drift_um"], cfg["overdue_h"], cfg["bad_streak"]) == (150, 150, 100, 24, 2)
     sm.CONFIG_PATH.write_text(json.dumps({"gap_near_um": 1, "bad_streak": 99, "overdue_h": "x"}), encoding="utf-8")
     cfg = sm.load_config()
     assert cfg["gap_near_um"] == 10 and cfg["bad_streak"] == 10 and cfg["overdue_h"] == 24
@@ -464,14 +466,14 @@ def test_position_config_has_defaults_and_is_clamped(sm):
 
 def test_bad_probe_is_yellow_and_sent_at_once_then_red_on_repeat_then_cleared(sm):
     ag = configured_agent(sm)
-    ag.add_positions(pos("подвод", ai=500))                                     # расхождение 101 > 50
+    ag.add_positions(pos("подвод", ai=620))                                     # расхождение 221 > 150
     ev = ag.tick(ag.clock())
     assert [(e["data"]["code"], e["level"]) for e in ev] == [("pos_approach", "medium")]
     assert "Подвод: датчики разошлись" in ev[0]["text"]
     assert ag._kick.is_set(), "жёлтое предупреждение не срочное, но уходит сразу"
     ag._kick.clear()
     assert ag.tick(ag.clock()) == [], "ничего нового — без повторов"
-    ag.add_positions(pos("подвод", ai=500))                                     # вторая плохая подряд
+    ag.add_positions(pos("подвод", ai=620))                                     # вторая плохая подряд
     ev = ag.tick(ag.clock())
     assert [(e["data"]["code"], e["level"]) for e in ev] == [("pos_approach", "high")]
     assert "проб подряд: 2" in ev[0]["text"] and ag._kick.is_set()
@@ -495,7 +497,7 @@ def test_retract_and_approach_are_counted_separately(sm):
 
 def test_old_bad_probe_does_not_keep_alert(sm):
     ag = configured_agent(sm)
-    ag.add_positions(pos("подвод", ai=500))
+    ag.add_positions(pos("подвод", ai=620))
     ag.tick(ag.clock())
     assert "pos_approach" in ag.active
     ev = ag.tick(ag.clock() + sm.POS_STALE_S + 60)
@@ -505,7 +507,7 @@ def test_old_bad_probe_does_not_keep_alert(sm):
 def test_bad_streak_from_config(sm):
     sm.save_config({"bad_streak": 1})
     ag = configured_agent(sm)
-    ag.add_positions(pos("подвод", ai=500))
+    ag.add_positions(pos("подвод", ai=620))
     ev = ag.tick(ag.clock())
     assert ev[0]["level"] == "high", "bad_streak=1 — красная с первой плохой пробы"
 
@@ -650,7 +652,7 @@ def test_snapshot_has_autocal_and_positions_text(sm):
     assert set(m["positions"]) == {"retract", "approach"} and m["positions"]["approach"]["ok"] is True
     assert "Автокалибровка: готово, 2 ч 0 мин назад, ноль уползал на 12 мкм" in snap["text"]
     assert "отвод и подвод в норме, расхождение датчиков до 11 мкм" in snap["text"].lower()
-    ag.add_positions(pos("подвод", t=now, ai=500))
+    ag.add_positions(pos("подвод", t=now, ai=620))
     ag.tick(now)
     text = ag.snapshot()["text"]
     assert "в норме" not in text and "Подвод: датчики разошлись" in text, "плохая проба: строка «в норме» уходит, остаётся тревога"
@@ -706,3 +708,33 @@ def test_send_with_garbage_saved_token_says_why_and_does_not_hammer(sm, rx):
     assert res["ok"] is False and "похоже на адрес" in res["error"] and not rx.requests, "на сервер с таким токеном даже не ходим"
     assert "похоже на адрес" in ag.status["error"] and ag.status["ok"] is False
     assert ag._next_send >= clk.t + 60, "следующая попытка не через 5 секунд: без бесконечного цикла"
+
+
+# ------------------------------------------------------------------------------- допуски 150/150 и перенос с прежних 100/50
+
+def test_kir_real_gap_on_approach_raises_nothing(sm):
+    ag = configured_agent(sm)
+    ag.add_positions(pos("подвод", ai=506))                                     # у Kir на подводе реально ~106–107 мкм
+    ag.add_positions(pos("отвод", target=20000, calc=20001, enc=20002, ai=20110))
+    assert ag.tick(ag.clock()) == [] and ag.active == {}, "в допуске 150 — ни жёлтого, ни красного"
+
+
+def test_old_default_tolerances_in_file_are_replaced_by_new_defaults(sm):
+    # 2.0.42–2.0.43 сами записали 100/50 в monitor.json при «Сохранить» — это не выбор человека
+    sm.CONFIG_PATH.write_text(json.dumps({"plant": "kir", "gap_far_um": 100, "gap_near_um": 50, "drift_um": 100}), encoding="utf-8")
+    cfg = sm.load_config()
+    assert (cfg["gap_far_um"], cfg["gap_near_um"]) == (150, 150) and cfg["plant"] == "kir"
+    sm.CONFIG_PATH.write_text(json.dumps({"gap_far_um": 100, "gap_near_um": 200}), encoding="utf-8")
+    cfg = sm.load_config()
+    assert (cfg["gap_far_um"], cfg["gap_near_um"]) == (100, 200), "значения, заданные руками, остаются"
+
+
+def test_save_config_does_not_write_default_thresholds(sm):
+    sm.save_config({"enabled": True, "url": "https://mon.example.ru", "token": REAL_TOKEN, "plant": "kir"})
+    saved = json.loads(sm.CONFIG_PATH.read_text(encoding="utf-8"))
+    assert not any(k in saved for k in sm.TUNING), "пороги по умолчанию в файл не пишем: смена умолчаний дойдёт до заводов"
+    assert saved["plant"] == "kir" and saved["token"] == REAL_TOKEN
+    sm.CONFIG_PATH.write_text(json.dumps({**saved, "gap_near_um": 200}), encoding="utf-8")
+    sm.save_config({"plant": "kir2"})
+    saved = json.loads(sm.CONFIG_PATH.read_text(encoding="utf-8"))
+    assert saved["gap_near_um"] == 200 and "gap_far_um" not in saved, "заданное руками сохраняется, остальное — по умолчанию"

@@ -542,16 +542,16 @@ def test_sysmon_positions_and_yellow_to_red_end_to_end(srv, store, tmp_path, mon
         ag = sysmon.Agent(sources=src)
         ag._cfg = sysmon.load_config()
         now = time.time()
-        rec = {"t": now, "step": "подвод", "target": 400, "calc": 401, "enc": 399, "ai": 500, "timeout": False, "sv": 88.0, "stage": 7}
+        rec = {"t": now, "step": "подвод", "target": 400, "calc": 401, "enc": 399, "ai": 620, "timeout": False, "sv": 88.0, "stage": 7}
         ag.add_positions(rec)
         ag.tick(now)
         assert ag._kick.is_set(), "жёлтое предупреждение просит отправку сразу"
         assert ag.send()["ok"] is True
         v = store.plants_view()[0]
         assert [(a["code"], a["level"]) for a in v["alerts"]] == [("pos_approach", "medium")]
-        assert "Подвод: датчики разошлись на 101" in v["alerts"][0]["text"]
+        assert "Подвод: датчики разошлись на 221" in v["alerts"][0]["text"]
         assert "в норме" not in v["snapshot"]["text"] and v["snapshot"]["micro"]["positions"]["approach"]["ok"] is False
-        assert [r["gap"] for r in store.positions(pid)] == [101.0] and "positions" not in [e["kind"] for e in store.events(pid)]
+        assert [r["gap"] for r in store.positions(pid)] == [221.0] and "positions" not in [e["kind"] for e in store.events(pid)]
         ag.add_positions(dict(rec, t=now + 60))                      # повтор — жёлтое становится красным
         ag.tick(now + 60)
         assert ag.send()["ok"] is True

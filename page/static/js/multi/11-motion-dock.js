@@ -143,7 +143,7 @@ function mdPill(st, conn) {
   if (st.result && st.result.corrupt) return ['битый поток — результаты не учитываются', 'is-warn'];
   if (!st.connected) return ['нет связи с камерой', 'is-bad'];
   if (st.result && !st.result.alive) return [st.result.reason || 'нет данных', 'is-bad'];
-  return ['жива · ' + st.fps + ' к/с', 'is-ok'];
+  return ['жива · ' + st.fps + ' к/с' + (st.decoder === 'gpu' ? ' · GPU' : ''), 'is-ok'];
 }
 
 // общий вид: сколько камер с КЗ и все ли живы
@@ -242,7 +242,8 @@ function mdZoneCardHtml(cam, z, i) {
       <div class="md-zone__row"><span class="md-lbl" title="Защита от одиночных всплесков: бит зоны меняется, только когда порог выполнен столько кадров анализа ПОДРЯД. Один проскочивший кадр счёт сбрасывает.">кадров подряд</span>
         <span class="md-lbl">вкл</span>${mdNum(a + ' data-f="fon"', z.frames_to_on == null ? 3 : z.frames_to_on, 'min="1" max="1000" title="Сколько кадров подряд выше порога on, чтобы бит включился"')}
         <span class="md-lbl">выкл</span>${mdNum(a + ' data-f="foff"', z.frames_to_off == null ? 4 : z.frames_to_off, 'min="1" max="1000" title="Сколько кадров подряд ниже порога off, чтобы бит выключился"')}</div>
-      <div class="md-zone__row"><span class="md-lbl">вывод в ПЛК</span>${mdOutCell(z.out, a)}</div>
+      <div class="md-zone__row"><span class="md-lbl">вывод в ПЛК</span>${mdOutCell(z.out, a)}
+        <label class="md-lbl" title="Считать оптический поток (flow) для этой зоны. Самое тяжёлое в анализе: если зона решает по diff и flow не нужен, выключите — процессор разгрузится, а flow этой зоны в графиках и записях будет 0"><input type="checkbox" ${a} data-f="trackflow"${z.metric === 'flow' ? ' checked disabled' : (z.track_flow === false ? '' : ' checked')} /> flow</label></div>
     </div>
     <div class="md-zone__chart"><canvas id="md-ch-${k}" height="84"></canvas></div>
   </div>`;
@@ -256,6 +257,8 @@ function mdCameraParamsHtml(cam) {
     <div class="md-fields">
       ${mdField('Название', `<input type="text" ${a} data-f="name" value="${escapeHtml(cam.name)}" />`)}
       ${mdField('Адрес потока', `<input type="text" ${a} data-f="url" value="${escapeHtml(cam.url)}" />`, '', 'md-wide')}
+      ${mdField('Поток', `<select ${a} data-f="substream">${mdSel([['0', 'основной'], ['1', 'дополнительный (легче)']], cam.substream ? '1' : '0')}</select>`, 'Дополнительный поток камеры Dahua (subtype=1): картинка меньше, процессор нагружается заметно слабее. Пороги после смены снимите заново — значения diff и flow зависят от разрешения')}
+      ${mdField('Декодирование', `<select ${a} data-f="hw_accel">${mdSel([['off', 'процессор'], ['auto', 'видеоядро (авто)'], ['d3d11', 'видеоядро (Direct3D 11)']], cam.hw_accel || 'off')}</select>`, 'Видеоядро процессора (Intel UHD и т.п.) декодирует видео вместо процессора. Не открылось или не дало кадров — сервис сам вернётся на процессор')}
       <div class="md-sub">Анализ движения</div>
       ${mdField('Кадров/с в анализ', mdNum(a + ' data-f="proc_fps"', cam.proc_fps, 'min="0.2" max="30" step="0.5"'))}
       ${mdField('Шаг сравнения, кадров', mdNum(a + ' data-f="frame_gap"', cam.frame_gap, 'min="1" max="10"'), 'Сравнивать кадр не с соседним, а через N кадров: медленное движение виднее')}
@@ -321,6 +324,7 @@ function mdOnZone(t, cam) {
     else if (f === 'metric') { z.metric = t.value; z.on = MD_THR[z.metric][0]; z.off = MD_THR[z.metric][1]; }
     else if (f === 'on' || f === 'off') z[f] = parseFloat(t.value) || 0;
     else if (f === 'fon' || f === 'foff') z[f === 'fon' ? 'frames_to_on' : 'frames_to_off'] = Math.max(1, Math.min(1000, parseInt(t.value, 10) || 1));
+    else if (f === 'trackflow') z.track_flow = t.checked;
     else if (f === 'okind') z.out = t.value ? { kind: t.value, address: (z.out && z.out.address) || 0 } : null;
     else if (f === 'oaddr' && z.out) z.out.address = parseInt(t.value, 10) || 0;
   }, f === 'type' || f === 'metric' || f === 'okind');
@@ -333,6 +337,8 @@ function mdOnCamera(t, cam) {
     else if (f === 'skind') cam.status_out = t.value ? { kind: t.value, address: (cam.status_out && cam.status_out.address) || 0 } : null;
     else if (f === 'saddr') { if (cam.status_out) cam.status_out.address = parseInt(t.value, 10) || 0; }
     else if (f === 'frame_gap') cam[f] = parseInt(t.value, 10) || 1;
+    else if (f === 'hw_accel') cam[f] = t.value;
+    else if (f === 'substream') cam[f] = t.value === '1';
     else cam[f] = parseFloat(t.value) || 0;
   }, f === 'skind');
 }

@@ -32,6 +32,7 @@ ID_RE = re.compile(r"^[A-Za-z0-9_\-]{1,40}$")
 ZONE_TYPES = ("motion", "presence")
 METRICS = ("flow", "diff")
 GROUP_TYPES = ("sum", "monotonic", "worktimer")
+HW_ACCEL_MODES = ("off", "auto", "d3d11")    # аппаратное декодирование видео: выкл / любое доступное / Direct3D 11 (видеоядро Intel, AMD, NVIDIA)
 ZONE_OUT_KINDS = ("holding", "coil")
 GROUP_OUT_KINDS = ("holding", "bits", "coils")
 AGGS = ("any", "majority", "all")
@@ -101,6 +102,7 @@ def _norm_zone(z: dict, cam_id: str) -> dict:
         "on": on,
         "off": off,
         "invert": bool(z.get("invert", ztype == "presence")),
+        "track_flow": bool(z.get("track_flow", True)),
         "smooth": _num(z.get("smooth", 5), where + ".smooth", 1, 100, True),
         "frames_to_on": _num(z.get("frames_to_on", 3), where + ".frames_to_on", 1, 1000, True),
         "frames_to_off": _num(z.get("frames_to_off", 4), where + ".frames_to_off", 1, 1000, True),
@@ -182,6 +184,9 @@ def normalize_camera(c: dict) -> dict:
     transport = str(c.get("transport", "tcp")).lower()
     if transport not in ("tcp", "udp"):
         raise ValueError("камера %s: transport tcp или udp" % cid)
+    hw = str(c.get("hw_accel", "off")).lower()
+    if hw not in HW_ACCEL_MODES:
+        raise ValueError("камера %s: hw_accel — одно из %s" % (cid, ", ".join(HW_ACCEL_MODES)))
     fs = c.get("frame_size")
     if fs:
         fs = [_num(fs[0], "frame_size", 1, None, True), _num(fs[1], "frame_size", 1, None, True)]
@@ -194,6 +199,8 @@ def normalize_camera(c: dict) -> dict:
         "enabled": bool(c.get("enabled", True)),
         "url": str(c.get("url") or ""),
         "transport": transport,
+        "hw_accel": hw,
+        "substream": bool(c.get("substream", False)),
         "proc_fps": _num(c.get("proc_fps", 3), "камера %s.proc_fps" % cid, 0.2, 30),
         "frame_gap": _num(c.get("frame_gap", 1), "камера %s.frame_gap" % cid, 1, 10, True),
         "reconnect_delay_s": _num(c.get("reconnect_delay_s", 3.0), "камера %s.reconnect_delay_s" % cid, 0.5, 300),
@@ -277,11 +284,15 @@ class ZoneRT:
     def step(self, prev: np.ndarray, cur: np.ndarray, dt: float) -> int:
         x, y, w, h = self.bbox
         a, b = prev[y:y + h, x:x + w], cur[y:y + h, x:x + w]
-        raw_flow = flow_metric(a, b, self.mask, dt)
         raw_diff = diff_metric(a, b, self.mask, self.cfg["blur"], self.cfg["flicker_comp"])
-        self.hist_flow.append(raw_flow)
         self.hist_diff.append(raw_diff)
-        self.flow = sum(self.hist_flow) / len(self.hist_flow)
+        # оптический поток — самое дорогое в анализе (на крупной зоне больше половины процессора): если зона решает по diff и flow
+        # для неё не нужен (track_flow выключен), не считаем; в графиках и записях flow такой зоны равен 0
+        if self.cfg["metric"] == "flow" or self.cfg.get("track_flow", True):
+            self.hist_flow.append(flow_metric(a, b, self.mask, dt))
+            self.flow = sum(self.hist_flow) / len(self.hist_flow)
+        else:
+            self.flow = 0.0
         self.diff = sum(self.hist_diff) / len(self.hist_diff)
         self.value = self.flow if self.cfg["metric"] == "flow" else self.diff
         return self.hys.update(self.value)

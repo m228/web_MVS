@@ -293,7 +293,7 @@ function mdZonesTabHtml(mode, cam) {
     html += '<p class="net-hint">Зон нет. Нажмите «Разметить зону» и обведите на кадре то, что должно двигаться (лента, шнек).</p>';
   } else {
     html += `<div class="md-trendbar"><span>Тренды за последние <b id="mdWinLbl">${mdFmtWin(MD.win)}</b> ${mdHelp(MD_TREND_HELP)}</span>` +
-      `<span class="md-statwin">Среднее / мин / макс за <select id="mdStatWin">${mdSel(MD_STAT_WINS, MD.statWin)}</select> ${mdHelp('Среднее, минимум и максимум diff и flow каждой зоны за выбранный период, только по кадрам в норме. Копятся в сервисе движения, пока он работает (после перезапуска сервиса — с нуля; для долгой истории — CSV-запись и архив). Значения сглажены, как на графиках.')}</span></div><div class="md-zones">`;
+      `<span class="md-statwin">Среднее / мин / макс за <select id="mdStatWin">${mdSel(MD_STAT_WINS, MD.statWin)}</select> ${mdHelp('Среднее, минимум и максимум diff и flow каждой зоны за выбранный период, только по кадрам в норме. Копятся в сервисе движения и лежат на диске (data\\trends): после обновления или перезапуска сервиса не обнуляются; хранятся 10 суток. Подробно — CSV-запись и архив. Значения сглажены, как на графиках.')}</span></div><div class="md-zones">`;
     shown.forEach((c) => {
       if (!c.zones.length) return;
       if (all) html += `<div class="md-camhead"><b>${escapeHtml(c.name)}${mdIpTag(c.url)}</b><span class="motion-dock__pill" id="md-cp-${escapeHtml(c.id)}"></span></div>`;

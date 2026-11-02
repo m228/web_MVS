@@ -54,6 +54,14 @@ def build_rtsp_url(ip, username="admin", password="", channel=1, subtype=0, port
     return f"rtsp://{credentials}{ip}:{port}/cam/realmonitor?channel={channel}&subtype={subtype}"
 
 
+# дополнительный поток камеры: у Dahua subtype=1 вместо 0 (картинка в разы меньше — декодер нагружается на порядок слабее).
+# Адрес без subtype= (не Dahua) не трогаем.
+def substream_url(url):
+    if str(url or "").lower().startswith("rtsp") and re.search(r"subtype=\d+", url):
+        return re.sub(r"subtype=\d+", "subtype=1", url, count=1)
+    return url
+
+
 # подменить хост (IP) в RTSP-ссылке, сохранив логин/пароль, порт, путь и query.
 # Нужно после смены IP камеры: старый url ведёт на старый адрес. Разбираем строкой,
 # а не urllib, чтобы не декодировать уже закодированные логин/пароль.

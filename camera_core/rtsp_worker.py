@@ -9,7 +9,7 @@ from logger import log_event
 import dahua_control
 import plate_config
 
-from .utils import DEFAULT_VIDEO_FPS, RTSP_RECONNECT_BACKOFF, RTSP_RECONNECT_LOG_EVERY, RTSP_STALL_SECONDS
+from .utils import DEFAULT_VIDEO_FPS, RTSP_RECONNECT_BACKOFF, RTSP_RECONNECT_LOG_EVERY, RTSP_STALL_SECONDS, substream_url
 from .base_worker import BaseCameraWorker
 from .frame_quality import GARBAGE_THRESHOLD, SAMPLE_PERIOD_S, frame_garbage
 from .hw_decode import decoder_kind, hw_params, normalize_mode
@@ -74,6 +74,7 @@ class RtspCameraWorker(BaseCameraWorker):
         self._quality_at = 0.0
         # декодирование: 'gpu' (видеоядро) / 'cpu' / '' (камера не открыта). _hw_off — видеоядро не вышло, до перезапуска процессор
         self.decoder = ""
+        self.substream = False          # захват идёт по дополнительному потоку (plate_config.rtsp.substream)
         self._hw_off = False
         self._hw_open_fail = 0
         self._hw_zero = 0
@@ -387,14 +388,24 @@ class RtspCameraWorker(BaseCameraWorker):
                       {"serial_number": self.serial_number, "photo": self.save_photo,
                        "video": self.save_video, "autostart": self.autostart})
 
+    def _stream_url(self):
+        """Адрес для захвата: с plate_config.rtsp.substream — дополнительный поток камеры (меньше разрешение, легче декодировать)."""
+        try:
+            rcfg = plate_config.load().get("rtsp")
+            sub = isinstance(rcfg, dict) and bool(rcfg.get("substream"))
+        except Exception:
+            sub = False
+        self.substream = sub and substream_url(self.rtsp_url) != self.rtsp_url
+        return substream_url(self.rtsp_url) if sub else self.rtsp_url
+
     def _cv_open(self, mode):
         """cv2.VideoCapture; mode off — программно, иначе с запросом аппаратного декодирования."""
         params = hw_params(mode) if mode != "off" else []
+        url = self._stream_url()
         try:
-            capture = cv2.VideoCapture(self.rtsp_url, cv2.CAP_FFMPEG, params) if params \
-                else cv2.VideoCapture(self.rtsp_url, cv2.CAP_FFMPEG)
+            capture = cv2.VideoCapture(url, cv2.CAP_FFMPEG, params) if params else cv2.VideoCapture(url, cv2.CAP_FFMPEG)
         except Exception:
-            capture = cv2.VideoCapture(self.rtsp_url, cv2.CAP_FFMPEG)
+            capture = cv2.VideoCapture(url, cv2.CAP_FFMPEG)
         try:
             capture.set(cv2.CAP_PROP_BUFFERSIZE, 1)
         except Exception:
@@ -425,7 +436,7 @@ class RtspCameraWorker(BaseCameraWorker):
             kind = decoder_kind(capture)
             if kind != self.decoder:
                 log_event("camera_core.rtsp_stream", "Декодирование RTSP: %s" % ("видеоядро" if kind == "gpu" else "процессор"),
-                          "info", {"serial_number": self.serial_number, "mode": mode, "decoder": kind})
+                          "info", {"serial_number": self.serial_number, "mode": mode, "decoder": kind, "substream": self.substream})
             self.decoder = kind
             return capture
         self._hw_open_fail += 1
@@ -603,6 +614,7 @@ class RtspCameraWorker(BaseCameraWorker):
             "viewers": self._viewers,
             "autostart": self.autostart,
             "decoder": self.decoder,
+            "substream": self.substream,
         }
 
     # ---------- цифровой зум ----------

@@ -147,3 +147,31 @@ def test_without_target_fps_every_frame_is_read(monkeypatch):
         assert cap.reads > 5 and cap.grabs == 0
     finally:
         w.force_close()
+
+
+def test_substream_url_only_for_dahua_style_addresses():
+    from camera_core.utils import substream_url
+    u = "rtsp://admin:p@10.0.0.5:554/cam/realmonitor?channel=1&subtype=0"
+    assert substream_url(u).endswith("channel=1&subtype=1")
+    assert substream_url("rtsp://h/stream1") == "rtsp://h/stream1"
+    assert substream_url("") == ""
+
+
+def test_worker_opens_substream_only_when_enabled(monkeypatch):
+    url = "rtsp://admin:p@10.0.0.5:554/cam/realmonitor?channel=1&subtype=0"
+    opened = []
+
+    def run(cfg):
+        monkeypatch.setattr(rw.plate_config, "load", lambda: cfg)
+        monkeypatch.setattr(rw.cv2, "VideoCapture", lambda u, api, params=None: opened.append(u) or Cap(True))
+        w = RtspCameraWorker("t_sub", None, url)
+        w._open_capture()
+        return w
+    w = run({"rtsp": {"hw_accel": "off"}})
+    assert opened[-1] == url and not w.substream
+    w = run({"rtsp": {"hw_accel": "off", "substream": True}})
+    assert opened[-1].endswith("subtype=1") and w.substream and w.stream_state()["substream"] is True
+    w = RtspCameraWorker("t_sub2", None, "rtsp://h/stream1")
+    monkeypatch.setattr(rw.plate_config, "load", lambda: {"rtsp": {"substream": True}})
+    w._open_capture()
+    assert opened[-1] == "rtsp://h/stream1" and not w.substream, "не Dahua-адрес не трогаем"

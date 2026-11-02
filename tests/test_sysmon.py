@@ -253,6 +253,49 @@ def test_plate_reboot_event(sm):
     assert ev and ev[0]["kind"] == "plate_reboot" and ev[0]["level"] == "high"
 
 
+def test_plate_uptime_register_wrap_is_not_reboot(sm):
+    """Регистр секунд 16-битный: после 65535 он идёт с нуля, это не перезагрузка платы."""
+    ext = {"uptime_s": 65500, "uptime_laps": 0}
+    ag = sm.Agent(sources=make_sources(ext=lambda: dict(ext)), clock=Clock())
+    assert ag.tick(1.0) == []
+    ext.update(uptime_s=40, uptime_laps=1)                # прошёл круг: 65536 + 40 с
+    assert ag.tick(16.0) == []
+    assert ag.snapshot()["micro"]["plate_up_s"] == 65536 + 40
+    ext.update(uptime_s=60, uptime_laps=1)
+    assert ag.tick(31.0) == []
+
+
+def test_plate_real_reboot_with_laps(sm):
+    ext = {"uptime_s": 100, "uptime_laps": 3}
+    ag = sm.Agent(sources=make_sources(ext=lambda: dict(ext)), clock=Clock())
+    assert ag.tick(1.0) == []
+    ext.update(uptime_s=5, uptime_laps=0)                 # после перезагрузки круги тоже с нуля
+    ev = ag.tick(16.0)
+    assert ev and ev[0]["kind"] == "plate_reboot"
+
+
+def test_plate_wrap_without_laps_register(sm):
+    """Старая прошивка без счётчика кругов: обнуление у границы 65536 не считаем перезагрузкой."""
+    up = {"v": 65500}
+    ag = sm.Agent(sources=make_sources(ext=lambda: {"uptime_s": up["v"]}), clock=Clock())
+    assert ag.tick(1.0) == []
+    up["v"] = 40
+    assert ag.tick(16.0) == []
+    up["v"] = 20000
+    assert ag.tick(31.0) == []
+    up["v"] = 30                                          # а падение с 20000 до 30 — уже перезагрузка
+    assert ag.tick(46.0)
+
+
+def test_plate_laps_register_flicker_is_not_reboot(sm):
+    """Счётчик кругов то читается, то нет: смена способа подсчёта не должна давать ложную тревогу."""
+    ext = {"uptime_s": 4000, "uptime_laps": 2}
+    ag = sm.Agent(sources=make_sources(ext=lambda: dict(ext)), clock=Clock())
+    assert ag.tick(1.0) == []
+    ext.pop("uptime_laps")
+    assert ag.tick(16.0) == []
+
+
 def test_source_failure_does_not_break_pulse(sm):
     def boom():
         raise RuntimeError("плата отвалилась")

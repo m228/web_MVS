@@ -127,6 +127,21 @@ def _num(v, nd=None):
     return round(v, nd) if nd is not None else v
 
 
+PLATE_UP_WRAP = 65536      # регистр аптайма платы (1523) — uint16 в секундах; обнулений считает регистр 1524 (uptime_laps)
+
+
+def plate_uptime(ext: dict) -> tuple[Optional[float], bool]:
+    """Аптайм платы, с: (значение, точно ли). Точно — когда прочитан счётчик кругов (laps*65536 + секунды);
+    иначе голый регистр секунд, он обнуляется каждые 18 ч 12 мин сам, без перезагрузки."""
+    secs = _num((ext or {}).get("uptime_s"))
+    if secs is None:
+        return None, False
+    laps = _num((ext or {}).get("uptime_laps"))
+    if laps is None:
+        return secs, False
+    return laps * PLATE_UP_WRAP + secs, True
+
+
 def _iso_ts(v) -> Optional[float]:
     """Время из ISO-строки без пояса (так пишет автокалибровка: локальное время ПК) -> unix-время; None, если не разобрать."""
     try:
@@ -496,6 +511,7 @@ class Agent:
         self._ready_since: Optional[float] = None
         self._work_since: Optional[float] = None      # с какого момента автомат в работе (для «автокалибровки давно не было»)
         self._plate_up: Optional[float] = None
+        self._plate_up_exact = False                   # _plate_up посчитан с кругами (иначе — голый 16-битный регистр)
         self.positions: deque = deque(maxlen=POS_MEM)  # положения датчиков на отводе/подводе (с оценкой), старые — слева
         self._ac_seen_ts: Optional[float] = None       # какую по счёту автокалибровку уже учли в истории дрейфа нуля
         self._ac_drift: deque = deque(maxlen=5)        # (ноль уползал больше допуска?, на сколько мкм) по последним калибровкам
@@ -745,11 +761,15 @@ class Agent:
         for code in [c for c in self.active if c not in found and c not in keep]:
             old = self.active.pop(code)
             events.append(self._emit("alert", "info", "Снято: " + old["text"], {"code": code, "state": "closed"}, t=now))
-        up = _num((d.get("ext") or {}).get("uptime_s"))
+        up, exact = plate_uptime(d.get("ext") or {})
         if up is not None:
-            if self._plate_up is not None and up + 10 < self._plate_up:
-                events.append(self._emit("plate_reboot", "high", "Плата микроскопа перезагрузилась (её аптайм сбросился)", {}, t=now))
-            self._plate_up = up
+            prev, prev_exact = self._plate_up, self._plate_up_exact
+            if prev is not None and prev_exact == exact and up + 10 < prev:
+                # без счётчика кругов падение с «почти 65536» к малому числу — обычное обнуление регистра, а не перезагрузка
+                wrap = not exact and prev > PLATE_UP_WRAP - 3600 and up < 3600
+                if not wrap:
+                    events.append(self._emit("plate_reboot", "high", "Плата микроскопа перезагрузилась (её аптайм сбросился)", {}, t=now))
+            self._plate_up, self._plate_up_exact = up, exact
         return events
 
     def tick(self, now: Optional[float] = None) -> list[dict]:
@@ -875,7 +895,7 @@ def _micro_block(d: dict, now: float) -> dict:
         "step": state.get("step"), "manual": state.get("manual"), "auto": state.get("cyclic"), "fault": state.get("fault"),
         "cv_state": cv.get("state"), "cv_enabled": d.get("cv_enabled"),
         "last_probe_t": pr.get("last_t"), "probes_today": pr.get("today"),
-        "plate_up_s": _num(ext.get("uptime_s")), "plate_temp": _num(ext.get("temp")),
+        "plate_up_s": plate_uptime(ext)[0], "plate_temp": _num(ext.get("temp")),
         "plate_12v": round(u12 / 1000.0, 1) if u12 is not None else None,
     }
 

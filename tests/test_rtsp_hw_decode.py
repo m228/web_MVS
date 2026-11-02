@@ -1,5 +1,8 @@
 """Декодирование RTSP на видеоядре: режим из plate_config, откат на процессор, учёт реального декодера."""
+import time
+
 import cv2
+import numpy as np
 
 from camera_core import hw_decode
 from camera_core import rtsp_worker as rw
@@ -87,3 +90,60 @@ def test_gives_up_hardware_after_three_opens_without_frames(monkeypatch):
     assert not w._hw_off
     w._hw_giveup_check(False)
     assert w._hw_off
+
+
+class CountingCap:
+    """Камера 25 к/с: считает, сколько кадров реально переведено в картинку (read) и сколько только вычитано (grab)."""
+    def __init__(self):
+        self.reads = self.grabs = 0
+
+    def isOpened(self):
+        return True
+
+    def get(self, prop):
+        return 25.0 if prop == cv2.CAP_PROP_FPS else 0
+
+    def set(self, *a):
+        return True
+
+    def grab(self):
+        time.sleep(0.01)
+        self.grabs += 1
+        return True
+
+    def read(self):
+        time.sleep(0.01)
+        self.reads += 1
+        return True, np.zeros((48, 64, 3), np.uint8)
+
+    def release(self):
+        pass
+
+
+def test_frames_between_target_fps_are_grabbed_not_decoded_to_bgr(monkeypatch):
+    cap = CountingCap()
+    w = RtspCameraWorker("t_grab", None, "rtsp://example/x")
+    monkeypatch.setattr(w, "_open_capture", lambda: cap)
+    w.autostart = True
+    w.ensure_capture(target_fps=5)
+    try:
+        deadline = time.time() + 5
+        while time.time() < deadline and cap.reads < 3:
+            time.sleep(0.02)
+        assert cap.reads >= 3
+        assert cap.grabs > cap.reads * 3, "между нужными кадрами остальные только вычитываются (grab)"
+    finally:
+        w.force_close()
+
+
+def test_without_target_fps_every_frame_is_read(monkeypatch):
+    cap = CountingCap()
+    w = RtspCameraWorker("t_grab2", None, "rtsp://example/x")
+    monkeypatch.setattr(w, "_open_capture", lambda: cap)
+    w.autostart = True
+    w.ensure_capture()
+    try:
+        time.sleep(0.5)
+        assert cap.reads > 5 and cap.grabs == 0
+    finally:
+        w.force_close()

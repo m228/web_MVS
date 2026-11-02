@@ -182,6 +182,10 @@ def _init(c: sqlite3.Connection) -> None:
         c.execute("CREATE TABLE IF NOT EXISTS boil_hidden (id INTEGER PRIMARY KEY AUTOINCREMENT, serial TEXT NOT NULL, t_from REAL NOT NULL, "
                   "t_to REAL NOT NULL, n INTEGER NOT NULL, reason TEXT NOT NULL, at REAL NOT NULL)")
         c.execute("CREATE INDEX IF NOT EXISTS ix_boil_hidden ON boil_hidden (serial, t_from)")
+        # журнал режима автомата микроскопа: запуск приложения, переключения «Автомат / Выключен / Ручной / Авария», правки настроек цикла
+        c.execute("CREATE TABLE IF NOT EXISTS mode_log (id INTEGER PRIMARY KEY AUTOINCREMENT, t REAL NOT NULL, kind TEXT NOT NULL, "
+                  "state TEXT, stage INTEGER, text TEXT NOT NULL)")
+        c.execute("CREATE INDEX IF NOT EXISTS ix_mode_log ON mode_log (t)")
         c.execute("INSERT OR IGNORE INTO meta (key, value) VALUES ('schema_version', ?)", (str(SCHEMA_VERSION),))
         c.commit()
 
@@ -398,6 +402,36 @@ def change_delete(serial: str, cid: int) -> bool:
         n = c.execute("DELETE FROM changes WHERE id=? AND serial=?", (cid, serial)).rowcount
         c.commit()
         return n > 0
+
+
+# --- журнал режима автомата микроскопа (тренд «Автомат / Ручной») ---
+MODE_STATES = ("auto", "off", "manual", "fault")      # Автомат идёт / Автомат выключен (проб нет) / Ручной / Авария
+MODE_KINDS = ("start", "mode", "setting")             # запуск приложения / переключение / правка настроек цикла
+
+
+def mode_add(t: float, kind: str, state: Optional[str], stage: Optional[int], text: str) -> int:
+    """Записать событие режима автомата: kind — start / mode / setting, state — auto / off / manual / fault (у setting — None)."""
+    with _wlock:
+        c = conn()
+        mid = c.execute("INSERT INTO mode_log (t, kind, state, stage, text) VALUES (?, ?, ?, ?, ?)",
+                        (t, kind, state, stage, text[:300])).lastrowid
+        c.commit()
+        return mid
+
+
+def mode_window(t_from: float, t_to: float) -> dict:
+    """Режим автомата за окно [t_from, t_to]: {"before": последнее переключение до окна (состояние на левом краю) или None,
+    "events": события окна по времени}. Без записей — before None и events [] (график полосу не рисует)."""
+    c = conn()
+    cols = "id, t, kind, state, stage, text"
+    before = c.execute("SELECT %s FROM mode_log WHERE t<? AND kind IN ('start','mode') ORDER BY t DESC, id DESC LIMIT 1" % cols, (t_from,)).fetchone()
+    ev = c.execute("SELECT %s FROM mode_log WHERE t>=? AND t<=? ORDER BY t, id" % cols, (t_from, t_to)).fetchall()
+    return {"before": dict(before) if before else None, "events": [dict(r) for r in ev]}
+
+
+def mode_last(limit: int = 50) -> list[dict]:
+    """Последние события режима, новые первыми."""
+    return [dict(r) for r in conn().execute("SELECT id, t, kind, state, stage, text FROM mode_log ORDER BY t DESC, id DESC LIMIT ?", (int(limit),))]
 
 
 def check_save(t: float, sig: str, tag: Optional[str], ok: bool, data: str) -> int:

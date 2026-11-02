@@ -1475,9 +1475,17 @@ def cv_trend(serial: str | None = None, series: str | None = None, limit: int = 
     без них — последние limit проб (вкладка «Разломы»)."""
     ser = [s.strip() for s in series.split(",")] if series else None
     if t_from is not None and t_to is not None:
-        return cv_store.trend_range(_cv_serial(serial), t_from, t_to, series=ser,
-                                    limit=max(10, min(limit, 5000)))
+        res = cv_store.trend_range(_cv_serial(serial), t_from, t_to, series=ser,
+                                   limit=max(10, min(limit, 5000)))
+        res["modes"] = db.mode_window(t_from, t_to)         # полоса «Автомат / выключен / Ручной» под графиком (журнал режима автомата)
+        return res
     return cv_store.trend(_cv_serial(serial), series=ser, limit=limit)
+
+
+@app.get("/api/micro/mode_log")
+def micro_mode_log(limit: int = 50):
+    """Журнал режима автомата: запуск приложения, переключения «Автомат / выключен / Ручной / авария», правки настроек цикла (новые первыми)."""
+    return {"events": db.mode_last(max(1, min(limit, 500))), "now": micro.fsm.mode_state() if micro.fsm else None}
 
 
 @app.get("/api/cv/trend/days")

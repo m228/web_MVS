@@ -231,7 +231,7 @@ def test_no_probes_not_when_manual_or_waiting_sv(sm):
     clk = Clock(10_000.0)
     st = {"stage": 4, "stage_ok": True, "cyclic": True, "manual": True, "sv": 80, "cycle_params": {"trigger_mode": "sv", "sv_from": 84, "sv_to": 92}}
     ag = sm.Agent(sources=make_sources(state=lambda: st, probes=lambda s, since: {"last_t": 1.0, "today": 0}), clock=clk)
-    ag._cfg = dict(ag._cfg, no_probe_min=5)
+    ag._cfg = dict(ag._cfg, no_probe_min=5, auto_off_min=10**6)      # «нет проб» молчит в ручном режиме; тревога «Автомат выключен» — отдельное правило, тут выключено
     ag.tick(clk.t)
     clk.t += 3600
     assert ag.tick(clk.t) == [], "ручной режим"
@@ -240,6 +240,39 @@ def test_no_probes_not_when_manual_or_waiting_sv(sm):
     ag.tick(clk.t)
     clk.t += 3600
     assert ag.tick(clk.t) == [], "СВ 80 ниже диапазона 84–92 — проба и не должна идти"
+
+
+def test_auto_off_rule(sm):
+    """Варка идёт, а «Автомат» выключен / «Ручной»: проб нет, и «нет проб» молчит (оно только при включённом Автомате) — отдельная тревога."""
+    clk = Clock(10_000.0)
+    st = {"stage": 8, "stage_ok": True, "cyclic": False, "manual": False, "fault": False, "cycle_params": {"trigger_mode": "time"}}
+    ag = sm.Agent(sources=make_sources(state=lambda: st, probes=lambda s, since: {"last_t": 1.0, "today": 0}), clock=clk)
+    ag._cfg = dict(ag._cfg, auto_off_min=10, no_probe_min=5)
+    assert ag.tick(clk.t) == [], "условия сложились только что — ждём"
+    clk.t += 9 * 60
+    assert ag.tick(clk.t) == []
+    clk.t += 2 * 60
+    ev = ag.tick(clk.t)
+    assert ev and ev[0]["data"]["code"] == "auto_off" and "«Автомат» выключен" in ev[0]["text"] and "стадия 8" in ev[0]["text"] and "11 мин" in ev[0]["text"], ev
+    st["cyclic"] = True                                                   # Автомат включили — тревога снята
+    ev = ag.tick(clk.t + 15)
+    assert ev and ev[0]["data"]["state"] == "closed"
+
+
+def test_auto_off_manual_and_not_between_boils(sm):
+    clk = Clock(10_000.0)
+    st = {"stage": 5, "stage_ok": True, "cyclic": False, "manual": True, "fault": False, "cycle_params": {"trigger_mode": "time"}}
+    ag = sm.Agent(sources=make_sources(state=lambda: st), clock=clk)
+    ag._cfg = dict(ag._cfg, auto_off_min=10)
+    ag.tick(clk.t)
+    clk.t += 11 * 60
+    ev = ag.tick(clk.t)
+    assert ev and ev[0]["data"]["code"] == "auto_off" and "«Ручной»" in ev[0]["text"], ev
+    st["manual"], st["stage_ok"], st["stage"] = False, False, 1           # между варками (пропарка, стадия 1) Автомат выключен нормально
+    ev = ag.tick(clk.t + 15)
+    assert ev and ev[0]["data"]["state"] == "closed"
+    clk.t += 3 * 3600
+    assert ag.tick(clk.t) == []
 
 
 def test_plate_reboot_event(sm):

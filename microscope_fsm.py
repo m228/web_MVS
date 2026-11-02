@@ -82,6 +82,10 @@ class MicroscopeFSM:
         """Идёт варка: стадия в зоне авто-цикла (или включено «варить без стадии» и «Автомат»), либо идёт проба."""
         return self.mode != 0 or self._stage_in() or (self._ignore_stage and self.sw0 and not self.manual)
 
+    def mode_state(self) -> str:
+        """Режим автомата: fault — авария, manual — ручной, auto — «Автомат» включён (цикл идёт по стадии), off — выключен (проб нет, пока не включат)."""
+        return "fault" if self._fault else "manual" if self.manual else "auto" if self.sw0 else "off"
+
     def _hw_idle(self) -> bool:
         """Варки не было целый час (или с запуска программы не видели) — тогда ежечасная промывка разрешена."""
         return self._last_brew_t is None or time.monotonic() - self._last_brew_t >= self._hw_idle_s
@@ -237,6 +241,9 @@ class MicroscopeFSM:
         self._unflag = {1: 0, 2: 0}
         # колбэк persist счётчика варок (ставит microscope_service): on_varka_count(count)
         self.on_varka_count = None
+        # колбэк смены режима автомата (ставит microscope_service): on_mode_change(state, stage, first) — запись в журнал режима (тренд «Автомат / Ручной»)
+        self.on_mode_change = None
+        self._mode_prev = None
         # колбэк итога калибровки -> журнал autocal.log + persist «последней» (ставит microscope_service)
         self.on_autocal_done = None
         # колбэк «довод не сошёлся» -> запись в отдельный лог-файл (ставит microscope_service)
@@ -1540,6 +1547,16 @@ class MicroscopeFSM:
                         unflag.append(m)
 
         pos2 = telem.get("pos2")
+
+        # режим автомата изменился (или это первый такт после запуска) — в журнал режима: по нему видно, когда «Автомат» был выключен
+        mode_now = self.mode_state()
+        if mode_now != self._mode_prev:
+            first, self._mode_prev = self._mode_prev is None, mode_now
+            if self.on_mode_change:
+                try:
+                    self.on_mode_change(mode_now, self.stage if self._stage_seen else None, first)
+                except Exception as e:
+                    log_event("microscope_fsm", "Ошибка записи режима автомата", "warn", {"error": str(e)})
 
         # persist счётчика варок и итог калибровки — и в Ручном (калибровку могли прервать переходом в ручной)
         if varka_persist is not None and self.on_varka_count:

@@ -1025,7 +1025,34 @@ def cv_report(serial: str | None = None, frm: str | None = Query(None, alias="fr
     rep = report.build(_cv_serial(serial), t0, t1, fin_sv=max(0.2, min(fin_sv, 20.0)), anomalies=True)
     import other_plants
     rep["others_available"] = other_plants.names()          # папка database/<завод>: нет её — в отчёте нет и галочки
+    rep["hidden"] = db.hidden_boils(cv_store._serial_dir(_cv_serial(serial)).name, t0, t1)      # скрытые из отчёта варки периода (с пометкой) — под таблицей, «Вернуть»
     return rep
+
+
+@app.post("/api/cv/boil/hide")
+def cv_boil_hide(body: dict = Body(...), serial: str | None = None):
+    """Скрыть варки из отчёта: {starts: [t_start, …], reason}. Пробы остаются в журнале; вернуть — /api/cv/boil/unhide."""
+    starts = body.get("starts")
+    if not isinstance(starts, list) or not starts:
+        return {"ok": False, "error": "не выбрано ни одной варки"}
+    res = cv_store.hide_boils(_cv_serial(serial), starts[:200], str(body.get("reason") or ""))
+    if res["hidden"]:
+        api_log("api.cv.boil_hide", "Скрыты варки из отчёта: %d" % len(res["hidden"]),
+                payload={"hidden": res["hidden"], "reason": str(body.get("reason") or "")[:cv_store.HIDE_REASON_MAX]})
+    return {"ok": bool(res["hidden"]), **res}
+
+
+@app.post("/api/cv/boil/unhide")
+def cv_boil_unhide(body: dict = Body(...), serial: str | None = None):
+    """Вернуть скрытые варки в отчёт: {ids: [id, …]}."""
+    ids = body.get("ids")
+    if not isinstance(ids, list) or not ids:
+        return {"ok": False, "error": "не выбрано ни одной варки"}
+    tag = cv_store._serial_dir(_cv_serial(serial)).name
+    done = [i for i in ids if isinstance(i, int) and db.unhide_boil(tag, i)]
+    if done:
+        api_log("api.cv.boil_hide", "Возвращены в отчёт скрытые варки: %d" % len(done), payload={"ids": done})
+    return {"ok": bool(done), "unhidden": done}
 
 
 @app.get("/api/cv/others/report")
@@ -1448,9 +1475,17 @@ def cv_trend(serial: str | None = None, series: str | None = None, limit: int = 
     без них — последние limit проб (вкладка «Разломы»)."""
     ser = [s.strip() for s in series.split(",")] if series else None
     if t_from is not None and t_to is not None:
-        return cv_store.trend_range(_cv_serial(serial), t_from, t_to, series=ser,
-                                    limit=max(10, min(limit, 5000)))
+        res = cv_store.trend_range(_cv_serial(serial), t_from, t_to, series=ser,
+                                   limit=max(10, min(limit, 5000)))
+        res["modes"] = db.mode_window(t_from, t_to)         # полоса «Автомат / выключен / Ручной» под графиком (журнал режима автомата)
+        return res
     return cv_store.trend(_cv_serial(serial), series=ser, limit=limit)
+
+
+@app.get("/api/micro/mode_log")
+def micro_mode_log(limit: int = 50):
+    """Журнал режима автомата: запуск приложения, переключения «Автомат / выключен / Ручной / авария», правки настроек цикла (новые первыми)."""
+    return {"events": db.mode_last(max(1, min(limit, 500))), "now": micro.fsm.mode_state() if micro.fsm else None}
 
 
 @app.get("/api/cv/trend/days")

@@ -4164,6 +4164,20 @@ body.micro-rep-doc .micro-rep-sbar { width: 90px; }
 .micro-rep-fin { display: inline-flex; align-items: center; gap: 6px; font-size: 0.85em; color: var(--muted); }
 .micro-rep-fin input { width: 58px; padding: 4px 6px; text-align: right; }
 
+/* панель «Скрыть варки» отчёта: список варок с галочками, пометка, «Скрыть»; ниже — скрытые («Вернуть») */
+.micro-rep-hide { padding: 10px 12px; margin-bottom: 12px; border-radius: 10px; background: var(--surface-muted, rgba(255,255,255,.04));
+  border: 1px solid var(--border, rgba(131,151,179,.28)); font-size: 0.85em; }
+.micro-rep-hide[hidden] { display: none; }
+.micro-rep-hide__list { max-height: 240px; overflow-y: auto; margin: 6px 0 8px; display: flex; flex-direction: column; gap: 3px; }
+.micro-rep-hide__row { display: flex; flex-direction: row; align-items: center; gap: 8px; cursor: pointer; white-space: nowrap; }
+.micro-rep-hide__row.is-off { opacity: .55; cursor: default; }
+.micro-rep-hide__row small { color: var(--muted); }
+.micro-rep-hide__row input[type="checkbox"] { width: 15px; height: 15px; min-height: 0; margin: 0; padding: 0; flex: 0 0 auto; accent-color: var(--accent, #2563eb); }
+.micro-rep-hide__act { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.micro-rep-hide__act input[type="text"] { width: 270px; max-width: 100%; height: 30px; min-height: 0; padding: 2px 8px; }
+.micro-rep-hide__h { margin-top: 10px; color: var(--muted); }
+.micro-rep-hide__h:first-child { margin-top: 0; }
+
 /* маленькие галочки: правило проекта — чекбокс всегда компактный (15 px), а не растянутый общим стилем полей */
 .micro-rep-cols input[type="checkbox"] { width: 15px; height: 15px; min-height: 0; margin: 0; padding: 0; flex: 0 0 auto; accent-color: var(--accent, #2563eb); }
 .micro-rep-cols label { flex-direction: row; align-items: center; }

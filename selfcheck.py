@@ -363,7 +363,7 @@ MODULES = [
     "sdk_gige", "camera_params", "dahua_control", "net_tools", "rtsp_store",
     "save_settings", "plate_config", "sv_source", "microscope_plc", "microscope_fsm",
     "microscope_service", "cv_analyzer", "cv_volume", "substages", "db", "report", "boil_compare", "cv_fracture", "cv_client", "video_client", "motion_client", "services", "delta_update", "cv_store", "boil_archive", "fracture_lab", "cv_pipeline", "model_check", "boil_anomaly", "other_plants", "cam_events", "cam_monitor", "cam_report", "sysmon",
-    "updater", "auto_update", "autostart", "diag", "app", "mvsdk",
+    "updater", "update_health", "auto_update", "autostart", "diag", "app", "mvsdk",
 ]
 THIRD_PARTY = ["cv2", "numpy", "fastapi", "starlette", "uvicorn", "pymodbus", "harvesters", "genicam",
                "pydantic", "multipart"]
@@ -391,6 +391,7 @@ API = {
     "save_settings": ["load", "get", "update"],
     "updater": ["check_latest", "download_latest", "apply_update", "_version_tuple"],
     "auto_update": ["start", "stop", "agent", "AutoUpdater", "load_config"],
+    "update_health": ["capture", "evaluate", "verdict_text", "default_sources"],
     "autostart": ["status", "enable", "disable"],
     "net_tools": ["status", "enable_jumbo", "disable_jumbo", "enable_filter", "disable_filter"],
     "dahua_control": ["parse_rtsp_credentials", "get_capabilities", "set_white_light"],

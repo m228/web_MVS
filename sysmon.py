@@ -1002,6 +1002,22 @@ def agent() -> Optional[Agent]:
     return _agent
 
 
+def report(kind: str, level: str, text: str, data: Optional[dict] = None) -> bool:
+    """Событие от другого модуля (автообновление): в очередь на приёмник и сразу, не дожидаясь пульса. Агент не запущен или отправка
+    не настроена — молча ничего (False): мониторинг не обязателен."""
+    ag = _agent
+    if ag is None or not configured(ag._cfg):
+        return False
+    ag._emit(kind, level, text, data, push=True)
+    return True
+
+
+def start_reason() -> Optional[str]:
+    """Почему стартовало это приложение (pc_reboot / app_restart / app_update / first) — по записи, которую агент сделал при старте."""
+    ag = _agent
+    return (ag.start_info or {}).get("reason") if ag is not None and ag.start_info else None
+
+
 def record_positions(info: dict) -> None:
     """Положения датчиков на отводе/подводе — из колбэка автомата. Агент не запущен — молча ничего (мониторинг не обязателен)."""
     ag = _agent

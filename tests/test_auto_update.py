@@ -37,9 +37,30 @@ class Env:
         monkeypatch.setattr(u, "components_info", lambda: {"components": [{"key": "main", "installed": True},
                                                                            {"key": "motion", "installed": True},
                                                                            {"key": "cv", "installed": False}]})
-        monkeypatch.setattr(auto_update, "read_version", lambda: "2.0.49")
-        self.ag = AutoUpdater(window_fn=lambda: self.window, cfg_fn=lambda: self.cfg, clock=self.clock,
-                              frozen_fn=lambda: self.frozen, state_file=tmp_path / "auto_update.json")
+        self.version = "2.0.49"
+        monkeypatch.setattr(auto_update, "read_version", lambda: self.version)
+        self.state_file = tmp_path / "auto_update.json"
+        self.wall = 1_800_000_000.0
+        self.reports = []                  # то, что ушло бы на приёмник: (kind, level, text, data)
+        self.reason = None                 # причина старта по sysmon (app_update — обновили кнопкой)
+        self.h = {"micro_on": True, "plate": True, "plc": True, "cam": True, "rtsp": 3, "services": {"cv": "healthy", "motion": "healthy"},
+                  "cyclic": True, "manual": False, "alerts": {}}
+        h = self.h
+        self.src = {"micro_on": lambda: h["micro_on"], "plate_connected": lambda: h["plate"], "plc_connected": lambda: h["plc"],
+                    "camera_streaming": lambda: h["cam"], "rtsp_running": lambda: h["rtsp"], "services": lambda: dict(h["services"]),
+                    "automat": lambda: (h["cyclic"], h["manual"]), "alerts": lambda: dict(h["alerts"])}
+        self.ag = self.new_agent()
+
+    def new_agent(self):
+        """Новое приложение после перезапуска: тот же файл состояния, свои часы с нуля."""
+        self.clock = Clock()
+        return AutoUpdater(window_fn=lambda: self.window, cfg_fn=lambda: self.cfg, clock=self.clock,
+                           frozen_fn=lambda: self.frozen, state_file=self.state_file, report_fn=self._report, wall=lambda: self.wall,
+                           health_src=self.src, start_reason_fn=lambda: self.reason)
+
+    def _report(self, kind, level, text, data):
+        self.reports.append((kind, level, text, data))
+        return True
 
     def _check(self, quiet=False):
         self.checks += 1
@@ -276,3 +297,204 @@ def test_quiet_check_logs_only_on_change(monkeypatch):
     assert len(logged) == 1
     updater.check_latest()                              # ручная проверка пишет всегда
     assert len(logged) == 2
+
+
+# ---------- сообщения об обновлении и проверка «всё ли поднялось» ----------
+
+from auto_update import HEALTH_FIRST_S, HEALTH_MAX_S, HEALTH_RETRY_S, PENDING_MAX_S
+
+
+def updates(env):
+    return [(lvl, d["state"], text) for kind, lvl, text, d in env.reports if kind == "update"]
+
+
+def restart_into_new_version(env):
+    """Автоперезапуск прошёл до запуска update.ps1; дальше «новое приложение» на 2.0.50 с тем же файлом состояния."""
+    env.first_check()
+    env.tick(5)
+    env.tick(HOLD_S)
+    env.tick(10)
+    assert len(env.runs) == 1
+    env.version = "2.0.50"
+    env.wall += 60
+    env.ag = env.new_agent()
+    env.ag.resume()
+
+
+def test_staged_message_once_per_downloaded_version(env):
+    env.first_check()
+    assert updates(env) == [("info", "staged", "Скачана v2.0.50, перезапущусь после варки")]
+    env.tick(30 * 60 + 1)
+    assert len(updates(env)) == 1
+
+
+def test_staged_message_without_auto_restart_and_not_for_already_staged(env):
+    env.cfg["auto_restart"] = False
+    env.first_check()
+    assert updates(env)[0][2] == "Скачана v2.0.50, жду перезапуска по кнопке"
+    env.reports.clear()
+    env.download_result = {"ok": True, "version": "2.0.50", "already": True}
+    env.check["staged"] = None
+    env.tick(30 * 60 + 1)
+    assert env.reports == []
+
+
+def test_launch_writes_marker_with_state_before_restart(env):
+    import json
+    env.h["cam"], env.h["rtsp"] = True, 2
+    env.first_check()
+    env.tick(5)
+    env.tick(HOLD_S)
+    env.tick(10)
+    data = json.loads(env.state_file.read_text(encoding="utf-8"))
+    p = data["pending"]
+    assert (p["from"], p["to"], p["t"]) == ("2.0.49", "2.0.50", env.wall)
+    assert p["pre"]["camera_streaming"] and p["pre"]["rtsp_running"] == 2 and p["pre"]["services_ok"] == ["cv", "motion"]
+    assert data["attempts"] == {"2.0.50": 1}, "счётчик попыток не потерян рядом с меткой"
+
+
+def test_failed_launch_does_not_leave_marker(env):
+    env.run_result = {"ok": False, "error": "update.ps1 не найден"}
+    env.first_check()
+    env.tick(5)
+    env.tick(HOLD_S)
+    env.tick(10)
+    import json
+    assert "pending" not in json.loads(env.state_file.read_text(encoding="utf-8"))
+
+
+def test_everything_back_gives_one_ok_message(env):
+    restart_into_new_version(env)
+    env.reports.clear()
+    env.tick(HEALTH_FIRST_S - 1)
+    assert env.reports == []
+    env.tick(2)
+    assert len(env.reports) == 1
+    kind, level, text, data = env.reports[0]
+    assert (level, data["state"]) == ("info", "ok")
+    assert text.startswith("Обновлено 2.0.49 → 2.0.50 · плата ✓ · ПЛК ✓ · камера ✓ · RTSP 3 из 3 ✓ · автомат ✓ · сервисы ✓")
+    env.tick(HEALTH_MAX_S)
+    assert len(env.reports) == 1, "итог один"
+    assert "pending" not in __import__("json").loads(env.state_file.read_text(encoding="utf-8"))
+
+
+def test_slow_recovery_waits_and_reports_ok_once(env):
+    restart_into_new_version(env)
+    env.reports.clear()
+    env.h["cam"], env.h["rtsp"] = False, 1                # камеры подключаются со страницы не сразу
+    env.tick(HEALTH_FIRST_S + 1)
+    assert env.reports == []
+    env.h["cam"], env.h["rtsp"] = True, 3
+    env.tick(HEALTH_RETRY_S)
+    assert [u[1] for u in updates(env)] == ["ok"]
+
+
+def test_problems_after_deadline_give_loud_warning_with_reasons(env):
+    restart_into_new_version(env)
+    env.reports.clear()
+    env.h["cam"] = False
+    env.h["services"]["cv"] = "gave_up"
+    for _ in range(12):
+        env.tick(HEALTH_RETRY_S)
+    assert len(env.reports) == 1
+    kind, level, text, data = env.reports[0]
+    assert (level, data["state"]) == ("medium", "warn")
+    assert "камера микроскопа не стримит" in text and "сервис CV не отвечает" in text and "в порядке: плата, ПЛК" in text
+    assert data["bad"] and data["ok"]
+
+
+def test_new_red_alert_is_a_problem_but_old_one_is_not(env):
+    env.h["alerts"] = {"pos_approach": {"level": "high", "text": "Подвод: датчики разошлись"}}   # была ещё до обновления
+    restart_into_new_version(env)
+    env.reports.clear()
+    env.h["alerts"]["camera_exposure"] = {"level": "high", "text": "Камера: экспозиция 5000 вместо 170"}
+    for _ in range(12):
+        env.tick(HEALTH_RETRY_S)
+    assert "новая красная тревога: Камера: экспозиция" in updates(env)[0][2]
+    assert "Подвод" not in updates(env)[0][2]
+
+
+def test_same_version_after_launch_means_failed_update(env):
+    env.first_check()
+    env.tick(5)
+    env.tick(HOLD_S)
+    env.tick(10)
+    env.wall += 120
+    env.ag = env.new_agent()                           # апдейтер откатился: приложение снова на 2.0.49
+    env.reports.clear()
+    env.ag.resume()
+    assert updates(env) == [("info", "failed", "Обновление до v2.0.50 не удалось, работаю на v2.0.49")]
+    env.tick(HEALTH_MAX_S + 10)
+    assert len(env.reports) == 1, "проверка «всё поднялось» после отката не запускается"
+
+
+def test_stale_marker_is_ignored(env):
+    restart_into_new_version(env)
+    env.reports.clear()
+    env.wall += PENDING_MAX_S + 100
+    import json
+    st = json.loads(env.state_file.read_text(encoding="utf-8"))
+    st["pending"] = {"from": "2.0.49", "to": "2.0.50", "t": env.wall - PENDING_MAX_S - 50, "pre": None}
+    env.state_file.write_text(json.dumps(st), encoding="utf-8")
+    env.ag = env.new_agent()
+    env.ag.resume()
+    env.tick(HEALTH_MAX_S + 10)
+    assert env.reports == []
+
+
+def test_manual_update_gets_absolute_checks_only(env):
+    env.version, env.reason = "2.0.50", "app_update"   # метки нет: обновили кнопкой
+    env.h["rtsp"], env.h["cam"] = 0, False             # «было/стало» сравнивать не с чем — на них не ругаемся
+    env.ag.resume()
+    env.tick(HEALTH_FIRST_S + 1)
+    kind, level, text, data = env.reports[0]
+    assert (level, data["state"]) == ("info", "ok")
+    assert text.startswith("Обновлено до v2.0.50 · плата ✓ · ПЛК ✓ · сервисы ✓") and "камера" not in text
+
+
+def test_manual_update_still_catches_dead_plate(env):
+    env.check["update_available"] = False                 # новее релиза нет — «скачана» не шлём
+    env.version, env.reason = "2.0.50", "app_update"
+    env.h["plate"] = False
+    env.ag.resume()
+    for _ in range(10):
+        env.tick(HEALTH_RETRY_S)
+    assert updates(env)[0][1] == "warn" and "плата микроскопа не отвечает" in updates(env)[0][2]
+
+
+def test_plain_restart_and_dev_run_do_not_start_health(env):
+    env.check["update_available"] = False                 # новее релиза нет — «скачана» не шлём
+    env.reason = "app_restart"
+    env.ag.resume()
+    env.tick(HEALTH_MAX_S + 10)
+    assert env.reports == []
+    env.reason, env.frozen = "app_update", False
+    env.ag.resume()
+    env.tick(HEALTH_MAX_S + 10)
+    assert env.reports == []
+
+
+def test_health_runs_even_if_auto_update_is_switched_off(env):
+    env.cfg["enabled"] = False
+    env.version, env.reason = "2.0.50", "app_update"
+    env.ag.resume()
+    env.tick(HEALTH_FIRST_S + 1)
+    assert updates(env)[0][1] == "ok" and env.checks == 0
+
+
+def test_broken_report_channel_does_not_break_the_thread(env):
+    def boom(*a):
+        raise RuntimeError("приёмник недоступен")
+    env.ag._report_fn = boom
+    env.first_check()                                  # «скачана» не отправилось — но проверка и скачивание отработали
+    assert env.downloads == 1 and env.ag.state()["staged"] == "2.0.50"
+
+
+def test_health_source_failure_is_reported_as_problem_not_crash(env):
+    env.check["update_available"] = False                 # новее релиза нет — «скачана» не шлём
+    env.version, env.reason = "2.0.50", "app_update"
+    env.src["plate_connected"] = lambda: (_ for _ in ()).throw(RuntimeError("нет платы"))
+    env.ag.resume()
+    for _ in range(10):
+        env.tick(HEALTH_RETRY_S)
+    assert updates(env)[0][1] == "warn"

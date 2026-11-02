@@ -784,3 +784,21 @@ def test_save_config_does_not_write_default_thresholds(sm):
     sm.save_config({"plant": "kir2"})
     saved = json.loads(sm.CONFIG_PATH.read_text(encoding="utf-8"))
     assert saved["gap_near_um"] == 250 and "gap_far_um" not in saved, "заданное руками сохраняется, остальное — по умолчанию"
+
+
+def test_report_queues_update_event_and_start_reason_is_exposed(sm, monkeypatch):
+    """sysmon.report — точка для автообновления: событие вида update уходит в очередь и просит отправку сразу; без агента или без настроек молчит."""
+    monkeypatch.setattr(sm, "_agent", None)
+    assert sm.report("update", "info", "Скачана v2.0.52", {"state": "staged"}) is False and sm.start_reason() is None
+    sm.save_config({"enabled": True, "url": "http://localhost:8769", "token": TOKEN, "allow_http": True})
+    ag = sm.Agent(sources=make_sources(), clock=Clock())
+    ag.start_info = {"reason": "app_update", "level": "info"}
+    monkeypatch.setattr(sm, "_agent", ag)
+    assert sm.start_reason() == "app_update"
+    assert sm.report("update", "info", "Скачана v2.0.52", {"state": "staged"}) is True
+    ev = [e for e in sm.outbox_batch() if e["kind"] == "update"]
+    assert len(ev) == 1 and ev[0]["data"]["state"] == "staged" and ev[0]["text"] == "Скачана v2.0.52"
+    assert ag._kick.is_set(), "отправка запрошена сразу, не ждём пульс"
+    sm.save_config({"enabled": False})
+    ag._cfg = sm.load_config()
+    assert sm.report("update", "info", "ещё", {}) is False, "отправка выключена — событие не копится"

@@ -149,7 +149,8 @@ DEFAULTS = {
         "version":      {"reg": 1520, "scale": 1, "kind": "num"},
         "module_ver":   {"reg": 1521, "scale": 1, "kind": "num"},  # 19=hw1.3, 32=hw2.0
         "serial":       {"reg": 1531, "scale": 1, "kind": "num"},
-        "uptime_s":     {"reg": 1523, "scale": 1, "kind": "num"},
+        "uptime_s":     {"reg": 1523, "scale": 1, "kind": "num"},  # секунды, uint16: обнуляется каждые 65536 с (18 ч 12 мин)
+        "uptime_laps":  {"reg": 1524, "scale": 1, "kind": "num"},  # сколько раз 1523 обнулялся; полный аптайм = laps*65536 + uptime_s
         "init_status":  {"reg": 1532, "scale": 1, "kind": "bits"},
         # маска ОТКЛЮЧЕНИЯ блокировок прошивки: бит=1 → блокировка отключена (в норме все 0)
         "locks":        {"reg": 1535, "scale": 1, "kind": "bits"},

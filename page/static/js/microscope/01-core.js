@@ -1223,7 +1223,8 @@
 
       // система
       set("tSerial", num(e.serial));
-      set("tUptime", upt(e.uptime_s));
+      // регистр секунд 16-битный и обнуляется каждые 18 ч 12 мин; круги считает отдельный регистр
+      set("tUptime", upt(e.uptime_s == null ? null : e.uptime_s + (e.uptime_laps || 0) * 65536));
 
       // данные с контроллера (ПЛК) — источник аппарата по Modbus (sv_source). Пока нет данных -> «(—)».
       const plc = d.plc || {}, pv = plc.values || {};

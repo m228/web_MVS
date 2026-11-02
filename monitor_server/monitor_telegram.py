@@ -27,13 +27,17 @@ from collections import deque
 from pathlib import Path
 from typing import Callable, Optional
 
+import monitor_release
+
 log = logging.getLogger("monitor.telegram")
 
 API_BASE = "https://api.telegram.org"
 HTTP_TIMEOUT_S = 10
 RETRY_MAX_S = 1800
 WATCH_EVERY_S = 30
-DEFAULTS = {"fresh_s": 900, "max_per_hour": 20, "offline_repeat_s": 7200, "max_age_s": 7200}
+DEFAULTS = {"fresh_s": 900, "max_per_hour": 20, "offline_repeat_s": 7200, "max_age_s": 7200, "morning": (8, 0)}
+MORNING_WINDOW_S = 2 * 3600          # утреннюю сводку после этого срока уже не шлём (приёмник включили днём — это не «утро»)
+MORNING_SPAN_S = 12 * 3600           # за сколько часов до отправки смотрим: 08:00 -> с 20:00 (граница смен Макса)
 TEST_TEXT = "✅ web_MVS панель: Telegram подключён. Сюда придут тревоги заводов: перезапуск ПК или приложения, нет связи, красные тревоги."
 
 
@@ -57,7 +61,19 @@ def load_config(data: Path) -> Optional[dict]:
             cfg[key] = int(t[src] * mult)
     if isinstance(t.get("max_per_hour"), int) and t["max_per_hour"] > 0:
         cfg["max_per_hour"] = t["max_per_hour"]
+    if "morning" in t:                                    # "07:30" — другое время; false / "" / "off" — не слать утреннюю сводку
+        cfg["morning"] = parse_hhmm(t["morning"])
     return cfg
+
+
+def parse_hhmm(v) -> Optional[tuple]:
+    """«08:00» -> (8, 0). Не время или «выключено» -> None (сводка отключена)."""
+    try:
+        h, m = str(v).strip().split(":")
+        h, m = int(h), int(m)
+    except ValueError:
+        return None
+    return (h, m) if 0 <= h < 24 and 0 <= m < 60 else None
 
 
 def mask(text: str, token: str) -> str:
@@ -147,8 +163,8 @@ def format_line(r: dict) -> str:
 class Notifier:
     """Забирает очередь notify из хранилища и отправляет в Telegram. Свой поток; kick() — «проверь очередь сейчас» (после пульса)."""
 
-    def __init__(self, store, client: TelegramClient, cfg: dict, clock: Callable[[], float] = time.time):
-        self.store, self.client, self.cfg, self.clock = store, client, cfg, clock
+    def __init__(self, store, client: TelegramClient, cfg: dict, clock: Callable[[], float] = time.time, releases=None):
+        self.store, self.client, self.cfg, self.clock, self.releases = store, client, cfg, clock, releases
         self.state = {"last_ok_t": None, "last_error": "", "last_try_t": None, "sent_messages": 0}
         self._sent_times: deque = deque()       # когда ушли последние сообщения (потолок max_per_hour)
         self._summary_t = 0.0
@@ -175,6 +191,10 @@ class Notifier:
                 self.flush()
             except Exception:
                 log.exception("отправка в Telegram")
+            try:
+                self.morning()
+            except Exception:
+                log.exception("утренняя сводка")
             self._kick.wait(WATCH_EVERY_S)
             self._kick.clear()
 
@@ -240,6 +260,33 @@ class Notifier:
                     sent += 1
             return sent
 
+    def morning(self) -> bool:
+        """Утренняя сводка: раз в сутки после заданного времени (по умолчанию 08:00 по часам ПК приёмника), одним сообщением на все заводы.
+        Не ушла (нет связи) — повторяем, пока не вышел срок MORNING_WINDOW_S. Что уже отправлена сегодня, помнит БД: перезапуск не задвоит."""
+        hm = self.cfg.get("morning")
+        if not hm:
+            return False
+        with self._lock:
+            now = self.clock()
+            lt = time.localtime(now)
+            due = time.mktime((lt.tm_year, lt.tm_mon, lt.tm_mday, hm[0], hm[1], 0, 0, 0, -1))
+            day = time.strftime("%Y-%m-%d", lt)
+            if now < due or now - due > MORNING_WINDOW_S or self.store.meta_get("morning_day") == day:
+                return False
+            t0 = due - MORNING_SPAN_S
+            plants = self.store.plants_view()
+            facts = {p["id"]: self.store.digest_facts(p["id"], t0, due) for p in plants}
+            text = format_morning(plants, facts, self.store.outages(t0, due), t0, due, now, self.releases.latest if self.releases else None)
+            ok, _, err = self._send_all(text)
+            self.state["last_try_t"] = now
+            if not ok:
+                self.state["last_error"] = err
+                log.warning("Telegram: утренняя сводка не ушла — %s", err)
+                return False
+            self.store.meta_set("morning_day", day)
+            self.state.update(last_ok_t=now, last_error="", sent_messages=self.state["sent_messages"] + 1)
+            return True
+
     def send_test(self) -> tuple:
         ok, _, err = self._send_all(TEST_TEXT)
         if ok:
@@ -291,23 +338,33 @@ def _head(p: dict, now: float) -> str:
     return head
 
 
-def format_all(plants: list, now: float) -> str:
-    """Коротко по каждому заводу: статус, когда был пульс, сколько тревог."""
+def _old_version(p: dict, latest: Optional[str]) -> str:
+    """«2.0.43 → есть 2.0.50», если завод на более старой версии, иначе пусто. Версию не додумываем: нет данных — нет и пометки."""
+    ver = (p.get("snapshot") or {}).get("app_version")
+    return "%s, есть %s" % (ver, latest) if monitor_release.is_older(ver, latest) else ""
+
+
+def format_all(plants: list, now: float, latest: Optional[str] = None) -> str:
+    """Коротко по каждому заводу: статус, когда был пульс, сколько тревог, старая ли версия."""
     if not plants:
         return "Заводов пока нет."
     lines = ["Заводы на %s:" % _hm(now)]
     for p in plants:
         n = len(p.get("alerts") or [])
-        lines.append(_head(p, now) + (", тревог: %d" % n if n else ""))
+        old = _old_version(p, latest)
+        lines.append(_head(p, now) + (", тревог: %d" % n if n else "") + (", старая версия %s" % old if old else ""))
     return "\n".join(lines)[:MESSAGE_MAX]
 
 
-def format_plant(p: dict, now: float) -> str:
+def format_plant(p: dict, now: float, latest: Optional[str] = None) -> str:
     """Вся текстовая сводка по заводу: статус, строка «как дела» из снимка, тревоги с временем, датчики последней пробы, последние события."""
     lines = [_head(p, now)]
     snap = p.get("snapshot") or {}
     if p.get("status") == "waiting" or not snap:
         return "\n".join(lines)
+    old = _old_version(p, latest)
+    if old:
+        lines.append("⚠ Старая версия приложения: %s" % old)
     body = [ln for ln in str(snap.get("text") or "").split("\n") if ln and not ln.startswith("Тревоги:")]
     if body and snap.get("plant") and body[0].startswith(str(snap["plant"]) + " · "):
         body[0] = body[0][len(str(snap["plant"])) + 3:]           # имя завода уже в заголовке
@@ -333,14 +390,67 @@ def format_plant(p: dict, now: float) -> str:
     return "\n".join(lines)[:MESSAGE_MAX]
 
 
+def format_morning(plants: list, facts: dict, outages: list, t0: float, t1: float, now: float, latest: Optional[str] = None) -> str:
+    """Утренняя сводка за окно [t0, t1] (ночь: с 20:00 до 08:00). Только факты из журнала и последнего снимка завода, без оценок.
+    Где данных нет — «нет данных»; если приёмник сам не работал, об обрывах и тревогах пишем «не зафиксировано», а не «не было»."""
+    day = time.strftime("%d.%m", time.localtime(t1))
+    lines = ["☀ Сводка за ночь %s–%s (%s)" % (_hm(t0), _hm(t1), day)]
+    for a, b in outages:
+        lines.append("⚠ Приёмник не работал %s–%s: в это время обрывы связи и тревоги не фиксировались" % (_hm(a), _hm(b)))
+    none = "не зафиксировано" if outages else "не было"
+    if not plants:
+        return "\n".join(lines + ["Заводов пока нет."])
+    for p in plants:
+        snap = p.get("snapshot") or {}
+        head = _head(p, now)
+        ver = snap.get("app_version")
+        if ver:
+            head += " · версия %s" % ver
+            if monitor_release.is_older(ver, latest):
+                head += " (есть %s)" % latest
+        lines += ["", head]
+        if p.get("status") == "waiting" or not snap:
+            lines.append("• нет данных: завод ещё не присылал пульс")
+            continue
+        f = facts.get(p["id"]) or {}
+        off = f.get("offline") or []
+        lines.append("• Связь: обрывов %s" % ("%d (%s)" % (len(off), ", ".join(_hm(t) for t in off[:6])) if off else none))
+        starts = f.get("starts") or []
+        if starts:
+            lines.append("• Запуски: " + "; ".join("%s %s" % (_hm(t), text) for t, text in starts[:4]))
+        else:
+            lines.append("• Запуски ПК и приложения: %s" % none)
+        plate = f.get("plate_reboots") or []
+        if plate:
+            lines.append("• Перезагрузок платы: %d (%s)" % (len(plate), ", ".join(_hm(t) for t in plate[:6])))
+        alerts = f.get("alerts") or []
+        if alerts:
+            lines.append("• Тревоги за ночь:")
+            for a in alerts[:6]:
+                icon = "🔴" if a["level"] in ("critical", "high") else "🟡"
+                lines.append("   %s %s — открытий: %d, первое в %s" % (icon, a["text"], a["n"], _hm(a["first_t"])))
+        else:
+            lines.append("• Тревоги за ночь: %s" % none)
+        open_now = p.get("alerts") or []
+        if open_now:
+            lines.append("• Сейчас открыто: " + "; ".join("%s (с %s)" % (a["text"], _dhm(a["since"])) for a in open_now[:4]))
+        else:
+            lines.append("• Сейчас открытых тревог нет")
+        probes = (snap.get("micro") or {}).get("probes_today")
+        if probes is not None and p.get("last_seen_t"):
+            lines.append("• Проб с 00:00 до пульса %s: %s" % (_hm(p["last_seen_t"]), probes))
+    return "\n".join(lines)[:MESSAGE_MAX]
+
+
 class Bot:
     """Отвечает на сообщения в Telegram: кнопки заводов → сводка по заводу. Свой поток, длинный опрос getUpdates (наружу порты не открываем).
     Отвечает только чатам из chat_ids: чужим — молчание (в журнал только номер чата)."""
 
     POLL_S = 25
 
-    def __init__(self, store, client: TelegramClient, poll_client: TelegramClient, chat_ids: list, clock: Callable[[], float] = time.time):
-        self.store, self.client, self.poll_client, self.clock = store, client, poll_client, clock
+    def __init__(self, store, client: TelegramClient, poll_client: TelegramClient, chat_ids: list, clock: Callable[[], float] = time.time,
+                 releases=None):
+        self.store, self.client, self.poll_client, self.clock, self.releases = store, client, poll_client, clock, releases
         self.allowed = {str(c) for c in chat_ids}
         self.offset: Optional[int] = None
         self.state = {"last_error": "", "answered": 0}
@@ -372,9 +482,9 @@ class Bot:
         if key in MENU_WORDS:
             reply = "Нажми кнопку с названием завода внизу — пришлю всё по нему текстом. «%s» — коротко по каждому." % ALL_BUTTON
         elif key in ALL_WORDS:
-            reply = format_all(plants, now)
+            reply = format_all(plants, now, self.releases.latest if self.releases else None)
         elif key in by_name:
-            reply = format_plant(by_name[key], now)
+            reply = format_plant(by_name[key], now, self.releases.latest if self.releases else None)
         else:
             reply = "Не понял. Нажми кнопку с названием завода внизу."
         ok, _, err = self.client.send(chat["id"], reply, self.keyboard())

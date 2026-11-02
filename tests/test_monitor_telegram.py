@@ -460,7 +460,7 @@ def test_build_app_enables_notifier_only_when_configured(tmp_path, monkeypatch, 
         assert srv.call("GET", "/api/telegram")[1] == {"configured": False}, "блока telegram нет — приёмник работает как раньше"
     finally:
         srv.close()
-    (tmp_path / "server.json").write_text(json.dumps({"telegram": {"token": TOKEN, "chat_ids": [CHAT]}}), encoding="utf-8")
+    (tmp_path / "server.json").write_text(json.dumps({"telegram": {"token": TOKEN, "chat_ids": [CHAT], "morning": False}}), encoding="utf-8")
     srv = Srv(None, None, app=entry.build_app())
     try:
         code, j = srv.call("GET", "/api/telegram")
@@ -669,7 +669,7 @@ def test_bot_thread_answers_a_question_end_to_end(tmp_path, tg, monkeypatch):
     monkeypatch.setenv("MONITOR_DATA", str(tmp_path))
     monkeypatch.setenv("MONITOR_PASSWORD", PASSWORD)
     monkeypatch.setenv("MONITOR_TELEGRAM_API", tg.url)
-    (tmp_path / "server.json").write_text(json.dumps({"telegram": {"token": TOKEN, "chat_ids": [CHAT]}}), encoding="utf-8")
+    (tmp_path / "server.json").write_text(json.dumps({"telegram": {"token": TOKEN, "chat_ids": [CHAT], "morning": False}}), encoding="utf-8")
     tg.updates = [msg("Кир", uid=1)]                                        # вопрос до запуска — не отвечаем
     srv = Srv(None, None, app=entry.build_app())                            # watchdog включён: поднимаются отправщик и бот
     try:

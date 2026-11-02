@@ -54,7 +54,7 @@ def manifest() -> dict:
 
 
 def create_app(store: monitor_store.Store, password: str, version: str, panel_html: str, watchdog: bool = True,
-               clock: Callable[[], float] = time.time, assets: Optional[dict] = None, notifier=None, bot=None) -> FastAPI:
+               clock: Callable[[], float] = time.time, assets: Optional[dict] = None, notifier=None, bot=None, releases=None) -> FastAPI:
     if not password:
         raise ValueError("пароль панели не задан")
     fails: dict = {}
@@ -68,6 +68,7 @@ def create_app(store: monitor_store.Store, password: str, version: str, panel_ht
             last_purge = 0.0
             while not stop.wait(WATCH_EVERY_S):
                 try:
+                    store.touch_alive()                  # отметка «приёмник жив»: по ней при запуске видно, сколько он не работал
                     for ev in store.check_offline():
                         log.warning("%s: %s", ev["plant"], ev["text"])
                         if notifier is not None:
@@ -85,8 +86,12 @@ def create_app(store: monitor_store.Store, password: str, version: str, panel_ht
             notifier.start()
         if bot is not None and watchdog:
             bot.start()
+        if releases is not None and watchdog:
+            releases.start()
         yield
         stop.set()
+        if releases is not None:
+            releases.stop()
         if notifier is not None:
             notifier.stop()
         if bot is not None:
@@ -209,7 +214,7 @@ def create_app(store: monitor_store.Store, password: str, version: str, panel_ht
         bad = panel_denied(request)
         if bad is not None:
             return bad
-        return {"plants": store.plants_view(), "server_t": clock(), "version": version}
+        return {"plants": store.plants_view(), "server_t": clock(), "version": version, "latest_version": releases.latest if releases else None}
 
     @app.post("/api/plants")
     async def plants_add(request: Request):

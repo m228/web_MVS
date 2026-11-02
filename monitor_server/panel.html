@@ -43,6 +43,8 @@ h2 { margin: 0; font-size: 19px; }
 .chip.s-checking { background: var(--warn-bg); color: var(--warn); }
 .sub { color: var(--muted); font-size: 13px; }
 .sub .bad { color: var(--bad); font-weight: 600; }
+.ver { color: var(--text); font-weight: 700; font-size: 14px; }
+.ver.old { color: var(--warn); background: var(--warn-bg); border-radius: 999px; padding: 1px 10px; }
 pre.text { margin: 0; font: inherit; font-size: 14px; white-space: pre-wrap; line-height: 1.65; }
 .card.s-offline pre.text, .card.s-waiting pre.text { opacity: .55; }
 .alerts { display: flex; flex-direction: column; gap: 6px; }
@@ -121,7 +123,18 @@ const opened = new Set();           // у каких заводов раскры
 const openedPos = new Set();        // у каких раскрыты «Датчики»
 const openedChart = new Set();      // у каких внутри раскрыт график (по умолчанию свёрнут)
 const posCache = {};                // id завода -> последние положения датчиков (новые первыми)
-let plants = [], serverT = Date.now() / 1000;
+let plants = [], serverT = Date.now() / 1000, latestV = null;   // latestV — последняя версия на GitHub (null — не знаем)
+
+function verTuple(v) {
+  const m = /^v?(\d+)\.(\d+)\.(\d+)$/.exec(String(v || '').trim());
+  return m ? [Number(m[1]), Number(m[2]), Number(m[3])] : null;
+}
+function verOlder(v, latest) {          // true только если обе версии разобраны и завод строго старше
+  const a = verTuple(v), b = verTuple(latest);
+  if (!a || !b) return false;
+  for (let i = 0; i < 3; i++) if (a[i] !== b[i]) return a[i] < b[i];
+  return false;
+}
 
 const fmt = (t) => new Date(t * 1000).toLocaleString('ru-RU', {day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit'});
 function dur(s) {
@@ -201,7 +214,11 @@ function card(p) {
   let sub;
   if (p.status === 'waiting') sub = 'ещё не выходил на связь';
   else if (p.status === 'offline') sub = '<span class="bad">нет пульса — последний ' + esc(dur(serverT - p.last_seen_t)) + '</span>';
-  else sub = (snap.app_version ? 'v' + esc(snap.app_version) + ' · ' : '') + 'пульс ' + esc(dur(serverT - p.last_seen_t));
+  else {
+    const old = verOlder(snap.app_version, latestV);
+    sub = (snap.app_version ? '<span class="ver' + (old ? ' old' : '') + '"' + (old ? ' title="Приложение завода старее последнего релиза"' : '') + '>v' +
+      esc(snap.app_version) + (old ? ' · есть ' + esc(latestV) : '') + '</span> · ' : '') + 'пульс ' + esc(dur(serverT - p.last_seen_t));
+  }
   const alerts = p.alerts.map((a) => '<div class="alert' + (a.level === 'critical' || a.level === 'high' ? ' bad' : '') + '"><b>' + esc(a.text) +
     '</b><small>с ' + fmt(a.since) + '</small></div>').join('');
   return '<article class="card s-' + p.status + (p.alerts.length ? ' has-alert' : '') + '" data-id="' + p.id + '">' +
@@ -268,7 +285,7 @@ async function loadTg() {
 async function load() {
   try {
     const j = await api('/api/plants');
-    plants = j.plants; serverT = j.server_t;
+    plants = j.plants; serverT = j.server_t; latestV = j.latest_version || null;
     $('upd').textContent = 'обновлено ' + new Date().toLocaleTimeString('ru-RU');
     render();
     loadTg();

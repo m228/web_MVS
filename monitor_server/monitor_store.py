@@ -36,6 +36,7 @@ ALERT_DEDUP_S = 120              # событие тревоги от завод
 NOTIFY_LEVELS = ("critical", "high")                              # в Telegram идут только они (жёлтое «medium» — только в панели)
 NOTIFY_KINDS = ("start", "alert", "plate_reboot", "offline")      # какие события бывают «открытием» тревоги
 OFFLINE_KINDS = ("offline", "offline_repeat")
+OUTAGE_MIN_S = 180               # приёмник молчал дольше — это перерыв (перезапуск занимает секунды)
 
 
 def hash_token(token: str) -> str:
@@ -88,12 +89,65 @@ class Store:
                 target REAL, calc REAL, enc REAL, ai REAL, gap REAL, ok INTEGER NOT NULL DEFAULT 1, timeout INTEGER NOT NULL DEFAULT 0,
                 why TEXT NOT NULL DEFAULT '', sv REAL, stage INTEGER, UNIQUE (plant_id, eid));
             CREATE INDEX IF NOT EXISTS ix_positions_plant ON positions (plant_id, t);
+            CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS outages (start_t REAL NOT NULL, end_t REAL NOT NULL);
         """)
         self.db.commit()
+        self._note_outage()
 
     def close(self) -> None:
         with self._lock:
             self.db.close()
+
+    # ------------------------------------------------------------------------------------------- когда не работал сам приёмник
+
+    def meta_get(self, key: str) -> Optional[str]:
+        with self._lock:
+            r = self.db.execute("SELECT value FROM meta WHERE key=?", (key,)).fetchone()
+        return r["value"] if r else None
+
+    def meta_set(self, key: str, value: str) -> None:
+        with self._lock, self.db:
+            self.db.execute("INSERT INTO meta (key, value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", (key, str(value)))
+
+    def _note_outage(self) -> None:
+        """При запуске сверяемся с последней отметкой «жив»: если приёмник молчал дольше OUTAGE_MIN_S, записываем перерыв.
+        За это время обрывы связи заводов он не видел — утренняя сводка должна об этом сказать, а не писать «обрывов не было»."""
+        now = self.clock()
+        try:
+            last = float(self.meta_get("alive_t"))
+        except (TypeError, ValueError):
+            last = None
+        if last is not None and last < now and now - last > OUTAGE_MIN_S:
+            with self._lock, self.db:
+                self.db.execute("INSERT INTO outages (start_t, end_t) VALUES (?,?)", (last, now))
+        self.meta_set("alive_t", repr(now))
+
+    def touch_alive(self) -> None:
+        self.meta_set("alive_t", repr(self.clock()))
+
+    def outages(self, t0: float, t1: float) -> list[tuple]:
+        """Перерывы работы приёмника, пересекающие окно [t0, t1], обрезанные по окну."""
+        with self._lock:
+            rows = self.db.execute("SELECT start_t, end_t FROM outages WHERE end_t > ? AND start_t < ? ORDER BY start_t", (t0, t1)).fetchall()
+        return [(max(r["start_t"], t0), min(r["end_t"], t1)) for r in rows]
+
+    def digest_facts(self, plant_id: int, t0: float, t1: float) -> dict:
+        """Что было с заводом в окне [t0, t1] — только то, что записано в журнале: обрывы связи, запуски, перезагрузки платы, тревоги."""
+        with self._lock:
+            def q(sql, *args):
+                return self.db.execute(sql, (plant_id, t0, t1) + args).fetchall()
+            offline = [r["t"] for r in q("SELECT t FROM events WHERE plant_id=? AND t>=? AND t<? AND kind='offline' ORDER BY t")]
+            starts = [(r["t"], r["text"]) for r in q("SELECT t, text FROM events WHERE plant_id=? AND t>=? AND t<? AND kind='start' ORDER BY t")]
+            plate = [r["t"] for r in q("SELECT t FROM events WHERE plant_id=? AND t>=? AND t<? AND kind='plate_reboot' ORDER BY t")]
+            alerts: dict = {}
+            for r in q("SELECT t, level, text, code FROM events WHERE plant_id=? AND t>=? AND t<? AND kind='alert' AND state='open' ORDER BY t"):
+                a = alerts.setdefault(r["code"], {"code": r["code"], "n": 0, "text": "", "level": "info", "first_t": r["t"]})
+                a["n"] += 1
+                a["text"] = r["text"]
+                if LEVELS.index(r["level"]) < LEVELS.index(a["level"]):
+                    a["level"] = r["level"]
+        return {"offline": offline, "starts": starts, "plate_reboots": plate, "alerts": list(alerts.values())}
 
     # ------------------------------------------------------------------------------------------------------------- заводы
 

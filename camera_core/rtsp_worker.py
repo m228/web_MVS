@@ -7,10 +7,12 @@ import time
 import cv2
 from logger import log_event
 import dahua_control
+import plate_config
 
 from .utils import DEFAULT_VIDEO_FPS, RTSP_RECONNECT_BACKOFF, RTSP_RECONNECT_LOG_EVERY, RTSP_STALL_SECONDS
 from .base_worker import BaseCameraWorker
 from .frame_quality import GARBAGE_THRESHOLD, SAMPLE_PERIOD_S, frame_garbage
+from .hw_decode import decoder_kind, hw_params, normalize_mode
 
 
 class RtspCameraWorker(BaseCameraWorker):
@@ -70,6 +72,11 @@ class RtspCameraWorker(BaseCameraWorker):
         self.gray_samples = 0
         self.gray_frames = 0
         self._quality_at = 0.0
+        # декодирование: 'gpu' (видеоядро) / 'cpu' / '' (камера не открыта). _hw_off — видеоядро не вышло, до перезапуска процессор
+        self.decoder = ""
+        self._hw_off = False
+        self._hw_open_fail = 0
+        self._hw_zero = 0
 
     # ---------- фоновый захват ----------
 
@@ -199,6 +206,7 @@ class RtspCameraWorker(BaseCameraWorker):
         last_frame_time = None
         last_emit = 0.0
         source_fps = DEFAULT_VIDEO_FPS
+        got_frame = False          # с текущим открытием пришёл хотя бы один кадр
         self._last_frame_at = time.time()
         self._start_watchdog()
 
@@ -226,6 +234,7 @@ class RtspCameraWorker(BaseCameraWorker):
 
                     self.capture = capture
                     self.running = True
+                    got_frame = False
                     source_fps = self._capture_fps(capture)
                     self._last_frame_at = time.time()
                     self._stall_reported = False
@@ -254,6 +263,7 @@ class RtspCameraWorker(BaseCameraWorker):
                                       {"serial_number": self.serial_number, "attempt": attempt,
                                        "retry_in": self._backoff_delay(attempt),
                                        "stall_seconds": round(time.time() - self._last_frame_at, 1)})
+                        self._hw_giveup_check(got_frame)
                         try:
                             capture.release()
                         except Exception:
@@ -268,6 +278,7 @@ class RtspCameraWorker(BaseCameraWorker):
                     continue
 
                 self._last_frame_at = time.time()
+                got_frame = True
                 # кадры снова пошли после «тишины» — гасим тревогу сторожа
                 if self._stall_reported:
                     self._stall_reported = False
@@ -365,13 +376,73 @@ class RtspCameraWorker(BaseCameraWorker):
                       {"serial_number": self.serial_number, "photo": self.save_photo,
                        "video": self.save_video, "autostart": self.autostart})
 
-    def _open_capture(self):
-        capture = cv2.VideoCapture(self.rtsp_url, cv2.CAP_FFMPEG)
+    def _cv_open(self, mode):
+        """cv2.VideoCapture; mode off — программно, иначе с запросом аппаратного декодирования."""
+        params = hw_params(mode) if mode != "off" else []
+        try:
+            capture = cv2.VideoCapture(self.rtsp_url, cv2.CAP_FFMPEG, params) if params \
+                else cv2.VideoCapture(self.rtsp_url, cv2.CAP_FFMPEG)
+        except Exception:
+            capture = cv2.VideoCapture(self.rtsp_url, cv2.CAP_FFMPEG)
         try:
             capture.set(cv2.CAP_PROP_BUFFERSIZE, 1)
         except Exception:
             pass
         return capture
+
+    def _hw_mode(self):
+        if self._hw_off:
+            return "off"
+        try:
+            rcfg = plate_config.load().get("rtsp")
+            return normalize_mode(rcfg.get("hw_accel") if isinstance(rcfg, dict) else None)
+        except Exception:
+            return "auto"
+
+    def _open_capture(self):
+        """Видеоядро (plate_config.rtsp.hw_accel, по умолчанию auto) -> не открылось: пробуем процессор.
+        Процессором открылось, а видеоядром нет — дальше этот воркер декодирует процессором. Не открылось ни так, ни так
+        (камера мертва) — видеоядро не виним; программную попытку повторяем лишь на каждом 3-м провале, иначе мёртвая
+        камера держала бы вдвое дольше (у OpenCV на открытие жёсткие 30 с)."""
+        mode = self._hw_mode()
+        if mode == "off":
+            self.decoder = "cpu"
+            return self._cv_open("off")
+        capture = self._cv_open(mode)
+        if capture.isOpened():
+            self._hw_open_fail = 0
+            kind = decoder_kind(capture)
+            if kind != self.decoder:
+                log_event("camera_core.rtsp_stream", "Декодирование RTSP: %s" % ("видеоядро" if kind == "gpu" else "процессор"),
+                          "info", {"serial_number": self.serial_number, "mode": mode, "decoder": kind})
+            self.decoder = kind
+            return capture
+        self._hw_open_fail += 1
+        if self._hw_open_fail % 3 != 1:
+            return capture
+        try:
+            capture.release()
+        except Exception:
+            pass
+        capture = self._cv_open("off")
+        if capture.isOpened():
+            self._hw_off = True
+            self.decoder = "cpu"
+            log_event("camera_core.rtsp_stream", "С видеоядром поток не открылся, а программно открылся — дальше декодирую процессором",
+                      "warn", {"serial_number": self.serial_number, "mode": mode})
+        return capture
+
+    def _hw_giveup_check(self, got_frame):
+        """Поток с видеоядром оборвался, не дав ни одного кадра. Три раза подряд — видеоядро его не тянет, возвращаемся на процессор."""
+        if got_frame:
+            self._hw_zero = 0          # обычный обрыв связи, не вина видеоядра
+        if self._hw_off or self.decoder != "gpu" or got_frame:
+            return
+        self._hw_zero += 1
+        if self._hw_zero >= 3:
+            self._hw_off = True
+            log_event("camera_core.rtsp_stream", "Видеоядро не дало ни одного кадра за %d открытий — дальше декодирую процессором" % self._hw_zero,
+                      "warn", {"serial_number": self.serial_number})
 
     def _capture_fps(self, capture):
         try:
@@ -520,6 +591,7 @@ class RtspCameraWorker(BaseCameraWorker):
             "reconnecting": self.reconnecting,
             "viewers": self._viewers,
             "autostart": self.autostart,
+            "decoder": self.decoder,
         }
 
     # ---------- цифровой зум ----------

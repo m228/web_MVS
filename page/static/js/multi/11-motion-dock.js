@@ -258,7 +258,7 @@ function mdCameraParamsHtml(cam) {
       ${mdField('Название', `<input type="text" ${a} data-f="name" value="${escapeHtml(cam.name)}" />`)}
       ${mdField('Адрес потока', `<input type="text" ${a} data-f="url" value="${escapeHtml(cam.url)}" />`, '', 'md-wide')}
       ${mdField('Поток', `<select ${a} data-f="substream">${mdSel([['0', 'основной'], ['1', 'дополнительный (легче)']], cam.substream ? '1' : '0')}</select>`, 'Дополнительный поток камеры Dahua (subtype=1): картинка меньше, процессор нагружается заметно слабее. Пороги после смены снимите заново — значения diff и flow зависят от разрешения')}
-      ${mdField('Декодирование', `<select ${a} data-f="hw_accel">${mdSel([['off', 'процессор'], ['auto', 'видеоядро (авто)'], ['d3d11', 'видеоядро (Direct3D 11)']], cam.hw_accel || 'off')}</select>`, 'Видеоядро процессора (Intel UHD и т.п.) декодирует видео вместо процессора. Не открылось или не дало кадров — сервис сам вернётся на процессор')}
+      ${mdField('Декодирование', `<select ${a} data-f="hw_accel">${mdSel([['off', 'процессор'], ['auto', 'видеоядро (авто)'], ['d3d11', 'видеоядро (Direct3D 11)']], cam.hw_accel || 'auto')}</select>`, 'Видеоядро процессора (Intel UHD и т.п.) декодирует видео вместо процессора. Не открылось или не дало кадров — сервис сам вернётся на процессор')}
       <div class="md-sub">Анализ движения</div>
       ${mdField('Кадров/с в анализ', mdNum(a + ' data-f="proc_fps"', cam.proc_fps, 'min="0.2" max="30" step="0.5"'))}
       ${mdField('Шаг сравнения, кадров', mdNum(a + ' data-f="frame_gap"', cam.frame_gap, 'min="1" max="10"'), 'Сравнивать кадр не с соседним, а через N кадров: медленное движение виднее')}

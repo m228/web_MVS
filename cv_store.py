@@ -421,9 +421,7 @@ def _hist_backfill(serial: str):
         recompute_journal(serial)       # логика объёма/муки/рассева изменилась (calc_ver) — обновить строки, у которых ещё есть кадры
     except Exception:
         pass
-    known = set()
-    for day in _hist_days(serial):
-        known.update(r.get("ts") for r in _hist_read(serial, day))
+    known = db.known_ts(_serial_dir(serial).name)       # все пробы журнала, и скрытые тоже: скрытая варка из cv_results заново не дописывается
     for p in sorted(x for x in sd.iterdir() if x.is_dir()):
         if p.name in known:
             continue
@@ -770,6 +768,35 @@ def boil_groups(serial: str) -> list[list[dict]]:
     rows.sort(key=lambda r: r["t"])
     _apply_fines_gate(rows)
     return _group_boils(rows)
+
+
+HIDE_REASON_MAX = 120
+
+
+def hide_boils(serial: str, starts: list, reason: str, now: Optional[float] = None) -> dict:
+    """Скрыть варки из отчёта (пробы остаются в журнале, db.read_rows их не отдаёт). starts — время начала варок (epoch, как t_start в отчёте).
+    Границы берём из самих варок журнала, а не от клиента. Идущую варку (последняя проба моложе BOIL_OPEN_S) и несуществующую пропускаем.
+    Возвращает {"hidden": [{id, t_from, t_to, n}], "skipped": [{t, why}]}."""
+    now = time.time() if now is None else now
+    reason = (reason or "").strip()[:HIDE_REASON_MAX] or "скрыта оператором"
+    groups = boil_groups(serial)
+    tag = _serial_dir(serial).name
+    hidden, skipped = [], []
+    for s in starts:
+        try:
+            s = float(s)
+        except (TypeError, ValueError):
+            skipped.append({"t": s, "why": "неверное время"})
+            continue
+        g = next((x for x in groups if abs(x[0]["t"] - s) < 1.0), None)
+        if g is None:
+            skipped.append({"t": s, "why": "варки нет в журнале (уже скрыта?)"})
+        elif now - g[-1]["t"] <= BOIL_OPEN_S:
+            skipped.append({"t": s, "why": "варка ещё идёт"})
+        else:
+            hid = db.hide_boil(tag, g[0]["t"], g[-1]["t"], reason, now)
+            hidden.append({"id": hid, "t_from": g[0]["t"], "t_to": g[-1]["t"], "n": len(g)})
+    return {"hidden": hidden, "skipped": skipped}
 
 
 def boils(serial: str, limit: int = 6, now: Optional[float] = None, offset: int = 0) -> list[dict]:
@@ -1264,7 +1291,7 @@ def recompute_journal(serial: str, t_from: Optional[float] = None) -> int:
         return 0
     cfg, fresh = _volume_cfg_now(), {}
     tag = _serial_dir(serial).name
-    jr_rows = db.read_rows(tag)
+    jr_rows = db.read_rows(tag, with_hidden=True)          # скрытые варки пересчитываются тоже: вернут в отчёт — цифры будут свежими
     curve_on = cv_volume.volume_cfg(cfg)["fines_curve_on"]
     fit = boil_fit_times(jr_rows) if curve_on else {}     # время «готовности» варок — для растяжения плавного порога
     fill = fill_seed_age(jr_rows) if curve_on else {}
@@ -1288,7 +1315,7 @@ def recompute_journal(serial: str, t_from: Optional[float] = None) -> int:
             continue
     n = 0
     tag = _serial_dir(serial).name
-    cur = {r["ts"]: r for r in db.read_rows(tag)}
+    cur = {r["ts"]: r for r in db.read_rows(tag, with_hidden=True)}
     for ts, row in fresh.items():
         if ts in cur and cur[ts] != row:
             db.upsert_row(tag, row)
@@ -1326,7 +1353,7 @@ def list_archive(serial: str) -> list[dict]:
     if not dirs:
         return []
     t0 = _ts_epoch(dirs[-1])
-    rows = {r["ts"]: r for r in db.read_rows(sd.name, t_from=(t0 - 1) if t0 else None)}
+    rows = {r["ts"]: r for r in db.read_rows(sd.name, t_from=(t0 - 1) if t0 else None, with_hidden=True)}      # лента архива — кадры на диске, скрытые тоже
     out = []
     for ts in dirs:
         r = rows.get(ts)

@@ -356,6 +356,7 @@
         oneModel ? "модель " + esc(modelName(oneModel)) : "", "сформирован " + dmy(rep.generated) + " " + new Date(rep.generated * 1000).toTimeString().slice(0, 5)].filter(Boolean).join(" · ");
       let h = '<div class="micro-rep-head"><div><div class="micro-rep-title">Отчёт по варкам</div><div class="micro-rep-sub">' + meta + "</div></div>" +
         (opt.print ? '<img class="micro-rep-logo" src="/static/icon/Logo_Black.png" alt="Maximum Automation">' : "") + "</div>";
+      h += hiddenNote(rep);
       const off = t.boils - t.typical;
       h += '<div class="micro-rep-cards">' +
         card("Варок", t.boils, "проб " + t.probes + (off ? " · не в итогах " + off : "")) +
@@ -470,7 +471,7 @@
 
     function render(rep) {
       const out = g("repOut");
-      if (!rep.boils.length) { out.innerHTML = '<div class="micro-conn-hint">За этот период варок нет (учитываются варки не короче ' + rep.min_probes + " проб).</div>"; return; }
+      if (!rep.boils.length) { out.innerHTML = hiddenNote(rep) + '<div class="micro-conn-hint">За этот период варок нет (учитываются варки не короче ' + rep.min_probes + " проб).</div>"; return; }
       lastW = out.clientWidth;
       if (tip) tip.hidden = true;                 // точка под курсором исчезнет вместе со старым графиком — mouseout не придёт
       out.innerHTML = reportHtml(rep, { width: Math.max(320, Math.min(1400, lastW || 900)) });
@@ -542,6 +543,63 @@
       if (lastRep && lastRep.boils.length) render(lastRep);
     }
 
+    // ===== «Скрыть варки»: варки, посчитанные неправильно, уходят из отчёта, трендов и сравнения; пробы из журнала не удаляются, «Вернуть» — обратно =====
+    const HIDE_REASONS = ["неправильные подсчёты", "сбой записи проб", "авария на заводе"];
+    const epLbl = (t) => { const d = new Date(t * 1000), p = (n) => String(n).padStart(2, "0"); return p(d.getDate()) + "." + p(d.getMonth() + 1) + " " + p(d.getHours()) + ":" + p(d.getMinutes()); };
+    const nBoils = (n) => n + " " + plural(n, "варка", "варки", "варок");
+
+    // строка над отчётом (и в PDF): сколько варок скрыто и почему — чтобы цифры не выглядели полными
+    function hiddenNote(rep) {
+      const H = rep.hidden || [];
+      if (!H.length) return "";
+      const why = [...new Set(H.map((x) => x.reason))].map((r) => "«" + esc(r) + "»").join(", ");
+      return '<div class="micro-rep-warn micro-rep-hidnote"><b>Скрыто из отчёта: ' + nBoils(H.length) + "</b> (" + why + "). Пробы в журнале остались.</div>";
+    }
+
+    function renderHidePanel() {
+      const box = g("repHidePanel"); if (!box || !lastRep) return;
+      const B = lastRep.boils || [], H = lastRep.hidden || [];
+      const mark = (b) => (b.flag ? " · " + FLAG[b.flag][0] : "");
+      const rows = B.map((b) => '<label class="micro-rep-hide__row' + (b.finished ? "" : " is-off") + '"><input type="checkbox" data-start="' + b.t_start + '"' + (b.finished ? "" : " disabled") + " /> " +
+        tsLbl(b.start) + " <small>" + b.probes + " " + plural(b.probes, "проба", "пробы", "проб") + " · " + dur(b.duration_min) + (b.fines_avg != null ? " · мука " + fmt(b.fines_avg, 0) + " %" : "") + mark(b) +
+        (b.finished ? "" : " · идёт, скрыть нельзя") + "</small></label>").join("");
+      box.innerHTML = '<div class="micro-rep-hide__h">Что убрать из отчёта (данные не удаляются)</div>' +
+        '<div class="micro-rep-hide__list">' + (rows || '<small class="micro-conn-hint">в периоде нет варок</small>') + "</div>" +
+        '<div class="micro-rep-hide__act"><input type="text" id="repHideReason" list="repHideReasons" maxlength="120" value="' + esc(HIDE_REASONS[0]) + '" title="Пометка: почему скрыты (видна в отчёте)" />' +
+        '<datalist id="repHideReasons">' + HIDE_REASONS.map((r) => '<option value="' + esc(r) + '"></option>').join("") + "</datalist>" +
+        '<button type="button" class="toolbar-btn toolbar-btn--neutral" id="repHideGo" disabled>Скрыть выбранные</button></div>' +
+        (H.length ? '<div class="micro-rep-hide__h">Скрытые в этом периоде (' + H.length + ")</div><div class=\"micro-rep-hide__list\">" +
+          H.map((x) => '<div class="micro-rep-hide__row">' + epLbl(x.t_from) + " <small>" + x.n + " " + plural(x.n, "проба", "пробы", "проб") + " · «" + esc(x.reason) + "»</small>" +
+            '<button type="button" class="toolbar-btn toolbar-btn--neutral" data-unhide="' + x.id + '" title="Вернуть эту варку в отчёт">Вернуть</button></div>').join("") + "</div>" : "");
+    }
+    function hideSel() { return [...g("repHidePanel").querySelectorAll("input[data-start]:checked")].map((i) => Number(i.dataset.start)); }
+    async function hidePost(url, body) {
+      const hint = g("repHint");
+      try {
+        const r = await (await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) })).json();
+        await generate();
+        const skipped = (r.skipped || []).length ? "пропущено " + r.skipped.length + ": " + r.skipped[0].why : "";
+        hint.textContent = r.ok ? skipped : (r.error || skipped || "не получилось");
+      } catch (e) { hint.textContent = "не получилось: " + e.message; }
+    }
+    function initHidePanel() {
+      const box = g("repHidePanel"); if (!box) return;
+      g("repHideBtn").addEventListener("click", () => { box.hidden = !box.hidden; g("repHideBtn").classList.toggle("is-on", !box.hidden); if (!box.hidden) renderHidePanel(); });
+      box.addEventListener("change", (e) => {
+        if (!e.target.closest("input[data-start]")) return;
+        const n = hideSel().length, b = g("repHideGo"); b.disabled = !n; b.textContent = n ? "Скрыть выбранные (" + n + ")" : "Скрыть выбранные";
+      });
+      box.addEventListener("click", (e) => {
+        const un = e.target.closest("[data-unhide]");
+        if (un) { hidePost("/api/cv/boil/unhide", { ids: [Number(un.dataset.unhide)] }); return; }
+        if (!e.target.closest("#repHideGo")) return;
+        const sel = hideSel(); if (!sel.length) return;
+        const reason = g("repHideReason").value.trim() || HIDE_REASONS[0];
+        if (!window.confirm("Скрыть из отчёта " + nBoils(sel.length) + "?\n\nПометка: «" + reason + "».\nПробы не удаляются — скрытые варки можно вернуть кнопкой «Вернуть» в этой же панели.")) return;
+        hidePost("/api/cv/boil/hide", { starts: sel, reason });
+      });
+    }
+
     async function generate() {
       const hint = g("repHint"), qq = query();
       if (!qq.from || !qq.to) { hint.textContent = "укажи обе даты"; return; }
@@ -552,6 +610,7 @@
         render(rep);
         if (anyOthersOn() && (rep.others_available || []).length) loadOthers().then(() => { if (lastRep === rep) render(rep); });
         renderColsPanel();
+        g("repHideBtn").disabled = false; renderHidePanel();
         lastQ = qq.q; g("repCsvBtn").disabled = false; g("repPdfBtn").disabled = !rep.boils.length; hint.textContent = "";
       } catch (e) { hint.textContent = "не получилось: " + e.message; }
       g("repGoBtn").disabled = false;
@@ -599,6 +658,7 @@
       g("repColsBtn").addEventListener("click", () => { g("repColsPanel").hidden = !g("repColsPanel").hidden; g("repColsBtn").classList.toggle("is-on", !g("repColsPanel").hidden); });
       g("repCsvBtn").addEventListener("click", () => { if (lastQ) window.location.href = "/api/cv/report.csv?" + lastQ + "&cols=" + encodeURIComponent(visibleKeys().join(",")); });
       g("repPdfBtn").addEventListener("click", printReport);      // диалог печати → «Сохранить как PDF»
+      initHidePanel();
     }
     window.microRep = { fmt, range, esc, tsLbl, hmLbl, dayLbl, dmy, dur, plural, modelName, niceStep, yScale, legend, chartHead, median, quant, attachTip, hideTip, printDoc, openBoil };
     init();

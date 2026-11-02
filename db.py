@@ -178,6 +178,10 @@ def _init(c: sqlite3.Connection) -> None:
         c.execute("CREATE TABLE IF NOT EXISTS model_checks (id INTEGER PRIMARY KEY AUTOINCREMENT, t REAL NOT NULL, sig TEXT NOT NULL, "
                   "tag TEXT, ok INTEGER NOT NULL, data TEXT NOT NULL)")
         c.execute("CREATE INDEX IF NOT EXISTS ix_model_checks ON model_checks (t)")
+        # скрытые из отчёта варки (диапазон времени от первой до последней пробы варки): пробы остаются в журнале, read_rows их не отдаёт
+        c.execute("CREATE TABLE IF NOT EXISTS boil_hidden (id INTEGER PRIMARY KEY AUTOINCREMENT, serial TEXT NOT NULL, t_from REAL NOT NULL, "
+                  "t_to REAL NOT NULL, n INTEGER NOT NULL, reason TEXT NOT NULL, at REAL NOT NULL)")
+        c.execute("CREATE INDEX IF NOT EXISTS ix_boil_hidden ON boil_hidden (serial, t_from)")
         c.execute("INSERT OR IGNORE INTO meta (key, value) VALUES ('schema_version', ?)", (str(SCHEMA_VERSION),))
         c.commit()
 
@@ -263,9 +267,14 @@ def rebuild_boils(serial: str, commit: bool = True) -> int:
         return bid
 
 
+_NOT_HIDDEN = " AND NOT EXISTS (SELECT 1 FROM boil_hidden h WHERE h.serial=journal.serial AND journal.t BETWEEN h.t_from AND h.t_to)"
+
+
 def read_rows(serial: str, t_from: Optional[float] = None, t_to: Optional[float] = None, day: Optional[str] = None,
-              with_boil: bool = False) -> list[dict]:
-    """Строки журнала по времени — те же словари, что раньше в jsonl (из row_json). with_boil добавляет boil_id и sv_max_run."""
+              with_boil: bool = False, with_hidden: bool = False) -> list[dict]:
+    """Строки журнала по времени — те же словари, что раньше в jsonl (из row_json). with_boil добавляет boil_id и sv_max_run.
+    Пробы скрытых варок (boil_hidden) не отдаются: отчёт, тренды, сравнение и аномалии их не видят; with_hidden=True — отдать и их
+    (пересчёт журнала, лента архива кадров)."""
     sql, args = "SELECT row_json, boil_id, sv_max_run FROM journal WHERE serial=?", [serial]
     if day:         # диапазон по ключу (serial, ts), а не LIKE: LIKE индекс не берёт и читает ВСЕ пробы серийника — чтение по дням росло квадратично
         sql += " AND ts>=? AND ts<?"
@@ -276,13 +285,52 @@ def read_rows(serial: str, t_from: Optional[float] = None, t_to: Optional[float]
     if t_to is not None:
         sql += " AND t<=?"
         args.append(t_to)
+    try:
+        cur = list(conn().execute(sql + ("" if with_hidden else _NOT_HIDDEN) + " ORDER BY t, ts", args))
+    except sqlite3.OperationalError:       # чужая база более старой версии (только чтение): таблицы скрытых нет — скрывать нечего
+        cur = list(conn().execute(sql + " ORDER BY t, ts", args))
     out = []
-    for r in conn().execute(sql + " ORDER BY t, ts", args):
+    for r in cur:
         d = json.loads(r["row_json"])
         if with_boil:
             d["boil_id"], d["sv_max_run"] = r["boil_id"], r["sv_max_run"]
         out.append(d)
     return out
+
+
+def hide_boil(serial: str, t_from: float, t_to: float, reason: str, at: float) -> int:
+    """Скрыть варку из отчёта: пробы с t в [t_from, t_to] перестают отдаваться read_rows. Возвращает id записи (для «Вернуть»)."""
+    with _wlock:
+        c = conn()
+        n = c.execute("SELECT COUNT(*) FROM journal WHERE serial=? AND t BETWEEN ? AND ?", (serial, t_from, t_to)).fetchone()[0]
+        hid = c.execute("INSERT INTO boil_hidden (serial, t_from, t_to, n, reason, at) VALUES (?, ?, ?, ?, ?, ?)",
+                        (serial, t_from, t_to, n, reason, at)).lastrowid
+        c.commit()
+        return hid
+
+
+def unhide_boil(serial: str, hid: int) -> bool:
+    """Вернуть скрытую варку в отчёт. False — такой записи нет."""
+    with _wlock:
+        c = conn()
+        n = c.execute("DELETE FROM boil_hidden WHERE id=? AND serial=?", (hid, serial)).rowcount
+        c.commit()
+        return n > 0
+
+
+def hidden_boils(serial: str, t_from: Optional[float] = None, t_to: Optional[float] = None) -> list[dict]:
+    """Скрытые варки серийника по времени: [{id, t_from, t_to, n, reason, at}]. С t_from / t_to — те, что начались в этом периоде."""
+    sql, args = "SELECT id, t_from, t_to, n, reason, at FROM boil_hidden WHERE serial=?", [serial]
+    if t_from is not None:
+        sql += " AND t_from>=?"
+        args.append(t_from)
+    if t_to is not None:
+        sql += " AND t_from<=?"
+        args.append(t_to)
+    try:
+        return [dict(r) for r in conn().execute(sql + " ORDER BY t_from", args)]
+    except sqlite3.OperationalError:       # чужая база старой версии без таблицы
+        return []
 
 
 def days(serial: str) -> list[str]:

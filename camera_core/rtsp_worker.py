@@ -249,7 +249,18 @@ class RtspCameraWorker(BaseCameraWorker):
                     self.reconnecting = False
 
                 # --- чтение кадра ---
-                ok, raw = capture.read()
+                # Кадр этого тика не нужен (отдаём/пишем не чаще target_fps): декодируем его, потому что поток надо вычитывать,
+                # но без read() — не копируем с видеоядра в память и не пересчитываем в BGR. На 4 камерах 2,7 Мп это основная
+                # нагрузка процессора.
+                skip = self.target_fps and (time.time() - last_emit) < 1.0 / self.target_fps and hasattr(capture, "grab")
+                if skip:
+                    if capture.grab():
+                        self._last_frame_at = time.time()
+                        got_frame = True
+                        continue
+                    ok, raw = False, None
+                else:
+                    ok, raw = capture.read()
 
                 if not ok or raw is None:
                     self.metrics["errors"] += 1

@@ -1025,7 +1025,34 @@ def cv_report(serial: str | None = None, frm: str | None = Query(None, alias="fr
     rep = report.build(_cv_serial(serial), t0, t1, fin_sv=max(0.2, min(fin_sv, 20.0)), anomalies=True)
     import other_plants
     rep["others_available"] = other_plants.names()          # папка database/<завод>: нет её — в отчёте нет и галочки
+    rep["hidden"] = db.hidden_boils(cv_store._serial_dir(_cv_serial(serial)).name, t0, t1)      # скрытые из отчёта варки периода (с пометкой) — под таблицей, «Вернуть»
     return rep
+
+
+@app.post("/api/cv/boil/hide")
+def cv_boil_hide(body: dict = Body(...), serial: str | None = None):
+    """Скрыть варки из отчёта: {starts: [t_start, …], reason}. Пробы остаются в журнале; вернуть — /api/cv/boil/unhide."""
+    starts = body.get("starts")
+    if not isinstance(starts, list) or not starts:
+        return {"ok": False, "error": "не выбрано ни одной варки"}
+    res = cv_store.hide_boils(_cv_serial(serial), starts[:200], str(body.get("reason") or ""))
+    if res["hidden"]:
+        api_log("api.cv.boil_hide", "Скрыты варки из отчёта: %d" % len(res["hidden"]),
+                payload={"hidden": res["hidden"], "reason": str(body.get("reason") or "")[:cv_store.HIDE_REASON_MAX]})
+    return {"ok": bool(res["hidden"]), **res}
+
+
+@app.post("/api/cv/boil/unhide")
+def cv_boil_unhide(body: dict = Body(...), serial: str | None = None):
+    """Вернуть скрытые варки в отчёт: {ids: [id, …]}."""
+    ids = body.get("ids")
+    if not isinstance(ids, list) or not ids:
+        return {"ok": False, "error": "не выбрано ни одной варки"}
+    tag = cv_store._serial_dir(_cv_serial(serial)).name
+    done = [i for i in ids if isinstance(i, int) and db.unhide_boil(tag, i)]
+    if done:
+        api_log("api.cv.boil_hide", "Возвращены в отчёт скрытые варки: %d" % len(done), payload={"ids": done})
+    return {"ok": bool(done), "unhidden": done}
 
 
 @app.get("/api/cv/others/report")

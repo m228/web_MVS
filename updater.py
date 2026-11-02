@@ -138,13 +138,19 @@ def _fetch_latest_meta(max_age: float = 0.0):
     return meta
 
 
-def check_latest():
-    """Сравнить текущую версию с последним релизом. Безопасно из исходников."""
+_last_check_logged = None   # (current, latest, available) последней записи в журнал: тихая проверка пишет только при смене
+
+
+def check_latest(quiet: bool = False):
+    """Сравнить текущую версию с последним релизом. Безопасно из исходников.
+    quiet — фоновая проверка (auto_update): в журнал только при смене результата, а не при каждом вызове."""
+    global _last_check_logged
     current = read_version()
     try:
         tag, asset, notes = _fetch_latest_meta()
     except Exception as exc:
-        log_event("updater.check", "Не удалось проверить обновления", "warn", {"error": str(exc)})
+        if not quiet:
+            log_event("updater.check", "Не удалось проверить обновления", "warn", {"error": str(exc)})
         return {"current": current, "latest": None, "update_available": False,
                 "error": "Не удалось связаться с GitHub: " + str(exc)}
 
@@ -156,8 +162,11 @@ def check_latest():
     if staged and _version_tuple(staged) <= _version_tuple(current) and STAGING.exists():
         shutil.rmtree(STAGING, ignore_errors=True)         # архив уже установлен — лишние ~80 МБ не держим
         staged = ""
-    log_event("updater.check", "Проверка обновлений", "info",
-              {"current": current, "latest": latest, "available": available})
+    key = (current, latest, available)
+    if not quiet or key != _last_check_logged:
+        log_event("updater.check", "Проверка обновлений", "info",
+                  {"current": current, "latest": latest, "available": available})
+    _last_check_logged = key
     return {
         "current": current,
         "latest": latest or None,
@@ -318,6 +327,10 @@ def _download_latest_locked(extract: bool, delta_only: bool = False):
         return {"ok": False, "error": "Не удалось связаться с GitHub: " + str(exc)}
     if asset is None:
         return {"ok": False, "error": "В последнем релизе нет файла web_MVS_*.zip"}
+
+    # архив этой версии уже скачан и проверен (фоновое автообновление или прошлое нажатие) — не стираем и не качаем заново
+    if staged_version() == _norm(tag) and (not extract or (STAGED / "web_MVS.exe").is_file()):
+        return {"ok": True, "version": _norm(tag), "already": True}
 
     # имя приходит из GitHub API — берём только basename, чтобы оно не увело файл из STAGING
     zip_path = STAGING / Path(str(asset.get("name") or "web_MVS_new.zip")).name

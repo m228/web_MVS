@@ -25,6 +25,7 @@ import rtsp_store
 import save_settings
 import net_tools
 import updater
+import auto_update
 from microscope_service import micro
 import cv_client
 import video_client
@@ -69,6 +70,11 @@ async def lifespan(app: FastAPI):
         sysmon.start()
     except Exception as e:
         api_log("app", "Мониторинг не запустился: %s" % e, "error")
+    # автообновление: раз в 30 мин проверяет релиз, качает заранее, перезапускает после варки (окно — micro.restart_window)
+    try:
+        auto_update.start(window_fn=micro.restart_window)
+    except Exception as e:
+        api_log("app", "Автообновление не запустилось: %s" % e, "error")
     # сайдкары (cv_service, video_service), если установлены рядом: поднимаем фоном сразу — CV-модель грузится долго
     services.start()
     # версии Python/genicam/harvesters + дата .cti — видно, не обновилась ли
@@ -90,6 +96,7 @@ async def lifespan(app: FastAPI):
     # журнал событий камер (связь, серые кадры, КЗ, зоны) пишется в фоне — без открытой страницы
     monitor.start()
     yield
+    auto_update.stop()
     monitor.stop()
     micro.stop()
     api_log("app", "Остановка приложения")
@@ -262,6 +269,24 @@ def api_debug_info():
 def api_update_check():
     api_log("api.update", "Проверка обновлений")
     return updater.check_latest()
+
+
+@app.get("/api/update/state")
+def api_update_state():
+    """Состояние автообновления из кэша фонового потока (без сети и без записи в журнал): страницы опрашивают его каждые несколько секунд.
+    staged — версия, уже скачанная и готовая к перезапуску; auto.restart_in_s — идёт отсчёт автоперезапуска (плашка «Отмена»)."""
+    ag = auto_update.agent()
+    if ag is None:
+        return {"current": read_version(), "latest": None, "staged": None, "downloading": False, "last_check": None, "error": "",
+                "auto": {"enabled": False, "restart": False, "interval_min": None, "restart_in_s": None, "waiting_for": ""}}
+    return ag.state()
+
+
+@app.get("/api/update/auto_cancel")
+def api_update_auto_cancel():
+    """«Отмена» на плашке автоперезапуска: до следующей пропарки приложение само не перезапустится (кнопка «Перезапустить» остаётся)."""
+    ag = auto_update.agent()
+    return ag.cancel() if ag is not None else {"ok": False}
 
 
 @app.get("/api/update/download")

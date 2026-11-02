@@ -375,6 +375,9 @@ DEFAULTS = {
     # снимок по событию (журнал камер): остановка зоны или зависание картинки, удержавшиеся hold_s секунд, сохраняют кадр в
     # event_shots/<камера>/<дата>/. От серых кадров: удержание, проверка самого кадра, cooldown_s на зону и daily_limit на камеру
     "cam_snapshots": {"enabled": True, "hold_s": 30, "cooldown_s": 300, "daily_limit": 100},
+    # автообновление (auto_update.py): раз в interval_min проверяет релиз GitHub и сам скачивает; auto_restart — перезапуск, когда
+    # варки нет (после пропарки/калибровки, см. MicroscopeFSM.restart_window): за warn_s секунд до него на страницах плашка с «Отмена»
+    "auto_update": {"enabled": True, "interval_min": 30, "auto_restart": True, "warn_s": 10},
 
     # начальные значения для этапа B (СВ/стадия — ручные, пока нет источника из ПЛК)
     "manual_sv": 0.0,

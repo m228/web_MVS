@@ -219,10 +219,42 @@ async function onMultiUpdate() {
   await muWatch(chk.current, chk.latest, !!r.no_browser, since);
 }
 
+// автообновление (auto_update.py): релиз уже скачан — кнопка «Перезапустить → vX»; отсчёт автоперезапуска (варки нет) ведёт сервер,
+// плашку с «Отмена» рисует update-state.js. На отсчёте запоминаем раскладку и подключённые камеры (как при ручном), на «запуске» ждём
+// новую версию тем же muWatch, что и после кнопки
+function muInitAuto(btn) {
+  if (!window.UpdateState) return;
+  const label = btn.textContent, title = btn.title;
+  const showReady = (v) => {
+    if (MU.busy) return;
+    btn.textContent = v ? `Перезапустить → v${v}` : label;
+    btn.title = v ? `Версия v${v} уже скачана. Нажмите, когда удобно: камеры отключатся примерно на минуту и поднимутся сами` : title;
+    btn.classList.toggle('is-update-ready', !!v);
+  };
+  UpdateState.on('state', (s) => showReady(s.staged));
+  UpdateState.on('countdown', () => {
+    MU.busy = true;
+    btn.disabled = true;
+    muSaveFlag((UpdateState.last() || {}).current || '');
+  });
+  UpdateState.on('cancel', () => {
+    muDropFlag();
+    muSay('');
+    muFinish();
+  });
+  UpdateState.on('launch', (info) => {
+    const before = (UpdateState.last() || {}).current || '';
+    log.warn('Автообновление: сервер перезапускается', { version: info.version });
+    muSay(`Перезапускаюсь на v${info.version}: камеры вернутся сами, около минуты…`, 'warn');
+    muWatch(before, info.version, true, Math.floor(Date.now() / 1000) - 15);
+  });
+}
+
 async function initMultiUpdate() {
   const { btn } = muEls();
   if (!btn) return;
   btn.addEventListener('click', onMultiUpdate);
+  muInitAuto(btn);
   // после перезагрузки: сказать, чем кончилось (успех или откат)
   const p = AS.pending;
   if (!p) return;

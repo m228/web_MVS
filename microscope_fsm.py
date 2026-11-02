@@ -72,6 +72,9 @@ CYCLE_STAGE_MIN = 3
 CYCLE_STAGE_MAX = 9
 # Стадии ВНЕ диапазона, на которых пробы тоже берутся: 20 УНВ (удержание на воде) — аппарат поддерживают, чтобы он работал медленнее.
 CYCLE_EXTRA_STAGES = (20,)
+# Стадии, на которых безопасно перезапускать приложение для обновления (см. restart_window): 1 Остановлен, 11 Пропарка (после
+# калибровки), 12 Надвыгрузка, 13 Собрать аппарат, 14 Термоудар. Список белый: стадия неизвестна или не из списка — не перезапускаем.
+RESTART_STAGES = (1, 11, 12, 13, 14)
 
 
 class MicroscopeFSM:
@@ -86,6 +89,30 @@ class MicroscopeFSM:
     def _stage_in(self) -> bool:
         """Стадия варки разрешает авто-цикл: в диапазоне «от…до» (вкладка «Цикл») или одна из CYCLE_EXTRA_STAGES (20 УНВ)."""
         return self._stage_min <= self.stage <= self._stage_max or self.stage in CYCLE_EXTRA_STAGES
+
+    def restart_window(self):
+        """Можно ли сейчас перезапустить приложение (автообновление): (True, "") или (False, причина по-русски).
+        Варка прошла, идёт пропарка/после неё, автомат свободен, калибровка нуля не идёт и не ждёт своей очереди."""
+        with self._lock:
+            if not self._stage_seen:
+                return False, "стадия от ПЛК ещё не получена"
+            if self._ignore_stage:
+                return False, "включено «варить без стадии»"
+            if self.stage not in RESTART_STAGES or self._stage_in():
+                return False, "идёт варка (стадия %d)" % self.stage
+            if not self.plate.status.get("connected", False):
+                return False, "нет связи с платой"
+            if self.manual:
+                return False, "ручной режим"
+            if self._fault or self.sw3 or self._halt:
+                return False, "авария или «Стоп движения»"
+            if self.mode != 0 or self._cv_busy or any(self._unflag.values()):
+                return False, "идёт проба или разбор"
+            if self._cal_active:
+                return False, "идёт автокалибровка нуля"
+            if self._ac_armed and self._ac_enabled and self._varka_count >= self._ac_every_n:
+                return False, "ждёт автокалибровка нуля"
+            return True, ""
 
     def __init__(self, plate, config):
         self.plate = plate

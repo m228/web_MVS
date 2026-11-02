@@ -91,4 +91,52 @@
     }
 
     btn.addEventListener("click", () => { if (ready) apply(); else if (latest) download(); else check(); });
+
+    // ---- автообновление (auto_update.py): релиз качается сам, кнопка сама «перезапустить»; без человека — перезапуск, когда варки нет ----
+    // за 10 с до него плашка «Отмена» (update-state.js): на отсчёте закрываем камеру штатно (как в apply), «Отмена» — открываем снова
+    if (window.UpdateState) {
+      let prep = null, camWas = false;
+      UpdateState.on("state", (s) => {
+        if (!s.staged || ready === s.staged || btn.classList.contains("is-busy")) return;
+        setReady(s.staged);
+      });
+      UpdateState.on("countdown", () => {
+        prep = (async () => {
+          btn.classList.add("is-busy"); say("перезапуск…");
+          try { if (camConnected) { camWas = await camCloseGracefully(); } } catch (e) { camWas = false; }
+        })();
+      });
+      UpdateState.on("cancel", async () => {
+        try { await prep; } catch (e) { }
+        btn.classList.remove("is-busy");
+        if (ready) setReady(ready); else idle();
+        if (camWas) { camWas = false; try { camConnect(); sentCmd("Камера: автоперезапуск отменён, поток открыт снова"); } catch (e) { } }
+      });
+      UpdateState.on("launch", async (info) => {
+        try { await prep; } catch (e) { }
+        if (camWas) { try { localStorage.setItem("microCamReconnect", "1"); } catch (e) { } }
+        const before = (UpdateState.last() || {}).current || "";
+        say("перезапускаю…");
+        const started = Date.now();
+        let wentDown = false;
+        const poll = async () => {
+          try {
+            const i = await (await fetch("/api/version", { cache: "no-store" })).json();
+            if (i && i.app && before && i.app !== before) { window.location.reload(); return; }
+            // приложение останавливалось, а версия прежняя — апдейтер откатился: перезагрузка вернёт камеру по метке microCamReconnect
+            if (wentDown) { window.location.reload(); return; }
+            // 90 с, а приложение так и не остановилось — апдейтер не сработал: вернуть камеру
+            if (Date.now() - started > 90 * 1000) {
+              btn.classList.remove("is-busy"); say("обновление не запустилось — проверь update.log", 0);
+              try { localStorage.removeItem("microCamReconnect"); } catch (e) { }
+              if (camWas) { camWas = false; try { camConnect(); sentCmd("Камера: автоперезапуск не пошёл, поток открыт снова"); } catch (e) { } }
+              return;
+            }
+          } catch (e) { wentDown = true; /* приложение перезапускается */ }
+          if (Date.now() - started > 8 * 60 * 1000) { btn.classList.remove("is-busy"); say("долго — проверь update.log", 0); return; }
+          setTimeout(poll, 3000);
+        };
+        setTimeout(poll, 6000);
+      });
+    }
   })();

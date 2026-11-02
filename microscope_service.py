@@ -139,6 +139,23 @@ class MicroscopeService:
             except Exception as e:
                 log_event("microscope_service", "Сборщик архивов варок: сбой", "warn", {"error": repr(e)})
 
+    def restart_window(self):
+        """Окно для перезапуска приложения (автообновление): (True, "") или (False, причина). Кроме автомата смотрит связь с ПЛК
+        (стадия без связи «залипает»), перехват ПЛК, набор/разбор пробы и проверку модели."""
+        import model_check
+        fsm = self.fsm
+        if not self._started or fsm is None:
+            return False, "микроскоп выключен"
+        if self._sv_override:
+            return False, "включён перехват ПЛК"
+        if self.sv_source is None or not self.sv_source.status().get("connected"):
+            return False, "нет связи с ПЛК"
+        if self._probe_collecting or self._cv_run_lock.locked():
+            return False, "идёт проба или разбор"
+        if model_check.STATE["running"]:
+            return False, "идёт проверка модели"
+        return fsm.restart_window()
+
     MODEL_CHECK_TICK_S = 60      # раз во столько смотрим, не устарела ли проверка модели и нет ли окна между варками
 
     def _mc_health(self):

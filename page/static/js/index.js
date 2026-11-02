@@ -1076,7 +1076,9 @@ async function checkUpdates() {
     return;
   }
 
-  if (data.update_available) {
+  if (data.update_available && data.staged && data.staged === data.latest) {
+    showUpdateReady(data.staged);            // фоновое автообновление уже скачало релиз — остаётся перезапустить
+  } else if (data.update_available) {
     log.info('Доступно обновление', { current: data.current, latest: data.latest });
     setUpdateStatus(`Доступна новая версия ${data.latest}`, 'status-chip--warn');
     addUpdateButton('Скачать обновление', 'btn-primary', downloadUpdate);
@@ -1122,6 +1124,49 @@ async function applyUpdate() {
   log.warn('Приложение перезапускается для обновления');
   setUpdateStatus('Обновление… приложение перезапускается, подождите', 'status-chip--warn');
   await pollUntilBack();
+}
+
+// ---- автообновление (auto_update.py): релиз уже скачан в фоне — на карточке остаётся «Перезапустить»; без человека сервер сам
+// перезапустится, когда варки нет (плашку с «Отмена» рисует update-state.js)
+let updateReadyShown = '';
+
+function showUpdateReady(version) {
+  updateReadyShown = version;
+  clearUpdateActions();
+  setUpdateStatus(`Версия ${version} скачана и готова к установке`, 'status-chip--ok');
+  addUpdateButton('Перезапустить', 'btn-primary', restartStaged);
+}
+
+async function restartStaged() {
+  if (!confirm('Приложение закроется на минуту, обновится и запустится заново. Продолжить?')) return;
+  clearUpdateActions();
+  setUpdateStatus('Запускаю обновление…');
+  // основное приложение + установленные дополнения, архив уже скачан — update.ps1 его не качает
+  const comps = await UpdateApi.components();
+  const keys = ['main'];
+  ((comps && comps.components) || []).forEach((c) => { if (c.key !== 'main' && c.installed) keys.push(c.key); });
+  const data = await UpdateApi.run(keys, false, true, true);
+  if (!data || !data.ok) {
+    setUpdateStatus(data?.error || 'Не удалось запустить обновление', 'status-chip--error');
+    addUpdateButton('Повторить', 'btn-secondary', restartStaged);
+    return;
+  }
+  log.warn('Приложение перезапускается для обновления');
+  setUpdateStatus('Обновление… приложение перезапускается, подождите', 'status-chip--warn');
+  await pollUntilBack();
+}
+
+function initAutoUpdateCard() {
+  if (!window.UpdateState || !getUpdateEls().card) return;
+  UpdateState.on('state', (s) => {
+    if (s.staged && s.staged !== updateReadyShown) showUpdateReady(s.staged);
+  });
+  UpdateState.on('countdown', () => { clearUpdateActions(); setUpdateStatus('Варки нет — перезапуск сейчас…', 'status-chip--warn'); });
+  UpdateState.on('cancel', () => { if (updateReadyShown) showUpdateReady(updateReadyShown); });
+  UpdateState.on('launch', () => {
+    setUpdateStatus('Обновление… приложение перезапускается, подождите', 'status-chip--warn');
+    pollUntilBack();
+  });
 }
 
 // после apply сервер выходит и поднимается заново (с новой версией) — ждём, пока ответит
@@ -1332,6 +1377,7 @@ function initUpdateCard() {
 
   // показать текущую версию сразу при загрузке
   loadCurrentVersion().catch(() => {});
+  initAutoUpdateCard();
 }
 
 async function initIndexPage() {

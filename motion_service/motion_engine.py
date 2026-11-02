@@ -184,7 +184,7 @@ def normalize_camera(c: dict) -> dict:
     transport = str(c.get("transport", "tcp")).lower()
     if transport not in ("tcp", "udp"):
         raise ValueError("камера %s: transport tcp или udp" % cid)
-    hw = str(c.get("hw_accel", "off")).lower()
+    hw = str(c.get("hw_accel", "auto")).lower()
     if hw not in HW_ACCEL_MODES:
         raise ValueError("камера %s: hw_accel — одно из %s" % (cid, ", ".join(HW_ACCEL_MODES)))
     fs = c.get("frame_size")

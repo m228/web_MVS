@@ -296,7 +296,7 @@ def _wait(cond, timeout=8.0):
 
 
 def _worker(tmp_path, frames, frozen=False, **cam):
-    raw = {"id": "w", "url": "fake", "proc_fps": 20, "freeze_timeout_s": 1, "zones": [
+    raw = {"id": "w", "url": "fake", "hw_accel": "off", "proc_fps": 20, "freeze_timeout_s": 1, "zones": [
         {"id": "z1", "points": LEFT, "metric": "diff", "smooth": 2, "frames_to_on": 2, "frames_to_off": 2,
          "out": {"kind": "holding", "address": 0}},
         {"id": "z2", "points": RIGHT, "metric": "diff", "smooth": 2, "frames_to_on": 2, "frames_to_off": 2,
@@ -406,7 +406,7 @@ def test_recording_survives_service_restart_and_summary_shows_break(tmp_path, mo
     import motion_records as mr
     srv = _load_server()
     data = tmp_path / "data"
-    raw = {"id": "w", "name": "Лента", "url": "fake", "proc_fps": 20, "freeze_timeout_s": 1, "zones": [
+    raw = {"id": "w", "name": "Лента", "url": "fake", "hw_accel": "off", "proc_fps": 20, "freeze_timeout_s": 1, "zones": [
         {"id": "z1", "points": LEFT, "metric": "diff", "smooth": 2, "frames_to_on": 2, "frames_to_off": 2}]}
     factory = lambda u, t: FakeCap(make_frames(200))
 
@@ -763,7 +763,7 @@ def test_long_history_window_squeeze_and_max_keeps_bursts(tmp_path):
 # ───────────────────── аппаратное декодирование и подпоток ─────────────────────
 def test_camera_config_hw_accel_and_substream_defaults_and_validation():
     c = me.normalize_camera({"id": "c1", "url": "x"})
-    assert c["hw_accel"] == "off" and c["substream"] is False
+    assert c["hw_accel"] == "auto" and c["substream"] is False
     c = me.normalize_camera({"id": "c1", "url": "x", "hw_accel": "AUTO", "substream": True})
     assert c["hw_accel"] == "auto" and c["substream"] is True
     with pytest.raises(ValueError, match="hw_accel"):
@@ -808,7 +808,7 @@ class _Cap:
 
 
 def _plain_worker(tmp_path, factory, **cam):
-    cfg = me.normalize_camera(dict({"id": "w", "url": "rtsp://h/cam?subtype=0"}, **cam))
+    cfg = me.normalize_camera(dict({"id": "w", "url": "rtsp://h/cam?subtype=0", "hw_accel": "off"}, **cam))
     return CameraWorker(cfg, me.normalize_modbus({}), mm.LinkRegistry(lambda h, p: None), tmp_path, factory)
 
 

@@ -92,7 +92,7 @@ def hw_params(hw_accel: str) -> list:
 
 
 def cfg_hw(cfg: dict) -> str:
-    return cfg.get("hw_accel", "off")
+    return cfg.get("hw_accel", "auto")
 
 
 def decoder_kind(cap) -> str:
@@ -165,7 +165,7 @@ class CameraWorker(threading.Thread):
         """Открыть поток: подпоток вместо основного (substream) и аппаратное декодирование (hw_accel). Не открылось с аппаратным —
         один раз пробуем программно: если так открылось, дальше этот воркер декодирует процессором (до перезапуска сервиса)."""
         url = stream_url(url, cfg.get("substream", False))
-        hw = "off" if self._hw_off else cfg.get("hw_accel", "off")
+        hw = "off" if self._hw_off else cfg.get("hw_accel", "auto")
         if hw == "off":
             return self.capture_factory(url, cfg["transport"])
         cap = self.capture_factory(url, cfg["transport"], hw)

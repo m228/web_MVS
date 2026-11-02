@@ -43,7 +43,7 @@ DB_PATH = DATA_DIR / "sysmon.db"
 CONFIG_PATH = DATA_DIR / "monitor.json"
 
 SCHEMA = 1
-DEFAULTS = {"enabled": False, "url": "", "token": "", "plant": "", "interval_s": 300, "system_proxy": True, "no_probe_min": 30, "allow_http": False,
+DEFAULTS = {"enabled": False, "url": "", "token": "", "plant": "", "interval_s": 300, "system_proxy": True, "no_probe_min": 30, "auto_off_min": 10, "allow_http": False,
             # датчики микроскопа (правятся в monitor.json): допуски расхождения трёх датчиков, мкм — на отводе и на подводе
             # (отвод 150, подвод 200 по решению Макса 01.11: у Kir на подводе аналоговый датчик стабильно выше энкодера на 100–150 мкм); «ноль уполз» — |датчик − энкодер|
             # до автокалибровки, мкм; автокалибровки нет дольше overdue_h часов работы; bad_streak плохих проб подряд —
@@ -252,7 +252,7 @@ def _clean_cfg(cfg: dict) -> dict:
     out["plant"] = str(cfg.get("plant") or "").strip()[:40]
     out["system_proxy"] = bool(cfg.get("system_proxy", True))
     out["allow_http"] = bool(cfg.get("allow_http", False))
-    for k, lo, hi in (("interval_s", 60, 3600), ("no_probe_min", 5, 240), ("gap_far_um", 10, 2000), ("gap_near_um", 10, 2000),
+    for k, lo, hi in (("interval_s", 60, 3600), ("no_probe_min", 5, 240), ("auto_off_min", 2, 240), ("gap_far_um", 10, 2000), ("gap_near_um", 10, 2000),
                       ("drift_um", 10, 5000), ("overdue_h", 1, 168), ("bad_streak", 1, 10)):
         try:
             out[k] = max(lo, min(hi, int(cfg.get(k, DEFAULTS[k]))))
@@ -509,6 +509,7 @@ class Agent:
         self.active: dict = {}              # code -> {level, text, since}
         self._seen: dict = {}               # code -> сколько проверок подряд правило срабатывало
         self._ready_since: Optional[float] = None
+        self._auto_off_since: Optional[float] = None      # с какого момента варка идёт, а «Автомат» выключен / стоит «Ручной»
         self._work_since: Optional[float] = None      # с какого момента автомат в работе (для «автокалибровки давно не было»)
         self._plate_up: Optional[float] = None
         self._plate_up_exact = False                   # _plate_up посчитан с кругами (иначе — голый 16-битный регистр)
@@ -663,6 +664,17 @@ class Agent:
 
             if state.get("fault"):
                 found["fault"] = ("high", "Авария автомата: " + str(state.get("fault_msg") or "")[:120])
+
+            # варка идёт (стадия в зоне цикла), а «Автомат» выключен или стоит «Ручной»: проб нет, и правило «нет проб» ниже молчит —
+            # оно работает только при включённом Автомате. 29–31.10 на Кире так пропали 16 варок: после перезапуска «Автомат» включает страница в браузере
+            idle = bool(stage_ok and d.get("cv_enabled") and d.get("serial") and not state.get("fault") and (state.get("manual") or not state.get("cyclic")))
+            if not idle:
+                self._auto_off_since = None
+            else:
+                self._auto_off_since = self._auto_off_since or now
+                if now - self._auto_off_since >= self._cfg["auto_off_min"] * 60:
+                    found["auto_off"] = ("medium" if state.get("manual") else "high", "Варка идёт (стадия %s), а %s уже %s — проб нет" % (
+                        state.get("stage"), "стоит «Ручной»" if state.get("manual") else "«Автомат» выключен", fmt_dur(now - self._auto_off_since)))
 
             self._position_rules(found, d, now)
             self._autocal_rules(found, state, now)

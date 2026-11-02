@@ -1530,6 +1530,16 @@
     const p = Math.pow(10, Math.floor(Math.log10(Math.max(v, 1)))), m = [1, 2, 2.5, 5, 10].find((x) => x * p >= v) || 10;
     return m * p;
   }
+  // режим автомата под графиком (журнал режима, /api/cv/trend → modes): зелёный — «Автомат» идёт, оранжевый — выключен (проб нет), синий — ручной, красный — авария
+  const CV_MODE_COLOR = { auto: "#34d399", off: "#f59e0b", manual: "#60a5fa", fault: "#ef4444" };
+  const CV_MODE_NAME = { auto: "Автомат включён", off: "Автомат выключен — проб нет", manual: "Ручной режим", fault: "Авария автомата" };
+  function cvModeSegments(m, start, end) {           // отрезки режима в окне: состояние на левом краю (before) и дальше по переключениям
+    const ev = ((m && m.events) || []).filter((e) => e.kind !== "setting"), out = [];
+    let cur = m && m.before ? { state: m.before.state, a: start } : null;
+    for (const e of ev) { if (cur) { cur.b = e.t; out.push(cur); } cur = { state: e.state, a: e.t }; }
+    if (cur) { cur.b = Math.min(end, Date.now() / 1000); if (cur.b > cur.a) out.push(cur); }
+    return out;
+  }
   function cvDrawTrend() {
     const cv = $("cvTrend"); if (!cv) return;
     const ctx = cv.getContext("2d");
@@ -1543,7 +1553,8 @@
     const span = v.end - v.start;
     const sel = cvSelectedSeries();
     const showUm = sel.some((s) => CV_UM_SERIES.includes(s));
-    const pad = { l: 34, r: showUm ? 42 : 10, t: 12, b: 34 };
+    const modes = d.modes, laneOn = !!(modes && (modes.before || (modes.events || []).some((e) => e.kind !== "setting")));
+    const pad = { l: 34, r: showUm ? 42 : 10, t: 12, b: laneOn ? 42 : 34 };      // под осью — полоса режима автомата
     const plotW = W - pad.l - pad.r, plotH = H - pad.t - pad.b;
     const xAt = (tt) => pad.l + plotW * (tt - v.start) / span;
     cvTrendGeom = { padL: pad.l, plotW, start: v.start, span };
@@ -1596,6 +1607,16 @@
       ctx.fillStyle = muted;
       ctx.fillText(cvPad2(dt.getHours()) + ":" + cvPad2(dt.getMinutes()), x, H - pad.b + 13);
       if (day !== lastDay) { ctx.fillText(cvPad2(dt.getDate()) + "." + cvPad2(dt.getMonth() + 1), x, H - pad.b + 25); lastDay = day; }
+    }
+    if (laneOn) {                                                       // полоса режима автомата + засечки: запуск приложения, правки настроек цикла
+      const y0 = pad.t + plotH + 3;
+      cvModeSegments(modes, v.start, v.end).forEach((sg) => {
+        const x0 = xAt(Math.max(sg.a, v.start)), x1 = xAt(Math.min(sg.b, v.end));
+        ctx.fillStyle = CV_MODE_COLOR[sg.state] || muted; ctx.fillRect(x0, y0, Math.max(1.5, x1 - x0), 5);
+      });
+      (modes.events || []).filter((e) => e.kind !== "mode" && e.t >= v.start && e.t <= v.end).forEach((e) => {
+        ctx.fillStyle = e.kind === "start" ? getCss("--text", "#fff") : getCss("--accent", "#2563eb"); ctx.fillRect(xAt(e.t) - 1, y0 - 2, 2, 9);
+      });
     }
     if (!t.length || i1 <= i0) {
       ctx.fillStyle = muted; ctx.font = "12px sans-serif"; ctx.textAlign = "center";
@@ -1816,7 +1837,14 @@
       '<span class="dot" style="background:' + CV_SERIES_COLOR[g] + '"></span>' + names[g] + " " + val(g) + "%").filter(Boolean).join("<br>");
     const fsv = cvTrendMode !== "sieve" ? "" : ["0–0,05", "0,05–0,10", "0,10–0,15", "0,15–0,20", "0,20–0,30", "0,30–0,40", "0,40–0,50", "0,50–0,60", "0,60–0,70", "0,70–0,80", "0,80–0,90", "0,90–1,0", "&gt; 1,0"].map((n, k) => val("fsv" + k) == null ? "" :
       '<span class="dot" style="background:' + CV_SERIES_COLOR["fsv" + k] + '"></span>' + n + " мм " + val("fsv" + k) + "%").filter(Boolean).join("<br>");
-    tip.innerHTML = head + (line2 ? "<br>" + line2 : "") + (line3 ? "<br>" + line3 : "") + (fsv ? "<br>" + fsv : (groups ? "<br>" + groups : "")) + (msg ? "<br><i>" + msg + "</i>" : "");
+    // режим автомата на момент пробы и события рядом (±20 мин): запуск приложения, переключения, правки настроек цикла
+    let modeLine = "";
+    if (d.modes) {
+      const tt = d.t[i], sg = cvModeSegments(d.modes, (cvTrendView && cvTrendView.start) || tt, tt + 1).find((x) => tt >= x.a && tt <= x.b);
+      const near = (d.modes.events || []).filter((e) => Math.abs(e.t - tt) <= 1200).slice(0, 3).map((e) => cvFmtT(e.t) + " " + String(e.text).replace(/</g, "&lt;"));
+      modeLine = (sg ? '<span class="dot" style="background:' + CV_MODE_COLOR[sg.state] + '"></span>' + CV_MODE_NAME[sg.state] : "") + (near.length ? (sg ? "<br>" : "") + near.join("<br>") : "");
+    }
+    tip.innerHTML = head + (modeLine ? "<br>" + modeLine : "") + (line2 ? "<br>" + line2 : "") + (line3 ? "<br>" + line3 : "") + (fsv ? "<br>" + fsv : (groups ? "<br>" + groups : "")) + (msg ? "<br><i>" + msg + "</i>" : "");
     tip.hidden = false;
     const w = tip.offsetWidth, W = cv.clientWidth;
     tip.style.left = (x + 12 + w > W ? Math.max(0, x - 12 - w) : x + 12) + "px";

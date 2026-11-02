@@ -63,6 +63,7 @@ class MicroscopeService:
             self.fsm.on_photo = self._auto_photo   # кадры пробы в выдержке (см. _auto_photo)
             self.fsm.on_video = self._auto_video   # запись видео пробы на выдержку (см. _auto_video)
             self.fsm.on_varka_count = self._persist_varka   # persist счётчика варок (автокалибровка)
+            self.fsm.on_mode_change = self._log_mode        # режим автомата (Автомат / выключен / Ручной / авария) -> журнал режима
             self.fsm.on_autocal_done = self._log_autocal    # итог автокалибровки -> autocal.log + «последняя»
             self.fsm.on_approach_fail = self._log_approach_fail   # «довод не сошёлся» -> отдельный лог
             self.fsm.on_probe_positions = self._on_probe_positions   # три датчика на отводе/подводе -> мониторинг
@@ -784,8 +785,43 @@ class MicroscopeService:
             return {"enabled": True, **self.sv_source.status()}
         return {"enabled": False, "connected": False, "values": {}}
 
+    CYCLE_LABELS = {"ignore_stage": "варить без стадии", "stage_from": "стадия от", "stage_to": "стадия до", "sv_from": "СВ от", "sv_to": "СВ до", "trigger_mode": "триггер",
+                    "pause_sec": "пауза, с", "dwell_sec": "выдержка, с", "arrive_sensor": "датчик прихода", "retract_pos": "отвод, мкм",
+                    "pre_wash_sec": "промывка, с", "shot_interval_sec": "скрин каждые, с", "photo_format": "формат кадра"}
+    MODE_LABELS = {"auto": "Автомат включён", "off": "Автомат выключен — проб нет", "manual": "Ручной режим", "fault": "Авария автомата"}
+
+    def _log_mode(self, state, stage, first):
+        """Колбэк автомата: режим сменился → в журнал режима (db.mode_log, тренд «Автомат / Ручной»). first — первый такт нового автомата:
+        запуск приложения (в первый раз за процесс) или перезапуск автомата после применения настроек."""
+        import db
+        booted = getattr(self, "_mode_booted", False)
+        self._mode_booted = True
+        text = ("Запуск приложения: " if first and not booted else "Автомат перезапущен: " if first else "") + self.MODE_LABELS.get(state, state)
+        db.mode_add(time.time(), "start" if first and not booted else "mode", state, stage, text)
+
+    def _log_cycle_patch(self, patch):
+        """Правки цикла пробы и режима камеры → в журнал режима: кто и когда тронул «стадии от…до», «СВ от…до» и т.п. (видно на тренде)."""
+        import db
+        old = ((self.cfg or {}).get("probe_cycle") or {})
+        new = patch.get("probe_cycle") or {}
+        show = lambda x: "—" if x is None else "вкл" if x is True else "выкл" if x is False else x
+        ch = ["%s %s → %s" % (self.CYCLE_LABELS.get(k, k), show(old.get(k)), show(v))
+              for k, v in new.items() if not isinstance(v, dict) and old.get(k) != v]
+        if patch.get("camera_mode") is not None and patch["camera_mode"] != (self.cfg or {}).get("camera_mode"):
+            ch.append("режим камеры %s → %s" % ((self.cfg or {}).get("camera_mode") or "—", patch["camera_mode"]))
+        if ch:
+            fsm = self.fsm
+            db.mode_add(time.time(), "setting", None, fsm.stage if fsm is not None and fsm._stage_seen else None, "Настройки цикла: " + ", ".join(ch))
+
+    def _log_cycle_patch_safe(self, patch):
+        try:
+            self._log_cycle_patch(patch)
+        except Exception as e:
+            log_event("microscope_service", "Не удалось записать правку цикла в журнал режима", "warn", {"error": str(e)})
+
     def apply_settings(self, patch):
         """Сохранить правки (IP камеры/платы и т.п.) в plate_config.json и перезапуститься."""
+        self._log_cycle_patch_safe(patch)
         plate_config.save(patch)
         return self.reload()
 
@@ -855,6 +891,7 @@ class MicroscopeService:
         """Датчик прихода мотора для цикла (enc/calc/ai) — сразу, без перезапуска платы, и в конфиг."""
         mode = str(mode) if str(mode) in ("enc", "calc", "ai") else "enc"
         res = self.fsm.set_arrive_sensor(mode) if self.fsm else {"arrive_sensor": mode}
+        self._log_cycle_patch_safe({"probe_cycle": {"arrive_sensor": mode}})
         plate_config.save({"probe_cycle": {"arrive_sensor": mode}})
         if self.cfg is not None:
             self.cfg.setdefault("probe_cycle", {})["arrive_sensor"] = mode
@@ -865,6 +902,7 @@ class MicroscopeService:
         """Сменить триггер пробы (time/sv/cv) сразу, без перезапуска платы, и запомнить в конфиг."""
         mode = str(mode) if str(mode) in ("time", "sv", "cv") else "time"
         res = self.fsm.set_trigger_mode(mode) if self.fsm else {"trigger_mode": mode}
+        self._log_cycle_patch_safe({"probe_cycle": {"trigger_mode": mode}})
         plate_config.save({"probe_cycle": {"trigger_mode": mode}})
         if self.cfg is not None:
             self.cfg.setdefault("probe_cycle", {})["trigger_mode"] = mode
@@ -875,6 +913,7 @@ class MicroscopeService:
         """«Варить без стадии» — авто-цикл без проверки стадии 3..9. Сразу, без reload."""
         on = bool(on)
         res = self.fsm.set_ignore_stage(on) if self.fsm else {"ignore_stage": on}
+        self._log_cycle_patch_safe({"probe_cycle": {"ignore_stage": on}})
         plate_config.save({"probe_cycle": {"ignore_stage": on}})
         if self.cfg is not None:
             self.cfg.setdefault("probe_cycle", {})["ignore_stage"] = on

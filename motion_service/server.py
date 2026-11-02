@@ -42,6 +42,7 @@ os.environ.setdefault("OPENCV_LOG_LEVEL", "ERROR")
 
 import motion_engine as engine  # noqa: E402
 import motion_records  # noqa: E402
+import motion_trends  # noqa: E402
 from motion_camera import CameraWorker, open_capture  # noqa: E402
 from motion_modbus import LinkRegistry, ModbusLink  # noqa: E402
 from motion_scenarios import ScenarioRunner  # noqa: E402
@@ -75,8 +76,12 @@ class RingLog(logging.Handler):
 class Manager:
     """Конфиг на диске + рабочие потоки камер."""
 
-    def __init__(self, data_dir: Path, capture_factory: Callable = open_capture, client_factory=None):
+    def __init__(self, data_dir: Path, capture_factory: Callable = open_capture, client_factory=None,
+                 auto_record: bool = False, shots_min: float = 0.0, keep_days: float = motion_trends.KEEP_DAYS):
         self.dir = Path(data_dir)
+        self.auto_record = auto_record          # первый запуск без recording.json: писать CSV по всем камерам сразу (ручное «выкл» запоминается)
+        self.shots_min = shots_min              # раз в сколько минут снимать все камеры «в один момент» (0 — не снимать)
+        self.keep_days = keep_days              # записи, тренды и снимки старше этого удаляются
         self.dir.mkdir(parents=True, exist_ok=True)
         self.path = self.dir / "motion_config.json"
         self.capture_factory = capture_factory
@@ -88,6 +93,7 @@ class Manager:
         self.rec_cams: set = set()              # камеры, у которых запись включена по одной (кнопка «●» камеры)
         self._lock = threading.RLock()
         self.scenarios = ScenarioRunner(self)
+        self._halt = threading.Event()
 
     # --- конфиг ---
     def load(self):
@@ -111,6 +117,10 @@ class Manager:
             d = json.loads((self.dir / "recording.json").read_text(encoding="utf-8-sig"))
             self.rec_all = bool(d.get("all"))
             self.rec_cams = {str(c) for c in (d.get("cams") or [])}
+        except FileNotFoundError:
+            if self.auto_record:
+                self.rec_all = True
+                self._save_rec()
         except (OSError, ValueError, AttributeError):
             pass
 
@@ -192,13 +202,57 @@ class Manager:
         w.stop_record()
         return None
 
+    # --- снимки «в один момент» и уборка старого ---
+    def take_shots(self, ts: Optional[float] = None):
+        """Снять все включённые камеры одновременно: data\\shots\\<день>\\<время>\\<камера>.jpg + log.json. -> папка или None."""
+        ts = ts or time.time()
+        with self._lock:
+            workers = [w for w in self.workers.values() if w.cfg["enabled"] and w.cfg["url"]]
+        if not workers:
+            return None
+        cams = {w.id: w.shot() for w in workers}
+        try:
+            return motion_trends.write_shot(self.dir, ts, cams)
+        except OSError as e:
+            log.warning("снимок не записан: %s", e)
+            return None
+
+    def _housekeeping(self):
+        """Фон: уборка старого раз в час и снимки по часам (:00, :20, :40 при шаге 20 мин)."""
+        next_clean = 0.0
+        next_shot = 0.0
+        while not self._halt.is_set():
+            now = time.time()
+            if now >= next_clean:
+                next_clean = now + 3600
+                try:
+                    n = motion_trends.purge(self.dir, self.keep_days, now)
+                    if n:
+                        log.info("уборка: удалено %d старых файлов/папок (старше %g сут.)", n, self.keep_days)
+                except Exception as e:  # noqa: BLE001
+                    log.warning("уборка старых записей не удалась: %s", e)
+            if self.shots_min > 0:
+                step = self.shots_min * 60.0
+                if not next_shot:
+                    next_shot = (now // step + 1) * step
+                if now >= next_shot:
+                    next_shot = (now // step + 1) * step
+                    try:
+                        self.take_shots(now)
+                    except Exception as e:  # noqa: BLE001
+                        log.warning("снимки камер не сделаны: %s", e)
+            self._halt.wait(5.0)
+
     def start(self):
         self.load()
         self._load_rec()
         self.apply(self.cfg, save=False)
         self.scenarios.start()
+        if self.auto_record or self.shots_min > 0 or self.keep_days:
+            threading.Thread(target=self._housekeeping, daemon=True, name="housekeeping").start()
 
     def shutdown(self):
+        self._halt.set()
         self.scenarios.stop()
         with self._lock:
             for w in self.workers.values():
@@ -217,7 +271,11 @@ def create_app(data_dir: Optional[Path] = None, capture_factory: Callable = open
     data_dir = Path(data_dir or os.environ.get("MOTION_DATA") or HERE / "data")
     ring = RingLog()
     logging.getLogger("motion").addHandler(ring)
-    mgr = Manager(data_dir, capture_factory, client_factory)
+    # автозапись CSV, снимки раз в 20 мин и хранение 10 суток — по умолчанию; MOTION_AUTORECORD=0 / MOTION_SHOTS_MIN=0 / MOTION_KEEP_DAYS=N меняют
+    mgr = Manager(data_dir, capture_factory, client_factory,
+                  auto_record=os.environ.get("MOTION_AUTORECORD", "1") != "0",
+                  shots_min=float(os.environ.get("MOTION_SHOTS_MIN", "20")),
+                  keep_days=float(os.environ.get("MOTION_KEEP_DAYS", str(motion_trends.KEEP_DAYS))))
 
     @asynccontextmanager
     async def lifespan(_app):
@@ -283,6 +341,14 @@ def create_app(data_dir: Optional[Path] = None, capture_factory: Callable = open
     @app.post("/record")
     def record_all(req: dict = Body(...)):
         return {"recording": mgr.record_all(bool(req.get("on")))}
+
+    @app.post("/shots/now")
+    def shots_now():
+        """Снять все камеры прямо сейчас (проверка; обычно снимает сам по часам). -> путь папки снимка."""
+        folder = mgr.take_shots()
+        if folder is None:
+            raise HTTPException(404, "нет включённых камер")
+        return {"folder": str(folder)}
 
     @app.get("/records.zip")
     def records_zip(days: float = 7.0):

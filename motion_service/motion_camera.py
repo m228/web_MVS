@@ -25,7 +25,8 @@ from typing import Callable, Optional
 import cv2
 import numpy as np
 
-from motion_engine import CameraEngine
+from motion_engine import CameraEngine, scale_points
+from motion_trends import TrendLog
 from motion_modbus import LinkRegistry
 
 log = logging.getLogger("motion.camera")
@@ -158,6 +159,9 @@ class CameraWorker(threading.Thread):
         self._rec_path: Optional[Path] = None
         self._rec_flushed = 0.0
         self._rec_ids: list = []
+        # тренды на диске (data\trends): переживают перезапуск; здесь же читаем их обратно, чтобы графики и статистика не обнулялись
+        self._trend = TrendLog(self.data_dir, self.id)
+        self._restore_trends()
         self._writer: Optional[threading.Thread] = None
         self.plc = {"enabled": bool(self.mb.get("enable")), "ok": None, "error": ""}
 
@@ -191,6 +195,8 @@ class CameraWorker(threading.Thread):
         self._halt.set()
         self._writes_evt.set()
         self.stop_record()
+        with self._lock:
+            self._trend.close()
 
     def state(self) -> dict:
         with self._lock:
@@ -264,24 +270,81 @@ class CameraWorker(threading.Thread):
         span = round(min(window_s, time.time() - first * STATS_STEP_S), 1) if first is not None else 0.0
         return {"window_s": window_s, "span_s": max(0.0, span), "zones": zones}
 
+    def _restore_trends(self):
+        """Длинная история (2 ч) и корзины статистики (сутки) — из data\trends: после обновления сервиса графики не пустые."""
+        try:
+            zids = {z["id"] for z in self.cfg["zones"] if z["enabled"]}
+            longs, stats = self._trend.load(time.time(), LONG_LEN * LONG_STEP_S, STATS_LEN * STATS_STEP_S, zids)
+        except Exception as e:  # noqa: BLE001 — битый файл трендов не должен мешать запуску камеры
+            log.warning("[%s] тренды с диска не восстановлены: %s", self.id, e)
+            return
+        self._long.extend(longs[-LONG_LEN:])
+        self._stats.extend(stats[-STATS_LEN:])
+        if longs or stats:
+            log.info("[%s] тренды восстановлены с диска: %d точек истории, %d корзин статистики", self.id, len(longs), len(stats))
+
+    def shot(self, max_w: int = 1280) -> dict:
+        """Снимок «в один момент» для data\\shots: {"jpeg": байты|None, "info": {связь, статус, значения зон}}. На кадре нарисованы зоны:
+        зелёная — «движется» (бит 1), красная — «стоит», рядом diff / flow."""
+        with self._lock:
+            f = None if self._frame is None else self._frame.copy()
+            st = dict(self._state) if self._state else None
+            fps = 0.0
+            if len(self._stamps) >= 2 and self._stamps[-1] > self._stamps[0]:
+                fps = (len(self._stamps) - 1) / (self._stamps[-1] - self._stamps[0])
+            conn, err, dec = self._connected, self._error, self._decoder
+        zones = {z["id"]: {"flow": round(z["flow"], 3), "diff": round(z["diff"], 3), "bit": int(z["bit"])} for z in (st or {}).get("zones", [])}
+        info = {"name": self.cfg["name"], "connected": bool(conn), "alive": bool(st and st.get("alive")),
+                "status": "ok" if (st and st.get("alive")) else ((st or {}).get("reason") or err or "нет данных"),
+                "fps": round(fps, 2), "decoder": dec, "zones": zones}
+        if f is None:
+            return {"jpeg": None, "info": info}
+        if f.ndim == 2:
+            f = cv2.cvtColor(f, cv2.COLOR_GRAY2BGR)
+        h, w = f.shape[:2]
+        if max_w and w > max_w:
+            k = max_w / float(w)
+            f = cv2.resize(f, (max_w, int(round(h * k))), interpolation=cv2.INTER_AREA)
+        else:
+            k = 1.0
+        fh, fw = f.shape[:2]
+        size = self.cfg.get("frame_size")
+        for zc in self.cfg["zones"]:
+            z = zones.get(zc["id"])
+            if not z or not zc.get("points"):
+                continue
+            pts = np.round(np.array(scale_points(zc["points"], size, (w, h))) * k).astype(np.int32)
+            color = (60, 200, 60) if z["bit"] else (50, 50, 230)
+            cv2.polylines(f, [pts], True, color, 2)
+            cv2.putText(f, "%s d=%.2f f=%.2f" % (zc["id"], z["diff"], z["flow"]), (int(pts[:, 0].min()), max(14, int(pts[:, 1].min()) - 6)),
+                        cv2.FONT_HERSHEY_SIMPLEX, max(0.4, fw / 1800.0), color, 1, cv2.LINE_AA)
+        cv2.putText(f, "%s %s" % (self.id, time.strftime("%Y-%m-%d %H:%M:%S")), (8, fh - 10), cv2.FONT_HERSHEY_SIMPLEX,
+                    max(0.45, fw / 1600.0), (255, 255, 255), 1, cv2.LINE_AA)
+        ok, buf = cv2.imencode(".jpg", f, [cv2.IMWRITE_JPEG_QUALITY, 82])
+        return {"jpeg": buf.tobytes() if ok else None, "info": info}
+
     def start_record(self) -> str:
         """Писать метрики каждого кадра в CSV (data/records) — для калибровки порогов по реальной ленте."""
         with self._lock:
             if self._rec_path:
                 return self._rec_path.name
-            d = self.data_dir / "records"
-            d.mkdir(parents=True, exist_ok=True)
-            self._rec_path = d / ("%s_%s.csv" % (self.id, time.strftime("%Y%m%d_%H%M%S")))
-            while self._rec_path.exists():                    # перезапуск в ту же секунду не затирает прежний файл
-                self._rec_path = d / (self._rec_path.stem + "_b.csv")
             self._rec_ids = [z["id"] for z in self.cfg["zones"] if z["enabled"]]
-            self._rec_fh = open(self._rec_path, "w", newline="", encoding="utf-8-sig")
-            self._rec_csv = csv.writer(self._rec_fh, delimiter=";")
-            head = ["time"]
-            for zid in self._rec_ids:
-                head += ["%s_flow" % zid, "%s_diff" % zid, "%s_bit" % zid]
-            self._rec_csv.writerow(head + ["alive", "status"])
-            return self._rec_path.name
+            return self._rec_open()
+
+    def _rec_open(self) -> str:
+        """Новый файл записи (колонки — по self._rec_ids). Звать под self._lock."""
+        d = self.data_dir / "records"
+        d.mkdir(parents=True, exist_ok=True)
+        self._rec_path = d / ("%s_%s.csv" % (self.id, time.strftime("%Y%m%d_%H%M%S")))
+        while self._rec_path.exists():                    # перезапуск в ту же секунду не затирает прежний файл
+            self._rec_path = d / (self._rec_path.stem + "_b.csv")
+        self._rec_fh = open(self._rec_path, "w", newline="", encoding="utf-8-sig")
+        self._rec_csv = csv.writer(self._rec_fh, delimiter=";")
+        head = ["time"]
+        for zid in self._rec_ids:
+            head += ["%s_flow" % zid, "%s_diff" % zid, "%s_bit" % zid]
+        self._rec_csv.writerow(head + ["alive", "status"])
+        return self._rec_path.name
 
     def flush_record(self):
         """Дописать буфер на диск (перед выдачей файла: иначе последние секунды лежат в памяти)."""
@@ -302,10 +365,14 @@ class CameraWorker(threading.Thread):
         if status != "ok" or ts - self._rec_flushed >= RECORD_FLUSH_S:   # сбой — сразу на диск: при отключении питания это самые нужные строки
             self._rec_fh.flush()
             self._rec_flushed = ts
-        if self._rec_fh.tell() > RECORD_MAX_BYTES:
+        if self._rec_fh.tell() > RECORD_MAX_BYTES:       # файл полон — продолжаем в следующем: запись не должна молча остановиться
             self._rec_fh.close()
             self._rec_fh = self._rec_csv = None
             self._rec_path = None
+            try:
+                self._rec_open()
+            except OSError as e:
+                log.warning("[%s] новый файл записи не открылся: %s", self.id, e)
 
     def stop_record(self):
         with self._lock:
@@ -326,6 +393,7 @@ class CameraWorker(threading.Thread):
             self._bucket = [ts, dict(zones), ok]
         elif ts - b[0] >= LONG_STEP_S:
             self._long.append((b[0], b[1], b[2]))
+            self._trend.add_long(b[0], b[1], b[2])
             self._bucket = [ts, dict(zones), ok]
         else:
             for zid, (fl, df, bit) in zones.items():
@@ -340,6 +408,7 @@ class CameraWorker(threading.Thread):
         if b is None or b[0] != key:
             if b is not None:
                 self._stats.append(b)
+                self._trend.add_stats(b)
             b = self._sbucket = [key, {}]
         for zid, (fl, df, _bit) in zones.items():
             a = b[1].get(zid)

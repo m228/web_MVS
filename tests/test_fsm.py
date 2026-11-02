@@ -192,3 +192,79 @@ def test_reset_cycle_returns_to_idle(fsm):
     fsm.start_sample()
     fsm.reset_cycle()
     assert fsm.mode == 0
+
+
+# ---------- окно перезапуска для автообновления (restart_window) ----------
+
+def test_restart_window_needs_known_stage(fsm):
+    ok, why = fsm.restart_window()
+    assert not ok and "стадия" in why                   # от ПЛК ещё ничего не пришло
+
+
+@pytest.mark.parametrize("stage", [1, 11, 12, 13, 14])
+def test_restart_window_open_after_boil(fsm, stage):
+    fsm.set_stage(stage)
+    assert fsm.restart_window() == (True, "")
+
+
+@pytest.mark.parametrize("stage", [0, 2, 3, 5, 7, 9, 10, 20, 21])
+def test_restart_window_closed_on_boil_and_unknown_stages(fsm, stage):
+    fsm.set_stage(stage)
+    ok, why = fsm.restart_window()
+    assert not ok and "стадия %d" % stage in why
+
+
+def test_restart_window_closed_while_probe_runs(fsm):
+    fsm.set_stage(12)
+    fsm.start_sample()
+    ok, why = fsm.restart_window()
+    assert not ok and "проба" in why
+
+
+def test_restart_window_closed_in_manual_fault_and_no_link(fsm):
+    fsm.set_stage(12)
+    fsm.manual = True
+    assert fsm.restart_window()[1] == "ручной режим"
+    fsm.manual = False
+    fsm.set_movement_inhibit(True)
+    assert "авария" in fsm.restart_window()[1]
+    fsm.set_movement_inhibit(False)
+    fsm._halt = False
+    fsm.plate.status["connected"] = False
+    assert fsm.restart_window()[1] == "нет связи с платой"
+
+
+def test_restart_window_closed_while_cv_busy_and_ignore_stage(fsm):
+    fsm.set_stage(12)
+    fsm.cv_begin()
+    assert not fsm.restart_window()[0]
+    fsm.cv_end()
+    assert fsm.restart_window()[0]
+    fsm.set_ignore_stage(True)
+    assert "без стадии" in fsm.restart_window()[1]
+
+
+def test_restart_window_waits_for_zero_calibration(fsm):
+    fsm.set_autocal(enabled=True, every_n=1)
+    fsm.set_stage(10)
+    fsm.tick()
+    fsm.set_stage(11)                                   # фронт пропарки: варок 1/1 — калибровка стартует сразу
+    fsm.tick()
+    ok, why = fsm.restart_window()
+    assert not ok and "калибровк" in why
+    fsm._cal_active = False                             # калибровка кончилась, но своя очередь ещё не снята
+    fsm.mode = 0
+    fsm._ac_armed = True
+    assert "калибровк" in fsm.restart_window()[1]
+    fsm._ac_armed = False
+    fsm._unflag = {1: 0, 2: 0}
+    assert fsm.restart_window() == (True, "")
+
+
+def test_restart_window_open_when_calibration_not_due(fsm):
+    fsm.set_autocal(enabled=True, every_n=3)            # варка 1 из 3: калибровки на этой пропарке не будет
+    fsm.set_stage(10)
+    fsm.tick()
+    fsm.set_stage(11)
+    fsm.tick()
+    assert fsm.restart_window() == (True, "")

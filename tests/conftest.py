@@ -6,6 +6,7 @@ plate_config.json / mvs.db / cv_results. Тот же приём, что в selfc
 
 Запуск из корня репозитория:  .venv\\Scripts\\python.exe -m pytest -q
 """
+import os
 import sys
 import tempfile
 from pathlib import Path
@@ -14,6 +15,7 @@ import pytest
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
+os.environ.setdefault("MONITOR_RELEASE_URL", "")     # приёмник мониторинга в тестах не ходит на GitHub за номером последней версии
 
 # DATA_DIR на сессию — до импорта модулей проекта в тестах
 import paths  # noqa: E402

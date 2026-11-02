@@ -180,6 +180,8 @@ class Store:
             last = self._last_notified(plant_id, OFFLINE_KINDS + ("online",))
             if last is None or last["kind"] == "online":
                 return
+        elif kind == "update":                  # скачана / обновлён / не удалось: шлём всегда (звук или «в историю» решает Notifier по state)
+            pass
         else:
             return
         row = self.db.execute("SELECT name FROM plants WHERE id=?", (plant_id,)).fetchone()

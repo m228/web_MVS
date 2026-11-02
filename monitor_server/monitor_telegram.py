@@ -2,6 +2,8 @@
 
 Что шлём (правила — monitor_store.Store._maybe_notify): свежие критичные и красные события — перезапуск ПК/приложения, «нет пульса»,
 красные тревоги, перезагрузка платы — и «снято» / «связь восстановилась», если об открытии мы сообщали. Жёлтые предупреждения — только в панели.
+Сообщения об обновлении завода (вид update: скачана, обновлён и всё поднялось, откат) приходят «в историю» — без звука; со звуком
+только «обновлён, но не всё поднялось» (is_quiet). Тревоги и «в историю» уходят отдельными сообщениями, тихие потолок не едят.
 Старые события (пачка после обрыва связи) в чат не идут. Несколько событий одного завода в одном проходе — одно сообщение. Не больше
 max_per_hour сообщений в час: остальное одной строкой «ещё N событий, смотри панель».
 
@@ -106,18 +108,34 @@ class TelegramClient:
         except Exception as e:
             return False, None, 0.0, mask("Ошибка отправки в Telegram: %s" % e, self.token)
 
-    def send(self, chat_id, text: str, markup: Optional[dict] = None) -> tuple:
+    def send(self, chat_id, text: str, markup: Optional[dict] = None, silent: bool = False) -> tuple:
+        """silent — сообщение «в историю»: приходит в чат без звука и вибрации (disable_notification)."""
         payload = {"chat_id": chat_id, "text": text[:4000], "disable_web_page_preview": True}
         if markup:
             payload["reply_markup"] = markup
+        if silent:
+            payload["disable_notification"] = True
         ok, _, wait, err = self.call("sendMessage", payload)
         return ok, wait, err
 
 
+# события обновления (kind "update", state от завода): что в Telegram приходит без звука «в историю», а что со звуком.
+# Тихо: скачана, обновлён и всё поднялось, откат (о нём и так кричит красная тревога «приложение перезапущено»).
+# Со звуком — только «обновлён, но что-то не поднялось»: другой тревоги об этом нет, а камера/плата могут не работать.
+UPDATE_ICON = {"staged": "📦", "ok": "✅", "warn": "⚠️", "failed": "↩️"}
+QUIET_UPDATE_STATES = ("staged", "ok", "failed")
+
+
+def is_quiet(r: dict) -> bool:
+    return r.get("kind") == "update" and r.get("state") in QUIET_UPDATE_STATES
+
+
 def format_line(r: dict) -> str:
-    """Одна строка сообщения: «🔴 Кир — текст · 19:40». Снятие и восстановление — зелёные."""
+    """Одна строка сообщения: «🔴 Кир — текст · 19:40». Снятие и восстановление — зелёные, обновление — свой значок."""
     hm = time.strftime("%H:%M", time.localtime(r["t"]))
     text = r["text"].strip()
+    if r["kind"] == "update":
+        return "%s %s — %s · %s" % (UPDATE_ICON.get(r.get("state"), "🔄"), r["plant_name"], text, hm)
     if r["kind"] == "online":
         return "🟢 %s — %s · %s" % (r["plant_name"], text[:1].lower() + text[1:], hm)
     if r["state"] == "closed":
@@ -160,10 +178,10 @@ class Notifier:
             self._kick.wait(WATCH_EVERY_S)
             self._kick.clear()
 
-    def _send_all(self, text: str) -> tuple:
+    def _send_all(self, text: str, silent: bool = False) -> tuple:
         wait, err = 0.0, ""
         for chat in self.cfg["chat_ids"]:
-            ok, w, e = self.client.send(chat, text)
+            ok, w, e = self.client.send(chat, text, silent=silent)
             if not ok:
                 return False, max(wait, w), e
         return True, 0.0, ""
@@ -189,21 +207,27 @@ class Notifier:
             for r in rows:
                 by_plant.setdefault(r["plant_id"], []).append(r)
             sent, muted = 0, 0
+            groups = []                                          # (строки, тихо?): у завода тревоги и «история» уходят отдельными сообщениями
             for plant_rows in by_plant.values():
-                ids = [r["id"] for r in plant_rows]
-                if self._recent(now) >= self.cfg["max_per_hour"]:
+                loud = [r for r in plant_rows if not is_quiet(r)]
+                quiet = [r for r in plant_rows if is_quiet(r)]
+                groups += [(g, silent) for g, silent in ((loud, False), (quiet, True)) if g]
+            for group_rows, silent in groups:
+                ids = [r["id"] for r in group_rows]
+                if not silent and self._recent(now) >= self.cfg["max_per_hour"]:      # тихие потолок не едят: бюджет — для тревог
                     self.store.notify_mark(ids, "muted", now, "потолок сообщений в час")
                     muted += len(ids)
                     continue
-                ok, wait, err = self._send_all("\n".join(format_line(r) for r in plant_rows))
+                ok, wait, err = self._send_all("\n".join(format_line(r) for r in group_rows), silent)
                 self.state["last_try_t"] = now
                 if ok:
                     self.store.notify_mark(ids, "sent", now)
-                    self._sent_times.append(now)
+                    if not silent:
+                        self._sent_times.append(now)
                     self.state.update(last_ok_t=now, last_error="", sent_messages=self.state["sent_messages"] + 1)
                     sent += 1
                 else:
-                    tries = max(r["tries"] for r in plant_rows) + 1
+                    tries = max(r["tries"] for r in group_rows) + 1
                     delay = max(wait, min(RETRY_MAX_S, 30 * 2 ** (tries - 1)))
                     self.store.notify_retry(ids, now + delay, err)
                     self.state["last_error"] = err

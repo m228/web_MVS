@@ -686,3 +686,96 @@ def test_bot_thread_answers_a_question_end_to_end(tmp_path, tg, monkeypatch):
         assert last_send["body"]["reply_markup"]["keyboard"][0] == [{"text": "Кир"}]
     finally:
         srv.close()
+
+
+# ------------------------------------------------------------------------------------------- обновление: «в историю» без звука
+
+def silent_flags(tg):
+    return [bool(r["body"].get("disable_notification")) for r in tg.requests if r["method"] == "sendMessage"]
+
+
+def upd(eid, t, text, state, level="info"):
+    return ev(eid, t, text, kind="update", level=level, state=state)
+
+
+def test_update_events_are_queued_in_any_level(env):
+    e = env
+    pid, _ = e.store.create_plant("Кир")
+    t = e.clk.t
+    e.store.ingest(pid, pulse([upd("u1", t - 30, "Скачана v2.0.52, перезапущусь после варки", "staged"),
+                               upd("u2", t - 20, "Обновлено 2.0.51 → 2.0.52 · плата ✓", "ok"),
+                               upd("u3", t - 10, "Обновлено до 2.0.52, но не всё поднялось: камера не стримит", "warn", level="medium"),
+                               upd("old", t - 3600, "Давнее", "ok")]))
+    assert rows(e) == [("update", "staged", ""), ("update", "ok", ""), ("update", "warn", "")]
+
+
+def test_quiet_update_messages_are_silent_and_the_warning_is_loud(env):
+    e = env
+    pid, _ = e.store.create_plant("Кир")
+    t = e.clk.t
+    e.store.ingest(pid, pulse([upd("u1", t - 30, "Скачана v2.0.52, перезапущусь после варки", "staged"),
+                               upd("u2", t - 20, "Обновлено 2.0.51 → 2.0.52 · плата ✓", "ok"),
+                               upd("u3", t - 10, "Обновлено до 2.0.52, но не всё поднялось: камера не стримит", "warn", level="medium")]))
+    assert e.n.flush() == 2
+    texts = e.tg.sent()
+    flags = silent_flags(e.tg)
+    by_text = dict(zip(texts, flags))
+    loud = [t for t, f in by_text.items() if not f]
+    quiet = [t for t, f in by_text.items() if f]
+    assert len(loud) == 1 and loud[0].startswith("⚠️ Кир — Обновлено до 2.0.52, но не всё поднялось")
+    assert len(quiet) == 1 and quiet[0].count("\n") == 1 and quiet[0].startswith("📦 Кир — Скачана v2.0.52") and "\n✅ Кир — Обновлено 2.0.51" in quiet[0]
+
+
+def test_failed_update_is_silent_because_the_restart_alarm_already_rings(env):
+    e = env
+    pid, _ = e.store.create_plant("Кир")
+    t = e.clk.t
+    e.store.ingest(pid, pulse([ev("s1", t - 30, "Приложение перезапущено, предыдущая остановка нештатная", kind="start", level="critical"),
+                               upd("u1", t - 20, "Обновление до v2.0.52 не удалось, работаю на v2.0.51", "failed")]))
+    assert e.n.flush() == 2
+    by_text = dict(zip(e.tg.sent(), silent_flags(e.tg)))
+    assert by_text["🔴 Кир — Приложение перезапущено, предыдущая остановка нештатная · " + time.strftime("%H:%M", time.localtime(t - 30))] is False
+    assert [v for k, v in by_text.items() if k.startswith("↩️")] == [True]
+
+
+def test_alarms_stay_loud_even_with_quiet_messages_alongside(env):
+    e = env
+    pid, _ = e.store.create_plant("Кир")
+    t = e.clk.t
+    e.store.ingest(pid, pulse([upd("u1", t - 30, "Скачана v2.0.52, перезапущусь после варки", "staged"),
+                               ev("a1", t - 20, "Камера: экспозиция 5000", code="camera_exposure", state="open")]))
+    e.n.flush()
+    by_text = {k.split(" — ")[0]: v for k, v in zip(e.tg.sent(), silent_flags(e.tg))}
+    assert by_text == {"🔴 Кир": False, "📦 Кир": True}
+
+
+def test_quiet_messages_do_not_eat_the_hourly_alarm_budget(env):
+    e = env
+    e.cfg["max_per_hour"] = 1
+    pid, _ = e.store.create_plant("Кир")
+    t = e.clk.t
+    e.store.ingest(pid, pulse([upd("u1", t - 30, "Скачана v2.0.52", "staged")]))
+    e.n.flush()
+    e.store.ingest(pid, pulse([upd("u2", t - 25, "Обновлено 2.0.51 → 2.0.52", "ok")]))
+    e.n.flush()
+    e.store.ingest(pid, pulse([ev("s1", t - 5, "ПК перезагрузился", kind="start", level="critical")]))
+    assert e.n.flush() == 1
+    assert [s for s in e.tg.sent() if s.startswith("🔴")] != [], "тревога после двух тихих сообщений прошла"
+
+
+def test_update_line_icons_and_quiet_rule():
+    base = {"t": 1_000_000.0, "plant_name": "Кир", "text": "Текст", "kind": "update", "state": "", "level": "info"}
+    assert mt.format_line(dict(base, state="staged")).startswith("📦 Кир — Текст")
+    assert mt.format_line(dict(base, state="ok")).startswith("✅ Кир — Текст")
+    assert mt.format_line(dict(base, state="warn")).startswith("⚠️ Кир — Текст")
+    assert mt.format_line(dict(base, state="failed")).startswith("↩️ Кир — Текст")
+    assert [mt.is_quiet(dict(base, state=s)) for s in ("staged", "ok", "failed", "warn")] == [True, True, True, False]
+    assert not mt.is_quiet(dict(base, kind="alert", state="open"))
+
+
+def test_client_sets_disable_notification_only_when_silent(env):
+    e = env
+    c = mt.TelegramClient(TOKEN, e.tg.url, timeout=5)
+    assert c.send(CHAT, "громко")[0] and c.send(CHAT, "тихо", silent=True)[0]
+    bodies = [r["body"] for r in e.tg.requests if r["method"] == "sendMessage"]
+    assert "disable_notification" not in bodies[0] and bodies[1]["disable_notification"] is True

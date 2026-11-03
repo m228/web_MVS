@@ -4612,6 +4612,7 @@ body.micro-rep-doc .micro-cmp-strips { grid-template-columns: repeat(6, 1fr); ga
 .motion-mark__stage img { width: 100%; height: auto; max-height: 68vh; object-fit: contain; display: block; margin: 0 auto; }
 .motion-mark__stage canvas { position: absolute; inset: 0; width: 100%; height: 100%; cursor: crosshair; }
 .motion-mark__form { display: flex; gap: 14px; flex-wrap: wrap; margin-top: 10px; font-size: 13px; }
+.motion-mark__form[hidden] { display: none; }
 .motion-mark__form input, .motion-mark__form select { background: var(--input-bg); border: 1px solid var(--input-border); color: var(--text); border-radius: 6px; padding: 4px 8px; font: inherit; }
 
 /* журнал камер: фильтры в одну строку, ниже лента эпизодов (время · длительность · камера · что было) */

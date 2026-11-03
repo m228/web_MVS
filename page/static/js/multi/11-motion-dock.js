@@ -183,9 +183,11 @@ function renderMotionDock() {
   sw.checked = !!(cam && cam.enabled);
   mdEl('mdSwitchWrap').hidden = all;
   mdEl('mdMark').hidden = all;
+  mdEl('mdMarkRods').hidden = all;
   mdEl('mdRec').hidden = all;
   mdEl('mdAll').hidden = all;
   mdEl('mdMark').disabled = !(cam && cam.enabled);
+  mdEl('mdMarkRods').disabled = !(cam && cam.enabled);
   mdEl('mdRec').disabled = !(cam && cam.enabled);
   mdEl('mdRecAll').hidden = !all;
   mdEl('mdRecZip').hidden = !all;
@@ -233,6 +235,20 @@ function mdOutCell(o, attrs) {
 function mdZoneCardHtml(cam, z, i) {
   const a = `data-md="z" data-cam="${escapeHtml(cam.id)}" data-i="${i}"`;
   const k = escapeHtml(cam.id + '-' + z.id);
+  if (z.type === 'cycle') {
+    return `<div class="md-zone">
+    <div class="md-zone__ctl">
+      <div class="md-zone__row"><input type="text" ${a} data-f="name" value="${escapeHtml(z.name)}" title="${escapeHtml(z.id)}" />
+        <span class="cv-bit" id="md-zb-${k}" title="Палка найдена">–</span><span class="md-num" id="md-zv-${k}" title="Угол красного конца от вертикали по часовой, °">–</span><span class="md-sp"></span>
+        <button type="button" class="btn-secondary md-x" ${a} data-f="del" title="Удалить палку">✕</button></div>
+      <div class="md-zstat" id="md-st-${k}" title="Угол красного конца палки от вертикали по часовой (0–360°) и уверенность поиска"></div>
+      <div class="md-zone__row"><span class="md-lbl" title="Ось вала на кадре (пиксели кадра разметки): точка, вокруг которой вращается палка">ось x, y</span>${mdNum(a + ' data-f="cx"', Math.round(z.center[0]), 'min="0" step="1"')}${mdNum(a + ' data-f="cy"', Math.round(z.center[1]), 'min="0" step="1"')}
+        <span class="md-lbl" title="Окружность вокруг оси, внутри которой ищется палка: должна доставать до её концов">радиус, px</span>${mdNum(a + ' data-f="radius"', z.radius, 'min="20" step="5"')}</div>
+      <div class="md-zone__row"><span class="md-lbl">вывод в ПЛК</span>${mdOutCell(z.out, a)}<span class="net-hint">регистр — угол в 0,1°</span></div>
+    </div>
+    <div class="md-zone__chart"><canvas id="md-ch-${k}" height="84"></canvas></div>
+  </div>`;
+  }
   return `<div class="md-zone">
     <div class="md-zone__ctl">
       <div class="md-zone__row"><input type="text" ${a} data-f="name" value="${escapeHtml(z.name)}" title="${escapeHtml(z.id)}" />
@@ -250,6 +266,26 @@ function mdZoneCardHtml(cam, z, i) {
         <label class="md-lbl" title="Считать оптический поток (flow) для этой зоны. Самое тяжёлое в анализе: если зона решает по diff и flow не нужен, выключите — процессор разгрузится, а flow этой зоны в графиках и записях будет 0"><input type="checkbox" ${a} data-f="trackflow"${z.metric === 'flow' ? ' checked disabled' : (z.track_flow === false ? '' : ' checked')} /> flow</label></div>
     </div>
     <div class="md-zone__chart"><canvas id="md-ch-${k}" height="84"></canvas></div>
+  </div>`;
+}
+
+// синхронность двух валов: отклонение от зеркальности (Δ, °), допуск и эталон; график Δ — справа
+function mdMirrorCardHtml(cam, g) {
+  const a = `data-md="mg" data-cam="${escapeHtml(cam.id)}" data-gid="${escapeHtml(g.id)}"`;
+  const k = escapeHtml(cam.id + '-' + g.id);
+  const names = g.zones.map((id) => { const z = cam.zones.find((q) => q.id === id); return escapeHtml(z ? z.name : id); }).join(' ↔ ');
+  return `<div class="md-zone md-mirror">
+    <div class="md-zone__ctl">
+      <div class="md-zone__row"><b>${escapeHtml(g.name)}</b><span class="net-hint">${names}</span><span class="md-sp"></span>
+        <span class="cv-bit" id="md-mxb-${k}" title="Авария: рассинхрон больше допуска">–</span><span class="md-num" id="md-mxv-${k}" title="Отклонение от нормы, °">–</span></div>
+      <div class="md-zstat" id="md-mxs-${k}"></div>
+      <div class="md-zone__row"><span class="md-lbl" title="Авария, когда отклонение по модулю не меньше допуска">допуск, °</span>${mdNum(a + ' data-f="tol"', g.tol, 'min="0.5" max="180" step="0.5"')}
+        <span class="md-lbl" title="Поправка нуля: какое значение суммы углов считать нормой. Кнопка справа берёт текущее положение валов за эталон — нажимайте, когда валы заведомо выставлены ровно">эталон, °</span>${mdNum(a + ' data-f="ref"', g.ref, 'min="-180" max="180" step="0.5"')}
+        <button type="button" class="btn-secondary md-x" ${a} data-f="calib" title="Принять текущее положение валов за норму (эталон = текущее значение)">текущее = норма</button></div>
+      <div class="md-zone__row"><span class="md-lbl">вывод в ПЛК</span>${mdOutCell(g.out ? { kind: g.out.kind === 'coils' ? 'coil' : 'holding', address: g.out.address } : null, a)}
+        <span class="net-hint">регистр — Δ в 0,1° со знаком; coil — авария</span></div>
+    </div>
+    <div class="md-zone__chart"><canvas id="md-mx-${k}" height="84"></canvas></div>
   </div>`;
 }
 
@@ -351,6 +387,7 @@ function mdZonesTabHtml(mode, cam) {
       if (!c.zones.length) return;
       if (all) html += `<div class="md-camhead"><b>${escapeHtml(c.name)}${mdIpTag(c.url)}</b><span class="motion-dock__pill" id="md-cp-${escapeHtml(c.id)}"></span></div>`;
       html += c.zones.map((z, i) => mdZoneCardHtml(c, z, i)).join('');
+      html += (c.groups || []).filter((g) => g.type === 'mirror').map((g) => mdMirrorCardHtml(c, g)).join('');
     });
     html += '</div>';
   }
@@ -366,13 +403,15 @@ function mdOnZone(t, cam) {
     mdEdit(() => {
       cam.zones.splice(i, 1);
       (cam.groups || []).forEach((g) => { g.zones = g.zones.filter((x) => x !== z.id); if (g.order) g.order = g.order.filter((x) => x !== z.id); });
-      cam.groups = (cam.groups || []).filter((g) => g.zones.length);
+      cam.groups = (cam.groups || []).filter((g) => g.zones.length && (g.type !== 'mirror' || g.zones.length === 2));
       (MV.cfg.scenarios || []).forEach((s) => { s.sources = s.sources.filter((x) => !(x.camera === cam.id && x.zone === z.id)); });
     }, true);
     return;
   }
   mdEdit(() => {
-    if (f === 'name') z.name = t.value;
+    if (f === 'radius') z.radius = Math.max(20, parseFloat(t.value) || 20);
+    else if (f === 'cx' || f === 'cy') z.center[f === 'cx' ? 0 : 1] = Math.max(0, parseFloat(t.value) || 0);
+    else if (f === 'name') z.name = t.value;
     else if (f === 'type') { z.type = t.value; z.invert = t.value === 'presence'; }
     else if (f === 'metric') { z.metric = t.value; z.on = MD_THR[z.metric][0]; z.off = MD_THR[z.metric][1]; }
     else if (f === 'on' || f === 'off') z[f] = parseFloat(t.value) || 0;
@@ -381,6 +420,26 @@ function mdOnZone(t, cam) {
     else if (f === 'okind') z.out = t.value ? { kind: t.value, address: (z.out && z.out.address) || 0 } : null;
     else if (f === 'oaddr' && z.out) z.out.address = parseInt(t.value, 10) || 0;
   }, f === 'type' || f === 'metric' || f === 'okind');
+}
+
+// карточка синхронности: допуск, эталон, вывод; «текущее = норма» берёт текущую сумму углов из живого состояния
+function mdOnMirror(t, cam) {
+  const g = (cam.groups || []).find((q) => q.id === t.dataset.gid);
+  if (!g) return;
+  const f = t.dataset.f;
+  if (f === 'calib') {
+    const live = (((MV.states[cam.id] || {}).result || {}).groups || []).find((q) => q.id === g.id);
+    if (!live || !live.valid || !live.angles || live.angles[0] == null || live.angles[1] == null) { alert('Сейчас не видно обе палки — эталон принять нельзя.'); return; }
+    const raw = g.mode === 'same' ? live.angles[0] - live.angles[1] : live.angles[0] + live.angles[1];
+    mdEdit(() => { g.ref = Math.round((((raw + 180) % 360 + 360) % 360 - 180) * 10) / 10; }, true);
+    return;
+  }
+  mdEdit(() => {
+    if (f === 'tol') g.tol = Math.max(0.5, Math.min(180, parseFloat(t.value) || 10));
+    else if (f === 'ref') g.ref = Math.max(-180, Math.min(180, parseFloat(t.value) || 0));
+    else if (f === 'okind') g.out = t.value ? { kind: t.value === 'coil' ? 'coils' : 'holding', address: (g.out && g.out.address) || 0 } : null;
+    else if (f === 'oaddr' && g.out) g.out.address = parseInt(t.value, 10) || 0;
+  }, f === 'okind');
 }
 
 function mdOnCamera(t, cam) {
@@ -410,6 +469,7 @@ async function mdDrawTrends() {
   res.forEach((h, k) => {
     if (!h || h.error || !h.zones) return;
     cams[k].zones.forEach((z) => mdDrawChart(cams[k], z, h.zones[z.id], h.t || [], h.ok || []));
+    mdDrawMirrorCharts(cams[k], h);
   });
   if (MD.trendDirty) { MD.trendDirty = false; mdDrawTrends(); }
 }
@@ -418,6 +478,9 @@ async function mdDrawTrends() {
 const mdNumFmt = (v) => (v >= 100 ? v.toFixed(0) : v >= 10 ? v.toFixed(1) : v.toFixed(2));
 
 function mdZoneStatHtml(z, cur, st) {
+  if (z.type === 'cycle') {
+    return cur && cur.valid ? `угол <b class="md-zstat__cur">${Number(cur.angle).toFixed(1)}°</b> · уверенность ${Number(cur.conf).toFixed(2)}` : 'палка не найдена';
+  }
   const row = (m) => {
     const c = cur ? mdNumFmt(Number(cur[m])) : '–';
     const s = st && st[m];
@@ -439,7 +502,7 @@ function mdPaintZoneStats() {
       if (!el) return;
       el.innerHTML = mdZoneStatHtml(z, live[z.id], sr && sr.zones && sr.zones[z.id]);
       // накоплено меньше, чем просили (сервис недавно стартовал): честно говорим, за сколько на самом деле
-      if (sr && sr.zones && sr.zones[z.id] && sr.span_s < sr.window_s * 0.9) {
+      if (z.type !== 'cycle' && sr && sr.zones && sr.zones[z.id] && sr.span_s < sr.window_s * 0.9) {
         const n = document.createElement('div');
         n.className = 'md-zstat__note';
         n.textContent = 'накоплено за ' + mdFmtWin(sr.span_s);
@@ -468,9 +531,61 @@ async function mdLoadStats(force) {
 }
 
 // график зоны: ось X — время, правый край — «сейчас», левый — «сейчас − окно»
+// временной ряд значений vals (null — нет данных) в диапазоне [lo, hi]; wrap — угол 0..360: на переходе через ноль линию не тянем;
+// lines — горизонтальные пунктиры [{v, color}]; bad[i] — серый фон «кадров нет»
+function mdDrawSeries(cv, t, vals, ok, lo, hi, opts) {
+  const w = cv.clientWidth, hh = 84;
+  if (!w) return;
+  if (cv.width !== w) cv.width = w;
+  const g = cv.getContext('2d');
+  g.clearRect(0, 0, w, hh);
+  const plotH = hh - 13, win = MD.win, n = vals.length;
+  const Y = (v) => plotH - ((v - lo) / (hi - lo)) * (plotH - 6) - 1;
+  g.fillStyle = '#94a3b8'; g.font = '10px sans-serif';
+  g.fillText(String(hi), 3, 10); g.fillText(String(lo), 3, plotH - 2);
+  g.fillText('−' + mdFmtWin(win), 3, hh - 1);
+  g.textAlign = 'right'; g.fillText('сейчас', w - 3, hh - 1); g.textAlign = 'left';
+  if (n < 2) return;
+  const tEnd = t[n - 1];
+  const X = (i) => w - 1 - ((tEnd - t[i]) / win) * (w - 2);
+  const dt = (t[n - 1] - t[0]) / (n - 1);
+  const bw = Math.max(1.5, (dt / win) * w + 1);
+  const gap = Math.max(dt * 3, 5);
+  for (let i = 0; i < n; i += 1) if (ok[i] === 0) { g.fillStyle = 'rgba(156,163,175,.30)'; g.fillRect(X(i) - bw, 0, bw, plotH); }
+  g.setLineDash([4, 3]); g.lineWidth = 1;
+  (opts.lines || []).forEach((l) => { g.strokeStyle = l.color; g.beginPath(); g.moveTo(0, Y(l.v)); g.lineTo(w, Y(l.v)); g.stroke(); });
+  g.setLineDash([]);
+  g.strokeStyle = '#38bdf8'; g.lineWidth = 1.6; g.beginPath();
+  let pen = false;
+  vals.forEach((v, i) => {
+    if (v == null || ok[i] === 0) { pen = false; return; }
+    const brk = !pen || t[i] - t[i - 1] > gap || (opts.wrap && Math.abs(v - vals[i - 1]) > 180);
+    if (brk) g.moveTo(X(i), Y(v)); else g.lineTo(X(i), Y(v));
+    pen = true;
+  });
+  g.stroke();
+}
+
+// отклонение валов во времени: Δ = θ1 + θ2 − эталон (зеркально) или θ1 − θ2 − эталон, приведённое к −180..180; по истории углов двух зон
+function mdDrawMirrorCharts(cam, h) {
+  (cam.groups || []).filter((g) => g.type === 'mirror').forEach((g) => {
+    const cv = mdEl('md-mx-' + cam.id + '-' + g.id);
+    const a = h.zones[g.zones[0]], b = h.zones[g.zones[1]];
+    if (!cv || !a || !b) return;
+    const vals = a.flow.map((v, i) => {
+      if (!a.bit[i] || !b.bit[i]) return null;
+      const raw = g.mode === 'same' ? v - b.flow[i] : v + b.flow[i];
+      return ((((raw - g.ref + 180) % 360) + 360) % 360) - 180;
+    });
+    const span = Math.max(20, Math.ceil((g.tol * 2) / 10) * 10);
+    mdDrawSeries(cv, h.t || [], vals, h.ok || [], -span, span, { lines: [{ v: g.tol, color: '#ef4444' }, { v: -g.tol, color: '#ef4444' }, { v: 0, color: '#64748b' }] });
+  });
+}
+
 function mdDrawChart(cam, z, d, t, ok) {
   const cv = mdEl('md-ch-' + cam.id + '-' + z.id);
   if (!cv || !d) return;
+  if (z.type === 'cycle') { mdDrawSeries(cv, t, d.flow.map((v, i) => (d.bit[i] ? v : null)), ok, 0, 360, { wrap: true, lines: [{ v: 180, color: '#64748b' }] }); return; }
   const w = cv.clientWidth, hh = 84, strip = 7;
   if (!w) return;
   if (cv.width !== w) cv.width = w;
@@ -631,7 +746,7 @@ function mdGroupRowHtml(cam, g, i) {
   const a = `data-md="g" data-cam="${escapeHtml(cam.id)}" data-i="${i}"`;
   return `<div class="md-card"><b>${escapeHtml(cam.name)}${mdIpTag(cam.url)}</b><span class="md-dim">·</span><b>${escapeHtml(g.name)}</b><span class="net-hint">${g.type} · ${names} · ${out}</span><span class="md-sp"></span>
     <span class="cv-bit" id="md-gv-${escapeHtml(cam.id + '-' + g.id)}">–</span>
-    <button type="button" class="btn-secondary md-x" ${a} data-f="edit">Изменить</button>
+    ${g.type === 'mirror' ? '' : `<button type="button" class="btn-secondary md-x" ${a} data-f="edit">Изменить</button>`}
     <button type="button" class="btn-secondary md-x" ${a} data-f="del" title="Удалить группу">✕</button></div>`;
 }
 
@@ -756,7 +871,15 @@ function paintMotionDockLive() {
     });
     ((res && res.groups) || []).forEach((g) => {
       const b = mdEl('md-gv-' + c.id + '-' + g.id);
-      if (b) { b.textContent = g.value; b.classList.toggle('on', g.value > 0); }
+      if (b) { b.textContent = g.type === 'mirror' ? g.alarm : g.value; b.classList.toggle('on', g.type === 'mirror' ? g.alarm === 0 : g.value > 0); }
+      if (g.type !== 'mirror') return;
+      const k = c.id + '-' + g.id, ok = g.valid && g.delta != null;
+      const v = mdEl('md-mxv-' + k);
+      if (v) { v.textContent = ok ? (g.delta > 0 ? '+' : '') + g.delta.toFixed(1) + '°' : '—'; v.style.color = ok && g.alarm ? '#f87171' : ''; }
+      const ab = mdEl('md-mxb-' + k);
+      if (ab) { ab.textContent = g.alarm; ab.style.color = g.alarm ? '#f87171' : ''; }
+      const s = mdEl('md-mxs-' + k);
+      if (s) s.textContent = (g.angles || []).map((x, i) => (x == null ? '—' : x.toFixed(1) + '°')).join(' · ') + (ok ? '' : ' · не видно обе палки');
     });
   });
   // статус каждой камеры (заголовки зон и список камер в общем виде)
@@ -994,16 +1117,21 @@ async function mdLoadMarkFrame() {
   } catch (e) { /* ждём следующий кадр */ } finally { m.busy = false; }
 }
 
-function openMarkModal() {
+function openMarkModal(rods) {
   const { source, cam } = mdCamera();
   if (!source || !cam || !cam.enabled) return;
-  MD.mark = { cam: cam.id, pts: [], cursor: null, fw: 0, fh: 0, closed: false, busy: false };
+  rods = rods === true;       // слушатель click передаёт событие, а не флаг
+  MD.mark = { cam: cam.id, pts: [], cursor: null, fw: 0, fh: 0, closed: false, busy: false, rods };
   mdEl('mmCam').textContent = source.label || source.serial;
+  mdEl('mmTitle').textContent = rods ? 'Разметка валов' : 'Разметка зоны';
+  mdEl('mmOk').textContent = rods ? 'Добавить валы' : 'Добавить зону';
   mdEl('mmImg').removeAttribute('src');
   mdEl('mmForm').hidden = true;
   mdEl('mmOk').hidden = true;
-  mdEl('mmClose').hidden = false;
-  mdEl('mmHint').textContent = 'Кликайте по углам зоны. ПКМ — убрать точку. «Замкнуть» или Enter — готово (минимум 3 точки). Кадр замирает после первой точки.';
+  mdEl('mmClose').hidden = rods;
+  mdEl('mmHint').textContent = rods
+    ? 'Кликните по оси левого вала (красная точка в центре палки), затем по оси правого. ПКМ — убрать точку. Enter — готово. Радиус и точное положение осей потом правятся в карточке.'
+    : 'Кликайте по углам зоны. ПКМ — убрать точку. «Замкнуть» или Enter — готово (минимум 3 точки). Кадр замирает после первой точки.';
   const modal = mdEl('motionMarkModal');
   modal.classList.add('show');
   modal.setAttribute('aria-hidden', 'false');
@@ -1025,10 +1153,18 @@ function closeMarkModal() {
 function mdMarkUi() {
   const m = MD.mark;
   if (!m) return;
-  mdEl('mmClose').disabled = m.closed || m.pts.length < 3;
-  mdEl('mmUndo').disabled = m.closed || !m.pts.length;
+  if (m.rods) {
+    mdEl('mmOk').hidden = m.pts.length < 2;
+    mdEl('mmUndo').disabled = !m.pts.length;
+  } else {
+    mdEl('mmClose').disabled = m.closed || m.pts.length < 3;
+    mdEl('mmUndo').disabled = m.closed || !m.pts.length;
+  }
   mdDrawMark();
 }
+
+// радиус поиска палки по умолчанию, пикселей кадра разметки: 17 % ширины (на 1920 — 326; достаёт до концов палки у ступицы)
+const mdRodRadius = (fs) => Math.round(fs[0] * 0.17);
 
 function mdDrawMark() {
   const m = MD.mark, img = mdEl('mmImg'), cv = mdEl('mmCanvas');
@@ -1046,9 +1182,21 @@ function mdDrawMark() {
   ((cam && cam.zones) || []).forEach((z) => {      // уже размеченные зоны — для ориентира
     g.strokeStyle = '#9ca3af'; g.fillStyle = 'rgba(156,163,175,.14)';
     g.beginPath();
+    if (z.type === 'cycle') {
+      g.arc(z.center[0] * (fw / rs[0]) * sx, z.center[1] * (fh / rs[1]) * sy, z.radius * (fw / rs[0]) * sx, 0, 7); g.stroke();
+      return;
+    }
     z.points.forEach((p, i) => { const x = p[0] * (fw / rs[0]) * sx, y = p[1] * (fh / rs[1]) * sy; if (i) g.lineTo(x, y); else g.moveTo(x, y); });
     g.closePath(); g.fill(); g.stroke();
   });
+  if (m.rods) {                                    // валы: точка оси и окружность поиска стандартного радиуса
+    g.strokeStyle = '#38bdf8'; g.fillStyle = '#38bdf8';
+    m.pts.forEach((p) => {
+      g.beginPath(); g.arc(p[0] * sx, p[1] * sy, 4, 0, 7); g.fill();
+      g.beginPath(); g.arc(p[0] * sx, p[1] * sy, mdRodRadius(rs) * (fw / rs[0]) * sx, 0, 7); g.stroke();
+    });
+    return;
+  }
   g.strokeStyle = '#38bdf8'; g.fillStyle = '#38bdf8';
   g.beginPath();
   m.pts.forEach((p, i) => (i ? g.lineTo(p[0] * sx, p[1] * sy) : g.moveTo(p[0] * sx, p[1] * sy)));
@@ -1076,10 +1224,33 @@ function mdMarkClose() {
   mdMarkUi();
 }
 
+// два вала: две зоны-цикла и группа mirror (синхронность); центры — кликнутые точки в пикселях кадра разметки
+function mdMarkSaveRods(m, cam, fw, fh) {
+  if (m.pts.length < 2) return;
+  const pts = m.pts.slice(0, 2).sort((p, q) => p[0] - q[0]);          // левый вал — первый
+  mdEdit(() => {
+    const fs = cam.frame_size || [fw, fh];
+    cam.frame_size = fs;
+    const free = (pre) => { let n = 1; while (cam.zones.some((z) => z.id === pre + n) || (cam.groups || []).some((q) => q.id === pre + n)) n += 1; return pre + n; };
+    const ids = [free('rod'), null];
+    const mk = (id, name, p) => ({ id, name, enabled: true, type: 'cycle', metric: 'flow', points: [], on: 0, off: 0, invert: false, track_flow: false, smooth: 3,
+      frames_to_on: 1, frames_to_off: 1, blur: 0, flicker_comp: false, out: null,
+      center: [Math.round(p[0] * fs[0] / fw), Math.round(p[1] * fs[1] / fh)], radius: mdRodRadius(fs) });
+    cam.zones.push(mk(ids[0], 'Вал левый', pts[0]));
+    ids[1] = free('rod');
+    cam.zones.push(mk(ids[1], 'Вал правый', pts[1]));
+    cam.groups = cam.groups || [];
+    cam.groups.push({ id: free('sync'), name: 'Синхронность валов', type: 'mirror', zones: ids, mode: 'mirror', ref: 0, tol: 10, frames_to_on: 3, frames_to_off: 5, out: null });
+  }, true);
+  log.success('КЗ: валы добавлены', { serial: cam.id });
+  closeMarkModal();
+}
+
 function mdMarkSave() {
   const m = MD.mark, cam = m && mvCam(m.cam);
   if (!cam) return;
   const fw = m.fw || mdEl('mmImg').naturalWidth, fh = m.fh || mdEl('mmImg').naturalHeight;
+  if (m.rods) { mdMarkSaveRods(m, cam, fw, fh); return; }
   const metric = mdEl('mmMetric').value, type = mdEl('mmType').value;
   const name = mdEl('mmName').value.trim();
   const pts = m.pts.slice();
@@ -1111,7 +1282,8 @@ function initMotionDock() {
     if (source) mdSetEnabled(source.serial, e.target.checked, () => { e.target.checked = !e.target.checked; });
   });
   mdEl('mdAll')?.addEventListener('click', () => setFocus(-1));   // общий вид: фокус снимаем
-  mdEl('mdMark')?.addEventListener('click', openMarkModal);
+  mdEl('mdMark')?.addEventListener('click', () => openMarkModal(false));
+  mdEl('mdMarkRods')?.addEventListener('click', () => openMarkModal(true));
   mdEl('mdRec')?.addEventListener('click', mdOnRec);
   mdEl('mdRecAll')?.addEventListener('click', mdOnRecAll);
   mdEl('mdRecZip')?.addEventListener('click', mdOnRecZip);
@@ -1129,6 +1301,7 @@ function initMotionDock() {
     if (!kind) return;
     if (kind === 'z') { const cam = mvCam(t.dataset.cam); if (cam) mdOnZone(t, cam); }
     else if (kind === 'g') mdOnGroup(t);
+    else if (kind === 'mg') { const cam = mvCam(t.dataset.cam); if (cam) mdOnMirror(t, cam); }
     else if (kind === 'c') { const cam = mvCam(t.dataset.cam); if (cam) mdOnCamera(t, cam); }
     else if (kind === 'p') mdOnPlc(t);
     else if (kind === 's') mdOnScenario(t);
@@ -1160,7 +1333,7 @@ function initMotionDock() {
   const cv = mdEl('mmCanvas');
   cv?.addEventListener('click', (e) => {
     const m = MD.mark;
-    if (!m || m.closed) return;
+    if (!m || m.closed || (m.rods && m.pts.length >= 2)) return;
     m.pts.push(mdMarkPoint(e));
     mdMarkUi();
   });
@@ -1175,6 +1348,7 @@ function initMotionDock() {
   document.addEventListener('keydown', (e) => {
     if (!MD.mark) return;
     if (e.key === 'Escape') closeMarkModal();
+    else if (MD.mark.rods) { if (e.key === 'Enter' && MD.mark.pts.length >= 2) mdMarkSave(); }
     else if (e.key === 'Enter' && !MD.mark.closed && !/INPUT|SELECT|TEXTAREA/.test((e.target || {}).tagName || '')) mdMarkClose();
     else if (e.key === 'Enter' && MD.mark.closed) mdMarkSave();
   });

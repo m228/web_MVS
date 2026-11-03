@@ -145,6 +145,7 @@ function drawMotionTile(index) {
   ctx.font = 'bold 13px sans-serif';
   cam.zones.forEach((z) => {
     if (z.enabled === false) return;
+    if (z.type === 'cycle') { drawCycleOnTile(ctx, z, cam, g, live[z.id], mvZoneMode(st, live[z.id])); return; }
     const pts = zonePointsOnTile(z, cam, g);
     const lz = live[z.id];
     const [stroke, fill] = MV_COLORS[mvZoneMode(st, lz)];
@@ -157,6 +158,33 @@ function drawMotionTile(index) {
     ctx.lineWidth = 3; ctx.strokeStyle = '#000'; ctx.strokeText(label, pts[0][0] + 4, pts[0][1] + 15);
     ctx.fillStyle = '#fff'; ctx.fillText(label, pts[0][0] + 4, pts[0][1] + 15); ctx.lineWidth = 2;
   });
+  // рассинхрон валов: подпись по центру сверху, красная — тревога
+  ((st && st.groups) || []).filter((lg) => lg.type === 'mirror').forEach((lg, k) => {
+    const bad = !!problem || !lg.valid;
+    const txt = 'Δ ' + (bad || lg.delta == null ? '—' : (lg.delta > 0 ? '+' : '') + lg.delta.toFixed(1) + '°');
+    ctx.font = 'bold 18px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.lineWidth = 4; ctx.strokeStyle = '#000'; ctx.strokeText(txt, g.w / 2, 26 + k * 24);
+    ctx.fillStyle = bad ? '#9ca3af' : lg.alarm ? '#f87171' : '#4ade80'; ctx.fillText(txt, g.w / 2, 26 + k * 24);
+    ctx.textAlign = 'left'; ctx.font = 'bold 13px sans-serif'; ctx.lineWidth = 2;
+  });
+}
+
+// зона-цикл: окружность поиска вокруг оси вала и палка — красный конец на найденном угле, синий напротив
+function drawCycleOnTile(ctx, z, cam, g, lz, mode) {
+  const fs = cam.frame_size || [g.nw, g.nh];
+  const sx = (g.nw / fs[0]) * g.k, sy = (g.nh / fs[1]) * g.k;
+  const cx = g.ox + z.center[0] * sx, cy = g.oy + z.center[1] * sy, r = z.radius * (sx + sy) / 2;
+  ctx.lineWidth = 1.5; ctx.strokeStyle = MV_COLORS[mode][0]; ctx.setLineDash([4, 4]);
+  ctx.beginPath(); ctx.arc(cx, cy, r, 0, 7); ctx.stroke(); ctx.setLineDash([]);
+  if (mode === 'dead' || !lz || !lz.valid) return;
+  const a = (lz.angle * Math.PI) / 180, dx = Math.sin(a) * r, dy = -Math.cos(a) * r;
+  ctx.lineWidth = 3;
+  ctx.strokeStyle = '#ef4444'; ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(cx + dx, cy + dy); ctx.stroke();
+  ctx.strokeStyle = '#38bdf8'; ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(cx - dx, cy - dy); ctx.stroke();
+  const label = z.name + '  ' + Number(lz.angle).toFixed(1) + '°';
+  ctx.lineWidth = 3; ctx.strokeStyle = '#000'; ctx.strokeText(label, cx - r * 0.6, cy - r - 6);
+  ctx.fillStyle = '#fff'; ctx.fillText(label, cx - r * 0.6, cy - r - 6); ctx.lineWidth = 2;
 }
 
 function drawAllMotionTiles() {

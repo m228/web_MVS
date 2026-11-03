@@ -512,7 +512,10 @@ class CameraWorker(threading.Thread):
                 self._note_conn(True, "")
                 self._decoder = decoder_kind(cap)
                 got_frame = False
-                self.engine.reset()
+                if self._last_good and time.time() - self._last_good < timeout:
+                    self.engine.buf.clear()    # короткий обрыв (короче freeze_timeout_s): сравнивать со старым кадром нельзя, а биты зон держим
+                else:
+                    self.engine.reset()
                 last_gray, last_proc, freeze_time, frozen = None, 0.0, 0.0, False
                 if file_src:
                     fps = cap.get(cv2.CAP_PROP_FPS) or 25.0

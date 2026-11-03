@@ -295,7 +295,25 @@ def _wait(cond, timeout=8.0):
     return False
 
 
-def _worker(tmp_path, frames, frozen=False, **cam):
+class DropCap(FakeCap):
+    """Поток, который на drop_at-м кадре обрывается (grab -> False), как RTSP-камера при сбое."""
+
+    def __init__(self, frames, drop_at):
+        super().__init__(frames)
+        self.drop_at = drop_at
+
+    def grab(self):
+        if self.i >= self.drop_at:
+            return False
+        return super().grab()
+
+
+class ClosedCap(FakeCap):
+    def isOpened(self):
+        return False
+
+
+def _worker(tmp_path, frames, frozen=False, cap_factory=None, **cam):
     raw = {"id": "w", "url": "fake", "hw_accel": "off", "proc_fps": 20, "freeze_timeout_s": 1, "zones": [
         {"id": "z1", "points": LEFT, "metric": "diff", "smooth": 2, "frames_to_on": 2, "frames_to_off": 2,
          "out": {"kind": "holding", "address": 0}},
@@ -311,9 +329,46 @@ def _worker(tmp_path, frames, frozen=False, **cam):
         clients.append(c)
         return c
 
-    w = CameraWorker(cfg, mb, mm.LinkRegistry(factory), tmp_path, lambda url, tr: FakeCap(frames, frozen))
+    w = CameraWorker(cfg, mb, mm.LinkRegistry(factory), tmp_path, cap_factory or (lambda url, tr: FakeCap(frames, frozen)))
     w.start()
     return w, clients
+
+
+def _drop_and_read_bits(tmp_path, caps):
+    """Гоняет воркер по списку источников (по одному на открытие), пишет CSV -> строки z1_bit с живыми кадрами ПОСЛЕ обрыва."""
+    frames = make_frames(40)
+    opened = []
+
+    def factory(url, tr):
+        opened.append(1)
+        return caps[min(len(opened), len(caps)) - 1](frames)
+    w, _ = _worker(tmp_path, frames, cap_factory=factory, url="rtsp://h/cam", reconnect_delay_s=0.5, freeze_timeout_s=1.2)
+    try:
+        assert _wait(lambda: (w.state()["result"] or {}).get("zones") and w.state()["result"]["zones"][0]["bit"] == 1)
+        name = w.start_record()
+        assert _wait(lambda: len(opened) >= len(caps), 12)
+        assert _wait(lambda: (w.state()["result"] or {}).get("alive") and w.state()["result"]["zones"][0]["bit"] == 1, 12)
+        time.sleep(0.6)
+        w.stop_record()
+    finally:
+        w.stop()
+    rows = [r.split(";") for r in (tmp_path / "records" / name).read_text(encoding="utf-8-sig").splitlines()[1:]]
+    ev = [i for i, r in enumerate(rows) if r[-1] == "событие: источник открыт"]
+    assert ev, "переподключение должно попасть в запись"
+    return [r[3] for r in rows[ev[0]:] if r[-1] == "ok"]
+
+
+def test_short_stream_drop_keeps_zone_bit(tmp_path):
+    """Обрыв короче freeze_timeout_s не даёт ложного «стоит»: после переподключения бит зоны не падает в 0."""
+    bits = _drop_and_read_bits(tmp_path, [lambda f: DropCap(f, 30), lambda f: FakeCap(f)])
+    assert bits and set(bits) == {"1"}, bits
+
+
+def test_long_stream_drop_resets_zone_bit(tmp_path):
+    """Обрыв дольше freeze_timeout_s — состояния с нуля: после ожидания бит набирается заново (0 -> 1)."""
+    caps = [lambda f: DropCap(f, 30)] + [lambda f: ClosedCap(f)] * 3 + [lambda f: FakeCap(f)]
+    bits = _drop_and_read_bits(tmp_path, caps)
+    assert "0" in bits and bits[-1] == "1", bits
 
 
 def test_worker_detects_motion_writes_plc_and_reports_snapshot(tmp_path):

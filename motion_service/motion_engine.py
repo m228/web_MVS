@@ -38,7 +38,8 @@ CYCLE_RED_HSV = (12, 163, 70, 80)     # красный: H ≤ h_max или H ≥
 CYCLE_BLUE_HSV = (82, 135, 55, 60)    # синий/голубой: h_lo ≤ H ≤ h_hi, S ≥ s_min, V ≥ v_min (голубая половина тоже сюда)
 HW_ACCEL_MODES = ("off", "auto", "d3d11")    # аппаратное декодирование видео: выкл / любое доступное / Direct3D 11 (видеоядро Intel, AMD, NVIDIA)
 ZONE_OUT_KINDS = ("holding", "coil")
-SCENARIO_SIGNALS = ("move", "pulp")    # что сценарий берёт у зон: бит «движется» или «жом есть» (вид окна)
+SCENARIO_SIGNALS = ("move", "pulp", "state")    # что сценарий берёт у зон: бит «движется», «жом есть» (вид окна) или состояние окна 0 пусто / 1 жом стоит / 2 движется
+SCENARIO_RULES = ("or", "and", "sum", "level", "each")   # level — уровень снизу вверх (порядок источников), each — каждый источник в свой регистр (адрес, адрес+1, …)
 ZONE_OUT_VALUES = ("bit", "state")     # что зона пишет в ПЛК: бит «движется» или состояние окна 0 пусто / 1 жом стоит / 2 движется
 FILL_METRICS = ("off", "tex", "lum", "rel")   # признак «вид окна» (есть ли жом): выкл / зернистость / яркость / яркость относительно металла вокруг окна
 FILL_TEX_BLUR = 5                      # ядро размытия для зернистости: tex = средняя |кадр − размытый кадр| в зоне
@@ -254,8 +255,8 @@ def _norm_scenario(sc: dict, cams: list) -> dict:
         raise ValueError("сценарий %r: id — только латиница, цифры, _ и -" % sid)
     where = "сценарий %s" % sid
     rule = sc.get("rule", "or")
-    if rule not in ("or", "and", "sum"):
-        raise ValueError("%s: правило %r не из or/and/sum" % (where, rule))
+    if rule not in SCENARIO_RULES:
+        raise ValueError("%s: правило %r не из %s" % (where, rule, "/".join(SCENARIO_RULES)))
     signal = sc.get("signal", "move")
     if signal not in SCENARIO_SIGNALS:
         raise ValueError("%s: сигнал %r не из %s" % (where, signal, "/".join(SCENARIO_SIGNALS)))

@@ -738,14 +738,16 @@ function mdPlcHtml() {
     ${mdGroupsSectionHtml()}`;
 }
 
-const MD_SC_SIGNALS = [['pulp', 'Жом есть'], ['move', 'Движение']];
-const MD_SC_RULES = [['or', 'Хоть одно'], ['and', 'Все'], ['sum', 'Сколько']];
+const MD_SC_SIGNALS = [['pulp', 'Жом есть'], ['move', 'Движение'], ['state', 'Состояние']];
+const MD_SC_RULES = [['or', 'Хоть одно'], ['and', 'Все'], ['sum', 'Сколько'], ['level', 'Уровень'], ['each', 'Отдельно']];
 function mdScenarioSummary(s, cams) {
-  const pulp = s.signal === 'pulp';
-  const what = { or: pulp ? 'хоть в одном жом' : 'хоть одно крутится', and: pulp ? 'жом во всех' : 'все крутятся', sum: pulp ? 'сколько окон с жомом' : 'сколько крутится' }[s.rule] || '';
+  const pulp = s.signal === 'pulp', st = s.signal === 'state';
+  const what = st ? { level: 'уровень снизу вверх', each: 'каждое окно отдельно' }[s.rule] || 'состояние окон 0 / 1 / 2' : {
+    or: pulp ? 'хоть в одном жом' : 'хоть одно крутится', and: pulp ? 'жом во всех' : 'все крутятся', sum: pulp ? 'сколько окон с жомом' : 'сколько крутится',
+    level: pulp ? 'уровень жома снизу вверх' : 'уровень снизу вверх', each: pulp ? 'жом в каждом окне отдельно' : 'каждое окно отдельно' }[s.rule] || '';
   const names = s.sources.map((x) => { const c = cams.find((q) => q.id === x.camera), z = c && (x.group ? (c.groups || []).find((q) => q.id === x.group) : c.zones.find((q) => q.id === x.zone)); return z ? z.name : null; }).filter(Boolean);
   const tags = names.slice(0, 5).map((n) => `<span class="md-sr__tag">${escapeHtml(n)}</span>`).join('') + (names.length > 5 ? `<span class="md-sr__tag">+${names.length - 5}</span>` : '');
-  return `<span>${pulp ? 'жом' : 'движение'} · ${what}</span>${tags || '<span class="md-sr__tag">нет источников</span>'}`;
+  return `<span>${pulp ? 'жом' : st ? 'состояние' : 'движение'} · ${what}</span>${tags || '<span class="md-sr__tag">нет источников</span>'}`;
 }
 
 function mdScenarioHtml(s, i) {
@@ -757,6 +759,12 @@ function mdScenarioHtml(s, i) {
   const seg = (name, list, cur, f) => `<span class="md-seg">${list.map(([v, t]) => `<label><input type="radio" name="${name}" ${a} data-f="${f}" value="${v}"${cur === v ? ' checked' : ''} /><span>${t}</span></label>`).join('')}</span>`;
   const src = opts.length ? opts.map((o) => { const v = escapeHtml(o.key); return `<label class="md-cp${o.group ? ' md-cp--grp' : ''}" ${o.group ? '' : `data-peek="${v}"`} title="${o.group ? 'Вычисление: берётся его значение (сумма, уровень, % наработки)' : ''}"><input type="checkbox" ${a} data-f="src" value="${v}"${chosen.has(o.key) ? ' checked' : ''} />${o.group ? '<b class="md-sig">Σ</b>' : `<i class="md-dot" id="md-sd-${escapeHtml(o.camera)}-${escapeHtml(o.zone)}"></i>`}<span>${escapeHtml(o.label)}${o.ip}</span></label>`; }).join('')
     : '<span class="net-hint">нет размеченных зон</span>';
+  const label = (x) => { const o = opts.find((q) => q.key === (x.group ? 'g:' + x.camera + '/' + x.group : x.camera + '/' + x.zone)); return o ? o.label : '—'; };
+  const n = s.sources.length;
+  const ord = (s.rule === 'level' || s.rule === 'each') && n > 1 ? `<div><div class="md-zr__t">${s.rule === 'level' ? 'Порядок окон: первое — низ, последнее — верх' : 'Порядок записи: каждый источник в свой регистр подряд'}</div><div class="md-ord">${s.sources.map((x, j) => {
+    const hint = s.rule === 'level' ? (j === 0 ? 'низ' : j === n - 1 ? 'верх' : '') : (s.out ? (s.out.kind === 'coil' ? 'coil ' : 'рег. ') + (s.out.address + j) : '');
+    return `<div class="md-ord__row"><b>${j + 1}</b><span>${escapeHtml(label(x))}</span><i>${hint}</i><button type="button" class="btn-secondary md-x" ${a} data-f="up" data-j="${j}"${j === 0 ? ' disabled' : ''} title="Выше в порядке">▲</button><button type="button" class="btn-secondary md-x" ${a} data-f="dn" data-j="${j}"${j === n - 1 ? ' disabled' : ''} title="Ниже в порядке">▼</button></div>`;
+  }).join('')}</div></div>` : '';
   const open = MD.open['sc-' + s.id];
   const outTxt = s.out ? (s.out.kind === 'coil' ? 'coil ' : 'рег. ') + s.out.address : 'не пишем';
   return `<div class="md-sr${open ? ' is-open' : ''}" id="md-sr-${sid}" data-st="i">
@@ -769,6 +777,7 @@ function mdScenarioHtml(s, i) {
     <div class="md-sr__det">
       <div><div class="md-zr__t">Название</div><input type="text" ${a} data-f="name" value="${escapeHtml(s.name)}" /></div>
       <div><div class="md-zr__t">Источники</div><div class="md-sr__chips">${src}</div></div>
+      ${ord}
       <div class="md-sr__g3">
         <div><div class="md-zr__t">Что считать</div>${seg('sg-' + sid, MD_SC_SIGNALS, s.signal || 'move', 'signal')}</div>
         <div><div class="md-zr__t">Правило</div>${seg('rl-' + sid, MD_SC_RULES, s.rule, 'rule')}</div>
@@ -815,6 +824,12 @@ function mdOnScenario(t) {
     mdEdit(() => list.splice(Number(t.dataset.i), 1), true);
     return;
   }
+  if (f === 'up' || f === 'dn') {            // порядок источников: ▲ выше (к низу шахты), ▼ ниже
+    const j = Number(t.dataset.j), k = f === 'up' ? j - 1 : j + 1;
+    if (k < 0 || k >= s.sources.length) return;
+    mdEdit(() => { [s.sources[j], s.sources[k]] = [s.sources[k], s.sources[j]]; }, true);
+    return;
+  }
   mdEdit(() => {
     if (f === 'name') s.name = t.value;
     else if (f === 'rule') s.rule = t.value;
@@ -827,7 +842,7 @@ function mdOnScenario(t) {
       s.sources = s.sources.filter((x) => !(x.camera === camera && (isGrp ? x.group === id : x.zone === id)));
       if (t.checked) s.sources.push(isGrp ? { camera, group: id } : { camera, zone: id });
     }
-  });
+  }, f === 'rule' || f === 'signal' || f === 'src');
 }
 
 function mdBindPlc() {
@@ -877,12 +892,33 @@ function mdGeZonesHtml(cam, g) {
   return cam.zones.map((z) => `<label class="md-chk"><input type="checkbox" value="${escapeHtml(z.id)}"${g.zones.includes(z.id) ? ' checked' : ''} />${escapeHtml(z.name)}</label>`).join('');
 }
 
+// порядок зон «снизу вверх» для вычисления monotonic: ▲▼ у каждой выбранной зоны
+function mdGeOrderHtml(cam, order) {
+  const n = (order || []).length;
+  if (!n) return '<span class="net-hint">выберите зоны</span>';
+  return order.map((id, j) => {
+    const z = cam.zones.find((q) => q.id === id);
+    return `<div class="md-ord__row"><b>${j + 1}</b><span>${escapeHtml(z ? z.name : id)}</span><i>${j === 0 ? 'низ' : j === n - 1 ? 'верх' : ''}</i>` +
+      `<button type="button" class="btn-secondary md-x" data-md="g" data-f="oup" data-j="${j}"${j === 0 ? ' disabled' : ''} title="Ниже по шахте">▲</button><button type="button" class="btn-secondary md-x" data-md="g" data-f="odn" data-j="${j}"${j === n - 1 ? ' disabled' : ''} title="Выше по шахте">▼</button></div>`;
+  }).join('');
+}
+
+// выбор зон поменялся: порядок сохраняем для оставшихся, новые — в конец
+function mdGeSyncOrder() {
+  const e = MD.editGrp, cam = e && mvCam(e.cam), box = mdEl('geOrder');
+  if (!cam || !box) return;
+  const ids = [...document.querySelectorAll('#mdGe #geZones input[type=checkbox]:checked')].map((x) => x.value);
+  e.order = (e.order || []).filter((id) => ids.includes(id)).concat(ids.filter((id) => !(e.order || []).includes(id)));
+  box.innerHTML = mdGeOrderHtml(cam, e.order);
+}
+
 function mdGroupEditorHtml() {
   const e = MD.editGrp;
   const cam = e && mvCam(e.cam);
   if (!cam) return '';
   const g = e.i >= 0 ? cam.groups[e.i] : { id: '', name: '', type: 'sum', zones: [], out: { kind: 'holding', address: 0 }, window_s: 60, min_active: 1, agg: 'any', scale: 100 };
   if (!g) return '';
+  if (!e.order) e.order = (g.order && g.order.length ? g.order : g.zones).filter((id) => g.zones.includes(id));
   const camOpts = mdCfgCams().filter((c) => c.zones.length).map((c) => [c.id, escapeHtml(c.name)]);
   // сетка 2–3 колонки: подпись слева, поле справа; зоны, подсказка и кнопки — на всю ширину
   return `<div class="md-card md-ge" id="mdGe">
@@ -894,7 +930,7 @@ function mdGroupEditorHtml() {
     <label class="md-gt" data-for="worktimer" title="100 = проценты; 1000 или 4095 — для аналогового выхода"><span>Шкала</span><input type="number" id="geScale" min="1" value="${g.scale || 100}" /></label>
     <label class="md-gt" data-for="worktimer"><span>Рабочая, если</span><select id="geAgg">${mdSel([['any', 'хоть один кадр активен'], ['majority', 'не меньше половины кадров'], ['all', 'все кадры активны']], g.agg || 'any')}</select></label>
     <div class="md-ge__zones"><span>Зоны</span><span class="md-ge__chk" id="geZones">${mdGeZonesHtml(cam, g)}</span></div>
-    <p class="net-hint md-gt md-ge__full" data-for="monotonic">Порядок «снизу вверх» = порядок зон в списке (первая зона — низ шахты).</p>
+    <div class="md-gt md-ge__full" data-for="monotonic"><div class="md-zr__t">Порядок: первое — низ, последнее — верх</div><div class="md-ord" id="geOrder">${mdGeOrderHtml(cam, e.order)}</div></div>
     <div class="md-ge__btns"><button type="button" class="btn-primary" data-md="g" data-f="ok">Готово</button><button type="button" class="btn-secondary" data-md="g" data-f="cancel">Отмена</button></div></div>`;
 }
 
@@ -917,6 +953,13 @@ function mdOnGroup(t) {
   }
   if (f === 'edit') { MD.editGrp = { cam: t.dataset.cam, i: Number(t.dataset.i) }; MD.key = ''; renderMotionDock(); return; }
   if (f === 'cancel') { MD.editGrp = null; MD.key = ''; renderMotionDock(); return; }
+  if (f === 'oup' || f === 'odn') {            // порядок зон в редакторе вычисления
+    const e = MD.editGrp, cam0 = e && mvCam(e.cam), j = Number(t.dataset.j), k = f === 'oup' ? j - 1 : j + 1;
+    if (!cam0 || !e.order || k < 0 || k >= e.order.length) return;
+    [e.order[j], e.order[k]] = [e.order[k], e.order[j]];
+    mdEl('geOrder').innerHTML = mdGeOrderHtml(cam0, e.order);
+    return;
+  }
   const cam = mvCam(f === 'ok' ? (MD.editGrp && MD.editGrp.cam) : t.dataset.cam);
   if (!cam) return;
   if (f === 'del') {
@@ -950,7 +993,10 @@ function mdOnGroup(t) {
     const ng = { id: old ? old.id : '', name: mdEl('geName').value.trim() || 'Вычисление', type, zones: ids,
       out: old ? old.out : null };      // вывод в ПЛК у группы больше не правится: пишет сценарий; старый вывод сохраняем как был
     if (!ng.id) { let n = 1; while ((cam.groups || []).some((q) => q.id === 'g' + n)) n += 1; ng.id = 'g' + n; }
-    if (type === 'monotonic') ng.order = cam.zones.map((z) => z.id).filter((id) => ids.includes(id));
+    if (type === 'monotonic') {
+      const o = (MD.editGrp.order || []).filter((id) => ids.includes(id));
+      ng.order = o.concat(cam.zones.map((z) => z.id).filter((id) => ids.includes(id) && !o.includes(id)));
+    }
     if (type === 'worktimer') {
       Object.assign(ng, { window_s: parseInt(mdEl('geWin').value, 10) || 60, min_active: Math.min(ids.length, parseInt(mdEl('geMin').value, 10) || 1),
         agg: mdEl('geAgg').value, scale: parseInt(mdEl('geScale').value, 10) || 100 });
@@ -1066,14 +1112,15 @@ function paintMotionDockLive() {
   });
   (MV.scen || []).forEach((s) => {
     const b = mdEl('md-sv-' + s.id);
-    if (b) b.textContent = s.value;
     const bits = s.bits || [];
+    const scc = ((MV.cfg && MV.cfg.scenarios) || []).find((q) => q.id === s.id);
+    const each = !!scc && scc.rule === 'each';
+    if (b) { b.textContent = each ? bits.join(' · ') : s.value; b.classList.toggle('md-sr__val--list', each); }
     const pulp = s.signal === 'pulp';
     const row = mdEl('md-sr-' + s.id);
-    if (row) row.dataset.st = s.value > 0 ? (pulp ? 'p' : 'm') : 'i';
+    if (row) row.dataset.st = (each ? bits.some(Boolean) : s.value > 0) ? (pulp ? 'p' : 'm') : 'i';
     const un = mdEl('md-su-' + s.id);
-    const sc = ((MV.cfg && MV.cfg.scenarios) || []).find((q) => q.id === s.id);
-    if (un) un.textContent = sc && sc.rule === 'sum' ? 'из ' + bits.length : s.value > 0 ? 'да' : 'нет';
+    if (un) un.textContent = each ? 'по окнам' : scc && (scc.rule === 'sum' || scc.rule === 'level') ? 'из ' + bits.length : s.value > 0 ? 'да' : 'нет';
     const info = mdEl('md-ss-' + s.id);
     if (info) {
       info.textContent = (pulp ? 'жом в ' : 'крутится ') + bits.filter(Boolean).length + ' из ' + bits.length + ' · пишем ' + s.value + ' · ' +
@@ -1501,11 +1548,13 @@ function initMotionDock() {
   body?.addEventListener('click', (e) => { if (e.target.tagName === 'BUTTON' && e.target.dataset.md) dispatch(e); });
   body?.addEventListener('change', (e) => {
     if (e.target.id === 'geType') mdSyncGroupEditor();
+    if (e.target.closest && e.target.closest('#geZones')) mdGeSyncOrder();
     // другая камера в редакторе группы — перечитываем её зоны, не трогая остальные поля
     if (e.target.id === 'geCam' && MD.editGrp) {
       MD.editGrp.cam = e.target.value;
+      MD.editGrp.order = [];
       const cam = mvCam(e.target.value);
-      if (cam) mdEl('geZones').innerHTML = mdGeZonesHtml(cam, { zones: [] });
+      if (cam) { mdEl('geZones').innerHTML = mdGeZonesHtml(cam, { zones: [] }); mdGeSyncOrder(); }
     }
   });
   body?.addEventListener('click', (e) => {          // строка окна: нажали на шапку — раскрыли настройки

@@ -186,7 +186,8 @@ def bind_all(uvicorn, app, hosts: list[str], port: int, sleep=time.sleep) -> lis
             if h in socks:
                 continue
             try:
-                socks[h] = uvicorn.Config(app, host=h, port=port).bind_socket()
+                # log_level обязателен: Config без него при создании сбрасывает логгеры uvicorn на INFO, и в service.log пошёл бы журнал доступа
+                socks[h] = uvicorn.Config(app, host=h, port=port, log_level="warning").bind_socket()
             except OSError as e:
                 log.warning("не удалось занять %s:%d (%s)%s", h, port, e, "" if attempt == BIND_TRIES - 1 or len(hosts) == 1 else ", повторю")
         if len(socks) == len(hosts) or len(hosts) == 1:

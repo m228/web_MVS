@@ -423,7 +423,8 @@ def test_listen_hosts_list_and_single(tmp_path, monkeypatch):
 
 def test_bind_all_skips_missing_address_and_fails_if_none(monkeypatch):
     class Cfg:
-        def __init__(self, app, host, port):
+        def __init__(self, app, host, port, log_level=None):
+            assert log_level == "warning", "без log_level uvicorn сбрасывает логирование на INFO"
             self.host = host
 
         def bind_socket(self):

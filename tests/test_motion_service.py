@@ -964,3 +964,96 @@ def test_track_flow_off_skips_optical_flow_for_diff_zone(monkeypatch):
     z, zr = zone(metric="flow", track_flow=False)
     zr.step(f0, f1, 0.3)
     assert calls and zr.flow > 0, "зона на flow считает его всегда, даже при track_flow=false"
+
+
+# ───────────────────────────── вид окна: жом есть / пусто / движется ─────────────────────────────
+def grain_frames(n, move_left=False, seed=3):
+    """Левая половина — крупа (шум по пикселям, как жом в окне), правая — гладкая стенка. Крупа может ехать (3 px/кадр)."""
+    rng = np.random.default_rng(seed)
+    grain = rng.integers(60, 200, (H, W)).astype(np.float32)
+    out = []
+    for i in range(n):
+        left = np.roll(grain, 3 * i if move_left else 0, axis=1)[:, :W // 2]
+        right = np.full((H, W // 2), 90.0, np.float32)     # не 128: ровный серый ~128 детектор считает битым потоком
+        f = np.hstack([left, right]) + rng.normal(0, 1.0, (H, W))
+        out.append(np.clip(f, 0, 255).astype(np.uint8))
+    return out
+
+
+def fill_cfg(**kw):
+    fill = dict(fill_metric="tex", fill_smooth=3, fill_frames=3)
+    fill.update(kw)
+    return me.normalize_camera({"id": "c", "zones": [
+        dict({"id": "z1", "points": LEFT, "metric": "diff", "out": {"kind": "holding", "address": 4, "value": "state"}}, **fill),
+        dict({"id": "z2", "points": RIGHT, "metric": "diff", "out": {"kind": "holding", "address": 5, "value": "state"}}, **fill)]})
+
+
+def test_fill_defaults_off_and_validation():
+    z = me.normalize_camera({"id": "c", "zones": [{"id": "z1", "points": LEFT, "out": {"kind": "coil", "address": 1}}]})["zones"][0]
+    assert z["fill_metric"] == "off" and z["fill_on"] == 0 and z["out"]["value"] == "bit", "без настройки всё как раньше"
+    z = me.normalize_camera({"id": "c", "zones": [{"id": "z1", "points": LEFT}]})["zones"][0]
+    assert z["out"] is None
+    for bad, part in [({"fill_metric": "цвет"}, "вида окна"), ({"fill_on": 2, "fill_off": 3}, "off"),
+                      ({"out": {"kind": "coil", "address": 1, "value": "x"}}, "значение вывода")]:
+        with pytest.raises(ValueError, match=part):
+            me.normalize_camera({"id": "c", "zones": [dict({"id": "z1", "points": LEFT}, **bad)]})
+
+
+def test_fill_texture_separates_grain_from_smooth_wall():
+    eng, st = run_engine(fill_cfg(), grain_frames(30))
+    z = {x["id"]: x for x in st["zones"]}
+    assert z["z1"]["tex"] > 10 * z["z2"]["tex"], z
+    assert z["z1"]["fill"] is None and z["z1"]["state"] is None, "пороги не заданы — только измерение, решения нет"
+    off = me.normalize_camera({"id": "c", "zones": [{"id": "z1", "points": LEFT}]})
+    _, st = run_engine(off, grain_frames(10))
+    assert "tex" not in st["zones"][0], "признак выключен — поля вида окна в состоянии нет"
+
+
+def test_fill_three_states_pulp_standing_empty_standing_moving():
+    cfg = fill_cfg(fill_on=6.0, fill_off=3.0)
+    _, st = run_engine(cfg, grain_frames(30))
+    z = {x["id"]: x for x in st["zones"]}
+    assert (z["z1"]["bit"], z["z1"]["fill"], z["z1"]["state"]) == (0, 1, 1), "жом есть и стоит"
+    assert (z["z2"]["bit"], z["z2"]["fill"], z["z2"]["state"]) == (0, 0, 0), "пусто и стоит"
+    _, st = run_engine(cfg, grain_frames(30, move_left=True))
+    z = {x["id"]: x for x in st["zones"]}
+    assert (z["z1"]["bit"], z["z1"]["state"]) == (1, 2), "жом едет"
+    assert z["z2"]["state"] == 0
+    eng = me.CameraEngine(cfg)
+    dead = eng.dead_state(1.0, "нет кадров")
+    assert [x["state"] for x in dead["zones"]] == [0, 0], "камера мёртвая — состояние 0"
+
+
+def test_fill_invert_means_pulp_when_value_is_low():
+    cfg = fill_cfg(fill_on=6.0, fill_off=3.0, fill_invert=True)
+    _, st = run_engine(cfg, grain_frames(30))
+    z = {x["id"]: x for x in st["zones"]}
+    assert (z["z1"]["fill"], z["z2"]["fill"]) == (0, 1), "в режиме «жом при низком» гладкое окно — это жом"
+
+
+def test_fill_state_goes_to_plc_and_falls_back_to_bit_without_thresholds():
+    cfg = fill_cfg(fill_on=6.0, fill_off=3.0)
+    eng, st = run_engine(cfg, grain_frames(30))
+    assert eng.compute_writes(st) == [("holding", 4, 1), ("holding", 5, 0)]
+    eng, st = run_engine(cfg, grain_frames(30, move_left=True))
+    assert eng.compute_writes(st)[0] == ("holding", 4, 2)
+    eng, st = run_engine(fill_cfg(), grain_frames(30, move_left=True))      # пороги не заданы — пишется бит движения
+    assert eng.compute_writes(st) == [("holding", 4, 1), ("holding", 5, 0)]
+
+
+def test_record_gets_fill_columns_only_for_zones_with_fill(tmp_path):
+    w, _ = _worker(tmp_path, grain_frames(40, move_left=True), zones=[
+        {"id": "z1", "points": LEFT, "metric": "diff", "fill_metric": "tex", "fill_smooth": 2},
+        {"id": "z2", "points": RIGHT, "metric": "diff"}])
+    try:
+        assert _wait(lambda: (w.state()["result"] or {}).get("alive"))
+        name = w.start_record()
+        time.sleep(0.6)
+        w.stop_record()
+        lines = (tmp_path / "records" / name).read_text(encoding="utf-8-sig").splitlines()
+    finally:
+        w.stop()
+    head = lines[0].split(";")
+    assert head == ["time", "z1_flow", "z1_diff", "z1_bit", "z1_tex", "z1_lum", "z1_fill", "z2_flow", "z2_diff", "z2_bit", "alive", "status"]
+    rows = [l.split(";") for l in lines[1:] if l.endswith(";ok")]
+    assert rows and all(len(r) == len(head) for r in rows) and float(rows[-1][4]) > 5 and float(rows[-1][5]) > 50

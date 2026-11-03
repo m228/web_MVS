@@ -27,6 +27,8 @@ function mdLoadStatWin() {
 }
 
 const MD = {
+  peekKey: '',          // что сейчас показано во всплывающем кадре (пусто — ничего)
+  peekFrames: {},       // id камеры → { t, p } кадр для подсказки (кэш на 3 с)
   statWin: mdLoadStatWin(),
   stats: {},            // id камеры → ответ /api/motion/stats
   statAt: 0,
@@ -501,10 +503,10 @@ function mdScenarioHtml(s, i) {
   const a = `data-md="s" data-i="${i}"`;
   const opts = mdSourceOptions();
   const chosen = new Set(s.sources.map((x) => x.camera + '/' + x.zone));
-  const src = opts.length ? opts.map((o) => `<label class="md-chk"><input type="checkbox" ${a} data-f="src" value="${escapeHtml(o.camera + '/' + o.zone)}"${chosen.has(o.camera + '/' + o.zone) ? ' checked' : ''} /><span>${escapeHtml(o.label)}${o.ip}</span></label>`).join('')
+  const src = opts.length ? opts.map((o) => `<label class="md-chk" data-peek="${escapeHtml(o.camera + '/' + o.zone)}"><input type="checkbox" ${a} data-f="src" value="${escapeHtml(o.camera + '/' + o.zone)}"${chosen.has(o.camera + '/' + o.zone) ? ' checked' : ''} /><i class="md-dot" id="md-sd-${escapeHtml(o.camera)}-${escapeHtml(o.zone)}"></i><span>${escapeHtml(o.label)}${o.ip}</span></label>`).join('')
     : '<span class="net-hint">нет размеченных зон</span>';
   return `<div class="md-card md-card--col">
-    <div class="md-row"><input type="text" ${a} data-f="name" value="${escapeHtml(s.name)}" /><span class="md-sp"></span>
+    <div class="md-row" data-peek-scn="${i}" title="Наведите — покажу кадры всех источников сценария с подсвеченными зонами"><input type="text" ${a} data-f="name" value="${escapeHtml(s.name)}" /><span class="md-sp"></span>
       <span class="cv-bit" id="md-sv-${escapeHtml(s.id)}">–</span>
       <button type="button" class="btn-secondary md-x" ${a} data-f="del" title="Удалить сценарий">✕</button></div>
     <div class="md-flow"><div class="md-flow__src">${src}</div><span class="md-flow__arrow">→</span>
@@ -719,9 +721,20 @@ function paintMotionDockLive() {
     if (b) { b.textContent = s.value; b.classList.toggle('on', s.value > 0); }
     const info = mdEl('md-ss-' + s.id);
     if (info) {
-      info.textContent = 'источников: ' + (s.bits || []).length + ' · биты: ' + (s.bits || []).join('') + ' · ' +
+      const bits = s.bits || [];
+      info.textContent = 'крутится ' + bits.filter(Boolean).length + ' из ' + bits.length + ' · пишем ' + s.value + ' · ' +
         (!s.plc ? 'запись в ПЛК выключена' : s.ok === null ? 'ПЛК: ждёт' : s.ok ? 'ПЛК: записано' : 'ПЛК: ошибка ' + (s.error || ''));
     }
+  });
+  // точка у каждой зоны в списке источников: зелёная — крутится, красная — стоит, серая — нет кадров
+  mdCfgCams().forEach((c) => {
+    const res = (MV.states[c.id] || {}).result;
+    c.zones.forEach((zc) => {
+      const dot = mdEl('md-sd-' + c.id + '-' + zc.id);
+      if (!dot) return;
+      const z = res && res.alive ? (res.zones || []).find((q) => q.id === zc.id) : null;
+      dot.className = 'md-dot ' + (!z ? 'is-na' : z.bit ? 'is-on' : 'is-off');
+    });
   });
   const box = mdEl('mdPlcCams');
   if (box && MD.tab === 'plc' && MV.cfg) {
@@ -732,6 +745,125 @@ function paintMotionDockLive() {
   }
   if (MD.tab === 'zones') mdPaintZoneStats();
   if (MD.tab === 'zones' && (MV.tick % 2 === 0)) mdDrawTrends();
+}
+
+// ---------- всплывающий кадр: на какой камере и где именно эта зона ----------
+// Наведение на источник сценария — кадр этой камеры с подсвеченной зоной; на строку сценария — кадры всех его источников.
+function mdPeekFrame(camId) {
+  const hit = MD.peekFrames[camId];
+  if (hit && Date.now() - hit.t < 3000) return hit.p;
+  const p = fetch('/api/motion/snapshot?camera=' + encodeURIComponent(camId) + '&w=640')
+    .then((r) => (r.ok ? r.blob() : null)).then((b) => (b ? createImageBitmap(b) : null)).catch(() => null);
+  MD.peekFrames[camId] = { t: Date.now(), p };
+  return p;
+}
+
+function mdPeekCanvas(cam, bmp, hotIds, width) {
+  const cv = document.createElement('canvas');
+  cv.width = width;
+  cv.height = Math.round(width * bmp.height / bmp.width);
+  const g = cv.getContext('2d');
+  g.drawImage(bmp, 0, 0, cv.width, cv.height);
+  const fs = cam.frame_size || [bmp.width, bmp.height];
+  const sx = cv.width / fs[0], sy = cv.height / fs[1];
+  g.font = '600 12px sans-serif';
+  cam.zones.forEach((z) => {
+    if (!z.points || z.points.length < 3) return;
+    const hot = hotIds.includes(z.id);
+    g.beginPath();
+    z.points.forEach(([x, y], i) => (i ? g.lineTo(x * sx, y * sy) : g.moveTo(x * sx, y * sy)));
+    g.closePath();
+    if (hot) { g.fillStyle = 'rgba(250,204,21,.32)'; g.fill(); }
+    g.lineWidth = hot ? 3 : 1;
+    g.strokeStyle = hot ? '#facc15' : 'rgba(255,255,255,.4)';
+    g.stroke();
+    if (hot) {
+      const [x, y] = z.points[0];
+      g.fillStyle = '#facc15';
+      g.fillText(z.name, Math.max(4, Math.min(cv.width - 60, x * sx)), Math.max(14, y * sy - 5));
+    }
+  });
+  return cv;
+}
+
+async function mdPeekShow(items, ev) {
+  const box = mdEl('mdPeek');
+  if (!box) return;
+  const byCam = new Map();
+  items.forEach(({ camera, zone }) => { byCam.set(camera, (byCam.get(camera) || []).concat(zone)); });
+  const key = MD.peekKey;
+  box.hidden = false;
+  box.textContent = 'загружаю кадр…';
+  mdPeekMove(ev);
+  const parts = await Promise.all([...byCam].map(async ([camId, zones]) => {
+    const cam = mvCam(camId);
+    const bmp = cam ? await mdPeekFrame(camId) : null;
+    return { cam, bmp, zones };
+  }));
+  if (MD.peekKey !== key) return;            // пока грузилось, мышь ушла
+  box.textContent = '';
+  box.classList.toggle('is-multi', parts.length > 1);
+  parts.forEach(({ cam, bmp, zones }) => {
+    if (!cam) return;
+    const fig = document.createElement('div');
+    const names = zones.map((id) => { const z = cam.zones.find((q) => q.id === id); return z ? z.name : id; }).join(', ');
+    const cap = document.createElement('div');
+    cap.textContent = cam.name + (mdIp(cam.url) ? ' (' + mdIp(cam.url) + ')' : '') + ' · ' + names;
+    fig.appendChild(cap);
+    if (bmp) fig.appendChild(mdPeekCanvas(cam, bmp, zones, parts.length > 1 ? 300 : 440));
+    else { const na = document.createElement('div'); na.className = 'md-dim'; na.textContent = 'кадра нет — камера не подключена'; fig.appendChild(na); }
+    box.appendChild(fig);
+  });
+  mdPeekMove(ev);
+}
+
+function mdPeekMove(ev) {
+  const box = mdEl('mdPeek');
+  if (!box || box.hidden || !ev) return;
+  const pad = 16;
+  const x = Math.min(ev.clientX + pad, window.innerWidth - box.offsetWidth - 8);
+  const y = Math.min(ev.clientY + pad, window.innerHeight - box.offsetHeight - 8);
+  box.style.left = Math.max(8, x) + 'px';
+  box.style.top = Math.max(8, y) + 'px';
+}
+
+function mdPeekHide() {
+  MD.peekKey = '';
+  const box = mdEl('mdPeek');
+  if (box) box.hidden = true;
+}
+
+function mdBindPeek(body) {
+  const box = document.createElement('div');
+  box.id = 'mdPeek';
+  box.className = 'mv-peek';
+  box.hidden = true;
+  document.body.appendChild(box);
+  const target = (e) => (e.target.closest ? e.target.closest('[data-peek],[data-peek-scn]') : null);
+  body?.addEventListener('mouseover', (e) => {
+    const t = target(e);
+    if (!t) return;
+    let key, items;
+    if (t.dataset.peek) {
+      const [camera, zone] = t.dataset.peek.split('/');
+      key = t.dataset.peek;
+      items = [{ camera, zone }];
+    } else {
+      const s = ((MV.cfg && MV.cfg.scenarios) || [])[Number(t.dataset.peekScn)];
+      key = 'scn' + t.dataset.peekScn;
+      items = s ? s.sources : [];
+      if (!items.length) return;
+    }
+    if (key === MD.peekKey) return;
+    MD.peekKey = key;
+    mdPeekShow(items, e);
+  });
+  body?.addEventListener('mousemove', (e) => { if (MD.peekKey) mdPeekMove(e); });
+  body?.addEventListener('mouseout', (e) => {
+    const to = e.relatedTarget && e.relatedTarget.closest ? e.relatedTarget.closest('[data-peek],[data-peek-scn]') : null;
+    if (!to || to !== target(e)) mdPeekHide();
+  });
+  body?.addEventListener('click', mdPeekHide);
 }
 
 // ---------- включение КЗ и запись CSV ----------
@@ -924,6 +1056,7 @@ function initMotionDock() {
   }));
 
   const body = mdEl('mdBody');
+  mdBindPeek(body);
   const dispatch = (e) => {
     const t = e.target;
     const kind = t.dataset && t.dataset.md;

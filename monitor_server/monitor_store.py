@@ -15,6 +15,7 @@
 from __future__ import annotations
 
 import hashlib
+import hmac
 import json
 import secrets
 import sqlite3
@@ -37,6 +38,8 @@ NOTIFY_LEVELS = ("critical", "high")                              # в Telegram 
 NOTIFY_KINDS = ("start", "alert", "plate_reboot", "offline")      # какие события бывают «открытием» тревоги
 OFFLINE_KINDS = ("offline", "offline_repeat")
 OUTAGE_MIN_S = 180               # приёмник молчал дольше — это перерыв (перезапуск занимает секунды)
+ENROLL_PENDING_MAX = 30          # заявок «ждут решения» не больше: ключ регистрации не должен позволять забить панель
+ENROLL_KEEP_DAYS = 14            # заявку, от которой 2 недели нет вестей, забываем
 
 
 def hash_token(token: str) -> str:
@@ -91,7 +94,13 @@ class Store:
             CREATE INDEX IF NOT EXISTS ix_positions_plant ON positions (plant_id, t);
             CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS outages (start_t REAL NOT NULL, end_t REAL NOT NULL);
+            CREATE TABLE IF NOT EXISTS enroll (
+                id INTEGER PRIMARY KEY AUTOINCREMENT, machine TEXT NOT NULL UNIQUE, name TEXT NOT NULL, version TEXT NOT NULL DEFAULT '',
+                ip TEXT NOT NULL DEFAULT '', secret_hash TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pending',
+                first_t REAL NOT NULL, last_t REAL NOT NULL, plant_id INTEGER, token TEXT);
         """)
+        if not any(r["name"] == "machine" for r in self.db.execute("PRAGMA table_info(plants)")):
+            self.db.execute("ALTER TABLE plants ADD COLUMN machine TEXT")      # какой ПК зарегистрировался под этим заводом (авто-регистрация)
         self.db.commit()
         self._note_outage()
 
@@ -151,15 +160,17 @@ class Store:
 
     # ------------------------------------------------------------------------------------------------------------- заводы
 
-    def create_plant(self, name: str) -> tuple[int, str]:
-        """Завести завод и выдать токен (показать один раз). ValueError — название пустое, длинное или занято."""
+    def create_plant(self, name: str, machine: Optional[str] = None) -> tuple[int, str]:
+        """Завести завод и выдать токен (показать один раз). ValueError — название пустое, длинное или занято.
+        machine — id ПК, если завод заведён по заявке (авто-регистрация): по нему повторная заявка того же ПК получит новый токен."""
         name = " ".join((name or "").split())
         if not name or len(name) > NAME_MAX:
             raise ValueError("Название завода — от 1 до %d символов" % NAME_MAX)
         token = secrets.token_urlsafe(24)
         with self._lock:
             try:
-                cur = self.db.execute("INSERT INTO plants (name, token_hash, created_t) VALUES (?,?,?)", (name, hash_token(token), self.clock()))
+                cur = self.db.execute("INSERT INTO plants (name, token_hash, created_t, machine) VALUES (?,?,?,?)",
+                                      (name, hash_token(token), self.clock(), machine))
                 self.db.commit()
             except sqlite3.IntegrityError:
                 raise ValueError("Завод с таким названием уже есть")
@@ -180,6 +191,7 @@ class Store:
             self.db.execute("DELETE FROM alerts WHERE plant_id=?", (plant_id,))
             self.db.execute("DELETE FROM positions WHERE plant_id=?", (plant_id,))
             self.db.execute("DELETE FROM notify WHERE plant_id=?", (plant_id,))
+            self.db.execute("DELETE FROM enroll WHERE plant_id=?", (plant_id,))        # удалённый завод может зарегистрироваться заново
             return self.db.execute("DELETE FROM plants WHERE id=?", (plant_id,)).rowcount > 0
 
     def plant_by_token(self, token: str) -> Optional[sqlite3.Row]:
@@ -187,6 +199,69 @@ class Store:
             return None
         with self._lock:
             return self.db.execute("SELECT * FROM plants WHERE token_hash=?", (hash_token(token),)).fetchone()
+
+    # ------------------------------------------------------------------------------------------------------------- авто-регистрация
+
+    def enroll_request(self, machine: str, name: str, version: str, ip: str, secret: str) -> dict:
+        """Заявка клиента (повторяется каждую минуту, пока не примут). Возвращает {"status": pending|approved|rejected, "new": bool, "id", "name"}.
+        approved приходит с токеном ОДИН раз (token), потом токен у приёмника стирается. Тот же ПК с другим секретом (переустановка) — заявка
+        начинается заново. ValueError — поля не годятся; OverflowError — очередь заявок переполнена."""
+        machine, secret = str(machine or "").strip(), str(secret or "").strip()
+        if not (8 <= len(machine) <= 128) or not (16 <= len(secret) <= 128):
+            raise ValueError("заявка заполнена неверно")
+        name = " ".join(str(name or "").split())[:NAME_MAX] or "Новый клиент"
+        version, ip = str(version or "")[:20], str(ip or "")[:64]
+        shash, now = hash_token(secret), self.clock()
+        with self._lock, self.db:
+            row = self.db.execute("SELECT * FROM enroll WHERE machine=?", (machine,)).fetchone()
+            if row is None:
+                if self.db.execute("SELECT COUNT(*) FROM enroll WHERE status='pending'").fetchone()[0] >= ENROLL_PENDING_MAX:
+                    raise OverflowError("слишком много заявок")
+                cur = self.db.execute("INSERT INTO enroll (machine, name, version, ip, secret_hash, first_t, last_t) VALUES (?,?,?,?,?,?,?)",
+                                      (machine, name, version, ip, shash, now, now))
+                return {"status": "pending", "new": True, "id": cur.lastrowid, "name": name}
+            if not hmac.compare_digest(row["secret_hash"], shash):              # приложение поставили заново: прежний секрет потерян
+                self.db.execute("UPDATE enroll SET secret_hash=?, status='pending', token=NULL, name=?, version=?, ip=?, first_t=?, last_t=? WHERE id=?",
+                                (shash, name, version, ip, now, now, row["id"]))
+                return {"status": "pending", "new": True, "id": row["id"], "name": name}
+            self.db.execute("UPDATE enroll SET version=?, ip=?, last_t=? WHERE id=?", (version, ip, now, row["id"]))
+            if row["status"] == "approved" and row["token"]:
+                self.db.execute("UPDATE enroll SET token=NULL, status='done' WHERE id=?", (row["id"],))
+                plant = self.db.execute("SELECT name FROM plants WHERE id=?", (row["plant_id"],)).fetchone()
+                return {"status": "approved", "new": False, "id": row["id"], "name": plant["name"] if plant else row["name"], "token": row["token"]}
+            status = "approved" if row["status"] == "done" else row["status"]
+            return {"status": status, "new": False, "id": row["id"], "name": row["name"]}
+
+    def enroll_pending(self) -> list[dict]:
+        """Заявки, которые ждут решения Макса: для панели."""
+        with self._lock:
+            rows = self.db.execute("SELECT * FROM enroll WHERE status='pending' ORDER BY first_t").fetchall()
+        return [{"id": r["id"], "name": r["name"], "version": r["version"], "ip": r["ip"], "first_t": r["first_t"], "last_t": r["last_t"],
+                 "known": self._plant_of(r["machine"]) is not None} for r in rows]
+
+    def _plant_of(self, machine: str) -> Optional[sqlite3.Row]:
+        return self.db.execute("SELECT * FROM plants WHERE machine=?", (machine,)).fetchone()
+
+    def enroll_approve(self, req_id: int, name: Optional[str] = None) -> dict:
+        """Принять заявку: завести завод (или, если этот же ПК уже заведён, выдать ему новый токен) и положить токен до следующей заявки клиента.
+        LookupError — заявки нет или она уже решена; ValueError — имя пустое или занято другим заводом."""
+        with self._lock:
+            row = self.db.execute("SELECT * FROM enroll WHERE id=? AND status='pending'", (int(req_id),)).fetchone()
+            if row is None:
+                raise LookupError("Заявки нет или она уже решена")
+            plant = self._plant_of(row["machine"])
+            if plant is not None:                                              # тот же ПК зарегистрировался снова: название остаётся прежним
+                pid, pname, token = plant["id"], plant["name"], self.rotate_token(plant["id"])
+            else:
+                pname = " ".join((name or row["name"]).split())
+                pid, token = self.create_plant(pname, row["machine"])
+            with self.db:
+                self.db.execute("UPDATE enroll SET status='approved', plant_id=?, token=?, name=? WHERE id=?", (pid, token, pname, row["id"]))
+        return {"id": pid, "name": pname}
+
+    def enroll_reject(self, req_id: int) -> bool:
+        with self._lock, self.db:
+            return self.db.execute("UPDATE enroll SET status='rejected' WHERE id=? AND status='pending'", (int(req_id),)).rowcount > 0
 
     # ------------------------------------------------------------------------------------------------------------- приём
 
@@ -397,6 +472,7 @@ class Store:
             cutoff = self.clock() - self.retention_days * 86400
             self.db.execute("DELETE FROM positions WHERE t < ?", (cutoff,))
             self.db.execute("DELETE FROM notify WHERE t < ? AND status!='pending'", (cutoff,))
+            self.db.execute("DELETE FROM enroll WHERE last_t < ?", (self.clock() - ENROLL_KEEP_DAYS * 86400,))      # давно молчащие заявки (в т.ч. непринятые)
             return self.db.execute("DELETE FROM events WHERE t < ?", (cutoff,)).rowcount
 
     # ------------------------------------------------------------------------------------------------------------- чтение

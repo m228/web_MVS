@@ -269,6 +269,8 @@ function mdZoneCardHtml(cam, z, i) {
   </div>`;
 }
 
+const mdTableLabel = (g) => (g.table ? 'есть · перекос от ' + Math.min(...g.table).toFixed(1) + ' до ' + Math.max(...g.table).toFixed(1) + '°' : 'нет — Δ с общим эталоном');
+
 // синхронность двух валов: отклонение от зеркальности (Δ, °), допуск и эталон; график Δ — справа
 function mdMirrorCardHtml(cam, g) {
   const a = `data-md="mg" data-cam="${escapeHtml(cam.id)}" data-gid="${escapeHtml(g.id)}"`;
@@ -282,6 +284,9 @@ function mdMirrorCardHtml(cam, g) {
       <div class="md-zone__row"><span class="md-lbl" title="Авария, когда отклонение по модулю не меньше допуска">допуск, °</span>${mdNum(a + ' data-f="tol"', g.tol, 'min="0.5" max="180" step="0.5"')}
         <span class="md-lbl" title="Поправка нуля: какое значение суммы углов считать нормой. Кнопка справа берёт текущее положение валов за эталон — нажимайте, когда валы заведомо выставлены ровно">эталон, °</span>${mdNum(a + ' data-f="ref"', g.ref, 'min="-180" max="180" step="0.5"')}
         <button type="button" class="btn-secondary md-x" ${a} data-f="calib" title="Принять текущее положение валов за норму (эталон = текущее значение)">текущее = норма</button></div>
+      <div class="md-zone__row"><span class="md-lbl" title="Камера стоит сбоку и объектив искажает: даже ровные валы дают Δ, зависящую от положения палки (за оборот до ±10°). Таблица запоминает этот перекос по кругу и вычитает его. Снимать, когда валы заведомо ровные и палки прошли полный оборот за последние ~5 минут; после сдвига камеры снять заново.">поправка по углу</span>
+        <span class="net-hint" id="md-mxt-${k}">${mdTableLabel(g)}</span>
+        <button type="button" class="btn-secondary md-x" ${a} data-f="table" title="Снять таблицу по последним ~5 минутам: валы должны быть ровными и сделать полный оборот">снять за оборот</button>${g.table ? `<button type="button" class="btn-secondary md-x" ${a} data-f="tclear" title="Убрать таблицу поправки">сбросить</button>` : ''}</div>
       <div class="md-zone__row"><span class="md-lbl">вывод в ПЛК</span>${mdOutCell(g.out ? { kind: g.out.kind === 'coils' ? 'coil' : 'holding', address: g.out.address } : null, a)}
         <span class="net-hint">регистр — Δ в 0,1° со знаком; coil — авария</span></div>
     </div>
@@ -423,15 +428,25 @@ function mdOnZone(t, cam) {
 }
 
 // карточка синхронности: допуск, эталон, вывод; «текущее = норма» берёт текущую сумму углов из живого состояния
-function mdOnMirror(t, cam) {
+async function mdOnMirror(t, cam) {
   const g = (cam.groups || []).find((q) => q.id === t.dataset.gid);
   if (!g) return;
   const f = t.dataset.f;
   if (f === 'calib') {
     const live = (((MV.states[cam.id] || {}).result || {}).groups || []).find((q) => q.id === g.id);
-    if (!live || !live.valid || !live.angles || live.angles[0] == null || live.angles[1] == null) { alert('Сейчас не видно обе палки — эталон принять нельзя.'); return; }
-    const raw = g.mode === 'same' ? live.angles[0] - live.angles[1] : live.angles[0] + live.angles[1];
-    mdEdit(() => { g.ref = Math.round((((raw + 180) % 360 + 360) % 360 - 180) * 10) / 10; }, true);
+    if (!live || !live.valid || live.delta == null) { alert('Сейчас не видно обе палки — эталон принять нельзя.'); return; }
+    // delta уже с учётом таблицы и прежнего эталона: сдвигаем эталон ровно на неё
+    mdEdit(() => { g.ref = Math.max(-180, Math.min(180, Math.round((g.ref + live.delta) * 10) / 10)); }, true);
+    return;
+  }
+  if (f === 'tclear') { mdEdit(() => { g.table = null; }, true); return; }
+  if (f === 'table') {
+    if (!confirm('Снять таблицу поправки по последним ~5 минутам?\n\nВалы сейчас должны быть выставлены ровно, а палки — пройти полный оборот. Таблица запомнит текущее положение как норму; эталон сбросится в 0.')) return;
+    t.disabled = true;
+    const r = await mvJson('/api/motion/mirror_table', { camera: cam.id, group: g.id });
+    t.disabled = false;
+    if (!r || r.error || !r.table) { alert('Таблицу снять не удалось: ' + ((r && r.error) || 'нет ответа от сервиса')); return; }
+    mdEdit(() => { g.table = r.table; g.ref = 0; }, true);
     return;
   }
   mdEdit(() => {
@@ -566,6 +581,13 @@ function mdDrawSeries(cv, t, vals, ok, lo, hi, opts) {
   g.stroke();
 }
 
+// поправка по таблице (36 ячеек по 10°, линейно по кругу) — как mirror_corr в сервисе; нет таблицы — 0
+function mdMirrorCorr(table, theta) {
+  if (!table || table.length !== 36) return 0;
+  const x = (((theta % 360) + 360) % 360) / 10, i = Math.floor(x) % 36, f = x - Math.floor(x);
+  return table[i] + (table[(i + 1) % 36] - table[i]) * f;
+}
+
 // отклонение валов во времени: Δ = θ1 + θ2 − эталон (зеркально) или θ1 − θ2 − эталон, приведённое к −180..180; по истории углов двух зон
 function mdDrawMirrorCharts(cam, h) {
   (cam.groups || []).filter((g) => g.type === 'mirror').forEach((g) => {
@@ -575,7 +597,7 @@ function mdDrawMirrorCharts(cam, h) {
     const vals = a.flow.map((v, i) => {
       if (!a.bit[i] || !b.bit[i]) return null;
       const raw = g.mode === 'same' ? v - b.flow[i] : v + b.flow[i];
-      return ((((raw - g.ref + 180) % 360) + 360) % 360) - 180;
+      return ((((raw - mdMirrorCorr(g.table, v) - g.ref + 180) % 360) + 360) % 360) - 180;
     });
     const span = Math.max(20, Math.ceil((g.tol * 2) / 10) * 10);
     mdDrawSeries(cv, h.t || [], vals, h.ok || [], -span, span, { lines: [{ v: g.tol, color: '#ef4444' }, { v: -g.tol, color: '#ef4444' }, { v: 0, color: '#64748b' }] });

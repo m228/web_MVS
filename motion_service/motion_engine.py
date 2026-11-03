@@ -188,7 +188,12 @@ def _norm_group(g: dict, cam_id: str, zone_ids: list, cycle_ids=()) -> dict:
         mode = g.get("mode", "mirror")
         if mode not in MIRROR_MODES:
             raise ValueError("%s: режим %r не из %s" % (where, mode, list(MIRROR_MODES)))
-        out.update(mode=mode,
+        tbl = g.get("table")
+        if tbl:
+            if not isinstance(tbl, (list, tuple)) or len(tbl) != MIRROR_BINS:
+                raise ValueError("%s: таблица поправки — ровно %d чисел" % (where, MIRROR_BINS))
+            tbl = [_num(v, where + ".table", -90, 90) for v in tbl]
+        out.update(mode=mode, table=tbl or None,
                    ref=_num(g.get("ref", 0), where + ".ref", -180, 180),
                    tol=_num(g.get("tol", 10), where + ".tol", 0.5, 180),
                    frames_to_on=_num(g.get("frames_to_on", 3), where + ".frames_to_on", 1, 1000, True),
@@ -357,6 +362,41 @@ class ZoneRT:
         self.diff = sum(self.hist_diff) / len(self.hist_diff)
         self.value = self.flow if self.cfg["metric"] == "flow" else self.diff
         return self.hys.update(self.value)
+
+
+MIRROR_BINS = 36         # таблица поправки зеркальности: 36 ячеек по 10° по углу первой палки
+
+
+def mirror_corr(table, theta: float) -> float:
+    """Поправка (°) для угла первой палки theta: линейная интерполяция по кругу между ячейками таблицы (центры 0, 10, … 350°). Нет таблицы — 0."""
+    if not table:
+        return 0.0
+    x = (theta % 360.0) / (360.0 / MIRROR_BINS)
+    i = int(x) % MIRROR_BINS
+    f = x - int(x)
+    return float(table[i] + (table[(i + 1) % MIRROR_BINS] - table[i]) * f)
+
+
+def build_mirror_table(samples, min_bins: int = 28, min_n: int = 60):
+    """samples [(θ1, сумма углов θ1±θ2)] по кадрам при ровных валах → (таблица из 36 чисел, сведения).
+    Сумма углов приводится к −180..180 (норма ≈ 0); в каждой ячейке медиана, пустые заполняются по кругу линейно. Мало точек, не весь круг
+    пройден или разброс слишком велик (валы, похоже, не синхронны) — ValueError с понятным текстом: плохая таблица запомнит чужой перекос как норму."""
+    pts = [(float(a) % 360.0, ang_diff(float(r), 0.0)) for a, r in samples]
+    if len(pts) < min_n:
+        raise ValueError("мало данных: %d кадров, нужно не меньше %d. Дайте валам сделать полный оборот" % (len(pts), min_n))
+    bins: list = [[] for _ in range(MIRROR_BINS)]
+    for a, r in pts:
+        bins[int(round(a / (360.0 / MIRROR_BINS))) % MIRROR_BINS].append(r)
+    have = [i for i, b in enumerate(bins) if b]
+    if len(have) < min_bins:
+        raise ValueError("палка прошла не весь круг: заполнено %d ячеек из %d, нужно не меньше %d. Дождитесь полного оборота" % (len(have), MIRROR_BINS, min_bins))
+    xs = np.array(have, dtype=float)
+    ys = np.array([float(np.median(bins[i])) for i in have])
+    table = np.interp(np.arange(MIRROR_BINS), xs, ys, period=MIRROR_BINS)
+    spread = float(np.ptp(table))
+    if spread > 60.0:
+        raise ValueError("разброс %.0f° слишком велик — валы, похоже, не синхронны; таблицу в таком состоянии снимать нельзя" % spread)
+    return [round(float(v), 1) for v in table], {"n": len(pts), "bins": len(have), "spread": round(spread, 1)}
 
 
 PHIS = np.arange(0, 360, 1.0)
@@ -684,15 +724,18 @@ class CameraEngine:
         ok = bool(alive and ca and cb and ca.valid and cb.valid)
         hys = self.mirrors[g["id"]]
         delta = None
+        corr = 0.0
         if ok:
             raw = ca.angle + cb.angle if g["mode"] == "mirror" else ca.angle - cb.angle
-            delta = round(ang_diff(raw, g["ref"]), 2)
+            corr = mirror_corr(g["table"], ca.angle)         # перекос от угла камеры/объектива в этом положении палки, снятый при калибровке
+            delta = round(ang_diff(raw, corr + g["ref"]), 2)
             alarm = hys.update(abs(delta))
         else:
             hys.reset()
             alarm = 0
         return {"id": g["id"], "name": g["name"], "type": "mirror", "value": int(round(delta * 10)) if ok else 0,
                 "bits": [int(alarm)], "delta": delta, "valid": ok, "alarm": int(alarm), "tol": g["tol"], "ref": g["ref"], "mode": g["mode"],
+                "corr": round(corr, 2), "table": bool(g["table"]),
                 "angles": [round(ca.angle, 2) if ca and ca.valid else None, round(cb.angle, 2) if cb and cb.valid else None]}
 
     def compute_writes(self, state: dict) -> list:

@@ -63,6 +63,11 @@ def stats(service_url: str, cam: str, window: float = 10800.0) -> dict:
     return _call(service_url, "/cameras/%s/stats?window=%s" % (urllib.parse.quote(cam, safe=""), float(window)))
 
 
+def mirror_table(service_url: str, cam: str, group: str) -> dict:
+    """Таблица поправки зеркальности валов по последним минутам работы (снимать, пока валы ровные)."""
+    return _call(service_url, "/cameras/%s/mirror_table" % urllib.parse.quote(cam, safe=""), {"group": str(group)}, timeout=10.0)
+
+
 def record(service_url: str, cam: str, on: bool) -> dict:
     return _call(service_url, "/cameras/%s/record" % urllib.parse.quote(cam, safe=""), {"on": bool(on)})
 

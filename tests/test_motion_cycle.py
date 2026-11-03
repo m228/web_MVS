@@ -3,6 +3,7 @@
 Кадры синтетические: на зелёном фоне цветная палка под заданным углом (от вертикали по часовой). Плюс регрессия на реальном видео
 диффузии, если оно лежит на диске (E:\\grib_dif) — иначе пропускается.
 """
+import json
 import math
 import sys
 from pathlib import Path
@@ -207,3 +208,120 @@ def test_real_diffusion_video_mirror_within_tolerance():
     assert len(deltas) >= 230
     assert max(abs(d) for d in deltas) <= 15 and alarms == 0
     assert abs(float(np.median(deltas))) <= 6
+
+
+# ───────────── таблица поправки зеркальности (перекос от угла камеры и объектива) ─────────────
+def _bias(a):
+    """Выдуманный перекос камеры: до ±8° в зависимости от положения левой палки."""
+    return 8.0 * math.sin(math.radians(a - 20))
+
+
+def test_build_mirror_table_follows_the_bias_and_fills_gaps():
+    rng = np.random.default_rng(3)
+    samples = [(a, 360 + _bias(a) + rng.normal(0, 0.4)) for a in rng.uniform(0, 360, 400) if not 100 < a < 118]   # пробел в 18°
+    table, info = me.build_mirror_table(samples)
+    assert len(table) == me.MIRROR_BINS and info["bins"] >= 33
+    for i, v in enumerate(table):
+        assert abs(v - _bias(i * 10)) <= 1.5, (i, v, _bias(i * 10))
+    assert abs(me.mirror_corr(table, 95) - _bias(95)) <= 1.5 and abs(me.mirror_corr(table, 359.9) - _bias(359.9)) <= 1.5
+
+
+@pytest.mark.parametrize("samples, text", [
+    ([(a, 360.0) for a in range(0, 30)], "мало данных"),
+    ([(a % 120, 360.0) for a in range(200)], "не весь круг"),
+    ([(a, 360.0 + (80 if a < 180 else -80)) for a in range(0, 360, 2)] * 2, "не синхронны"),
+])
+def test_build_mirror_table_refuses_bad_data(samples, text):
+    with pytest.raises(ValueError) as e:
+        me.build_mirror_table(samples)
+    assert text in str(e.value)
+
+
+def test_mirror_corr_empty_table_is_zero_and_normalize_checks_length():
+    assert me.mirror_corr(None, 123) == 0.0
+    with pytest.raises(ValueError):
+        cam_cfg(groups=[{"id": "g", "type": "mirror", "zones": ["L", "R"], "table": [0] * 10}])
+    with pytest.raises(ValueError):
+        cam_cfg(groups=[{"id": "g", "type": "mirror", "zones": ["L", "R"], "table": [0] * 35 + [99]}])
+
+
+def test_table_removes_systematic_bias_in_delta():
+    table = [round(_bias(i * 10), 1) for i in range(me.MIRROR_BINS)]
+    plain = cam_cfg(groups=[{"id": "sync", "type": "mirror", "zones": ["L", "R"], "tol": 10}])
+    fixed = cam_cfg(groups=[{"id": "sync", "type": "mirror", "zones": ["L", "R"], "tol": 10, "table": table}])
+    for a in (20, 110, 200, 290):                   # палки «ровные», но камера даёт перекос _bias(a)
+        right = (360 - a + _bias(a)) % 360
+        d0 = run(me.CameraEngine(plain), a, right)["groups"][0]["delta"]
+        g1 = run(me.CameraEngine(fixed), a, right)["groups"][0]
+        assert abs(d0 - _bias(a)) <= 2.5, (a, d0)                 # без таблицы перекос виден целиком
+        assert abs(g1["delta"]) <= 2.5 and g1["table"] is True, (a, g1["delta"])
+
+
+def test_worker_collects_samples_and_endpoint_builds_table(tmp_path):
+    import importlib.util
+    from fastapi import HTTPException
+    spec = importlib.util.spec_from_file_location("motion_server_cycle", MS / "server.py")
+    srv = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(srv)
+    app = srv.create_app(tmp_path / "data")
+    cfg = {"cameras": [{"id": "dif", "name": "d", "enabled": False, "url": "x", "frame_size": [W, H],
+                        "zones": [{"id": "L", "type": "cycle", "center": [250, 270]}, {"id": "R", "type": "cycle", "center": [700, 270]}],
+                        "groups": [{"id": "sync", "type": "mirror", "zones": ["L", "R"]}]}]}
+    put = next(r.endpoint for r in app.router.routes if getattr(r, "path", "") == "/config" and "PUT" in r.methods)
+    call = next(r.endpoint for r in app.router.routes if getattr(r, "path", "") == "/cameras/{cid}/mirror_table")
+    put(cfg)
+    with pytest.raises(HTTPException) as e:
+        call("dif", {"group": "sync"})
+    assert e.value.status_code == 400 and "мало данных" in e.value.detail
+    with pytest.raises(HTTPException) as e:
+        call("dif", {"group": "nope"})
+    assert e.value.status_code == 404
+    w = app.state.mgr.workers["dif"]
+    for i in range(400):                             # кадры одного оборота: слева a, справа 360 − a + перекос
+        a = (i * 0.9) % 360
+        w._history.append((float(i), {"L": (a, 0.3, 1), "R": ((360 - a + _bias(a)) % 360, 0.3, 1)}, 1))
+    w._history.append((999.0, {"L": (5.0, 0.3, 0), "R": (5.0, 0.3, 1)}, 1))        # палка не найдена — в выборку не идёт
+    body = call("dif", {"group": "sync"})
+    assert body["n"] == 400 and len(body["table"]) == 36
+    assert all(abs(v - _bias(i * 10)) <= 1.5 for i, v in enumerate(body["table"]))
+
+
+PNG_DIR = Path(r"E:\grib_dif")
+
+
+@pytest.mark.skipif(not VIDEO.exists() or not list(PNG_DIR.glob("val_1*.png")), reason="видео и кадры диффузии не лежат на этом компьютере")
+def test_real_table_from_video_predicts_other_days():
+    """Таблица, снятая по видео 08.09, на кадрах 10–14.09 (другие дни) сжимает разброс Δ в разы: перекос — свойство камеры, а не случай."""
+    cfg = {"id": "dif", "url": "x", "frame_size": [1920, 1080], "proc_fps": 4,
+           "zones": [{"id": "L", "type": "cycle", "center": [318, 291], "radius": 340}, {"id": "R", "type": "cycle", "center": [1015, 316], "radius": 340}],
+           "groups": [{"id": "sync", "type": "mirror", "zones": ["L", "R"], "tol": 15}]}
+    eng = me.CameraEngine(me.normalize_camera(cfg))
+    cap, t, samples = cv2.VideoCapture(str(VIDEO)), 0.0, []
+    while True:
+        ok, fr = cap.read()
+        if not ok:
+            break
+        st = eng.process(cv2.cvtColor(fr, cv2.COLOR_BGR2GRAY), t, fr)
+        t += 0.25
+        if st and st["groups"][0]["valid"]:
+            z = {x["id"]: x for x in st["zones"]}
+            samples.append((z["L"]["angle"], z["L"]["angle"] + z["R"]["angle"]))
+    table, _ = me.build_mirror_table(samples, min_bins=20, min_n=100)       # видео — чуть меньше одного оборота, пробелы дозаполняются
+    cfg["groups"][0]["table"] = table
+    raw, fixed = [], []
+    for p in sorted(PNG_DIR.glob("val_1*.png")):
+        img = cv2.imread(str(p))
+        g = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        for cfg_g, out in ((None, raw), (table, fixed)):
+            c = json.loads(json.dumps(cfg))
+            c["groups"][0]["table"] = cfg_g
+            e = me.CameraEngine(me.normalize_camera(c))
+            st = None
+            for i in range(3):
+                st = e.process(g, i * 0.25, img) or st
+            if st["groups"][0]["valid"]:
+                out.append(st["groups"][0]["delta"])
+    assert len(fixed) >= 15
+    # у каждого режима кадры могли отсеяться по-разному (одиночный кадр без слежения) — сравниваем разброс
+    assert np.std(fixed) <= 0.6 * np.std(raw), (np.std(raw), np.std(fixed))
+    assert max(abs(x) for x in fixed) <= 6.5

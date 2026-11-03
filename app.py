@@ -1234,6 +1234,12 @@ def motion_stats(camera: str, window: float = 10800.0):
     return motion_client.stats(_motion_url(), camera, window)
 
 
+@app.post("/api/motion/mirror_table")
+def motion_mirror_table(req: dict = Body(...)):
+    # таблица поправки зеркальности двух валов по последним минутам (снимают, пока валы ровные); сохраняет интерфейс
+    return motion_client.mirror_table(_motion_url(), str(req.get("camera") or ""), str(req.get("group") or ""))
+
+
 @app.post("/api/motion/record")
 def motion_record(req: dict = Body(...)):
     return motion_client.record(_motion_url(), str(req.get("camera") or ""), bool(req.get("on")))

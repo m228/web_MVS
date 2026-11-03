@@ -32,6 +32,7 @@ import video_client
 import motion_client
 import cam_events
 import cam_monitor
+import day_capture
 import cam_report
 import services
 import sysmon
@@ -60,6 +61,15 @@ def _rtsp_workers_snapshot() -> dict:
 
 monitor = cam_monitor.Monitor(_rtsp_workers_snapshot, lambda: _motion_url(), motion_client.state,
                               shot_fn=motion_client.snapshot, cfg_fn=lambda: plate_config.load().get("cam_snapshots"))
+
+
+def _day_capture_cams() -> list:
+    return [{**e, "serial": manager._saved_rtsp_serial(e)} for e in rtsp_store.load() if e.get("url")]
+
+
+# новая RTSP-камера: сутки кадров раз в 20 минут (data\day_shots), см. day_capture.py
+day_cap = day_capture.DayCapture(_day_capture_cams, lambda c: manager.grab_rtsp_frame(c["serial"], c["url"]),
+                                 DATA_DIR / "day_capture.json", DATA_DIR / "day_shots")
 
 
 @asynccontextmanager
@@ -96,9 +106,11 @@ async def lifespan(app: FastAPI):
     manager.resume_rtsp_autostart()
     # журнал событий камер (связь, серые кадры, КЗ, зоны) пишется в фоне — без открытой страницы
     monitor.start()
+    day_cap.start()
     yield
     auto_update.stop()
     monitor.stop()
+    day_cap.stop()
     micro.stop()
     api_log("app", "Остановка приложения")
     sysmon.stop()                                      # последним: отметка «штатная остановка» для следующего старта

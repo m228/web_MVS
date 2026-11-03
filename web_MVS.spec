@@ -25,6 +25,9 @@ import os
 from PyInstaller.utils.hooks import collect_all, collect_submodules
 
 datas = [('page', 'page'), ('Driver', 'Driver'), ('VERSION', '.')]
+# ключ авто-регистрации в мониторинге (build.bat берёт его из monitor_server\data\server.json; в git не лежит) — рядом с VERSION
+if os.path.exists('enroll_key.txt'):
+    datas.append(('enroll_key.txt', '.'))
 binaries = []
 hiddenimports = ['app', 'camera_core', 'rtsp_store', 'net_tools', 'paths', 'logger', 'updater', 'diag',
                  'dahua_control', 'sdk_gige', 'camera_params', 'board_guard',

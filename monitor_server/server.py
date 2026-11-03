@@ -31,17 +31,52 @@ def read_version() -> str:
     return "dev"
 
 
-def load_listen(data: Path) -> tuple[str, int]:
-    """Где слушать: MONITOR_HOST / MONITOR_PORT главнее; иначе host / port из data\\server.json (удобно для автозапуска, где окружения нет); иначе 127.0.0.1:8769.
-    Для ZeroTier в host пишется адрес этого ПК в сети ZeroTier (например 11.11.11.12): тогда приёмник виден только там и на самом ПК через этот адрес."""
-    host, port = "127.0.0.1", 8769
+def load_listen_hosts(data: Path) -> tuple[list[str], int]:
+    """Где слушать: MONITOR_HOST / MONITOR_PORT главнее; иначе host (один адрес) или hosts (список) и port из data\\server.json
+    (удобно для автозапуска, где окружения нет); иначе 127.0.0.1:8769. Для ZeroTier в host пишется адрес этого ПК в сети ZeroTier
+    (например 172.29.134.237): тогда приёмник виден только там и на самом ПК через этот адрес. Список hosts — когда клиенты
+    ещё сидят в двух сетях ZeroTier (переезд): слушаем адрес в каждой."""
+    hosts, port = ["127.0.0.1"], 8769
     try:
         cfg = json.loads((data / "server.json").read_text(encoding="utf-8"))
-        host = str(cfg.get("host") or host).strip()
+        listed = cfg.get("hosts")
+        if isinstance(listed, list):
+            hosts = [str(h).strip() for h in listed if str(h).strip()] or hosts
+        elif cfg.get("host"):
+            hosts = [str(cfg["host"]).strip()]
         port = int(cfg.get("port") or port)
     except (OSError, ValueError, AttributeError):
         pass
-    return os.environ.get("MONITOR_HOST") or host, int(os.environ.get("MONITOR_PORT") or port)
+    env = [h.strip() for h in os.environ.get("MONITOR_HOST", "").split(",") if h.strip()]
+    return env or hosts, int(os.environ.get("MONITOR_PORT") or port)
+
+
+def load_listen(data: Path) -> tuple[str, int]:
+    """Первый адрес для прослушивания и порт (по нему трей проверяет, что приёмник жив)."""
+    hosts, port = load_listen_hosts(data)
+    return hosts[0], port
+
+
+def load_enroll_key(data: Path) -> str:
+    """Ключ регистрации клиентов: MONITOR_ENROLL_KEY главнее; иначе data\\server.json (enroll_key); иначе создаём и сохраняем.
+    Тот же ключ build.bat кладёт в сборку клиента: без него заявка не принимается."""
+    env = os.environ.get("MONITOR_ENROLL_KEY", "").strip()
+    if env:
+        return env
+    path = data / "server.json"
+    try:
+        cfg = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(cfg, dict):
+            cfg = {}
+    except (OSError, ValueError):
+        cfg = {}
+    key = str(cfg.get("enroll_key") or "").strip()
+    if not key:
+        key = secrets.token_urlsafe(24)
+        cfg["enroll_key"] = key
+        data.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8")
+    return key
 
 
 def load_password(data: Path) -> str:
@@ -135,7 +170,32 @@ def build_app():
         log.info("Утренняя сводка: %s", "%02d:%02d" % hm if hm else "выключена")
     html = (HERE / "panel.html").read_text(encoding="utf-8")
     return monitor_app.create_app(store, load_password(data), read_version(), html, assets=load_assets(), notifier=notifier, bot=bot,
-                                  releases=releases)
+                                  releases=releases, enroll_key=load_enroll_key(data))
+
+
+BIND_WAIT_S = 10            # адрес ZeroTier при загрузке Windows поднимается позже приёмника: пробуем ещё
+BIND_TRIES = 6
+
+
+def bind_all(uvicorn, app, hosts: list[str], port: int, sleep=time.sleep) -> list:
+    """Сокеты на каждый адрес. Адрес, которого ещё нет (сеть ZeroTier не поднялась), ждём до BIND_TRIES·BIND_WAIT_S секунд, потом
+    работаем на тех, что есть; ни одного нет — ошибка (надзор перезапустит). Так выход из одной из двух сетей не валит приёмник."""
+    socks: dict = {}
+    for attempt in range(BIND_TRIES):
+        for h in hosts:
+            if h in socks:
+                continue
+            try:
+                socks[h] = uvicorn.Config(app, host=h, port=port).bind_socket()
+            except OSError as e:
+                log.warning("не удалось занять %s:%d (%s)%s", h, port, e, "" if attempt == BIND_TRIES - 1 or len(hosts) == 1 else ", повторю")
+        if len(socks) == len(hosts) or len(hosts) == 1:
+            break
+        if attempt < BIND_TRIES - 1:
+            sleep(BIND_WAIT_S)
+    if not socks:
+        raise OSError("ни один адрес не занят: %s" % ", ".join(hosts))
+    return list(socks.values())
 
 
 def main():
@@ -143,11 +203,15 @@ def main():
     if sys.stdout is None or sys.stderr is None:         # запуск без окна (pythonw из автозапуска): консоли нет, uvicorn на ней падает
         sys.stdout = sys.stderr = open(HERE / "service.log", "a", encoding="utf-8", buffering=1)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-    host, port = load_listen(Path(os.environ.get("MONITOR_DATA") or HERE / "data"))
-    log.info("Приёмник мониторинга v%s: http://%s:%d", read_version(), host, port)
+    hosts, port = load_listen_hosts(Path(os.environ.get("MONITOR_DATA") or HERE / "data"))
+    log.info("Приёмник мониторинга v%s: %s", read_version(), ", ".join("http://%s:%d" % (h, port) for h in hosts))
     if os.environ.get("MONITOR_PARENT_PID", "").isdigit():
         watch_parent(int(os.environ["MONITOR_PARENT_PID"]))
-    uvicorn.run(build_app(), host=host, port=port, log_level="warning")
+    app = build_app()
+    if len(hosts) == 1:
+        uvicorn.run(app, host=hosts[0], port=port, log_level="warning")
+    else:
+        uvicorn.Server(uvicorn.Config(app, host=hosts[0], port=port, log_level="warning")).run(sockets=bind_all(uvicorn, app, hosts, port))
 
 
 if __name__ == "__main__":

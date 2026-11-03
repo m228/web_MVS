@@ -225,10 +225,23 @@ const mdHelp = (text) => `<span class="md-help" title="${escapeHtml(text)}">?</s
 const mdField = (label, ctl, title, cls) => `<label${title ? ` title="${escapeHtml(title)}"` : ''}${cls ? ` class="${cls}"` : ''}><span>${label}</span>${ctl}</label>`;
 
 // ---------- вкладка «Зоны · тренды» ----------
-function mdOutCell(o, attrs) {
+function mdOutCell(o, attrs, withState) {
   // адрес нужен только когда вывод включён — иначе поле лишь теснит соседей по строке
   return `<div class="md-out"><select ${attrs} data-f="okind">${mdSel([['', 'нет'], ['holding', 'регистр'], ['coil', 'coil']], o ? o.kind : '')}</select>` +
-    (o && o.kind ? `<input type="number" min="0" max="65535" ${attrs} data-f="oaddr" value="${o.address}" title="Адрес регистра / coil" placeholder="адрес" />` : '') + '</div>';
+    (o && o.kind ? `<input type="number" min="0" max="65535" ${attrs} data-f="oaddr" value="${o.address}" title="Адрес регистра / coil" placeholder="адрес" />` : '') +
+    // что писать — только у зоны с признаком вида окна: бит «движется» или состояние окна 0 пусто / 1 жом стоит / 2 движется
+    (withState && o && o.kind ? `<select ${attrs} data-f="oval" title="Что писать: бит «движется» 0/1 или состояние окна: 0 — пусто, 1 — жом стоит, 2 — движется (пока пороги вида окна не заданы, пишется бит)">${mdSel([['bit', 'движение'], ['state', 'состояние окна']], o.value || 'bit')}</select>` : '') + '</div>';
+}
+
+const MD_FILL_METRICS = [['off', 'нет'], ['rel', 'яркость к металлу'], ['lum', 'яркость'], ['tex', 'зернистость']];
+const MD_FILL_STATE = ['пусто', 'жом стоит', 'движется'];
+const MD_FILL_HELP = 'Вид окна — есть ли в нём жом. По движению пустое окно и окно со стоящим жомом неотличимы; вид окна различает их.\n' +
+  'Яркость к металлу — яркость окна, делённая на яркость металла вокруг него (свет и солнце на неё почти не влияют: жом светлый ≈ 0.9, пустое окно тёмное ≈ 0.65). Яркость — средний свет в окне, зернистость — резкость мелких деталей. Пока пороги on/off равны 0, значения только измеряются (в панели и в записи CSV), решения нет.\n' +
+  'Когда пороги заданы: выше on (или ниже off, если выбрано «жом при низком») — жом есть. Состояние окна: 0 пусто, 1 жом стоит, 2 движется.';
+function mdFillText(z) {
+  if (!z || z.tex === undefined) return '–';
+  const base = z.fill_metric === 'lum' ? 'яркость ' + Number(z.lum).toFixed(0) : z.fill_metric === 'rel' ? 'отн. яркость ' + Number(z.rel).toFixed(2) : 'зерн. ' + Number(z.tex).toFixed(2);
+  return z.state == null ? base + ' · пороги не заданы' : base + ' · ' + MD_FILL_STATE[z.state];
 }
 
 // зона слева, её тренд справа
@@ -265,7 +278,13 @@ function mdZoneCardHtml(cam, z, i) {
       <div class="md-zone__row"><span class="md-lbl" title="Защита от одиночных всплесков: бит зоны меняется, только когда порог выполнен столько кадров анализа ПОДРЯД. Один проскочивший кадр счёт сбрасывает.">кадров подряд</span>
         <span class="md-lbl">вкл</span>${mdNum(a + ' data-f="fon"', z.frames_to_on == null ? 3 : z.frames_to_on, 'min="1" max="1000" title="Сколько кадров подряд выше порога on, чтобы бит включился"')}
         <span class="md-lbl">выкл</span>${mdNum(a + ' data-f="foff"', z.frames_to_off == null ? 4 : z.frames_to_off, 'min="1" max="1000" title="Сколько кадров подряд ниже порога off, чтобы бит выключился"')}</div>
-      <div class="md-zone__row"><span class="md-lbl">вывод в ПЛК</span>${mdOutCell(z.out, a)}
+      <div class="md-zone__row"><span class="md-lbl" title="${escapeHtml(MD_FILL_HELP)}">вид окна</span>
+        <select ${a} data-f="fmetric">${mdSel(MD_FILL_METRICS, z.fill_metric || 'off')}</select>` +
+      (z.fill_metric && z.fill_metric !== 'off' ? `<span class="md-lbl">on</span>${mdNum(a + ' data-f="fllon"', z.fill_on || 0, 'step="0.01" min="0" title="Верхний порог вида окна. 0 — пороги не заданы, только измерение"')}
+        <span class="md-lbl">off</span>${mdNum(a + ' data-f="flloff"', z.fill_off || 0, 'step="0.01" min="0" title="Нижний порог вида окна"')}
+        <select ${a} data-f="fllinv" title="При каком значении признака в окне есть жом">${mdSel([['0', 'жом при высоком'], ['1', 'жом при низком']], z.fill_invert ? '1' : '0')}</select>
+        <span class="md-lbl md-fill" id="md-zf-${k}">–</span>` : '') + `</div>
+      <div class="md-zone__row"><span class="md-lbl">вывод в ПЛК</span>${mdOutCell(z.out, a, z.fill_metric && z.fill_metric !== 'off')}
         <label class="md-lbl" title="Считать оптический поток (flow) для этой зоны. Самое тяжёлое в анализе: если зона решает по diff и flow не нужен, выключите — процессор разгрузится, а flow этой зоны в графиках и записях будет 0"><input type="checkbox" ${a} data-f="trackflow"${z.metric === 'flow' ? ' checked disabled' : (z.track_flow === false ? '' : ' checked')} /> flow</label></div>
     </div>
     <div class="md-zone__chart"><canvas id="md-ch-${k}" height="84"></canvas></div>
@@ -425,11 +444,15 @@ function mdOnZone(t, cam) {
     else if (f === 'on' || f === 'off') z[f] = parseFloat(t.value) || 0;
     else if (f === 'fon' || f === 'foff') z[f === 'fon' ? 'frames_to_on' : 'frames_to_off'] = Math.max(1, Math.min(1000, parseInt(t.value, 10) || 1));
     else if (f === 'trackflow') z.track_flow = t.checked;
-    else if (f === 'okind') z.out = t.value ? { kind: t.value, address: (z.out && z.out.address) || 0 } : null;
+    else if (f === 'okind') z.out = t.value ? { kind: t.value, address: (z.out && z.out.address) || 0, value: (z.out && z.out.value) || 'bit' } : null;
     else if (f === 'oaddr' && z.out) z.out.address = parseInt(t.value, 10) || 0;
     else if (f === 'rkind') z.rpm_out = t.value ? { kind: 'holding', address: (z.rpm_out && z.rpm_out.address) || 0 } : null;
     else if (f === 'raddr' && z.rpm_out) z.rpm_out.address = parseInt(t.value, 10) || 0;
-  }, f === 'type' || f === 'metric' || f === 'okind' || f === 'rkind');
+    else if (f === 'oval' && z.out) z.out.value = t.value;
+    else if (f === 'fmetric') z.fill_metric = t.value;
+    else if (f === 'fllon' || f === 'flloff') z[f === 'fllon' ? 'fill_on' : 'fill_off'] = Math.max(0, parseFloat(t.value) || 0);
+    else if (f === 'fllinv') z.fill_invert = t.value === '1';
+  }, f === 'type' || f === 'metric' || f === 'okind' || f === 'fmetric' || f === 'rkind');
 }
 
 // карточка синхронности: допуск, эталон, вывод; «текущее = норма» берёт текущую сумму углов из живого состояния
@@ -895,6 +918,8 @@ function paintMotionDockLive() {
       if (bit) { bit.textContent = z.bit; bit.classList.toggle('on', z.bit === 1); }
       const val = mdEl('md-zv-' + c.id + '-' + z.id);
       if (val) val.textContent = Number(z.value).toFixed(2);
+      const fl = mdEl('md-zf-' + c.id + '-' + z.id);
+      if (fl) fl.textContent = mdFillText(z);
     });
     ((res && res.groups) || []).forEach((g) => {
       const b = mdEl('md-gv-' + c.id + '-' + g.id);

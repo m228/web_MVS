@@ -180,6 +180,7 @@ class CameraWorker(threading.Thread):
         self._rec_path: Optional[Path] = None
         self._rec_flushed = 0.0
         self._rec_ids: list = []
+        self._rec_fill: set = set()       # зоны записи с признаком вида окна: у них в CSV ещё три колонки
         # тренды на диске (data\trends): переживают перезапуск; здесь же читаем их обратно, чтобы графики и статистика не обнулялись
         self._trend = TrendLog(self.data_dir, self.id)
         self._restore_trends()
@@ -329,7 +330,8 @@ class CameraWorker(threading.Thread):
             if len(self._stamps) >= 2 and self._stamps[-1] > self._stamps[0]:
                 fps = (len(self._stamps) - 1) / (self._stamps[-1] - self._stamps[0])
             conn, err, dec = self._connected, self._error, self._decoder
-        zones = {z["id"]: {"flow": round(z["flow"], 3), "diff": round(z["diff"], 3), "bit": int(z["bit"])} for z in (st or {}).get("zones", [])}
+        zones = {z["id"]: {"flow": round(z["flow"], 3), "diff": round(z["diff"], 3), "bit": int(z["bit"]),
+                           **({"tex": z["tex"], "lum": z["lum"], "rel": z["rel"], "state": z["state"]} if "tex" in z else {})} for z in (st or {}).get("zones", [])}
         info = {"name": self.cfg["name"], "connected": bool(conn), "alive": bool(st and st.get("alive")),
                 "status": "ok" if (st and st.get("alive")) else ((st or {}).get("reason") or err or "нет данных"),
                 "fps": round(fps, 2), "decoder": dec, "zones": zones}
@@ -352,7 +354,8 @@ class CameraWorker(threading.Thread):
             pts = np.round(np.array(scale_points(zc["points"], size, (w, h))) * k).astype(np.int32)
             color = (60, 200, 60) if z["bit"] else (50, 50, 230)
             cv2.polylines(f, [pts], True, color, 2)
-            cv2.putText(f, "%s d=%.2f f=%.2f" % (zc["id"], z["diff"], z["flow"]), (int(pts[:, 0].min()), max(14, int(pts[:, 1].min()) - 6)),
+            cv2.putText(f, "%s d=%.2f f=%.2f" % (zc["id"], z["diff"], z["flow"]) + (" t=%.1f L=%.0f r=%.2f" % (z["tex"], z["lum"], z["rel"]) if "tex" in z else ""),
+                        (int(pts[:, 0].min()), max(14, int(pts[:, 1].min()) - 6)),
                         cv2.FONT_HERSHEY_SIMPLEX, max(0.4, fw / 1800.0), color, 1, cv2.LINE_AA)
         cv2.putText(f, "%s %s" % (self.id, time.strftime("%Y-%m-%d %H:%M:%S")), (8, fh - 10), cv2.FONT_HERSHEY_SIMPLEX,
                     max(0.45, fw / 1600.0), (255, 255, 255), 1, cv2.LINE_AA)
@@ -365,6 +368,7 @@ class CameraWorker(threading.Thread):
             if self._rec_path:
                 return self._rec_path.name
             self._rec_ids = [z["id"] for z in self.cfg["zones"] if z["enabled"]]
+            self._rec_fill = {z["id"] for z in self.cfg["zones"] if z["enabled"] and z.get("fill_metric", "off") != "off"}
             return self._rec_open()
 
     def _rec_open(self) -> str:
@@ -379,6 +383,8 @@ class CameraWorker(threading.Thread):
         head = ["time"]
         for zid in self._rec_ids:
             head += ["%s_flow" % zid, "%s_diff" % zid, "%s_bit" % zid]
+            if zid in self._rec_fill:           # признак вида окна (зернистость, яркость, жом есть) — для подбора порогов по записи
+                head += ["%s_tex" % zid, "%s_lum" % zid, "%s_rel" % zid, "%s_fill" % zid]
         self._rec_csv.writerow(head + ["alive", "status"])
         return self._rec_path.name
 
@@ -397,6 +403,8 @@ class CameraWorker(threading.Thread):
         for zid in self._rec_ids:
             z = byid.get(zid) or {}
             row += ["", "", ""] if event else [z.get("flow", 0), z.get("diff", 0), z.get("bit", 0)]
+            if zid in self._rec_fill:
+                row += ["", "", "", ""] if event else [z.get("tex", ""), z.get("lum", ""), z.get("rel", ""), "" if z.get("fill") is None else z["fill"]]
         self._rec_csv.writerow(row + ["" if event else int(status == "ok"), status])
         if status != "ok" or ts - self._rec_flushed >= RECORD_FLUSH_S:   # сбой — сразу на диск: при отключении питания это самые нужные строки
             self._rec_fh.flush()

@@ -302,7 +302,7 @@ class MicroscopeService:
     PROBE_MODE_DWELL = 23      # режим автомата «выдержка у стекла» (см. microscope_fsm)
 
     def _set_cv_status(self, state, message=""):
-        """Статус разбора для UI: idle / running / ok / no_camera / no_frames / overexposed /
+        """Статус разбора для UI: idle / running / ok / no_camera / no_frames / overexposed / black /
         sidecar_offline / error. Любой отказ виден на странице, а не только в логе."""
         self._cv_status = {"state": state, "message": message, "ts": time.strftime("%H:%M:%S")}
 
@@ -369,6 +369,17 @@ class MicroscopeService:
                       {"serial": serial, "median": round(med), "saturated_pct": round(sat * 100, 1), "camera": cur})
         return over
 
+    def _black(self, img, worker, serial):
+        """Абсолютно чёрный кадр (нет света или плата зависла) в пробу не идёт: статус «black» и ошибка в журнал."""
+        import camera_params
+        black, med, p99 = camera_params.blackness(img)
+        if black:
+            cur = getattr(worker, "current_config", None) or {}
+            self._set_cv_status("black", "проба пропущена: кадр абсолютно чёрный (яркость %d из 255) — нет света, проверь плату и подсветку" % med)
+            log_event("microscope_service", "CV: кадр пробы чёрный — в пробу не идёт", "error",
+                      {"serial": serial, "median": round(med), "p99": round(p99), "camera": cur})
+        return black
+
     def _cv_probe_session(self):
         """Сессия пробы (фон): у стекла «снять кадр → разобрать → следующий», пока не разобрано
         frames_per_probe кадров. Затем автомату — «отводи» (cv_release), а проба досохраняется
@@ -418,9 +429,9 @@ class MicroscopeService:
                 img = self._grab_frame(worker, save_raw, fmt)
                 if img is None or not self._probe_at_glass():
                     break      # камера молчит / кадр пришёл уже после начала отвода (в движении)
-                if self._overexposed(img, worker, serial):
+                if self._overexposed(img, worker, serial) or self._black(img, worker, serial):
                     overexposed = True
-                    break      # экспозиция та же — следующие кадры будут такими же белыми
+                    break      # экспозиция/свет те же — следующие кадры будут такими же белыми или чёрными
                 self._cv_analyze_one(run, img)
                 done = len(run["overlays"])
                 if fsm:
@@ -498,7 +509,7 @@ class MicroscopeService:
                 self._set_cv_status("no_frames", "камера не отдала кадр за 5 с")
                 log_event("microscope_service", "CV: живой кадр не получен за 5 с", "warn")
                 return
-            if self._overexposed(img, worker, serial):
+            if self._overexposed(img, worker, serial) or self._black(img, worker, serial):
                 return
             run = self._cv_begin(self.cfg or {})
             self._cv_analyze_one(run, img)

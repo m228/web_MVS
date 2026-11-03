@@ -68,7 +68,7 @@ STEP_KEYS = {"отвод": "retract", "подвод": "approach"}
 PUSH_CODES = ("pos_", "autocal_drift")     # жёлтые (не срочные) предупреждения, которые всё равно уходят сразу
 URGENT = ("critical", "high")
 # сколько проверок подряд правило должно срабатывать, чтобы тревога открылась (плата, например, молча переподключается)
-CONFIRM = {"service_cv": 2, "service_video": 2, "service_motion": 2, "plate_down": 4, "camera_exposure": 2, "cv_fail": 2}
+CONFIRM = {"service_cv": 2, "service_video": 2, "service_motion": 2, "plate_down": 4, "camera_exposure": 2, "cv_fail": 2, "black": 2}
 NEAR_MEDIAN_N = 3           # подвод: расхождение датчиков судим по медиане стольких последних проб, а не по одной (у Kir бывают одиночные пики)
 
 STAGE_NAMES = {1: "Остановлен", 2: "Набор", 3: "Сгущение", 4: "Затравка", 5: "Подкачка", 6: "Стабилизация", 7: "Рост", 8: "Уваривание",
@@ -477,8 +477,9 @@ def default_sources() -> dict:
             return {"serial": ""}
         w = manager.workers.get(serial)               # не создаём воркер ради мониторинга
         cur = getattr(w, "current_config", None) if w is not None else None
+        bw = getattr(w, "black", None) if w is not None else None
         return {"serial": serial, "streaming": bool(w is not None and w.running), "current": dict(cur) if cur else None,
-                "saved": camera_params.saved(serial)}
+                "saved": camera_params.saved(serial), "black_s": round(bw.seconds(), 1) if bw is not None else 0.0}
 
     def probes(serial, since):
         c = db.conn()
@@ -628,6 +629,40 @@ class Agent:
         d["positions"] = list(self.positions)
         return d
 
+    def _black_text(self, d: dict, head: str) -> str:
+        """Текст тревоги «чёрный кадр» с тем, что видно по плате (свет, 12V, статус, сбросы): по Telegram сразу ясно, куда смотреть."""
+        state, ext = d.get("state") or {}, d.get("ext") or {}
+        cur = (d.get("camera") or {}).get("current") or {}
+        bits = ["свет %s" % ("%s %%" % state.get("led_bright") if state.get("led_on") else "выкл")]
+        if cur.get("exposure_time") is not None:
+            bits.append("экспозиция %s мкс" % _fmt_val(cur["exposure_time"]))
+        u12 = _num(ext.get("u12v"))
+        if u12 is not None:
+            bits.append("12V %.1f В" % (u12 / 1000.0))
+        st = _num(ext.get("init_status"))
+        if st is not None:
+            bits.append("статус платы 0x%04X" % int(st))
+        resets = [_num(ext.get(k)) for k in ("wdt_resets", "lan_resets", "lan_stack_resets")]
+        if all(r is not None for r in resets):
+            bits.append("сбросы платы: сторож %d, LAN %d/%d" % tuple(int(r) for r in resets))
+        if (d.get("status") or {}).get("connected") is False:
+            bits.append("плата не отвечает")
+        return "%s (%s)" % (head, ", ".join(bits))
+
+    def _black_rule(self, d: dict, cam: dict) -> str:
+        """Живой поток камеры микроскопа непрерывно чёрный BLACK_SECONDS, а свет включён и экспозиция не нулевая -> текст тревоги, иначе ''."""
+        import camera_params
+        secs = _num(cam.get("black_s")) or 0
+        if not (cam.get("serial") and cam.get("streaming") and secs >= camera_params.BLACK_SECONDS):
+            return ""
+        state = d.get("state") or {}
+        if not state.get("led_on") or not (_num(state.get("led_bright")) or 0) > 0:
+            return ""
+        exp = _num((cam.get("current") or {}).get("exposure_time"))
+        if exp is not None and exp <= 0:
+            return ""
+        return self._black_text(d, "Кадр камеры чёрный уже %s при включённом свете" % fmt_dur(secs))
+
     def _rules(self, d: dict, now: float) -> tuple[dict, set]:
         """Какие тревоги сейчас горят: ({код: (уровень, текст)}, коды, про которые сейчас ничего не известно — их не трогаем)."""
         found: dict = {}
@@ -652,7 +687,14 @@ class Agent:
                 found["service_" + name] = ("medium", "%s не поднимается" % SERVICE_LABELS[name])
 
         if micro:
-            if cv.get("state") == "overexposed" and d.get("cv_enabled") and stage_ok:
+            black = self._black_rule(d, cam)
+            if black:
+                found["black"] = ("high", black)
+            elif cam.get("serial") and not cam.get("streaming"):
+                keep.add("black")                     # камера не стримит — не знаем, вернулся ли свет, тревога остаётся как была
+            if cv.get("state") == "black" and d.get("cv_enabled") and stage_ok:
+                found["black"] = ("high", self._black_text(d, "Проба пропущена: кадр абсолютно чёрный"))
+            elif cv.get("state") == "overexposed" and d.get("cv_enabled") and stage_ok:
                 found["overexposed"] = ("high", "Кадры пересвечены, пробы пропускаются")
             elif cv.get("state") in ("no_camera", "no_frames", "sidecar_offline") and d.get("cv_enabled") and stage_ok:
                 found["cv_fail"] = ("high", "Проба не разобрана: " + str(cv.get("message") or cv.get("state"))[:120])

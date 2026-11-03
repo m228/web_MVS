@@ -115,3 +115,54 @@ def overexposure(img):
     med = float(np.median(g))
     sat = float((g >= 250).mean())
     return (med >= OVER_MEDIAN or sat >= OVER_SAT_SHARE), med, sat
+
+
+# чёрный кадр: свет не горит или не доходит (плата зависла, 12V упало, шторка) — шума и картинки нет совсем.
+# Рабочие кадры: медиана 74–118, 99-й процентиль выше 100; порог взят с большим запасом, чтобы тусклый, но живой кадр не пугал.
+BLACK_MEDIAN = 8           # медиана яркости (0–255) не выше этого
+BLACK_P99 = 40             # и 99-й процентиль не выше этого — тогда кадр чёрный
+BLACK_SECONDS = 120        # столько непрерывно чёрного живого потока — тревога (решение Макса 03.11)
+BLACK_SAMPLE_S = 1.0       # живой поток проверяем раз в секунду
+BLACK_GAP_S = 10.0         # кадров не было дольше этого — отсчёт чёрного начинается заново
+
+
+def blackness(img):
+    """(чёрный ли кадр, медиана яркости, 99-й процентиль). Считается по прореженному серому кадру, как overexposure."""
+    import cv2
+    import numpy as np
+    g = img if img.ndim == 2 else cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    step = max(1, min(g.shape[:2]) // 256)
+    g = g[::step, ::step]
+    med = float(np.median(g))
+    p99 = float(np.percentile(g, 99))
+    return (med <= BLACK_MEDIAN and p99 <= BLACK_P99), med, p99
+
+
+class BlackWatch:
+    """Сколько секунд подряд живой поток чёрный. Кормим кадрами из потока; сам проверяет раз в BLACK_SAMPLE_S."""
+
+    def __init__(self, clock=None):
+        import time
+        self._clock = clock or time.time
+        self.since = None          # с какого момента кадры чёрные подряд
+        self.last = None           # когда был последний проверенный кадр
+        self.med = self.p99 = None
+
+    def feed(self, img):
+        now = self._clock()
+        if self.last is not None and now - self.last < BLACK_SAMPLE_S:
+            return
+        if self.last is not None and now - self.last > BLACK_GAP_S:
+            self.since = None      # поток прерывался: чёрное до паузы не считаем
+        self.last = now
+        black, self.med, self.p99 = blackness(img)
+        if not black:
+            self.since = None
+        elif self.since is None:
+            self.since = now
+
+    def seconds(self):
+        """Секунд непрерывно чёрного потока; 0 — кадр живой или поток молчит."""
+        if self.since is None or self.last is None or self._clock() - self.last > BLACK_GAP_S:
+            return 0.0
+        return self._clock() - self.since

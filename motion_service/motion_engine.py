@@ -34,6 +34,9 @@ METRICS = ("flow", "diff")
 GROUP_TYPES = ("sum", "monotonic", "worktimer")
 HW_ACCEL_MODES = ("off", "auto", "d3d11")    # аппаратное декодирование видео: выкл / любое доступное / Direct3D 11 (видеоядро Intel, AMD, NVIDIA)
 ZONE_OUT_KINDS = ("holding", "coil")
+ZONE_OUT_VALUES = ("bit", "state")     # что зона пишет в ПЛК: бит «движется» или состояние окна 0 пусто / 1 жом стоит / 2 движется
+FILL_METRICS = ("off", "tex", "lum")   # признак «вид окна» (есть ли жом): выкл / зернистость (резкость мелких деталей) / средняя яркость
+FILL_TEX_BLUR = 5                      # ядро размытия для зернистости: tex = средняя |кадр − размытый кадр| в зоне
 GROUP_OUT_KINDS = ("holding", "bits", "coils")
 AGGS = ("any", "majority", "all")
 
@@ -60,13 +63,35 @@ def _num(v, name, lo=None, hi=None, integer=False):
     return x
 
 
-def _out(o, kinds, name, allow_none=True):
+def _out(o, kinds, name, allow_none=True, values=None):
     if not o or not o.get("kind"):
         return None
     kind = o.get("kind")
     if kind not in kinds:
         raise ValueError("%s: вид вывода %r не из %s" % (name, kind, list(kinds)))
-    return {"kind": kind, "address": _num(o.get("address", 0), name + ".address", 0, 65535, True)}
+    res = {"kind": kind, "address": _num(o.get("address", 0), name + ".address", 0, 65535, True)}
+    if values:      # что писать: у зоны — бит или состояние окна; остальные выводы значение не выбирают
+        v = o.get("value", values[0])
+        if v not in values:
+            raise ValueError("%s: значение вывода %r не из %s" % (name, v, list(values)))
+        res["value"] = v
+    return res
+
+
+def _fill_cfg(z: dict, where: str) -> dict:
+    """Признак «вид окна» — есть ли в окне жом. Нужен, чтобы отличить «шахта пустая и стоит» от «жом есть, но стоит»: по движению
+    эти два состояния одинаковы. fill_on = 0 — пороги не заданы: признак только измеряется (в панели и записи), решения нет."""
+    metric = z.get("fill_metric", "off")
+    if metric not in FILL_METRICS:
+        raise ValueError("%s: признак вида окна %r не из %s" % (where, metric, list(FILL_METRICS)))
+    on = _num(z.get("fill_on", 0), where + ".fill_on", 0)
+    off = _num(z.get("fill_off", 0), where + ".fill_off", 0)
+    invert = bool(z.get("fill_invert", False))
+    if on > 0 and off > on:        # как у порогов движения: on — верхний порог, off — нижний; fill_invert лишь меняет, при каком из них «жом есть»
+        raise ValueError("%s: порог off вида окна (%s) больше порога on (%s)" % (where, off, on))
+    return {"fill_metric": metric, "fill_on": on, "fill_off": off, "fill_invert": invert,
+            "fill_smooth": _num(z.get("fill_smooth", 15), where + ".fill_smooth", 1, 600, True),
+            "fill_frames": _num(z.get("fill_frames", 10), where + ".fill_frames", 1, 1000, True)}
 
 
 def _norm_zone(z: dict, cam_id: str) -> dict:
@@ -108,7 +133,8 @@ def _norm_zone(z: dict, cam_id: str) -> dict:
         "frames_to_off": _num(z.get("frames_to_off", 4), where + ".frames_to_off", 1, 1000, True),
         "blur": _num(z.get("blur", 5), where + ".blur", 0, 31, True),
         "flicker_comp": bool(z.get("flicker_comp", True)),
-        "out": _out(z.get("out"), ZONE_OUT_KINDS, where + ".out"),
+        "out": _out(z.get("out"), ZONE_OUT_KINDS, where + ".out", values=ZONE_OUT_VALUES),
+        **_fill_cfg(z, where),
     }
 
 
@@ -274,12 +300,24 @@ class ZoneRT:
         self.hist_diff = deque(maxlen=zcfg["smooth"])
         self.hys = Hysteresis(zcfg["on"], zcfg["off"], zcfg["invert"], zcfg["frames_to_on"], zcfg["frames_to_off"])
         self.flow = self.diff = self.value = 0.0
+        self.fill_metric = zcfg.get("fill_metric", "off")
+        self.hist_fill = deque(maxlen=zcfg.get("fill_smooth", 15))
+        # решает «жом есть» только при заданных порогах (fill_on > 0), иначе признак лишь измеряется
+        self.fill_hys = (Hysteresis(zcfg["fill_on"], zcfg["fill_off"], zcfg["fill_invert"], zcfg["fill_frames"], zcfg["fill_frames"])
+                         if self.fill_metric != "off" and zcfg["fill_on"] > 0 else None)
+        self.tex = self.lum = 0.0           # сглаженные зернистость и яркость зоны (считаются, пока признак вида окна включён)
+        self.fill: Optional[int] = None     # 1 — жом есть, 0 — нет, None — решения нет (признак выключен или пороги не заданы)
 
     def reset(self):
         self.hist_flow.clear()
         self.hist_diff.clear()
+        self.hist_fill.clear()
         self.hys.reset()
+        if self.fill_hys:
+            self.fill_hys.reset()
         self.flow = self.diff = self.value = 0.0
+        self.tex = self.lum = 0.0
+        self.fill = None
 
     def step(self, prev: np.ndarray, cur: np.ndarray, dt: float) -> int:
         x, y, w, h = self.bbox
@@ -295,7 +333,21 @@ class ZoneRT:
             self.flow = 0.0
         self.diff = sum(self.hist_diff) / len(self.hist_diff)
         self.value = self.flow if self.cfg["metric"] == "flow" else self.diff
+        if self.fill_metric != "off":
+            self._fill_step(b)
         return self.hys.update(self.value)
+
+    def _fill_step(self, cur: np.ndarray):
+        """Вид окна: зернистость (жом — крупа, пустое окно — гладкая стенка) и яркость, сглаженные за fill_smooth кадров."""
+        m = self.mask
+        k = FILL_TEX_BLUR if FILL_TEX_BLUR % 2 else FILL_TEX_BLUR + 1
+        tex = float(np.abs(cur.astype(np.float32) - cv2.GaussianBlur(cur, (k, k), 0).astype(np.float32))[m].mean())
+        self.hist_fill.append((tex, float(cur[m].mean())))
+        n = len(self.hist_fill)
+        self.tex = sum(t for t, _ in self.hist_fill) / n
+        self.lum = sum(v for _, v in self.hist_fill) / n
+        if self.fill_hys:
+            self.fill = self.fill_hys.update(self.tex if self.fill_metric == "tex" else self.lum)
 
 
 def flow_metric(a: np.ndarray, b: np.ndarray, mask: np.ndarray, dt: float) -> float:
@@ -462,7 +514,8 @@ class CameraEngine:
             zones.append({"id": zc["id"], "name": zc["name"], "type": zc["type"], "metric": zc["metric"],
                           "enabled": zc["enabled"], "bit": int(bits.get(zc["id"], 0)) if alive else 0,
                           "flow": round(z.flow, 4) if z else 0.0, "diff": round(z.diff, 4) if z else 0.0,
-                          "value": round(z.value, 4) if z else 0.0, "on": zc["on"], "off": zc["off"]})
+                          "value": round(z.value, 4) if z else 0.0, "on": zc["on"], "off": zc["off"],
+                          **self._fill_state(zc, z, alive, bool(bits.get(zc["id"], 0)))})
         groups = []
         for g in self.cfg["groups"]:
             gb = {zid: (bits.get(zid, 0) if alive else 0) for zid in g["zones"]}
@@ -482,14 +535,28 @@ class CameraEngine:
         return {"ts": now, "alive": alive, "reason": reason, "frame_wh": list(self.frame_wh) if self.frame_wh else None,
                 "zones": zones, "groups": groups}
 
+    @staticmethod
+    def _fill_state(zc: dict, z: Optional[ZoneRT], alive: bool, moving: bool) -> dict:
+        """Поля вида окна для состояния зоны. state: 2 — движется, 1 — жом есть и стоит, 0 — пусто и стоит; None — решения нет."""
+        if zc.get("fill_metric", "off") == "off":
+            return {}
+        fill = z.fill if (z and alive) else None
+        state = None if fill is None else (2 if moving else fill)
+        if not alive:
+            state = 0
+        return {"fill_metric": zc["fill_metric"], "tex": round(z.tex, 3) if z else 0.0, "lum": round(z.lum, 2) if z else 0.0,
+                "fill": fill, "state": state}
+
     def compute_writes(self, state: dict) -> list:
         """Состояние → записи в ПЛК: [(kind, address, value)], kind: holding | coil. Порядок стабильный."""
         out = []
         zb = {z["id"]: z["bit"] for z in state["zones"]}
+        zs = {z["id"]: z.get("state") for z in state["zones"]}
         for zc in self.cfg["zones"]:
             o = zc["out"]
             if o and zc["enabled"]:
-                out.append((o["kind"], o["address"], int(zb.get(zc["id"], 0))))
+                val = zs.get(zc["id"]) if o.get("value") == "state" else None    # состояния нет (пороги не заданы) — пишем бит движения
+                out.append((o["kind"], o["address"], int(zb.get(zc["id"], 0) if val is None else val)))
         gv = {g["id"]: g for g in state["groups"]}
         for gc in self.cfg["groups"]:
             o = gc["out"]

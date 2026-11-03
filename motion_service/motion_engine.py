@@ -257,10 +257,17 @@ def _norm_scenario(sc: dict, cams: list) -> dict:
     if signal not in SCENARIO_SIGNALS:
         raise ValueError("%s: сигнал %r не из %s" % (where, signal, "/".join(SCENARIO_SIGNALS)))
     zones = {c["id"]: {z["id"] for z in c["zones"]} for c in cams}
+    groups = {c["id"]: {g["id"] for g in c["groups"] if g["type"] != "mirror"} for c in cams}
     srcs = []
-    for s in sc.get("sources") or []:     # источники удалённых камер/зон тихо отбрасываем: сценарий не должен ломать весь конфиг
-        cam, zone = str(s.get("camera", "")), str(s.get("zone", ""))
-        if zone in zones.get(cam, ()) and not any(x["camera"] == cam and x["zone"] == zone for x in srcs):
+    for s in sc.get("sources") or []:     # источники удалённых камер/зон/групп тихо отбрасываем: сценарий не должен ломать весь конфиг
+        cam = str(s.get("camera", ""))
+        if s.get("group") is not None:    # источник — группа камеры («вычисление»): берётся её значение (сумма, уровень, % наработки)
+            grp = str(s.get("group"))
+            if grp in groups.get(cam, ()) and not any(x["camera"] == cam and x.get("group") == grp for x in srcs):
+                srcs.append({"camera": cam, "group": grp})
+            continue
+        zone = str(s.get("zone", ""))
+        if zone in zones.get(cam, ()) and not any(x["camera"] == cam and x.get("zone") == zone for x in srcs):
             srcs.append({"camera": cam, "zone": zone})
     mb = sc.get("modbus")
     return {"id": sid, "name": str(sc.get("name") or sid), "rule": rule, "signal": signal, "sources": srcs,

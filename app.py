@@ -26,6 +26,7 @@ import save_settings
 import net_tools
 import updater
 import auto_update
+import release_push
 from microscope_service import micro
 import cv_client
 import video_client
@@ -74,6 +75,7 @@ async def lifespan(app: FastAPI):
     # а без микроскопа — ночью (auto_update.night_window)
     try:
         auto_update.start(window_fn=micro.restart_window, micro_fn=micro.active)
+        release_push.start()                           # приёмник мониторинга сообщает о новом релизе — проверяем GitHub сразу, не через 30 мин
     except Exception as e:
         api_log("app", "Автообновление не запустилось: %s" % e, "error")
     # сайдкары (cv_service, video_service), если установлены рядом: поднимаем фоном сразу — CV-модель грузится долго
@@ -97,6 +99,7 @@ async def lifespan(app: FastAPI):
     # журнал событий камер (связь, серые кадры, КЗ, зоны) пишется в фоне — без открытой страницы
     monitor.start()
     yield
+    release_push.stop()
     auto_update.stop()
     monitor.stop()
     micro.stop()

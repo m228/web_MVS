@@ -1,6 +1,7 @@
 """monitor_release — какая версия web_MVS последняя на GitHub: чтобы панель и бот сообщали «завод на старой версии».
 
-Раз в час спрашиваем у GitHub последний релиз. Нет связи или GitHub не ответил — прошлое значение остаётся, а если его не было, метки нет
+Раз в REFRESH_S (3 минуты) спрашиваем у GitHub последний релиз: один запрос от приёмника вместо запросов от каждого клиента, а клиенты
+узнают о новой версии через GET /wait (monitor_app) за секунды и сами качают её с GitHub. Лимит GitHub без ключа — 60 запросов в час, 20 в час нам хватает. Нет связи или GitHub не ответил — прошлое значение остаётся, а если его не было, метки нет
 (версию не додумываем). Адрес можно заменить переменной MONITOR_RELEASE_URL; пустое значение отключает проверку.
 """
 from __future__ import annotations
@@ -17,7 +18,7 @@ from typing import Callable, Optional
 log = logging.getLogger("monitor.release")
 
 LATEST_URL = "https://api.github.com/repos/m228/web_MVS/releases/latest"
-REFRESH_S = 3600
+REFRESH_S = 180
 RETRY_S = 600
 HTTP_TIMEOUT_S = 10
 _VER = re.compile(r"^v?(\d+)\.(\d+)\.(\d+)$")

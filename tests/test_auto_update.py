@@ -256,6 +256,19 @@ def test_config_bounds(monkeypatch):
     assert auto_update.load_config() == auto_update.DEFAULT_CFG
 
 
+def test_check_now_pulls_next_check_forward_but_not_back(env):
+    env.first_check()
+    assert env.checks == 1
+    env.ag.check_now(20)                               # приёмник сообщил о релизе: проверка через ≤20 с вместо 30 минут
+    env.tick(10)
+    assert env.checks == 1
+    env.tick(15)
+    assert env.checks == 2
+    env.ag.check_now(1000)                             # дальнюю метку не отодвигаем
+    env.tick(60)
+    assert env.checks == 2
+
+
 # ---------- клиенты без микроскопа: ночное окно ----------
 
 def _at(h, m=0):

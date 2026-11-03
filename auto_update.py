@@ -340,6 +340,11 @@ class AutoUpdater:
                      {"from": h["from"], "to": h["to"], "ok": res["ok"], "bad": res["bad"]})
 
     # ---- снаружи
+    def check_now(self, delay_s: float = 0.0) -> None:
+        """Приёмник сообщил о новой версии (release_push): проверить GitHub не через interval_min, а через delay_s секунд
+        (разброс, чтобы все клиенты не пошли качать в одну секунду). Позднюю проверку не отодвигаем."""
+        self._next_check = min(self._next_check, self._clock() + max(0.0, delay_s))
+
     def cancel(self) -> dict:
         """«Отмена» на плашке: перезапуск гасится до следующего захода в окно (пропарка следующей варки)."""
         if self._restart_at is not None:

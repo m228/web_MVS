@@ -10,6 +10,8 @@
   DELETE /api/plants/{id}       — удалить завод вместе с журналом.
   GET  /api/telegram            — состояние уведомлений в Telegram (без токена и chat id); POST /api/telegram/test — тестовое сообщение.
   GET  /health                  — жив ли (без пароля, без данных).
+  GET  /wait?known=<версия>     — «толчок» о релизе: клиент (Bearer-токен) держит запрос; ответ сразу, если последняя версия на GitHub не равна known,
+                                  иначе через WAIT_S секунд {"latest", "changed": false}. Клиент сам скачивает релиз с GitHub.
   GET  /manifest.webmanifest, /icon-192.png, /icon-512.png, /favicon.ico — иконка и описание приложения (без пароля, секретов нет):
                                   по ним браузер ставит панель отдельным окном («Установить как приложение»).
 
@@ -19,6 +21,7 @@
 """
 from __future__ import annotations
 
+import asyncio
 import base64
 import hmac
 import json
@@ -37,6 +40,7 @@ import monitor_store
 log = logging.getLogger("monitor")
 
 INGEST_MAX_BYTES = 1_000_000
+WAIT_S = 25                      # /wait держит запрос столько, потом отвечает «без изменений»; клиент тут же спрашивает снова
 AUTH_FAILS_MAX = 8
 AUTH_FAILS_WINDOW_S = 300
 WATCH_EVERY_S = 30
@@ -159,6 +163,21 @@ def create_app(store: monitor_store.Store, password: str, version: str, panel_ht
     @app.get("/health")
     def health():
         return {"ok": True, "service": "monitor", "version": version}
+
+    @app.get("/wait")
+    async def wait(request: Request, known: str = ""):
+        """Длинный запрос «не вышла ли новая версия?»: ответ приходит, как только приёмник увидел на GitHub версию, отличную от known."""
+        auth = request.headers.get("authorization", "")
+        if (store.plant_by_token(auth[7:].strip()) if auth.lower().startswith("bearer ") else None) is None:
+            return JSONResponse({"ok": False, "error": "токен не принят"}, status_code=401)
+        end = time.monotonic() + WAIT_S
+        while True:
+            latest = releases.latest if releases is not None else None
+            if latest and latest != known[:20]:
+                return {"ok": True, "latest": latest, "changed": True}
+            if time.monotonic() >= end or await request.is_disconnected():
+                return {"ok": True, "latest": latest, "changed": False}
+            await asyncio.sleep(1)
 
     @app.post("/ingest")
     async def ingest(request: Request):

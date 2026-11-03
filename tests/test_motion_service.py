@@ -1117,3 +1117,22 @@ def test_scenario_signal_default_move_and_validation():
     assert [s["signal"] for s in cfg["scenarios"]] == ["move", "pulp"]
     with pytest.raises(ValueError, match="сигнал"):
         me.normalize_config(_two_cams_cfg([{"id": "s1", "signal": "x"}]))
+
+
+def test_scenario_group_source_takes_group_value_and_sum_adds_values():
+    """Источник сценария — группа («вычисление»): её значение (наработка %, уровень) идёт в сценарий как есть, sum плюсует значения."""
+    import motion_scenarios as sc
+    st = {"a": {"result": {"alive": True, "zones": [{"id": "z1", "bit": 1}], "groups": [{"id": "g1", "value": 78}]}},
+          "b": {"result": {"alive": False, "zones": [], "groups": [{"id": "g1", "value": 5}]}}}
+    one = sc.source_bits([{"camera": "a", "group": "g1"}], st)
+    assert one == [78] and sc.evaluate("sum", one) == 78 and sc.evaluate("or", one) == 1
+    mixed = sc.source_bits([{"camera": "a", "group": "g1"}, {"camera": "a", "zone": "z1"}, {"camera": "b", "group": "g1"}, {"camera": "a", "group": "нет"}], st)
+    assert mixed == [78, 1, 0, 0] and sc.evaluate("sum", mixed) == 79 and sc.evaluate("and", mixed) == 0
+
+
+def test_scenario_normalize_keeps_group_sources_and_drops_missing_or_mirror():
+    cfg = me.normalize_config({"cameras": [{"id": "a", "zones": [{"id": "z1", "points": LEFT}, {"id": "z2", "points": RIGHT}],
+                                            "groups": [{"id": "g1", "type": "sum", "zones": ["z1", "z2"]}]}],
+                               "scenarios": [{"id": "s1", "rule": "sum", "sources": [{"camera": "a", "group": "g1"}, {"camera": "a", "group": "g1"},
+                                                                                       {"camera": "a", "group": "g9"}, {"camera": "a", "zone": "z1"}]}]})
+    assert cfg["scenarios"][0]["sources"] == [{"camera": "a", "group": "g1"}, {"camera": "a", "zone": "z1"}]

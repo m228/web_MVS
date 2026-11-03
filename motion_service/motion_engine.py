@@ -29,9 +29,13 @@ FB = dict(pyr_scale=0.5, levels=3, winsize=15, iterations=3, poly_n=5, poly_sigm
 MIN_FLOW_SIDE = 16       # зона меньше этого (px) для Farneback не годится — поток = 0
 ID_RE = re.compile(r"^[A-Za-z0-9_\-]{1,40}$")
 
-ZONE_TYPES = ("motion", "presence")
+ZONE_TYPES = ("motion", "presence", "cycle")
 METRICS = ("flow", "diff")
-GROUP_TYPES = ("sum", "monotonic", "worktimer")
+GROUP_TYPES = ("sum", "monotonic", "worktimer", "mirror")
+MIRROR_MODES = ("mirror", "same")
+CYCLE_WORK_R = 170       # радиус (px), до которого сжимается область вокруг оси палки перед поиском: быстро и не зависит от разрешения камеры
+CYCLE_RED_HSV = (12, 163, 70, 80)     # красный: H ≤ h_max или H ≥ h_min (круг оттенков), S ≥ s_min, V ≥ v_min
+CYCLE_BLUE_HSV = (82, 135, 55, 60)    # синий/голубой: h_lo ≤ H ≤ h_hi, S ≥ s_min, V ≥ v_min (голубая половина тоже сюда)
 HW_ACCEL_MODES = ("off", "auto", "d3d11")    # аппаратное декодирование видео: выкл / любое доступное / Direct3D 11 (видеоядро Intel, AMD, NVIDIA)
 ZONE_OUT_KINDS = ("holding", "coil")
 ZONE_OUT_VALUES = ("bit", "state")     # что зона пишет в ПЛК: бит «движется» или состояние окна 0 пусто / 1 жом стоит / 2 движется
@@ -104,6 +108,8 @@ def _norm_zone(z: dict, cam_id: str) -> dict:
     ztype = z.get("type", "motion")
     if ztype not in ZONE_TYPES:
         raise ValueError("%s: тип %r не из %s" % (where, ztype, list(ZONE_TYPES)))
+    if ztype == "cycle":
+        return _norm_cycle(z, zid, where)
     metric = z.get("metric", "flow")
     if metric not in METRICS:
         raise ValueError("%s: метрика %r не из %s" % (where, metric, list(METRICS)))
@@ -140,7 +146,52 @@ def _norm_zone(z: dict, cam_id: str) -> dict:
     }
 
 
-def _norm_group(g: dict, cam_id: str, zone_ids: list) -> dict:
+def _hsv4(v, default, name, hue_pair_ok):
+    """[h1, h2, s_min, v_min] — оттенок 0..179 (шкала OpenCV), насыщенность и яркость 0..255."""
+    v = list(v) if v else list(default)
+    if len(v) != 4:
+        raise ValueError("%s: нужно четыре числа [H1, H2, S, V]" % name)
+    h1, h2 = _num(v[0], name, 0, 179, True), _num(v[1], name, 0, 179, True)
+    s, val = _num(v[2], name, 0, 255, True), _num(v[3], name, 0, 255, True)
+    if not hue_pair_ok and h1 > h2:
+        raise ValueError("%s: первый оттенок больше второго" % name)
+    return [h1, h2, s, val]
+
+
+def _norm_cycle(z: dict, zid: str, where: str) -> dict:
+    """Зона-«цикл»: палка из красной и синей половин на оси; центр + радиус вместо полигона. Результат — угол красного конца
+    от вертикали по часовой (0..360). Полигона нет (points = []), метрик потока/разности нет."""
+    c = z.get("center")
+    if not c or len(c) != 2:
+        raise ValueError("%s: нужен центр оси [x, y]" % where)
+    center = [_num(c[0], where + ".center", 0), _num(c[1], where + ".center", 0)]
+    return {
+        "id": zid,
+        "name": str(z.get("name") or zid),
+        "enabled": bool(z.get("enabled", True)),
+        "type": "cycle",
+        "metric": "flow",
+        "points": [],
+        "on": 0.0, "off": 0.0, "invert": False, "track_flow": False,
+        "smooth": _num(z.get("smooth", 3), where + ".smooth", 1, 50, True),
+        "frames_to_on": 1, "frames_to_off": 1, "blur": 0, "flicker_comp": False,
+        "out": _out(z.get("out"), ZONE_OUT_KINDS, where + ".out"),
+        "center": center,
+        "radius": _num(z.get("radius", 330), where + ".radius", 20),
+        "r_min": _num(z.get("r_min", 0.1), where + ".r_min", 0.0, 0.8),
+        "red_hsv": _hsv4(z.get("red_hsv"), CYCLE_RED_HSV, where + ".red_hsv", True),
+        "blue_hsv": _hsv4(z.get("blue_hsv"), CYCLE_BLUE_HSV, where + ".blue_hsv", False),
+        "min_score": _num(z.get("min_score", 0.4), where + ".min_score", 0.01, 2),
+        "min_conf": _num(z.get("min_conf", 0.1), where + ".min_conf", 0, 1),
+        "jump_deg": _num(z.get("jump_deg", 25), where + ".jump_deg", 3, 180),
+        "hold_frames": _num(z.get("hold_frames", 3), where + ".hold_frames", 0, 1000, True),
+        "relock_frames": _num(z.get("relock_frames", 5), where + ".relock_frames", 1, 1000, True),
+        "rpm_window": _num(z.get("rpm_window", 20), where + ".rpm_window", 2, 300),
+        "rpm_out": _out(z.get("rpm_out"), ("holding",), where + ".rpm_out"),
+    }
+
+
+def _norm_group(g: dict, cam_id: str, zone_ids: list, cycle_ids=()) -> dict:
     gid = str(g.get("id") or "")
     if not ID_RE.match(gid):
         raise ValueError("камера %s: id группы %r — только латиница, цифры, _ и -" % (cam_id, gid))
@@ -161,6 +212,22 @@ def _norm_group(g: dict, cam_id: str, zone_ids: list) -> dict:
         "zones": zs,
         "out": _out(g.get("out"), GROUP_OUT_KINDS, where + ".out"),
     }
+    if gtype == "mirror":
+        if len(zs) != 2 or any(x not in cycle_ids for x in zs):
+            raise ValueError("%s: нужны ровно две зоны типа cycle" % where)
+        mode = g.get("mode", "mirror")
+        if mode not in MIRROR_MODES:
+            raise ValueError("%s: режим %r не из %s" % (where, mode, list(MIRROR_MODES)))
+        tbl = g.get("table")
+        if tbl:
+            if not isinstance(tbl, (list, tuple)) or len(tbl) != MIRROR_BINS:
+                raise ValueError("%s: таблица поправки — ровно %d чисел" % (where, MIRROR_BINS))
+            tbl = [_num(v, where + ".table", -90, 90) for v in tbl]
+        out.update(mode=mode, table=tbl or None,
+                   ref=_num(g.get("ref", 0), where + ".ref", -180, 180),
+                   tol=_num(g.get("tol", 10), where + ".tol", 0.5, 180),
+                   frames_to_on=_num(g.get("frames_to_on", 3), where + ".frames_to_on", 1, 1000, True),
+                   frames_to_off=_num(g.get("frames_to_off", 5), where + ".frames_to_off", 1, 1000, True))
     if gtype == "monotonic":
         order = [str(x) for x in (g.get("order") or zs)]
         if sorted(order) != sorted(zs):
@@ -205,7 +272,8 @@ def normalize_camera(c: dict) -> dict:
     ids = [z["id"] for z in zones]
     if len(set(ids)) != len(ids):
         raise ValueError("камера %s: id зон повторяются" % cid)
-    groups = [_norm_group(g, cid, ids) for g in (c.get("groups") or [])]
+    cycle_ids = [z["id"] for z in zones if z["type"] == "cycle"]
+    groups = [_norm_group(g, cid, ids, cycle_ids) for g in (c.get("groups") or [])]
     gids = [g["id"] for g in groups]
     if len(set(gids)) != len(gids):
         raise ValueError("камера %s: id групп повторяются" % cid)
@@ -373,6 +441,171 @@ class ZoneRT:
             self.fill = self.fill_hys.update({"tex": self.tex, "lum": self.lum, "rel": self.rel}[self.fill_metric])
 
 
+MIRROR_BINS = 36         # таблица поправки зеркальности: 36 ячеек по 10° по углу первой палки
+
+
+def mirror_corr(table, theta: float) -> float:
+    """Поправка (°) для угла первой палки theta: линейная интерполяция по кругу между ячейками таблицы (центры 0, 10, … 350°). Нет таблицы — 0."""
+    if not table:
+        return 0.0
+    x = (theta % 360.0) / (360.0 / MIRROR_BINS)
+    i = int(x) % MIRROR_BINS
+    f = x - int(x)
+    return float(table[i] + (table[(i + 1) % MIRROR_BINS] - table[i]) * f)
+
+
+def build_mirror_table(samples, min_bins: int = 28, min_n: int = 60):
+    """samples [(θ1, сумма углов θ1±θ2)] по кадрам при ровных валах → (таблица из 36 чисел, сведения).
+    Сумма углов приводится к −180..180 (норма ≈ 0); в каждой ячейке медиана, пустые заполняются по кругу линейно. Мало точек, не весь круг
+    пройден или разброс слишком велик (валы, похоже, не синхронны) — ValueError с понятным текстом: плохая таблица запомнит чужой перекос как норму."""
+    pts = [(float(a) % 360.0, ang_diff(float(r), 0.0)) for a, r in samples]
+    if len(pts) < min_n:
+        raise ValueError("мало данных: %d кадров, нужно не меньше %d. Дайте валам сделать полный оборот" % (len(pts), min_n))
+    bins: list = [[] for _ in range(MIRROR_BINS)]
+    for a, r in pts:
+        bins[int(round(a / (360.0 / MIRROR_BINS))) % MIRROR_BINS].append(r)
+    have = [i for i, b in enumerate(bins) if b]
+    if len(have) < min_bins:
+        raise ValueError("палка прошла не весь круг: заполнено %d ячеек из %d, нужно не меньше %d. Дождитесь полного оборота" % (len(have), MIRROR_BINS, min_bins))
+    xs = np.array(have, dtype=float)
+    ys = np.array([float(np.median(bins[i])) for i in have])
+    table = np.interp(np.arange(MIRROR_BINS), xs, ys, period=MIRROR_BINS)
+    spread = float(np.ptp(table))
+    if spread > 60.0:
+        raise ValueError("разброс %.0f° слишком велик — валы, похоже, не синхронны; таблицу в таком состоянии снимать нельзя" % spread)
+    return [round(float(v), 1) for v in table], {"n": len(pts), "bins": len(have), "spread": round(spread, 1)}
+
+
+PHIS = np.arange(0, 360, 1.0)
+_PHI_SIN, _PHI_COS = np.sin(np.radians(PHIS))[:, None], np.cos(np.radians(PHIS))[:, None]
+_K3 = np.ones((3, 3), np.uint8)
+
+
+def circ_mean(deg) -> float:
+    """Среднее углов в градусах по кругу (359 и 1 → 0, а не 180)."""
+    r = np.radians(np.asarray(deg, dtype=np.float64))
+    return float(np.degrees(np.arctan2(np.sin(r).mean(), np.cos(r).mean())) % 360.0)
+
+
+def ang_diff(a: float, b: float) -> float:
+    """a − b, приведённое к −180..180."""
+    return (a - b + 180.0) % 360.0 - 180.0
+
+
+class CycleRT:
+    """Палка на оси: красная половина в одну сторону, синяя в противоположную. Угол красного конца — от вертикали по часовой, 0..360.
+
+    Ищем только по цвету вдоль лучей от центра оси (фон по медиане не годится: колёса за палкой тоже вращаются): для каждого угла φ
+    считаем долю «красных» точек на луче φ плюс долю «синих» на луче φ+180, берём лучший φ. Уверенность — насколько он лучше
+    самой сильной альтернативы дальше 20° от него. Найдя палку, дальше ищем рядом с прошлым углом (±jump_deg): одиночные ложные
+    пики не уводят угол; потеряли на relock_frames кадров подряд — снова ищем по всему кругу."""
+
+    def __init__(self, zcfg: dict, frame_size, cur_wh):
+        self.cfg = zcfg
+        self.id, self.name = zcfg["id"], zcfg["name"]
+        W, H = cur_wh
+        sx = W / float(frame_size[0]) if frame_size else 1.0
+        sy = H / float(frame_size[1]) if frame_size else 1.0
+        cx, cy = zcfg["center"][0] * sx, zcfg["center"][1] * sy
+        R = max(8.0, zcfg["radius"] * (sx + sy) / 2.0)
+        self.x0, self.y0 = max(0, int(cx - R)), max(0, int(cy - R))
+        self.x1, self.y1 = min(W, int(cx + R) + 1), min(H, int(cy + R) + 1)
+        self.k = min(1.0, CYCLE_WORK_R / R)                          # сжатие рабочей области
+        self.ox, self.oy = (cx - self.x0) * self.k, (cy - self.y0) * self.k
+        r1 = R * self.k
+        self.rs = np.arange(max(3.0, r1 * zcfg["r_min"]), r1, 1.0)
+        self.xs = np.clip(np.rint(self.ox + self.rs[None, :] * _PHI_SIN).astype(int), 0, max(0, int((self.x1 - self.x0) * self.k) - 1))
+        self.ys = np.clip(np.rint(self.oy - self.rs[None, :] * _PHI_COS).astype(int), 0, max(0, int((self.y1 - self.y0) * self.k) - 1))
+        self.raw: deque = deque(maxlen=zcfg["smooth"])
+        self.trk: deque = deque()               # (время, «развёрнутый» угол без скачков через 360°) за последние rpm_window секунд — для оборотов
+        self.reset()
+
+    def reset(self):
+        self.raw.clear()
+        self.trk.clear()
+        self.unw: Optional[float] = None
+        self.last: Optional[float] = None       # последний принятый угол (до сглаживания) — вокруг него ищем дальше
+        self.miss = 0                           # сколько кадров подряд палку не нашли
+        self.angle = 0.0
+        self.conf = 0.0
+        self.score = 0.0
+        self.rpm = 0.0                          # обороты, об/мин: «+» по часовой стрелке, «−» против; 0 — стоит или пока мало данных
+        self.valid = False
+
+    def _track(self, now: float):
+        """Угол принят: наращиваем непрерывный угол и пересчитываем обороты наклоном прямой по точкам последних rpm_window секунд.
+        Наклон по многим точкам, а не разность соседних кадров: шум угла в ±1° не превращается в ложные обороты."""
+        self.unw = self.angle if self.unw is None else self.unw + ang_diff(self.angle, self.unw % 360.0)
+        self.trk.append((now, self.unw))
+        win = self.cfg["rpm_window"]
+        while self.trk and now - self.trk[0][0] > win:
+            self.trk.popleft()
+        if len(self.trk) < 5 or self.trk[-1][0] - self.trk[0][0] < 0.4 * win:
+            self.rpm = 0.0
+            return
+        t = np.array([p[0] for p in self.trk])
+        a = np.array([p[1] for p in self.trk])
+        self.rpm = float(np.polyfit(t - t[0], a, 1)[0]) / 6.0              # град/с → об/мин
+
+    def _lost(self):
+        self.trk.clear()
+        self.unw = None
+        self.rpm = 0.0
+
+    def _liks(self, bgr: np.ndarray):
+        hsv = cv2.cvtColor(bgr, cv2.COLOR_BGR2HSV)
+        h, s, v = [c.astype(np.int32) for c in cv2.split(hsv)]
+        hm, hn, rs_, rv = self.cfg["red_hsv"]
+        red = (((h <= hm) | (h >= hn)) & (s >= rs_) & (v >= rv)).astype(np.float32)
+        b1, b2, bs, bv = self.cfg["blue_hsv"]
+        blue = ((h >= b1) & (h <= b2) & (s >= bs) & (v >= bv)).astype(np.float32)
+        return cv2.dilate(red, _K3), cv2.dilate(blue, _K3)
+
+    def step(self, frame: Optional[np.ndarray], now: float = 0.0) -> bool:
+        """Новый цветной кадр (now — его время, с) → угол и обороты. True, если палка найдена на этом кадре."""
+        c = self.cfg
+        found = False
+        if frame is not None and frame.ndim == 3:
+            crop = frame[self.y0:self.y1, self.x0:self.x1]
+            if self.k < 1.0:
+                crop = cv2.resize(crop, None, fx=self.k, fy=self.k, interpolation=cv2.INTER_AREA)
+            red, blue = self._liks(crop)
+            sr, sb = red[self.ys, self.xs].mean(axis=1), blue[self.ys, self.xs].mean(axis=1)
+            comb = sr + np.roll(sb, -180)                                  # красный на φ, синий на φ+180
+            cand = comb
+            locked = self.last is not None and self.miss < c["relock_frames"]
+            if locked:
+                near = np.abs(((PHIS - self.last + 180.0) % 360.0) - 180.0) <= c["jump_deg"]
+                cand = np.where(near, comb, -1.0)
+            i = int(np.argmax(cand))
+            best = float(comb[i])
+            far = np.abs(((PHIS - PHIS[i] + 180.0) % 360.0) - 180.0) > 20.0
+            second = float(comb[far].max()) if far.any() else 0.0
+            conf = 1.0 - second / best if best > 1e-6 else 0.0
+            self.score, self.conf = best, max(0.0, conf)
+            if best >= c["min_score"] and (locked or conf >= c["min_conf"]):
+                idx = (i + np.arange(-4, 5)) % 360                          # уточнение до долей градуса: центр тяжести вокруг пика
+                w = np.clip(comb[idx] - 0.5 * best, 0.0, None)
+                r = np.radians(PHIS[idx])
+                ang = float(np.degrees(np.arctan2((w * np.sin(r)).sum(), (w * np.cos(r)).sum())) % 360.0) if w.sum() > 0 else float(PHIS[i])
+                self.last = ang
+                self.raw.append(ang)
+                self.angle = circ_mean(list(self.raw))
+                self.miss = 0
+                self.valid = True
+                found = True
+                self._track(now)
+        if not found:
+            self.miss += 1
+            if self.miss > c["hold_frames"]:
+                self.valid = False
+                self._lost()
+            if self.miss >= c["relock_frames"]:
+                self.raw.clear()
+                self._lost()                    # после перезахвата угол может оказаться где угодно — обороты считаем заново
+        return found
+
+
 def flow_metric(a: np.ndarray, b: np.ndarray, mask: np.ndarray, dt: float) -> float:
     """Средняя величина оптического потока в полигоне, приведённая к калибровочному dt."""
     if a.shape[0] < MIN_FLOW_SIDE or a.shape[1] < MIN_FLOW_SIDE:
@@ -493,6 +726,9 @@ class CameraEngine:
         self.zones: Optional[list[ZoneRT]] = None
         self.frame_wh: Optional[tuple] = None
         self.timers = {g["id"]: WorkTimer(g["window_s"], g["agg"]) for g in cam_cfg["groups"] if g["type"] == "worktimer"}
+        self.mirrors = {g["id"]: Hysteresis(g["tol"], g["tol"] * 0.7, False, g["frames_to_on"], g["frames_to_off"])
+                        for g in cam_cfg["groups"] if g["type"] == "mirror"}
+        self.cycles: dict = {}                  # id зоны-цикла → CycleRT (строятся вместе с зонами, на первом кадре)
         self.last_state: Optional[dict] = None
 
     def reset(self):
@@ -500,16 +736,24 @@ class CameraEngine:
         self.buf.clear()
         for z in self.zones or []:
             z.reset()
+        for c in self.cycles.values():
+            c.reset()
         for t in self.timers.values():
             t.reset()
+        for m in self.mirrors.values():
+            m.reset()
 
     def _build(self, gray):
         h, w = gray.shape[:2]
         self.frame_wh = (w, h)
-        self.zones = [ZoneRT(z, self.cfg["frame_size"], (w, h)) for z in self.cfg["zones"] if z["enabled"]]
+        self.zones = [ZoneRT(z, self.cfg["frame_size"], (w, h)) for z in self.cfg["zones"] if z["enabled"] and z["type"] != "cycle"]
+        self.cycles = {z["id"]: CycleRT(z, self.cfg["frame_size"], (w, h)) for z in self.cfg["zones"] if z["enabled"] and z["type"] == "cycle"}
+        for m in self.mirrors.values():
+            m.reset()
 
-    def process(self, gray: np.ndarray, now: float) -> Optional[dict]:
-        """Следующий (уже отобранный по proc_fps) серый кадр → состояние. None, пока копится буфер для FRAME_GAP."""
+    def process(self, gray: np.ndarray, now: float, frame: Optional[np.ndarray] = None) -> Optional[dict]:
+        """Следующий (уже отобранный по proc_fps) серый кадр → состояние. None, пока копится буфер для FRAME_GAP.
+        frame — тот же кадр в цвете: нужен зонам-циклам (цвет палки); без него (серый поток) они «палку не видят»."""
         if self.zones is None or self.frame_wh != (gray.shape[1], gray.shape[0]):
             self._build(gray)
             self.buf.clear()
@@ -519,6 +763,8 @@ class CameraEngine:
         prev = self.buf[0]
         dt = self.gap * self.proc_interval
         bits = {z.id: z.step(prev, gray, dt) for z in self.zones}
+        for c in self.cycles.values():
+            bits[c.id] = int(c.step(frame, now))
         self.last_state = self._state(bits, now, alive=True)
         return self.last_state
 
@@ -533,6 +779,9 @@ class CameraEngine:
         zs = {z.id: z for z in self.zones}
         zones = []
         for zc in self.cfg["zones"]:
+            if zc["type"] == "cycle":
+                zones.append(self._cycle_zone(zc, alive))
+                continue
             z = zs.get(zc["id"])
             zones.append({"id": zc["id"], "name": zc["name"], "type": zc["type"], "metric": zc["metric"],
                           "enabled": zc["enabled"], "bit": int(bits.get(zc["id"], 0)) if alive else 0,
@@ -542,6 +791,9 @@ class CameraEngine:
         groups = []
         for g in self.cfg["groups"]:
             gb = {zid: (bits.get(zid, 0) if alive else 0) for zid in g["zones"]}
+            if g["type"] == "mirror":
+                groups.append(self._mirror_group(g, alive))
+                continue
             if g["type"] == "monotonic":
                 gb, value = monotonic_level(gb, g["order"])
             elif g["type"] == "sum":
@@ -558,6 +810,40 @@ class CameraEngine:
         return {"ts": now, "alive": alive, "reason": reason, "frame_wh": list(self.frame_wh) if self.frame_wh else None,
                 "zones": zones, "groups": groups}
 
+    def _cycle_zone(self, zc: dict, alive: bool) -> dict:
+        """Зона-цикл → запись состояния. angle — градусы 0..360 красного конца от вертикали по часовой; bit — палка найдена.
+        flow = angle, diff = conf: так угол и уверенность попадают в истории, тренды и CSV, которые знают только flow/diff/bit."""
+        c = self.cycles.get(zc["id"])
+        ok = bool(alive and c and c.valid)
+        angle = round(c.angle, 2) if ok else 0.0
+        conf = round(c.conf, 3) if ok else 0.0
+        rpm = round(c.rpm, 3) if ok else 0.0
+        return {"id": zc["id"], "name": zc["name"], "type": "cycle", "metric": "flow", "enabled": zc["enabled"],
+                "bit": int(ok), "flow": angle, "diff": conf, "value": angle, "on": 0.0, "off": 0.0,
+                "angle": angle, "conf": conf, "rpm": rpm, "score": round(c.score, 3) if c else 0.0, "valid": ok}
+
+    def _mirror_group(self, g: dict, alive: bool) -> dict:
+        """Две палки → рассинхрон. mirror: углы зеркальны (θ1 + θ2 = 360 + ref), same: одинаковы (θ1 − θ2 = ref). delta — отклонение
+        в градусах −180..180; alarm — |delta| ≥ tol (гистерезис и debounce). Не видно хоть одной палки или камеры нет — delta не считается,
+        alarm = 0 (нечего судить), value = 0."""
+        ca, cb = (self.cycles.get(zid) for zid in g["zones"])
+        ok = bool(alive and ca and cb and ca.valid and cb.valid)
+        hys = self.mirrors[g["id"]]
+        delta = None
+        corr = 0.0
+        if ok:
+            raw = ca.angle + cb.angle if g["mode"] == "mirror" else ca.angle - cb.angle
+            corr = mirror_corr(g["table"], ca.angle)         # перекос от угла камеры/объектива в этом положении палки, снятый при калибровке
+            delta = round(ang_diff(raw, corr + g["ref"]), 2)
+            alarm = hys.update(abs(delta))
+        else:
+            hys.reset()
+            alarm = 0
+        return {"id": g["id"], "name": g["name"], "type": "mirror", "value": int(round(delta * 10)) if ok else 0,
+                "bits": [int(alarm)], "delta": delta, "valid": ok, "alarm": int(alarm), "tol": g["tol"], "ref": g["ref"], "mode": g["mode"],
+                "corr": round(corr, 2), "table": bool(g["table"]),
+                "angles": [round(ca.angle, 2) if ca and ca.valid else None, round(cb.angle, 2) if cb and cb.valid else None]}
+
     @staticmethod
     def _fill_state(zc: dict, z: Optional[ZoneRT], alive: bool, moving: bool) -> dict:
         """Поля вида окна для состояния зоны. state: 2 — движется, 1 — жом есть и стоит, 0 — пусто и стоит; None — решения нет."""
@@ -572,15 +858,25 @@ class CameraEngine:
                 "fill": fill, "state": state}
 
     def compute_writes(self, state: dict) -> list:
-        """Состояние → записи в ПЛК: [(kind, address, value)], kind: holding | coil. Порядок стабильный."""
+        """Состояние → записи в ПЛК: [(kind, address, value)], kind: holding | coil. Порядок стабильный.
+        Зона-цикл в holding пишет угол в 0,1° (0..3599), в coil — «палка найдена»; группа mirror в holding — рассинхрон в 0,1°
+        знаковым int16 (дополнительный код: −5,0° → 65486)."""
         out = []
         zb = {z["id"]: z["bit"] for z in state["zones"]}
+        za = {z["id"]: z for z in state["zones"]}
         zs = {z["id"]: z.get("state") for z in state["zones"]}
         for zc in self.cfg["zones"]:
             o = zc["out"]
             if o and zc["enabled"]:
-                val = zs.get(zc["id"]) if o.get("value") == "state" else None    # состояния нет (пороги не заданы) — пишем бит движения
-                out.append((o["kind"], o["address"], int(zb.get(zc["id"], 0) if val is None else val)))
+                if zc["type"] == "cycle" and o["kind"] == "holding":
+                    val = int(round(za[zc["id"]]["angle"] * 10)) % 3600 if za[zc["id"]]["valid"] else 0
+                else:
+                    sv = zs.get(zc["id"]) if o.get("value") == "state" else None    # состояния нет (пороги не заданы) — пишем бит движения
+                    val = int(zb.get(zc["id"], 0) if sv is None else sv)
+                out.append((o["kind"], o["address"], val))
+            ro = zc.get("rpm_out")
+            if ro and zc["enabled"] and zc["type"] == "cycle":      # обороты в 0,01 об/мин знаковым int16 (против часовой — дополнительный код)
+                out.append(("holding", ro["address"], int(round(za[zc["id"]]["rpm"] * 100)) & 0xFFFF))
         gv = {g["id"]: g for g in state["groups"]}
         for gc in self.cfg["groups"]:
             o = gc["out"]
@@ -588,7 +884,7 @@ class CameraEngine:
                 continue
             g = gv[gc["id"]]
             if o["kind"] == "holding":
-                out.append(("holding", o["address"], int(g["value"])))
+                out.append(("holding", o["address"], int(g["value"]) & 0xFFFF if g["type"] == "mirror" else int(g["value"])))
             elif o["kind"] == "bits":
                 packed = 0
                 for i, b in enumerate(g["bits"][:16]):

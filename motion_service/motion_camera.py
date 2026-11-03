@@ -244,6 +244,19 @@ class CameraWorker(threading.Thread):
         ok, buf = cv2.imencode(".jpg", f, [cv2.IMWRITE_JPEG_QUALITY, 80])
         return (buf.tobytes(), (w, h)) if ok else None
 
+    def mirror_samples(self, zone_ids: list, mode: str = "mirror") -> list:
+        """[(θ1, θ1±θ2)] по кадрам в норме, где найдены обе палки — из покадровой истории (последние ~5 мин). Для таблицы поправки зеркальности.
+        Берём именно покадровую историю, а не секундную: там берётся максимум за секунду, а он у вращающихся навстречу палок смещён."""
+        a, b = zone_ids
+        with self._lock:
+            rows = list(self._history)
+        out = []
+        for _ts, zones, ok in rows:
+            za, zb = zones.get(a), zones.get(b)
+            if ok and za and zb and za[2] and zb[2]:
+                out.append((za[0], za[0] + zb[0] if mode == "mirror" else za[0] - zb[0]))
+        return out
+
     def history(self, n: int = 300, window_s: float = 0, points: int = 600) -> dict:
         """Ряды для графиков. n — последние n кадров (калибровка); window_s > 0 — последние window_s секунд
         из длинной истории (до 2 ч), ужатые до ~points точек (максимум в корзине), правый край — «сейчас»."""
@@ -617,7 +630,7 @@ class CameraWorker(threading.Thread):
             if frozen:                         # камера ожила — состояния с нуля
                 frozen = False
                 self.engine.reset()
-            st = self.engine.process(gray, now)
+            st = self.engine.process(gray, now, frame)
             if st is not None:
                 self._publish(st, frame, True)
             else:

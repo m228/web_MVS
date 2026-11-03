@@ -139,6 +139,7 @@
             <div class="motion-dock__tools">
               <span class="motion-dock__save" id="mdSave"></span>
               <button type="button" class="btn-primary" id="mdMark">Разметить зону</button>
+              <button type="button" class="btn-secondary" id="mdMarkRods" title="Два вала диффузии с палками: углы красного конца и рассинхрон от зеркальности">Разметить валы</button>
               <button type="button" class="btn-secondary md-icon" id="mdRec" title="Писать метрики каждого кадра в CSV (для калибровки порогов)">●</button>
               <button type="button" class="btn-secondary md-icon md-wide" id="mdRecAll" hidden title="Писать метрики всех камер с КЗ в CSV сразу (по файлу на камеру) — чтобы потом разобрать, когда и какая камера пропадала">● все</button>
               <button type="button" class="btn-secondary md-icon md-wide" id="mdRecZip" hidden title="Скачать все записи одним архивом: CSV по камерам + summary.txt (сводка: когда и на сколько камеры пропадали)">⤓ архив</button>
@@ -444,7 +445,7 @@
     <div class="network-modal__card motion-mark__card" role="dialog" aria-modal="true">
       <div class="network-modal__header">
         <div class="network-modal__title-group">
-          <h2>Разметка зоны</h2>
+          <h2 id="mmTitle">Разметка зоны</h2>
           <span class="network-modal__serial">Камера: <strong id="mmCam">—</strong></span>
         </div>
         <button type="button" class="modal-close-btn" id="mmX" aria-label="Закрыть">×</button>

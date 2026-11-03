@@ -334,6 +334,20 @@ def create_app(data_dir: Optional[Path] = None, capture_factory: Callable = open
         # среднее / мин / макс flow и diff по каждой зоне за последние window секунд (до суток), только по кадрам в норме
         return mgr.worker(cid).stats(window)
 
+    @app.post("/cameras/{cid}/mirror_table")
+    def mirror_table(cid: str, req: dict = Body(...)):
+        """Таблица поправки зеркальности группы mirror по последним ~5 минутам, пока валы заведомо ровные: перекос от угла камеры и объектива
+        в каждом положении палки. Конфиг не меняет — сохраняет интерфейс (поле group.table)."""
+        cam = next((c for c in mgr.cfg["cameras"] if c["id"] == cid), None)
+        g = next((x for x in (cam or {}).get("groups", []) if x["id"] == str(req.get("group")) and x["type"] == "mirror"), None)
+        if g is None:
+            raise HTTPException(404, "нет такой группы синхронности валов")
+        try:
+            table, info = engine.build_mirror_table(mgr.worker(cid).mirror_samples(g["zones"], g["mode"]))
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+        return dict(info, table=table)
+
     @app.post("/cameras/{cid}/record")
     def record(cid: str, req: dict = Body(...)):
         return {"recording": mgr.record_camera(cid, bool(req.get("on")))}

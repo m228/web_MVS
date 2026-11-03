@@ -35,8 +35,10 @@ GROUP_TYPES = ("sum", "monotonic", "worktimer")
 HW_ACCEL_MODES = ("off", "auto", "d3d11")    # аппаратное декодирование видео: выкл / любое доступное / Direct3D 11 (видеоядро Intel, AMD, NVIDIA)
 ZONE_OUT_KINDS = ("holding", "coil")
 ZONE_OUT_VALUES = ("bit", "state")     # что зона пишет в ПЛК: бит «движется» или состояние окна 0 пусто / 1 жом стоит / 2 движется
-FILL_METRICS = ("off", "tex", "lum")   # признак «вид окна» (есть ли жом): выкл / зернистость (резкость мелких деталей) / средняя яркость
+FILL_METRICS = ("off", "tex", "lum", "rel")   # признак «вид окна» (есть ли жом): выкл / зернистость / яркость / яркость относительно металла вокруг окна
 FILL_TEX_BLUR = 5                      # ядро размытия для зернистости: tex = средняя |кадр − размытый кадр| в зоне
+FILL_RING_MARGIN = 1.0                 # «металл вокруг окна» для rel: полоса шириной в высоту окна вокруг него, без самого окна и его рамки
+FILL_RING_GAP = 0.25                   # рамка окна (доля высоты), которая в металл не входит
 GROUP_OUT_KINDS = ("holding", "bits", "coils")
 AGGS = ("any", "majority", "all")
 
@@ -305,8 +307,22 @@ class ZoneRT:
         # решает «жом есть» только при заданных порогах (fill_on > 0), иначе признак лишь измеряется
         self.fill_hys = (Hysteresis(zcfg["fill_on"], zcfg["fill_off"], zcfg["fill_invert"], zcfg["fill_frames"], zcfg["fill_frames"])
                          if self.fill_metric != "off" and zcfg["fill_on"] > 0 else None)
-        self.tex = self.lum = 0.0           # сглаженные зернистость и яркость зоны (считаются, пока признак вида окна включён)
+        self.tex = self.lum = self.rel = 0.0    # сглаженные зернистость, яркость и яркость относительно металла (считаются, пока признак вида окна включён)
+        self.ring = self._build_ring(pts, W, H) if self.fill_metric == "rel" else None
         self.fill: Optional[int] = None     # 1 — жом есть, 0 — нет, None — решения нет (признак выключен или пороги не заданы)
+
+    def _build_ring(self, pts, W, H):
+        """Металл вокруг окна: (x0, y0, x1, y1, маска) — полоса вокруг bbox без самого окна и его рамки. Яркость окна делим на медиану
+        этой полосы: свет, солнце и автоэкспозиция меняют обе одинаково, а «жом / пусто» — только окно."""
+        x, y, w, h = self.bbox
+        m = max(8, int(round(h * FILL_RING_MARGIN)))
+        x0, y0, x1, y1 = max(0, x - m), max(0, y - m), min(W, x + w + m), min(H, y + h + m)
+        hole = np.zeros((y1 - y0, x1 - x0), np.uint8)
+        cv2.fillPoly(hole, [pts - [x0, y0]], 255)
+        g = max(3, int(round(h * FILL_RING_GAP))) * 2 + 1
+        hole = cv2.dilate(hole, np.ones((g, g), np.uint8))
+        ring = hole == 0
+        return (x0, y0, x1, y1, ring) if ring.sum() >= 50 else None
 
     def reset(self):
         self.hist_flow.clear()
@@ -316,7 +332,7 @@ class ZoneRT:
         if self.fill_hys:
             self.fill_hys.reset()
         self.flow = self.diff = self.value = 0.0
-        self.tex = self.lum = 0.0
+        self.tex = self.lum = self.rel = 0.0
         self.fill = None
 
     def step(self, prev: np.ndarray, cur: np.ndarray, dt: float) -> int:
@@ -334,20 +350,27 @@ class ZoneRT:
         self.diff = sum(self.hist_diff) / len(self.hist_diff)
         self.value = self.flow if self.cfg["metric"] == "flow" else self.diff
         if self.fill_metric != "off":
-            self._fill_step(b)
+            self._fill_step(b, cur)
         return self.hys.update(self.value)
 
-    def _fill_step(self, cur: np.ndarray):
-        """Вид окна: зернистость (жом — крупа, пустое окно — гладкая стенка) и яркость, сглаженные за fill_smooth кадров."""
+    def _fill_step(self, cur: np.ndarray, frame: np.ndarray):
+        """Вид окна: зернистость, яркость и яркость относительно металла вокруг (rel), сглаженные за fill_smooth кадров.
+        Жом в окне светлый волокнистый, пустое окно тёмное зернистое: rel у жома выше (~0,9 против ~0,65)."""
         m = self.mask
         k = FILL_TEX_BLUR if FILL_TEX_BLUR % 2 else FILL_TEX_BLUR + 1
         tex = float(np.abs(cur.astype(np.float32) - cv2.GaussianBlur(cur, (k, k), 0).astype(np.float32))[m].mean())
-        self.hist_fill.append((tex, float(cur[m].mean())))
+        lum = float(cur[m].mean())
+        rel = 0.0
+        if self.ring is not None:
+            x0, y0, x1, y1, rm = self.ring
+            rel = lum / max(1.0, float(np.median(frame[y0:y1, x0:x1][rm])))
+        self.hist_fill.append((tex, lum, rel))
         n = len(self.hist_fill)
-        self.tex = sum(t for t, _ in self.hist_fill) / n
-        self.lum = sum(v for _, v in self.hist_fill) / n
+        self.tex = sum(v[0] for v in self.hist_fill) / n
+        self.lum = sum(v[1] for v in self.hist_fill) / n
+        self.rel = sum(v[2] for v in self.hist_fill) / n
         if self.fill_hys:
-            self.fill = self.fill_hys.update(self.tex if self.fill_metric == "tex" else self.lum)
+            self.fill = self.fill_hys.update({"tex": self.tex, "lum": self.lum, "rel": self.rel}[self.fill_metric])
 
 
 def flow_metric(a: np.ndarray, b: np.ndarray, mask: np.ndarray, dt: float) -> float:
@@ -545,6 +568,7 @@ class CameraEngine:
         if not alive:
             state = 0
         return {"fill_metric": zc["fill_metric"], "tex": round(z.tex, 3) if z else 0.0, "lum": round(z.lum, 2) if z else 0.0,
+                "rel": round(z.rel, 3) if z else 0.0,
                 "fill": fill, "state": state}
 
     def compute_writes(self, state: dict) -> list:

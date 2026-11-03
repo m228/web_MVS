@@ -17,7 +17,6 @@ import io
 import json
 import logging
 import sqlite3
-import math
 import os
 import threading
 import time
@@ -32,7 +31,6 @@ SCALE = 10000                          # значения хранятся це�
 _LIM = 1e11                            # защита: «бесконечные» заглушки (min = 1e30) не должны переполнить 64-битное целое
 MAX_BUF = 300_000                      # строк в памяти при сбое диска: дальше отбрасываем самое старое, а не растём без предела
 PURGE_CHUNK_S = 3600                   # уборка режется на куски по часу: замок хранилища на время куска, камеры не встают
-LEGACY_AGE_S = 2 * 86400               # старые CSV-тренды переносим за последние двое суток (график 2 ч + статистика суток)
 
 _REG: dict = {}
 _REG_LOCK = threading.Lock()
@@ -71,10 +69,6 @@ def store_for(base) -> "MotionStore":
                         pass
                 s = MotionStore(path)
             _REG[key] = s
-            try:
-                s.import_legacy_trends(Path(base))
-            except Exception as e:  # noqa: BLE001 — перенос старых CSV не должен мешать запуску
-                log.warning("старые CSV-тренды не перенесены: %s", e)
         return s
 
 
@@ -418,71 +412,3 @@ class MotionStore:
             return self.path.stat().st_size
         except OSError:
             return 0
-
-    # ───────────── перенос старых CSV-трендов ─────────────
-    def import_legacy_trends(self, base: Path, now: Optional[float] = None) -> int:
-        """Однократно: data\\trends\\*.csv за последние двое суток → trend / stat, чтобы графики и «среднее / мин / макс» не обнулились
-        после обновления. Файлы остаются и убираются по возрасту. Битый файл (хвост из нулей после отключения питания, обрезанный
-        UTF-8) пропускается целиком или с этого места. -> сколько строк перенесено."""
-        d = Path(base) / "trends"
-        if not d.is_dir():
-            return 0
-        now = now or time.time()
-        total = 0
-        for p in sorted(d.glob("*.csv")):
-            try:
-                if now - p.stat().st_mtime > LEGACY_AGE_S:
-                    continue
-                with self._lock:
-                    if self._c.execute("SELECT 1 FROM meta WHERE key=?", ("imp:" + p.name,)).fetchone():
-                        continue
-                is_stat = p.stem.endswith("_stats")
-                cam = (p.stem[:-6] if is_stat else p.stem).rsplit("_", 1)[0]
-                n = 0
-                batch: list = []
-
-                def put():
-                    with self._lock:
-                        c = self._id(cam)
-                        if is_stat:
-                            self._c.executemany("INSERT OR IGNORE INTO stat VALUES (?,?,?,?,?,?,?,?,?,?)", [(c,) + r for r in batch])
-                        else:
-                            self._c.executemany("INSERT OR IGNORE INTO trend VALUES (?,?,?,?,?,?,?)", [(c,) + r for r in batch])
-                        self._c.commit()
-                    batch.clear()
-
-                try:
-                    with open(p, newline="", encoding="utf-8-sig", errors="replace") as fh:
-                        rd = csv.reader((line.replace("\0", "") for line in fh), delimiter=";")
-                        next(rd, None)
-                        for r in rd:
-                            try:
-                                with self._lock:
-                                    zid = self._id(r[2])
-                                if is_stat:
-                                    batch.append((int(r[1]), zid, int(r[3])) + tuple(_q(x) for x in r[4:10]))
-                                else:
-                                    batch.append((int(round(float(r[1]) * 10)), zid, _q(r[3]), _q(r[4]), int(r[5]), int(r[6])))
-                            except (ValueError, IndexError):
-                                continue                       # битая и оборванная строка
-                            n += 1
-                            if len(batch) >= 5000:
-                                put()
-                except (csv.Error, OSError) as e:
-                    log.warning("файл трендов прочитан не до конца (%s): %s", p.name, e)
-                if batch:
-                    put()
-                with self._lock:
-                    self._c.execute("INSERT OR REPLACE INTO meta VALUES (?,?)", ("imp:" + p.name, str(n)))
-                    self._c.commit()
-                total += n
-            except Exception as e:  # noqa: BLE001 — один плохой файл не должен ронять запуск
-                log.warning("старый файл трендов не перенесён (%s): %s", p.name, e)
-                with self._lock:
-                    try:
-                        self._c.rollback()
-                    except sqlite3.Error:
-                        pass
-        if total:
-            log.info("тренды из старых CSV перенесены в %s: %d строк", DB_NAME, total)
-        return total

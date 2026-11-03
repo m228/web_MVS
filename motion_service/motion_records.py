@@ -3,8 +3,7 @@
 Запись камеры (motion_camera.start_record) пишет строку на каждый обработанный кадр: время, значения зон, alive (1/0) и status
 («ok» или причина: картинка застыла, битый поток, нет кадров…). Отдельные строки-события («событие: поток оборвался») имеют
 пустой alive. Здесь по ним считается сводка: сколько времени камера была в норме, когда и на сколько пропадала.
-Архив = summary.txt + CSV каждого запуска записи за последние дни (CSV собирается из базы в прежнем виде, Excel открывает как раньше;
-CSV прежних версий из data\\records кладутся как есть). В сводке по каждой зоне — среднее / мин / макс flow и diff и доля времени
+Архив = summary.txt + CSV каждого запуска записи за последние дни (CSV собирается из базы, Excel открывает). В сводке по каждой зоне — среднее / мин / макс flow и diff и доля времени
 «крутится» (по кадрам в норме): по ним ставят пороги on/off.
 """
 from __future__ import annotations
@@ -138,16 +137,13 @@ def summary_text(store, runs: list, names: Optional[dict] = None, since: float =
 
 
 def build_zip(base: Path, days: float = 7.0, now: Optional[float] = None, names: Optional[dict] = None) -> Optional[bytes]:
-    """Архив: summary.txt + CSV каждого запуска записи за последние days суток (собираются из базы) + CSV прежних версий из
-    data\\records, изменённые за это время. Записей нет — None."""
+    """Архив: summary.txt + CSV каждого запуска записи за последние days суток (собираются из базы). Записей нет — None."""
     now = time.time() if now is None else now
     base = Path(base)
     since = now - days * 86400
     store = store_for(base)
     runs = store.runs(since)
-    legacy_dir = base / "records"
-    legacy = sorted(p for p in legacy_dir.glob("*.csv") if p.is_file() and p.stat().st_mtime >= since) if legacy_dir.is_dir() else []
-    if not runs and not legacy:
+    if not runs:
         return None
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
@@ -163,6 +159,4 @@ def build_zip(base: Path, days: float = 7.0, now: Optional[float] = None, names:
                 store.write_run_csv(run, out, since)
                 out.flush()
                 out.detach()
-        for p in legacy:
-            z.write(p, p.name)
     return buf.getvalue()

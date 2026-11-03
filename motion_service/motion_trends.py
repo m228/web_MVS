@@ -2,8 +2,7 @@
 
 Тренды пишутся в SQLite (motion_store, data\\motion.db): точка раз в секунду на зону (сырое, хранится KEEP_DAYS) и корзина 10 с на зону
 (среднее / мин / макс; хранится навсегда — на порядок компактнее). При старте камеры они читаются обратно в память — графики и
-«среднее / мин / макс» не обнуляются после обновления. Старые CSV (data\\trends\\*.csv, до версии 2.2) за последние двое суток
-переносятся в базу при первом запуске, остальные убираются по возрасту.
+«среднее / мин / макс» не обнуляются после обновления.
 
 Снимки: раз в N минут (по умолчанию 20, по часам: :00 :20 :40) все камеры снимаются одновременно:
   shots\\<ГГГГММДД>\\<ЧЧММСС>\\<камера>.jpg + log.json (значения зон, связь, статус); сводка по зонам — в таблице shot базы (навсегда).
@@ -105,21 +104,12 @@ def write_shot(base: Path, ts: float, cams: dict) -> Optional[Path]:
 
 
 def purge(base: Path, days: float = KEEP_DAYS, now: Optional[float] = None, shots_days: Optional[float] = None, vacuum_pages: int = 5000) -> int:
-    """Убрать сырое старше days суток (секундные тренды, кадры записи в базе; старые CSV файлами), JPEG снимков — старше shots_days
+    """Убрать сырое старше days суток (секундные тренды и кадры записи в базе), JPEG снимков — старше shots_days
     (по умолчанию days). Корзины статистики и сводка снимков остаются. -> сколько строк/файлов/папок убрано."""
     now = now or time.time()
     n = 0
     base = Path(base)
     n += store_for(base).purge_raw(now - days * 86400, vacuum_pages)
-    edge = now - days * 86400
-    for sub in ("records", "trends"):                      # CSV прежних версий
-        for p in (base / sub).glob("*.csv") if (base / sub).is_dir() else []:
-            try:
-                if p.stat().st_mtime < edge:
-                    p.unlink()
-                    n += 1
-            except OSError:
-                pass
     edge = now - (days if shots_days is None else shots_days) * 86400
     shots = base / "shots"
     if shots.is_dir():

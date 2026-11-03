@@ -43,41 +43,12 @@ def test_trend_log_skips_old_points_and_zones_not_in_config(tmp_path):
     assert [round(x[1]["z1"][0]) for x in longs] == [2]
 
 
-def test_legacy_csv_trends_move_to_db_once_and_bad_rows_are_skipped(tmp_path):
-    now = time.time()
-    d = tmp_path / "trends"
-    d.mkdir()
-    stamp = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(now - 30))
-    (d / "c1_20261102.csv").write_text("time;ts;zone;flow;diff;bit;ok\n%s;%.1f;z1;0.5;1.25;1;1\nмусор;без;чисел\n2026-11-02 14:00:00;12" % (stamp, now - 30),
-                                      encoding="utf-8-sig")
-    (d / "c1_20261102_stats.csv").write_text("time;key;zone;n;sum_flow;min_flow;max_flow;sum_diff;min_diff;max_diff\n%s;%d;z1;3;4.5;1.0;2.0;6.0;1.5;2.5\n"
-                                             % (stamp, int((now - 30) // 10)), encoding="utf-8-sig")
-    old = d / "c1_20260101.csv"                              # старше двух суток — не переносится
-    old.write_text("time;ts;zone;flow;diff;bit;ok\n%s;%.1f;z1;9;9;1;1\n" % (stamp, now - 30), encoding="utf-8-sig")
-    os.utime(old, (now - 5 * 86400, now - 5 * 86400))
-    st = ms.store_for(tmp_path)
-    assert st.import_legacy_trends(tmp_path) == 0, "второй раз тот же файл не переносится"
-    longs, stats = mt.TrendLog(tmp_path, "c1").load(now, 7200, 86400, {"z1"})
-    assert len(longs) == 1 and longs[0][1]["z1"] == (0.5, 1.25, 1), "битые и оборванные строки пропущены, старый файл не тронут"
-    assert stats[0][1]["z1"] == [3, 4.5, 1.0, 2.0, 6.0, 1.5, 2.5]
-
-
 def test_corrupt_db_is_set_aside_and_service_starts_with_a_new_one(tmp_path):
     (tmp_path / "motion.db").write_bytes(b"this is not a sqlite database" * 200)
     st = ms.store_for(tmp_path)
     st.add_trend("c1", time.time(), {"z1": (1, 2, 1)}, 1)
     assert len(st.load_trend("c1", time.time(), 600, 600, {"z1"})[0]) == 1
     assert (tmp_path / "motion.db.corrupt").is_file(), "битая база отложена, а не потеряна"
-
-
-def test_legacy_import_survives_nul_tail_and_broken_utf8(tmp_path):
-    now = time.time()
-    d = tmp_path / "trends"
-    d.mkdir()
-    good = "%s;%.1f;z1;0.5;1.0;1;1\n" % (time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(now - 5)), now - 5)
-    (d / "c1_20261102.csv").write_bytes(("time;ts;zone;flow;diff;bit;ok\n" + good).encode("utf-8-sig") + b"\x00\x00\x00\xd0\n" + b"\xd0")
-    st = ms.store_for(tmp_path)                                  # не падает: сервис стартует
-    assert len(st.load_trend("c1", now, 7200, 86400, {"z1"})[0]) == 1
 
 
 def test_nan_is_stored_as_zero_not_as_huge_value(tmp_path):
@@ -199,12 +170,6 @@ def test_purge_removes_only_old_raw_rows_and_jpeg_but_keeps_stats_and_shot_log(t
         st.add_stat("c1", int(ts // 10), {"z1": [3, 1.0, 0.1, 0.9, 2.0, 0.2, 0.8]})
         st.rec_add("c1", ts, 1, "ok", {"z1": {"flow": 1, "diff": 1, "bit": 1}})
     st.add_shot(old, "c1", "z1", True, True, "ok", 3.0, 1.0, 1.0, 1, True)
-    for sub, name in (("records", "a.csv"), ("trends", "a.csv"), ("records", "b.csv")):       # CSV прежних версий убираются по возрасту
-        d = tmp_path / sub
-        d.mkdir(exist_ok=True)
-        (d / name).write_text("x")
-    os.utime(tmp_path / "records" / "a.csv", (old, old))
-    os.utime(tmp_path / "trends" / "a.csv", (old, old))
     for day, t in (("20261001", now - 20 * 86400), ("20261101", new)):
         d = tmp_path / "shots" / day
         d.mkdir(parents=True)
@@ -213,7 +178,6 @@ def test_purge_removes_only_old_raw_rows_and_jpeg_but_keeps_stats_and_shot_log(t
     assert len(st.load_trend("c1", now, 80 * 86400, 80 * 86400, {"z1"})[0]) == 1, "старая секундная точка убрана, свежая осталась"
     assert len(st.load_trend("c1", now, 80 * 86400, 80 * 86400, {"z1"})[1]) == 2, "корзины статистики хранятся навсегда"
     assert len(st.shots(0, now + 10)) == 1, "сводка снимков остаётся"
-    assert (tmp_path / "records" / "b.csv").exists() and not (tmp_path / "records" / "a.csv").exists() and not (tmp_path / "trends" / "a.csv").exists()
     assert (tmp_path / "shots" / "20261101").exists() and not (tmp_path / "shots" / "20261001").exists(), "JPEG чистятся по своим суткам"
 
 

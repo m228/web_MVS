@@ -542,23 +542,73 @@ def test_position_config_has_defaults_and_is_clamped(sm):
     assert cfg["gap_near_um"] == 10 and cfg["bad_streak"] == 10 and cfg["overdue_h"] == 24
 
 
-def test_bad_probe_is_yellow_and_sent_at_once_then_red_on_repeat_then_cleared(sm):
+def bad_approach(ag, n=1):
+    for _ in range(n):
+        ag.add_positions(pos("подвод", ai=620))                                 # расхождение 221 > 200
+
+
+def test_approach_is_judged_by_median_of_three_probes_yellow_then_red_then_cleared(sm):
     ag = configured_agent(sm)
-    ag.add_positions(pos("подвод", ai=620))                                     # расхождение 221 > 150
+    bad_approach(ag, 2)
+    assert ag.tick(ag.clock()) == [], "две плохие пробы — по медиане трёх ещё не судим"
+    bad_approach(ag)                                                            # третья: медиана 221 > 200
     ev = ag.tick(ag.clock())
     assert [(e["data"]["code"], e["level"]) for e in ev] == [("pos_approach", "medium")]
-    assert "Подвод: датчики разошлись" in ev[0]["text"]
+    assert "Подвод: датчики разошлись на 221 мкм (допуск 200, медиана 3 проб)" in ev[0]["text"]
     assert ag._kick.is_set(), "жёлтое предупреждение не срочное, но уходит сразу"
     ag._kick.clear()
     assert ag.tick(ag.clock()) == [], "ничего нового — без повторов"
-    ag.add_positions(pos("подвод", ai=620))                                     # вторая плохая подряд
+    bad_approach(ag)                                                            # вторая плохая медиана подряд
     ev = ag.tick(ag.clock())
     assert [(e["data"]["code"], e["level"]) for e in ev] == [("pos_approach", "high")]
     assert "проб подряд: 2" in ev[0]["text"] and ag._kick.is_set()
-    ag.add_positions(pos("подвод"))                                             # хорошая проба снимает
+    ag.add_positions(pos("подвод"))                                             # одна хорошая проба медиану не меняет
+    assert ag.tick(ag.clock()) == [] and ag.active["pos_approach"]["level"] == "high"
+    ag.add_positions(pos("подвод"))                                             # две хорошие из трёх — тревога снята
     ev = ag.tick(ag.clock())
     assert [(e["data"]["code"], e["data"]["state"]) for e in ev] == [("pos_approach", "closed")]
     assert ag.active == {}
+
+
+def test_single_approach_spike_does_not_raise_alert(sm):
+    ag = configured_agent(sm)
+    ag.add_positions(pos("подвод"))
+    ag.add_positions(pos("подвод"))
+    bad_approach(ag)                                                            # одиночный пик (как 308 мкм у Kir)
+    assert ag.tick(ag.clock()) == []
+    ag.add_positions(pos("подвод"))
+    assert ag.tick(ag.clock()) == [] and ag.active == {}, "пик ушёл из медианы"
+
+
+def test_approach_timeout_is_bad_at_once_without_median(sm):
+    ag = configured_agent(sm)
+    ag.add_positions(pos("подвод", timeout=True))
+    ev = ag.tick(ag.clock())
+    assert [(e["data"]["code"], e["level"]) for e in ev] == [("pos_approach", "medium")] and "не доехал" in ev[0]["text"]
+
+
+def test_retract_is_still_judged_by_single_probe(sm):
+    ag = configured_agent(sm)
+    ag.add_positions(pos("отвод", target=20000, calc=20001, enc=20002, ai=20300))
+    ev = ag.tick(ag.clock())
+    assert [(e["data"]["code"], e["level"]) for e in ev] == [("pos_retract", "medium")]
+
+
+def test_cv_fail_needs_two_checks_in_a_row(sm):
+    """Перезапуск приложения: камера на секунду не отдаёт кадр — одна проверка не повод для тревоги (Kir 02.11 20:26)."""
+    cv = {"state": "no_frames", "message": "камера не отдала кадр"}
+    ag = sm.Agent(sources=make_sources(cv=lambda: dict(cv), state=lambda: {"stage": 7, "stage_ok": True, "cyclic": True}, cfg=lambda: {"camera_serial": "S1", "cv": {"enabled": True}}),
+                  clock=Clock())
+    assert ag.tick(1.0) == []
+    ev = ag.tick(31.0)
+    assert [(e["data"]["code"], e["level"]) for e in ev] == [("cv_fail", "high")]
+    cv["state"] = "ok"
+    ev = ag.tick(61.0)
+    assert [e["data"]["state"] for e in ev] == ["closed"]
+    cv["state"] = "no_frames"
+    assert ag.tick(91.0) == []
+    cv["state"] = "ok"
+    assert ag.tick(121.0) == [], "сбой на одну проверку — без тревоги и без «снято»"
 
 
 def test_retract_and_approach_are_counted_separately(sm):
@@ -575,7 +625,7 @@ def test_retract_and_approach_are_counted_separately(sm):
 
 def test_old_bad_probe_does_not_keep_alert(sm):
     ag = configured_agent(sm)
-    ag.add_positions(pos("подвод", ai=620))
+    bad_approach(ag, 3)
     ag.tick(ag.clock())
     assert "pos_approach" in ag.active
     ev = ag.tick(ag.clock() + sm.POS_STALE_S + 60)
@@ -585,9 +635,9 @@ def test_old_bad_probe_does_not_keep_alert(sm):
 def test_bad_streak_from_config(sm):
     sm.save_config({"bad_streak": 1})
     ag = configured_agent(sm)
-    ag.add_positions(pos("подвод", ai=620))
+    bad_approach(ag, 3)
     ev = ag.tick(ag.clock())
-    assert ev[0]["level"] == "high", "bad_streak=1 — красная с первой плохой пробы"
+    assert ev[0]["level"] == "high", "bad_streak=1 — красная с первой плохой оценки"
 
 
 def test_good_probes_raise_no_alert(sm):
@@ -730,6 +780,7 @@ def test_snapshot_has_autocal_and_positions_text(sm):
     assert set(m["positions"]) == {"retract", "approach"} and m["positions"]["approach"]["ok"] is True
     assert "Автокалибровка: готово, 2 ч 0 мин назад, ноль уползал на 12 мкм" in snap["text"]
     assert "отвод и подвод в норме, расхождение датчиков до 11 мкм" in snap["text"].lower()
+    ag.add_positions(pos("подвод", t=now, ai=620))
     ag.add_positions(pos("подвод", t=now, ai=620))
     ag.tick(now)
     text = ag.snapshot()["text"]

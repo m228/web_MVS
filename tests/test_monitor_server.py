@@ -543,6 +543,8 @@ def test_sysmon_positions_and_yellow_to_red_end_to_end(srv, store, tmp_path, mon
         ag._cfg = sysmon.load_config()
         now = time.time()
         rec = {"t": now, "step": "подвод", "target": 400, "calc": 401, "enc": 399, "ai": 620, "timeout": False, "sv": 88.0, "stage": 7}
+        ag.add_positions(dict(rec, t=now - 40))                      # подвод судим по медиане трёх проб: нужны три плохие
+        ag.add_positions(dict(rec, t=now - 20))
         ag.add_positions(rec)
         ag.tick(now)
         assert ag._kick.is_set(), "жёлтое предупреждение просит отправку сразу"
@@ -551,16 +553,17 @@ def test_sysmon_positions_and_yellow_to_red_end_to_end(srv, store, tmp_path, mon
         assert [(a["code"], a["level"]) for a in v["alerts"]] == [("pos_approach", "medium")]
         assert "Подвод: датчики разошлись на 221" in v["alerts"][0]["text"]
         assert "в норме" not in v["snapshot"]["text"] and v["snapshot"]["micro"]["positions"]["approach"]["ok"] is False
-        assert [r["gap"] for r in store.positions(pid)] == [221.0] and "positions" not in [e["kind"] for e in store.events(pid)]
+        assert [r["gap"] for r in store.positions(pid)] == [221.0] * 3 and "positions" not in [e["kind"] for e in store.events(pid)]
         ag.add_positions(dict(rec, t=now + 60))                      # повтор — жёлтое становится красным
         ag.tick(now + 60)
         assert ag.send()["ok"] is True
         assert [(a["code"], a["level"]) for a in store.plants_view()[0]["alerts"]] == [("pos_approach", "high")]
         assert [e["level"] for e in store.events(pid) if e["code"] == "pos_approach"].count("high") == 1
-        ag.add_positions(dict(rec, t=now + 120, ai=405))             # хорошая проба — тревога снята
-        ag.tick(now + 120)
+        ag.add_positions(dict(rec, t=now + 120, ai=405))             # две хорошие из последних трёх — медиана в норме, тревога снята
+        ag.add_positions(dict(rec, t=now + 180, ai=405))
+        ag.tick(now + 180)
         assert ag.send()["ok"] is True
-        assert store.plants_view()[0]["alerts"] == [] and len(store.positions(pid)) == 3
+        assert store.plants_view()[0]["alerts"] == [] and len(store.positions(pid)) == 6
     finally:
         sysmon.close()
 

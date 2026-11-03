@@ -68,7 +68,8 @@ STEP_KEYS = {"отвод": "retract", "подвод": "approach"}
 PUSH_CODES = ("pos_", "autocal_drift")     # жёлтые (не срочные) предупреждения, которые всё равно уходят сразу
 URGENT = ("critical", "high")
 # сколько проверок подряд правило должно срабатывать, чтобы тревога открылась (плата, например, молча переподключается)
-CONFIRM = {"service_cv": 2, "service_video": 2, "service_motion": 2, "plate_down": 4, "camera_exposure": 2}
+CONFIRM = {"service_cv": 2, "service_video": 2, "service_motion": 2, "plate_down": 4, "camera_exposure": 2, "cv_fail": 2}
+NEAR_MEDIAN_N = 3           # подвод: расхождение датчиков судим по медиане стольких последних проб, а не по одной (у Kir бывают одиночные пики)
 
 STAGE_NAMES = {1: "Остановлен", 2: "Набор", 3: "Сгущение", 4: "Затравка", 5: "Подкачка", 6: "Стабилизация", 7: "Рост", 8: "Уваривание",
                9: "Готовность", 10: "Выгрузка", 11: "Пропарка", 12: "Надвыгрузка", 13: "Собрать аппарат", 14: "Термоудар",
@@ -698,19 +699,38 @@ class Agent:
                         found["no_probes"] = ("medium", "Варка идёт, а проб нет уже %s" % fmt_dur(now - ref))
         return found, keep
 
+    def _bad_flags(self, step: str, recs: list) -> list:
+        """По каждой пробе: (плохая ли, почему). Отвод — по самой пробе. Подвод — по медиане последних NEAR_MEDIAN_N проб:
+        одиночный пик расхождения тревогу не открывает; не доехал (таймаут) — плохая сразу. Меньше N проб подряд с замером — не судим."""
+        out = []
+        tol = self._cfg["gap_near_um"]
+        for i, r in enumerate(recs):
+            if step != "подвод":
+                out.append((not r.get("ok"), r.get("why") or "не в норме"))
+            elif r.get("timeout"):
+                out.append((True, r.get("why") or "не доехал за отведённое время"))
+            else:
+                win = recs[max(0, i - NEAR_MEDIAN_N + 1):i + 1]
+                gaps = [x.get("gap") for x in win if not x.get("timeout") and x.get("gap") is not None]
+                med = sorted(gaps)[len(gaps) // 2] if len(gaps) == NEAR_MEDIAN_N else None
+                bad = med is not None and med > tol
+                out.append((bad, "датчики разошлись на %d мкм (допуск %d, медиана %d проб)" % (med, tol, NEAR_MEDIAN_N) if bad else ""))
+        return out
+
     def _position_rules(self, found: dict, d: dict, now: float) -> None:
-        """Отвод и подвод: плохая проба (не доехал / датчики разошлись) — жёлтое предупреждение сразу;
+        """Отвод и подвод: плохая проба (не доехал / датчики разошлись; на подводе — медиана трёх проб) — жёлтое предупреждение сразу;
         bad_streak плохих подряд на этом шаге — красная тревога. Хорошая проба снимает."""
         need = self._cfg["bad_streak"]
         for step, key in STEP_KEYS.items():
             recs = [r for r in (d.get("positions") or []) if r.get("step") == step and now - (r.get("t") or 0) <= POS_STALE_S]
+            flags = self._bad_flags(step, recs)
             run = 0
-            for r in reversed(recs):
-                if r.get("ok"):
+            for bad, _ in reversed(flags):
+                if not bad:
                     break
                 run += 1
             if run:
-                text = "%s: %s" % (step.capitalize(), recs[-1].get("why") or "не в норме")
+                text = "%s: %s" % (step.capitalize(), flags[-1][1])
                 if run > 1:
                     text += " · проб подряд: %d" % run
                 found["pos_" + key] = ("high" if run >= need else "medium", text)

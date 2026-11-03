@@ -39,7 +39,7 @@ class Chat:
     def __init__(self):
         self.sent, self.ok = [], True
 
-    def send(self, chat_id, text, markup=None):
+    def send(self, chat_id, text, markup=None, silent=False):
         if not self.ok:
             return False, 0.0, "нет связи с Telegram"
         self.sent.append(text)

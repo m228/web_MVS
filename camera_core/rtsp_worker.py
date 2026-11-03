@@ -544,6 +544,33 @@ class RtspCameraWorker(BaseCameraWorker):
 
     # ---------- снимок ----------
 
+    def grab_raw(self, fresh_s=5.0):
+        """Полноразмерный кадр без цифрового зума и без записи фото (для суточной съёмки новой камеры, см. day_capture.py).
+        Поток идёт и кадр свежий — берём его копию; иначе (закрыта вкладка, захвата нет) открываем камеру на один кадр и закрываем."""
+        img = self.last_frame
+        if img is not None and time.time() - self._last_frame_at <= fresh_s:
+            return img.copy()
+        capture = None
+        try:
+            capture = self._open_capture()
+            if not capture.isOpened():
+                return None
+            frame = None
+            for _ in range(5):          # первые кадры после открытия бывают недодекодированы — берём последний из нескольких
+                ok, f = capture.read()
+                if ok and f is not None:
+                    frame = f
+            return frame
+        except Exception as e:
+            log_event("camera_core.rtsp_grab", "Не удалось взять кадр", "warn", {"serial_number": self.serial_number, "error": repr(e)})
+            return None
+        finally:
+            if capture is not None:
+                try:
+                    capture.release()
+                except Exception:
+                    pass
+
     # сохранить отдельный снимок и вернуть его как jpeg
     def snapshot(self):
         # берём живой кадр и СРАЗУ копируем: generate() в другом потоке параллельно

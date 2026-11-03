@@ -12,10 +12,10 @@
 """
 from __future__ import annotations
 
-import csv
 import logging
 import os
 import re
+import sqlite3
 import threading
 import time
 from collections import deque
@@ -26,6 +26,7 @@ import cv2
 import numpy as np
 
 from motion_engine import CameraEngine, scale_points
+from motion_store import store_for
 from motion_trends import TrendLog
 from motion_modbus import LinkRegistry
 
@@ -36,8 +37,6 @@ LONG_STEP_S = 1.0                # длинная история: одна то�
 LONG_LEN = 7200                  # ... на 2 часа назад
 STATS_STEP_S = 10                # статистика зон (среднее/мин/макс): корзина на 10 с ...
 STATS_LEN = 8640                 # ... и сутки назад (8640 × 10 с)
-RECORD_MAX_BYTES = 100 * 1024 * 1024
-RECORD_FLUSH_S = 5.0             # буфер записи уходит на диск не реже чем раз в 5 с: при остановке сервиса теряется не больше этого хвоста
 _OPEN_LOCK = threading.Lock()    # OPENCV_FFMPEG_CAPTURE_OPTIONS — переменная окружения процесса, выставляем под замком
 
 
@@ -176,12 +175,13 @@ class CameraWorker(threading.Thread):
         self._sbucket: Optional[list] = None  # набирающаяся корзина статистики
         self._writes: Optional[list] = None   # что должно лежать в ПЛК (последнее)
         self._writes_evt = threading.Event()
-        self._rec_fh = self._rec_csv = None
-        self._rec_path: Optional[Path] = None
-        self._rec_flushed = 0.0
+        self._store = store_for(self.data_dir)
+        self._rec_run: Optional[int] = None   # идущий запуск записи в базе (data\motion.db)
+        self._rec_name: Optional[str] = None
         self._rec_ids: list = []
-        self._rec_fill: set = set()       # зоны записи с признаком вида окна: у них в CSV ещё три колонки
-        # тренды на диске (data\trends): переживают перезапуск; здесь же читаем их обратно, чтобы графики и статистика не обнулялись
+        self._rec_fill: set = set()       # зоны записи с признаком вида окна: у них ещё четыре значения (tex, lum, rel, fill)
+        self._rec_warned = False
+        # тренды на диске (data\motion.db): переживают перезапуск; здесь же читаем их обратно, чтобы графики и статистика не обнулялись
         self._trend = TrendLog(self.data_dir, self.id)
         self._restore_trends()
         self._writer: Optional[threading.Thread] = None
@@ -230,7 +230,7 @@ class CameraWorker(threading.Thread):
                 fps = (len(self._stamps) - 1) / (self._stamps[-1] - self._stamps[0])
             return {"id": self.id, "name": self.cfg["name"], "enabled": self.cfg["enabled"], "connected": self._connected,
                     "error": self._error, "decoder": self._decoder, "fps": round(fps, 2), "age_s": round(time.time() - self._last_good, 1) if self._last_good else None,
-                    "recording": self._rec_path.name if self._rec_path else None, "plc": dict(self.plc), "result": st}
+                    "recording": self._rec_name, "plc": dict(self.plc), "result": st}
 
     def snapshot_jpeg(self, max_w: int = 0) -> Optional[tuple]:
         """(jpeg-байты, (ширина, высота) оригинала) последнего кадра или None."""
@@ -362,71 +362,55 @@ class CameraWorker(threading.Thread):
         ok, buf = cv2.imencode(".jpg", f, [cv2.IMWRITE_JPEG_QUALITY, 82])
         return {"jpeg": buf.tobytes() if ok else None, "info": info}
 
-    def start_record(self) -> str:
-        """Писать метрики каждого кадра в CSV (data/records) — для калибровки порогов по реальной ленте."""
+    def start_record(self) -> Optional[str]:
+        """Писать метрики каждого кадра в базу (data\\motion.db) — для калибровки порогов по реальной ленте. -> метка запуска."""
         with self._lock:
-            if self._rec_path:
-                return self._rec_path.name
+            if self._rec_run:
+                return self._rec_name
             self._rec_ids = [z["id"] for z in self.cfg["zones"] if z["enabled"]]
             self._rec_fill = {z["id"] for z in self.cfg["zones"] if z["enabled"] and z.get("fill_metric", "off") != "off"}
-            return self._rec_open()
-
-    def _rec_open(self) -> str:
-        """Новый файл записи (колонки — по self._rec_ids). Звать под self._lock."""
-        d = self.data_dir / "records"
-        d.mkdir(parents=True, exist_ok=True)
-        self._rec_path = d / ("%s_%s.csv" % (self.id, time.strftime("%Y%m%d_%H%M%S")))
-        while self._rec_path.exists():                    # перезапуск в ту же секунду не затирает прежний файл
-            self._rec_path = d / (self._rec_path.stem + "_b.csv")
-        self._rec_fh = open(self._rec_path, "w", newline="", encoding="utf-8-sig")
-        self._rec_csv = csv.writer(self._rec_fh, delimiter=";")
-        head = ["time"]
-        for zid in self._rec_ids:
-            head += ["%s_flow" % zid, "%s_diff" % zid, "%s_bit" % zid]
-            if zid in self._rec_fill:           # признак вида окна (зернистость, яркость, жом есть) — для подбора порогов по записи
-                head += ["%s_tex" % zid, "%s_lum" % zid, "%s_rel" % zid, "%s_fill" % zid]
-        self._rec_csv.writerow(head + ["alive", "status"])
-        return self._rec_path.name
+            try:
+                self._rec_run = self._store.rec_start(self.id, self._rec_ids, self._rec_fill, time.time())
+            except (OSError, sqlite3.Error) as e:                # диск полон / база недоступна: запись не включается, камера работает дальше
+                log.warning("[%s] запись метрик не включилась: %s", self.id, e)
+                return None
+            self._rec_name = "%s_%s_r%d" % (self.id, time.strftime("%Y%m%d_%H%M%S"), self._rec_run)
+            return self._rec_name
 
     def flush_record(self):
-        """Дописать буфер на диск (перед выдачей файла: иначе последние секунды лежат в памяти)."""
-        with self._lock:
-            if self._rec_fh:
-                self._rec_fh.flush()
+        """Дописать буфер на диск (перед выдачей архива: иначе последние секунды лежат в памяти)."""
+        self._store.flush()
 
     def _rec_write(self, ts: float, byid: dict, status: str, event: bool = False):
-        """Строка в CSV записи. Звать под self._lock. status — «ok» или причина (картинка застыла, каша…); event — разовое
+        """Строка записи кадра. Звать под self._lock. status — «ok» или причина (картинка застыла, каша…); event — разовое
         событие связи (alive пустой, значения зон пустые): объясняет дыру в строках, когда поток оборвался и кадров не было."""
-        if not self._rec_csv:
+        if not self._rec_run:
             return
-        row = [time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(ts)) + ".%03d" % int(ts % 1 * 1000)]
-        for zid in self._rec_ids:
-            z = byid.get(zid) or {}
-            row += ["", "", ""] if event else [z.get("flow", 0), z.get("diff", 0), z.get("bit", 0)]
-            if zid in self._rec_fill:
-                row += ["", "", "", ""] if event else [z.get("tex", ""), z.get("lum", ""), z.get("rel", ""), "" if z.get("fill") is None else z["fill"]]
-        self._rec_csv.writerow(row + ["" if event else int(status == "ok"), status])
-        if status != "ok" or ts - self._rec_flushed >= RECORD_FLUSH_S:   # сбой — сразу на диск: при отключении питания это самые нужные строки
-            self._rec_fh.flush()
-            self._rec_flushed = ts
-        if self._rec_fh.tell() > RECORD_MAX_BYTES:       # файл полон — продолжаем в следующем: запись не должна молча остановиться
-            self._rec_fh.close()
-            self._rec_fh = self._rec_csv = None
-            self._rec_path = None
-            try:
-                self._rec_open()
-            except OSError as e:
-                log.warning("[%s] новый файл записи не открылся: %s", self.id, e)
+        zones: dict = {}
+        if not event:
+            for zid in self._rec_ids:
+                z = byid.get(zid) or {}
+                v = {"flow": z.get("flow", 0), "diff": z.get("diff", 0), "bit": z.get("bit", 0)}
+                if zid in self._rec_fill:           # признак вида окна (зернистость, яркость, жом есть) — для подбора порогов по записи
+                    v.update(tex=z.get("tex"), lum=z.get("lum"), rel=z.get("rel"), fill=z.get("fill"))
+                zones[zid] = v
+        try:
+            self._store.rec_add(self.id, ts, None if event else int(status == "ok"), status, zones)
+            self._store.maybe_flush(ts, force=status != "ok")      # сбой — сразу в базу: переживёт падение процесса (при отключении питания WAL без fsync теряет последние секунды)
+        except (OSError, sqlite3.Error) as e:
+            if not self._rec_warned:
+                self._rec_warned = True
+                log.warning("[%s] запись метрик не пишется: %s", self.id, e)
 
     def stop_record(self):
         with self._lock:
-            if self._rec_fh:
+            if self._rec_run:
                 try:
-                    self._rec_fh.close()
-                except Exception:
+                    self._store.rec_stop(self._rec_run, time.time())
+                except (OSError, sqlite3.Error):
                     pass
-            self._rec_fh = self._rec_csv = None
-            self._rec_path = None
+            self._rec_run = None
+            self._rec_name = None
 
     # ─────────── внутреннее ───────────
     def _push_history(self, ts: float, zones: dict, ok: int):

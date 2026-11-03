@@ -410,6 +410,14 @@ class CameraManager:
                 worker.rtsp_url = rtsp_url
             return worker
 
+    def grab_rtsp_frame(self, serial_number, rtsp_url):
+        """Один полноразмерный кадр RTSP-камеры. Воркера нет (камеру не открывали после запуска) — временный, в реестр не кладём."""
+        with self._registry_lock:
+            worker = self.rtsp_workers.get(serial_number)
+        if worker is None:
+            worker = RtspCameraWorker(serial_number, self, rtsp_url)
+        return worker.grab_raw()
+
     # убрать RTSP-воркер из реестра (напр. после смены IP: старый serial завязан на
     # старый адрес). Останавливает поток и удаляет объект, чтобы не копить «висящие».
     def drop_rtsp(self, serial_number):

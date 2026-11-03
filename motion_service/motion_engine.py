@@ -38,6 +38,7 @@ CYCLE_RED_HSV = (12, 163, 70, 80)     # красный: H ≤ h_max или H ≥
 CYCLE_BLUE_HSV = (82, 135, 55, 60)    # синий/голубой: h_lo ≤ H ≤ h_hi, S ≥ s_min, V ≥ v_min (голубая половина тоже сюда)
 HW_ACCEL_MODES = ("off", "auto", "d3d11")    # аппаратное декодирование видео: выкл / любое доступное / Direct3D 11 (видеоядро Intel, AMD, NVIDIA)
 ZONE_OUT_KINDS = ("holding", "coil")
+SCENARIO_SIGNALS = ("move", "pulp")    # что сценарий берёт у зон: бит «движется» или «жом есть» (вид окна)
 ZONE_OUT_VALUES = ("bit", "state")     # что зона пишет в ПЛК: бит «движется» или состояние окна 0 пусто / 1 жом стоит / 2 движется
 FILL_METRICS = ("off", "tex", "lum", "rel")   # признак «вид окна» (есть ли жом): выкл / зернистость / яркость / яркость относительно металла вокруг окна
 FILL_TEX_BLUR = 5                      # ядро размытия для зернистости: tex = средняя |кадр − размытый кадр| в зоне
@@ -255,14 +256,24 @@ def _norm_scenario(sc: dict, cams: list) -> dict:
     rule = sc.get("rule", "or")
     if rule not in ("or", "and", "sum"):
         raise ValueError("%s: правило %r не из or/and/sum" % (where, rule))
+    signal = sc.get("signal", "move")
+    if signal not in SCENARIO_SIGNALS:
+        raise ValueError("%s: сигнал %r не из %s" % (where, signal, "/".join(SCENARIO_SIGNALS)))
     zones = {c["id"]: {z["id"] for z in c["zones"]} for c in cams}
+    groups = {c["id"]: {g["id"] for g in c["groups"] if g["type"] != "mirror"} for c in cams}
     srcs = []
-    for s in sc.get("sources") or []:     # источники удалённых камер/зон тихо отбрасываем: сценарий не должен ломать весь конфиг
-        cam, zone = str(s.get("camera", "")), str(s.get("zone", ""))
-        if zone in zones.get(cam, ()) and not any(x["camera"] == cam and x["zone"] == zone for x in srcs):
+    for s in sc.get("sources") or []:     # источники удалённых камер/зон/групп тихо отбрасываем: сценарий не должен ломать весь конфиг
+        cam = str(s.get("camera", ""))
+        if s.get("group") is not None:    # источник — группа камеры («вычисление»): берётся её значение (сумма, уровень, % наработки)
+            grp = str(s.get("group"))
+            if grp in groups.get(cam, ()) and not any(x["camera"] == cam and x.get("group") == grp for x in srcs):
+                srcs.append({"camera": cam, "group": grp})
+            continue
+        zone = str(s.get("zone", ""))
+        if zone in zones.get(cam, ()) and not any(x["camera"] == cam and x.get("zone") == zone for x in srcs):
             srcs.append({"camera": cam, "zone": zone})
     mb = sc.get("modbus")
-    return {"id": sid, "name": str(sc.get("name") or sid), "rule": rule, "sources": srcs,
+    return {"id": sid, "name": str(sc.get("name") or sid), "rule": rule, "signal": signal, "sources": srcs,
             "out": _out(sc.get("out"), ZONE_OUT_KINDS, where + ".out"),
             "modbus": normalize_modbus(mb, base=None) if mb else None}
 

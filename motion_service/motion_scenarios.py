@@ -13,27 +13,33 @@ from typing import Optional
 log = logging.getLogger("motion.scenarios")
 
 RULES = ("or", "and", "sum")
+SIGNALS = ("move", "pulp")      # move — бит «движется» зоны, pulp — «жом есть» (вид окна; без включённого вида окна — 0)
 
 
 def evaluate(rule: str, bits: list) -> int:
-    """Биты источников → значение сценария."""
+    """Значения источников → значение сценария: or — хоть одно > 0, and — все > 0, sum — сумма значений (бит зоны 0/1, у группы — её значение)."""
     if rule == "and":
         return 1 if bits and all(bits) else 0
     if rule == "sum":
-        return int(sum(1 for b in bits if b))
+        return int(sum(bits))
     return 1 if any(bits) else 0
 
 
-def source_bits(sources: list, states: dict) -> list:
-    """[{camera, zone}] + {id камеры: state()} → биты; камеры/зоны нет или она не жива → 0."""
+def source_bits(sources: list, states: dict, signal: str = "move") -> list:
+    """[{camera, zone | group}] + {id камеры: state()} → значения; камеры/зоны/группы нет или она не жива → 0. Зона: signal move —
+    бит движения, pulp — «жом есть» (z["fill"] == 1; у зоны без вида окна или без порогов решения нет → 0). Группа: её значение."""
     out = []
     for s in sources:
         res = (states.get(s["camera"]) or {}).get("result") or {}
         bit = 0
-        if res.get("alive"):
+        if res.get("alive") and s.get("group") is not None:
+            for g in res.get("groups") or []:
+                if g["id"] == s["group"]:
+                    bit = int(g["value"])
+        elif res.get("alive"):
             for z in res.get("zones") or []:
                 if z["id"] == s["zone"]:
-                    bit = int(z["bit"])
+                    bit = int(z.get("fill") == 1) if signal == "pulp" else int(z["bit"])
         out.append(bit)
     return out
 
@@ -62,11 +68,11 @@ class ScenarioRunner(threading.Thread):
         live_ids = set()
         for sc in cfg.get("scenarios", []):
             live_ids.add(sc["id"])
-            bits = source_bits(sc["sources"], states)
+            bits = source_bits(sc["sources"], states, sc.get("signal", "move"))
             value = evaluate(sc["rule"], bits)
             mb = sc.get("modbus") or cfg["modbus"]
             st = self.status.setdefault(sc["id"], {"ok": None, "error": ""})
-            st.update(name=sc["name"], value=value, bits=bits, plc=bool(mb.get("enable")), out=sc["out"])
+            st.update(name=sc["name"], value=value, bits=bits, plc=bool(mb.get("enable")), out=sc["out"], signal=sc.get("signal", "move"))
             if not mb.get("enable") or not sc["out"]:
                 st.update(ok=None, error="")
                 continue

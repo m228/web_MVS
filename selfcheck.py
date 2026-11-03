@@ -3984,16 +3984,22 @@ def _sysmon():
         assert {"camera_exposure", "overexposed"} <= codes, "тревоги: %s" % sorted(codes)
         blob = json.dumps(ag.snapshot(), ensure_ascii=False)
         assert "SECRET-TOKEN" not in blob, "токен попал в снимок"
-        # датчики микроскопа: плохая проба подвода — жёлтое предупреждение, повтор — красная тревога; хорошая снимает
-        ag.add_positions({"t": 10020.0, "step": "подвод", "target": 400, "calc": 401, "enc": 399, "ai": 620, "timeout": False})
-        ag.tick(10020.0)
-        assert ag.active.get("pos_approach", {}).get("level") == "medium", "плохая проба подвода: ожидалось жёлтое предупреждение"
-        ag.add_positions({"t": 10030.0, "step": "подвод", "target": 400, "calc": 401, "enc": 399, "ai": 620, "timeout": False})
+        # датчики микроскопа: подвод судим по медиане трёх проб — три плохие дают жёлтое предупреждение, ещё одна — красную; хорошие снимают
+        bad = {"step": "подвод", "target": 400, "calc": 401, "enc": 399, "ai": 620, "timeout": False}
+        for t in (10020.0, 10021.0):
+            ag.add_positions(dict(bad, t=t))
+        ag.tick(10021.0)
+        assert "pos_approach" not in ag.active, "две плохие пробы подвода: по медиане трёх ещё не судим"
+        ag.add_positions(dict(bad, t=10022.0))
+        ag.tick(10022.0)
+        assert ag.active.get("pos_approach", {}).get("level") == "medium", "плохая медиана подвода: ожидалось жёлтое предупреждение"
+        ag.add_positions(dict(bad, t=10030.0))
         ag.tick(10030.0)
-        assert ag.active.get("pos_approach", {}).get("level") == "high", "две плохие подряд: ожидалась красная тревога"
-        ag.add_positions({"t": 10040.0, "step": "подвод", "target": 400, "calc": 401, "enc": 399, "ai": 405, "timeout": False})
-        ag.tick(10040.0)
-        assert "pos_approach" not in ag.active, "хорошая проба должна снять тревогу"
+        assert ag.active.get("pos_approach", {}).get("level") == "high", "две плохие оценки подряд: ожидалась красная тревога"
+        for t in (10040.0, 10041.0):
+            ag.add_positions(dict(bad, t=t, ai=405))
+        ag.tick(10041.0)
+        assert "pos_approach" not in ag.active, "две хорошие пробы из трёх должны снять тревогу"
         import app as _app
         paths = {getattr(x, "path", "") for x in _app.app.routes}
         need = {"/monitor", "/api/sysmon/state", "/api/sysmon/starts", "/api/sysmon/config", "/api/sysmon/send_test"}

@@ -179,9 +179,54 @@ def test_rod_lost_then_found_again_over_whole_circle():
     empty = np.full((H, W, 3), (60, 130, 70), np.uint8)
     g0 = cv2.cvtColor(empty, cv2.COLOR_BGR2GRAY)
     for i in range(8):
-        eng.process(g0, 10 + i * 0.25, empty)
+        eng.process(g0, 10 + i * 5.0, empty)             # дольше coast_s (30 с) не видно — палка потеряна
     st = run(eng, 200, 160)                              # палка «выскочила» в другое место: поиск по всему кругу
     assert zone(st, "L")["valid"] and abs(me.ang_diff(zone(st, "L")["angle"], 200)) <= 2.0
+
+
+def test_rod_hidden_for_a_while_is_held_and_edge_decoy_does_not_steal_it():
+    """Палки не видно (переход по зелёному, блик), а рядом ровная красно-синяя кромка: угол держим по скорости, на кромку не прыгаем."""
+    eng = me.CameraEngine(cam_cfg())
+    spin(eng, 10, 6.0, seconds=20)                       # вращаются 6°/с: к t=20 левая ≈ 130°, правая ≈ 230°
+    decoy = rod_frame({})
+    for cx, cy in ((250, 270), (700, 270)):
+        cv2.line(decoy, (cx, cy), (cx - 150, cy), RED, 3)      # красный влево (270°), синий вправо (90°) — как кромка кожуха
+        cv2.line(decoy, (cx, cy), (cx + 150, cy), BLUE, 3)
+    gray = cv2.cvtColor(decoy, cv2.COLOR_BGR2GRAY)
+    for i in range(40):                                  # 10 с без палок
+        t = 20.0 + i * 0.25
+        st = eng.process(gray, t, decoy)
+        z = zone(st, "L")
+        assert z["valid"] and z["coast"] and z["bit"] == 0, (t, z)
+        assert abs(me.ang_diff(z["angle"], 10 + 6.0 * t)) <= 4.0, (t, z["angle"])
+    assert st["groups"][0]["valid"]                      # группа не слепнет: считается по удерживаемым углам
+    img = rod_frame({(250, 270): (10 + 6.0 * 30.5) % 360, (700, 270): (360 - 10 - 6.0 * 30.5) % 360})
+    st = eng.process(cv2.cvtColor(img, cv2.COLOR_BGR2GRAY), 30.5, img)
+    z = zone(st, "L")
+    assert z["valid"] and not z["coast"] and z["bit"] == 1
+    assert abs(me.ang_diff(z["angle"], 10 + 6.0 * 30.5)) <= 2.0
+
+
+def test_fat_colour_blobs_are_not_mistaken_for_the_rod():
+    """Широкие красное/синее пятна (кожух, тень) — не палка: ищем только тонкие полоски."""
+    img = rod_frame({(250, 270): 40, (700, 270): 320})
+    cv2.rectangle(img, (290, 200), (430, 340), RED, -1)        # пятно справа от оси (≈90°) на всю длину луча ...
+    cv2.rectangle(img, (70, 200), (210, 340), BLUE, -1)        # ... и синее напротив
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    eng = me.CameraEngine(cam_cfg())
+    st = None
+    for i in range(4):
+        st = eng.process(gray, i * 0.25, img) or st
+    assert abs(me.ang_diff(zone(st, "L")["angle"], 40)) <= 2.0
+
+
+def test_coast_off_loses_the_rod_at_once():
+    eng = me.CameraEngine(cam_cfg(zones=[{"id": "L", "type": "cycle", "center": [250, 270], "radius": 170, "coast_s": 0},
+                                         {"id": "R", "type": "cycle", "center": [700, 270], "radius": 170, "coast_s": 0}], groups=[]))
+    run(eng, 40, 320)
+    empty = np.full((H, W, 3), (60, 130, 70), np.uint8)
+    st = eng.process(cv2.cvtColor(empty, cv2.COLOR_BGR2GRAY), 5.0, empty)
+    assert not zone(st, "L")["valid"]
 
 
 @pytest.mark.skipif(not VIDEO.exists(), reason="видео диффузии не лежит на этом компьютере")
@@ -359,8 +404,8 @@ def test_rpm_drops_to_zero_after_rod_is_lost_and_after_dead_camera():
     spin(eng, 10, 6.0)
     empty = np.full((H, W, 3), (60, 130, 70), np.uint8)
     for i in range(8):
-        st = eng.process(cv2.cvtColor(empty, cv2.COLOR_BGR2GRAY), 40 + i * 0.25, empty) or None
-    assert st is not None and zone(st, "L")["rpm"] == 0.0
+        st = eng.process(cv2.cvtColor(empty, cv2.COLOR_BGR2GRAY), 40 + i * 5.0, empty) or None
+    assert st is not None and zone(st, "L")["rpm"] == 0.0 and not zone(st, "L")["valid"]
     assert zone(eng.dead_state(99.0, "нет"), "L")["rpm"] == 0.0
 
 

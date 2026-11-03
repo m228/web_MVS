@@ -192,11 +192,13 @@ function drawCycleOnTile(ctx, z, cam, g, lz, mode) {
   if (mode === 'dead' || !lz || !lz.valid) return;
   const a = (lz.angle * Math.PI) / 180, dx = Math.sin(a) * r, dy = -Math.cos(a) * r;
   ctx.lineWidth = 3;
+  if (lz.coast) ctx.setLineDash([6, 5]);                   // палки не видно — угол держится по скорости вращения (пунктир)
   ctx.strokeStyle = MV_ROD_RED; ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(cx + dx, cy + dy); ctx.stroke();
   ctx.strokeStyle = MV_ROD_BLUE; ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(cx - dx, cy - dy); ctx.stroke();
+  ctx.setLineDash([]);
   // подпись под окружностью: вал со значком направления, ниже значения красного и синего концов (0–360° от вертикали по часовой)
   const x = cx - r * 0.55, y = cy + r + 16;
-  [[z.name + '  ' + mvDirIcon(lz.rpm), '#fff'], ['красный ' + Number(lz.angle).toFixed(1) + '°', MV_ROD_RED], ['синий ' + mvBlueAngle(lz.angle).toFixed(1) + '°', MV_ROD_BLUE]].forEach(([txt, col], i) => {
+  [[z.name + '  ' + mvDirIcon(lz.rpm) + (lz.coast ? '  ~' : ''), '#fff'], ['красный ' + Number(lz.angle).toFixed(1) + '°', MV_ROD_RED], ['синий ' + mvBlueAngle(lz.angle).toFixed(1) + '°', MV_ROD_BLUE]].forEach(([txt, col], i) => {
     ctx.lineWidth = 3; ctx.strokeStyle = '#000'; ctx.strokeText(txt, x, y + i * 17);
     ctx.fillStyle = col; ctx.fillText(txt, x, y + i * 17);
   });

@@ -8,7 +8,8 @@ HOLD_S секунд подряд: за warn_s секунд до запуска u
 
 Защиты: только собранный exe; «Отмена» гасит перезапуск до следующего захода в окно; на версию не больше MAX_ATTEMPTS автозапусков
 (откат обновления не должен гонять завод по кругу); сбой связи — пауза растёт до 60 минут, в журнал не чаще раза в час.
-Заводы без микроскопа/связи с ПЛК: окна нет, перезапуск только кнопкой.
+Клиенты без микроскопа (камеры, мульти): окно — ночное, night_from…night_to часов по местному времени (по умолчанию 20:00–08:00), пока
+не идёт проверка модели; плашка «10 с · Отмена» и защиты те же. Микроскопные клиенты без связи с ПЛК окна не имеют (только кнопка).
 """
 import json
 import math
@@ -36,7 +37,7 @@ HEALTH_RETRY_S = 120       # при замечаниях — повтор чер
 HEALTH_MAX_S = 600         # дольше не ждём: вердикт «не всё поднялось»
 PENDING_MAX_S = 3600       # метка «обновляюсь» старше часа — устаревшая, не считаем её итогом запуска
 
-DEFAULT_CFG = {"enabled": True, "interval_min": 30, "auto_restart": True, "warn_s": 10}
+DEFAULT_CFG = {"enabled": True, "interval_min": 30, "auto_restart": True, "warn_s": 10, "night_from": 20, "night_to": 8}
 
 
 def load_config() -> dict:
@@ -50,10 +51,27 @@ def load_config() -> dict:
     try:
         cfg["interval_min"] = min(1440.0, max(1.0, float(cfg["interval_min"])))
         cfg["warn_s"] = min(120, max(3, int(cfg["warn_s"])))
+        cfg["night_from"] = min(23, max(0, int(cfg["night_from"])))
+        cfg["night_to"] = min(24, max(0, int(cfg["night_to"])))
     except (TypeError, ValueError):
-        cfg["interval_min"], cfg["warn_s"] = DEFAULT_CFG["interval_min"], DEFAULT_CFG["warn_s"]
+        cfg.update({k: DEFAULT_CFG[k] for k in ("interval_min", "warn_s", "night_from", "night_to")})
     cfg["enabled"], cfg["auto_restart"] = bool(cfg["enabled"]), bool(cfg["auto_restart"])
     return cfg
+
+
+def night_window(cfg: dict, now: Optional[float] = None) -> tuple:
+    """Окно перезапуска для клиентов без микроскопа: (True, "") или (False, причина). Открыто по местному времени с night_from до night_to
+    часов (через полночь тоже: 20→8); равные часы — открыто всегда. Идёт проверка модели — не перезапускаем."""
+    h0, h1 = cfg.get("night_from", DEFAULT_CFG["night_from"]), cfg.get("night_to", DEFAULT_CFG["night_to"])
+    lt = time.localtime(now)
+    h = lt.tm_hour + lt.tm_min / 60.0
+    inside = True if h0 == h1 else (h0 <= h < h1 if h0 < h1 else (h >= h0 or h < h1))
+    if not inside:
+        return False, "ждёт ночного окна %02d:00–%02d:00" % (h0, h1 % 24)
+    import model_check
+    if model_check.STATE["running"]:
+        return False, "идёт проверка модели"
+    return True, ""
 
 
 def _read_state(path) -> dict:
@@ -84,8 +102,11 @@ class AutoUpdater:
     def __init__(self, window_fn: Callable[[], tuple] = None, cfg_fn: Callable[[], dict] = load_config,
                  clock: Callable[[], float] = time.monotonic, frozen_fn: Callable[[], bool] = updater.is_frozen,
                  state_file=STATE_FILE, report_fn: Callable = sysmon.report, wall: Callable[[], float] = time.time,
-                 health_src=None, start_reason_fn: Callable = sysmon.start_reason):
+                 health_src=None, start_reason_fn: Callable = sysmon.start_reason, micro_fn: Optional[Callable[[], bool]] = None,
+                 night_fn: Callable[[dict], tuple] = night_window):
         self._window_fn = window_fn or (lambda: (False, "микроскоп не подключён"))
+        self._micro_fn = micro_fn                # None — все клиенты решают окном микроскопа; иначе без микроскопа окно ночное
+        self._night_fn = night_fn
         self._cfg_fn = cfg_fn
         self._clock = clock
         self._frozen_fn = frozen_fn
@@ -202,7 +223,7 @@ class AutoUpdater:
         if not cfg["auto_restart"]:
             self._close_window("автоперезапуск выключен в настройках")
             return
-        ok, reason = self._window_fn()
+        ok, reason = self._night_fn(cfg) if self._micro_fn is not None and not self._micro_fn() else self._window_fn()
         if not ok:
             self._close_window(reason)
             return
@@ -345,11 +366,12 @@ class AutoUpdater:
 _agent: Optional[AutoUpdater] = None
 
 
-def start(window_fn: Callable[[], tuple] = None) -> AutoUpdater:
-    """Запустить поток (один на процесс). Вызывается из lifespan приложения; window_fn — micro.restart_window."""
+def start(window_fn: Callable[[], tuple] = None, micro_fn: Optional[Callable[[], bool]] = None) -> AutoUpdater:
+    """Запустить поток (один на процесс). Вызывается из lifespan приложения; window_fn — micro.restart_window, micro_fn — micro.active
+    (микроскоп не работает — окно ночное, см. night_window)."""
     global _agent
     if _agent is None:
-        _agent = AutoUpdater(window_fn=window_fn)
+        _agent = AutoUpdater(window_fn=window_fn, micro_fn=micro_fn)
         _agent.start()
     return _agent
 

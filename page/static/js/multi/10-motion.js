@@ -170,6 +170,12 @@ function drawMotionTile(index) {
   });
 }
 
+// обороты вала: ↻ по часовой, ↺ против; около нуля — «стоит»
+function mvRpmText(rpm) {
+  const v = Number(rpm) || 0;
+  return Math.abs(v) < 0.02 ? 'стоит' : (v > 0 ? '↻ ' : '↺ ') + Math.abs(v).toFixed(2) + ' об/мин';
+}
+
 // зона-цикл: окружность поиска вокруг оси вала и палка — красный конец на найденном угле, синий напротив
 function drawCycleOnTile(ctx, z, cam, g, lz, mode) {
   const fs = cam.frame_size || [g.nw, g.nh];
@@ -182,7 +188,7 @@ function drawCycleOnTile(ctx, z, cam, g, lz, mode) {
   ctx.lineWidth = 3;
   ctx.strokeStyle = '#ef4444'; ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(cx + dx, cy + dy); ctx.stroke();
   ctx.strokeStyle = '#38bdf8'; ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(cx - dx, cy - dy); ctx.stroke();
-  const label = z.name + '  ' + Number(lz.angle).toFixed(1) + '°';
+  const label = z.name + '  ' + Number(lz.angle).toFixed(1) + '° · ' + mvRpmText(lz.rpm);
   ctx.lineWidth = 3; ctx.strokeStyle = '#000'; ctx.strokeText(label, cx - r * 0.6, cy - r - 6);
   ctx.fillStyle = '#fff'; ctx.fillText(label, cx - r * 0.6, cy - r - 6); ctx.lineWidth = 2;
 }

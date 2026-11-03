@@ -158,6 +158,8 @@ def _norm_cycle(z: dict, zid: str, where: str) -> dict:
         "jump_deg": _num(z.get("jump_deg", 25), where + ".jump_deg", 3, 180),
         "hold_frames": _num(z.get("hold_frames", 3), where + ".hold_frames", 0, 1000, True),
         "relock_frames": _num(z.get("relock_frames", 5), where + ".relock_frames", 1, 1000, True),
+        "rpm_window": _num(z.get("rpm_window", 20), where + ".rpm_window", 2, 300),
+        "rpm_out": _out(z.get("rpm_out"), ("holding",), where + ".rpm_out"),
     }
 
 
@@ -440,16 +442,40 @@ class CycleRT:
         self.xs = np.clip(np.rint(self.ox + self.rs[None, :] * _PHI_SIN).astype(int), 0, max(0, int((self.x1 - self.x0) * self.k) - 1))
         self.ys = np.clip(np.rint(self.oy - self.rs[None, :] * _PHI_COS).astype(int), 0, max(0, int((self.y1 - self.y0) * self.k) - 1))
         self.raw: deque = deque(maxlen=zcfg["smooth"])
+        self.trk: deque = deque()               # (время, «развёрнутый» угол без скачков через 360°) за последние rpm_window секунд — для оборотов
         self.reset()
 
     def reset(self):
         self.raw.clear()
+        self.trk.clear()
+        self.unw: Optional[float] = None
         self.last: Optional[float] = None       # последний принятый угол (до сглаживания) — вокруг него ищем дальше
         self.miss = 0                           # сколько кадров подряд палку не нашли
         self.angle = 0.0
         self.conf = 0.0
         self.score = 0.0
+        self.rpm = 0.0                          # обороты, об/мин: «+» по часовой стрелке, «−» против; 0 — стоит или пока мало данных
         self.valid = False
+
+    def _track(self, now: float):
+        """Угол принят: наращиваем непрерывный угол и пересчитываем обороты наклоном прямой по точкам последних rpm_window секунд.
+        Наклон по многим точкам, а не разность соседних кадров: шум угла в ±1° не превращается в ложные обороты."""
+        self.unw = self.angle if self.unw is None else self.unw + ang_diff(self.angle, self.unw % 360.0)
+        self.trk.append((now, self.unw))
+        win = self.cfg["rpm_window"]
+        while self.trk and now - self.trk[0][0] > win:
+            self.trk.popleft()
+        if len(self.trk) < 5 or self.trk[-1][0] - self.trk[0][0] < 0.4 * win:
+            self.rpm = 0.0
+            return
+        t = np.array([p[0] for p in self.trk])
+        a = np.array([p[1] for p in self.trk])
+        self.rpm = float(np.polyfit(t - t[0], a, 1)[0]) / 6.0              # град/с → об/мин
+
+    def _lost(self):
+        self.trk.clear()
+        self.unw = None
+        self.rpm = 0.0
 
     def _liks(self, bgr: np.ndarray):
         hsv = cv2.cvtColor(bgr, cv2.COLOR_BGR2HSV)
@@ -460,8 +486,8 @@ class CycleRT:
         blue = ((h >= b1) & (h <= b2) & (s >= bs) & (v >= bv)).astype(np.float32)
         return cv2.dilate(red, _K3), cv2.dilate(blue, _K3)
 
-    def step(self, frame: Optional[np.ndarray]) -> bool:
-        """Новый цветной кадр → угол. True, если палка найдена на этом кадре."""
+    def step(self, frame: Optional[np.ndarray], now: float = 0.0) -> bool:
+        """Новый цветной кадр (now — его время, с) → угол и обороты. True, если палка найдена на этом кадре."""
         c = self.cfg
         found = False
         if frame is not None and frame.ndim == 3:
@@ -493,12 +519,15 @@ class CycleRT:
                 self.miss = 0
                 self.valid = True
                 found = True
+                self._track(now)
         if not found:
             self.miss += 1
             if self.miss > c["hold_frames"]:
                 self.valid = False
+                self._lost()
             if self.miss >= c["relock_frames"]:
                 self.raw.clear()
+                self._lost()                    # после перезахвата угол может оказаться где угодно — обороты считаем заново
         return found
 
 
@@ -660,7 +689,7 @@ class CameraEngine:
         dt = self.gap * self.proc_interval
         bits = {z.id: z.step(prev, gray, dt) for z in self.zones}
         for c in self.cycles.values():
-            bits[c.id] = int(c.step(frame))
+            bits[c.id] = int(c.step(frame, now))
         self.last_state = self._state(bits, now, alive=True)
         return self.last_state
 
@@ -712,9 +741,10 @@ class CameraEngine:
         ok = bool(alive and c and c.valid)
         angle = round(c.angle, 2) if ok else 0.0
         conf = round(c.conf, 3) if ok else 0.0
+        rpm = round(c.rpm, 3) if ok else 0.0
         return {"id": zc["id"], "name": zc["name"], "type": "cycle", "metric": "flow", "enabled": zc["enabled"],
                 "bit": int(ok), "flow": angle, "diff": conf, "value": angle, "on": 0.0, "off": 0.0,
-                "angle": angle, "conf": conf, "score": round(c.score, 3) if c else 0.0, "valid": ok}
+                "angle": angle, "conf": conf, "rpm": rpm, "score": round(c.score, 3) if c else 0.0, "valid": ok}
 
     def _mirror_group(self, g: dict, alive: bool) -> dict:
         """Две палки → рассинхрон. mirror: углы зеркальны (θ1 + θ2 = 360 + ref), same: одинаковы (θ1 − θ2 = ref). delta — отклонение
@@ -753,6 +783,9 @@ class CameraEngine:
                 else:
                     val = int(zb.get(zc["id"], 0))
                 out.append((o["kind"], o["address"], val))
+            ro = zc.get("rpm_out")
+            if ro and zc["enabled"] and zc["type"] == "cycle":      # обороты в 0,01 об/мин знаковым int16 (против часовой — дополнительный код)
+                out.append(("holding", ro["address"], int(round(za[zc["id"]]["rpm"] * 100)) & 0xFFFF))
         gv = {g["id"]: g for g in state["groups"]}
         for gc in self.cfg["groups"]:
             o = gc["out"]

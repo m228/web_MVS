@@ -325,3 +325,72 @@ def test_real_table_from_video_predicts_other_days():
     # у каждого режима кадры могли отсеяться по-разному (одиночный кадр без слежения) — сравниваем разброс
     assert np.std(fixed) <= 0.6 * np.std(raw), (np.std(raw), np.std(fixed))
     assert max(abs(x) for x in fixed) <= 6.5
+
+
+# ───────────── обороты ─────────────
+def spin(eng, a0, dps, seconds=30.0, fps=4.0, still_after=None):
+    """Палки вращаются: левая от a0 со скоростью dps град/с (+ по часовой), правая зеркально. Возвращает последнее состояние."""
+    st = None
+    for i in range(int(seconds * fps)):
+        t = i / fps
+        a = a0 + dps * (t if still_after is None else min(t, still_after))
+        img = rod_frame({(250, 270): a % 360, (700, 270): (360 - a) % 360})
+        st = eng.process(cv2.cvtColor(img, cv2.COLOR_BGR2GRAY), t, img) or st
+    return st
+
+
+@pytest.mark.parametrize("dps, a0", [(6.0, 10), (-6.0, 100), (4.5, 340), (-9.0, 30)])
+def test_rpm_matches_rotation_speed_and_sign_through_wraparound(dps, a0):
+    st = spin(me.CameraEngine(cam_cfg()), a0, dps)
+    l, r = zone(st, "L")["rpm"], zone(st, "R")["rpm"]
+    assert abs(l - dps / 6.0) <= 0.05 * abs(dps / 6.0) + 0.02, (dps, l)      # левая крутится со знаком dps
+    assert abs(r + dps / 6.0) <= 0.05 * abs(dps / 6.0) + 0.02, (dps, r)      # правая — навстречу
+
+
+def test_rpm_zero_when_standing_and_before_enough_data():
+    eng = me.CameraEngine(cam_cfg())
+    assert zone(spin(eng, 50, 6.0, seconds=1.5), "L")["rpm"] == 0.0        # данных мало
+    st = spin(me.CameraEngine(cam_cfg()), 50, 0.0)
+    assert abs(zone(st, "L")["rpm"]) <= 0.02 and zone(st, "L")["valid"]
+
+
+def test_rpm_drops_to_zero_after_rod_is_lost_and_after_dead_camera():
+    eng = me.CameraEngine(cam_cfg())
+    spin(eng, 10, 6.0)
+    empty = np.full((H, W, 3), (60, 130, 70), np.uint8)
+    for i in range(8):
+        st = eng.process(cv2.cvtColor(empty, cv2.COLOR_BGR2GRAY), 40 + i * 0.25, empty) or None
+    assert st is not None and zone(st, "L")["rpm"] == 0.0
+    assert zone(eng.dead_state(99.0, "нет"), "L")["rpm"] == 0.0
+
+
+def test_rpm_out_writes_signed_hundredths():
+    c = cam_cfg(zones=[{"id": "L", "type": "cycle", "center": [250, 270], "radius": 170, "rpm_out": {"kind": "holding", "address": 20}},
+                       {"id": "R", "type": "cycle", "center": [700, 270], "radius": 170, "rpm_out": {"kind": "holding", "address": 21}}],
+                 groups=[])
+    eng = me.CameraEngine(c)
+    st = spin(eng, 10, 6.0)                                      # 1 об/мин: левая +, правая −
+    w = {(k, a): v for k, a, v in eng.compute_writes(st)}
+    assert 95 <= w[("holding", 20)] <= 105
+    assert 65536 - 105 <= w[("holding", 21)] <= 65536 - 95
+    with pytest.raises(ValueError):
+        cam_cfg(zones=[{"id": "L", "type": "cycle", "center": [1, 2], "rpm_out": {"kind": "coil", "address": 1}}])
+
+
+@pytest.mark.skipif(not VIDEO.exists(), reason="видео диффузии не лежит на этом компьютере")
+def test_real_video_rpm_is_steady_and_opposite():
+    eng = me.CameraEngine(me.normalize_camera({
+        "id": "dif", "url": "x", "frame_size": [1920, 1080], "proc_fps": 4,
+        "zones": [{"id": "L", "type": "cycle", "center": [318, 291], "radius": 340}, {"id": "R", "type": "cycle", "center": [1015, 316], "radius": 340}]}))
+    cap, t, ls, rs = cv2.VideoCapture(str(VIDEO)), 0.0, [], []
+    while True:
+        ok, fr = cap.read()
+        if not ok:
+            break
+        st = eng.process(cv2.cvtColor(fr, cv2.COLOR_BGR2GRAY), t, fr)
+        t += 0.25
+        if st and t > 25:                                        # первые секунды окно оборотов ещё набирается
+            z = {x["id"]: x for x in st["zones"]}
+            ls.append(z["L"]["rpm"]); rs.append(z["R"]["rpm"])
+    assert 0.65 <= np.median(rs) <= 0.80 and -0.80 <= np.median(ls) <= -0.65      # ≈ 1,1°/кадр × 4 кадра/с ÷ 6 = 0,73 об/мин, левая против часовой
+    assert np.percentile(rs, 10) >= 0.55 and np.percentile(ls, 90) <= -0.55         # без сильных провалов

@@ -33,6 +33,7 @@ class CameraWorker(BaseCameraWorker):
     def __init__(self, serial_number, manager):
         super().__init__(serial_number, manager)
 
+        self.black = camera_params.BlackWatch()       # сколько секунд подряд поток чёрный (тревога на плате/свете)
         self.ia = None
         # сеанс SDK-стрима (GigE через MvCameraControl.dll с resend), если активен
         self._sdk_stream = None
@@ -80,6 +81,13 @@ class CameraWorker(BaseCameraWorker):
         self._cache_ttl = 30.0              # сек — кэш живёт между refresh-цикл UI
 
     # запомнить выбранную пользователем запись (handle) и/или интерфейс
+    def _black_feed(self, img):
+        """Кадр потока -> счётчик «чёрный подряд». Сбой проверки поток не роняет."""
+        try:
+            self.black.feed(img)
+        except Exception:
+            pass
+
     def select_interface(self, interface_id=None, device_handle=None):
         # переключение допустимо только при закрытом потоке —
         # иначе self.ia, открытый через старый интерфейс, повиснет
@@ -660,6 +668,7 @@ class CameraWorker(BaseCameraWorker):
                     self.metrics["image_number"] += 1
                     self.metrics["width"] = img.shape[1]
                     self.metrics["height"] = img.shape[0]
+                    self._black_feed(img)
 
                     if last_frame_time is not None:
                         dt = now - last_frame_time
@@ -790,6 +799,7 @@ class CameraWorker(BaseCameraWorker):
                     self.metrics["errors"] += 1
                     continue
                 self._last_bgr = img               # сырой кадр (до цветокоррекции) — для автофокуса
+                self._black_feed(img)
                 if self.color:
                     img = _apply_color(img, self.color)
                 ok, encoded = cv2.imencode(".jpg", img)

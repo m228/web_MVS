@@ -4585,6 +4585,13 @@ body.micro-rep-doc .micro-cmp-strips { grid-template-columns: repeat(6, 1fr); ga
 .md-sp { flex: 1; }
 .md-chk { display: inline-flex; flex-direction: row; align-items: center; gap: 6px; margin-right: 10px; font-size: 12px; font-weight: 400; color: var(--text); }
 .md-ip { color: var(--muted); font-weight: 400; font-size: 11px; white-space: nowrap; }
+.md-dot { flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--border-strong); }
+.md-dot.is-on { background: var(--success); }
+.md-dot.is-off { background: #f87171; }
+.mv-peek { position: fixed; z-index: 10000; pointer-events: none; display: grid; gap: 8px; padding: 8px; border-radius: 10px; background: rgba(5, 8, 13, .95); color: #e7eefb; font-size: 12px; box-shadow: 0 8px 28px rgba(0, 0, 0, .45); }
+.mv-peek[hidden] { display: none; }
+.mv-peek.is-multi { grid-template-columns: repeat(2, auto); }
+.mv-peek canvas { display: block; margin-top: 4px; border-radius: 6px; }
 .md-chk input { width: 16px; height: 16px; min-height: 0; }
 .md-flow { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .md-flow__src { flex: 1 1 260px; display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 2px 12px; padding: 5px 8px; border: 1px dashed var(--border-strong); border-radius: 10px; }

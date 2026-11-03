@@ -8,6 +8,7 @@ import threading
 import time
 
 import plate_config
+from board_guard import BoardGuard
 from microscope_plc import PlateClient
 from microscope_fsm import MicroscopeFSM
 from sv_source import SvSource
@@ -24,6 +25,7 @@ class MicroscopeService:
         self.plate = None
         self.fsm = None
         self.sv_source = None
+        self.guard = None                # защита от чёрного кадра (board_guard), живёт, пока запущен микроскоп
         # заводка: момент перехода «Сгущение(3) → Затравка и далее(4..9)»; None — варка не отслеживается
         self._last_stage = None
         self._pump_runs = 0              # сколько раз началась подкачка (стадия 5) в идущей варке
@@ -82,6 +84,9 @@ class MicroscopeService:
                 self.sv_source = SvSource(svc, on_update=self._on_sv,
                                           fallback_host=self.cfg.get("host", ""))
                 self.sv_source.start()
+            self.guard = BoardGuard({"camera": self._guard_camera, "state": lambda: self.fsm.state, "status": lambda: self.plate.status,
+                                     "ext": lambda: self.plate.ext, "reboot": self.plate.reboot})
+            self.guard.start()
             self._started = True
             if self._zip_thread is None or not self._zip_thread.is_alive():
                 self._zip_thread = threading.Thread(target=self._boil_zip_loop, name="boil-zip", daemon=True)
@@ -93,7 +98,21 @@ class MicroscopeService:
                       "info", {"host": self.cfg.get("host"), "port": self.cfg.get("port"),
                                "sv_source": bool(svc.get("enabled"))})
 
-    BOIL_ZIP_TICK_S = 120        # раз во столько сборщик архивов смотрит, нет ли законченной варки без архива
+    def _guard_camera(self):
+        """Камера микроскопа для защиты от чёрного кадра: идёт ли поток, сколько он чёрный, жив ли последний кадр."""
+        from camera_core import manager
+        serial = (plate_config.load().get("camera_serial") or "").strip()
+        w = manager.workers.get(serial) if serial else None       # воркер не создаём ради проверки
+        bw = getattr(w, "black", None)
+        cur = getattr(w, "current_config", None)
+        return {"serial": serial, "streaming": bool(w is not None and w.running), "current": dict(cur) if cur else None,
+                "black_s": bw.seconds() if bw is not None else 0.0, "live": bool(bw is not None and bw.live())}
+
+    def guard_status(self):
+        """Последний перезапуск платы защитой от чёрного кадра ({} — не было) — для мониторинга."""
+        return dict(self.guard.last) if self.guard and self.guard.last else {}
+
+    BOIL_ZIP_TICK_S = 120       # раз во столько сборщик архивов смотрит, нет ли законченной варки без архива
 
     def _boil_quiet(self):
         """Варки сейчас нет — архив можно собирать: стадия вне зоны авто-цикла пробы (3…9, 20 УНВ — та же проверка,
@@ -755,6 +774,8 @@ class MicroscopeService:
         with self._lock:
             if not self._started:
                 return
+            if self.guard:
+                self.guard.stop()
             for obj in (self.sv_source, self.fsm, self.plate):
                 try:
                     if obj is not None:

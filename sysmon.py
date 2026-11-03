@@ -490,7 +490,7 @@ def default_sources() -> dict:
     return {
         "cfg": plate_config.load,
         "micro_on": lambda: services.micro_enabled(plate_config.load()),
-        "state": micro.state, "status": micro.status, "ext": micro.ext, "cv": micro.cv_status,
+        "state": micro.state, "status": micro.status, "ext": micro.ext, "cv": micro.cv_status, "guard": micro.guard_status,
         "services": services.states,
         "camera": camera,
         "probes": probes,
@@ -625,6 +625,7 @@ class Agent:
                     return self.src["probes"](d["serial"], now - (lt.tm_hour * 3600 + lt.tm_min * 60 + lt.tm_sec))
                 d["probes"] = _safe(probes, None, errs, "probes")
         d["camera"] = g("camera", {}) or {}
+        d["guard"] = g("guard", {}) or {}
         d["services"] = g("services", {}) or {}
         d["positions"] = list(self.positions)
         return d
@@ -647,19 +648,18 @@ class Agent:
             bits.append("сбросы платы: сторож %d, LAN %d/%d" % tuple(int(r) for r in resets))
         if (d.get("status") or {}).get("connected") is False:
             bits.append("плата не отвечает")
+        guard = d.get("guard") or {}
+        if guard.get("t"):
+            bits.append("плату уже перезапускали в %s: %s" % (time.strftime("%H:%M", time.localtime(guard["t"])), guard.get("text") or guard.get("result")))
         return "%s (%s)" % (head, ", ".join(bits))
 
     def _black_rule(self, d: dict, cam: dict) -> str:
         """Живой поток камеры микроскопа непрерывно чёрный BLACK_SECONDS, а свет включён и экспозиция не нулевая -> текст тревоги, иначе ''."""
         import camera_params
         secs = _num(cam.get("black_s")) or 0
-        if not (cam.get("serial") and cam.get("streaming") and secs >= camera_params.BLACK_SECONDS):
-            return ""
         state = d.get("state") or {}
-        if not state.get("led_on") or not (_num(state.get("led_bright")) or 0) > 0:
-            return ""
-        exp = _num((cam.get("current") or {}).get("exposure_time"))
-        if exp is not None and exp <= 0:
+        if not (cam.get("serial") and camera_params.black_alarm(secs, cam.get("streaming"), state.get("led_on"),
+                                                                _num(state.get("led_bright")), _num((cam.get("current") or {}).get("exposure_time")))):
             return ""
         return self._black_text(d, "Кадр камеры чёрный уже %s при включённом свете" % fmt_dur(secs))
 
@@ -687,6 +687,9 @@ class Agent:
                 found["service_" + name] = ("medium", "%s не поднимается" % SERVICE_LABELS[name])
 
         if micro:
+            guard = d.get("guard") or {}
+            if guard.get("result") == "no_return":                        # защита перезапустила плату, а она не поднялась — сразу, без подтверждений
+                found["board_reboot"] = ("high", "Защита от чёрного кадра перезапустила плату: " + str(guard.get("text")))
             black = self._black_rule(d, cam)
             if black:
                 found["black"] = ("high", black)
@@ -842,7 +845,9 @@ class Agent:
                 # без счётчика кругов падение с «почти 65536» к малому числу — обычное обнуление регистра, а не перезагрузка
                 wrap = not exact and prev > PLATE_UP_WRAP - 3600 and up < 3600
                 if not wrap:
-                    events.append(self._emit("plate_reboot", "high", "Плата микроскопа перезагрузилась (её аптайм сбросился)", {}, t=now))
+                    by_guard = now - ((d.get("guard") or {}).get("t") or 0) < 300       # её только что перезапустила защита от чёрного кадра
+                    events.append(self._emit("plate_reboot", "high", "Плата микроскопа перезагрузилась (её аптайм сбросился)"
+                                             + (" по команде защиты от чёрного кадра" if by_guard else ""), {}, t=now))
             self._plate_up, self._plate_up_exact = up, exact
         return events
 

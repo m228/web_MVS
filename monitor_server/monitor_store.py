@@ -38,6 +38,12 @@ NOTIFY_LEVELS = ("critical", "high")                              # в Telegram 
 NOTIFY_KINDS = ("start", "alert", "plate_reboot", "offline")      # какие события бывают «открытием» тревоги
 OFFLINE_KINDS = ("offline", "offline_repeat")
 OUTAGE_MIN_S = 180               # приёмник молчал дольше — это перерыв (перезапуск занимает секунды)
+# настройки, которые Макс меняет заводу из панели или Telegram (уходят клиенту в ответе на /wait): что присылать и как часто.
+# Тревоги присылаются всегда — их отключить нельзя.
+CONFIG_FLAGS = {"send_positions": "Пробы датчиков", "send_micro": "Блок микроскопа", "send_camera": "Камера", "send_services": "Сервисы"}
+INTERVAL_MIN_S, INTERVAL_MAX_S = 60, 3600
+COMMAND_KINDS = ("update",)      # «Обновить»: клиент проверяет релиз сейчас и перезапускается в первом подходящем окне
+COMMAND_TTL_S = 24 * 3600        # команда, которую клиент так и не забрал за сутки, устаревает
 ENROLL_PENDING_MAX = 30          # заявок «ждут решения» не больше: ключ регистрации не должен позволять забить панель
 ENROLL_KEEP_DAYS = 14            # заявку, от которой 2 недели нет вестей, забываем
 
@@ -94,13 +100,19 @@ class Store:
             CREATE INDEX IF NOT EXISTS ix_positions_plant ON positions (plant_id, t);
             CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS outages (start_t REAL NOT NULL, end_t REAL NOT NULL);
+            CREATE TABLE IF NOT EXISTS commands (
+                id INTEGER PRIMARY KEY AUTOINCREMENT, plant_id INTEGER NOT NULL, kind TEXT NOT NULL, created_t REAL NOT NULL, delivered_t REAL);
+            CREATE INDEX IF NOT EXISTS ix_commands_plant ON commands (plant_id, delivered_t);
             CREATE TABLE IF NOT EXISTS enroll (
                 id INTEGER PRIMARY KEY AUTOINCREMENT, machine TEXT NOT NULL UNIQUE, name TEXT NOT NULL, version TEXT NOT NULL DEFAULT '',
                 ip TEXT NOT NULL DEFAULT '', secret_hash TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pending',
                 first_t REAL NOT NULL, last_t REAL NOT NULL, plant_id INTEGER, token TEXT);
         """)
-        if not any(r["name"] == "machine" for r in self.db.execute("PRAGMA table_info(plants)")):
-            self.db.execute("ALTER TABLE plants ADD COLUMN machine TEXT")      # какой ПК зарегистрировался под этим заводом (авто-регистрация)
+        have = {r["name"] for r in self.db.execute("PRAGMA table_info(plants)")}
+        for col, ddl in (("machine", "TEXT"),                        # какой ПК зарегистрировался под этим заводом (авто-регистрация)
+                         ("config", "TEXT"), ("config_v", "INTEGER NOT NULL DEFAULT 0")):      # настройки с панели и их номер версии
+            if col not in have:
+                self.db.execute("ALTER TABLE plants ADD COLUMN %s %s" % (col, ddl))
         self.db.commit()
         self._note_outage()
 
@@ -192,6 +204,7 @@ class Store:
             self.db.execute("DELETE FROM positions WHERE plant_id=?", (plant_id,))
             self.db.execute("DELETE FROM notify WHERE plant_id=?", (plant_id,))
             self.db.execute("DELETE FROM enroll WHERE plant_id=?", (plant_id,))        # удалённый завод может зарегистрироваться заново
+            self.db.execute("DELETE FROM commands WHERE plant_id=?", (plant_id,))
             return self.db.execute("DELETE FROM plants WHERE id=?", (plant_id,)).rowcount > 0
 
     def plant_by_token(self, token: str) -> Optional[sqlite3.Row]:
@@ -199,6 +212,75 @@ class Store:
             return None
         with self._lock:
             return self.db.execute("SELECT * FROM plants WHERE token_hash=?", (hash_token(token),)).fetchone()
+
+    # ------------------------------------------------------------------------------------------------------------- настройки и команды заводу
+
+    def plant_config(self, plant_id: int) -> dict:
+        """{"v": номер версии настроек, "config": {что менялось с панели}}. Нет завода — LookupError."""
+        with self._lock:
+            r = self.db.execute("SELECT config, config_v FROM plants WHERE id=?", (plant_id,)).fetchone()
+        if r is None:
+            raise LookupError("Завода нет")
+        try:
+            cfg = json.loads(r["config"]) if r["config"] else {}
+        except ValueError:
+            cfg = {}
+        return {"v": r["config_v"], "config": cfg if isinstance(cfg, dict) else {}}
+
+    def set_plant_config(self, plant_id: int, patch: dict) -> dict:
+        """Слить правки (интервал пульса, флаги «что присылать») и поднять номер версии: клиент заберёт их на ближайшем /wait.
+        ValueError — неизвестный ключ или значение не годится; LookupError — завода нет."""
+        if not isinstance(patch, dict) or not patch:
+            raise ValueError("нечего менять")
+        clean: dict = {}
+        for k, v in patch.items():
+            if k in CONFIG_FLAGS:
+                if not isinstance(v, bool):
+                    raise ValueError("%s: нужно да или нет" % k)
+                clean[k] = v
+            elif k == "interval_s":
+                if isinstance(v, bool) or not isinstance(v, (int, float)) or not INTERVAL_MIN_S <= v <= INTERVAL_MAX_S:
+                    raise ValueError("интервал — от %d до %d с" % (INTERVAL_MIN_S, INTERVAL_MAX_S))
+                clean[k] = int(v)
+            else:
+                raise ValueError("неизвестная настройка: %s" % str(k)[:30])
+        with self._lock:
+            cur = self.plant_config(plant_id)
+            new = {**cur["config"], **clean}
+            if new == cur["config"]:
+                return cur
+            with self.db:
+                self.db.execute("UPDATE plants SET config=?, config_v=config_v+1 WHERE id=?", (json.dumps(new, ensure_ascii=False), plant_id))
+            return {"v": cur["v"] + 1, "config": new}
+
+    def command_add(self, plant_id: int, kind: str) -> int:
+        """Поставить команду заводу в очередь. Такая же, ещё не забранная, уже ждёт — вторая не создаётся. ValueError — неизвестная команда."""
+        if kind not in COMMAND_KINDS:
+            raise ValueError("неизвестная команда")
+        now = self.clock()
+        with self._lock, self.db:
+            if self.db.execute("SELECT 1 FROM plants WHERE id=?", (plant_id,)).fetchone() is None:
+                raise LookupError("Завода нет")
+            r = self.db.execute("SELECT id FROM commands WHERE plant_id=? AND kind=? AND delivered_t IS NULL AND created_t>?",
+                                (plant_id, kind, now - COMMAND_TTL_S)).fetchone()
+            if r:
+                return r["id"]
+            return self.db.execute("INSERT INTO commands (plant_id, kind, created_t) VALUES (?,?,?)", (plant_id, kind, now)).lastrowid
+
+    def commands_pending(self, plant_id: int) -> int:
+        with self._lock:
+            return self.db.execute("SELECT COUNT(*) FROM commands WHERE plant_id=? AND delivered_t IS NULL AND created_t>?",
+                                   (plant_id, self.clock() - COMMAND_TTL_S)).fetchone()[0]
+
+    def commands_take(self, plant_id: int) -> list[dict]:
+        """Отдать клиенту его команды (каждая — один раз)."""
+        now = self.clock()
+        with self._lock, self.db:
+            rows = self.db.execute("SELECT id, kind FROM commands WHERE plant_id=? AND delivered_t IS NULL AND created_t>? ORDER BY id",
+                                   (plant_id, now - COMMAND_TTL_S)).fetchall()
+            for r in rows:
+                self.db.execute("UPDATE commands SET delivered_t=? WHERE id=?", (now, r["id"]))
+        return [{"id": r["id"], "kind": r["kind"]} for r in rows]
 
     # ------------------------------------------------------------------------------------------------------------- авто-регистрация
 
@@ -472,6 +554,7 @@ class Store:
             cutoff = self.clock() - self.retention_days * 86400
             self.db.execute("DELETE FROM positions WHERE t < ?", (cutoff,))
             self.db.execute("DELETE FROM notify WHERE t < ? AND status!='pending'", (cutoff,))
+            self.db.execute("DELETE FROM commands WHERE created_t < ?", (cutoff,))
             self.db.execute("DELETE FROM enroll WHERE last_t < ?", (self.clock() - ENROLL_KEEP_DAYS * 86400,))      # давно молчащие заявки (в т.ч. непринятые)
             return self.db.execute("DELETE FROM events WHERE t < ?", (cutoff,)).rowcount
 
@@ -517,6 +600,7 @@ class Store:
                 except ValueError:
                     snap = None
                 out.append({
+                    "config": self.plant_config(p["id"]), "cmd_pending": self.commands_pending(p["id"]),
                     "id": p["id"], "name": p["name"], "status": self._status(p, now), "created_t": p["created_t"],
                     "last_seen_t": p["last_seen_t"], "interval_s": p["interval_s"], "offline_since": p["offline_since"],
                     "snapshot": snap, "alerts": alerts, "events": self.events(p["id"], 5)})

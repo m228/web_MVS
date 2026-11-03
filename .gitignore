@@ -68,6 +68,9 @@ cam_events.db-shm
 # мониторинг (sysmon): токен и журнал стартов — только локально
 /monitor.json
 /monitor.json.tmp
+/monitor_remote.json
+/monitor_remote.json.tmp
+/enroll.json
 sysmon.db
 sysmon.db-wal
 sysmon.db-shm

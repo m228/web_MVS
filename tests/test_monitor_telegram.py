@@ -590,7 +590,7 @@ def test_plant_button_gives_full_text_report(bot_env):
     assert any(ln.startswith("⚠ Подвод (") and "расчётная 500 · энкодер 500 · датчик 714, разница 214" in ln for ln in lines)
     assert "Последние события:" in lines and any("Приложение обновлено до v2.0.46" in ln for ln in lines)
     sent = e.tg.requests[-1]["body"]
-    assert sent["chat_id"] == CHAT and sent["text"] == reply and sent["reply_markup"]["keyboard"][-1] == [{"text": "Все заводы"}]
+    assert sent["chat_id"] == CHAT and sent["text"] == reply and [b["text"] for b in sent["reply_markup"]["inline_keyboard"][0]] == ["🔄 Обновить", "⚙ Данные"], "под сводкой завода — кнопки команд"
 
 
 def test_plant_without_alerts_says_so_and_waiting_plant_is_short(bot_env):
@@ -683,7 +683,7 @@ def test_bot_thread_answers_a_question_end_to_end(tmp_path, tg, monkeypatch):
             time.sleep(0.1)
         assert tg.sent() and tg.sent()[0].startswith("⚪ Кир — ещё не выходил на связь")
         last_send = [r for r in tg.requests if r["method"] == "sendMessage"][-1]
-        assert last_send["body"]["reply_markup"]["keyboard"][0] == [{"text": "Кир"}]
+        assert [b["text"] for b in last_send["body"]["reply_markup"]["inline_keyboard"][0]] == ["🔄 Обновить", "⚙ Данные"]
     finally:
         srv.close()
 

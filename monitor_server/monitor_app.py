@@ -13,8 +13,10 @@
   GET  /api/enroll              — заявки, ждущие решения; POST /api/enroll/{id}/approve ({"name"}) и /reject — принять / отклонить.
   GET  /api/telegram            — состояние уведомлений в Telegram (без токена и chat id); POST /api/telegram/test — тестовое сообщение.
   GET  /health                  — жив ли (без пароля, без данных).
-  GET  /wait?known=<версия>     — «толчок» о релизе: клиент (Bearer-токен) держит запрос; ответ сразу, если последняя версия на GitHub не равна known,
-                                  иначе через WAIT_S секунд {"latest", "changed": false}. Клиент сам скачивает релиз с GitHub.
+  GET  /wait?known=<версия>&cv=<n> — канал «вниз» (клиент с Bearer-токеном держит запрос): ответ сразу, если последняя версия на GitHub не равна
+                                  known, появилась команда («Обновить») или настройки изменились (номер config_v не равен cv); иначе через WAIT_S секунд
+                                  {"latest", "changed": false, "commands": [], "config_v"}. Клиент сам скачивает релиз с GitHub.
+  POST /api/plants/{id}/update, /api/update_all — команда «Обновить» заводу / всем; GET|POST /api/plants/{id}/config — что присылать и как часто.
   GET  /manifest.webmanifest, /icon-192.png, /icon-512.png, /favicon.ico — иконка и описание приложения (без пароля, секретов нет):
                                   по ним браузер ставит панель отдельным окном («Установить как приложение»).
 
@@ -171,18 +173,24 @@ def create_app(store: monitor_store.Store, password: str, version: str, panel_ht
         return {"ok": True, "service": "monitor", "version": version}
 
     @app.get("/wait")
-    async def wait(request: Request, known: str = ""):
-        """Длинный запрос «не вышла ли новая версия?»: ответ приходит, как только приёмник увидел на GitHub версию, отличную от known."""
+    async def wait(request: Request, known: str = "", cv: int = -1):
+        """Длинный запрос «что нового для меня?»: ответ приходит сразу, как только на GitHub вышла версия, отличная от known, заводу поставили
+        команду или изменили его настройки (config_v != cv). Иначе — через WAIT_S секунд «без изменений»."""
         auth = request.headers.get("authorization", "")
-        if (store.plant_by_token(auth[7:].strip()) if auth.lower().startswith("bearer ") else None) is None:
+        plant = store.plant_by_token(auth[7:].strip()) if auth.lower().startswith("bearer ") else None
+        if plant is None:
             return JSONResponse({"ok": False, "error": "токен не принят"}, status_code=401)
         end = time.monotonic() + WAIT_S
         while True:
             latest = releases.latest if releases is not None else None
-            if latest and latest != known[:20]:
-                return {"ok": True, "latest": latest, "changed": True}
-            if time.monotonic() >= end or await request.is_disconnected():
-                return {"ok": True, "latest": latest, "changed": False}
+            cmds = await run_in_threadpool(store.commands_take, plant["id"])
+            conf = await run_in_threadpool(store.plant_config, plant["id"])
+            changed = bool(latest and latest != known[:20])
+            if changed or cmds or conf["v"] != cv or time.monotonic() >= end or await request.is_disconnected():
+                out = {"ok": True, "latest": latest, "changed": changed, "commands": cmds, "config_v": conf["v"]}
+                if conf["v"] != cv:
+                    out["config"] = conf["config"]
+                return out
             await asyncio.sleep(1)
 
     @app.post("/ingest")
@@ -332,6 +340,47 @@ def create_app(store: monitor_store.Store, password: str, version: str, panel_ht
         if bad is not None:
             return bad
         return {"positions": store.positions(plant_id, limit)}
+
+    @app.post("/api/plants/{plant_id}/update")
+    def plant_update(plant_id: int, request: Request):
+        """Команда «Обновить»: клиент заберёт её на ближайшем /wait (секунды), проверит релиз и перезапустится в первом подходящем окне."""
+        bad = write_denied(request)
+        if bad is not None:
+            return bad
+        try:
+            return {"command": store.command_add(plant_id, "update")}
+        except LookupError:
+            return JSONResponse({"error": "завода нет"}, status_code=404)
+
+    @app.post("/api/update_all")
+    def update_all(request: Request):
+        bad = write_denied(request)
+        if bad is not None:
+            return bad
+        ids = [store.command_add(p["id"], "update") for p in store.plants_view()]
+        return {"sent": len(ids)}
+
+    @app.get("/api/plants/{plant_id}/config")
+    def plant_config_get(plant_id: int, request: Request):
+        bad = panel_denied(request)
+        if bad is not None:
+            return bad
+        try:
+            return store.plant_config(plant_id)
+        except LookupError:
+            return JSONResponse({"error": "завода нет"}, status_code=404)
+
+    @app.post("/api/plants/{plant_id}/config")
+    async def plant_config_set(plant_id: int, request: Request):
+        bad = write_denied(request)
+        if bad is not None:
+            return bad
+        try:
+            return store.set_plant_config(plant_id, await request.json())
+        except LookupError:
+            return JSONResponse({"error": "завода нет"}, status_code=404)
+        except ValueError as e:                              # и «нечего менять», и битый JSON (он тоже ValueError)
+            return JSONResponse({"error": str(e)}, status_code=400)
 
     @app.post("/api/plants/{plant_id}/token")
     def plant_token(plant_id: int, request: Request):

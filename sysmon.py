@@ -42,15 +42,19 @@ from paths import DATA_DIR, read_version
 
 DB_PATH = DATA_DIR / "sysmon.db"
 CONFIG_PATH = DATA_DIR / "monitor.json"
+REMOTE_PATH = DATA_DIR / "monitor_remote.json"   # настройки, присланные с панели (release_push): поверх monitor.json, в него не пишутся
 
 SCHEMA = 1
 DEFAULTS = {"enabled": False, "url": "", "token": "", "plant": "", "interval_s": 300, "system_proxy": True, "no_probe_min": 30, "auto_off_min": 10, "allow_http": False,
+            # что присылать (меняется с панели/Telegram, см. REMOTE_KEYS): тревоги шлются всегда; выключить можно лишь подробности
+            "send_positions": True, "send_micro": True, "send_camera": True, "send_services": True,
             "auto_enroll": True,       # нет токена — самому просить его у приёмника (enroll_client); нужен ключ в сборке
             # датчики микроскопа (правятся в monitor.json): допуски расхождения трёх датчиков, мкм — на отводе и на подводе
             # (отвод 150, подвод 200 по решению Макса 01.11: у Kir на подводе аналоговый датчик стабильно выше энкодера на 100–150 мкм); «ноль уполз» — |датчик − энкодер|
             # до автокалибровки, мкм; автокалибровки нет дольше overdue_h часов работы; bad_streak плохих проб подряд —
             # жёлтое предупреждение становится красной тревогой
             "gap_far_um": 150, "gap_near_um": 200, "drift_um": 100, "overdue_h": 24, "bad_streak": 2}
+REMOTE_KEYS = ("interval_s", "send_positions", "send_micro", "send_camera", "send_services")     # что приёмник может менять заводу
 TUNING = ("gap_far_um", "gap_near_um", "drift_um", "overdue_h", "bad_streak")      # пороги: в файл пишем только то, что изменили руками
 
 BOOT_TOL_S = 120            # время загрузки Windows у двух запусков расходится больше — это была перезагрузка ПК
@@ -256,6 +260,8 @@ def _clean_cfg(cfg: dict) -> dict:
     out["system_proxy"] = bool(cfg.get("system_proxy", True))
     out["allow_http"] = bool(cfg.get("allow_http", False))
     out["auto_enroll"] = bool(cfg.get("auto_enroll", True))
+    for k in ("send_positions", "send_micro", "send_camera", "send_services"):
+        out[k] = bool(cfg.get(k, True))
     for k, lo, hi in (("interval_s", 60, 3600), ("no_probe_min", 5, 240), ("auto_off_min", 2, 240), ("gap_far_um", 10, 2000), ("gap_near_um", 10, 2000),
                       ("drift_um", 10, 5000), ("overdue_h", 1, 168), ("bad_streak", 1, 10)):
         try:
@@ -265,7 +271,26 @@ def _clean_cfg(cfg: dict) -> dict:
     return out
 
 
-def load_config() -> dict:
+def load_remote() -> dict:
+    """Настройки с панели: {"v": номер версии, "config": {...}}; файла нет или он битый — v=None (клиент спросит с cv=-1)."""
+    try:
+        data = json.loads(REMOTE_PATH.read_text(encoding="utf-8"))
+        cfg = {k: v for k, v in (data.get("config") or {}).items() if k in REMOTE_KEYS}
+        return {"v": int(data["v"]), "config": cfg}
+    except (OSError, ValueError, KeyError, TypeError, AttributeError):
+        return {"v": None, "config": {}}
+
+
+def save_remote(v: int, config: dict) -> None:
+    REMOTE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    tmp = REMOTE_PATH.with_name(REMOTE_PATH.name + ".tmp")
+    tmp.write_text(json.dumps({"v": int(v), "config": {k: x for k, x in (config or {}).items() if k in REMOTE_KEYS}}, ensure_ascii=False), encoding="utf-8")
+    os.replace(tmp, REMOTE_PATH)
+
+
+def load_config(local_only: bool = False) -> dict:
+    """Настройки: monitor.json, поверх него — присланное с панели (REMOTE_KEYS). local_only — только файл (так save_config
+    не записывает присланное в monitor.json)."""
     cfg = {}
     try:
         data = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
@@ -278,12 +303,14 @@ def load_config() -> dict:
         pass
     except Exception as e:
         log_event("sysmon", "Не удалось прочитать monitor.json — беру настройки по умолчанию", "warn", {"error": str(e)})
+    if not local_only:
+        cfg = {**cfg, **load_remote()["config"]}
     return _clean_cfg(cfg)
 
 
 def save_config(patch: dict) -> dict:
     """Слить правки в monitor.json. Пустой токен в правке = «не менять» (форма не показывает старый). Ошибка адреса — ValueError."""
-    cur = load_config()
+    cur = load_config(local_only=True)
     new = dict(cur)
     for k in DEFAULTS:
         if k not in patch or patch[k] is None:
@@ -314,6 +341,7 @@ def public_config(cfg: Optional[dict] = None) -> dict:
     cfg["token_set"] = bool(tok)
     cfg["token_len"] = len(tok)
     cfg["token_tail"] = tok[-4:] if len(tok) >= 12 else ""
+    cfg["remote_keys"] = sorted(load_remote()["config"])           # что сейчас задано с панели (перекрывает monitor.json)
     return cfg
 
 
@@ -620,7 +648,7 @@ class Agent:
         rec["timeout"] = bool(rec["timeout"])
         rec.update(position_verdict(rec, cfg))
         self.positions.append(rec)
-        if configured(cfg):
+        if configured(cfg) and cfg.get("send_positions", True):
             outbox_add("positions", "info", position_text(rec), rec, rec["t"])
 
     # ---- сбор и правила
@@ -888,11 +916,11 @@ class Agent:
             "app_start_t": self.started_at, "app_up_s": app_up,
             "start": self.start_info,
             "alerts": [{"code": c, **a} for c, a in list(self.active.items())],
-            "camera": _camera_block(d.get("camera") or {}),
-            "services": {k: _svc_state(v) for k, v in (d.get("services") or {}).items()},
+            "camera": _camera_block(d.get("camera") or {}) if cfg.get("send_camera", True) else {"set": False},
+            "services": {k: _svc_state(v) for k, v in (d.get("services") or {}).items()} if cfg.get("send_services", True) else {},
             "errors": d.get("errors") or [],
         }
-        if d.get("micro_on"):
+        if d.get("micro_on") and cfg.get("send_micro", True):
             snap["micro"] = _micro_block(d, now)
         snap["text"] = summary_text(snap)
         return mask_secrets(snap)

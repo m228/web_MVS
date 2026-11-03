@@ -28,6 +28,7 @@ from pathlib import Path
 from typing import Callable, Optional
 
 import monitor_release
+import monitor_store
 
 log = logging.getLogger("monitor.telegram")
 
@@ -138,8 +139,8 @@ class TelegramClient:
 # события обновления (kind "update", state от завода): что в Telegram приходит без звука «в историю», а что со звуком.
 # Тихо: скачана, обновлён и всё поднялось, откат (о нём и так кричит красная тревога «приложение перезапущено»).
 # Со звуком — только «обновлён, но что-то не поднялось»: другой тревоги об этом нет, а камера/плата могут не работать.
-UPDATE_ICON = {"staged": "📦", "ok": "✅", "warn": "⚠️", "failed": "↩️"}
-QUIET_UPDATE_STATES = ("staged", "ok", "failed")
+UPDATE_ICON = {"staged": "📦", "ok": "✅", "warn": "⚠️", "failed": "↩️", "cmd": "🔄"}
+QUIET_UPDATE_STATES = ("staged", "ok", "failed", "cmd")        # cmd — ответ завода на команду «Обновить»
 
 
 def is_quiet(r: dict) -> bool:
@@ -472,14 +473,86 @@ class Bot:
             if not ok:
                 log.warning("Telegram: заявка клиента не ушла в чат — %s", err)
 
+    # ---- кнопки под сводкой завода: «Обновить» и «Данные» (что присылает завод)
+    def plant_buttons(self, p: dict) -> dict:
+        return {"inline_keyboard": [[{"text": "🔄 Обновить", "callback_data": "up:%d" % p["id"]}, {"text": "⚙ Данные", "callback_data": "cf:%d" % p["id"]}]]}
+
+    def config_view(self, plant_id: int) -> Optional[tuple]:
+        """(текст, кнопки) окна «что присылает завод»: переключатели и интервал пульса. Нет завода — None."""
+        p = next((x for x in self.store.plants_view() if x["id"] == plant_id), None)
+        if p is None:
+            return None
+        conf = p["config"]["config"]
+        rows, row = [], []
+        for key, label in monitor_store.CONFIG_FLAGS.items():
+            row.append({"text": ("✅ " if conf.get(key, True) else "⬜ ") + label, "callback_data": "tg:%d:%s" % (plant_id, key)})
+            if len(row) == 2:
+                rows.append(row)
+                row = []
+        if row:
+            rows.append(row)
+        cur = round((conf.get("interval_s") or (p.get("interval_s") or monitor_store.DEFAULT_INTERVAL_S)) / 60)
+        rows.append([{"text": ("● " if cur == m else "") + "%d мин" % m, "callback_data": "iv:%d:%d" % (plant_id, m)} for m in (1, 5, 15, 30)])
+        text = "⚙ %s — что присылает завод\nТревоги приходят всегда. Изменения доходят за несколько секунд.\nПульс раз в %d мин." % (p["name"], cur)
+        return text, {"inline_keyboard": rows}
+
+    def _settings_callback(self, cb: dict, kind: str, args: list) -> Optional[str]:
+        """up / ua / cf / tg / iv: команды и настройки заводу. Возвращает текст-ответ (всплывающая подсказка)."""
+        msg = cb.get("message") or {}
+        chat_id = msg["chat"]["id"]
+        try:
+            if kind in ("up", "ua"):
+                plants = self.store.plants_view()
+                if kind == "up":
+                    plants = [p for p in plants if p["id"] == int(args[0])]
+                if not plants:
+                    return "Завода нет."
+                for p in plants:
+                    self.store.command_add(p["id"], "update")
+                names = ", ".join(p["name"] for p in plants)
+                self.client.send(chat_id, "🔄 Команда «Обновить» отправлена: %s.\nЗавод заберёт её за секунды, скачает версию и перезапустится, когда варки нет. "
+                                          "Итог придёт сообщением." % names)
+                return "Отправил: %s" % names
+            pid = int(args[0])
+            if kind == "cf":
+                view = self.config_view(pid)
+                if view is None:
+                    return "Завода нет."
+                self.client.send(chat_id, view[0], view[1])
+                return "Данные завода"
+            if kind == "tg":
+                key = args[1]
+                if key not in monitor_store.CONFIG_FLAGS:
+                    return None
+                cur = self.store.plant_config(pid)["config"].get(key, True)
+                self.store.set_plant_config(pid, {key: not cur})
+            elif kind == "iv":
+                self.store.set_plant_config(pid, {"interval_s": int(args[1]) * 60})
+            else:
+                return None
+            view = self.config_view(pid)
+            if view is not None:
+                self.client.call("editMessageText", {"chat_id": chat_id, "message_id": msg.get("message_id"), "text": view[0], "reply_markup": view[1]})
+            return "Применится за несколько секунд"
+        except LookupError:
+            return "Завода нет."
+        except (ValueError, IndexError) as e:
+            return "Не получилось: %s" % e
+
     def _callback(self, cb: dict) -> Optional[str]:
-        """Нажатие кнопки под заявкой: ea:<id> — принять, er:<id> — отклонить. Чужие чаты — молчание."""
+        """Нажатие кнопки: ea:<id> принять / er:<id> отклонить заявку клиента; up/ua/cf/tg/iv — команды и настройки заводу. Чужие чаты — молчание."""
         msg = cb.get("message") or {}
         chat = msg.get("chat") or {}
         if str(chat.get("id")) not in self.allowed or chat.get("type") != "private":
             log.info("Telegram: кнопка из чужого чата %s проигнорирована", chat.get("id"))
             return None
-        kind, _, num = str(cb.get("data") or "").partition(":")
+        kind, *args = str(cb.get("data") or "").split(":")
+        if kind in ("up", "ua", "cf", "tg", "iv"):
+            toast = self._settings_callback(cb, kind, args)
+            if toast is not None:
+                self.client.call("answerCallbackQuery", {"callback_query_id": cb.get("id"), "text": toast[:190]})
+            return toast
+        num = args[0] if args else ""
         if kind not in ("ea", "er") or not num.isdigit():
             return None
         if kind == "ea":
@@ -517,13 +590,17 @@ class Bot:
         now = self.clock()
         if key in MENU_WORDS:
             reply = "Нажми кнопку с названием завода внизу — пришлю всё по нему текстом. «%s» — коротко по каждому." % ALL_BUTTON
+            markup = self.keyboard()
         elif key in ALL_WORDS:
             reply = format_all(plants, now, self.releases.latest if self.releases else None)
+            markup = {"inline_keyboard": [[{"text": "🔄 Обновить все", "callback_data": "ua"}]]}
         elif key in by_name:
             reply = format_plant(by_name[key], now, self.releases.latest if self.releases else None)
+            markup = self.plant_buttons(by_name[key])
         else:
             reply = "Не понял. Нажми кнопку с названием завода внизу."
-        ok, _, err = self.client.send(chat["id"], reply, self.keyboard())
+            markup = self.keyboard()
+        ok, _, err = self.client.send(chat["id"], reply, markup)
         if ok:
             self.state["answered"] += 1
         else:

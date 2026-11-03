@@ -361,6 +361,112 @@ def test_night_cancel_holds_until_window_closes_and_opens_again(env):
     assert len(env.runs) == 1
 
 
+# ---------- команда «Обновить» с панели / из Telegram (request_update) ----------
+
+def _day_agent(env, micro=False):
+    """Клиент без микроскопа среди дня: ночное окно закрыто, пока команда не сняла ограничение (cfg с night 0…24)."""
+    day = lambda cfg: (True, "") if (cfg.get("night_from"), cfg.get("night_to")) == (0, 24) else (False, "ждёт ночного окна 20:00–08:00")
+    env.window = (True, "") if micro else (False, "микроскоп выключен")
+    env.ag = AutoUpdater(window_fn=lambda: env.window, cfg_fn=lambda: env.cfg, clock=env.clock, frozen_fn=lambda: env.frozen,
+                         state_file=env.state_file, report_fn=env._report, wall=lambda: env.wall, health_src=env.src,
+                         start_reason_fn=lambda: env.reason, micro_fn=lambda: micro, night_fn=day)
+
+
+def _cmd_texts(env):
+    return [r[2] for r in env.reports if r[3].get("state") == "cmd"]
+
+
+def test_request_update_skips_the_night_wait(env):
+    _day_agent(env)
+    env.first_check()
+    env.tick(HOLD_S + 60)
+    assert env.runs == [] and env.ag.state()["auto"]["waiting_for"].startswith("ждёт ночного окна"), "без команды днём не перезапускаемся"
+    env.ag.request_update()
+    assert _cmd_texts(env)[0].startswith("Команда «Обновить» получена")
+    env.tick(5)
+    env.tick(HOLD_S)
+    env.tick(env.cfg["warn_s"])
+    assert len(env.runs) == 1 and env.runs[0][1]["staged"] is True
+    assert env.ag._forced() is False, "после запуска команда отработана"
+
+
+def test_request_update_checks_github_at_once(env):
+    env.first_check()
+    assert env.checks == 1
+    env.ag.request_update()
+    env.tick(1)
+    assert env.checks == 2, "команда не ждёт interval_min"
+
+
+def test_request_update_when_already_latest_answers_and_clears(env):
+    env.check["update_available"] = False
+    env.first_check()
+    env.ag.request_update()
+    env.tick(1)
+    assert any("Обновлений нет" in t for t in _cmd_texts(env)) and env.ag._forced() is False
+    env.ag.request_update()
+    env.tick(1)
+    assert sum("Обновлений нет" in t for t in _cmd_texts(env)) == 2, "каждая команда получает свой ответ"
+
+
+def test_request_update_with_microscope_still_waits_for_boil_and_tells_once(env):
+    _day_agent(env, micro=True)
+    env.window = (False, "идёт варка (стадия 7)")
+    env.first_check()
+    env.ag.request_update()
+    env.tick(HOLD_S + 60)
+    env.tick(60)
+    assert env.runs == []
+    waits = [t for t in _cmd_texts(env) if "жду подходящего момента" in t]
+    assert len(waits) == 1 and "идёт варка (стадия 7)" in waits[0], "про ожидание сообщаем один раз, а не каждый такт"
+    env.window = (True, "")                              # пропарка — окно открылось
+    env.tick(5)
+    env.tick(HOLD_S)
+    env.tick(env.cfg["warn_s"])
+    assert len(env.runs) == 1
+
+
+def test_request_update_beats_switched_off_auto_restart_and_auto_update(env):
+    env.cfg["auto_restart"] = False
+    env.first_check()
+    env.tick(HOLD_S + 30)
+    assert env.runs == []
+    env.ag.request_update()
+    env.tick(5)
+    env.tick(HOLD_S)
+    env.tick(env.cfg["warn_s"])
+    assert len(env.runs) == 1, "явная команда сильнее настройки «автоперезапуск выключен»"
+
+
+def test_request_update_works_even_if_auto_update_disabled(env):
+    env.cfg["enabled"] = False
+    env.tick(FIRST_CHECK_S + 1)
+    assert env.checks == 0
+    env.ag.request_update()
+    env.tick(1)
+    assert env.checks == 1 and env.downloads == 1
+
+
+def test_request_update_clears_earlier_cancel(env):
+    env.first_check()
+    env.tick(HOLD_S + 1)
+    env.ag.cancel()
+    assert env.ag._cancelled is True
+    env.ag.request_update()
+    assert env.ag._cancelled is False, "оператор сам просит обновить — прежняя «Отмена» снята"
+
+
+def test_request_update_expires_after_six_hours(env):
+    _day_agent(env)
+    env.first_check()
+    env.tick(HOLD_S + 60)
+    env.ag.request_update()
+    env.window = (False, "микроскоп выключен")
+    env.tick(auto_update.FORCED_S + 10)                  # окно не открылось за FORCED_S: команда устарела, днём снова ждём ночи
+    assert env.ag._forced() is False and env.runs == []
+    assert env.ag.state()["auto"]["waiting_for"].startswith("ждёт ночного окна")
+
+
 # ---------- правки updater, на которые опирается автообновление ----------
 
 def _make_zip(path, version):

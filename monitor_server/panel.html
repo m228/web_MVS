@@ -86,6 +86,11 @@ dialog code { color: var(--text); word-break: break-all; }
 .tok { display: flex; gap: 8px; margin: 12px 0; }
 .tok input { flex: 1; min-width: 0; font: 13px ui-monospace, Consolas, monospace; padding: 8px 10px; border-radius: 10px; border: 1px solid var(--line); background: var(--bg); color: var(--text); }
 .err { color: var(--bad); font-size: 14px; min-height: 1.2em; }
+.cfg { display: grid; gap: 8px; margin: 12px 0; }
+.cfg label { display: flex; align-items: center; gap: 10px; color: var(--text); font-size: 15px; }
+.cfg input[type=checkbox] { width: 15px; height: 15px; }
+.cfg select { font: inherit; padding: 4px 8px; border-radius: 8px; border: 1px solid var(--line); background: var(--bg); color: var(--text); }
+.chip.wait { background: var(--warn-bg); color: var(--warn); }
 #enroll { margin: 0 24px 16px; display: flex; flex-direction: column; gap: 8px; }
 #enroll[hidden] { display: none; }
 .req { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; background: var(--warn-bg); border: 1px solid var(--warn); border-radius: 14px; padding: 10px 14px; }
@@ -104,10 +109,19 @@ dialog code { color: var(--text); word-break: break-all; }
   <h1><img src="/icon-192.png" alt="">Мониторинг заводов</h1>
   <span id="tg" class="chip" hidden></span><button id="tgTest" hidden>Тест</button>
   <span id="upd"></span>
+  <button id="updAll" title="Команда «Обновить» всем заводам: каждый скачает версию и перезапустится, когда варки нет">Обновить все</button>
   <button id="add" class="primary">+ Завод</button>
 </header>
 <section id="enroll" hidden></section>
 <main id="cards"><div class="empty">Загрузка…</div></main>
+
+<dialog id="cfgDlg">
+  <h3 id="cfgTitle">Что присылает завод</h3>
+  <p>Тревоги приходят всегда. Остальное можно выключить; изменения доходят до завода за несколько секунд.</p>
+  <div class="cfg" id="cfgBody"></div>
+  <div class="err" id="cfgErr"></div>
+  <div style="text-align:right"><button id="cfgClose">Закрыть</button> <button id="cfgSave" class="primary">Сохранить</button></div>
+</dialog>
 
 <dialog id="dlg">
   <h3 id="dlgTitle">Токен завода</h3>
@@ -229,11 +243,13 @@ function card(p) {
   const alerts = p.alerts.map((a) => '<div class="alert' + (a.level === 'critical' || a.level === 'high' ? ' bad' : '') + '"><b>' + esc(a.text) +
     '</b><small>с ' + fmt(a.since) + '</small></div>').join('');
   return '<article class="card s-' + p.status + (p.alerts.length ? ' has-alert' : '') + '" data-id="' + p.id + '">' +
-    '<div class="head"><h2>' + esc(p.name) + '</h2><span class="chip s-' + p.status + '">' + STATUS[p.status] + '</span></div>' +
+    '<div class="head"><h2>' + esc(p.name) + '</h2><span>' + (p.cmd_pending ? '<span class="chip wait" title="Команда ждёт, пока завод её заберёт">обновление ждёт</span> ' : '') +
+    '<span class="chip s-' + p.status + '">' + STATUS[p.status] + '</span></span></div>' +
     '<div class="sub">' + sub + '</div>' +
     (snap.text ? '<pre class="text">' + esc(snap.text.split('\n').filter((l) => !l.startsWith('Тревоги:')).join('\n')) + '</pre>' : '') +
     (alerts ? '<div class="alerts">' + alerts + '</div>' : '') +
     '<div class="tools"><button data-a="log">Журнал</button>' + (snap.micro ? '<button data-a="pos">Датчики</button>' : '') +
+    '<button data-a="upd">Обновить</button><button data-a="cfg">Данные</button>' +
     '<button data-a="token">Новый токен</button><button data-a="del">Удалить</button></div>' +
     '<div class="pos' + (openedPos.has(p.id) ? ' open' : '') + '" id="pos' + p.id + '">' + (openedPos.has(p.id) ? posBlock(p.id) : '') + '</div>' +
     '<div class="log' + (opened.has(p.id) ? ' open' : '') + '" id="log' + p.id + '"></div></article>';
@@ -361,6 +377,32 @@ $('tgTest').onclick = async () => {
   finally { btn.disabled = false; loadTg(); }
 };
 $('dlgClose').onclick = () => $('dlg').close();
+
+const FLAGS = {send_positions: 'Пробы датчиков (таблица и график)', send_micro: 'Блок микроскопа в сводке', send_camera: 'Камера в сводке', send_services: 'Сервисы в сводке'};
+let cfgPlant = null;
+function openCfg(p) {
+  cfgPlant = p.id;
+  const c = p.config.config;
+  $('cfgTitle').textContent = 'Что присылает «' + p.name + '»';
+  const cur = Math.round((c.interval_s || p.interval_s || 300) / 60);
+  const opts = [1, 5, 10, 15, 30].concat([1, 5, 10, 15, 30].includes(cur) ? [] : [cur]).sort((a, b) => a - b);
+  $('cfgBody').innerHTML = Object.entries(FLAGS).map(([k, label]) => '<label><input type="checkbox" data-k="' + k + '"' + (c[k] === false ? '' : ' checked') + '> ' + esc(label) + '</label>').join('') +
+    '<label>Пульс раз в <select id="cfgInt">' + opts.map((m) => '<option value="' + m + '"' + (m === cur ? ' selected' : '') + '>' + m + ' мин</option>').join('') + '</select></label>';
+  $('cfgErr').textContent = '';
+  $('cfgDlg').showModal();
+}
+$('cfgClose').onclick = () => $('cfgDlg').close();
+$('cfgSave').onclick = async () => {
+  const body = {interval_s: Number($('cfgInt').value) * 60};
+  document.querySelectorAll('#cfgBody input[data-k]').forEach((i) => { body[i.dataset.k] = i.checked; });
+  try { await api('/api/plants/' + cfgPlant + '/config', {method: 'POST', body: JSON.stringify(body)}); $('cfgDlg').close(); load(); }
+  catch (e) { $('cfgErr').textContent = e.message; }
+};
+$('updAll').onclick = async () => {
+  if (!confirm('Отправить «Обновить» всем заводам? Каждый скачает свежую версию и перезапустится, когда варки нет.')) return;
+  try { const j = await api('/api/update_all', {method: 'POST'}); alert('Отправлено заводам: ' + j.sent + '. Итог придёт в Telegram и в журнал каждого завода.'); load(); }
+  catch (e) { alert(e.message); }
+};
 $('dlgCopy').onclick = async () => {
   // по http (ZeroTier) у браузера нет navigator.clipboard — копируем старым способом через выделение
   const inp = $('dlgTok');
@@ -384,6 +426,11 @@ $('cards').onclick = async (ev) => {
     if (openedPos.has(id)) openedPos.delete(id); else openedPos.add(id);
     $('pos' + id).classList.toggle('open', openedPos.has(id));
     if (openedPos.has(id)) { $('pos' + id).innerHTML = posBlock(id); loadPos(id); }
+  } else if (btn.dataset.a === 'upd') {
+    try { await api('/api/plants/' + id + '/update', {method: 'POST'}); load(); }
+    catch (e) { alert(e.message); }
+  } else if (btn.dataset.a === 'cfg') {
+    openCfg(p);
   } else if (btn.dataset.a === 'token') {
     if (!confirm('Выдать «' + p.name + '» новый токен? Старый перестанет работать — его нужно заново ввести в приложении завода.')) return;
     try { const j = await api('/api/plants/' + id + '/token', {method: 'POST'}); showToken('Новый токен', p.name, j.token); }

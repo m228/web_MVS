@@ -29,6 +29,7 @@ FIRST_CHECK_S = 120        # первая проверка после старт
 HOLD_S = 30                # окно должно держаться столько подряд, прежде чем показать плашку (стадия не мигает)
 MAX_BACKOFF_S = 3600       # пауза после сбоя связи растёт до часа
 ERROR_LOG_EVERY_S = 3600   # одну и ту же ошибку в журнал не чаще
+FORCED_S = 6 * 3600        # команда «Обновить» с панели действует столько: ночное окно и «автоперезапуск выключен» не мешают
 MAX_ATTEMPTS = 2           # автозапусков обновления на одну версию
 APP_PORT = 8000            # как run.PORT: update.ps1 ждёт ответа приложения на этом порту
 STATE_FILE = DATA_DIR / "auto_update.json"   # попытки автозапуска по версиям и метка «обновляюсь»; ВНЕ .update — её апдейтер сносит
@@ -132,6 +133,8 @@ class AutoUpdater:
         self._cancelled = False        # «Отмена» на этом заходе в окно; сбрасывается, когда окно закрылось
         self._waiting = ""
         self._launched = False
+        self._forced_until = 0.0       # команда «Обновить» (request_update): до этого момента окно не ночное, а «когда варки нет»
+        self._forced_told = False      # про ожидание окна по этой команде уже сообщили
 
     # ---- жизненный цикл
     def start(self) -> None:
@@ -167,7 +170,7 @@ class AutoUpdater:
         now = self._clock()
         if self._health is not None:                    # проверка после обновления идёт и при выключенном автообновлении (обновили кнопкой)
             self._health_step(now)
-        if not cfg["enabled"]:
+        if not cfg["enabled"] and not self._forced():
             return
         if now >= self._next_check:
             self._check(now, cfg)
@@ -195,6 +198,9 @@ class AutoUpdater:
                               last_check=time.time())
         if not res.get("update_available") or downloading or staged == res.get("latest"):
             self._fails = 0                             # делать нечего — цикл прошёл чисто
+            if self._forced() and not res.get("update_available"):       # команду с панели закрываем ответом: «уже последняя»
+                self._forced_until = 0.0
+                self._notify("cmd", "info", "Обновлений нет: уже последняя версия v%s" % read_version(), {})
             return
         r = updater.download_latest(extract=False)
         if r.get("busy"):                               # кто-то уже качает (кнопка на странице) — посмотрим на следующей проверке
@@ -220,11 +226,18 @@ class AutoUpdater:
         if self._launched or not staged or updater._version_tuple(staged) <= updater._version_tuple(read_version()):
             self._close_window("")
             return
-        if not cfg["auto_restart"]:
+        forced = self._forced()
+        if not cfg["auto_restart"] and not forced:
             self._close_window("автоперезапуск выключен в настройках")
             return
-        ok, reason = self._night_fn(cfg) if self._micro_fn is not None and not self._micro_fn() else self._window_fn()
+        if self._micro_fn is not None and not self._micro_fn():
+            ok, reason = self._night_fn({**cfg, "night_from": 0, "night_to": 24} if forced else cfg)       # по команде — не ждём ночи
+        else:
+            ok, reason = self._window_fn()
         if not ok:
+            if forced and not self._forced_told:
+                self._forced_told = True
+                self._notify("cmd", "info", "Обновление v%s готово, жду подходящего момента: %s" % (staged, reason), {"to": staged})
             self._close_window(reason)
             return
         if self._window_since is None:
@@ -257,6 +270,7 @@ class AutoUpdater:
         self._waiting = waiting
 
     def _launch(self, staged: str) -> None:
+        self._forced_until = 0.0
         self._restart_at = None
         self._cancelled = True                          # один запуск на заход в окно: не вышло — не долбим
         state = _read_state(self._state_file)
@@ -340,6 +354,18 @@ class AutoUpdater:
                      {"from": h["from"], "to": h["to"], "ok": res["ok"], "bad": res["bad"]})
 
     # ---- снаружи
+    def _forced(self) -> bool:
+        return self._clock() < self._forced_until
+
+    def request_update(self) -> None:
+        """Команда «Обновить» с панели или из Telegram (release_push): проверить релиз сейчас и перезапуститься в первом подходящем окне —
+        без ночного ожидания и даже при выключенном автоперезапуске; «варка идёт» и «Отмена» по-прежнему сильнее (отмену команда снимает).
+        Итог (уже последняя / жду момента / обновлён) уходит на приёмник событием update."""
+        now = self._clock()
+        self._forced_until, self._forced_told, self._cancelled = now + FORCED_S, False, False
+        self._next_check = min(self._next_check, now)
+        self._notify("cmd", "info", "Команда «Обновить» получена — проверяю релиз (сейчас v%s)" % read_version(), {})
+
     def check_now(self, delay_s: float = 0.0) -> None:
         """Приёмник сообщил о новой версии (release_push): проверить GitHub не через interval_min, а через delay_s секунд
         (разброс, чтобы все клиенты не пошли качать в одну секунду). Позднюю проверку не отодвигаем."""

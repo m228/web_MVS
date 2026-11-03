@@ -25,8 +25,8 @@ class Rel:
 def test_wait_needs_token(store):
     s = Srv(store, releases=Rel())
     try:
-        assert s.call("GET", "/wait?known=", password=None)[0] == 401
-        assert s.call("GET", "/wait?known=", password=None, bearer="wrong-token")[0] == 401
+        assert s.call("GET", "/wait?known=&cv=0", password=None)[0] == 401
+        assert s.call("GET", "/wait?known=&cv=0", password=None, bearer="wrong-token")[0] == 401
     finally:
         s.close()
 
@@ -36,9 +36,9 @@ def test_wait_answers_at_once_when_version_differs(store):
     s = Srv(store, releases=Rel("2.1.8"))
     try:
         t0 = time.monotonic()
-        code, j = s.json("GET", "/wait?known=", password=None, bearer=token)
-        assert code == 200 and j == {"ok": True, "latest": "2.1.8", "changed": True} and time.monotonic() - t0 < 2
-        assert s.json("GET", "/wait?known=2.1.7", password=None, bearer=token)[1]["changed"] is True
+        code, j = s.json("GET", "/wait?known=&cv=0", password=None, bearer=token)
+        assert code == 200 and (j["latest"], j["changed"], j["commands"]) == ("2.1.8", True, []) and time.monotonic() - t0 < 2
+        assert s.json("GET", "/wait?known=2.1.7&cv=0", password=None, bearer=token)[1]["changed"] is True
     finally:
         s.close()
 
@@ -51,7 +51,7 @@ def test_wait_holds_then_returns_new_version_as_soon_as_it_appears(store, monkey
     try:
         threading.Timer(1.5, lambda: setattr(rel, "latest", "2.1.9")).start()
         t0 = time.monotonic()
-        code, j = s.json("GET", "/wait?known=2.1.8", password=None, bearer=token)
+        code, j = s.json("GET", "/wait?known=2.1.8&cv=0", password=None, bearer=token)
         waited = time.monotonic() - t0
         assert j["latest"] == "2.1.9" and j["changed"] is True
         assert 1.0 < waited < 5, "держит запрос, но отвечает сразу, как версия появилась (%.1f с)" % waited
@@ -64,12 +64,14 @@ def test_wait_times_out_unchanged_and_works_without_releases(store, monkeypatch)
     _, token = store.create_plant("Кир")
     s = Srv(store, releases=Rel("2.1.8"))
     try:
-        assert s.json("GET", "/wait?known=2.1.8", password=None, bearer=token)[1] == {"ok": True, "latest": "2.1.8", "changed": False}
+        j = s.json("GET", "/wait?known=2.1.8&cv=0", password=None, bearer=token)[1]
+        assert (j["latest"], j["changed"], j["commands"]) == ("2.1.8", False, []) and "config" not in j, "настройки не менялись — не шлём"
     finally:
         s.close()
     s2 = Srv(store)                                    # проверка релизов выключена: версии нет, запрос не крутится вхолостую
     try:
-        assert s2.json("GET", "/wait?known=", password=None, bearer=token)[1] == {"ok": True, "latest": None, "changed": False}
+        j = s2.json("GET", "/wait?known=&cv=0", password=None, bearer=token)[1]
+        assert (j["latest"], j["changed"]) == (None, False)
     finally:
         s2.close()
 
@@ -87,7 +89,8 @@ def listener(answers, installed="2.1.7", cfg=None):
         a = answers.pop(0) if len(answers) > 1 else answers[0]
         return a
 
-    ln = release_push.ReleaseListener(fired.append, cfg_fn=lambda: cfg or CFG, get=get, installed_fn=lambda: installed)
+    ln = release_push.ReleaseListener(fired.append, cfg_fn=lambda: cfg or CFG, get=get, installed_fn=lambda: installed,
+                                      remote_load=lambda: {"v": None, "config": {}}, remote_save=lambda v, c: None)
     ln.calls, ln.fired = calls, fired
     return ln
 
@@ -99,10 +102,10 @@ def ok(latest):
 def test_client_asks_update_check_when_newer_released_once():
     ln = listener([ok("2.1.8"), ok("2.1.8"), ok("2.1.9")])
     assert ln.step() == release_push.REPOLL_S
-    assert ln.fired == ["2.1.8"] and ln.calls[0][0].endswith("/wait?known=")
+    assert ln.fired == ["2.1.8"] and ln.calls[0][0].endswith("/wait?known=&cv=-1")
     ln.step()
     assert ln.fired == ["2.1.8"], "о той же версии второй раз не просим"
-    assert ln.calls[1][0].endswith("/wait?known=2.1.8"), "в запрос идёт последняя известная версия"
+    assert ln.calls[1][0].endswith("/wait?known=2.1.8&cv=-1"), "в запрос идёт последняя известная версия"
     ln.step()
     assert ln.fired == ["2.1.8", "2.1.9"]
 

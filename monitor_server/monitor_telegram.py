@@ -463,8 +463,44 @@ class Bot:
         rows.append([{"text": ALL_BUTTON}])
         return {"keyboard": rows, "resize_keyboard": True, "is_persistent": True}
 
+    def announce_enroll(self, req_id: int, name: str, version: str, ip: str) -> None:
+        """Новая заявка клиента: сообщение со звуком и кнопками «Принять / Отклонить» во все разрешённые чаты."""
+        text = "🆕 Новый клиент просит токен: «%s»\nВерсия %s · адрес %s\nПринять — токен уйдёт ему сам." % (name, version or "—", ip or "—")
+        markup = {"inline_keyboard": [[{"text": "✅ Принять", "callback_data": "ea:%d" % req_id}, {"text": "✖ Отклонить", "callback_data": "er:%d" % req_id}]]}
+        for chat in sorted(self.allowed):
+            ok, _, err = self.client.send(chat, text, markup)
+            if not ok:
+                log.warning("Telegram: заявка клиента не ушла в чат — %s", err)
+
+    def _callback(self, cb: dict) -> Optional[str]:
+        """Нажатие кнопки под заявкой: ea:<id> — принять, er:<id> — отклонить. Чужие чаты — молчание."""
+        msg = cb.get("message") or {}
+        chat = msg.get("chat") or {}
+        if str(chat.get("id")) not in self.allowed or chat.get("type") != "private":
+            log.info("Telegram: кнопка из чужого чата %s проигнорирована", chat.get("id"))
+            return None
+        kind, _, num = str(cb.get("data") or "").partition(":")
+        if kind not in ("ea", "er") or not num.isdigit():
+            return None
+        if kind == "ea":
+            try:
+                res = self.store.enroll_approve(int(num))
+                reply = "✅ Принят: «%s». Токен уйдёт клиенту при его следующей заявке (до минуты)." % res["name"]
+            except LookupError:
+                reply = "Заявка уже решена или устарела."
+            except ValueError as e:
+                reply = "Не принял: %s. Прими в панели под другим названием." % e
+        else:
+            reply = "✖ Отклонено." if self.store.enroll_reject(int(num)) else "Заявка уже решена или устарела."
+        self.client.call("answerCallbackQuery", {"callback_query_id": cb.get("id"), "text": reply[:190]})
+        old = str(msg.get("text") or "").split("\n")[0]
+        self.client.call("editMessageText", {"chat_id": chat["id"], "message_id": msg.get("message_id"), "text": (old + "\n" + reply)[:4000]})
+        return reply
+
     def handle(self, update: dict) -> Optional[str]:
         """Один входящий апдейт. Возвращает текст ответа (или None, если отвечать не надо)."""
+        if update.get("callback_query"):
+            return self._callback(update["callback_query"])
         m = update.get("message") or {}
         chat = m.get("chat") or {}
         if chat.get("id") is None:
@@ -497,14 +533,14 @@ class Bot:
 
     def skip_backlog(self) -> None:
         """Вопросы, заданные пока приёмник не работал, не отвечаем: после простоя они уже не новость и ответ придёт не вовремя."""
-        ok, body, _, _ = self.poll_client.call("getUpdates", {"offset": -1, "timeout": 0, "allowed_updates": ["message"]})
+        ok, body, _, _ = self.poll_client.call("getUpdates", {"offset": -1, "timeout": 0, "allowed_updates": ["message", "callback_query"]})
         res = (body or {}).get("result") if ok else None
         if res:
             self.offset = res[-1]["update_id"] + 1
 
     def poll_once(self, timeout: int = POLL_S) -> tuple:
         """Один длинный опрос. (успех, сколько секунд подождать до следующего)."""
-        payload = {"timeout": timeout, "allowed_updates": ["message"]}
+        payload = {"timeout": timeout, "allowed_updates": ["message", "callback_query"]}
         if self.offset is not None:
             payload["offset"] = self.offset
         ok, body, wait, err = self.poll_client.call("getUpdates", payload)

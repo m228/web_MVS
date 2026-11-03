@@ -29,10 +29,19 @@ function levelClass(level) {
   return level === 'critical' || level === 'high' ? 'is-bad' : (level === 'medium' ? 'is-warn' : 'is-info');
 }
 
-function renderLink(send, cfg) {
+// сам просит токен у приёмника (enroll_client): что видно на странице, пока токена нет
+const ENROLL_TEXT = {
+  searching: 'ищу сервер мониторинга…',
+  pending: 'заявка отправлена — жду, пока примут в панели',
+  rejected: 'заявку отклонили в панели',
+};
+
+function renderLink(send, cfg, enroll) {
   const el = $('monLink');
   let cls = 'mon-chip', text;
-  if (!send.configured) { text = cfg.enabled ? 'нет адреса или токена' : 'отправка выключена'; }
+  const wait = enroll && enroll.auto ? ENROLL_TEXT[enroll.state] : '';
+  if (wait) { cls += enroll.state === 'rejected' ? ' is-bad' : ' is-warn'; text = wait; }
+  else if (!send.configured) { text = cfg.enabled ? 'нет адреса или токена' : 'отправка выключена'; }
   else if (send.ok === true) { cls += ' is-ok'; text = 'на связи · ' + ago(send.last_ok_t); }
   else if (send.ok === false) { cls += ' is-bad'; text = 'нет связи с сервером'; }
   else { cls += ' is-warn'; text = 'ждёт первой отправки'; }
@@ -40,6 +49,7 @@ function renderLink(send, cfg) {
   el.textContent = text;
 
   const info = [];
+  if (wait && enroll.error) info.push(enroll.error);
   if (send.ok === false && send.error) info.push(send.error);
   if (send.pending > 0) info.push('в очереди ' + send.pending + ' событ.');
   const box = $('monSendInfo');
@@ -85,7 +95,7 @@ async function load() {
   }
   $('monText').textContent = state.snapshot.text;
   renderAlerts(state.alerts || []);
-  renderLink(state.send, state.config);
+  renderLink(state.send, state.config, state.enroll);
   renderLog(state);
   if (!formFilled) fillForm(state.config);
 }

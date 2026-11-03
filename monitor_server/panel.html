@@ -86,6 +86,12 @@ dialog code { color: var(--text); word-break: break-all; }
 .tok { display: flex; gap: 8px; margin: 12px 0; }
 .tok input { flex: 1; min-width: 0; font: 13px ui-monospace, Consolas, monospace; padding: 8px 10px; border-radius: 10px; border: 1px solid var(--line); background: var(--bg); color: var(--text); }
 .err { color: var(--bad); font-size: 14px; min-height: 1.2em; }
+#enroll { margin: 0 24px 16px; display: flex; flex-direction: column; gap: 8px; }
+#enroll[hidden] { display: none; }
+.req { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; background: var(--warn-bg); border: 1px solid var(--warn); border-radius: 14px; padding: 10px 14px; }
+.req b { font-size: 14px; }
+.req .sub { flex: 1; min-width: 160px; }
+.req input { font: inherit; padding: 5px 10px; border-radius: 10px; border: 1px solid var(--line); background: var(--bg); color: var(--text); width: 170px; }
 @media (max-width: 600px) {
   header { padding: 12px 14px; gap: 10px; }
   h1 { font-size: 18px; }
@@ -100,6 +106,7 @@ dialog code { color: var(--text); word-break: break-all; }
   <span id="upd"></span>
   <button id="add" class="primary">+ Завод</button>
 </header>
+<section id="enroll" hidden></section>
 <main id="cards"><div class="empty">Загрузка…</div></main>
 
 <dialog id="dlg">
@@ -282,12 +289,44 @@ async function loadTg() {
   } catch (e) { /* метка обновится на следующем опросе */ }
 }
 
+let reqs = [], reqKey = '';
+function renderReqs() {
+  // заявки новых клиентов: пока человек печатает название, список не перерисовываем (иначе поле сбросится)
+  const box = $('enroll');
+  if (box.contains(document.activeElement) && document.activeElement.tagName === 'INPUT') return;
+  const key = JSON.stringify(reqs.map((r) => [r.id, r.name, r.version, r.ip]));
+  if (key === reqKey) return;
+  reqKey = key;
+  box.hidden = !reqs.length;
+  box.innerHTML = reqs.map((r) => '<div class="req" data-id="' + r.id + '"><b>Новый клиент</b>' +
+    '<input value="' + esc(r.name) + '" maxlength="40"' + (r.known ? ' disabled title="Этот ПК уже заведён: название останется прежним, токен будет новый"' : '') + '>' +
+    '<span class="sub">v' + esc(r.version || '—') + ' · ' + esc(r.ip || '') + ' · с ' + fmt(r.first_t) + '</span>' +
+    '<button class="primary" data-r="ok">Принять</button><button data-r="no">Отклонить</button></div>').join('');
+}
+
+async function loadReqs() {
+  try { reqs = (await api('/api/enroll')).requests; renderReqs(); } catch (e) { /* список догрузится на следующем опросе */ }
+}
+
+$('enroll').onclick = async (ev) => {
+  const btn = ev.target.closest('button[data-r]');
+  if (!btn) return;
+  const row = btn.closest('.req'), id = Number(row.dataset.id);
+  try {
+    if (btn.dataset.r === 'ok') await api('/api/enroll/' + id + '/approve', {method: 'POST', body: JSON.stringify({name: row.querySelector('input').value})});
+    else await api('/api/enroll/' + id + '/reject', {method: 'POST'});
+    reqKey = '';
+    loadReqs(); load();
+  } catch (e) { alert(e.message); }
+};
+
 async function load() {
   try {
     const j = await api('/api/plants');
     plants = j.plants; serverT = j.server_t; latestV = j.latest_version || null;
     $('upd').textContent = 'обновлено ' + new Date().toLocaleTimeString('ru-RU');
     render();
+    loadReqs();
     loadTg();
   } catch (e) { $('upd').textContent = 'нет связи с сервером: ' + e.message; }
 }

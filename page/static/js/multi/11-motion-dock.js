@@ -166,14 +166,14 @@ function renderMotionDock() {
   if (dock.hidden) return;
   const { source, cam } = mdCamera();
   const all = mode === 'all';
-  if (MD.tab !== 'zones' && MD.tab !== 'plc') MD.tab = 'zones';
+  if (MD.tab !== 'zones' && MD.tab !== 'plc' && MD.tab !== 'cams') MD.tab = 'zones';
 
   const cams = mdCfgCams();
   const camKey = all
     ? cams.map((c) => c.id + (c.enabled ? '1' : '0') + c.zones.length + '/' + (c.groups || []).length).join(',')
     : (cam ? [cam.enabled ? 1 : 0, cam.zones.length, (cam.groups || []).length].join('/') : 'x');
   const key = [mode, source ? source.serial : '', MD.tab, MV.online, camKey, JSON.stringify(MD.editGrp),
-    ((MV.cfg && MV.cfg.scenarios) || []).length, state.cameras.length].join('|');
+    ((MV.cfg && MV.cfg.scenarios) || []).length, state.cameras.length, cams.length].join('|');
 
   // шапка: название, тумблер КЗ (серый, когда выключено), разметка, запись
   dock.classList.toggle('is-cv-off', all ? !cams.some((c) => c.enabled) : !(cam && cam.enabled));
@@ -202,6 +202,8 @@ function renderMotionDock() {
     body.innerHTML = mdPlcHtml();
     mdBindPlc();
     if (MD.editGrp) mdSyncGroupEditor();
+  } else if (MD.tab === 'cams') {
+    body.innerHTML = mdCamsTabHtml();
   } else {
     body.innerHTML = mdZonesTabHtml(mode, cam);
     mdDrawTrends();
@@ -280,6 +282,55 @@ function mdCamerasListHtml() {
   return `<details class="md-det" open><summary>Камеры</summary><div class="md-camlist">${rtsp.map((c) =>
     `<label class="md-camrow"><span class="switch"><input type="checkbox" data-md="cs" data-serial="${escapeHtml(c.serial)}"${mvEnabled(c.serial) ? ' checked' : ''}${MV.online ? '' : ' disabled'} /><span class="switch-track"></span></span>` +
     `<span>${escapeHtml(c.label)}${mdIpTag(c.connection && c.connection.url)}</span><span class="motion-dock__pill" id="md-cp-${escapeHtml(c.serial)}"></span></label>`).join('')}</div></details>`;
+}
+
+// ---------- вкладка «Камеры»: всё, что есть в сервисе, и используется ли оно ----------
+// Камера «используется», если её зона стоит в сценарии, пишет в ПЛК сама (вывод зоны или статуса, группа с выводом).
+function mdCamUsage(cam) {
+  const scen = ((MV.cfg && MV.cfg.scenarios) || []).filter((s) => s.sources.some((x) => x.camera === cam.id))
+    .map((s) => s.name + (s.out ? ' (' + (s.out.kind === 'coil' ? 'coil ' : 'рег. ') + s.out.address + ')' : ''));
+  const plc = [];
+  cam.zones.forEach((z) => { if (z.out) plc.push(z.name + ' → ' + (z.out.kind === 'coil' ? 'coil ' : 'рег. ') + z.out.address); });
+  (cam.groups || []).forEach((g) => { if (g.out) plc.push('группа ' + g.name + ' → ' + (g.out.kind === 'coils' ? 'coil ' : 'рег. ') + g.out.address); });
+  if (cam.status_out) plc.push('статус → ' + (cam.status_out.kind === 'coil' ? 'coil ' : 'рег. ') + cam.status_out.address);
+  return { scen, plc, used: scen.length > 0 || plc.length > 0 };
+}
+
+function mdCamsTabHtml() {
+  const cams = mdCfgCams();
+  if (!cams.length) return '<p class="net-hint">В сервисе движения камер нет.</p>';
+  const byIp = {};
+  cams.forEach((c) => { const ip = mdIp(c.url); if (ip) (byIp[ip] = byIp[ip] || []).push(c); });
+  const info = cams.map((c) => ({ c, u: mdCamUsage(c) }));
+  const idle = info.filter((x) => !x.u.used).length;
+  const rows = info.map(({ c, u }) => {
+    const ip = mdIp(c.url);
+    const twins = (byIp[ip] || []).filter((x) => x.id !== c.id);
+    const flows = c.zones.filter((z) => z.metric === 'flow' || z.track_flow !== false).length;
+    const inUi = state.cameras.some((q) => q.serial === c.id);
+    const use = u.used
+      ? [u.scen.length ? 'сценарии: ' + u.scen.map(escapeHtml).join(', ') : '', u.plc.length ? 'в ПЛК: ' + u.plc.map(escapeHtml).join(', ') : ''].filter(Boolean).join('<br>')
+      : '<span class="md-cam__idle">не используется</span>';
+    const btn = u.used
+      ? `<button type="button" class="btn-secondary md-x" disabled title="Камера стоит в сценарии или пишет в ПЛК. Сначала уберите её оттуда.">Убрать</button>`
+      : `<button type="button" class="btn-secondary md-x" data-md="cm" data-cam="${escapeHtml(c.id)}" data-f="rm" title="Убрать камеру и её зоны из сервиса движения">Убрать</button>`;
+    return `<div class="md-cam${u.used ? '' : ' is-idle'}" data-peek-cam="${escapeHtml(c.id)}">
+      <div class="md-cam__who"><b>${escapeHtml(c.name)}</b>${mdIpTag(c.url)}<span class="md-dim">${escapeHtml(c.id)}${inUi ? '' : ' · нет в списке камер страницы'}</span>
+        <span class="motion-dock__pill" id="md-cr-${escapeHtml(c.id)}"></span></div>
+      <div class="md-cam__load">${c.substream ? 'подпоток' : 'основной поток'} · ${c.proc_fps} к/с · зон: ${c.zones.length}${flows ? ' · flow считается: ' + flows : ''}${c.enabled ? '' : ' · выключена'}${twins.length ? '<br>та же камера, что: ' + twins.map((x) => escapeHtml(x.id)).join(', ') : ''}</div>
+      <div class="md-cam__use">${use}</div>
+      <div class="md-cam__act">${btn}</div></div>`;
+  }).join('');
+  return `<p class="net-hint">Камер в сервисе: ${cams.length}, используется: ${cams.length - idle}${idle ? `, <b>не используется: ${idle}</b> (считают впустую и грузят процессор)` : ''}. Наведите на строку — покажу кадр с зонами.</p><div class="md-cams">${rows}</div>`;
+}
+
+function mdOnCamRow(t) {
+  const cam = mvCam(t.dataset.cam);
+  if (!cam || t.dataset.f !== 'rm') return;
+  if (mdCamUsage(cam).used) return;
+  if (!confirm('Убрать камеру «' + cam.name + '» (' + cam.id + ') вместе с её зонами (' + cam.zones.length + ')? Она нигде не используется.')) return;
+  mdPeekHide();
+  mdEdit(() => { MV.cfg.cameras = MV.cfg.cameras.filter((c) => c.id !== cam.id); }, true);
 }
 
 function mdZonesTabHtml(mode, cam) {
@@ -743,6 +794,15 @@ function paintMotionDockLive() {
       return `<div class="md-card md-card--sq"><b>${escapeHtml(c.name)}</b>${mdIpTag(c.url)}<span class="net-hint">${!MV.cfg.modbus.enable ? 'запись выключена' : p.ok === null || p.ok === undefined ? 'ПЛК: ждёт' : p.ok ? 'ПЛК: ок' : 'ПЛК: ошибка ' + escapeHtml(p.error || '')}</span></div>`;
     }).join('') + '</div>';
   }
+  if (MD.tab === 'cams') {
+    mdCfgCams().forEach((c) => {
+      const p = mdEl('md-cr-' + c.id);
+      if (!p) return;
+      const [txt, cls] = mdPill(MV.states[c.id], c.enabled);
+      p.textContent = txt;
+      p.className = 'motion-dock__pill ' + cls;
+    });
+  }
   if (MD.tab === 'zones') mdPaintZoneStats();
   if (MD.tab === 'zones' && (MV.tick % 2 === 0)) mdDrawTrends();
 }
@@ -806,9 +866,9 @@ async function mdPeekShow(items, ev) {
   parts.forEach(({ cam, bmp, zones }) => {
     if (!cam) return;
     const fig = document.createElement('div');
-    const names = zones.map((id) => { const z = cam.zones.find((q) => q.id === id); return z ? z.name : id; }).join(', ');
+    const names = zones.filter(Boolean).map((id) => { const z = cam.zones.find((q) => q.id === id); return z ? z.name : id; }).join(', ');
     const cap = document.createElement('div');
-    cap.textContent = cam.name + (mdIp(cam.url) ? ' (' + mdIp(cam.url) + ')' : '') + ' · ' + names;
+    cap.textContent = cam.name + (mdIp(cam.url) ? ' (' + mdIp(cam.url) + ')' : '') + (names ? ' · ' + names : '');
     fig.appendChild(cap);
     if (bmp) fig.appendChild(mdPeekCanvas(cam, bmp, zones, parts.length > 1 ? 300 : 440));
     else { const na = document.createElement('div'); na.className = 'md-dim'; na.textContent = 'кадра нет — камера не подключена'; fig.appendChild(na); }
@@ -839,7 +899,8 @@ function mdBindPeek(body) {
   box.className = 'mv-peek';
   box.hidden = true;
   document.body.appendChild(box);
-  const target = (e) => (e.target.closest ? e.target.closest('[data-peek],[data-peek-scn]') : null);
+  const SEL = '[data-peek],[data-peek-scn],[data-peek-cam]';
+  const target = (e) => (e.target.closest ? e.target.closest(SEL) : null);
   body?.addEventListener('mouseover', (e) => {
     const t = target(e);
     if (!t) return;
@@ -848,6 +909,11 @@ function mdBindPeek(body) {
       const [camera, zone] = t.dataset.peek.split('/');
       key = t.dataset.peek;
       items = [{ camera, zone }];
+    } else if (t.dataset.peekCam) {
+      const cam = mvCam(t.dataset.peekCam);
+      key = 'cam' + t.dataset.peekCam;
+      items = cam ? (cam.zones.length ? cam.zones.map((z) => ({ camera: cam.id, zone: z.id })) : [{ camera: cam.id, zone: '' }]) : [];
+      if (!items.length) return;
     } else {
       const s = ((MV.cfg && MV.cfg.scenarios) || [])[Number(t.dataset.peekScn)];
       key = 'scn' + t.dataset.peekScn;
@@ -860,7 +926,7 @@ function mdBindPeek(body) {
   });
   body?.addEventListener('mousemove', (e) => { if (MD.peekKey) mdPeekMove(e); });
   body?.addEventListener('mouseout', (e) => {
-    const to = e.relatedTarget && e.relatedTarget.closest ? e.relatedTarget.closest('[data-peek],[data-peek-scn]') : null;
+    const to = e.relatedTarget && e.relatedTarget.closest ? e.relatedTarget.closest(SEL) : null;
     if (!to || to !== target(e)) mdPeekHide();
   });
   body?.addEventListener('click', mdPeekHide);
@@ -1066,6 +1132,7 @@ function initMotionDock() {
     else if (kind === 'c') { const cam = mvCam(t.dataset.cam); if (cam) mdOnCamera(t, cam); }
     else if (kind === 'p') mdOnPlc(t);
     else if (kind === 's') mdOnScenario(t);
+    else if (kind === 'cm') mdOnCamRow(t);
     else if (kind === 'cs') mdSetEnabled(t.dataset.serial, t.checked, () => { t.checked = !t.checked; });
   };
   body?.addEventListener('change', (e) => { if (e.target.tagName !== 'BUTTON') dispatch(e); });

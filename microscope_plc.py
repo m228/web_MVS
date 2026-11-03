@@ -20,6 +20,9 @@ from logger import log_event
 # бэкофф переподключения (сек), как у RTSP-воркера — не долбим плату на обрыве
 _RECONNECT_BACKOFF = [1, 2, 5, 10, 30]
 
+BOARD_CMD_REG = 1570      # регистр команд платы (рядом «Сохранить» 0x8888 — не трогаем)
+BOARD_REBOOT = 0xAAAA     # чистый перезапуск без записи в EEPROM
+
 
 class PlateClient:
     def __init__(self, config):
@@ -367,6 +370,13 @@ class PlateClient:
         Ставится в очередь и выполняется в потоке опроса."""
         with self._pending_lock:
             self._pending.append((int(addr), int(value) & 0xFFFF))
+
+    def reboot(self):
+        """Перезапустить плату: команда 0xAAAA в регистр команд 1570 (так же шлёт кнопка «Перезагрузить» её страницы,
+        проверено по HAR 03.11). Плата сама гасит регистр и через ~1 с перезагружается, возвращается за ~5 с; наши слова OUT
+        после неё переписываются на новом сокете (_write_changed_out). Другие значения в 1570 здесь писать нельзя:
+        0xBBBB, 0xCCCC, 0x9876, 0x4353 затирают EEPROM."""
+        self.write_reg(BOARD_CMD_REG, BOARD_REBOOT)
 
     def _warn_write(self, msg, payload):
         now = time.time()

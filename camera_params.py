@@ -166,3 +166,17 @@ class BlackWatch:
         if self.since is None or self.last is None or self._clock() - self.last > BLACK_GAP_S:
             return 0.0
         return self._clock() - self.since
+
+    def live(self):
+        """Поток идёт и последний проверенный кадр не чёрный."""
+        return self.since is None and self.last is not None and self._clock() - self.last <= BLACK_GAP_S
+
+
+def black_alarm(secs, streaming, led_on, led_bright, exposure):
+    """Чёрный кадр — повод для тревоги: поток идёт, чёрный не меньше BLACK_SECONDS, а свет включён и экспозиция не нулевая
+    (иначе чернота ожидаема). exposure None — не знаем, не мешает."""
+    if not (streaming and secs >= BLACK_SECONDS):
+        return False
+    if not led_on or not (led_bright or 0) > 0:
+        return False
+    return exposure is None or exposure > 0

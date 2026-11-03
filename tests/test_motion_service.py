@@ -1136,3 +1136,48 @@ def test_scenario_normalize_keeps_group_sources_and_drops_missing_or_mirror():
                                "scenarios": [{"id": "s1", "rule": "sum", "sources": [{"camera": "a", "group": "g1"}, {"camera": "a", "group": "g1"},
                                                                                        {"camera": "a", "group": "g9"}, {"camera": "a", "zone": "z1"}]}]})
     assert cfg["scenarios"][0]["sources"] == [{"camera": "a", "group": "g1"}, {"camera": "a", "zone": "z1"}]
+
+
+def test_scenario_level_rule_takes_highest_active_source_in_order():
+    """Шахта: источники идут снизу вверх; уровень = номер самого верхнего окна с жомом (нижние считаются заполненными)."""
+    import motion_scenarios as sc
+    assert sc.evaluate("level", [1, 1, 0]) == 2 and sc.evaluate("level", [0, 0, 0]) == 0
+    assert sc.evaluate("level", [0, 1, 1]) == 3, "верхнее окно с жомом — уровень 3, даже если нижнее выпало"
+    assert sc.evaluate("level", []) == 0
+
+
+def test_scenario_each_rule_writes_one_register_per_source_and_state_signal():
+    import motion_scenarios as sc
+    zs = [{"id": "w1", "bit": 0, "fill": 1, "state": 1}, {"id": "w2", "bit": 1, "fill": 1, "state": 2}, {"id": "w3", "bit": 0, "fill": 0, "state": 0}, {"id": "w4", "bit": 1}]
+    st = {"a": {"result": {"alive": True, "zones": zs}}}
+    srcs = [{"camera": "a", "zone": z} for z in ("w1", "w2", "w3", "w4")]
+    assert sc.source_bits(srcs, st, "state") == [1, 2, 0, 1], "без порогов вида окна (w4) — бит движения"
+    scn = {"rule": "each", "out": {"kind": "holding", "address": 100}}
+    assert sc.writes_for(scn, [1, 2, 0], 3) == [("holding", 100, 1), ("holding", 101, 2), ("holding", 102, 0)]
+    assert sc.writes_for({"rule": "sum", "out": {"kind": "coil", "address": 5}}, [1, 1], 2) == [("coil", 5, 2)]
+    assert sc.writes_for({"rule": "each", "out": {"kind": "holding", "address": 65535}}, [1, 1], 2) == [("holding", 65535, 1)], "за пределы адресов не пишем"
+
+
+def test_scenario_runner_writes_each_source_to_its_own_register(tmp_path):
+    import motion_scenarios as sc
+    sent = []
+
+    class Link:
+        last_error = ""
+
+        def write(self, w):
+            sent.append(list(w))
+            return True
+
+    class Mgr:
+        cfg = {"modbus": {"enable": True, "host": "h", "port": 502, "device_id": 1, "write_period_s": 5.0},
+               "scenarios": [{"id": "s1", "name": "окна", "rule": "each", "signal": "pulp", "out": {"kind": "holding", "address": 10},
+                              "sources": [{"camera": "a", "zone": "w1"}, {"camera": "a", "zone": "w2"}]}]}
+        links = type("L", (), {"get": lambda self, *a: Link()})()
+        workers = {"a": type("W", (), {"state": lambda self: {"result": {"alive": True, "zones": [{"id": "w1", "bit": 0, "fill": 1}, {"id": "w2", "bit": 0, "fill": 0}]}}})()}
+
+    r = sc.ScenarioRunner(Mgr())
+    r.tick(100.0)
+    assert sent == [[("holding", 10, 1), ("holding", 11, 0)]]
+    r.tick(101.0)
+    assert len(sent) == 1, "значения не менялись — повторно раньше периода не пишем"

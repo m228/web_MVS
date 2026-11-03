@@ -4602,7 +4602,7 @@ body.micro-rep-doc .micro-cmp-strips { grid-template-columns: repeat(6, 1fr); ga
 .md-cp:has(input:checked) { background: var(--accent-soft); color: var(--accent); border-color: var(--accent); }
 .md-sr__g3 { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 14px; }
 .md-seg { display: inline-flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
-.md-seg label { display: block; margin: 0; padding: 4px 12px; font-size: 12px; font-weight: 400; color: var(--muted); cursor: pointer; }
+.md-seg label { white-space: nowrap; display: block; margin: 0; padding: 4px 12px; font-size: 12px; font-weight: 400; color: var(--muted); cursor: pointer; }
 .md-seg input { display: none; }
 .md-seg label:has(input:checked) { background: var(--accent-soft); color: var(--accent); }
 .md-sr__foot { display: flex; align-items: center; gap: 10px; }
@@ -4617,6 +4617,13 @@ body.micro-rep-doc .micro-cmp-strips { grid-template-columns: repeat(6, 1fr); ga
 .md-sig { font-size: 12px; color: var(--accent); }
 .md-sr__foot { flex-wrap: wrap; font-size: 12px; color: var(--muted); }
 .md-sr__foot .md-x { flex: none; }
+.md-ord { display: flex; flex-direction: column; gap: 4px; max-width: 460px; }
+.md-ord__row { display: grid; grid-template-columns: 22px minmax(0, 1fr) 64px 28px 28px; gap: 8px; align-items: center; padding: 3px 8px; border: 1px solid var(--border); border-radius: 8px; font-size: 12px; }
+.md-ord__row b { color: var(--muted); font-weight: 600; text-align: center; }
+.md-ord__row i { font-style: normal; color: var(--muted); font-size: 11px; text-align: right; }
+.md-ord__row .md-x { padding: 1px 0; min-height: 0; width: 28px; }
+.md-ord__row .md-x:disabled { opacity: .35; cursor: default; }
+.md-sr__val > b.md-sr__val--list { font-size: 15px; letter-spacing: .02em; }
 .md-openall, .md-zr__col label.md-lbl { flex-direction: row; align-items: center; gap: 5px; }
 .md-openall input[type=checkbox], .md-zr__col input[type=checkbox] { width: 15px; height: 15px; margin: 0; flex: none; }
 @media (max-width: 900px) { .md-zr__head { grid-template-columns: 4px 110px minmax(0, 1fr) 26px; } .md-zr__head .md-zone__chart { display: none; } .md-zr__det { grid-template-columns: 1fr; } }

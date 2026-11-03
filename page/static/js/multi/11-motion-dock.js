@@ -231,14 +231,14 @@ function mdOutCell(o, attrs, withState) {
     (withState && o && o.kind ? `<select ${attrs} data-f="oval" title="Что писать: бит «движется» 0/1 или состояние окна: 0 — пусто, 1 — жом стоит, 2 — движется (пока пороги вида окна не заданы, пишется бит)">${mdSel([['bit', 'движение'], ['state', 'состояние окна']], o.value || 'bit')}</select>` : '') + '</div>';
 }
 
-const MD_FILL_METRICS = [['off', 'нет'], ['tex', 'зернистость'], ['lum', 'яркость']];
+const MD_FILL_METRICS = [['off', 'нет'], ['rel', 'яркость к металлу'], ['lum', 'яркость'], ['tex', 'зернистость']];
 const MD_FILL_STATE = ['пусто', 'жом стоит', 'движется'];
 const MD_FILL_HELP = 'Вид окна — есть ли в нём жом. По движению пустое окно и окно со стоящим жомом неотличимы; вид окна различает их.\n' +
-  'Зернистость — резкость мелких деталей (жом — крупа, пустая стенка гладкая), яркость — средний свет в окне. Пока пороги on/off равны 0, значения только измеряются (в панели и в записи CSV), решения нет.\n' +
+  'Яркость к металлу — яркость окна, делённая на яркость металла вокруг него (свет и солнце на неё почти не влияют: жом светлый ≈ 0.9, пустое окно тёмное ≈ 0.65). Яркость — средний свет в окне, зернистость — резкость мелких деталей. Пока пороги on/off равны 0, значения только измеряются (в панели и в записи CSV), решения нет.\n' +
   'Когда пороги заданы: выше on (или ниже off, если выбрано «жом при низком») — жом есть. Состояние окна: 0 пусто, 1 жом стоит, 2 движется.';
 function mdFillText(z) {
   if (!z || z.tex === undefined) return '–';
-  const base = (z.fill_metric === 'lum' ? 'яркость ' + Number(z.lum).toFixed(0) : 'зерн. ' + Number(z.tex).toFixed(2));
+  const base = z.fill_metric === 'lum' ? 'яркость ' + Number(z.lum).toFixed(0) : z.fill_metric === 'rel' ? 'отн. яркость ' + Number(z.rel).toFixed(2) : 'зерн. ' + Number(z.tex).toFixed(2);
   return z.state == null ? base + ' · пороги не заданы' : base + ' · ' + MD_FILL_STATE[z.state];
 }
 
@@ -261,8 +261,8 @@ function mdZoneCardHtml(cam, z, i) {
         <span class="md-lbl">выкл</span>${mdNum(a + ' data-f="foff"', z.frames_to_off == null ? 4 : z.frames_to_off, 'min="1" max="1000" title="Сколько кадров подряд ниже порога off, чтобы бит выключился"')}</div>
       <div class="md-zone__row"><span class="md-lbl" title="${escapeHtml(MD_FILL_HELP)}">вид окна</span>
         <select ${a} data-f="fmetric">${mdSel(MD_FILL_METRICS, z.fill_metric || 'off')}</select>` +
-      (z.fill_metric && z.fill_metric !== 'off' ? `<span class="md-lbl">on</span>${mdNum(a + ' data-f="fllon"', z.fill_on || 0, 'step="0.1" min="0" title="Верхний порог вида окна. 0 — пороги не заданы, только измерение"')}
-        <span class="md-lbl">off</span>${mdNum(a + ' data-f="flloff"', z.fill_off || 0, 'step="0.1" min="0" title="Нижний порог вида окна"')}
+      (z.fill_metric && z.fill_metric !== 'off' ? `<span class="md-lbl">on</span>${mdNum(a + ' data-f="fllon"', z.fill_on || 0, 'step="0.01" min="0" title="Верхний порог вида окна. 0 — пороги не заданы, только измерение"')}
+        <span class="md-lbl">off</span>${mdNum(a + ' data-f="flloff"', z.fill_off || 0, 'step="0.01" min="0" title="Нижний порог вида окна"')}
         <select ${a} data-f="fllinv" title="При каком значении признака в окне есть жом">${mdSel([['0', 'жом при высоком'], ['1', 'жом при низком']], z.fill_invert ? '1' : '0')}</select>
         <span class="md-lbl md-fill" id="md-zf-${k}">–</span>` : '') + `</div>
       <div class="md-zone__row"><span class="md-lbl">вывод в ПЛК</span>${mdOutCell(z.out, a, z.fill_metric && z.fill_metric !== 'off')}

@@ -1054,6 +1054,46 @@ def test_record_gets_fill_columns_only_for_zones_with_fill(tmp_path):
     finally:
         w.stop()
     head = lines[0].split(";")
-    assert head == ["time", "z1_flow", "z1_diff", "z1_bit", "z1_tex", "z1_lum", "z1_fill", "z2_flow", "z2_diff", "z2_bit", "alive", "status"]
+    assert head == ["time", "z1_flow", "z1_diff", "z1_bit", "z1_tex", "z1_lum", "z1_rel", "z1_fill", "z2_flow", "z2_diff", "z2_bit", "alive", "status"]
     rows = [l.split(";") for l in lines[1:] if l.endswith(";ok")]
     assert rows and all(len(r) == len(head) for r in rows) and float(rows[-1][4]) > 5 and float(rows[-1][5]) > 50
+
+
+def window_frame(win_value, metal=200.0, scale=1.0, seed=5):
+    """Светлый металл с окном: левая половина кадра — окно (win_value), вокруг металл. scale — «свет» (солнце, ночь) на весь кадр."""
+    rng = np.random.default_rng(seed)
+    f = np.full((H, W), metal, np.float32)
+    f[60:180, 40:140] = win_value
+    return np.clip(f * scale + rng.normal(0, 1.5, (H, W)), 0, 255).astype(np.uint8)
+
+
+def test_fill_rel_is_brightness_relative_to_metal_and_ignores_overall_light():
+    """rel = яркость окна / яркость металла вокруг: тёмное окно (пусто) ≈ 0.65, светлое (жом) ≈ 0.92 — при любом общем свете."""
+    z = me.normalize_camera({"id": "c", "zones": [{"id": "z1", "points": [[50, 70], [130, 70], [130, 170], [50, 170]],
+                                                   "fill_metric": "rel", "fill_smooth": 1}]})["zones"][0]
+    got = {}
+    for name, win in (("empty", 130.0), ("pulp", 185.0)):
+        for scale in (1.0, 0.6):
+            zr = me.ZoneRT(z, None, (W, H))
+            f = window_frame(win, scale=scale)
+            zr.step(f, f, 0.3)
+            got[(name, scale)] = zr.rel
+    assert abs(got[("empty", 1.0)] - 0.65) < 0.03 and abs(got[("pulp", 1.0)] - 0.925) < 0.03, got
+    assert abs(got[("empty", 0.6)] - got[("empty", 1.0)]) < 0.03 and abs(got[("pulp", 0.6)] - got[("pulp", 1.0)]) < 0.03, "общий свет rel не меняет"
+    assert zr.ring is not None
+
+
+def test_fill_rel_decides_pulp_with_thresholds_and_zone_at_frame_edge_still_works():
+    cfg = me.normalize_camera({"id": "c", "zones": [
+        {"id": "z1", "points": [[50, 70], [130, 70], [130, 170], [50, 170]], "fill_metric": "rel", "fill_on": 0.8, "fill_off": 0.74,
+         "fill_smooth": 2, "fill_frames": 2},
+        {"id": "z2", "points": [[0, 0], [60, 0], [60, 40], [0, 40]], "fill_metric": "rel", "fill_on": 0.8, "fill_off": 0.74}]})
+    eng = me.CameraEngine(cfg)
+    st = None
+    for i in range(8):
+        st = eng.process(window_frame(185.0, seed=i), float(i)) or st
+    assert st["zones"][0]["fill"] == 1 and st["zones"][0]["state"] == 1
+    for i in range(8, 16):
+        st = eng.process(window_frame(130.0, seed=i), float(i)) or st
+    assert st["zones"][0]["fill"] == 0 and st["zones"][0]["state"] == 0
+    assert st["zones"][1]["rel"] >= 0, "окно у края кадра: полоса вокруг обрезается, расчёт не падает"

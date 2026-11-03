@@ -70,9 +70,10 @@ async def lifespan(app: FastAPI):
         sysmon.start()
     except Exception as e:
         api_log("app", "Мониторинг не запустился: %s" % e, "error")
-    # автообновление: раз в 30 мин проверяет релиз, качает заранее, перезапускает после варки (окно — micro.restart_window)
+    # автообновление: раз в 30 мин проверяет релиз, качает заранее, перезапускает после варки (окно — micro.restart_window),
+    # а без микроскопа — ночью (auto_update.night_window)
     try:
-        auto_update.start(window_fn=micro.restart_window)
+        auto_update.start(window_fn=micro.restart_window, micro_fn=micro.active)
     except Exception as e:
         api_log("app", "Автообновление не запустилось: %s" % e, "error")
     # сайдкары (cv_service, video_service), если установлены рядом: поднимаем фоном сразу — CV-модель грузится долго

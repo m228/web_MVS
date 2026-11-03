@@ -71,3 +71,6 @@ cam_events.db-shm
 sysmon.db
 sysmon.db-wal
 sysmon.db-shm
+
+# ключ авто-регистрации мониторинга (создаёт build.bat)
+/enroll_key.txt

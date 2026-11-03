@@ -16,6 +16,10 @@ call ".venv\Scripts\activate.bat"
 
 python -m pip install --upgrade pyinstaller || exit /b 1
 
+rem enrollment key for monitoring auto-registration: same key as the receiver (monitor_server\data\server.json); kept out of git
+if exist "monitor_server\data\server.json" powershell -NoProfile -Command "try { $k = (Get-Content 'monitor_server\data\server.json' -Raw -Encoding UTF8 | ConvertFrom-Json).enroll_key; if ($k) { [IO.File]::WriteAllText('enroll_key.txt', $k.Trim()) } } catch { }"
+if exist "enroll_key.txt" (echo [build] enroll_key.txt found: auto-registration will work in this build) else (echo [build] WARNING: no enroll_key.txt - this build will NOT auto-register on the monitor. Start the receiver once, then rebuild.)
+
 set /p VER=<VERSION
 echo [build] Building web_MVS %VER% ...
 pyinstaller --noconfirm web_MVS.spec || (echo [build] BUILD FAILED & exit /b 1)

@@ -36,6 +36,7 @@ from pathlib import Path
 from typing import Callable, Optional
 from urllib.parse import urlparse
 
+import enroll_client
 from logger import log_event, mask_secrets
 from paths import DATA_DIR, read_version
 
@@ -44,6 +45,7 @@ CONFIG_PATH = DATA_DIR / "monitor.json"
 
 SCHEMA = 1
 DEFAULTS = {"enabled": False, "url": "", "token": "", "plant": "", "interval_s": 300, "system_proxy": True, "no_probe_min": 30, "auto_off_min": 10, "allow_http": False,
+            "auto_enroll": True,       # нет токена — самому просить его у приёмника (enroll_client); нужен ключ в сборке
             # датчики микроскопа (правятся в monitor.json): допуски расхождения трёх датчиков, мкм — на отводе и на подводе
             # (отвод 150, подвод 200 по решению Макса 01.11: у Kir на подводе аналоговый датчик стабильно выше энкодера на 100–150 мкм); «ноль уполз» — |датчик − энкодер|
             # до автокалибровки, мкм; автокалибровки нет дольше overdue_h часов работы; bad_streak плохих проб подряд —
@@ -253,6 +255,7 @@ def _clean_cfg(cfg: dict) -> dict:
     out["plant"] = str(cfg.get("plant") or "").strip()[:40]
     out["system_proxy"] = bool(cfg.get("system_proxy", True))
     out["allow_http"] = bool(cfg.get("allow_http", False))
+    out["auto_enroll"] = bool(cfg.get("auto_enroll", True))
     for k, lo, hi in (("interval_s", 60, 3600), ("no_probe_min", 5, 240), ("auto_off_min", 2, 240), ("gap_far_um", 10, 2000), ("gap_near_um", 10, 2000),
                       ("drift_um", 10, 5000), ("overdue_h", 1, 168), ("bad_streak", 1, 10)):
         try:
@@ -527,6 +530,7 @@ class Agent:
         self._thread: Optional[threading.Thread] = None
         self._send_lock = threading.Lock()
         self._cfg = load_config()
+        self.enroller = enroll_client.Enroller()
 
     # ---- жизненный цикл
     def start(self) -> None:
@@ -565,9 +569,23 @@ class Agent:
                     next_watch = now + WATCH_EVERY_S
                 if self._send_due(now):
                     self.send(now=now)
+                self._enroll(now)
             except Exception as e:                  # агент не должен умирать от случайной ошибки
                 log_event("sysmon", "Мониторинг: ошибка цикла: %s" % e, "error")
             self._stop.wait(TICK_S)
+
+    def _enroll(self, now: float) -> None:
+        """Токена нет — просим его у приёмника (раз в минуту, см. enroll_client). Получили — сохраняем и сразу шлём первый пульс."""
+        cfg = self._cfg
+        if cfg.get("token") or not cfg.get("auto_enroll", True):
+            return
+        patch = self.enroller.step(cfg, now)
+        if patch:
+            save_config(patch)
+            self._cfg = load_config()
+            self._kick.set()
+
+    # ---- ожидание токена
 
     def _sync_schedule(self) -> None:
         """Интервал укоротили в настройках — следующий пульс не ждёт старого срока (после удачной отправки)."""
@@ -885,7 +903,8 @@ class Agent:
         d = self.collect()
         snap = self.snapshot(d, cfg)
         return {"snapshot": snap, "alerts": snap["alerts"], "send": {**self.status, "pending": outbox_count(),
-                "configured": configured(cfg)}, "config": public_config(cfg), "recent": list(self.recent), "starts": starts(15)}
+                "configured": configured(cfg)}, "config": public_config(cfg), "recent": list(self.recent), "starts": starts(15),
+                "enroll": {**self.enroller.status, "auto": cfg["auto_enroll"] and not cfg["token"]}}
 
     # ---- отправка
     def send(self, now: Optional[float] = None, force: bool = False) -> dict:

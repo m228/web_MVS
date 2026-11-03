@@ -8,6 +8,9 @@
   GET  /api/plants/{id}/events  — журнал завода (?limit=100&before=<id>).
   POST /api/plants/{id}/token   — выдать новый токен (старый перестаёт работать).
   DELETE /api/plants/{id}       — удалить завод вместе с журналом.
+  POST /enroll                  — заявка нового клиента с ключом регистрации (без пароля панели): {key, machine, name, version, secret}.
+                                  Повторяется раз в минуту, пока Макс не решит; «принято» приходит с токеном один раз. 403 — ключ не тот.
+  GET  /api/enroll              — заявки, ждущие решения; POST /api/enroll/{id}/approve ({"name"}) и /reject — принять / отклонить.
   GET  /api/telegram            — состояние уведомлений в Telegram (без токена и chat id); POST /api/telegram/test — тестовое сообщение.
   GET  /health                  — жив ли (без пароля, без данных).
   GET  /wait?known=<версия>     — «толчок» о релизе: клиент (Bearer-токен) держит запрос; ответ сразу, если последняя версия на GitHub не равна known,
@@ -58,11 +61,14 @@ def manifest() -> dict:
 
 
 def create_app(store: monitor_store.Store, password: str, version: str, panel_html: str, watchdog: bool = True,
-               clock: Callable[[], float] = time.time, assets: Optional[dict] = None, notifier=None, bot=None, releases=None) -> FastAPI:
+               clock: Callable[[], float] = time.time, assets: Optional[dict] = None, notifier=None, bot=None, releases=None,
+               enroll_key: str = "") -> FastAPI:
     if not password:
         raise ValueError("пароль панели не задан")
     fails: dict = {}
+    enroll_fails: dict = {}
     pw = password.encode("utf-8")
+    ekey = (enroll_key or "").encode("utf-8")
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -205,6 +211,72 @@ def create_app(store: monitor_store.Store, password: str, version: str, panel_ht
         if notifier is not None:
             notifier.kick()
         return {"ok": True, **res}
+
+    @app.post("/enroll")
+    async def enroll(request: Request):
+        """Заявка нового клиента (завод сам просит токен). Пускаем только с ключом регистрации; решение — за Максом (панель, Telegram)."""
+        if not ekey:
+            return JSONResponse({"ok": False, "error": "приём новых клиентов выключен"}, status_code=503)
+        ip = client_ip(request)
+        now = clock()
+        recent = [t for t in enroll_fails.get(ip, []) if now - t < AUTH_FAILS_WINDOW_S]
+        enroll_fails[ip] = recent
+        if len(recent) >= AUTH_FAILS_MAX:
+            return JSONResponse({"ok": False, "error": "слишком много неверных ключей"}, status_code=429, headers={"Retry-After": "60"})
+        try:
+            body = await request.body()
+            if len(body) > 4096:
+                raise ValueError("слишком большая заявка")
+            data = json.loads(body.decode("utf-8"))
+            if not isinstance(data, dict):
+                raise ValueError("заявка не разобрана")
+        except (ValueError, UnicodeDecodeError) as e:
+            return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
+        if not hmac.compare_digest(str(data.get("key") or "").encode("utf-8"), ekey):
+            recent.append(now)
+            if len(enroll_fails) > 1000:
+                for k in [k for k, v in enroll_fails.items() if not v or now - v[-1] > AUTH_FAILS_WINDOW_S]:
+                    enroll_fails.pop(k, None)
+            return JSONResponse({"ok": False, "error": "ключ регистрации не принят"}, status_code=403)
+        try:
+            res = await run_in_threadpool(store.enroll_request, data.get("machine"), data.get("name"), data.get("version"), ip, data.get("secret"))
+        except ValueError as e:
+            return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
+        except OverflowError as e:
+            return JSONResponse({"ok": False, "error": str(e)}, status_code=429, headers={"Retry-After": "300"})
+        if res.pop("new", False) and bot is not None:                  # новая заявка: Макс увидит её и в Telegram (с кнопками)
+            await run_in_threadpool(bot.announce_enroll, res["id"], res["name"], str(data.get("version") or "")[:20], ip)
+        return {"ok": True, **res}
+
+    @app.get("/api/enroll")
+    def enroll_list(request: Request):
+        bad = panel_denied(request)
+        if bad is not None:
+            return bad
+        return {"requests": store.enroll_pending()}
+
+    @app.post("/api/enroll/{req_id}/approve")
+    async def enroll_approve(req_id: int, request: Request):
+        bad = write_denied(request)
+        if bad is not None:
+            return bad
+        try:
+            body = await request.json()
+        except ValueError:
+            body = {}
+        try:
+            return store.enroll_approve(req_id, str(body.get("name") or "") if isinstance(body, dict) else "")
+        except LookupError as e:
+            return JSONResponse({"error": str(e)}, status_code=404)
+        except ValueError as e:
+            return JSONResponse({"error": str(e)}, status_code=400)
+
+    @app.post("/api/enroll/{req_id}/reject")
+    def enroll_reject(req_id: int, request: Request):
+        bad = write_denied(request)
+        if bad is not None:
+            return bad
+        return {"rejected": store.enroll_reject(req_id)}
 
     @app.get("/api/telegram")
     def telegram_state(request: Request):

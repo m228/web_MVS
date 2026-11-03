@@ -12,9 +12,9 @@
   GET  /cameras/{id}/snapshot     — последний кадр JPEG (?w=1280 — уменьшить; заголовки X-Frame-W/H — размер оригинала).
   GET  /cameras/{id}/history      — ряды flow/diff/bit для графиков калибровки (?n=300).
   GET  /cameras/{id}/stats        — среднее / мин / макс flow и diff по зонам за последние ?window=10800 секунд (до суток).
-  POST /cameras/{id}/record       — {"on": true|false}: писать метрики каждого кадра в CSV (data\\records).
+  POST /cameras/{id}/record       — {"on": true|false}: писать метрики каждого кадра в базу data\\motion.db.
   POST /record                    — то же сразу для всех включённых камер.
-  GET  /records.zip               — все CSV записи за последние дни (?days=7) + summary.txt со сводкой сбоев, одним архивом.
+  GET  /records.zip               — CSV записей за последние дни (?days=7, собираются из базы) + summary.txt со сводкой сбоев, одним архивом.
   POST /modbus/ping               — {"host","port","device_id","address"}: прочитать один регистр (только чтение).
   GET  /logs                      — последние строки журнала сервиса.
 
@@ -25,6 +25,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import sqlite3
 import sys
 import threading
 import time
@@ -42,6 +43,7 @@ os.environ.setdefault("OPENCV_LOG_LEVEL", "ERROR")
 
 import motion_engine as engine  # noqa: E402
 import motion_records  # noqa: E402
+import motion_store  # noqa: E402
 import motion_trends  # noqa: E402
 from motion_camera import CameraWorker, open_capture  # noqa: E402
 from motion_modbus import LinkRegistry, ModbusLink  # noqa: E402
@@ -77,11 +79,13 @@ class Manager:
     """Конфиг на диске + рабочие потоки камер."""
 
     def __init__(self, data_dir: Path, capture_factory: Callable = open_capture, client_factory=None,
-                 auto_record: bool = False, shots_min: float = 0.0, keep_days: float = motion_trends.KEEP_DAYS):
+                 auto_record: bool = False, shots_min: float = 0.0, keep_days: float = motion_trends.KEEP_DAYS,
+                 shots_keep_days: float = motion_trends.SHOTS_KEEP_DAYS):
         self.dir = Path(data_dir)
-        self.auto_record = auto_record          # первый запуск без recording.json: писать CSV по всем камерам сразу (ручное «выкл» запоминается)
+        self.auto_record = auto_record          # первый запуск без recording.json: писать метрики по всем камерам сразу (ручное «выкл» запоминается)
         self.shots_min = shots_min              # раз в сколько минут снимать все камеры «в один момент» (0 — не снимать)
-        self.keep_days = keep_days              # записи, тренды и снимки старше этого удаляются
+        self.keep_days = keep_days              # сырые тренды и записи по кадрам старше этого удаляются (корзины статистики — никогда)
+        self.shots_keep_days = shots_keep_days  # JPEG снимков старше этого удаляются (сводка по зонам остаётся в базе)
         self.dir.mkdir(parents=True, exist_ok=True)
         self.path = self.dir / "motion_config.json"
         self.capture_factory = capture_factory
@@ -94,6 +98,7 @@ class Manager:
         self._lock = threading.RLock()
         self.scenarios = ScenarioRunner(self)
         self._halt = threading.Event()
+        self._hk: Optional[threading.Thread] = None
 
     # --- конфиг ---
     def load(self):
@@ -111,7 +116,7 @@ class Manager:
             log.error("Конфиг не прочитан (%s) — файл сохранён как %s, стартуем пустыми", e, bad.name)
             self.cfg = engine.default_config()
 
-    # --- запись CSV переживает перезапуск сервиса (обновление, сбой): что включили — то после старта пишется дальше, в новый файл ---
+    # --- запись метрик переживает перезапуск сервиса (обновление, сбой): что включили — то после старта пишется дальше, новым запуском ---
     def _load_rec(self):
         try:
             d = json.loads((self.dir / "recording.json").read_text(encoding="utf-8-sig"))
@@ -210,10 +215,13 @@ class Manager:
             workers = [w for w in self.workers.values() if w.cfg["enabled"] and w.cfg["url"]]
         if not workers:
             return None
+        if motion_trends.low_disk(self.dir):
+            log.warning("снимок пропущен: на диске меньше %d МБ свободного места", motion_trends.MIN_FREE_BYTES >> 20)
+            return None
         cams = {w.id: w.shot() for w in workers}
         try:
             return motion_trends.write_shot(self.dir, ts, cams)
-        except OSError as e:
+        except (OSError, sqlite3.Error) as e:
             log.warning("снимок не записан: %s", e)
             return None
 
@@ -226,11 +234,19 @@ class Manager:
             if now >= next_clean:
                 next_clean = now + 3600
                 try:
-                    n = motion_trends.purge(self.dir, self.keep_days, now)
+                    days, vacuum = self.keep_days, 5000
+                    if motion_trends.low_disk(self.dir):
+                        days, vacuum = min(days, motion_trends.LOW_DISK_DAYS), 500000     # место нужно сейчас — страницы отдаём диску все
+                        log.warning("мало места на диске (< %d МБ): сырые записи режу до %g сут.", motion_trends.MIN_FREE_BYTES >> 20, days)
+                    n = motion_trends.purge(self.dir, days, now, self.shots_keep_days, vacuum)
                     if n:
-                        log.info("уборка: удалено %d старых файлов/папок (старше %g сут.)", n, self.keep_days)
+                        log.info("уборка: убрано %d старых строк/файлов/папок (сырое старше %g сут., снимки старше %g сут.)", n, days, self.shots_keep_days)
                 except Exception as e:  # noqa: BLE001
                     log.warning("уборка старых записей не удалась: %s", e)
+            try:
+                motion_store.store_for(self.dir).maybe_flush(now)          # камеры, давно не писавшие, не держат хвост в памяти
+            except Exception as e:  # noqa: BLE001
+                log.warning("буфер записи не сброшен на диск: %s", e)
             if self.shots_min > 0:
                 step = self.shots_min * 60.0
                 if not next_shot:
@@ -244,12 +260,14 @@ class Manager:
             self._halt.wait(5.0)
 
     def start(self):
+        motion_store.store_for(self.dir)         # открыть базу и перенести старые CSV-тренды до запуска камер
         self.load()
         self._load_rec()
         self.apply(self.cfg, save=False)
         self.scenarios.start()
         if self.auto_record or self.shots_min > 0 or self.keep_days:
-            threading.Thread(target=self._housekeeping, daemon=True, name="housekeeping").start()
+            self._hk = threading.Thread(target=self._housekeeping, daemon=True, name="housekeeping")
+            self._hk.start()
 
     def shutdown(self):
         self._halt.set()
@@ -259,6 +277,9 @@ class Manager:
                 w.stop()
             self.workers = {}
         self.links.close_all()
+        if self._hk and self._hk.is_alive() and self._hk is not threading.current_thread():
+            self._hk.join(15)                   # уборка/снимки в разгаре — дать закончить, иначе они заново откроют базу после закрытия
+        motion_store.close_for(self.dir)
 
     def worker(self, cid: str) -> CameraWorker:
         w = self.workers.get(cid)
@@ -271,11 +292,12 @@ def create_app(data_dir: Optional[Path] = None, capture_factory: Callable = open
     data_dir = Path(data_dir or os.environ.get("MOTION_DATA") or HERE / "data")
     ring = RingLog()
     logging.getLogger("motion").addHandler(ring)
-    # автозапись CSV, снимки раз в 20 мин и хранение 10 суток — по умолчанию; MOTION_AUTORECORD=0 / MOTION_SHOTS_MIN=0 / MOTION_KEEP_DAYS=N меняют
+    # автозапись, снимки раз в 20 мин, сырое 60 суток и JPEG снимков 10 суток — по умолчанию; MOTION_AUTORECORD=0 / MOTION_SHOTS_MIN=0 / MOTION_KEEP_DAYS=N / MOTION_SHOTS_KEEP_DAYS=N меняют
     mgr = Manager(data_dir, capture_factory, client_factory,
                   auto_record=os.environ.get("MOTION_AUTORECORD", "1") != "0",
                   shots_min=float(os.environ.get("MOTION_SHOTS_MIN", "20")),
-                  keep_days=float(os.environ.get("MOTION_KEEP_DAYS", str(motion_trends.KEEP_DAYS))))
+                  keep_days=float(os.environ.get("MOTION_KEEP_DAYS", str(motion_trends.KEEP_DAYS))),
+                  shots_keep_days=float(os.environ.get("MOTION_SHOTS_KEEP_DAYS", str(motion_trends.SHOTS_KEEP_DAYS))))
 
     @asynccontextmanager
     async def lifespan(_app):
@@ -366,11 +388,11 @@ def create_app(data_dir: Optional[Path] = None, capture_factory: Callable = open
 
     @app.get("/records.zip")
     def records_zip(days: float = 7.0):
-        """Все CSV записи за последние days суток + summary.txt (когда и на сколько камеры пропадали) — одним архивом."""
+        """Записи за последние days суток (CSV собирается из базы) + summary.txt (когда и на сколько камеры пропадали) — одним архивом."""
         for w in list(mgr.workers.values()):
             w.flush_record()
         names = {c["id"]: {"name": c.get("name"), "zones": {z["id"]: z.get("name") for z in c.get("zones", [])}} for c in mgr.cfg.get("cameras", [])}
-        data = motion_records.build_zip(mgr.dir / "records", max(0.01, min(float(days), 365.0)), names=names)
+        data = motion_records.build_zip(mgr.dir, max(0.01, min(float(days), 31.0)), names=names)
         if data is None:
             raise HTTPException(404, "записей ещё нет — включите запись («● все» в общем виде панели КЗ)")
         return Response(content=data, media_type="application/zip",

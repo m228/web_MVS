@@ -307,6 +307,15 @@ class FakeCap:
         return 25.0
 
 
+def _rec_text(base, name):
+    """CSV запуска записи по его метке (то, что вернул start_record) — выгрузка из базы в прежнем виде."""
+    import motion_store as ms
+    st = ms.store_for(base)
+    st.flush()
+    rid = int(name.rsplit("_r", 1)[1])
+    return st.export_run_csv(next(r for r in st.runs() if r["id"] == rid)).decode("utf-8-sig")
+
+
 def _wait(cond, timeout=8.0):
     t0 = time.time()
     while time.time() - t0 < timeout:
@@ -373,7 +382,7 @@ def _drop_and_read_bits(tmp_path, caps):
         w.stop_record()
     finally:
         w.stop()
-    rows = [r.split(";") for r in (tmp_path / "records" / name).read_text(encoding="utf-8-sig").splitlines()[1:]]
+    rows = [r.split(";") for r in _rec_text(tmp_path, name).splitlines()[1:]]
     ev = [i for i, r in enumerate(rows) if r[-1] == "событие: источник открыт"]
     assert ev, "переподключение должно попасть в запись"
     return [r[3] for r in rows[ev[0]:] if r[-1] == "ok"]
@@ -408,7 +417,7 @@ def test_worker_detects_motion_writes_plc_and_reports_snapshot(tmp_path):
         name = w.start_record()
         time.sleep(0.4)
         w.stop_record()
-        txt = (tmp_path / "records" / name).read_text(encoding="utf-8-sig")
+        txt = _rec_text(tmp_path, name)
         assert txt.splitlines()[0].startswith("time;z1_flow;z1_diff;z1_bit") and len(txt.splitlines()) > 2
     finally:
         w.stop()
@@ -422,7 +431,7 @@ def test_record_has_status_column_and_connection_events(tmp_path):
         w._note_conn(False, "поток оборвался")                     # как при обрыве RTSP: кадров нет, но событие в файле остаётся
         time.sleep(0.5)
         w.stop_record()
-        lines = (tmp_path / "records" / name).read_text(encoding="utf-8-sig").splitlines()
+        lines = _rec_text(tmp_path, name).splitlines()
         assert lines[0].endswith(";alive;status")
         assert any(l.endswith(";0;картинка застыла") for l in lines[1:]), "причина по каждой строке сбоя"
         ev = [l.split(";") for l in lines if l.endswith("событие: поток оборвался")]
@@ -458,26 +467,38 @@ def test_worker_stats_avg_min_max_per_zone_only_good_frames(tmp_path):
         w.stop()
 
 
+def _rec_store(tmp_path, t0, cam="cam_1", zones=("z1",)):
+    import motion_store as ms
+    st = ms.MotionStore(tmp_path / "motion.db")
+    return st, st.rec_start(cam, list(zones), set(), t0)
+
+
+def _z(flow, diff, bit):
+    return {"z1": {"flow": flow, "diff": diff, "bit": bit}}
+
+
 def test_records_summary_zone_values_names_and_rotating_share(tmp_path):
     import motion_records as mr
     t0 = time.mktime((2026, 10, 30, 19, 0, 0, 0, 0, -1))
-    path = tmp_path / "cam_1_20261030_190000.csv"
-    stamp = lambda i: time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(t0 + i)) + ".000"
-    rows = ["time;z1_flow;z1_diff;z1_bit;alive;status"]
-    rows += ["%s;1.0;2.0;1;1;ok" % stamp(0), "%s;3.0;6.0;1;1;ok" % stamp(1), "%s;0.2;0.4;0;1;ok" % stamp(2),
-             "%s;9.0;99.0;1;0;картинка застыла" % stamp(3), "%s;;;;;событие: поток оборвался" % stamp(4)]
-    path.write_text("\n".join(rows) + "\n", encoding="utf-8-sig")
-    zs = mr.zone_stats(path)["z1"]
+    st, _ = _rec_store(tmp_path, t0)
+    st.rec_add("cam_1", t0, 1, "ok", _z(1.0, 2.0, 1))
+    st.rec_add("cam_1", t0 + 1, 1, "ok", _z(3.0, 6.0, 1))
+    st.rec_add("cam_1", t0 + 2, 1, "ok", _z(0.2, 0.4, 0))
+    st.rec_add("cam_1", t0 + 3, 0, "картинка застыла", _z(9.0, 99.0, 1))
+    st.rec_add("cam_1", t0 + 4, None, "событие: поток оборвался", {})
+    run = st.runs()[0]
+    zs = st.run_zone_stats(run)["z1"]
     assert zs["n"] == 3, "строки со сбоем и события не считаются"
     assert zs["flow"] == pytest.approx((1.4, 0.2, 3.0)) and zs["diff"] == pytest.approx((2.8, 0.4, 6.0))
     assert zs["bit"] == pytest.approx(2 / 3)
-    txt = mr.summary_text([path], {"cam_1": {"name": "Лента", "zones": {"z1": "Шнек"}}})
+    txt = mr.summary_text(st, [run], {"cam_1": {"name": "Лента", "zones": {"z1": "Шнек"}}})
     assert "Шнек (z1): diff ср 2.80 мин 0.40 макс 6.00 · flow ср 1.40 мин 0.20 макс 3.00 · крутится 67 %" in txt
-    assert "z1: diff" in mr.summary_text([path]), "без имён — по id"
+    assert "z1: diff" in mr.summary_text(st, [run]), "без имён — по id"
+    st.close()
 
 
 def test_recording_survives_service_restart_and_summary_shows_break(tmp_path, monkeypatch):
-    """Включённая запись (все камеры и одной камеры) после перезапуска сервиса (обновление) продолжается сама в новом файле;
+    """Включённая запись (все камеры и одной камеры) после перезапуска сервиса (обновление) продолжается сама новым запуском;
     выключили вручную — после перезапуска не пишется; перерыв между файлами виден в сводке."""
     import motion_records as mr
     srv = _load_server()
@@ -503,7 +524,7 @@ def test_recording_survives_service_restart_and_summary_shows_break(tmp_path, mo
         m1.shutdown()
     assert json.loads((data / "recording.json").read_text())["all"] is True, "включённая запись запомнена на диске"
 
-    time.sleep(1.2)                                           # новый сервис — новый файл (имя с секундами)
+    time.sleep(1.2)                                           # новый сервис — новый запуск записи
     m2 = boot()
     try:
         assert _wait(lambda: m2.workers["w"].state()["recording"], 5), "после перезапуска запись пошла сама"
@@ -529,45 +550,50 @@ def test_recording_survives_service_restart_and_summary_shows_break(tmp_path, mo
     finally:
         m4.shutdown()
 
-    files = sorted((data / "records").glob("w_*.csv"))
-    assert len(files) >= 3
-    assert {mr.camera_of(p) for p in files} == {"w"}
+    import motion_store as ms
+    st = ms.MotionStore(data / "motion.db")
+    runs = st.runs()
+    assert len(runs) >= 3 and {r["cam"] for r in runs} == {"w"}
     monkeypatch.setattr(mr, "GAP_MIN_S", 0.5)                 # в тесте перезапуски идут секунду-две
-    txt = mr.summary_text(files)
-    assert "Перерывы между файлами записи" in txt and "  w: " in txt
-
-
-def _rec_row(t0, dt, alive, status, zones=1):
-    ts = t0 + dt
-    cells = ["", "", ""] * zones if alive is None else ["0.5", "0.4", "1"] * zones
-    return ";".join([time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(ts)) + ".%03d" % int(ts % 1 * 1000)] + cells + ["" if alive is None else str(alive), status])
+    txt = mr.summary_text(st, runs)
+    assert "Перерывы между запусками записи" in txt and "  w: " in txt
+    st.close()
 
 
 def test_records_summary_finds_frozen_gap_and_events_and_zip(tmp_path):
     import io
     import zipfile
     import motion_records as mr
-    rec = tmp_path / "records"
-    rec.mkdir()
     t0 = time.mktime((2026, 10, 30, 19, 0, 0, 0, 0, -1))
-    rows = [_rec_row(t0, i, 1, "ok") for i in range(10)]
-    rows += [_rec_row(t0, i, 0, "картинка застыла") for i in range(10, 15)]
-    rows += [_rec_row(t0, i, 1, "ok") for i in range(15, 25)]
-    rows += [_rec_row(t0, 24.5, None, "событие: поток оборвался")]
-    rows += [_rec_row(t0, i, 1, "ok") for i in range(45, 50)]                # 20 с без единой строки — пропуск
-    path = rec / "cam_1_20261030_190000.csv"
-    path.write_text("\n".join(["time;z1_flow;z1_diff;z1_bit;alive;status"] + rows + ["2026-10-30 19:00:5"]) + "\n", encoding="utf-8-sig")
-    a = mr.analyze(mr.read_rows(path))
+    st, _ = _rec_store(tmp_path, t0)
+    for i in range(10):
+        st.rec_add("cam_1", t0 + i, 1, "ok", _z(0.5, 0.4, 1))
+    for i in range(10, 15):
+        st.rec_add("cam_1", t0 + i, 0, "картинка застыла", _z(0.5, 0.4, 1))
+    for i in range(15, 25):
+        st.rec_add("cam_1", t0 + i, 1, "ok", _z(0.5, 0.4, 1))
+    st.rec_add("cam_1", t0 + 24.5, None, "событие: поток оборвался", {})
+    for i in range(45, 50):                                                    # 20 с без единой строки — пропуск
+        st.rec_add("cam_1", t0 + i, 1, "ok", _z(0.5, 0.4, 1))
+    st.rec_stop(st.runs()[0]["id"], t0 + 50)
+    run2 = st.rec_start("cam_2", ["z1"], set(), t0)
+    for i in range(30):
+        st.rec_add("cam_2", t0 + i, 1, "ok", _z(0.5, 0.4, 1))
+    runs = st.runs()
+    r1 = next(r for r in runs if r["cam"] == "cam_1")
+    a = mr.analyze(st.run_rows(r1))
     assert a["rows"] == 30 and [(round(e - s), what) for s, e, what in a["bad"]] == [(5, "картинка застыла"), (21, "нет данных (кадров и строк не было)")]
     assert a["events"][0][1] == "поток оборвался"
-    txt = mr.summary_text([path])
+    txt = mr.summary_text(st, runs)
     assert "Сбои были: cam_1 (2)" in txt and "картинка застыла" in txt and "поток оборвался" in txt
-    (rec / "cam_2_20261030_190000.csv").write_text("time;z1_flow;z1_diff;z1_bit;alive;status\n" + "\n".join(_rec_row(t0, i, 1, "ok") for i in range(30)) + "\n", encoding="utf-8-sig")
-    assert "cam_2 — файл" in mr.summary_text(sorted(rec.glob("*.csv"))) and "в норме: 100.0 %" in mr.summary_text(sorted(rec.glob("*.csv")))
-    z = mr.build_zip(rec, now=time.time())
+    assert "cam_2 — запись с" in txt and "в норме: 100.0 %" in txt
+    st.close()
+    z = mr.build_zip(tmp_path, now=t0 + 3600)
     with zipfile.ZipFile(io.BytesIO(z)) as zf:
         assert sorted(zf.namelist()) == ["cam_1_20261030_190000.csv", "cam_2_20261030_190000.csv", "summary.txt"]
-    assert mr.build_zip(rec, days=1, now=time.time() + 5 * 86400) is None, "старше days — в архив не идут"
+        first = zf.read("cam_1_20261030_190000.csv").decode("utf-8-sig").splitlines()
+        assert first[0] == "time;z1_flow;z1_diff;z1_bit;alive;status" and first[1].endswith(";0.5;0.4;1;1;ok") and any("поток оборвался" in r for r in first)
+    assert mr.build_zip(tmp_path, days=1, now=t0 + 5 * 86400) is None, "запуски старше days в архив не идут"
     assert mr.build_zip(tmp_path / "нет_такой") is None
 
 
@@ -747,12 +773,12 @@ def test_server_end_to_end_with_video_file(tmp_path):
         code, hist, _ = _http(port, "/cameras/belt/history?n=20")
         assert code == 200 and set(hist["zones"]) == {"l1", "l2"}
         code, rec, _ = _http(port, "/cameras/belt/record", {"on": True})
-        assert code == 200 and rec["recording"].endswith(".csv")
+        assert code == 200 and rec["recording"]
         assert _http(port, "/cameras/belt/record", {"on": False})[1]["recording"] is None
 
         # запись сразу по всем камерам, правка настроек не рвёт её, архив = CSV + summary.txt
         code, ra, _ = _http(port, "/record", {"on": True})
-        assert code == 200 and list(ra["recording"]) == ["belt"] and ra["recording"]["belt"].endswith(".csv")
+        assert code == 200 and list(ra["recording"]) == ["belt"] and ra["recording"]["belt"]
         cfg2 = json.loads(json.dumps(cfg))
         cfg2["cameras"][0]["name"] = "Лента 2"
         assert _http(port, "/config", cfg2, "PUT")[0] == 200
@@ -1050,7 +1076,7 @@ def test_record_gets_fill_columns_only_for_zones_with_fill(tmp_path):
         name = w.start_record()
         time.sleep(0.6)
         w.stop_record()
-        lines = (tmp_path / "records" / name).read_text(encoding="utf-8-sig").splitlines()
+        lines = _rec_text(tmp_path, name).splitlines()
     finally:
         w.stop()
     head = lines[0].split(";")

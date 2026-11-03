@@ -537,7 +537,7 @@ function mdRodAnglesHtml(z) {
 
 function mdZoneStatHtml(z, cur, st) {
   if (z.type === 'cycle') {
-    return cur && cur.valid ? `${mdRodAnglesHtml(cur)} · уверенность ${Number(cur.conf).toFixed(2)}` : 'палка не найдена';
+    return cur && cur.valid ? `${mdRodAnglesHtml(cur)} · ${cur.coast ? '<span title="Палки не видно (переход по тёмному, блик): угол держится по скорости вращения до coast_s секунд">не видно, держу по скорости</span>' : 'уверенность ' + Number(cur.conf).toFixed(2)}` : 'палка не найдена';
   }
   const row = (m) => {
     const c = cur ? mdNumFmt(Number(cur[m])) : '–';

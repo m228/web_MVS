@@ -12,7 +12,7 @@ import plate_config
 from .utils import DEFAULT_VIDEO_FPS, RTSP_RECONNECT_BACKOFF, RTSP_RECONNECT_LOG_EVERY, RTSP_STALL_SECONDS, substream_url
 from .base_worker import BaseCameraWorker
 from .frame_quality import GARBAGE_THRESHOLD, SAMPLE_PERIOD_S, frame_garbage
-from .hw_decode import decoder_kind, hw_params, normalize_mode
+from .hw_decode import decoder_kind, hw_params, normalize_mode, wait_open_turn
 
 
 class RtspCameraWorker(BaseCameraWorker):
@@ -426,6 +426,7 @@ class RtspCameraWorker(BaseCameraWorker):
         Процессором открылось, а видеоядром нет — дальше этот воркер декодирует процессором. Не открылось ни так, ни так
         (камера мертва) — видеоядро не виним; программную попытку повторяем лишь на каждом 3-м провале, иначе мёртвая
         камера держала бы вдвое дольше (у OpenCV на открытие жёсткие 30 с)."""
+        wait_open_turn()                       # камеры открываются по одной, а не все сразу после перезапуска
         mode = self._hw_mode()
         if mode == "off":
             self.decoder = "cpu"

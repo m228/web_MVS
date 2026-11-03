@@ -24,7 +24,28 @@ sys.path.insert(0, str(MS))
 
 import motion_engine as me  # noqa: E402
 import motion_modbus as mm  # noqa: E402
+import motion_camera as mcam  # noqa: E402
 from motion_camera import CameraWorker, decoder_kind, garbage_ratio, hw_params, stream_url  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def _no_open_gap(monkeypatch):
+    """Очередь на открытие потоков в тестах не ждём (проверяется отдельным тестом)."""
+    monkeypatch.setattr(mcam, "OPEN_GAP_S", 0.0)
+
+
+def test_open_turn_spaces_openings_without_holding_the_slow_one():
+    mcam._open_next = 0.0
+    t = [100.0]
+    slept = []
+
+    def sleep(s):
+        slept.append(round(s, 3))
+        t[0] += s
+    waits = [mcam.wait_open_turn(2.0, clock=lambda: t[0], sleep=sleep) for _ in range(3)]
+    assert waits == [0.0, 2.0, 2.0] and slept == [2.0, 2.0]
+    t[0] += 30
+    assert mcam.wait_open_turn(2.0, clock=lambda: t[0], sleep=sleep) == 0.0
 
 W, H = 320, 240
 LEFT = [[10, 40], [150, 40], [150, 200], [10, 200]]

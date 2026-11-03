@@ -3,10 +3,32 @@ import time
 
 import cv2
 import numpy as np
+import pytest
 
 from camera_core import hw_decode
 from camera_core import rtsp_worker as rw
 from camera_core.rtsp_worker import RtspCameraWorker
+
+
+@pytest.fixture(autouse=True)
+def _no_open_gap(monkeypatch):
+    """Очередь на открытие потоков в тестах не ждём (проверяется отдельным тестом ниже)."""
+    monkeypatch.setattr(hw_decode, "OPEN_GAP_S", 0.0)
+
+
+def test_open_turn_spaces_openings_without_holding_the_slow_one():
+    """Три камеры открываются с шагом gap: ждёт только тот, кому рано; следующий в очереди не ждёт окончания чужого открытия."""
+    hw_decode._open_next = 0.0
+    t = [100.0]
+    slept = []
+
+    def sleep(s):
+        slept.append(round(s, 3))
+        t[0] += s
+    waits = [hw_decode.wait_open_turn(2.0, clock=lambda: t[0], sleep=sleep) for _ in range(3)]
+    assert waits == [0.0, 2.0, 2.0] and slept == [2.0, 2.0]
+    t[0] += 30                                         # долго молчали — следующий открывается сразу
+    assert hw_decode.wait_open_turn(2.0, clock=lambda: t[0], sleep=sleep) == 0.0
 
 
 class Cap:

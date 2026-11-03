@@ -3,9 +3,33 @@
 Те же функции, что в motion_service/motion_camera.py: тот сервис — отдельный процесс со своим .venv и
 из web_MVS ничего не импортирует, поэтому общий код не вынести.
 """
+import threading
+import time
+
 import cv2
 
 HW_MODES = ("off", "auto", "d3d11")
+
+OPEN_GAP_S = 2.0
+_open_lock = threading.Lock()
+_open_next = 0.0
+
+
+def wait_open_turn(gap=None, clock=time.monotonic, sleep=time.sleep) -> float:
+    """Очередь на открытие потока: каждое следующее открытие стартует не раньше чем через gap секунд после предыдущего.
+    После перезапуска все камеры открывались одновременно (декодер, сеть и процессор разом — страница не отвечала);
+    теперь они подхватываются по одной. Держим лишь расписание, а не само открытие: мёртвая камера (открытие до 30 с)
+    остальные не задерживает. -> сколько секунд ждали."""
+    global _open_next
+    gap = OPEN_GAP_S if gap is None else gap
+    with _open_lock:
+        now = clock()
+        start = max(now, _open_next)
+        _open_next = start + gap
+    wait = start - now
+    if wait > 0:
+        sleep(wait)
+    return max(wait, 0.0)
 
 
 def normalize_mode(value) -> str:

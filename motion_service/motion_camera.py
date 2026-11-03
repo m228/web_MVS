@@ -96,6 +96,27 @@ def cfg_hw(cfg: dict) -> str:
     return cfg.get("hw_accel", "auto")
 
 
+OPEN_GAP_S = 2.0
+_open_lock = threading.Lock()
+_open_next = 0.0
+
+
+def wait_open_turn(gap: Optional[float] = None, clock=time.monotonic, sleep=time.sleep) -> float:
+    """Очередь на открытие потока: следующее открытие стартует не раньше чем через gap секунд после предыдущего.
+    После перезапуска сервиса все камеры открывались разом (декодер, сеть, процессор) — теперь по одной. Держим лишь
+    расписание, а не само открытие: мёртвая камера остальные не задерживает. -> сколько секунд ждали."""
+    global _open_next
+    gap = OPEN_GAP_S if gap is None else gap
+    with _open_lock:
+        now = clock()
+        start = max(now, _open_next)
+        _open_next = start + gap
+    wait = start - now
+    if wait > 0:
+        sleep(wait)
+    return max(wait, 0.0)
+
+
 def decoder_kind(cap) -> str:
     """'gpu' — поток реально декодируется на видеоядре, 'cpu' — программно, '' — неизвестно (подмена в тестах)."""
     try:
@@ -169,6 +190,8 @@ class CameraWorker(threading.Thread):
         """Открыть поток: подпоток вместо основного (substream) и аппаратное декодирование (hw_accel). Не открылось с аппаратным —
         один раз пробуем программно: если так открылось, дальше этот воркер декодирует процессором (до перезапуска сервиса)."""
         url = stream_url(url, cfg.get("substream", False))
+        if is_stream_url(url):
+            wait_open_turn()                   # камеры открываются по одной, а не все сразу после перезапуска
         hw = "off" if self._hw_off else cfg.get("hw_accel", "auto")
         if hw == "off":
             return self.capture_factory(url, cfg["transport"])

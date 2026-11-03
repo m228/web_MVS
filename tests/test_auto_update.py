@@ -256,6 +256,98 @@ def test_config_bounds(monkeypatch):
     assert auto_update.load_config() == auto_update.DEFAULT_CFG
 
 
+# ---------- клиенты без микроскопа: ночное окно ----------
+
+def _at(h, m=0):
+    import time
+    return time.mktime((2026, 11, 3, h, m, 0, 0, 0, -1))
+
+
+@pytest.mark.parametrize("h,open_", [(19, False), (20, True), (23, True), (0, True), (7, True), (8, False), (12, False)])
+def test_night_window_20_to_08_wraps_midnight(h, open_):
+    ok, why = auto_update.night_window({"night_from": 20, "night_to": 8}, _at(h, 30) if h not in (19, 8) else _at(h, 59))
+    assert ok is open_ and (ok or "20:00–08:00" in why)
+
+
+def test_night_window_same_day_range_and_always_open():
+    cfg = {"night_from": 2, "night_to": 5}
+    assert auto_update.night_window(cfg, _at(3))[0] is True and auto_update.night_window(cfg, _at(5))[0] is False
+    assert auto_update.night_window({"night_from": 0, "night_to": 24}, _at(13))[0] is True
+    assert auto_update.night_window({"night_from": 7, "night_to": 7}, _at(13))[0] is True, "равные часы — окно открыто всегда"
+    assert auto_update.night_window({}, _at(22))[0] is True, "без настроек — 20:00–08:00 по умолчанию"
+
+
+def test_night_window_closed_while_model_check_runs(monkeypatch):
+    import model_check
+    monkeypatch.setitem(model_check.STATE, "running", True)
+    ok, why = auto_update.night_window({"night_from": 20, "night_to": 8}, _at(23))
+    assert ok is False and "проверка модели" in why
+
+
+def test_night_config_defaults_and_bounds(monkeypatch):
+    assert auto_update.DEFAULT_CFG["night_from"] == 20 and auto_update.DEFAULT_CFG["night_to"] == 8
+    monkeypatch.setattr(auto_update.plate_config, "load", lambda: {"auto_update": {"night_from": 99, "night_to": -5}})
+    cfg = auto_update.load_config()
+    assert cfg["night_from"] == 23 and cfg["night_to"] == 0
+    monkeypatch.setattr(auto_update.plate_config, "load", lambda: {"auto_update": {"night_from": "x"}})
+    assert auto_update.load_config()["night_from"] == 20
+
+
+class _NoMicro:
+    """Клиент без микроскопа: окно решает ночное правило, а не микроскопное (оно всегда закрыто)."""
+
+    def __init__(self, env, night=(True, ""), micro=False):
+        self.night, self.micro = night, micro
+        env.window = (False, "микроскоп выключен")
+        env.ag = AutoUpdater(window_fn=lambda: env.window, cfg_fn=lambda: env.cfg, clock=env.clock, frozen_fn=lambda: env.frozen,
+                             state_file=env.state_file, report_fn=env._report, wall=lambda: env.wall, health_src=env.src,
+                             start_reason_fn=lambda: env.reason, micro_fn=lambda: self.micro, night_fn=lambda cfg: self.night)
+
+
+def test_without_microscope_night_window_restarts(env):
+    _NoMicro(env)
+    env.first_check()
+    env.tick(HOLD_S + 5)
+    env.tick(env.cfg["warn_s"])
+    assert len(env.runs) == 1 and env.runs[0][1]["staged"] is True
+
+
+def test_without_microscope_daytime_waits_and_says_why(env):
+    nm = _NoMicro(env, night=(False, "ждёт ночного окна 20:00–08:00"))
+    env.first_check()
+    env.tick(HOLD_S + 60)
+    assert env.runs == [] and env.ag.state()["auto"]["waiting_for"] == "ждёт ночного окна 20:00–08:00"
+    nm.night = (True, "")                                # наступила ночь
+    env.tick(5)                                          # окно открылось
+    env.tick(HOLD_S)                                     # держится HOLD_S — пошёл отсчёт
+    env.tick(env.cfg["warn_s"])
+    assert len(env.runs) == 1
+
+
+def test_with_microscope_the_night_rule_is_not_used(env):
+    _NoMicro(env, night=(True, ""), micro=True)          # микроскоп работает: решает он (окно закрыто — варка), ночь не помогает
+    env.window = (False, "идёт варка (стадия 7)")
+    env.first_check()
+    env.tick(HOLD_S + 60)
+    assert env.runs == [] and env.ag.state()["auto"]["waiting_for"] == "идёт варка (стадия 7)"
+
+
+def test_night_cancel_holds_until_window_closes_and_opens_again(env):
+    nm = _NoMicro(env)
+    env.first_check()
+    env.tick(HOLD_S + 1)
+    env.ag.cancel()
+    env.tick(60)
+    assert env.runs == [] and env.ag.state()["auto"]["waiting_for"].startswith("отменено")
+    nm.night = (False, "день")                           # утро — окно закрылось, отмена сброшена
+    env.tick(10)
+    nm.night = (True, "")                                # следующая ночь
+    env.tick(5)
+    env.tick(HOLD_S)
+    env.tick(env.cfg["warn_s"])
+    assert len(env.runs) == 1
+
+
 # ---------- правки updater, на которые опирается автообновление ----------
 
 def _make_zip(path, version):

@@ -159,6 +159,10 @@ class MicroscopeService:
             except Exception as e:
                 log_event("microscope_service", "Сборщик архивов варок: сбой", "warn", {"error": repr(e)})
 
+    def active(self) -> bool:
+        """Микроскоп на этом клиенте работает (запущен автомат): окно перезапуска решает он, иначе — ночное (auto_update)."""
+        return bool(self._started and self.fsm is not None)
+
     def restart_window(self):
         """Окно для перезапуска приложения (автообновление): (True, "") или (False, причина). Кроме автомата смотрит связь с ПЛК
         (стадия без связи «залипает»), перехват ПЛК, набор/разбор пробы и проверку модели."""

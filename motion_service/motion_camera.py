@@ -609,7 +609,7 @@ class CameraWorker(threading.Thread):
             if frozen:                         # камера ожила — состояния с нуля
                 frozen = False
                 self.engine.reset()
-            st = self.engine.process(gray, now)
+            st = self.engine.process(gray, now, frame)
             if st is not None:
                 self._publish(st, frame, True)
             else:

@@ -170,11 +170,17 @@ function drawMotionTile(index) {
   });
 }
 
-// обороты вала: ↻ по часовой, ↺ против; около нуля — «стоит»
-function mvRpmText(rpm) {
+// направление вращения вала значком: ↻ по часовой, ↺ против, ■ стоит (числа оборотов не показываем)
+function mvDirIcon(rpm) {
   const v = Number(rpm) || 0;
-  return Math.abs(v) < 0.02 ? 'стоит' : (v > 0 ? '↻ ' : '↺ ') + Math.abs(v).toFixed(2) + ' об/мин';
+  return Math.abs(v) < 0.02 ? '■' : v > 0 ? '↻' : '↺';
 }
+
+// угол синего конца палки: напротив красного
+const mvBlueAngle = (red) => (Number(red) + 180) % 360;
+
+const MV_ROD_RED = '#ef4444';
+const MV_ROD_BLUE = '#38bdf8';
 
 // зона-цикл: окружность поиска вокруг оси вала и палка — красный конец на найденном угле, синий напротив
 function drawCycleOnTile(ctx, z, cam, g, lz, mode) {
@@ -186,11 +192,15 @@ function drawCycleOnTile(ctx, z, cam, g, lz, mode) {
   if (mode === 'dead' || !lz || !lz.valid) return;
   const a = (lz.angle * Math.PI) / 180, dx = Math.sin(a) * r, dy = -Math.cos(a) * r;
   ctx.lineWidth = 3;
-  ctx.strokeStyle = '#ef4444'; ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(cx + dx, cy + dy); ctx.stroke();
-  ctx.strokeStyle = '#38bdf8'; ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(cx - dx, cy - dy); ctx.stroke();
-  const label = z.name + '  ' + Number(lz.angle).toFixed(1) + '° · ' + mvRpmText(lz.rpm);
-  ctx.lineWidth = 3; ctx.strokeStyle = '#000'; ctx.strokeText(label, cx - r * 0.6, cy - r - 6);
-  ctx.fillStyle = '#fff'; ctx.fillText(label, cx - r * 0.6, cy - r - 6); ctx.lineWidth = 2;
+  ctx.strokeStyle = MV_ROD_RED; ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(cx + dx, cy + dy); ctx.stroke();
+  ctx.strokeStyle = MV_ROD_BLUE; ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(cx - dx, cy - dy); ctx.stroke();
+  // подпись под окружностью: вал со значком направления, ниже значения красного и синего концов (0–360° от вертикали по часовой)
+  const x = cx - r * 0.55, y = cy + r + 16;
+  [[z.name + '  ' + mvDirIcon(lz.rpm), '#fff'], ['красный ' + Number(lz.angle).toFixed(1) + '°', MV_ROD_RED], ['синий ' + mvBlueAngle(lz.angle).toFixed(1) + '°', MV_ROD_BLUE]].forEach(([txt, col], i) => {
+    ctx.lineWidth = 3; ctx.strokeStyle = '#000'; ctx.strokeText(txt, x, y + i * 17);
+    ctx.fillStyle = col; ctx.fillText(txt, x, y + i * 17);
+  });
+  ctx.lineWidth = 2;
 }
 
 function drawAllMotionTiles() {

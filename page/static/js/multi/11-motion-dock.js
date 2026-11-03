@@ -258,9 +258,6 @@ function mdZoneCardHtml(cam, z, i) {
       <div class="md-zone__row"><span class="md-lbl" title="Ось вала на кадре (пиксели кадра разметки): точка, вокруг которой вращается палка">ось x, y</span>${mdNum(a + ' data-f="cx"', Math.round(z.center[0]), 'min="0" step="1"')}${mdNum(a + ' data-f="cy"', Math.round(z.center[1]), 'min="0" step="1"')}
         <span class="md-lbl" title="Окружность вокруг оси, внутри которой ищется палка: должна доставать до её концов">радиус, px</span>${mdNum(a + ' data-f="radius"', z.radius, 'min="20" step="5"')}</div>
       <div class="md-zone__row"><span class="md-lbl">угол в ПЛК</span>${mdOutCell(z.out, a)}<span class="net-hint">регистр — угол в 0,1°</span></div>
-      <div class="md-zone__row"><span class="md-lbl" title="Обороты по наклону угла за последние секунды: «+» по часовой, «−» против; в регистре — в 0,01 об/мин знаковым числом">обороты в ПЛК</span>
-        <div class="md-out"><select ${a} data-f="rkind">${mdSel([['', 'нет'], ['holding', 'регистр']], z.rpm_out ? 'holding' : '')}</select>${z.rpm_out ? `<input type="number" min="0" max="65535" ${a} data-f="raddr" value="${z.rpm_out.address}" title="Адрес регистра" placeholder="адрес" />` : ''}</div>
-        <span class="net-hint">0,01 об/мин, со знаком</span></div>
     </div>
     <div class="md-zone__chart"><canvas id="md-ch-${k}" height="84"></canvas></div>
   </div>`;
@@ -446,13 +443,11 @@ function mdOnZone(t, cam) {
     else if (f === 'trackflow') z.track_flow = t.checked;
     else if (f === 'okind') z.out = t.value ? { kind: t.value, address: (z.out && z.out.address) || 0, value: (z.out && z.out.value) || 'bit' } : null;
     else if (f === 'oaddr' && z.out) z.out.address = parseInt(t.value, 10) || 0;
-    else if (f === 'rkind') z.rpm_out = t.value ? { kind: 'holding', address: (z.rpm_out && z.rpm_out.address) || 0 } : null;
-    else if (f === 'raddr' && z.rpm_out) z.rpm_out.address = parseInt(t.value, 10) || 0;
     else if (f === 'oval' && z.out) z.out.value = t.value;
     else if (f === 'fmetric') z.fill_metric = t.value;
     else if (f === 'fllon' || f === 'flloff') z[f === 'fllon' ? 'fill_on' : 'fill_off'] = Math.max(0, parseFloat(t.value) || 0);
     else if (f === 'fllinv') z.fill_invert = t.value === '1';
-  }, f === 'type' || f === 'metric' || f === 'okind' || f === 'fmetric' || f === 'rkind');
+  }, f === 'type' || f === 'metric' || f === 'okind' || f === 'fmetric');
 }
 
 // карточка синхронности: допуск, эталон, вывод; «текущее = норма» берёт текущую сумму углов из живого состояния
@@ -520,9 +515,14 @@ async function mdDrawTrends() {
 // ---------- значения зон: сейчас / среднее / мин / макс ----------
 const mdNumFmt = (v) => (v >= 100 ? v.toFixed(0) : v >= 10 ? v.toFixed(1) : v.toFixed(2));
 
+// значения вала: красный и синий конец палки (0–360° от вертикали по часовой, синий напротив красного) и значок направления вращения
+function mdRodAnglesHtml(z) {
+  return `<span style="color:${MV_ROD_RED}">красный <b>${Number(z.angle).toFixed(1)}°</b></span> · <span style="color:${MV_ROD_BLUE}">синий <b>${mvBlueAngle(z.angle).toFixed(1)}°</b></span> <span title="Направление вращения: ↻ по часовой, ↺ против, ■ стоит">${mvDirIcon(z.rpm)}</span>`;
+}
+
 function mdZoneStatHtml(z, cur, st) {
   if (z.type === 'cycle') {
-    return cur && cur.valid ? `угол <b class="md-zstat__cur">${Number(cur.angle).toFixed(1)}°</b> · <b>${mvRpmText(cur.rpm)}</b> · уверенность ${Number(cur.conf).toFixed(2)}` : 'палка не найдена';
+    return cur && cur.valid ? `${mdRodAnglesHtml(cur)} · уверенность ${Number(cur.conf).toFixed(2)}` : 'палка не найдена';
   }
   const row = (m) => {
     const c = cur ? mdNumFmt(Number(cur[m])) : '–';
@@ -931,7 +931,11 @@ function paintMotionDockLive() {
       const ab = mdEl('md-mxb-' + k);
       if (ab) { ab.textContent = g.alarm; ab.style.color = g.alarm ? '#f87171' : ''; }
       const s = mdEl('md-mxs-' + k);
-      if (s) s.textContent = (g.angles || []).map((x, i) => (x == null ? '—' : x.toFixed(1) + '°')).join(' · ') + (ok ? '' : ' · не видно обе палки');
+      if (s) {                  // оба вала: красный и синий конец и направление каждого; ниже — отклонение Δ уже в заголовке карточки
+        const rod = (zid, name) => { const z = (res.zones || []).find((q) => q.id === zid); return z && z.valid ? `<div>${escapeHtml(name)}: ${mdRodAnglesHtml(z)}</div>` : `<div>${escapeHtml(name)}: не видно</div>`; };
+        const ids = ((c.groups || []).find((q) => q.id === g.id) || { zones: [] }).zones;
+        s.innerHTML = ids.map((zid) => rod(zid, (c.zones.find((q) => q.id === zid) || { name: zid }).name)).join('');
+      }
     });
   });
   // статус каждой камеры (заголовки зон и список камер в общем виде)

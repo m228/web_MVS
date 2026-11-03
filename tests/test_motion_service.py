@@ -1097,3 +1097,23 @@ def test_fill_rel_decides_pulp_with_thresholds_and_zone_at_frame_edge_still_work
         st = eng.process(window_frame(130.0, seed=i), float(i)) or st
     assert st["zones"][0]["fill"] == 0 and st["zones"][0]["state"] == 0
     assert st["zones"][1]["rel"] >= 0, "окно у края кадра: полоса вокруг обрезается, расчёт не падает"
+
+
+def test_scenario_signal_pulp_sums_windows_with_pulp_and_move_ors_motion():
+    """Шахта: один сценарий считает окна с жомом (уровень 0..3), другой — есть ли движение в окнах."""
+    import motion_scenarios as sc
+    zs = [{"id": "w3", "bit": 0, "fill": 1}, {"id": "w2", "bit": 1, "fill": 1}, {"id": "w1", "bit": 1, "fill": 1}, {"id": "w0", "bit": 0}]
+    st = {"a": {"result": {"alive": True, "zones": zs}}}
+    srcs = [{"camera": "a", "zone": z} for z in ("w3", "w2", "w1")]
+    assert sc.evaluate("sum", sc.source_bits(srcs, st, "pulp")) == 3
+    assert sc.evaluate("or", sc.source_bits(srcs, st, "move")) == 1 and sc.evaluate("sum", sc.source_bits(srcs, st)) == 2
+    assert sc.source_bits([{"camera": "a", "zone": "w0"}], st, "pulp") == [0], "без вида окна жома нет"
+    st["a"]["result"]["alive"] = False
+    assert sc.source_bits(srcs, st, "pulp") == [0, 0, 0], "камера мертва — 0"
+
+
+def test_scenario_signal_default_move_and_validation():
+    cfg = me.normalize_config(_two_cams_cfg([{"id": "s1"}, {"id": "s2", "signal": "pulp"}]))
+    assert [s["signal"] for s in cfg["scenarios"]] == ["move", "pulp"]
+    with pytest.raises(ValueError, match="сигнал"):
+        me.normalize_config(_two_cams_cfg([{"id": "s1", "signal": "x"}]))

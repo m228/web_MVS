@@ -184,8 +184,11 @@ def _norm_cycle(z: dict, zid: str, where: str) -> dict:
         "min_score": _num(z.get("min_score", 0.4), where + ".min_score", 0.01, 2),
         "min_conf": _num(z.get("min_conf", 0.1), where + ".min_conf", 0, 1),
         "jump_deg": _num(z.get("jump_deg", 25), where + ".jump_deg", 3, 180),
-        "hold_frames": _num(z.get("hold_frames", 3), where + ".hold_frames", 0, 1000, True),
-        "relock_frames": _num(z.get("relock_frames", 5), where + ".relock_frames", 1, 1000, True),
+        "coast_s": _num(z.get("coast_s", 30), where + ".coast_s", 0, 3600),
+        "red_min": _num(z.get("red_min", 0.12), where + ".red_min", 0, 1),
+        "blue_alone": _num(z.get("blue_alone", 0.6), where + ".blue_alone", 0, 1),
+        "blue_w": _num(z.get("blue_w", 0.5), where + ".blue_w", 0, 1),
+        "thin": _num(z.get("thin", 9), where + ".thin", 0, 51, True),
         "rpm_window": _num(z.get("rpm_window", 20), where + ".rpm_window", 2, 300),
         "rpm_out": _out(z.get("rpm_out"), ("holding",), where + ".rpm_out"),
     }
@@ -496,9 +499,14 @@ class CycleRT:
     """Палка на оси: красная половина в одну сторону, синяя в противоположную. Угол красного конца — от вертикали по часовой, 0..360.
 
     Ищем только по цвету вдоль лучей от центра оси (фон по медиане не годится: колёса за палкой тоже вращаются): для каждого угла φ
-    считаем долю «красных» точек на луче φ плюс долю «синих» на луче φ+180, берём лучший φ. Уверенность — насколько он лучше
-    самой сильной альтернативы дальше 20° от него. Найдя палку, дальше ищем рядом с прошлым углом (±jump_deg): одиночные ложные
-    пики не уводят угол; потеряли на relock_frames кадров подряд — снова ищем по всему кругу."""
+    считаем долю «красных» точек на луче φ плюс blue_w · долю «синих» на луче φ+180, берём лучший φ. Синий в цехе почти везде
+    (тени, фон), поэтому он только подспорье: палку принимаем, если красного на луче не меньше red_min либо синий тонкой полосой
+    почти на всю длину (blue_alone — красный конец бывает блеклым). Цветные пятна (кожух, тени) отсекаем:
+    считаем только тонкие цветные полоски (thin — ширина «окна открытия» в пикселях, 0 — не отсекать).
+    Уверенность — насколько лучший φ лучше самой сильной альтернативы дальше 20° от него. Найдя палку, дальше ищем рядом с
+    ожидаемым углом (прошлый + скорость·время, окно ±jump_deg, при пропаже расширяется на 1°/с): одиночные ложные пики не уводят угол.
+    Палку не видно (переход по тёмному/зелёному, блик) — до coast_s секунд держим ожидаемый угол и скорость (coast), а не прыгаем
+    на ближайшую кромку; позже coast_s — палка потеряна, снова ищем по всему кругу."""
 
     def __init__(self, zcfg: dict, frame_size, cur_wh):
         self.cfg = zcfg
@@ -516,6 +524,7 @@ class CycleRT:
         self.rs = np.arange(max(3.0, r1 * zcfg["r_min"]), r1, 1.0)
         self.xs = np.clip(np.rint(self.ox + self.rs[None, :] * _PHI_SIN).astype(int), 0, max(0, int((self.x1 - self.x0) * self.k) - 1))
         self.ys = np.clip(np.rint(self.oy - self.rs[None, :] * _PHI_COS).astype(int), 0, max(0, int((self.y1 - self.y0) * self.k) - 1))
+        self.ker = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (zcfg["thin"], zcfg["thin"])) if zcfg["thin"] >= 3 else None
         self.raw: deque = deque(maxlen=zcfg["smooth"])
         self.trk: deque = deque()               # (время, «развёрнутый» угол без скачков через 360°) за последние rpm_window секунд — для оборотов
         self.reset()
@@ -526,6 +535,8 @@ class CycleRT:
         self.unw: Optional[float] = None
         self.last: Optional[float] = None       # последний принятый угол (до сглаживания) — вокруг него ищем дальше
         self.miss = 0                           # сколько кадров подряд палку не нашли
+        self.last_t = 0.0                       # время последнего принятого угла
+        self.coast = False                      # палки не видно, угол — ожидаемый по скорости (valid при этом сохраняется до coast_s)
         self.angle = 0.0
         self.conf = 0.0
         self.score = 0.0
@@ -556,26 +567,36 @@ class CycleRT:
         hsv = cv2.cvtColor(bgr, cv2.COLOR_BGR2HSV)
         h, s, v = [c.astype(np.int32) for c in cv2.split(hsv)]
         hm, hn, rs_, rv = self.cfg["red_hsv"]
-        red = (((h <= hm) | (h >= hn)) & (s >= rs_) & (v >= rv)).astype(np.float32)
+        red = (((h <= hm) | (h >= hn)) & (s >= rs_) & (v >= rv)).astype(np.uint8)
         b1, b2, bs, bv = self.cfg["blue_hsv"]
-        blue = ((h >= b1) & (h <= b2) & (s >= bs) & (v >= bv)).astype(np.float32)
-        return cv2.dilate(red, _K3), cv2.dilate(blue, _K3)
+        blue = ((h >= b1) & (h <= b2) & (s >= bs) & (v >= bv)).astype(np.uint8)
+        if self.ker is not None:                                           # оставляем только тонкое: то, что не пережило «открытие»
+            red &= 1 - cv2.morphologyEx(red, cv2.MORPH_OPEN, self.ker)
+            blue &= 1 - cv2.morphologyEx(blue, cv2.MORPH_OPEN, self.ker)
+        return cv2.dilate(red.astype(np.float32), _K3), cv2.dilate(blue.astype(np.float32), _K3)
+
+    def _expected(self, now: float) -> float:
+        """Где палка должна быть сейчас: прошлый угол + скорость × время (скорость — по последним оборотам, не больше 30°/с)."""
+        rate = max(-30.0, min(30.0, self.rpm * 6.0))
+        return (self.last + rate * max(0.0, now - self.last_t)) % 360.0
 
     def step(self, frame: Optional[np.ndarray], now: float = 0.0) -> bool:
         """Новый цветной кадр (now — его время, с) → угол и обороты. True, если палка найдена на этом кадре."""
         c = self.cfg
         found = False
+        dt = now - self.last_t
+        locked = self.last is not None and dt <= c["coast_s"]
         if frame is not None and frame.ndim == 3:
             crop = frame[self.y0:self.y1, self.x0:self.x1]
             if self.k < 1.0:
                 crop = cv2.resize(crop, None, fx=self.k, fy=self.k, interpolation=cv2.INTER_AREA)
             red, blue = self._liks(crop)
             sr, sb = red[self.ys, self.xs].mean(axis=1), blue[self.ys, self.xs].mean(axis=1)
-            comb = sr + np.roll(sb, -180)                                  # красный на φ, синий на φ+180
+            comb = sr + c["blue_w"] * np.roll(sb, -180)                    # красный на φ, синий на φ+180
             cand = comb
-            locked = self.last is not None and self.miss < c["relock_frames"]
             if locked:
-                near = np.abs(((PHIS - self.last + 180.0) % 360.0) - 180.0) <= c["jump_deg"]
+                hw = min(90.0, c["jump_deg"] + max(0.0, dt - 2.0))         # при пропаже окно поиска понемногу растёт: 1°/с
+                near = np.abs(((PHIS - self._expected(now) + 180.0) % 360.0) - 180.0) <= hw
                 cand = np.where(near, comb, -1.0)
             i = int(np.argmax(cand))
             best = float(comb[i])
@@ -583,26 +604,31 @@ class CycleRT:
             second = float(comb[far].max()) if far.any() else 0.0
             conf = 1.0 - second / best if best > 1e-6 else 0.0
             self.score, self.conf = best, max(0.0, conf)
-            if best >= c["min_score"] and (locked or conf >= c["min_conf"]):
+            if cand[i] >= 0 and best >= c["min_score"] and (sr[i] >= c["red_min"] or sb[(i + 180) % 360] >= c["blue_alone"]) and (locked or conf >= c["min_conf"]):
                 idx = (i + np.arange(-4, 5)) % 360                          # уточнение до долей градуса: центр тяжести вокруг пика
                 w = np.clip(comb[idx] - 0.5 * best, 0.0, None)
                 r = np.radians(PHIS[idx])
                 ang = float(np.degrees(np.arctan2((w * np.sin(r)).sum(), (w * np.cos(r)).sum())) % 360.0) if w.sum() > 0 else float(PHIS[i])
-                self.last = ang
+                if self.coast:
+                    self.raw.clear()                                         # сглаживание не тянет к ожидаемому углу из пропажи
+                self.last, self.last_t = ang, now
                 self.raw.append(ang)
                 self.angle = circ_mean(list(self.raw))
                 self.miss = 0
-                self.valid = True
+                self.valid, self.coast = True, False
                 found = True
                 self._track(now)
         if not found:
             self.miss += 1
-            if self.miss > c["hold_frames"]:
-                self.valid = False
-                self._lost()
-            if self.miss >= c["relock_frames"]:
+            if locked:                                                       # не видно, но недавно была: держим ожидаемый угол и скорость
+                self.angle = self._expected(now)
+                self.coast, self.valid = True, True
+                self.conf = 0.0
+            else:
+                self.valid, self.coast = False, False
+                self.last = None
                 self.raw.clear()
-                self._lost()                    # после перезахвата угол может оказаться где угодно — обороты считаем заново
+                self._lost()
         return found
 
 
@@ -815,12 +841,13 @@ class CameraEngine:
         flow = angle, diff = conf: так угол и уверенность попадают в истории, тренды и CSV, которые знают только flow/diff/bit."""
         c = self.cycles.get(zc["id"])
         ok = bool(alive and c and c.valid)
+        coast = bool(ok and c.coast)
         angle = round(c.angle, 2) if ok else 0.0
         conf = round(c.conf, 3) if ok else 0.0
         rpm = round(c.rpm, 3) if ok else 0.0
         return {"id": zc["id"], "name": zc["name"], "type": "cycle", "metric": "flow", "enabled": zc["enabled"],
-                "bit": int(ok), "flow": angle, "diff": conf, "value": angle, "on": 0.0, "off": 0.0,
-                "angle": angle, "conf": conf, "rpm": rpm, "score": round(c.score, 3) if c else 0.0, "valid": ok}
+                "bit": int(ok and not coast), "flow": angle, "diff": conf, "value": angle, "on": 0.0, "off": 0.0,
+                "angle": angle, "conf": conf, "rpm": rpm, "score": round(c.score, 3) if c else 0.0, "valid": ok, "coast": coast}
 
     def _mirror_group(self, g: dict, alive: bool) -> dict:
         """Две палки → рассинхрон. mirror: углы зеркальны (θ1 + θ2 = 360 + ref), same: одинаковы (θ1 − θ2 = ref). delta — отклонение

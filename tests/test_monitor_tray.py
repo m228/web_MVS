@@ -161,3 +161,74 @@ def test_autostart_runs_tray_and_dependencies_are_listed():
     assert "pystray" in req and "pillow" in req
     assert "tray.py" in (MS / "run_tray.bat").read_text(encoding="utf-8")
     assert (MS / "static" / "icon-192.png").is_file(), "значок берётся из static\\icon-192.png"
+
+
+# ------------------------------------------------------------------------------------------------------------------ «Обновить» в меню значка
+
+def _git(cwd, *args):
+    r = subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", *args], cwd=cwd, capture_output=True, text=True, encoding="utf-8")
+    assert r.returncode == 0, (args, r.stderr)
+    return r.stdout
+
+
+def _commit(repo, files, msg):
+    for rel, text in files.items():
+        f = repo / rel
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_text(text, encoding="utf-8")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", msg)
+
+
+@pytest.fixture
+def repos(tmp_path):
+    origin, work = tmp_path / "origin", tmp_path / "work"
+    origin.mkdir()
+    _git(origin, "init", "-q", "-b", "main")
+    _commit(origin, {"VERSION": "2.1.0\n", "app.py": "app v1\n", "monitor_server/server.py": "server v1\n", "monitor_server/tray.py": "tray v1\n",
+                     "monitor_server/tray.log": "log origin\n"}, "v2.1.0")
+    _git(tmp_path, "clone", "-q", str(origin), str(work))
+    return origin, work
+
+
+def test_update_replaces_receiver_files_only_and_keeps_data_logs_and_foreign_work(repos):
+    origin, work = repos
+    (work / "monitor_server" / "data").mkdir()
+    (work / "monitor_server" / "data" / "server.json").write_text("секрет", encoding="utf-8")      # данные приёмника: не трогаем
+    (work / "monitor_server" / "tray.log").write_text("мой журнал\n", encoding="utf-8")            # журнал отслеживается git, но он наш
+    (work / "app.py").write_text("чужая правка\n", encoding="utf-8")                                 # чужая работа в этой же папке
+    _commit(origin, {"VERSION": "2.1.1\n", "app.py": "app v2\n", "monitor_server/server.py": "server v2\n", "monitor_server/tray.log": "log origin 2\n"}, "v2.1.1")
+    res = tray.update_files(work)
+    assert res["ok"] and res["changed"] and res["version"] == "2.1.1" and "2.1.1" in res["message"] and res["tray_changed"] is False
+    assert (work / "monitor_server" / "server.py").read_text(encoding="utf-8") == "server v2\n"
+    assert (work / "VERSION").read_text(encoding="utf-8").strip() == "2.1.1"
+    assert (work / "monitor_server" / "data" / "server.json").read_text(encoding="utf-8") == "секрет"
+    assert (work / "monitor_server" / "tray.log").read_text(encoding="utf-8") == "мой журнал\n", "журнал не перезаписан"
+    assert (work / "app.py").read_text(encoding="utf-8") == "чужая правка\n", "остальное дерево (чужие правки) не тронуто"
+
+
+def test_update_twice_second_time_says_already_latest_and_flags_tray_change(repos):
+    origin, work = repos
+    _commit(origin, {"VERSION": "2.1.2\n", "monitor_server/tray.py": "tray v2\n"}, "v2.1.2")
+    first = tray.update_files(work)
+    assert first["changed"] is True and first["tray_changed"] is True, "сам значок обновился — предупредим, что он подхватится при следующем запуске"
+    again = tray.update_files(work)
+    assert again["ok"] and again["changed"] is False and again["version"] == "2.1.2" and "последняя" in again["message"]
+
+
+def test_update_without_repo_or_git_or_network_reports_instead_of_crashing(repos, tmp_path):
+    origin, work = repos
+    plain = tmp_path / "plain"
+    plain.mkdir()
+    res = tray.update_files(plain)
+    assert res["ok"] is False and "git-репозитория" in res["message"]
+    res = tray.update_files(work, git="git-которого-нет")
+    assert res["ok"] is False and "git не найден" in res["message"]
+    res = tray.update_files(work, remote="нет-такого-remote")
+    assert res["ok"] is False and "не удалось скачать" in res["message"]
+
+
+def test_menu_has_update_item_before_restart():
+    src = (MS / "tray.py").read_text(encoding="utf-8")
+    assert src.index('pystray.MenuItem("Обновить", update)') < src.index('pystray.MenuItem("Перезапустить сервер", restart)')
+    assert "update_files(HERE.parent)" in src and "sup.restart()" in src.split("def update(")[1].split("def quit_")[0]

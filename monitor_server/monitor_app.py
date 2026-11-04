@@ -5,7 +5,8 @@
   GET  /                        — панель (один общий пароль, HTTP Basic: имя любое, пароль — из data\\server.json).
   GET  /api/plants              — карточки заводов: статус, снимок, открытые тревоги, последние события.
   POST /api/plants              — {"name"}: завести завод, в ответе токен (показывается один раз).
-  GET  /api/plants/{id}/events  — журнал завода (?limit=100&before=<id>).
+  GET  /api/plants/{id}/events  — журнал завода (?limit=100&before=<id>&errors=1 — только ошибки).
+  POST /api/plants/{id}/alerts/ack — {"code"?}: сбросить тревогу (без code — все) в панели; в журнале остаётся «Сброшено: …».
   POST /api/plants/{id}/token   — выдать новый токен (старый перестаёт работать).
   POST /api/plants/{id}/rename  — {"name"}: переименовать завод (токен, журнал и датчики остаются).
   POST /api/plants/{id}/view    — {"hidden": ["pc", "camera", …]}: какие блоки карточки скрыть («Вид» в панели; хранится в приёмнике).
@@ -303,11 +304,11 @@ def create_app(store: monitor_store.Store, password: str, version: str, panel_ht
         return {"id": pid, "token": token}
 
     @app.get("/api/plants/{plant_id}/events")
-    def plant_events(plant_id: int, request: Request, limit: int = 100, before: int = 0):
+    def plant_events(plant_id: int, request: Request, limit: int = 100, before: int = 0, errors: int = 0):
         bad = panel_denied(request)
         if bad is not None:
             return bad
-        return {"events": store.events(plant_id, limit, before or None)}
+        return {"events": store.events(plant_id, limit, before or None, bool(errors))}
 
     @app.get("/api/plants/{plant_id}/positions")
     def plant_positions(plant_id: int, request: Request, limit: int = 60):
@@ -338,6 +339,18 @@ def create_app(store: monitor_store.Store, password: str, version: str, panel_ht
             return JSONResponse({"error": str(e)}, status_code=400)
         except LookupError:
             return JSONResponse({"error": "завода нет"}, status_code=404)
+
+    @app.post("/api/plants/{plant_id}/alerts/ack")
+    async def plant_alerts_ack(plant_id: int, request: Request):
+        bad = write_denied(request)
+        if bad is not None:
+            return bad
+        try:
+            body = await request.json()
+        except ValueError:
+            body = {}
+        code = body.get("code") if isinstance(body, dict) else None      # без кода — сбросить все открытые тревоги завода
+        return {"acked": store.ack_alerts(plant_id, str(code)[:40] if code else None)}
 
     @app.post("/api/plants/{plant_id}/view")
     async def plant_view(plant_id: int, request: Request):

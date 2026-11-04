@@ -372,7 +372,8 @@ def format_plant(p: dict, now: float, latest: Optional[str] = None) -> str:
     alerts = p.get("alerts") or []
     if alerts:
         lines.append("Тревоги:")
-        lines += ["%s %s (с %s)" % ("🔴" if a.get("level") in ("critical", "high") else "🟡", a["text"], _hm(a["since"])) for a in alerts]
+        lines += ["%s %s (с %s)%s" % ("🔴" if a.get("level") in ("critical", "high") else "🟡", a["text"], _hm(a["since"]),
+                                     " · сброшена в панели" if a.get("acked") else "") for a in alerts]
     else:
         lines.append("Тревог нет")
     pos = ((snap.get("micro") or {}).get("positions")) or {}
@@ -433,7 +434,7 @@ def format_morning(plants: list, facts: dict, outages: list, t0: float, t1: floa
             lines.append("• Тревоги за ночь: %s" % none)
         open_now = p.get("alerts") or []
         if open_now:
-            lines.append("• Сейчас открыто: " + "; ".join("%s (с %s)" % (a["text"], _dhm(a["since"])) for a in open_now[:4]))
+            lines.append("• Сейчас открыто: " + "; ".join("%s (с %s)%s" % (a["text"], _dhm(a["since"]), ", сброшена в панели" if a.get("acked") else "") for a in open_now[:4]))
         else:
             lines.append("• Сейчас открытых тревог нет")
         probes = (snap.get("micro") or {}).get("probes_today")

@@ -33,6 +33,7 @@ TEXT_MAX = 300
 RETENTION_DAYS = 90
 SKEW_MAX_S = 7 * 86400           # время события от завода дальше недели от сейчас — часы врут, берём время приёма
 NAME_MAX = 40
+ERROR_KINDS = ("alert", "plate_reboot", "offline")                   # какие события журнала считаются ошибками (фильтр «Тревоги»)
 VIEW_BLOCKS = ["pc", "services", "camera", "brew", "motion"]       # блоки карточки, которые можно скрыть в «Виде» (тревоги скрыть нельзя)
 ALERT_DEDUP_S = 120              # событие тревоги от завода и достроенное из снимка — одно и то же, если время рядом
 NOTIFY_LEVELS = ("critical", "high")                              # в Telegram идут только они (жёлтое «medium» — только в панели)
@@ -102,6 +103,9 @@ class Store:
         """)
         if not any(r["name"] == "machine" for r in self.db.execute("PRAGMA table_info(plants)")):
             self.db.execute("ALTER TABLE plants ADD COLUMN machine TEXT")      # какой ПК зарегистрировался под этим заводом (авто-регистрация)
+        if not any(r["name"] == "acked_t" for r in self.db.execute("PRAGMA table_info(alerts)")):
+            self.db.execute("ALTER TABLE alerts ADD COLUMN acked_t REAL")      # когда Макс сбросил тревогу в панели (NULL — не сбрасывал)
+            self.db.execute("ALTER TABLE alerts ADD COLUMN ack_level TEXT")    # какой она была тяжести в момент сброса: стала хуже — откроется снова
         self.db.commit()
         self._note_outage()
 
@@ -438,7 +442,10 @@ class Store:
             level = level if level in LEVELS else "info"
             text = str(a.get("text") or code)[:TEXT_MAX]
             if code in open_rows:
+                r = open_rows[code]
                 self.db.execute("UPDATE alerts SET level=?, text=? WHERE plant_id=? AND code=?", (level, text, plant_id, code))
+                if r["acked_t"] is not None and LEVELS.index(level) < LEVELS.index(r["ack_level"] or "info"):      # стало хуже, чем при сбросе
+                    self.db.execute("UPDATE alerts SET acked_t=NULL, ack_level=NULL WHERE plant_id=? AND code=?", (plant_id, code))
                 continue
             since = self._clamp_t(a.get("since"), now)
             self.db.execute("INSERT INTO alerts (plant_id, code, level, text, since_t) VALUES (?,?,?,?,?)", (plant_id, code, level, text, since))
@@ -454,6 +461,21 @@ class Store:
                 new += self._insert_event(plant_id, "srv-alert-%s-%d-closed" % (code, int(r["since_t"])), now, now, "alert", "info",
                                           "Снято: " + r["text"], code, "closed")
         return new
+
+    def ack_alerts(self, plant_id: int, code: Optional[str] = None) -> int:
+        """Сбросить открытую тревогу в панели (code=None — все открытые у завода): она уходит с карточки и из сводки, но остаётся в журнале.
+        Вернётся сама, если завод перестанет её присылать и пришлёт снова, или если она станет тяжелее. Возвращает, сколько сброшено."""
+        now = self.clock()
+        n = 0
+        with self._lock, self.db:
+            sql, args = "SELECT * FROM alerts WHERE plant_id=? AND acked_t IS NULL", [plant_id]
+            if code is not None:
+                sql, args = sql + " AND code=?", args + [code]
+            for r in self.db.execute(sql, args).fetchall():
+                self.db.execute("UPDATE alerts SET acked_t=?, ack_level=? WHERE plant_id=? AND code=?", (now, r["level"], plant_id, r["code"]))
+                self._insert_event(plant_id, "srv-ack-%s-%d" % (r["code"], int(now * 1000)), now, now, "alert", "info", "Сброшено: " + r["text"], r["code"], "ack")
+                n += 1
+        return n
 
     def ingest(self, plant_id: int, payload) -> dict:
         """Принять пульс. ValueError — формат не тот (завод получит 400), LookupError — завод удалили."""
@@ -524,14 +546,17 @@ class Store:
         return {"id": r["id"], "t": r["t"], "recv_t": r["recv_t"], "kind": r["kind"], "level": r["level"], "text": r["text"],
                 "code": r["code"], "state": r["state"]}
 
-    def events(self, plant_id: int, limit: int = 100, before_id: Optional[int] = None) -> list[dict]:
+    def events(self, plant_id: int, limit: int = 100, before_id: Optional[int] = None, errors_only: bool = False) -> list[dict]:
+        """Журнал завода, новые первыми. errors_only — только ошибки: тревоги (открыты, сняты, сброшены), перезагрузки платы, «нет пульса»."""
         limit = max(1, min(int(limit), 500))
+        sql, args = "SELECT * FROM events WHERE plant_id=?", [plant_id]
+        if before_id:
+            sql, args = sql + " AND id<?", args + [before_id]
+        if errors_only:
+            sql += " AND kind IN (%s)" % ",".join("?" * len(ERROR_KINDS))
+            args += list(ERROR_KINDS)
         with self._lock:
-            if before_id:
-                rows = self.db.execute("SELECT * FROM events WHERE plant_id=? AND id<? ORDER BY t DESC, id DESC LIMIT ?",
-                                       (plant_id, before_id, limit)).fetchall()
-            else:
-                rows = self.db.execute("SELECT * FROM events WHERE plant_id=? ORDER BY t DESC, id DESC LIMIT ?", (plant_id, limit)).fetchall()
+            rows = self.db.execute(sql + " ORDER BY t DESC, id DESC LIMIT ?", args + [limit]).fetchall()
         return [self._event_row(r) for r in rows]
 
     def positions(self, plant_id: int, limit: int = 100) -> list[dict]:
@@ -552,7 +577,7 @@ class Store:
         out = []
         with self._lock:
             for p in self.db.execute("SELECT * FROM plants ORDER BY name").fetchall():
-                alerts = [{"code": a["code"], "level": a["level"], "text": a["text"], "since": a["since_t"]}
+                alerts = [{"code": a["code"], "level": a["level"], "text": a["text"], "since": a["since_t"], "acked": a["acked_t"] is not None}
                           for a in self.db.execute("SELECT * FROM alerts WHERE plant_id=? ORDER BY since_t", (p["id"],))]
                 try:
                     snap = json.loads(p["snapshot"]) if p["snapshot"] else None

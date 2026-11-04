@@ -594,3 +594,80 @@ def test_rpm_out_register_follows_speed_and_is_zero_when_standing():
     assert 70 <= w[("holding", 21)] <= 85 or 65536 - 85 <= w[("holding", 21)] <= 65536 - 70
     w = w_at(25 + 15)                                    # остановились 15 с назад: «стоит», регистр 0 сразу, а не через окно 20 с
     assert w[("holding", 20)] == 0 and w[("holding", 21)] == 0
+
+
+# ───────────── самоподстройка поправки (скользящее окно, форма без среднего) ─────────────
+class _Rod:
+    """Подставная палка для _mirror_group: только то, что читает группа."""
+    def __init__(self, angle, moving=True):
+        self.angle, self.valid, self.coast, self.moving = angle, True, False, moving
+
+
+def _drive(eng, minutes, t0=0.0, shift=0.0, rpm=0.79, fps=4.0, noise=0.5, outliers=0.0, moving=True, seed=5):
+    """Крутит валы `minutes` минут: слева θ, справа 360 − θ + перекос камеры + сдвиг; возвращает (время, [delta по кадрам])."""
+    rng = np.random.default_rng(seed)
+    g = eng.cfg["groups"][0]
+    out, t, a = [], t0, rpm * 360.0 / 60.0 * t0 % 360
+    for _ in range(int(minutes * 60 * fps)):
+        t += 1.0 / fps
+        a = (a + rpm * 360.0 / 60.0 / fps) % 360
+        right = (360 - a + _bias(a) + shift + rng.normal(0, noise)) % 360
+        if outliers and rng.random() < outliers:
+            right = rng.uniform(0, 360)
+        eng.cycles = {"L": _Rod(a, moving), "R": _Rod(right, moving)}
+        out.append(eng._mirror_group(g, True, t)["delta"])
+    return t, out
+
+
+def _eng(**g):
+    grp = {"id": "sync", "type": "mirror", "zones": ["L", "R"], "tol": 5}
+    grp.update(g)
+    return me.CameraEngine(cam_cfg(groups=[grp]))
+
+
+def test_learn_defaults_and_bounds():
+    g = cam_cfg()["groups"][0]
+    assert g["learn"] is True and g["learn_min"] == 30
+    assert "learn" not in me.CameraEngine(cam_cfg(groups=[{"id": "g", "type": "mirror", "zones": ["L", "R"], "learn": False}])).learners
+    with pytest.raises(ValueError):
+        cam_cfg(groups=[{"id": "g", "type": "mirror", "zones": ["L", "R"], "learn_min": 2}])
+
+
+def test_learning_flattens_the_wave_but_keeps_a_real_shift_visible():
+    eng = _eng()
+    _, d = _drive(eng, 4)                           # первые минуты: форма ещё не выучена, волна ±8° видна
+    assert np.max(np.abs(d)) > 6
+    t, d = _drive(eng, 8, t0=240)                   # дальше: волна выучена, Δ около нуля
+    late = np.abs(d[-4 * 60 * 4:])
+    assert np.percentile(late, 95) <= 2.0, np.percentile(late, 95)
+    st = eng._mirror_group(eng.cfg["groups"][0], True, t)
+    assert st["learn"]["ready"] and st["learn"]["bins"] >= 30 and 10 < st["learn"]["amp"] < 20 and len(st["shape"]) == 36
+    t, d = _drive(eng, 3, t0=t, shift=7.0)           # настоящий сдвиг валов на 7°: виден сразу и не «принимается за норму»
+    assert np.median(d[-4 * 60:]) > 5.0
+    t, d = _drive(eng, 40, t0=t, shift=7.0)          # даже через полное окно сдвиг остаётся в Δ
+    assert 5.5 < np.median(d[-4 * 60:]) < 8.5, np.median(d[-4 * 60:])
+    assert np.percentile(np.abs(np.array(d[-4 * 60:]) - 7.0), 95) <= 2.5     # а волна по-прежнему выучена
+
+
+def test_learning_ignores_wrong_catches_and_stopped_shafts():
+    eng = _eng()
+    t, d = _drive(eng, 12, outliers=0.05)           # 5 % ошибочных захватов палки
+    assert np.percentile(np.abs(d[-4 * 60 * 3:]), 90) <= 2.5
+    shape = list(eng.learners["sync"].shape)
+    _drive(eng, 15, t0=t, moving=False, shift=5.0)   # вал стоит (углы замерли): ничего не учится
+    assert eng.learners["sync"].shape == pytest.approx(shape, abs=0.5)       # новых кадров нет — форма стоит (дрейф лишь от дозревания окна)
+
+
+def test_learned_shape_survives_restart_and_is_dropped_with_another_table(tmp_path):
+    path = tmp_path / "mirror_learn_dif.json"
+    cfg = cam_cfg(groups=[{"id": "sync", "type": "mirror", "zones": ["L", "R"]}])
+    eng = me.CameraEngine(cfg, path)
+    t, _ = _drive(eng, 8)
+    eng._learn_save(t + 100, force=True)
+    assert path.exists()
+    again = me.CameraEngine(cfg, path)
+    assert again.learners["sync"].shape == pytest.approx(eng.learners["sync"].shape, abs=0.01) and not again.learners["sync"].fresh
+    other = cam_cfg(groups=[{"id": "sync", "type": "mirror", "zones": ["L", "R"], "table": [1.0] * 36}])
+    assert me.CameraEngine(other, path).learners["sync"].fresh                  # таблицу сменили — старая форма не подходит
+    path.write_text("мусор", encoding="utf-8")
+    assert me.CameraEngine(cfg, path).learners["sync"].fresh                    # битый файл не роняет сервис

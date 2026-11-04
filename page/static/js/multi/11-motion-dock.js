@@ -322,6 +322,9 @@ function mdMirrorCardHtml(cam, g) {
       <div class="md-zone__row"><span class="md-lbl" title="Камера стоит сбоку и объектив искажает: даже ровные валы дают Δ, зависящую от положения палки (за оборот до ±10°). Таблица запоминает этот перекос по кругу и вычитает его. Снимать, когда валы заведомо ровные и палки прошли полный оборот за последние ~5 минут; после сдвига камеры снять заново.">поправка по углу</span>
         <span class="net-hint" id="md-mxt-${k}">${mdTableLabel(g)}</span>
         <button type="button" class="btn-secondary md-x" ${a} data-f="table" title="Снять таблицу по последним ~5 минутам: валы должны быть ровными и сделать полный оборот">снять за оборот</button>${g.table ? `<button type="button" class="btn-secondary md-x" ${a} data-f="tclear" title="Убрать таблицу поправки">сбросить</button>` : ''}</div>
+      <div class="md-zone__row"><label class="md-lbl" title="Волна Δ за оборот — перекос камеры, он повторяется. Сервис сам выучивает её по скользящему окну и вычитает: Δ держится около нуля, а свет и положение камеры подстраиваются. Учится только форма волны: настоящий сдвиг валов в неё не уходит и виден в Δ сразу."><input type="checkbox" ${a} data-f="learn"${g.learn === false ? '' : ' checked'} /> самоподстройка</label>
+        <span class="md-lbl" title="За какое время учится форма: скользящее окно. Больше — спокойнее, меньше — быстрее следует за светом и камерой">окно, мин</span>${mdNum(a + ' data-f="learnmin"', g.learn_min || 30, 'min="5" max="240" step="5"')}
+        <span class="net-hint" id="md-mxl-${k}"></span></div>
       <div class="md-zone__row"><span class="md-lbl">вывод в ПЛК</span>${mdOutCell(g.out ? { kind: g.out.kind === 'coils' ? 'coil' : 'holding', address: g.out.address } : null, a)}
         <span class="net-hint">регистр — Δ в 0,1° со знаком; coil — авария</span></div>
     </div>
@@ -493,6 +496,8 @@ async function mdOnMirror(t, cam) {
   mdEdit(() => {
     if (f === 'tol') g.tol = Math.max(0.5, Math.min(180, parseFloat(t.value) || 10));
     else if (f === 'ref') g.ref = Math.max(-180, Math.min(180, parseFloat(t.value) || 0));
+    else if (f === 'learn') g.learn = t.checked;
+    else if (f === 'learnmin') g.learn_min = Math.max(5, Math.min(240, parseInt(t.value, 10) || 30));
     else if (f === 'okind') g.out = t.value ? { kind: t.value === 'coil' ? 'coils' : 'holding', address: (g.out && g.out.address) || 0 } : null;
     else if (f === 'oaddr' && g.out) g.out.address = parseInt(t.value, 10) || 0;
   }, f === 'okind');
@@ -642,10 +647,12 @@ function mdDrawMirrorCharts(cam, h) {
     const cv = mdEl('md-mx-' + cam.id + '-' + g.id);
     const a = h.zones[g.zones[0]], b = h.zones[g.zones[1]];
     if (!cv || !a || !b) return;
+    const live = (((MV.states[cam.id] || {}).result || {}).groups || []).find((q) => q.id === g.id);
+    const shape = g.learn === false ? null : (live && live.shape);         // выученная форма: сейчас одна на всё окно графика (плывёт медленно)
     const vals = a.flow.map((v, i) => {
       if (!a.bit[i] || !b.bit[i]) return null;
       const raw = g.mode === 'same' ? v - b.flow[i] : v + b.flow[i];
-      return ((((raw - mdMirrorCorr(g.table, v) - g.ref + 180) % 360) + 360) % 360) - 180;
+      return ((((raw - mdMirrorCorr(g.table, v) - mdMirrorCorr(shape, v) - g.ref + 180) % 360) + 360) % 360) - 180;
     });
     const span = Math.max(20, Math.ceil((g.tol * 2) / 10) * 10);
     mdDrawSeries(cv, h.t || [], vals, h.ok || [], -span, span, { lines: [{ v: g.tol, color: '#ef4444' }, { v: -g.tol, color: '#ef4444' }, { v: 0, color: '#64748b' }] });
@@ -1053,6 +1060,8 @@ function paintMotionDockLive() {
       if (v) { v.textContent = ok ? (g.delta > 0 ? '+' : '') + g.delta.toFixed(1) + '°' : '—'; v.style.color = ok && g.alarm ? '#f87171' : ''; }
       const ab = mdEl('md-mxb-' + k);
       if (ab) { ab.textContent = g.alarm; ab.style.color = g.alarm ? '#f87171' : ''; }
+      const ls = mdEl('md-mxl-' + k);
+      if (ls) ls.textContent = g.learn ? (g.learn.ready ? 'учится · форма ±' + (g.learn.amp / 2).toFixed(1) + '°' : 'копит: ' + g.learn.bins + ' из 36 ячеек') : 'выключена';
       const s = mdEl('md-mxs-' + k);
       if (s) {                  // оба вала: красный и синий конец и направление каждого; ниже — отклонение Δ уже в заголовке карточки
         const rod = (zid, name) => { const z = (res.zones || []).find((q) => q.id === zid); return z && z.valid ? `<div>${escapeHtml(name)}: ${mdRodAnglesHtml(z)}</div>` : `<div>${escapeHtml(name)}: не видно</div>`; };

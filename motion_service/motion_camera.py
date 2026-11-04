@@ -158,7 +158,7 @@ class CameraWorker(threading.Thread):
         self._hw_off = False                   # аппаратное декодирование не вышло — до остановки воркера декодируем процессором
         self._hw_fail = 0                      # сколько открытий подряд с аппаратным декодированием не дали ни одного кадра
         self._decoder = ""                     # 'gpu' | 'cpu' | '' — чем декодируется поток сейчас
-        self.engine = CameraEngine(cam_cfg)
+        self.engine = CameraEngine(cam_cfg, self.data_dir / ("mirror_learn_%s.json" % re.sub(r"[^\w.-]", "_", str(cam_cfg["id"]))))
         self._halt = threading.Event()
         self._lock = threading.Lock()
         self._frame: Optional[np.ndarray] = None

@@ -580,3 +580,17 @@ def test_zone_state_has_moving_none_until_known_and_none_when_lost():
     for i in range(8):
         st = eng.process(cv2.cvtColor(empty, cv2.COLOR_BGR2GRAY), 10 + i * 5.0, empty) or st
     assert zone(st, "L")["moving"] is None and not zone(st, "L")["valid"]
+
+
+def test_rpm_out_register_follows_speed_and_is_zero_when_standing():
+    c = cam_cfg(zones=[{"id": "L", "type": "cycle", "center": [250, 270], "radius": 170, "rpm_out": {"kind": "holding", "address": 20}},
+                       {"id": "R", "type": "cycle", "center": [700, 270], "radius": 170, "rpm_out": {"kind": "holding", "address": 21}}],
+                 groups=[])
+    eng = me.CameraEngine(c)
+    run = drive(eng, [(25, 4.7), (30, 0.0)])
+    w_at = lambda t: {(k, a): v for k, a, v in eng.compute_writes(next(s for tt, s in run if tt >= t))}
+    w = w_at(24)
+    assert 70 <= w[("holding", 20)] <= 85 or 65536 - 85 <= w[("holding", 20)] <= 65536 - 70       # ±0,79 об/мин ×100 (знак по стороне)
+    assert 70 <= w[("holding", 21)] <= 85 or 65536 - 85 <= w[("holding", 21)] <= 65536 - 70
+    w = w_at(25 + 15)                                    # остановились 15 с назад: «стоит», регистр 0 сразу, а не через окно 20 с
+    assert w[("holding", 20)] == 0 and w[("holding", 21)] == 0

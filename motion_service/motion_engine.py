@@ -9,7 +9,7 @@
 Дальше как в старых детекторах: сглаживание → гистерезис on/off + debounce (frames_to_on / frames_to_off) → бит зоны.
 Зона type=motion активна при ВЫСОКОЙ метрике (движется), type=presence — при НИЗКОЙ (густой ровный жом гасит поток).
 
-Группы зон (groups): sum — сколько зон активно; monotonic — уровень снизу вверх (верхнее окно полное → нижние тоже, шахта);
+Группы зон (groups): level — уровень жидкости по маске YOLO-модели и зонам-стёклам (motion_level.py, декантатор); sum — сколько зон активно; monotonic — уровень снизу вверх (верхнее окно полное → нижние тоже, шахта);
 worktimer — сколько секунд (в % окна) за последнее окно были активны зоны (лента жома).
 
 Выход в ПЛК описывается полями out у зоны / группы / камеры (status_out), compute_writes() превращает состояние в список записей.
@@ -26,14 +26,16 @@ from typing import Optional
 import cv2
 import numpy as np
 
+from motion_level import DEFAULT_URL as LEVEL_URL, GEOMETRIES as LEVEL_GEOMETRIES, LevelRT
+
 CALIB_DT = 0.33          # интервал между кадрами, при котором калибровались пороги потока (камеры ~3 fps)
 FB = dict(pyr_scale=0.5, levels=3, winsize=15, iterations=3, poly_n=5, poly_sigma=1.2, flags=0)
 MIN_FLOW_SIDE = 16       # зона меньше этого (px) для Farneback не годится — поток = 0
 ID_RE = re.compile(r"^[A-Za-z0-9_\-]{1,40}$")
 
-ZONE_TYPES = ("motion", "presence", "cycle")
+ZONE_TYPES = ("motion", "presence", "cycle", "level")
 METRICS = ("flow", "diff")
-GROUP_TYPES = ("sum", "monotonic", "worktimer", "mirror")
+GROUP_TYPES = ("sum", "monotonic", "worktimer", "mirror", "level")
 MIRROR_MODES = ("mirror", "same")
 CYCLE_WORK_R = 170       # радиус (px), до которого сжимается область вокруг оси палки перед поиском: быстро и не зависит от разрешения камеры
 CYCLE_RED_HSV = (16, 165, 50, 55)     # красный: H ≤ h_max или H ≥ h_min (круг оттенков), S ≥ s_min, V ≥ v_min; мягче прежнего: красный конец в сумерках бледнеет и желтеет
@@ -114,6 +116,8 @@ def _norm_zone(z: dict, cam_id: str) -> dict:
         raise ValueError("%s: тип %r не из %s" % (where, ztype, list(ZONE_TYPES)))
     if ztype == "cycle":
         return _norm_cycle(z, zid, where)
+    if ztype == "level":
+        return _norm_level_zone(z, zid, where)
     metric = z.get("metric", "flow")
     if metric not in METRICS:
         raise ValueError("%s: метрика %r не из %s" % (where, metric, list(METRICS)))
@@ -147,6 +151,29 @@ def _norm_zone(z: dict, cam_id: str) -> dict:
         "flicker_comp": bool(z.get("flicker_comp", True)),
         "out": _out(z.get("out"), ZONE_OUT_KINDS, where + ".out", values=ZONE_OUT_VALUES),
         **_fill_cfg(z, where),
+    }
+
+
+def _norm_level_zone(z: dict, zid: str, where: str) -> dict:
+    """Зона-«стекло» для уровня жидкости (декантатор): только полигон; метрик потока/разности и порогов нет. Уровень считает группа type=level
+    по маске модели. flow зоны = уровень стекла 0..100 %, diff = сырой уровень до отсечки и сглаживания — оба попадают в тренды и CSV."""
+    pts = z.get("points") or []
+    if len(pts) < 3:
+        raise ValueError("%s: в полигоне меньше трёх точек" % where)
+    try:
+        pts = [[float(p[0]), float(p[1])] for p in pts]
+    except Exception:
+        raise ValueError("%s: точки полигона должны быть парами [x, y]" % where)
+    return {
+        "id": zid,
+        "name": str(z.get("name") or zid),
+        "enabled": bool(z.get("enabled", True)),
+        "type": "level",
+        "metric": "flow",
+        "points": pts,
+        "on": 0.0, "off": 0.0, "invert": False, "track_flow": False,
+        "smooth": 1, "frames_to_on": 1, "frames_to_off": 1, "blur": 0, "flicker_comp": False,
+        "out": None,
     }
 
 
@@ -200,7 +227,7 @@ def _norm_cycle(z: dict, zid: str, where: str) -> dict:
     }
 
 
-def _norm_group(g: dict, cam_id: str, zone_ids: list, cycle_ids=()) -> dict:
+def _norm_group(g: dict, cam_id: str, zone_ids: list, cycle_ids=(), level_ids=()) -> dict:
     gid = str(g.get("id") or "")
     if not ID_RE.match(gid):
         raise ValueError("камера %s: id группы %r — только латиница, цифры, _ и -" % (cam_id, gid))
@@ -239,6 +266,27 @@ def _norm_group(g: dict, cam_id: str, zone_ids: list, cycle_ids=()) -> dict:
                    learn_min=_num(g.get("learn_min", 30), where + ".learn_min", 5, 240, True),
                    frames_to_on=_num(g.get("frames_to_on", 3), where + ".frames_to_on", 1, 1000, True),
                    frames_to_off=_num(g.get("frames_to_off", 5), where + ".frames_to_off", 1, 1000, True))
+    if gtype == "level":
+        if not 1 <= len(zs) <= 2 or any(x not in level_ids for x in zs):
+            raise ValueError("%s: нужны одна-две зоны типа level — нижнее стекло, потом верхнее" % where)
+        geometry = g.get("geometry", "lvldec")
+        if geometry not in LEVEL_GEOMETRIES:
+            raise ValueError("%s: геометрия %r не из %s" % (where, geometry, list(LEVEL_GEOMETRIES)))
+        out.update(
+            service_url=str(g.get("service_url") or LEVEL_URL).strip().rstrip("/"),
+            liquid_class=str(g.get("liquid_class") or "liquid").strip(),
+            conf=_num(g.get("conf", 0.35), where + ".conf", 0.01, 0.99),
+            imgsz=_num(g.get("imgsz", 0), where + ".imgsz", 0, 4096, True),
+            geometry=geometry,
+            infer_interval_s=_num(g.get("infer_interval_s", 2), where + ".infer_interval_s", 0.2, 600),
+            alpha=_num(g.get("alpha", 0.93), where + ".alpha", 0, 0.999),
+            warmup_s=_num(g.get("warmup_s", 10), where + ".warmup_s", 0, 600),
+            glass1_min=_num(g.get("glass1_min", 15), where + ".glass1_min", 0, 100),
+            glass2_min=_num(g.get("glass2_min", 20), where + ".glass2_min", 0, 100),
+            glass1_full=_num(g.get("glass1_full", 100), where + ".glass1_full", 0, 100),
+            glass2_full=_num(g.get("glass2_full", 100), where + ".glass2_full", 0, 100),
+            hold_s=_num(g.get("hold_s", 30), where + ".hold_s", 1, 3600),
+            contour=bool(g.get("contour", False)))
     if gtype == "monotonic":
         order = [str(x) for x in (g.get("order") or zs)]
         if sorted(order) != sorted(zs):
@@ -294,7 +342,8 @@ def normalize_camera(c: dict) -> dict:
     if len(set(ids)) != len(ids):
         raise ValueError("камера %s: id зон повторяются" % cid)
     cycle_ids = [z["id"] for z in zones if z["type"] == "cycle"]
-    groups = [_norm_group(g, cid, ids, cycle_ids) for g in (c.get("groups") or [])]
+    level_ids = [z["id"] for z in zones if z["type"] == "level"]
+    groups = [_norm_group(g, cid, ids, cycle_ids, level_ids) for g in (c.get("groups") or [])]
     gids = [g["id"] for g in groups]
     if len(set(gids)) != len(gids):
         raise ValueError("камера %s: id групп повторяются" % cid)
@@ -867,6 +916,9 @@ class CameraEngine:
         self.mirrors = {g["id"]: Hysteresis(g["tol"], g["tol"] * 0.7, False, g["frames_to_on"], g["frames_to_off"])
                         for g in cam_cfg["groups"] if g["type"] == "mirror"}
         self.cycles: dict = {}                  # id зоны-цикла → CycleRT (строятся вместе с зонами, на первом кадре)
+        zl = {z["id"]: z for z in cam_cfg["zones"] if z["type"] == "level"}
+        self.levels = {g["id"]: LevelRT(g, [zl[x] for x in g["zones"] if x in zl], cam_cfg["frame_size"])
+                       for g in cam_cfg["groups"] if g["type"] == "level"}     # уровни живут от потока модели (LevelInfer), не от кадров камеры
         self.last_state: Optional[dict] = None
         # самоподстройка поправки синхронности: выученная форма переживает перезапуск (камера пересоздаётся при любой правке настроек)
         self.learn_path = learn_path
@@ -917,11 +969,13 @@ class CameraEngine:
             t.reset()
         for m in self.mirrors.values():
             m.reset()
+        for lv in self.levels.values():
+            lv.reset()
 
     def _build(self, gray):
         h, w = gray.shape[:2]
         self.frame_wh = (w, h)
-        self.zones = [ZoneRT(z, self.cfg["frame_size"], (w, h)) for z in self.cfg["zones"] if z["enabled"] and z["type"] != "cycle"]
+        self.zones = [ZoneRT(z, self.cfg["frame_size"], (w, h)) for z in self.cfg["zones"] if z["enabled"] and z["type"] not in ("cycle", "level")]
         self.cycles = {z["id"]: CycleRT(z, self.cfg["frame_size"], (w, h)) for z in self.cfg["zones"] if z["enabled"] and z["type"] == "cycle"}
         for m in self.mirrors.values():
             m.reset()
@@ -975,6 +1029,9 @@ class CameraEngine:
             if zc["type"] == "cycle":
                 zones.append(self._cycle_zone(zc, alive))
                 continue
+            if zc["type"] == "level":
+                zones.append(self._level_zone(zc, now, alive))
+                continue
             z = zs.get(zc["id"])
             zones.append({"id": zc["id"], "name": zc["name"], "type": zc["type"], "metric": zc["metric"],
                           "enabled": zc["enabled"], "bit": int(bits.get(zc["id"], 0)) if alive else 0,
@@ -986,6 +1043,9 @@ class CameraEngine:
             gb = {zid: (bits.get(zid, 0) if alive else 0) for zid in g["zones"]}
             if g["type"] == "mirror":
                 groups.append(self._mirror_group(g, alive, now))
+                continue
+            if g["type"] == "level":
+                groups.append(self._level_group(g, now, alive))
                 continue
             if g["type"] == "monotonic":
                 gb, value = monotonic_level(gb, g["order"])
@@ -1016,6 +1076,34 @@ class CameraEngine:
         return {"id": zc["id"], "name": zc["name"], "type": "cycle", "metric": "flow", "enabled": zc["enabled"],
                 "bit": int(ok and not coast), "flow": angle, "diff": conf, "value": angle, "on": 0.0, "off": 0.0,
                 "angle": angle, "conf": conf, "rpm": rpm, "score": round(c.score, 3) if c else 0.0, "valid": ok, "coast": coast, "moving": moving}
+
+    def _level_zone(self, zc: dict, now: float, alive: bool) -> dict:
+        """Зона-стекло → запись состояния. flow = уровень стекла 0..100 %, diff = сырой уровень (до отсечки и сглаживания), bit — в стекле есть жидкость."""
+        gc = next((g for g in self.cfg["groups"] if g["type"] == "level" and zc["id"] in g["zones"]), None)
+        snap = self.levels[gc["id"]].snapshot(now, alive) if gc else None
+        idx = gc["zones"].index(zc["id"]) if gc else 0
+        valid = bool(snap and snap["valid"])
+        pct = round((snap["s1"] if idx == 0 else snap["s2"]) * 100, 1) if valid else 0.0
+        raw = snap["raw"][idx] if snap else None
+        rawp = round(raw * 100, 1) if (valid and raw is not None) else 0.0
+        return {"id": zc["id"], "name": zc["name"], "type": "level", "metric": "flow", "enabled": zc["enabled"],
+                "bit": int(valid and pct > 0), "flow": pct, "diff": rawp, "value": pct, "on": 0.0, "off": 0.0,
+                "level": pct, "raw": rawp, "valid": valid}
+
+    def _level_group(self, g: dict, now: float, alive: bool) -> dict:
+        """Группа-уровень → запись состояния. value = Total × 10 (0..1000) — это и уходит в ПЛК; total/g1/g2 — в процентах (g1, g2: 0..50)."""
+        lv = self.levels[g["id"]]
+        s = lv.snapshot(now, alive)
+        ok = s["valid"]
+        total = max(0.0, min(100.0, s["total"]))
+        out = {"id": g["id"], "name": g["name"], "type": "level", "value": int(round(total * 10)) if ok else 0,
+               "bits": [int(ok and s["g1"] > 0), int(ok and s["g2"] > 0)],
+               "valid": ok, "total": round(total, 1), "g1": round(s["g1"], 1), "g2": round(s["g2"], 1),
+               "raw": [None if r is None else round(r * 100, 1) for r in s["raw"]], "conf": round(s["conf"], 2),
+               "ms": s["ms"], "model": s["model"], "err": s["err"], "age_s": s["age_s"], "warmup": bool(now - lv.t0 < g["warmup_s"])}
+        if g.get("contour"):
+            out["contour"], out["contour_wh"] = s["contour"], s["contour_wh"]
+        return out
 
     def _mirror_group(self, g: dict, alive: bool, now: float = 0.0) -> dict:
         """Две палки → рассинхрон. mirror: углы зеркальны (θ1 + θ2 = 360 + ref), same: одинаковы (θ1 − θ2 = ref). delta — отклонение

@@ -1389,7 +1389,7 @@ def _services_supervisor():
     (cvd / ".venv" / "Scripts" / "python.exe").write_bytes(b"")
     (cvd / "server.py").write_text("", encoding="utf-8")
     cfg = {"cv": {"enabled": False, "service_url": "http://127.0.0.1:8766"}, "video": {"service_url": "http://127.0.0.1:8767"}}
-    clock, spawned, healthy = [1000.0], [], {"cv": False, "video": False, "motion": False}
+    clock, spawned, healthy = [1000.0], [], {"cv": False, "video": False, "motion": False, "level": False}
 
     class Proc:                                       # вместо настоящего процесса: poll() — None, пока «жив»
         code = None
@@ -1408,7 +1408,7 @@ def _services_supervisor():
     try:
         sup = services.Supervisor(base=base, spawn_fn=fake_spawn, now=lambda: clock[0], load_cfg=lambda: cfg)
         r = sup.check_once()
-        assert r == {"cv": "off", "video": "absent", "motion": "absent"}, "CV выключен тумблером, видео и движение не установлены: %s" % r
+        assert r == {"cv": "off", "video": "absent", "motion": "absent", "level": "absent"}, "CV выключен тумблером, видео, движение и уровень не установлены: %s" % r
         cfg["cv"]["enabled"] = True
         import logger
 

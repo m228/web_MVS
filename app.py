@@ -30,6 +30,7 @@ from microscope_service import micro
 import cv_client
 import video_client
 import motion_client
+import level_client
 import cam_events
 import cam_monitor
 import day_capture
@@ -1326,6 +1327,43 @@ def motion_vision(req: dict = Body(...)):
 @app.get("/api/motion/logs")
 def motion_logs(n: int = 100):
     return motion_client.logs(_motion_url(), n)
+
+
+# --- сервис уровня (level_service/): YOLO-модель для вкладки «Уровень» панели «КЗ» (декантатор). Модель грузится из браузера ---
+def _level_url() -> str:
+    return (plate_config.load().get("level") or {}).get("service_url") or level_client.DEFAULT_URL
+
+
+@app.get("/api/level/health")
+def level_health():
+    url = _level_url()
+    h = level_client.health(url)
+    return {"service_url": url, "online": h is not None, "service": h}
+
+
+@app.get("/api/level/models")
+def level_models():
+    """Файлы моделей в level_service\\model и какая загружена сейчас."""
+    return level_client.models(_level_url())
+
+
+@app.post("/api/level/model/upload")
+async def level_model_upload(request: Request, name: str = "model.pt"):
+    """Залить .pt/.onnx из браузера → сервис сохранит и горячо загрузит."""
+    raw = await request.body()
+    res = level_client.model_upload(_level_url(), raw, name=name)
+    log_event("level", "Загрузка модели в сервис уровня: %s (%d байт) — %s" % (name, len(raw or b""), "ошибка: %s" % res["error"] if "error" in res else "ок"),
+              "warn" if "error" in res else "info")
+    return res
+
+
+@app.post("/api/level/model/load")
+def level_model_load(req: dict = Body(...)):
+    """Загрузить другую уже лежащую в model\\ модель (по имени файла)."""
+    name = os.path.basename(str(req.get("name") or ""))
+    if not name:
+        return {"error": "не указано имя модели"}
+    return level_client.model_load(_level_url(), os.path.join("model", name))
 
 
 # --- видео-сервис (video_service/): ролик варки. Сервис отвечает — на странице микроскопа видна вкладка «Ролик» ---

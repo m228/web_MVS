@@ -26,6 +26,7 @@ import cv2
 import numpy as np
 
 from motion_engine import CameraEngine, scale_points
+from motion_level import LevelInfer, post_infer
 from motion_store import store_for
 from motion_trends import TrendLog
 from motion_modbus import LinkRegistry
@@ -147,7 +148,7 @@ def open_capture(url: str, transport: str = "tcp", hw_accel: str = "off"):
 
 class CameraWorker(threading.Thread):
     def __init__(self, cam_cfg: dict, modbus_cfg: dict, links: LinkRegistry, data_dir: Path,
-                 capture_factory: Callable = open_capture):
+                 capture_factory: Callable = open_capture, level_post: Optional[Callable] = None):
         super().__init__(daemon=True, name="cam-" + cam_cfg["id"])
         self.cfg = cam_cfg
         self.id = cam_cfg["id"]
@@ -155,6 +156,7 @@ class CameraWorker(threading.Thread):
         self.links = links
         self.data_dir = Path(data_dir)
         self.capture_factory = capture_factory
+        self.level_post = level_post or post_infer      # запрос к сервису уровня (в тестах подменяется)
         self._hw_off = False                   # аппаратное декодирование не вышло — до остановки воркера декодируем процессором
         self._hw_fail = 0                      # сколько открытий подряд с аппаратным декодированием не дали ни одного кадра
         self._decoder = ""                     # 'gpu' | 'cpu' | '' — чем декодируется поток сейчас
@@ -231,6 +233,14 @@ class CameraWorker(threading.Thread):
             return {"id": self.id, "name": self.cfg["name"], "enabled": self.cfg["enabled"], "connected": self._connected,
                     "error": self._error, "decoder": self._decoder, "fps": round(fps, 2), "age_s": round(time.time() - self._last_good, 1) if self._last_good else None,
                     "recording": self._rec_name, "plc": dict(self.plc), "result": st}
+
+    def _level_frame(self) -> Optional[np.ndarray]:
+        """Свежий кадр для модели уровня; None — кадра нет, он старше 5 с или камера застыла/мертва (тогда модель не гоняем)."""
+        with self._lock:
+            f, st = self._frame, self._state
+        if f is None or (st is not None and not st.get("alive")) or time.time() - self._last_good > 5.0:
+            return None
+        return f
 
     def snapshot_jpeg(self, max_w: int = 0) -> Optional[tuple]:
         """(jpeg-байты, (ширина, высота) оригинала) последнего кадра или None."""
@@ -513,6 +523,8 @@ class CameraWorker(threading.Thread):
             return
         self._writer = threading.Thread(target=self._plc_loop, daemon=True, name="plc-" + self.id)
         self._writer.start()
+        for lv in self.engine.levels.values():         # группы-уровни: свой поток модели на каждую (обычно одна — декантатор)
+            LevelInfer(lv, self._level_frame, self._halt, self.level_post).start()
         file_src = not is_stream_url(url)
         interval = self.engine.proc_interval
         timeout = cfg["freeze_timeout_s"]

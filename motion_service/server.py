@@ -78,7 +78,7 @@ class RingLog(logging.Handler):
 class Manager:
     """Конфиг на диске + рабочие потоки камер."""
 
-    def __init__(self, data_dir: Path, capture_factory: Callable = open_capture, client_factory=None,
+    def __init__(self, data_dir: Path, capture_factory: Callable = open_capture, client_factory=None, level_post=None,
                  auto_record: bool = False, shots_min: float = 0.0, keep_days: float = motion_trends.KEEP_DAYS,
                  shots_keep_days: float = motion_trends.SHOTS_KEEP_DAYS):
         self.dir = Path(data_dir)
@@ -91,6 +91,7 @@ class Manager:
         self.capture_factory = capture_factory
         self.links = LinkRegistry(client_factory)
         self.client_factory = client_factory
+        self.level_post = level_post              # запрос к сервису уровня; None — настоящий HTTP (в тестах подменяется)
         self.workers: dict[str, CameraWorker] = {}
         self.cfg = engine.default_config()
         self.rec_all = False                    # «писать все»: камера, перезапущенная правкой настроек, продолжает писать в новый файл
@@ -171,7 +172,7 @@ class Manager:
             self.workers = keep
             for c in new["cameras"]:
                 if c["id"] not in self.workers:
-                    w = CameraWorker(c, new["modbus"], self.links, self.dir, self.capture_factory)
+                    w = CameraWorker(c, new["modbus"], self.links, self.dir, self.capture_factory, self.level_post)
                     self.workers[c["id"]] = w
                     if (self.rec_all or c["id"] in self.rec_cams) and c["enabled"] and c["url"]:
                         w.start_record()
@@ -288,12 +289,12 @@ class Manager:
         return w
 
 
-def create_app(data_dir: Optional[Path] = None, capture_factory: Callable = open_capture, client_factory=None) -> FastAPI:
+def create_app(data_dir: Optional[Path] = None, capture_factory: Callable = open_capture, client_factory=None, level_post=None) -> FastAPI:
     data_dir = Path(data_dir or os.environ.get("MOTION_DATA") or HERE / "data")
     ring = RingLog()
     logging.getLogger("motion").addHandler(ring)
     # автозапись, снимки раз в 20 мин, сырое 60 суток и JPEG снимков 10 суток — по умолчанию; MOTION_AUTORECORD=0 / MOTION_SHOTS_MIN=0 / MOTION_KEEP_DAYS=N / MOTION_SHOTS_KEEP_DAYS=N меняют
-    mgr = Manager(data_dir, capture_factory, client_factory,
+    mgr = Manager(data_dir, capture_factory, client_factory, level_post,
                   auto_record=os.environ.get("MOTION_AUTORECORD", "1") != "0",
                   shots_min=float(os.environ.get("MOTION_SHOTS_MIN", "20")),
                   keep_days=float(os.environ.get("MOTION_KEEP_DAYS", str(motion_trends.KEEP_DAYS))),

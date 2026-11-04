@@ -354,10 +354,14 @@ DEFAULTS = {
     # Modbus. Камеры, зоны и выводы в ПЛК настраиваются на странице «Движение» (хранятся в motion_service\data), тут только адрес.
     "motion": {"service_url": "http://127.0.0.1:8768"},
 
-    # САЙДКАРЫ: web_MVS сам поднимает установленные рядом cv_service\, video_service\ и motion_service\ (services.py) — при старте
+    # СЕРВИС УРОВНЯ (level_service\): держит YOLO-модель (декантатор и т.п.) и отдаёт контуры найденного; кадры у него берёт motion_service,
+    # уровень по зонам и запись в ПЛК считает он. Модель грузится на вкладке «Уровень» панели «КЗ» (хранится в level_service\model).
+    "level": {"service_url": "http://127.0.0.1:8769"},
+
+    # САЙДКАРЫ: web_MVS сам поднимает установленные рядом cv_service\, video_service\, motion_service\ и level_service\ (services.py) — при старте
     # и сторожем раз в минуту. Не установлен (нет .venv) — пропуск; уже отвечает — не трогаем; CV — только при включённом тумблере CV.
     # autostart: False — этот сервис поднимать руками (run.bat).
-    "services": {"cv": {"autostart": True}, "video": {"autostart": True}, "motion": {"autostart": True}},
+    "services": {"cv": {"autostart": True}, "video": {"autostart": True}, "motion": {"autostart": True}, "level": {"autostart": True}},
 
     # АВТОПОДВОД по разломам (Часть C) — ВЫКЛ по умолчанию. При подтверждённом разломе
     # отодвинуть подвод чуть назад ПО ЭНКОДЕРУ (аналог только в лог, он врёт ~100мкм) и

@@ -952,8 +952,7 @@
         // автокалибровка нуля М1
         const ac = cfg.autocal || {};
         const acT = $("autocalToggle"); if (acT) acT.checked = !!ac.enabled;
-        faSet("acEveryN", ac.every_n); faSet("acLo", ac.sensor_lo);
-        faSet("acHi", ac.sensor_hi); faSet("acTimeout", ac.timeout_sec);
+        faSet("acEveryN", ac.every_n); faSet("acTimeout", ac.timeout_sec);
         cfgSerial = cfg.camera_serial || "";
         loadedOk = true;
       }
@@ -1383,7 +1382,7 @@
       if (cfg) (cfg.autocal = cfg.autocal || {}).enabled = acT.checked;
       sentCmd("Автокалибровка: " + (acT.checked ? "вкл" : "выкл"));
     });
-    [["acEveryN", "every_n"], ["acLo", "sensor_lo"], ["acHi", "sensor_hi"], ["acTimeout", "timeout_sec"]]
+    [["acEveryN", "every_n"], ["acTimeout", "timeout_sec"]]
       .forEach(([id, key]) => {
         const el = $(id);
         if (el) el.addEventListener("change", () => {

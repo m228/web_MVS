@@ -1028,8 +1028,8 @@ class _FwM1:
                           "pos1_ai": None if self.__dict__.get("no_ai") else ai}   # __getattr__ ловит всё — только __dict__
 
 
-@check("Микроскоп", "Автокалибровка нуля М1 на модели прошивки: команды только стоя, сдвиг по датчику, «все три "
-                    "одинаковые», масштаб на отводе, стоп/нет связи/проба поверх, пропарка")
+@check("Микроскоп", "Автокалибровка нуля М1 на модели прошивки: только «Поиск 0» + отвод + сверка, повтор «Поиска 0» при "
+                    "расхождении, команды только стоя, стоп/нет связи/проба поверх, пропарка")
 def _autocal():
     import copy
     import plate_config
@@ -1039,6 +1039,7 @@ def _autocal():
         cfg = copy.deepcopy(plate_config.DEFAULTS)
         cfg["probe_cycle"]["retract_pos"] = 2000
         cfg["autocal"].update(enabled=True, timeout_sec=5)
+        cfg["step_timeout_s"] = 20                                   # отвод, который не доехал (упор), не ждём 300 с
         pl = _FwM1(**kw)
         fsm = MicroscopeFSM(pl, cfg)
         fsm.set_manual(manual)
@@ -1048,7 +1049,7 @@ def _autocal():
         if start:
             assert fsm.start_autocal()["status"] == "started"
         tail = None
-        for t in range(1500):
+        for t in range(5000):
             if hook:
                 hook(t, fsm, pl)
             fsm.tick()
@@ -1064,39 +1065,33 @@ def _autocal():
 
     n = lambda pl, op: sum(1 for c in pl.calls if c[0] == "motor_" + op and c[1][0] == 1)
 
-    fsm, pl = mk()                                                   # ноль в порядке
+    fsm, pl = mk()                                                   # ноль в порядке: один «Поиск 0», без «Установить 0»/сдвигов
     st = run(fsm, pl)
-    assert st["result"] == "готово" and n(pl, "set_zero") == 1 and n(pl, "find_zero") == 1, st
-    assert abs(pl.sensor() - pl.enc) <= 30 and abs(pl.enc - 2000) <= 50, (pl.x, pl.enc)
-    fsm, pl = mk(x=2200)                                             # ноль уполз: у нуля датчик +200 -> сдвиг к стеклу
+    assert st["result"] == "готово" and n(pl, "find_zero") == 1 and n(pl, "set_zero") == 0 and n(pl, "shift") == 0, st
+    assert abs(pl.sensor() - pl.enc) <= 100 and abs(pl.enc - 2000) <= 50, (pl.x, pl.enc)
+    for kw in ({"x": 2200}, {"x": 1800}, {"x": 2150, "noise": 60}):  # ноль уполз вверх / вниз / шум датчика ±60
+        fsm, pl = mk(**kw)
+        st = run(fsm, pl)
+        assert n(pl, "set_zero") == 0 and n(pl, "shift") == 0, (kw, "лишние команды")
+        assert st["result"] == "готово" and abs(pl.sensor() - pl.enc) <= 100, (kw, st, pl.x, pl.enc)
+    fsm, pl = mk(gain=0.92)                                          # масштаб датчика: расхождение держится -> 3 «Поиска 0», плашка
     st = run(fsm, pl)
-    assert st["result"] == "готово" and st["attempt"] == 1 and abs(pl.sensor() - pl.enc) <= 50, (st, pl.x, pl.enc)
-    assert st["last"]["diff_before"] == 200 and abs(st["last"]["diff_after"]) <= 50, st["last"]
-    fsm, pl = mk(x=1800)                                             # уполз вниз: упор ниже нуля датчика -> сдвиг от стекла
-    st = run(fsm, pl)
-    assert st["result"] == "готово" and abs(pl.sensor() - pl.enc) <= 50, (st, pl.x, pl.enc)
-    fsm, pl = mk(x=2150, noise=60)                                   # шум датчика ±60: медиана стоя
-    st = run(fsm, pl)
-    assert st["result"] == "готово" and abs(pl.sensor() - pl.enc) <= 50, (st, pl.x, pl.enc)
-    fsm, pl = mk(gain=0.92)                                          # масштаб датчика: случай «датчик на ~160 меньше»
-    st = run(fsm, pl)
-    assert st["result"].startswith("готово, на отводе расхождение") and st["failed"] and "масштаб" in st["fail_msg"], st
+    assert st["result"] == "не удалось" and st["failed"] and n(pl, "find_zero") == 3 and "расходится" in st["fail_msg"], st
     assert fsm.clear_autocal_fail()["was_failed"] and not fsm.state["autocal"]["failed"], "плашку можно сбросить"
-    assert fsm.state["autocal"]["result"].startswith("готово"), "сброс плашки итог не трогает"
+    assert fsm.state["autocal"]["result"] == "не удалось", "сброс плашки итог не трогает"
     fsm, pl = mk()                                                   # неустоявшийся датчик на отводе: 1-й замер врёт, 2-й чистый
-    flaky = {"n": 0}
     real_tele = pl._tele
 
     def tele():
         real_tele()
-        if fsm._cal_phase == "after" and flaky["n"] < 400 and fsm._cal_after1 is None:
+        if fsm._cal_phase == "after" and fsm._cal_after1 is None:
             pl.telemetry["pos1_ai"] += 5610                          # +561 мкм, пока идёт первый замер (датчик ×0,1 в FSM)
     pl._tele = tele
     st = run(fsm, pl)
-    assert st["result"] == "готово" and not st["failed"], "разовое расхождение должно пережить перемер: %s" % st
-    fsm, pl = mk(x=2120, x_stop=120)                                 # упор выше зоны 0..50: не лечится -> не удалось
+    assert st["result"] == "готово" and not st["failed"] and n(pl, "find_zero") == 1, "разовое расхождение — перемер, не повтор: %s" % st
+    fsm, pl = mk(x=2120, x_stop=120)                                 # упор выше нуля датчика: не лечится -> 3 поиска, не удалось
     st = run(fsm, pl)
-    assert st["result"] == "не удалось" and st["failed"] and n(pl, "set_zero") == 0, st
+    assert st["result"] == "не удалось" and st["failed"] and n(pl, "find_zero") == 3 and n(pl, "set_zero") == 0, st
     fsm, pl = mk()                                                   # датчик не приходит: не виснем, «не удалось»
     pl.no_ai = True
     pl._tele()
@@ -1146,7 +1141,7 @@ def _autocal():
     for _ in range(8):
         fsm.tick()
     assert n(pl, "steps") == 1, pl.calls
-    return "7 случаев нуля (и без датчика) + стоп / нет связи / проба поверх / из Ручного / пропарка — ни одной команды на ходу"
+    return "ноль в порядке / уполз вверх и вниз / шум / масштаб / упор / без датчика + стоп / нет связи / проба поверх / из Ручного / пропарка — «Установить 0» и сдвигов нет, команд на ходу нет"
 
 
 @check("Микроскоп", "Страховка разбора CV: по умолчанию 120 с, значение из настроек доходит до автомата, меньше 10 с не бывает")

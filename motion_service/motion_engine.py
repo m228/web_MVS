@@ -864,7 +864,9 @@ class CameraEngine:
     def _mirror_group(self, g: dict, alive: bool) -> dict:
         """Две палки → рассинхрон. mirror: углы зеркальны (θ1 + θ2 = 360 + ref), same: одинаковы (θ1 − θ2 = ref). delta — отклонение
         в градусах −180..180; alarm — |delta| ≥ tol (гистерезис и debounce). Не видно хоть одной палки или камеры нет — delta не считается,
-        alarm = 0 (нечего судить), value = 0."""
+        alarm = 0 (нечего судить), value = 0. Пока хоть одна палка в удержании (её не видно, угол достроен по скорости — hold), delta
+        показывается, но тревогу не меняем: ни включить, ни выключить, ни накопить счёт. Достроенный угол уходит от настоящего на
+        единицы градусов — на таких отрезках на заводе набирались ложные тревоги."""
         ca, cb = (self.cycles.get(zid) for zid in g["zones"])
         ok = bool(alive and ca and cb and ca.valid and cb.valid)
         hys = self.mirrors[g["id"]]
@@ -874,12 +876,14 @@ class CameraEngine:
             raw = ca.angle + cb.angle if g["mode"] == "mirror" else ca.angle - cb.angle
             corr = mirror_corr(g["table"], ca.angle)         # перекос от угла камеры/объектива в этом положении палки, снятый при калибровке
             delta = round(ang_diff(raw, corr + g["ref"]), 2)
-            alarm = hys.update(abs(delta))
+            hold = ca.coast or cb.coast
+            alarm = hys.state if hold else hys.update(abs(delta))
         else:
             hys.reset()
             alarm = 0
+            hold = False
         return {"id": g["id"], "name": g["name"], "type": "mirror", "value": int(round(delta * 10)) if ok else 0,
-                "bits": [int(alarm)], "delta": delta, "valid": ok, "alarm": int(alarm), "tol": g["tol"], "ref": g["ref"], "mode": g["mode"],
+                "bits": [int(alarm)], "delta": delta, "valid": ok, "hold": bool(hold), "alarm": int(alarm), "tol": g["tol"], "ref": g["ref"], "mode": g["mode"],
                 "corr": round(corr, 2), "table": bool(g["table"]),
                 "angles": [round(ca.angle, 2) if ca and ca.valid else None, round(cb.angle, 2) if cb and cb.valid else None]}
 

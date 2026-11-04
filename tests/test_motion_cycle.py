@@ -476,3 +476,43 @@ def test_real_plant_frames_day_and_night_both_rods_found_and_mirror_consistent()
             good += abs(g["delta"]) <= 12.0
     assert both >= 0.97 * len(frames), (both, len(frames))
     assert good == both, (good, both)
+
+
+# ───────────── тревога и удержание ─────────────
+def test_mirror_alarm_is_not_changed_while_a_rod_is_held():
+    """Пока одной палки не видно (угол достроен по скорости), тревогу ни включаем, ни гасим: достроенный угол врёт на градусы."""
+    eng = me.CameraEngine(cam_cfg())
+    spin(eng, 10, 6.0, seconds=20)                       # оба крутятся, Δ ≈ 0
+    t = 20.0
+    only_right = rod_frame({(700, 270): (360 - (10 + 6.0 * 20.0)) % 360})
+    gray = cv2.cvtColor(only_right, cv2.COLOR_BGR2GRAY)
+    for i in range(40):                                  # левую не видно 10 с, правая идёт «не в такт» (рассинхрон 20°, в пределах окна поиска)
+        t = 20.0 + i * 0.25
+        img = rod_frame({(700, 270): (360 - (10 + 6.0 * t) + 20) % 360})
+        st = eng.process(cv2.cvtColor(img, cv2.COLOR_BGR2GRAY), t, img)
+        g = st["groups"][0]
+        assert zone(st, "L")["coast"] and g["hold"], (t, zone(st, "L"))
+        assert g["delta"] is not None and (i < 8 or abs(g["delta"]) > 12)   # Δ показывается (первые 2 с — сглаживание правой)...
+        assert g["alarm"] == 0, (t, g)                                  # ...а тревога не включается
+    img = rod_frame({(250, 270): (10 + 6.0 * 30.25) % 360, (700, 270): (360 - (10 + 6.0 * 30.25) + 20) % 360})
+    for k in range(6):                                   # левая вернулась, рассинхрон настоящий — тревога включается
+        st = eng.process(cv2.cvtColor(img, cv2.COLOR_BGR2GRAY), 30.25 + k * 0.25, img)
+    g = st["groups"][0]
+    assert not g["hold"] and g["alarm"] == 1
+
+
+def test_mirror_alarm_stays_on_through_a_hold_and_clears_after():
+    eng = me.CameraEngine(cam_cfg())
+    st = run(eng, 40, 280, n=10)                         # θ1 + θ2 = 320 → Δ = −40°: тревога
+    assert st["groups"][0]["alarm"] == 1
+    for k in range(30):                                  # левая пропала; правая плавно «возвращается в норму» (Δ → 0): без защиты тревога бы погасла
+        right = min(320.0, 280.0 + 3.4 * k)
+        img = rod_frame({(700, 270): right})
+        st = eng.process(cv2.cvtColor(img, cv2.COLOR_BGR2GRAY), 3.0 + k * 0.25, img)
+        g = st["groups"][0]
+        assert g["hold"] and g["alarm"] == 1, (k, g["delta"], g["alarm"])
+    assert abs(g["delta"]) < 7                           # Δ уже в норме, а тревога держится
+    img = rod_frame({(250, 270): 40, (700, 270): 320})   # левая вернулась: теперь тревога гаснет как обычно
+    for k in range(10):
+        st = eng.process(cv2.cvtColor(img, cv2.COLOR_BGR2GRAY), 11.0 + k * 0.25, img)
+    assert not st["groups"][0]["hold"] and st["groups"][0]["alarm"] == 0

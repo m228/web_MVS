@@ -256,7 +256,7 @@ def test_config_bounds(monkeypatch):
     assert auto_update.load_config() == auto_update.DEFAULT_CFG
 
 
-# ---------- клиенты без микроскопа: ночное окно ----------
+# ---------- клиенты без микроскопа: окно по часам (по умолчанию 08:00–20:00) ----------
 
 def _at(h, m=0):
     import time
@@ -264,33 +264,39 @@ def _at(h, m=0):
 
 
 @pytest.mark.parametrize("h,open_", [(19, False), (20, True), (23, True), (0, True), (7, True), (8, False), (12, False)])
-def test_night_window_20_to_08_wraps_midnight(h, open_):
-    ok, why = auto_update.night_window({"night_from": 20, "night_to": 8}, _at(h, 30) if h not in (19, 8) else _at(h, 59))
+def test_hours_window_20_to_08_wraps_midnight_when_configured(h, open_):
+    ok, why = auto_update.hours_window({"window_from": 20, "window_to": 8}, _at(h, 30) if h not in (19, 8) else _at(h, 59))
     assert ok is open_ and (ok or "20:00–08:00" in why)
 
 
-def test_night_window_same_day_range_and_always_open():
-    cfg = {"night_from": 2, "night_to": 5}
-    assert auto_update.night_window(cfg, _at(3))[0] is True and auto_update.night_window(cfg, _at(5))[0] is False
-    assert auto_update.night_window({"night_from": 0, "night_to": 24}, _at(13))[0] is True
-    assert auto_update.night_window({"night_from": 7, "night_to": 7}, _at(13))[0] is True, "равные часы — окно открыто всегда"
-    assert auto_update.night_window({}, _at(22))[0] is True, "без настроек — 20:00–08:00 по умолчанию"
+@pytest.mark.parametrize("h,open_", [(7, False), (8, True), (12, True), (19, True), (20, False), (23, False), (3, False)])
+def test_default_window_is_daytime_08_to_20(h, open_):
+    ok, why = auto_update.hours_window(auto_update.DEFAULT_CFG, _at(h, 30))
+    assert ok is open_ and (ok or "08:00–20:00" in why), "ночью клиенты без микроскопа не перезапускаются"
 
 
-def test_night_window_closed_while_model_check_runs(monkeypatch):
+def test_hours_window_same_day_range_and_always_open():
+    cfg = {"window_from": 2, "window_to": 5}
+    assert auto_update.hours_window(cfg, _at(3))[0] is True and auto_update.hours_window(cfg, _at(5))[0] is False
+    assert auto_update.hours_window({"window_from": 0, "window_to": 24}, _at(13))[0] is True
+    assert auto_update.hours_window({"window_from": 7, "window_to": 7}, _at(13))[0] is True, "равные часы — окно открыто всегда"
+    assert auto_update.hours_window({}, _at(13))[0] is True and auto_update.hours_window({}, _at(22))[0] is False, "без настроек — 08:00–20:00 по умолчанию (днём)"
+
+
+def test_hours_window_closed_while_model_check_runs(monkeypatch):
     import model_check
     monkeypatch.setitem(model_check.STATE, "running", True)
-    ok, why = auto_update.night_window({"night_from": 20, "night_to": 8}, _at(23))
+    ok, why = auto_update.hours_window({"window_from": 20, "window_to": 8}, _at(23))
     assert ok is False and "проверка модели" in why
 
 
-def test_night_config_defaults_and_bounds(monkeypatch):
-    assert auto_update.DEFAULT_CFG["night_from"] == 20 and auto_update.DEFAULT_CFG["night_to"] == 8
-    monkeypatch.setattr(auto_update.plate_config, "load", lambda: {"auto_update": {"night_from": 99, "night_to": -5}})
+def test_window_config_defaults_and_bounds(monkeypatch):
+    assert auto_update.DEFAULT_CFG["window_from"] == 8 and auto_update.DEFAULT_CFG["window_to"] == 20, "по умолчанию днём: 08:00–20:00 (решение Макса 04.11)"
+    monkeypatch.setattr(auto_update.plate_config, "load", lambda: {"auto_update": {"window_from": 99, "window_to": -5}})
     cfg = auto_update.load_config()
-    assert cfg["night_from"] == 23 and cfg["night_to"] == 0
-    monkeypatch.setattr(auto_update.plate_config, "load", lambda: {"auto_update": {"night_from": "x"}})
-    assert auto_update.load_config()["night_from"] == 20
+    assert cfg["window_from"] == 23 and cfg["window_to"] == 0
+    monkeypatch.setattr(auto_update.plate_config, "load", lambda: {"auto_update": {"window_from": "x"}})
+    assert auto_update.load_config()["window_from"] == 8
 
 
 class _NoMicro:
@@ -301,10 +307,10 @@ class _NoMicro:
         env.window = (False, "микроскоп выключен")
         env.ag = AutoUpdater(window_fn=lambda: env.window, cfg_fn=lambda: env.cfg, clock=env.clock, frozen_fn=lambda: env.frozen,
                              state_file=env.state_file, report_fn=env._report, wall=lambda: env.wall, health_src=env.src,
-                             start_reason_fn=lambda: env.reason, micro_fn=lambda: self.micro, night_fn=lambda cfg: self.night)
+                             start_reason_fn=lambda: env.reason, micro_fn=lambda: self.micro, hours_fn=lambda cfg: self.night)
 
 
-def test_without_microscope_night_window_restarts(env):
+def test_without_microscope_hours_window_restarts(env):
     _NoMicro(env)
     env.first_check()
     env.tick(HOLD_S + 5)
@@ -313,10 +319,10 @@ def test_without_microscope_night_window_restarts(env):
 
 
 def test_without_microscope_daytime_waits_and_says_why(env):
-    nm = _NoMicro(env, night=(False, "ждёт ночного окна 20:00–08:00"))
+    nm = _NoMicro(env, night=(False, "ждёт окна 08:00–20:00"))
     env.first_check()
     env.tick(HOLD_S + 60)
-    assert env.runs == [] and env.ag.state()["auto"]["waiting_for"] == "ждёт ночного окна 20:00–08:00"
+    assert env.runs == [] and env.ag.state()["auto"]["waiting_for"] == "ждёт окна 08:00–20:00"
     nm.night = (True, "")                                # наступила ночь
     env.tick(5)                                          # окно открылось
     env.tick(HOLD_S)                                     # держится HOLD_S — пошёл отсчёт

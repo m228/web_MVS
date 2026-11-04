@@ -55,6 +55,7 @@ OLD_TUNING_DEFAULTS = {"gap_far_um": 150, "gap_near_um": 200, "drift_um": 100}  
 
 BOOT_TOL_S = 120            # время загрузки Windows у двух запусков расходится больше — это была перезагрузка ПК
 BEAT_EVERY_S = 30           # как часто пишем на диск «я жив» (по нему считаем, сколько не работали)
+MOTION_CAMS_MAX = 24        # сколько камер движения кладём в пульс
 WATCH_EVERY_S = 15          # как часто проверяем правила тревог
 TICK_S = 5                  # шаг фонового потока
 STARTUP_DELAY_S = 20        # первый пульс не раньше, чем через столько после старта (пока поднимаются плата, камера, сервисы)
@@ -492,6 +493,22 @@ def default_sources() -> dict:
         last = c.execute("SELECT MAX(t) last FROM journal WHERE serial=?", (serial,)).fetchone()["last"]
         return {"last_t": last, "today": n}
 
+    def motion():
+        """Камеры сервиса движения + свободное место на диске приложения (там же и записи). Сервис не запущен — None: блока в панели не будет."""
+        import shutil
+
+        import motion_client
+        import paths
+        cfg = plate_config.load()
+        if services.states().get("motion") not in ("healthy", "remote"):
+            return None
+        st = motion_client.state((cfg.get("motion") or {}).get("service_url") or motion_client.DEFAULT_URL, timeout=2.0)
+        cams = st.get("cameras") if isinstance(st, dict) else None
+        if not cams:
+            return None
+        du = shutil.disk_usage(str(paths.DATA_DIR))
+        return {"cameras": cams, "disk": {"free": du.free, "total": du.total}}
+
     return {
         "cfg": plate_config.load,
         "micro_on": lambda: services.micro_enabled(plate_config.load()),
@@ -499,6 +516,7 @@ def default_sources() -> dict:
         "services": services.states,
         "camera": camera,
         "probes": probes,
+        "motion": motion,
     }
 
 
@@ -665,6 +683,7 @@ class Agent:
         d["camera"] = g("camera", {}) or {}
         d["guard"] = g("guard", {}) or {}
         d["services"] = g("services", {}) or {}
+        d["motion"] = g("motion", None)
         d["positions"] = list(self.positions)
         return d
 
@@ -914,6 +933,9 @@ class Agent:
         }
         if d.get("micro_on"):
             snap["micro"] = _micro_block(d, now)
+        motion = _motion_block(d["motion"]) if d.get("motion") else None
+        if motion:
+            snap["motion"] = motion
         snap["text"] = summary_text(snap)
         return mask_secrets(snap)
 
@@ -988,6 +1010,24 @@ def _camera_block(cam: dict) -> dict:
             out[k] = _num(cur.get(k), 2)
         if saved.get(k) is not None:
             out[k + "_saved"] = _num(saved.get(k), 2)
+    return out
+
+
+def _motion_block(m: dict) -> Optional[dict]:
+    """Камеры движения для панели: имя, работает ли, кадров в секунду, сколько секунд назад был последний кадр, пишется ли запись; диск — в ГБ."""
+    cams = []
+    for c in (m.get("cameras") or [])[:MOTION_CAMS_MAX]:
+        if not isinstance(c, dict):
+            continue
+        cams.append({"name": str(c.get("name") or c.get("id") or "?")[:40], "on": bool(c.get("enabled", True)), "ok": bool(c.get("connected")),
+                     "fps": _num(c.get("fps"), 1), "age_s": _num(c.get("age_s"), 0), "rec": bool(c.get("recording")),
+                     "error": str(c.get("error") or "")[:80] or None})
+    if not cams:
+        return None
+    out: dict = {"cameras": cams}
+    disk = m.get("disk") or {}
+    if disk.get("total"):
+        out["disk"] = {"free_gb": round(disk["free"] / 1e9, 1), "total_gb": round(disk["total"] / 1e9, 1)}
     return out
 
 
@@ -1066,6 +1106,13 @@ def summary_text(s: dict) -> str:
                 if cam.get("exposure_time_saved") is not None:
                     txt += " (сохранено %g)" % cam["exposure_time_saved"]
             lines.append(txt)
+    mo = s.get("motion")
+    if mo:
+        cams = mo["cameras"]
+        txt = "Камеры движения: %d из %d работают" % (sum(1 for c in cams if c["on"] and c["ok"]), sum(1 for c in cams if c["on"]))
+        if mo.get("disk"):
+            txt += ", на диске свободно %g ГБ" % mo["disk"]["free_gb"]
+        lines.append(txt)
     svc = s.get("services") or {}
     shown = [("%s %s" % (SERVICE_LABELS.get(k, k), {"ok": "ок", "starting": "запускается", "down": "не работает"}.get(v, v)))
              for k, v in svc.items() if v in ("ok", "starting", "down")]

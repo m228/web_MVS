@@ -304,9 +304,9 @@ function mdZoneCardHtml(cam, z, i) {
   </div>`;
 }
 
-const mdTableLabel = (g) => (g.table ? 'есть · перекос от ' + Math.min(...g.table).toFixed(1) + ' до ' + Math.max(...g.table).toFixed(1) + '°' : 'нет — Δ с общим эталоном');
+const mdLastDelta = {};   // группа → последнее надёжное Δ (палки видны): в удержании показываем его, а не достроенное
 
-// синхронность двух валов: отклонение от зеркальности (Δ, °), допуск и эталон; график Δ — справа
+// карточка синхронности валов: слева Δ, автокоррекция (тумблер), допуск и эталон, вывод в ПЛК; справа два графика Δ — без коррекции и с ней
 function mdMirrorCardHtml(cam, g) {
   const a = `data-md="mg" data-cam="${escapeHtml(cam.id)}" data-gid="${escapeHtml(g.id)}"`;
   const k = escapeHtml(cam.id + '-' + g.id);
@@ -316,19 +316,19 @@ function mdMirrorCardHtml(cam, g) {
       <div class="md-zone__row"><b>${escapeHtml(g.name)}</b><span class="net-hint">${names}</span><span class="md-sp"></span>
         <span class="cv-bit" id="md-mxb-${k}" title="Авария: рассинхрон больше допуска">–</span><span class="md-num" id="md-mxv-${k}" title="Отклонение от нормы, °">–</span></div>
       <div class="md-zstat" id="md-mxs-${k}"></div>
-      <div class="md-zone__row"><span class="md-lbl" title="Авария, когда отклонение по модулю не меньше допуска">допуск, °</span>${mdNum(a + ' data-f="tol"', g.tol, 'min="0.5" max="180" step="0.5"')}
-        <span class="md-lbl" title="Поправка нуля: какое значение суммы углов считать нормой. Кнопка справа берёт текущее положение валов за эталон — нажимайте, когда валы заведомо выставлены ровно">эталон, °</span>${mdNum(a + ' data-f="ref"', g.ref, 'min="-180" max="180" step="0.5"')}
-        <button type="button" class="btn-secondary md-x" ${a} data-f="calib" title="Принять текущее положение валов за норму (эталон = текущее значение)">текущее = норма</button></div>
-      <div class="md-zone__row"><span class="md-lbl" title="Камера стоит сбоку и объектив искажает: даже ровные валы дают Δ, зависящую от положения палки (за оборот до ±10°). Таблица запоминает этот перекос по кругу и вычитает его. Снимать, когда валы заведомо ровные и палки прошли полный оборот за последние ~5 минут; после сдвига камеры снять заново.">поправка по углу</span>
-        <span class="net-hint" id="md-mxt-${k}">${mdTableLabel(g)}</span>
-        <button type="button" class="btn-secondary md-x" ${a} data-f="table" title="Снять таблицу по последним ~5 минутам: валы должны быть ровными и сделать полный оборот">снять за оборот</button>${g.table ? `<button type="button" class="btn-secondary md-x" ${a} data-f="tclear" title="Убрать таблицу поправки">сбросить</button>` : ''}</div>
-      <div class="md-zone__row"><label class="md-lbl" title="Волна Δ за оборот — перекос камеры, он повторяется. Сервис сам выучивает её по скользящему окну и вычитает: Δ держится около нуля, а свет и положение камеры подстраиваются. Учится только форма волны: настоящий сдвиг валов в неё не уходит и виден в Δ сразу."><input type="checkbox" ${a} data-f="learn"${g.learn === false ? '' : ' checked'} /> самоподстройка</label>
-        <span class="md-lbl" title="За какое время учится форма: скользящее окно. Больше — спокойнее, меньше — быстрее следует за светом и камерой">окно, мин</span>${mdNum(a + ' data-f="learnmin"', g.learn_min || 30, 'min="5" max="240" step="5"')}
+      <div class="md-zone__row md-mx-set">
+        <label class="switch-toggle md-sw md-sw--sm" title="Волна Δ за оборот — перекос камеры, он повторяется. Сервис сам выучивает её по скользящему окну и вычитает: Δ держится около нуля, а свет и положение камеры подстраиваются. Учится только форма волны: настоящий сдвиг валов в неё не уходит и виден в Δ сразу."><span class="switch"><input type="checkbox" ${a} data-f="learn"${g.learn === false ? '' : ' checked'} /><span class="switch-track"></span></span><span class="md-lbl md-lbl--on">автокоррекция</span></label>
+        <span class="md-lbl" title="За какое время учится форма: скользящее окно. Больше — спокойнее, меньше — быстрее следует за светом и камерой">окно</span>${mdNum(a + ' data-f="learnmin"', g.learn_min || 30, 'min="5" max="240" step="5"')}<span class="md-lbl">мин</span>
         <span class="net-hint" id="md-mxl-${k}"></span></div>
-      <div class="md-zone__row"><span class="md-lbl">вывод в ПЛК</span>${mdOutCell(g.out ? { kind: g.out.kind === 'coils' ? 'coil' : 'holding', address: g.out.address } : null, a)}
-        <span class="net-hint">регистр — Δ в 0,1° со знаком; coil — авария</span></div>
+      <div class="md-zone__row md-mx-set"><span class="md-lbl" title="Авария, когда отклонение по модулю не меньше допуска">допуск, °</span>${mdNum(a + ' data-f="tol"', g.tol, 'min="0.5" max="180" step="0.5"')}
+        <span class="md-lbl" title="Какое значение суммы углов считать нормой (уровень Δ). Автокоррекция убирает волну, а уровень остаётся за вами">эталон, °</span>${mdNum(a + ' data-f="ref"', g.ref, 'min="-180" max="180" step="0.5"')}
+        <span class="md-lbl" title="Регистр — Δ в 0,1° со знаком; coil — авария">вывод в ПЛК</span>${mdOutCell(g.out ? { kind: g.out.kind === 'coils' ? 'coil' : 'holding', address: g.out.address } : null, a)}</div>` +
+    (g.table ? `<div class="md-zone__row"><span class="md-lbl">ручная таблица</span><span class="net-hint">перекос от ${Math.min(...g.table).toFixed(1)} до ${Math.max(...g.table).toFixed(1)}°</span><button type="button" class="btn-secondary md-x" ${a} data-f="tclear" title="Убрать ручную таблицу поправки: дальше работает только автокоррекция">сбросить</button></div>` : '') + `
     </div>
-    <div class="md-zone__chart"><canvas id="md-mx-${k}" height="84"></canvas></div>
+    <div class="md-zone__chart md-mx2">
+      <div class="md-mxc"><span class="md-mxc__t">без коррекции</span><canvas id="md-mx0-${k}" height="64"></canvas></div>
+      <div class="md-mxc"><span class="md-mxc__t">с коррекцией</span><canvas id="md-mx-${k}" height="64"></canvas></div>
+    </div>
   </div>`;
 }
 
@@ -471,28 +471,32 @@ function mdOnZone(t, cam) {
   }, f === 'type' || f === 'metric' || f === 'okind' || f === 'rkind' || f === 'fmetric' || f === 'oclear');
 }
 
-// карточка синхронности: допуск, эталон, вывод; «текущее = норма» берёт текущую сумму углов из живого состояния
+// «Проверить связь с сервером»: пульс на сервер мониторинга прямо сейчас (тот же, что шлёт приложение раз в несколько минут) и ответ сервера
+async function mdOnPulse() {
+  const b = mdEl('mdPulse'), m = mdEl('mdPulseMsg');
+  if (!b || !m) return;
+  b.disabled = true;
+  m.className = 'net-hint';
+  m.textContent = 'отправляю пульс…';
+  let r;
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(), 40000);
+  try { r = await (await fetch('/api/sysmon/send_test', { cache: 'no-store', signal: ctl.signal })).json(); } catch (e) { r = { ok: false, error: 'приложение не ответило' }; }
+  clearTimeout(timer);
+  b.disabled = false;
+  const ok = !!(r && r.ok);
+  m.className = 'net-hint ' + (ok ? 'md-pulse--ok' : 'md-pulse--bad');
+  m.textContent = ok ? 'сервер принял пульс' : ((r && r.error) || 'нет связи с сервером');
+  clearTimeout(mdOnPulse.t);
+  mdOnPulse.t = setTimeout(() => { m.textContent = ''; }, 30000);
+}
+
+// карточка синхронности: допуск, эталон, автокоррекция, вывод
 async function mdOnMirror(t, cam) {
   const g = (cam.groups || []).find((q) => q.id === t.dataset.gid);
   if (!g) return;
   const f = t.dataset.f;
-  if (f === 'calib') {
-    const live = (((MV.states[cam.id] || {}).result || {}).groups || []).find((q) => q.id === g.id);
-    if (!live || !live.valid || live.delta == null) { alert('Сейчас не видно обе палки — эталон принять нельзя.'); return; }
-    // delta уже с учётом таблицы и прежнего эталона: сдвигаем эталон ровно на неё
-    mdEdit(() => { g.ref = Math.max(-180, Math.min(180, Math.round((g.ref + live.delta) * 10) / 10)); }, true);
-    return;
-  }
   if (f === 'tclear') { mdEdit(() => { g.table = null; }, true); return; }
-  if (f === 'table') {
-    if (!confirm('Снять таблицу поправки по последним ~5 минутам?\n\nВалы сейчас должны быть выставлены ровно, а палки — пройти полный оборот. Таблица запомнит текущее положение как норму; эталон сбросится в 0.')) return;
-    t.disabled = true;
-    const r = await mvJson('/api/motion/mirror_table', { camera: cam.id, group: g.id });
-    t.disabled = false;
-    if (!r || r.error || !r.table) { alert('Таблицу снять не удалось: ' + ((r && r.error) || 'нет ответа от сервиса')); return; }
-    mdEdit(() => { g.table = r.table; g.ref = 0; }, true);
-    return;
-  }
   mdEdit(() => {
     if (f === 'tol') g.tol = Math.max(0.5, Math.min(180, parseFloat(t.value) || 10));
     else if (f === 'ref') g.ref = Math.max(-180, Math.min(180, parseFloat(t.value) || 0));
@@ -602,7 +606,7 @@ async function mdLoadStats(force) {
 // временной ряд значений vals (null — нет данных) в диапазоне [lo, hi]; wrap — угол 0..360: на переходе через ноль линию не тянем;
 // lines — горизонтальные пунктиры [{v, color}]; bad[i] — серый фон «кадров нет»
 function mdDrawSeries(cv, t, vals, ok, lo, hi, opts) {
-  const w = cv.clientWidth, hh = 84;
+  const w = cv.clientWidth, hh = (opts && opts.h) || 84;
   if (!w) return;
   if (cv.width !== w) cv.width = w;
   const g = cv.getContext('2d');
@@ -643,19 +647,24 @@ function mdMirrorCorr(table, theta) {
 
 // отклонение валов во времени: Δ = θ1 + θ2 − эталон (зеркально) или θ1 − θ2 − эталон, приведённое к −180..180; по истории углов двух зон
 function mdDrawMirrorCharts(cam, h) {
+  const wrap = (x) => ((((x + 180) % 360) + 360) % 360) - 180;
   (cam.groups || []).filter((g) => g.type === 'mirror').forEach((g) => {
-    const cv = mdEl('md-mx-' + cam.id + '-' + g.id);
+    const cv = mdEl('md-mx-' + cam.id + '-' + g.id), cv0 = mdEl('md-mx0-' + cam.id + '-' + g.id);
     const a = h.zones[g.zones[0]], b = h.zones[g.zones[1]];
-    if (!cv || !a || !b) return;
+    if (!cv || !cv0 || !a || !b) return;
     const live = (((MV.states[cam.id] || {}).result || {}).groups || []).find((q) => q.id === g.id);
     const shape = g.learn === false ? null : (live && live.shape);         // выученная форма: сейчас одна на всё окно графика (плывёт медленно)
-    const vals = a.flow.map((v, i) => {
-      if (!a.bit[i] || !b.bit[i]) return null;
+    const plain = [], fixed = [];
+    a.flow.forEach((v, i) => {
+      if (!a.bit[i] || !b.bit[i]) { plain.push(null); fixed.push(null); return; }
       const raw = g.mode === 'same' ? v - b.flow[i] : v + b.flow[i];
-      return ((((raw - mdMirrorCorr(g.table, v) - mdMirrorCorr(shape, v) - g.ref + 180) % 360) + 360) % 360) - 180;
+      plain.push(wrap(raw - g.ref));                                                           // как есть: только уровень (эталон)
+      fixed.push(wrap(raw - mdMirrorCorr(g.table, v) - mdMirrorCorr(shape, v) - g.ref));       // с поправкой: ручная таблица + выученная форма
     });
-    const span = Math.max(20, Math.ceil((g.tol * 2) / 10) * 10);
-    mdDrawSeries(cv, h.t || [], vals, h.ok || [], -span, span, { lines: [{ v: g.tol, color: '#ef4444' }, { v: -g.tol, color: '#ef4444' }, { v: 0, color: '#64748b' }] });
+    const span = Math.max(20, Math.ceil((g.tol * 2) / 10) * 10);                               // одна шкала на оба графика: сравнивать на глаз
+    const o = { h: 64, lines: [{ v: g.tol, color: '#ef4444' }, { v: -g.tol, color: '#ef4444' }, { v: 0, color: '#64748b' }] };
+    mdDrawSeries(cv0, h.t || [], plain, h.ok || [], -span, span, o);
+    mdDrawSeries(cv, h.t || [], fixed, h.ok || [], -span, span, o);
   });
 }
 
@@ -1057,7 +1066,14 @@ function paintMotionDockLive() {
       if (g.type !== 'mirror') return;
       const k = c.id + '-' + g.id, ok = g.valid && g.delta != null;
       const v = mdEl('md-mxv-' + k);
-      if (v) { v.textContent = ok ? (g.delta > 0 ? '+' : '') + g.delta.toFixed(1) + '°' : '—'; v.style.color = ok && g.alarm ? '#f87171' : ''; }
+      if (ok && !g.hold) mdLastDelta[k] = g.delta;
+      const shown = ok ? (g.hold && mdLastDelta[k] != null ? mdLastDelta[k] : g.delta) : null;      // удержание: палку не видно, угол достроен — Δ с него не показываем
+      if (v) {
+        v.textContent = shown != null ? (shown > 0 ? '+' : '') + shown.toFixed(1) + '°' : '—';
+        v.style.color = ok && g.alarm ? '#f87171' : '';
+        v.style.opacity = ok && g.hold ? '.45' : '';
+        v.title = ok && g.hold ? 'Палку не видно, угол достроен по скорости: показано последнее надёжное значение' : 'Отклонение от нормы, °';
+      }
       const ab = mdEl('md-mxb-' + k);
       if (ab) { ab.textContent = g.alarm; ab.style.color = g.alarm ? '#f87171' : ''; }
       const ls = mdEl('md-mxl-' + k);
@@ -1490,6 +1506,7 @@ function initMotionDock() {
   mdEl('mdRec')?.addEventListener('click', mdOnRec);
   mdEl('mdRecAll')?.addEventListener('click', mdOnRecAll);
   mdEl('mdRecZip')?.addEventListener('click', mdOnRecZip);
+  mdEl('mdPulse')?.addEventListener('click', mdOnPulse);
   document.querySelectorAll('[data-md-tab]').forEach((b) => b.addEventListener('click', () => {
     MD.tab = b.dataset.mdTab;
     MD.key = '';

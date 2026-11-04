@@ -51,8 +51,8 @@ def put_config(service_url: str, cfg: dict) -> dict:
     return _call(service_url, "/config", cfg, method="PUT", timeout=15.0)
 
 
-def state(service_url: str) -> dict:
-    return _call(service_url, "/state")
+def state(service_url: str, timeout: float = 5.0) -> dict:
+    return _call(service_url, "/state", timeout=timeout)
 
 
 def history(service_url: str, cam: str, n: int = 300, window: float = 0, points: int = 600) -> dict:

@@ -203,3 +203,14 @@ def test_old_database_without_shot_column_is_migrated(ev):
     c.close()
     rows = ev.episodes(now=100.0)
     assert len(rows) == 1 and rows[0]["shot"] is False, "база 2.0.17 открывается, колонка кадра добавлена сама"
+
+
+def test_cycle_zone_events_follow_moving_not_found():
+    """У зоны-цикла (палка на валу) bit — «палка найдена»; в журнал «крутится / стоит» идёт поле moving."""
+    from cam_monitor import Monitor
+    cv = lambda **z: {"enabled": True, "result": {"alive": True, "zones": [{"id": "rod1", "name": "Вал", "type": "cycle", "enabled": True, **z}]}}
+    assert Monitor._cv_active(cv(bit=0, moving=True)) == {("zone_on", "rod1"): "Вал"}
+    assert Monitor._cv_active(cv(bit=1, moving=False)) == {("zone_off", "rod1"): "Вал"}
+    assert Monitor._cv_active(cv(bit=1, moving=None)) == {}
+    plain = {"enabled": True, "result": {"alive": True, "zones": [{"id": "z1", "name": "Жом", "type": "motion", "enabled": True, "bit": 1}]}}
+    assert Monitor._cv_active(plain) == {("zone_on", "z1"): "Жом"}

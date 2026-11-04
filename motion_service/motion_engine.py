@@ -34,7 +34,8 @@ METRICS = ("flow", "diff")
 GROUP_TYPES = ("sum", "monotonic", "worktimer", "mirror")
 MIRROR_MODES = ("mirror", "same")
 CYCLE_WORK_R = 170       # радиус (px), до которого сжимается область вокруг оси палки перед поиском: быстро и не зависит от разрешения камеры
-CYCLE_RED_HSV = (12, 163, 70, 80)     # красный: H ≤ h_max или H ≥ h_min (круг оттенков), S ≥ s_min, V ≥ v_min
+CYCLE_RED_HSV = (16, 165, 50, 55)     # красный: H ≤ h_max или H ≥ h_min (круг оттенков), S ≥ s_min, V ≥ v_min; мягче прежнего: красный конец в сумерках бледнеет и желтеет
+CYCLE_RED_HSV_OLD = (12, 163, 70, 80)  # прежний умолчательный красный: зоны, сохранённые с ним нетронутыми, переходят на новый (свои значения не трогаем)
 CYCLE_BLUE_HSV = (82, 135, 55, 60)    # синий/голубой: h_lo ≤ H ≤ h_hi, S ≥ s_min, V ≥ v_min (голубая половина тоже сюда)
 HW_ACCEL_MODES = ("off", "auto", "d3d11")    # аппаратное декодирование видео: выкл / любое доступное / Direct3D 11 (видеоядро Intel, AMD, NVIDIA)
 ZONE_OUT_KINDS = ("holding", "coil")
@@ -180,7 +181,7 @@ def _norm_cycle(z: dict, zid: str, where: str) -> dict:
         "center": center,
         "radius": _num(z.get("radius", 330), where + ".radius", 20),
         "r_min": _num(z.get("r_min", 0.1), where + ".r_min", 0.0, 0.8),
-        "red_hsv": _hsv4(z.get("red_hsv"), CYCLE_RED_HSV, where + ".red_hsv", True),
+        "red_hsv": _hsv4(None if tuple(z.get("red_hsv") or ()) == CYCLE_RED_HSV_OLD else z.get("red_hsv"), CYCLE_RED_HSV, where + ".red_hsv", True),
         "blue_hsv": _hsv4(z.get("blue_hsv"), CYCLE_BLUE_HSV, where + ".blue_hsv", False),
         "min_score": _num(z.get("min_score", 0.4), where + ".min_score", 0.01, 2),
         "min_conf": _num(z.get("min_conf", 0.1), where + ".min_conf", 0, 1),

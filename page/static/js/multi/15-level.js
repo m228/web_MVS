@@ -59,7 +59,7 @@ function lvPaintModel() {
     const sig = files.join('|') + '#' + cur;
     if (sel.dataset.sig !== sig) {
       sel.dataset.sig = sig;
-      sel.innerHTML = files.length ? mdSel(files.map((f) => [escapeHtml(f), escapeHtml(f)]), cur) : '<option value="">— нет файлов —</option>';
+      sel.innerHTML = files.length ? mdSel(files.map((f) => [escapeHtml(f), escapeHtml(f)]), escapeHtml(cur)) : '<option value="">— нет файлов —</option>';
     }
     sel.disabled = !files.length;
   }

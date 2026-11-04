@@ -304,6 +304,7 @@ function mdZoneCardHtml(cam, z, i) {
   </div>`;
 }
 
+const mdLastDelta = {};   // группа → последнее надёжное Δ (палки видны): в удержании показываем его, а не достроенное
 const mdTableLabel = (g) => (g.table ? 'есть · перекос от ' + Math.min(...g.table).toFixed(1) + ' до ' + Math.max(...g.table).toFixed(1) + '°' : 'нет — Δ с общим эталоном');
 
 // синхронность двух валов: отклонение от зеркальности (Δ, °), допуск и эталон; график Δ — справа
@@ -1057,7 +1058,14 @@ function paintMotionDockLive() {
       if (g.type !== 'mirror') return;
       const k = c.id + '-' + g.id, ok = g.valid && g.delta != null;
       const v = mdEl('md-mxv-' + k);
-      if (v) { v.textContent = ok ? (g.delta > 0 ? '+' : '') + g.delta.toFixed(1) + '°' : '—'; v.style.color = ok && g.alarm ? '#f87171' : ''; }
+      if (ok && !g.hold) mdLastDelta[k] = g.delta;
+      const shown = ok ? (g.hold && mdLastDelta[k] != null ? mdLastDelta[k] : g.delta) : null;      // удержание: палку не видно, угол достроен — Δ с него не показываем
+      if (v) {
+        v.textContent = shown != null ? (shown > 0 ? '+' : '') + shown.toFixed(1) + '°' : '—';
+        v.style.color = ok && g.alarm ? '#f87171' : '';
+        v.style.opacity = ok && g.hold ? '.45' : '';
+        v.title = ok && g.hold ? 'Палку не видно, угол достроен по скорости: показано последнее надёжное значение' : 'Отклонение от нормы, °';
+      }
       const ab = mdEl('md-mxb-' + k);
       if (ab) { ab.textContent = g.alarm; ab.style.color = g.alarm ? '#f87171' : ''; }
       const ls = mdEl('md-mxl-' + k);

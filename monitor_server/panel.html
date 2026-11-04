@@ -49,7 +49,35 @@ h2 { margin: 0; font-size: 19px; }
 .ver { color: var(--text); font-weight: 700; font-size: 14px; }
 .ver.old { color: var(--warn); background: var(--warn-bg); border-radius: 999px; padding: 1px 10px; }
 pre.text { margin: 0; font: inherit; font-size: 14px; white-space: pre-wrap; line-height: 1.65; }
-.card.s-offline pre.text, .card.s-waiting pre.text { opacity: .55; }
+.card.s-offline .blocks, .card.s-waiting .blocks, .card.s-offline pre.text, .card.s-waiting pre.text { opacity: .55; }
+.blocks { display: flex; flex-direction: column; }
+.blk { border-top: 1px solid var(--line); padding: 9px 0 3px; }
+.bh { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 13px; margin-bottom: 5px; }
+.bh svg { width: 16px; height: 16px; flex: none; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.kv { display: flex; justify-content: space-between; gap: 12px; font-size: 14px; padding: 2px 0; }
+.kv > span:first-child { color: var(--muted); }
+.kv > span:last-child { text-align: right; }
+.kv .bad { color: var(--bad); font-weight: 600; }
+.kv .warn { color: var(--warn); font-weight: 600; }
+.pills { display: flex; gap: 6px; flex-wrap: wrap; }
+.pill { font-size: 12px; font-weight: 600; padding: 2px 10px; border-radius: 999px; background: var(--idle-bg); color: var(--muted); }
+.pill.ok { background: var(--ok-bg); color: var(--ok); }
+.pill.warn { background: var(--warn-bg); color: var(--warn); }
+.pill.bad { background: var(--bad-bg); color: var(--bad); }
+.head .r { display: flex; align-items: center; gap: 6px; }
+button.mini { padding: 2px 9px; font-size: 12px; border-radius: 999px; color: var(--muted); }
+.vmenu { display: none; border: 1px solid var(--line); border-radius: 12px; padding: 8px 12px; background: var(--bg); }
+.vmenu.open { display: block; }
+.vmenu .sub { margin-bottom: 4px; }
+.vmenu label { display: flex; align-items: center; gap: 8px; font-size: 14px; padding: 2px 0; cursor: pointer; }
+.vmenu input { width: 15px; height: 15px; margin: 0; }
+#sum { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 0 24px 14px; background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 9px 14px; }
+#sum[hidden] { display: none; }
+#sum .tot { font-weight: 700; margin-right: 6px; }
+.sp { width: 9px; height: 9px; border-radius: 50%; display: inline-block; background: var(--muted); flex: none; }
+.sp.ok { background: var(--ok); } .sp.warn { background: var(--warn); } .sp.bad { background: var(--bad); }
+.sc { display: inline-flex; align-items: center; gap: 6px; padding: 3px 11px; border-radius: 999px; font-size: 13px; background: var(--bg); border: 1px solid var(--line); color: var(--text); text-decoration: none; cursor: pointer; }
+.sc:hover { border-color: var(--accent); }
 .alerts { display: flex; flex-direction: column; gap: 6px; }
 .alert { border-left: 4px solid var(--warn); background: var(--warn-bg); border-radius: 8px; padding: 6px 12px; font-size: 14px; }
 .alert.bad { border-color: var(--bad); background: var(--bad-bg); }
@@ -99,6 +127,7 @@ dialog code { color: var(--text); word-break: break-all; }
   header { padding: 12px 14px; gap: 10px; }
   h1 { font-size: 18px; }
   main { grid-template-columns: 1fr; padding: 0 12px 24px; gap: 12px; }
+  #sum { margin: 0 12px 12px; }
 }
 </style>
 </head>
@@ -109,6 +138,7 @@ dialog code { color: var(--text); word-break: break-all; }
   <div class="updbox"><span id="upd"></span><span id="pver"></span></div>
   <button id="add" class="primary">+ Завод</button>
 </header>
+<section id="sum" hidden></section>
 <section id="enroll" hidden></section>
 <main id="cards"><div class="empty">Загрузка…</div></main>
 
@@ -131,6 +161,7 @@ const RANK = {offline: 0, checking: 2, waiting: 3, online: 4};
 // строку «Тревоги: …» из текста завода не показываем: ниже те же тревоги отдельными плашками с временем
 const opened = new Set();           // у каких заводов раскрыт журнал
 const openedPos = new Set();        // у каких раскрыты «Датчики»
+const openedView = new Set();        // у каких открыто меню «Вид»
 const openedChart = new Set();      // у каких внутри раскрыт график (по умолчанию свёрнут)
 const posCache = {};                // id завода -> последние положения датчиков (новые первыми)
 let plants = [], serverT = Date.now() / 1000, latestV = null;   // latestV — последняя версия на GitHub (null — не знаем)
@@ -227,6 +258,100 @@ function cardText(snap) {
   return lines.join('\n');
 }
 
+const ICONS = {
+  pc: '<rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/>',
+  services: '<rect x="4" y="4" width="16" height="6" rx="2"/><rect x="4" y="14" width="16" height="6" rx="2"/><path d="M8 7h.01M8 17h.01"/>',
+  camera: '<rect x="3" y="7" width="18" height="13" rx="2"/><circle cx="12" cy="13.5" r="3.5"/><path d="M8 7l1.5-3h5L16 7"/>',
+  brew: '<path d="M9 3h6M10 3v6l-5 9a2 2 0 0 0 2 3h10a2 2 0 0 0 2-3l-5-9V3"/><path d="M7.5 15h9"/>',
+  motion: '<rect x="3" y="6" width="13" height="12" rx="2"/><path d="M16 10l5-3v10l-5-3"/>',
+};
+const BLOCK_NAMES = {pc: 'ПК и приложение', services: 'Службы', camera: 'Камера', brew: 'Варка', motion: 'Камеры движения'};
+const SVC_NAMES = {cv: 'CV', video: 'видео', motion: 'движение'};
+const kv = (k, v, cls) => '<div class="kv"><span>' + k + '</span><span' + (cls ? ' class="' + cls + '"' : '') + '>' + v + '</span></div>';
+
+function fmtUp(s) {
+  if (s === null || s === undefined) return '—';
+  s = Math.max(0, Math.round(s));
+  const d = Math.floor(s / 86400), h = Math.floor(s % 86400 / 3600), m = Math.floor(s % 3600 / 60);
+  if (d) return d + ' д ' + h + ' ч';
+  if (h) return h + ' ч ' + m + ' мин';
+  return Math.max(1, m) + ' мин';
+}
+
+// каждый блок возвращает html или '' (нет данных — блока нет); порядок = порядок в карточке
+function blockData(snap) {
+  const out = {}, cam = snap.camera || {}, m = snap.micro, st = snap.start || {};
+  if (snap.pc_up_s != null || snap.app_up_s != null) {
+    out.pc = kv('ПК работает', fmtUp(snap.pc_up_s)) + kv('Приложение', fmtUp(snap.app_up_s)) +
+      (snap.app_start_t ? kv('Запуск', fmt(snap.app_start_t) + (st.text ? '<br><span class="sub">' + esc(st.text) + '</span>' : '')) : '');
+  }
+  const svc = Object.entries(snap.services || {}).filter(([, v]) => v === 'ok' || v === 'starting' || v === 'down');
+  if (svc.length) {
+    out.services = '<div class="pills">' + svc.map(([k, v]) => '<span class="pill ' + (v === 'ok' ? 'ok' : v === 'starting' ? 'warn' : 'bad') + '">' + esc(SVC_NAMES[k] || k) +
+      (v === 'starting' ? ' · запускается' : v === 'down' ? ' · не работает' : '') + '</span>').join('') + '</div>';
+  }
+  if (cam.set) {
+    const par = (k, name) => {
+      if (cam[k] == null) return '';
+      const sv = cam[k + '_saved'];
+      return kv(name, sv == null || sv === cam[k] ? esc(cam[k]) + (sv == null ? '' : ' · как сохранено') : esc(cam[k]) + ' · сохранено ' + esc(sv), sv != null && sv !== cam[k] ? 'warn' : '');
+    };
+    out.camera = kv('Стримит', cam.streaming ? 'да' : 'нет', cam.streaming ? '' : 'bad') + par('exposure_time', 'Экспозиция') + par('gain', 'Усиление');
+  }
+  if (m) {
+    let h = '';
+    if (m.plate_connected === false) h += kv('Плата', 'не отвечает', 'bad');
+    else {
+      h += kv('Стадия', esc(m.stage_name || '—') + (m.fault ? ' · авария' : m.manual ? ' · ручной' : m.step ? ' · ' + esc(m.step) : ''), m.fault ? 'bad' : '');
+      if (m.probes_today != null) h += kv('Проб сегодня', esc(m.probes_today));
+      if (m.last_probe_t) h += kv('Последняя проба', esc(dur(snap.t - m.last_probe_t)));
+      const ac = m.autocal;
+      if (ac && ac.failed) h += kv('Автокалибровка', 'не удалась', 'warn');
+      else if (ac && ac.last_ts) h += kv('Автокалибровка', esc(ac.last_result || '—') + ' · ' + esc(dur(snap.t - ac.last_ts)));
+      const pos = m.positions || {}, names = {retract: 'Отвод', approach: 'Подвод'};
+      for (const k of Object.keys(names)) if (pos[k]) h += kv(names[k], pos[k].ok ? 'в норме' : 'вне допуска', pos[k].ok ? '' : 'warn');
+    }
+    out.brew = h;
+  }
+  return out;
+}
+
+function blocksHtml(p, snap) {
+  const data = blockData(snap), hidden = p.hidden_blocks || [];
+  const html = Object.keys(BLOCK_NAMES).filter((k) => data[k] && !hidden.includes(k)).map((k) =>
+    '<div class="blk"><div class="bh"><svg viewBox="0 0 24 24">' + ICONS[k] + '</svg>' + BLOCK_NAMES[k] + '</div>' + data[k] + '</div>').join('');
+  if (Object.keys(data).length) return html ? '<div class="blocks">' + html + '</div>' : '';
+  return snap.text ? '<pre class="text">' + esc(cardText(snap)) + '</pre>' : '';      // снимок старого формата — как раньше, текстом
+}
+
+function viewMenu(p, snap) {
+  const data = blockData(snap), hidden = p.hidden_blocks || [], keys = Object.keys(BLOCK_NAMES).filter((k) => data[k]);
+  if (!keys.length) return '';
+  return '<div class="vmenu' + (openedView.has(p.id) ? ' open' : '') + '"><div class="sub">Что показывать в карточке</div>' + keys.map((k) =>
+    '<label><input type="checkbox" data-blk="' + k + '"' + (hidden.includes(k) ? '' : ' checked') + '>' + BLOCK_NAMES[k] + '</label>').join('') + '</div>';
+}
+
+const plural = (n, a, b, c) => (n % 10 === 1 && n % 100 !== 11 ? a : n % 10 >= 2 && n % 10 <= 4 && (n % 100 < 10 || n % 100 >= 20) ? b : c);
+function plantDot(p) {
+  const hi = p.alerts.some((a) => a.level === 'critical' || a.level === 'high');
+  if (p.status === 'offline' || hi) return 'bad';
+  if (p.alerts.length || p.status === 'checking') return 'warn';
+  return p.status === 'online' ? 'ok' : '';
+}
+function renderSummary() {
+  const box = $('sum');
+  box.hidden = !plants.length;
+  if (!plants.length) return;
+  const on = plants.filter((p) => p.status === 'online').length, off = plants.filter((p) => p.status === 'offline').length;
+  const worst = plants.some((p) => plantDot(p) === 'bad') ? 'bad' : plants.some((p) => plantDot(p) === 'warn') ? 'warn' : 'ok';
+  box.innerHTML = '<span class="tot"><span class="sp ' + worst + '"></span> В сети ' + on + ' из ' + plants.length + (off ? ' · нет связи ' + off : '') + '</span>' +
+    sorted().map((p) => {
+      const n = p.alerts.length;
+      return '<a class="sc" data-go="' + p.id + '"><span class="sp ' + plantDot(p) + '"></span>' + esc(p.name) +
+        (p.status === 'offline' ? ' · нет связи' : p.status === 'waiting' ? ' · ждёт' : '') + (n ? ' · ' + n + ' ' + plural(n, 'тревога', 'тревоги', 'тревог') : '') + '</a>';
+    }).join('');
+}
+
 function card(p) {
   const snap = p.snapshot || {};
   const bad = p.alerts.some((a) => a.level === 'critical' || a.level === 'high');
@@ -241,10 +366,11 @@ function card(p) {
   const alerts = p.alerts.map((a) => '<div class="alert' + (a.level === 'critical' || a.level === 'high' ? ' bad' : '') + '"><b>' + esc(a.text) +
     '</b><small>с ' + fmt(a.since) + '</small></div>').join('');
   return '<article class="card s-' + p.status + (p.alerts.length ? ' has-alert' : '') + '" data-id="' + p.id + '">' +
-    '<div class="head"><h2>' + esc(p.name) + '</h2><span class="chip s-' + p.status + '">' + STATUS[p.status] + '</span></div>' +
+    '<div class="head"><h2>' + esc(p.name) + '</h2><span class="r"><span class="chip s-' + p.status + '">' + STATUS[p.status] + '</span>' +
+    (viewMenu(p, snap) ? '<button class="mini" data-a="view">Вид</button>' : '') + '</span></div>' +
     '<div class="sub">' + sub + '</div>' +
-    (snap.text ? '<pre class="text">' + esc(cardText(snap)) + '</pre>' : '') +
     (alerts ? '<div class="alerts">' + alerts + '</div>' : '') +
+    viewMenu(p, snap) + blocksHtml(p, snap) +
     '<div class="tools"><button data-a="log">Журнал</button>' + (snap.micro ? '<button data-a="pos">Датчики</button>' : '') +
     '<button data-a="rename">Переименовать</button><button data-a="token">Новый токен</button><button data-a="del">Удалить</button></div>' +
     '<div class="pos' + (openedPos.has(p.id) ? ' open' : '') + '" id="pos' + p.id + '">' + (openedPos.has(p.id) ? posBlock(p.id) : '') + '</div>' +
@@ -264,6 +390,7 @@ function titleBadge() {
 
 function render() {
   titleBadge();
+  renderSummary();
   const box = $('cards');
   box.innerHTML = plants.length ? sorted().map(card).join('') : '<div class="empty">Заводов пока нет. Нажми «+ Завод», чтобы выдать токен.</div>';
   opened.forEach((id) => loadLog(id));
@@ -400,6 +527,9 @@ $('cards').onclick = async (ev) => {
     if (openedPos.has(id)) openedPos.delete(id); else openedPos.add(id);
     $('pos' + id).classList.toggle('open', openedPos.has(id));
     if (openedPos.has(id)) { $('pos' + id).innerHTML = posBlock(id); loadPos(id); }
+  } else if (btn.dataset.a === 'view') {
+    if (openedView.has(id)) openedView.delete(id); else openedView.add(id);
+    btn.closest('.card').querySelector('.vmenu').classList.toggle('open', openedView.has(id));
   } else if (btn.dataset.a === 'rename') {
     const name = (prompt('Новое название завода (как будет на карточке и в Telegram):', p.name) || '').trim();
     if (!name || name === p.name) return;
@@ -411,9 +541,26 @@ $('cards').onclick = async (ev) => {
     catch (e) { alert(e.message); }
   } else if (btn.dataset.a === 'del') {
     if (!confirm('Удалить завод «' + p.name + '» вместе с журналом? Это нельзя отменить.')) return;
-    try { await api('/api/plants/' + id, {method: 'DELETE'}); opened.delete(id); openedPos.delete(id); openedChart.delete(id); delete posCache[id]; load(); }
+    try { await api('/api/plants/' + id, {method: 'DELETE'}); opened.delete(id); openedPos.delete(id); openedView.delete(id); openedChart.delete(id); delete posCache[id]; load(); }
     catch (e) { alert(e.message); }
   }
+};
+
+$('cards').addEventListener('change', async (ev) => {      // галочка в «Виде»: скрытые блоки хранит приёмник
+  const cb = ev.target.closest('input[data-blk]');
+  if (!cb) return;
+  const id = Number(cb.closest('.card').dataset.id), p = plants.find((x) => x.id === id);
+  const hidden = new Set(p.hidden_blocks || []);
+  if (cb.checked) hidden.delete(cb.dataset.blk); else hidden.add(cb.dataset.blk);
+  try {
+    p.hidden_blocks = (await api('/api/plants/' + id + '/view', {method: 'POST', body: JSON.stringify({hidden: [...hidden]})})).hidden;
+    render();
+  } catch (e) { cb.checked = !cb.checked; alert(e.message); }
+});
+$('sum').onclick = (ev) => {
+  const a = ev.target.closest('a[data-go]');
+  const el = a && document.querySelector('.card[data-id="' + a.dataset.go + '"]');
+  if (el) el.scrollIntoView({behavior: 'smooth', block: 'center'});
 };
 
 $('cards').addEventListener('toggle', (ev) => {       // график свёрнут по умолчанию; запоминаем, у кого его раскрыли

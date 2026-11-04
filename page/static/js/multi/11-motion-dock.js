@@ -232,10 +232,10 @@ const mdHelp = (text) => `<span class="md-help" title="${escapeHtml(text)}">?</s
 const mdField = (label, ctl, title, cls) => `<label${title ? ` title="${escapeHtml(title)}"` : ''}${cls ? ` class="${cls}"` : ''}><span>${label}</span>${ctl}</label>`;
 
 // ---------- вкладка «Зоны · тренды» ----------
-function mdOutCell(o, attrs, withState) {
-  // адрес нужен только когда вывод включён — иначе поле лишь теснит соседей по строке
-  return `<div class="md-out"><select ${attrs} data-f="okind">${mdSel([['', 'нет'], ['holding', 'регистр'], ['coil', 'coil']], o ? o.kind : '')}</select>` +
-    (o && o.kind ? `<input type="number" min="0" max="65535" ${attrs} data-f="oaddr" value="${o.address}" title="Адрес регистра / coil" placeholder="адрес" />` : '') +
+function mdOutCell(o, attrs, withState, pre = 'o', kinds = [['', 'нет'], ['holding', 'регистр'], ['coil', 'coil']]) {
+  // адрес нужен только когда вывод включён — иначе поле лишь теснит соседей по строке; pre — приставка полей (o — основной вывод, r — скорость)
+  return `<div class="md-out"><select ${attrs} data-f="${pre}kind">${mdSel(kinds, o ? o.kind : '')}</select>` +
+    (o && o.kind ? `<input type="number" min="0" max="65535" ${attrs} data-f="${pre}addr" value="${o.address}" title="Адрес регистра / coil" placeholder="адрес" />` : '') +
     // что писать — только у зоны с признаком вида окна: бит «движется» или состояние окна 0 пусто / 1 жом стоит / 2 движется
     (withState && o && o.kind ? `<select ${attrs} data-f="oval" title="Что писать: бит «движется» 0/1 или состояние окна: 0 — пусто, 1 — жом стоит, 2 — движется (пока пороги вида окна не заданы, пишется бит)">${mdSel([['bit', 'движение'], ['state', 'состояние окна']], o.value || 'bit')}</select>` : '') + '</div>';
 }
@@ -265,6 +265,7 @@ function mdZoneCardHtml(cam, z, i) {
       <div class="md-zone__row"><span class="md-lbl" title="Ось вала на кадре (пиксели кадра разметки): точка, вокруг которой вращается палка">ось x, y</span>${mdNum(a + ' data-f="cx"', Math.round(z.center[0]), 'min="0" step="1"')}${mdNum(a + ' data-f="cy"', Math.round(z.center[1]), 'min="0" step="1"')}
         <span class="md-lbl" title="Окружность вокруг оси, внутри которой ищется палка: должна доставать до её концов">радиус, px</span>${mdNum(a + ' data-f="radius"', z.radius, 'min="20" step="5"')}</div>
       <div class="md-zone__row"><span class="md-lbl">угол в ПЛК</span>${mdOutCell(z.out, a)}<span class="net-hint">регистр — угол в 0,1°</span></div>
+      <div class="md-zone__row"><span class="md-lbl">скорость в ПЛК</span>${mdOutCell(z.rpm_out, a, false, 'r', [['', 'нет'], ['holding', 'регистр']])}<span class="net-hint" title="Знаковый int16: ↻ плюс, ↺ минус (−0,79 об/мин → 65457). Стоит — 0">регистр — об/мин ×100, со знаком</span></div>
     </div>
     <div class="md-zone__chart"><canvas id="md-ch-${k}" height="84"></canvas></div>
   </div>`;
@@ -458,11 +459,13 @@ function mdOnZone(t, cam) {
     else if (f === 'trackflow') z.track_flow = t.checked;
     else if (f === 'okind') z.out = t.value ? { kind: t.value, address: (z.out && z.out.address) || 0, value: (z.out && z.out.value) || 'bit' } : null;
     else if (f === 'oaddr' && z.out) z.out.address = parseInt(t.value, 10) || 0;
+    else if (f === 'rkind') z.rpm_out = t.value ? { kind: 'holding', address: (z.rpm_out && z.rpm_out.address) || 0 } : null;
+    else if (f === 'raddr' && z.rpm_out) z.rpm_out.address = parseInt(t.value, 10) || 0;
     else if (f === 'oval' && z.out) z.out.value = t.value;
     else if (f === 'fmetric') { z.fill_metric = t.value; z.fill_invert = t.value === 'tex'; }   // яркость: жом светлее; зернистость: жом гладче
     else if (f === 'fllon' || f === 'flloff') z[f === 'fllon' ? 'fill_on' : 'fill_off'] = Math.max(0, parseFloat(t.value) || 0);
     else if (f === 'oclear') z.out = null;
-  }, f === 'type' || f === 'metric' || f === 'okind' || f === 'fmetric' || f === 'oclear');
+  }, f === 'type' || f === 'metric' || f === 'okind' || f === 'rkind' || f === 'fmetric' || f === 'oclear');
 }
 
 // карточка синхронности: допуск, эталон, вывод; «текущее = норма» берёт текущую сумму углов из живого состояния
@@ -532,7 +535,9 @@ const mdNumFmt = (v) => (v >= 100 ? v.toFixed(0) : v >= 10 ? v.toFixed(1) : v.to
 
 // значения вала: красный и синий конец палки (0–360° от вертикали по часовой, синий напротив красного) и значок направления вращения
 function mdRodAnglesHtml(z) {
-  return `<span style="color:${MV_ROD_RED}">красный <b>${Number(z.angle).toFixed(1)}°</b></span> · <span style="color:${MV_ROD_BLUE}">синий <b>${mvBlueAngle(z.angle).toFixed(1)}°</b></span> <span title="Направление вращения: ↻ по часовой, ↺ против, ■ стоит">${mvDirIcon(z.rpm)}</span>`;
+  const rpm = Math.abs(Number(z.rpm) || 0);
+  const speed = z.moving === false ? 'стоит' : rpm > 0.02 ? `${rpm.toFixed(2)} об/мин` : '–';
+  return `<span style="color:${MV_ROD_RED}">красный <b>${Number(z.angle).toFixed(1)}°</b></span> · <span style="color:${MV_ROD_BLUE}">синий <b>${mvBlueAngle(z.angle).toFixed(1)}°</b></span> · <b title="Скорость вращения вала">${speed}</b> <span title="Направление вращения: ↻ по часовой, ↺ против, ■ стоит">${mvDirIcon(z.rpm)}</span>`;
 }
 
 function mdZoneStatHtml(z, cur, st) {

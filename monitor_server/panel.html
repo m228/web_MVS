@@ -82,7 +82,14 @@ button.mini { padding: 2px 9px; font-size: 12px; border-radius: 999px; color: va
 .alert { border-left: 4px solid var(--warn); background: var(--warn-bg); border-radius: 8px; padding: 6px 12px; font-size: 14px; }
 .alert.bad { border-color: var(--bad); background: var(--bad-bg); }
 .alert small { color: var(--muted); margin-left: 8px; }
-.alert:not(.bad)::before { content: "\26A0"; color: var(--warn); margin-right: 8px; }
+.alert { display: flex; align-items: center; flex-wrap: wrap; }
+.alert button.mini { margin-left: auto; }
+.alert.acked { border-color: var(--line); background: var(--idle-bg); color: var(--muted); }
+.alert.acked::before { content: "\2713"; color: var(--muted); margin-right: 8px; }
+.alerts > button.mini { align-self: flex-start; }
+.lm { display: flex; gap: 6px; margin-bottom: 6px; }
+.lm button.mini.on { color: var(--accent); border-color: var(--accent); }
+.alert:not(.bad):not(.acked)::before { content: "\26A0"; color: var(--warn); margin-right: 8px; }
 .pos { display: none; border-top: 1px solid var(--line); padding-top: 6px; }
 .pos.open { display: block; }
 .pt-wrap { overflow-x: auto; }
@@ -161,6 +168,7 @@ const RANK = {offline: 0, checking: 2, waiting: 3, online: 4};
 // строку «Тревоги: …» из текста завода не показываем: ниже те же тревоги отдельными плашками с временем
 const opened = new Set();           // у каких заводов раскрыт журнал
 const openedPos = new Set();        // у каких раскрыты «Датчики»
+const logErrors = new Set();         // у каких журнал показывает только ошибки
 const openedView = new Set();        // у каких открыто меню «Вид»
 const openedChart = new Set();      // у каких внутри раскрыт график (по умолчанию свёрнут)
 const posCache = {};                // id завода -> последние положения датчиков (новые первыми)
@@ -331,11 +339,12 @@ function viewMenu(p, snap) {
     '<label><input type="checkbox" data-blk="' + k + '"' + (hidden.includes(k) ? '' : ' checked') + '>' + BLOCK_NAMES[k] + '</label>').join('') + '</div>';
 }
 
+const live = (p) => p.alerts.filter((a) => !a.acked);        // тревоги, которые Макс не сбросил: только они красят карточку и сводку
 const plural = (n, a, b, c) => (n % 10 === 1 && n % 100 !== 11 ? a : n % 10 >= 2 && n % 10 <= 4 && (n % 100 < 10 || n % 100 >= 20) ? b : c);
 function plantDot(p) {
-  const hi = p.alerts.some((a) => a.level === 'critical' || a.level === 'high');
+  const hi = live(p).some((a) => a.level === 'critical' || a.level === 'high');
   if (p.status === 'offline' || hi) return 'bad';
-  if (p.alerts.length || p.status === 'checking') return 'warn';
+  if (live(p).length || p.status === 'checking') return 'warn';
   return p.status === 'online' ? 'ok' : '';
 }
 function renderSummary() {
@@ -346,7 +355,7 @@ function renderSummary() {
   const worst = plants.some((p) => plantDot(p) === 'bad') ? 'bad' : plants.some((p) => plantDot(p) === 'warn') ? 'warn' : 'ok';
   box.innerHTML = '<span class="tot"><span class="sp ' + worst + '"></span> В сети ' + on + ' из ' + plants.length + (off ? ' · нет связи ' + off : '') + '</span>' +
     sorted().map((p) => {
-      const n = p.alerts.length;
+      const n = live(p).length;
       return '<a class="sc" data-go="' + p.id + '"><span class="sp ' + plantDot(p) + '"></span>' + esc(p.name) +
         (p.status === 'offline' ? ' · нет связи' : p.status === 'waiting' ? ' · ждёт' : '') + (n ? ' · ' + n + ' ' + plural(n, 'тревога', 'тревоги', 'тревог') : '') + '</a>';
     }).join('');
@@ -354,7 +363,6 @@ function renderSummary() {
 
 function card(p) {
   const snap = p.snapshot || {};
-  const bad = p.alerts.some((a) => a.level === 'critical' || a.level === 'high');
   let sub;
   if (p.status === 'waiting') sub = 'ещё не выходил на связь';
   else if (p.status === 'offline') sub = '<span class="bad">нет пульса — последний ' + esc(dur(serverT - p.last_seen_t)) + '</span>';
@@ -363,9 +371,11 @@ function card(p) {
     sub = (snap.app_version ? '<span class="ver' + (old ? ' old' : '') + '"' + (old ? ' title="Приложение завода старее последнего релиза"' : '') + '>v' +
       esc(snap.app_version) + (old ? ' · есть ' + esc(latestV) : '') + '</span> · ' : '') + 'пульс ' + esc(dur(serverT - p.last_seen_t));
   }
-  const alerts = p.alerts.map((a) => '<div class="alert' + (a.level === 'critical' || a.level === 'high' ? ' bad' : '') + '"><b>' + esc(a.text) +
-    '</b><small>с ' + fmt(a.since) + '</small></div>').join('');
-  return '<article class="card s-' + p.status + (p.alerts.length ? ' has-alert' : '') + '" data-id="' + p.id + '">' +
+  const alerts = p.alerts.map((a) => '<div class="alert' + (a.acked ? ' acked' : a.level === 'critical' || a.level === 'high' ? ' bad' : '') + '"><b>' + esc(a.text) +
+    '</b><small>с ' + fmt(a.since) + (a.acked ? ' · сброшена' : '') + '</small>' +
+    (a.acked ? '' : '<button class="mini" data-a="ack" data-code="' + esc(a.code) + '">Сбросить</button>') + '</div>').join('') +
+    (live(p).length > 1 ? '<button class="mini" data-a="ackall">Сбросить все</button>' : '');
+  return '<article class="card s-' + p.status + (live(p).length ? ' has-alert' : '') + '" data-id="' + p.id + '">' +
     '<div class="head"><h2>' + esc(p.name) + '</h2><span class="r"><span class="chip s-' + p.status + '">' + STATUS[p.status] + '</span>' +
     (viewMenu(p, snap) ? '<button class="mini" data-a="view">Вид</button>' : '') + '</span></div>' +
     '<div class="sub">' + sub + '</div>' +
@@ -378,13 +388,13 @@ function card(p) {
 }
 
 function sorted() {
-  const w = (p) => (RANK[p.status] ?? 5) - (p.alerts.some((a) => a.level === 'critical' || a.level === 'high') ? 1.5 : 0);
+  const w = (p) => (RANK[p.status] ?? 5) - (live(p).some((a) => a.level === 'critical' || a.level === 'high') ? 1.5 : 0);
   return [...plants].sort((a, b) => w(a) - w(b) || a.name.localeCompare(b.name, 'ru'));
 }
 
 function titleBadge() {
   // число заводов, где что-то не так, — в заголовке окна: видно и в свёрнутом окне на панели задач
-  const n = plants.filter((p) => p.status === 'offline' || p.alerts.some((a) => a.level === 'critical' || a.level === 'high')).length;
+  const n = plants.filter((p) => p.status === 'offline' || live(p).some((a) => a.level === 'critical' || a.level === 'high')).length;
   document.title = (n ? '(' + n + ') ' : '') + 'web_MVS панель';
 }
 
@@ -409,10 +419,13 @@ async function loadPos(id) {
 
 async function loadLog(id) {
   try {
-    const j = await api('/api/plants/' + id + '/events?limit=60');
+    const errs = logErrors.has(id);
+    const j = await api('/api/plants/' + id + '/events?limit=60' + (errs ? '&errors=1' : ''));
     const el = $('log' + id);
-    if (el) el.innerHTML = j.events.map((e) => '<div class="row ' + esc(e.level) + '"><span class="t">' + fmt(e.t) + '</span><span>' + esc(e.text) + '</span></div>').join('')
-      || '<div class="sub">Записей пока нет.</div>';
+    const rows = j.events.map((e) => '<div class="row ' + esc(e.level) + '"><span class="t">' + fmt(e.t) + '</span><span>' + esc(e.text) + '</span></div>').join('');
+    if (el) el.innerHTML = '<div class="lm"><button class="mini' + (errs ? '' : ' on') + '" data-a="lm" data-m="all">Все</button>' +
+      '<button class="mini' + (errs ? ' on' : '') + '" data-a="lm" data-m="err">Тревоги</button></div>' +
+      (rows || '<div class="sub">' + (errs ? 'Тревог пока не было.' : 'Записей пока нет.') + '</div>');
   } catch (e) { /* журнал догрузится на следующем опросе */ }
 }
 
@@ -527,6 +540,14 @@ $('cards').onclick = async (ev) => {
     if (openedPos.has(id)) openedPos.delete(id); else openedPos.add(id);
     $('pos' + id).classList.toggle('open', openedPos.has(id));
     if (openedPos.has(id)) { $('pos' + id).innerHTML = posBlock(id); loadPos(id); }
+  } else if (btn.dataset.a === 'ack' || btn.dataset.a === 'ackall') {
+    try {
+      await api('/api/plants/' + id + '/alerts/ack', {method: 'POST', body: JSON.stringify(btn.dataset.a === 'ack' ? {code: btn.dataset.code} : {})});
+      load();
+    } catch (e) { alert(e.message); }
+  } else if (btn.dataset.a === 'lm') {
+    if (btn.dataset.m === 'err') logErrors.add(id); else logErrors.delete(id);
+    loadLog(id);
   } else if (btn.dataset.a === 'view') {
     if (openedView.has(id)) openedView.delete(id); else openedView.add(id);
     btn.closest('.card').querySelector('.vmenu').classList.toggle('open', openedView.has(id));
@@ -541,7 +562,7 @@ $('cards').onclick = async (ev) => {
     catch (e) { alert(e.message); }
   } else if (btn.dataset.a === 'del') {
     if (!confirm('Удалить завод «' + p.name + '» вместе с журналом? Это нельзя отменить.')) return;
-    try { await api('/api/plants/' + id, {method: 'DELETE'}); opened.delete(id); openedPos.delete(id); openedView.delete(id); openedChart.delete(id); delete posCache[id]; load(); }
+    try { await api('/api/plants/' + id, {method: 'DELETE'}); opened.delete(id); openedPos.delete(id); openedView.delete(id); logErrors.delete(id); openedChart.delete(id); delete posCache[id]; load(); }
     catch (e) { alert(e.message); }
   }
 };

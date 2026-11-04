@@ -194,8 +194,16 @@ class Monitor:
         if not res.get("alive"):
             reason = res.get("reason") or c.get("error") or "нет связи"
             return {("cv_frozen" if "застыл" in reason else "cv_dead", ""): reason}
-        return {("zone_on" if z.get("bit") else "zone_off", str(z.get("id"))): z.get("name") or str(z.get("id"))
-                for z in res.get("zones") or [] if z.get("enabled", True)}
+        out = {}
+        for z in res.get("zones") or []:
+            if not z.get("enabled", True):
+                continue
+            # у зоны-цикла (палка на валу) bit = «палка найдена», а «крутится / стоит» — отдельное поле moving (None — пока неизвестно)
+            on = z.get("moving") if z.get("type") == "cycle" else bool(z.get("bit"))
+            if on is None:
+                continue
+            out[("zone_on" if on else "zone_off", str(z.get("id")))] = z.get("name") or str(z.get("id"))
+        return out
 
     # ---------- поток ----------
     def start(self) -> None:

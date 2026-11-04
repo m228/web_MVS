@@ -516,3 +516,67 @@ def test_mirror_alarm_stays_on_through_a_hold_and_clears_after():
     for k in range(10):
         st = eng.process(cv2.cvtColor(img, cv2.COLOR_BGR2GRAY), 11.0 + k * 0.25, img)
     assert not st["groups"][0]["hold"] and st["groups"][0]["alarm"] == 0
+
+
+# ───────────── крутится / стоит ─────────────
+def drive(eng, plan, fps=4.0, hide_left=False):
+    """plan [(секунд, град/с левого)] — валы крутятся зеркально; возвращает [(время, состояние)]. Время и угол идут сплошным потоком."""
+    out, t, a = [], 0.0, 40.0
+    for seconds, dps in plan:
+        for _ in range(int(seconds * fps)):
+            frames = {(700, 270): (360 - a) % 360}
+            if not hide_left:
+                frames[(250, 270)] = a % 360
+            img = rod_frame(frames)
+            st = eng.process(cv2.cvtColor(img, cv2.COLOR_BGR2GRAY), t, img)
+            if st:
+                out.append((t, st))
+            t += 1.0 / fps
+            a += dps / fps
+    return out
+
+
+def test_moving_and_standing_are_detected_within_about_ten_seconds():
+    eng = me.CameraEngine(cam_cfg())
+    run = drive(eng, [(20, 4.7), (40, 0.0), (30, 4.7)])
+    at = lambda t: zone(next(s for tt, s in run if tt >= t), "L")
+    assert at(19)["moving"] is True and at(19)["rpm"] != 0
+    assert at(20 + 4)["moving"] is True                  # только что остановились: за 4 с ещё не ясно, остаётся «крутится»
+    z = at(20 + 13)
+    assert z["moving"] is False and z["rpm"] == 0.0      # за ~10 с стоит, обороты 0 сразу
+    assert at(59)["moving"] is False
+    assert at(60 + 13)["moving"] is True                 # поехал — через ~10 с снова «крутится»
+
+
+def test_slow_start_after_a_stop_counts_as_moving():
+    eng = me.CameraEngine(cam_cfg())
+    run = drive(eng, [(15, 4.7), (20, 0.0), (40, 1.8)])    # 0,3 об/мин
+    z = zone(next(s for tt, s in run if tt >= 15 + 20 + 14), "L")
+    assert z["moving"] is True
+
+
+def test_hidden_rod_takes_moving_state_from_its_partner_and_does_not_drift_when_partner_stands():
+    eng = me.CameraEngine(cam_cfg())
+    drive(eng, [(20, 4.7)])                              # крутятся, левую видно
+    # дальше левую не видно, а оба вала остановились: ожидаемый угол левой не должен уезжать по прежней скорости
+    out, t = [], 20.0
+    a_stop = 40.0 + 4.7 * 20
+    for i in range(int(25 * 4)):
+        img = rod_frame({(700, 270): (360 - a_stop) % 360})
+        st = eng.process(cv2.cvtColor(img, cv2.COLOR_BGR2GRAY), t, img)
+        out.append((t, st))
+        t += 0.25
+    z = zone(out[-1][1], "L")
+    assert z["coast"] and z["moving"] is False
+    assert abs(me.ang_diff(z["angle"], a_stop)) <= 12.0     # без правки ушёл бы на 4,7°/с × 25 с ≈ 117°
+    assert zone(out[-1][1], "R")["moving"] is False
+
+
+def test_zone_state_has_moving_none_until_known_and_none_when_lost():
+    eng = me.CameraEngine(cam_cfg())
+    st = run(eng, 40, 320)
+    assert zone(st, "L")["moving"] is None               # меньше stop_s данных — не знаем
+    empty = np.full((H, W, 3), (60, 130, 70), np.uint8)
+    for i in range(8):
+        st = eng.process(cv2.cvtColor(empty, cv2.COLOR_BGR2GRAY), 10 + i * 5.0, empty) or st
+    assert zone(st, "L")["moving"] is None and not zone(st, "L")["valid"]

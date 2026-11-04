@@ -192,6 +192,8 @@ def _norm_cycle(z: dict, zid: str, where: str) -> dict:
         "blue_w": _num(z.get("blue_w", 0.5), where + ".blue_w", 0, 1),
         "thin": _num(z.get("thin", 9), where + ".thin", 0, 51, True),
         "rpm_window": _num(z.get("rpm_window", 20), where + ".rpm_window", 2, 300),
+        "stop_s": _num(z.get("stop_s", 10), where + ".stop_s", 2, 300),
+        "stop_deg": _num(z.get("stop_deg", 5), where + ".stop_deg", 1, 45),
         "rpm_out": _out(z.get("rpm_out"), ("holding",), where + ".rpm_out"),
     }
 
@@ -548,6 +550,9 @@ class CycleRT:
         self.last: Optional[float] = None       # последний принятый угол (до сглаживания) — вокруг него ищем дальше
         self.miss = 0                           # сколько кадров подряд палку не нашли
         self.last_t = 0.0                       # время последнего принятого угла
+        self.mv: deque = deque()                # (время, развёрнутый угол) за последние stop_s секунд — для «крутится / стоит»
+        self.moving: Optional[bool] = None      # вал крутится (True) / стоит (False); None — пока неизвестно
+        self.hint_stop = False                  # палки не видно, а парная стоит: ожидаемый угол не двигаем
         self.coast = False                      # палки не видно, угол — ожидаемый по скорости (valid при этом сохраняется до coast_s)
         self.angle = 0.0
         self.conf = 0.0
@@ -574,6 +579,24 @@ class CycleRT:
         self.trk.clear()
         self.unw = None
         self.rpm = 0.0
+        self.mv.clear()
+        self.moving = None
+        self.hint_stop = False
+
+    def _motion(self, now: float):
+        """Крутится или стоит: за stop_s секунд угол сдвинулся меньше stop_deg — стоит; больше 1,6·stop_deg — крутится; между — как было.
+        Не по оборотам (там окно 20 с и они отстают), а по самому сдвигу угла: ход вала ≈ 4,7°/с, за 10 с это ~47°, а шум угла — градус."""
+        self.mv.append((now, self.unw))
+        while self.mv and now - self.mv[0][0] > self.cfg["stop_s"]:
+            self.mv.popleft()
+        if now - self.mv[0][0] < 0.8 * self.cfg["stop_s"]:
+            return
+        a = [p[1] for p in self.mv]
+        rng = max(a) - min(a)
+        if rng < self.cfg["stop_deg"]:
+            self.moving = False
+        elif rng >= 1.6 * self.cfg["stop_deg"]:
+            self.moving = True
 
     def _liks(self, bgr: np.ndarray):
         hsv = cv2.cvtColor(bgr, cv2.COLOR_BGR2HSV)
@@ -589,7 +612,7 @@ class CycleRT:
 
     def _expected(self, now: float) -> float:
         """Где палка должна быть сейчас: прошлый угол + скорость × время (скорость — по последним оборотам, не больше 30°/с)."""
-        rate = max(-30.0, min(30.0, self.rpm * 6.0))
+        rate = 0.0 if self.hint_stop else max(-30.0, min(30.0, self.rpm * 6.0))
         return (self.last + rate * max(0.0, now - self.last_t)) % 360.0
 
     def step(self, frame: Optional[np.ndarray], now: float = 0.0) -> bool:
@@ -622,6 +645,7 @@ class CycleRT:
                 r = np.radians(PHIS[idx])
                 ang = float(np.degrees(np.arctan2((w * np.sin(r)).sum(), (w * np.cos(r)).sum())) % 360.0) if w.sum() > 0 else float(PHIS[i])
                 if self.coast:
+                    self.mv.clear()                                          # скачок при возврате палки — не ход вала
                     self.raw.clear()                                         # сглаживание не тянет к ожидаемому углу из пропажи
                 self.last, self.last_t = ang, now
                 self.raw.append(ang)
@@ -630,6 +654,7 @@ class CycleRT:
                 self.valid, self.coast = True, False
                 found = True
                 self._track(now)
+                self._motion(now)
         if not found:
             self.miss += 1
             if locked:                                                       # не видно, но недавно была: держим ожидаемый угол и скорость
@@ -803,8 +828,25 @@ class CameraEngine:
         bits = {z.id: z.step(prev, gray, dt) for z in self.zones}
         for c in self.cycles.values():
             bits[c.id] = int(c.step(frame, now))
+        self._link_partners()
         self.last_state = self._state(bits, now, alive=True)
         return self.last_state
+
+    def _link_partners(self) -> None:
+        """Палки не видно, а парная в кадре: валы зеркальны, значит «крутится / стоит» у них общее. Парная стоит — ожидаемый угол не двигаем
+        (иначе при остановке в слепом секторе угол «уезжал» бы по прежней скорости)."""
+        for g in self.cfg["groups"]:
+            if g["type"] != "mirror":
+                continue
+            a, b = (self.cycles.get(zid) for zid in g["zones"])
+            if not a or not b:
+                continue
+            for x, y in ((a, b), (b, a)):
+                if x.coast and y.valid and not y.coast and y.moving is not None:
+                    x.moving = y.moving
+                    x.hint_stop = y.moving is False
+                else:
+                    x.hint_stop = False
 
     def dead_state(self, now: float, reason: str = "") -> dict:
         """Камеры нет/кадр застыл: биты и уровни = 0, status = 0 (в ПЛК уходят нули и «камера не жива»)."""
@@ -856,10 +898,11 @@ class CameraEngine:
         coast = bool(ok and c.coast)
         angle = round(c.angle, 2) if ok else 0.0
         conf = round(c.conf, 3) if ok else 0.0
-        rpm = round(c.rpm, 3) if ok else 0.0
+        moving = c.moving if ok else None
+        rpm = round(c.rpm, 3) if ok and moving is not False else 0.0         # стоит — обороты 0 сразу, не ждём окно 20 с
         return {"id": zc["id"], "name": zc["name"], "type": "cycle", "metric": "flow", "enabled": zc["enabled"],
                 "bit": int(ok and not coast), "flow": angle, "diff": conf, "value": angle, "on": 0.0, "off": 0.0,
-                "angle": angle, "conf": conf, "rpm": rpm, "score": round(c.score, 3) if c else 0.0, "valid": ok, "coast": coast}
+                "angle": angle, "conf": conf, "rpm": rpm, "score": round(c.score, 3) if c else 0.0, "valid": ok, "coast": coast, "moving": moving}
 
     def _mirror_group(self, g: dict, alive: bool) -> dict:
         """Две палки → рассинхрон. mirror: углы зеркальны (θ1 + θ2 = 360 + ref), same: одинаковы (θ1 − θ2 = ref). delta — отклонение

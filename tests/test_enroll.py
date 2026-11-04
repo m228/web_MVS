@@ -395,6 +395,93 @@ def test_end_to_end_enroller_to_receiver_then_pulse(esrv, store, tmp_path, monke
         sysmon.close()
 
 
+# ------------------------------------------------------------------------------------------------------------------ кнопка «Отправить заявку»
+
+def test_hurry_lifts_all_pauses(tmp_path):
+    net = Net({})
+    e = enroller(tmp_path, net)
+    e.step({})
+    n = len(net.calls)
+    e.step({})
+    assert len(net.calls) == n, "без кнопки раньше срока не стучимся"
+    e.hurry()
+    e.step({})
+    assert len(net.calls) == 2 * n, "после hurry заявка уходит сразу"
+    e2 = enroller(tmp_path, Net({u: (200, {"ok": True, "status": "rejected"}, "") for u in enroll_client.DEFAULT_SERVERS}))
+    e2.step({})
+    assert e2.status["state"] == "rejected"
+    e2.step({})
+    n2 = len(e2.post.calls)
+    e2.hurry()
+    e2.step({})
+    assert len(e2.post.calls) == n2 + 1, "отклонённую заявку по кнопке можно подать снова, не ждать 6 часов"
+
+
+def test_enroll_now_button_flow_even_with_auto_off(esrv, store, tmp_path, monkeypatch):
+    import sysmon
+    sysmon.close()
+    monkeypatch.setattr(sysmon, "DB_PATH", tmp_path / "sysmon.db")
+    monkeypatch.setattr(sysmon, "CONFIG_PATH", tmp_path / "monitor.json")
+    monkeypatch.setattr(enroll_client, "DEFAULT_SERVERS", ())
+    try:
+        sysmon.save_config({"url": esrv.base, "system_proxy": False})
+        sysmon.CONFIG_PATH.write_text(json.dumps({**json.loads(sysmon.CONFIG_PATH.read_text(encoding="utf-8")), "auto_enroll": False}), encoding="utf-8")
+        ag = sysmon.Agent(sources={})
+        ag.enroller = enroll_client.Enroller(key_fn=lambda: KEY, machine_fn=lambda: MACHINE, state_path=tmp_path / "enroll.json", host_fn=lambda: "PC-9")
+        ag._cfg = sysmon.load_config()
+        ag._enroll(1000.0)
+        assert ag.enroller.status["state"] == "idle", "автозаявка выключена — сама не стучится"
+        res = ag.enroll_now()
+        assert res == {"ok": True, "state": "pending", "error": ""}, "кнопка шлёт заявку и при выключенной автозаявке"
+        rid = esrv.json("GET", "/api/enroll")[1]["requests"][0]["id"]
+        esrv.json("POST", "/api/enroll/%d/approve" % rid, {"name": "Завод-9"}, headers=P)
+        res = ag.enroll_now()
+        assert res["ok"] is True and res["state"] == "done"
+        cfg = sysmon.load_config()
+        assert cfg["token"] and cfg["enabled"] and cfg["plant"] == "Завод-9"
+        assert ag.enroll_now() == {"ok": False, "state": "has_token", "error": "токен уже есть — регистрация не нужна"}
+    finally:
+        sysmon.close()
+
+
+def test_enroll_now_reports_no_key_and_no_server(tmp_path, monkeypatch):
+    import sysmon
+    sysmon.close()
+    monkeypatch.setattr(sysmon, "DB_PATH", tmp_path / "sysmon.db")
+    monkeypatch.setattr(sysmon, "CONFIG_PATH", tmp_path / "monitor.json")
+    try:
+        ag = sysmon.Agent(sources={})
+        ag.enroller = enroll_client.Enroller(key_fn=lambda: "", state_path=tmp_path / "enroll.json")
+        res = ag.enroll_now()
+        assert res["ok"] is False and res["state"] == "no_key"
+        ag.enroller = enroll_client.Enroller(key_fn=lambda: KEY, machine_fn=lambda: MACHINE, post=Net({}), state_path=tmp_path / "enroll.json")
+        res = ag.enroll_now()
+        assert res["ok"] is False and res["state"] == "searching" and "Нет связи" in res["error"]
+    finally:
+        sysmon.close()
+
+
+def test_client_can_rename_pending_request_but_not_decided_one(store):
+    r = req(store, name="DESKTOP-C9R41JT")
+    again = req(store, name="Кир-2")
+    assert again["status"] == "pending" and again["new"] is False and again["name"] == "Кир-2", "название поправили на клиенте — заявка в панели с новым"
+    assert [x["name"] for x in store.enroll_pending()] == ["Кир-2"]
+    store.enroll_approve(r["id"], "Кир-2")
+    got = req(store, name="Другое")
+    assert got["status"] == "approved" and got["name"] == "Кир-2", "после решения название задаёт приёмник, а не клиент"
+
+
+def test_enroll_button_is_on_monitor_page_and_route_exists():
+    root = Path(__file__).resolve().parent.parent
+    html = (root / "page" / "monitor.html").read_text(encoding="utf-8")
+    js = (root / "page" / "static" / "js" / "monitor.js").read_text(encoding="utf-8")
+    app_src = (root / "app.py").read_text(encoding="utf-8")
+    assert 'id="monEnroll"' in html and "Отправить заявку на сервер" in html
+    assert "/api/sysmon/enroll_now" in js and "method: 'POST'" in js and "monEnroll" in js and "token_set" in js
+    assert "monPlant" in js.split("async function enrollNow")[1].split("window.addEventListener")[0], "кнопка требует название завода и сохраняет форму"
+    assert '@app.post("/api/sysmon/enroll_now")' in app_src
+
+
 # ------------------------------------------------------------------------------------------------------------------ точка входа
 
 def test_enroll_key_created_once_kept_with_password_and_env_wins(tmp_path, monkeypatch):

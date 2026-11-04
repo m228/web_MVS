@@ -35,6 +35,15 @@ const ENROLL_TEXT = {
   pending: 'заявка отправлена — жду, пока примут в панели',
   rejected: 'заявку отклонили в панели',
 };
+// ответ кнопки «Отправить заявку на сервер»
+const ENROLL_RESULT = {
+  pending: 'Заявка отправлена — жду, пока её примут в панели сервера',
+  done: 'Готово: токен получен, регистрация завершена',
+  rejected: 'Заявку отклонили в панели сервера',
+  no_key: 'В этой сборке нет ключа регистрации: обнови приложение или вставь токен вручную',
+  searching: 'Сервер мониторинга не отвечает',
+  has_token: 'Токен уже есть — регистрация не нужна',
+};
 
 function renderLink(send, cfg, enroll) {
   const el = $('monLink');
@@ -97,6 +106,7 @@ async function load() {
   renderAlerts(state.alerts || []);
   renderLink(state.send, state.config, state.enroll);
   renderLog(state);
+  $('monEnroll').classList.toggle('hidden', !!state.config.token_set);     // заявка нужна, только пока токена нет
   if (!formFilled) fillForm(state.config);
 }
 
@@ -143,10 +153,35 @@ async function testLink() {
   setMsg($('monSendInfo').textContent.includes(err) ? '' : err, true);
 }
 
+async function enrollNow() {
+  const btn = $('monEnroll');
+  // название завода из поля выше уходит в заявку и появится в панели сервера; без него был бы только сетевой номер ПК (DESKTOP-…)
+  if (!$('monPlant').value.trim()) {
+    setMsg('Впиши название завода в поле «Завод» — под ним клиент появится в панели сервера', true);
+    $('monPlant').focus();
+    return;
+  }
+  btn.disabled = true;
+  setMsg('Отправляю заявку…');
+  try {
+    if (!(await save())) return;                      // сохраняем форму: заявка берёт название из настроек
+    const res = await (await fetch('/api/sysmon/enroll_now', { method: 'POST' })).json();
+    const text = ENROLL_RESULT[res.state] || res.error || 'Нет ответа от приложения';
+    setMsg(res.state === 'searching' && res.error ? text + ': ' + res.error : text, !res.ok);
+    log.info('Заявка на регистрацию по кнопке: ' + (res.state || 'нет ответа'));
+  } catch (e) {
+    setMsg('Заявка не ушла: ' + e.message, true);
+  } finally {
+    btn.disabled = false;
+    load();
+  }
+}
+
 window.addEventListener('DOMContentLoaded', () => {
   log.info('Страница мониторинга загружена');
   $('monSave').addEventListener('click', save);
   $('monTest').addEventListener('click', testLink);
+  $('monEnroll').addEventListener('click', enrollNow);
   load();
   setInterval(() => { if (!document.hidden) load(); }, POLL_MS);
 });

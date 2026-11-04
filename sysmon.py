@@ -533,6 +533,7 @@ class Agent:
         self._send_lock = threading.Lock()
         self._cfg = load_config()
         self.enroller = enroll_client.Enroller()
+        self._enroll_lock = threading.Lock()           # заявку шлют цикл агента и кнопка на странице — не одновременно
 
     # ---- жизненный цикл
     def start(self) -> None:
@@ -581,11 +582,28 @@ class Agent:
         cfg = self._cfg
         if cfg.get("token") or not cfg.get("auto_enroll", True):
             return
-        patch = self.enroller.step(cfg, now)
-        if patch:
-            save_config(patch)
-            self._cfg = load_config()
-            self._kick.set()
+        with self._enroll_lock:
+            patch = self.enroller.step(cfg, now)
+            if patch:
+                save_config(patch)
+                self._cfg = load_config()
+                self._kick.set()
+
+    def enroll_now(self) -> dict:
+        """Кнопка «Отправить заявку на сервер» на странице «Мониторинг»: заявка сразу, без пауз и даже при выключенной автозаявке.
+        Возвращает {ok, state, error}: ok — заявка принята приёмником (ждёт «Принять») или токен уже получен."""
+        with self._enroll_lock:
+            cfg = self._cfg = load_config()
+            if cfg.get("token"):
+                return {"ok": False, "state": "has_token", "error": "токен уже есть — регистрация не нужна"}
+            self.enroller.hurry()
+            patch = self.enroller.step(cfg, self.clock())
+            if patch:
+                save_config(patch)
+                self._cfg = load_config()
+                self._kick.set()
+            st = self.enroller.status
+            return {"ok": st["state"] in ("pending", "done"), "state": st["state"], "error": st.get("error") or ""}
 
     # ---- ожидание токена
 

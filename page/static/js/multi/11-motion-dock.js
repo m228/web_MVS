@@ -711,6 +711,9 @@ function mdSourceOptions() {
   return out;
 }
 
+// заголовок блока «Подключение»: адрес и порт из полей ниже
+const mdPlcTitle = (m) => 'ПЛК ' + escapeHtml(m.host || '—') + ' : ' + escapeHtml(m.port);
+
 function mdPlcHtml() {
   const m = (MV.cfg && MV.cfg.modbus) || { enable: false, host: '', port: 502, device_id: 1, write_period_s: 1 };
   const a = 'data-md="p"';
@@ -720,7 +723,7 @@ function mdPlcHtml() {
     <div class="md-sbox md-plcbox ${m.enable ? 'is-on' : 'is-off'}" id="mdPlcBlock"><div class="md-sr${MD.open['plc'] ? ' is-open' : ''}">
       <div class="md-sr__head md-plcbox__head" data-zt="plc" title="Нажмите, чтобы раскрыть настройки подключения">
         <span class="md-zr__bar"></span>
-        <div class="md-sr__nm"><b>ПЛК ${escapeHtml(m.host || '—')} : ${escapeHtml(m.port)}</b><div class="md-sr__sum"><span id="mdPlcState">${m.enable ? 'включено' : 'выключено — в ПЛК ничего не пишется'}</span><span id="md-plcsum"></span></div></div>
+        <div class="md-sr__nm"><b id="mdPlcTitle">${mdPlcTitle(m)}</b><div class="md-sr__sum"><span id="mdPlcState">${m.enable ? 'включено' : 'выключено — в ПЛК ничего не пишется'}</span><span id="md-plcsum"></span></div></div>
         <label class="switch-toggle md-sw" title="Включить связь с ПЛК: сценарии начнут записывать значения в контроллер"><span class="switch"><input type="checkbox" ${a} data-f="enable"${m.enable ? ' checked' : ''} /><span class="switch-track"></span></span></label>
         <span class="md-zr__chev">⌄</span>
       </div>
@@ -795,6 +798,9 @@ function mdOnPlc(t) {
     else if (f === 'host') m.host = t.value.trim();
     else if (f === 'write_period_s') m.write_period_s = parseFloat(t.value) || 1;
     else m[f] = parseInt(t.value, 10) || (f === 'port' ? 502 : 0);
+    // заголовок следует за полями IP/порт сразу, без перерисовки вкладки
+    const ttl = mdEl('mdPlcTitle');
+    if (ttl) ttl.innerHTML = mdPlcTitle(m);
   });
 }
 

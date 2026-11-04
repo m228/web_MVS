@@ -224,13 +224,15 @@ class Store:
                 self.db.execute("UPDATE enroll SET secret_hash=?, status='pending', token=NULL, name=?, version=?, ip=?, first_t=?, last_t=? WHERE id=?",
                                 (shash, name, version, ip, now, now, row["id"]))
                 return {"status": "pending", "new": True, "id": row["id"], "name": name}
-            self.db.execute("UPDATE enroll SET version=?, ip=?, last_t=? WHERE id=?", (version, ip, now, row["id"]))
+            # пока заявку не решили, клиент может поправить название (поле «Завод» на странице «Мониторинг»): в панели и Telegram — новое
+            shown = name if row["status"] == "pending" else row["name"]
+            self.db.execute("UPDATE enroll SET version=?, ip=?, last_t=?, name=? WHERE id=?", (version, ip, now, shown, row["id"]))
             if row["status"] == "approved" and row["token"]:
                 self.db.execute("UPDATE enroll SET token=NULL, status='done' WHERE id=?", (row["id"],))
                 plant = self.db.execute("SELECT name FROM plants WHERE id=?", (row["plant_id"],)).fetchone()
                 return {"status": "approved", "new": False, "id": row["id"], "name": plant["name"] if plant else row["name"], "token": row["token"]}
             status = "approved" if row["status"] == "done" else row["status"]
-            return {"status": status, "new": False, "id": row["id"], "name": row["name"]}
+            return {"status": status, "new": False, "id": row["id"], "name": shown}
 
     def enroll_pending(self) -> list[dict]:
         """Заявки, которые ждут решения Макса: для панели."""

@@ -116,6 +116,11 @@ class Enroller:
         except OSError:
             pass
 
+    def hurry(self) -> None:
+        """Кнопка «Отправить заявку»: снять паузы (обычную, растущую при обрыве связи и 6 часов после отказа) — следующий шаг пойдёт сразу."""
+        self._next = 0.0
+        self._fails = 0
+
     def _urls(self, cfg: dict) -> list[str]:
         out: list[str] = []
         for u in (self._good, str(cfg.get("url") or "").strip().rstrip("/")) + DEFAULT_SERVERS:

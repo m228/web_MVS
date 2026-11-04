@@ -210,6 +210,17 @@ def sysmon_config_save(payload: dict = Body(...)):
     return {"status": "ok", "config": sysmon.public_config(cfg)}
 
 
+@app.post("/api/sysmon/enroll_now")
+def sysmon_enroll_now():
+    """Кнопка «Отправить заявку на сервер»: заявка на регистрацию сразу, не ждём минуту. POST — меняет состояние."""
+    ag = sysmon.agent()
+    if ag is None:
+        return {"ok": False, "state": "off", "error": "мониторинг не запущен"}
+    res = ag.enroll_now()
+    api_log("api.sysmon.enroll_now", "Заявка на регистрацию по кнопке: %s" % res.get("state"), "info" if res.get("ok") else "warn")
+    return res
+
+
 @app.get("/api/sysmon/send_test")
 def sysmon_send_test():
     """Отправить пульс прямо сейчас и вернуть ответ сервера («Проверить связь»)."""

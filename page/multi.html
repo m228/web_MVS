@@ -153,7 +153,11 @@
             <button type="button" class="md-tab" role="tab" data-md-tab="plc">ПЛК · сценарии · группы</button>
             <button type="button" class="md-tab" role="tab" data-md-tab="cams">Камеры</button>
           </div>
-          <p class="cap-line" id="mdCap" data-state="unknown"><span class="cap-dot"></span><span class="cap-text">Проверяю…</span></p>
+          <div class="md-capbar">
+            <p class="cap-line" id="mdCap" data-state="unknown"><span class="cap-dot"></span><span class="cap-text">Проверяю…</span></p>
+            <button type="button" class="btn-secondary md-x" id="mdPulse" title="Отправить пульс на сервер мониторинга прямо сейчас и показать ответ сервера">Проверить связь с сервером</button>
+            <span class="net-hint" id="mdPulseMsg" aria-live="polite"></span>
+          </div>
           <div class="motion-dock__body" id="mdBody"></div>
         </section>
 

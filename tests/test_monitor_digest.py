@@ -311,3 +311,12 @@ def test_morning_lists_connection_losses(env):
     e.clk.t = e.t1 + 60
     e.n.morning()
     assert "• Связь: обрывов 1 (02:10)" in e.chat.sent[0].split("\n")
+
+
+def test_panel_shows_receiver_version_under_updated_time(tmp_path):
+    """Под «обновлено» — версия приёмника (тот же номер, что у приложения на заводах); API её отдаёт."""
+    assert PANEL.index('id="upd"') < PANEL.index('id="pver"') < PANEL.index('id="add"'), "версия стоит сразу под временем обновления"
+    assert "'приёмник v' + j.version" in PANEL and "verOlder(j.version, latestV)" in PANEL, "отстаёт от последнего релиза — подсветка, как у заводов"
+    store = ms.Store(tmp_path / "m.db")
+    assert _api_plants(monitor_app.create_app(store, PASSWORD, "2.1.15", PANEL, watchdog=False))["version"] == "2.1.15"
+    store.close()

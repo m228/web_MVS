@@ -27,6 +27,9 @@ header { display: flex; align-items: center; gap: 16px; padding: 18px 24px; flex
 h1 { margin: 0; font-size: 22px; flex: 1; display: flex; align-items: center; gap: 12px; }
 h1 img { width: 34px; height: 34px; }
 #upd { color: var(--muted); font-size: 13px; }
+.updbox { display: flex; flex-direction: column; align-items: flex-end; line-height: 1.35; }
+#pver { color: var(--muted); font-size: 12px; }
+#pver.old { color: var(--warn); font-weight: 600; }
 button { font: inherit; color: var(--text); background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 6px 14px; cursor: pointer; }
 button:hover { border-color: var(--accent); }
 button.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
@@ -103,7 +106,7 @@ dialog code { color: var(--text); word-break: break-all; }
 <header>
   <h1><img src="/icon-192.png" alt="">Мониторинг заводов</h1>
   <span id="tg" class="chip" hidden></span><button id="tgTest" hidden>Тест</button>
-  <span id="upd"></span>
+  <div class="updbox"><span id="upd"></span><span id="pver"></span></div>
   <button id="add" class="primary">+ Завод</button>
 </header>
 <section id="enroll" hidden></section>
@@ -325,6 +328,10 @@ async function load() {
     const j = await api('/api/plants');
     plants = j.plants; serverT = j.server_t; latestV = j.latest_version || null;
     $('upd').textContent = 'обновлено ' + new Date().toLocaleTimeString('ru-RU');
+    // версия самой панели (приёмника): тот же номер, что у приложения на заводах; отстаёт от последнего релиза — подсвечена, как у заводов
+    const pv = $('pver'), old = verOlder(j.version, latestV);
+    pv.textContent = j.version ? 'приёмник v' + j.version + (old ? ' · есть ' + latestV : '') : '';
+    pv.className = old ? 'old' : '';
     render();
     loadReqs();
     loadTg();

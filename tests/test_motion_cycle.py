@@ -439,3 +439,40 @@ def test_real_video_rpm_is_steady_and_opposite():
             ls.append(z["L"]["rpm"]); rs.append(z["R"]["rpm"])
     assert 0.65 <= np.median(rs) <= 0.80 and -0.80 <= np.median(ls) <= -0.65      # ≈ 1,1°/кадр × 4 кадра/с ÷ 6 = 0,73 об/мин, левая против часовой
     assert np.percentile(rs, 10) >= 0.55 and np.percentile(ls, 90) <= -0.55         # без сильных провалов
+
+
+# ───────────── цвет красного конца ─────────────
+def test_untouched_old_default_red_range_moves_to_new_but_custom_is_kept():
+    base = {"id": "L", "type": "cycle", "center": [250, 270], "radius": 170}
+    z_old = me._norm_cycle({**base, "red_hsv": list(me.CYCLE_RED_HSV_OLD)}, "L", "z")
+    z_none = me._norm_cycle(dict(base), "L", "z")
+    z_own = me._norm_cycle({**base, "red_hsv": [10, 170, 90, 100]}, "L", "z")
+    assert z_old["red_hsv"] == z_none["red_hsv"] == list(me.CYCLE_RED_HSV)
+    assert z_own["red_hsv"] == [10, 170, 90, 100]
+
+
+FRAMES_DIR = Path(r"E:\grib_dif")
+
+
+@pytest.mark.skipif(len(list(FRAMES_DIR.glob("*.png"))) < 40, reason="кадры завода (E:\\grib_dif) не лежат на этом компьютере")
+def test_real_plant_frames_day_and_night_both_rods_found_and_mirror_consistent():
+    """Реальные кадры одной камеры за несколько суток (день, вечер, ночь): без истории, по одному кадру, обе палки находятся почти всегда,
+    а сумма углов зеркальна (разброс — известный «горб» объектива, не больше ~±12°)."""
+    frames = sorted(FRAMES_DIR.glob("*.png"))
+    both = good = 0
+    for f in frames:
+        im = cv2.resize(cv2.imdecode(np.fromfile(f, np.uint8), cv2.IMREAD_COLOR), (1280, 720))
+        eng = me.CameraEngine(me.normalize_camera({
+            "id": "dif", "url": "x", "frame_size": [1920, 1080], "proc_fps": 4,
+            "zones": [{"id": "L", "type": "cycle", "center": [318, 291], "radius": 340},
+                      {"id": "R", "type": "cycle", "center": [1015, 316], "radius": 340}],
+            "groups": [{"id": "sync", "type": "mirror", "zones": ["L", "R"], "tol": 15}]}))
+        gray = cv2.cvtColor(im, cv2.COLOR_BGR2GRAY)
+        eng.process(gray, 0.0, im)                       # первый кадр только заполняет буфер
+        st = eng.process(gray, 0.25, im)
+        g = st["groups"][0]
+        if g["valid"]:
+            both += 1
+            good += abs(g["delta"]) <= 12.0
+    assert both >= 0.97 * len(frames), (both, len(frames))
+    assert good == both, (good, both)

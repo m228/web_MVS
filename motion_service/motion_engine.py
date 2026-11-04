@@ -17,6 +17,8 @@ worktimer — сколько секунд (в % окна) за последне�
 from __future__ import annotations
 
 import copy
+import json
+import os
 import re
 from collections import deque
 from typing import Optional
@@ -233,6 +235,8 @@ def _norm_group(g: dict, cam_id: str, zone_ids: list, cycle_ids=()) -> dict:
         out.update(mode=mode, table=tbl or None,
                    ref=_num(g.get("ref", 0), where + ".ref", -180, 180),
                    tol=_num(g.get("tol", 10), where + ".tol", 0.5, 180),
+                   learn=bool(g.get("learn", True)),
+                   learn_min=_num(g.get("learn_min", 30), where + ".learn_min", 5, 240, True),
                    frames_to_on=_num(g.get("frames_to_on", 3), where + ".frames_to_on", 1, 1000, True),
                    frames_to_off=_num(g.get("frames_to_off", 5), where + ".frames_to_off", 1, 1000, True))
     if gtype == "monotonic":
@@ -491,6 +495,77 @@ def build_mirror_table(samples, min_bins: int = 28, min_n: int = 60):
     if spread > 60.0:
         raise ValueError("разброс %.0f° слишком велик — валы, похоже, не синхронны; таблицу в таком состоянии снимать нельзя" % spread)
     return [round(float(v), 1) for v in table], {"n": len(pts), "bins": len(have), "spread": round(spread, 1)}
+
+
+LEARN_STEP_S = 10.0       # как часто пересчитывать выученную форму
+LEARN_ALPHA = 0.25        # какую долю пути к новой форме проходим за один пересчёт: форма плывёт плавно, поправка не прыгает
+LEARN_AMP_MAX = 25.0      # размах выученной формы по модулю, °: больше — это уже не перекос камеры
+LEARN_GATE = 60.0         # кадр дальше стольких градусов от ожидаемого в обучение не берём (ошибочный захват палки)
+LEARN_MIN_BINS = 28       # столько ячеек из 36 должно быть заполнено, чтобы форма считалась
+LEARN_MIN_PER_BIN = 3     # ... и по стольку кадров в каждой
+LEARN_PER_BIN_MAX = 600   # потолок кадров в ячейке (память)
+
+
+class MirrorLearn:
+    """Самоподстройка поправки группы mirror: выучивает, как Δ зависит от угла левой палки (перекос камеры), по скользящему окну.
+
+    В ячейку по углу кладётся остаток r = Δ до выученной формы (после ручной таблицы и эталона). Форма = медианы ячеек минус их среднее:
+    постоянный сдвиг валов и медленный дрейф в форму НЕ уходят, остаются в Δ и дают тревогу; учится только то, что повторяется каждый оборот.
+    Окно скользит: свет и положение камеры меняются — форма подстраивается. shape — 36 чисел по 10°, как у table."""
+
+    def __init__(self, window_s: float, shape=None):
+        self.window_s = float(window_s)
+        self.bins = [deque(maxlen=LEARN_PER_BIN_MAX) for _ in range(MIRROR_BINS)]   # ячейка → (время, остаток)
+        ok = isinstance(shape, (list, tuple)) and len(shape) == MIRROR_BINS
+        self.shape = [float(v) for v in shape] if ok else [0.0] * MIRROR_BINS
+        self.fresh = not ok                 # формы ещё не было: первую считаем целиком, без плавного подхода
+        self.level = 0.0                    # где сейчас среднее остатка (≈ постоянный сдвиг валов), °
+        self.filled = 0                     # заполненных ячеек в окне
+        self.ready = False
+        self.dirty = False                  # форма изменилась с последнего сохранения
+        self._t_step = 0.0
+
+    def corr(self, theta: float) -> float:
+        return mirror_corr(self.shape, theta)
+
+    def add(self, now: float, theta: float, r: float) -> None:
+        """r — отклонение θ1 ± θ2 от нормы ДО выученной формы (после ручной таблицы и эталона), °, −180..180. Форму учим целиком, не добавку к ней."""
+        gate = LEARN_GATE if (self.ready or not self.fresh) else 90.0
+        if abs(ang_diff(r, self.level + self.corr(theta))) > gate:
+            return                                          # ошибочный захват палки: в форму не берём
+        self.bins[int(round((theta % 360.0) / (360.0 / MIRROR_BINS))) % MIRROR_BINS].append((float(now), float(r)))
+
+    def step(self, now: float) -> None:
+        """Раз в LEARN_STEP_S: выкинуть старое, пересчитать форму."""
+        if now - self._t_step < LEARN_STEP_S:
+            return
+        self._t_step = now
+        edge = now - self.window_s
+        meds = []
+        for i, d in enumerate(self.bins):
+            while d and d[0][0] < edge:
+                d.popleft()
+            meds.append(float(np.median([v for _, v in d])) if len(d) >= LEARN_MIN_PER_BIN else None)
+        have = [i for i, m in enumerate(meds) if m is not None]
+        self.filled = len(have)
+        self.ready = self.filled >= LEARN_MIN_BINS
+        if not self.ready:
+            return
+        ys = np.array([meds[i] for i in have])
+        self.level = float(ys.mean())
+        target = np.interp(np.arange(MIRROR_BINS), np.array(have, dtype=float), ys - self.level, period=MIRROR_BINS)
+        target = np.clip(target, -LEARN_AMP_MAX, LEARN_AMP_MAX)
+        old = np.array(self.shape)
+        new = target if self.fresh else old + LEARN_ALPHA * (target - old)
+        self.fresh = False
+        self.shape = [float(v) for v in new]
+        self.dirty = True
+
+    def amp(self) -> float:
+        return float(max(self.shape) - min(self.shape))
+
+    def info(self) -> dict:
+        return {"ready": bool(self.ready), "bins": int(self.filled), "amp": round(self.amp(), 1), "window_min": round(self.window_s / 60.0)}
 
 
 PHIS = np.arange(0, 360, 1.0)
@@ -781,7 +856,7 @@ def monotonic_level(bits_by_id: dict, order: list) -> tuple[dict, int]:
 class CameraEngine:
     """Один поток кадров → состояния зон/групп. Потокобезопасность — на вызывающем (один поток на камеру)."""
 
-    def __init__(self, cam_cfg: dict):
+    def __init__(self, cam_cfg: dict, learn_path=None):
         self.cfg = cam_cfg
         self.gap = cam_cfg["frame_gap"]
         self.proc_interval = 1.0 / cam_cfg["proc_fps"]
@@ -793,6 +868,43 @@ class CameraEngine:
                         for g in cam_cfg["groups"] if g["type"] == "mirror"}
         self.cycles: dict = {}                  # id зоны-цикла → CycleRT (строятся вместе с зонами, на первом кадре)
         self.last_state: Optional[dict] = None
+        # самоподстройка поправки синхронности: выученная форма переживает перезапуск (камера пересоздаётся при любой правке настроек)
+        self.learn_path = learn_path
+        self._learn_saved = 0.0
+        saved = self._learn_load()
+        # выученная форма — добавка к ручной таблице; сменили таблицу — прежняя форма к ней уже не подходит, учим заново
+        self.learners = {g["id"]: MirrorLearn(g["learn_min"] * 60.0,
+                                              saved.get(g["id"], {}).get("shape") if saved.get(g["id"], {}).get("table") == g["table"] else None)
+                         for g in cam_cfg["groups"] if g["type"] == "mirror" and g["learn"]}
+
+    def _learn_load(self) -> dict:
+        if not self.learn_path:
+            return {}
+        try:
+            with open(self.learn_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            return data if isinstance(data, dict) else {}
+        except (OSError, ValueError):
+            return {}
+
+    def _learn_save(self, now: float, force: bool = False) -> None:
+        """Раз в минуту, если форма менялась: data\\mirror_learn_<камера>.json. Ошибка записи не должна мешать анализу кадров."""
+        if not self.learn_path or not self.learners or (not force and now - self._learn_saved < 60.0):
+            return
+        self._learn_saved = now
+        if not any(m.dirty for m in self.learners.values()):
+            return
+        try:
+            tables = {g["id"]: g["table"] for g in self.cfg["groups"]}
+            data = {gid: {"shape": [round(v, 2) for v in m.shape], "table": tables.get(gid)} for gid, m in self.learners.items()}
+            tmp = str(self.learn_path) + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(data, f)
+            os.replace(tmp, self.learn_path)
+            for m in self.learners.values():
+                m.dirty = False
+        except OSError:
+            pass
 
     def reset(self):
         """После потери камеры/переподключения: буфер кадров и состояния — с нуля."""
@@ -830,6 +942,7 @@ class CameraEngine:
             bits[c.id] = int(c.step(frame, now))
         self._link_partners()
         self.last_state = self._state(bits, now, alive=True)
+        self._learn_save(now)
         return self.last_state
 
     def _link_partners(self) -> None:
@@ -872,7 +985,7 @@ class CameraEngine:
         for g in self.cfg["groups"]:
             gb = {zid: (bits.get(zid, 0) if alive else 0) for zid in g["zones"]}
             if g["type"] == "mirror":
-                groups.append(self._mirror_group(g, alive))
+                groups.append(self._mirror_group(g, alive, now))
                 continue
             if g["type"] == "monotonic":
                 gb, value = monotonic_level(gb, g["order"])
@@ -904,7 +1017,7 @@ class CameraEngine:
                 "bit": int(ok and not coast), "flow": angle, "diff": conf, "value": angle, "on": 0.0, "off": 0.0,
                 "angle": angle, "conf": conf, "rpm": rpm, "score": round(c.score, 3) if c else 0.0, "valid": ok, "coast": coast, "moving": moving}
 
-    def _mirror_group(self, g: dict, alive: bool) -> dict:
+    def _mirror_group(self, g: dict, alive: bool, now: float = 0.0) -> dict:
         """Две палки → рассинхрон. mirror: углы зеркальны (θ1 + θ2 = 360 + ref), same: одинаковы (θ1 − θ2 = ref). delta — отклонение
         в градусах −180..180; alarm — |delta| ≥ tol (гистерезис и debounce). Не видно хоть одной палки или камеры нет — delta не считается,
         alarm = 0 (нечего судить), value = 0. Пока хоть одна палка в удержании (её не видно, угол достроен по скорости — hold), delta
@@ -915,11 +1028,18 @@ class CameraEngine:
         hys = self.mirrors[g["id"]]
         delta = None
         corr = 0.0
+        lrn = self.learners.get(g["id"])
         if ok:
             raw = ca.angle + cb.angle if g["mode"] == "mirror" else ca.angle - cb.angle
-            corr = mirror_corr(g["table"], ca.angle)         # перекос от угла камеры/объектива в этом положении палки, снятый при калибровке
-            delta = round(ang_diff(raw, corr + g["ref"]), 2)
             hold = ca.coast or cb.coast
+            corr_man = mirror_corr(g["table"], ca.angle)     # перекос от угла камеры/объектива в этом положении палки, снятый при калибровке
+            if lrn:
+                # самоподстройка: учим только по честным кадрам (обе палки видны, вал крутится), а поправка — ручная таблица + выученная форма
+                if not hold and ca.moving is not False and cb.moving is not False:
+                    lrn.add(now, ca.angle, ang_diff(raw, corr_man + g["ref"]))
+                lrn.step(now)
+            corr = corr_man + (lrn.corr(ca.angle) if lrn else 0.0)
+            delta = round(ang_diff(raw, corr + g["ref"]), 2)
             alarm = hys.state if hold else hys.update(abs(delta))
         else:
             hys.reset()
@@ -928,6 +1048,7 @@ class CameraEngine:
         return {"id": g["id"], "name": g["name"], "type": "mirror", "value": int(round(delta * 10)) if ok else 0,
                 "bits": [int(alarm)], "delta": delta, "valid": ok, "hold": bool(hold), "alarm": int(alarm), "tol": g["tol"], "ref": g["ref"], "mode": g["mode"],
                 "corr": round(corr, 2), "table": bool(g["table"]),
+                "learn": lrn.info() if lrn else None, "shape": [round(v, 2) for v in lrn.shape] if lrn else None,
                 "angles": [round(ca.angle, 2) if ca and ca.valid else None, round(cb.angle, 2) if cb and cb.valid else None]}
 
     @staticmethod

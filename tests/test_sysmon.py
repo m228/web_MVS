@@ -526,7 +526,8 @@ def test_position_verdict(sm):
     assert sm.position_verdict(pos("подвод", ai=590), cfg)["ok"] is True, "191 мкм — ещё в допуске подвода 200"
     assert sm.position_verdict(pos("подвод", ai=620), cfg)["ok"] is False
     assert sm.position_verdict(pos("подвод", ai=506), cfg)["ok"] is True, "реальные ~107 мкм у Kir на подводе — без предупреждения"
-    assert sm.position_verdict(pos("отвод", ai=540), cfg)["ok"] is True, "на отводе допуск тоже 150"
+    assert sm.position_verdict(pos("отвод", ai=540), cfg)["ok"] is True, "на отводе допуск тоже 200"
+    assert sm.position_verdict(pos("отвод", ai=590), cfg)["ok"] is True, "191 мкм — в допуске отвода 200 (было 150)"
     assert sm.position_verdict(pos("отвод", ai=600), cfg)["ok"] is False
     to = sm.position_verdict(pos("подвод", timeout=True), cfg)
     assert to["ok"] is False and "не доехал" in to["why"]
@@ -536,7 +537,7 @@ def test_position_verdict(sm):
 
 def test_position_config_has_defaults_and_is_clamped(sm):
     cfg = sm.load_config()
-    assert (cfg["gap_far_um"], cfg["gap_near_um"], cfg["drift_um"], cfg["overdue_h"], cfg["bad_streak"]) == (150, 200, 100, 24, 2)
+    assert (cfg["gap_far_um"], cfg["gap_near_um"], cfg["drift_um"], cfg["overdue_h"], cfg["bad_streak"]) == (200, 200, 200, 24, 2), "везде 200"
     sm.CONFIG_PATH.write_text(json.dumps({"gap_near_um": 1, "bad_streak": 99, "overdue_h": "x"}), encoding="utf-8")
     cfg = sm.load_config()
     assert cfg["gap_near_um"] == 10 and cfg["bad_streak"] == 10 and cfg["overdue_h"] == 24
@@ -720,7 +721,7 @@ def test_autocal_failed_is_red_at_once(sm):
 
 def test_autocal_drift_yellow_then_red_on_second_calibration(sm):
     now = time.time()
-    last = {"v": {"ts": iso(now - 600), "result": "готово", "diff_before": 150, "diff_after": 3}}
+    last = {"v": {"ts": iso(now - 600), "result": "готово", "diff_before": 250, "diff_after": 3}}
 
     def state():
         return autocal_state(last=last["v"])()
@@ -728,9 +729,9 @@ def test_autocal_drift_yellow_then_red_on_second_calibration(sm):
     ag.clock = Clock(now)
     ev = ac_ev(ag.tick(now))
     assert [(e["data"]["code"], e["level"]) for e in ev] == [("autocal_drift", "medium")]
-    assert "150 мкм" in ev[0]["text"] and ag._kick.is_set(), "«ноль уполз» — жёлтое, уходит сразу"
+    assert "250 мкм" in ev[0]["text"] and ag._kick.is_set(), "«ноль уполз» — жёлтое, уходит сразу"
     assert ac_ev(ag.tick(now + 15)) == [], "та же калибровка не считается дважды"
-    last["v"] = {"ts": iso(now + 3600), "result": "готово", "diff_before": -130, "diff_after": 2}
+    last["v"] = {"ts": iso(now + 3600), "result": "готово", "diff_before": -230, "diff_after": 2}
     ev = ac_ev(ag.tick(now + 3700))
     assert [(e["data"]["code"], e["level"]) for e in ev] == [("autocal_drift", "high")], "второй раз подряд — красная"
     last["v"] = {"ts": iso(now + 7200), "result": "готово", "diff_before": 12, "diff_after": 1}
@@ -846,17 +847,21 @@ def test_kir_real_gap_on_approach_raises_nothing(sm):
     ag.add_positions(pos("подвод", target=500, calc=500, enc=500, ai=614.2))   # реальные пробы Kir 01.11: датчик выше энкодера на 102–147 мкм
     ag.add_positions(pos("подвод", target=530, calc=530, enc=530, ai=677.0))   # худшая из виденных (147)
     ag.add_positions(pos("отвод", target=20000, calc=20001, enc=20002, ai=20110))
-    assert ag.tick(ag.clock()) == [] and ag.active == {}, "в допуске (отвод 150, подвод 200) — ни жёлтого, ни красного"
+    assert ag.tick(ag.clock()) == [] and ag.active == {}, "в допуске 200 — ни жёлтого, ни красного"
 
 
 def test_old_default_tolerances_in_file_are_replaced_by_new_defaults(sm):
     # 2.0.42–2.0.43 сами записали 100/50 в monitor.json при «Сохранить» — это не выбор человека
     sm.CONFIG_PATH.write_text(json.dumps({"plant": "kir", "gap_far_um": 100, "gap_near_um": 50, "drift_um": 100}), encoding="utf-8")
     cfg = sm.load_config()
-    assert (cfg["gap_far_um"], cfg["gap_near_um"]) == (150, 200) and cfg["plant"] == "kir"
+    assert (cfg["gap_far_um"], cfg["gap_near_um"], cfg["drift_um"]) == (200, 200, 200) and cfg["plant"] == "kir"
     sm.CONFIG_PATH.write_text(json.dumps({"gap_far_um": 100, "gap_near_um": 250}), encoding="utf-8")
     cfg = sm.load_config()
     assert (cfg["gap_far_um"], cfg["gap_near_um"]) == (100, 250), "значения, заданные руками, остаются"
+    sm.CONFIG_PATH.write_text(json.dumps({"gap_far_um": 150, "gap_near_um": 200, "drift_um": 100, "bad_streak": 3}), encoding="utf-8")
+    cfg = sm.load_config()
+    assert (cfg["gap_far_um"], cfg["gap_near_um"], cfg["drift_um"], cfg["bad_streak"]) == (200, 200, 200, 3), \
+        "прежние умолчания 150/200/100 в файле заменяются новыми (200), остальное остаётся"
 
 
 def test_save_config_does_not_write_default_thresholds(sm):

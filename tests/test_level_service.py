@@ -182,4 +182,4 @@ def test_last_model_is_remembered_across_restart(serve, tmp_path):
 def test_boot_with_broken_model_still_starts(serve, tmp_path):
     c = serve(boot_path=str(tmp_path / "bad.pt"))
     h = c.get("/health")[1]
-    assert h["ok"] and h["model"] is None and "bad.pt" in h["error"]
+    assert h["ok"] and h["model"] is None and "bad.pt" in h["load_error"] and "error" not in h, "ответ /health без ключа error: клиент web_MVS считает его признаком сбоя"

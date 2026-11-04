@@ -42,6 +42,7 @@ sys.path.insert(0, str(HERE))
 os.environ.setdefault("OPENCV_LOG_LEVEL", "ERROR")
 
 import motion_engine as engine  # noqa: E402
+import motion_lvldec  # noqa: E402
 import motion_records  # noqa: E402
 import motion_store  # noqa: E402
 import motion_trends  # noqa: E402
@@ -410,6 +411,14 @@ def create_app(data_dir: Optional[Path] = None, capture_factory: Callable = open
         ok, info = link.read_holding(addr)
         link.close()
         return {"ok": ok, "info": info}
+
+    @app.post("/level/import")
+    def level_import(req: dict = Body(...)):
+        """Текст config.ini от LVLDec → фрагмент настроек камеры (зоны, пороги, ПЛК). Ничего не сохраняет: панель сама кладёт его в камеру."""
+        try:
+            return motion_lvldec.import_ini(str(req.get("ini") or ""))
+        except ValueError as e:
+            raise HTTPException(400, str(e))
 
     @app.get("/logs")
     def logs(n: int = 100):

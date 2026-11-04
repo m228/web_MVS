@@ -167,7 +167,7 @@ def test_level_config_defaults_match_production_lvldec():
     d = me.normalize_camera({"id": "d", "zones": [{"id": "a", "type": "level", "points": LOW}], "groups": [
         {"id": "l", "type": "level", "zones": ["a"]}]})["groups"][0]
     assert (d["conf"], d["infer_interval_s"], d["alpha"], d["warmup_s"], d["glass1_min"], d["glass2_min"]) == (0.35, 2, 0.93, 10, 15, 20)
-    assert (d["glass1_full"], d["glass2_full"], d["geometry"], d["liquid_class"], d["service_url"]) == (100, 100, "lvldec", "liquid", "http://127.0.0.1:8769")
+    assert (d["glass1_full"], d["glass2_full"], d["geometry"], d["liquid_class"], d["service_url"]) == (100, 100, "lvldec", "liquid", "http://127.0.0.1:8770")
     assert g["out"] == {"kind": "holding", "address": 11}
 
 
@@ -310,7 +310,7 @@ def test_worker_asks_model_and_writes_total_x10_to_plc(tmp_path):
         assert g["total"] == pytest.approx(50.0, abs=0.01) and g["model"] == "fake.pt" and g["ms"] == 7
         assert _wait(lambda: clients and ("holding", 11, 500) in clients[0].log), "50,0 % → регистр 11 = 500"
         url, magic, params = calls[0]
-        assert url == "http://127.0.0.1:8769" and magic == b"\xff\xd8", "на сервис уходит JPEG кадра"
+        assert url == "http://127.0.0.1:8770" and magic == b"\xff\xd8", "на сервис уходит JPEG кадра"
         assert params == {"conf": 0.35, "geometry": "lvldec"}
         assert _wait(lambda: len(calls) >= 3), "модель опрашивается регулярно (infer_interval_s), а не один раз"
     finally:
@@ -373,3 +373,89 @@ def test_post_infer_reads_answer_and_error_text():
     finally:
         srv.shutdown()
     assert "не отвечает" in ml.post_infer("http://127.0.0.1:1", b"x", {}, timeout=1)["error"]
+
+
+# ───────────────────────────── перенос config.ini от LVLDec ─────────────────────────────
+LVLDEC_INI = """\
+[camera]
+rtsp_url = rtsp://admin:secret@192.168.3.239:554/cam/realmonitor?channel=1&subtype=0
+
+[plc]
+ip = 192.168.20.14
+port = 502
+device_id = 1
+mb_address = 11
+heartbeat_register = -1
+
+[detection]
+model = 26x_detection.pt
+conf = 0.35
+imgsz = 640
+resize_w = 0
+resize_h = 0
+alpha = 0.93
+glass1_min = 15
+glass2_min = 20
+glass1_full = 100
+glass2_full = 84
+infer_interval_sec = 2
+
+[runtime]
+stale_timeout_sec = 20
+value_stuck_sec = 60
+restart_hours = 0
+warmup_sec = 10
+state_save_sec = 120
+
+[zones]
+; Полигоны стёкол
+lower = 757,559 757,1050 834,1053 831,560
+upper = 1400,23 1379,562 1454,563 1479,24
+"""
+
+
+def test_import_lvldec_ini_maps_production_config():
+    import motion_lvldec as lv
+    r = lv.import_ini(LVLDEC_INI)
+    assert r["url"].startswith("rtsp://admin:secret@192.168.3.239:554/cam/realmonitor?channel=1&subtype=0") and r["model"] == "26x_detection.pt"
+    assert r["zones"]["lower"] == [[757, 559], [757, 1050], [834, 1053], [831, 560]] and len(r["zones"]["upper"]) == 4
+    g = r["group"]
+    assert (g["conf"], g["imgsz"], g["infer_interval_s"], g["alpha"], g["warmup_s"]) == (0.35, 640, 2.0, 0.93, 10.0)
+    assert (g["glass1_min"], g["glass2_min"], g["glass1_full"], g["glass2_full"]) == (15, 20, 100, 84)
+    assert r["plc"] == {"host": "192.168.20.14", "port": 502, "device_id": 1, "address": 11}
+    assert "out" not in g, "прямого вывода группы нет: в ПЛК пишет сценарий (как у остальных КЗ)"
+    assert any("не переносятся" in n for n in r["notes"]) and any("26x_detection.pt" in n for n in r["notes"])
+
+
+def test_imported_fragment_passes_config_validation_end_to_end():
+    import motion_lvldec as lv
+    r = lv.import_ini(LVLDEC_INI)
+    cam = me.normalize_camera({"id": "dec", "url": r["url"], "frame_size": [1920, 1080],
+                               "zones": [{"id": "low", "type": "level", "points": r["zones"]["lower"]},
+                                         {"id": "up", "type": "level", "points": r["zones"]["upper"]}],
+                               "groups": [dict(r["group"], id="lvl", type="level", zones=["low", "up"])]})
+    assert cam["groups"][0]["glass2_full"] == 84 and cam["groups"][0]["out"] is None
+    sc = me.normalize_config({"cameras": [cam], "scenarios": [{"id": "lvl_dec", "rule": "sum", "sources": [{"camera": "dec", "group": "lvl"}],
+                                                               "out": {"kind": "holding", "address": r["plc"]["address"]},
+                                                               "modbus": {"enable": False, "host": r["plc"]["host"], "port": r["plc"]["port"],
+                                                                          "device_id": r["plc"]["device_id"]}}]})["scenarios"][0]
+    assert sc["modbus"]["enable"] is False and sc["sources"] == [{"camera": "dec", "group": "lvl"}] and sc["out"]["address"] == 11
+
+
+@pytest.mark.parametrize("text,part", [
+    ("hello", "не config.ini"),
+    ("[detection]\nconf = abc\n", "нужно число"),
+    ("[zones]\nlower = 1,2 3\n", "нужно x,y"),
+])
+def test_import_lvldec_ini_rejects_garbage(text, part):
+    import motion_lvldec as lv
+    with pytest.raises(ValueError) as e:
+        lv.import_ini(text)
+    assert part in str(e.value)
+
+
+def test_import_lvldec_ini_without_upper_zone_and_with_few_points():
+    import motion_lvldec as lv
+    r = lv.import_ini("[detection]\nconf = 0.4\n[zones]\nlower = 1,1 5,1 5,5\nupper = 1,1 2,2\n")
+    assert r["zones"]["lower"] and r["zones"]["upper"] is None
+    assert any("верхней зоны нет" in n for n in r["notes"])

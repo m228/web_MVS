@@ -1,4 +1,4 @@
-"""Сервис уровня (сайдкар): держит YOLO-модель и отдаёт контуры найденного на кадре. Порт по умолчанию 8769 (LEVEL_PORT).
+"""Сервис уровня (сайдкар): держит YOLO-модель и отдаёт контуры найденного на кадре. Порт по умолчанию 8770 (LEVEL_PORT).
 
 Отдельный процесс рядом с web_MVS (как cv_service / motion_service), со своим venv (torch + ultralytics, см. README).
 Кадры берёт у камеры motion_service и шлёт сюда по localhost; уровень по зонам и запись в ПЛК считает уже он.
@@ -103,7 +103,7 @@ def create_app(model_dir: Optional[Path] = None, model_factory: Callable = defau
     def health():
         m = cur()
         return {"ok": True, "version": version, "uptime_s": round(time.time() - started, 1),
-                "model": m.info() if m else None, "error": state["error"]}
+                "model": m.info() if m else None, "load_error": state["error"]}
 
     @app.get("/model")
     def model():
@@ -171,7 +171,7 @@ def create_app(model_dir: Optional[Path] = None, model_factory: Callable = defau
 
 def main():
     import uvicorn
-    port = int(os.environ.get("LEVEL_PORT", "8769"))
+    port = int(os.environ.get("LEVEL_PORT", "8770"))
     host = os.environ.get("LEVEL_HOST", "127.0.0.1")
     uvicorn.run(create_app(), host=host, port=port, log_level="info")
 

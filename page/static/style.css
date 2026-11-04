@@ -4818,3 +4818,22 @@ body.micro-rep-doc .micro-cmp-strips { grid-template-columns: repeat(6, 1fr); ga
 .upd-toast__cancel { border: 1px solid var(--warning); background: transparent; color: var(--warning); border-radius: 8px; padding: 2px 12px; font: inherit; cursor: pointer; }
 .upd-toast__cancel:disabled { opacity: .5; cursor: default; }
 .btn.is-update-ready { background: var(--accent); border-color: transparent; color: var(--accent-contrast); font-weight: 700; }
+
+/* ===== КЗ · вкладка «Уровень» (декантатор: уровень жидкости по YOLO-модели) ===== */
+.lv { display: flex; flex-direction: column; gap: 10px; }
+.lv-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.lv-row select { width: auto; min-width: 220px; max-width: 100%; }
+.lv-now { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.lv-now b { font-size: 34px; line-height: 1; font-variant-numeric: tabular-nums; }
+.lv-now b.is-off { color: var(--muted); }
+.lv-unit { font-size: 16px; color: var(--muted); }
+.lv-msg { font-size: 12px; color: var(--muted); }
+.lv-msg.is-ok { color: var(--success); }
+.lv-msg.is-bad { color: var(--danger); }
+.lv-notes { margin: 0; padding-left: 18px; font-size: 12px; color: var(--muted); }
+.lv-par summary { cursor: pointer; font-size: 13px; font-weight: 600; margin-bottom: 8px; }
+.lv .md-fields input[type=number] { width: 100%; }
+.lv-plc { align-items: center; }
+.lv-plc.is-on { border-color: var(--success); }
+.lv-plcf { flex: 1; }
+.lv-all { margin-left: auto; font-variant-numeric: tabular-nums; }

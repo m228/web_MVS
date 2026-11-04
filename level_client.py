@@ -12,7 +12,7 @@ import urllib.parse
 import urllib.request
 from typing import Optional
 
-DEFAULT_URL = "http://127.0.0.1:8769"
+DEFAULT_URL = "http://127.0.0.1:8770"
 _opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
 

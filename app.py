@@ -1329,6 +1329,12 @@ def motion_logs(n: int = 100):
     return motion_client.logs(_motion_url(), n)
 
 
+@app.post("/api/motion/level_import")
+def motion_level_import(req: dict = Body(...)):
+    """Вкладка «Уровень»: перенос настроек LVLDec — на входе текст его config.ini, на выходе зоны/пороги/ПЛК для камеры."""
+    return motion_client.level_import(_motion_url(), str(req.get("ini") or ""))
+
+
 # --- сервис уровня (level_service/): YOLO-модель для вкладки «Уровень» панели «КЗ» (декантатор). Модель грузится из браузера ---
 def _level_url() -> str:
     return (plate_config.load().get("level") or {}).get("service_url") or level_client.DEFAULT_URL

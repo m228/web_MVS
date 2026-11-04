@@ -173,7 +173,7 @@ function renderMotionDock() {
   if (dock.hidden) return;
   const { source, cam } = mdCamera();
   const all = mode === 'all';
-  if (MD.tab !== 'zones' && MD.tab !== 'plc' && MD.tab !== 'cams') MD.tab = 'zones';
+  if (MD.tab !== 'zones' && MD.tab !== 'plc' && MD.tab !== 'cams' && MD.tab !== 'level') MD.tab = 'zones';
 
   const cams = mdCfgCams();
   const camKey = all
@@ -213,6 +213,10 @@ function renderMotionDock() {
     if (MD.editGrp) mdSyncGroupEditor();
   } else if (MD.tab === 'cams') {
     body.innerHTML = mdCamsTabHtml();
+  } else if (MD.tab === 'level') {
+    body.innerHTML = mdLevelTabHtml(mode, cam);
+    lvPaintModel();
+    lvRefresh(true);
   } else {
     body.innerHTML = mdZonesTabHtml(mode, cam);
     mdDrawTrends();
@@ -385,7 +389,7 @@ function mdCamsTabHtml() {
   const rows = info.map(({ c, u }) => {
     const ip = mdIp(c.url);
     const twins = (byIp[ip] || []).filter((x) => x.id !== c.id);
-    const flows = c.zones.filter((z) => z.metric === 'flow' || z.track_flow !== false).length;
+    const flows = c.zones.filter((z) => z.type !== 'level' && (z.metric === 'flow' || z.track_flow !== false)).length;
     const inUi = state.cameras.some((q) => q.serial === c.id);
     const use = u.used
       ? [u.scen.length ? 'сценарии: ' + u.scen.map(escapeHtml).join(', ') : '', u.plc.length ? 'в ПЛК: ' + u.plc.map(escapeHtml).join(', ') : ''].filter(Boolean).join('<br>')
@@ -421,15 +425,15 @@ function mdZonesTabHtml(mode, cam) {
   let html = '';
   if (!shown.length) {
     html += '<p class="net-hint">КЗ ещё ни у одной камеры не включено. Включите его ниже или выберите ячейку с RTSP-камерой и нажмите тумблер справа сверху.</p>';
-  } else if (shown.every((c) => !c.zones.length)) {
+  } else if (shown.every((c) => !c.zones.some((z) => z.type !== 'level'))) {
     html += '<p class="net-hint">Зон нет. Нажмите «Разметить зону» и обведите на кадре то, что должно двигаться (лента, шнек).</p>';
   } else {
     html += `<div class="md-trendbar"><label class="md-lbl md-openall" title="Раскрыть настройки всех окон"><input type="checkbox" id="mdOpenAll"${MD.openAll ? ' checked' : ''} /> подробно</label><span>Тренды за последние <b id="mdWinLbl">${mdFmtWin(MD.win)}</b> ${mdHelp(MD_TREND_HELP)}</span>` +
       `<span class="md-statwin">Среднее / мин / макс за <select id="mdStatWin">${mdSel(MD_STAT_WINS, MD.statWin)}</select> ${mdHelp('Среднее, минимум и максимум diff и flow каждой зоны за выбранный период, только по кадрам в норме. Копятся в сервисе движения и лежат на диске (data\\trends): после обновления или перезапуска сервиса не обнуляются; хранятся 10 суток. Подробно — CSV-запись и архив. Значения сглажены, как на графиках.')}</span></div><div class="md-zones">`;
     shown.forEach((c) => {
-      if (!c.zones.length) return;
+      if (!c.zones.some((z) => z.type !== 'level')) return;
       if (all) html += `<div class="md-camhead"><b>${escapeHtml(c.name)}${mdIpTag(c.url)}</b><span class="motion-dock__pill" id="md-cp-${escapeHtml(c.id)}"></span></div>`;
-      html += c.zones.map((z, i) => mdZoneCardHtml(c, z, i)).join('');
+      html += c.zones.map((z, i) => (z.type === 'level' ? '' : mdZoneCardHtml(c, z, i))).join('');      // стёкла уровня — на вкладке «Уровень»
       html += (c.groups || []).filter((g) => g.type === 'mirror').map((g) => mdMirrorCardHtml(c, g)).join('');
     });
     html += '</div>';
@@ -726,8 +730,8 @@ function mdOnWheel(e) {
 function mdSourceOptions() {
   const out = [];
   mdCfgCams().forEach((c) => {
-    c.zones.forEach((z) => { if (z.type !== 'cycle') out.push({ camera: c.id, zone: z.id, key: c.id + '/' + z.id, label: c.name + ' · ' + z.name, ip: mdIpTag(c.url) }); });
-    (c.groups || []).forEach((g) => { if (g.type !== 'mirror') out.push({ camera: c.id, group: g.id, key: 'g:' + c.id + '/' + g.id, label: c.name + ' · ' + g.name, ip: '' }); });
+    c.zones.forEach((z) => { if (z.type !== 'cycle' && z.type !== 'level') out.push({ camera: c.id, zone: z.id, key: c.id + '/' + z.id, label: c.name + ' · ' + z.name, ip: mdIpTag(c.url) }); });
+    (c.groups || []).forEach((g) => { if (g.type !== 'mirror' && g.type !== 'level') out.push({ camera: c.id, group: g.id, key: 'g:' + c.id + '/' + g.id, label: c.name + ' · ' + g.name, ip: '' }); });
   });
   return out;
 }
@@ -861,7 +865,7 @@ function mdBindPlc() {
 }
 
 // ---------- группы зон (ниже сценариев; по всем камерам) ----------
-const MD_GROUP_TYPES = { sum: 'сумма зон', monotonic: 'уровень снизу вверх', worktimer: 'наработка за окно', mirror: 'синхронность валов' };
+const MD_GROUP_TYPES = { sum: 'сумма зон', monotonic: 'уровень снизу вверх', worktimer: 'наработка за окно', mirror: 'синхронность валов', level: 'уровень жидкости' };
 function mdGroupRowHtml(cam, g, i) {
   const a = `data-md="g" data-cam="${escapeHtml(cam.id)}" data-i="${i}"`;
   const k = escapeHtml(cam.id + '-' + g.id);
@@ -888,14 +892,15 @@ function mdGroupRowHtml(cam, g, i) {
 
 function mdGroupsSectionHtml() {
   const rows = [];
-  mdCfgCams().forEach((cam) => (cam.groups || []).forEach((g, i) => rows.push(mdGroupRowHtml(cam, g, i))));
+  mdCfgCams().forEach((cam) => (cam.groups || []).forEach((g, i) => { if (g.type !== 'level') rows.push(mdGroupRowHtml(cam, g, i)); }));   // «уровень» — на своей вкладке
   const list = rows.length ? `<div class="md-sbox">${rows.join('')}</div>` : '<p class="net-hint">Вычислений нет. Вычисление складывает окна одной камеры: сумма — сколько активно, уровень снизу вверх — шахта, наработка за окно — доля времени в % (лента жома). Результат берёт сценарий и пишет в ПЛК. Зоны из РАЗНЫХ камер объединяйте в сценарии выше.</p>';
   return `<div class="md-groups"><h3 class="md-h md-h--row md-h--sec"><button type="button" class="md-add" data-md="g" data-f="add" title="Добавить вычисление" aria-label="Добавить вычисление">+</button>Вычисления <span class="md-dim">считают окна одной камеры; результат берёт сценарий</span></h3>${list}<div id="mdGrpEd">${MD.editGrp ? mdGroupEditorHtml() : ''}</div></div>`;
 }
 
 function mdGeZonesHtml(cam, g) {
-  if (!cam.zones.length) return '<span class="net-hint">у камеры нет зон</span>';
-  return cam.zones.map((z) => `<label class="md-chk"><input type="checkbox" value="${escapeHtml(z.id)}"${g.zones.includes(z.id) ? ' checked' : ''} />${escapeHtml(z.name)}</label>`).join('');
+  const zs = cam.zones.filter((z) => z.type !== 'level');
+  if (!zs.length) return '<span class="net-hint">у камеры нет зон</span>';
+  return zs.map((z) => `<label class="md-chk"><input type="checkbox" value="${escapeHtml(z.id)}"${g.zones.includes(z.id) ? ' checked' : ''} />${escapeHtml(z.name)}</label>`).join('');
 }
 
 function mdGroupEditorHtml() {
@@ -1141,6 +1146,7 @@ function paintMotionDockLive() {
       p.className = 'motion-dock__pill ' + cls;
     });
   }
+  if (MD.tab === 'level') mdLevelPaintLive();
   if (MD.tab === 'zones') mdPaintZoneStats();
   if (MD.tab === 'zones' && (MV.tick % 2 === 0)) mdDrawTrends();
 }
@@ -1336,21 +1342,24 @@ async function mdLoadMarkFrame() {
   } catch (e) { /* ждём следующий кадр */ } finally { m.busy = false; }
 }
 
-function openMarkModal(rods) {
+function openMarkModal(kind) {
   const { source, cam } = mdCamera();
   if (!source || !cam || !cam.enabled) return;
-  rods = rods === true;       // слушатель click передаёт событие, а не флаг
-  MD.mark = { cam: cam.id, pts: [], cursor: null, fw: 0, fh: 0, closed: false, busy: false, rods };
+  const rods = kind === true, glass = kind === 'glass';       // слушатель click передаёт событие, а не флаг
+  MD.mark = { cam: cam.id, pts: [], cursor: null, fw: 0, fh: 0, closed: false, busy: false, rods, glass, polys: [] };
   mdEl('mmCam').textContent = source.label || source.serial;
-  mdEl('mmTitle').textContent = rods ? 'Разметка валов' : 'Разметка зоны';
-  mdEl('mmOk').textContent = rods ? 'Добавить валы' : 'Добавить зону';
+  mdEl('mmTitle').textContent = rods ? 'Разметка валов' : glass ? 'Разметка стёкол' : 'Разметка зоны';
+  mdEl('mmOk').textContent = rods ? 'Добавить валы' : glass ? 'Готово' : 'Добавить зону';
+  mdEl('mmClose').textContent = 'Замкнуть (Enter)';
   mdEl('mmImg').removeAttribute('src');
   mdEl('mmForm').hidden = true;
   mdEl('mmOk').hidden = true;
   mdEl('mmClose').hidden = rods;
   mdEl('mmHint').textContent = rods
     ? 'Кликните по оси левого вала (красная точка в центре палки), затем по оси правого. ПКМ — убрать точку. Enter — готово. Радиус и точное положение осей потом правятся в карточке.'
-    : 'Кликайте по углам зоны. ПКМ — убрать точку. «Замкнуть» или Enter — готово (минимум 3 точки). Кадр замирает после первой точки.';
+    : glass
+      ? 'Обведите НИЖНЕЕ (рабочее) стекло: клики по углам внутри стекла. ПКМ — убрать точку. Enter — замкнуть (минимум 3 точки). Потом обведите верхнее; если стекло одно — «Готово».'
+      : 'Кликайте по углам зоны. ПКМ — убрать точку. «Замкнуть» или Enter — готово (минимум 3 точки). Кадр замирает после первой точки.';
   const modal = mdEl('motionMarkModal');
   modal.classList.add('show');
   modal.setAttribute('aria-hidden', 'false');
@@ -1375,6 +1384,11 @@ function mdMarkUi() {
   if (m.rods) {
     mdEl('mmOk').hidden = m.pts.length < 2;
     mdEl('mmUndo').disabled = !m.pts.length;
+  } else if (m.glass) {
+    mdEl('mmClose').textContent = m.polys.length ? 'Замкнуть верхнее (Enter)' : 'Замкнуть нижнее (Enter)';
+    mdEl('mmClose').disabled = m.pts.length < 3;
+    mdEl('mmOk').hidden = !m.polys.length;
+    mdEl('mmUndo').disabled = !m.pts.length && !m.polys.length;
   } else {
     mdEl('mmClose').disabled = m.closed || m.pts.length < 3;
     mdEl('mmUndo').disabled = m.closed || !m.pts.length;
@@ -1416,7 +1430,13 @@ function mdDrawMark() {
     });
     return;
   }
-  g.strokeStyle = '#38bdf8'; g.fillStyle = '#38bdf8';
+  (m.polys || []).forEach((poly, k) => {              // стёкла, которые уже обведены: нижнее — голубое, верхнее — жёлтое
+    g.strokeStyle = k ? '#fbbf24' : '#38bdf8'; g.fillStyle = k ? 'rgba(251,191,36,.18)' : 'rgba(56,189,248,.18)';
+    g.beginPath();
+    poly.forEach((p, i) => (i ? g.lineTo(p[0] * sx, p[1] * sy) : g.moveTo(p[0] * sx, p[1] * sy)));
+    g.closePath(); g.fill(); g.stroke();
+  });
+  g.strokeStyle = m.glass && m.polys.length ? '#fbbf24' : '#38bdf8'; g.fillStyle = g.strokeStyle;
   g.beginPath();
   m.pts.forEach((p, i) => (i ? g.lineTo(p[0] * sx, p[1] * sy) : g.moveTo(p[0] * sx, p[1] * sy)));
   if (m.closed) g.closePath();
@@ -1431,8 +1451,27 @@ function mdMarkPoint(event) {
   return [Math.max(0, Math.min(fw, Math.round((event.clientX - r.left) / r.width * fw))), Math.max(0, Math.min(fh, Math.round((event.clientY - r.top) / r.height * fh)))];
 }
 
+// убрать последнюю точку; у стёкол, когда точек нет, — вернуться к правке ранее замкнутого полигона
+function mdMarkUndo() {
+  const m = MD.mark;
+  if (!m || m.closed) return;
+  if (m.glass && !m.pts.length && m.polys.length) m.pts = m.polys.pop();
+  else m.pts.pop();
+  mdMarkUi();
+}
+
 function mdMarkClose() {
   const m = MD.mark;
+  if (m && m.glass) {                                  // стёкла: замкнули полигон — следующий; второй замкнут — сохраняем
+    if (m.pts.length < 3) return;
+    m.polys.push(m.pts);
+    m.pts = [];
+    m.cursor = null;
+    if (m.polys.length >= 2) { mdMarkSave(); return; }
+    mdEl('mmHint').textContent = 'Нижнее готово. Теперь обведите ВЕРХНЕЕ стекло (жёлтое) или нажмите «Готово», если стекло одно.';
+    mdMarkUi();
+    return;
+  }
   if (!m || m.closed || m.pts.length < 3) return;
   m.closed = true;
   m.cursor = null;
@@ -1470,6 +1509,7 @@ function mdMarkSave() {
   if (!cam) return;
   const fw = m.fw || mdEl('mmImg').naturalWidth, fh = m.fh || mdEl('mmImg').naturalHeight;
   if (m.rods) { mdMarkSaveRods(m, cam, fw, fh); return; }
+  if (m.glass) { lvMarkSave(m, cam, fw, fh); return; }
   const metric = mdEl('mmMetric').value, type = mdEl('mmType').value;
   const name = mdEl('mmName').value.trim();
   const pts = m.pts.slice();
@@ -1526,6 +1566,7 @@ function initMotionDock() {
     else if (kind === 'p') mdOnPlc(t);
     else if (kind === 's') mdOnScenario(t);
     else if (kind === 'cm') mdOnCamRow(t);
+    else if (kind === 'lv') mdOnLevel(t);
     else if (kind === 'cs') mdSetEnabled(t.dataset.serial, t.checked, () => { t.checked = !t.checked; });
   };
   body?.addEventListener('change', (e) => { if (e.target.tagName !== 'BUTTON') dispatch(e); });
@@ -1573,9 +1614,9 @@ function initMotionDock() {
     mdMarkUi();
   });
   cv?.addEventListener('mousemove', (e) => { if (MD.mark && !MD.mark.closed) { MD.mark.cursor = mdMarkPoint(e); mdDrawMark(); } });
-  cv?.addEventListener('contextmenu', (e) => { e.preventDefault(); if (MD.mark && !MD.mark.closed) { MD.mark.pts.pop(); mdMarkUi(); } });
+  cv?.addEventListener('contextmenu', (e) => { e.preventDefault(); mdMarkUndo(); });
   mdEl('mmImg')?.addEventListener('load', mdDrawMark);
-  mdEl('mmUndo')?.addEventListener('click', () => { if (MD.mark && !MD.mark.closed) { MD.mark.pts.pop(); mdMarkUi(); } });
+  mdEl('mmUndo')?.addEventListener('click', mdMarkUndo);
   mdEl('mmCancel')?.addEventListener('click', closeMarkModal);
   mdEl('mmX')?.addEventListener('click', closeMarkModal);
   mdEl('mmClose')?.addEventListener('click', mdMarkClose);
@@ -1583,6 +1624,7 @@ function initMotionDock() {
   document.addEventListener('keydown', (e) => {
     if (!MD.mark) return;
     if (e.key === 'Escape') closeMarkModal();
+    else if (MD.mark.glass) { if (e.key === 'Enter') { if (MD.mark.pts.length >= 3) mdMarkClose(); else if (MD.mark.polys.length) mdMarkSave(); } }
     else if (MD.mark.rods) { if (e.key === 'Enter' && MD.mark.pts.length >= 2) mdMarkSave(); }
     else if (e.key === 'Enter' && !MD.mark.closed && !/INPUT|SELECT|TEXTAREA/.test((e.target || {}).tagName || '')) mdMarkClose();
     else if (e.key === 'Enter' && MD.mark.closed) mdMarkSave();

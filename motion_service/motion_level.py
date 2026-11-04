@@ -29,7 +29,7 @@ import numpy as np
 
 log = logging.getLogger("motion.level")
 
-DEFAULT_URL = "http://127.0.0.1:8769"
+DEFAULT_URL = "http://127.0.0.1:8770"
 GEOMETRIES = ("lvldec", "exact")
 CONTOUR_MAX_PTS = 60               # контур жидкости для плитки: не больше стольких точек на контур
 _opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))     # localhost без системного прокси (иначе виснет)

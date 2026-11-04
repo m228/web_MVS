@@ -1175,9 +1175,9 @@ class MicroscopeService:
             return "-" if not d else "calc=%s enc=%s sensor=%s diff=%s" % (
                 d["calc"], d["enc"], d["sensor"], d["sensor"] - d["enc"])
         try:
-            line = "%s\t%s\t%s\tfixes=%s\tzero_sensor=%s\tbefore: %s\tafter: %s\t%s\n" % (
-                info.get("ts"), info.get("trigger"), info.get("result"), info.get("fixes"),
-                info.get("zero_sensor"), pos(info.get("before")), pos(info.get("after")), info.get("reason") or "")
+            line = "%s\t%s\t%s\tsearches=%s\tbefore: %s\tafter: %s\t%s\n" % (
+                info.get("ts"), info.get("trigger"), info.get("result"), info.get("searches"),
+                pos(info.get("before")), pos(info.get("after")), info.get("reason") or "")
             path = DATA_DIR / "autocal.log"
             path.parent.mkdir(parents=True, exist_ok=True)
             with open(path, "a", encoding="utf-8") as f:

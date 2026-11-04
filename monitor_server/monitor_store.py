@@ -185,6 +185,25 @@ class Store:
             raise LookupError("Завода нет")
         return token
 
+    def rename_plant(self, plant_id: int, name: str) -> str:
+        """Переименовать завод (кнопка в панели): токен, журнал и датчики остаются. ValueError — название пустое, длинное или занято;
+        LookupError — завода нет. Возвращает новое название."""
+        name = " ".join((name or "").split())
+        if not name or len(name) > NAME_MAX:
+            raise ValueError("Название завода — от 1 до %d символов" % NAME_MAX)
+        with self._lock:
+            try:
+                n = self.db.execute("UPDATE plants SET name=? WHERE id=?", (name, plant_id)).rowcount
+                if n:
+                    self.db.execute("UPDATE notify SET plant_name=? WHERE plant_id=?", (name, plant_id))     # ещё не отправленные сообщения — с новым названием
+                self.db.commit()
+            except sqlite3.IntegrityError:
+                self.db.rollback()
+                raise ValueError("Завод с таким названием уже есть")
+        if not n:
+            raise LookupError("Завода нет")
+        return name
+
     def delete_plant(self, plant_id: int) -> bool:
         with self._lock, self.db:
             self.db.execute("DELETE FROM events WHERE plant_id=?", (plant_id,))

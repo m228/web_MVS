@@ -218,6 +218,15 @@ function drawCharts() {
   document.querySelectorAll('details.chart[open] canvas.pc').forEach(drawChart);
 }
 
+function cardText(snap) {
+  // строки «Тревоги: …» не показываем (тревоги ниже плашками); имя, которым назвался сам клиент («DESKTOP-… · ПК работает …»), убираем:
+  // название завода — в заголовке карточки и его можно переименовать
+  const lines = snap.text.split('\n').filter((l) => !l.startsWith('Тревоги:'));
+  const own = snap.plant ? snap.plant + ' · ' : '';
+  if (own && lines.length && lines[0].startsWith(own)) lines[0] = lines[0].slice(own.length);
+  return lines.join('\n');
+}
+
 function card(p) {
   const snap = p.snapshot || {};
   const bad = p.alerts.some((a) => a.level === 'critical' || a.level === 'high');
@@ -234,10 +243,10 @@ function card(p) {
   return '<article class="card s-' + p.status + (p.alerts.length ? ' has-alert' : '') + '" data-id="' + p.id + '">' +
     '<div class="head"><h2>' + esc(p.name) + '</h2><span class="chip s-' + p.status + '">' + STATUS[p.status] + '</span></div>' +
     '<div class="sub">' + sub + '</div>' +
-    (snap.text ? '<pre class="text">' + esc(snap.text.split('\n').filter((l) => !l.startsWith('Тревоги:')).join('\n')) + '</pre>' : '') +
+    (snap.text ? '<pre class="text">' + esc(cardText(snap)) + '</pre>' : '') +
     (alerts ? '<div class="alerts">' + alerts + '</div>' : '') +
     '<div class="tools"><button data-a="log">Журнал</button>' + (snap.micro ? '<button data-a="pos">Датчики</button>' : '') +
-    '<button data-a="token">Новый токен</button><button data-a="del">Удалить</button></div>' +
+    '<button data-a="rename">Переименовать</button><button data-a="token">Новый токен</button><button data-a="del">Удалить</button></div>' +
     '<div class="pos' + (openedPos.has(p.id) ? ' open' : '') + '" id="pos' + p.id + '">' + (openedPos.has(p.id) ? posBlock(p.id) : '') + '</div>' +
     '<div class="log' + (opened.has(p.id) ? ' open' : '') + '" id="log' + p.id + '"></div></article>';
 }
@@ -391,6 +400,11 @@ $('cards').onclick = async (ev) => {
     if (openedPos.has(id)) openedPos.delete(id); else openedPos.add(id);
     $('pos' + id).classList.toggle('open', openedPos.has(id));
     if (openedPos.has(id)) { $('pos' + id).innerHTML = posBlock(id); loadPos(id); }
+  } else if (btn.dataset.a === 'rename') {
+    const name = (prompt('Новое название завода (как будет на карточке и в Telegram):', p.name) || '').trim();
+    if (!name || name === p.name) return;
+    try { await api('/api/plants/' + id + '/rename', {method: 'POST', body: JSON.stringify({name})}); load(); }
+    catch (e) { alert(e.message); }
   } else if (btn.dataset.a === 'token') {
     if (!confirm('Выдать «' + p.name + '» новый токен? Старый перестанет работать — его нужно заново ввести в приложении завода.')) return;
     try { const j = await api('/api/plants/' + id + '/token', {method: 'POST'}); showToken('Новый токен', p.name, j.token); }

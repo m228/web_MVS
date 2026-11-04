@@ -7,6 +7,7 @@
   POST /api/plants              — {"name"}: завести завод, в ответе токен (показывается один раз).
   GET  /api/plants/{id}/events  — журнал завода (?limit=100&before=<id>).
   POST /api/plants/{id}/token   — выдать новый токен (старый перестаёт работать).
+  POST /api/plants/{id}/rename  — {"name"}: переименовать завод (токен, журнал и датчики остаются).
   DELETE /api/plants/{id}       — удалить завод вместе с журналом.
   POST /enroll                  — заявка нового клиента с ключом регистрации (без пароля панели): {key, machine, name, version, secret}.
                                   Повторяется раз в минуту, пока Макс не решит; «принято» приходит с токеном один раз. 403 — ключ не тот.
@@ -321,6 +322,19 @@ def create_app(store: monitor_store.Store, password: str, version: str, panel_ht
             return bad
         try:
             return {"token": store.rotate_token(plant_id)}
+        except LookupError:
+            return JSONResponse({"error": "завода нет"}, status_code=404)
+
+    @app.post("/api/plants/{plant_id}/rename")
+    async def plant_rename(plant_id: int, request: Request):
+        bad = write_denied(request)
+        if bad is not None:
+            return bad
+        try:
+            body = await request.json()
+            return {"name": store.rename_plant(plant_id, str(body.get("name", "")) if isinstance(body, dict) else "")}
+        except ValueError as e:
+            return JSONResponse({"error": str(e)}, status_code=400)
         except LookupError:
             return JSONResponse({"error": "завода нет"}, status_code=404)
 

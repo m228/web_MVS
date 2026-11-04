@@ -33,6 +33,7 @@ TEXT_MAX = 300
 RETENTION_DAYS = 90
 SKEW_MAX_S = 7 * 86400           # время события от завода дальше недели от сейчас — часы врут, берём время приёма
 NAME_MAX = 40
+VIEW_BLOCKS = ["pc", "services", "camera", "brew", "motion"]       # блоки карточки, которые можно скрыть в «Виде» (тревоги скрыть нельзя)
 ALERT_DEDUP_S = 120              # событие тревоги от завода и достроенное из снимка — одно и то же, если время рядом
 NOTIFY_LEVELS = ("critical", "high")                              # в Telegram идут только они (жёлтое «medium» — только в панели)
 NOTIFY_KINDS = ("start", "alert", "plate_reboot", "offline")      # какие события бывают «открытием» тревоги
@@ -204,8 +205,28 @@ class Store:
             raise LookupError("Завода нет")
         return name
 
+    def hidden_blocks(self, plant_id: int) -> list[str]:
+        """Какие блоки карточки Макс скрыл через «Вид» (хранится в приёмнике, поэтому одинаково на всех устройствах)."""
+        try:
+            v = json.loads(self.meta_get("view:%d" % plant_id) or "[]")
+        except ValueError:
+            return []
+        return [b for b in v if b in VIEW_BLOCKS] if isinstance(v, list) else []
+
+    def set_hidden_blocks(self, plant_id: int, hidden) -> list[str]:
+        """Запомнить скрытые блоки завода. ValueError — список кривой или блок неизвестен; LookupError — завода нет."""
+        if not isinstance(hidden, list) or any(b not in VIEW_BLOCKS for b in hidden):
+            raise ValueError("Неизвестный блок карточки")
+        with self._lock:
+            if not self.db.execute("SELECT 1 FROM plants WHERE id=?", (plant_id,)).fetchone():
+                raise LookupError("Завода нет")
+            clean = sorted(set(hidden), key=VIEW_BLOCKS.index)
+            self.meta_set("view:%d" % plant_id, json.dumps(clean))
+        return clean
+
     def delete_plant(self, plant_id: int) -> bool:
         with self._lock, self.db:
+            self.db.execute("DELETE FROM meta WHERE key=?", ("view:%d" % plant_id,))
             self.db.execute("DELETE FROM events WHERE plant_id=?", (plant_id,))
             self.db.execute("DELETE FROM alerts WHERE plant_id=?", (plant_id,))
             self.db.execute("DELETE FROM positions WHERE plant_id=?", (plant_id,))
@@ -540,5 +561,5 @@ class Store:
                 out.append({
                     "id": p["id"], "name": p["name"], "status": self._status(p, now), "created_t": p["created_t"],
                     "last_seen_t": p["last_seen_t"], "interval_s": p["interval_s"], "offline_since": p["offline_since"],
-                    "snapshot": snap, "alerts": alerts, "events": self.events(p["id"], 5)})
+                    "snapshot": snap, "alerts": alerts, "events": self.events(p["id"], 5), "hidden_blocks": self.hidden_blocks(p["id"])})
         return out

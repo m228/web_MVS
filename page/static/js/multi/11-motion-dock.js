@@ -414,6 +414,7 @@ function mdMirrorCardHtml(cam, g) {
       <div class="md-zone__row"><b>${escapeHtml(g.name)}</b><span class="net-hint">${names}</span><span class="md-sp"></span>
         <span class="cv-bit" id="md-mxb-${k}" title="Авария: рассинхрон больше допуска">–</span><span class="md-num" id="md-mxv-${k}" title="Отклонение от нормы, °">–</span></div>
       <div class="md-zstat" id="md-mxs-${k}"></div>
+      <div class="md-zstat md-mxd" id="md-mxd-${k}"></div>
       <div class="md-zone__row md-mx-set">
         <label class="switch-toggle md-sw md-sw--sm" title="Волна Δ за оборот — перекос камеры, он повторяется. Сервис сам выучивает её по скользящему окну и вычитает: Δ держится около нуля, а свет и положение камеры подстраиваются. Учится только форма волны: настоящий сдвиг валов в неё не уходит и виден в Δ сразу."><span class="switch"><input type="checkbox" ${a} data-f="learn"${g.learn === false ? '' : ' checked'} /><span class="switch-track"></span></span><span class="md-lbl md-lbl--on">автокоррекция</span></label>
         <span class="md-lbl" title="За какое время учится форма: скользящее окно. Больше — спокойнее, меньше — быстрее следует за светом и камерой">окно</span>${mdNum(a + ' data-f="learnmin"', g.learn_min || 30, 'min="5" max="240" step="5"')}<span class="md-lbl">мин</span>
@@ -663,11 +664,25 @@ function mdZoneStatHtml(z, cur, st) {
   return row('diff') + row('flow');
 }
 
+// Δ с коррекцией за период: среднее / мин / макс (и сама поправка), считает сервис по каждому кадру с видимыми палками
+const mdSgn = (v) => (v > 0 ? '+' : '') + Number(v).toFixed(1);
+function mdMirrorStatHtml(s, sr) {
+  const d = s.delta, cr = s.corr;
+  const note = sr && s.span_s < sr.window_s * 0.9 ? ` <span class="md-zstat__note">накоплено за ${mdFmtWin(s.span_s)}</span>` : '';
+  return `<div class="md-zstat__row is-main" title="Отклонение Δ уже с поправкой автокоррекции, по каждому кадру, где видны обе палки (без удержания)">Δ с коррекцией за ${mdFmtWin(sr.window_s)}: ср <b class="md-zstat__cur">${mdSgn(d.avg)}°</b> · мин ${mdSgn(d.min)} · макс ${mdSgn(d.max)}${note}</div>` +
+    `<div class="md-zstat__row" title="Сколько вычитается из сырой суммы углов: ручная таблица + выученная форма">поправка: ср ${mdSgn(cr.avg)} · от ${mdSgn(cr.min)} до ${mdSgn(cr.max)}°</div>`;
+}
+
 function mdPaintZoneStats() {
   mdLoadStats();
   mdShownCams().forEach((c) => {
     const res = (MV.states[c.id] || {}).result;
     const sr = MD.stats[c.id];
+    (c.groups || []).filter((g) => g.type === 'mirror').forEach((g) => {
+      const el = mdEl('md-mxd-' + c.id + '-' + g.id);
+      const gs = sr && sr.groups && sr.groups[g.id];
+      if (el) el.innerHTML = gs ? mdMirrorStatHtml(gs, sr) : '';
+    });
     const live = {};
     ((res && res.zones) || []).forEach((z) => { live[z.id] = z; });
     c.zones.forEach((z) => {

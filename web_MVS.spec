@@ -30,7 +30,7 @@ if os.path.exists('enroll_key.txt'):
     datas.append(('enroll_key.txt', '.'))
 binaries = []
 hiddenimports = ['app', 'camera_core', 'rtsp_store', 'net_tools', 'paths', 'logger', 'updater', 'diag',
-                 'dahua_control', 'sdk_gige', 'camera_params', 'board_guard',
+                 'dahua_control', 'sdk_gige', 'camera_params', 'board_guard', 'console_guard',
                  # микроскоп (страница /microscope): плата по Modbus TCP + автомат
                  'microscope_service', 'microscope_plc', 'microscope_fsm', 'plate_config', 'sv_source']
 # selfcheck.py грузит модули по имени строкой (importlib) — PyInstaller их не увидит сам

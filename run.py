@@ -104,6 +104,11 @@ def main():
         return
     # ассеты (page/) ищутся относительно CWD -> переходим в каталог бандла
     os.chdir(BUNDLE_DIR)
+    # собранный exe: консоль без QuickEdit (клик по окну не замораживает сервер) + журнал на диске logs\app.log и crash.log;
+    # раньше при падении текст ошибки исчезал вместе с окном консоли (см. console_guard). Включаем до прогрева — он ходит в драйвер камер
+    if getattr(sys, "frozen", False):
+        import console_guard
+        console_guard.install(DATA_DIR, read_version())
     # прогрев продюсера в главном потоке до uvicorn — иначе в exe рабочие потоки
     # видят 0 камер (см. _warmup)
     _warmup()

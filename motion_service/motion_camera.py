@@ -40,9 +40,11 @@ STATS_LEN = 8640                 # ... и сутки назад (8640 × 10 с)
 _OPEN_LOCK = threading.Lock()    # OPENCV_FFMPEG_CAPTURE_OPTIONS — переменная окружения процесса, выставляем под замком
 
 
-def _squeeze(rows: list, points: int) -> list:
+def _squeeze(rows: list, points: int, angle_ids=frozenset()) -> list:
     """[(ts, {зона: (flow, diff, bit)}, ok)] → не больше points строк: корзины по k штук, внутри максимум по зонам,
-    ok — минимум (хоть один плохой кадр делает корзину «нет данных»), время — последней строки корзины."""
+    ok — минимум (хоть один плохой кадр делает корзину «нет данных»), время — последней строки корзины.
+    angle_ids — зоны-палки (flow = угол): угол максимумом не сжать (у вращающихся навстречу валов максимум берётся из разных
+    моментов, сумма углов уезжала на десятки градусов), поэтому берём строку целиком — последнюю в корзине, оба вала из одного момента."""
     if len(rows) <= points:
         return rows
     k = -(-len(rows) // points)
@@ -53,7 +55,10 @@ def _squeeze(rows: list, points: int) -> list:
         for _, z, _ok in chunk:
             for zid, (fl, df, bit) in z.items():
                 old = zones.get(zid)
-                zones[zid] = (fl, df, bit) if old is None else (max(old[0], fl), max(old[1], df), max(old[2], bit))
+                if zid in angle_ids:
+                    zones[zid] = (fl, df, bit)
+                else:
+                    zones[zid] = (fl, df, bit) if old is None else (max(old[0], fl), max(old[1], df), max(old[2], bit))
         out.append((chunk[-1][0], zones, min(r[2] for r in chunk)))
     return out
 
@@ -173,6 +178,9 @@ class CameraWorker(threading.Thread):
         self._bucket: Optional[list] = None   # [ts, {зона: (flow, diff, bit)}, ok] — набирающаяся секунда длинной истории
         self._stats: deque = deque(maxlen=STATS_LEN)   # корзины статистики: [номер 10-секундки, {зона: [n, Σflow, min, max, Σdiff, min, max]}]
         self._sbucket: Optional[list] = None  # набирающаяся корзина статистики
+        self._angle_ids = frozenset(z["id"] for z in cam_cfg["zones"] if z["type"] == "cycle")      # зоны-палки: flow — угол
+        self._mstats: deque = deque(maxlen=STATS_LEN)   # корзины статистики синхронности валов: [номер 10-секундки, {группа: [n, Σ delta, min, max, Σ поправка, min, max]}] (в памяти)
+        self._mbucket: Optional[list] = None
         self._writes: Optional[list] = None   # что должно лежать в ПЛК (последнее)
         self._writes_evt = threading.Event()
         self._store = store_for(self.data_dir)
@@ -268,7 +276,7 @@ class CameraWorker(threading.Thread):
                 if rows:
                     edge = rows[-1][0] - float(window_s)
                     rows = [r for r in rows if r[0] >= edge]
-                pts = _squeeze(rows, max(10, int(points)))
+                pts = _squeeze(rows, max(10, int(points)), self._angle_ids)
             else:
                 pts = list(self._history)[-max(1, n):]
         zones: dict = {}
@@ -320,6 +328,24 @@ class CameraWorker(threading.Thread):
             if self._sbucket is not None and self._sbucket[0] >= edge:      # набирающуюся корзину копируем: её правит поток камеры
                 rows.append([self._sbucket[0], {k: list(v) for k, v in self._sbucket[1].items()}])
             first = rows[0][0] if rows else None
+            mrows = [r for r in self._mstats if r[0] >= edge]
+            if self._mbucket is not None and self._mbucket[0] >= edge and self._mbucket[1]:
+                mrows.append([self._mbucket[0], {k: list(v) for k, v in self._mbucket[1].items()}])
+        macc: dict = {}
+        mfirst: dict = {}
+        for _key, gs in mrows:
+            for gid, v in gs.items():
+                mfirst.setdefault(gid, _key)
+                a = macc.get(gid)
+                if a is None:
+                    macc[gid] = list(v)
+                else:
+                    a[0] += v[0]; a[1] += v[1]; a[2] = min(a[2], v[2]); a[3] = max(a[3], v[3])
+                    a[4] += v[4]; a[5] = min(a[5], v[5]); a[6] = max(a[6], v[6])
+        groups = {gid: {"n": a[0], "span_s": round(max(0.0, min(window_s, time.time() - mfirst[gid] * STATS_STEP_S)), 1),
+                        "delta": {"avg": round(a[1] / a[0], 2), "min": round(a[2], 2), "max": round(a[3], 2)},
+                        "corr": {"avg": round(a[4] / a[0], 2), "min": round(a[5], 2), "max": round(a[6], 2)}}
+                  for gid, a in macc.items() if a[0]}
         acc: dict = {}
         for _key, zs in rows:
             for zid, v in zs.items():
@@ -334,7 +360,7 @@ class CameraWorker(threading.Thread):
                        "diff": {"avg": round(a[4] / a[0], 4), "min": round(a[5], 4), "max": round(a[6], 4)}}
                  for zid, a in acc.items() if a[0]}
         span = round(min(window_s, time.time() - first * STATS_STEP_S), 1) if first is not None else 0.0
-        return {"window_s": window_s, "span_s": max(0.0, span), "zones": zones}
+        return {"window_s": window_s, "span_s": max(0.0, span), "zones": zones, "groups": groups}
 
     def _restore_trends(self):
         """Длинная история (2 ч) и корзины статистики (сутки) — из data\trends: после обновления сервиса графики не пустые."""
@@ -455,7 +481,13 @@ class CameraWorker(threading.Thread):
         else:
             for zid, (fl, df, bit) in zones.items():
                 old = b[1].get(zid)
-                b[1][zid] = (fl, df, bit) if old is None else (max(old[0], fl), max(old[1], df), max(old[2], bit))
+                if old is None:
+                    b[1][zid] = (fl, df, bit)
+                elif zid in self._angle_ids:
+                    # угол не «максимум»: берём самый поздний кадр секунды, где палка найдена (бит секунды — «найдена хотя бы раз»)
+                    b[1][zid] = (fl, df, 1) if bit else (old if old[2] else (fl, df, 0))
+                else:
+                    b[1][zid] = (max(old[0], fl), max(old[1], df), max(old[2], bit))
             b[2] = min(b[2], ok)
 
     def _stats_add(self, ts: float, zones: dict):
@@ -475,6 +507,26 @@ class CameraWorker(threading.Thread):
                 a[0] += 1; a[1] += fl; a[2] = min(a[2], fl); a[3] = max(a[3], fl)
                 a[4] += df; a[5] = min(a[5], df); a[6] = max(a[6], df)
 
+    def _mirror_stats_add(self, ts: float, groups: list):
+        """Δ группы синхронности (уже С коррекцией) и сама поправка — в 10-секундную корзину. Только кадры, где видны обе палки и угол не достроен
+        (в удержании Δ ненадёжна — её нет и в шапке). Звать под self._lock."""
+        key = int(ts // STATS_STEP_S)
+        b = self._mbucket
+        if b is None or b[0] != key:
+            if b is not None and b[1]:
+                self._mstats.append(b)
+            b = self._mbucket = [key, {}]
+        for g in groups:
+            if g.get("type") != "mirror" or not g.get("valid") or g.get("hold") or g.get("delta") is None:
+                continue
+            d, cr = float(g["delta"]), float(g.get("corr") or 0.0)
+            a = b[1].get(g["id"])
+            if a is None:
+                b[1][g["id"]] = [1, d, d, d, cr, cr, cr]
+            else:
+                a[0] += 1; a[1] += d; a[2] = min(a[2], d); a[3] = max(a[3], d)
+                a[4] += cr; a[5] = min(a[5], cr); a[6] = max(a[6], cr)
+
     def _publish(self, state: dict, frame: Optional[np.ndarray], count_frame: bool):
         writes = self.engine.compute_writes(state)
         with self._lock:
@@ -487,6 +539,7 @@ class CameraWorker(threading.Thread):
                 self._push_history(state["ts"], zones, 1 if state["alive"] else 0)
                 if state["alive"]:
                     self._stats_add(state["ts"], zones)
+                    self._mirror_stats_add(state["ts"], state.get("groups") or [])
             self._writes = writes
             self._rec_write(state["ts"], {z["id"]: z for z in state["zones"]}, "ok" if state["alive"] else (state["reason"] or "нет данных"))
         self._writes_evt.set()

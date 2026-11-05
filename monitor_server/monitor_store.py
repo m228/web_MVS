@@ -28,16 +28,18 @@ SCHEMA = 1                       # версия формата пульса (sna
 LEVELS = ("critical", "high", "medium", "info")
 DEFAULT_INTERVAL_S = 300
 OFFLINE_GRACE_S = 120            # запас к двум пропущенным пульсам
+OFFLINE_AFTER_S = 1800           # «нет пульса» не раньше чем через полчаса молчания: пропавший пульс — ещё не беда (закрытое приложение сообщает само)
 EVENT_MAX = 200                  # событий принимаем из одного пульса
 TEXT_MAX = 300
 RETENTION_DAYS = 90
 SKEW_MAX_S = 7 * 86400           # время события от завода дальше недели от сейчас — часы врут, берём время приёма
 NAME_MAX = 40
-ERROR_KINDS = ("alert", "plate_reboot", "offline")                   # какие события журнала считаются ошибками (фильтр «Тревоги»)
-VIEW_BLOCKS = ["pc", "services", "camera", "brew", "motion", "disk"]       # блоки карточки, которые можно скрыть в «Виде» (тревоги скрыть нельзя)
+ERROR_KINDS = ("alert", "plate_reboot", "offline", "app_stop")                   # какие события журнала считаются ошибками (фильтр «Тревоги»)
+VIEW_BLOCKS = ["pc", "disk", "services", "camera", "motion", "brew", "autocal", "sensors", "plate"]      # общие для всех заводов, затем микроскопные
+DEFAULT_HIDDEN = ["plate"]                                          # что скрыто, пока Макс не настроил «Вид» (подробности про плату — по желанию)       # блоки карточки, которые можно скрыть в «Виде» (тревоги скрыть нельзя)
 ALERT_DEDUP_S = 120              # событие тревоги от завода и достроенное из снимка — одно и то же, если время рядом
 NOTIFY_LEVELS = ("critical", "high")                              # в Telegram идут только они (жёлтое «medium» — только в панели)
-NOTIFY_KINDS = ("start", "alert", "plate_reboot", "offline")      # какие события бывают «открытием» тревоги
+NOTIFY_KINDS = ("start", "alert", "plate_reboot", "offline", "app_stop")      # какие события бывают «открытием» тревоги
 OFFLINE_KINDS = ("offline", "offline_repeat")
 OUTAGE_MIN_S = 180               # приёмник молчал дольше — это перерыв (перезапуск занимает секунды)
 ENROLL_PENDING_MAX = 30          # заявок «ждут решения» не больше: ключ регистрации не должен позволять забить панель
@@ -49,8 +51,8 @@ def hash_token(token: str) -> str:
 
 
 def offline_limit(interval_s: Optional[float]) -> float:
-    """Сколько можно молчать до тревоги: два пропущенных пульса и запас."""
-    return 2 * (interval_s or DEFAULT_INTERVAL_S) + OFFLINE_GRACE_S
+    """Сколько можно молчать до сообщения «нет пульса»: два пропущенных пульса с запасом, но не меньше получаса."""
+    return max(2 * (interval_s or DEFAULT_INTERVAL_S) + OFFLINE_GRACE_S, OFFLINE_AFTER_S)
 
 
 def _num(v) -> Optional[float]:
@@ -211,11 +213,14 @@ class Store:
 
     def hidden_blocks(self, plant_id: int) -> list[str]:
         """Какие блоки карточки Макс скрыл через «Вид» (хранится в приёмнике, поэтому одинаково на всех устройствах)."""
+        raw = self.meta_get("view:%d" % plant_id)
+        if raw is None:
+            return list(DEFAULT_HIDDEN)
         try:
-            v = json.loads(self.meta_get("view:%d" % plant_id) or "[]")
+            v = json.loads(raw)
         except ValueError:
-            return []
-        return [b for b in v if b in VIEW_BLOCKS] if isinstance(v, list) else []
+            return list(DEFAULT_HIDDEN)
+        return [b for b in v if b in VIEW_BLOCKS] if isinstance(v, list) else list(DEFAULT_HIDDEN)
 
     def set_hidden_blocks(self, plant_id: int, hidden) -> list[str]:
         """Запомнить скрытые блоки завода. ValueError — список кривой или блок неизвестен; LookupError — завода нет."""
@@ -226,6 +231,16 @@ class Store:
                 raise LookupError("Завода нет")
             clean = sorted(set(hidden), key=VIEW_BLOCKS.index)
             self.meta_set("view:%d" % plant_id, json.dumps(clean))
+        return clean
+
+    def set_hidden_blocks_all(self, hidden) -> list[str]:
+        """Один набор скрытых блоков всем заводам сразу («для всех» в «Виде»): единый стандарт. ValueError — блок неизвестен."""
+        if not isinstance(hidden, list) or any(b not in VIEW_BLOCKS for b in hidden):
+            raise ValueError("Неизвестный блок карточки")
+        clean = sorted(set(hidden), key=VIEW_BLOCKS.index)
+        with self._lock, self.db:
+            for r in self.db.execute("SELECT id FROM plants").fetchall():
+                self.meta_set("view:%d" % r["id"], json.dumps(clean))
         return clean
 
     def delete_plant(self, plant_id: int) -> bool:
@@ -393,7 +408,7 @@ class Store:
                 hours = (now - p["offline_since"]) / 3600
                 text = "Всё ещё нет пульса (уже %s)" % ("%d ч" % round(hours) if hours >= 1.5 else "%d мин" % round(hours * 60))
                 n += self.db.execute("INSERT OR IGNORE INTO notify (plant_id, plant_name, eid, t, created_t, level, kind, code, state, text) VALUES (?,?,?,?,?,?,?,?,?,?)",
-                                     (p["id"], p["name"], "srv-offline-rep-%d" % int(now), now, now, "critical", "offline_repeat", "", "open", text)).rowcount
+                                     (p["id"], p["name"], "srv-offline-rep-%d" % int(now), now, now, "high", "offline_repeat", "", "open", text)).rowcount
         return n
 
     def _insert_position(self, plant_id: int, eid: str, t: float, d: dict) -> None:
@@ -517,6 +532,11 @@ class Store:
             return "offline" if now - self.started_at > limit else "checking"
         return "online"
 
+    def _last_stop(self, plant_id: int):
+        """Последнее событие «приложение закрыто», если после него приложение ещё не запускалось (иначе None)."""
+        r = self.db.execute("SELECT kind, level, t FROM events WHERE plant_id=? AND kind IN ('app_stop','start') ORDER BY t DESC, id DESC LIMIT 1", (plant_id,)).fetchone()
+        return r if r is not None and r["kind"] == "app_stop" else None
+
     def check_offline(self) -> list[dict]:
         """Объявить недоступными заводы, которые молчат дольше допустимого. Возвращает новые события (для оповещений)."""
         now = self.clock()
@@ -527,8 +547,15 @@ class Store:
                     continue
                 self.db.execute("UPDATE plants SET offline_since=? WHERE id=?", (now, p["id"]))
                 text = "Нет пульса уже %d мин" % round((now - p["last_seen_t"]) / 60)
-                if self._insert_event(p["id"], "srv-offline-%d" % int(p["last_seen_t"]), now, now, "offline", "critical", text):
-                    out.append({"plant": p["name"], "plant_id": p["id"], "level": "critical", "kind": "offline", "text": text, "t": now})
+                level = "high"                                   # пропавший пульс сам по себе не критичен: сообщение, но не «красное»
+                stop = self._last_stop(p["id"])
+                if stop is not None:
+                    if stop["level"] == "critical":              # приложение закрыли — об этом уже писали сразу, тут только запись в журнал
+                        level, text = "info", "Приложение закрыто, пульса нет уже %d мин" % round((now - p["last_seen_t"]) / 60)
+                    else:                                        # закрылось ради обновления и не вернулось — вот это серьёзно
+                        level, text = "critical", "После обновления приложение не вернулось: пульса нет уже %d мин" % round((now - p["last_seen_t"]) / 60)
+                if self._insert_event(p["id"], "srv-offline-%d" % int(p["last_seen_t"]), now, now, "offline", level, text):
+                    out.append({"plant": p["name"], "plant_id": p["id"], "level": level, "kind": "offline", "text": text, "t": now})
         return out
 
     def purge(self) -> int:
@@ -586,5 +613,6 @@ class Store:
                 out.append({
                     "id": p["id"], "name": p["name"], "status": self._status(p, now), "created_t": p["created_t"],
                     "last_seen_t": p["last_seen_t"], "interval_s": p["interval_s"], "offline_since": p["offline_since"],
-                    "snapshot": snap, "alerts": alerts, "events": self.events(p["id"], 5), "hidden_blocks": self.hidden_blocks(p["id"])})
+                    "snapshot": snap, "alerts": alerts, "events": self.events(p["id"], 5), "hidden_blocks": self.hidden_blocks(p["id"]),
+                    "closed_t": (lambda st: st["t"] if st is not None and st["level"] == "critical" else None)(self._last_stop(p["id"]))})
         return out

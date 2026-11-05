@@ -55,6 +55,8 @@ OLD_TUNING_DEFAULTS = {"gap_far_um": 150, "gap_near_um": 200, "drift_um": 100}  
 
 BOOT_TOL_S = 120            # время загрузки Windows у двух запусков расходится больше — это была перезагрузка ПК
 BEAT_EVERY_S = 30           # как часто пишем на диск «я жив» (по нему считаем, сколько не работали)
+STOP_SEND_TIMEOUT_S = 3     # сколько ждём приёмник при закрытии приложения
+UPDATE_RESTART_S = 600      # закрытие в пределах этого времени после запуска апдейтера — «для обновления»
 MOTION_CAMS_MAX = 24        # сколько камер движения кладём в пульс
 WATCH_EVERY_S = 15          # как часто проверяем правила тревог
 TICK_S = 5                  # шаг фонового потока
@@ -494,11 +496,8 @@ def default_sources() -> dict:
         return {"last_t": last, "today": n}
 
     def motion():
-        """Камеры сервиса движения + свободное место на диске приложения (там же и записи). Сервис не запущен — None: блока в панели не будет."""
-        import shutil
-
+        """Камеры сервиса движения. Сервис не запущен — None: блока в панели не будет."""
         import motion_client
-        import paths
         cfg = plate_config.load()
         if services.states().get("motion") not in ("healthy", "remote"):
             return None
@@ -506,8 +505,15 @@ def default_sources() -> dict:
         cams = st.get("cameras") if isinstance(st, dict) else None
         if not cams:
             return None
+        return {"cameras": cams}
+
+    def disk():
+        """Свободное место на диске приложения: там лежат база, кадры, видео и записи — у всех заводов одинаково."""
+        import shutil
+
+        import paths
         du = shutil.disk_usage(str(paths.DATA_DIR))
-        return {"cameras": cams, "disk": {"free": du.free, "total": du.total}}
+        return {"free": du.free, "total": du.total}
 
     return {
         "cfg": plate_config.load,
@@ -517,6 +523,7 @@ def default_sources() -> dict:
         "camera": camera,
         "probes": probes,
         "motion": motion,
+        "disk": disk,
     }
 
 
@@ -572,7 +579,20 @@ class Agent:
         t = self._thread
         if t is not None:
             t.join(timeout=3)
+            self._report_stop()
         mark_clean_stop()
+
+    def _report_stop(self) -> None:
+        """Приложение закрывают: пишем событие и пробуем сразу отправить (коротко, выход не задерживаем). Закрыли руками — это красное,
+        закрыли ради обновления — просто запись в историю. Не ушло — событие лежит в очереди и уйдёт со следующим стартом."""
+        try:
+            now = self.clock()
+            upd = _update_restart_t is not None and now - _update_restart_t < UPDATE_RESTART_S
+            self._emit("app_stop", "info" if upd else "critical", "Приложение закрыто" + (" для обновления" if upd else ""), {"update": upd}, t=now)
+            if configured(self._cfg):
+                self.send(now=now, timeout=STOP_SEND_TIMEOUT_S)
+        except Exception as e:                        # закрытие не должно падать из-за мониторинга
+            log_event("sysmon", "Мониторинг: не удалось отправить «приложение закрыто»: %s" % e, "warn")
 
     def _loop(self) -> None:
         next_watch = 0.0
@@ -684,6 +704,7 @@ class Agent:
         d["guard"] = g("guard", {}) or {}
         d["services"] = g("services", {}) or {}
         d["motion"] = g("motion", None)
+        d["disk"] = g("disk", None)
         d["positions"] = list(self.positions)
         return d
 
@@ -933,6 +954,9 @@ class Agent:
         }
         if d.get("micro_on"):
             snap["micro"] = _micro_block(d, now)
+        disk = _disk_block(d.get("disk"))
+        if disk:
+            snap["disk"] = disk
         motion = _motion_block(d["motion"]) if d.get("motion") else None
         if motion:
             snap["motion"] = motion
@@ -949,7 +973,7 @@ class Agent:
                 "enroll": {**self.enroller.status, "auto": cfg["auto_enroll"] and not cfg["token"]}}
 
     # ---- отправка
-    def send(self, now: Optional[float] = None, force: bool = False) -> dict:
+    def send(self, now: Optional[float] = None, force: bool = False, timeout: Optional[float] = None) -> dict:
         """Одна отправка: снимок + накопленные события. Успех — HTTP 2xx; неуспех — события остаются, повтор позже.
         force — «Проверить связь»: слать, даже если галочка «Отправлять» ещё не включена (адрес и токен нужны всё равно)."""
         with self._send_lock:
@@ -973,7 +997,7 @@ class Agent:
             events = outbox_batch()
             body = {"schema": SCHEMA, "sent_t": now, "snapshot": self.snapshot(None, cfg), "events": events}
             via_proxy = cfg["system_proxy"] and not closed_network(cfg["url"], cfg["allow_http"])
-            ok, code, err = _post(cfg["url"] + "/ingest", cfg["token"], body, via_proxy)
+            ok, code, err = _post(cfg["url"] + "/ingest", cfg["token"], body, via_proxy, **({"timeout": timeout} if timeout else {}))
             st = self.status
             st.update({"last_try_t": now, "http": code})
             if ok:
@@ -1014,7 +1038,7 @@ def _camera_block(cam: dict) -> dict:
 
 
 def _motion_block(m: dict) -> Optional[dict]:
-    """Камеры движения для панели: имя, работает ли, кадров в секунду, сколько секунд назад был последний кадр, пишется ли запись; диск — в ГБ."""
+    """Камеры движения для панели: имя, работает ли, кадров в секунду, сколько секунд назад был последний кадр, пишется ли запись."""
     cams = []
     for c in (m.get("cameras") or [])[:MOTION_CAMS_MAX]:
         if not isinstance(c, dict):
@@ -1024,11 +1048,14 @@ def _motion_block(m: dict) -> Optional[dict]:
                      "error": str(c.get("error") or "")[:80] or None})
     if not cams:
         return None
-    out: dict = {"cameras": cams}
-    disk = m.get("disk") or {}
-    if disk.get("total"):
-        out["disk"] = {"free_gb": round(disk["free"] / 1e9, 1), "total_gb": round(disk["total"] / 1e9, 1)}
-    return out
+    return {"cameras": cams}
+
+
+def _disk_block(disk: Optional[dict]) -> Optional[dict]:
+    """Свободно / всего на диске приложения, ГБ."""
+    if not isinstance(disk, dict) or not disk.get("total"):
+        return None
+    return {"free_gb": round(disk["free"] / 1e9, 1), "total_gb": round(disk["total"] / 1e9, 1)}
 
 
 def _micro_block(d: dict, now: float) -> dict:
@@ -1109,10 +1136,10 @@ def summary_text(s: dict) -> str:
     mo = s.get("motion")
     if mo:
         cams = mo["cameras"]
-        txt = "Камеры движения: %d из %d работают" % (sum(1 for c in cams if c["on"] and c["ok"]), sum(1 for c in cams if c["on"]))
-        if mo.get("disk"):
-            txt += ", на диске свободно %g ГБ" % mo["disk"]["free_gb"]
-        lines.append(txt)
+        lines.append("Камеры движения: %d из %d работают" % (sum(1 for c in cams if c["on"] and c["ok"]), sum(1 for c in cams if c["on"])))
+    dk = s.get("disk")
+    if dk:
+        lines.append("Диск: свободно %g ГБ из %g" % (dk["free_gb"], dk["total_gb"]))
     svc = s.get("services") or {}
     shown = [("%s %s" % (SERVICE_LABELS.get(k, k), {"ok": "ок", "starting": "запускается", "down": "не работает"}.get(v, v)))
              for k, v in svc.items() if v in ("ok", "starting", "down")]
@@ -1147,6 +1174,15 @@ def _post(url: str, token: str, body: dict, system_proxy: bool = True, timeout: 
 # ------------------------------------------------------------------------------------------------------------------- синглтон
 
 _agent: Optional[Agent] = None
+
+
+_update_restart_t: Optional[float] = None
+
+
+def note_update_restart() -> None:
+    """Апдейтер запущен и сейчас закроет приложение: закрытие не тревога (его вызвал сам завод)."""
+    global _update_restart_t
+    _update_restart_t = time.time()
 
 
 def start() -> Agent:

@@ -22,6 +22,7 @@ from camera_core import manager, build_rtsp_url, replace_host_in_url
 import plate_config
 import camera_params
 import rtsp_store
+import scan_service
 import save_settings
 import net_tools
 import updater
@@ -171,6 +172,11 @@ def multi_page():
 @app.get("/network")
 def network_page():
     return _page("network.html")
+
+
+@app.get("/scan")
+def scan_page():
+    return _page("scan.html")
 
 
 @app.get("/monitor")
@@ -1690,6 +1696,64 @@ async def force_ip(serial_number: str, ip: str, mask: str = "", gateway: str = "
     data = manager.force_ip(serial_number, ip, mask or None, gateway or None)
     api_log("api.force_ip", "Ответ ForceIP", payload={"serial_number": serial_number, "result": data})
     return data
+
+
+# ---------- Scan Camera: поиск RTSP-камер в подсети ----------
+@app.post("/api/scan/start")
+def scan_start(payload: dict = Body(...)):
+    prefix = scan_service.parse_prefix(payload.get("prefix"))
+    try:
+        first, last = int(payload.get("first", 1)), int(payload.get("last", 254))
+    except (TypeError, ValueError):
+        return {"error": "bad_range"}
+    if not prefix or not (0 <= first <= last <= 255):
+        return {"error": "bad_range"}
+    user = str(payload.get("user") or "admin")
+    passwords = [str(p) for p in (payload.get("passwords") or []) if str(p) != ""] or [""]
+    if not scan_service.job.start(prefix, first, last, user, passwords):
+        return {"error": "already_running"}
+    api_log("api.scan.start", "Запущено сканирование подсети", payload={"prefix": prefix, "first": first, "last": last})
+    return {"ok": True}
+
+
+@app.get("/api/scan/state")
+def scan_state():
+    st = scan_service.job.state()
+    saved = {e.get("ip") for e in rtsp_store.load()}
+    for it in st["items"]:
+        it["saved"] = it["ip"] in saved
+    return st
+
+
+@app.post("/api/scan/stop")
+def scan_stop():
+    scan_service.job.stop()
+    return {"ok": True}
+
+
+@app.get("/api/scan/frame")
+def scan_frame(ip: str):
+    jpeg = scan_service.job.frame(ip)
+    if not jpeg:
+        return Response(status_code=404)
+    return Response(jpeg, media_type="image/jpeg", headers=_NOCACHE)
+
+
+@app.post("/api/scan/add")
+def scan_add(payload: dict = Body(...)):
+    """Добавить найденную камеру в сохранённые RTSP. Пароль не указан — берём тот, с которым снят кадр."""
+    ip = str(payload.get("ip") or "")
+    conn = scan_service.job.connection(ip)
+    if not conn:
+        return {"error": "not_found"}
+    user = str(payload.get("user") or "admin")
+    password = payload.get("password")
+    if password in (None, ""):
+        password = conn["password"] if conn["password"] is not None else ""
+    url = scan_service.build_url(ip, conn["port"], conn["path"], user, str(password))
+    items = rtsp_store.save({"url": url, "label": ip, "ip": ip})
+    api_log("api.scan.add", "Камера из сканера добавлена в RTSP", payload={"ip": ip, "count": len(items)})
+    return {"ok": True, "items": items}
 
 
 # ---------- мини-база сохранённых RTSP-камер ----------

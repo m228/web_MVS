@@ -235,6 +235,23 @@ class MotionStore:
                     stats.setdefault(key, {})[zn] = [n] + [_f(x) for x in (sf, mnf, mxf, sd, mnd, mxd)]
         return [(ts, longs[ts][0], longs[ts][1]) for ts in sorted(longs)], [[k, stats[k]] for k in sorted(stats)]
 
+    def visibility(self, cam: str, zone_ids: set, t0: float, t1: float, step_s: int) -> dict:
+        """Сколько секунд из каждого окна step_s палка была найдена: {зона: {номер окна: (секунд с данными, секунд «найдена»)}}.
+        Считаем только секунды, когда камера отдавала нормальную картинку (ok=1): обрыв связи не считается «палку не видно».
+        Номер окна = время // step_s. Источник — секундные тренды (бит секунды = «найдена хотя бы в одном кадре секунды»)."""
+        step = max(1, int(step_s))
+        with self._lock:
+            self.flush()
+            c = self._id(cam)
+            ids = {self._id(z): z for z in zone_ids}
+            out: dict = {z: {} for z in zone_ids}
+            for k, z, n, f in self._c.execute(
+                    "SELECT ts / ? AS k, zone, COUNT(*), SUM(bit) FROM trend WHERE cam=? AND ts>=? AND ts<? AND ok=1 GROUP BY k, zone",
+                    (step * 10, c, int(t0 * 10), int(t1 * 10))):
+                if z in ids:
+                    out[ids[z]][int(k)] = (int(n), int(f or 0))
+        return out
+
     # ───────────── записи по кадрам ─────────────
     def rec_start(self, cam: str, zone_ids: list, fill_ids: set, t: float) -> int:
         with self._lock:

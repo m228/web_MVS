@@ -6,6 +6,16 @@ const MD_WIN_MIN = 30;
 const MD_WIN_MAX = 7200;
 // статистика зон (ср / мин / макс за окно): считает сервис движения, окно до суток
 const MD_STAT_KEY = 'mvStatWin';
+const MD_VIS_WINS = [[3600, '1 ч'], [10800, '3 ч'], [28800, '8 ч'], [86400, '24 ч'], [259200, '3 сут'], [604800, '7 сут']];
+const MD_VIS_KEY = 'mdVisWin';
+const MD_VIS_COLORS = ['#6c7bff', '#f59e0b', '#34d399', '#f472b6'];     // левая — синяя, правая — оранжевая
+function mdLoadVisWin() {
+  try {
+    const v = Number(localStorage.getItem(MD_VIS_KEY));
+    if (MD_VIS_WINS.some(([x]) => x === v)) return v;
+  } catch (e) { /* без памяти браузера — по умолчанию */ }
+  return 86400;
+}
 const MD_STAT_WINS = [[300, '5 мин'], [900, '15 мин'], [3600, '1 ч'], [10800, '3 ч'], [28800, '8 ч'], [86400, '24 ч']];
 const MD_STAT_EVERY_MS = 5000;
 const MD_OPEN_KEY = 'mvZoneOpenAll';
@@ -35,6 +45,9 @@ const MD = {
   peekKey: '',          // что сейчас показано во всплывающем кадре (пусто — ничего)
   peekFrames: {},       // id камеры → { t, p } кадр для подсказки (кэш на 3 с)
   statWin: mdLoadStatWin(),
+  visWin: mdLoadVisWin(),   // период графика «Видимость палок», с
+  vis: {},              // id камеры → ответ /api/motion/visibility
+  visAt: {},            // id камеры → когда и за какой период запрошено
   stats: {},            // id камеры → ответ /api/motion/stats
   statAt: 0,
   statBusy: false,
@@ -304,6 +317,91 @@ function mdZoneCardHtml(cam, z, i) {
   </div>`;
 }
 
+// «Видимость палок»: доля времени, когда палка найдена, окнами за период; смотреть, помогли ли подсветка, свет или сдвиг камеры
+function mdVisHtml(cam) {
+  if (!cam.zones.some((z) => z.type === 'cycle' && z.enabled !== false)) return '';
+  const k = escapeHtml(cam.id);
+  return `<div class="md-zone md-vis">
+    <div class="md-zone__ctl">
+      <div class="md-zone__row"><b>Видимость палок</b><span class="md-sp"></span><span class="md-lbl">за</span><select data-md="vis" title="За какой период показать график и среднее">${mdSel(MD_VIS_WINS, MD.visWin)}</select></div>
+      <div class="md-zstat" id="md-vl-${k}">загружаю…</div>
+      <div class="net-hint" title="Секунда считается «найдена», если палку увидели хотя бы в одном кадре секунды; когда палки нет или она достроена по скорости — «не найдена». Время без картинки (обрыв связи) в расчёт не идёт.">доля времени, когда палка найдена</div>
+    </div>
+    <div class="md-zone__chart"><canvas id="md-vis-${k}" height="84"></canvas></div>
+  </div>`;
+}
+
+function mdVisTime(ts, win) {
+  const d = new Date(ts * 1000), p2 = (n) => String(n).padStart(2, '0');
+  return (win > 86400 ? p2(d.getDate()) + '.' + p2(d.getMonth() + 1) + ' ' : '') + p2(d.getHours()) + ':' + p2(d.getMinutes());
+}
+
+function mdDrawVis(cam) {
+  const cv = mdEl('md-vis-' + cam.id);
+  if (!cv) return;
+  const d = MD.vis[cam.id];
+  const lg = mdEl('md-vl-' + cam.id);
+  const ids = d && d.zones ? Object.keys(d.zones) : [];
+  if (lg) {
+    lg.innerHTML = !d ? 'загружаю…' : d.error ? escapeHtml(d.error)
+      : ids.map((id, n) => `<div style="color:${MD_VIS_COLORS[n % MD_VIS_COLORS.length]}">● ${escapeHtml((d.names && d.names[id]) || id)} <b>${d.avg[id] == null ? '—' : d.avg[id].toFixed(1) + ' %'}</b></div>`).join('');
+  }
+  const w = cv.clientWidth, hh = cv.height || 84;
+  if (!w) return;
+  if (cv.width !== w) cv.width = w;
+  const g = cv.getContext('2d');
+  g.clearRect(0, 0, w, hh);
+  g.font = '10px sans-serif'; g.fillStyle = '#94a3b8';
+  const vals = ids.flatMap((id) => d.zones[id]).filter((v) => v != null);
+  if (!d || !d.t || !vals.length) { g.fillText(d && d.error ? '' : d ? 'нет данных за период' : 'загружаю…', 8, hh / 2); return; }
+  const padL = 30, padB = 14, plotW = w - padL - 4, plotH = hh - padB - 6;
+  const lo = Math.min(90, Math.floor((Math.min(...vals) - 2) / 5) * 5), hi = 100;
+  const stepV = hi - lo > 30 ? 20 : hi - lo > 15 ? 10 : 5;
+  const X = (i) => padL + (d.t.length > 1 ? (i / (d.t.length - 1)) * plotW : 0);
+  const Y = (v) => 3 + plotH - ((v - lo) / (hi - lo)) * plotH;
+  g.lineWidth = 1; g.strokeStyle = 'rgba(148,163,184,.22)';
+  for (let v = hi; v >= lo; v -= stepV) {
+    g.beginPath(); g.moveTo(padL, Y(v)); g.lineTo(w - 4, Y(v)); g.stroke();
+    g.fillText(v + '%', 2, Math.max(9, Y(v) + 3));
+  }
+  for (let j = 0; j <= 4; j += 1) {
+    const i = Math.round((j * (d.t.length - 1)) / 4);
+    g.textAlign = j === 0 ? 'left' : j === 4 ? 'right' : 'center';
+    g.fillText(mdVisTime(d.t[i], d.window_s), j === 0 ? padL : j === 4 ? w - 4 : X(i), hh - 2);
+  }
+  g.textAlign = 'left';
+  ids.forEach((id, n) => {
+    g.strokeStyle = MD_VIS_COLORS[n % MD_VIS_COLORS.length]; g.lineWidth = 1.8; g.beginPath();
+    let pen = false;
+    d.zones[id].forEach((v, i) => {
+      if (v == null) { pen = false; return; }
+      if (pen) g.lineTo(X(i), Y(v)); else g.moveTo(X(i), Y(v));
+      pen = true;
+    });
+    g.stroke();
+  });
+}
+
+// подтянуть с сервиса (не чаще раза в минуту, сразу при смене периода) и нарисовать
+async function mdVisRefresh(cams, force) {
+  const now = Date.now();
+  await Promise.all(cams.map(async (c) => {
+    if (!c.zones.some((z) => z.type === 'cycle' && z.enabled !== false)) return;
+    const at = MD.visAt[c.id];
+    if (!force && at && at.win === MD.visWin && now - at.t < 60000) return;
+    MD.visAt[c.id] = { t: now, win: MD.visWin };
+    const r = await mvApi('/api/motion/visibility?camera=' + encodeURIComponent(c.id) + '&window=' + MD.visWin);
+    MD.vis[c.id] = r && !r.error ? r : { error: (r && r.error) || 'нет ответа сервиса' };
+    mdDrawVis(c);
+  }));
+}
+
+function mdOnVis(t) {
+  MD.visWin = Number(t.value);
+  try { localStorage.setItem(MD_VIS_KEY, String(MD.visWin)); } catch (err) { /* не критично */ }
+  mdVisRefresh(mdShownCams().filter((c) => c.zones.length), true);
+}
+
 const mdLastDelta = {};   // группа → последнее надёжное Δ (палки видны): в удержании показываем его, а не достроенное
 
 // карточка синхронности валов: слева Δ, автокоррекция (тумблер), допуск и эталон, вывод в ПЛК; справа два графика Δ — без коррекции и с ней
@@ -316,6 +414,7 @@ function mdMirrorCardHtml(cam, g) {
       <div class="md-zone__row"><b>${escapeHtml(g.name)}</b><span class="net-hint">${names}</span><span class="md-sp"></span>
         <span class="cv-bit" id="md-mxb-${k}" title="Авария: рассинхрон больше допуска">–</span><span class="md-num" id="md-mxv-${k}" title="Отклонение от нормы, °">–</span></div>
       <div class="md-zstat" id="md-mxs-${k}"></div>
+      <div class="md-zstat md-mxd" id="md-mxd-${k}"></div>
       <div class="md-zone__row md-mx-set">
         <label class="switch-toggle md-sw md-sw--sm" title="Волна Δ за оборот — перекос камеры, он повторяется. Сервис сам выучивает её по скользящему окну и вычитает: Δ держится около нуля, а свет и положение камеры подстраиваются. Учится только форма волны: настоящий сдвиг валов в неё не уходит и виден в Δ сразу."><span class="switch"><input type="checkbox" ${a} data-f="learn"${g.learn === false ? '' : ' checked'} /><span class="switch-track"></span></span><span class="md-lbl md-lbl--on">автокоррекция</span></label>
         <span class="md-lbl" title="За какое время учится форма: скользящее окно. Больше — спокойнее, меньше — быстрее следует за светом и камерой">окно</span>${mdNum(a + ' data-f="learnmin"', g.learn_min || 30, 'min="5" max="240" step="5"')}<span class="md-lbl">мин</span>
@@ -430,6 +529,7 @@ function mdZonesTabHtml(mode, cam) {
       if (!c.zones.length) return;
       if (all) html += `<div class="md-camhead"><b>${escapeHtml(c.name)}${mdIpTag(c.url)}</b><span class="motion-dock__pill" id="md-cp-${escapeHtml(c.id)}"></span></div>`;
       html += c.zones.map((z, i) => mdZoneCardHtml(c, z, i)).join('');
+      html += mdVisHtml(c);
       html += (c.groups || []).filter((g) => g.type === 'mirror').map((g) => mdMirrorCardHtml(c, g)).join('');
     });
     html += '</div>';
@@ -536,6 +636,8 @@ async function mdDrawTrends() {
     cams[k].zones.forEach((z) => mdDrawChart(cams[k], z, h.zones[z.id], h.t || [], h.ok || []));
     mdDrawMirrorCharts(cams[k], h);
   });
+  cams.forEach((c) => mdDrawVis(c));            // из кэша: карточка могла перерисоваться
+  mdVisRefresh(cams, false);
   if (MD.trendDirty) { MD.trendDirty = false; mdDrawTrends(); }
 }
 
@@ -562,11 +664,25 @@ function mdZoneStatHtml(z, cur, st) {
   return row('diff') + row('flow');
 }
 
+// Δ с коррекцией за период: среднее / мин / макс (и сама поправка), считает сервис по каждому кадру с видимыми палками
+const mdSgn = (v) => (v > 0 ? '+' : '') + Number(v).toFixed(1);
+function mdMirrorStatHtml(s, sr) {
+  const d = s.delta, cr = s.corr;
+  const note = sr && s.span_s < sr.window_s * 0.9 ? ` <span class="md-zstat__note">накоплено за ${mdFmtWin(s.span_s)}</span>` : '';
+  return `<div class="md-zstat__row is-main" title="Отклонение Δ уже с поправкой автокоррекции, по каждому кадру, где видны обе палки (без удержания)">Δ с коррекцией за ${mdFmtWin(sr.window_s)}: ср <b class="md-zstat__cur">${mdSgn(d.avg)}°</b> · мин ${mdSgn(d.min)} · макс ${mdSgn(d.max)}${note}</div>` +
+    `<div class="md-zstat__row" title="Сколько вычитается из сырой суммы углов: ручная таблица + выученная форма">поправка: ср ${mdSgn(cr.avg)} · от ${mdSgn(cr.min)} до ${mdSgn(cr.max)}°</div>`;
+}
+
 function mdPaintZoneStats() {
   mdLoadStats();
   mdShownCams().forEach((c) => {
     const res = (MV.states[c.id] || {}).result;
     const sr = MD.stats[c.id];
+    (c.groups || []).filter((g) => g.type === 'mirror').forEach((g) => {
+      const el = mdEl('md-mxd-' + c.id + '-' + g.id);
+      const gs = sr && sr.groups && sr.groups[g.id];
+      if (el) el.innerHTML = gs ? mdMirrorStatHtml(gs, sr) : '';
+    });
     const live = {};
     ((res && res.zones) || []).forEach((z) => { live[z.id] = z; });
     c.zones.forEach((z) => {
@@ -1521,6 +1637,7 @@ function initMotionDock() {
     if (!kind) return;
     if (kind === 'z') { const cam = mvCam(t.dataset.cam); if (cam) mdOnZone(t, cam); }
     else if (kind === 'g') mdOnGroup(t);
+    else if (kind === 'vis') mdOnVis(t);
     else if (kind === 'mg') { const cam = mvCam(t.dataset.cam); if (cam) mdOnMirror(t, cam); }
     else if (kind === 'c') { const cam = mvCam(t.dataset.cam); if (cam) mdOnCamera(t, cam); }
     else if (kind === 'p') mdOnPlc(t);

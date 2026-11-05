@@ -26,6 +26,8 @@ const LIGHT_SVG = '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" s
 const ZOOM_SVG = '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"></circle><path d="M21 21l-4.3-4.3M11 8v6M8 11h6"></path></svg>';
 
 const REGION_SVG = '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 8V5a2 2 0 0 1 2-2h3M16 3h3a2 2 0 0 1 2 2v3M21 16v3a2 2 0 0 1-2 2h-3M8 21H5a2 2 0 0 1-2-2v-3"></path><path d="M8.5 12h7M12 8.5v7"></path></svg>';
+const MARK_SVG = '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="8" stroke-dasharray="3 3"/><path d="M12 12V4"/><path d="M12 12l5 3"/></svg>';   // разметка КЗ: окружность поиска и палка
+const MARK_OFF_SVG = MARK_SVG.replace('</svg>', '<path d="M4 4l16 16"/></svg>');
 
 function defaultGigeSettings() {
   return {

@@ -7,7 +7,7 @@ const LV_DEF = { conf: 0.35, imgsz: 0, geometry: 'lvldec', infer_interval_s: 2, 
 // [мин, макс] числовых параметров группы (как проверяет сервер)
 const LV_NUM = { conf: [0.01, 0.99], imgsz: [0, 4096], infer_interval_s: [0.2, 600], alpha: [0, 0.999], warmup_s: [0, 600],
   glass1_min: [0, 100], glass2_min: [0, 100], glass1_full: [0, 100], glass2_full: [0, 100], hold_s: [1, 3600] };
-const LV = { svc: null, models: null, at: 0, busy: false, msg: '', msgCls: '', notes: [] };
+const LV = { svc: null, models: null, at: 0, busy: false, msg: '', msgCls: '' };
 
 const lvGroup = (cam) => ((cam && cam.groups) || []).find((g) => g.type === 'level') || null;
 const lvP = (g, k) => (g && g[k] !== undefined ? g[k] : LV_DEF[k]);
@@ -80,7 +80,8 @@ function mdLevelTabHtml(mode, cam) {
   const m = (sc && sc.modbus) || { enable: false, host: '', port: 502, device_id: 1 };
   const a = 'data-md="lv"';
   const num = (f, v, min, max, step) => `<input type="number" ${a} data-f="${f}" value="${escapeHtml(v)}" min="${min}" max="${max}" step="${step || 'any'}" />`;
-  const par = g ? `<details class="lv-par"${LV.parOpen ? ' open' : ''}><summary>Параметры</summary><div class="md-fields">
+  // пары рядом: нижнее | верхнее, остальное — по смыслу (модель, сглаживание, маска, запас)
+  const par = g ? `<div class="lv-par"><div class="md-h">Параметры</div><div class="md-fields md-fields--c">
       ${mdField('Уверенность модели', num('conf', lvP(g, 'conf'), 0.01, 0.99, 0.01), 'Порог уверенности 0…1: объекты слабее отбрасываются')}
       ${mdField('Опрос модели, с', num('infer_interval_s', lvP(g, 'infer_interval_s'), 0.2, 600, 0.1), 'Как часто кадр отправляется на распознавание')}
       ${mdField('Сглаживание', num('alpha', lvP(g, 'alpha'), 0, 0.999, 0.01), 'EMA: ближе к 1 — плавнее и инертнее (0 — без сглаживания)')}
@@ -94,16 +95,20 @@ function mdLevelTabHtml(mode, cam) {
       ${mdField('Класс жидкости', `<input type="text" ${a} data-f="liquid_class" value="${escapeHtml(lvP(g, 'liquid_class'))}" />`, 'Имя класса модели, которое считается жидкостью (у моделей LVLDec — liquid)')}
       ${mdField('Размер входа', num('imgsz', lvP(g, 'imgsz'), 0, 4096, 32), '0 — тот, на котором обучена модель')}
       ${mdField('Держать без модели, с', num('hold_s', lvP(g, 'hold_s'), 1, 3600, 1), 'Сколько держать последний уровень, если модель молчит; потом — ноль')}
-    </div></details>` : '';
-  const plc = g ? `<div class="md-h md-h--row md-h--sec">Запись в ПЛК <span class="md-dim" id="lvPlcInfo"></span></div>
-    <div class="md-card lv-plc ${m.enable ? 'is-on' : ''}">
-      <label class="switch-toggle md-sw" title="Писать Total ×10 в регистр контроллера. Выключено — в ПЛК ничего не уходит"><span class="switch"><input type="checkbox" ${a} data-f="p_en"${m.enable ? ' checked' : ''} /><span class="switch-track"></span></span></label>
-      <div class="md-fields lv-plcf">
-        ${mdField('IP контроллера', `<input type="text" ${a} data-f="p_host" value="${escapeHtml(m.host)}" placeholder="192.168.0.10" />`)}
-        ${mdField('Порт', num('p_port', m.port, 1, 65535, 1))}
-        ${mdField('Unit ID', num('p_dev', m.device_id, 0, 255, 1))}
-        ${mdField('Регистр Total ×10', num('p_addr', sc && sc.out ? sc.out.address : 0, 0, 65535, 1), 'Целое 0…1000: 54,3 % → 543 (SCADA делит на 10)')}
-      </div></div>` : '';
+    </div></div>` : '';
+  // запись в ПЛК — карточка справа от параметров; квадратик справа в шапке включает запись
+  const plc = g ? `<div class="lv-plc2${m.enable ? ' is-on' : ''}">
+    <div class="lv-plc2__head"><b>Запись в ПЛК</b><span class="md-dim" id="lvPlcInfo"></span>
+      <label class="lv-sq" title="Писать Total ×10 в регистр контроллера. Выключено — в ПЛК ничего не уходит"><input type="checkbox" ${a} data-f="p_en"${m.enable ? ' checked' : ''} /><span></span></label></div>
+    <div class="md-fields md-fields--c lv-plc2__body">
+      ${mdField('IP контроллера', `<input type="text" ${a} data-f="p_host" value="${escapeHtml(m.host)}" placeholder="192.168.0.10" />`)}
+      ${mdField('Порт', num('p_port', m.port, 1, 65535, 1))}
+      ${mdField('Unit ID', num('p_dev', m.device_id, 0, 255, 1))}
+      ${mdField('Регистр Total ×10', num('p_addr', sc && sc.out ? sc.out.address : 0, 0, 65535, 1), 'Целое 0…1000: 54,3 % → 543 (SCADA делит на 10)')}
+    </div></div>` : '';
+  const names = g ? g.zones.map((id) => { const z = cam.zones.find((q) => q.id === id); return z ? z.name : id; }) : [];
+  const glasses = g ? `<div class="lv-glasses">${names.map((n, i) =>
+    `<span class="lv-glass"><i style="background:${i ? LV_COL.up : LV_COL.low}"></i>${escapeHtml(n)}<button type="button" class="btn-secondary md-x" ${a} data-f="del_glass" data-gi="${i}" title="${i ? 'Удалить верхнее стекло' : 'Удалить стёкла: без нижнего (рабочего) уровень не считается'}">✕</button></span>`).join('')}${names.length < 2 ? '<span class="lv-glass lv-glass--empty">верхнего стекла нет</span>' : ''}</div>` : '';
   return `<div class="lv">
     <p class="cap-line" id="lvCap" data-state="unknown"><span class="cap-dot"></span><span class="cap-text">Проверяю сервис уровня…</span></p>
     <div class="lv-row">
@@ -113,15 +118,13 @@ function mdLevelTabHtml(mode, cam) {
     </div>
     <div class="lv-now"><b id="lvTotal">–</b><span class="lv-unit">%</span><span class="md-dim" id="lvParts"></span><span class="md-dim" id="lvMeta"></span></div>
     <div class="lv-row">
-      <button type="button" class="btn-primary md-x" ${a} data-f="mark" title="Обведите на кадре нижнее (рабочее) стекло, потом верхнее">${g ? 'Разметить стёкла заново' : 'Разметить стёкла'}</button>
-      <button type="button" class="btn-secondary md-x" ${a} data-f="import" title="Перенести настройки LVLDec: зоны, пороги, камеру, ПЛК — из его data\\config.ini">Импорт config.ini LVLDec…</button>
-      <input type="file" id="lvIni" accept=".ini,.txt" hidden ${a} data-f="ini" />
+      ${glasses}
+      <button type="button" class="btn-primary md-x" ${a} data-f="mark" title="Обведите на кадре нижнее (рабочее) стекло, потом верхнее">${g ? 'Разметить заново' : 'Разметить стёкла'}</button>
       ${g ? `<label class="micro-check" title="Тонкий контур найденной жидкости на плитке камеры"><input type="checkbox" ${a} data-f="contour"${lvP(g, 'contour') ? ' checked' : ''} /><span class="micro-check__text">контур жидкости</span></label>` : ''}
       <span class="lv-msg ${LV.msgCls}" id="lvMsg">${escapeHtml(LV.msg)}</span>
     </div>
-    ${LV.notes.length ? `<ul class="lv-notes">${LV.notes.map((n) => `<li>${escapeHtml(n)}</li>`).join('')}</ul>` : ''}
-    ${g ? '' : '<p class="net-hint">Стёкол ещё нет. «Разметить стёкла» — обвести на кадре нижнее и верхнее; либо «Импорт config.ini LVLDec» — перенести всё, что настроено в LVLDec.</p>'}
-    ${par}${plc}
+    ${g ? '' : '<p class="net-hint">Стёкол ещё нет. «Разметить стёкла» — обвести на кадре нижнее и верхнее.</p>'}
+    ${g ? `<div class="lv-cols">${par}${plc}</div>` : ''}
   </div>`;
 }
 
@@ -165,6 +168,7 @@ function lvEnsureScenario(cam, g) {
       out: { kind: 'holding', address: 0 }, modbus: { enable: false, host: '', port: 502, device_id: 1, write_period_s: 1 } };
     list.push(sc);
   }
+  if (!sc.sources.some((x) => x.camera === cam.id && x.group === g.id)) sc.sources = [{ camera: cam.id, group: g.id }];   // группу удаляли и разметили заново
   return sc;
 }
 
@@ -227,44 +231,12 @@ async function lvLoadModel(name) {
   lvRefresh(true);
 }
 
-// перенос настроек LVLDec: камера в сервисе уже есть, меняем зоны, пороги и сценарий записи (связь с ПЛК остаётся выключенной)
-async function lvImport(cam, file) {
-  if (!file) return;
-  const r = await mvJson('/api/motion/level_import', { ini: await file.text() });
-  const inp = mdEl('lvIni');
-  if (inp) inp.value = '';
-  if (!r || r.error) { lvMsg('Импорт: ' + ((r && r.error) || 'нет ответа'), 'is-bad'); return; }
-  const base = [1920, 1080];             // зоны LVLDec заданы в пикселях кадра основного потока (1920×1080)
-  const notes = r.notes.slice();
-  if (r.url && mdIp(r.url) && mdIp(r.url) !== mdIp(cam.url)) notes.unshift('адрес камеры в config.ini: ' + mdIp(r.url) + ', в приложении: ' + (mdIp(cam.url) || '—') + ' — зоны перенесены как есть');
-  mdEdit(() => {
-    if (!cam.frame_size || !(cam.zones || []).length) cam.frame_size = base.slice();
-    const fs = cam.frame_size;
-    const sc = (p) => [Math.round(p[0] * fs[0] / base[0]), Math.round(p[1] * fs[1] / base[1])];
-    let g = lvGroup(cam);
-    if (r.zones.lower) g = lvSetZones(cam, [r.zones.lower, r.zones.upper].filter(Boolean).map((poly) => poly.map(sc)));
-    if (!g) return;
-    Object.assign(g, r.group);
-    const s = lvEnsureScenario(cam, g);
-    s.out = { kind: 'holding', address: r.plc.address };
-    s.modbus = { enable: false, host: r.plc.host, port: r.plc.port, device_id: r.plc.device_id, write_period_s: 1 };
-  }, true);
-  LV.notes = notes;
-  LV.parOpen = true;
-  lvMsg(lvGroup(cam) ? '✓ перенесено из config.ini' : 'Зон в config.ini нет — разметьте стёкла', lvGroup(cam) ? 'is-ok' : 'is-bad');
-  MD.key = '';
-  renderMotionDock();
-  log.success('КЗ: импорт config.ini LVLDec', { serial: cam.id });
-}
-
 function mdOnLevel(t) {
   const { cam } = mdCamera();
   if (!cam) return;
   const f = t.dataset.f;
   if (f === 'pick') { mdEl('lvFile')?.click(); return; }
-  if (f === 'import') { mdEl('lvIni')?.click(); return; }
   if (f === 'upload') { lvUpload(t.files && t.files[0]); return; }
-  if (f === 'ini') { lvImport(cam, t.files && t.files[0]); return; }
   if (f === 'mark') { openMarkModal('glass'); return; }
   if (f === 'model') { lvLoadModel(t.value); return; }
   const g = lvGroup(cam);
@@ -279,6 +251,7 @@ function mdOnLevel(t) {
     mdEdit(() => { g[f] = v; });
     return;
   }
+  if (f === 'del_glass') { lvDelGlass(cam, g, Number(t.dataset.gi)); return; }
   if (f.startsWith('p_')) {                             // запись в ПЛК: сценарий «Уровень · камера» со своей связью
     const sc = lvEnsureScenario(cam, g);
     if (f === 'p_en' && t.checked && !String(sc.modbus.host || '').trim()) {
@@ -287,13 +260,32 @@ function mdOnLevel(t) {
       return;
     }
     mdEdit(() => {
-      if (f === 'p_en') { sc.modbus.enable = t.checked; t.closest('.lv-plc')?.classList.toggle('is-on', t.checked); }
+      if (f === 'p_en') { sc.modbus.enable = t.checked; t.closest('.lv-plc2')?.classList.toggle('is-on', t.checked); }
       else if (f === 'p_host') sc.modbus.host = t.value.trim();
       else if (f === 'p_port') sc.modbus.port = parseInt(t.value, 10) || 502;
       else if (f === 'p_dev') sc.modbus.device_id = parseInt(t.value, 10) || 0;
       else if (f === 'p_addr') sc.out = { kind: 'holding', address: Math.max(0, parseInt(t.value, 10) || 0) };
     });
   }
+}
+
+// удалить стекло: верхнее — только его; нижнее — рабочее, без него уровень не считается, поэтому уходят оба
+// (настройки связи с ПЛК остаются в сценарии и подхватятся при новой разметке)
+function lvDelGlass(cam, g, i) {
+  const both = i === 0 && g.zones.length > 1;
+  const q = i ? 'Удалить верхнее стекло?' : both ? 'Нижнее стекло — рабочее: без него уровень не считается.\nУдалить оба стекла?' : 'Удалить стекло?';
+  if (!confirm(q)) return;
+  const ids = i ? g.zones.slice(1) : g.zones.slice();
+  mdEdit(() => {
+    cam.zones = cam.zones.filter((z) => !ids.includes(z.id));
+    g.zones = g.zones.filter((id) => !ids.includes(id));
+    if (!g.zones.length) {
+      cam.groups = cam.groups.filter((x) => x.id !== g.id);
+      const sc = lvScenario(cam);
+      if (sc) sc.sources = sc.sources.filter((x) => !(x.camera === cam.id && x.group === g.id));
+    }
+  }, true);
+  log.success('КЗ: стекло удалено', { serial: cam.id, glass: i ? 'верхнее' : 'нижнее' });
 }
 
 // ---------- карточка уровня на «Зоны · тренды» (как у синхронности валов: слева значения, справа график) ----------

@@ -197,15 +197,27 @@ function drawLevelOnTile(ctx, cam, g, st, problem) {
     const z = cam.zones.find((q) => q.id === zid);
     if (!z || z.enabled === false) return;
     const pts = zonePointsOnTile(z, cam, g);
-    const col = ok ? MV_LEVEL_COL[i % 2] : '#9ca3af';
-    ctx.strokeStyle = col; ctx.fillStyle = col + '24';
-    ctx.beginPath();
-    pts.forEach((p, k) => (k ? ctx.lineTo(p[0], p[1]) : ctx.moveTo(p[0], p[1])));
-    ctx.closePath(); ctx.fill(); ctx.stroke();
     const lz = live[zid];
-    const label = ok && lz ? Math.round(lz.level) + ' %' : '—';
-    ctx.lineWidth = 3; ctx.strokeStyle = '#000'; ctx.strokeText(label, pts[0][0] + 4, pts[0][1] + 15);
-    ctx.fillStyle = '#fff'; ctx.fillText(label, pts[0][0] + 4, pts[0][1] + 15); ctx.lineWidth = 2;
+    const col = ok ? MV_LEVEL_COL[i % 2] : '#9ca3af';
+    const path = () => { ctx.beginPath(); pts.forEach((p, k) => (k ? ctx.lineTo(p[0], p[1]) : ctx.moveTo(p[0], p[1]))); ctx.closePath(); };
+    ctx.lineWidth = 2; ctx.strokeStyle = col; ctx.fillStyle = col + '1a';
+    path(); ctx.fill(); ctx.stroke();
+    if (!ok || !lz) return;
+    // «палка» уровня: линия на измеренной высоте внутри стекла и заливка под ней — двигаются вместе с жидкостью, как палка вала с углом
+    const xs = pts.map((p) => p[0]), ys = pts.map((p) => p[1]);
+    const x0 = Math.min(...xs), x1 = Math.max(...xs), y0 = Math.min(...ys), y1 = Math.max(...ys);
+    const yl = y1 - (y1 - y0) * Math.max(0, Math.min(100, lz.level)) / 100;
+    ctx.save();
+    path(); ctx.clip();
+    ctx.fillStyle = col + '55'; ctx.fillRect(x0, yl, x1 - x0, y1 - yl);
+    ctx.lineWidth = 3; ctx.strokeStyle = '#fff'; ctx.beginPath(); ctx.moveTo(x0, yl); ctx.lineTo(x1, yl); ctx.stroke();
+    ctx.restore();
+    // подпись справа от стекла на высоте уровня: стрелка и заполнение стекла
+    const label = Math.round(lz.level) + ' %';
+    ctx.fillStyle = col;
+    ctx.beginPath(); ctx.moveTo(x1 + 3, yl); ctx.lineTo(x1 + 11, yl - 5); ctx.lineTo(x1 + 11, yl + 5); ctx.closePath(); ctx.fill();
+    ctx.lineWidth = 3; ctx.strokeStyle = '#000'; ctx.strokeText(label, x1 + 14, yl + 5);
+    ctx.fillStyle = '#fff'; ctx.fillText(label, x1 + 14, yl + 5); ctx.lineWidth = 2;
   });
   if (ok && lg.contour && lg.contour_wh) {          // тонкий контур найденной жидкости
     const cw = lg.contour_wh[0], kx = (g.nw / cw) * g.k;

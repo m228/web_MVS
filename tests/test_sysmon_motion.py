@@ -19,16 +19,16 @@ def snap(**src):
 
 
 def test_motion_block_in_snapshot(sm):
-    s = snap(motion=lambda: {"cameras": CAMS, "disk": DISK})
+    s = snap(motion=lambda: {"cameras": CAMS}, disk=lambda: DISK)
     m = s["motion"]
     assert [c["name"] for c in m["cameras"]] == ["Вал 1", "Вал 2", "Лента"]
     c1, c2, c3 = m["cameras"]
     assert (c1["on"], c1["ok"], c1["fps"], c1["age_s"], c1["rec"], c1["error"]) == (True, True, 25.0, 0.0, True, None)
     assert (c2["ok"], c2["rec"], c2["age_s"]) == (False, False, None) and len(c2["error"]) == 80, "ошибка обрезается"
     assert c3["on"] is False
-    assert m["disk"] == {"free_gb": 380.4, "total_gb": 1000.0}
+    assert "disk" not in m and s["disk"] == {"free_gb": 380.4, "total_gb": 1000.0}, "диск — общий блок снимка, не часть движения"
     assert "result" not in json.dumps(m), "внутренности сервиса движения в пульс не уходят"
-    assert "Камеры движения: 1 из 2 работают, на диске свободно 380.4 ГБ" in s["text"], "выключенная камера в счёт не идёт"
+    assert "Камеры движения: 1 из 2 работают" in s["text"] and "Диск: свободно 380.4 ГБ из 1000" in s["text"], "выключенная камера в счёт не идёт"
 
 
 @pytest.mark.parametrize("value", [None, {}, {"cameras": []}, {"cameras": ["мусор"]}])
@@ -53,5 +53,12 @@ def test_motion_without_disk_and_camera_limit(sm):
 
 
 def test_motion_works_on_plant_without_microscope(sm):
-    s = snap(micro_on=lambda: False, motion=lambda: {"cameras": CAMS, "disk": DISK})
+    s = snap(micro_on=lambda: False, motion=lambda: {"cameras": CAMS}, disk=lambda: DISK)
     assert "micro" not in s and s["motion"]["cameras"]
+
+
+def test_disk_is_in_snapshot_of_every_plant(sm):
+    micro = snap(disk=lambda: DISK)                                   # микроскоп без сервиса движения
+    assert micro["disk"] == {"free_gb": 380.4, "total_gb": 1000.0} and "motion" not in micro
+    assert "disk" not in snap(), "источника нет — блока нет"
+    assert "disk" not in snap(disk=lambda: {"free": 1, "total": 0}), "диск без размера не показываем"

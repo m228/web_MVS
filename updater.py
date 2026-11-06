@@ -646,5 +646,11 @@ def run_update_script(port: int = 8000, staged: bool = False, components=None, y
         subprocess.Popen(cmd, creationflags=base, close_fds=True, cwd=str(app_dir))
     log_event("updater.run", "Запущен update.ps1 из папки установки" + ("; приложение будет остановлено и запущено заново" if "main" in comps else ""),
               "warn", {"script": str(script), "components": comps})
+    if "main" in comps:                                          # мониторингу: закрытие приложения сейчас — ради обновления, не тревога
+        try:
+            import sysmon
+            sysmon.note_update_restart()
+        except Exception:
+            pass
     return {"ok": True, "message": "обновление запущено", "components": comps, "restart": "main" in comps,
             "no_browser": no_browser_applied}

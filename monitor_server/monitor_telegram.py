@@ -35,7 +35,7 @@ API_BASE = "https://api.telegram.org"
 HTTP_TIMEOUT_S = 10
 RETRY_MAX_S = 1800
 WATCH_EVERY_S = 30
-DEFAULTS = {"fresh_s": 900, "max_per_hour": 20, "offline_repeat_s": 7200, "max_age_s": 7200, "morning": (8, 0)}
+DEFAULTS = {"fresh_s": 900, "max_per_hour": 20, "offline_repeat_s": 21600, "max_age_s": 7200, "morning": (8, 0)}
 MORNING_WINDOW_S = 2 * 3600          # утреннюю сводку после этого срока уже не шлём (приёмник включили днём — это не «утро»)
 MORNING_SPAN_S = 12 * 3600           # за сколько часов до отправки смотрим: 08:00 -> с 20:00 (граница смен Макса)
 TEST_TEXT = "✅ web_MVS панель: Telegram подключён. Сюда придут тревоги заводов: перезапуск ПК или приложения, нет связи, красные тревоги."
@@ -157,7 +157,8 @@ def format_line(r: dict) -> str:
     if r["state"] == "closed":
         text = text[len("Снято: "):] if text.startswith("Снято: ") else text
         return "🟢 %s — снято: %s · %s" % (r["plant_name"], text, hm)
-    return "🔴 %s — %s · %s" % (r["plant_name"], text, hm)
+    icon = "🟠" if r["kind"] in ("offline", "offline_repeat") and r.get("level") == "high" else "🔴"      # пропал пульс — оранжевый, не красный
+    return "%s %s — %s · %s" % (icon, r["plant_name"], text, hm)
 
 
 class Notifier:

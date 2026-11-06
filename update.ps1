@@ -11,10 +11,10 @@
 #   -Port <порт>      порт приложения для проверки запуска (по умолчанию 8000)
 #   -Root <папка>     папка установки (по умолчанию — рядом со скриптом)
 #   -NoElevate        не запрашивать права администратора (для проверок)
-#   -Components <список>  что обновлять: main (основное приложение), cv (CV микроскопа), video (видео-ролик), motion (CV RTSP / движение),
+#   -Components <список>  что обновлять: main (основное приложение), cv (CV микроскопа), video (видео-ролик), motion (CV RTSP / движение), level (уровень жидкости / YOLO),
 #                     через запятую или all. Без параметра — меню с выбором (прошлый выбор помнится в update_choice.json)
 #   -ZipDir <папка>   папка с готовыми архивами релиза (web_MVS_v*.zip, cv_service_v*.zip, ...) вместо скачивания
-#   -Yes              подтвердить тяжёлую первую установку CV (torch, несколько ГБ) без вопроса
+#   -Yes              подтвердить тяжёлую первую установку (CV микроскопа или уровень: torch, несколько ГБ) без вопроса
 #   -NoMenu           меню не показывать (без -Components обновляется только основное приложение, как раньше)
 #   -NoBrowser        запускать приложение с --no-open: страницу в браузере оно не открывает (её перезагружает вкладка, с которой нажали «обновить»)
 [CmdletBinding()]
@@ -393,13 +393,14 @@ function Invoke-Update {
 }
 
 # ---------- компоненты: основное приложение + дополнения (сервисы рядом) ----------
-# Один релиз GitHub несёт все архивы одной версии: web_MVS_v*.zip, cv_service_v*.zip, video_service_v*.zip, motion_service_v*.zip.
-# Что обновлять — выбирает меню (или -Components main,cv,video,motion); прошлый выбор помнится в update_choice.json.
+# Один релиз GitHub несёт все архивы одной версии: web_MVS_v*.zip, cv_service_v*.zip, video_service_v*.zip, motion_service_v*.zip, level_service_v*.zip.
+# Что обновлять — выбирает меню (или -Components main,cv,video,motion,level); прошлый выбор помнится в update_choice.json.
 $ComponentDefs = @(
     @{ Key = 'main';   Title = 'Основное приложение (web_MVS)';           Dir = '';               Asset = 'web_MVS_*.zip';       Marker = '';                Heavy = $false },
     @{ Key = 'cv';     Title = 'CV микроскопа (cv_service)';               Dir = 'cv_service';     Asset = 'cv_service_*.zip';    Marker = 'detector.py';     Heavy = $true },
     @{ Key = 'video';  Title = 'Видео-ролик микроскопа (video_service)';   Dir = 'video_service';  Asset = 'video_service_*.zip'; Marker = 'render.py';       Heavy = $false },
-    @{ Key = 'motion'; Title = 'CV RTSP / движение (motion_service)';      Dir = 'motion_service'; Asset = 'motion_service_*.zip'; Marker = 'motion_engine.py'; Heavy = $false }
+    @{ Key = 'motion'; Title = 'CV RTSP / движение (motion_service)';      Dir = 'motion_service'; Asset = 'motion_service_*.zip'; Marker = 'motion_engine.py'; Heavy = $false },
+    @{ Key = 'level';  Title = 'Уровень жидкости / YOLO (level_service)';  Dir = 'level_service';  Asset = 'level_service_*.zip';  Marker = 'seg_model.py';     Heavy = $true }
 )
 $script:addonResults = New-Object System.Collections.ArrayList
 $script:relCache = $null
@@ -467,7 +468,7 @@ function Read-ComponentList([string]$text) {
         $t = $t.Trim().ToLower()
         if (-not $t) { continue }
         if ($t -eq 'all') { return @($ComponentDefs | ForEach-Object { $_.Key }) }
-        if (Get-ComponentDef $t) { $keys += $t } else { throw "неизвестный компонент '$t' (допустимо: main, cv, video, motion, all)" }
+        if (Get-ComponentDef $t) { $keys += $t } else { throw "неизвестный компонент '$t' (допустимо: main, cv, video, motion, level, all)" }
     }
     return @($keys | Select-Object -Unique)
 }
@@ -563,7 +564,7 @@ function Update-Addon($d) {
         # --- тяжёлая первая установка — только с подтверждением ---
         if (-not $installed -and $d.Heavy -and -not $Yes) {
             if ($NoMenu) { throw 'первая установка тяжёлая (несколько ГБ: torch) — подтвердите её (галочка/ключ -Yes)' }
-            $ans = Read-Host 'Первая установка CV тянет несколько ГБ (torch, ultralytics) и занимает время. Установить сейчас? [y/N]'
+            $ans = Read-Host 'Первая установка тянет несколько ГБ (torch, ultralytics) и занимает время. Установить сейчас? [y/N]'
             if ($ans.Trim().ToLower() -notin @('y', 'yes', 'д', 'да')) { Log 'пропускаю по вашему решению'; Add-AddonResult $d.Key 'skip' 'пропущено'; return }
         }
 

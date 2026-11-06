@@ -159,6 +159,7 @@ class LevelRT:
             self.err = ""
             self.contour: list = []
             self.contour_wh: Optional[list] = None
+            self.objs: list = []                  # объекты последнего ответа модели (все классы) — для размеченной картинки SCADA
             self._zmasks: dict = {}
 
     def _zone(self, i: int, W: int, H: int):
@@ -195,6 +196,15 @@ class LevelRT:
             self.model = str(result.get("model") or "")
             self.last_ok, self.err = now, ""
             self.contour, self.contour_wh = contour, [W, H]
+            self.objs = objs
+
+    def overlay(self, now: Optional[float] = None) -> dict:
+        """Всё для размеченной картинки SCADA: объекты последнего ответа модели и уровень. Ответ старше hold_s — объектов и уровня нет (как у snapshot)."""
+        snap = self.snapshot(now, True)
+        with self._lock:
+            objs, wh = (list(self.objs), list(self.contour_wh) if self.contour_wh else None) if snap["valid"] else ([], None)
+        lv = {"total": snap["total"], "glass1": snap["g1"], "glass2": snap["g2"]} if snap["valid"] else None
+        return {"objs": objs, "wh": wh, "liquid_class": self.g["liquid_class"], "lv": lv}
 
     def note_error(self, msg: str, quiet: bool = False):
         """Причина, по которой нового уровня нет (видна в панели). quiet — в журнал не писать (о мёртвой камере уже сказал её поток)."""

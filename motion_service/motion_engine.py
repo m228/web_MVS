@@ -333,6 +333,33 @@ def _norm_scenario(sc: dict, cams: list) -> dict:
             "modbus": normalize_modbus(mb, base=None) if mb else None}
 
 
+WEBVIEW_DEFAULT = {"enabled": False, "host": "0.0.0.0", "port": 5000, "update_sec": 5.0, "jpeg_quality": 85, "annotate": False,
+                   "crop_x1": 0, "crop_y1": 0, "crop_x2": 0, "crop_y2": 0, "output_w": 0, "output_h": 0}
+
+
+def _norm_webview(w: dict, cid: str) -> dict:
+    """Картинка камеры для SCADA и браузера (motion_webview.py). Ключи и значения по умолчанию — как в [webview] у LVLDec."""
+    where = "камера %s.webview" % cid
+    d = WEBVIEW_DEFAULT
+    host = str(w.get("host", d["host"])).strip()
+    if not host:
+        raise ValueError("%s.host: пусто (0.0.0.0 — вся сеть, 127.0.0.1 — только этот ПК)" % where)
+    out = {"enabled": bool(w.get("enabled", d["enabled"])), "host": host,
+           "port": _num(w.get("port", d["port"]), where + ".port", 1, 65535, True),
+           "update_sec": _num(w.get("update_sec", d["update_sec"]), where + ".update_sec", 0.5, 3600),
+           "jpeg_quality": _num(w.get("jpeg_quality", d["jpeg_quality"]), where + ".jpeg_quality", 1, 100, True),
+           "annotate": bool(w.get("annotate", d["annotate"]))}
+    for k in ("crop_x1", "crop_y1", "crop_x2", "crop_y2"):
+        out[k] = _num(w.get(k, 0), where + "." + k, 0, 100000, True)
+    for k in ("output_w", "output_h"):
+        out[k] = _num(w.get(k, 0), where + "." + k, 0, 16384, True)
+    if any(out[k] for k in ("crop_x1", "crop_y1", "crop_x2", "crop_y2")) and not (out["crop_x2"] > out["crop_x1"] and out["crop_y2"] > out["crop_y1"]):
+        raise ValueError("%s: обрезка — x2 больше x1 и y2 больше y1 (или все четыре 0 — без обрезки)" % where)
+    if bool(out["output_w"]) != bool(out["output_h"]):
+        raise ValueError("%s: размер — ширина и высота обе больше 0 (или обе 0 — не менять размер)" % where)
+    return out
+
+
 def normalize_camera(c: dict) -> dict:
     cid = str(c.get("id") or "")
     if not ID_RE.match(cid):
@@ -359,6 +386,7 @@ def normalize_camera(c: dict) -> dict:
     mb = c.get("modbus")
     if mb:
         mb = normalize_modbus(mb, base=None)
+    wv = _norm_webview(c["webview"], cid) if c.get("webview") else None
     return {
         "id": cid,
         "name": str(c.get("name") or cid),
@@ -378,6 +406,7 @@ def normalize_camera(c: dict) -> dict:
         "frame_size": fs,
         "status_out": _out(c.get("status_out"), ZONE_OUT_KINDS, "камера %s.status_out" % cid),
         "modbus": mb,
+        "webview": wv,
         "zones": zones,
         "groups": groups,
     }
@@ -403,6 +432,9 @@ def normalize_config(cfg: dict) -> dict:
     ids = [c["id"] for c in cams]
     if len(set(ids)) != len(ids):
         raise ValueError("id камер повторяются")
+    ports = [c["webview"]["port"] for c in cams if c["webview"] and c["webview"]["enabled"]]
+    if len(set(ports)) != len(ports):
+        raise ValueError("картинка для SCADA: у двух камер один и тот же порт — у каждой камеры свой")
     scs = [_norm_scenario(s, cams) for s in (cfg.get("scenarios") or [])]
     sids = [s["id"] for s in scs]
     if len(set(sids)) != len(sids):

@@ -8,6 +8,12 @@ const LV_DEF = { conf: 0.35, imgsz: 0, geometry: 'lvldec', infer_interval_s: 2, 
 const LV_NUM = { conf: [0.01, 0.99], imgsz: [0, 4096], infer_interval_s: [0.2, 600], alpha: [0, 0.999], warmup_s: [0, 600],
   glass1_min: [0, 100], glass2_min: [0, 100], glass1_full: [0, 100], glass2_full: [0, 100], hold_s: [1, 3600] };
 const LV = { svc: null, models: null, at: 0, busy: false, msg: '', msgCls: '' };
+// картинка камеры для SCADA и браузера (cam.webview; сервер — motion_service/motion_webview.py): значения по умолчанию и границы — как у сервера, имена — как в [webview] LVLDec
+const WV_DEF = { enabled: false, host: '0.0.0.0', port: 5000, update_sec: 5, jpeg_quality: 85, annotate: false,
+  crop_x1: 0, crop_y1: 0, crop_x2: 0, crop_y2: 0, output_w: 0, output_h: 0 };
+const WV_NUM = { port: [1, 65535, true], update_sec: [0.5, 3600], jpeg_quality: [1, 100, true], crop_x1: [0, 100000, true], crop_y1: [0, 100000, true],
+  crop_x2: [0, 100000, true], crop_y2: [0, 100000, true], output_w: [0, 16384, true], output_h: [0, 16384, true] };
+const wvP = (cam, k) => (cam.webview && cam.webview[k] !== undefined ? cam.webview[k] : WV_DEF[k]);
 
 const lvGroup = (cam) => ((cam && cam.groups) || []).find((g) => g.type === 'level') || null;
 const lvP = (g, k) => (g && g[k] !== undefined ? g[k] : LV_DEF[k]);
@@ -106,6 +112,22 @@ function mdLevelTabHtml(mode, cam) {
       ${mdField('Unit ID', num('p_dev', m.device_id, 0, 255, 1))}
       ${mdField('Регистр Total ×10', num('p_addr', sc && sc.out ? sc.out.address : 0, 0, 65535, 1), 'Целое 0…1000: 54,3 % → 543 (SCADA делит на 10)')}
     </div></div>` : '';
+  // картинка для SCADA: карточка рядом с записью в ПЛК; квадратик справа в шапке включает отдачу
+  const wnum = (k, w) => `<input type="number" ${a} data-f="w_${k}" value="${escapeHtml(wvP(cam, k))}" min="${WV_NUM[k][0]}" max="${WV_NUM[k][1]}" step="${WV_NUM[k][2] ? 1 : 'any'}"${w ? ` style="width:${w}px"` : ''} />`;
+  const wOn = !!wvP(cam, 'enabled');
+  const web = `<div class="lv-plc2 lv-web${wOn ? ' is-on' : ''}">
+    <div class="lv-plc2__head"><b>Картинка для SCADA</b><span class="md-dim" id="lvWebInfo"></span>
+      <label class="lv-sq" title="Отдавать кадр камеры по HTTP: SCADA и браузер берут готовый JPEG по адресу ниже. Выключено — порт не открывается"><input type="checkbox" ${a} data-f="w_enabled"${wOn ? ' checked' : ''} /><span></span></label></div>
+    <div class="md-fields md-fields--c lv-plc2__body">
+      ${mdField('Порт', wnum('port'), 'Порт, на котором камера отдаёт картинку. Один порт — одна камера')}
+      ${mdField('Обновление, с', wnum('update_sec'), 'Как часто готовить новый кадр. Страница SCADA перезагружает картинку с тем же периодом')}
+      ${mdField('Качество JPEG', wnum('jpeg_quality'), '1…100: больше — чётче и тяжелее')}
+      <label class="lv-web__row" title="Обрезка в пикселях ОРИГИНАЛЬНОГО кадра: слева-сверху и справа-снизу. Все четыре 0 — без обрезки"><span>Обрезка x1 y1 x2 y2</span><span class="lv-web__nums">${wnum('crop_x1', 58)}${wnum('crop_y1', 58)}${wnum('crop_x2', 58)}${wnum('crop_y2', 58)}</span></label>
+      <label class="lv-web__row" title="Размер картинки после обрезки: ширина и высота. Обе 0 — не менять"><span>Размер w × h</span><span class="lv-web__nums">${wnum('output_w', 58)}${wnum('output_h', 58)}</span></label>
+    </div>
+    <label class="micro-check" title="Дополнительный адрес /scada.jpg: кадр с маской жидкости, рамкой и подписью Total / g1 / g2"><input type="checkbox" ${a} data-f="w_annotate"${wvP(cam, 'annotate') ? ' checked' : ''} /><span class="micro-check__text">с разметкой</span></label>
+    <div class="md-dim lv-web__url" id="lvWebUrl"></div>
+  </div>`;
   const names = g ? g.zones.map((id) => { const z = cam.zones.find((q) => q.id === id); return z ? z.name : id; }) : [];
   const glasses = g ? `<div class="lv-glasses">${names.map((n, i) =>
     `<span class="lv-glass"><i style="background:${i ? LV_COL.up : LV_COL.low}"></i>${escapeHtml(n)}<button type="button" class="btn-secondary md-x" ${a} data-f="del_glass" data-gi="${i}" title="${i ? 'Удалить верхнее стекло' : 'Удалить стёкла: без нижнего (рабочего) уровень не считается'}">✕</button></span>`).join('')}${names.length < 2 ? '<span class="lv-glass lv-glass--empty">верхнего стекла нет</span>' : ''}</div>` : '';
@@ -124,7 +146,7 @@ function mdLevelTabHtml(mode, cam) {
       <span class="lv-msg ${LV.msgCls}" id="lvMsg">${escapeHtml(LV.msg)}</span>
     </div>
     ${g ? '' : '<p class="net-hint">Стёкол ещё нет. «Разметить стёкла» — обвести на кадре нижнее и верхнее.</p>'}
-    ${g ? `<div class="lv-cols">${par}${plc}</div>` : ''}
+    <div class="lv-cols">${par}${plc}${web}</div>
   </div>`;
 }
 
@@ -157,6 +179,20 @@ function mdLevelPaintLive() {
     const sc = (MV.scen || []).find((q) => q.id === lvScenId(cam));
     info.textContent = !sc ? '' : !sc.plc ? 'выключена' : sc.ok === null ? 'ждёт ответа ПЛК' : sc.ok ? 'записано: ' + sc.value : 'ошибка: ' + (sc.error || '');
   }
+  lvPaintWeb(cam);
+}
+
+// картинка для SCADA: состояние сервера и адреса, по которым её забирают
+function lvPaintWeb(cam) {
+  const info = mdEl('lvWebInfo'), url = mdEl('lvWebUrl');
+  if (!info || !url) return;
+  const on = !!wvP(cam, 'enabled');
+  const w = (MV.states[cam.id] || {}).webview;
+  info.textContent = !on ? '' : !w ? 'ждёт запуска камеры' : w.error ? 'ошибка' : w.age_s === null ? 'ждёт кадра' : 'кадр ' + Math.round(w.age_s) + ' с назад';
+  info.classList.toggle('is-bad', !!(w && w.error));
+  const base = 'http://' + location.hostname + ':' + wvP(cam, 'port');
+  url.textContent = on ? (w && w.error ? w.error + ' · ' : '') + base + '/frame.jpg · ' + base + '/scada.html' + (wvP(cam, 'annotate') ? ' · /scada.jpg' : '') : '';
+  url.classList.toggle('is-bad', !!(w && w.error));
 }
 
 // ---------- действия ----------
@@ -239,6 +275,7 @@ function mdOnLevel(t) {
   if (f === 'upload') { lvUpload(t.files && t.files[0]); return; }
   if (f === 'mark') { openMarkModal('glass'); return; }
   if (f === 'model') { lvLoadModel(t.value); return; }
+  if (f.startsWith('w_')) { lvOnWeb(cam, t, f.slice(2)); return; }
   const g = lvGroup(cam);
   if (!g) return;
   if (f === 'contour') { mdEdit(() => { g.contour = t.checked; }); return; }
@@ -267,6 +304,37 @@ function mdOnLevel(t) {
       else if (f === 'p_addr') sc.out = { kind: 'holding', address: Math.max(0, parseInt(t.value, 10) || 0) };
     });
   }
+}
+
+// правка поля картинки для SCADA. Обрезка (4 числа) и размер (2 числа) применяются парами: пока пара не сложилась (x2 ≤ x1 и т. п.), сервер её
+// отвергнет — поэтому в конфиг уходит только целая и верная группа, а в строке сообщения сказано, чего не хватает
+function lvOnWeb(cam, t, k) {
+  const put = (patch) => mdEdit(() => { cam.webview = Object.assign({}, WV_DEF, cam.webview || {}, patch); });
+  if (k === 'enabled' || k === 'annotate') {
+    put({ [k]: t.checked });
+    if (k === 'enabled') t.closest('.lv-web')?.classList.toggle('is-on', t.checked);
+    lvPaintWeb(cam);
+    return;
+  }
+  const lim = WV_NUM[k];
+  if (!lim) return;
+  let v = parseFloat(String(t.value).replace(',', '.'));
+  if (Number.isNaN(v)) { t.value = wvP(cam, k); return; }
+  v = Math.max(lim[0], Math.min(lim[1], v));
+  if (lim[2]) v = Math.round(v);
+  t.value = v;
+  const group = k.startsWith('crop_') ? ['crop_x1', 'crop_y1', 'crop_x2', 'crop_y2'] : k.startsWith('output_') ? ['output_w', 'output_h'] : null;
+  if (!group) { put({ [k]: v }); lvPaintWeb(cam); return; }
+  const val = {};
+  group.forEach((q) => { const el = t.closest('.lv-web').querySelector('[data-f="w_' + q + '"]'); val[q] = q === k ? v : Math.round(parseFloat(el && el.value) || 0); });
+  const ok = group.length === 4 ? (!group.some((q) => val[q]) || (val.crop_x2 > val.crop_x1 && val.crop_y2 > val.crop_y1)) : (!!val.output_w === !!val.output_h);
+  if (!ok) {
+    lvMsg(group.length === 4 ? 'Обрезка не применена: нужно x2 > x1 и y2 > y1 (или все четыре 0 — без обрезки)' : 'Размер не применён: ширина и высота обе больше 0 (или обе 0 — не менять)', 'is-bad');
+    return;
+  }
+  lvMsg('', '');
+  put(val);
+  lvPaintWeb(cam);
 }
 
 // удалить стекло: верхнее — только его; нижнее — рабочее, без него уровень не считается, поэтому уходят оба

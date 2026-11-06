@@ -1281,7 +1281,7 @@ function initMicroGate() {
     .then((d) => reflectMicroEnabled(!!d.enabled)).catch(() => {});
 }
 
-// ---------- что обновлять: основное приложение + дополнения (cv_service, video_service, motion_service) ----------
+// ---------- что обновлять: основное приложение + дополнения (cv_service, video_service, motion_service, level_service) ----------
 let updateComponents = [];
 
 async function loadUpdateComponents() {
@@ -1323,20 +1323,21 @@ function reflectUpdateComponentsHint() {
   const sel = selectedUpdateComponents();
   if (btn) btn.disabled = sel.length === 0;
   if (!hint) return;
-  const heavy = updateComponents.find((c) => c.key === 'cv' && sel.includes('cv') && !c.installed);
-  hint.textContent = heavy
-    ? 'CV микроскопа ставится впервые: скачается несколько ГБ (torch), это долго.'
+  const heavy = updateComponents.filter((c) => c.heavy && sel.includes(c.key) && !c.installed);
+  hint.textContent = heavy.length
+    ? heavy.map((c) => c.title).join(', ') + ' — ставится впервые: скачается несколько ГБ (torch), это долго.'
     : (sel.includes('main') ? 'Основное приложение перезапустится (около минуты).' : '');
 }
 
 async function applySelectedUpdate() {
   const sel = selectedUpdateComponents();
   if (!sel.length) return;
-  const needsCv = updateComponents.some((c) => c.key === 'cv' && sel.includes('cv') && !c.installed);
+  const heavyNew = updateComponents.filter((c) => c.heavy && sel.includes(c.key) && !c.installed);      // тяжёлая первая установка (torch): CV микроскопа, уровень
+  const needsCv = heavyNew.length > 0;
   const titles = sel.map((k) => (updateComponents.find((c) => c.key === k) || {}).title || k).join('\n • ');
   let msg = 'Обновить:\n • ' + titles + '\n\n';
   msg += sel.includes('main') ? 'Основное приложение закроется, заменит файлы и запустится заново.' : 'Приложение продолжит работать; сервисы дополнений перезапустятся.';
-  if (needsCv) msg += '\n\nCV микроскопа ставится ВПЕРВЫЕ: скачается несколько ГБ (torch) — это надолго. Продолжить?';
+  if (needsCv) msg += '\n\nВПЕРВЫЕ ставится: ' + heavyNew.map((c) => c.title).join(', ') + '. Скачается несколько ГБ (torch) — это надолго. Продолжить?';
   if (!confirm(msg)) return;
 
   setUpdateModal(false);

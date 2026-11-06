@@ -566,6 +566,7 @@ ADDONS = [
     {"key": "cv", "title": "CV микроскопа (cv_service)", "dir": "cv_service", "marker": "detector.py", "heavy": True},
     {"key": "video", "title": "Видео-ролик микроскопа (video_service)", "dir": "video_service", "marker": "render.py", "heavy": False},
     {"key": "motion", "title": "CV RTSP / движение (motion_service)", "dir": "motion_service", "marker": "motion_engine.py", "heavy": False},
+    {"key": "level", "title": "Уровень жидкости / YOLO (level_service)", "dir": "level_service", "marker": "seg_model.py", "heavy": True},
 ]
 _COMPONENT_KEYS = {"main"} | {a["key"] for a in ADDONS}
 

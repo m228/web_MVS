@@ -2,9 +2,9 @@
 # через update.bat, или снять лишнее. Основное приложение (web_MVS.exe) и его данные НЕ трогает никогда.
 #
 # Без параметров — меню. Параметры для запуска без меню:
-#   -Venvs    удалить окружения (.venv) дополнений cv_service / video_service / motion_service (код, model\, data\ остаются)
+#   -Venvs    удалить окружения (.venv) дополнений cv_service / video_service / motion_service / level_service (код, model\, data\ остаются)
 #   -Python   удалить Python 3.10–3.12, поставленный установщиком python.org (из «Программы и компоненты»; другие версии не трогаем)
-#   -Addons   удалить дополнения ЦЕЛИКОМ: папки cv_service, video_service, motion_service вместе с model\, data\ (настройки камер, модель CV!)
+#   -Addons   удалить дополнения ЦЕЛИКОМ: папки cv_service, video_service, motion_service, level_service вместе с model\, data\ (настройки камер, модели CV и уровня!)
 #   -All      -Addons и -Python вместе
 #   -Yes      без вопросов (для -Addons — без ввода слова подтверждения)
 #   -Root <папка>  папка установки (по умолчанию — рядом со скриптом);  -NoElevate  не запрашивать права администратора (для проверок)
@@ -28,7 +28,7 @@ if ([string]::IsNullOrWhiteSpace($Root)) {
 }
 $Root = (Resolve-Path -LiteralPath $Root).Path
 $logFile = Join-Path $Root 'uninstall.log'
-$AddonDirs = @('cv_service', 'video_service', 'motion_service')
+$AddonDirs = @('cv_service', 'video_service', 'motion_service', 'level_service')
 
 function Log([string]$msg, [string]$color = '') {
     $line = "[uninstall] $msg"
@@ -153,7 +153,7 @@ try {
         Write-Host '  1. Окружения дополнений (.venv)         — код, model, data остаются; потом update.bat заново создаст окружение'
         Write-Host '  2. Python 3.10–3.12 (python.org)'
         Write-Host '  3. Окружения + Python                    — как на чистой машине; дополнения ставятся заново через update.bat'
-        Write-Host '  4. Дополнения целиком + Python           — ВКЛЮЧАЯ model и data (настройки камер, модель CV)!'
+        Write-Host '  4. Дополнения целиком + Python           — ВКЛЮЧАЯ model и data (настройки камер, модели CV и уровня)!'
         Write-Host '  Q. Выход'
         switch (([string](Read-Host 'Номер')).Trim().ToLower()) {
             '1' { $doVenvs = $true }
@@ -165,7 +165,7 @@ try {
     }
     if ($doAddons) {
         if (-not $Yes) {
-            Write-Host 'Будут удалены папки cv_service, video_service, motion_service ЦЕЛИКОМ (включая model и data). Вернуть их нельзя.' -ForegroundColor Yellow
+            Write-Host 'Будут удалены папки cv_service, video_service, motion_service, level_service ЦЕЛИКОМ (включая model и data). Вернуть их нельзя.' -ForegroundColor Yellow
             if (([string](Read-Host 'Для подтверждения введите слово delete')).Trim().ToLower() -ne 'delete') { Log 'не подтверждено — дополнения не тронуты'; $doAddons = $false }
         }
         if ($doAddons) { Remove-AddonsWhole }

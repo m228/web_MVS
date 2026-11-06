@@ -1,4 +1,4 @@
-"""Выбор компонентов обновления: основное приложение + дополнения (cv_service, video_service, motion_service).
+"""Выбор компонентов обновления: основное приложение + дополнения (cv_service, video_service, motion_service, level_service).
 
 Бэкенд (updater.components_info / parse_components / run_update_script) и сам update.ps1 — на «песочнице»: фальшивый
 дополнительный сервис в zip (с маркером, VERSION и своим setup.bat, который создаёт .venv), без сети и без админа.
@@ -17,7 +17,7 @@ ROOT = Path(__file__).resolve().parent.parent
 
 
 def test_parse_components_known_keys_only():
-    assert updater.parse_components("main, CV;bogus motion main") == ["main", "cv", "motion"]
+    assert updater.parse_components("main, CV;bogus motion main level") == ["main", "cv", "motion", "level"]
     assert updater.parse_components("") == [] and updater.parse_components(None) == []
 
 
@@ -29,9 +29,13 @@ def test_components_info_versions_installed_and_remembered(tmp_path, monkeypatch
     (tmp_path / "update_choice.json").write_text('{"components": ["main", "video", "bogus"]}', encoding="utf-8")
     info = updater.components_info()
     by = {c["key"]: c for c in info["components"]}
-    assert list(by) == ["main", "cv", "video", "motion"]
+    assert list(by) == ["main", "cv", "video", "motion", "level"]
     assert by["video"]["installed"] is True and by["video"]["version"] == "1.9.10"
     assert by["cv"]["installed"] is False and by["cv"]["heavy"] is True and by["motion"]["installed"] is False
+    assert by["level"]["installed"] is False and by["level"]["heavy"] is True, "уровень — тяжёлое дополнение (torch): первая установка с подтверждением"
+    (tmp_path / "level_service").mkdir()
+    (tmp_path / "level_service" / "seg_model.py").write_text("", encoding="utf-8")
+    assert {c["key"]: c for c in updater.components_info()["components"]}["level"]["installed"] is True, "маркер level_service — seg_model.py"
     assert info["remembered"] == ["main", "video"], "неизвестные ключи в прошлом выборе отбрасываются"
 
 
@@ -91,6 +95,15 @@ pytestmark_win = pytest.mark.skipif(sys.platform != "win32", reason="update.ps1 
 def _fake_addon_zip(path: Path, version: str):
     with zipfile.ZipFile(path, "w") as z:
         z.writestr("render.py", "# fake")
+        z.writestr("VERSION", version + "\r\n")
+        z.writestr("requirements.txt", "# none\r\n")
+        z.writestr("setup.bat", "@echo off\r\nmkdir .venv\\Scripts\r\ntype nul > .venv\\Scripts\\python.exe\r\necho setup done\r\npause\r\n")
+
+
+def _fake_level_zip(path: Path, version: str):
+    with zipfile.ZipFile(path, "w") as z:
+        z.writestr("seg_model.py", "# fake")
+        z.writestr("server.py", "# fake")
         z.writestr("VERSION", version + "\r\n")
         z.writestr("requirements.txt", "# none\r\n")
         z.writestr("setup.bat", "@echo off\r\nmkdir .venv\\Scripts\r\ntype nul > .venv\\Scripts\\python.exe\r\necho setup done\r\npause\r\n")
@@ -248,7 +261,7 @@ def _python_section() -> str:
 
 def test_setup_bats_take_python_exe():
     """update.ps1 передаёт найденный/поставленный Python в PYTHON_EXE (PATH после установки в запущенном процессе не обновится)."""
-    for d in ("cv_service", "video_service", "motion_service"):
+    for d in ("cv_service", "video_service", "motion_service", "level_service"):
         txt = (ROOT / d / "setup.bat").read_text(encoding="utf-8", errors="replace")
         assert "if defined PYTHON_EXE set \"PY=%PYTHON_EXE%\"" in txt and '"%PY%" -m venv .venv' in txt, d
         assert "\npython -m venv" not in txt, d + ": голый python вне запасного значения"
@@ -290,7 +303,7 @@ def test_uninstall_ps1_venvs_and_addons(tmp_path):
                        capture_output=True, text=True, timeout=60)
     assert p.stdout.strip() == "0", p.stdout + p.stderr
     root = tmp_path / "каталог с пробелом"
-    for d in ("cv_service", "video_service", "motion_service"):
+    for d in ("cv_service", "video_service", "motion_service", "level_service"):
         (root / d / ".venv" / "Scripts").mkdir(parents=True)
         (root / d / ".venv" / "Scripts" / "python.exe").write_text("", encoding="utf-8")
         (root / d / "server.py").write_text("# code", encoding="utf-8")
@@ -306,12 +319,51 @@ def test_uninstall_ps1_venvs_and_addons(tmp_path):
         return r.returncode, r.stdout + r.stderr
 
     code, out = run("-Venvs")
-    assert code == 0 and "удалено окружений: 3" in out, out
-    assert not any((root / d / ".venv").exists() for d in ("cv_service", "video_service", "motion_service"))
+    assert code == 0 and "удалено окружений: 4" in out, out
+    assert not any((root / d / ".venv").exists() for d in ("cv_service", "video_service", "motion_service", "level_service"))
     assert (root / "cv_service" / "server.py").is_file() and (root / "cv_service" / "model" / "best.pt").is_file(), "код и модель остаются"
     code, out = run("-Venvs")
     assert code == 0 and "окружений дополнений нет" in out, out
     code, out = run("-Addons")
-    assert code == 0 and "удалено дополнений: 3" in out, out
-    assert not any((root / d).exists() for d in ("cv_service", "video_service", "motion_service"))
+    assert code == 0 and "удалено дополнений: 4" in out, out
+    assert not any((root / d).exists() for d in ("cv_service", "video_service", "motion_service", "level_service"))
     assert (root / "web_MVS.exe").is_file() and (root / "plate_config.json").is_file(), "основное приложение и данные не трогаем"
+
+
+@pytestmark_win
+def test_update_ps1_installs_level_service_heavy_first_install_needs_yes(tmp_path):
+    """level_service ставится тем же update.ps1, что и остальные дополнения: первая установка тяжёлая (нужен -Yes), потом файлы + setup.bat, .venv и model\\ не трогаются."""
+    root, zips = tmp_path / "каталог с пробелом", tmp_path / "zips"
+    root.mkdir(); zips.mkdir()
+    (root / "update.ps1").write_bytes((ROOT / "update.ps1").read_bytes())
+    _fake_level_zip(zips / "level_service_v2.1.36.zip", "2.1.36")
+
+    code, out = _run_update(root, zips, "-Components", "level")                    # без подтверждения — отказ, ничего не поставлено
+    assert code == 1 and "-Yes" in out and not (root / "level_service").exists(), out
+
+    code, out = _run_update(root, zips, "-Components", "level", "-Yes")            # подтвердили: файлы + setup.bat
+    assert code == 0, out
+    assert (root / "level_service" / "seg_model.py").is_file() and (root / "level_service" / ".venv" / "Scripts" / "python.exe").is_file(), out
+    assert (root / "level_service" / "VERSION").read_text().strip() == "2.1.36"
+
+    (root / "level_service" / "model").mkdir()
+    (root / "level_service" / "model" / "best.pt").write_bytes(b"x" * 10)           # загруженная модель обновление не затирает
+    (zips / "level_service_v2.1.36.zip").unlink()
+    _fake_level_zip(zips / "level_service_v2.1.37.zip", "2.1.37")
+    code, out = _run_update(root, zips, "-Components", "level")                    # уже стоит — подтверждение не нужно
+    assert code == 0 and "2.1.36 → 2.1.37" in out, out
+    assert (root / "level_service" / "model" / "best.pt").read_bytes() == b"x" * 10 and (root / "level_service" / ".venv" / "Scripts" / "python.exe").is_file()
+
+
+def test_build_and_release_scripts_ship_level_service():
+    """build.bat собирает архив level_service и кладёт UpdaterLevel в бандл, release.bat без него не публикует (его нет в релизе — сайдкар не скачается)."""
+    build = (ROOT / "build.bat").read_text(encoding="utf-8", errors="replace")
+    rel = (ROOT / "release.bat").read_text(encoding="utf-8", errors="replace")
+    assert "dist\\level_service_v%VER%.zip" in build and "UpdaterLevel.bat" in build and "UpdaterLevel.ps1" in build
+    assert "level_service_v%VER%.zip" in rel and rel.count("%ZIP5%") >= 4, "release.bat проверяет и публикует пятый архив"
+    for z in ("web_MVS", "cv_service", "video_service", "motion_service", "level_service"):
+        assert "dist\\%s_v%%VER%%.zip" % z in rel, z
+    for f in ("UpdaterLevel.bat", "UpdaterLevel.ps1"):
+        assert (ROOT / f).is_file()
+    ps1 = (ROOT / "UpdaterLevel.ps1").read_text(encoding="ascii")
+    assert "level_service*.zip" in ps1 and "seg_model.py" in ps1 and "motion_engine" not in ps1

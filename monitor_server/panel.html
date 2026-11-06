@@ -124,6 +124,12 @@ dialog::backdrop { background: rgba(0,0,0,.45); }
 dialog h3 { margin: 0 0 10px; }
 dialog p { margin: 6px 0; color: var(--muted); font-size: 14px; }
 dialog code { color: var(--text); word-break: break-all; }
+.fld { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 10px 0; color: var(--muted); font-size: 14px; }
+.fld input[type=number] { width: 92px; font: inherit; padding: 5px 8px; border-radius: 10px; border: 1px solid var(--line); background: var(--bg); color: var(--text); text-align: right; }
+.chk { display: flex; align-items: center; gap: 8px; margin: 10px 0; font-size: 14px; cursor: pointer; }
+.chk input { width: 15px; height: 15px; margin: 0; }
+.sbtns { display: flex; gap: 8px; justify-content: flex-end; margin-top: 12px; }
+.sbtns .sp2 { flex: 1; }
 .tok { display: flex; gap: 8px; margin: 12px 0; }
 .tok input { flex: 1; min-width: 0; font: 13px ui-monospace, Consolas, monospace; padding: 8px 10px; border-radius: 10px; border: 1px solid var(--line); background: var(--bg); color: var(--text); }
 .err { color: var(--bad); font-size: 14px; min-height: 1.2em; }
@@ -161,6 +167,16 @@ dialog code { color: var(--text); word-break: break-all; }
   <p>Токен — <b id="dlgLen"></b> символа. Не копируй двойным щелчком: он режется на «-» и берётся только кусок. Нажми «Копировать» или кликни в поле и Ctrl+A, Ctrl+C.</p>
   <div class="err" id="dlgErr"></div>
   <div style="text-align:right"><button id="dlgClose">Закрыть</button></div>
+</dialog>
+
+<dialog id="sdlg">
+  <h3 id="sTitle">Настройки завода</h3>
+  <p>Для завода, где часто пропадает или плавает интернет. Что завод «нет связи», в панели видно всегда; тут решается, когда и как писать об этом в Telegram.</p>
+  <label class="fld">Нет пульса через, мин <input id="sAfter" type="number" min="5" max="1440" step="5"></label>
+  <label class="fld">Напоминать раз в, мин (0 — не напоминать) <input id="sRepeat" type="number" min="0" max="10080" step="30"></label>
+  <label class="chk"><input id="sNotify" type="checkbox">Писать «нет пульса» в Telegram</label>
+  <div class="err" id="sErr"></div>
+  <div class="sbtns"><button id="sReset">По умолчанию</button><span class="sp2"></span><button id="sClose">Закрыть</button><button id="sSave" class="primary">Сохранить</button></div>
 </dialog>
 
 <script>
@@ -412,16 +428,23 @@ function renderSummary() {
     }).join('');
 }
 
+function settingsNote(p) {         // свои настройки «нет пульса» у завода — коротко в строке состояния
+  const c = p.settings_custom || [], st = p.settings || {}, bits = [];
+  if (c.includes('offline_after_min')) bits.push('нет пульса через ' + st.offline_after_min + ' мин');
+  if (c.includes('offline_notify') && st.offline_notify === false) bits.push('без Telegram');
+  return bits.length ? ' · <span title="Настройки завода («Настройки» внизу карточки)">' + esc(bits.join(', ')) + '</span>' : '';
+}
+
 function card(p) {
   const snap = p.snapshot || {};
   let sub;
   if (p.status === 'waiting') sub = 'ещё не выходил на связь';
-  else if (p.status === 'offline') sub = '<span class="bad">нет пульса — последний ' + esc(dur(serverT - p.last_seen_t)) + '</span>';
+  else if (p.status === 'offline') sub = '<span class="bad">нет пульса — последний ' + esc(dur(serverT - p.last_seen_t)) + '</span>' + settingsNote(p);
   else {
     const old = verOlder(snap.app_version, latestV);
     sub = (p.closed_t ? '<span class="bad">приложение закрыто в ' + esc(new Date(p.closed_t * 1000).toLocaleTimeString('ru-RU', {hour: '2-digit', minute: '2-digit'})) + '</span> · ' : '') +
       (snap.app_version ? '<span class="ver' + (old ? ' old' : '') + '"' + (old ? ' title="Приложение завода старее последнего релиза"' : '') + '>v' +
-      esc(snap.app_version) + (old ? ' · есть ' + esc(latestV) : '') + '</span> · ' : '') + 'пульс ' + esc(dur(serverT - p.last_seen_t));
+      esc(snap.app_version) + (old ? ' · есть ' + esc(latestV) : '') + '</span> · ' : '') + 'пульс ' + esc(dur(serverT - p.last_seen_t)) + settingsNote(p);
   }
   const alerts = p.alerts.map((a) => '<div class="alert' + (a.acked ? ' acked' : a.level === 'critical' || a.level === 'high' ? ' bad' : '') + '"><b>' + esc(a.text) +
     '</b><small>с ' + fmt(a.since) + (a.acked ? ' · сброшена' : '') + '</small>' +
@@ -434,7 +457,7 @@ function card(p) {
     (alerts ? '<div class="alerts">' + alerts + '</div>' : '') +
     viewMenu(p, snap) + blocksHtml(p, snap) +
     '<div class="tools"><button data-a="log">Журнал</button>' + (snap.micro ? '<button data-a="pos">Датчики</button>' : '') +
-    '<button data-a="rename">Переименовать</button><button data-a="token">Новый токен</button><button data-a="del">Удалить</button></div>' +
+    '<button data-a="settings">Настройки</button><button data-a="rename">Переименовать</button><button data-a="token">Новый токен</button><button data-a="del">Удалить</button></div>' +
     '<div class="pos' + (openedPos.has(p.id) ? ' open' : '') + '" id="pos' + p.id + '">' + (openedPos.has(p.id) ? posBlock(p.id) : '') + '</div>' +
     '<div class="log' + (opened.has(p.id) ? ' open' : '') + '" id="log' + p.id + '"></div></article>';
 }
@@ -569,6 +592,14 @@ $('tgTest').onclick = async () => {
   finally { btn.disabled = false; loadTg(); }
 };
 $('dlgClose').onclick = () => $('dlg').close();
+let sId = null;
+async function saveSettings(body) {
+  try { await api('/api/plants/' + sId + '/settings', {method: 'POST', body: JSON.stringify(body)}); $('sdlg').close(); load(); }
+  catch (e) { $('sErr').textContent = e.message; }
+}
+$('sSave').onclick = () => saveSettings({offline_after_min: Number($('sAfter').value), offline_repeat_min: Number($('sRepeat').value), offline_notify: $('sNotify').checked});
+$('sReset').onclick = () => saveSettings({offline_after_min: null, offline_repeat_min: null, offline_notify: null});
+$('sClose').onclick = () => $('sdlg').close();
 $('dlgCopy').onclick = async () => {
   // по http (ZeroTier) у браузера нет navigator.clipboard — копируем старым способом через выделение
   const inp = $('dlgTok');
@@ -609,6 +640,13 @@ $('cards').onclick = async (ev) => {
   } else if (btn.dataset.a === 'view') {
     if (openedView.has(id)) openedView.delete(id); else openedView.add(id);
     btn.closest('.card').querySelector('.vmenu').classList.toggle('open', openedView.has(id));
+  } else if (btn.dataset.a === 'settings') {
+    sId = id;
+    const st = p.settings || {};
+    $('sTitle').textContent = 'Настройки: ' + p.name;
+    $('sAfter').value = st.offline_after_min; $('sRepeat').value = st.offline_repeat_min; $('sNotify').checked = st.offline_notify !== false;
+    $('sErr').textContent = '';
+    $('sdlg').showModal();
   } else if (btn.dataset.a === 'rename') {
     const name = (prompt('Новое название завода (как будет на карточке и в Telegram):', p.name) || '').trim();
     if (!name || name === p.name) return;

@@ -98,7 +98,7 @@ def _fake_addon_zip(path: Path, version: str):
 
 def _run_update(root: Path, zips: Path, *args):
     cmd = ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(root / "update.ps1"), "-Root", str(root),
-           "-NoElevate", "-NoMenu", "-ZipDir", str(zips), *args]
+           "-NoElevate", "-NoMenu", "-NoPython", "-ZipDir", str(zips), *args]
     p = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=120, stdin=subprocess.DEVNULL)
     return p.returncode, p.stdout + p.stderr
 
@@ -230,3 +230,88 @@ def test_update_ps1_save_download_resumes_after_drops(tmp_path):
         assert not (tmp_path / "stall.bin").exists()
     finally:
         srv.shutdown()
+
+
+# ───────────────────────────── Python для дополнений и деинсталлятор ─────────────────────────────
+def _run_ps(script: str, tmp_path: Path, timeout: int = 120) -> str:
+    ps1 = tmp_path / "t_py.ps1"
+    ps1.write_text(script, encoding="utf-8-sig")
+    p = subprocess.run(["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(ps1)], capture_output=True, text=True,
+                       encoding="utf-8", errors="replace", timeout=timeout, stdin=subprocess.DEVNULL)
+    return p.stdout + p.stderr
+
+
+def _python_section() -> str:
+    src = (ROOT / "update.ps1").read_text(encoding="utf-8-sig")
+    return src[src.index("# ---------- Python для дополнений"):src.index("# ---------- компоненты")]
+
+
+def test_setup_bats_take_python_exe():
+    """update.ps1 передаёт найденный/поставленный Python в PYTHON_EXE (PATH после установки в запущенном процессе не обновится)."""
+    for d in ("cv_service", "video_service", "motion_service"):
+        txt = (ROOT / d / "setup.bat").read_text(encoding="utf-8", errors="replace")
+        assert "if defined PYTHON_EXE set \"PY=%PYTHON_EXE%\"" in txt and '"%PY%" -m venv .venv' in txt, d
+        assert "\npython -m venv" not in txt, d + ": голый python вне запасного значения"
+
+
+@pytestmark_win
+def test_update_ps1_python_helpers(tmp_path):
+    """Найти/поставить Python: битый venv, нет установщика, чужая подпись; Find-Python не падает."""
+    good_home = tmp_path / "py_home"; good_home.mkdir(); (good_home / "python.exe").write_text("", encoding="utf-8")
+    broken, fine, nocfg = tmp_path / "v_broken", tmp_path / "v_fine", tmp_path / "v_nocfg"
+    for d in (broken, fine, nocfg):
+        d.mkdir()
+    (broken / "pyvenv.cfg").write_text("home = %s\nversion = 3.12.0\n" % (tmp_path / "нет такого"), encoding="utf-8")
+    (fine / "pyvenv.cfg").write_text("home = %s\nversion = 3.12.0\n" % good_home, encoding="utf-8")
+    unsigned = tmp_path / "python-3.12.10-amd64.exe"; unsigned.write_text("MZ not a real installer", encoding="utf-8")
+    script = ('$ErrorActionPreference="Stop"\n[Console]::OutputEncoding=[Text.Encoding]::UTF8\n'
+              'function Log([string]$m,[string]$c=""){ Write-Host ("LOG: "+$m) }\n'
+              "$Root = '%s'; $tmp = '%s'; $ZipDir = ''; $PythonInstaller = '%s'\n" % (tmp_path, tmp_path, tmp_path / "нет.exe")
+              + _python_section() + "\n"
+              "'broken=' + (Test-VenvBroken '%s')\n'fine=' + (Test-VenvBroken '%s')\n'nocfg=' + (Test-VenvBroken '%s')\n" % (broken, fine, nocfg)
+              + "$f = Find-Python; 'find=' + $(if ($f) { 'ok' } else { 'none' })\n"
+              "try { Ensure-Python | Out-Null; 'NOENSURE' } catch { 'ENSURE ' + $_.Exception.Message }\n"
+              "try { Test-PythonInstallerSignature '%s'; 'NOSIG' } catch { 'SIG ' + $_.Exception.Message }\n" % unsigned)
+    out = _run_ps(script, tmp_path)
+    assert "broken=True" in out and "fine=False" in out and "nocfg=False" in out, out
+    assert "find=ok" in out or "find=none" in out, out
+    if "find=ok" in out:                                   # на этой машине Python есть — Ensure-Python его и вернёт, ничего не ставя
+        assert "NOENSURE" in out, out
+    else:
+        assert "ENSURE установщик Python не найден" in out, out
+    assert "SIG подпись установщика Python не подтверждена" in out, out
+
+
+@pytestmark_win
+def test_uninstall_ps1_venvs_and_addons(tmp_path):
+    """Uninstall.ps1: -Venvs убирает только .venv, -Addons — папки целиком; основное приложение и чужие файлы не трогает."""
+    p = subprocess.run(["powershell", "-NoProfile", "-Command",
+                        "$e=$null; [void][System.Management.Automation.Language.Parser]::ParseFile('%s',[ref]$null,[ref]$e); $e.Count" % (ROOT / "Uninstall.ps1")],
+                       capture_output=True, text=True, timeout=60)
+    assert p.stdout.strip() == "0", p.stdout + p.stderr
+    root = tmp_path / "каталог с пробелом"
+    for d in ("cv_service", "video_service", "motion_service"):
+        (root / d / ".venv" / "Scripts").mkdir(parents=True)
+        (root / d / ".venv" / "Scripts" / "python.exe").write_text("", encoding="utf-8")
+        (root / d / "server.py").write_text("# code", encoding="utf-8")
+    (root / "cv_service" / "model").mkdir(); (root / "cv_service" / "model" / "best.pt").write_text("m", encoding="utf-8")
+    (root / "web_MVS.exe").write_text("exe", encoding="utf-8")
+    (root / "plate_config.json").write_text("{}", encoding="utf-8")
+    (root / "Uninstall.ps1").write_bytes((ROOT / "Uninstall.ps1").read_bytes())
+
+    def run(*args):
+        r = subprocess.run(["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(root / "Uninstall.ps1"), "-Root", str(root),
+                            "-NoElevate", "-Yes", *args], capture_output=True, text=True, encoding="utf-8", errors="replace",
+                           timeout=120, stdin=subprocess.DEVNULL)
+        return r.returncode, r.stdout + r.stderr
+
+    code, out = run("-Venvs")
+    assert code == 0 and "удалено окружений: 3" in out, out
+    assert not any((root / d / ".venv").exists() for d in ("cv_service", "video_service", "motion_service"))
+    assert (root / "cv_service" / "server.py").is_file() and (root / "cv_service" / "model" / "best.pt").is_file(), "код и модель остаются"
+    code, out = run("-Venvs")
+    assert code == 0 and "окружений дополнений нет" in out, out
+    code, out = run("-Addons")
+    assert code == 0 and "удалено дополнений: 3" in out, out
+    assert not any((root / d).exists() for d in ("cv_service", "video_service", "motion_service"))
+    assert (root / "web_MVS.exe").is_file() and (root / "plate_config.json").is_file(), "основное приложение и данные не трогаем"

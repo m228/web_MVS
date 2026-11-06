@@ -22,7 +22,10 @@ if defined PX (
 )
 
 echo [1/4] Creating venv .venv ...
-python -m venv .venv
+REM update.ps1 installs/finds Python itself and passes it in PYTHON_EXE; run by hand - plain python from PATH
+set "PY=python"
+if defined PYTHON_EXE set "PY=%PYTHON_EXE%"
+"%PY%" -m venv .venv
 if errorlevel 1 ( echo ERROR: venv not created. Is python in PATH? & pause & exit /b 1 )
 
 echo [2/4] Base dependencies ...

@@ -35,6 +35,8 @@ copy /Y UpdaterMotion.ps1 "dist\web_MVS\" >nul
 copy /Y SelfCheck_HW.bat "dist\web_MVS\" >nul
 copy /Y update.bat "dist\web_MVS\" >nul
 copy /Y update.ps1 "dist\web_MVS\" >nul
+copy /Y Uninstall.bat "dist\web_MVS\" >nul
+copy /Y Uninstall.ps1 "dist\web_MVS\" >nul
 
 echo [build] Packing main archive ...
 powershell -NoProfile -Command "Compress-Archive -Path 'dist\web_MVS\*' -DestinationPath 'dist\web_MVS_v%VER%.zip' -Force" || exit /b 1

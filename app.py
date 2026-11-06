@@ -1259,6 +1259,12 @@ def motion_stats(camera: str, window: float = 10800.0):
     return motion_client.stats(_motion_url(), camera, window)
 
 
+@app.get("/api/motion/visibility")
+def motion_visibility(camera: str, window: float = 86400.0):
+    # видимость палок валов: доля времени, когда палка найдена, окнами за период (до 7 суток)
+    return motion_client.visibility(_motion_url(), camera, window)
+
+
 @app.post("/api/motion/mirror_table")
 def motion_mirror_table(req: dict = Body(...)):
     # таблица поправки зеркальности двух валов по последним минутам (снимают, пока валы ровные); сохраняет интерфейс

@@ -9,6 +9,8 @@
   POST /api/plants/{id}/alerts/ack — {"code"?}: сбросить тревогу (без code — все) в панели; в журнале остаётся «Сброшено: …».
   POST /api/plants/{id}/token   — выдать новый токен (старый перестаёт работать).
   POST /api/plants/{id}/rename  — {"name"}: переименовать завод (токен, журнал и датчики остаются).
+  POST /api/plants/{id}/settings — {"offline_after_min", "offline_repeat_min", "offline_notify"}: настройки «нет пульса» для одного завода (None — вернуть общее значение).
+  POST /api/plants/view_all     — то же самое, но для всех заводов сразу (кнопка «Для всех заводов» в «Виде»).
   POST /api/plants/{id}/view    — {"hidden": ["pc", "camera", …]}: какие блоки карточки скрыть («Вид» в панели; хранится в приёмнике).
   DELETE /api/plants/{id}       — удалить завод вместе с журналом.
   POST /enroll                  — заявка нового клиента с ключом регистрации (без пароля панели): {key, machine, name, version, secret}.
@@ -351,6 +353,30 @@ def create_app(store: monitor_store.Store, password: str, version: str, panel_ht
             body = {}
         code = body.get("code") if isinstance(body, dict) else None      # без кода — сбросить все открытые тревоги завода
         return {"acked": store.ack_alerts(plant_id, str(code)[:40] if code else None)}
+
+    @app.post("/api/plants/{plant_id}/settings")
+    async def plant_settings(plant_id: int, request: Request):
+        bad = write_denied(request)
+        if bad is not None:
+            return bad
+        try:
+            body = await request.json()
+            return {"settings": store.set_plant_settings(plant_id, body)}
+        except ValueError as e:
+            return JSONResponse({"error": str(e)}, status_code=400)
+        except LookupError:
+            return JSONResponse({"error": "завода нет"}, status_code=404)
+
+    @app.post("/api/plants/view_all")
+    async def plants_view_all(request: Request):
+        bad = write_denied(request)
+        if bad is not None:
+            return bad
+        try:
+            body = await request.json()
+            return {"hidden": store.set_hidden_blocks_all(body.get("hidden") if isinstance(body, dict) else None)}
+        except ValueError as e:
+            return JSONResponse({"error": str(e)}, status_code=400)
 
     @app.post("/api/plants/{plant_id}/view")
     async def plant_view(plant_id: int, request: Request):

@@ -177,12 +177,13 @@ def test_offline_after_two_missed_pulses_and_back(store):
     pid, _ = store.create_plant("Кир")
     store.ingest(pid, pulse(interval=300))
     limit = ms.offline_limit(300)
-    assert limit == 720
+    assert limit == 1800, "не раньше получаса молчания"
+    assert ms.offline_limit(900) == 1920, "а при редких пульсах — два интервала и запас"
     store.clk.t += limit - 1
     assert store.check_offline() == [] and store.plants_view()[0]["status"] == "online"
     store.clk.t += 2
     out = store.check_offline()
-    assert len(out) == 1 and out[0]["level"] == "critical" and out[0]["plant"] == "Кир" and "12 мин" in out[0]["text"]
+    assert len(out) == 1 and out[0]["level"] == "high" and out[0]["plant"] == "Кир" and "30 мин" in out[0]["text"]
     assert store.plants_view()[0]["status"] == "offline"
     assert store.check_offline() == [], "тревога об одном и том же молчании — один раз"
     store.clk.t += 600

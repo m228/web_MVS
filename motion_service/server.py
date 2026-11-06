@@ -353,6 +353,14 @@ def create_app(data_dir: Optional[Path] = None, capture_factory: Callable = open
         # window > 0 — последние window секунд из длинной истории (до 2 ч), ужатые до points точек; иначе последние n кадров
         return mgr.worker(cid).history(max(1, min(int(n), 900)), max(0.0, min(float(window), 7200.0)), max(10, min(int(points), 2000)))
 
+    @app.get("/cameras/{cid}/visibility")
+    def cam_visibility(cid: str, window: float = 86400.0):
+        # видимость палок (зоны-циклы): доля времени «найдена» окнами за последние window секунд (до 7 суток)
+        r = mgr.worker(cid).visibility(window)
+        if "error" in r:
+            raise HTTPException(500, r["error"])
+        return r
+
     @app.get("/cameras/{cid}/stats")
     def cam_stats(cid: str, window: float = 10800.0):
         # среднее / мин / макс flow и diff по каждой зоне за последние window секунд (до суток), только по кадрам в норме

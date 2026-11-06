@@ -181,7 +181,7 @@ def test_offline_then_online_and_no_online_for_plain_reconnect(env):
     e = env
     pid, _ = e.store.create_plant("Кир")
     e.store.ingest(pid, pulse())
-    e.clk.t += 13 * 60
+    e.clk.t += 31 * 60
     assert len(e.store.check_offline()) == 1
     e.clk.t += 60
     e.store.ingest(pid, pulse())                                   # вернулся пульс -> событие «связь восстановилась»
@@ -225,14 +225,14 @@ def test_message_texts_for_closed_and_online(env):
     e.store.ingest(pid, pulse([ev("c1", t - 40, "Снято: Камера: экспозиция 5000", level="info", code="camera_exposure", state="closed")]))
     e.n.flush()
     assert e.tg.sent()[1].startswith("🟢 Кир — снято: Камера: экспозиция 5000 · ")
-    e.clk.t += 13 * 60
+    e.clk.t += 31 * 60
     e.store.check_offline()
     e.n.flush()
     e.clk.t += 60
     e.store.ingest(pid, pulse())
     e.n.flush()
     sent = e.tg.sent()
-    assert sent[2].startswith("🔴 Кир — Нет пульса уже 13 мин") and sent[3].startswith("🟢 Кир — связь восстановилась")
+    assert sent[2].startswith("🟠 Кир — Нет пульса уже 31 мин") and sent[3].startswith("🟢 Кир — связь восстановилась")
 
 
 def test_queue_survives_restart_without_duplicates(env, tmp_path):
@@ -304,22 +304,22 @@ def test_events_pending_too_long_are_dropped_not_sent(env):
     assert e.store.notify_count() == 0
 
 
-def test_offline_reminder_every_two_hours_only_after_first_message(env):
+def test_offline_reminder_every_six_hours_only_after_first_message(env):
     e = env
     pid, _ = e.store.create_plant("Кир")
     e.store.ingest(pid, pulse())
-    e.clk.t += 13 * 60
+    e.clk.t += 31 * 60
     e.store.check_offline()
     e.n.flush()
     assert len(e.tg.sent()) == 1
-    e.clk.t += 3600
+    e.clk.t += 2 * 3600 + 100
     e.n.flush()
-    assert len(e.tg.sent()) == 1, "через час напоминать рано"
-    e.clk.t += 3700
+    assert len(e.tg.sent()) == 1, "через два часа напоминать рано"
+    e.clk.t += 4 * 3600
     e.n.flush()
-    assert len(e.tg.sent()) == 2 and "Всё ещё нет пульса" in e.tg.sent()[1]
+    assert len(e.tg.sent()) == 2 and "Всё ещё нет пульса" in e.tg.sent()[1] and e.tg.sent()[1].startswith("🟠")
     e.n.flush()
-    assert len(e.tg.sent()) == 2, "не чаще раза в два часа"
+    assert len(e.tg.sent()) == 2, "не чаще раза в шесть часов"
 
 
 def test_token_is_masked_everywhere(env, caplog):
@@ -359,7 +359,7 @@ def test_load_config_variants(tmp_path):
     p.write_text(json.dumps({"telegram": {"token": " " + TOKEN + " ", "chat_ids": [CHAT, "222"], "fresh_min": 5, "max_per_hour": 7}}), encoding="utf-8")
     cfg = mt.load_config(tmp_path)
     assert cfg["token"] == TOKEN and cfg["chat_ids"] == [CHAT, "222"] and cfg["fresh_s"] == 300 and cfg["max_per_hour"] == 7
-    assert cfg["offline_repeat_s"] == 7200 and cfg["api_base"] == mt.API_BASE
+    assert cfg["offline_repeat_s"] == 21600 and cfg["api_base"] == mt.API_BASE
     p.write_text("{сломано", encoding="utf-8")
     assert mt.load_config(tmp_path) is None
 
@@ -602,12 +602,12 @@ def test_plant_without_alerts_says_so_and_waiting_plant_is_short(bot_env):
 
 def test_offline_plant_is_red_in_report_and_summary(bot_env):
     e = bot_env
-    e.clk.t += 13 * 60
+    e.clk.t += 31 * 60
     e.store.check_offline()
     rep = e.bot.handle(msg("Кир"))
-    assert rep.startswith("🔴 Кир — нет связи, пульс 13 мин назад")
+    assert rep.startswith("🔴 Кир — нет связи, пульс 31 мин назад")
     allr = e.bot.handle(msg("Все заводы"))
-    assert allr.split("\n")[0].startswith("Заводы на ") and "🔴 Кир — нет связи, пульс 13 мин назад, тревог: 2" in allr and "⚪ Буи — ещё не выходил на связь" in allr
+    assert allr.split("\n")[0].startswith("Заводы на ") and "🔴 Кир — нет связи, пульс 31 мин назад, тревог: 2" in allr and "⚪ Буи — ещё не выходил на связь" in allr
 
 
 def test_menu_words_and_unknown_text(bot_env):

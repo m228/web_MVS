@@ -115,6 +115,17 @@ function drawMotionTile(index) {
   const on = !!(cam && cam.enabled);
   const st = on ? (MV.states[tile.serial] || {}).result : null;
   const problem = on ? tileMotionStatusText(st) : '';
+  const maskBtn = el.querySelector('[data-tile-mask]');         // кнопка «разметка» — только у камеры с включённым КЗ
+  if (maskBtn) {
+    maskBtn.hidden = !on;
+    const off = !!tile.markupOff;
+    if (maskBtn.dataset.off !== String(off)) {
+      maskBtn.dataset.off = String(off);
+      maskBtn.classList.toggle('is-eye-off', off);
+      maskBtn.innerHTML = off ? MARK_OFF_SVG : MARK_SVG;
+      maskBtn.title = off ? 'Показать разметку КЗ' : 'Скрыть разметку КЗ (зоны, палки, подписи) — останется чистая картинка';
+    }
+  }
 
   // картинка скрыта, а зоны КЗ есть — на чёрном экране только они (с названием и значением), надпись «картинка скрыта» не мешает
   const ph = el.querySelector('[data-tile-placeholder]');
@@ -137,7 +148,7 @@ function drawMotionTile(index) {
   if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; }
   const ctx = canvas.getContext('2d');
   ctx.clearRect(0, 0, canvas.width, canvas.height);
-  if (!g || !tile.connected || !on) return;
+  if (!g || !tile.connected || !on || tile.markupOff) return;       // разметка скрыта кнопкой — чистая картинка
 
   const live = {};
   ((st && st.zones) || []).forEach((z) => { live[z.id] = z; });

@@ -1,6 +1,6 @@
 // ---------- раскладка ----------
 function newTile() {
-  return { serial: null, kind: null, connected: false, photo: false, video: false, light: false, zoomFactor: 1, live: true, hidden: false, el: null };
+  return { serial: null, kind: null, connected: false, photo: false, video: false, light: false, zoomFactor: 1, live: true, hidden: false, markupOff: false, el: null };
 }
 
 function setLayout(n) {
@@ -52,6 +52,7 @@ function createTileEl() {
       <div class="multi-tile__tools">
         <button type="button" class="tile-region-btn" data-tile-region title="Зум областью — выделите рамку" aria-label="Зум областью" hidden>${REGION_SVG}</button>
         <button type="button" class="tile-region-btn tile-eye-btn" data-tile-eye title="Скрыть картинку (поток, фото и КЗ продолжают работать)" aria-label="Скрыть картинку" hidden>${EYE_SVG}</button>
+        <button type="button" class="tile-region-btn tile-mask-btn" data-tile-mask title="Скрыть разметку КЗ (зоны, палки, подписи) — останется чистая картинка" aria-label="Скрыть разметку" hidden>${MARK_SVG}</button>
       </div>
       <img class="multi-tile__frame hidden" alt="Кадр камеры" data-tile-frame />
       <div class="multi-tile__placeholder" data-tile-placeholder>NO CAMERA</div>
@@ -110,6 +111,15 @@ function createTileEl() {
     event.stopPropagation();
     setFocus(idx());
     toggleTileHidden(idx());
+  });
+  // «разметка»: спрятать рисунок КЗ (окружности, палки, подписи, Δ), чтобы посмотреть на чистую картинку
+  el.querySelector('[data-tile-mask]').addEventListener('click', (event) => {
+    event.stopPropagation();
+    setFocus(idx());
+    const t = state.tiles[idx()];
+    if (!t) return;
+    t.markupOff = !t.markupOff;
+    drawMotionTile(idx());
   });
   const marquee = el.querySelector('[data-tile-marquee]');
   marquee.addEventListener('mousedown', (event) => {
@@ -207,6 +217,7 @@ function renderTile(index) {
 
   if (!tile.connected) {
     tile.hidden = false;
+    tile.markupOff = false;
     if (frame) { frame.classList.add('hidden'); frame.src = ''; }
     if (placeholder) { placeholder.textContent = 'NO CAMERA'; placeholder.classList.remove('hidden'); }
     tile.regionMode = false;

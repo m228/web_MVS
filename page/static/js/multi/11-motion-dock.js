@@ -204,10 +204,12 @@ function renderMotionDock() {
   mdEl('mdSwitchWrap').hidden = all;
   mdEl('mdMark').hidden = all;
   mdEl('mdMarkRods').hidden = all;
+  mdEl('mdMarkGlass').hidden = all;
   mdEl('mdRec').hidden = all;
   mdEl('mdAll').hidden = all;
   mdEl('mdMark').disabled = !(cam && cam.enabled);
   mdEl('mdMarkRods').disabled = !(cam && cam.enabled);
+  mdEl('mdMarkGlass').disabled = !(cam && cam.enabled);
   mdEl('mdRec').disabled = !(cam && cam.enabled);
   mdEl('mdRecAll').hidden = !all;
   mdEl('mdRecZip').hidden = !all;
@@ -515,6 +517,9 @@ function mdOnCamRow(t) {
   mdEdit(() => { MV.cfg.cameras = MV.cfg.cameras.filter((c) => c.id !== cam.id); }, true);
 }
 
+// есть что показать на вкладке «Зоны · тренды»: обычные зоны (стёкла уровня — не в счёт) или карточка уровня
+const mdHasZoneCards = (c) => c.zones.some((z) => z.type !== 'level') || !!lvGroup(c);
+
 function mdZonesTabHtml(mode, cam) {
   const all = mode === 'all';
   if (!all && !(cam && cam.enabled)) {
@@ -524,16 +529,17 @@ function mdZonesTabHtml(mode, cam) {
   let html = '';
   if (!shown.length) {
     html += '<p class="net-hint">КЗ ещё ни у одной камеры не включено. Включите его ниже или выберите ячейку с RTSP-камерой и нажмите тумблер справа сверху.</p>';
-  } else if (shown.every((c) => !c.zones.some((z) => z.type !== 'level'))) {
+  } else if (shown.every((c) => !mdHasZoneCards(c))) {
     html += '<p class="net-hint">Зон нет. Нажмите «Разметить зону» и обведите на кадре то, что должно двигаться (лента, шнек).</p>';
   } else {
     html += `<div class="md-trendbar"><label class="md-lbl md-openall" title="Раскрыть настройки всех окон"><input type="checkbox" id="mdOpenAll"${MD.openAll ? ' checked' : ''} /> подробно</label><span>Тренды за последние <b id="mdWinLbl">${mdFmtWin(MD.win)}</b> ${mdHelp(MD_TREND_HELP)}</span>` +
       `<span class="md-statwin">Среднее / мин / макс за <select id="mdStatWin">${mdSel(MD_STAT_WINS, MD.statWin)}</select> ${mdHelp('Среднее, минимум и максимум diff и flow каждой зоны за выбранный период, только по кадрам в норме. Копятся в сервисе движения и лежат на диске (data\\trends): после обновления или перезапуска сервиса не обнуляются; хранятся 10 суток. Подробно — CSV-запись и архив. Значения сглажены, как на графиках.')}</span></div><div class="md-zones">`;
     shown.forEach((c) => {
-      if (!c.zones.some((z) => z.type !== 'level')) return;
+      if (!mdHasZoneCards(c)) return;
       if (all) html += `<div class="md-camhead"><b>${escapeHtml(c.name)}${mdIpTag(c.url)}</b><span class="motion-dock__pill" id="md-cp-${escapeHtml(c.id)}"></span></div>`;
       html += c.zones.map((z, i) => (z.type === 'level' ? '' : mdZoneCardHtml(c, z, i))).join('');      // стёкла уровня — на вкладке «Уровень»
       html += mdVisHtml(c);
+      html += mdLevelCardHtml(c);
       html += (c.groups || []).filter((g) => g.type === 'mirror').map((g) => mdMirrorCardHtml(c, g)).join('');
     });
     html += '</div>';
@@ -639,6 +645,7 @@ async function mdDrawTrends() {
     if (!h || h.error || !h.zones) return;
     cams[k].zones.forEach((z) => mdDrawChart(cams[k], z, h.zones[z.id], h.t || [], h.ok || []));
     mdDrawMirrorCharts(cams[k], h);
+    mdDrawLevelChart(cams[k], h);
   });
   cams.forEach((c) => mdDrawVis(c));            // из кэша: карточка могла перерисоваться
   mdVisRefresh(cams, false);
@@ -689,6 +696,7 @@ function mdPaintZoneStats() {
     });
     const live = {};
     ((res && res.zones) || []).forEach((z) => { live[z.id] = z; });
+    mdLevelCardLive(c, sr);
     c.zones.forEach((z) => {
       const el = mdEl('md-st-' + c.id + '-' + z.id);
       if (!el) return;
@@ -1659,6 +1667,7 @@ function initMotionDock() {
   mdEl('mdAll')?.addEventListener('click', () => setFocus(-1));   // общий вид: фокус снимаем
   mdEl('mdMark')?.addEventListener('click', () => openMarkModal(false));
   mdEl('mdMarkRods')?.addEventListener('click', () => openMarkModal(true));
+  mdEl('mdMarkGlass')?.addEventListener('click', () => openMarkModal('glass'));
   mdEl('mdRec')?.addEventListener('click', mdOnRec);
   mdEl('mdRecAll')?.addEventListener('click', mdOnRecAll);
   mdEl('mdRecZip')?.addEventListener('click', mdOnRecZip);

@@ -4839,3 +4839,6 @@ body.micro-rep-doc .micro-cmp-strips { grid-template-columns: repeat(6, 1fr); ga
 .lv-plc.is-on { border-color: var(--success); }
 .lv-plcf { flex: 1; }
 .lv-all { margin-left: auto; font-variant-numeric: tabular-nums; }
+.md-level .md-zone__chart canvas { height: 84px; }
+.md-lv-total { font-size: 20px; font-weight: 700; color: var(--text); }
+.md-level .md-zstat div { line-height: 1.5; }

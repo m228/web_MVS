@@ -295,3 +295,103 @@ function mdOnLevel(t) {
     });
   }
 }
+
+// ---------- карточка уровня на «Зоны · тренды» (как у синхронности валов: слева значения, справа график) ----------
+const LV_COL = { total: 'var(--text)', low: '#38bdf8', up: '#fbbf24' };      // Total — толстая линия цвета текста темы, нижнее стекло — голубая, верхнее — жёлтая (как на плитке)
+const lvTextColor = () => (getComputedStyle(document.documentElement).getPropertyValue('--text') || '').trim() || '#e2e8f0';
+
+function mdLevelCardHtml(cam) {
+  const g = lvGroup(cam);
+  if (!g) return '';
+  const k = escapeHtml(cam.id);
+  const names = g.zones.map((id) => { const z = cam.zones.find((q) => q.id === id); return escapeHtml(z ? z.name : id); }).join(' + ');
+  return `<div class="md-zone md-level">
+    <div class="md-zone__ctl">
+      <div class="md-zone__row"><b>${escapeHtml(g.name)}</b><span class="net-hint">${names}</span><span class="md-sp"></span>
+        <span class="md-num md-lv-total" id="md-lvn-${k}" title="Total: нижнее + верхнее стекло, 0…100 %">–</span></div>
+      <div class="md-zstat" id="md-lvs-${k}"></div>
+      <div class="net-hint" id="md-lvm-${k}"></div>
+      <div class="net-hint"><span style="color:${LV_COL.total}">● Total</span> <span style="color:${LV_COL.low}">● нижнее стекло</span>${g.zones.length > 1 ? ` <span style="color:${LV_COL.up}">● верхнее стекло</span>` : ''} · линии стёкол — заполнение стекла, %</div>
+    </div>
+    <div class="md-zone__chart"><canvas id="md-lvc-${k}" height="84"></canvas></div>
+  </div>`;
+}
+
+// живые значения карточки: Total сейчас, по стеклам — сейчас / среднее / мин / макс за выбранный период, строка про модель
+function mdLevelCardLive(cam, sr) {
+  const g = lvGroup(cam);
+  if (!g) return;
+  const lg = lvLive(cam);
+  const res = (MV.states[cam.id] || {}).result;
+  const live = {};
+  ((res && res.zones) || []).forEach((z) => { live[z.id] = z; });
+  const tot = mdEl('md-lvn-' + cam.id);
+  if (tot) { tot.textContent = lg && lg.valid ? lvFmt(lg.total) + ' %' : '–'; tot.style.color = lg && lg.valid ? '' : '#9ca3af'; }
+  const stats = (zid) => sr && sr.zones && sr.zones[zid] && sr.zones[zid].flow;
+  const rows = g.zones.map((zid, i) => {
+    const z = cam.zones.find((q) => q.id === zid);
+    const s = stats(zid), lz = live[zid];
+    const cur = lz && lg && lg.valid ? lvFmt(lz.level) : '–';
+    return `<div class="md-zstat__row${i ? '' : ' is-main'}" style="color:${i ? LV_COL.up : LV_COL.low}">${escapeHtml(z ? z.name : zid)}: сейчас <b class="md-zstat__cur">${cur}</b> %` +
+      (s ? ` · ср ${lvFmt(s.avg)} · мин ${lvFmt(s.min)} · макс ${lvFmt(s.max)}` : ' · ср – · мин – · макс –') + '</div>';
+  });
+  const avgs = g.zones.map((zid) => stats(zid)).filter(Boolean);
+  if (avgs.length === g.zones.length && sr) {
+    // среднее Total = сумма средних уровней стёкол / 2 (мин и макс Total из мин/макс стёкол не сложить — они в разное время)
+    rows.unshift(`<div class="md-zstat__row" title="Среднее Total за период: (среднее нижнего + среднее верхнего) / 2">Total за ${mdFmtWin(sr.window_s)}: ср <b>${lvFmt(avgs.reduce((a, s) => a + s.avg, 0) / 2)}</b> %</div>`);
+  }
+  const el = mdEl('md-lvs-' + cam.id);
+  if (el) {
+    el.innerHTML = rows.join('') + (sr && sr.span_s < sr.window_s * 0.9 ? `<div class="md-zstat__note">накоплено за ${mdFmtWin(sr.span_s)}</div>` : '');
+  }
+  const m = mdEl('md-lvm-' + cam.id);
+  if (m) {
+    const p = (MV.scen || []).find((q) => q.id === lvScenId(cam));
+    const plc = !p || !p.plc ? 'запись в ПЛК выключена' : p.ok === null ? 'ПЛК: ждёт ответа' : p.ok ? 'ПЛК: записано ' + p.value : 'ПЛК: ошибка ' + (p.error || '');
+    m.textContent = (!lg ? 'ждём данных' : lg.valid ? 'модель ' + lg.model + ' · ' + lg.ms + ' мс · уверенность ' + lg.conf.toFixed(2) : (lg.err || 'ждём первого ответа модели')) + ' · ' + plc;
+  }
+}
+
+// график уровня: Total и заполнение каждого стекла во времени; ось X — как у остальных графиков (правый край «сейчас», окно — колесом мыши)
+function mdDrawLevelChart(cam, h) {
+  const g = lvGroup(cam);
+  const cv = g && mdEl('md-lvc-' + cam.id);
+  const a = g && h.zones && h.zones[g.zones[0]];
+  if (!cv || !a) return;
+  const b = g.zones[1] ? h.zones[g.zones[1]] : null;
+  const t = h.t || [], ok = h.ok || [], n = t.length;
+  const w = cv.clientWidth, hh = cv.height || 84;
+  if (!w) return;
+  if (cv.width !== w) cv.width = w;
+  const c = cv.getContext('2d');
+  c.clearRect(0, 0, w, hh);
+  const plotH = hh - 13, win = MD.win;
+  const Y = (v) => plotH - (Math.max(0, Math.min(100, v)) / 100) * (plotH - 6) - 1;
+  c.fillStyle = '#94a3b8'; c.font = '10px sans-serif';
+  c.fillText('100', 3, 10); c.fillText('0', 3, plotH - 2);
+  c.fillText('−' + mdFmtWin(win), 3, hh - 1);
+  c.textAlign = 'right'; c.fillText('сейчас', w - 3, hh - 1); c.textAlign = 'left';
+  if (n < 2) return;
+  const tEnd = t[n - 1];
+  const X = (i) => w - 1 - ((tEnd - t[i]) / win) * (w - 2);
+  const dt = (t[n - 1] - t[0]) / (n - 1);
+  const bw = Math.max(1.5, (dt / win) * w + 1);
+  const gap = Math.max(dt * 3, 5);
+  for (let i = 0; i < n; i += 1) if (ok[i] === 0) { c.fillStyle = 'rgba(156,163,175,.30)'; c.fillRect(X(i) - bw, 0, bw, plotH); }
+  c.setLineDash([4, 3]); c.lineWidth = 1; c.strokeStyle = '#64748b';
+  c.beginPath(); c.moveTo(0, Y(50)); c.lineTo(w, Y(50)); c.stroke();
+  c.setLineDash([]);
+  const line = (vals, color, width) => {
+    c.strokeStyle = color; c.lineWidth = width; c.beginPath();
+    let pen = false;
+    vals.forEach((v, i) => {
+      if (v == null || ok[i] === 0) { pen = false; return; }
+      if (!pen || t[i] - t[i - 1] > gap) c.moveTo(X(i), Y(v)); else c.lineTo(X(i), Y(v));
+      pen = true;
+    });
+    c.stroke();
+  };
+  if (b) line(b.flow, LV_COL.up, 1.2);
+  line(a.flow, LV_COL.low, 1.2);
+  line(a.flow.map((v, i) => v / 2 + (b ? b.flow[i] / 2 : 0)), lvTextColor(), 2);      // Total = (нижнее + верхнее) / 2 в процентах стекла
+}

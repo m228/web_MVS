@@ -157,6 +157,7 @@ function drawMotionTile(index) {
   cam.zones.forEach((z) => {
     if (z.enabled === false) return;
     if (z.type === 'cycle') { drawCycleOnTile(ctx, z, cam, g, live[z.id], mvZoneMode(st, live[z.id])); return; }
+    if (z.type === 'level') return;                 // стёкла уровня рисует drawLevelOnTile ниже
     const pts = zonePointsOnTile(z, cam, g);
     const lz = live[z.id];
     const [stroke, fill] = MV_COLORS[mvZoneMode(st, lz)];
@@ -179,6 +180,55 @@ function drawMotionTile(index) {
     ctx.fillStyle = bad ? '#9ca3af' : lg.alarm ? '#f87171' : '#4ade80'; ctx.fillText(txt, g.w / 2, 26 + k * 24);
     ctx.textAlign = 'left'; ctx.font = 'bold 13px sans-serif'; ctx.lineWidth = 2;
   });
+  drawLevelOnTile(ctx, cam, g, st, problem);
+}
+
+// уровень жидкости (декантатор): стёкла нижнее — голубое, верхнее — жёлтое; на каждом его заполнение, сверху по центру Total и вклад стёкол
+const MV_LEVEL_COL = ['#38bdf8', '#fbbf24'];
+function drawLevelOnTile(ctx, cam, g, st, problem) {
+  const cg = (cam.groups || []).find((x) => x.type === 'level');
+  if (!cg) return;
+  const lg = ((st && st.groups) || []).find((x) => x.id === cg.id);
+  const live = {};
+  ((st && st.zones) || []).forEach((z) => { live[z.id] = z; });
+  const ok = !problem && !!lg && !!lg.valid;
+  ctx.lineWidth = 2; ctx.font = 'bold 13px sans-serif';
+  cg.zones.forEach((zid, i) => {
+    const z = cam.zones.find((q) => q.id === zid);
+    if (!z || z.enabled === false) return;
+    const pts = zonePointsOnTile(z, cam, g);
+    const col = ok ? MV_LEVEL_COL[i % 2] : '#9ca3af';
+    ctx.strokeStyle = col; ctx.fillStyle = col + '24';
+    ctx.beginPath();
+    pts.forEach((p, k) => (k ? ctx.lineTo(p[0], p[1]) : ctx.moveTo(p[0], p[1])));
+    ctx.closePath(); ctx.fill(); ctx.stroke();
+    const lz = live[zid];
+    const label = ok && lz ? Math.round(lz.level) + ' %' : '—';
+    ctx.lineWidth = 3; ctx.strokeStyle = '#000'; ctx.strokeText(label, pts[0][0] + 4, pts[0][1] + 15);
+    ctx.fillStyle = '#fff'; ctx.fillText(label, pts[0][0] + 4, pts[0][1] + 15); ctx.lineWidth = 2;
+  });
+  if (ok && lg.contour && lg.contour_wh) {          // тонкий контур найденной жидкости
+    const cw = lg.contour_wh[0], kx = (g.nw / cw) * g.k;
+    ctx.strokeStyle = '#4ade80'; ctx.lineWidth = 1.5;
+    lg.contour.forEach((poly) => {
+      ctx.beginPath();
+      poly.forEach((p, k) => (k ? ctx.lineTo(g.ox + p[0] * kx, g.oy + p[1] * kx) : ctx.moveTo(g.ox + p[0] * kx, g.oy + p[1] * kx)));
+      ctx.closePath(); ctx.stroke();
+    });
+    ctx.lineWidth = 2;
+  }
+  const main = ok ? lvFmt(lg.total) + ' %' : '—';
+  ctx.textAlign = 'center';
+  ctx.font = 'bold 20px sans-serif';
+  ctx.lineWidth = 4; ctx.strokeStyle = '#000'; ctx.strokeText(main, g.w / 2, 28);
+  ctx.fillStyle = ok ? '#fff' : '#9ca3af'; ctx.fillText(main, g.w / 2, 28);
+  if (ok) {
+    const sub = lvFmt(lg.g1) + ' + ' + lvFmt(lg.g2);
+    ctx.font = 'bold 13px sans-serif';
+    ctx.lineWidth = 3; ctx.strokeText(sub, g.w / 2, 46);
+    ctx.fillStyle = '#d1d5db'; ctx.fillText(sub, g.w / 2, 46);
+  }
+  ctx.textAlign = 'left'; ctx.font = 'bold 13px sans-serif'; ctx.lineWidth = 2;
 }
 
 // направление вращения вала значком: ↻ по часовой, ↺ против, ■ стоит (числа оборотов не показываем)
@@ -247,7 +297,8 @@ function onMotionHover(event) {
   if (!hit) { tip.hidden = true; return; }
   const lz = ((st && st.zones) || []).find((z) => z.id === hit.id);
   const problem = tileMotionStatusText(st);
-  tip.textContent = hit.name + (problem ? ' — ' + problem : lz
+  tip.textContent = hit.name + (problem ? ' — ' + problem : lz && hit.type === 'level'
+    ? ' · заполнено ' + Number(lz.level).toFixed(1) + ' % · сырое ' + Number(lz.raw).toFixed(1) + ' %' : lz
     ? ' · ' + (lz.bit ? 'крутится' : 'стоит') + ' · diff ' + Number(lz.diff).toFixed(2) + ' · flow ' + Number(lz.flow).toFixed(2) : '');
   tip.style.left = Math.min(event.clientX + 14, window.innerWidth - 260) + 'px';
   tip.style.top = event.clientY + 16 + 'px';

@@ -4856,6 +4856,14 @@ body.micro-rep-doc .micro-cmp-strips { grid-template-columns: repeat(6, 1fr); ga
 .lv-plc2__body.md-fields--c { grid-template-columns: max-content; }
 .lv-plc2__body.md-fields--c label { grid-template-columns: 130px 120px; }
 .lv-plc2__body.md-fields--c input[type=text] { width: 120px; }
+/* картинка для SCADA: та же карточка; обрезка и размер — несколько узких полей в строке */
+.lv-web .lv-plc2__body.md-fields--c input[type=number] { width: 74px; }
+.lv-web .lv-web__row { grid-template-columns: 130px auto; }
+.lv-web__nums { display: inline-flex; gap: 4px; }
+.lv-web .lv-web__nums input[type=number] { width: 58px; padding-left: 6px; padding-right: 4px; }
+.lv-web .micro-check { margin-top: 10px; }
+.lv-web__url { margin-top: 8px; font-size: 12px; word-break: break-all; }
+.lv-web__url.is-bad, .lv-web .md-dim.is-bad { color: var(--danger); }
 /* маленький квадратик-переключатель */
 .lv-sq { position: relative; width: 18px; height: 18px; flex: none; cursor: pointer; }
 .lv-sq input { position: absolute; inset: 0; opacity: 0; margin: 0; width: 100%; height: 100%; cursor: pointer; }

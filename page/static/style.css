@@ -4858,9 +4858,11 @@ body.micro-rep-doc .micro-cmp-strips { grid-template-columns: repeat(6, 1fr); ga
 .lv-plc2__body.md-fields--c input[type=text] { width: 120px; }
 /* картинка для SCADA: та же карточка; обрезка и размер — несколько узких полей в строке */
 .lv-web .lv-plc2__body.md-fields--c input[type=number] { width: 74px; }
-.lv-web .lv-web__row { grid-template-columns: 130px auto; }
+.lv-web .lv-plc2__body label.lv-web__row { grid-template-columns: 130px auto; }
 .lv-web__nums { display: inline-flex; gap: 4px; }
-.lv-web .lv-web__nums input[type=number] { width: 58px; padding-left: 6px; padding-right: 4px; }
+/* обрезка и размер: узкие поля без стрелочек — только цифры */
+.lv-web .lv-web__nums input.lv-web__n[type=number] { width: 46px; box-sizing: border-box; padding-left: 4px; padding-right: 4px; text-align: right; -moz-appearance: textfield; appearance: textfield; }
+.lv-web .lv-web__nums input.lv-web__n[type=number]::-webkit-inner-spin-button, .lv-web .lv-web__nums input.lv-web__n[type=number]::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
 .lv-web .micro-check { margin-top: 10px; }
 .lv-web__url { margin-top: 8px; font-size: 12px; word-break: break-all; }
 .lv-web__url.is-bad, .lv-web .md-dim.is-bad { color: var(--danger); }

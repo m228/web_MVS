@@ -18,6 +18,8 @@
   GET  /api/enroll              — заявки, ждущие решения; POST /api/enroll/{id}/approve ({"name"}) и /reject — принять / отклонить.
   GET  /api/telegram            — состояние уведомлений в Telegram (без токена и chat id); POST /api/telegram/test — тестовое сообщение.
   GET  /health                  — жив ли (без пароля, без данных).
+  POST /netcheck                — для диагностики связи (net_diag.py на ПК завода): читает тело до 256 КБ целиком и отвечает {got: сколько байт принял}.
+                                  Без пароля и без хранения: нужна, чтобы проверить, проходят ли по каналу большие запросы (MTU).
   GET  /manifest.webmanifest, /icon-192.png, /icon-512.png, /favicon.ico — иконка и описание приложения (без пароля, секретов нет):
                                   по ним браузер ставит панель отдельным окном («Установить как приложение»).
 
@@ -45,6 +47,7 @@ import monitor_store
 log = logging.getLogger("monitor")
 
 INGEST_MAX_BYTES = 1_000_000
+NETCHECK_MAX_BYTES = 262_144
 AUTH_FAILS_MAX = 8
 AUTH_FAILS_WINDOW_S = 300
 WATCH_EVERY_S = 30
@@ -170,6 +173,15 @@ def create_app(store: monitor_store.Store, password: str, version: str, panel_ht
     @app.get("/health")
     def health():
         return {"ok": True, "service": "monitor", "version": version}
+
+    @app.post("/netcheck")
+    async def netcheck(request: Request):
+        got = 0
+        async for chunk in request.stream():
+            got += len(chunk)
+            if got > NETCHECK_MAX_BYTES:
+                return JSONResponse({"ok": False, "error": "слишком большое тело"}, status_code=413)
+        return {"ok": True, "got": got}
 
     @app.post("/ingest")
     async def ingest(request: Request):

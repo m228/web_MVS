@@ -35,6 +35,7 @@ copy /Y UpdaterMotion.ps1 "dist\web_MVS\" >nul
 copy /Y UpdaterLevel.bat "dist\web_MVS\" >nul
 copy /Y UpdaterLevel.ps1 "dist\web_MVS\" >nul
 copy /Y SelfCheck_HW.bat "dist\web_MVS\" >nul
+copy /Y NetDiag.bat "dist\web_MVS\" >nul
 copy /Y update.bat "dist\web_MVS\" >nul
 copy /Y update.ps1 "dist\web_MVS\" >nul
 copy /Y Uninstall.bat "dist\web_MVS\" >nul

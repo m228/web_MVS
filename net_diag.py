@@ -382,7 +382,7 @@ def check_sizes(rep: Report, target: dict, via_proxy: bool) -> dict:
     probe = _http(url + "/netcheck", via_proxy=via_proxy)         # GET: у нового приёмника маршрут есть (405 «только POST»), у старого — 404; так без гонок с обрывом соединения
     if probe["code"] == 404:
         res["posts"].append({"size": POST_SIZES[0], "state": "unsupported", "ms": probe["ms"], "err": ""})
-        rep.step(WARN, "POST больших данных не проверить: приёмник без /netcheck (обнови приёмник до 2.1.40+)")
+        rep.step(WARN, "POST больших данных не проверить: приёмник без /netcheck (обнови приёмник до 2.1.41+)")
         return res
     for size in POST_SIZES:
         r = _http(url + "/netcheck", "POST", b"x" * size, {"Content-Type": "application/octet-stream"}, via_proxy=via_proxy, timeout=POST_TIMEOUT_S)
@@ -400,7 +400,7 @@ def check_sizes(rep: Report, target: dict, via_proxy: bool) -> dict:
             state = "error"
         res["posts"].append({"size": size, "state": state, "ms": r["ms"], "err": r["err"]})
         if state == "unsupported":
-            rep.step(WARN, "POST больших данных не проверить: приёмник без /netcheck (обнови приёмник до 2.1.40+)")
+            rep.step(WARN, "POST больших данных не проверить: приёмник без /netcheck (обнови приёмник до 2.1.41+)")
             break
         rep.step(OK if state == "ok" else FAIL, "POST %d КБ: %s" % (size // 1024, ("дошёл за %d мс" % r["ms"]) if state == "ok" else (r["err"] or "ответ HTTP %s" % r["code"])))
         if state != "ok":

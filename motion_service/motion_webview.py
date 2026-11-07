@@ -6,8 +6,9 @@
 Адреса (как в LVLDec):
   /, /index.html            страница с картинкой и переключателем «Сырой / С разметкой»
   /scada.html, /scada.htm   минимальная страница для SCADA (старый IE-компонент): картинка на весь экран + обновление по таймеру
+  /scada.jpg                адрес для SCADA: кадр с разметкой, если annotate = true, иначе тот же чистый кадр, что /frame.jpg
   /frame.jpg                последний сырой кадр: обрезка → размер → метка времени → JPEG
-  /frame_annotated.jpg, /scada.jpg   то же с разметкой (маска жидкости, рамки, Total / g1 / g2); только при annotate = true
+  /frame_annotated.jpg      кадр с разметкой (маска жидкости, рамки, Total / g1 / g2); только при annotate = true
   /healthz                  JSON: возраст последних JPEG в секундах (для мониторинга)
 
 Настройки на камеру — cam["webview"], имена как в config.ini LVLDec: enabled, host, port, update_sec, jpeg_quality, annotate,
@@ -169,7 +170,7 @@ INDEX_HTML = """<!doctype html>
   <a href="/healthz" target="_blank">healthz</a>
 </div>
 <img id="cam" src="/frame.jpg?ts=0" alt="камера">
-<div class="hint">Прямые URL для SCADA: <code>/frame.jpg</code> (сырой) · <code>/scada.jpg</code> (с разметкой)</div>
+<div class="hint">Прямые URL для SCADA: <code>/scada.jpg</code> (с разметкой, если она включена) · <code>/frame.jpg</code> (всегда сырой)</div>
 <script>
  const img = document.getElementById('cam');
  const btnRaw = document.getElementById('btnRaw');
@@ -252,9 +253,14 @@ class Handler(BaseHTTPRequestHandler):
             else:
                 self._send(200, "image/jpeg", jpeg)
         elif path in ("/frame_annotated.jpg", "/scada.jpg"):
-            jpeg, _ = self.store.get_annotated()
+            # /scada.jpg — адрес, на который смотрит SCADA: с разметкой, если annotate включён, иначе тот же чистый кадр, что и /frame.jpg
+            # (в LVLDec без annotate он отвечал 503 — а SCADA на нём стоит и при выключенной разметке картинки не видела).
+            # /frame_annotated.jpg — только размеченная, как в LVLDec.
+            plain = path == "/scada.jpg" and not self.annotate_on
+            jpeg, _ = self.store.get_raw() if plain else self.store.get_annotated()
             if not jpeg:
-                self._send(503, "text/plain; charset=utf-8", "аннотированный кадр ещё не готов".encode("utf-8"))
+                msg = "нет кадра — камера ещё не готова" if plain else "аннотированный кадр ещё не готов"
+                self._send(503, "text/plain; charset=utf-8", msg.encode("utf-8"))
             else:
                 self._send(200, "image/jpeg", jpeg)
         elif path == "/healthz":

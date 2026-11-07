@@ -113,7 +113,8 @@ function mdLevelTabHtml(mode, cam) {
       ${mdField('Регистр Total ×10', num('p_addr', sc && sc.out ? sc.out.address : 0, 0, 65535, 1), 'Целое 0…1000: 54,3 % → 543 (SCADA делит на 10)')}
     </div></div>` : '';
   // картинка для SCADA: карточка рядом с записью в ПЛК; квадратик справа в шапке включает отдачу
-  const wnum = (k, w) => `<input type="number" ${a} data-f="w_${k}" value="${escapeHtml(wvP(cam, k))}" min="${WV_NUM[k][0]}" max="${WV_NUM[k][1]}" step="${WV_NUM[k][2] ? 1 : 'any'}"${w ? ` style="width:${w}px"` : ''} />`;
+  // small — узкое поле без стрелочек (обрезка, размер): только цифры, ширина по значению
+  const wnum = (k, small) => `<input type="number" ${a} data-f="w_${k}" value="${escapeHtml(wvP(cam, k))}" min="${WV_NUM[k][0]}" max="${WV_NUM[k][1]}" step="${WV_NUM[k][2] ? 1 : 'any'}"${small ? ' class="lv-web__n"' : ''} />`;
   const wOn = !!wvP(cam, 'enabled');
   const web = `<div class="lv-plc2 lv-web${wOn ? ' is-on' : ''}">
     <div class="lv-plc2__head"><b>Картинка для SCADA</b><span class="md-dim" id="lvWebInfo"></span>
@@ -122,10 +123,10 @@ function mdLevelTabHtml(mode, cam) {
       ${mdField('Порт', wnum('port'), 'Порт, на котором камера отдаёт картинку. Один порт — одна камера')}
       ${mdField('Обновление, с', wnum('update_sec'), 'Как часто готовить новый кадр. Страница SCADA перезагружает картинку с тем же периодом')}
       ${mdField('Качество JPEG', wnum('jpeg_quality'), '1…100: больше — чётче и тяжелее')}
-      <label class="lv-web__row" title="Обрезка в пикселях ОРИГИНАЛЬНОГО кадра: слева-сверху и справа-снизу. Все четыре 0 — без обрезки"><span>Обрезка x1 y1 x2 y2</span><span class="lv-web__nums">${wnum('crop_x1', 58)}${wnum('crop_y1', 58)}${wnum('crop_x2', 58)}${wnum('crop_y2', 58)}</span></label>
-      <label class="lv-web__row" title="Размер картинки после обрезки: ширина и высота. Обе 0 — не менять"><span>Размер w × h</span><span class="lv-web__nums">${wnum('output_w', 58)}${wnum('output_h', 58)}</span></label>
+      <label class="lv-web__row" title="Обрезка в пикселях ОРИГИНАЛЬНОГО кадра: слева-сверху и справа-снизу. Все четыре 0 — без обрезки"><span>Обрезка x1 y1 x2 y2</span><span class="lv-web__nums">${wnum('crop_x1', 1)}${wnum('crop_y1', 1)}${wnum('crop_x2', 1)}${wnum('crop_y2', 1)}</span></label>
+      <label class="lv-web__row" title="Размер картинки после обрезки: ширина и высота. Обе 0 — не менять"><span>Размер w × h</span><span class="lv-web__nums">${wnum('output_w', 1)}${wnum('output_h', 1)}</span></label>
     </div>
-    <label class="micro-check" title="Дополнительный адрес /scada.jpg: кадр с маской жидкости, рамкой и подписью Total / g1 / g2"><input type="checkbox" ${a} data-f="w_annotate"${wvP(cam, 'annotate') ? ' checked' : ''} /><span class="micro-check__text">с разметкой</span></label>
+    <label class="micro-check" title="На адресе /scada.jpg будет кадр с маской жидкости, рамкой и подписью Total / g1 / g2. Без галочки там чистая картинка"><input type="checkbox" ${a} data-f="w_annotate"${wvP(cam, 'annotate') ? ' checked' : ''} /><span class="micro-check__text">с разметкой</span></label>
     <div class="md-dim lv-web__url" id="lvWebUrl"></div>
   </div>`;
   const names = g ? g.zones.map((id) => { const z = cam.zones.find((q) => q.id === id); return z ? z.name : id; }) : [];
@@ -191,7 +192,7 @@ function lvPaintWeb(cam) {
   info.textContent = !on ? '' : !w ? 'ждёт запуска камеры' : w.error ? 'ошибка' : w.age_s === null ? 'ждёт кадра' : 'кадр ' + Math.round(w.age_s) + ' с назад';
   info.classList.toggle('is-bad', !!(w && w.error));
   const base = 'http://' + location.hostname + ':' + wvP(cam, 'port');
-  url.textContent = on ? (w && w.error ? w.error + ' · ' : '') + base + '/frame.jpg · ' + base + '/scada.html' + (wvP(cam, 'annotate') ? ' · /scada.jpg' : '') : '';
+  url.textContent = on ? (w && w.error ? w.error + ' · ' : '') + base + '/scada.jpg' : '';
   url.classList.toggle('is-bad', !!(w && w.error));
 }
 

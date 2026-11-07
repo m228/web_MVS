@@ -187,6 +187,28 @@ def test_annotated_routes_are_503_until_annotation_exists(server):
         assert get(port, p)[0] == 200
 
 
+def test_scada_jpg_serves_plain_picture_when_annotation_is_off(server):
+    """SCADA стоит на /scada.jpg (Navigate2 в её скрипте): без разметки там должна быть обычная картинка, а не 503, как в LVLDec без annotate."""
+    store, make = server
+    port = make(annotate=False)
+    code, _, body = get(port, "/scada.jpg")
+    assert code == 503 and body.decode("utf-8") == "нет кадра — камера ещё не готова"
+    store.set_raw(gradient(), time.time())
+    code, h, scada = get(port, "/scada.jpg?t=1")
+    assert code == 200 and h["content-type"] == "image/jpeg" and scada == get(port, "/frame.jpg")[2], "тот же кадр, что и /frame.jpg"
+    assert get(port, "/frame_annotated.jpg")[0] == 503, "размеченного кадра без annotate нет, как в LVLDec"
+
+
+def test_scada_jpg_serves_annotated_picture_when_annotation_is_on(server):
+    store, make = server
+    port = make(annotate=True)
+    store.set_raw(gradient(), time.time())
+    assert get(port, "/scada.jpg")[0] == 503, "размеченный ещё не готов — чистый не подсовываем: SCADA покажет старую картинку, а не подмену"
+    other = gradient()[::-1].copy()
+    store.set_annotated(other, time.time())
+    assert get(port, "/scada.jpg")[2] == get(port, "/frame_annotated.jpg")[2] != get(port, "/frame.jpg")[2]
+
+
 def test_scada_page_points_at_raw_or_annotated_frame_and_refreshes(server):
     _, make = server
     raw_port, ann_port = make(annotate=False, refresh=3.0), make(annotate=True, refresh=2.6)

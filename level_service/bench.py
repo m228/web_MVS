@@ -56,6 +56,12 @@ def liquid_area(r) -> float:
     return float((m.data.cpu().numpy() > 0.5).any(axis=0).mean())
 
 
+def pip_install(pkg: str) -> int:
+    """pip именно этого интерпретатора (venv сервиса), а не системного. Без os.system: кавычки в пути ломали запуск под cmd."""
+    import subprocess
+    return subprocess.call([sys.executable, "-m", "pip", "install", pkg])
+
+
 def timeit(fn) -> tuple:
     t = time.time()
     r = fn()
@@ -85,12 +91,14 @@ def main():
     from ultralytics import YOLO
     try:
         import openvino as ov
-        devs = ov.Core().available_devices
     except ImportError:
-        say("openvino не установлен — ставлю (pip install openvino) ...")
-        os.system('"%s" -m pip install "openvino>=2024.0"' % sys.executable)
+        say("openvino не установлен в этом окружении — ставлю (pip install openvino) ...")
+        if pip_install("openvino>=2024.0") != 0:
+            sys.exit("Не удалось поставить openvino. Вручную: %s -m pip install openvino" % sys.executable)
+        import importlib
+        importlib.invalidate_caches()
         import openvino as ov
-        devs = ov.Core().available_devices
+    devs = ov.Core().available_devices
     say("Модель: %s   кадр: %dx%d   устройства OpenVINO: %s" % (model, frame.shape[1], frame.shape[0], ", ".join(devs)))
     say("Время на кадр, секунды (медиана из %d), в скобках — первый вызов; «жидкость» — доля кадра, закрытая маской" % RUNS)
     say("%-6s %-22s %-14s %-12s" % ("вход", "вариант", "с/кадр", "жидкость"))

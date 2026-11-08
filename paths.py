@@ -19,7 +19,6 @@
       dataset\  Videos\  rtsp_cameras.json   <- создаются в работе, не входят в архив,
                                                 поэтому обновление их не затирает
 """
-import os
 import sys
 from pathlib import Path
 
@@ -32,12 +31,6 @@ else:
     # запуск из исходников: код и данные в корне репозитория
     BUNDLE_DIR = Path(__file__).resolve().parent
     DATA_DIR = BUNDLE_DIR
-    # WEB_MVS_DATA_DIR — свой каталог данных для фейк-стенда (fake_mode.py): пишем в .fake_data, а не в боевые файлы.
-    # Только для запуска из исходников: в собранной поставке переменная ничего не меняет.
-    _data_override = os.environ.get("WEB_MVS_DATA_DIR", "").strip()
-    if _data_override:
-        DATA_DIR = Path(_data_override).resolve()
-        DATA_DIR.mkdir(parents=True, exist_ok=True)
 
 
 def read_version() -> str:

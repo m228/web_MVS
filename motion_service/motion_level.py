@@ -22,6 +22,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from pathlib import Path
 from typing import Callable, Optional
 
 import cv2
@@ -244,14 +245,43 @@ def post_infer(url: str, jpeg: bytes, params: dict, timeout: float = 30.0) -> di
         return {"error": "сервис уровня не отвечает (%s)" % (url or DEFAULT_URL)}
 
 
+def yolo_label(objs: list, cls_name: str, W: int, H: int) -> str:
+    """Контуры жидкости → разметка YOLO-seg (класс 0, точки 0..1, по строке на контур). Пусто — жидкости модель не нашла."""
+    lines = []
+    for o in objs:
+        if o.get("name") != cls_name:
+            continue
+        for poly in o.get("polygons") or []:
+            if len(poly) >= 3:
+                pts = " ".join("%.6f %.6f" % (min(1.0, max(0.0, x / W)), min(1.0, max(0.0, y / H))) for x, y in poly)
+                lines.append("0 " + pts)
+    return "\n".join(lines) + ("\n" if lines else "")
+
+
+def prune_frames(folder: Path, keep: int):
+    """Оставить в folder\\images не больше keep самых новых кадров; разметку старых (labels\\<имя>.txt) убрать вместе с ними."""
+    imgs = sorted((folder / "images").glob("*.jpg"))
+    for p in imgs[:max(0, len(imgs) - keep)]:
+        for f in (p, folder / "labels" / (p.stem + ".txt")):
+            try:
+                f.unlink()
+            except OSError:
+                pass
+
+
 class LevelInfer(threading.Thread):
     """Раз в infer_interval_s: свежий кадр камеры → сервис уровня → LevelRT. Отдельный поток: модель на процессоре думает
-    секунду, и разбор кадров камеры, и запись в ПЛК от этого не тормозят."""
+    секунду, и разбор кадров камеры, и запись в ПЛК от этого не тормозят.
+
+    save_dir + frames_min в группе: раз в frames_min минут тот же кадр, что ушёл в модель (полный размер, без разметки), кладётся в
+    save_dir\\images, а в save_dir\\labels — то, что нашла модель, в формате YOLO-seg: готовая заготовка для разметки и дообучения."""
 
     def __init__(self, rt: LevelRT, get_frame: Callable[[], Optional[np.ndarray]], halt: threading.Event,
-                 post: Callable = post_infer, jpeg_quality: int = 95):
+                 post: Callable = post_infer, jpeg_quality: int = 95, save_dir: Optional[Path] = None):
         super().__init__(daemon=True, name="level-" + rt.g["id"])
         self.rt, self.get_frame, self.halt, self.post, self.q = rt, get_frame, halt, post, jpeg_quality
+        self.save_dir = Path(save_dir) if save_dir else None
+        self._last_save = 0.0
 
     def run(self):
         g = self.rt.g
@@ -282,3 +312,33 @@ class LevelInfer(threading.Thread):
             self.rt.note_error(res["error"])
         else:
             self.rt.ingest(res)
+            try:
+                self._maybe_save(buf.tobytes(), res)
+            except Exception as e:                       # диск полон / нет прав: уровень от этого не страдает
+                log.warning("[уровень %s] кадр для обучения не сохранён: %s", g["id"], e)
+
+    def _maybe_save(self, jpeg: bytes, res: dict):
+        g = self.rt.g
+        every = float(g.get("frames_min") or 0)
+        now = time.time()
+        if not self.save_dir or every <= 0 or now - self._last_save < every * 60:
+            return
+        self._last_save = now
+        W, H = int(res["image"]["w"]), int(res["image"]["h"])
+        objs = res.get("objects") or []
+        if g["geometry"] != "exact":                     # в разметку — честные контуры, а не «как в LVLDec» (те съезжают к центру)
+            params = {"conf": g["conf"], "geometry": "exact"}
+            if g["imgsz"]:
+                params["imgsz"] = g["imgsz"]
+            exact = self.post(g["service_url"], jpeg, params, max(10.0, g["infer_interval_s"] * 5))
+            objs = exact.get("objects") or [] if "error" not in exact else None
+        with self.rt._lock:
+            raw = list(self.rt.raw)
+        tag = "_".join("%s%s" % (k, "x" if v is None else int(round(v * 100))) for k, v in zip("nv", raw))   # n — нижнее, v — верхнее, сырой %
+        name = "%s_%s" % (time.strftime("%Y%m%d_%H%M%S", time.localtime(now)), tag)
+        (self.save_dir / "images").mkdir(parents=True, exist_ok=True)
+        (self.save_dir / "images" / (name + ".jpg")).write_bytes(jpeg)
+        if objs is not None:
+            (self.save_dir / "labels").mkdir(parents=True, exist_ok=True)
+            (self.save_dir / "labels" / (name + ".txt")).write_text(yolo_label(objs, g["liquid_class"], W, H), encoding="utf-8")
+        prune_frames(self.save_dir, int(g.get("frames_keep") or 1000))

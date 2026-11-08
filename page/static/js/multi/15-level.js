@@ -3,10 +3,10 @@
 // площади, залитая маской жидкости; Total = (нижнее + верхнее) · 50 %, в ПЛК уходит ×10 (54,3 % → 543). В ПЛК пишет сценарий
 // «Уровень · камера» со своей связью, выключенной по умолчанию. Серверная часть — motion_service/motion_level.py.
 const LV_DEF = { conf: 0.35, imgsz: 0, geometry: 'lvldec', infer_interval_s: 2, alpha: 0.93, warmup_s: 10, glass1_min: 15, glass2_min: 20,
-  glass1_full: 100, glass2_full: 100, hold_s: 30, contour: false, liquid_class: 'liquid' };
+  glass1_full: 100, glass2_full: 100, hold_s: 30, contour: false, liquid_class: 'liquid', frames_min: 0, frames_keep: 1000 };
 // [мин, макс] числовых параметров группы (как проверяет сервер)
 const LV_NUM = { conf: [0.01, 0.99], imgsz: [0, 4096], infer_interval_s: [0.2, 600], alpha: [0, 0.999], warmup_s: [0, 600],
-  glass1_min: [0, 100], glass2_min: [0, 100], glass1_full: [0, 100], glass2_full: [0, 100], hold_s: [1, 3600] };
+  glass1_min: [0, 100], glass2_min: [0, 100], glass1_full: [0, 100], glass2_full: [0, 100], hold_s: [1, 3600], frames_min: [0, 1440], frames_keep: [10, 100000] };
 const LV = { svc: null, models: null, at: 0, busy: false, msg: '', msgCls: '' };
 // картинка камеры для SCADA и браузера (cam.webview; сервер — motion_service/motion_webview.py): значения по умолчанию и границы — как у сервера, имена — как в [webview] LVLDec
 const WV_DEF = { enabled: false, host: '0.0.0.0', port: 5000, update_sec: 5, jpeg_quality: 85, annotate: false,
@@ -56,7 +56,13 @@ function lvPaintModel() {
     if (!s) setCapLine(cap, true, 'Проверяю сервис уровня…', '');
     else if (!s.online) setCapLine(cap, false, '', 'Сервис уровня не запущен (level_service\\setup.bat, потом перезапуск web_MVS)');
     else if (!m) setCapLine(cap, false, '', 'Сервис уровня работает, модель не загружена — загрузите .pt');
-    else setCapLine(cap, true, 'Модель ' + m.name + ' · ' + m.classes.join(', ') + ' · ' + m.device, '');
+    else {
+      // на каком размере считаем и на каком модель обучена: расхождение (обучена на 960, считаем на 640) занижает уровень
+      const g = lvGroup(mdCamera().cam);
+      const used = (g && g.imgsz) || m.imgsz;
+      const sz = !m.imgsz ? '' : used === m.imgsz ? ' · вход ' + used + ' (как при обучении)' : ' · ВХОД ' + used + ', обучена на ' + m.imgsz + ' — уровень может занижаться';
+      setCapLine(cap, true, 'Модель ' + m.name + ' · ' + m.classes.join(', ') + ' · ' + m.device + sz, '');
+    }
   }
   const sel = mdEl('lvModelSel');
   if (sel) {
@@ -101,6 +107,8 @@ function mdLevelTabHtml(mode, cam) {
       ${mdField('Класс жидкости', `<input type="text" ${a} data-f="liquid_class" value="${escapeHtml(lvP(g, 'liquid_class'))}" />`, 'Имя класса модели, которое считается жидкостью (у моделей LVLDec — liquid)')}
       ${mdField('Размер входа', num('imgsz', lvP(g, 'imgsz'), 0, 4096, 32), '0 — тот, на котором обучена модель')}
       ${mdField('Держать без модели, с', num('hold_s', lvP(g, 'hold_s'), 1, 3600, 1), 'Сколько держать последний уровень, если модель молчит; потом — ноль')}
+      ${mdField('Кадры для обучения, мин', num('frames_min', lvP(g, 'frames_min'), 0, 1440, 1), '0 — не сохранять. Иначе раз в столько минут кадр, ушедший в модель (полный размер, без разметки), кладётся в data\\level_frames\\images, а то, что нашла модель, — в labels (YOLO). Разметку можно удалить или поправить')}
+      ${mdField('Хранить кадров, шт', num('frames_keep', lvP(g, 'frames_keep'), 10, 100000, 1), 'Сколько последних кадров держать на диске (старые стираются вместе с разметкой)')}
     </div></div>` : '';
   // запись в ПЛК — карточка справа от параметров; квадратик справа в шапке включает запись
   const plc = g ? `<div class="lv-plc2${m.enable ? ' is-on' : ''}">

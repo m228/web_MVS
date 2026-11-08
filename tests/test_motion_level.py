@@ -459,3 +459,78 @@ def test_import_lvldec_ini_without_upper_zone_and_with_few_points():
     r = lv.import_ini("[detection]\nconf = 0.4\n[zones]\nlower = 1,1 5,1 5,5\nupper = 1,1 2,2\n")
     assert r["zones"]["lower"] and r["zones"]["upper"] is None
     assert any("верхней зоны нет" in n for n in r["notes"])
+
+
+# ── кадры для обучения: JPEG, ушедший в модель, + разметка YOLO-seg ───────────────────────────────────────────────
+
+def test_yolo_label_is_normalized_and_only_liquid():
+    objs = answer((10, 20, 110, 220))["objects"] + [{"cls": 1, "name": "glass", "conf": 0.9, "bbox": [0, 0, 1, 1], "polygons": [rect(0, 0, 5, 5)]}]
+    lines = ml.yolo_label(objs, "liquid", W, H).strip().split("\n")
+    assert len(lines) == 1 and lines[0].startswith("0 ")
+    nums = [float(v) for v in lines[0].split()[1:]]
+    assert len(nums) == 8 and nums[:2] == pytest.approx([10 / W, 20 / H], abs=1e-5) and max(nums) <= 1.0
+    assert ml.yolo_label([], "liquid", W, H) == ""
+
+
+def test_prune_frames_keeps_newest_and_removes_labels_together(tmp_path):
+    (tmp_path / "images").mkdir()
+    (tmp_path / "labels").mkdir()
+    for i in range(5):
+        (tmp_path / "images" / ("2026110%d.jpg" % i)).write_bytes(b"x")
+        (tmp_path / "labels" / ("2026110%d.txt" % i)).write_text("0 0 0 1 1 1 0\n")
+    ml.prune_frames(tmp_path, 2)
+    assert sorted(p.name for p in (tmp_path / "images").glob("*")) == ["20261103.jpg", "20261104.jpg"]
+    assert sorted(p.name for p in (tmp_path / "labels").glob("*")) == ["20261103.txt", "20261104.txt"]
+
+
+def _infer_step(tmp_path, geometry, frames_min, posted):
+    cam = level_cam(geometry=geometry, frames_min=frames_min, frames_keep=10)
+    zc = {z["id"]: z for z in cam["zones"]}
+    rtt = ml.LevelRT(cam["groups"][0], [zc["low"], zc["up"]], cam["frame_size"])
+
+    def post(url, jpeg, params, timeout):
+        posted.append(dict(params))
+        return answer((90, 120, 150, 235))
+
+    li = ml.LevelInfer(rtt, lambda: np.full((H, W, 3), 90, np.uint8), threading.Event(), post, save_dir=tmp_path / "lf")
+    return li
+
+
+def test_saves_frame_and_label_every_frames_min_and_is_off_by_default(tmp_path):
+    posted = []
+    li = _infer_step(tmp_path, "exact", 0, posted)
+    li.step()
+    assert not (tmp_path / "lf").exists(), "frames_min=0 — ничего не пишем"
+    li = _infer_step(tmp_path, "exact", 5, posted)
+    li.step()
+    li.step()                                                  # второй раз сразу — ещё рано (интервал 5 мин)
+    jpgs = list((tmp_path / "lf" / "images").glob("*.jpg"))
+    txts = list((tmp_path / "lf" / "labels").glob("*.txt"))
+    assert len(jpgs) == 1 and len(txts) == 1 and jpgs[0].stem == txts[0].stem
+    assert jpgs[0].stem.endswith("_n100_v0"), "в имени — сырой уровень нижнего и верхнего, %"
+    assert cv2.imread(str(jpgs[0])).shape[:2] == (H, W), "кадр полного размера, без разметки"
+    assert txts[0].read_text().startswith("0 ")
+    assert len(posted) == 3 and all(p["geometry"] == "exact" for p in posted), "exact — второго запроса за честными контурами не нужно"
+
+
+def test_label_uses_exact_geometry_even_if_level_is_lvldec(tmp_path):
+    posted = []
+    li = _infer_step(tmp_path, "lvldec", 5, posted)
+    li.step()
+    assert [p["geometry"] for p in posted] == ["lvldec", "exact"], "для разметки — отдельный запрос с честной геометрией"
+    assert len(list((tmp_path / "lf" / "labels").glob("*.txt"))) == 1
+
+
+def test_saver_failure_does_not_break_level(tmp_path):
+    posted = []
+    li = _infer_step(tmp_path, "exact", 5, posted)
+    (tmp_path / "lf").write_text("файл вместо папки")          # mkdir упадёт
+    li.step()
+    assert li.rt.snapshot(None, True)["valid"], "уровень посчитан, хотя кадр не сохранился"
+
+
+def test_level_config_frames_defaults_and_limits():
+    g = level_cam()["groups"][0]
+    assert (g["frames_min"], g["frames_keep"]) == (0, 1000)
+    with pytest.raises(ValueError):
+        level_cam(frames_keep=1)

@@ -286,7 +286,9 @@ def _norm_group(g: dict, cam_id: str, zone_ids: list, cycle_ids=(), level_ids=()
             glass1_full=_num(g.get("glass1_full", 100), where + ".glass1_full", 0, 100),
             glass2_full=_num(g.get("glass2_full", 100), where + ".glass2_full", 0, 100),
             hold_s=_num(g.get("hold_s", 30), where + ".hold_s", 1, 3600),
-            contour=bool(g.get("contour", False)))
+            contour=bool(g.get("contour", False)),
+            frames_min=_num(g.get("frames_min", 0), where + ".frames_min", 0, 1440),
+            frames_keep=_num(g.get("frames_keep", 1000), where + ".frames_keep", 10, 100000, True))
     if gtype == "monotonic":
         order = [str(x) for x in (g.get("order") or zs)]
         if sorted(order) != sorted(zs):

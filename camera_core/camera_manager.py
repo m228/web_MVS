@@ -24,6 +24,11 @@ from .gentl_env import (
 from .utils import int_to_ip, ip_to_int
 from .gige_worker import CameraWorker
 from .rtsp_worker import RtspCameraWorker
+import fake_mode
+
+if fake_mode.ENABLED:                      # стенд без железа (WEB_MVS_FAKE=1): воркеры отдают синтетические кадры
+    from .fake_worker import FakeGigeWorker, FakeRtspWorker
+    CameraWorker, RtspCameraWorker = FakeGigeWorker, FakeRtspWorker
 
 
 class CameraManager:
@@ -31,6 +36,8 @@ class CameraManager:
 
     def __init__(self):
         self.harvester = Harvester()
+        if fake_mode.ENABLED:
+            fake_mode.install_dahua()      # свет/зум/фокус/сеть RTSP-камер — в памяти, не по сети
         self.driver_loaded = False
         # серийник -> агрегированный лучший статус (для обратной совместимости)
         self.cam_online = {}
@@ -160,6 +167,8 @@ class CameraManager:
     # держится до перезагрузки камеры, но этого достаточно, чтобы она появилась
     # в нашей подсети и дальше уже можно прописать постоянный IP обычным путём.
     def force_ip(self, serial_number, ip, mask=None, gateway=None):
+        if fake_mode.ENABLED:
+            return {"ip": "force_ip_ok", "new_ip": ip}
         self.load_driver()
         if not self.driver_loaded:
             return {"ip": "not_driver"}
@@ -317,6 +326,11 @@ class CameraManager:
 
     # полный список записей устройств (одна запись на пару серийник+интерфейс)
     def list_devices(self):
+        if fake_mode.ENABLED:
+            return [{"device_index": i, "device_handle": "fake#%d" % i, "serial_number": serial, "access_status": 1,
+                     "available": True, "model": model, "interface_id": "fake-if", "interface_name": "Ethernet [192.168.1.1]",
+                     "interface_ip": "192.168.1.1"}
+                    for i, (serial, (_ip, model)) in enumerate(fake_mode.GIGE_DEVICES.items())]
         self.load_driver()
         result = []
         if not self.driver_loaded:
@@ -483,6 +497,9 @@ class CameraManager:
 
     # загрузка драйвера для работы
     def load_driver(self):
+      if fake_mode.ENABLED:                # драйвера нет и не нужен: список камер даёт list_devices
+          self.driver_loaded = True
+          return
       with self._driver_lock:
         try:
             # драйвер уже загружен — повторно .cti не добавляем (иначе производитель

@@ -41,6 +41,7 @@ import fracture_lab
 import cv_store
 import db
 import autostart
+import fake_mode
 from paths import read_version, BUNDLE_DIR, DATA_DIR
 
 
@@ -75,26 +76,32 @@ day_cap = day_capture.DayCapture(_day_capture_cams, lambda c: manager.grab_rtsp_
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    api_log("app", "Запуск приложения")
+    api_log("app", "Запуск приложения" + (" [FAKE-РЕЖИМ: камеры/плата/ПЛК эмулируются, наружу ничего не уходит]" if fake_mode.ENABLED else ""))
     # удалённый мониторинг: запись старта (перезагрузка ПК / перезапуск приложения) и «пульс» на сервер Макса; не должен мешать запуску
-    try:
-        sysmon.start()
-    except Exception as e:
-        api_log("app", "Мониторинг не запустился: %s" % e, "error")
+    # (в фейк-режиме — не стартуем вообще: стенд не должен слать пульс/тревоги на боевой приёмник)
+    if not fake_mode.ENABLED:
+        try:
+            sysmon.start()
+        except Exception as e:
+            api_log("app", "Мониторинг не запустился: %s" % e, "error")
     # автообновление: раз в 30 мин проверяет релиз, качает заранее, перезапускает после варки (окно — micro.restart_window),
-    # а без микроскопа — днём, 08:00–20:00 (auto_update.hours_window)
-    try:
-        auto_update.start(window_fn=micro.restart_window, micro_fn=micro.active)
-    except Exception as e:
-        api_log("app", "Автообновление не запустилось: %s" % e, "error")
+    # а без микроскопа — днём, 08:00–20:00 (auto_update.hours_window). В фейке — выключено (не качать и не перезапускать стенд)
+    if not fake_mode.ENABLED:
+        try:
+            auto_update.start(window_fn=micro.restart_window, micro_fn=micro.active)
+        except Exception as e:
+            api_log("app", "Автообновление не запустилось: %s" % e, "error")
     # сайдкары (cv_service, video_service), если установлены рядом: поднимаем фоном сразу — CV-модель грузится долго
-    services.start()
+    # (в фейке их поднимает scripts/fake_server.py)
+    if not fake_mode.ENABLED:
+        services.start()
     # версии Python/genicam/harvesters + дата .cti — видно, не обновилась ли
     # библиотека (типовая причина "драйвер раньше работал, теперь нет")
     manager.log_environment()
     manager.load_driver()
     # даём продюсеру время на обнаружение камер, иначе первый опрос ловит ошибки
-    await asyncio.sleep(2.0)
+    if not fake_mode.ENABLED:
+        await asyncio.sleep(2.0)
     manager.scan_cams()
     # плата микроскопа + автомат (пытается подключиться к плате; без неё — тихий реконнект).
     # Поднимаем ТОЛЬКО если микроскоп включён галочкой на главной (micro_enabled).
@@ -146,7 +153,17 @@ def _page(name: str) -> HTMLResponse:
     физически не может взять старый файл из кэша (смесь нового HTML и старого JS ломала кнопки)."""
     html = (PAGE_DIR / name).read_text(encoding="utf-8")
     ver = read_version()
-    return HTMLResponse(_STATIC_REF.sub(lambda m: m.group(1) + "?v=" + ver + '"', html), headers=_NOCACHE)
+    html = fake_mode.inject_badge(_STATIC_REF.sub(lambda m: m.group(1) + "?v=" + ver + '"', html))   # в фейке — плашка «FAKE»
+    return HTMLResponse(html, headers=_NOCACHE)
+
+
+@app.middleware("http")
+async def _fake_guard(request: Request, call_next):
+    """Фейк-режим: кнопки, которые меняют систему (обновление приложения, автозапуск Windows), отвечают заглушкой."""
+    if fake_mode.is_blocked(request.url.path):
+        return Response(content=json.dumps({"error": "fake_mode", "message": "в фейк-режиме отключено"}, ensure_ascii=False),
+                        media_type="application/json")
+    return await call_next(request)
 
 
 @app.get("/")

@@ -11,7 +11,6 @@
 Геометрию регистров берём из plate_config.DEFAULTS, чтобы эмулятор и клиент совпадали.
 """
 import argparse
-import math
 import os
 import random
 import sys
@@ -72,31 +71,6 @@ def _decode_cmd(code):
                     return m, op
             return m, None
     return None, None
-
-
-SCENARIO = {"stage": 5, "cycle_s": 0.0}     # --stage / --cycle: стадия варки; cycle_s > 0 — стадии 1..21 идут по кругу
-
-
-def _signed(v):
-    return int(v) & 0xFFFF
-
-
-def _plc_scenario(ctx, t):
-    """Имитация ПЛК аппарата: блок %MW650..%MW661, который читает sv_source (адреса — plate_config.sv_source.fields).
-    СВ плавает около 88 % (в окне автомата 84–92), стадия фиксированная (по умолчанию 5 — идёт проба микроскопа) или бежит по кругу (--cycle)."""
-    stage = SCENARIO["stage"]
-    if SCENARIO["cycle_s"] > 0:
-        stage = 1 + int(t // SCENARIO["cycle_s"]) % 21
-    sv = 88.0 + 3.0 * math.sin(t / 90.0) + random.uniform(-0.05, 0.05)
-    for reg, val in ((650, sv * 100),                      # СВ, ×100
-                     (651, _signed(72 + 3 * math.sin(t / 120.0))),   # температура в аппарате, °C
-                     (652, 68 + int(6 * math.sin(t / 150.0))),       # уровень, %
-                     (653, 42 + random.randint(-1, 1)),              # ток циркулятора, A
-                     (654, _signed(-60 + random.randint(-2, 2))),    # разрежение сверху, ×10 (−6,0)
-                     (655, _signed(12 + random.randint(-1, 1))),     # давление снизу, ×10
-                     (656, stage), (657, 0), (658, int(t) % 65536),  # стадия, подстадия, время варки, с
-                     (659, 40), (660, 10), (661, 60 + int(10 * math.sin(t / 30.0)))):   # клапаны сироп/вода/продукт, %
-        _write_word(ctx, reg, int(val))
 
 
 def sim_loop(ctx, period):
@@ -205,7 +179,6 @@ def sim_loop(ctx, period):
         # для этапа A — имитируем ПЛК: СВ (×100) и стадия варки
         _write_word(ctx, 500, 8262 + random.randint(-3, 3))
         _write_word(ctx, 501, 5)
-        _plc_scenario(ctx, tick * period)
 
         tick += 1
         if tick % 20 == 0:
@@ -220,10 +193,7 @@ def main():
     ap = argparse.ArgumentParser(description="Эмулятор платы микроскопа (Modbus TCP)")
     ap.add_argument("--host", default="0.0.0.0")
     ap.add_argument("--port", type=int, default=15020)
-    ap.add_argument("--stage", type=int, default=5, help="стадия варки в «ПЛК» (656), по умолчанию 5")
-    ap.add_argument("--cycle", type=float, default=0.0, help="секунд на стадию: стадии 1..21 идут по кругу (0 — стадия фиксирована)")
     args = ap.parse_args()
-    SCENARIO["stage"], SCENARIO["cycle_s"] = args.stage, args.cycle
 
     # блок holding-регистров 0..1599 (покрывает и системные 1520..1545), zero_mode -> адрес == индекс
     block = ModbusSequentialDataBlock(0, [0] * 1600)

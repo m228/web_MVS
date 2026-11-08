@@ -75,6 +75,3 @@ sysmon.db-shm
 
 # ключ авто-регистрации мониторинга (создаёт build.bat)
 /enroll_key.txt
-
-# фейк-стенд без железа (fake_mode.py): данные песочницы
-/.fake_data

@@ -566,6 +566,7 @@ ADDONS = [
     {"key": "cv", "title": "CV микроскопа (cv_service)", "dir": "cv_service", "marker": "detector.py", "heavy": True},
     {"key": "video", "title": "Видео-ролик микроскопа (video_service)", "dir": "video_service", "marker": "render.py", "heavy": False},
     {"key": "motion", "title": "CV RTSP / движение (motion_service)", "dir": "motion_service", "marker": "motion_engine.py", "heavy": False},
+    {"key": "level", "title": "Уровень жидкости / YOLO (level_service)", "dir": "level_service", "marker": "seg_model.py", "heavy": True},
 ]
 _COMPONENT_KEYS = {"main"} | {a["key"] for a in ADDONS}
 
@@ -646,5 +647,11 @@ def run_update_script(port: int = 8000, staged: bool = False, components=None, y
         subprocess.Popen(cmd, creationflags=base, close_fds=True, cwd=str(app_dir))
     log_event("updater.run", "Запущен update.ps1 из папки установки" + ("; приложение будет остановлено и запущено заново" if "main" in comps else ""),
               "warn", {"script": str(script), "components": comps})
+    if "main" in comps:                                          # мониторингу: закрытие приложения сейчас — ради обновления, не тревога
+        try:
+            import sysmon
+            sysmon.note_update_restart()
+        except Exception:
+            pass
     return {"ok": True, "message": "обновление запущено", "components": comps, "restart": "main" in comps,
             "no_browser": no_browser_applied}

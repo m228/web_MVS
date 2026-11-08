@@ -98,7 +98,29 @@ def _warmup():
             pass
 
 
+def run_net_diag():
+    """Диагностика связи с приёмником мониторинга: web_MVS.exe --net-diag (или NetDiag.bat). Отчёт — net_diag_<время>.txt рядом с exe."""
+    os.chdir(BUNDLE_DIR)
+    code = 1
+    try:
+        import net_diag
+        code = net_diag.main([a for a in sys.argv[1:] if a != "--net-diag"])
+    except SystemExit:
+        pass
+    except Exception:
+        import traceback
+        traceback.print_exc()
+    try:
+        input("Нажми Enter, чтобы закрыть окно...")
+    except Exception:
+        pass
+    sys.exit(code)
+
+
 def main():
+    if "--net-diag" in sys.argv:
+        run_net_diag()
+        return
     if "--diag" in sys.argv or os.environ.get("WEB_MVS_DIAG"):
         run_diag()
         return

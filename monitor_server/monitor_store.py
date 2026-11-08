@@ -28,16 +28,19 @@ SCHEMA = 1                       # версия формата пульса (sna
 LEVELS = ("critical", "high", "medium", "info")
 DEFAULT_INTERVAL_S = 300
 OFFLINE_GRACE_S = 120            # запас к двум пропущенным пульсам
+OFFLINE_AFTER_S = 1800           # «нет пульса» не раньше чем через полчаса молчания: пропавший пульс — ещё не беда (закрытое приложение сообщает само)
 EVENT_MAX = 200                  # событий принимаем из одного пульса
 TEXT_MAX = 300
 RETENTION_DAYS = 90
 SKEW_MAX_S = 7 * 86400           # время события от завода дальше недели от сейчас — часы врут, берём время приёма
 NAME_MAX = 40
-ERROR_KINDS = ("alert", "plate_reboot", "offline")                   # какие события журнала считаются ошибками (фильтр «Тревоги»)
-VIEW_BLOCKS = ["pc", "services", "camera", "brew", "motion", "disk"]       # блоки карточки, которые можно скрыть в «Виде» (тревоги скрыть нельзя)
+ERROR_KINDS = ("alert", "plate_reboot", "offline", "app_stop")                   # какие события журнала считаются ошибками (фильтр «Тревоги»)
+VIEW_BLOCKS = ["pc", "disk", "services", "camera", "motion", "brew", "autocal", "sensors", "plate"]      # общие для всех заводов, затем микроскопные
+PLANT_SETTINGS = {"offline_after_min": (5, 1440), "offline_repeat_min": (0, 10080)}     # настройки завода и допустимые границы (минуты); повтор 0 — не напоминать
+DEFAULT_HIDDEN = ["plate"]                                          # что скрыто, пока Макс не настроил «Вид» (подробности про плату — по желанию)       # блоки карточки, которые можно скрыть в «Виде» (тревоги скрыть нельзя)
 ALERT_DEDUP_S = 120              # событие тревоги от завода и достроенное из снимка — одно и то же, если время рядом
 NOTIFY_LEVELS = ("critical", "high")                              # в Telegram идут только они (жёлтое «medium» — только в панели)
-NOTIFY_KINDS = ("start", "alert", "plate_reboot", "offline")      # какие события бывают «открытием» тревоги
+NOTIFY_KINDS = ("start", "alert", "plate_reboot", "offline", "app_stop")      # какие события бывают «открытием» тревоги
 OFFLINE_KINDS = ("offline", "offline_repeat")
 OUTAGE_MIN_S = 180               # приёмник молчал дольше — это перерыв (перезапуск занимает секунды)
 ENROLL_PENDING_MAX = 30          # заявок «ждут решения» не больше: ключ регистрации не должен позволять забить панель
@@ -48,9 +51,10 @@ def hash_token(token: str) -> str:
     return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
 
-def offline_limit(interval_s: Optional[float]) -> float:
-    """Сколько можно молчать до тревоги: два пропущенных пульса и запас."""
-    return 2 * (interval_s or DEFAULT_INTERVAL_S) + OFFLINE_GRACE_S
+def offline_limit(interval_s: Optional[float], after_s: Optional[float] = None) -> float:
+    """Сколько можно молчать до сообщения «нет пульса»: два пропущенных пульса с запасом, но не меньше after_s (по умолчанию полчаса;
+    у завода с нестабильным интернетом Макс ставит больше в настройках завода)."""
+    return max(2 * (interval_s or DEFAULT_INTERVAL_S) + OFFLINE_GRACE_S, after_s or OFFLINE_AFTER_S)
 
 
 def _num(v) -> Optional[float]:
@@ -211,11 +215,14 @@ class Store:
 
     def hidden_blocks(self, plant_id: int) -> list[str]:
         """Какие блоки карточки Макс скрыл через «Вид» (хранится в приёмнике, поэтому одинаково на всех устройствах)."""
+        raw = self.meta_get("view:%d" % plant_id)
+        if raw is None:
+            return list(DEFAULT_HIDDEN)
         try:
-            v = json.loads(self.meta_get("view:%d" % plant_id) or "[]")
+            v = json.loads(raw)
         except ValueError:
-            return []
-        return [b for b in v if b in VIEW_BLOCKS] if isinstance(v, list) else []
+            return list(DEFAULT_HIDDEN)
+        return [b for b in v if b in VIEW_BLOCKS] if isinstance(v, list) else list(DEFAULT_HIDDEN)
 
     def set_hidden_blocks(self, plant_id: int, hidden) -> list[str]:
         """Запомнить скрытые блоки завода. ValueError — список кривой или блок неизвестен; LookupError — завода нет."""
@@ -228,9 +235,68 @@ class Store:
             self.meta_set("view:%d" % plant_id, json.dumps(clean))
         return clean
 
+    def plant_overrides(self, plant_id: int) -> dict:
+        """Что Макс поменял для этого завода (остальное — общие значения). Битую запись не слушаем."""
+        try:
+            v = json.loads(self.meta_get("pcfg:%d" % plant_id) or "{}")
+        except ValueError:
+            return {}
+        out = {}
+        if isinstance(v, dict):
+            for k, (lo, hi) in PLANT_SETTINGS.items():
+                if isinstance(v.get(k), int) and not isinstance(v.get(k), bool) and lo <= v[k] <= hi:
+                    out[k] = v[k]
+            if isinstance(v.get("offline_notify"), bool):
+                out["offline_notify"] = v["offline_notify"]
+        return out
+
+    def plant_settings(self, plant_id: int) -> dict:
+        """Действующие настройки завода: свои, а где не менялись — общие (полчаса до «нет пульса», напоминание раз в 6 часов, сообщения включены)."""
+        return {**self._base_settings(), **self.plant_overrides(plant_id)}
+
+    def _base_settings(self) -> dict:
+        return {"offline_after_min": OFFLINE_AFTER_S // 60, "offline_repeat_min": round(((self.notify_cfg or {}).get("offline_repeat_s") or 21600) / 60),
+                "offline_notify": True}
+
+    def set_plant_settings(self, plant_id: int, changes) -> dict:
+        """Поменять настройки завода. changes — {ключ: значение}; значение None возвращает ключу общее значение. ValueError — ключ неизвестен или
+        значение вне границ; LookupError — завода нет. Возвращает действующие настройки."""
+        if not isinstance(changes, dict) or not changes:
+            raise ValueError("Нет настроек для сохранения")
+        cur = self.plant_overrides(plant_id)
+        for k, v in changes.items():
+            if k == "offline_notify":
+                if v is not None and not isinstance(v, bool):
+                    raise ValueError("«Слать в Telegram» — да или нет")
+            elif k in PLANT_SETTINGS:
+                lo, hi = PLANT_SETTINGS[k]
+                if v is not None and (not isinstance(v, int) or isinstance(v, bool) or not lo <= v <= hi):
+                    raise ValueError("%s: от %d до %d минут" % ("Нет пульса через" if k == "offline_after_min" else "Напоминать раз в", lo, hi))
+            else:
+                raise ValueError("Неизвестная настройка: %s" % k)
+            if v is None or v == self._base_settings()[k]:           # то же, что общее значение, — значит, у завода своей настройки нет
+                cur.pop(k, None)
+            else:
+                cur[k] = v
+        with self._lock:
+            if not self.db.execute("SELECT 1 FROM plants WHERE id=?", (plant_id,)).fetchone():
+                raise LookupError("Завода нет")
+            self.meta_set("pcfg:%d" % plant_id, json.dumps(cur))
+        return self.plant_settings(plant_id)
+
+    def set_hidden_blocks_all(self, hidden) -> list[str]:
+        """Один набор скрытых блоков всем заводам сразу («для всех» в «Виде»): единый стандарт. ValueError — блок неизвестен."""
+        if not isinstance(hidden, list) or any(b not in VIEW_BLOCKS for b in hidden):
+            raise ValueError("Неизвестный блок карточки")
+        clean = sorted(set(hidden), key=VIEW_BLOCKS.index)
+        with self._lock, self.db:
+            for r in self.db.execute("SELECT id FROM plants").fetchall():
+                self.meta_set("view:%d" % r["id"], json.dumps(clean))
+        return clean
+
     def delete_plant(self, plant_id: int) -> bool:
         with self._lock, self.db:
-            self.db.execute("DELETE FROM meta WHERE key=?", ("view:%d" % plant_id,))
+            self.db.execute("DELETE FROM meta WHERE key IN (?, ?)", ("view:%d" % plant_id, "pcfg:%d" % plant_id))
             self.db.execute("DELETE FROM events WHERE plant_id=?", (plant_id,))
             self.db.execute("DELETE FROM alerts WHERE plant_id=?", (plant_id,))
             self.db.execute("DELETE FROM positions WHERE plant_id=?", (plant_id,))
@@ -345,6 +411,8 @@ class Store:
         Старое событие (после обрыва связи пришла пачка) — только в журнал."""
         if now - t > self.notify_cfg.get("fresh_s", 900):
             return
+        if kind in OFFLINE_KINDS and not self.plant_settings(plant_id)["offline_notify"]:      # у этого завода «нет пульса» в Telegram выключено: только панель и журнал
+            return
         if level in NOTIFY_LEVELS and kind in NOTIFY_KINDS and state != "closed":
             pass
         elif kind == "alert" and state == "closed":
@@ -385,15 +453,19 @@ class Store:
         n = 0
         with self._lock, self.db:
             for p in self.db.execute("SELECT * FROM plants WHERE offline_since IS NOT NULL").fetchall():
+                st = self.plant_settings(p["id"])
+                repeat_s = st["offline_repeat_min"] * 60
+                if not st["offline_notify"] or repeat_s <= 0:                       # напоминания выключены для этого завода
+                    continue
                 last = self._last_notified(p["id"], OFFLINE_KINDS)
-                if last is None or last["status"] != "sent" or now - (last["sent_t"] or now) < every_s:
+                if last is None or last["status"] != "sent" or now - (last["sent_t"] or now) < repeat_s:
                     continue
                 if self.db.execute("SELECT 1 FROM notify WHERE plant_id=? AND kind IN ('offline','offline_repeat') AND status='pending'", (p["id"],)).fetchone():
                     continue
                 hours = (now - p["offline_since"]) / 3600
                 text = "Всё ещё нет пульса (уже %s)" % ("%d ч" % round(hours) if hours >= 1.5 else "%d мин" % round(hours * 60))
                 n += self.db.execute("INSERT OR IGNORE INTO notify (plant_id, plant_name, eid, t, created_t, level, kind, code, state, text) VALUES (?,?,?,?,?,?,?,?,?,?)",
-                                     (p["id"], p["name"], "srv-offline-rep-%d" % int(now), now, now, "critical", "offline_repeat", "", "open", text)).rowcount
+                                     (p["id"], p["name"], "srv-offline-rep-%d" % int(now), now, now, "high", "offline_repeat", "", "open", text)).rowcount
         return n
 
     def _insert_position(self, plant_id: int, eid: str, t: float, d: dict) -> None:
@@ -512,10 +584,15 @@ class Store:
             return "waiting"
         if p["offline_since"] is not None:
             return "offline"
-        limit = offline_limit(p["interval_s"])
+        limit = offline_limit(p["interval_s"], self.plant_settings(p["id"])["offline_after_min"] * 60)
         if now - p["last_seen_t"] > limit:
             return "offline" if now - self.started_at > limit else "checking"
         return "online"
+
+    def _last_stop(self, plant_id: int):
+        """Последнее событие «приложение закрыто», если после него приложение ещё не запускалось (иначе None)."""
+        r = self.db.execute("SELECT kind, level, t FROM events WHERE plant_id=? AND kind IN ('app_stop','start') ORDER BY t DESC, id DESC LIMIT 1", (plant_id,)).fetchone()
+        return r if r is not None and r["kind"] == "app_stop" else None
 
     def check_offline(self) -> list[dict]:
         """Объявить недоступными заводы, которые молчат дольше допустимого. Возвращает новые события (для оповещений)."""
@@ -527,8 +604,15 @@ class Store:
                     continue
                 self.db.execute("UPDATE plants SET offline_since=? WHERE id=?", (now, p["id"]))
                 text = "Нет пульса уже %d мин" % round((now - p["last_seen_t"]) / 60)
-                if self._insert_event(p["id"], "srv-offline-%d" % int(p["last_seen_t"]), now, now, "offline", "critical", text):
-                    out.append({"plant": p["name"], "plant_id": p["id"], "level": "critical", "kind": "offline", "text": text, "t": now})
+                level = "high"                                   # пропавший пульс сам по себе не критичен: сообщение, но не «красное»
+                stop = self._last_stop(p["id"])
+                if stop is not None:
+                    if stop["level"] == "critical":              # приложение закрыли — об этом уже писали сразу, тут только запись в журнал
+                        level, text = "info", "Приложение закрыто, пульса нет уже %d мин" % round((now - p["last_seen_t"]) / 60)
+                    else:                                        # закрылось ради обновления и не вернулось — вот это серьёзно
+                        level, text = "critical", "После обновления приложение не вернулось: пульса нет уже %d мин" % round((now - p["last_seen_t"]) / 60)
+                if self._insert_event(p["id"], "srv-offline-%d" % int(p["last_seen_t"]), now, now, "offline", level, text):
+                    out.append({"plant": p["name"], "plant_id": p["id"], "level": level, "kind": "offline", "text": text, "t": now})
         return out
 
     def purge(self) -> int:
@@ -586,5 +670,6 @@ class Store:
                 out.append({
                     "id": p["id"], "name": p["name"], "status": self._status(p, now), "created_t": p["created_t"],
                     "last_seen_t": p["last_seen_t"], "interval_s": p["interval_s"], "offline_since": p["offline_since"],
-                    "snapshot": snap, "alerts": alerts, "events": self.events(p["id"], 5), "hidden_blocks": self.hidden_blocks(p["id"])})
+                    "snapshot": snap, "alerts": alerts, "events": self.events(p["id"], 5), "hidden_blocks": self.hidden_blocks(p["id"]), "settings": self.plant_settings(p["id"]), "settings_custom": sorted(self.plant_overrides(p["id"])),
+                    "closed_t": (lambda st: st["t"] if st is not None and st["level"] == "critical" else None)(self._last_stop(p["id"]))})
         return out

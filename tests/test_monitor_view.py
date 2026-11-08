@@ -20,14 +20,14 @@ def srv(store):
     s.close()
 
 
-def test_hidden_blocks_default_empty_and_roundtrip(store):
+def test_hidden_blocks_default_and_roundtrip(store):
     pid, _ = store.create_plant("Кир")
-    assert store.hidden_blocks(pid) == []
-    assert store.plants_view()[0]["hidden_blocks"] == []
+    assert store.hidden_blocks(pid) == ["plate"], "пока «Вид» не настраивали, подробности про плату скрыты"
+    assert store.plants_view()[0]["hidden_blocks"] == ["plate"]
     assert store.set_hidden_blocks(pid, ["camera", "pc", "camera"]) == ["pc", "camera"], "дубли убираются, порядок как в карточке"
     assert store.plants_view()[0]["hidden_blocks"] == ["pc", "camera"]
     assert store.set_hidden_blocks(pid, []) == []
-    assert store.hidden_blocks(pid) == []
+    assert store.hidden_blocks(pid) == [], "пустой выбор — это «показывать всё», а не «вернуть умолчание»"
 
 
 def test_hidden_blocks_validation(store):
@@ -46,7 +46,7 @@ def test_hidden_blocks_are_per_plant_and_removed_with_plant(store):
     a, _ = store.create_plant("Кир")
     b, _ = store.create_plant("Буи")
     store.set_hidden_blocks(a, ["services"])
-    assert store.hidden_blocks(b) == []
+    assert store.hidden_blocks(b) == ["plate"]
     store.delete_plant(a)
     assert store.meta_get("view:%d" % a) is None, "после удаления завода его настройки не остаются"
 

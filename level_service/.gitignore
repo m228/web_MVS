@@ -1,0 +1,14 @@
+# venv сайдкара, модели и лог — локальные, в репозиторий/релиз не кладём
+.venv/
+venv/
+model/
+*.pt
+*.onnx
+*.engine
+__pycache__/
+# лог сервиса, когда его поднимает web_MVS (services.py)
+service.log*
+VERSION
+# замер скорости (bench.bat): переведённые модели и результат
+bench_ov/
+bench_result.txt

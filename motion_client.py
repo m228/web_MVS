@@ -102,6 +102,11 @@ def logs(service_url: str, n: int = 100) -> dict:
     return _call(service_url, "/logs?n=%d" % int(n))
 
 
+def level_import(service_url: str, ini_text: str) -> dict:
+    """config.ini от LVLDec → фрагмент настроек камеры (зоны, пороги, ПЛК); ничего не сохраняет."""
+    return _call(service_url, "/level/import", {"ini": ini_text}, timeout=8.0)
+
+
 def snapshot(service_url: str, cam: str, width: int = 0, timeout: float = 5.0):
     """(jpeg-байты, ширина оригинала, высота оригинала) или None, если кадра нет/сервис молчит."""
     url = _base(service_url) + "/cameras/%s/snapshot?w=%d" % (urllib.parse.quote(cam, safe=""), int(width))

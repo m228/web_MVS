@@ -1,0 +1,7 @@
+# Сервис уровня (YOLO-модель → контуры). Ставится в СВОЙ venv рядом с web_MVS (как cv_service).
+# Версии не зажаты жёстко (>=): встаёт на Python 3.10 / 3.11 / 3.12. torch и ultralytics ставит setup.bat отдельным шагом.
+fastapi>=0.110
+uvicorn>=0.27
+python-multipart>=0.0.9
+opencv-python>=4.8,<5
+numpy>=1.24,<3

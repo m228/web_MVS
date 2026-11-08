@@ -156,7 +156,7 @@ def build_app():
     import monitor_telegram
     data =Path(os.environ.get("MONITOR_DATA") or HERE / "data")
     tg = monitor_telegram.load_config(data)                    # блок "telegram" в data\server.json; нет — приёмник работает без уведомлений
-    store = monitor_store.Store(data / "monitor.db", notify={"fresh_s": tg["fresh_s"]} if tg else None)
+    store = monitor_store.Store(data / "monitor.db", notify={"fresh_s": tg["fresh_s"], "offline_repeat_s": tg["offline_repeat_s"]} if tg else None)
     releases = monitor_release.Releases()                      # последняя версия на GitHub: метка «старая версия» в панели и в боте
     notifier = monitor_telegram.Notifier(store, monitor_telegram.TelegramClient(tg["token"], tg["api_base"]), tg, releases=releases) if tg else None
     bot = None

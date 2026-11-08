@@ -140,6 +140,7 @@
               <span class="motion-dock__save" id="mdSave"></span>
               <button type="button" class="btn-primary" id="mdMark">Разметить зону</button>
               <button type="button" class="btn-secondary" id="mdMarkRods" title="Два вала диффузии с палками: углы красного конца и рассинхрон от зеркальности">Разметить валы</button>
+              <button type="button" class="btn-secondary" id="mdMarkGlass" title="Два мерных стекла: уровень жидкости по модели — нижнее, потом верхнее">Разметить стёкла</button>
               <button type="button" class="btn-secondary md-icon" id="mdRec" title="Писать метрики каждого кадра в CSV (для калибровки порогов)">●</button>
               <button type="button" class="btn-secondary md-icon md-wide" id="mdRecAll" hidden title="Писать метрики всех камер с КЗ в CSV сразу (по файлу на камеру) — чтобы потом разобрать, когда и какая камера пропадала">● все</button>
               <button type="button" class="btn-secondary md-icon md-wide" id="mdRecZip" hidden title="Скачать все записи одним архивом: CSV по камерам + summary.txt (сводка: когда и на сколько камеры пропадали)">⤓ архив</button>
@@ -151,6 +152,7 @@
           <div class="motion-dock__tabs" role="tablist" aria-label="Разделы КЗ">
             <button type="button" class="md-tab is-active" role="tab" data-md-tab="zones">Зоны · тренды</button>
             <button type="button" class="md-tab" role="tab" data-md-tab="plc">ПЛК · сценарии · группы</button>
+            <button type="button" class="md-tab" role="tab" data-md-tab="level" title="Уровень жидкости по YOLO-модели: декантатор">Уровень</button>
             <button type="button" class="md-tab" role="tab" data-md-tab="cams">Камеры</button>
           </div>
           <div class="md-capbar">
@@ -485,6 +487,7 @@
   <script src="/static/js/multi/08-region-info.js"></script>
   <script src="/static/js/multi/10-motion.js"></script>
   <script src="/static/js/multi/11-motion-dock.js"></script>
+  <script src="/static/js/multi/15-level.js"></script>
   <script src="/static/js/multi/12-autostart.js"></script>
   <script src="/static/js/multi/13-journal.js"></script>
   <script src="/static/js/multi/14-update.js"></script>

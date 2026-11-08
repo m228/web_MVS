@@ -24,7 +24,7 @@ set /p VER=<VERSION
 echo [build] Building web_MVS %VER% ...
 pyinstaller --noconfirm web_MVS.spec || (echo [build] BUILD FAILED & exit /b 1)
 
-echo [build] Adding run.bat + update + UpdaterCV + UpdaterVideo + UpdaterMotion to the bundle ...
+echo [build] Adding run.bat + update + UpdaterCV + UpdaterVideo + UpdaterMotion + UpdaterLevel to the bundle ...
 copy /Y run.bat "dist\web_MVS\" >nul
 copy /Y UpdaterCV.bat "dist\web_MVS\" >nul
 copy /Y UpdaterCV.ps1 "dist\web_MVS\" >nul
@@ -32,9 +32,14 @@ copy /Y UpdaterVideo.bat "dist\web_MVS\" >nul
 copy /Y UpdaterVideo.ps1 "dist\web_MVS\" >nul
 copy /Y UpdaterMotion.bat "dist\web_MVS\" >nul
 copy /Y UpdaterMotion.ps1 "dist\web_MVS\" >nul
+copy /Y UpdaterLevel.bat "dist\web_MVS\" >nul
+copy /Y UpdaterLevel.ps1 "dist\web_MVS\" >nul
 copy /Y SelfCheck_HW.bat "dist\web_MVS\" >nul
+copy /Y NetDiag.bat "dist\web_MVS\" >nul
 copy /Y update.bat "dist\web_MVS\" >nul
 copy /Y update.ps1 "dist\web_MVS\" >nul
+copy /Y Uninstall.bat "dist\web_MVS\" >nul
+copy /Y Uninstall.ps1 "dist\web_MVS\" >nul
 
 echo [build] Packing main archive ...
 powershell -NoProfile -Command "Compress-Archive -Path 'dist\web_MVS\*' -DestinationPath 'dist\web_MVS_v%VER%.zip' -Force" || exit /b 1
@@ -53,12 +58,18 @@ echo [build] Packing motion add-on (motion_service, code only) ...
 copy /Y VERSION "motion_service\VERSION" >nul
 powershell -NoProfile -Command "$f=Get-ChildItem 'motion_service' | Where-Object { $_.Name -notin @('.venv','venv','data','__pycache__','tests') -and $_.Name -notlike 'service.log*' }; Compress-Archive -Path $f.FullName -DestinationPath 'dist\motion_service_v%VER%.zip' -Force" || exit /b 1
 
+rem same: top-level items; .venv, model\ (uploaded YOLO models) and logs must never go into the zip
+echo [build] Packing level add-on (level_service, code only) ...
+copy /Y VERSION "level_service\VERSION" >nul
+powershell -NoProfile -Command "$f=Get-ChildItem 'level_service' | Where-Object { $_.Name -notin @('.venv','venv','model','__pycache__','bench_ov','bench_result.txt') -and $_.Name -notlike 'service.log*' }; Compress-Archive -Path $f.FullName -DestinationPath 'dist\level_service_v%VER%.zip' -Force" || exit /b 1
+
 echo.
 echo [build] Done:
 echo         dist\web_MVS_v%VER%.zip      (основное приложение, для всех)
 echo         dist\cv_service_v%VER%.zip   (CV-модуль, докачивается UpdaterCV.bat на микроскопных машинах)
 echo         dist\video_service_v%VER%.zip (video add-on, fetched by UpdaterVideo.bat on microscope machines)
 echo         dist\motion_service_v%VER%.zip (motion add-on, fetched by UpdaterMotion.bat on plant machines)
+echo         dist\level_service_v%VER%.zip (level add-on, YOLO + torch, fetched by UpdaterLevel.bat or the update menu)
 if /i "%~1"=="nopush" (
     echo [build] nopush: release not published. Publish later with release.bat
     endlocal

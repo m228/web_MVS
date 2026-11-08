@@ -476,15 +476,17 @@ def test_prune_frames_keeps_newest_and_removes_labels_together(tmp_path):
     (tmp_path / "images").mkdir()
     (tmp_path / "labels").mkdir()
     for i in range(5):
-        (tmp_path / "images" / ("2026110%d.jpg" % i)).write_bytes(b"x")
+        (tmp_path / "images" / ("2026110%d.jpg" % i)).write_bytes(b"xxx")
         (tmp_path / "labels" / ("2026110%d.txt" % i)).write_text("0 0 0 1 1 1 0\n")
-    ml.prune_frames(tmp_path, 2)
+    assert ml.frames_stats(tmp_path) == (5, 15)
+    assert ml.prune_frames(tmp_path, 2) == (3, 9), "стёрто 3 кадра, 9 байт"
     assert sorted(p.name for p in (tmp_path / "images").glob("*")) == ["20261103.jpg", "20261104.jpg"]
     assert sorted(p.name for p in (tmp_path / "labels").glob("*")) == ["20261103.txt", "20261104.txt"]
 
 
-def _infer_step(tmp_path, geometry, frames_min, posted):
-    cam = level_cam(geometry=geometry, frames_min=frames_min, frames_keep=10)
+def _infer_step(tmp_path, posted, geometry="exact", **g):
+    g.setdefault("frames_keep", 10)
+    cam = level_cam(geometry=geometry, **g)
     zc = {z["id"]: z for z in cam["zones"]}
     rtt = ml.LevelRT(cam["groups"][0], [zc["low"], zc["up"]], cam["frame_size"])
 
@@ -492,38 +494,75 @@ def _infer_step(tmp_path, geometry, frames_min, posted):
         posted.append(dict(params))
         return answer((90, 120, 150, 235))
 
-    li = ml.LevelInfer(rtt, lambda: np.full((H, W, 3), 90, np.uint8), threading.Event(), post, save_dir=tmp_path / "lf")
-    return li
+    return ml.LevelInfer(rtt, lambda: np.full((H, W, 3), 90, np.uint8), threading.Event(), post, save_dir=tmp_path / "lf")
 
 
-def test_saves_frame_and_label_every_frames_min_and_is_off_by_default(tmp_path):
+def test_frames_are_off_by_default_and_status_says_so(tmp_path):
+    li = _infer_step(tmp_path, [])
+    li.step()
+    assert not (tmp_path / "lf").exists()
+    assert li.rt.snapshot(None, True)["frames"]["state"] == "off"
+
+
+def test_saves_frame_and_label_every_frames_every_s_while_window_is_open(tmp_path):
     posted = []
-    li = _infer_step(tmp_path, "exact", 0, posted)
+    li = _infer_step(tmp_path, posted, frames_on=True, frames_run=7, frames_every_s=300, frames_hours=2)
     li.step()
-    assert not (tmp_path / "lf").exists(), "frames_min=0 — ничего не пишем"
-    li = _infer_step(tmp_path, "exact", 5, posted)
-    li.step()
-    li.step()                                                  # второй раз сразу — ещё рано (интервал 5 мин)
+    li.step()                                                  # второй раз сразу — ещё рано (интервал 300 с)
     jpgs = list((tmp_path / "lf" / "images").glob("*.jpg"))
     txts = list((tmp_path / "lf" / "labels").glob("*.txt"))
     assert len(jpgs) == 1 and len(txts) == 1 and jpgs[0].stem == txts[0].stem
     assert jpgs[0].stem.endswith("_n100_v0"), "в имени — сырой уровень нижнего и верхнего, %"
     assert cv2.imread(str(jpgs[0])).shape[:2] == (H, W), "кадр полного размера, без разметки"
     assert txts[0].read_text().startswith("0 ")
-    assert len(posted) == 3 and all(p["geometry"] == "exact" for p in posted), "exact — второго запроса за честными контурами не нужно"
+    fr = li.rt.snapshot(None, True)["frames"]
+    assert fr["state"] == "run" and 7100 < fr["left_s"] <= 7200 and fr["saved"] == 1 and fr["mb"] >= 0
+    assert (tmp_path / "lf" / "run.json").exists()
+    assert len(posted) == 2 and all(p["geometry"] == "exact" for p in posted), "exact — второго запроса за честными контурами не нужно"
+
+
+def test_window_ends_by_itself_and_new_run_id_starts_a_new_one(tmp_path):
+    posted = []
+    li = _infer_step(tmp_path, posted, frames_on=True, frames_run=7, frames_every_s=1, frames_hours=1)
+    (tmp_path / "lf").mkdir()
+    (tmp_path / "lf" / "run.json").write_text('{"run": 7, "t0": %f}' % (time.time() - 3700))      # час давно прошёл
+    li.step()
+    assert li.rt.snapshot(None, True)["frames"]["state"] == "done"
+    assert not (tmp_path / "lf" / "images").exists(), "окно закрыто — кадров нет"
+    li.rt.g["frames_run"] = 8                                  # кнопка «Начать» ещё раз
+    li.step()
+    assert li.rt.snapshot(None, True)["frames"]["state"] == "run"
+    assert len(list((tmp_path / "lf" / "images").glob("*.jpg"))) == 1
+
+
+def test_window_survives_restart(tmp_path):
+    posted = []
+    a = _infer_step(tmp_path, posted, frames_on=True, frames_run=7, frames_every_s=300, frames_hours=1)
+    a.step()
+    t0 = a._run[1]
+    b = _infer_step(tmp_path, posted, frames_on=True, frames_run=7, frames_every_s=300, frames_hours=1)     # перезапуск камеры
+    b.step()
+    assert b._run == (7, t0), "тот же запуск продолжается с прежнего начала, а не начинается заново"
+
+
+def test_stops_when_disk_is_nearly_full(tmp_path, monkeypatch):
+    monkeypatch.setattr(ml, "FRAMES_MIN_FREE", 10 ** 18)
+    li = _infer_step(tmp_path, [], frames_on=True, frames_run=1, frames_every_s=1)
+    li.step()
+    assert li.rt.snapshot(None, True)["frames"]["state"] == "disk"
+    assert not (tmp_path / "lf" / "images").exists()
 
 
 def test_label_uses_exact_geometry_even_if_level_is_lvldec(tmp_path):
     posted = []
-    li = _infer_step(tmp_path, "lvldec", 5, posted)
+    li = _infer_step(tmp_path, posted, geometry="lvldec", frames_on=True, frames_run=1, frames_every_s=300)
     li.step()
     assert [p["geometry"] for p in posted] == ["lvldec", "exact"], "для разметки — отдельный запрос с честной геометрией"
     assert len(list((tmp_path / "lf" / "labels").glob("*.txt"))) == 1
 
 
 def test_saver_failure_does_not_break_level(tmp_path):
-    posted = []
-    li = _infer_step(tmp_path, "exact", 5, posted)
+    li = _infer_step(tmp_path, [], frames_on=True, frames_run=1, frames_every_s=300)
     (tmp_path / "lf").write_text("файл вместо папки")          # mkdir упадёт
     li.step()
     assert li.rt.snapshot(None, True)["valid"], "уровень посчитан, хотя кадр не сохранился"
@@ -531,6 +570,7 @@ def test_saver_failure_does_not_break_level(tmp_path):
 
 def test_level_config_frames_defaults_and_limits():
     g = level_cam()["groups"][0]
-    assert (g["frames_min"], g["frames_keep"]) == (0, 1000)
-    with pytest.raises(ValueError):
-        level_cam(frames_keep=1)
+    assert (g["frames_on"], g["frames_every_s"], g["frames_hours"], g["frames_keep"]) == (False, 60, 24, 1000)
+    for bad in ({"frames_keep": 1}, {"frames_every_s": 0}, {"frames_hours": 0}):
+        with pytest.raises(ValueError):
+            level_cam(**bad)

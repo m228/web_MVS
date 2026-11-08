@@ -17,6 +17,8 @@
 #   -Yes              подтвердить тяжёлую первую установку (CV микроскопа или уровень: torch, несколько ГБ) без вопроса
 #   -NoMenu           меню не показывать (без -Components обновляется только основное приложение, как раньше)
 #   -NoBrowser        запускать приложение с --no-open: страницу в браузере оно не открывает (её перезагружает вкладка, с которой нажали «обновить»)
+#   -StableSec <с>    сколько секунд следить за приложением после того, как оно ответило (по умолчанию 45): упало или зависло —
+#                     перезапуск, второй раз не вышло — откат прежней версии; 0 — не следить
 #   -PythonInstaller <файл>  готовый установщик Python (python-3.12.*-amd64.exe) вместо скачивания с python.org (когда с завода python.org недоступен).
 #                     Python нужен только дополнениям (cv, video, motion): первая установка дополнения сама найдёт или поставит Python 3.12.
 #   -NoPython         не искать и не ставить Python (для проверок: setup.bat запускается как есть)
@@ -35,6 +37,7 @@ param(
     [switch]$Yes,
     [switch]$NoMenu,
     [switch]$NoBrowser,
+    [int]$StableSec = 45,
     [string]$PythonInstaller = '',
     [switch]$NoPython
 )
@@ -257,30 +260,82 @@ function Stop-App([string]$exePath) {
     throw 'приложение не остановилось за 20 секунд'
 }
 
-function Start-AppAndWait([string]$root, [string]$expectVersion) {
-    # запускает exe и ждёт ответа сервера нужной версии; $true — поднялось
+function Write-CrashDiag([string]$root, [datetime]$since, $proc) {
+    # Что известно о сбое приложения: код выхода, хвост его журнала (logs\app.log) и запись Windows об аварийном завершении.
+    # Раньше текст ошибки оставался только в окне консоли приложения и исчезал вместе с ним.
+    try { if ($proc -and $proc.HasExited) { Log ("код выхода процесса: {0} (0x{1:X})" -f $proc.ExitCode, $proc.ExitCode) 'Yellow' } } catch {}
+    $tail = @()
+    $f = Join-Path $root 'logs\app.log'
+    if (Test-Path -LiteralPath $f) { try { $tail = @(Get-Content -LiteralPath $f -Tail 12 -Encoding UTF8 -ErrorAction Stop) } catch {} }
+    if ($tail.Count -gt 0) {
+        Log 'последние строки журнала приложения (logs\app.log):' 'Yellow'
+        foreach ($l in $tail) { Log ('    ' + $l) }
+    } else { Log 'журнала приложения (logs\app.log) нет — приложение ничего не успело записать или это версия без журнала' 'Yellow' }
+    try {
+        $ev = Get-WinEvent -FilterHashtable @{ LogName = 'Application'; ProviderName = 'Application Error'; StartTime = $since } -MaxEvents 10 -ErrorAction Stop |
+            Where-Object { $_.Message -match 'web_MVS' } | Select-Object -First 1
+        if ($ev) { Log ('запись Windows о падении: ' + ((($ev.Message -split "`r?`n") | Select-Object -First 4) -join ' | ')) 'Yellow' }
+    } catch {}
+}
+
+function Start-AppAndWait([string]$root, [string]$expectVersion, [int]$stableSec = 0) {
+    # Запускает exe и ждёт ответа сервера нужной версии, затем $stableSec секунд следит, что процесс жив и отвечает.
+    # $true — поднялось и держится. При сбое пишет в update.log, что известно о причине (Write-CrashDiag).
     $exe = Join-Path $root 'web_MVS.exe'
     if (-not (Test-Path -LiteralPath $exe)) { Log 'ОШИБКА: web_MVS.exe не найден' 'Red'; return $false }
     Log 'запускаю приложение...'
-    if ($NoBrowser) { Start-Process -FilePath $exe -WorkingDirectory $root -ArgumentList '--no-open' | Out-Null }
-    else { Start-Process -FilePath $exe -WorkingDirectory $root | Out-Null }
-    $deadline = (Get-Date).AddSeconds(90)
+    $started = Get-Date
+    # Окно консоли приложения — СВЁРНУТЫМ. Обычное всплывало поверх экрана ровно тогда, когда оператор смотрит на страницу, клик
+    # попадал в консоль, включался QuickEdit и приложение замирало на записи в консоль («Failed to fetch», пульса нет).
+    $sp = @{ FilePath = $exe; WorkingDirectory = $root; WindowStyle = 'Minimized'; PassThru = $true }
+    if ($NoBrowser) { $sp.ArgumentList = @('--no-open') }
+    try { $p = Start-Process @sp } catch { Log ("не удалось запустить web_MVS.exe: " + $_.Exception.Message) 'Yellow'; return $false }
+    $null = $p.Handle                                    # без этого Windows PowerShell 5.1 не отдаёт ExitCode после выхода процесса
+    $deadline = $started.AddSeconds(90)
+    $answered = $false
     while ((Get-Date) -lt $deadline) {
         Start-Sleep -Seconds 2
-        if (@(Get-Process -Name 'web_MVS' -ErrorAction SilentlyContinue).Count -eq 0) {
-            if ((Get-Date) -gt $deadline.AddSeconds(-80)) { Log 'процесс web_MVS завершился сразу после запуска' 'Yellow'; return $false }
+        if ($p.HasExited) {
+            Log ("процесс web_MVS завершился через {0:N0} с после запуска" -f ((Get-Date) - $started).TotalSeconds) 'Yellow'
+            Write-CrashDiag $root $started $p
+            return $false
         }
         try {
             $v = [string](Get-LocalJson "http://127.0.0.1:$Port/api/debug/info").version
             if ($v) {
                 if ($expectVersion -and $v -ne $expectVersion) { Log "приложение отвечает, но версия $v (ждали $expectVersion)" 'Yellow'; return $false }
                 Log "приложение запущено, версия $v" 'Green'
-                return $true
+                $answered = $true
+                break
             }
         } catch {}
     }
-    Log 'приложение не ответило за 90 секунд' 'Yellow'
-    return $false
+    if (-not $answered) { Log 'приложение не ответило за 90 секунд' 'Yellow'; Write-CrashDiag $root $started $p; return $false }
+    if ($stableSec -le 0) { return $true }
+
+    # Ответило — ещё не значит «поднялось»: после обновления приложение бывало пропадало или зависало через секунды.
+    Log "слежу за приложением $stableSec с: не упадёт ли и не зависнет ли..."
+    $until = (Get-Date).AddSeconds($stableSec)
+    $silent = 0
+    while ((Get-Date) -lt $until) {
+        Start-Sleep -Seconds 3
+        if ($p.HasExited) {
+            Log ("приложение завершилось через {0:N0} с после запуска (сразу после того, как ответило)" -f ((Get-Date) - $started).TotalSeconds) 'Yellow'
+            Write-CrashDiag $root $started $p
+            return $false
+        }
+        try { $null = Get-LocalJson "http://127.0.0.1:$Port/api/version" 4000; $silent = 0 }
+        catch {
+            $silent++
+            if ($silent -ge 3) {
+                Log 'приложение работает, но не отвечает 3 проверки подряд (около 20 с) — зависло' 'Yellow'
+                Write-CrashDiag $root $started $p
+                return $false
+            }
+        }
+    }
+    Log 'приложение стабильно ✓' 'Green'
+    return $true
 }
 
 # ---------- основной поток ----------
@@ -372,7 +427,16 @@ function Invoke-Update {
 
     # --- запустить и убедиться, что поднялось ---
     $up = $true
-    if (-not $NoRestart) { $up = Start-AppAndWait $Root $installed }
+    if (-not $NoRestart) {
+        $up = Start-AppAndWait $Root $installed $StableSec
+        if (-not $up) {
+            # одна повторная попытка: после обновления приложение бывало пропадало разово, помогал обычный перезапуск;
+            # откатывать прежнюю версию из-за разового сбоя не нужно, а если упало и второй раз — откат ниже
+            Log 'приложение не удержалось после запуска — останавливаю и запускаю ещё раз' 'Yellow'
+            Stop-App (Join-Path $Root 'web_MVS.exe')
+            $up = Start-AppAndWait $Root $installed $StableSec
+        }
+    }
     if (-not $up) {
         Log 'новая версия не поднялась — возвращаю прежнюю' 'Red'
         Stop-App (Join-Path $Root 'web_MVS.exe')

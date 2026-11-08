@@ -61,7 +61,7 @@ powershell -NoProfile -Command "$f=Get-ChildItem 'motion_service' | Where-Object
 rem same: top-level items; .venv, model\ (uploaded YOLO models) and logs must never go into the zip
 echo [build] Packing level add-on (level_service, code only) ...
 copy /Y VERSION "level_service\VERSION" >nul
-powershell -NoProfile -Command "$f=Get-ChildItem 'level_service' | Where-Object { $_.Name -notin @('.venv','venv','model','__pycache__') -and $_.Name -notlike 'service.log*' }; Compress-Archive -Path $f.FullName -DestinationPath 'dist\level_service_v%VER%.zip' -Force" || exit /b 1
+powershell -NoProfile -Command "$f=Get-ChildItem 'level_service' | Where-Object { $_.Name -notin @('.venv','venv','model','__pycache__','bench_ov','bench_result.txt') -and $_.Name -notlike 'service.log*' }; Compress-Archive -Path $f.FullName -DestinationPath 'dist\level_service_v%VER%.zip' -Force" || exit /b 1
 
 echo.
 echo [build] Done:

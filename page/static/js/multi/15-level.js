@@ -3,10 +3,10 @@
 // площади, залитая маской жидкости; Total = (нижнее + верхнее) · 50 %, в ПЛК уходит ×10 (54,3 % → 543). В ПЛК пишет сценарий
 // «Уровень · камера» со своей связью, выключенной по умолчанию. Серверная часть — motion_service/motion_level.py.
 const LV_DEF = { conf: 0.35, imgsz: 0, geometry: 'lvldec', infer_interval_s: 2, alpha: 0.93, warmup_s: 10, glass1_min: 15, glass2_min: 20,
-  glass1_full: 100, glass2_full: 100, hold_s: 30, contour: false, liquid_class: 'liquid' };
+  glass1_full: 100, glass2_full: 100, hold_s: 30, contour: false, liquid_class: 'liquid', frames_on: false, frames_every_s: 60, frames_hours: 24, frames_keep: 1000 };
 // [мин, макс] числовых параметров группы (как проверяет сервер)
 const LV_NUM = { conf: [0.01, 0.99], imgsz: [0, 4096], infer_interval_s: [0.2, 600], alpha: [0, 0.999], warmup_s: [0, 600],
-  glass1_min: [0, 100], glass2_min: [0, 100], glass1_full: [0, 100], glass2_full: [0, 100], hold_s: [1, 3600] };
+  glass1_min: [0, 100], glass2_min: [0, 100], glass1_full: [0, 100], glass2_full: [0, 100], hold_s: [1, 3600], frames_every_s: [1, 86400], frames_hours: [0.01, 720], frames_keep: [10, 100000] };
 const LV = { svc: null, models: null, at: 0, busy: false, msg: '', msgCls: '' };
 // картинка камеры для SCADA и браузера (cam.webview; сервер — motion_service/motion_webview.py): значения по умолчанию и границы — как у сервера, имена — как в [webview] LVLDec
 const WV_DEF = { enabled: false, host: '0.0.0.0', port: 5000, update_sec: 5, jpeg_quality: 85, annotate: false,
@@ -56,7 +56,13 @@ function lvPaintModel() {
     if (!s) setCapLine(cap, true, 'Проверяю сервис уровня…', '');
     else if (!s.online) setCapLine(cap, false, '', 'Сервис уровня не запущен (level_service\\setup.bat, потом перезапуск web_MVS)');
     else if (!m) setCapLine(cap, false, '', 'Сервис уровня работает, модель не загружена — загрузите .pt');
-    else setCapLine(cap, true, 'Модель ' + m.name + ' · ' + m.classes.join(', ') + ' · ' + m.device, '');
+    else {
+      // на каком размере считаем и на каком модель обучена: расхождение (обучена на 960, считаем на 640) занижает уровень
+      const g = lvGroup(mdCamera().cam);
+      const used = (g && g.imgsz) || m.imgsz;
+      const sz = !m.imgsz ? '' : used === m.imgsz ? ' · вход ' + used + ' (как при обучении)' : ' · ВХОД ' + used + ', обучена на ' + m.imgsz + ' — уровень может занижаться';
+      setCapLine(cap, true, 'Модель ' + m.name + ' · ' + m.classes.join(', ') + ' · ' + m.device + sz, '');
+    }
   }
   const sel = mdEl('lvModelSel');
   if (sel) {
@@ -129,6 +135,18 @@ function mdLevelTabHtml(mode, cam) {
     <label class="micro-check" title="На адресе /scada.jpg будет кадр с маской жидкости, рамкой и подписью Total / g1 / g2. Без галочки там чистая картинка"><input type="checkbox" ${a} data-f="w_annotate"${wvP(cam, 'annotate') ? ' checked' : ''} /><span class="micro-check__text">с разметкой</span></label>
     <div class="md-dim lv-web__url" id="lvWebUrl"></div>
   </div>`;
+  // кадры для обучения: съёмка на заданное время, сама заканчивается; кнопка запускает окно (сервер считает время по своим часам)
+  const fnum = (f, v, min, max, step) => num(f, v, min, max, step);
+  const frames = g ? `<div class="lv-plc2 lv-frames">
+    <div class="lv-plc2__head"><b>Кадры для обучения</b><span class="md-dim" id="lvFrInfo"></span></div>
+    <div class="md-fields md-fields--c lv-plc2__body">
+      ${mdField('Раз в, с', fnum('frames_every_s', lvP(g, 'frames_every_s'), 1, 86400, 1), 'Как часто сохранять кадр: 5 — каждые 5 секунд, 1200 — раз в 20 минут. Чаще, чем опрос модели (раз в 2 с), не получится')}
+      ${mdField('Снимать, ч', fnum('frames_hours', lvP(g, 'frames_hours'), 0.01, 720, 0.5), 'Сколько часов идёт съёмка от нажатия «Начать», потом сама останавливается')}
+      ${mdField('Хранить, шт', fnum('frames_keep', lvP(g, 'frames_keep'), 10, 100000, 10), 'Предел на диске: старые кадры стираются вместе с разметкой')}
+    </div>
+    <div class="lv-frames__go"><button type="button" class="btn-primary md-x" id="lvFrBtn" ${a} data-f="fr_go">Начать</button><span class="md-dim" id="lvFrNote"></span></div>
+    <div class="md-dim lv-frames__url">Папка: data\\level_frames — images (кадр 1920×1080 без разметки) и labels (то, что нашла модель, YOLO). Метки можно удалить или перерисовать. При свободном месте меньше 2 ГБ съёмка встаёт.</div>
+  </div>` : '';
   const names = g ? g.zones.map((id) => { const z = cam.zones.find((q) => q.id === id); return z ? z.name : id; }) : [];
   const glasses = g ? `<div class="lv-glasses">${names.map((n, i) =>
     `<span class="lv-glass"><i style="background:${i ? LV_COL.up : LV_COL.low}"></i>${escapeHtml(n)}<button type="button" class="btn-secondary md-x" ${a} data-f="del_glass" data-gi="${i}" title="${i ? 'Удалить верхнее стекло' : 'Удалить стёкла: без нижнего (рабочего) уровень не считается'}">✕</button></span>`).join('')}${names.length < 2 ? '<span class="lv-glass lv-glass--empty">верхнего стекла нет</span>' : ''}</div>` : '';
@@ -147,7 +165,7 @@ function mdLevelTabHtml(mode, cam) {
       <span class="lv-msg ${LV.msgCls}" id="lvMsg">${escapeHtml(LV.msg)}</span>
     </div>
     ${g ? '' : '<p class="net-hint">Стёкол ещё нет. «Разметить стёкла» — обвести на кадре нижнее и верхнее.</p>'}
-    <div class="lv-cols">${par}${plc}${web}</div>
+    <div class="lv-cols">${par}${plc}${web}${frames}</div>
   </div>`;
 }
 
@@ -181,6 +199,38 @@ function mdLevelPaintLive() {
     info.textContent = !sc ? '' : !sc.plc ? 'выключена' : sc.ok === null ? 'ждёт ответа ПЛК' : sc.ok ? 'записано: ' + sc.value : 'ошибка: ' + (sc.error || '');
   }
   lvPaintWeb(cam);
+  lvPaintFrames(cam, lg);
+}
+
+// сколько осталось, по-человечески
+function lvFmtDur(sec) {
+  sec = Math.max(0, Math.round(sec));
+  if (sec < 90) return sec + ' с';
+  if (sec < 5400) return Math.round(sec / 60) + ' мин';
+  const h = Math.floor(sec / 3600), m = Math.round((sec % 3600) / 60);
+  return h + ' ч' + (m ? ' ' + m + ' мин' : '');
+}
+
+// съёмка идёт: включена в настройках и сервер не сказал, что окно кончилось / место кончилось
+function lvFramesRunning(cam, g) {
+  const fr = (lvLive(cam) || {}).frames;
+  return !!lvP(g, 'frames_on') && !(fr && (fr.state === 'done' || fr.state === 'disk'));
+}
+
+// карточка «Кадры для обучения»: состояние, остаток времени, оценка объёма
+function lvPaintFrames(cam, lg) {
+  const g = lvGroup(cam), info = mdEl('lvFrInfo'), note = mdEl('lvFrNote'), btn = mdEl('lvFrBtn');
+  if (!g || !info) return;
+  const fr = lg && lg.frames;
+  const run = lvFramesRunning(cam, g);
+  const every = lvP(g, 'frames_every_s'), hours = lvP(g, 'frames_hours'), keep = lvP(g, 'frames_keep');
+  const n = Math.min(keep, Math.max(1, Math.floor(hours * 3600 / every)));
+  const est = '≈ ' + n + ' кадров, ≈ ' + Math.round(n * 0.7) + ' МБ (кадр ~0,7 МБ)';
+  info.textContent = !run ? (fr && fr.state === 'done' ? 'закончена' : fr && fr.state === 'disk' ? 'остановлена: мало места на диске' : 'выключена')
+    : fr && fr.state === 'run' ? 'идёт · осталось ' + lvFmtDur(fr.left_s) : 'запускается…';
+  if (btn) btn.textContent = run ? 'Остановить' : 'Начать';
+  note.textContent = run || !fr ? est : (fr.saved ? 'на диске ' + fr.saved + ' кадров · ' + fr.mb + ' МБ. ' : '') + est;
+  info.closest('.lv-frames').classList.toggle('is-on', run);
 }
 
 // картинка для SCADA: состояние сервера и адреса, по которым её забирают
@@ -287,6 +337,11 @@ function mdOnLevel(t) {
     v = Math.max(LV_NUM[f][0], Math.min(LV_NUM[f][1], v));
     t.value = v;
     mdEdit(() => { g[f] = v; });
+    return;
+  }
+  if (f === 'fr_go') {                                   // «Начать» / «Остановить» съёмку кадров для обучения
+    const run = lvFramesRunning(cam, g);
+    mdEdit(() => { g.frames_on = !run; if (!run) g.frames_run = 1 + Math.floor(Math.random() * 2000000000); });
     return;
   }
   if (f === 'del_glass') { lvDelGlass(cam, g, Number(t.dataset.gi)); return; }

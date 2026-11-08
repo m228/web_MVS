@@ -17,11 +17,13 @@ from __future__ import annotations
 
 import json
 import logging
+import shutil
 import threading
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from pathlib import Path
 from typing import Callable, Optional
 
 import cv2
@@ -31,6 +33,7 @@ log = logging.getLogger("motion.level")
 
 DEFAULT_URL = "http://127.0.0.1:8770"
 GEOMETRIES = ("lvldec", "exact")
+FRAMES_MIN_FREE = 2 * 1024 ** 3     # съёмка кадров для обучения встаёт, если на диске свободно меньше
 CONTOUR_MAX_PTS = 60               # контур жидкости для плитки: не больше стольких точек на контур
 _opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))     # localhost без системного прокси (иначе виснет)
 
@@ -158,6 +161,7 @@ class LevelRT:
             self.model = ""
             self.err = ""
             self.contour: list = []
+            self.frames: Optional[dict] = None     # состояние съёмки кадров для обучения (LevelInfer) — в панель
             self.contour_wh: Optional[list] = None
             self.objs: list = []                  # объекты последнего ответа модели (все классы) — для размеченной картинки SCADA
             self._zmasks: dict = {}
@@ -206,6 +210,10 @@ class LevelRT:
         lv = {"total": snap["total"], "glass1": snap["g1"], "glass2": snap["g2"]} if snap["valid"] else None
         return {"objs": objs, "wh": wh, "liquid_class": self.g["liquid_class"], "lv": lv}
 
+    def set_frames(self, info: dict):
+        with self._lock:
+            self.frames = info
+
     def note_error(self, msg: str, quiet: bool = False):
         """Причина, по которой нового уровня нет (видна в панели). quiet — в журнал не писать (о мёртвой камере уже сказал её поток)."""
         with self._lock:
@@ -225,7 +233,7 @@ class LevelRT:
                     "s1": self.proc.smooth_g1 if valid else 0.0, "s2": self.proc.smooth_g2 if valid else 0.0,
                     "raw": list(self.raw), "conf": self.conf, "ms": self.ms, "model": self.model,
                     "err": self.err, "age_s": None if age is None else round(age, 1),
-                    "contour": list(self.contour) if valid else [], "contour_wh": self.contour_wh}
+                    "contour": list(self.contour) if valid else [], "contour_wh": self.contour_wh, "frames": self.frames}
 
 
 def post_infer(url: str, jpeg: bytes, params: dict, timeout: float = 30.0) -> dict:
@@ -244,14 +252,68 @@ def post_infer(url: str, jpeg: bytes, params: dict, timeout: float = 30.0) -> di
         return {"error": "сервис уровня не отвечает (%s)" % (url or DEFAULT_URL)}
 
 
+def yolo_label(objs: list, cls_name: str, W: int, H: int) -> str:
+    """Контуры жидкости → разметка YOLO-seg (класс 0, точки 0..1, по строке на контур). Пусто — жидкости модель не нашла."""
+    lines = []
+    for o in objs:
+        if o.get("name") != cls_name:
+            continue
+        for poly in o.get("polygons") or []:
+            if len(poly) >= 3:
+                pts = " ".join("%.6f %.6f" % (min(1.0, max(0.0, x / W)), min(1.0, max(0.0, y / H))) for x, y in poly)
+                lines.append("0 " + pts)
+    return "\n".join(lines) + ("\n" if lines else "")
+
+
+def frames_stats(folder: Path) -> tuple:
+    """(сколько кадров лежит в folder\\images, сколько байт)."""
+    n = size = 0
+    try:
+        for p in (folder / "images").glob("*.jpg"):
+            n += 1
+            size += p.stat().st_size
+    except OSError:
+        pass
+    return n, size
+
+
+def prune_frames(folder: Path, keep: int) -> tuple:
+    """Оставить в folder\\images не больше keep самых новых кадров; разметку старых (labels\\<имя>.txt) убрать вместе с ними.
+    Возвращает (сколько кадров стёрто, сколько байт освободили)."""
+    imgs = sorted((folder / "images").glob("*.jpg"))
+    gone = freed = 0
+    for p in imgs[:max(0, len(imgs) - keep)]:
+        try:
+            freed += p.stat().st_size
+        except OSError:
+            pass
+        for f in (p, folder / "labels" / (p.stem + ".txt")):
+            try:
+                f.unlink()
+            except OSError:
+                pass
+        gone += 1
+    return gone, freed
+
+
 class LevelInfer(threading.Thread):
     """Раз в infer_interval_s: свежий кадр камеры → сервис уровня → LevelRT. Отдельный поток: модель на процессоре думает
-    секунду, и разбор кадров камеры, и запись в ПЛК от этого не тормозят."""
+    секунду, и разбор кадров камеры, и запись в ПЛК от этого не тормозят.
+
+    Съёмка кадров для обучения (save_dir + frames_* в группе). Включает её кнопка в панели (frames_on + новый frames_run), дальше сервер
+    сам: раз в frames_every_s секунд (не чаще опроса модели) тот же кадр, что ушёл в модель (полный размер, без разметки), кладётся в
+    save_dir\\images, а в save_dir\\labels — то, что нашла модель, в формате YOLO-seg (заготовка для разметки и дообучения). Идёт
+    frames_hours часов от нажатия и сама заканчивается (метка начала — в save_dir\\run.json, переживает перезапуск); хранится не больше
+    frames_keep кадров; свободного места на диске меньше FRAMES_MIN_FREE — съёмка встаёт, чтобы не забить диск."""
 
     def __init__(self, rt: LevelRT, get_frame: Callable[[], Optional[np.ndarray]], halt: threading.Event,
-                 post: Callable = post_infer, jpeg_quality: int = 95):
+                 post: Callable = post_infer, jpeg_quality: int = 95, save_dir: Optional[Path] = None):
         super().__init__(daemon=True, name="level-" + rt.g["id"])
         self.rt, self.get_frame, self.halt, self.post, self.q = rt, get_frame, halt, post, jpeg_quality
+        self.save_dir = Path(save_dir) if save_dir else None
+        self._last_save = 0.0
+        self._run: Optional[tuple] = None          # (номер запуска из конфига, время начала по часам сервера)
+        self._stats: Optional[list] = None         # [кадров на диске, байт] — считаем один раз, дальше по ходу дела
 
     def run(self):
         g = self.rt.g
@@ -282,3 +344,74 @@ class LevelInfer(threading.Thread):
             self.rt.note_error(res["error"])
         else:
             self.rt.ingest(res)
+            try:
+                self._maybe_save(buf.tobytes(), res)
+            except Exception as e:                       # диск полон / нет прав: уровень от этого не страдает
+                log.warning("[уровень %s] кадр для обучения не сохранён: %s", g["id"], e)
+
+    def _window(self, now: float) -> tuple:
+        """(состояние съёмки: off | run | done, сколько секунд осталось). Начало окна — первое включение с новым frames_run."""
+        g = self.rt.g
+        if not g.get("frames_on"):
+            return "off", 0.0
+        rid = int(g.get("frames_run") or 0)
+        if self._run is None or self._run[0] != rid:
+            f = self.save_dir / "run.json"
+            t0 = None
+            try:
+                d = json.loads(f.read_text(encoding="utf-8"))
+                if int(d.get("run", -1)) == rid:
+                    t0 = float(d["t0"])
+            except (OSError, ValueError, KeyError, TypeError):
+                pass
+            if t0 is None:
+                t0 = now
+                self.save_dir.mkdir(parents=True, exist_ok=True)
+                f.write_text(json.dumps({"run": rid, "t0": t0}), encoding="utf-8")
+            self._run = (rid, t0)
+        left = self._run[1] + float(g["frames_hours"]) * 3600.0 - now
+        return ("run", left) if left > 0 else ("done", 0.0)
+
+    def _maybe_save(self, jpeg: bytes, res: dict):
+        if not self.save_dir:
+            return
+        g = self.rt.g
+        now = time.time()
+        state, left = self._window(now)
+        if state == "run":
+            try:
+                if shutil.disk_usage(self.save_dir.parent).free < FRAMES_MIN_FREE:
+                    state = "disk"
+            except OSError:
+                pass
+        if self._stats is None:
+            self._stats = list(frames_stats(self.save_dir))
+        if state == "run" and now - self._last_save >= float(g["frames_every_s"]):
+            self._last_save = now
+            self._save(jpeg, res, now)
+        self.rt.set_frames({"state": state, "left_s": int(left), "saved": self._stats[0], "mb": round(self._stats[1] / 1048576, 1)})
+
+    def _save(self, jpeg: bytes, res: dict, now: float):
+        g = self.rt.g
+        W, H = int(res["image"]["w"]), int(res["image"]["h"])
+        objs = res.get("objects") or []
+        if g["geometry"] != "exact":                     # в разметку — честные контуры, а не «как в LVLDec» (те съезжают к центру)
+            params = {"conf": g["conf"], "geometry": "exact"}
+            if g["imgsz"]:
+                params["imgsz"] = g["imgsz"]
+            exact = self.post(g["service_url"], jpeg, params, max(10.0, g["infer_interval_s"] * 5))
+            objs = (exact.get("objects") or []) if "error" not in exact else None
+        with self.rt._lock:
+            raw = list(self.rt.raw)
+        tag = "_".join("%s%s" % (k, "x" if v is None else int(round(v * 100))) for k, v in zip("nv", raw))   # n — нижнее, v — верхнее, сырой %
+        name = "%s_%s" % (time.strftime("%Y%m%d_%H%M%S", time.localtime(now)), tag)
+        (self.save_dir / "images").mkdir(parents=True, exist_ok=True)
+        (self.save_dir / "images" / (name + ".jpg")).write_bytes(jpeg)
+        self._stats[0] += 1
+        self._stats[1] += len(jpeg)
+        if objs is not None:
+            (self.save_dir / "labels").mkdir(parents=True, exist_ok=True)
+            (self.save_dir / "labels" / (name + ".txt")).write_text(yolo_label(objs, g["liquid_class"], W, H), encoding="utf-8")
+        gone, freed = prune_frames(self.save_dir, int(g.get("frames_keep") or 1000))
+        self._stats[0] -= gone
+        self._stats[1] -= freed

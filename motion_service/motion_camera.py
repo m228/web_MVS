@@ -617,7 +617,7 @@ class CameraWorker(threading.Thread):
         self._writer = threading.Thread(target=self._plc_loop, daemon=True, name="plc-" + self.id)
         self._writer.start()
         for lv in self.engine.levels.values():         # группы-уровни: свой поток модели на каждую (обычно одна — декантатор)
-            LevelInfer(lv, self._level_frame, self._halt, self.level_post).start()
+            LevelInfer(lv, self._level_frame, self._halt, self.level_post, save_dir=self.data_dir / "level_frames").start()
         wv = cfg.get("webview")
         if wv and wv["enabled"]:
             self._web = WebView(self.id, wv, self._web_source, self._halt)

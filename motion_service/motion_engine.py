@@ -286,7 +286,12 @@ def _norm_group(g: dict, cam_id: str, zone_ids: list, cycle_ids=(), level_ids=()
             glass1_full=_num(g.get("glass1_full", 100), where + ".glass1_full", 0, 100),
             glass2_full=_num(g.get("glass2_full", 100), where + ".glass2_full", 0, 100),
             hold_s=_num(g.get("hold_s", 30), where + ".hold_s", 1, 3600),
-            contour=bool(g.get("contour", False)))
+            contour=bool(g.get("contour", False)),
+            frames_on=bool(g.get("frames_on", False)),
+            frames_run=_num(g.get("frames_run", 0), where + ".frames_run", 0, 2 ** 31 - 1, True),
+            frames_every_s=_num(g.get("frames_every_s", 60), where + ".frames_every_s", 1, 86400),
+            frames_hours=_num(g.get("frames_hours", 24), where + ".frames_hours", 0.01, 720),
+            frames_keep=_num(g.get("frames_keep", 1000), where + ".frames_keep", 10, 100000, True))
     if gtype == "monotonic":
         order = [str(x) for x in (g.get("order") or zs)]
         if sorted(order) != sorted(zs):
@@ -1133,6 +1138,8 @@ class CameraEngine:
                "valid": ok, "total": round(total, 1), "g1": round(s["g1"], 1), "g2": round(s["g2"], 1),
                "raw": [None if r is None else round(r * 100, 1) for r in s["raw"]], "conf": round(s["conf"], 2),
                "ms": s["ms"], "model": s["model"], "err": s["err"], "age_s": s["age_s"], "warmup": bool(now - lv.t0 < g["warmup_s"])}
+        if s.get("frames"):
+            out["frames"] = s["frames"]
         if g.get("contour"):
             out["contour"], out["contour_wh"] = s["contour"], s["contour_wh"]
         return out

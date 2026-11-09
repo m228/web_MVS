@@ -420,6 +420,8 @@ DEFAULTS = {
     # enabled=false -> не читаем, на странице «(—)». Макс впишет реальные адреса регистров.
     "sv_source": {
         "enabled": True,       # включено — читаем данные аппарата с ПЛК (Макс подтвердил 2026-08-28)
+        # протокол источника — целиком один: "modbus" (поля ниже, reg) или "opcua" (раздел opcua, node). Только чтение.
+        "protocol": "modbus",
         "host": "10.20.2.180", # IP контроллера аппарата (M580), дал Макс
         "port": 502,
         "unit": 255,           # unit Modbus-сервера M580 (подтверждено Максом)
@@ -447,6 +449,19 @@ DEFAULTS = {
             "v_syrup":   {"reg": 0, "scale": 1},                      # клапан сиропа, обратка %
             "v_water":   {"reg": 0, "scale": 1},                      # клапан воды, обратка %
             "v_product": {"reg": 0, "scale": 1},                      # головной клапан продукта (коллектор → аппарат), обратка %
+        },
+        # OPC UA (protocol="opcua"): адрес сервера, защита, теги. Логин/пароль — НЕ здесь, а в data\opcua_secret.json.
+        # security: None | Basic256Sha256 | Aes128_Sha256_RsaOaep | Aes256_Sha256_RsaPss; mode: Sign | SignAndEncrypt;
+        # auth: anonymous | user. Поле: {node: NodeId вида "ns=3;s=PLC.Brix", scale}; инж.значение = тег / scale; node "" — не читается.
+        "opcua": {
+            "endpoint": "",
+            "security": "None",
+            "mode": "SignAndEncrypt",
+            "auth": "anonymous",
+            "timeout_s": 3,
+            "fields": {name: {"node": "", "scale": 1} for name in (
+                "sv", "temp_app", "level", "current", "press_top", "press_bot", "vacuum", "stage", "substage", "cook_time",
+                "v_syrup", "v_water", "v_product")},
         },
         # совместимость со старым конфигом (используется, если в fields нет sv/stage):
         "sv_register": 0,
@@ -491,6 +506,8 @@ def _drop_stale_sv_source(user):
     sv = user.get("sv_source")
     if not isinstance(sv, dict):
         return user
+    if sv.get("protocol") == "opcua" or isinstance(sv.get("opcua"), dict):
+        return user          # сохранено со страницы (вкладка «ПЛК»): не слепок DEFAULTS, даже если reg Modbus в файле нет
     fields = sv.get("fields") or {}
     regs = [int((f or {}).get("reg", 0) or 0) for f in fields.values() if isinstance(f, dict)]
     if not any(regs) and int(sv.get("sv_register", 0) or 0) == 0:

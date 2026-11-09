@@ -163,6 +163,12 @@
           <div class="motion-dock__body" id="mdBody"></div>
         </section>
 
+        <!-- Вакуум-аппарат (ПЛК): источник данных аппарата — Modbus / OPC UA, только чтение (plc-source.js; тот же блок, что на микроскопе) -->
+        <details class="card plc-card" id="plcCard">
+          <summary>Вакуум-аппарат (ПЛК)</summary>
+          <div id="plcSourceMulti"></div>
+        </details>
+
         <section class="card debug-console hidden" id="debugConsoleSection" aria-live="polite">
           <div class="debug-console__header">
             <div>
@@ -491,6 +497,11 @@
   <script src="/static/js/multi/12-autostart.js"></script>
   <script src="/static/js/multi/13-journal.js"></script>
   <script src="/static/js/multi/14-update.js"></script>
+  <script src="/static/js/plc-source.js"></script>
+  <script>
+    // карточка ПЛК рисуется при первом раскрытии (не грузим настройки и не опрашиваем, пока свёрнута)
+    document.getElementById("plcCard")?.addEventListener("toggle", (e) => { if (e.target.open) window.PlcSource?.mount(document.getElementById("plcSourceMulti")); });
+  </script>
   <script src="/static/js/multi/09-init.js"></script>
 </body>
 </html>

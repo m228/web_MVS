@@ -361,12 +361,12 @@ MODULES = [
     "paths", "logger", "camera_core", "camera_core.gentl_env", "camera_core.utils", "camera_core.imaging",
     "camera_core.base_worker", "camera_core.gige_worker", "camera_core.rtsp_worker", "camera_core.camera_manager",
     "sdk_gige", "camera_params", "board_guard", "dahua_control", "net_tools", "rtsp_store",
-    "save_settings", "plate_config", "sv_source", "microscope_plc", "microscope_fsm",
+    "save_settings", "plate_config", "sv_source", "opcua_client", "plc_source", "microscope_plc", "microscope_fsm",
     "microscope_service", "cv_analyzer", "cv_volume", "substages", "db", "report", "boil_compare", "cv_fracture", "cv_client", "video_client", "motion_client", "level_client", "services", "delta_update", "cv_store", "boil_archive", "fracture_lab", "cv_pipeline", "model_check", "boil_anomaly", "other_plants", "cam_events", "cam_monitor", "cam_report", "sysmon",
     "updater", "update_health", "auto_update", "autostart", "diag", "app", "mvsdk",
 ]
 THIRD_PARTY = ["cv2", "numpy", "fastapi", "starlette", "uvicorn", "pymodbus", "harvesters", "genicam",
-               "pydantic", "multipart"]
+               "pydantic", "multipart", "asyncua", "asyncua.sync", "cryptography"]
 
 # имя модуля -> имена, которые от него ждут другие модули / диагностика
 API = {
@@ -378,6 +378,8 @@ API = {
     "microscope_plc": ["PlateClient"],
     "microscope_fsm": ["MicroscopeFSM"],
     "sv_source": ["SvSource"],
+    "opcua_client": ["OpcUaConn", "get_endpoints", "with_conn", "scan", "ensure_client_cert", "load_secret", "save_secret", "secret_public"],
+    "plc_source": ["normalize", "public", "conn_from_body", "modbus_read_test"],
     "plate_config": ["load", "save", "replace_all", "backup", "DEFAULTS", "CONFIG_PATH"],
     "cv_analyzer": ["analyze", "measure_objects", "summarize", "draw_overlay", "blur_score"],
     "db": ["upsert_row", "read_rows", "rebuild_boils", "is_new_boil"],
@@ -929,6 +931,38 @@ def _sv_source():
     finally:
         src.stop()
     return "sv=52.5 stage=7, 1 запрос на опрос"
+
+
+@check("Микроскоп", "SvSource: читает СВ и стадию по OPC UA (эмулятор, шифрование + логин)")
+def _sv_source_opcua():
+    # эмулятор лежит в scripts\ (в exe — _internal\scripts\): заодно проверяет, что asyncua и cryptography собраны в бандл
+    import paths
+    sys.path.insert(0, str(paths.BUNDLE_DIR / "scripts"))
+    try:
+        from opcua_sim import start_sim
+    except ImportError as e:
+        raise Skip("нет эмулятора OPC UA: %s" % e)
+    import opcua_client
+    from sv_source import SvSource
+    sock = socket.socket(); sock.bind(("127.0.0.1", 0)); port = sock.getsockname()[1]; sock.close()
+    sim = start_sim(port, secure=True, users={"op": "123"}, animate=False)
+    try:
+        opcua_client.save_secret("op", "123")                          # песочница: data\ во временной папке
+        src = SvSource({"protocol": "opcua", "period_s": 0.2, "glitch_filter": False,
+                        "opcua": {"endpoint": sim.url, "security": "Basic256Sha256", "mode": "SignAndEncrypt", "auth": "user",
+                                  "fields": {"sv": {"node": sim.node_id("Brix")}, "stage": {"node": sim.node_id("Mode")},
+                                             "level": {"node": sim.node_id("Broken")}}}})
+        src.start()
+        try:
+            assert _wait(lambda: src.status()["connected"], 15), "нет связи с эмулятором: %s" % src.status().get("error")
+            v = src.status()["values"]
+            assert abs(v["sv"] - 86.4) < 0.01 and v["stage"] == 5, "values=%s" % v
+            assert v["level"] is None, "тег с плохим статусом должен быть None, а не %r" % v["level"]
+        finally:
+            src.stop()
+    finally:
+        sim.stop()
+    return "sv=86.4 stage=5 по Basic256Sha256/SignAndEncrypt, плохой тег → (—)"
 
 
 class _FwM1:

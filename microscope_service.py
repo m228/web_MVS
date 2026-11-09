@@ -821,6 +821,34 @@ class MicroscopeService:
             return {"enabled": True, **self.sv_source.status()}
         return {"enabled": False, "connected": False, "values": {}}
 
+    def set_plc_source(self, patch):
+        """Вкладка «ПЛК»: сохранить источник данных аппарата (Modbus / OPC UA) и перезапустить ТОЛЬКО его —
+        плата и автомат не трогаются, цикл пробы не прерывается. Микроскоп выключен — только сохраняем."""
+        cfg = plate_config.save({"sv_source": patch})
+        svc = cfg.get("sv_source", {}) or {}
+        old = new = None
+        with self._lock:                      # под замком только подмена источника; старый гасим вне замка (закрытие сессии ждёт сеть)
+            if self.cfg is not None:
+                self.cfg["sv_source"] = svc
+            if self._started:
+                old, self.sv_source = self.sv_source, None
+                if svc.get("enabled"):
+                    new = SvSource(svc, on_update=self._on_sv, fallback_host=cfg.get("host", ""))
+                    new.adopt_valves(old)     # доза клапанов с прошлой пробы не теряется
+                    self.sv_source = new
+        if old is not None:
+            old.stop()                        # остановленный не зовёт on_update — новые значения не перетрёт
+        if new is not None:
+            with self._lock:
+                if self._started and self.sv_source is new:   # пока гасили старый, микроскоп могли выключить
+                    new.start()
+        log_event("microscope_service", "Источник данных аппарата: настройки применены", "info",
+                  {"protocol": svc.get("protocol"), "enabled": bool(svc.get("enabled")), "running": self._started})
+
+    def plc_running(self):
+        """Работает ли микроскоп (источник ПЛК живёт внутри него)."""
+        return bool(self._started)
+
     CYCLE_LABELS = {"ignore_stage": "варить без стадии", "stage_from": "стадия от", "stage_to": "стадия до", "sv_from": "СВ от", "sv_to": "СВ до", "trigger_mode": "триггер",
                     "pause_sec": "пауза, с", "dwell_sec": "выдержка, с", "arrive_sensor": "датчик прихода", "retract_pos": "отвод, мкм",
                     "pre_wash_sec": "промывка, с", "shot_interval_sec": "скрин каждые, с", "photo_format": "формат кадра"}

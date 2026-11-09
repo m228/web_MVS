@@ -3866,14 +3866,17 @@ input.micro-cam-num { width: 56px; min-width: 0; flex: 0 0 auto; padding: 4px 5p
   border-color: var(--border-strong, rgba(118,142,178,.45)); }
 
 /* Переключатель низа: шире + не переносить текст */
-.micro-tele-seg { width: 760px; max-width: 100%; grid-template-columns: repeat(6, 1fr); }
-/* ползунок на 6 кнопок: внутренний отступ 3px, ширина кнопки = (100% - 6px) / 6 */
-.micro-tele-seg .micro-win-pill { width: calc((100% - 6px) / 6); }
-.micro-tele-seg.cv .micro-win-pill { left: calc(3px + (100% - 6px) / 6); }
-.micro-tele-seg.trend .micro-win-pill { left: calc(3px + 2 * (100% - 6px) / 6); }
-.micro-tele-seg.cfg .micro-win-pill { left: calc(3px + 3 * (100% - 6px) / 6); }
-.micro-tele-seg.report .micro-win-pill { left: calc(3px + 4 * (100% - 6px) / 6); }
-.micro-tele-seg.compare .micro-win-pill { left: calc(3px + 5 * (100% - 6px) / 6); }
+/* ползунок: --seg-n кнопок, --seg-i — номер активной (с 0); внутренний отступ 3px, ширина кнопки = (100% - 6px) / n.
+   Порядок: Плата, ПЛК, Распознавание, Тренды, CV, Отчёт, Сравнение (+ Ролик, пока жив видео-сервис — has-video) */
+.micro-tele-seg { --seg-n: 7; --seg-i: 0; width: 880px; max-width: 100%; grid-template-columns: repeat(var(--seg-n), 1fr); }
+.micro-tele-seg .micro-win-pill { width: calc((100% - 6px) / var(--seg-n)); left: calc(3px + var(--seg-i) * (100% - 6px) / var(--seg-n)); }
+.micro-tele-seg.plc { --seg-i: 1; }
+.micro-tele-seg.cv { --seg-i: 2; }
+.micro-tele-seg.trend { --seg-i: 3; }
+.micro-tele-seg.cfg { --seg-i: 4; }
+.micro-tele-seg.report { --seg-i: 5; }
+.micro-tele-seg.compare { --seg-i: 6; }
+.micro-tele-seg.video { --seg-i: 7; }
 /* «Распознавание» теперь одна колонка; тренды вынесены в свою вкладку на всю ширину */
 .micro-tele-cv { grid-template-columns: 1fr; }
 .micro-tele-trend .micro-cv-block:first-child { margin-top: 0; padding-top: 0; border-top: 0; }
@@ -4365,14 +4368,7 @@ body.micro-rep-doc .micro-rep-sbar { width: 90px; }
 
 /* вкладка «Ролик» (видео-сервис, 07-video.js): седьмая кнопка нижней полосы — только пока сервис отвечает (класс has-video) */
 .micro-tele-seg .micro-win-btn[hidden] { display: none; }
-.micro-tele-seg.has-video { width: 880px; grid-template-columns: repeat(7, 1fr); }
-.micro-tele-seg.has-video .micro-win-pill { width: calc((100% - 6px) / 7); }
-.micro-tele-seg.has-video.cv .micro-win-pill { left: calc(3px + (100% - 6px) / 7); }
-.micro-tele-seg.has-video.trend .micro-win-pill { left: calc(3px + 2 * (100% - 6px) / 7); }
-.micro-tele-seg.has-video.cfg .micro-win-pill { left: calc(3px + 3 * (100% - 6px) / 7); }
-.micro-tele-seg.has-video.report .micro-win-pill { left: calc(3px + 4 * (100% - 6px) / 7); }
-.micro-tele-seg.has-video.compare .micro-win-pill { left: calc(3px + 5 * (100% - 6px) / 7); }
-.micro-tele-seg.has-video.video .micro-win-pill { left: calc(3px + 6 * (100% - 6px) / 7); }
+.micro-tele-seg.has-video { --seg-n: 8; width: 1000px; }
 #teleStripVideo[hidden], .micro-vid-prog[hidden] { display: none; }
 .micro-vid-head { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 14px; margin: 4px 0 12px; }
 .micro-vid-title { font-weight: 600; }
@@ -4880,3 +4876,71 @@ body.micro-rep-doc .micro-cmp-strips { grid-template-columns: repeat(6, 1fr); ga
 .md-level .md-zone__chart canvas { height: 84px; }
 .md-lv-total { font-size: 20px; font-weight: 700; color: var(--text); }
 .md-level .md-zstat div { line-height: 1.5; }
+
+/* ── «Вакуум-аппарат (ПЛК)»: источник данных аппарата, Modbus / OPC UA (plc-source.js) — микроскоп (вкладка «ПЛК») и /multi ── */
+.plc-src { display: flex; flex-direction: column; gap: 10px; font-size: 0.92em; }
+.plc-src__head { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; }
+.plc-src__sp { flex: 1 1 auto; }
+.plc-seg { display: inline-flex; background: var(--surface-muted); border: 1px solid var(--border); border-radius: 9px; padding: 3px; gap: 2px; }
+.plc-seg__btn { border: 0; background: transparent; color: var(--muted); padding: 6px 14px; border-radius: 7px; font-weight: 600; cursor: pointer; }
+.plc-seg__btn.is-active { background: var(--accent); color: var(--accent-contrast); }
+.plc-chk { display: inline-flex; flex-direction: row; align-items: center; gap: 6px; color: var(--muted); cursor: pointer; margin: 0; }
+.plc-chk input, .plc-fields input[type="checkbox"] { width: 15px; height: 15px; min-height: 0; margin: 0; padding: 0; flex: 0 0 auto; accent-color: var(--accent); }
+.plc-btn { min-height: 34px; padding: 7px 14px; border-radius: 10px; font-weight: 600; }
+.plc-msg { margin: 0; min-height: 1.2em; font-size: 0.9em; color: var(--muted); }
+.plc-msg[data-kind="ok"] { color: var(--success); }
+.plc-msg[data-kind="warn"] { color: var(--warning); }
+.plc-msg[data-kind="err"], .plc-err { color: var(--danger); }
+.plc-warn { margin: 0; font-size: 0.85em; color: var(--warning); }
+.plc-warn[hidden] { display: none; }
+.plc-pane[hidden], .plc-scan[hidden], .plc-inline[hidden] { display: none; }
+.plc-pane { display: flex; flex-direction: column; gap: 10px; }
+.plc-row, .plc-scan { display: flex; align-items: flex-end; flex-wrap: wrap; gap: 8px 12px; }
+.plc-inline { display: inline-flex; gap: 8px 12px; flex-wrap: wrap; }
+.plc-lab { display: flex; flex-direction: column; gap: 3px; margin: 0; font-size: 0.85em; color: var(--muted); }
+.plc-in { min-height: 34px; padding: 6px 9px; border-radius: 9px; font-size: 1em; width: auto; }
+.plc-src .plc-in--s { width: 82px; }
+.plc-src .plc-in--m { width: 170px; }
+.plc-src .plc-in--ip { width: 170px; }
+.plc-src .plc-in--url { width: 320px; max-width: 100%; }
+.plc-src select.plc-in { width: auto; min-width: 0; padding-right: 26px; }
+.plc-src .plc-in--node { width: 100%; min-width: 180px; font-family: ui-monospace, Consolas, monospace; font-size: 0.9em; }
+.plc-fields { border-collapse: collapse; width: 100%; }
+.plc-fields th { text-align: left; font-weight: 500; font-size: 0.82em; color: var(--table-head); padding: 4px 6px; border-bottom: 1px solid var(--border); }
+.plc-fields td { padding: 3px 6px; border-bottom: 1px solid var(--border); vertical-align: middle; }
+.plc-fields .plc-in { min-height: 30px; padding: 4px 7px; }
+.plc-fields .plc-c { text-align: center; }
+.plc-val { font-variant-numeric: tabular-nums; white-space: nowrap; min-width: 70px; }
+.plc-val.is-test { color: var(--accent); }
+.plc-fields tbody tr.is-active td { background: var(--accent-soft); }
+.plc-map .plc-fields tbody tr { cursor: pointer; }
+.plc-x { border: 0; background: transparent; color: var(--muted); cursor: pointer; font-size: 1.1em; padding: 0 4px; }
+.plc-x:hover { color: var(--danger); }
+.plc-two { display: grid; grid-template-columns: minmax(260px, 2fr) 3fr; gap: 14px; align-items: start; }
+@media (max-width: 900px) { .plc-two { grid-template-columns: 1fr; } }
+.plc-tree { border: 1px solid var(--border); border-radius: 10px; padding: 6px; max-height: 460px; overflow: auto; background: var(--surface-muted); }
+.plc-tree__kids[hidden] { display: none; }
+.plc-tree__line { display: flex; align-items: center; gap: 6px; padding: 3px 4px; border-radius: 6px; cursor: pointer; white-space: nowrap; }
+.plc-tree__line:hover { background: var(--accent-soft); }
+.plc-tree__caret { width: 16px; flex: 0 0 16px; border: 0; background: transparent; color: var(--muted); cursor: pointer; padding: 0; min-height: 0; }
+.plc-tree__name { overflow: hidden; text-overflow: ellipsis; }
+.plc-tree__val { margin-left: auto; font-variant-numeric: tabular-nums; color: var(--text); }
+.plc-tree__val.is-bad { color: var(--muted); font-style: italic; }
+.plc-tree__type { font-size: 0.78em; color: var(--muted); min-width: 44px; text-align: right; }
+.plc-tree__empty { padding-left: 24px; }
+.plc-hint { margin: 2px 0 6px; font-size: 0.85em; color: var(--muted); }
+.plc-eps { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.plc-eps:empty { display: none; }
+.plc-eps .plc-hint, .plc-scan .plc-hint { margin: 0; }
+.plc-chip { border: 1px solid var(--chip-border); background: var(--chip-bg); color: var(--chip-text); border-radius: 999px; padding: 3px 10px; font-size: 0.85em; cursor: pointer; }
+.plc-chip.is-off { opacity: 0.45; cursor: default; }
+.plc-scan__list { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.plc-link { font-size: 0.85em; color: var(--accent); align-self: center; text-decoration: none; }
+.plc-link:hover { text-decoration: underline; }
+#teleStripPlc[hidden] { display: none; }
+/* /multi: карточка внизу, свёрнута по умолчанию */
+.plc-card > summary { cursor: pointer; list-style: none; display: flex; align-items: center; gap: 10px; font-weight: 700; font-size: 1.05em; }
+.plc-card > summary::-webkit-details-marker { display: none; }
+.plc-card > summary::before { content: "▸"; color: var(--muted); }
+.plc-card[open] > summary::before { content: "▾"; }
+.plc-card[open] > summary { margin-bottom: 12px; }

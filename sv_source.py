@@ -1,4 +1,4 @@
-"""Источник СВ (Brix) и стадии варки из ПЛК/аппарата по Modbus TCP — этап A.
+"""Источник СВ (Brix) и стадии варки из ПЛК/аппарата по Modbus TCP или OPC UA — этап A.
 
 ПЛК тут в роли «почтового ящика»: Python читает у него два числа, которые сам не
 измеряет — СВ (густота утфеля) и стадию варки. Они нужны автомату, чтобы выбирать зазор
@@ -8,8 +8,11 @@
 (СВ меняется небыстро). При успешном чтении зовёт callback(sv, stage) — сервис пушит их в
 автомат. Пока в конфиге `sv_source.enabled=false` — не запускается, работает ручной ввод.
 
-Адреса/масштаб задаёт Макс в plate_config.json → sv_source:
-  host/port/unit, sv_register (+ sv_scale), stage_register.
+Адреса/масштаб задаёт Макс в plate_config.json → sv_source (или со страницы, вкладка «ПЛК»):
+  protocol = "modbus": host/port/unit, fields.<имя>.reg (+ scale, signed);
+  protocol = "opcua":  opcua.endpoint / security / mode / auth, opcua.fields.<имя>.node (+ scale).
+Протокол — целиком один на весь источник. По OPC UA только ЧТЕНИЕ (opcua_client.py). Дальше всё общее: фильтр сбоев,
+клапаны, on_update.
 """
 import threading
 import time
@@ -19,6 +22,8 @@ from pymodbus.client import ModbusTcpClient
 from logger import log_event
 
 _RECONNECT_BACKOFF = [1, 2, 5, 10, 30]
+
+INT_FIELDS = ("stage", "substage", "cook_time")     # по OPC UA могут прийти Float (5.0) — автомату и журналу нужны целые
 
 VALVE_SLACK = 5.0     # обратка чуть за 0–100 % — шум датчика (у закрытого клапана в знаковом регистре бывает −1): это 0 / 100 %
 
@@ -38,7 +43,11 @@ class SvSource:
     def __init__(self, cfg, on_update=None, fallback_host=""):
         # cfg — раздел sv_source из общего конфига
         self.on_update = on_update
+        self.protocol = "opcua" if str(cfg.get("protocol") or "modbus").strip().lower() == "opcua" else "modbus"
+        self._opc_cfg = dict(cfg.get("opcua") or {})
         self.host = (cfg.get("host") or fallback_host or "").strip()
+        if self.protocol == "opcua":
+            self.host = str(self._opc_cfg.get("endpoint") or "").strip()     # адрес источника для статуса/журнала
         self.port = int(cfg.get("port", 502))
         self.unit = int(cfg.get("unit", 255))
         self.period = float(cfg.get("period_s", 1.0))
@@ -47,15 +56,21 @@ class SvSource:
         # signed=true -> регистр читается как знаковый int16 (для разрежения/давления, которые
         # после REAL_TO_INT в ПЛК могут быть отрицательными и приходят в доп. коде).
         self.fields = {}
-        for name, spec in (cfg.get("fields") or {}).items():
+        if self.protocol == "opcua":
+            # OPC UA: name -> (NodeId, scale, False). Пустой node — поле не читается («(—)»). Знак уже в типе тега (Int16/Float).
+            for name, spec in (self._opc_cfg.get("fields") or {}).items():
+                node = str((spec or {}).get("node") or "").strip()
+                if node:
+                    self.fields[name] = (node, float((spec or {}).get("scale", 1) or 1) or 1.0, False)
+        for name, spec in ((cfg.get("fields") or {}) if self.protocol == "modbus" else {}).items():
             reg = int((spec or {}).get("reg", 0) or 0)
             if reg > 0:
                 scale = float((spec or {}).get("scale", 1)) or 1.0
                 signed = bool((spec or {}).get("signed", False))
                 self.fields[name] = (reg, scale, signed)
-        if "sv" not in self.fields and int(cfg.get("sv_register", 0) or 0) > 0:
+        if self.protocol == "modbus" and "sv" not in self.fields and int(cfg.get("sv_register", 0) or 0) > 0:
             self.fields["sv"] = (int(cfg["sv_register"]), float(cfg.get("sv_scale", 100)) or 1.0, False)
-        if "stage" not in self.fields and int(cfg.get("stage_register", 0) or 0) > 0:
+        if self.protocol == "modbus" and "stage" not in self.fields and int(cfg.get("stage_register", 0) or 0) > 0:
             self.fields["stage"] = (int(cfg["stage_register"]), 1.0, False)
 
         self._client = None
@@ -77,11 +92,13 @@ class SvSource:
         self._sv_good, self._sv_bad_n, self._sv_bad_raw = None, 0, None
         self._stage_cur, self._stage_cand, self._stage_n = None, None, 0
         self._last_glitch_log = 0.0
+        self._last_conn_log = 0.0
         # клапаны (поля «v_*», 0–100 %): копим между пробами дозу (∫ открытие·dt, %·с) и время открытия — проба раз в 1–2 мин,
         # а клапан открывают на минуты; по мгновенному снимку на пробе дозу не увидеть. Забирает take_valves() при записи пробы.
         self._valves_lock = threading.Lock()
         self._valves_acc = {}                 # name -> [доза %·с, секунд открыт]
         self._valves_prev = None              # (время опроса, {name: %}) — прошлое значение держится до следующего опроса
+        self._close_lock = threading.Lock()   # _close зовут и поток опроса, и stop() из другого потока — закрыть клиент ровно один раз
 
     # ---------- жизненный цикл ----------
 
@@ -93,7 +110,7 @@ class SvSource:
         self._thread = threading.Thread(target=self._loop, name="sv-source", daemon=True)
         self._thread.start()
         log_event("sv_source", "Источник данных аппарата (ПЛК) запущен", "info",
-                  {"host": self.host, "port": self.port, "fields": list(self.fields.keys())})
+                  {"protocol": self.protocol, "host": self.host, "port": self.port, "fields": list(self.fields.keys())})
 
     def stop(self):
         self._running = False
@@ -109,6 +126,7 @@ class SvSource:
             "sv": self._values.get("sv"),
             "stage": self._values.get("stage"),
             "host": self.host,
+            "protocol": self.protocol,
             "error": self._last_error,
         }
 
@@ -158,16 +176,19 @@ class SvSource:
             log_event("sv_source", "Разовый сбой чтения ПЛК отброшен: %s %s вместо %s" % (what, raw, kept), "warn", {"raw": raw, "kept": kept})
 
     def _close(self):
-        if self._client is not None:
+        with self._close_lock:
+            client, self._client = self._client, None
+        if client is not None:
             try:
-                self._client.close()
+                client.close()
             except Exception:
                 pass
-            self._client = None
         self._connected = False
         self._sock_up = False
 
     def _connect(self):
+        if self.protocol == "opcua":
+            return self._connect_opcua()
         # гвард по сокету, а не по _connected: connect() врёт (True к мёртвому IP)
         if self._client is not None and self._sock_up:
             return True
@@ -184,6 +205,39 @@ class SvSource:
             pass
         self._sock_up = False
         return False
+
+    def _connect_opcua(self):
+        """Сессия OPC UA (вход и шифрование — по opcua_client). Не вышло — причина в status().error и в журнал раз в минуту."""
+        if self._client is not None:
+            return True
+        from opcua_client import OpcUaConn, explain
+        try:
+            conn = OpcUaConn(self._opc_cfg)
+            conn.connect()
+        except Exception as e:
+            self._last_error = explain(e)
+            self._connected = False
+            now = time.time()
+            if now - self._last_conn_log > 60.0:
+                self._last_conn_log = now
+                log_event("sv_source", "OPC UA: нет подключения к серверу", "warn", {"host": self.host, "error": self._last_error})
+            return False
+        self._client = conn
+        self._sock_up = True
+        self._last_error = None
+        if not self._running:                 # пока ждали сервер, источник остановили (перезапуск настроек) — сессию не держим
+            self._close()                     # после присваивания: stop() мог закрыть «пусто» раньше, чем клиент появился
+            return False
+        return True
+
+    def _value(self, name, raw, scale):
+        """Сырое значение -> инж. величина. Modbus: слово int16/uint16 / scale. OPC UA: число тега / scale; стадия и т.п. — целым."""
+        if self.protocol == "opcua":
+            v = raw if scale == 1 else raw / scale
+            if name in INT_FIELDS:
+                return int(round(v))
+            return round(v, 4) if isinstance(v, float) else v
+        return raw if scale == 1 else raw / scale   # scale=1 -> целое (стадия)
 
     VALVE_OPEN_PCT = 2.0  # клапан «открыт», если обратка больше этого (обратка закрытого клапана не всегда ровно 0)
     VALVE_GAP_S = 10.0    # опросов не было дольше (обрыв связи) — этот отрезок в дозу не идёт: что было с клапаном, не знаем
@@ -214,6 +268,15 @@ class SvSource:
                 if v > self.VALVE_OPEN_PCT:
                     acc[1] += dt
 
+    def adopt_valves(self, other):
+        """Перенять накопленную дозу клапанов у прежнего источника (сохранили настройки ПЛК посреди варки — доза до пробы не теряется)."""
+        if other is None:
+            return
+        with other._valves_lock:
+            acc, prev = dict(other._valves_acc), other._valves_prev
+        with self._valves_lock:
+            self._valves_acc, self._valves_prev = acc, prev
+
     def take_valves(self):
         """Накопленное с прошлого вызова: {"water_dose": %·с, "water_s": с, "syrup_dose": …} (имя без «v_») и обнуление.
         Клапаны не настроены — {}; клапан весь отрезок неизвестен — его ключей нет (в журнале None, а не «0 — закрыт»)."""
@@ -230,6 +293,9 @@ class SvSource:
     def _read_all(self):
         """Все нужные регистры -> {reg: raw}. Один запрос на весь блок [мин..макс] — снимок согласован по времени, запросов в 9 раз
         меньше; ПЛК не дал блок (исключение Modbus) — читаем по одному регистру. Сетевые ошибки идут выше (переподключение)."""
+        if self.protocol == "opcua":                           # OPC UA: все теги одним запросом Read; плохой статус -> None
+            self.requests += 1
+            return self._client.read_many([node for node, _, _ in self.fields.values()])
         regs = sorted({reg for reg, _, _ in self.fields.values()})
         lo, hi = regs[0], regs[-1]
         if self._block_ok and hi - lo + 1 <= self.BLOCK_MAX:
@@ -249,6 +315,12 @@ class SvSource:
         return rr.registers[0]
 
     def _loop(self):
+        try:
+            self._poll()
+        finally:
+            self._close()                     # вышли из цикла (stop) — сессию/сокет не оставляем висеть
+
+    def _poll(self):
         backoff_i = 0
         while self._running:
             if not self._connect():
@@ -262,11 +334,16 @@ class SvSource:
             try:
                 values = {}
                 raws = self._read_all()
+                if not self._running:                   # остановлен, пока читали: устаревшие значения в автомат не отдаём
+                    break
                 for name, (reg, scale, signed) in self.fields.items():
-                    raw = raws[reg]
+                    raw = raws.get(reg)
+                    if raw is None:                     # OPC UA: тег с плохим статусом — значения нет («(—)»)
+                        values[name] = None
+                        continue
                     if signed and raw >= 0x8000:        # int16 в доп. коде -> отрицательное
                         raw -= 0x10000
-                    values[name] = raw if scale == 1 else raw / scale   # scale=1 -> целое (стадия)
+                    values[name] = self._value(name, raw, scale)
                     if name.startswith("v_"):
                         values[name] = valve_pct(values[name])     # обратка вне 0–100 % (65535) — значения нет: на странице «(—)», в пробу не идёт
                 values = self._sanitize(values)
@@ -275,12 +352,19 @@ class SvSource:
                 if self.on_update is not None:
                     self.on_update(values.get("sv"), values.get("stage"))
                 backoff_i = 0
+                if self.protocol == "opcua":            # сервер на связи, но ни один тег не читается — скорее всего неверные NodeId
+                    self._last_error = None if any(v is not None for v in values.values()) else \
+                        "ни один тег не читается — проверь теги (NodeId) на вкладке «ПЛК»"
                 if not self._connected:   # живой ПЛК подтверждён чтением (не connect())
                     self._connected = True
                     log_event("sv_source", "Связь с источником СВ установлена", "success", {"host": self.host})
             except Exception as e:
+                if not self._running:                   # штатная остановка (клиент закрыли из stop) — это не ошибка
+                    break
                 self._last_error = str(e)
                 log_event("sv_source", "Ошибка чтения контроллера — переподключение", "warn", {"error": str(e)})
                 self._close()
+                if self.protocol == "opcua":            # сессия OPC UA открывается дорого — не долбим сервер в цикле «вошёл/ошибка»
+                    time.sleep(min(self.period, 1.0))
                 continue
             time.sleep(self.period)

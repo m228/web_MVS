@@ -74,7 +74,7 @@ ROW_COLS = (
      "vtot_m1", "vtot_m2", "vtot_m3", "good_n", "rej_n", "fines_um", "fines_side_mm", "k_thick", "fines_from_sv",
      "frac_zones", "frac_pct", "frames",
      "v_syrup", "v_water", "v_product", "syrup_dose", "syrup_s", "water_dose", "water_s", "product_dose", "product_s",
-     "model"] + _SIEVE
+     "model", "seed_qty"] + _SIEVE
 )
 
 

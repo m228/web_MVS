@@ -449,7 +449,10 @@ DEFAULTS = {
             "v_syrup":   {"reg": 0, "scale": 1},                      # клапан сиропа, обратка %
             "v_water":   {"reg": 0, "scale": 1},                      # клапан воды, обратка %
             "v_product": {"reg": 0, "scale": 1},                      # головной клапан продукта (коллектор → аппарат), обратка %
+            # количество затравки (что завод подписал в SCADA на эту варку); единица — seed_unit ниже. По умолчанию не читается
+            "seed_qty":  {"reg": 0, "scale": 1},
         },
+        "seed_unit": "kg",     # единица затравки на экране: kg | l | pct (выбор на вкладке «ПЛК»)
         # OPC UA (protocol="opcua"): адрес сервера, защита, теги. Логин/пароль — НЕ здесь, а в data\opcua_secret.json.
         # security: None | Basic256Sha256 | Aes128_Sha256_RsaOaep | Aes256_Sha256_RsaPss; mode: Sign | SignAndEncrypt;
         # auth: anonymous | user. Поле: {node: NodeId вида "ns=3;s=PLC.Brix", scale}; инж.значение = тег / scale; node "" — не читается.
@@ -461,7 +464,7 @@ DEFAULTS = {
             "timeout_s": 3,
             "fields": {name: {"node": "", "scale": 1} for name in (
                 "sv", "temp_app", "level", "current", "press_top", "press_bot", "vacuum", "stage", "substage", "cook_time",
-                "v_syrup", "v_water", "v_product")},
+                "v_syrup", "v_water", "v_product", "seed_qty")},
         },
         # совместимость со старым конфигом (используется, если в fields нет sv/stage):
         "sv_register": 0,
@@ -506,7 +509,7 @@ def _drop_stale_sv_source(user):
     sv = user.get("sv_source")
     if not isinstance(sv, dict):
         return user
-    if sv.get("protocol") == "opcua" or isinstance(sv.get("opcua"), dict):
+    if sv.get("protocol") == "opcua" or isinstance(sv.get("opcua"), dict) or "seed_unit" in sv:
         return user          # сохранено со страницы (вкладка «ПЛК»): не слепок DEFAULTS, даже если reg Modbus в файле нет
     fields = sv.get("fields") or {}
     regs = [int((f or {}).get("reg", 0) or 0) for f in fields.values() if isinstance(f, dict)]

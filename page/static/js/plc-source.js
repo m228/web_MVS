@@ -8,6 +8,7 @@
     press_top: "Разрежение сверху", press_bot: "Давление снизу", vacuum: "Разрежение (резерв)",
     stage: "Стадия варки", substage: "Подстадия", cook_time: "Время варки, с",
     v_syrup: "Клапан сиропа, %", v_water: "Клапан воды, %", v_product: "Клапан продукта, %",
+    seed_qty: "Затравка",
   };
   const POLICY_LABEL = { None: "без защиты", Basic256Sha256: "Basic256Sha256", Aes128_Sha256_RsaOaep: "Aes128_Sha256_RsaOaep", Aes256_Sha256_RsaPss: "Aes256_Sha256_RsaPss" };
   const MODE_LABEL = { Sign: "подпись", SignAndEncrypt: "подпись + шифрование" };
@@ -126,20 +127,34 @@
     function say(text, kind) { msg.textContent = text || ""; msg.dataset.kind = kind || ""; }
 
     // ── таблицы полей ──
+    // подпись поля; у затравки — ещё выбор единицы (кг / л / %), один на обе таблицы
+    const unitSels = [];
+    function fieldLabel(f) {
+      if (f !== "seed_qty") return el("td", { text: LABELS[f] || f });
+      const units = (S.cfg && S.cfg.seed_units) || { kg: "кг", l: "л", pct: "%" };
+      const sel = el("select", { class: "plc-in plc-unit", title: "В чём завод подписывает затравку — так она и подписана в трендах и отчёте",
+        onclick: (e) => e.stopPropagation(),
+        onchange: () => { S.seedUnit = sel.value; unitSels.forEach((s) => { s.value = S.seedUnit; }); } },
+        ...Object.entries(units).map(([k, v]) => el("option", { value: k, text: v })));
+      sel.value = S.seedUnit || "kg";
+      unitSels.push(sel);
+      return el("td", { class: "plc-unitcell" }, el("span", { text: LABELS[f] + ", " }), sel);
+    }
     function buildTables(fields) {
       const tbMb = mbTable.tBodies[0], tbOp = opTable.tBodies[0];
       tbMb.replaceChildren(); tbOp.replaceChildren();
+      unitSels.length = 0;
       fields.forEach((f) => {
         rowReg[f] = el("input", { type: "number", class: "plc-in plc-in--s", min: "0", max: "65535" });
         rowScaleMb[f] = el("input", { type: "number", class: "plc-in plc-in--s", step: "any" });
         rowSigned[f] = el("input", { type: "checkbox" });
         rowVal.modbus[f] = el("td", { class: "plc-val" });
-        tbMb.append(el("tr", {}, el("td", { text: LABELS[f] || f }), el("td", {}, rowReg[f]), el("td", {}, rowScaleMb[f]), el("td", { class: "plc-c" }, rowSigned[f]), rowVal.modbus[f]));
+        tbMb.append(el("tr", {}, fieldLabel(f), el("td", {}, rowReg[f]), el("td", {}, rowScaleMb[f]), el("td", { class: "plc-c" }, rowSigned[f]), rowVal.modbus[f]));
 
         rowNode[f] = el("input", { type: "text", class: "plc-in plc-in--node", spellcheck: "false", autocomplete: "off", placeholder: "не читается", onfocus: () => setActive(f) });
         rowScaleOp[f] = el("input", { type: "number", class: "plc-in plc-in--s", step: "any" });
         rowVal.opcua[f] = el("td", { class: "plc-val" });
-        rowOp[f] = el("tr", { onclick: () => setActive(f) }, el("td", { text: LABELS[f] || f }), el("td", {}, rowNode[f]), el("td", {}, rowScaleOp[f]), rowVal.opcua[f],
+        rowOp[f] = el("tr", { onclick: () => setActive(f) }, fieldLabel(f), el("td", {}, rowNode[f]), el("td", {}, rowScaleOp[f]), rowVal.opcua[f],
           el("td", {}, el("button", { type: "button", class: "plc-x", title: "Не читать это поле", text: "×", onclick: (e) => { e.stopPropagation(); rowNode[f].value = ""; delete S.test[f]; paintValues(); } })));
         tbOp.append(rowOp[f]);
       });
@@ -152,6 +167,7 @@
 
     function fill(cfg) {
       S.cfg = cfg;
+      S.seedUnit = cfg.seed_unit || "kg";
       const mb = cfg.modbus || {}, op = cfg.opcua || {};
       buildTables(cfg.fields || Object.keys(LABELS));
       inp.enabled.checked = !!cfg.enabled;
@@ -203,7 +219,7 @@
       });
       const op = { ...connBody(), fields: opFields };
       if (!op.password) delete op.password;                  // пусто — пароль на ПК остаётся прежним
-      return { enabled: inp.enabled.checked, protocol: S.proto, period_s: period,
+      return { enabled: inp.enabled.checked, protocol: S.proto, period_s: period, seed_unit: S.seedUnit || "kg",
         modbus: { host: inp.mb_host.value.trim(), port: Number(inp.mb_port.value) || 502, unit: Number(inp.mb_unit.value) || 0, fields: mbFields },
         opcua: op };
     }

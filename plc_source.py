@@ -12,6 +12,13 @@ import opcua_client
 
 FIELDS = tuple(plate_config.DEFAULTS["sv_source"]["fields"].keys())
 NODE_MAX = 512
+SEED_UNITS = {"kg": "кг", "l": "л", "pct": "%"}       # единица затравки: ключ в конфиге → подпись на экране
+
+
+def seed_unit(cfg: dict | None = None) -> str:
+    """Единица затравки из конфига (kg | l | pct); мусор — kg."""
+    u = str(((cfg if cfg is not None else plate_config.load()).get("sv_source") or {}).get("seed_unit") or "kg")
+    return u if u in SEED_UNITS else "kg"
 
 
 def _int(v, name, lo, hi):
@@ -51,6 +58,11 @@ def normalize(body: dict) -> tuple[dict, dict | None]:
             out["period_s"] = min(60.0, max(0.2, float(body["period_s"])))
         except (TypeError, ValueError):
             raise ValueError("период опроса — число секунд")
+    if "seed_unit" in body:
+        u = str(body["seed_unit"] or "").lower()
+        if u not in SEED_UNITS:
+            raise ValueError("единица затравки: кг, л или %")
+        out["seed_unit"] = u
     mb = body.get("modbus")
     if isinstance(mb, dict):
         if "host" in mb:
@@ -98,6 +110,7 @@ def public(cfg: dict | None = None) -> dict:
         "enabled": bool(sv.get("enabled")),
         "protocol": sv.get("protocol") or "modbus",
         "period_s": sv.get("period_s", 1.0),
+        "seed_unit": seed_unit({"sv_source": sv}), "seed_units": SEED_UNITS,
         "modbus": {"host": sv.get("host", ""), "port": sv.get("port", 502), "unit": sv.get("unit", 255),
                    "fields": {k: {"reg": int((v or {}).get("reg", 0) or 0), "scale": (v or {}).get("scale", 1),
                                   "signed": bool((v or {}).get("signed", False))} for k, v in (sv.get("fields") or {}).items()}},

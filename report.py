@@ -84,6 +84,8 @@ def _boil_row(g: list, summary: dict, fin_sv: float = FIN_SV) -> dict:
         "sieve": _sieve_rows(block.get("sieve") or {}),
         # режим варки (ПЛК на момент проб; другой истории ПЛК нет): средняя температура в аппарате, °C, и разрежение сверху, бар
         "temp_avg": _mean([r.get("temp") for r in proc]), "vac_avg": _mean([r.get("vac") for r in proc]),
+        # затравка варки (что подписали в SCADA): наибольшее за варку — годится и для уставки (стоит всю варку), и для счётчика (растёт до итога)
+        "seed_qty": max((r["seed_qty"] for r in g if r.get("seed_qty") is not None), default=None),
     }
 
 
@@ -154,7 +156,7 @@ def _totals(rows: list[dict]) -> dict:
             "mean_um": mm("mean_um"), "sv_max": mm("sv_max"),
             "point_um": mm("point_um"), "fin_um": mm("fin_um"), "grow_um": mm("grow_um"), "to_ready_min": mm("to_ready_min"),
             "fin_cv": mm("fin_cv"), "fin_agg_pct": mm("fin_agg_pct"), "seed_ready_min": mm("seed_ready_min"), "seed_end_min": mm("seed_end_min"),
-            "temp_avg": mm("temp_avg"), "vac_avg": mm("vac_avg"),
+            "temp_avg": mm("temp_avg"), "vac_avg": mm("vac_avg"), "seed_qty": mm("seed_qty"),
             "water": sum(1 for r in typ if r.get("water") is True), "water_known": sum(1 for r in typ if r.get("water") is not None),
             "sieve": [_mean([s[i] for s in sv]) for i in range(len(SIEVE_LABELS))] if sv else None,     # средний рассев (каждая варка с равным весом)
             "best": {"start": best["start"], "fines_avg": best["fines_avg"]} if best else None,
@@ -276,7 +278,17 @@ def build(serial: str, t_from: float, t_to: float, min_probes: int = MIN_PROBES,
         "day_parts": [{"key": k, "name": n, "from": a, "to": b, **_totals([r for r in rows if r["part"] == k])} for k, n, a, b in DAY_PARTS],
         "substages": _substage_rows(sel),
         "targets": seed_target(), "changes": changes(serial, t_from, t_to), "anomalies": anom, "model_check": _model_drift(t_from, t_to),
+        "seed_unit": _seed_unit_label(),
     }
+
+
+def _seed_unit_label() -> str:
+    """Подпись единицы затравки (кг / л / %) — как выбрано на вкладке «ПЛК»."""
+    try:
+        import plc_source
+        return plc_source.SEED_UNITS[plc_source.seed_unit()]
+    except Exception:
+        return "кг"
 
 
 _BOIL_COLS = [("start", "начало"), ("end", "конец"), ("duration_min", "длительность, мин"), ("probes", "проб"), ("sv_min", "СВ мин"), ("sv_max", "СВ макс"),

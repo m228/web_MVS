@@ -151,6 +151,31 @@ def is_quiet(r: dict) -> bool:
     return r.get("kind") == "update" and r.get("state") in QUIET_UPDATE_STATES
 
 
+MUTE_QUICK_MIN = 120                      # кнопка «🔕 Тихо 2 ч» под сообщением о тревоге
+MUTE_SUMMARY_MAX_AGE_S = 86400            # итог тишины, которая кончилась больше суток назад, не шлём
+MUTE_RETRY_S = 60                         # если итог не ушёл — пауза перед новой попыткой (не меньше, чем просит Telegram)
+
+
+def wants_mute_button(rows: list) -> bool:
+    """Кнопка «Тихо» нужна там, где завод беспокоит: тревога, нет пульса, старт. «Снято» и «связь восстановилась» — хорошие вести, кнопка лишняя."""
+    return any(r.get("state") != "closed" and r.get("kind") not in ("online", "update") for r in rows)
+
+
+def format_mute_end(m: dict, p: Optional[dict], now: float) -> str:
+    """Итог тишины: что промолчали и что открыто сейчас (чтобы после тишины ничего не потерялось)."""
+    head = "🔔 %s — тишина закончилась (%s–%s)." % (m["name"], time.strftime("%H:%M", time.localtime(m["since"])), time.strftime("%H:%M", time.localtime(m["until"])))
+    n = m["count"]
+    lines = [head, "Пока молчали: %d %s." % (n, "событие" if n % 10 == 1 and n % 100 != 11 else "события" if 2 <= n % 10 <= 4 and not 12 <= n % 100 <= 14 else "событий")
+             if n else "Пока молчали: важных событий не было."]
+    now_open = []
+    if p is not None:
+        if p.get("status") == "offline":
+            now_open.append("🔴 нет связи")
+        now_open += ["🔴 " + a["text"] for a in p.get("alerts") or [] if not a.get("acked") and a.get("level") in ("critical", "high")]
+    lines.append("Сейчас открыто: " + "; ".join(now_open) if now_open else "Сейчас открытых красных тревог нет.")
+    return "\n".join(lines)
+
+
 def format_line(r: dict) -> str:
     """Одна строка сообщения: «🔴 Кир — текст · 19:40». Снятие и восстановление — зелёные, обновление — свой значок."""
     hm = time.strftime("%H:%M", time.localtime(r["t"]))
@@ -174,6 +199,7 @@ class Notifier:
         self.state = {"last_ok_t": None, "last_error": "", "last_try_t": None, "sent_messages": 0}
         self._sent_times: deque = deque()       # когда ушли последние сообщения (потолок max_per_hour)
         self._summary_t = 0.0
+        self._mute_retry_t = 0.0                # раньше этого времени итог тишины заново не шлём (Telegram не ответил / просил подождать)
         self._kick = threading.Event()
         self._stop = threading.Event()
         self._thread: Optional[threading.Thread] = None
@@ -204,10 +230,10 @@ class Notifier:
             self._kick.wait(WATCH_EVERY_S)
             self._kick.clear()
 
-    def _send_all(self, text: str, silent: bool = False) -> tuple:
+    def _send_all(self, text: str, silent: bool = False, markup: Optional[dict] = None) -> tuple:
         wait, err = 0.0, ""
         for chat in self.cfg["chat_ids"]:
-            ok, w, e = self.client.send(chat, text, silent=silent)
+            ok, w, e = self.client.send(chat, text, markup, silent=silent)
             if not ok:
                 return False, max(wait, w), e
         return True, 0.0, ""
@@ -221,10 +247,19 @@ class Notifier:
         """Один проход: напоминания «нет связи», затем отправка очереди. Возвращает, сколько сообщений ушло."""
         with self._lock:
             now = self.clock()
+            try:
+                sent = self._mute_summaries(now)
+            except Exception:                                    # итог тишины не должен останавливать остальные сообщения
+                log.exception("итог тишины")
+                sent = 0
             self.store.notify_offline_reminders(now, self.cfg["offline_repeat_s"])
             rows = self.store.notify_pending(now, 100)
+            hush = [r["id"] for r in rows if self.store.mute_until(r["plant_id"], now) is not None]
+            if hush:                                             # встали в очередь до того, как включили тишину: тоже молчим (и помним для итога)
+                self.store.notify_hush(hush, now)
+                rows = [r for r in rows if r["id"] not in hush]
             if not rows:
-                return 0
+                return sent
             old = [r["id"] for r in rows if now - r["t"] > self.cfg["max_age_s"]]
             if old:                                              # Telegram долго не отвечал — давнее уже не новость
                 self.store.notify_mark(old, "muted", now, "устарело")
@@ -232,7 +267,7 @@ class Notifier:
             by_plant: dict = {}
             for r in rows:
                 by_plant.setdefault(r["plant_id"], []).append(r)
-            sent, muted = 0, 0
+            muted = 0
             groups = []                                          # (строки, тихо?): у завода тревоги и «история» уходят отдельными сообщениями
             for plant_rows in by_plant.values():
                 loud = [r for r in plant_rows if not is_quiet(r)]
@@ -244,7 +279,9 @@ class Notifier:
                     self.store.notify_mark(ids, "muted", now, "потолок сообщений в час")
                     muted += len(ids)
                     continue
-                ok, wait, err = self._send_all("\n".join(format_line(r) for r in group_rows), silent)
+                markup = None if silent or not wants_mute_button(group_rows) else {"inline_keyboard": [[
+                    {"text": "🔕 Тихо %d ч" % (MUTE_QUICK_MIN // 60), "callback_data": "mt:%d:%d" % (group_rows[0]["plant_id"], MUTE_QUICK_MIN)}]]}
+                ok, wait, err = self._send_all("\n".join(format_line(r) for r in group_rows), silent, markup)
                 self.state["last_try_t"] = now
                 if ok:
                     self.store.notify_mark(ids, "sent", now)
@@ -265,6 +302,29 @@ class Notifier:
                 if ok:
                     sent += 1
             return sent
+
+    def _mute_summaries(self, now: float) -> int:
+        """Тишина кончилась (по сроку или «Снять»): одно сообщение «что пропустили и что сейчас открыто». Не ушло — повторим на следующем проходе.
+        Если тишина кончилась давно (приёмник не работал), итог уже не новость — молча закрываем."""
+        sent = 0
+        if now < self._mute_retry_t:
+            return 0
+        for m in self.store.mute_finished(now):
+            if now - m["until"] > MUTE_SUMMARY_MAX_AGE_S:
+                self.store.mute_reported(m["plant_id"], m["since"])
+                continue
+            p = next((x for x in self.store.plants_view() if x["id"] == m["plant_id"]), None)
+            ok, wait, err = self._send_all(format_mute_end(m, p, now))
+            self.state["last_try_t"] = now
+            if not ok:
+                self._mute_retry_t = now + max(wait, MUTE_RETRY_S)
+                self.state["last_error"] = err
+                log.warning("Telegram: итог тишины не ушёл — %s (повтор через %d с)", err, max(wait, MUTE_RETRY_S))
+                break
+            self.store.mute_reported(m["plant_id"], m["since"])
+            self.state.update(last_ok_t=now, last_error="", sent_messages=self.state["sent_messages"] + 1)
+            sent += 1
+        return sent
 
     def morning(self) -> bool:
         """Утренняя сводка: раз в сутки после заданного времени (по умолчанию 08:00 по часам ПК приёмника), одним сообщением на все заводы.
@@ -380,13 +440,15 @@ def format_all(plants: list, now: float, latest: Optional[str] = None) -> str:
         old = _old_version(p, latest)
         d = disk_of(p.get("snapshot") or {})
         lines.append(_head(p, now) + (", тревог: %d" % n if n else "") + (", " + disk_line(d).replace("Диск: свободно", "диск свободно").replace(" из ", "/") if d else "") +
-                     (", старая версия %s" % old if old else ""))
+                     (", старая версия %s" % old if old else "") + (", 🔕 тихо до %s" % _hm(p["mute_until"]) if p.get("mute_until") else ""))
     return "\n".join(lines)[:MESSAGE_MAX]
 
 
 def format_plant(p: dict, now: float, latest: Optional[str] = None) -> str:
     """Вся текстовая сводка по заводу: статус, строка «как дела» из снимка, тревоги с временем, датчики последней пробы, последние события."""
     lines = [_head(p, now)]
+    if p.get("mute_until"):
+        lines.append("🔕 Не беспокоить до %s (события — в панели и журнале)" % _hm(p["mute_until"]))
     snap = p.get("snapshot") or {}
     if p.get("status") == "waiting" or not snap:
         return "\n".join(lines)
@@ -490,7 +552,9 @@ class Bot:
     GONE = "Такого завода уже нет."
     # действие -> метод; pid обязателен у всех, кроме xx (отмена)
     ACTIONS = {"lg": "_act_log", "dk": "_act_disk", "ak": "_act_ack", "st": "_act_settings", "sv": "_act_set", "rn": "_act_rename",
-               "tk": "_act_token_ask", "tky": "_act_token", "dl": "_act_delete_ask", "dly": "_act_delete", "xx": "_act_cancel"}
+               "tk": "_act_token_ask", "tky": "_act_token", "dl": "_act_delete_ask", "dly": "_act_delete", "xx": "_act_cancel",
+               "mu": "_act_mute_menu", "ms": "_act_mute_set", "mt": "_act_mute_quick", "mc": "_act_mute_cancel"}
+    MUTE_PRESETS = ((60, "1 ч"), (120, "2 ч"), (240, "4 ч"), ("m", "до утра"))      # «Не беспокоить»; "m" — до утра, 0 — снять
     CONFIRMS = ("tky", "dly")                # «Да» под вопросом: действует CONFIRM_TTL_S и только один раз (см. _once)
     CONFIRM_TTL_S = 600
     AFTER_PRESETS = (15, 30, 60, 120, 240)                       # «нет пульса через», мин
@@ -542,6 +606,8 @@ class Bot:
         """Кнопки под сводкой завода. «Сбросить тревоги» — только если есть что сбрасывать."""
         pid, b = p["id"], self._btn
         rows = [[b("📜 Журнал", "lg", pid), b("💾 Диск", "dk", pid)]]
+        until = p.get("mute_until")
+        rows.append([b("🔔 Снять тишину (до %s)" % _hm(until), "mc", pid) if until else b("🔕 Не беспокоить", "mu", pid)])
         if any(not a.get("acked") for a in p.get("alerts") or []):
             rows.append([b("🔕 Сбросить тревоги", "ak", pid)])
         rows += [[b("⚙ Настройки", "st", pid), b("✏ Переименовать", "rn", pid)], [b("🔑 Новый токен", "tk", pid), b("🗑 Удалить", "dl", pid)]]
@@ -640,6 +706,69 @@ class Bot:
         if p is not None:
             self.client.call("editMessageReplyMarkup", {"chat_id": chat, "message_id": mid, "reply_markup": self.plant_markup(p)})
         return "Сброшено тревог: %d (в журнале останутся)" % n
+
+    # --- «Не беспокоить»: на время работы (калибровка, перезагрузки) события завода не идут в Telegram, в панели и журнале остаются
+
+    def _mute_menu(self, p: dict) -> tuple:
+        pid, b = p["id"], self._btn
+        until = p.get("mute_until")
+        text = ("🔕 %s — тишина до %s. Продлить или снять?" % (p["name"], _hm(until))) if until else \
+               ("🔕 %s — на сколько не беспокоить? События останутся в панели и журнале, а когда тишина кончится, я пришлю итог." % p["name"])
+        rows = [[b(label, "ms", pid, m) for m, label in self.MUTE_PRESETS]]
+        if until:
+            rows.append([b("🔔 Снять тишину", "ms", pid, 0)])
+        return text, {"inline_keyboard": rows}
+
+    def _mute_apply(self, pid: int, how: str) -> tuple:
+        """how: минуты, "m" (до утра) или "0" (снять). Возвращает (короткий ответ, время конца тишины или None)."""
+        if how == "0":
+            self.store.set_mute(pid, None)
+            return "🔔 Тишина снята", None
+        if how == "m" or how.isdigit():
+            until = self.store.set_mute(pid, "morning" if how == "m" else int(how))
+            return "🔕 Тихо до %s" % _hm(until), until
+        raise ValueError("bad mute arg")
+
+    def _act_mute_menu(self, chat, mid, pid, args) -> Optional[str]:
+        p = self._plant(pid)
+        if p is None:
+            return self.GONE
+        text, markup = self._mute_menu(p)
+        self._say(chat, text, markup)
+        return None
+
+    def _act_mute_set(self, chat, mid, pid, args) -> Optional[str]:
+        """Выбор срока в меню «Не беспокоить»: сообщение с меню переписывается."""
+        try:
+            reply, until = self._mute_apply(pid, args[0] if args else "")
+        except ValueError:
+            return None
+        p = self._plant(pid)
+        if p is None:
+            return self.GONE
+        self._edit(chat, mid, "🔕 %s — тихо до %s." % (p["name"], _hm(until)) if until else "🔔 %s — тишина снята." % p["name"],
+                   {"inline_keyboard": [[self._btn("🔔 Снять тишину", "ms", pid, 0)]]} if until else None)
+        return reply
+
+    def _act_mute_cancel(self, chat, mid, pid, args) -> Optional[str]:
+        """«🔔 Снять тишину» на сводке завода: сводка остаётся, у неё обновляются кнопки (как после «Сбросить тревоги»)."""
+        self.store.set_mute(pid, None)
+        p = self._plant(pid)
+        if p is None:
+            return self.GONE
+        self.client.call("editMessageReplyMarkup", {"chat_id": chat, "message_id": mid, "reply_markup": self.plant_markup(p)})
+        return "🔔 Тишина снята"
+
+    def _act_mute_quick(self, chat, mid, pid, args) -> Optional[str]:
+        """Кнопка прямо под сообщением о тревоге: «🔕 Тихо 2 ч» → «🔔 Снять тишину» (и обратно)."""
+        try:
+            reply, until = self._mute_apply(pid, args[0] if args else "")
+        except ValueError:
+            return None
+        markup = {"inline_keyboard": [[self._btn("🔔 Снять тишину", "mt", pid, 0)]]} if until else \
+                 {"inline_keyboard": [[self._btn("🔕 Тихо %d ч" % (MUTE_QUICK_MIN // 60), "mt", pid, MUTE_QUICK_MIN)]]}
+        self.client.call("editMessageReplyMarkup", {"chat_id": chat, "message_id": mid, "reply_markup": markup})
+        return reply
 
     # --- настройки «нет пульса»
 

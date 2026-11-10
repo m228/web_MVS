@@ -69,6 +69,8 @@ pre.text { margin: 0; font: inherit; font-size: 14px; white-space: pre-wrap; lin
 .pill.bad { background: var(--bad-bg); color: var(--bad); }
 .head .r { display: flex; align-items: center; gap: 6px; }
 button.mini { padding: 2px 9px; font-size: 12px; border-radius: 999px; color: var(--muted); }
+select.mini { padding: 2px 6px; font-size: 12px; border-radius: 999px; color: var(--muted); background: var(--bg); border: 1px solid var(--line); cursor: pointer; }
+.mini.mute.on { color: var(--accent); border-color: var(--accent); }
 .vmenu { display: none; border: 1px solid var(--line); border-radius: 12px; padding: 8px 12px; background: var(--bg); }
 .vmenu.open { display: block; }
 .vmenu .sub { margin-bottom: 4px; }
@@ -435,6 +437,15 @@ function settingsNote(p) {         // свои настройки «нет пу�
   return bits.length ? ' · <span title="Настройки завода («Настройки» внизу карточки)">' + esc(bits.join(', ')) + '</span>' : '';
 }
 
+function muteCtl(p) {              // «Не беспокоить»: пока тишина, события завода не идут в Telegram (здесь и в журнале они остаются)
+  if (p.mute_until) {
+    const hm = new Date(p.mute_until * 1000).toLocaleTimeString('ru-RU', {hour: '2-digit', minute: '2-digit'});
+    return '<button class="mini mute on" data-a="unmute" title="В Telegram ничего не приходит. Нажми, чтобы снять тишину (придёт итог)">🔕 тихо до ' + esc(hm) + ' · снять</button>';
+  }
+  return '<select class="mini mute" data-mute title="Не беспокоить: события этого завода не будут приходить в Telegram (в панели и журнале останутся)">' +
+    '<option value="">🔕 Тихо…</option><option value="60">1 час</option><option value="120">2 часа</option><option value="240">4 часа</option><option value="morning">до утра</option></select>';
+}
+
 function card(p) {
   const snap = p.snapshot || {};
   let sub;
@@ -451,7 +462,7 @@ function card(p) {
     (a.acked ? '' : '<button class="mini" data-a="ack" data-code="' + esc(a.code) + '">Сбросить</button>') + '</div>').join('') +
     (live(p).length > 1 ? '<button class="mini" data-a="ackall">Сбросить все</button>' : '');
   return '<article class="card s-' + p.status + (live(p).length ? ' has-alert' : '') + '" data-id="' + p.id + '">' +
-    '<div class="head"><h2>' + esc(p.name) + '</h2><span class="r"><span class="chip s-' + p.status + '">' + STATUS[p.status] + '</span>' +
+    '<div class="head"><h2>' + esc(p.name) + '</h2><span class="r"><span class="chip s-' + p.status + '">' + STATUS[p.status] + '</span>' + muteCtl(p) +
     (viewMenu(p, snap) ? '<button class="mini" data-a="view">Вид</button>' : '') + '</span></div>' +
     '<div class="sub">' + sub + '</div>' +
     (alerts ? '<div class="alerts">' + alerts + '</div>' : '') +
@@ -477,6 +488,8 @@ function render() {
   titleBadge();
   renderSummary();
   const box = $('cards');
+  const f = document.activeElement;
+  if (f && f.matches && f.matches('select[data-mute]') && box.contains(f)) return;      // человек выбирает срок тишины: список не схлопываем (перерисуем, когда он уйдёт)
   box.innerHTML = plants.length ? sorted().map(card).join('') : '<div class="empty">Заводов пока нет. Нажми «+ Завод», чтобы выдать токен.</div>';
   opened.forEach((id) => loadLog(id));
   openedPos.forEach((id) => loadPos(id));
@@ -628,6 +641,9 @@ $('cards').onclick = async (ev) => {
       await api('/api/plants/' + id + '/alerts/ack', {method: 'POST', body: JSON.stringify(btn.dataset.a === 'ack' ? {code: btn.dataset.code} : {})});
       load();
     } catch (e) { alert(e.message); }
+  } else if (btn.dataset.a === 'unmute') {
+    try { await api('/api/plants/' + id + '/mute', {method: 'POST', body: JSON.stringify({minutes: null})}); load(); }
+    catch (e) { alert(e.message); }
   } else if (btn.dataset.a === 'lm') {
     if (btn.dataset.m === 'err') logErrors.add(id); else logErrors.delete(id);
     loadLog(id);
@@ -662,6 +678,18 @@ $('cards').onclick = async (ev) => {
     catch (e) { alert(e.message); }
   }
 };
+
+$('cards').addEventListener('focusout', (ev) => {          // список «🔕 Тихо…» закрыт без выбора: догоняем пропущенную перерисовку
+  if (ev.target.matches && ev.target.matches('select[data-mute]')) setTimeout(render, 0);
+});
+$('cards').addEventListener('change', async (ev) => {      // «🔕 Тихо…»: выбор срока тишины для завода
+  const sel = ev.target.closest('select[data-mute]');
+  if (!sel || !sel.value) return;
+  const id = Number(sel.closest('.card').dataset.id);
+  sel.blur();
+  try { await api('/api/plants/' + id + '/mute', {method: 'POST', body: JSON.stringify({minutes: sel.value === 'morning' ? 'morning' : Number(sel.value)})}); load(); }
+  catch (e) { sel.value = ''; alert(e.message); }
+});
 
 $('cards').addEventListener('change', async (ev) => {      // галочка в «Виде»: скрытые блоки хранит приёмник
   const cb = ev.target.closest('input[data-blk]');

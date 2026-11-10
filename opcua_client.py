@@ -13,6 +13,7 @@
 """
 from __future__ import annotations
 
+import datetime
 import ipaddress
 import json
 import os
@@ -235,6 +236,53 @@ class OpcUaConn:
                 out[nid] = _plain(dv.Value.Value) if dv.StatusCode.is_good() else None
         return out
 
+    def probe(self, node_id: str) -> dict:
+        """«Проверить тег»: один Read (класс, имя, значение, тип) → что пришло и, если значения нет, почему — по-русски.
+        Только чтение. {node, name, cls, type, value, number, status, good, time, why}."""
+        from asyncua import ua
+        nid = str(node_id or "").strip()
+        if not nid:
+            raise ValueError("впиши NodeId тега, например ns=1;s=…")
+        if len(nid) > 512:
+            raise ValueError("слишком длинный NodeId")
+        out = {"node": nid, "name": "", "cls": "", "type": "", "value": None, "number": None,
+               "status": "", "good": False, "time": None, "why": ""}
+        try:
+            node = self._client.get_node(nid)
+        except Exception:
+            out.update(status="BadNodeIdInvalid", why=_TAG_WHY["BadNodeIdInvalid"])
+            return out
+        A = ua.AttributeIds
+        cls_dv, name_dv, val_dv, type_dv = node.read_attributes([A.NodeClass, A.DisplayName, A.Value, A.DataType])
+        if not cls_dv.StatusCode.is_good():                     # узла нет вовсе
+            st = cls_dv.StatusCode.name
+            out.update(status=st, why=_TAG_WHY.get(st, "сервер ответил %s" % st))
+            return out
+        out["cls"] = ua.NodeClass(cls_dv.Value.Value).name
+        if name_dv.StatusCode.is_good() and name_dv.Value.Value is not None:
+            out["name"] = name_dv.Value.Value.Text or ""
+        if out["cls"] != "Variable":
+            out["why"] = "это не тег-значение, а %s — раскрой его в дереве и выбери переменную внутри" % out["cls"]
+            return out
+        if type_dv.StatusCode.is_good():
+            out["type"] = _type_name(type_dv.Value.Value)
+        st = val_dv.StatusCode.name
+        ts = val_dv.SourceTimestamp or val_dv.ServerTimestamp
+        if ts is not None:
+            out["time"] = (ts if ts.tzinfo else ts.replace(tzinfo=datetime.timezone.utc)).isoformat()
+        out["status"], out["good"] = st, val_dv.StatusCode.is_good()
+        raw = val_dv.Value.Value if val_dv.Value is not None else None
+        out["value"] = _show(raw)
+        if out["good"]:
+            out["number"] = _plain(raw)
+            if out["number"] is None:
+                out["why"] = "значение не число (%s) — на поле аппарата его назначить нельзя" % (out["type"] or type(raw).__name__)
+        elif st.startswith("Uncertain"):
+            out["why"] = "значение «под сомнением» (%s) — в автомат такое не идёт, на странице будет «(—)»" % st
+        else:
+            out["why"] = _TAG_WHY.get(st, "сервер не отдал значение: %s" % st)
+        return out
+
     def browse(self, node_id: Optional[str] = None, find: str = "") -> list:
         """Дети узла (по умолчанию — Objects): [{node, name, cls, type, value, has_children}]. Значения переменных — одним Read."""
         return self.browse_page(node_id, find)["items"]
@@ -331,6 +379,19 @@ _HINTS = {
     "BadSecurityModeRejected": "сервер не поддерживает выбранный режим защиты — выбери из предложенных",
     "BadTooManySessions": "на сервере кончились сессии — закрой лишние подключения",
     "BadTcpEndpointUrlInvalid": "сервер не знает такой адрес (путь после порта) — возьми адрес из его списка",
+}
+
+
+_NO_LINK = "сервер OPC UA на связи, но значения у него нет — нет связи с контроллером/датчиком или тег не обновляется (%s)"
+_TAG_WHY = {
+    "BadNodeIdUnknown": "такого тега на сервере нет — проверь NodeId целиком: ns=… и строку после s= до последнего символа",
+    "BadNodeIdInvalid": "NodeId записан неверно — нужен вид ns=1;s=Имя или ns=2;i=1234",
+    "BadNotReadable": "тег закрыт на чтение на сервере",
+    "BadUserAccessDenied": "этому входу нельзя читать тег — попробуй вход по логину",
+    "BadAttributeIdInvalid": "у этого узла нет значения",
+    **{k: _NO_LINK % k for k in ("BadNotConnected", "BadNoCommunication", "BadCommunicationError", "BadOutOfService",
+                                 "BadWaitingForInitialData", "BadServerNotConnected", "BadDeviceFailure", "BadSensorFailure",
+                                 "BadConfigurationError")},
 }
 
 

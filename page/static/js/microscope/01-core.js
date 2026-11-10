@@ -1294,6 +1294,7 @@
 
       // ручной режим (синхронизируем UI с состоянием автомата)
       if (!!f.manual !== manualOn) syncManual(!!f.manual);
+      syncAutoIdle(f);
     } catch (e) {
       setConn({ connected: false, reconnecting: false });
     }
@@ -1319,6 +1320,20 @@
     const sw = document.querySelector(".micro-switch--manual");
     if (sw) sw.classList.toggle("is-manual", on);
     $("microPult").classList.toggle("is-locked", !on);   // гейт панелей М1/М2/LED/DQ
+  }
+
+  // Тумблер «Автомат» = ручной снят, но авто-цикл (cyclic) включается отдельно. Если цикл не идёт (после аварии, перезапуска) —
+  // не врём зелёным «Автомат»: подпись «Автомат · цикл выкл». Лечится переключением в «Ручной» и обратно.
+  function syncAutoIdle(f) {
+    if (manualOn) return;
+    const idle = !f.cyclic && !f.fault && !(f.autocal && f.autocal.active);
+    const sw = document.querySelector(".micro-switch--manual");
+    if (sw) {
+      if (!sw.dataset.title) sw.dataset.title = sw.title;   // исходная подсказка из html
+      sw.classList.toggle("is-idle", idle);
+      sw.title = idle ? "Автомат не запущен: цикл проб выключен. Переключите в «Ручной» и обратно — цикл включится." : sw.dataset.title;
+    }
+    $("manualState").textContent = idle ? "Автомат · цикл выкл" : "Автомат";
   }
 
   // ---- кнопки ----

@@ -3264,7 +3264,8 @@ html {
 .micro-switch--manual input:checked + .micro-switch__track { background: var(--warning-soft); border-color: var(--warning); }
 .micro-switch--manual input:checked + .micro-switch__track .micro-switch__thumb { transform: translateX(20px); background: var(--warning); }
 .micro-switch--manual .micro-switch__label { font-weight: 700; color: var(--success); }
-.micro-switch--manual.is-manual .micro-switch__label { color: var(--warning); }
+.micro-switch--manual.is-manual .micro-switch__label,
+.micro-switch--manual.is-idle .micro-switch__label { color: var(--warning); }
 
 .micro-panel__body { margin-top: 14px; }
 .micro-motors { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }

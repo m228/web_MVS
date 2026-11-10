@@ -268,3 +268,33 @@ def test_restart_window_open_when_calibration_not_due(fsm):
     fsm.set_stage(11)
     fsm.tick()
     assert fsm.restart_window() == (True, "")
+
+
+def test_take_sample_from_manual_enables_cycle(fsm):
+    # «Взять пробу» из Ручного снимает ручной (тумблер «Автомат» в UI) — авто-цикл (sw0) должен быть включён,
+    # иначе после пробы «Ожидание — «Автомат» выключен» при зелёном тумблере
+    fsm.manual = True
+    assert fsm.start_sample()["status"] == "started"
+    assert not fsm.manual and fsm.sw0
+    assert fsm.state["cyclic"]
+
+
+def test_autocal_from_manual_returns_manual_on_abort(fsm):
+    # калибровка кнопкой из ручного; оборвалась по «стопу движения» — ручной возвращается, а не «Автомат» без цикла
+    fsm.manual = True
+    assert fsm.start_autocal()["status"] == "started"
+    assert not fsm.manual and fsm._cal_return_manual
+    fsm.set_movement_inhibit(True)
+    fsm.tick()
+    assert not fsm._cal_active
+    assert fsm.manual and not fsm.sw0
+    assert fsm.state["manual"]
+
+
+def test_autocal_abort_by_operator_manual_keeps_manual(fsm):
+    # человек сам нажал «Ручной» во время калибровки — ручной остаётся, повторного возврата нет
+    fsm.manual = True
+    fsm.start_autocal()
+    fsm.set_manual(True)
+    fsm.tick()
+    assert not fsm._cal_active and fsm.manual and not fsm._cal_return_manual

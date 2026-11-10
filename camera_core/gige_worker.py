@@ -15,6 +15,7 @@ from .gentl_env import (
     GENTL_HINTS,
     MAX_FRAME_TIMEOUTS,
     SDK_GRAB_TIMEOUT_MS,
+    SDK_MAX_BAD_FRAMES,
     SDK_STREAM_STALL_SECONDS,
     _explain_error,
     _gentl_code,
@@ -777,6 +778,12 @@ class CameraWorker(BaseCameraWorker):
             self.metrics["image_number"] = 0
             self.metrics["fps"] = 0.0
             self.metrics["bandwidth_mbps"] = 0.0
+            # диагностика потерь/рывков: кадры с дырами (потеря пакетов после resend), счётчики сети SDK,
+            # «медленные» кадры (интервал заметно больше периода) с разбивкой, где потеряно время
+            self.metrics.update(lost_frames=0, lost_packets=0, net={}, slow_n=0, slow=[])
+            bad_streak = 0                  # кадров с дырами подряд
+            prev_resend = 0                 # nResendPacketCount на прошлом кадре — чтобы видеть переспросы именно перед медленным кадром
+            yield_ms = 0.0                  # сколько генератор простоял на yield (потребитель — браузер/сеть — не успевал забрать кадр)
 
             while self.running and self._session == token:      # вытеснил новый запрос стрима — выходим, не трогая общее состояние
                 res = stream.grab(timeout_ms=SDK_GRAB_TIMEOUT_MS)
@@ -791,7 +798,29 @@ class CameraWorker(BaseCameraWorker):
                                   {"serial_number": self.serial_number, "hint": GENTL_HINTS[-1011]})
                         break
                     continue
-                last_frame_wall = time.time()
+                t_got = last_frame_wall = time.time()
+
+                net = stream.net_stats() if hasattr(stream, "net_stats") else {}
+                if net:
+                    self.metrics["net"] = net
+                resent = net.get("resend_got", 0) - prev_resend if net else 0
+                prev_resend = net.get("resend_got", prev_resend) if net else prev_resend
+                lost = getattr(stream, "last_lost", 0)
+                if lost:
+                    # часть пакетов кадра не дошла даже после переспроса: в картинке полосы/сдвиг строк.
+                    # Такой кадр не показываем и не отдаём пробе (держим прежний); если подряд идут одни битые
+                    # (сеть совсем плохая) — после SDK_MAX_BAD_FRAMES показываем как есть, чтобы картинка не стояла.
+                    self.metrics["lost_frames"] += 1
+                    self.metrics["lost_packets"] += lost
+                    bad_streak += 1
+                    if self.metrics["lost_frames"] % 20 == 1:
+                        log_event("camera_core.generate_stream", "Кадр с потерянными пакетами (после resend)", "warn",
+                                  {"serial_number": self.serial_number, "lost_packets": lost, "resent": resent,
+                                   "bad_total": self.metrics["lost_frames"], "net": net})
+                    if bad_streak <= SDK_MAX_BAD_FRAMES:
+                        continue
+                else:
+                    bad_streak = 0
 
                 width, height, pixel_format, raw = res
                 img = _to_bgr(raw, width, height, pixel_format)
@@ -816,6 +845,14 @@ class CameraWorker(BaseCameraWorker):
                     dt = now - last_frame_time
                     if dt > 0:
                         self.metrics["fps"] = 1.0 / dt
+                    if fps and dt > 1.25 / float(fps):
+                        # медленный кадр: proc — наша обработка (дебайер+JPEG), yield — простой на отдаче прошлого кадра
+                        # (браузер/сеть), resent — переспросов пакетов перед этим кадром. Ничего из трёх не выросло —
+                        # кадр запоздал на стороне камеры/линка.
+                        self.metrics["slow_n"] += 1
+                        self.metrics["slow"] = (self.metrics["slow"] + [{
+                            "t": time.strftime("%H:%M:%S"), "dt": round(dt, 2), "proc_ms": round((now - t_got) * 1000),
+                            "yield_ms": round(yield_ms), "resent": resent, "lost": lost}])[-8:]
                 if self.metrics["fps"] > 0:
                     # СЫРОЙ кадр (raw) = реальные байты на линке (GVSP), а не сжатый JPEG
                     # в браузер. Так «Скорость потока» отражает загрузку канала камера↔ПК
@@ -825,10 +862,12 @@ class CameraWorker(BaseCameraWorker):
 
                 self._maybe_save(img, fps)
 
+                t_yield = time.time()
                 yield (
                     b"--frame\r\n"
                     b"Content-Type: image/jpeg\r\n\r\n" + frame + b"\r\n"
                 )
+                yield_ms = (time.time() - t_yield) * 1000
         except Exception as e:
             # логируем ВСЕГДА, даже если running ещё не выставлен (падение на open):
             # именно это давало «поток закрыт без ошибки» на 2-м запуске

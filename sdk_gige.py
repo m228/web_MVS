@@ -106,6 +106,7 @@ class GigeSdkStream:
         self._grabbing = False
         self._lock = threading.Lock()
         self.mismatch = {}   # что камера не приняла после всех попыток (пусто — всё встало)
+        self.last_lost = 0   # пакетов, потерянных в последнем кадре ПОСЛЕ resend (>0 — кадр с дырами: полосы/сдвиг)
 
     def open(self, settings=None):
         c = self._cam
@@ -231,6 +232,7 @@ class GigeSdkStream:
             return None
         try:
             fi = frame.stFrameInfo
+            self.last_lost = int(getattr(fi, "nLostPacket", 0) or 0)
             size = fi.nFrameLen
             buf = (_sdk.c_ubyte * size)()
             _sdk.memmove(buf, frame.pBufAddr, size)
@@ -239,6 +241,24 @@ class GigeSdkStream:
             return fi.nWidth, fi.nHeight, fmt, arr
         finally:
             self._cam.MV_CC_FreeImageBuffer(frame)
+
+    def net_stats(self):
+        """Счётчики сети из SDK с начала захвата: принято кадров, потеряно кадров/пакетов,
+        запрошено и получено переспросов. {} если SDK не отдал (не GigE, не идёт захват)."""
+        try:
+            info = _sdk.MV_MATCH_INFO_NET_DETECT()
+            _sdk.memset(_sdk.byref(info), 0, _sdk.sizeof(info))
+            req = _sdk.MV_ALL_MATCH_INFO()
+            req.nType = _sdk.MV_MATCH_TYPE_NET_DETECT
+            req.pInfo = _sdk.cast(_sdk.byref(info), _sdk.c_void_p)
+            req.nInfoSize = _sdk.sizeof(info)
+            if self._cam.MV_CC_GetAllMatchInfo(req) != 0:
+                return {}
+            return {"frames": int(info.nNetRecvFrameCount), "lost_frames": int(info.nLostFrameCount),
+                    "lost_packets": int(info.nLostPacketCount), "resend_req": int(info.nRequestResendPacketCount),
+                    "resend_got": int(info.nResendPacketCount), "mb": round(info.nReceiveDataSize / 1048576, 1)}
+        except Exception:
+            return {}
 
     def close(self):
         with self._lock:

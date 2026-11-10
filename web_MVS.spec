@@ -37,7 +37,7 @@ hiddenimports = ['app', 'camera_core', 'rtsp_store', 'net_tools', 'paths', 'logg
                  # микроскоп (страница /microscope): плата по Modbus TCP + автомат
                  'microscope_service', 'microscope_plc', 'microscope_fsm', 'plate_config', 'sv_source',
                  # источник данных аппарата по OPC UA (вкладка «ПЛК»)
-                 'opcua_client', 'plc_source']
+                 'opcua_client', 'plc_source', 'stage_map']
 # selfcheck.py грузит модули по имени строкой (importlib) — PyInstaller их не увидит сам
 selfcheck_imports = ['selfcheck', 'cv_analyzer', 'cv_fracture', 'cv_client', 'video_client', 'services', 'cv_store', 'fracture_lab', 'boil_archive',
                      'autostart', 'multipart', 'starlette', 'fastapi', 'pydantic']

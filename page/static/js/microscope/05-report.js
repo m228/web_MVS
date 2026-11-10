@@ -41,6 +41,7 @@
       const e = rep.boils.filter((b) => b.seed_end_min != null);
       return e.length && e.filter((b) => b.seed_ready_min != null).length < 0.8 * e.length ? "seed_end_min" : "seed_ready_min";
     }
+    const seedUnitOf = (rep, k) => ((rep && rep.seed_units && rep.seed_units[k]) || (rep && rep.seed_unit) || "кг");     // единица затравки этого вида (кг / л / %)
     const seedName = (rep) => (seedKey(rep) === "seed_end_min" ? "заводка → последняя проба" : "заводка → готовность");
     // за целью маточника: мука выше порога, размер вне коридора
     const finesBad = (rep, v) => v != null && v > tg(rep).fines_max;
@@ -91,6 +92,11 @@
         on: true, csv: ["seed_ready_min", "seed_end_min"] },
       { key: "seed_qty", head: "затравка", tip: "Количество затравки на варку из ПЛК (наибольшее за варку) — как его подписали в SCADA; единица — на вкладке «ПЛК»",
         cell: (b, rep) => (b.seed_qty == null ? "—" : fmt(b.seed_qty, 2) + " " + esc((rep && rep.seed_unit) || "кг")), on: true },
+      // затравка по видам (сларри / из маточника МУ): столбец виден, только если в отчёте есть хоть одна варка с таким значением (needs)
+      { key: "seed_slurry", needs: "seed_slurry", head: "сларри", tip: "Затравка сларри на варку из ПЛК (наибольшее за варку); единица — на вкладке «ПЛК»",
+        cell: (b, rep) => (b.seed_slurry == null ? "—" : fmt(b.seed_slurry, 2) + " " + esc(seedUnitOf(rep, "seed_slurry"))), on: true },
+      { key: "seed_mu", needs: "seed_mu", head: "МУ", tip: "Затравка из маточника МУ на варку из ПЛК (наибольшее за варку); единица — на вкладке «ПЛК»",
+        cell: (b, rep) => (b.seed_mu == null ? "—" : fmt(b.seed_mu, 2) + " " + esc(seedUnitOf(rep, "seed_mu"))), on: true },
       { key: "water", head: "вода", tip: "Вода на стабилизации: по клапану, а без клапана — по провалу СВ", cell: (b) => (b.water == null ? "—" : b.water ? (b.water_by === "sv" ? '<span title="по провалу СВ">да*</span>' : "да") : "нет"),
         on: true, csv: ["water", "water_dose"] },
       { key: "reject_pct", head: "брак, %", cell: (b) => fmt(b.reject_pct, 1), on: false },
@@ -107,7 +113,9 @@
       { key: "fin_cv", title: "Однородность: разброс размера в пробе, %", d: 1, on: true },
       { key: "fin_agg_pct", title: "Сростки на финише, % по числу", d: 1, zero: true, on: true },
       { key: "seed", title: (rep) => seedName(rep).replace(/^з/, "З") + ", мин", d: 0, val: (b, rep) => b[seedKey(rep)], on: true },
-      { key: "seed_qty", title: (rep) => "Затравка, " + ((rep && rep.seed_unit) || "кг"), d: 2, on: true },
+      { key: "seed_qty", title: (rep) => "Затравка, " + seedUnitOf(rep, "seed_qty"), d: 2, on: true },
+      { key: "seed_slurry", title: (rep) => "Затравка сларри, " + seedUnitOf(rep, "seed_slurry"), d: 2, on: true },
+      { key: "seed_mu", title: (rep) => "Затравка МУ, " + seedUnitOf(rep, "seed_mu"), d: 2, on: true },
       { key: "sieve", title: "Рассев финиша по дням, %", on: true },
       { key: "duration_min", title: "Длительность варки, мин", d: 0, on: false },
       { key: "sv_end", title: "СВ в конце варки", d: 1, on: false },
@@ -157,6 +165,8 @@
       { key: "vac", field: "vac_avg", name: "разрежение", unit: "бар", d: 2, span: 0.2, tip: "Среднее разрежение сверху за варку (по пробам стадий 3–9; ПЛК отдаёт с шагом 0,1 бар), шкала справа" },
       // единица затравки приходит с отчётом (rep.seed_unit: кг / л / %) — ставится в generate()
       { key: "seed", field: "seed_qty", name: "затравка", unit: "кг", d: 2, span: 1, tip: "Затравка варки из ПЛК (наибольшее за варку): сравнить, как больше/меньше затравки сказывается на показателе; шкала справа" },
+      { key: "seed_slurry", field: "seed_slurry", name: "сларри", unit: "кг", d: 2, span: 1, tip: "Затравка сларри варки из ПЛК (наибольшее за варку); шкала справа" },
+      { key: "seed_mu", field: "seed_mu", name: "МУ", unit: "кг", d: 2, span: 1, tip: "Затравка из маточника МУ варки из ПЛК (наибольшее за варку); шкала справа" },
     ];
     const OVER_KEY = "microRepOver1";
     let over = {};
@@ -353,7 +363,7 @@
 
     // ===== отчёт целиком (экран и печать): opt.width — ширина графиков, opt.print — версия для PDF =====
     function reportHtml(rep, opt) {
-      const t = rep.totals, cols = stateOf(COLS, COLS_KEY), vis = cols.filter((c) => c.on), on = (k) => colOn(cols, k), T = tg(rep), sk = seedKey(rep);
+      const t = rep.totals, cols = stateOf(COLS, COLS_KEY), vis = cols.filter((c) => c.on && !(c.needs && !rep.boils.some((b) => b[c.needs] != null))), on = (k) => colOn(cols, k), T = tg(rep), sk = seedKey(rep);
       const first = rep.boils[0];
       const segs = rep.segments || [], oneModel = segs.length === 1 && segs[0].model ? segs[0].model : null;
       const fromDay = dmy(rep.from), toDay = dmy(rep.to), dataFrom = first.start.slice(0, 10).split("-").reverse().join(".");
@@ -612,7 +622,7 @@
       try {
         const rep = await (await fetch("/api/cv/report?" + qq.q)).json();
         lastRep = rep; lastQ = qq.q;
-        OVER.find((o) => o.key === "seed").unit = rep.seed_unit || "кг";
+        OVER.forEach((o) => { if (o.field.startsWith("seed")) o.unit = seedUnitOf(rep, o.field); });
         render(rep);
         if (anyOthersOn() && (rep.others_available || []).length) loadOthers().then(() => { if (lastRep === rep) render(rep); });
         renderColsPanel();

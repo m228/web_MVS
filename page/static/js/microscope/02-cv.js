@@ -6,7 +6,7 @@
   // Вкладка «CV» + переключатель окна камера/распознавание. Данные с /api/cv/*.
   const CV_GROUPS = ["small", "medium", "large", "reject"];
   const CV_SERIES_COLOR = { small: "#1d9e75", medium: "#378add", large: "#ba7517", reject: "#e24b4a", mean: "#7f77dd", median: "#d16fb8", sv: "#f2c94c",
-    temp: "#ff8a4c", vac: "#4fd1e8", level: "#8aa4c8", current: "#a3d95b", cook_time: "#b9a98f", seed_age: "#ffb347", seed_qty: "#f78fb3", fines_avg: "#e8c547", fines_flat: "#ff5c5c",
+    temp: "#ff8a4c", vac: "#4fd1e8", level: "#8aa4c8", current: "#a3d95b", cook_time: "#b9a98f", seed_age: "#ffb347", seed_qty: "#f78fb3", seed_slurry: "#ffa6c9", seed_mu: "#c08be0", fines_avg: "#e8c547", fines_flat: "#ff5c5c",
     fsv0: "#fff0a8", fsv1: "#f5d861", fsv2: "#e8b93c", fsv3: "#c98a1e", fsv4: "#1d9e75", fsv5: "#2bb3a3", fsv6: "#378add", fsv7: "#5b6fe0", fsv8: "#7f77dd", fsv9: "#a46fd6", fsv10: "#d16fb8", fsv11: "#e0708a", fsv12: "#ba7517" };   // fsv0–12 — фракции рассева в режиме «Рассев» тренда
   let cvWinOn = false;          // окно показывает CV (true) или камеру (false)
   let cvLastResult = null;      // последняя проба (result.json)
@@ -1398,17 +1398,20 @@
   const CV_UM_SERIES = ["mean", "median"];                        // шкала справа, мкм
   // режим варки из ПЛК (рисуется пунктиром). Уровень — в %, на общей шкале 0–100; остальные — каждая на своей шкале
   // по видимому участку, но не уже «минимального размаха» (иначе шум на 0,2 °C выглядел бы бурей)
-  const CV_REGIME = ["temp", "vac", "level", "current", "cook_time", "seed_age", "seed_qty", "fines_avg", "fines_flat"];   // fines_avg — мука, среднее M1–M3: сплошной, но на общей шкале 0–100 % (как мелкая/средняя/крупная): 30 % всегда на одной высоте при любом приближении
+  const CV_REGIME = ["temp", "vac", "level", "current", "cook_time", "seed_age", "seed_qty", "seed_slurry", "seed_mu", "fines_avg", "fines_flat"];   // fines_avg — мука, среднее M1–M3: сплошной, но на общей шкале 0–100 % (как мелкая/средняя/крупная): 30 % всегда на одной высоте при любом приближении
   const CV_SOLID = ["fines_avg", "fines_flat"];   // мука (плавная и плоская): сплошные линии на шкале 0–100 %, пропуск данных внутри варки линию не рвёт
-  const CV_AUTO_SPAN = { temp: 10, vac: 0.5, current: 5, cook_time: 60, seed_age: 60, seed_qty: 1 };
+  const CV_AUTO_SPAN = { temp: 10, vac: 0.5, current: 5, cook_time: 60, seed_age: 60, seed_qty: 1, seed_slurry: 1, seed_mu: 1 };
   // единица затравки — как выбрано на вкладке «ПЛК» (кг / л / %): подпись строки тренда и подсказки
-  let cvSeedUnit = "кг";
+  const CV_SEEDS = { seed_qty: "затравка", seed_slurry: "затравка сларри", seed_mu: "затравка МУ" };   // виды затравки из ПЛК, у каждого своя единица
+  const cvSeedUnits = { seed_qty: "кг", seed_slurry: "кг", seed_mu: "кг" };
   (async () => {
     try {
       const c = ((await (await fetch("/api/plc/source", { cache: "no-store" })).json()) || {}).config || {};
-      cvSeedUnit = (c.seed_units || {})[c.seed_unit] || "кг";
-      const row = document.querySelector('#cvSeries input[value="seed_qty"]');
-      if (row) row.closest(".micro-srow").dataset.unit = cvSeedUnit;
+      Object.entries(c.seed_fields || {}).forEach(([k, f]) => { cvSeedUnits[k] = (c.seed_units || {})[f.unit] || "кг"; });
+      Object.entries(cvSeedUnits).forEach(([k, u]) => {
+        const row = document.querySelector('#cvSeries input[value="' + k + '"]');
+        if (row) row.closest(".micro-srow").dataset.unit = u;
+      });
     } catch (e) { }
   })();               // у муки своей авто-шкалы нет: по видимому участку она «растягивалась», и при приближении 30 % рисовалось у самого верха
   const CV_MIN_SERIES = ["cook_time", "seed_age"];                // в журнале секунды, показываем минуты
@@ -1842,7 +1845,7 @@
     const rv = (k, n) => (s[k] && s[k][i] != null ? Math.round(s[k][i] * n) / n : null);
     const line3 = [rv("temp", 10) != null ? "t " + rv("temp", 10) + " °C" : null, rv("vac", 1000) != null ? "разр. " + rv("vac", 1000) + " бар" : null,
       rv("level", 10) != null ? "ур. " + rv("level", 10) + "%" : null, rv("current", 10) != null ? "ток " + rv("current", 10) + " А" : null,
-      rv("cook_time", 1) != null ? "варка " + rv("cook_time", 1) + " мин" : null, rv("seed_age", 1) != null ? "с заводки " + rv("seed_age", 1) + " мин" : null, rv("seed_qty", 1000) != null ? "затравка " + rv("seed_qty", 1000) + " " + cvSeedUnit : null, rv("fines_avg", 100) != null ? "средняя мука " + rv("fines_avg", 100) + " %" : null, rv("fines_flat", 100) != null ? "мука без порога " + rv("fines_flat", 100) + " %" : null].filter(Boolean).join(" · ");
+      rv("cook_time", 1) != null ? "варка " + rv("cook_time", 1) + " мин" : null, rv("seed_age", 1) != null ? "с заводки " + rv("seed_age", 1) + " мин" : null, ...Object.keys(CV_SEEDS).map((k) => (rv(k, 1000) != null ? CV_SEEDS[k] + " " + rv(k, 1000) + " " + cvSeedUnits[k] : null)), rv("fines_avg", 100) != null ? "средняя мука " + rv("fines_avg", 100) + " %" : null, rv("fines_flat", 100) != null ? "мука без порога " + rv("fines_flat", 100) + " %" : null].filter(Boolean).join(" · ");
     const names = { small: "малая", medium: "средняя", large: "большая", reject: "брак" };
     const groups = CV_GROUPS.map((g) => val(g) == null ? "" :
       '<span class="dot" style="background:' + CV_SERIES_COLOR[g] + '"></span>' + names[g] + " " + val(g) + "%").filter(Boolean).join("<br>");

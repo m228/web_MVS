@@ -1133,8 +1133,14 @@ def cv_approach_get():
 @app.post("/api/cv/approach/settings")
 def cv_approach_set(patch: dict = Body(...)):
     data = micro.set_approach(patch or {})
-    api_log("api.cv.approach", "Изменены настройки автоподвода", payload={"patch": patch})
+    api_log("api.cv.approach", "Изменены настройки советов по подводу", payload={"patch": patch})
     return {"status": "ok", "approach": data}
+
+
+@app.get("/api/cv/approach/advice")
+def cv_approach_advice(serial: str = ""):
+    """Советы по подводу от разломов по строкам СВ-таблицы (только предложения, мотор и таблица не меняются)."""
+    return micro.approach_advice(_cv_serial(serial or None))
 
 
 # --- калибровка разломов по своим кадрам (см. fracture_lab.py) ---

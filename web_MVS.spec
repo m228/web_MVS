@@ -39,7 +39,7 @@ hiddenimports = ['app', 'camera_core', 'rtsp_store', 'net_tools', 'paths', 'logg
                  # источник данных аппарата по OPC UA (вкладка «ПЛК»)
                  'opcua_client', 'plc_source', 'stage_map']
 # selfcheck.py грузит модули по имени строкой (importlib) — PyInstaller их не увидит сам
-selfcheck_imports = ['selfcheck', 'cv_analyzer', 'cv_fracture', 'cv_client', 'video_client', 'services', 'cv_store', 'fracture_lab', 'boil_archive',
+selfcheck_imports = ['selfcheck', 'cv_analyzer', 'cv_fracture', 'cv_client', 'video_client', 'services', 'cv_store', 'fracture_lab', 'approach_advice', 'boil_archive',
                      'autostart', 'multipart', 'starlette', 'fastapi', 'pydantic']
 hiddenimports += collect_submodules('uvicorn')
 # вложенная обёртка MVS SDK (mvsdk/) — динамические импорты, тянем все подмодули

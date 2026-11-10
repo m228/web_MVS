@@ -41,6 +41,7 @@ class MicroscopeService:
         self._boil_t_s = None           # время с заводки до «готовности» идущей варки (известно с первой пробы стадии 9)
         self._refit_busy = False
         self._started = False
+        self._last_approach = None       # последний приход подвода {row, sp_row, ai, enc, calc, …} — уходит в ближайшую пробу
         self._lock = threading.Lock()
         # DEBUG (убрать после отладки цикла): перехват ПЛК — при True данные СВ/стадии
         # из sv_source игнорируются, работает ручной ввод со страницы (см. sv_override).
@@ -640,7 +641,7 @@ class MicroscopeService:
                                      sv=(sum(x for x in run["svs"] if x is not None) / max(1, len([x for x in run["svs"] if x is not None]))
                                          if any(x is not None for x in run["svs"]) else None),
                                      plc=self._plc_summary(run), phase=run.get("phase"),
-                                     detector=run.get("detector"), infer=run.get("infer"))
+                                     detector=run.get("detector"), infer=run.get("infer"), approach=self._take_approach())
         if saved and stage == 9 and self._fit_key != self._seed_ts:
             self._fit_key = self._seed_ts                 # первая проба «готовности» этой варки: длительность известна — растягиваем порог муки и пересчитываем варку
             self._spawn_refit(serial)
@@ -963,11 +964,22 @@ class MicroscopeService:
         return res
 
     def approach_config(self):
-        """Блок автоподвода по разломам (Часть C, по умолчанию выкл)."""
+        """Блок советов по подводу от разломов (шаг, порог зон, предельный зазор)."""
         return (self.cfg or {}).get("approach_correction", {}) if self.cfg else {}
 
+    def approach_advice(self, serial):
+        """Советы по подводу: пробы за 30 суток по строкам СВ-таблицы → где был разлом и на сколько отодвинуть SP. Только расчёт, ничего не двигает."""
+        import approach_advice
+        import cv_store
+        cfg = self.cfg or plate_config.load()          # микроскоп выключен (cfg не загружен) — таблица всё равно читается из конфига
+        ap = cfg.get("approach_correction") or {}
+        res = approach_advice.compute(cv_store.approach_rows(serial), cfg.get("SP") or [], cfg.get("SVSP") or [],
+                                      step_um=ap.get("step_um", 100), min_zones=ap.get("min_zones", 1), max_gap_um=ap.get("max_gap_um", 1500))
+        res["mode"] = "advise"
+        return res
+
     def set_approach(self, patch):
-        """Живое обновление настроек автоподвода (галочка/шаг мкм/пороги)."""
+        """Живое обновление настроек советов по подводу (шаг мкм / порог зон / предельный зазор)."""
         res = self._live_patch("approach_correction", patch)
         log_event("microscope_service", "Настройки автоподвода обновлены", "info", {"patch": patch})
         return res
@@ -1270,7 +1282,16 @@ class MicroscopeService:
     def _on_probe_positions(self, info):
         """Колбэк FSM: три датчика на доезде отвода/подвода -> мониторинг заводских ПК (sysmon). Только чтение."""
         import sysmon
+        if info.get("step") == "подвод":                  # положение подвода уйдёт в ближайшую пробу (галерея, советы по разломам)
+            self._last_approach = dict(info)
         sysmon.record_positions(info)
+
+    def _take_approach(self, max_age_s=900):
+        """Последний приход подвода для пробы: берём один раз и только свежий (иначе проба без подвода — ручной снимок и т.п.)."""
+        info, self._last_approach = self._last_approach, None
+        if not info or time.time() - float(info.get("t") or 0) > max_age_s:
+            return None
+        return {k: info.get(k) for k in ("row", "sp_row", "target", "ai", "enc", "calc", "sv", "timeout")}
 
     def set_autocal(self, enabled=None, every_n=None, sensor_lo=None, sensor_hi=None, timeout_sec=None):
         """Автокалибровка нуля М1: вкл/выкл + через сколько варок + пороги датчика + таймаут.

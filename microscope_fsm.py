@@ -267,6 +267,7 @@ class MicroscopeFSM:
         # колбэк «положения трёх датчиков на доезде отвода/подвода» -> мониторинг (ставит microscope_service)
         self.on_probe_positions = None
         self._pp_emit = None
+        self._m1_row = 1                 # строка СВ-таблицы (индекс SVSP/SP), по которой выбран подвод (для совета по разломам)
 
         self._period = max(0.02, int(config["poll_interval_ms"]) / 1000.0)
         # предохранитель шага цикла (тики по 100мс): нормальный выход — «доехал», а это
@@ -538,7 +539,8 @@ class MicroscopeFSM:
         """Запомнить положения трёх датчиков на доезде (под локом, только чтение): отдаём после выхода из лока."""
         num = lambda v: round(v, 1) if isinstance(v, (int, float)) and not isinstance(v, bool) else None
         self._pp_emit = {"t": time.time(), "step": step, "target": num(target), "calc": num(pos1), "enc": num(pos_enc),
-                         "ai": num(pos1_ai), "timeout": bool(timed_out), "sv": num(self.sv), "stage": self.stage}
+                         "ai": num(pos1_ai), "timeout": bool(timed_out), "sv": num(self.sv), "stage": self.stage,
+                         "row": int(self._m1_row), "sp_row": num(self.SP[self._m1_row]) if 0 <= self._m1_row < len(self.SP) else None}
 
     def _settle_wait(self):
         """Пауза ПОСЛЕ доезда движения (мотор стоит, датчик оседает — сравнить с энкодером).
@@ -1378,10 +1380,12 @@ class MicroscopeFSM:
                 # подвод к зазору по СВ (таблица SVSP); клапан трубки ОТКРЫТ на подводе.
                 # По той же строке выбираем фокус М2 (FOCUS[i]) — на разных СВ фокус сбит.
                 self.m1_sp = self.SP[1]                # по умолчанию SP[1]
+                self._m1_row = 1
                 focus = 0
                 for i in range(1, 50):
                     if self.sv >= self.SVSP[i] and self.SVSP[i] > 0.0:
                         self.m1_sp = self.SP[i]
+                        self._m1_row = i
                         focus = self.FOCUS[i] if i < len(self.FOCUS) else 0
                 # фокус применяем, если он ВКЛЮЧЁН галочкой. Значение 0 — валидная позиция
                 # (новый ноль после set_zero): М2 притянется к 0, а не «не трогать».

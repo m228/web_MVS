@@ -10,10 +10,23 @@
       set("fracDarkThr", fr.dark_thr); set("fracConfirm", fr.confirm_frames); set("fracMinArea", fr.min_area_frac);
       const st = $("fracStatus"); if (st) { st.textContent = fr.enabled === false ? "детект выключен" : "детект включён"; st.className = "micro-cv-status " + (fr.enabled === false ? "off" : "ok"); }
     }
-    if (ap) {
-      if ($("apEnable")) $("apEnable").checked = !!ap.enabled;
-      set("apStep", ap.step_um); set("apMinZones", ap.min_zones); set("apMaxTotal", ap.max_total_um); set("apCount", ap.count);
-    }
+    if (ap) { set("apStep", ap.step_um); set("apMinZones", ap.min_zones); set("apMaxGap", ap.max_gap_um); }
+  }
+  // Советы по подводу: по строке СВ-таблицы — проб, разломных, аналог на разломных/чистых, предложенный зазор (только предложения)
+  function apRender() {
+    const tb = $("apAdvice"); if (!tb) return;
+    const q = cvSerialQ() ? "?" + cvSerialQ() : "";
+    api("/api/cv/approach/advice" + q).then((a) => {
+      const rows = (a && a.rows) || [];
+      const f = (v) => (v == null ? "—" : String(Math.round(v)));
+      const adv = (r) => r.status === "advice" ? '<b class="micro-ap-adv">' + r.sp + " → " + r.proposed + "</b>"
+        : r.status === "ceiling" ? '<span class="micro-ap-cap">потолок ' + Math.round(a.max_gap_um) + "</span>" : "";
+      const html = '<tr><th>СВ от</th><th>зазор</th><th>проб</th><th>разлом</th><th title="средний аналоговый датчик на приходе: разломные / чистые">аналог</th><th>совет</th></tr>' +
+        rows.map((r) => "<tr" + (r.status === "advice" || r.status === "ceiling" ? ' class="is-frac"' : "") + "><td>" + r.sv_from + "</td><td>" + f(r.sp) + "</td><td>" +
+          (r.n || "—") + "</td><td>" + (r.n ? r.n_frac + " (" + Math.round(r.share * 100) + "%)" : "—") + "</td><td>" +
+          (r.ai_frac != null || r.ai_ok != null ? f(r.ai_frac) + " / " + f(r.ai_ok) : "—") + "</td><td>" + adv(r) + "</td></tr>").join("");
+      if (tb.__h !== html) { tb.innerHTML = rows.length ? html : "<tr><td>нет строк таблицы</td></tr>"; tb.__h = html; }
+    }).catch(() => {});
   }
   function fracRender() {
     const q = cvSerialQ() ? "?" + cvSerialQ() : "";
@@ -62,7 +75,7 @@
       ctx.fillText(lbl(0), pad.l, H - 5); const last = lbl(n - 1); ctx.fillText(last, W - pad.r - ctx.measureText(last).width, H - 5);
     }).catch(() => {});
   }
-  function fracRefresh() { fracRender(); setTimeout(fracDrawTrend, 30); }
+  function fracRefresh() { fracRender(); apRender(); setTimeout(fracDrawTrend, 30); }
   function isFracPaneVisible() {
     const p = document.querySelector('.micro-ppane[data-ppane="frac"]');
     return p && !p.classList.contains("hidden");
@@ -79,16 +92,12 @@
           dark_thr: num("fracDarkThr"), confirm_frames: num("fracConfirm"), min_area_frac: num("fracMinArea") }) }).catch(() => {});
       const h = $("fracSaveHint"); if (h) { h.textContent = "сохранено"; setTimeout(() => (h.textContent = ""), 1500); }
     });
-    const enAp = $("apEnable");
-    if (enAp) enAp.addEventListener("change", () => {
-      fetch("/api/cv/approach/settings", { method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ enabled: enAp.checked }) }).catch(() => {});
-    });
     const aps = $("apSaveBtn");
     if (aps) aps.addEventListener("click", async () => {
       await fetch("/api/cv/approach/settings", { method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ step_um: num("apStep"), min_zones: num("apMinZones"), max_total_um: num("apMaxTotal") }) }).catch(() => {});
+        body: JSON.stringify({ step_um: num("apStep"), min_zones: num("apMinZones"), max_gap_um: num("apMaxGap") }) }).catch(() => {});
       const h = $("apSaveHint"); if (h) { h.textContent = "сохранено"; setTimeout(() => (h.textContent = ""), 1500); }
+      apRender();
     });
     fracRefresh();
     setInterval(() => { if (isFracPaneVisible()) fracRefresh(); }, 6000);

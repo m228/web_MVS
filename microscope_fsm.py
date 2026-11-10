@@ -458,6 +458,7 @@ class MicroscopeFSM:
             was_manual = self.manual
             if self.manual:
                 self._drop_manual_locked()   # снять ручной безопасно (зеркало set_manual(True))
+                self.sw0 = True              # тумблер «Автомат» в UI = ручной снят: авто-цикл должен реально идти (иначе «Автомат выключен»)
             self.mode = 20
             self.t = 0
             self.cycle_t = 0
@@ -1214,7 +1215,8 @@ class MicroscopeFSM:
                 why = ("ручной" if self.manual else "стоп движения" if self.sw3
                        else "нет связи" if not connected else None)
                 if why:
-                    self._cal_return_manual = False
+                    if why == "ручной":
+                        self._cal_return_manual = False   # человек сам ушёл в ручной; при обрыве по связи/стопу ручной вернём ниже, а не оставим «Автомат» без цикла
                     self._unflag[1] = CAL_CMD_GAP_TICKS + 2
                     log_event("microscope_fsm", "Автокалибровка прервана: " + why, "warn")
                     cal_done = self._cal_finish("прервано (%s)" % why)

@@ -6,8 +6,12 @@
 """
 import threading
 import time
+from copy import deepcopy
 
+import microscope_fsm
 import plate_config
+import stage_map
+import substages
 from board_guard import BoardGuard
 from microscope_plc import PlateClient
 from microscope_fsm import MicroscopeFSM
@@ -824,8 +828,11 @@ class MicroscopeService:
     def set_plc_source(self, patch):
         """Вкладка «ПЛК»: сохранить источник данных аппарата (Modbus / OPC UA) и перезапустить ТОЛЬКО его —
         плата и автомат не трогаются, цикл пробы не прерывается. Микроскоп выключен — только сохраняем."""
+        old_sv = deepcopy((self.cfg or {}).get("sv_source") or {})
         cfg = plate_config.save({"sv_source": patch})
         svc = cfg.get("sv_source", {}) or {}
+        if "stage_map" in patch:
+            self._log_stage_map_change(old_sv, svc)
         old = new = None
         with self._lock:                      # под замком только подмена источника; старый гасим вне замка (закрытие сессии ждёт сеть)
             if self.cfg is not None:
@@ -849,7 +856,7 @@ class MicroscopeService:
         """Работает ли микроскоп (источник ПЛК живёт внутри него)."""
         return bool(self._started)
 
-    CYCLE_LABELS = {"ignore_stage": "варить без стадии", "stage_from": "стадия от", "stage_to": "стадия до", "sv_from": "СВ от", "sv_to": "СВ до", "trigger_mode": "триггер",
+    CYCLE_LABELS = {"ignore_stage": "варить без стадии", "stage_from": "стадия от", "stage_to": "стадия до", "stage_extra": "плюс стадии", "sv_from": "СВ от", "sv_to": "СВ до", "trigger_mode": "триггер",
                     "pause_sec": "пауза, с", "dwell_sec": "выдержка, с", "arrive_sensor": "датчик прихода", "retract_pos": "отвод, мкм",
                     "pre_wash_sec": "промывка, с", "shot_interval_sec": "скрин каждые, с", "photo_format": "формат кадра"}
     MODE_LABELS = {"auto": "Автомат включён", "off": "Автомат выключен — проб нет", "manual": "Ручной режим", "fault": "Авария автомата"}
@@ -868,14 +875,34 @@ class MicroscopeService:
         import db
         old = ((self.cfg or {}).get("probe_cycle") or {})
         new = patch.get("probe_cycle") or {}
-        show = lambda x: "—" if x is None else "вкл" if x is True else "выкл" if x is False else x
-        ch = ["%s %s → %s" % (self.CYCLE_LABELS.get(k, k), show(old.get(k)), show(v))
-              for k, v in new.items() if not isinstance(v, dict) and old.get(k) != v]
+        sm = (self.cfg or {}).get("sv_source")
+        stage = lambda x: stage_map.label(sm, x, substages.STAGE_NAMES)      # «3 СГУЩЕНИЕ»: название из карты стадий, иначе наше
+        def show(x, k=None):
+            if k in ("stage_from", "stage_to") and x is not None:
+                return stage(x)
+            if k == "stage_extra":
+                return ", ".join(stage(n) for n in x) if x else "нет"
+            return "—" if x is None else "вкл" if x is True else "выкл" if x is False else x
+        # «плюс» по умолчанию — 20 УНВ (ключа в старых настройках нет)
+        was = lambda k: old.get(k, list(microscope_fsm.CYCLE_EXTRA_STAGES) if k == "stage_extra" else None)
+        ch = ["%s %s → %s" % (self.CYCLE_LABELS.get(k, k), show(was(k), k), show(v, k))
+              for k, v in new.items() if not isinstance(v, dict) and was(k) != v]
         if patch.get("camera_mode") is not None and patch["camera_mode"] != (self.cfg or {}).get("camera_mode"):
             ch.append("режим камеры %s → %s" % ((self.cfg or {}).get("camera_mode") or "—", patch["camera_mode"]))
         if ch:
             fsm = self.fsm
             db.mode_add(time.time(), "setting", None, fsm.stage if fsm is not None and fsm._stage_seen else None, "Настройки цикла: " + ", ".join(ch))
+
+    def _log_stage_map_change(self, old_sv, new_sv):
+        """Правка карты стадий (вкладка «ПЛК») → в журнал режима: названия и состав стадий поменялись, на тренде видно когда."""
+        try:
+            import db
+            what = stage_map.describe_change(old_sv, new_sv)
+            if what:
+                fsm = self.fsm
+                db.mode_add(time.time(), "setting", None, fsm.stage if fsm is not None and fsm._stage_seen else None, "Карта стадий изменена: " + what)
+        except Exception as e:
+            log_event("microscope_service", "Не удалось записать правку карты стадий в журнал режима", "warn", {"error": str(e)})
 
     def _log_cycle_patch_safe(self, patch):
         try:

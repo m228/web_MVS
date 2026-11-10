@@ -59,7 +59,7 @@ def test_service_logs_mode_and_cycle_patch(data_dir):
     ev = list(reversed(db.mode_last(10)))
     assert [(e["kind"], e["state"]) for e in ev] == [("start", "off"), ("mode", "auto"), ("mode", "off"), ("setting", None)]
     assert ev[0]["text"].startswith("Запуск приложения") and ev[2]["text"].startswith("Автомат перезапущен")
-    assert ev[3]["text"] == "Настройки цикла: стадия от 3 → 8, варить без стадии выкл → вкл, режим камеры auto → stream"
+    assert ev[3]["text"] == "Настройки цикла: стадия от 3 сгущение → 8 уваривание, варить без стадии выкл → вкл, режим камеры auto → stream"
 
 
 def test_trend_response_has_modes(data_dir):
@@ -69,3 +69,23 @@ def test_trend_response_has_modes(data_dir):
     res = web.cv_trend(serial="NOSER", series=None, limit=100, t_from=now - 3600, t_to=now)
     assert res["modes"]["events"][0]["state"] == "off" and res["modes"]["before"] is None
     assert web.micro_mode_log(limit=5)["events"][0]["text"].startswith("Автомат выключен")
+
+
+def test_cycle_patch_uses_stage_map_names_and_extra(data_dir):
+    """Чужой контроллер: в журнал стадии пишутся названиями из карты; «плюс» стадии — отдельная строка; правка карты — своя запись."""
+    from microscope_service import MicroscopeService
+    svc = MicroscopeService()
+    custom = {"stage_map": {"profile": "custom", "rows": [{"code": 30, "name": "СГУЩЕНИЕ", "to": 3}, {"code": 70, "name": "ИСТОЩЕНИЕ", "to": 8}]}}
+    svc.cfg = {"probe_cycle": {"stage_from": 3, "stage_to": 9}, "sv_source": custom}
+    svc._log_cycle_patch({"probe_cycle": {"stage_to": 8, "stage_extra": [20, 21]}})
+    t = db.mode_last(1)[0]["text"]
+    assert t == "Настройки цикла: стадия до 9 готовность → 8 ИСТОЩЕНИЕ, плюс стадии 20 УНВ → 20 УНВ, 21", t     # было умолчание [20]
+    svc._log_cycle_patch({"probe_cycle": {"stage_extra": []}})
+    svc.cfg["probe_cycle"]["stage_extra"] = [20, 21]
+    svc._log_cycle_patch({"probe_cycle": {"stage_extra": []}})
+    assert db.mode_last(1)[0]["text"] == "Настройки цикла: плюс стадии 20 УНВ, 21 → нет"
+    svc._log_stage_map_change({"stage_map": {"profile": "ours"}}, custom)
+    assert db.mode_last(1)[0]["text"].startswith("Карта стадий изменена: профиль наша → другая")
+    n = len(db.mode_last(50))
+    svc._log_stage_map_change(custom, custom)                              # ничего не поменялось — не пишем
+    assert len(db.mode_last(50)) == n

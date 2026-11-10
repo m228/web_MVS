@@ -95,6 +95,57 @@ def normalize(body) -> dict:
     return out
 
 
+def our_names(cfg: dict | None) -> dict:
+    """Названия НАШИХ стадий по таблице: {наша стадия: {"name": "ВАРКА", "codes": [60, 61, 62]}}.
+    Одна наша стадия может быть сразу у нескольких кодов чужого контроллера — тогда названия через « / » (без повторов, по порядку кодов).
+    Профиль «ours» — пусто (остаются наши названия)."""
+    if profile_of(cfg) != "custom":
+        return {}
+    out: dict = {}
+    for r in sorted(rows_of(cfg), key=lambda r: r["code"]):
+        e = out.setdefault(r["to"], {"names": [], "codes": []})
+        e["codes"].append(r["code"])
+        if r["name"] and r["name"] not in e["names"]:
+            e["names"].append(r["name"])
+    return {to: {"name": " / ".join(e["names"]), "codes": e["codes"]} for to, e in out.items() if e["names"]}
+
+
+def label(cfg: dict | None, stage, fallback: dict | None = None) -> str:
+    """«3 СГУЩЕНИЕ» — номер нашей стадии и её название (из таблицы, иначе из fallback {стадия: название}); названия нет — просто номер."""
+    try:
+        n = int(stage)
+    except (TypeError, ValueError):
+        return "—" if stage in (None, "") else str(stage)
+    nm = (our_names(cfg).get(n) or {}).get("name") or (fallback or {}).get(n)
+    return "%d %s" % (n, nm) if nm else str(n)
+
+
+def describe_change(old: dict | None, new: dict | None) -> str:
+    """Что поменялось в карте стадий (для журнала режима); пусто — ничего. old/new — разделы sv_source."""
+    parts = []
+    names = {"ours": "наша", "custom": "другая"}
+    po, pn = profile_of(old), profile_of(new)
+    if po != pn:
+        parts.append("профиль %s → %s" % (names[po], names[pn]))
+    a = {r["code"]: r for r in rows_of(old)}
+    b = {r["code"]: r for r in rows_of(new)}
+    rows = []
+    for c in sorted(set(a) | set(b)):
+        x, y = a.get(c), b.get(c)
+        if x == y:
+            continue
+        if x is None:
+            rows.append("+%d %s → %d" % (c, y["name"] or "без названия", y["to"]))
+        elif y is None:
+            rows.append("−%d" % c)
+        else:
+            rows.append("%d: «%s» %d → «%s» %d" % (c, x["name"], x["to"], y["name"], y["to"]))
+    if rows:
+        parts.append("строки: " + ", ".join(rows[:6]) + (" и ещё %d" % (len(rows) - 6) if len(rows) > 6 else ""))
+    return "; ".join(parts)
+
+
 def public(cfg: dict | None) -> dict:
-    """Для страницы: профиль, строки (сохранённые или умолчательные), умолчательные для кнопки «сбросить»."""
-    return {"profile": profile_of(cfg), "rows": rows_of(cfg), "default_rows": [dict(r) for r in DEFAULT_ROWS]}
+    """Для страницы: профиль, строки (сохранённые или умолчательные), умолчательные для кнопки «сбросить», названия наших стадий по таблице."""
+    return {"profile": profile_of(cfg), "rows": rows_of(cfg), "default_rows": [dict(r) for r in DEFAULT_ROWS],
+            "names": {str(k): v for k, v in our_names(cfg).items()}}

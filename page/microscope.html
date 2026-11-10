@@ -797,31 +797,26 @@
                   </div>
                 </div>
 
-                <!-- Часть C: автоподвод по разломам (ВЫКЛ по умолчанию) -->
+                <!-- Часть C: советы по подводу от разломов (только предлагаем, мотор и СВ-таблицу не трогаем) -->
                 <div class="micro-cv-block">
-                  <div class="micro-cv-block__title">Автоподвод по разломам
-                    <span class="micro-cv-hint">осторожно — двигает подвод</span>
+                  <div class="micro-cv-block__title">Советы по подводу
+                    <span class="micro-cv-hint">только предложения — ничего не двигается</span>
                   </div>
-                  <label class="micro-switch" for="apEnable" title="При подтверждённом разломе отодвигать подвод чуть назад (по энкодеру)">
-                    <input type="checkbox" id="apEnable" />
-                    <span class="micro-switch__track"><span class="micro-switch__thumb"></span></span>
-                    <span class="micro-switch__label">Коррекция подвода</span>
-                  </label>
-                  <div class="micro-cycle-cols" style="margin-top:8px">
+                  <div class="micro-cycle-cols">
                     <div class="micro-cycle-col">
-                      <label class="micro-cycle-f"><span>Шаг назад, мкм</span><input type="number" id="apStep" step="10" /></label>
-                      <label class="micro-cycle-f"><span>Реагировать от зон</span><input type="number" id="apMinZones" step="1" min="1" /></label>
+                      <label class="micro-cycle-f"><span>Шаг дальше, мкм</span><input type="number" id="apStep" step="10" min="10" /></label>
+                      <label class="micro-cycle-f"><span>Разлом — от зон</span><input type="number" id="apMinZones" step="1" min="1" /></label>
                     </div>
                     <div class="micro-cycle-col">
-                      <label class="micro-cycle-f"><span>Макс. суммарно, мкм</span><input type="number" id="apMaxTotal" step="100" /></label>
-                      <label class="micro-cycle-f"><span>Коррекций сделано</span><input type="number" id="apCount" disabled /></label>
+                      <label class="micro-cycle-f" title="Совет не уводит зазор строки выше этого значения"><span>Предельный зазор, мкм</span><input type="number" id="apMaxGap" step="100" /></label>
                     </div>
                   </div>
                   <div class="micro-cycle-btns">
                     <button type="button" id="apSaveBtn" class="toolbar-btn toolbar-btn--primary">Сохранить</button>
                     <span class="micro-conn-hint" id="apSaveHint"></span>
                   </div>
-                  <p class="micro-plc-note">Двигаем по ЭНКОДЕРУ (СВ-таблица), аналоговый датчик — только в лог коррекций (он врёт ~100мкм). Перебор пробы при разломе — позже.</p>
+                  <div class="micro-ap-wrap"><table class="micro-ap-tbl" id="apAdvice"></table></div>
+                  <p class="micro-plc-note">Строка таблицы (по СВ): сколько проб и сколько с разломом при её текущем зазоре, средний аналоговый датчик подвода на разломных и чистых пробах. Совет — зазор строки + шаг, не выше предельного. Считается за 30 суток; поправили таблицу — счёт строки начинается заново.</p>
                 </div>
               </div>
 

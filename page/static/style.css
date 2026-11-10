@@ -3692,6 +3692,14 @@ input.micro-cam-num { width: 56px; min-width: 0; flex: 0 0 auto; padding: 4px 5p
 .micro-cv-n { color: var(--muted, #5b6b81); font-weight: 400; }
 .micro-cv-hint { margin-left: auto; font-size: 0.76em; color: var(--muted, #8a94a6); font-weight: 400; }
 .micro-cv-group-lbl { font-size: 0.8em; color: var(--muted, #5b6b81); margin: 8px 0 4px; }
+/* советы по подводу от разломов: компактная таблица строк СВ-таблицы */
+.micro-ap-wrap { margin-top: 8px; overflow-x: auto; }
+.micro-ap-tbl { width: 100%; border-collapse: collapse; font-size: 0.8em; font-variant-numeric: tabular-nums; }
+.micro-ap-tbl th { text-align: right; font-weight: 400; color: var(--muted, #8a94a6); padding: 2px 6px; border-bottom: 1px solid var(--border, rgba(131,151,179,.28)); }
+.micro-ap-tbl td { text-align: right; padding: 3px 6px; }
+.micro-ap-tbl tr.is-frac td { background: rgba(226,75,74,.08); }
+.micro-ap-adv { color: var(--danger, #e24b4a); }
+.micro-ap-cap { color: var(--muted, #8a94a6); }
 
 /* Рассев — полоски групп */
 .micro-cv-row { display: grid; grid-template-columns: 62px 1fr 26px 40px; align-items: center; gap: 8px; margin-bottom: 7px; font-size: 0.85em; }
@@ -3724,6 +3732,8 @@ input.micro-cam-num { width: 56px; min-width: 0; flex: 0 0 auto; padding: 4px 5p
   color: var(--muted, #5b6b81); cursor: pointer; font: inherit; transition: border-color .15s ease, color .15s ease; }
 .micro-cv-strip__item img { display: block; width: 100%; aspect-ratio: 6 / 5; object-fit: cover; background: #0e1726; }
 .micro-cv-strip__item span { font-size: 10px; line-height: 1.3; padding: 4px 2px; text-align: center; white-space: pre; font-variant-numeric: tabular-nums; }
+.micro-cv-strip__item.has-frac { box-shadow: inset 0 -3px 0 var(--danger, #e24b4a); }
+.micro-cv-strip__item.has-frac.is-active { box-shadow: inset 0 -3px 0 var(--danger, #e24b4a), 0 0 0 1px var(--accent, #2563eb); }
 .micro-cv-strip__item:hover { border-color: var(--accent, #2563eb); color: var(--text); }
 .micro-cv-strip__item.is-active { border-color: var(--accent, #2563eb); box-shadow: 0 0 0 1px var(--accent, #2563eb); color: var(--accent, #2563eb); }
 @media (min-width: 1820px) {

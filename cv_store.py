@@ -317,6 +317,7 @@ def _hist_row(result: dict) -> Optional[dict]:
     pct = s.get("groups_pct") or {}
     fr = (result.get("fracture") or {}).get("summary") or {}
     plc = result.get("plc") or {}
+    ap = result.get("approach") or {}
     rs = s.get("reasons") or {}
     # в журнал — мука и рассев БЕЗ порога СВ (он применяется при показе по варке, _apply_fines_gate)
     vp = (cv_volume.percents(s["volume"], ignore_off=True) if s.get("volume") else s.get("volume_pct")) or {}
@@ -335,6 +336,9 @@ def _hist_row(result: dict) -> Optional[dict]:
         "product_dose": plc.get("product_dose"), "product_s": plc.get("product_s"),
         "seed_qty": plc.get("seed_qty"),          # количество затравки из ПЛК (единица — sv_source.seed_unit)
         "seed_slurry": plc.get("seed_slurry"), "seed_mu": plc.get("seed_mu"),     # затравка сларри / из маточника МУ (единицы — seed_slurry_unit / seed_mu_unit)
+        # подвод этой пробы (для советов по разломам): строка СВ-таблицы, её SP, датчики на приходе
+        "ap_row": ap.get("row"), "ap_sp": ap.get("sp_row"), "ap_ai": ap.get("ai"), "ap_enc": ap.get("enc"), "ap_calc": ap.get("calc"),
+        "ap_to": (1 if ap.get("timeout") else 0) if ap else None,
         # чем снята проба: имя модели и imgsz — пробы разных моделей сравнивать нельзя (абсолютные цифры мелочи сдвигаются)
         "model": _model_tag(result.get("detector"), result.get("infer")),
         "count": s.get("count"), "mean": sz.get("mean"), "median": sz.get("median"),
@@ -937,7 +941,8 @@ def save_sample(serial: str, stage, frames: list[dict], images: list, timing: di
                 fracture: Optional[dict] = None, jpeg_quality: int = 85, frame_format: str = "jpg", max_gb: float = 0.0,
                 thumb_img=None, sv: Optional[float] = None,
                 plc: Optional[dict] = None, phase: Optional[str] = None,
-                detector: Optional[dict] = None, infer: Optional[dict] = None) -> Optional[dict]:
+                detector: Optional[dict] = None, infer: Optional[dict] = None,
+                approach: Optional[dict] = None) -> Optional[dict]:
     """Сохранить пробу. frames — список {file, summary, objects}. images — ЧИСТЫЕ кадры пробы
     (numpy BGR), пишутся в JPEG (jpeg_quality); контуры поверх рисует браузер по objects_N.json.
     thumb_img — кадр с контурами для миниатюры (нет — миниатюра из чистого кадра 0).
@@ -989,6 +994,7 @@ def save_sample(serial: str, stage, frames: list[dict], images: list, timing: di
             # режим варки из ПЛК на момент пробы: temp_app °C, level %, current A (ток циркулятора),
             # press_top (разрежение сверху), cook_time с, seed_age_s с (время с заводки). Нет ПЛК — ключа нет.
             **({"plc": plc} if plc else {}),
+            **({"approach": approach} if approach else {}),     # подвод пробы: строка таблицы, SP, датчики на приходе
             **({"detector": detector} if detector else {}),     # чем снята проба: модель и её imgsz
             **({"infer": infer} if infer else {}),              # как: conf / iou / tiles / overlap
             "timing": timing,
@@ -1338,7 +1344,7 @@ def list_samples(serial: str, limit: int = 50) -> list[dict]:
             r = _with_volume(p, json.loads((p / "result.json").read_text(encoding="utf-8")), vcfg)
             out.append({"ts": r["ts"], "stage": r.get("stage"), "substage": (r.get("plc") or {}).get("substage"), "sv": r.get("sv"),
                         "summary": r.get("summary"), "frames": len(r.get("frames", [])),
-                        "fracture": (r.get("fracture") or {}).get("summary")})
+                        "fracture": (r.get("fracture") or {}).get("summary"), "approach": r.get("approach")})
         except Exception:
             continue
     return out
@@ -1365,8 +1371,16 @@ def list_archive(serial: str) -> list[dict]:
         out.append({"ts": ts, "stage": r.get("stage"), "sv": r.get("sv"), "substage": r.get("substage"),
                     "summary": {"count": r.get("count"), "size_um": {"mean": r.get("mean")}},
                     "frames": r.get("frames") or 0,
-                    "fracture": {"has_fracture": bool(r.get("frac_zones")), "zones": r.get("frac_zones")}})
+                    "fracture": {"has_fracture": bool(r.get("frac_zones")), "zones": r.get("frac_zones")},
+                    "approach": ({"row": r.get("ap_row"), "sp_row": r.get("ap_sp"), "ai": r.get("ap_ai"), "enc": r.get("ap_enc"),
+                                  "calc": r.get("ap_calc"), "timeout": bool(r.get("ap_to"))} if r.get("ap_row") is not None else None)})
     return out
+
+
+def approach_rows(serial: str, days: float = 30) -> list[dict]:
+    """Строки журнала с подводом пробы (ap_row есть) за последние days суток — для советов по разломам (approach_advice)."""
+    t0 = time.time() - days * 86400
+    return [r for r in db.read_rows(_serial_dir(serial).name, t_from=t0) if r.get("ap_row") is not None]
 
 
 def get_result(serial: str, ts: str) -> Optional[dict]:

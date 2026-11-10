@@ -63,7 +63,7 @@ def null_sv_outliers(rows: list[dict]) -> list[dict]:
 
 # --- столбцы журнала: ключи строки (cv_store._hist_row) → типизированные столбцы ---
 _INT_COLS = ("stage", "substage", "frames", "frac_zones", "cook_time", "seed_age", "good_n", "rej_n",
-             "syrup_dose", "syrup_s", "water_dose", "water_s", "product_dose", "product_s")
+             "syrup_dose", "syrup_s", "water_dose", "water_s", "product_dose", "product_s", "ap_row", "ap_to")
 _TEXT_COLS = ("phase", "model")
 _SIEVE = ["sieve_%s_b%d" % (m, i) for m in ("m1", "m2", "m3", "area") for i in range(7)]
 ROW_COLS = (
@@ -74,7 +74,9 @@ ROW_COLS = (
      "vtot_m1", "vtot_m2", "vtot_m3", "good_n", "rej_n", "fines_um", "fines_side_mm", "k_thick", "fines_from_sv",
      "frac_zones", "frac_pct", "frames",
      "v_syrup", "v_water", "v_product", "syrup_dose", "syrup_s", "water_dose", "water_s", "product_dose", "product_s",
-     "model", "seed_qty", "seed_slurry", "seed_mu"] + _SIEVE
+     "model", "seed_qty", "seed_slurry", "seed_mu",
+     # подвод пробы: строка СВ-таблицы, её SP (цель), датчики на приходе (аналог 1271 / энкодер / расчётная), ap_to=1 — не доехал (таймаут)
+     "ap_row", "ap_sp", "ap_ai", "ap_enc", "ap_calc", "ap_to"] + _SIEVE
 )
 
 

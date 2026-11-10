@@ -1056,6 +1056,11 @@
     if (sz.mean != null) parts.push("ср. " + sz.mean + " мкм");
     if (s.frames) parts.push("кадров " + s.frames);
     if (fr.has_fracture) parts.push("разлом");
+    const ap = s.approach;                     // подвод пробы: аналоговый датчик (1271), энкодер, расчётная, зазор строки таблицы
+    if (ap && ap.ai != null) {
+      const n = (v) => (v == null ? "—" : Math.round(v));
+      parts.push("подвод: аналог " + n(ap.ai) + ", энкодер " + n(ap.enc) + ", расч. " + n(ap.calc) + " мкм; зазор " + n(ap.sp_row) + (ap.row != null ? " (строка " + ap.row + ")" : "") + (ap.timeout ? " · не доехал" : ""));
+    }
     return parts.join(" · ");
   }
   function cvRenderStrip() {
@@ -1075,12 +1080,14 @@
         b.title = cvSampleTitle(s);
         const im = document.createElement("img"); im.alt = ""; im.loading = "lazy"; im.src = cvThumbSrc(s.ts);      // миниатюры подгружаются по мере прокрутки
         const cap = document.createElement("span");
-        // две строки: время · стадия, ниже СВ (Brix) пробы
-        cap.textContent = cvTsLabel(s.ts).slice(0, 5) + (s.stage != null ? " · ст." + s.stage : "") + (s.sv != null ? "\nСВ " + String(Number(s.sv).toFixed(1)).replace(".", ",") : "");
+        // строки: время · стадия; ниже СВ (Brix) пробы; ниже аналоговый датчик подвода, мкм — при каких значениях сделана проба
+        cap.textContent = cvTsLabel(s.ts).slice(0, 5) + (s.stage != null ? " · ст." + s.stage : "") + (s.sv != null ? "\nСВ " + String(Number(s.sv).toFixed(1)).replace(".", ",") : "")
+          + (s.approach && s.approach.ai != null ? "\nпод. " + Math.round(s.approach.ai) : "");
         b.appendChild(im); b.appendChild(cap);
         b.addEventListener("click", () => cvSelectProbe(s.ts));
         wrap.insertBefore(b, prevEl ? prevEl.nextSibling : wrap.firstChild);
       }
+      b.classList.toggle("has-frac", !!(s.fracture && s.fracture.has_fracture));     // проба с разломом — красная полоска снизу
       prevEl = b;
     });
     wrap.hidden = !cvSamples.length;

@@ -362,7 +362,7 @@ MODULES = [
     "camera_core.base_worker", "camera_core.gige_worker", "camera_core.rtsp_worker", "camera_core.camera_manager",
     "sdk_gige", "camera_params", "board_guard", "dahua_control", "net_tools", "rtsp_store",
     "save_settings", "plate_config", "sv_source", "opcua_client", "plc_source", "stage_map", "microscope_plc", "microscope_fsm",
-    "microscope_service", "cv_analyzer", "cv_volume", "substages", "db", "report", "boil_compare", "cv_fracture", "cv_client", "video_client", "motion_client", "level_client", "services", "delta_update", "cv_store", "boil_archive", "fracture_lab", "cv_pipeline", "model_check", "boil_anomaly", "other_plants", "cam_events", "cam_monitor", "cam_report", "sysmon",
+    "microscope_service", "cv_analyzer", "cv_volume", "substages", "db", "report", "boil_compare", "cv_fracture", "cv_client", "video_client", "motion_client", "level_client", "services", "delta_update", "cv_store", "boil_archive", "fracture_lab", "approach_advice", "cv_pipeline", "model_check", "boil_anomaly", "other_plants", "cam_events", "cam_monitor", "cam_report", "sysmon",
     "updater", "update_health", "auto_update", "autostart", "diag", "app", "mvsdk",
 ]
 THIRD_PARTY = ["cv2", "numpy", "fastapi", "starlette", "uvicorn", "pymodbus", "harvesters", "genicam",
@@ -389,6 +389,7 @@ API = {
                  "trend_range", "history_days", "get_objects", "overlay_path", "thumb_path"],
     "cv_client": ["health", "infer", "model_info", "model_upload", "model_load"],
     "fracture_lab": ["save_frame", "list_frames", "set_label", "delete", "zones", "all_zones", "jpeg"],
+    "approach_advice": ["compute"],
     "rtsp_store": ["load", "save", "set_autostart", "remove"],
     "save_settings": ["load", "get", "update"],
     "updater": ["check_latest", "download_latest", "apply_update", "_version_tuple"],
@@ -467,7 +468,7 @@ SAFE_API = [
     "/api/version", "/api/debug/info", "/api/debug/logs",
     "/api/micro/enabled", "/api/micro/status", "/api/micro/telemetry", "/api/micro/config_dump",
     "/api/micro/config_snapshots",
-    "/api/cv/settings", "/api/cv/fracture/settings", "/api/cv/approach/settings",
+    "/api/cv/settings", "/api/cv/fracture/settings", "/api/cv/approach/settings", "/api/cv/approach/advice",
     "/api/cv/last", "/api/cv/prev", "/api/cv/samples", "/api/cv/trend", "/api/cv/trend/days",
     "/api/cv/fracture/lab/list",
     "/api/rtsp/saved", "/api/autostart/status", "/api/net/status",
@@ -2870,6 +2871,29 @@ def _cv_export_rotate():
     finally:
         shutil.rmtree(dest2, ignore_errors=True)
     return "архив по варкам, PNG-кадры без потерь и потолок по размеру работают"
+
+
+@check("CV", "approach_advice: разлом на строке таблицы → совет SP+шаг, потолок 1500, чистая строка без совета, проба при другом SP не считается")
+def _approach_advice():
+    import approach_advice
+    SP = [40000, 100, 600, 1400, 1600]
+    SVSP = [0.0, 75.0, 81.0, 85.0, 90.0]
+    rows = [
+        {"ts": "a", "ap_row": 2, "ap_sp": 600, "ap_ai": 640, "frac_zones": 1},
+        {"ts": "b", "ap_row": 2, "ap_sp": 600, "ap_ai": 610, "frac_zones": 0},
+        {"ts": "c", "ap_row": 2, "ap_sp": 500, "ap_ai": 500, "frac_zones": 3},      # другой SP — не считается
+        {"ts": "d", "ap_row": 3, "ap_sp": 1400, "ap_ai": 1450, "frac_zones": 2},    # 1400+100 = 1500 — ровно потолок
+        {"ts": "e", "ap_row": 4, "ap_sp": 1600, "ap_ai": 1650, "frac_zones": 1},    # SP уже выше потолка
+        {"ts": "f", "ap_row": 1, "ap_sp": 100, "ap_ai": 90, "frac_zones": 0},
+    ]
+    res = approach_advice.compute(rows, SP, SVSP, step_um=100, min_zones=1, max_gap_um=1500)
+    by = {r["row"]: r for r in res["rows"]}
+    assert by[2]["n"] == 2 and by[2]["n_frac"] == 1 and by[2]["status"] == "advice" and by[2]["proposed"] == 700, by[2]
+    assert by[2]["ai_frac"] == 640.0 and by[2]["ai_ok"] == 610.0, by[2]
+    assert by[3]["proposed"] == 1500, by[3]
+    assert by[4]["status"] == "ceiling" and by[4]["proposed"] is None, by[4]
+    assert by[1]["status"] == "ok" and by[1]["proposed"] is None, by[1]
+    return "совет по строке, потолок и фильтр по SP работают"
 
 
 @check("CV", "fracture_lab: кадр → метка → список → зоны → удаление (песочница)")

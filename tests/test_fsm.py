@@ -109,6 +109,17 @@ def test_probe_positions_reported_for_retract_and_approach(fsm):
     assert recs[0]["target"] == fsm._retract_pos
 
 
+def test_approach_record_carries_sv_table_row(fsm):
+    # советы по разломам: запись прихода подвода знает строку СВ-таблицы и её SP (СВ 88 → строка с порогом 88)
+    recs = []
+    fsm.on_probe_positions = recs.append
+    _start_cycle(fsm)
+    _run_until(fsm, lambda: fsm.mode == 23)
+    ap = [r for r in recs if r["step"] == "подвод"][0]
+    row = max(i for i in range(1, 50) if fsm.SVSP[i] > 0 and 88.0 >= fsm.SVSP[i])
+    assert ap["row"] == row and ap["sp_row"] == float(fsm.SP[row]) == ap["target"], ap
+
+
 def test_probe_positions_flag_timeout_when_motor_does_not_arrive(fsm):
     # мотор «не едет» (телеметрия стоит на нуле): шаг уходит по таймауту, в записи timeout=True
     recs = []

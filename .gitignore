@@ -75,3 +75,6 @@ sysmon.db-shm
 
 # ключ авто-регистрации мониторинга (создаёт build.bat)
 /enroll_key.txt
+
+# --- данные рядом с программой: логин/пароль OPC UA (opcua_secret.json), сертификат клиента (opcua_pki) и пр. — не в git ---
+/data

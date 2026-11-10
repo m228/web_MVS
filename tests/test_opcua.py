@@ -299,6 +299,37 @@ def test_api_browse_find(data_dir, pki, sim):
     assert r["ok"] and r["matched"] == 1 and r["total"] > opcua_client.BROWSE_LIMIT and r["items"][0]["name"].endswith("PA012")
 
 
+# ───────────────────────── «Проверить тег» (10.11) ─────────────────────────
+def test_probe_tag_value_and_reasons(sim, pki):
+    ns = sim.ns
+    def work(c):
+        return {k: c.probe(v) for k, v in {
+            "brix": sim.node_id("Brix"), "mode": sim.node_id("Submode"), "broken": sim.node_id("Broken"),
+            "unknown": "ns=%d;s=Нет.Такого" % ns, "garbage": "мусор", "folder": "ns=%d;s=VA" % ns}.items()}
+    r = opcua_client.with_conn(secure_cfg(sim), work, {"username": "op", "password": "123"})
+    b = r["brix"]
+    assert b["good"] and b["number"] == pytest.approx(86.4) and b["type"] == "Float" and b["name"] == "Brix" and b["status"] == "Good"
+    assert b["time"] and b["why"] == ""
+    assert r["mode"]["good"] and r["mode"]["number"] == 2                       # Submode (Mode меняют другие тесты)
+    assert not r["broken"]["good"] and r["broken"]["status"] == "BadNotConnected" and "нет связи с контроллером" in r["broken"]["why"]
+    assert r["unknown"]["status"] == "BadNodeIdUnknown" and "такого тега" in r["unknown"]["why"]
+    assert r["garbage"]["status"] == "BadNodeIdInvalid" and "записан неверно" in r["garbage"]["why"]
+    assert r["folder"]["cls"] == "Object" and r["folder"]["value"] is None and "не тег-значение" in r["folder"]["why"]
+    with pytest.raises(ValueError):
+        opcua_client.with_conn(secure_cfg(sim), lambda c: c.probe("  "), {"username": "op", "password": "123"})
+
+
+def test_api_probe(data_dir, pki, sim):
+    import app as web
+    base = {"endpoint": sim.url, "security": "Basic256Sha256", "mode": "SignAndEncrypt", "auth": "user", "username": "op", "password": "123"}
+    r = web.opcua_probe({**base, "node": sim.node_id("Level")})
+    assert r["ok"] and r["good"] and r["number"] == 62
+    bad = web.opcua_probe({**base, "node": ""})
+    assert bad["ok"] is False and "NodeId" in bad["error"]
+    deny = web.opcua_probe({**base, "password": "нет", "node": sim.node_id("Level")})
+    assert deny["ok"] is False and deny["error"]
+
+
 # ───────────────────────── после ревью ─────────────────────────
 def test_saved_password_only_for_saved_endpoint(data_dir, pki):
     opcua_client.save_secret("op", "секрет")

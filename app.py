@@ -443,6 +443,17 @@ def opcua_read(payload: dict = Body(...)):
         return _opcua_error(e)
 
 
+@app.post("/api/opcua/probe")
+def opcua_probe(payload: dict = Body(...)):
+    """«Проверить тег»: один NodeId → значение, тип, статус, время и причина, если значения нет (только чтение)."""
+    try:
+        conn, secret = plc_source.conn_from_body(payload)
+        node = str(payload.get("node") or "")
+        return {"ok": True, **opcua_client.with_conn(conn, lambda c: c.probe(node), secret)}
+    except Exception as e:
+        return _opcua_error(e)
+
+
 @app.get("/api/opcua/subnets")
 def opcua_subnets():
     return {"subnets": opcua_client.local_subnets()}

@@ -92,6 +92,18 @@
     const plainWarn = el("p", { class: "plc-warn", hidden: true, text: "Вход по логину без защиты: пароль уходит по сети открытым текстом. Если сервер умеет — выбери Basic256Sha256." });
     const scanBox = el("div", { class: "plc-scan", hidden: true });
     const tree = el("div", { class: "plc-tree", role: "tree", "aria-label": "Теги сервера" }, el("p", { class: "plc-hint", text: "Нажми «Подключиться» — здесь появятся теги сервера." }));
+    // «Проверить тег»: вставил NodeId (из дерева, из Prosys/UaExpert) → прочитать один раз или следить, приходит ли значение.
+    const probeNode = el("input", { type: "text", class: "plc-in plc-probe__node", placeholder: "ns=1;s=… — NodeId тега (клик по тегу в дереве тоже подставит)",
+      spellcheck: "false", autocomplete: "off", onkeydown: (e) => { if (e.key === "Enter") probe(); } });
+    const probeWatch = el("input", { type: "checkbox", onchange: () => { clearInterval(probeTimer); if (probeWatch.checked) { probe(); probeTimer = setInterval(probe, 3000); } } });
+    const probeOut = el("div", { class: "plc-probe__out", "aria-live": "polite" });
+    let probeTimer = 0, probeBusy = false;
+    const probeBox = el("div", { class: "plc-probe" },
+      el("div", { class: "plc-row" },
+        el("span", { class: "plc-probe__title", text: "Проверить тег" }), probeNode,
+        el("button", { type: "button", class: "btn-secondary plc-btn", text: "Прочитать", title: "Прочитать тег один раз (только чтение)", onclick: () => probe() }),
+        el("label", { class: "plc-chk", title: "Читать каждые 3 с — видно, приходит ли и меняется ли значение" }, probeWatch, el("span", { text: "следить" }))),
+      probeOut);
     const opTable = el("table", { class: "plc-fields" },
       el("thead", {}, el("tr", {}, el("th", { text: "Поле" }), el("th", { text: "Тег (NodeId)" }), el("th", { text: "Масштаб", title: "значение = тег / масштаб (обычно 1)" }), el("th", { text: "Значение" }), el("th"))),
       el("tbody"));
@@ -105,7 +117,7 @@
         lab("Защита", inp.op_security), lab("Режим", inp.op_mode), lab("Вход", inp.op_auth), userBox,
         lab("Опрос, с", num("period_op", "s")), lab("Таймаут, с", num("op_timeout", "s")),
         el("a", { class: "plc-link", href: "/api/opcua/client_cert", download: "web_mvs_client.der", title: "Сертификат этого ПК для шифрованного подключения: его один раз добавляют в доверенные на сервере OPC UA", text: "сертификат ⤓" })),
-      plainWarn, epNote,
+      plainWarn, epNote, probeBox,
       el("div", { class: "plc-two" }, tree,
         el("div", { class: "plc-map" }, el("p", { class: "plc-hint", text: "Выбери поле в таблице, потом тег в дереве слева — он назначится на поле." }), opTable)));
 
@@ -338,7 +350,35 @@
       else line.addEventListener("click", () => caret.click());
       return el("div", { class: "plc-tree__node" }, line, kids);
     }
+    async function probe() {
+      const node = probeNode.value.trim();
+      if (!node) { probeShow("Впиши NodeId тега или кликни тег в дереве.", "bad"); return; }
+      if (!probeNode.isConnected) { clearInterval(probeTimer); return; }   // панель убрали со страницы — не опрашиваем
+      if (probeBusy) return;
+      probeBusy = true;
+      try {
+        const r = await post("/api/opcua/probe", { ...connBody(), node }, 30000);
+        if (!r || !r.ok) { probeShow("Нет ответа: " + ((r && r.error) || "сервер не ответил"), "bad"); return; }
+        const when = r.time ? new Date(r.time).toLocaleTimeString("ru-RU") : "";
+        const head = [r.name, r.cls && r.cls !== "Variable" ? r.cls : "", r.type].filter(Boolean).join(" · ");
+        if (r.good) {
+          probeShow(null, r.number == null ? "warn" : "ok", fmt(r.value), [head, when && "время значения " + when, r.status].filter(Boolean).join(" · "), r.why);
+        } else {
+          probeShow(null, "bad", r.value != null ? fmt(r.value) : "нет значения", [head, r.status, when && "время " + when].filter(Boolean).join(" · "), r.why);
+        }
+      } finally { probeBusy = false; }
+    }
+    // Чужой текст (имена, статусы сервера) — только textContent.
+    function probeShow(text, kind, big, meta, why) {
+      probeOut.dataset.kind = kind || "";
+      if (text != null) { probeOut.textContent = text; return; }
+      probeOut.replaceChildren(...[el("b", { text: big }), meta ? " · " + meta : "",
+        el("span", { class: "plc-hint", text: " (проверено " + new Date().toLocaleTimeString("ru-RU") + ")" }),
+        why ? el("div", { text: why }) : null].filter((x) => x));
+    }
+
     function assign(it) {
+      probeNode.value = it.node;
       const f = S.active;
       if (!f || !rowNode[f]) return;
       rowNode[f].value = it.node;

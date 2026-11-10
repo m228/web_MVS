@@ -67,8 +67,26 @@ STEP_NAMES = {0: "ожидание", 20: "отвод", 21: "промывка п�
 # новый цикл не стартует. Уже идущий цикл доводится до конца (проб не рвём — безопасность).
 CYCLE_STAGE_MIN = 3
 CYCLE_STAGE_MAX = 9
-# Стадии ВНЕ диапазона, на которых пробы тоже берутся: 20 УНВ (удержание на воде) — аппарат поддерживают, чтобы он работал медленнее.
+# Стадии ВНЕ диапазона, на которых пробы тоже берутся (по умолчанию 20 УНВ — удержание на воде: аппарат поддерживают, чтобы он работал медленнее).
+# Правится на вкладке «Цикл» (probe_cycle.stage_extra — список стадий, пусто — только диапазон «от…до»).
 CYCLE_EXTRA_STAGES = (20,)
+
+
+def parse_stage_list(v, default=()):
+    """Список стадий 1..21 из списка/строки «20, 21»: мусор пропускаем, повторы убираем. None — default (ключа в настройках нет)."""
+    if v is None:
+        return tuple(default)
+    if isinstance(v, str):
+        v = v.replace(";", ",").replace(" ", ",").split(",")
+    out = []
+    for x in v if isinstance(v, (list, tuple)) else [v]:
+        try:
+            n = int(float(str(x).strip().replace(",", ".")))
+        except (TypeError, ValueError):
+            continue
+        if 1 <= n <= 21 and n not in out:
+            out.append(n)
+    return tuple(sorted(out))
 # Стадии, на которых безопасно перезапускать приложение для обновления (см. restart_window): 1 Остановлен, 11 Пропарка (после
 # калибровки), 12 Надвыгрузка, 13 Собрать аппарат, 14 Термоудар. Список белый: стадия неизвестна или не из списка — не перезапускаем.
 RESTART_STAGES = (1, 11, 12, 13, 14)
@@ -88,8 +106,8 @@ class MicroscopeFSM:
         return self._last_brew_t is None or time.monotonic() - self._last_brew_t >= self._hw_idle_s
 
     def _stage_in(self) -> bool:
-        """Стадия варки разрешает авто-цикл: в диапазоне «от…до» (вкладка «Цикл») или одна из CYCLE_EXTRA_STAGES (20 УНВ)."""
-        return self._stage_min <= self.stage <= self._stage_max or self.stage in CYCLE_EXTRA_STAGES
+        """Стадия варки разрешает авто-цикл: в диапазоне «от…до» или в списке «плюс» (вкладка «Цикл»; по умолчанию 20 УНВ)."""
+        return self._stage_min <= self.stage <= self._stage_max or self.stage in self._stage_extra
 
     def restart_window(self):
         """Можно ли сейчас перезапустить приложение (автообновление): (True, "") или (False, причина по-русски).
@@ -172,6 +190,7 @@ class MicroscopeFSM:
         # диапазон стадий, в котором авто-цикл разрешён (правится на вкладке «Цикл»); перепутали местами — меняем
         a, b = int(pc.get("stage_from", CYCLE_STAGE_MIN)), int(pc.get("stage_to", CYCLE_STAGE_MAX))
         self._stage_min, self._stage_max = (a, b) if a <= b else (b, a)
+        self._stage_extra = parse_stage_list(pc.get("stage_extra"), CYCLE_EXTRA_STAGES)    # «плюс» стадии вне диапазона
         # «варить без стадии»: при ручной варке ПЛК не двигает стадию (стоит), а СВ растёт —
         # тогда авто-цикл гоняем БЕЗ проверки стадии 3..9 (только по триггеру время/СВ).
         self._ignore_stage = bool(pc.get("ignore_stage", False))

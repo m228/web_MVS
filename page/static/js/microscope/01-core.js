@@ -15,7 +15,7 @@
   };
   const stageLabel = (m) => {
     if (m == null || m === "") return "(—)";
-    const n = STAGE_NAMES[Number(m)];
+    const n = stageNameOf(Number(m));
     return n ? `${m} (${n})` : String(m);
   };
 
@@ -34,22 +34,40 @@
 
   // пояснения к стадиям — как их называл Макс (память varka-stages); чего нет в списке, не придумываем
   const STAGE_HELP = { 5: "набор уровня", 6: "набор СВ", 7: "(!!!)", 8: "набор СВ" };
-  const PC_EXTRA_STAGES = [20];   // как CYCLE_EXTRA_STAGES в microscope_fsm.py: 20 УНВ (удержание на воде) — пробы берутся и там
+  // карта стадий чужого контроллера (вкладка «ПЛК»): {наша стадия: {name, codes}} — её названия важнее зашитых наших; пусто — наши
+  let stageMapNames = {};
+  const stageNameOf = (k) => { const t = stageMapNames[k]; return (t && t.name) || STAGE_NAMES[k]; };
+  // «плюс» стадии (вне диапазона «от — до», пробы берутся и там): поле «Плюс стадии», по умолчанию 20 УНВ (удержание на воде); как parse_stage_list в microscope_fsm.py
+  function pcExtraStages() {
+    const e = $("pcStageExtra"); if (!e) return [20];
+    const out = [];
+    String(e.value || "").split(/[\s,;]+/).forEach((x) => { const n = parseInt(x, 10); if (n >= 1 && n <= 21 && !out.includes(n)) out.push(n); });
+    return out.sort((p, q) => p - q);
+  }
   function pcStageInfoBuild(x, y) {
     const pop = $("pcStageInfoPop"); if (!pop) return;
+    const extra = pcExtraStages();
     pop.innerHTML = '<b>Стадии варки (M.mode)</b>' + Object.keys(STAGE_NAMES).map((k) => {
-      const inR = (Number(k) >= x && Number(k) <= y) || PC_EXTRA_STAGES.includes(Number(k));
-      return '<div class="' + (inR ? "in" : "") + '"><i>' + k + '</i> ' + STAGE_NAMES[k] + (STAGE_HELP[k] ? ' <em>— ' + STAGE_HELP[k] + '</em>' : '') + '</div>';
+      const inR = (Number(k) >= x && Number(k) <= y) || extra.includes(Number(k));
+      const t = stageMapNames[k], help = [STAGE_HELP[k], t && t.codes && t.codes.length ? "коды " + t.codes.join(", ") : ""].filter(Boolean).join(" · ");
+      return '<div class="' + (inR ? "in" : "") + '"><i>' + k + '</i> ' + stageNameOf(k) + (help ? ' <em>— ' + help + '</em>' : '') + '</div>';
     }).join("") + '<small>Подсвечено — стадии, в которых идёт авто-цикл пробы (поля слева)</small>';
   }
-  // подпись под полями «Стадии от — до»: «3 Сгущение → 9 Готовность»; полный список стадий — в подсказке
+  // подпись под полями «Стадии от — до»: «3 СГУЩЕНИЕ → 9 Готовность + 20 УНВ»; полный список стадий — в подсказке
   function pcStageHintUpdate() {
     const a = $("pcStageFrom"), b = $("pcStageTo"), h = $("pcStageHint"); if (!a || !b || !h) return;
-    const nm = (v) => { const n = STAGE_NAMES[Number(v)]; return n ? v + " " + n : (v || "—"); };
+    const nm = (v) => { const n = stageNameOf(Number(v)); return n ? v + " " + n : (v || "—"); };
     let x = Number(a.value), y = Number(b.value); if (x > y) [x, y] = [y, x];
-    h.textContent = nm(x) + " → " + nm(y) + " · + 20 УНВ";
+    const extra = pcExtraStages();
+    h.textContent = nm(x) + " → " + nm(y) + (extra.length ? " · + " + extra.map(nm).join(", ") : "");
     pcStageInfoBuild(x, y);
   }
+  // названия стадий из карты: при загрузке страницы и сразу после сохранения карты на вкладке «ПЛК» (plc-source.js шлёт stagemap-changed)
+  async function pcStageNamesLoad() {
+    try { stageMapNames = (((await api("/api/plc/source")).config || {}).stage_map || {}).names || {}; } catch (e) { }
+    pcStageHintUpdate();
+  }
+  window.addEventListener("stagemap-changed", (ev) => { stageMapNames = (ev.detail && ev.detail.names) || {}; pcStageHintUpdate(); });
 
   let manualOn = false;
   let cfg = null;
@@ -101,8 +119,9 @@
       try { await api("/api/micro/cycle_reset"); sentCmd("Цикл: сброс"); const h = $("cycHint"); if (h) h.textContent = "цикл сброшен"; }
       catch (e) { const h = $("cycHint"); if (h) h.textContent = "ошибка: " + e.message; }
     });
-    ["pcStageFrom", "pcStageTo"].forEach((id) => { const e = $(id); if (e) e.addEventListener("input", pcStageHintUpdate); });
+    ["pcStageFrom", "pcStageTo", "pcStageExtra"].forEach((id) => { const e = $(id); if (e) e.addEventListener("input", pcStageHintUpdate); });
     pcStageHintUpdate();
+    pcStageNamesLoad();
     const save = $("pcSave");
     if (save) save.addEventListener("click", async () => {
       if (!cfgLoaded) { loadHint("настройки ещё не загружены — подожди"); return; }
@@ -113,7 +132,7 @@
         photo_format: $("pcFormatSw").checked ? "jpg" : "png",
         trigger_mode: pcTrigMode, arrive_sensor: pcArriveMode,
         sv_from: $("pcSvFrom").value, sv_to: $("pcSvTo").value,
-        stage_from: $("pcStageFrom").value, stage_to: $("pcStageTo").value,
+        stage_from: $("pcStageFrom").value, stage_to: $("pcStageTo").value, stage_extra: pcExtraStages().join(","),
         fast_enabled: $("pcFastOn").checked ? 1 : 0, fast_frames: $("pcFastFrames").value, fast_gap_sec: $("pcFastGap").value,
         fast_pre_wash_sec: $("pcFastPreWash").value, fast_post_wash_sec: $("pcFastPostWash").value,
       };
@@ -921,7 +940,9 @@
           sv("pcRetract", pc.retract_pos); sv("pcPreWash", pc.pre_wash_sec);
           sv("pcDwell", pc.dwell_sec); sv("pcShotInterval", pc.shot_interval_sec);
           sv("pcPause", pc.pause_sec); sv("pcSvFrom", pc.sv_from); sv("pcSvTo", pc.sv_to);
-          sv("pcStageFrom", pc.stage_from); sv("pcStageTo", pc.stage_to); pcStageHintUpdate();
+          sv("pcStageFrom", pc.stage_from); sv("pcStageTo", pc.stage_to);
+          if ($("pcStageExtra")) $("pcStageExtra").value = (pc.stage_extra || [20]).join(", ");    // нет ключа — по умолчанию 20 УНВ
+          pcStageHintUpdate();
           const fp = pc.fast || {};                                        // быстрый цикл на подкачке
           const fo = $("pcFastOn"); if (fo) fo.checked = fp.enabled !== false;
           sv("pcFastFrames", fp.frames != null ? fp.frames : 1); sv("pcFastGap", fp.gap_sec != null ? fp.gap_sec : 2);

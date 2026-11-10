@@ -1237,6 +1237,17 @@ def _fsm():
         for st, ok in ((20, True), (10, False), (19, False), (21, False)):
             fsm.set_stage(st); fsm.tick()
             assert fsm.state["stage_ok"] is ok, "стадия %d: stage_ok должно быть %s (3..9 и 20 УНВ)" % (st, ok)
+        # «плюс» стадии настраиваются (probe_cycle.stage_extra): 21 добавили — идёт, УНВ убрали — не идёт; пусто — только диапазон
+        cfg3 = copy.deepcopy(cfg)
+        cfg3.setdefault("probe_cycle", {})["stage_extra"] = [21]
+        fsm3 = MicroscopeFSM(plate, cfg3)
+        for st, ok in ((21, True), (20, False), (9, True), (10, False)):
+            fsm3.set_stage(st); fsm3.tick()
+            assert fsm3.state["stage_ok"] is ok, "«плюс» [21]: стадия %d, stage_ok должно быть %s" % (st, ok)
+        cfg3["probe_cycle"]["stage_extra"] = []
+        fsm4 = MicroscopeFSM(plate, cfg3)
+        fsm4.set_stage(20); fsm4.tick()
+        assert fsm4.state["stage_ok"] is False, "«плюс» пуст, а стадия 20 всё ещё разрешает цикл"
         # ежечасная промывка: только когда варки не было целый час (пока варка/час после неё — клапаны не трогаем)
         import datetime as _dt, microscope_fsm
         class _At3(_dt.datetime):

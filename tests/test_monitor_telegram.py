@@ -71,7 +71,9 @@ class FakeTelegram:
                 elif outer.mode == "401":
                     code, resp = 401, {"ok": False, "description": "Unauthorized " + parts[0]}
                 elif outer.mode == "400":
-                    code, resp = 400, {"ok": False, "description": "Bad Request: chat not found"}
+                    code, resp = 400, {"ok": False, "error_code": 400, "description": "Bad Request: chat not found"}
+                elif method == "sendMessage":
+                    resp = {"ok": True, "result": {"message_id": len(outer.requests)}}       # у каждого сообщения свой номер
                 elif method == "getMe":
                     resp = {"ok": True, "result": {"username": "monitor_test_bot", "is_bot": True}}
                 elif method == "getUpdates":
@@ -568,7 +570,7 @@ def msg(text, chat=CHAT, ctype="private", uid=None):
 
 def test_keyboard_has_plant_buttons_in_rows_of_two_and_all_button(bot_env):
     kb = bot_env.bot.keyboard()
-    assert kb["keyboard"] == [[{"text": "Буи"}, {"text": "Кир"}], [{"text": "Все заводы"}]]
+    assert kb["keyboard"] == [[{"text": "Буи"}, {"text": "Кир"}], [{"text": "Все заводы"}, {"text": "🆕 Заявки"}]]
     assert kb["resize_keyboard"] is True and kb["is_persistent"] is True
     bot_env.store.create_plant("Третий")
     assert bot_env.bot.keyboard()["keyboard"][1] == [{"text": "Третий"}], "новый завод появляется на кнопках сам"
@@ -590,7 +592,10 @@ def test_plant_button_gives_full_text_report(bot_env):
     assert any(ln.startswith("⚠ Подвод (") and "расчётная 500 · энкодер 500 · датчик 714, разница 214" in ln for ln in lines)
     assert "Последние события:" in lines and any("Приложение обновлено до v2.0.46" in ln for ln in lines)
     sent = e.tg.requests[-1]["body"]
-    assert sent["chat_id"] == CHAT and sent["text"] == reply and sent["reply_markup"]["keyboard"][-1] == [{"text": "Все заводы"}]
+    assert sent["chat_id"] == CHAT and sent["text"] == reply
+    data = [b["callback_data"] for row in sent["reply_markup"]["inline_keyboard"] for b in row]
+    assert data == ["lg:%d" % e.kir, "dk:%d" % e.kir, "ak:%d" % e.kir, "st:%d" % e.kir, "rn:%d" % e.kir, "tk:%d" % e.kir, "dl:%d" % e.kir]
+    assert all(len(d.encode()) <= 64 for d in data)
 
 
 def test_plant_without_alerts_says_so_and_waiting_plant_is_short(bot_env):
@@ -683,7 +688,7 @@ def test_bot_thread_answers_a_question_end_to_end(tmp_path, tg, monkeypatch):
             time.sleep(0.1)
         assert tg.sent() and tg.sent()[0].startswith("⚪ Кир — ещё не выходил на связь")
         last_send = [r for r in tg.requests if r["method"] == "sendMessage"][-1]
-        assert last_send["body"]["reply_markup"]["keyboard"][0] == [{"text": "Кир"}]
+        assert last_send["body"]["reply_markup"]["inline_keyboard"][0][0]["callback_data"].startswith("lg:"), "под сводкой — кнопки управления"
     finally:
         srv.close()
 
@@ -779,3 +784,295 @@ def test_client_sets_disable_notification_only_when_silent(env):
     assert c.send(CHAT, "громко")[0] and c.send(CHAT, "тихо", silent=True)[0]
     bodies = [r["body"] for r in e.tg.requests if r["method"] == "sendMessage"]
     assert "disable_notification" not in bodies[0] and bodies[1]["disable_notification"] is True
+
+
+# ------------------------------------------------------------------------------------------------- бот: управление заводами с телефона
+
+def cb(data, chat=CHAT, mid=70, ctype="private", cid="cb1"):
+    return {"callback_query": {"id": cid, "data": data, "message": {"message_id": mid, "text": "сообщение бота\nвторая строка", "chat": {"id": chat, "type": ctype}}}}
+
+
+def reqs(e, method):
+    return [r["body"] for r in e.tg.requests if r["method"] == method]
+
+
+def kinds(e):
+    return [r["method"] for r in e.tg.requests]
+
+
+def test_disk_line_in_plant_report_and_in_all_with_thresholds(bot_env):
+    e = bot_env
+    snap = snap_pulse("kir", KIR_TEXT)
+    snap["snapshot"]["disk"] = {"free_gb": 120.4, "total_gb": 500.0}
+    e.store.ingest(e.kir, snap)
+    assert "Диск: свободно 120 из 500 ГБ (24 %)" in e.bot.handle(msg("Кир")).split("\n")
+    assert "диск свободно 120/500 ГБ (24 %)" in e.bot.handle(msg("Все заводы"))
+    for free, mark in ((49.0, "⚠ "), (20.0, "🔴 ")):                       # < 10 % — предупреждение, < 5 % — красный
+        snap["snapshot"]["disk"] = {"free_gb": free, "total_gb": 500.0}
+        e.store.ingest(e.kir, snap)
+        assert any(ln.startswith(mark + "Диск: свободно") for ln in e.bot.handle(msg("Кир")).split("\n")), free
+    snap["snapshot"].pop("disk")
+    snap["snapshot"]["motion"] = {"cameras": [], "disk": {"free_gb": 300.0, "total_gb": 500.0}}      # клиенты 2.1.27 держали диск внутри «движения»
+    e.store.ingest(e.kir, snap)
+    assert "Диск: свободно 300 из 500 ГБ (60 %)" in e.bot.handle(msg("Кир"))
+    snap["snapshot"].pop("motion")
+    e.store.ingest(e.kir, snap)
+    assert "Диск:" not in e.bot.handle(msg("Кир")), "нет данных — строки нет, цифр не выдумываем"
+
+
+def test_disk_button_answers_with_free_used_and_without_data(bot_env):
+    e = bot_env
+    e.bot.handle(cb("dk:%d" % e.kir))
+    assert "данных о диске нет" in e.tg.sent()[-1]
+    snap = snap_pulse("kir", KIR_TEXT)
+    snap["snapshot"]["disk"] = {"free_gb": 120.0, "total_gb": 500.0}
+    e.store.ingest(e.kir, snap)
+    e.bot.handle(cb("dk:%d" % e.kir))
+    assert e.tg.sent()[-1] == "💾 Кир\nДиск: свободно 120 из 500 ГБ (24 %)\nЗанято 380 ГБ"
+    assert reqs(e, "answerCallbackQuery")[-1]["callback_query_id"] == "cb1", "кнопка перестаёт крутиться"
+
+
+def test_log_button_lists_ten_latest_events(bot_env):
+    e = bot_env
+    e.bot.handle(cb("lg:%d" % e.kir))
+    text = e.tg.sent()[-1]
+    assert text.startswith("📜 Кир — последние события:") and "Приложение обновлено до v2.0.46" in text
+    e.bot.handle(cb("lg:%d" % e.bui))
+    assert "Записей пока нет." in e.tg.sent()[-1]
+
+
+def test_ack_button_clears_alerts_and_drops_its_own_button(bot_env):
+    e = bot_env
+    e.bot.handle(cb("ak:%d" % e.kir))
+    assert reqs(e, "answerCallbackQuery")[-1]["text"] == "Сброшено тревог: 2 (в журнале останутся)"
+    kir = next(p for p in e.store.plants_view() if p["id"] == e.kir)
+    assert kir["alerts"] and all(a["acked"] for a in kir["alerts"])
+    markup = reqs(e, "editMessageReplyMarkup")[-1]["reply_markup"]["inline_keyboard"]
+    assert "ak:%d" % e.kir not in [b["callback_data"] for row in markup for b in row]
+    e.bot.handle(cb("ak:%d" % e.kir))
+    assert reqs(e, "answerCallbackQuery")[-1]["text"] == "Сброшено тревог: 0 (в журнале останутся)"
+
+
+def test_rename_waits_for_name_and_validates(bot_env):
+    e = bot_env
+    e.bot.handle(cb("rn:%d" % e.kir))
+    assert "Как назвать «Кир»?" in e.tg.sent()[-1]
+    assert reqs(e, "sendMessage")[-1]["reply_markup"]["inline_keyboard"] == [[{"text": "Отмена", "callback_data": "xx"}]]
+    assert e.bot.handle(msg("   ")) is None, "пустое сообщение — игнор"
+    reply = e.bot.handle(msg("А" * 41))                                         # слишком длинное: ждём новую попытку, ожидание не теряем
+    assert reply.startswith("Не вышло: Название завода — от 1 до 40 символов") and e.bot._pending
+    reply = e.bot.handle(msg("Кир-2"))
+    assert reply.startswith("✏ Готово: «Кир» → «Кир-2»") and not e.bot._pending
+    assert "Кир-2" in e.store.plant_names() and "Кир" not in e.store.plant_names()
+    kb = reqs(e, "sendMessage")[-1]["reply_markup"]["keyboard"]
+    assert {"text": "Кир-2"} in [b for row in kb for b in row], "кнопки с названиями обновились"
+
+
+def test_cancel_word_ends_rename_and_keeps_name(bot_env):
+    e = bot_env
+    e.bot.handle(cb("rn:%d" % e.kir))
+    assert e.bot.handle(msg("Отмена")) == "Отменено." and not e.bot._pending
+    assert e.store.plant_names() == ["Буи", "Кир"]
+
+
+def test_menu_button_during_rename_is_navigation_not_a_name(bot_env):
+    e = bot_env
+    e.bot.handle(cb("rn:%d" % e.kir))
+    assert e.bot.handle(msg("Буи")) == "⚪ Буи — ещё не выходил на связь", "нажал завод — это не новое имя"
+    assert not e.bot._pending and e.store.plant_names() == ["Буи", "Кир"]
+
+
+def test_rename_wait_expires_after_five_minutes(bot_env):
+    e = bot_env
+    e.bot.handle(cb("rn:%d" % e.kir))
+    e.clk.t += 301
+    assert e.bot.handle(msg("Новое имя")) == "Не понял. Нажми кнопку с названием завода внизу."
+    assert e.store.plant_names() == ["Буи", "Кир"]
+
+
+def test_new_token_needs_confirmation_then_old_token_dies(bot_env):
+    e = bot_env
+    pid, tok_old = e.store.create_plant("Третий")
+    e.bot.handle(cb("tk:%d" % pid))
+    assert "Старый сразу перестанет работать" in e.tg.sent()[-1]
+    assert e.store.plant_by_token(tok_old) is not None, "без подтверждения токен не меняется"
+    e.bot.handle(cb("tky:%d" % pid, mid=71))
+    assert e.store.plant_by_token(tok_old) is None, "старый токен больше не принимается"
+    tok_msg = [b for b in reqs(e, "sendMessage") if b.get("parse_mode") == "HTML"][-1]
+    new = tok_msg["text"].split("<code>")[1].split("</code>")[0]
+    assert e.store.plant_by_token(new)["id"] == pid and tok_msg["protect_content"] is True
+    assert reqs(e, "editMessageText")[-1]["text"] == "🔑 Новый токен для «Третий» выдан." and reqs(e, "editMessageText")[-1]["message_id"] == 71
+
+
+def test_token_message_is_deleted_after_five_minutes_and_survives_restart(bot_env):
+    e = bot_env
+    e.bot.handle(cb("tky:%d" % e.kir))
+    idx = next(i for i, r in enumerate(e.tg.requests) if r["method"] == "sendMessage" and r["body"].get("parse_mode") == "HTML")
+    assert e.bot.sweep_deletes() == 0 and "deleteMessage" not in kinds(e), "рано"
+    bot2 = mt.Bot(e.store, mt.TelegramClient(TOKEN, e.tg.url, timeout=5), mt.TelegramClient(TOKEN, e.tg.url, timeout=5), [CHAT], clock=e.clk)   # «перезапуск»
+    e.clk.t += 301
+    assert bot2.sweep_deletes() == 1
+    d = reqs(e, "deleteMessage")[-1]
+    assert d["chat_id"] == CHAT and d["message_id"] == idx + 1, "стёрто именно сообщение с токеном"
+    assert bot2.sweep_deletes() == 0 and e.store.meta_get(mt.Bot.DELETE_KEY) == "[]", "второй раз не стираем"
+
+
+def test_failed_delete_is_retried_when_telegram_is_unreachable(bot_env):
+    e = bot_env
+    e.bot._track_delete(CHAT, 5, e.clk.t - 10)
+    e.tg.mode = "500"
+    assert e.bot.sweep_deletes() == 0
+    assert e.bot._deletes() == [[CHAT, 5, e.clk.t - 10]], "связи нет — оставили на потом"
+    e.tg.mode = "400"                                                           # Telegram ответил отказом (сообщения нет / не даёт) — повторять нечего
+    assert e.bot.sweep_deletes() == 0 and e.bot._deletes() == []
+    e.tg.mode = "500"
+    e.bot._track_delete(CHAT, 6, e.clk.t - 10 - mt.Bot.DELETE_KEEP_S)
+    e.bot.sweep_deletes()
+    assert e.bot._deletes() == [], "старше 47 часов — Telegram уже не даст, бросаем"
+
+
+def test_delete_needs_confirmation_and_removes_plant(bot_env):
+    e = bot_env
+    e.bot.handle(cb("dl:%d" % e.kir))
+    assert "Удалить «Кир»" in e.tg.sent()[-1] and "Вернуть нельзя" in e.tg.sent()[-1]
+    assert "Кир" in e.store.plant_names(), "без подтверждения завод на месте"
+    e.bot.handle(cb("dly:%d" % e.kir, mid=72))
+    assert e.store.plant_names() == ["Буи"]
+    assert reqs(e, "editMessageText")[-1]["text"] == "🗑 Удалён: «Кир»."
+    kb = reqs(e, "sendMessage")[-1]["reply_markup"]["keyboard"]
+    assert {"text": "Кир"} not in [b for row in kb for b in row]
+    e.bot.handle(cb("dly:%d" % e.kir, mid=73))                                  # повторное нажатие
+    assert reqs(e, "editMessageText")[-1]["text"] == "Такого завода уже нет."
+
+
+def test_cancel_button_removes_the_question(bot_env):
+    e = bot_env
+    e.bot.handle(cb("xx", mid=74))
+    assert reqs(e, "editMessageText")[-1] == {"chat_id": CHAT, "message_id": 74, "text": "Отменено.", "disable_web_page_preview": True}
+    assert e.store.plant_names() == ["Буи", "Кир"]
+
+
+def test_settings_menu_changes_plant_settings_and_resets(bot_env):
+    e = bot_env
+    e.bot.handle(cb("st:%d" % e.kir))
+    first = reqs(e, "sendMessage")[-1]
+    assert first["text"].startswith("⚙ Кир — настройки «нет пульса» (общие)") and "30 мин" in first["text"]
+    assert "✓ 30 мин" in str(first["reply_markup"]) and "↩" not in str(first["reply_markup"])
+    e.bot.handle(cb("sv:%d:a:60" % e.kir, mid=75))
+    assert e.store.plant_settings(e.kir)["offline_after_min"] == 60
+    edit = reqs(e, "editMessageText")[-1]
+    assert edit["message_id"] == 75 and "(свои)" in edit["text"] and "✓ 60 мин" in str(edit["reply_markup"])
+    assert "↩ Вернуть общие значения" in str(edit["reply_markup"])
+    e.bot.handle(cb("sv:%d:r:0" % e.kir))
+    e.bot.handle(cb("sv:%d:n:0" % e.kir))
+    s = e.store.plant_settings(e.kir)
+    assert s["offline_repeat_min"] == 0 and s["offline_notify"] is False
+    e.bot.handle(cb("sv:%d:z" % e.kir))
+    assert e.store.plant_overrides(e.kir) == {}, "вернули общие значения"
+    assert e.store.plant_settings(e.bui)["offline_after_min"] == 30, "другие заводы не тронуты"
+
+
+def test_settings_garbage_is_ignored(bot_env):
+    e = bot_env
+    for data in ("sv:%d:a:abc" % e.kir, "sv:%d:a" % e.kir, "sv:%d:q:1" % e.kir, "sv:%d:n:5" % e.kir, "sv:abc:a:60", "sv:", "zz:1"):
+        assert e.bot.handle(cb(data)) is None, data
+    assert e.store.plant_overrides(e.kir) == {}
+    assert e.bot.handle(cb("sv:%d:a:3" % e.kir)) == "Нет пульса через: от 5 до 1440 минут", "значение вне границ — сообщение, не падение"
+
+
+def test_requests_button_lists_waiting_clients_with_accept_buttons(bot_env):
+    e = bot_env
+    assert e.bot.handle(msg("🆕 Заявки")) == "Заявок на токен нет."
+    e.store.enroll_request("machine-id-0001", "ПК жома", "2.1.45", "10.0.0.7", "s" * 20)
+    assert e.bot.handle(msg("заявки")) == "Ждут решения: 1."
+    last = reqs(e, "sendMessage")[-1]
+    assert last["text"].startswith("🆕 Новый клиент просит токен: «ПК жома»") and last["reply_markup"]["inline_keyboard"][0][0]["callback_data"].startswith("ea:")
+    e.bot.handle(cb(last["reply_markup"]["inline_keyboard"][0][0]["callback_data"]))
+    assert "ПК жома" in e.store.plant_names()
+
+
+def test_buttons_from_foreign_chats_do_nothing(bot_env):
+    e = bot_env
+    before = len(e.tg.requests)
+    for data in ("dly:%d" % e.kir, "tky:%d" % e.kir, "sv:%d:z" % e.kir, "ak:%d" % e.kir):
+        assert e.bot.handle(cb(data, chat=999)) is None
+        assert e.bot.handle(cb(data, ctype="group")) is None
+    assert len(e.tg.requests) == before and e.store.plant_names() == ["Буи", "Кир"]
+
+
+def test_buttons_for_missing_plant_say_so(bot_env):
+    e = bot_env
+    for kind in ("lg", "dk", "ak", "st", "rn", "tk"):
+        e.bot.handle(cb("%s:9999" % kind))
+    assert [r["text"] for r in reqs(e, "answerCallbackQuery")] == ["Такого завода уже нет."] * 6
+    assert not e.bot._pending
+
+
+def test_double_press_of_token_confirmation_issues_one_token(bot_env):
+    e = bot_env
+    data = "tky:%d" % e.kir
+    e.bot.handle(cb(data, mid=80, cid="a"))
+    first = [b for b in reqs(e, "sendMessage") if b.get("parse_mode") == "HTML"][-1]["text"].split("<code>")[1].split("</code>")[0]
+    assert e.bot.handle(cb(data, mid=80, cid="b")) == "Уже выдан."
+    assert len([b for b in reqs(e, "sendMessage") if b.get("parse_mode") == "HTML"]) == 1, "второй токен не выдан"
+    assert e.store.plant_by_token(first)["id"] == e.kir, "выданный токен жив"
+    e.bot.handle(cb(data, mid=81, cid="c"))                                     # новый вопрос — новое решение
+    assert e.store.plant_by_token(first) is None
+
+
+def test_token_that_did_not_reach_the_chat_is_reported_honestly(bot_env, monkeypatch):
+    e = bot_env
+    real = e.bot.client.call
+    monkeypatch.setattr(e.bot.client, "call", lambda m, p=None: (False, None, 0.0, "нет связи") if m == "sendMessage" else real(m, p))
+    assert e.bot.handle(cb("tky:%d" % e.kir, mid=82)) == "Токен не дошёл, выдай новый"
+    assert "в чат не дошёл" in reqs(e, "editMessageText")[-1]["text"] and "выдан." not in reqs(e, "editMessageText")[-1]["text"]
+    assert e.bot._deletes() == []
+
+
+def test_stale_confirmation_does_nothing(bot_env):
+    e = bot_env
+    old = cb("dly:%d" % e.kir)
+    old["callback_query"]["message"]["date"] = e.clk.t - 601
+    assert e.bot.handle(old) == "Вопрос устарел — нажми кнопку заново."
+    assert e.store.plant_names() == ["Буи", "Кир"]
+    fresh = cb("dly:%d" % e.kir, mid=90)
+    fresh["callback_query"]["message"]["date"] = e.clk.t - 30
+    e.bot.handle(fresh)
+    assert e.store.plant_names() == ["Буи"]
+
+
+def test_skip_backlog_reports_failure_and_keeps_offset_empty(bot_env):
+    e = bot_env
+    e.tg.mode = "500"
+    assert e.bot.skip_backlog() is False and e.bot.offset is None, "не вышло — очередь не считается пропущенной"
+    e.tg.mode = "ok"
+    e.tg.updates = [cb("dly:%d" % e.kir, cid="old")]
+    assert e.bot.skip_backlog() is True and e.bot.offset == 2
+
+
+def test_failed_action_still_answers_the_callback(bot_env, monkeypatch):
+    e = bot_env
+    monkeypatch.setattr(e.store, "ack_alerts", lambda *a, **k: 1 / 0)
+    assert e.bot.handle(cb("ak:%d" % e.kir)) == "Не получилось, смотри панель."
+    assert reqs(e, "answerCallbackQuery")[-1]["text"] == "Не получилось, смотри панель."
+
+
+def test_broken_disk_in_snapshot_is_ignored_not_fatal(bot_env):
+    e = bot_env
+    for bad in ({"free_gb": "много", "total_gb": 500}, {"free_gb": float("nan"), "total_gb": 500}, {"free_gb": 600, "total_gb": 500},
+                {"free_gb": 5, "total_gb": 0}, {"free_gb": True, "total_gb": 500}, "диск"):
+        snap = snap_pulse("kir", KIR_TEXT)
+        snap["snapshot"]["disk"] = bad
+        e.store.ingest(e.kir, snap)
+        assert "Диск:" not in e.bot.handle(msg("Кир")) and e.bot.handle(msg("Все заводы")).startswith("Заводы на "), bad
+    snap["snapshot"].pop("disk")
+    snap["snapshot"]["motion"] = "сломано"
+    e.store.ingest(e.kir, snap)
+    assert "Диск:" not in e.bot.handle(msg("Кир"))
+
+
+def test_plant_named_like_a_menu_word_is_still_reachable(bot_env):
+    e = bot_env
+    e.store.create_plant("Все")
+    assert e.bot.handle(msg("Все")) == "⚪ Все — ещё не выходил на связь"
+    assert e.bot.handle(msg("Все заводы")).startswith("Заводы на ")

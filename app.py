@@ -915,6 +915,7 @@ def micro_settings(
     stage_from: int | None = None,
     stage_to: int | None = None,
     stage_extra: str | None = None,
+    glass_settle_sec: int | None = None,
     fast_enabled: int | None = None,
     fast_frames: int | None = None,
     fast_gap_sec: int | None = None,
@@ -948,6 +949,7 @@ def micro_settings(
     if stage_from is not None: pc["stage_from"] = stage_from
     if stage_to is not None: pc["stage_to"] = stage_to
     if stage_extra is not None: pc["stage_extra"] = list(microscope_fsm.parse_stage_list(stage_extra))     # «20, 21»; пустая строка — без «плюс»
+    if glass_settle_sec is not None: pc["glass_settle_sec"] = max(0, min(60, glass_settle_sec))   # осадка у стекла после подвода, с
     fast = {}                                                  # быстрый цикл на подкачке (стадия 5)
     if fast_enabled is not None: fast["enabled"] = bool(fast_enabled)
     if fast_frames is not None: fast["frames"] = max(1, fast_frames)

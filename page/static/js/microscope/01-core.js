@@ -143,6 +143,7 @@
         trigger_mode: pcTrigMode, arrive_sensor: pcArriveMode,
         sv_from: $("pcSvFrom").value, sv_to: $("pcSvTo").value,
         stage_from: $("pcStageFrom").value, stage_to: $("pcStageTo").value, stage_extra: pcExtraStages().join(","),
+        glass_settle_sec: $("pcGlassSettle").value,
         fast_enabled: $("pcFastOn").checked ? 1 : 0, fast_frames: $("pcFastFrames").value, fast_gap_sec: $("pcFastGap").value,
         fast_pre_wash_sec: $("pcFastPreWash").value, fast_post_wash_sec: $("pcFastPostWash").value,
       };
@@ -951,6 +952,7 @@
           sv("pcDwell", pc.dwell_sec); sv("pcShotInterval", pc.shot_interval_sec);
           sv("pcPause", pc.pause_sec); sv("pcSvFrom", pc.sv_from); sv("pcSvTo", pc.sv_to);
           sv("pcStageFrom", pc.stage_from); sv("pcStageTo", pc.stage_to);
+          sv("pcGlassSettle", pc.glass_settle_sec != null ? pc.glass_settle_sec : 5);     // осадка у стекла после подвода
           if ($("pcStageExtra")) $("pcStageExtra").value = (pc.stage_extra || [20]).join(", ");    // нет ключа — по умолчанию 20 УНВ
           pcStageHintUpdate();
           const fp = pc.fast || {};                                        // быстрый цикл на подкачке

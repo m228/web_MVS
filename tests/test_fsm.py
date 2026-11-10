@@ -46,7 +46,7 @@ def fsm():
     cfg = copy.deepcopy(plate_config.DEFAULTS)
     # короткие тайминги, чтобы цикл проходил за разумное число тиков
     cfg["probe_cycle"].update({"pause_sec": 1, "trigger_mode": "time", "pre_wash_sec": 0,
-                               "post_wash_pause_sec": 0, "dwell_sec": 0, "settle_sec": 0})
+                               "post_wash_pause_sec": 0, "dwell_sec": 0, "settle_sec": 0, "glass_settle_sec": 0})
     cfg["probe_cycle"]["fast"]["enabled"] = False
     return MicroscopeFSM(FakePlate(), cfg)
 
@@ -92,6 +92,28 @@ def _start_cycle(fsm):
     fsm.set_cyclic(True)
     fsm.set_stage(7)
     fsm.set_sv(88.0)
+
+
+def test_glass_settle_waits_after_approach_only():
+    # осадка у стекла: после подвода (22) ждём glass_settle_sec до выдержки (23); отвод/возврат ждут settle_sec (тут 0)
+    cfg = copy.deepcopy(plate_config.DEFAULTS)
+    cfg["probe_cycle"].update({"pause_sec": 1, "trigger_mode": "time", "pre_wash_sec": 0,
+                               "post_wash_pause_sec": 0, "dwell_sec": 0, "settle_sec": 0, "glass_settle_sec": 5})
+    cfg["probe_cycle"]["fast"]["enabled"] = False
+    f = MicroscopeFSM(FakePlate(), cfg)
+    _start_cycle(f)
+    _run_until(f, lambda: f.mode == 22)
+    ticks = 0
+    for _ in range(200):
+        v = f.plate.m1_sp
+        f.plate.telemetry.update({"pos1": v, "pos1_enc": v, "pos1_ai": v})
+        f.tick()
+        if f.mode == 23:
+            break
+        ticks += 1
+    assert 50 <= ticks <= 70, "осадка у стекла должна длиться ~5 с (50 тиков), было %d" % ticks
+    _run_until(f, lambda: f.mode == 0, max_ticks=400)
+    assert f.mode == 0
 
 
 def test_probe_positions_reported_for_retract_and_approach(fsm):

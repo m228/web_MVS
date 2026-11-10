@@ -167,6 +167,8 @@ class MicroscopeFSM:
         self._shot_interval_sec = max(1, int(pc.get("shot_interval_sec", 3)))  # период скринов, с
         self._pause_sec = max(0, int(pc.get("pause_sec", 60)))     # пауза между пробами (режим "time"), с
         self._settle_sec = max(0, int(pc.get("settle_sec", 2)))    # пауза после доезда движения (осадка датчика), с
+        # осадка у стекла: пауза после подвода ПЕРЕД первым кадром (потёки/течение в капле гаснут), с
+        self._glass_settle_sec = max(0, int(pc.get("glass_settle_sec", 5)))
         # режим повтора пробы внутри цикла: "time" (по паузе), "sv" (по целому СВ в [from..to])
         # или "cv" (по готовности CV: прошлая проба разобрана → следующая, см. set_cv_dwell)
         self._trigger_mode = self._norm_trigger(pc.get("trigger_mode", "time"))
@@ -326,6 +328,8 @@ class MicroscopeFSM:
         self._step_start = None       # позиция энкодера на входе в шаг движения (для доезда отвода)
         self._settle = 0              # тиков паузы после доезда (осадка датчика перед переходом)
         self._settle_ticks = max(0, self._settle_sec * 10)
+        self._glass_settle_ticks = max(0, self._glass_settle_sec * 10)
+        self._settle_limit = self._settle_ticks   # длина текущей паузы в тиках (для подписи на странице)
         # состояние гибридного доезда подвода (mode 22)
         self._fa_phase = None         # None / 'coarse' (грубо по 1274) / 'fine' (подгон по 1271)
         self._fa_retry = 0            # сделано подгонов по датчику
@@ -542,10 +546,13 @@ class MicroscopeFSM:
                          "ai": num(pos1_ai), "timeout": bool(timed_out), "sv": num(self.sv), "stage": self.stage,
                          "row": int(self._m1_row), "sp_row": num(self.SP[self._m1_row]) if 0 <= self._m1_row < len(self.SP) else None}
 
-    def _settle_wait(self):
+    def _settle_wait(self, ticks=None):
         """Пауза ПОСЛЕ доезда движения (мотор стоит, датчик оседает — сравнить с энкодером).
+        ticks — своя длина паузы (подвод к стеклу ждёт дольше); None — обычная settle_sec.
         Возврат True = пауза истекла, можно переходить к следующему шагу."""
-        if self._settle >= self._settle_ticks:
+        limit = self._settle_ticks if ticks is None else ticks
+        self._settle_limit = limit
+        if self._settle >= limit:
             self._settle = 0
             return True
         self._settle += 1
@@ -1021,8 +1028,8 @@ class MicroscopeFSM:
                     self._cal_step, num(e), num(c), num(s))
             elif m in (20, 22, 24) and self._settle > 0:
                 # приехал, идёт пауза осадки датчика (сравнить энкодер/аналог в статике)
-                left = (max(0, self._settle_ticks - self._settle) + 9) // 10
-                label = "Приехал — жду %d с (осадка датчика)" % max(1, left)
+                left = (max(0, self._settle_limit - self._settle) + 9) // 10
+                label = ("Приехал — жду %d с (осадка у стекла)" if m == 22 else "Приехал — жду %d с (осадка датчика)") % max(1, left)
             elif m == 20:
                 label = "Отвожу в %d мкм · таймаут %d с" % (self._retract_pos, step_left)
             elif m == 21:
@@ -1405,7 +1412,7 @@ class MicroscopeFSM:
                                                  prefer_ai=(sel == "ai" and pos1_ai is not None))
                 if arrived or self.t > self._step_timeout_ticks:
                     self.cw0 = False                   # по приходу к стеклу — закрыть трубку
-                    if self._settle_wait():            # приехал → пауза settle (осадка датчика) → выдержка
+                    if self._settle_wait(self._glass_settle_ticks):   # приехал → осадка у стекла (потёки гаснут) → выдержка
                         self._note_positions("подвод", self.m1_sp, pos1, pos_enc, pos1_ai, not arrived)
                         self.t = 0
                         self._fa_phase = None; self._fa_retry = 0; self._fa_wait = 0

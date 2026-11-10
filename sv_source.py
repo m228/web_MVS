@@ -20,6 +20,7 @@ import time
 from pymodbus.client import ModbusTcpClient
 
 from logger import log_event
+from stage_map import StageMap
 
 _RECONNECT_BACKOFF = [1, 2, 5, 10, 30]
 
@@ -91,6 +92,10 @@ class SvSource:
         self.requests = 0                     # счётчик запросов к ПЛК (для проверки)
         self._sv_good, self._sv_bad_n, self._sv_bad_raw = None, 0, None
         self._stage_cur, self._stage_cand, self._stage_n = None, None, 0
+        # карта стадий: чужой код контроллера -> наша стадия (профиль «ours» — без перевода)
+        self._stage_map = StageMap(cfg)
+        self._stage_info = (None, None)       # (сырой код с контроллера, его название) — только для показа на странице
+        self._last_unknown_stage_log = 0.0
         self._last_glitch_log = 0.0
         self._last_conn_log = 0.0
         # клапаны (поля «v_*», 0–100 %): копим между пробами дозу (∫ открытие·dt, %·с) и время открытия — проба раз в 1–2 мин,
@@ -125,6 +130,7 @@ class SvSource:
             "values": dict(self._values),          # {sv, stage, temp_app, vacuum, ...}
             "sv": self._values.get("sv"),
             "stage": self._values.get("stage"),
+            "stage_raw": self._stage_info[0], "stage_name": self._stage_info[1],   # код у контроллера и его название (профиль «другая»)
             "host": self.host,
             "protocol": self.protocol,
             "error": self._last_error,
@@ -167,6 +173,22 @@ class SvSource:
                     self._stage_cur, self._stage_cand, self._stage_n = st, None, 0
                 else:
                     v["stage"] = self._stage_cur                       # пока держим прежнюю; в журнал — только если не удержится
+        return v
+
+    def _translate_stage(self, values):
+        """Чужой код стадии -> наша стадия (до фильтра сбоев, чтобы он работал на наших кодах). Кода нет в таблице — стадии нет."""
+        if not self._stage_map.custom:
+            return values
+        raw = values.get("stage")
+        ours, name = self._stage_map.translate(raw)
+        self._stage_info = (raw, name)
+        if raw is not None and ours is None:
+            now = time.time()
+            if now - self._last_unknown_stage_log > 60.0:          # не чаще раза в минуту
+                self._last_unknown_stage_log = now
+                log_event("sv_source", "Код стадии %s есть у контроллера, но нет в карте стадий — стадия не определена" % raw, "warn", {"code": raw})
+        v = dict(values)
+        v["stage"] = ours
         return v
 
     def _note_glitch(self, what, raw, kept):
@@ -346,6 +368,7 @@ class SvSource:
                     values[name] = self._value(name, raw, scale)
                     if name.startswith("v_"):
                         values[name] = valve_pct(values[name])     # обратка вне 0–100 % (65535) — значения нет: на странице «(—)», в пробу не идёт
+                values = self._translate_stage(values)
                 values = self._sanitize(values)
                 self._values = values
                 self._accumulate_valves(values, time.time())

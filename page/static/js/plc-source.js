@@ -8,9 +8,12 @@
     press_top: "Разрежение сверху", press_bot: "Давление снизу", vacuum: "Разрежение (резерв)",
     stage: "Стадия варки", substage: "Подстадия", cook_time: "Время варки, с",
     v_syrup: "Клапан сиропа, %", v_water: "Клапан воды, %", v_product: "Клапан продукта, %",
-    seed_qty: "Затравка",
+    seed_qty: "Затравка", seed_slurry: "Затравка сларри", seed_mu: "Затравка МУ (маточник)",
   };
   const POLICY_LABEL = { None: "без защиты", Basic256Sha256: "Basic256Sha256", Aes128_Sha256_RsaOaep: "Aes128_Sha256_RsaOaep", Aes256_Sha256_RsaPss: "Aes256_Sha256_RsaPss" };
+  // наши стадии (M.mode) — в таблице карты стадий выбираем, во что перевести код чужого контроллера
+  const OUR_STAGES = { 1: "Остановлен", 2: "Набор", 3: "Сгущение", 4: "Затравка", 5: "Подкачка", 6: "Стабилизация", 7: "Рост", 8: "Уваривание",
+    9: "Готовность", 10: "Выгрузка", 11: "Пропарка", 12: "Надвыгрузка", 13: "Собрать аппарат", 14: "Термоудар", 20: "УНВ", 21: "Пауза" };
   const MODE_LABEL = { Sign: "подпись", SignAndEncrypt: "подпись + шифрование" };
 
   function el(tag, attrs, ...kids) {
@@ -49,7 +52,7 @@
     if (!root || root.dataset.plcMounted) return;
     root.dataset.plcMounted = "1";
     root.classList.add("plc-src");
-    const S = { cfg: null, proto: "modbus", active: "sv", test: {}, status: null, running: false, eps: null };
+    const S = { seedUnits: {}, cfg: null, proto: "modbus", active: "sv", test: {}, status: null, running: false, eps: null };
     const inp = {};                                   // поля ввода по ключу
     const rowVal = { modbus: {}, opcua: {} };         // ячейки «значение» по полю
     const rowNode = {}, rowScaleOp = {}, rowOp = {};
@@ -122,23 +125,55 @@
       el("div", { class: "plc-two" }, tree,
         el("div", { class: "plc-map" }, el("p", { class: "plc-hint", text: "Выбери поле в таблице, потом тег в дереве слева — он назначится на поле." }), opTable)));
 
-    root.replaceChildren(head, msg, paneMb, paneOp);
+    // ── карта стадий: контроллер наш (код как есть) или чужой (код переводим в наш по таблице) ──
+    inp.sm_profile = el("select", { class: "plc-in", title: "Наша — код стадии с контроллера идёт как есть. Другая — контроллер чужой: его коды переводятся в наши по таблице ниже",
+      onchange: syncStageMap }, el("option", { value: "ours", text: "Наша" }), el("option", { value: "custom", text: "Другая (по таблице)" }));
+    const smTable = el("table", { class: "plc-fields plc-sm__table" },
+      el("thead", {}, el("tr", {}, el("th", { text: "Код у контроллера" }), el("th", { text: "Название у них" }), el("th", { text: "Наша стадия" }), el("th"))),
+      el("tbody"));
+    const smBox = el("div", { class: "plc-sm__box" }, smTable,
+      el("div", { class: "plc-row" },
+        el("button", { type: "button", class: "btn-secondary plc-btn", text: "+ Строка", onclick: () => smAddRow({ code: "", name: "", to: 1 }) }),
+        el("button", { type: "button", class: "btn-secondary plc-btn", text: "Сбросить к списку по умолчанию", title: "Вернуть таблицу, как её дал Макс 10.11 (СТАРТ ШАГ … ПРОПАРКА)",
+          onclick: () => smFill((S.cfg.stage_map || {}).default_rows || []) })),
+      el("p", { class: "plc-hint", text: "Кода нет в таблице — стадия не определена (цикл пробы не стартует), в журнале появится запись. Не забудь «Сохранить»." }));
+    const smDetails = el("details", { class: "plc-sm__det" }, el("summary", { text: "Таблица кодов" }), smBox);
+    const smLive = el("span", { class: "plc-sm__live" });
+    const stageMapBar = el("div", { class: "plc-sm" },
+      el("div", { class: "plc-row" }, lab("Карта стадий", inp.sm_profile), smLive), smDetails);
+    function smAddRow(r) {
+      const code = el("input", { type: "number", class: "plc-in plc-in--s", min: "0", max: "65535", value: r.code ?? "" });
+      const name = el("input", { type: "text", class: "plc-in plc-in--m", maxlength: "40", value: r.name || "", spellcheck: "false" });
+      const to = el("select", { class: "plc-in" }, ...Object.entries(OUR_STAGES).map(([k, v]) => el("option", { value: k, text: k + " " + v })));
+      to.value = String(r.to);
+      const tr = el("tr", {}, el("td", {}, code), el("td", {}, name), el("td", {}, to),
+        el("td", {}, el("button", { type: "button", class: "plc-x", title: "Убрать строку", text: "×", onclick: () => tr.remove() })));
+      tr._get = () => ({ code: code.value, name: name.value.trim(), to: to.value });
+      smTable.tBodies[0].append(tr);
+    }
+    function smFill(rows) { smTable.tBodies[0].replaceChildren(); rows.forEach(smAddRow); }
+    function smRows() { return [...smTable.tBodies[0].rows].map((tr) => tr._get()).filter((r) => String(r.code).trim() !== ""); }
+    function syncStageMap() { smDetails.hidden = inp.sm_profile.value !== "custom"; smLive.hidden = smDetails.hidden; }
+
+    root.replaceChildren(head, msg, stageMapBar, paneMb, paneOp);
 
     function say(text, kind) { msg.textContent = text || ""; msg.dataset.kind = kind || ""; }
 
     // ── таблицы полей ──
-    // подпись поля; у затравки — ещё выбор единицы (кг / л / %), один на обе таблицы
+    // подпись поля; у каждого вида затравки (seed_fields с сервера: общая, сларри, МУ) — свой выбор единицы (кг / л / %), один на обе таблицы
     const unitSels = [];
     function fieldLabel(f) {
-      if (f !== "seed_qty") return el("td", { text: LABELS[f] || f });
+      const sf = S.cfg && S.cfg.seed_fields && S.cfg.seed_fields[f];
+      if (!sf) return el("td", { text: LABELS[f] || f });
       const units = (S.cfg && S.cfg.seed_units) || { kg: "кг", l: "л", pct: "%" };
-      const sel = el("select", { class: "plc-in plc-unit", title: "В чём завод подписывает затравку — так она и подписана в трендах и отчёте",
+      const sel = el("select", { class: "plc-in plc-unit", title: "В чём завод подписывает эту затравку — так она и подписана в трендах и отчёте",
         onclick: (e) => e.stopPropagation(),
-        onchange: () => { S.seedUnit = sel.value; unitSels.forEach((s) => { s.value = S.seedUnit; }); } },
+        onchange: () => { S.seedUnits[f] = sel.value; unitSels.forEach((s) => { if (s._f === f) s.value = sel.value; }); } },
         ...Object.entries(units).map(([k, v]) => el("option", { value: k, text: v })));
-      sel.value = S.seedUnit || "kg";
+      sel.value = S.seedUnits[f] || "kg";
+      sel._f = f;
       unitSels.push(sel);
-      return el("td", { class: "plc-unitcell" }, el("span", { text: LABELS[f] + ", " }), sel);
+      return el("td", { class: "plc-unitcell" }, el("span", { text: (LABELS[f] || sf.title) + ", " }), sel);
     }
     function buildTables(fields) {
       const tbMb = mbTable.tBodies[0], tbOp = opTable.tBodies[0];
@@ -167,7 +202,7 @@
 
     function fill(cfg) {
       S.cfg = cfg;
-      S.seedUnit = cfg.seed_unit || "kg";
+      S.seedUnits = Object.fromEntries(Object.entries(cfg.seed_fields || {}).map(([f, x]) => [f, x.unit || "kg"]));     // единица каждого вида затравки: kg | l | pct
       const mb = cfg.modbus || {}, op = cfg.opcua || {};
       buildTables(cfg.fields || Object.keys(LABELS));
       inp.enabled.checked = !!cfg.enabled;
@@ -184,6 +219,10 @@
       inp.op_auth.value = op.auth || "anonymous"; inp.op_username.value = op.username || ""; inp.op_timeout.value = op.timeout_s ?? 3;
       inp.op_password.value = "";
       inp.op_password.placeholder = op.has_password ? "задан — пусто = прежний" : "";
+      const sm = cfg.stage_map || {};
+      inp.sm_profile.value = sm.profile || "ours";
+      smFill(sm.rows || []);
+      syncStageMap();
       S.test = {};
       setProto(cfg.protocol || "modbus");
       syncSecurity();
@@ -219,7 +258,9 @@
       });
       const op = { ...connBody(), fields: opFields };
       if (!op.password) delete op.password;                  // пусто — пароль на ПК остаётся прежним
-      return { enabled: inp.enabled.checked, protocol: S.proto, period_s: period, seed_unit: S.seedUnit || "kg",
+      const seedUnits = Object.fromEntries(Object.entries((S.cfg && S.cfg.seed_fields) || {}).map(([f, x]) => [x.unit_key, S.seedUnits[f] || "kg"]));   // seed_unit / seed_slurry_unit / seed_mu_unit
+      return { enabled: inp.enabled.checked, protocol: S.proto, period_s: period, ...seedUnits,
+        stage_map: { profile: inp.sm_profile.value, rows: smRows() },
         modbus: { host: inp.mb_host.value.trim(), port: Number(inp.mb_port.value) || 502, unit: Number(inp.mb_unit.value) || 0, fields: mbFields },
         opcua: op };
     }
@@ -234,9 +275,12 @@
         if (!cell) return;
         const has = Object.prototype.hasOwnProperty.call(S.test, f);
         cell.textContent = fmt(has ? S.test[f] : live[f]);
+        if (f === "stage" && !has && st.stage_raw != null && inp.sm_profile.value === "custom")      // чужой код -> наша стадия
+          cell.textContent = fmt(live[f]) + " ← " + st.stage_raw + (st.stage_name ? " " + st.stage_name : "");
         cell.classList.toggle("is-test", has);
         cell.title = has ? "результат «Проверить»" : live[f] != null ? "читается сейчас" : "";
       });
+      smLive.textContent = st.connected && st.stage_raw != null ? "сейчас: " + st.stage_raw + (st.stage_name ? " " + st.stage_name : "") + " → наша " + fmt(st.stage) : "";
       if (!st.enabled) { badge.textContent = S.running ? "выключено" : "микроскоп выключен"; badge.className = "micro-plc-badge"; }
       else if (st.connected) { badge.textContent = "есть связь · " + (st.protocol === "opcua" ? "OPC UA" : "Modbus"); badge.className = "micro-plc-badge is-on"; }
       else { badge.textContent = "нет связи · " + (st.protocol === "opcua" ? "OPC UA" : "Modbus"); badge.className = "micro-plc-badge is-off"; }

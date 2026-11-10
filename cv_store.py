@@ -334,6 +334,7 @@ def _hist_row(result: dict) -> Optional[dict]:
         "syrup_dose": plc.get("syrup_dose"), "syrup_s": plc.get("syrup_s"), "water_dose": plc.get("water_dose"), "water_s": plc.get("water_s"),
         "product_dose": plc.get("product_dose"), "product_s": plc.get("product_s"),
         "seed_qty": plc.get("seed_qty"),          # количество затравки из ПЛК (единица — sv_source.seed_unit)
+        "seed_slurry": plc.get("seed_slurry"), "seed_mu": plc.get("seed_mu"),     # затравка сларри / из маточника МУ (единицы — seed_slurry_unit / seed_mu_unit)
         # чем снята проба: имя модели и imgsz — пробы разных моделей сравнивать нельзя (абсолютные цифры мелочи сдвигаются)
         "model": _model_tag(result.get("detector"), result.get("infer")),
         "count": s.get("count"), "mean": sz.get("mean"), "median": sz.get("median"),
@@ -548,7 +549,7 @@ EXPORT_COLUMNS = ["ts", "t", "stage", "substage", "phase", "sv", "temp", "level"
                   "agg_m1", "agg_m2", "agg_m3", "agg_area", "agg_n", "vtot_m1", "vtot_m2", "vtot_m3", "fines_side_mm", "fines_um", "k_thick", "fines_from_sv",
                   "n_needle", "n_aggregate", "n_crooked", "n_tiny", "n_huge", "suspect",
                   "frac_zones", "frac_pct", "frames",
-                  "v_syrup", "v_water", "v_product", "syrup_dose", "syrup_s", "water_dose", "water_s", "product_dose", "product_s", "model", "seed_qty"]
+                  "v_syrup", "v_water", "v_product", "syrup_dose", "syrup_s", "water_dose", "water_s", "product_dose", "product_s", "model", "seed_qty", "seed_slurry", "seed_mu"]
 
 
 def sieve_avg(r: dict, i: int) -> Optional[float]:

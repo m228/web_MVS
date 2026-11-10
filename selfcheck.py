@@ -361,7 +361,7 @@ MODULES = [
     "paths", "logger", "camera_core", "camera_core.gentl_env", "camera_core.utils", "camera_core.imaging",
     "camera_core.base_worker", "camera_core.gige_worker", "camera_core.rtsp_worker", "camera_core.camera_manager",
     "sdk_gige", "camera_params", "board_guard", "dahua_control", "net_tools", "rtsp_store",
-    "save_settings", "plate_config", "sv_source", "opcua_client", "plc_source", "microscope_plc", "microscope_fsm",
+    "save_settings", "plate_config", "sv_source", "opcua_client", "plc_source", "stage_map", "microscope_plc", "microscope_fsm",
     "microscope_service", "cv_analyzer", "cv_volume", "substages", "db", "report", "boil_compare", "cv_fracture", "cv_client", "video_client", "motion_client", "level_client", "services", "delta_update", "cv_store", "boil_archive", "fracture_lab", "cv_pipeline", "model_check", "boil_anomaly", "other_plants", "cam_events", "cam_monitor", "cam_report", "sysmon",
     "updater", "update_health", "auto_update", "autostart", "diag", "app", "mvsdk",
 ]

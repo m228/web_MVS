@@ -26,6 +26,10 @@
   const substageName = (c) => {
     if (c == null || c === "") return null;
     const n = Math.round(Number(c)); if (isNaN(n)) return null;
+    if (n >= 10 && Object.keys(stageMapRows).length) {                  // чужой контроллер: имя из таблицы карты стадий, своя строка или строка десятка + подэтап («ВАРКА 4»)
+      const own = stageMapRows[n], base = stageMapRows[Math.floor(n / 10) * 10];
+      if (own || base) return own || base + (n % 10 ? " " + (n % 10) : "");
+    }
     if (SUBSTAGE_NAMES[n]) return SUBSTAGE_NAMES[n];
     const st = Math.floor(n / 10), sub = n % 10, base = SUBSTAGE_STAGES[st];
     return base ? base + (sub ? " " + sub : "") : "подстадия " + n;
@@ -35,7 +39,7 @@
   // пояснения к стадиям — как их называл Макс (память varka-stages); чего нет в списке, не придумываем
   const STAGE_HELP = { 5: "набор уровня", 6: "набор СВ", 7: "(!!!)", 8: "набор СВ" };
   // карта стадий чужого контроллера (вкладка «ПЛК»): {наша стадия: {name, codes}} — её названия важнее зашитых наших; пусто — наши
-  let stageMapNames = {};
+  let stageMapNames = {}, stageMapRows = {};
   const stageNameOf = (k) => { const t = stageMapNames[k]; return (t && t.name) || STAGE_NAMES[k]; };
   // «плюс» стадии (вне диапазона «от — до», пробы берутся и там): поле «Плюс стадии», по умолчанию 20 УНВ (удержание на воде); как parse_stage_list в microscope_fsm.py
   function pcExtraStages() {
@@ -63,11 +67,17 @@
     pcStageInfoBuild(x, y);
   }
   // названия стадий из карты: при загрузке страницы и сразу после сохранения карты на вкладке «ПЛК» (plc-source.js шлёт stagemap-changed)
+  const stageMapApply = (sm) => {
+    sm = sm || {};
+    stageMapNames = sm.names || {};
+    stageMapRows = {};                                                    // названия кодов чужого контроллера — для подстадий (профиль «другая»)
+    if (sm.profile === "custom") (sm.rows || []).forEach((r) => { if (r && r.name) stageMapRows[Number(r.code)] = r.name; });
+  };
   async function pcStageNamesLoad() {
-    try { stageMapNames = (((await api("/api/plc/source")).config || {}).stage_map || {}).names || {}; } catch (e) { }
+    try { stageMapApply(((await api("/api/plc/source")).config || {}).stage_map); } catch (e) { }
     pcStageHintUpdate();
   }
-  window.addEventListener("stagemap-changed", (ev) => { stageMapNames = (ev.detail && ev.detail.names) || {}; pcStageHintUpdate(); });
+  window.addEventListener("stagemap-changed", (ev) => { stageMapApply(ev.detail); pcStageHintUpdate(); });
 
   let manualOn = false;
   let cfg = null;

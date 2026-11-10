@@ -6,7 +6,7 @@
 Настройка — plate_config.sv_source.stage_map:
   profile = "ours"   — контроллер наш, код стадии идёт как есть (по умолчанию);
   profile = "custom" — контроллер чужой, переводим по таблице rows [{code, name, to}] (пусто — DEFAULT_ROWS).
-Кода нет в таблице — стадии нет (None), не угадываем.
+Точного кода нет — берём строку его десятка (64 -> 60: важна первая цифра; для кодов от 10). Нет и её — стадии нет (None).
 """
 from __future__ import annotations
 
@@ -60,7 +60,10 @@ class StageMap:
     def translate(self, code):
         if not self.custom or code is None:
             return code, None
-        r = self._by_code.get(int(code))
+        code = int(code)
+        r = self._by_code.get(code)
+        if r is None and code >= 10:                       # точного кода нет (64) — берём строку своего десятка (60): важна первая цифра
+            r = self._by_code.get(code // 10 * 10)
         return (r["to"], r["name"] or None) if r else (None, None)
 
 

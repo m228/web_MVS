@@ -27,6 +27,8 @@ import net_tools
 import updater
 import auto_update
 from microscope_service import micro
+import plc_source
+import opcua_client
 import cv_client
 import video_client
 import motion_client
@@ -366,6 +368,101 @@ def micro_telemetry():
 @app.get("/api/micro/status")
 def micro_status():
     return micro.status()
+
+
+# ---------- Источник данных аппарата (ПЛК): Modbus или OPC UA — ТОЛЬКО чтение (вкладка «ПЛК») ----------
+# POST — в теле бывают логин/пароль OPC UA, им не место в адресе запроса. Пароль наружу не отдаётся.
+
+def _plc_payload():
+    return {"config": plc_source.public(), "live": micro.sv_status(), "running": micro.plc_running()}
+
+
+@app.get("/api/plc/source")
+def plc_source_get():
+    return _plc_payload()
+
+
+@app.post("/api/plc/source")
+def plc_source_save(payload: dict = Body(...)):
+    try:
+        patch, secret = plc_source.normalize(payload)
+        if secret is not None:
+            opcua_client.save_secret(**secret)
+        micro.set_plc_source(patch)
+    except ValueError as e:
+        return {"status": "error", "error": str(e)}
+    api_log("api.plc.source", "Сохранён источник данных аппарата (%s)" % patch.get("protocol", "—"),
+            payload={"patch": patch, "login_changed": secret is not None})
+    return {"status": "ok", **_plc_payload()}
+
+
+@app.post("/api/plc/modbus_test")
+def plc_modbus_test(payload: dict = Body(...)):
+    """«Проверить» на стороне Modbus: прочитать указанные регистры один раз (FC03), ничего не пишем."""
+    try:
+        values = plc_source.modbus_read_test(payload.get("host"), payload.get("port", 502), payload.get("unit", 255),
+                                             payload.get("regs") or [])
+    except Exception as e:
+        return {"ok": False, "error": str(e) or e.__class__.__name__}
+    return {"ok": True, "values": {str(k): v for k, v in values.items()}}
+
+
+def _opcua_error(e):
+    return {"ok": False, "error": opcua_client.explain(e)}
+
+
+@app.post("/api/opcua/endpoints")
+def opcua_endpoints(payload: dict = Body(...)):
+    """Что предлагает сервер (политики, режимы, способы входа) — без входа."""
+    try:
+        return {"ok": True, "endpoints": opcua_client.get_endpoints(payload.get("endpoint"), float(payload.get("timeout_s") or 3))}
+    except Exception as e:
+        return _opcua_error(e)
+
+
+@app.post("/api/opcua/browse")
+def opcua_browse(payload: dict = Body(...)):
+    """Дети узла (node пустой — Objects) с текущими значениями: «проводник» тегов."""
+    try:
+        conn, secret = plc_source.conn_from_body(payload)
+        node = str(payload.get("node") or "").strip() or None
+        return {"ok": True, "items": opcua_client.with_conn(conn, lambda c: c.browse(node), secret)}
+    except Exception as e:
+        return _opcua_error(e)
+
+
+@app.post("/api/opcua/read")
+def opcua_read(payload: dict = Body(...)):
+    """«Проверить»: прочитать выбранные теги одним запросом (только чтение)."""
+    try:
+        conn, secret = plc_source.conn_from_body(payload)
+        nodes = [str(n).strip() for n in (payload.get("nodes") or []) if str(n or "").strip()][:200]
+        return {"ok": True, "values": opcua_client.with_conn(conn, lambda c: c.read_many(nodes), secret)}
+    except Exception as e:
+        return _opcua_error(e)
+
+
+@app.get("/api/opcua/subnets")
+def opcua_subnets():
+    return {"subnets": opcua_client.local_subnets()}
+
+
+@app.get("/api/opcua/scan")
+def opcua_scan(subnet: str, port: int = 4840):
+    """Поиск серверов OPC UA в подсети: у кого открыт порт (по умолчанию 4840). Только попытка соединения."""
+    try:
+        found = opcua_client.scan(subnet, port)
+    except Exception as e:
+        return _opcua_error(e)
+    api_log("api.opcua.scan", "Поиск серверов OPC UA в %s:%d — найдено %d" % (subnet, port, len(found)))
+    return {"ok": True, "servers": found}
+
+
+@app.get("/api/opcua/client_cert")
+def opcua_client_cert():
+    """Сертификат клиента web_MVS (DER) — его один раз «доверяют» на сервере OPC UA для шифрованного подключения."""
+    cert, _ = opcua_client.ensure_client_cert()
+    return FileResponse(str(cert), media_type="application/pkix-cert", filename="web_mvs_client.der")
 
 
 @app.get("/api/micro/command")

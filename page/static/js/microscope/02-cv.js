@@ -155,17 +155,18 @@
   // переключатель нижней секции: телеметрия платы ↔ распознавание
   function wireTeleToggle() {
     const seg = document.querySelector(".micro-tele-seg");
-    const btns = { plate: $("telePlateBtn"), cv: $("teleCvBtn"), trend: $("teleTrendBtn"), cfg: $("teleCfgBtn"), report: $("teleReportBtn"), compare: $("teleCompareBtn"), video: $("teleVideoBtn") };
-    const panes = { plate: $("teleStripPlate"), cv: $("teleStripCv"), trend: $("teleStripTrend"), cfg: $("teleStripCfg"), report: $("teleStripReport"), compare: $("teleStripCompare"), video: $("teleStripVideo") };
+    const btns = { plate: $("telePlateBtn"), plc: $("telePlcBtn"), cv: $("teleCvBtn"), trend: $("teleTrendBtn"), cfg: $("teleCfgBtn"), report: $("teleReportBtn"), compare: $("teleCompareBtn"), video: $("teleVideoBtn") };
+    const panes = { plate: $("teleStripPlate"), plc: $("teleStripPlc"), cv: $("teleStripCv"), trend: $("teleStripTrend"), cfg: $("teleStripCfg"), report: $("teleStripReport"), compare: $("teleStripCompare"), video: $("teleStripVideo") };
     if (!btns.plate || !btns.cv) return;
     function set(mode) {
-      if (seg) ["cv", "trend", "cfg", "report", "compare", "video"].forEach((k) => seg.classList.toggle(k, mode === k));
+      if (seg) ["plc", "cv", "trend", "cfg", "report", "compare", "video"].forEach((k) => seg.classList.toggle(k, mode === k));
       Object.keys(btns).forEach((k) => {
         if (btns[k]) btns[k].classList.toggle("is-active", k === mode);
         if (panes[k]) panes[k].hidden = k !== mode;
       });
       const pw = $("projWrap"); if (pw) pw.hidden = mode !== "cv" && mode !== "trend";    // название проекта — только на «Распознавании» и «Трендах»
-      if (mode !== "plate") cvRefresh();
+      if (mode === "plc") { if (window.PlcSource) window.PlcSource.mount($("plcSourceMicro")); }    // «Вакуум-аппарат (ПЛК)» — рисуется при первом открытии
+      else if (mode !== "plate") cvRefresh();
       if (mode === "trend") setTimeout(cvDrawTrend, 30);     // canvas берёт ширину у показанной вкладки
       if (mode === "compare" && typeof cmpShown === "function") cmpShown();      // журнал изменений и группы — при первом открытии (08-compare.js)
     }

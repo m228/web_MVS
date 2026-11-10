@@ -1081,6 +1081,7 @@
     if (!plc || !plc.enabled) { wrap.classList.add("is-off"); if (el) el.textContent = "ПЛК: выкл"; }
     else if (plc.connected) { wrap.classList.add("is-on"); if (el) el.textContent = "ПЛК: обмен"; }
     else { wrap.classList.add("is-warn"); if (el) el.textContent = "ПЛК: нет связи"; }
+    wrap.title = plc && plc.enabled ? "Источник данных аппарата: " + (plc.protocol === "opcua" ? "OPC UA" : "Modbus TCP") + (plc.error ? " — " + plc.error : "") : "Связь с ПЛК аппарата (данные варки)";
   }
 
   const num = (v) => (v == null ? "—" : v);

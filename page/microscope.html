@@ -836,6 +836,7 @@
             <div class="micro-win-seg micro-tele-seg" role="tablist" aria-label="Телеметрия">
               <span class="micro-win-pill" id="telePill" aria-hidden="true"></span>
               <button type="button" class="micro-win-btn is-active" id="telePlateBtn" data-tele="plate">Плата</button>
+              <button type="button" class="micro-win-btn" id="telePlcBtn" data-tele="plc" title="Вакуум-аппарат (ПЛК): откуда читать СВ, стадию, температуру… — Modbus или OPC UA (только чтение)">ПЛК</button>
               <button type="button" class="micro-win-btn" id="teleCvBtn" data-tele="cv">Распознавание</button>
               <button type="button" class="micro-win-btn" id="teleTrendBtn" data-tele="trend">Тренды</button>
               <button type="button" class="micro-win-btn" id="teleCfgBtn" data-tele="cfg">CV</button>
@@ -882,7 +883,7 @@
               </div>
             </div>
             <div class="micro-tele-col">
-              <p class="micro-tele-group">Вакуум-аппарат (ПЛК) <span class="micro-plc-badge" id="plcBadge" title="Источник данных аппарата по Modbus">нет данных</span></p>
+              <p class="micro-tele-group">Вакуум-аппарат (ПЛК) <span class="micro-plc-badge" id="plcBadge" title="Источник данных аппарата (Modbus или OPC UA)">нет данных</span></p>
               <div class="micro-tiles micro-tiles--one">
                 <div class="micro-tile"><span>СВ (Brix)</span><b id="pcSv">(—)</b></div>
                 <div class="micro-tile"><span>Стадия варки</span><b id="pcStage">(—)</b></div>
@@ -895,7 +896,7 @@
                 <div class="micro-tile" title="Обратка клапана воды в коллектор, %"><span>Клапан воды</span><b id="pcWater">(—)</b></div>
                 <div class="micro-tile" title="Головной клапан продукта: из коллектора в аппарат, обратка %"><span>Клапан продукта</span><b id="pcProduct">(—)</b></div>
               </div>
-              <p class="micro-plc-note">адреса Modbus в <code>plate_config.json → sv_source</code></p>
+              <p class="micro-plc-note">настройка — вкладка «ПЛК» внизу</p>
             </div>
             <div class="micro-tele-col micro-tele-col--app">
               <p class="micro-tele-group">Вакуум-аппарат</p>
@@ -1252,6 +1253,8 @@
           </div>
 
           <!-- «CV» — настройки распознавания (4-я вкладка нижней полосы) -->
+          <!-- Вакуум-аппарат (ПЛК): источник данных аппарата — Modbus / OPC UA (plc-source.js) -->
+          <div class="micro-tele-plc" id="teleStripPlc" hidden><div id="plcSourceMicro"></div></div>
           <div class="micro-tele-cfg" id="teleStripCfg" hidden>
             <div class="micro-cfg-top">
               <label class="micro-switch" for="cvEnable" title="Включить распознавание кристаллов по пробам">
@@ -1360,6 +1363,7 @@
 
       <script src="/static/js/api.js"></script>
       <script src="/static/js/update-state.js"></script>
+      <script src="/static/js/plc-source.js"></script>
       <script src="/static/js/microscope/01-core.js"></script>
       <script src="/static/js/microscope/02-cv.js"></script>
       <script src="/static/js/microscope/03-frac.js"></script>

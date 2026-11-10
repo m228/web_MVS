@@ -89,7 +89,8 @@ class MicroscopeService:
                                           fallback_host=self.cfg.get("host", ""))
                 self.sv_source.start()
             self.guard = BoardGuard({"camera": self._guard_camera, "state": lambda: self.fsm.state, "status": lambda: self.plate.status,
-                                     "ext": lambda: self.plate.ext, "reboot": self.plate.reboot})
+                                     "ext": lambda: self.plate.ext, "reboot": self.plate.reboot,
+                                     "light": self.plate.reapply_led})
             self.guard.start()
             self._started = True
             if self._zip_thread is None or not self._zip_thread.is_alive():

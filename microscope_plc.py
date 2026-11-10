@@ -49,6 +49,7 @@ class PlateClient:
         # слова OUT из карты "out" — их ПК и переписывает после переподключения. Остальные
         # (1251/1252/1255/1256/1259) ПК не пишет: их смысл в прошивке не разобран, нули туда не льём.
         self._out_owned = sorted({int(i) for i in config.get("out", {}).values() if 0 <= int(i) < self._block_len})
+        self._uptime_prev = None   # прошлый аптайм платы (1523): если стал меньше — плата перезапускалась
         self._last_write_warn = 0.0
         self._last_read_warn = 0.0
 
@@ -390,6 +391,62 @@ class PlateClient:
             self._last_read_warn = now
             log_event("microscope_plc", msg, "warn", payload)
 
+    def _restore_after_restart(self):
+        """Плата перезапустилась (или мы только подключились): все наши слова OUT пишем заново, подсветку и её частоту
+        возвращаем такими, какими их оставили (см. _restore_led)."""
+        for i in self._out_owned:
+            self._out_last[i] = None
+        self._restore_led()
+
+    def _restore_led(self):
+        """Последние яркость, «вкл» и частота LED — из конфига (их туда сохраняет led_native, он же держит автомат в том же
+        состоянии). Яркость и «вкл» кладём в OUT-блок: в РУЧНОМ режиме автомат его не обновляет, и после перезапуска туда
+        ушли бы старые слова. Частота (1202) лежит вне OUT-блока — одиночной записью. Не задано (0) — не трогаем."""
+        c = self.cfg
+        if "led_bright" in c.get("out", {}) and c.get("led_bright") is not None:
+            self.set_out(self._out_idx("led_bright"), int(c["led_bright"]))
+            self._out_last[self._out_idx("led_bright")] = None    # не «уже записано»: плата могла остаться с нулём
+        if "led_on" in c.get("out", {}) and c.get("led_on") is not None:
+            self.set_out_bit(self._out_idx("led_on"), 0, bool(c["led_on"]))
+            self._out_last[self._out_idx("led_on")] = None
+        freq = int(c.get("led_freq") or 0)
+        reg = c.get("led", {}).get("freq")
+        if freq > 0 and reg is not None:
+            self.write_reg(int(reg), freq)
+
+    def led_mismatch(self):
+        """Что реально стоит в плате (читаем в ext: 1257 яркость, 1202 частота) против сохранённого в конфиге.
+        {} — совпадает или плата это не отдала; иначе {"bright": (должно, стоит), "freq": (должно, стоит)}."""
+        c, ext, diff = self.cfg, self.ext, {}
+        want_b, got_b = c.get("led_bright"), ext.get("led_bright")
+        if c.get("led_on") and want_b and got_b is not None and int(got_b) != int(want_b):
+            diff["bright"] = (int(want_b), int(got_b))
+        want_f, got_f = int(c.get("led_freq") or 0), ext.get("led_freq")
+        if want_f > 0 and got_f is not None and int(got_f) != want_f:
+            diff["freq"] = (want_f, int(got_f))
+        return diff
+
+    def reapply_led(self):
+        """Если подсветка в плате разошлась с сохранённой (на странице 12 %, а по факту 0 и картинка чёрная) — записать
+        сохранённые значения заново. Возвращает, что расходилось ({} — всё совпало, ничего не писали)."""
+        diff = self.led_mismatch()
+        if diff:
+            self._restore_led()
+        return diff
+
+    def _check_restart(self, ext):
+        """Аптайм платы (1523) стал меньше прежнего — она перезапустилась (кнопкой, нашим ребутом, питанием). Сокет при этом
+        мог не смениться, а записи в момент загрузки терялись, поэтому восстанавливаем уже по живому ответу. Раз в 18 ч
+        аптайм переходит через 65536 и тоже «уменьшается» — тогда мы лишь повторно пишем те же значения."""
+        up = ext.get("uptime_s")
+        if not isinstance(up, (int, float)):
+            return
+        if self._uptime_prev is not None and up + 10 < self._uptime_prev:
+            log_event("microscope_plc", "Плата перезапустилась — возвращаю яркость, частоту и выходы", "info",
+                      {"uptime_s": up, "was": self._uptime_prev})
+            self._restore_after_restart()
+        self._uptime_prev = up
+
     def _write_changed_out(self):
         # pymodbus 3.x после сбоя сам переоткрывает сокет внутри execute() — _connected и
         # _ensure_connected перезагрузку платы не видят. А плата после неё стоит с умолчаниями
@@ -398,8 +455,7 @@ class PlateClient:
         sock = getattr(self._client, "socket", None)
         if sock is not None and sock is not self._out_sock:
             self._out_sock = sock
-            for i in self._out_owned:
-                self._out_last[i] = None
+            self._restore_after_restart()
         with self._out_lock:
             out = list(self._out)
         for i, v in enumerate(out):
@@ -484,6 +540,7 @@ class PlateClient:
                     ext = self._read_ext()
                     with self._ext_lock:
                         self._ext = ext
+                    self._check_restart(ext)
             except Exception as e:
                 read_fails += 1
                 self._last_error = str(e)

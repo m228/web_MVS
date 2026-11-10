@@ -23,6 +23,7 @@ from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+AS_BLOCKS = 600                              # блоков в папке PCS/AS05 — больше, чем дерево показывает за раз (BROWSE_LIMIT)
 TAGS = {                                     # имя тега → (начальное значение, тип OPC UA)
     "Brix": (86.4, "Float"),
     "T_app": (71.2, "Float"),
@@ -111,6 +112,18 @@ class Sim:
         await recipe.add_variable(ua.NodeId("VA.Recipe.SV_target", ns), "SV_target", ua.Variant(91.5, ua.VariantType.Float))
         broken = await va.add_variable(ua.NodeId("VA.Broken", ns), "Broken", ua.Variant(0.0, ua.VariantType.Float))
         await broken.write_value(ua.DataValue(ua.Variant(0.0, ua.VariantType.Float), StatusCode_=ua.StatusCode(ua.StatusCodes.BadNotConnected)))
+        # Как у Siemens PCS7: AS с сотнями блоков (сервер отдаёт их не по алфавиту), один и тот же узел по двум ссылкам
+        # (Organizes + HasNotifier) и два разных узла с одинаковым именем.
+        pcs = await srv.nodes.objects.add_folder(ua.NodeId("PCS", ns), "PCS")
+        as05 = await pcs.add_folder(ua.NodeId("PCS.AS05", ns), "AS05")
+        for i in range(AS_BLOCKS - 1, -1, -1):
+            await as05.add_folder(ua.NodeId("PCS.AS05.B%03d" % i, ns), ua.QualifiedName("A_PRODUCT/PA%03d" % (i + 100), ns))
+        pa012 = await as05.add_folder(ua.NodeId("PCS.AS05.PA012", ns), ua.QualifiedName("A_PRODUCT/APRODUCT/PA012", ns))
+        await pa012.add_variable(ua.NodeId("PCS.AS05.PA012.PV", ns), ua.QualifiedName("PA012.PV_In#Value", ns), ua.Variant(42.5, ua.VariantType.Float))
+        oss = await pcs.add_object(ua.NodeId("PCS.OSS01", ns), ua.QualifiedName("OSS_OSS01::", ns))
+        await pcs.add_reference(oss.nodeid, ua.ObjectIds.HasNotifier, forward=True, bidirectional=False)
+        for k in ("A", "B"):
+            await pcs.add_object(ua.NodeId("PCS.OSS05" + k, ns), ua.QualifiedName("OSS_OSS05::", ns))
         async with srv:
             self._ready.set()
             t0 = time.time()

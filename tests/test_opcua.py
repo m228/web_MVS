@@ -267,6 +267,38 @@ def test_api_save_restarts_only_source(data_dir, pki, sim, monkeypatch):
     assert ep["ok"] is False and ep["error"]
 
 
+# ───────────────────────── большой узел и дубли (PCS7, 10.11) ─────────────────────────
+def test_browse_big_node_sorted_before_cut_and_find(sim, pki):
+    """601 ребёнок в порядке сервера «с конца»: раньше брали первые 500 до сортировки — PA012 пропадал."""
+    from opcua_sim import AS_BLOCKS
+    as05 = "ns=%d;s=PCS.AS05" % sim.ns
+    def work(c):
+        return c.browse_page(as05), c.browse_page(as05, "pa012"), c.browse_page(as05, "нет такого"), c.browse("ns=%d;s=PCS.AS05.PA012" % sim.ns)
+    page, found, none, pa012 = opcua_client.with_conn(secure_cfg(sim), work, {"username": "op", "password": "123"})
+    assert page["total"] == AS_BLOCKS + 1 and len(page["items"]) == opcua_client.BROWSE_LIMIT
+    names = [x["name"] for x in page["items"]]
+    assert names[0] == "A_PRODUCT/APRODUCT/PA012" and names == sorted(names, key=str.lower)   # обрезка ПОСЛЕ сортировки
+    assert [x["name"] for x in found["items"]] == ["A_PRODUCT/APRODUCT/PA012"] and found["matched"] == 1
+    assert none["items"] == [] and none["matched"] == 0 and none["total"] == AS_BLOCKS + 1
+    assert pa012[0]["name"] == "PA012.PV_In#Value" and pa012[0]["value"] == pytest.approx(42.5)
+
+
+def test_browse_dedups_same_node_keeps_namesakes(sim, pki):
+    """Один узел по двум ссылкам (Organizes + HasNotifier) — одна строка; два разных узла с одним именем — обе."""
+    items = opcua_client.with_conn(secure_cfg(sim), lambda c: c.browse("ns=%d;s=PCS" % sim.ns), {"username": "op", "password": "123"})
+    nodes = [x["node"] for x in items]
+    assert len(nodes) == len(set(nodes))
+    assert [x["name"] for x in items].count("OSS_OSS01::") == 1
+    assert [x["name"] for x in items].count("OSS_OSS05::") == 2
+
+
+def test_api_browse_find(data_dir, pki, sim):
+    import app as web
+    r = web.opcua_browse({"endpoint": sim.url, "security": "Basic256Sha256", "mode": "SignAndEncrypt", "auth": "user",
+                          "username": "op", "password": "123", "node": "ns=%d;s=PCS.AS05" % sim.ns, "find": "PA012"})
+    assert r["ok"] and r["matched"] == 1 and r["total"] > opcua_client.BROWSE_LIMIT and r["items"][0]["name"].endswith("PA012")
+
+
 # ───────────────────────── после ревью ─────────────────────────
 def test_saved_password_only_for_saved_endpoint(data_dir, pki):
     opcua_client.save_secret("op", "секрет")

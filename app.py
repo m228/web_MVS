@@ -27,6 +27,7 @@ import net_tools
 import updater
 import auto_update
 from microscope_service import micro
+import microscope_fsm
 import plc_source
 import opcua_client
 import cv_client
@@ -913,6 +914,7 @@ def micro_settings(
     sv_to: float | None = None,
     stage_from: int | None = None,
     stage_to: int | None = None,
+    stage_extra: str | None = None,
     fast_enabled: int | None = None,
     fast_frames: int | None = None,
     fast_gap_sec: int | None = None,
@@ -945,6 +947,7 @@ def micro_settings(
     if sv_to is not None: pc["sv_to"] = sv_to
     if stage_from is not None: pc["stage_from"] = stage_from
     if stage_to is not None: pc["stage_to"] = stage_to
+    if stage_extra is not None: pc["stage_extra"] = list(microscope_fsm.parse_stage_list(stage_extra))     # «20, 21»; пустая строка — без «плюс»
     fast = {}                                                  # быстрый цикл на подкачке (стадия 5)
     if fast_enabled is not None: fast["enabled"] = bool(fast_enabled)
     if fast_frames is not None: fast["frames"] = max(1, fast_frames)

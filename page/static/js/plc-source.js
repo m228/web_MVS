@@ -325,6 +325,7 @@
       if (!r || r.status !== "ok") return say("Не сохранено: " + ((r && r.error) || "нет ответа"), "err");
       S.status = r.live; S.running = r.running;
       fill(r.config);
+      window.dispatchEvent(new CustomEvent("stagemap-changed", { detail: (r.config || {}).stage_map || {} }));    // страница микроскопа обновит названия стадий в «Параметрах цикла»
       say(r.running ? "Сохранено, чтение аппарата перезапущено." : "Сохранено. Источник заработает, когда включат микроскоп.", "ok");
     }
 

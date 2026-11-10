@@ -211,7 +211,8 @@ DEFAULTS = {
     #   "cv"   — следующая проба, как только CV разобрал и сохранил прошлую (+ cv.gap_sec).
     # При включённом CV dwell_sec/shot_interval_sec не действуют: выдержка = cv.frames_per_probe.
     # photo_format — формат скринов/датасета микроскопа: "png" (без сжатия) или "jpg".
-    # stage_from..stage_to — диапазон стадий варки (M.mode), в котором авто-цикл пробы разрешён (по умолчанию 3..9).
+    # stage_from..stage_to — диапазон стадий варки (M.mode), в котором авто-цикл пробы разрешён (по умолчанию 3..9);
+    # stage_extra — «плюс» стадии вне диапазона, где пробы тоже берутся (по умолчанию [20] — УНВ, удержание на воде; [] — нет).
     # ignore_stage — «варить без стадии»: авто-цикл без проверки стадии 3..9 (ручная варка,
     # когда ПЛК не двигает стадию, а СВ растёт). По умолчанию False (гейт стадии активен).
     # settle_sec — пауза (сек) ПОСЛЕ доезда каждого движения (отвод/подвод/возврат), пока мотор
@@ -223,7 +224,7 @@ DEFAULTS = {
     "probe_cycle": {"retract_pos": 20000, "pre_wash_sec": 4, "dwell_sec": 15,
                     "shot_interval_sec": 3, "pause_sec": 60, "photo_format": "png",
                     "trigger_mode": "time", "arrive_sensor": "enc", "sv_from": 84, "sv_to": 92, "ignore_stage": False,
-                    "stage_from": 3, "stage_to": 9,
+                    "stage_from": 3, "stage_to": 9, "stage_extra": [20],
                     "ignore_focus": True, "settle_sec": 2,
                     "post_wash_pause_sec": 2, "photo_enabled": False,
                     # быстрый цикл на ПОДКАЧКЕ (стадия 5): на подкачке нужно успеть 2–3 пробы за минуту, поэтому меньше кадров, короче пауза

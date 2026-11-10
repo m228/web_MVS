@@ -129,3 +129,25 @@ def test_live_opcua_custom_stage(sim):
         assert _wait(lambda: src.status()["stage"] is None)
     finally:
         src.stop()
+
+
+def test_our_names_from_table():
+    """Названия НАШИХ стадий по таблице: несколько кодов в одну стадию — названия через « / » без повторов, коды по порядку."""
+    assert stage_map.our_names({"stage_map": {"profile": "ours"}}) == {}                    # наш контроллер — свои названия
+    n = stage_map.our_names(CUSTOM)                                                         # таблица по умолчанию
+    assert n[3] == {"name": "СГУЩЕНИЕ", "codes": [30, 31, 32]}
+    assert n[1]["name"] == "СТАРТ ШАГ / ПРЕДВ. ВАКУУМ" and n[7]["codes"] == [60, 61, 62]
+    assert stage_map.public(CUSTOM)["names"]["8"]["name"] == "ИСТОЩЕНИЕ"                    # странице — ключи строками (JSON)
+    assert stage_map.label(CUSTOM, 3, {3: "сгущение"}) == "3 СГУЩЕНИЕ"
+    assert stage_map.label({"stage_map": {"profile": "ours"}}, 3, {3: "сгущение"}) == "3 сгущение"
+    assert stage_map.label(CUSTOM, 9, {}) == "9" and stage_map.label(None, None) == "—"      # названия нет — просто номер
+
+
+def test_describe_change():
+    ours, rows = {"stage_map": {"profile": "ours"}}, {"stage_map": {"profile": "custom", "rows": [{"code": 30, "name": "СГ", "to": 3}]}}
+    assert stage_map.describe_change(ours, ours) == ""
+    assert stage_map.describe_change(rows, rows) == ""
+    assert stage_map.describe_change(ours, {"stage_map": {"profile": "ours", "rows": stage_map.DEFAULT_ROWS}}) == ""   # те же умолчательные строки — не изменение
+    new = {"stage_map": {"profile": "custom", "rows": [{"code": 30, "name": "СГ", "to": 4}, {"code": 40, "name": "ЗТ", "to": 4}]}}
+    assert stage_map.describe_change(rows, new) == "строки: 30: «СГ» 3 → «СГ» 4, +40 ЗТ → 4"
+    assert stage_map.describe_change(new, {"stage_map": {"profile": "custom", "rows": [{"code": 40, "name": "ЗТ", "to": 4}]}}) == "строки: −30"

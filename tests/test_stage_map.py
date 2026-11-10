@@ -34,7 +34,9 @@ def test_custom_default_table(code, ours):
 def test_custom_names_and_unknown():
     m = stage_map.StageMap(CUSTOM)
     assert m.translate(31) == (3, "СГУЩЕНИЕ") and m.translate(44) == (4, "ЗАТРАВКА МУ")
-    assert m.translate(99) == (None, None)                          # кода нет — не угадываем
+    assert m.translate(64) == (7, "ВАРКА") and m.translate(23) == (2, "НАБОР")   # точного кода нет — строка своего десятка
+    assert m.translate(55) == (5, "КРИСТАЛЛИЗАЦИЯ") and m.translate(99) == (11, "ПРОПАРКА")
+    assert m.translate(5) == (None, None) and m.translate(120) == (None, None)  # десятка нет — не угадываем
     assert m.translate(None) == (None, None)
 
 
@@ -79,7 +81,7 @@ def test_sv_source_translates_before_glitch_filter():
         assert out["stage"] == 3
     assert src._stage_n == 0 and src._stage_cand is None
     # неизвестный код — стадии нет
-    assert src._translate_stage({"stage": 99})["stage"] is None
+    assert src._translate_stage({"stage": 120})["stage"] is None
 
 
 def test_sv_source_ours_unchanged():

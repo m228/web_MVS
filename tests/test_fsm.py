@@ -120,6 +120,27 @@ def test_approach_record_carries_sv_table_row(fsm):
     assert ap["row"] == row and ap["sp_row"] == float(fsm.SP[row]) == ap["target"], ap
 
 
+def test_approach_ai_is_mean_of_three_readings(fsm):
+    # аналог подвода «болтается» (-6/0/+6 от цели в замерах раз в 0,5 с) — в запись идёт среднее по 3 замерам, а не один
+    recs = []
+    fsm.on_probe_positions = recs.append
+    _start_cycle(fsm)
+    seen_ai = set()
+    for _ in range(600):
+        v = fsm.plate.m1_sp
+        if v is not None:
+            k = (fsm.t + 1) // 5
+            ai = v + 6 * (k % 3 - 1) if fsm.mode == 22 else v
+            seen_ai.add(round(ai, 1))
+            fsm.plate.telemetry.update({"pos1": v, "pos1_enc": v, "pos1_ai": ai / fsm._sensor_scale})
+        fsm.tick()
+        if fsm.mode == 23:
+            break
+    ap = [r for r in recs if r["step"] == "подвод"][0]
+    assert len(seen_ai) >= 3, "датчик в тесте не болтался"
+    assert ap["ai"] == round(float(ap["target"]), 1), ap
+
+
 def test_probe_positions_flag_timeout_when_motor_does_not_arrive(fsm):
     # мотор «не едет» (телеметрия стоит на нуле): шаг уходит по таймауту, в записи timeout=True
     recs = []

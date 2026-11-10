@@ -4928,6 +4928,9 @@ body.micro-rep-doc .micro-cmp-strips { grid-template-columns: repeat(6, 1fr); ga
 .plc-tree__val.is-bad { color: var(--muted); font-style: italic; }
 .plc-tree__type { font-size: 0.78em; color: var(--muted); min-width: 44px; text-align: right; }
 .plc-tree__empty { padding-left: 24px; }
+.plc-tree__find { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 2px 0 4px 22px; }
+.plc-src .plc-tree__q { width: 220px; max-width: 100%; }
+.plc-tree__nid { font-size: 0.78em; color: var(--muted); overflow: hidden; text-overflow: ellipsis; min-width: 0; }
 .plc-hint { margin: 2px 0 6px; font-size: 0.85em; color: var(--muted); }
 .plc-eps { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
 .plc-eps:empty { display: none; }

@@ -277,14 +277,45 @@
       const ok = await expand(null, tree, 0);
       if (ok) say("Подключено. Раскрой папки и назначь теги на поля.", "ok");
     }
+    // Узел с тысячами детей (AS у PCS7): сервер отдаёт первые по алфавиту + «показано N из M» и поиск по имени внутри узла.
     async function expand(node, box, depth) {
-      const r = await post("/api/opcua/browse", { ...connBody(), node }, 30000);
+      const browse = (find) => post("/api/opcua/browse", { ...connBody(), node, find }, 30000);
+      const r = await browse("");
       if (!r || !r.ok) { say("Дерево: " + ((r && r.error) || "нет ответа"), "err"); return false; }
-      if (!r.items.length) box.append(el("p", { class: "plc-hint plc-tree__empty", text: "пусто" }));
-      r.items.forEach((it) => box.append(treeRow(it, depth)));
+      const rows = el("div", { role: "group" });
+      const pad = "padding-left:" + (depth * 14 + 2) + "px";
+      let note = null, q = null;
+      const fill = (x) => {
+        if (note) {
+          const cut = x.matched > x.items.length;
+          note.textContent = q.value.trim()
+            ? (x.matched ? "найдено " + x.matched + (cut ? ", показано " + x.items.length + " — уточни" : "") : "ничего не нашлось")
+            : "показано " + x.items.length + " из " + x.total + " — остальное через поиск";
+        }
+        const names = {};
+        x.items.forEach((it) => { names[it.name] = (names[it.name] || 0) + 1; });
+        rows.replaceChildren(...x.items.map((it) => treeRow(it, depth, names[it.name] > 1)));
+        if (!x.items.length && !note) rows.append(el("p", { class: "plc-hint plc-tree__empty", text: "пусто" }));
+      };
+      if (r.total > r.items.length) {
+        let seq = 0, timer = 0;
+        note = el("span", { class: "plc-hint" });
+        q = el("input", { type: "search", class: "plc-in plc-tree__q", placeholder: "найти в папке, напр. PA012", spellcheck: "false", autocomplete: "off",
+          oninput: () => {
+            clearTimeout(timer);
+            timer = setTimeout(async () => {
+              const my = ++seq, x = await browse(q.value.trim());
+              if (my !== seq) return;                     // пришёл ответ на старый запрос — пропускаем
+              if (x && x.ok) fill(x); else say("Поиск: " + ((x && x.error) || "нет ответа"), "err");
+            }, 400);
+          } });
+        box.append(el("div", { class: "plc-tree__find", style: pad }, q, note));
+      }
+      box.append(rows);
+      fill(r);
       return true;
     }
-    function treeRow(it, depth) {
+    function treeRow(it, depth, dupName) {
       const kids = el("div", { class: "plc-tree__kids", hidden: true, role: "group" });
       const isVar = it.cls === "Variable";
       const caret = el("button", { type: "button", class: "plc-tree__caret", "aria-label": "Раскрыть", text: it.has_children ? "▸" : "", disabled: !it.has_children });
@@ -299,6 +330,8 @@
       const line = el("div", { class: "plc-tree__line" + (isVar ? " is-var" : ""), role: "treeitem", title: it.node + (it.type ? " · " + it.type : "") + (it.status ? " · " + it.status : ""),
         style: "padding-left:" + (depth * 14 + 2) + "px" },
         caret, el("span", { class: "plc-tree__name", text: it.name }),
+        // одинаковые имена у разных узлов (у PCS7 так бывает) — подписываем NodeId, чтобы было видно, что это не дубль
+        dupName ? el("span", { class: "plc-tree__nid", text: it.node }) : null,
         isVar ? el("span", { class: "plc-tree__val" + (it.status ? " is-bad" : ""), text: it.status ? "нет значения" : fmt(it.value) }) : null,
         isVar && it.type ? el("span", { class: "plc-tree__type", text: it.type }) : null);
       if (isVar) line.addEventListener("click", () => assign(it));

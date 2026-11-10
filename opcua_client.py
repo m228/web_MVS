@@ -33,7 +33,8 @@ DEFAULT_PORT = 4840
 
 POLICIES = ("None", "Basic256Sha256", "Aes128_Sha256_RsaOaep", "Aes256_Sha256_RsaPss")
 MODES = ("Sign", "SignAndEncrypt")
-BROWSE_LIMIT = 500          # детей узла больше — показываем первые (страница не должна захлебнуться)
+BROWSE_LIMIT = 500          # детей узла больше — показываем первые по алфавиту + поиск по имени (страница не должна захлебнуться)
+FIND_MAX = 100              # длина строки поиска в узле
 READ_CHUNK = 50             # узлов в одном Read: у многих ПЛК/шлюзов MaxNodesPerRead около 100 и меньше
 
 _cert_lock = threading.Lock()
@@ -234,15 +235,34 @@ class OpcUaConn:
                 out[nid] = _plain(dv.Value.Value) if dv.StatusCode.is_good() else None
         return out
 
-    def browse(self, node_id: Optional[str] = None) -> list:
+    def browse(self, node_id: Optional[str] = None, find: str = "") -> list:
         """Дети узла (по умолчанию — Objects): [{node, name, cls, type, value, has_children}]. Значения переменных — одним Read."""
+        return self.browse_page(node_id, find)["items"]
+
+    def browse_page(self, node_id: Optional[str] = None, find: str = "") -> dict:
+        """Дети узла для «проводника»: {items, total, matched}.
+        Сервер может ссылаться на один узел дважды (Organizes + HasNotifier/HasEventSource у SCADA) — дубли по NodeId убираем.
+        Детей бывает тысячи (AS у PCS7): сортируем ВСЕХ по имени, фильтруем по find, и только потом режем до BROWSE_LIMIT —
+        иначе в дерево попадали первые 500 в порядке сервера, а остальные теги пропадали без следа."""
         from asyncua import ua
         parent = self._client.get_node(node_id) if node_id else self._client.nodes.objects
-        descs = parent.get_children_descriptions()[:BROWSE_LIMIT]
+        seen, descs = set(), []
+        for d in parent.get_children_descriptions():
+            nid = d.NodeId.to_string()
+            if nid in seen:
+                continue
+            seen.add(nid)
+            descs.append((nid, d.DisplayName.Text or d.BrowseName.Name or nid, d))
+        total = len(descs)
+        q = str(find or "").strip().lower()[:FIND_MAX]
+        if q:
+            descs = [x for x in descs if q in x[1].lower() or q in (x[2].BrowseName.Name or "").lower()]
+        matched = len(descs)
+        descs.sort(key=lambda x: (x[2].NodeClass.name == "Variable", x[1].lower()))
         items, var_nodes = [], []
-        for d in descs:
+        for nid, name, d in descs[:BROWSE_LIMIT]:
             cls = d.NodeClass.name
-            item = {"node": d.NodeId.to_string(), "name": d.DisplayName.Text or d.BrowseName.Name,
+            item = {"node": nid, "name": name,
                     "browse": d.BrowseName.to_string(), "cls": cls, "type": "", "value": None,
                     "has_children": cls in ("Object", "View", "Variable")}
             items.append(item)
@@ -258,8 +278,7 @@ class OpcUaConn:
                 item["type"] = _type_name(tv.Value.Value) if tv.StatusCode.is_good() else ""
                 # переменная-число — лист дерева; структура/массив (UDT у Siemens/Schneider) — раскрывается до своих полей
                 item["has_children"] = dv.StatusCode.is_good() and not isinstance(dv.Value.Value, (bool, int, float, str))
-        items.sort(key=lambda x: (x["cls"] == "Variable", x["name"].lower()))
-        return items
+        return {"items": items, "total": total, "matched": matched}
 
 
 def _plain(v):

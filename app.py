@@ -426,7 +426,8 @@ def opcua_browse(payload: dict = Body(...)):
     try:
         conn, secret = plc_source.conn_from_body(payload)
         node = str(payload.get("node") or "").strip() or None
-        return {"ok": True, "items": opcua_client.with_conn(conn, lambda c: c.browse(node), secret)}
+        find = str(payload.get("find") or "")
+        return {"ok": True, **opcua_client.with_conn(conn, lambda c: c.browse_page(node, find), secret)}
     except Exception as e:
         return _opcua_error(e)
 

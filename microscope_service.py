@@ -799,9 +799,13 @@ class MicroscopeService:
         """Перечитать plate_config.json и перезапустить плату+автомат с новыми настройками
         (чтобы правки SP/SVSP/периодов/адресов применялись без перезапуска приложения)."""
         was = self._started
+        manual = self.is_manual()        # до stop(): новый автомат всегда «Автомат», цикл выключен (кроме camera_mode auto)
         self.stop()
         if was:
             self.start()   # start() сам вызывает plate_config.load()
+            # «Сохранить» (параметры цикла, таблица подвода, «Применить») не должно гасить автомат: возвращаем как было —
+            # Ручной остаётся Ручным, Автомат — с включённым циклом (иначе на странице «Автомат · цикл выкл» и проб нет)
+            self.manual_mode(manual)
         return {"status": "reloaded", "host": self.cfg.get("host") if self.cfg else None}
 
     # ---------- чтение для эндпоинтов ----------

@@ -89,3 +89,42 @@ def test_cycle_patch_uses_stage_map_names_and_extra(data_dir):
     n = len(db.mode_last(50))
     svc._log_stage_map_change(custom, custom)                              # ничего не поменялось — не пишем
     assert len(db.mode_last(50)) == n
+
+
+def test_reload_keeps_automat_cycle_and_manual(data_dir):
+    """«Сохранить» перезапускает микроскоп: Автомат остаётся с включённым циклом, Ручной остаётся Ручным."""
+    from microscope_service import MicroscopeService
+
+    class Fsm:
+        def __init__(self):
+            self.manual, self.sw0 = False, False
+        def set_manual(self, on):
+            self.manual = bool(on)
+            if on:
+                self.sw0 = False
+        def set_cyclic(self, on):
+            self.sw0 = bool(on)
+
+    class Plate:
+        def set_out(self, *a):
+            pass
+
+    for was_manual in (False, True):
+        svc = MicroscopeService()
+        svc._started, svc.cfg, svc.plate = True, {"out": {"valves": 0}, "camera_mode": "stream"}, Plate()
+        svc.fsm = Fsm()
+        svc.fsm.manual = was_manual
+
+        def stop():
+            svc._started = False
+
+        def start():
+            svc._started, svc.fsm = True, Fsm()          # новый автомат: Автомат, цикл выключен (camera_mode не auto)
+
+        svc.stop, svc.start = stop, start
+        svc.reload()
+        assert svc.fsm.manual is was_manual
+        assert svc.fsm.sw0 is (not was_manual), "Автомат — цикл включён, Ручной — выключен"
+    svc._started = False
+    svc.reload()                                        # микроскоп был выключен — не запускаем
+    assert svc._started is False

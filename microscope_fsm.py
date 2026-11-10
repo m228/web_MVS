@@ -22,6 +22,7 @@
 """
 import threading
 import time
+from collections import deque
 from datetime import datetime
 
 from logger import log_event
@@ -34,7 +35,9 @@ CMD_SET_SP2 = 0x2006   # команда мотору М2 «установить 
 # цикла ждал полный таймаут 10 с. Считаем «доехал», если в пределах допуска.
 ARRIVE_TOL_UM = 50   # доезд: энкодер в пределах ±50 мкм от цели
 GLASS_AI = 20        # pos1_ai < GLASS_AI = аналог «у стекла» (страховка на подводе)
-ARRIVE_HOLD_TICKS = 20   # держать в диапазоне ±50 перед переходом (2 с при такте 100 мс)
+AI_HIST_LEN = 3          # сколько замеров аналога подвода усредняем для записи в пробу
+AI_HIST_EVERY_TICKS = 5  # замер раз в 0,5 с: 3 замера = ~1 с стоянки у стекла
+ARRIVE_HOLD_TICKS = 20  # держать в диапазоне ±50 перед переходом (2 с при такте 100 мс)
 
 # автокалибровка нуля М1 по датчику 1271 (зашито). Как это делает прошивка платы (разбор fw, tasks/todo.md п. 2b):
 # «Поиск 0» = ход в РАСЧЁТНУЮ 0 (если она уже 0 — дожим ещё 2000 шагов к стеклу), в конце ШТАТНОГО хода прошивка
@@ -269,6 +272,7 @@ class MicroscopeFSM:
         # колбэк «положения трёх датчиков на доезде отвода/подвода» -> мониторинг (ставит microscope_service)
         self.on_probe_positions = None
         self._pp_emit = None
+        self._ai_hist = deque(maxlen=AI_HIST_LEN)      # последние замеры аналога подвода для среднего в пробе
         self._m1_row = 1                 # строка СВ-таблицы (индекс SVSP/SP), по которой выбран подвод (для совета по разломам)
 
         self._period = max(0.02, int(config["poll_interval_ms"]) / 1000.0)
@@ -542,8 +546,11 @@ class MicroscopeFSM:
     def _note_positions(self, step, target, pos1, pos_enc, pos1_ai, timed_out):
         """Запомнить положения трёх датчиков на доезде (под локом, только чтение): отдаём после выхода из лока."""
         num = lambda v: round(v, 1) if isinstance(v, (int, float)) and not isinstance(v, bool) else None
+        ai = pos1_ai
+        if step == "подвод" and self._ai_hist:                 # аналог подвода — среднее по последним замерам (датчик чуть болтается)
+            ai = sum(self._ai_hist) / len(self._ai_hist)
         self._pp_emit = {"t": time.time(), "step": step, "target": num(target), "calc": num(pos1), "enc": num(pos_enc),
-                         "ai": num(pos1_ai), "timeout": bool(timed_out), "sv": num(self.sv), "stage": self.stage,
+                         "ai": num(ai), "timeout": bool(timed_out), "sv": num(self.sv), "stage": self.stage,
                          "row": int(self._m1_row), "sp_row": num(self.SP[self._m1_row]) if 0 <= self._m1_row < len(self.SP) else None}
 
     def _settle_wait(self, ticks=None):
@@ -1401,7 +1408,11 @@ class MicroscopeFSM:
                 self.cw0 = True                        # промывка трубки открыта на подводе
                 if self.t == 0:
                     self._settle = 0
+                    self._ai_hist.clear()
                 self.t += 1
+                # аналог подвода «болтается» — для записи в пробу копим 3 замера через 0,5 с (берём среднее)
+                if pos1_ai is not None and self.t % AI_HIST_EVERY_TICKS == 0:
+                    self._ai_hist.append(pos1_ai)
                 # доезд подвода по ЭНКОДЕРУ (довод в прошивке; галочка _fa_enabled выключена).
                 if self._fa_enabled:
                     arrived = self._approach_step(pos_enc, pos1_ai)   # грубо по энкодеру, точно по датчику

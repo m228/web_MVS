@@ -4064,9 +4064,9 @@ html[data-theme="navy"] .micro-rep-out, html[data-theme="dark"] .micro-rep-out {
    на тёмных темах день чуть светлее поля, вечер и ночь — темнее. Наложения: температура и разрежение — слоты 5 и 7 палитры (проверены
    валидатором вместе с синими точками, светлая и тёмная), числа шкалы — приглушённые, цвет ряда — только у значков */
 .micro-rep-out { --rep-dp-morning: rgba(0,0,0,.028); --rep-dp-day: transparent; --rep-dp-evening: rgba(0,0,0,.055); --rep-dp-night: rgba(0,0,0,.09);
-  --rep-ov-temp: #e87ba4; --rep-ov-vac: #6250d6; --rep-oth-0: #d9822b; --rep-oth-1: #2a9d8f; --rep-oth-2: #8e6bd1; --rep-oth-3: #c2477a; }
+  --rep-ov-temp: #e87ba4; --rep-ov-vac: #6250d6; --rep-ov-seed: #4c9a2a; --rep-oth-0: #d9822b; --rep-oth-1: #2a9d8f; --rep-oth-2: #8e6bd1; --rep-oth-3: #c2477a; }
 html[data-theme="navy"] .micro-rep-out, html[data-theme="dark"] .micro-rep-out { --rep-dp-morning: rgba(255,255,255,.022); --rep-dp-day: rgba(255,255,255,.045);
-  --rep-dp-evening: rgba(0,0,0,.14); --rep-dp-night: rgba(0,0,0,.26); --rep-ov-temp: #d55181; --rep-ov-vac: #9085e9; --rep-oth-0: #f0a050; --rep-oth-1: #4fc3b3; --rep-oth-2: #b49bea; --rep-oth-3: #e56a9f; }
+  --rep-dp-evening: rgba(0,0,0,.14); --rep-dp-night: rgba(0,0,0,.26); --rep-ov-temp: #d55181; --rep-ov-vac: #9085e9; --rep-ov-seed: #7cc75a; --rep-oth-0: #f0a050; --rep-oth-1: #4fc3b3; --rep-oth-2: #b49bea; --rep-oth-3: #e56a9f; }
 .micro-rep-chart .dp-morning { fill: var(--rep-dp-morning); }
 .micro-rep-chart .dp-day { fill: var(--rep-dp-day); }
 .micro-rep-chart .dp-evening { fill: var(--rep-dp-evening); }
@@ -4079,6 +4079,8 @@ html[data-theme="navy"] .micro-rep-out, html[data-theme="dark"] .micro-rep-out {
 .micro-rep-chart .ov.ov-vac { stroke: var(--rep-ov-vac); }
 .micro-rep-chart .ovm.ov-temp { fill: var(--rep-ov-temp); }
 .micro-rep-chart .ovm.ov-vac { fill: var(--rep-ov-vac); }
+.micro-rep-chart .ov.ov-seed { stroke: var(--rep-ov-seed); }
+.micro-rep-chart .ovm.ov-seed { fill: var(--rep-ov-seed); }
 .micro-rep-chart .olab { text-anchor: start; }
 /* другие заводы: «обычно» полосой, медиана пунктиром, подпись у левого края; цвет по порядку завода */
 .micro-rep-chart .oband { opacity: 0.16; }
@@ -4099,6 +4101,7 @@ html[data-theme="navy"] .micro-rep-out, html[data-theme="dark"] .micro-rep-out {
 .micro-rep-over .lg-ov { display: inline-block; width: 6px; height: 6px; transform: rotate(45deg); }
 .micro-rep-over .lg-ov.ov-temp { background: var(--rep-ov-temp); }
 .micro-rep-over .lg-ov.ov-vac { background: var(--rep-ov-vac); }
+.micro-rep-over .lg-ov.ov-seed { background: var(--rep-ov-seed); }
 .micro-rep-out .is-bad { color: var(--rep-bad); font-weight: 600; }
 .micro-rep-card.is-bad { border-color: var(--rep-bad); }
 .micro-rep-card.is-bad b { color: var(--rep-bad); }
@@ -4916,6 +4919,8 @@ body.micro-rep-doc .micro-cmp-strips { grid-template-columns: repeat(6, 1fr); ga
 .plc-map .plc-fields tbody tr { cursor: pointer; }
 .plc-x { border: 0; background: transparent; color: var(--muted); cursor: pointer; font-size: 1.1em; padding: 0 4px; }
 .plc-x:hover { color: var(--danger); }
+.plc-unitcell { white-space: nowrap; }
+.plc-src select.plc-unit { width: auto; min-height: 26px; padding: 2px 6px; }
 /* дерево — главное на вкладке: шире таблицы и почти на весь экран по высоте; низ можно тянуть мышкой */
 .plc-two { display: grid; grid-template-columns: minmax(320px, 3fr) minmax(380px, 2fr); gap: 14px; align-items: start; }
 @media (max-width: 1100px) { .plc-two { grid-template-columns: 1fr; } }

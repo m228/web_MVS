@@ -4936,6 +4936,12 @@ body.micro-rep-doc .micro-cmp-strips { grid-template-columns: repeat(6, 1fr); ga
 .plc-probe__out[data-kind="bad"] { color: var(--danger); }
 .plc-probe__out[data-kind="warn"] b { color: var(--warning); }
 .plc-probe__title { font-weight: 600; white-space: nowrap; }
+.plc-sm { display: flex; flex-direction: column; gap: 6px; }
+.plc-sm .plc-row { align-items: center; }
+.plc-sm__det[hidden], .plc-sm__live[hidden] { display: none; }
+.plc-sm__det summary { cursor: pointer; color: var(--muted); font-size: 0.9em; }
+.plc-sm__box { display: flex; flex-direction: column; gap: 8px; margin-top: 6px; max-width: 640px; }
+.plc-sm__live { color: var(--accent); font-variant-numeric: tabular-nums; }
 .plc-tree__kids[hidden] { display: none; }
 .plc-tree__line { display: flex; align-items: center; gap: 6px; padding: 3px 4px; border-radius: 6px; cursor: pointer; white-space: nowrap; }
 .plc-tree__line:hover { background: var(--accent-soft); }

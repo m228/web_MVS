@@ -451,8 +451,15 @@ DEFAULTS = {
             "v_product": {"reg": 0, "scale": 1},                      # головной клапан продукта (коллектор → аппарат), обратка %
             # количество затравки (что завод подписал в SCADA на эту варку); единица — seed_unit ниже. По умолчанию не читается
             "seed_qty":  {"reg": 0, "scale": 1},
+            # затравка по видам (у чужого завода заводят и сларри, и затравочным кристаллом из маточника МУ): свои теги и свои единицы
+            "seed_slurry": {"reg": 0, "scale": 1},                    # затравка сларри
+            "seed_mu":     {"reg": 0, "scale": 1},                    # затравка из маточника (МУ)
         },
+        # карта стадий (stage_map.py): "ours" — код стадии с контроллера как есть; "custom" — чужой контроллер, код переводится в наш по таблице rows
+        "stage_map": {"profile": "ours"},
         "seed_unit": "kg",     # единица затравки на экране: kg | l | pct (выбор на вкладке «ПЛК»)
+        "seed_slurry_unit": "kg",   # то же для затравки сларри
+        "seed_mu_unit": "kg",       # и для затравки из маточника (МУ)
         # OPC UA (protocol="opcua"): адрес сервера, защита, теги. Логин/пароль — НЕ здесь, а в data\opcua_secret.json.
         # security: None | Basic256Sha256 | Aes128_Sha256_RsaOaep | Aes256_Sha256_RsaPss; mode: Sign | SignAndEncrypt;
         # auth: anonymous | user. Поле: {node: NodeId вида "ns=3;s=PLC.Brix", scale}; инж.значение = тег / scale; node "" — не читается.
@@ -464,7 +471,7 @@ DEFAULTS = {
             "timeout_s": 3,
             "fields": {name: {"node": "", "scale": 1} for name in (
                 "sv", "temp_app", "level", "current", "press_top", "press_bot", "vacuum", "stage", "substage", "cook_time",
-                "v_syrup", "v_water", "v_product", "seed_qty")},
+                "v_syrup", "v_water", "v_product", "seed_qty", "seed_slurry", "seed_mu")},
         },
         # совместимость со старым конфигом (используется, если в fields нет sv/stage):
         "sv_register": 0,
@@ -509,7 +516,7 @@ def _drop_stale_sv_source(user):
     sv = user.get("sv_source")
     if not isinstance(sv, dict):
         return user
-    if sv.get("protocol") == "opcua" or isinstance(sv.get("opcua"), dict) or "seed_unit" in sv:
+    if sv.get("protocol") == "opcua" or isinstance(sv.get("opcua"), dict) or "seed_unit" in sv or "stage_map" in sv or "seed_slurry_unit" in sv:
         return user          # сохранено со страницы (вкладка «ПЛК»): не слепок DEFAULTS, даже если reg Modbus в файле нет
     fields = sv.get("fields") or {}
     regs = [int((f or {}).get("reg", 0) or 0) for f in fields.values() if isinstance(f, dict)]

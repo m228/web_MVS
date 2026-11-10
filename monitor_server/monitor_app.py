@@ -10,6 +10,8 @@
   POST /api/plants/{id}/token   — выдать новый токен (старый перестаёт работать).
   POST /api/plants/{id}/rename  — {"name"}: переименовать завод (токен, журнал и датчики остаются).
   POST /api/plants/{id}/settings — {"offline_after_min", "offline_repeat_min", "offline_notify"}: настройки «нет пульса» для одного завода (None — вернуть общее значение).
+  POST /api/plants/{id}/mute    — {"minutes": 120 | "morning" | null}: «Не беспокоить» — завод не шлёт в Telegram (панель и журнал как всегда), null — снять;
+                                  когда тишина кончится, в Telegram придёт итог. Ответ: {"mute_until": unix-время или null}.
   POST /api/plants/view_all     — то же самое, но для всех заводов сразу (кнопка «Для всех заводов» в «Виде»).
   POST /api/plants/{id}/view    — {"hidden": ["pc", "camera", …]}: какие блоки карточки скрыть («Вид» в панели; хранится в приёмнике).
   DELETE /api/plants/{id}       — удалить завод вместе с журналом.
@@ -378,6 +380,24 @@ def create_app(store: monitor_store.Store, password: str, version: str, panel_ht
             return JSONResponse({"error": str(e)}, status_code=400)
         except LookupError:
             return JSONResponse({"error": "завода нет"}, status_code=404)
+
+    @app.post("/api/plants/{plant_id}/mute")
+    async def plant_mute(plant_id: int, request: Request):
+        bad = write_denied(request)
+        if bad is not None:
+            return bad
+        try:
+            body = await request.json()
+            if not isinstance(body, dict) or "minutes" not in body:
+                raise ValueError("Нужно поле minutes: минуты, \"morning\" или null (снять)")
+            until = store.set_mute(plant_id, body["minutes"])
+        except ValueError as e:
+            return JSONResponse({"error": str(e)}, status_code=400)
+        except LookupError:
+            return JSONResponse({"error": "завода нет"}, status_code=404)
+        if body["minutes"] is None and notifier is not None:
+            notifier.kick()                                    # итог тишины уйдёт сразу, а не на следующем круге
+        return {"mute_until": until}
 
     @app.post("/api/plants/view_all")
     async def plants_view_all(request: Request):

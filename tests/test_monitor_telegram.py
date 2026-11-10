@@ -594,7 +594,7 @@ def test_plant_button_gives_full_text_report(bot_env):
     sent = e.tg.requests[-1]["body"]
     assert sent["chat_id"] == CHAT and sent["text"] == reply
     data = [b["callback_data"] for row in sent["reply_markup"]["inline_keyboard"] for b in row]
-    assert data == ["lg:%d" % e.kir, "dk:%d" % e.kir, "ak:%d" % e.kir, "st:%d" % e.kir, "rn:%d" % e.kir, "tk:%d" % e.kir, "dl:%d" % e.kir]
+    assert data == ["lg:%d" % e.kir, "dk:%d" % e.kir, "mu:%d" % e.kir, "ak:%d" % e.kir, "st:%d" % e.kir, "rn:%d" % e.kir, "tk:%d" % e.kir, "dl:%d" % e.kir]
     assert all(len(d.encode()) <= 64 for d in data)
 
 
@@ -1076,3 +1076,398 @@ def test_plant_named_like_a_menu_word_is_still_reachable(bot_env):
     e.store.create_plant("Все")
     assert e.bot.handle(msg("Все")) == "⚪ Все — ещё не выходил на связь"
     assert e.bot.handle(msg("Все заводы")).startswith("Заводы на ")
+
+
+# ------------------------------------------------------------------------------------------------- «Не беспокоить» (тихий режим завода)
+
+def mute_alert(eid, t, code="camera_exposure", state="open", text="Камера: экспозиция 5000 вместо 170"):
+    return ev(eid, t, text, code=code, state=state)
+
+
+def muted_rows(e):
+    return [(r["status"], r["reason"]) for r in e.store.db.execute("SELECT status, reason FROM notify ORDER BY id")]
+
+
+def test_mute_holds_telegram_back_but_journal_and_panel_keep_everything(env):
+    e = env
+    pid, _ = e.store.create_plant("Кир")
+    e.store.ingest(pid, pulse())
+    until = e.store.set_mute(pid, 120)
+    assert until == e.clk.t + 7200 and e.store.mute_until(pid) == until
+    e.store.ingest(pid, pulse([mute_alert("a1", e.clk.t - 20)]))
+    assert rows(e) == [], "в очередь для Telegram ничего не попало"
+    assert muted_rows(e) == [("muted", ms.MUTE_REASON)], "но запись осталась — для итога"
+    e.n.flush()
+    assert e.tg.sent() == []
+    texts = [x["text"] for x in e.store.events(pid, 20)]
+    assert any("Камера: экспозиция" in t for t in texts) and any(t.startswith("Тихий режим до ") for t in texts), "в журнале и событие, и пометка о тишине"
+    view = next(p for p in e.store.plants_view() if p["id"] == pid)
+    assert view["mute_until"] == until
+
+
+def test_mute_validation_and_missing_plant(env):
+    e = env
+    pid, _ = e.store.create_plant("Кир")
+    for bad in (0, -5, ms.MUTE_MAX_MIN + 1, "abc", True, 1.5, [60]):
+        with pytest.raises(ValueError):
+            e.store.set_mute(pid, bad)
+    with pytest.raises(LookupError):
+        e.store.set_mute(999, 60)
+    assert e.store.mute_until(pid) is None
+    e.store.set_mute(pid, None)                                                  # снимать нечего — тихо ничего не делает
+    assert not any("Тихий режим" in x["text"] for x in e.store.events(pid, 20))
+    assert e.store.set_mute(pid, ms.MUTE_MAX_MIN) == e.clk.t + 86400
+
+
+def test_mute_ends_by_itself_and_alerts_flow_again(env):
+    e = env
+    pid, _ = e.store.create_plant("Кир")
+    e.store.ingest(pid, pulse())
+    e.store.set_mute(pid, 60)
+    e.clk.t += 3601
+    assert e.store.mute_until(pid) is None
+    e.store.ingest(pid, pulse([mute_alert("a2", e.clk.t - 5)]))
+    assert rows(e) == [("alert", "open", "camera_exposure")]
+
+
+def test_alerts_queued_before_the_mute_are_held_and_counted(env):
+    e = env
+    pid, _ = e.store.create_plant("Кир")
+    e.store.ingest(pid, pulse([mute_alert("a1", e.clk.t - 20)]))
+    assert len(rows(e)) == 1
+    e.store.set_mute(pid, 60)                                                    # нажали «Тихо» под сообщением, а в очереди ещё лежит соседняя тревога
+    e.n.flush()
+    assert e.tg.sent() == [] and muted_rows(e) == [("muted", ms.MUTE_REASON)]
+    e.clk.t += 3601
+    e.store.ingest(pid, pulse())
+    e.n.flush()
+    assert len(e.tg.sent()) == 1 and "Пока молчали: 1 событие" in e.tg.sent()[0]
+
+
+def test_mute_end_sends_one_summary_with_what_is_still_open(env):
+    e = env
+    pid, _ = e.store.create_plant("Кир")
+    alert = {"code": "camera_exposure", "level": "high", "text": "Камера: экспозиция 5000", "since": e.clk.t}
+    e.store.ingest(pid, pulse(alerts=[alert]))
+    e.store.set_mute(pid, 60)
+    e.store.ingest(pid, pulse(alerts=[dict(alert, code="x2", text="Плата молчит")]))
+    e.n.flush()
+    assert e.tg.sent() == []
+    e.clk.t += 3601
+    e.store.ingest(pid, pulse(alerts=[alert, dict(alert, code="x2", text="Плата молчит")]))
+    e.n.flush()
+    assert len(e.tg.sent()) == 1
+    text = e.tg.sent()[0]
+    assert text.startswith("🔔 Кир — тишина закончилась (") and "Пока молчали: " in text
+    assert "Сейчас открыто: " in text and "🔴 Плата молчит" in text
+    e.n.flush()
+    e.n.flush()
+    assert len(e.tg.sent()) == 1, "итог один"
+
+
+def test_manual_unmute_sends_summary_even_when_nothing_happened(env):
+    e = env
+    pid, _ = e.store.create_plant("Кир")
+    e.store.ingest(pid, pulse())
+    e.store.set_mute(pid, 120)
+    e.store.set_mute(pid, None)
+    assert e.store.mute_until(pid) is None
+    assert any(x["text"] == "Тихий режим снят" for x in e.store.events(pid, 20))
+    e.n.flush()
+    assert len(e.tg.sent()) == 1 and "важных событий не было" in e.tg.sent()[0] and "красных тревог нет" in e.tg.sent()[0]
+
+
+def test_summary_is_retried_until_telegram_answers(env):
+    e = env
+    pid, _ = e.store.create_plant("Кир")
+    e.store.ingest(pid, pulse())
+    e.store.set_mute(pid, 5)
+    e.clk.t += 301
+    e.tg.mode = "500"
+    e.n.flush()
+    assert e.tg.sent() == [] and e.n.state["last_error"]
+    e.tg.mode = "ok"
+    e.n.flush()
+    assert e.tg.sent() == [], "после сбоя — пауза, а не новая попытка на каждом проходе"
+    e.clk.t += mt.MUTE_RETRY_S + 1
+    e.n.flush()
+    assert len(e.tg.sent()) == 1
+    e.n.flush()
+    assert len(e.tg.sent()) == 1
+
+
+def test_summary_of_a_long_gone_mute_is_dropped_quietly(env):
+    e = env
+    pid, _ = e.store.create_plant("Кир")
+    e.store.ingest(pid, pulse())
+    e.store.set_mute(pid, 60)
+    e.clk.t += 3600 + ms.MUTE_MAX_MIN * 60 + 10                                  # приёмник не работал больше суток
+    e.n.flush()
+    assert e.tg.sent() == [] and e.store.mute_finished(e.clk.t) == []
+
+
+def test_offline_reminders_are_silent_during_mute(env):
+    e = env
+    pid, _ = e.store.create_plant("Кир")
+    e.store.ingest(pid, pulse())
+    e.clk.t += 31 * 60
+    e.store.check_offline()
+    e.n.flush()
+    assert len(e.tg.sent()) == 1
+    e.store.set_mute(pid, 600)
+    e.clk.t += 7 * 3600
+    e.n.flush()
+    assert len(e.tg.sent()) == 1, "напоминание «всё ещё нет пульса» в тишине не идёт"
+
+
+def test_mute_survives_restart_and_dies_with_the_plant(env, tmp_path):
+    e = env
+    pid, _ = e.store.create_plant("Кир")
+    until = e.store.set_mute(pid, 90)
+    again = ms.Store(tmp_path / "monitor.db", clock=e.clk, notify={"fresh_s": 900})
+    try:
+        assert again.mute_until(pid) == until
+    finally:
+        again.close()
+    assert e.store.delete_plant(pid) and e.store.meta_get("mute:%d" % pid) is None
+
+
+def test_mute_until_morning_is_before_the_next_morning(env):
+    e = env
+    pid, _ = e.store.create_plant("Кир")
+    until = e.store.set_mute(pid, "morning")
+    lt = time.localtime(until)
+    assert (lt.tm_hour, lt.tm_min) == (8, 0) and 0 < until - e.clk.t <= 86400
+    assert e.store.mute_morning_due() == until
+
+
+def test_garbage_mute_record_is_ignored(env):
+    e = env
+    pid, _ = e.store.create_plant("Кир")
+    for junk in ("не json", "[]", '{"until": "завтра"}', '{"until": true}'):
+        e.store.meta_set("mute:%d" % pid, junk)
+        assert e.store.mute_until(pid) is None
+    assert e.store.mute_finished(e.clk.t) == []
+
+
+def test_alert_message_carries_quiet_button_but_good_news_does_not(env):
+    e = env
+    pid, _ = e.store.create_plant("Кир")
+    e.store.ingest(pid, pulse([mute_alert("a1", e.clk.t - 20)]))
+    e.n.flush()
+    sent = [r["body"] for r in e.tg.requests if r["method"] == "sendMessage"]
+    assert sent[-1]["reply_markup"]["inline_keyboard"][0][0] == {"text": "🔕 Тихо 2 ч", "callback_data": "mt:%d:120" % pid}
+    e.store.ingest(pid, pulse([mute_alert("a1c", e.clk.t - 5, state="closed")]))
+    e.n.flush()
+    sent = [r["body"] for r in e.tg.requests if r["method"] == "sendMessage"]
+    assert len(sent) == 2 and "reply_markup" not in sent[-1], "«снято» — хорошая весть, кнопка тишины не нужна"
+
+
+def test_wants_mute_button_rule():
+    assert mt.wants_mute_button([{"kind": "alert", "state": "open"}]) and mt.wants_mute_button([{"kind": "offline", "state": "open"}])
+    assert not mt.wants_mute_button([{"kind": "online", "state": ""}]) and not mt.wants_mute_button([{"kind": "alert", "state": "closed"}])
+    assert not mt.wants_mute_button([{"kind": "update", "state": "warn"}])
+
+
+# --- бот
+
+def test_bot_menu_button_opens_presets_and_sets_the_mute(bot_env):
+    e = bot_env
+    assert e.bot.handle(cb("mu:%d" % e.kir)) is None
+    menu = reqs(e, "sendMessage")[-1]
+    data = [b["callback_data"] for row in menu["reply_markup"]["inline_keyboard"] for b in row]
+    assert data == ["ms:%d:60" % e.kir, "ms:%d:120" % e.kir, "ms:%d:240" % e.kir, "ms:%d:m" % e.kir] and "на сколько не беспокоить" in menu["text"]
+    reply = e.bot.handle(cb("ms:%d:120" % e.kir, mid=71))
+    until = e.clk.t + 7200
+    assert e.store.mute_until(e.kir) == until and reply == "🔕 Тихо до " + time.strftime("%H:%M", time.localtime(until))
+    edit = reqs(e, "editMessageText")[-1]
+    assert edit["message_id"] == 71 and "тихо до" in edit["text"] and edit["reply_markup"]["inline_keyboard"][0][0]["callback_data"] == "ms:%d:0" % e.kir
+    assert reqs(e, "answerCallbackQuery")[-1]["text"] == reply
+
+
+def test_bot_unmute_and_report_shows_the_mute(bot_env):
+    e = bot_env
+    e.bot.handle(cb("ms:%d:60" % e.kir))
+    report = e.bot.handle(msg("Кир"))
+    assert "🔕 Не беспокоить до " in report
+    sent = reqs(e, "sendMessage")[-1]
+    first = [b for row in sent["reply_markup"]["inline_keyboard"] for b in row]
+    assert any(b["callback_data"] == "mc:%d" % e.kir and b["text"].startswith("🔔 Снять тишину (до ") for b in first)
+    assert "🔕 тихо до " in e.bot.handle(msg("Все заводы"))
+    # «Снять» на сводке: сводка остаётся, обновляются только кнопки (там снова «Не беспокоить»)
+    edits_before = len(reqs(e, "editMessageText"))
+    assert e.bot.handle(cb("mc:%d" % e.kir, mid=72)) == "🔔 Тишина снята" and e.store.mute_until(e.kir) is None
+    assert len(reqs(e, "editMessageText")) == edits_before, "текст сводки не трогаем"
+    markup = reqs(e, "editMessageReplyMarkup")[-1]
+    assert markup["message_id"] == 72 and "mu:%d" % e.kir in [b["callback_data"] for row in markup["reply_markup"]["inline_keyboard"] for b in row]
+    assert "🔕 Не беспокоить до " not in e.bot.handle(msg("Кир"))
+    # «Снять» в меню выбора срока правит само меню
+    e.bot.handle(cb("ms:%d:60" % e.kir, mid=73))
+    assert e.bot.handle(cb("ms:%d:0" % e.kir, mid=73)) == "🔔 Тишина снята"
+    assert e.store.mute_until(e.kir) is None and "тишина снята" in reqs(e, "editMessageText")[-1]["text"]
+    assert e.bot.handle(cb("mc:999")) == e.bot.GONE
+
+
+def test_bot_quiet_button_under_an_alert_toggles(bot_env):
+    e = bot_env
+    reply = e.bot.handle(cb("mt:%d:120" % e.kir, mid=75))
+    assert reply.startswith("🔕 Тихо до ") and e.store.mute_until(e.kir) is not None
+    markup = reqs(e, "editMessageReplyMarkup")[-1]
+    assert markup["message_id"] == 75 and markup["reply_markup"]["inline_keyboard"][0][0] == {"text": "🔔 Снять тишину", "callback_data": "mt:%d:0" % e.kir}
+    assert e.bot.handle(cb("mt:%d:0" % e.kir, mid=75)) == "🔔 Тишина снята" and e.store.mute_until(e.kir) is None
+    assert reqs(e, "editMessageReplyMarkup")[-1]["reply_markup"]["inline_keyboard"][0][0]["callback_data"] == "mt:%d:120" % e.kir
+
+
+def test_bot_mute_until_morning(bot_env):
+    e = bot_env
+    e.bot.handle(cb("ms:%d:m" % e.kir))
+    until = e.store.mute_until(e.kir)
+    assert until is not None and 0 < until - e.clk.t <= 86400 and time.localtime(until).tm_hour == 8
+
+
+def test_bot_mute_garbage_foreign_chat_and_missing_plant(bot_env):
+    e = bot_env
+    for bad in ("ms:%d:zzz" % e.kir, "ms:%d:99999" % e.kir, "ms:%d" % e.kir, "mt:%d:-5" % e.kir, "mt:%d:0.5" % e.kir):
+        assert e.bot.handle(cb(bad)) is None, bad
+    assert e.store.mute_until(e.kir) is None
+    assert e.bot.handle(cb("mt:%d:60" % e.kir, chat=555)) is None and e.store.mute_until(e.kir) is None
+    assert e.bot.handle(cb("mt:%d:60" % e.kir, ctype="group")) is None and e.store.mute_until(e.kir) is None
+    assert e.bot.handle(cb("mt:999:60")) == e.bot.GONE
+    assert e.bot.handle(cb("mu:999")) == e.bot.GONE
+
+
+# --- панель и API
+
+def test_mute_api_sets_and_clears(env):
+    e = env
+    pid, _ = e.store.create_plant("Кир")
+    srv = Srv(e.store, e.n)
+    try:
+        path = "/api/plants/%d/mute" % pid
+        assert srv.call("POST", path, {"minutes": 60})[0] == 403, "запись только из панели (X-Panel)"
+        code, j = srv.call("POST", path, {"minutes": 60}, headers={"X-Panel": "1"})
+        assert code == 200 and j == {"mute_until": e.clk.t + 3600} and e.store.mute_until(pid) == e.clk.t + 3600
+        code, j = srv.call("POST", path, {"minutes": "morning"}, headers={"X-Panel": "1"})
+        assert code == 200 and j["mute_until"] > e.clk.t
+        for bad in ({"minutes": 0}, {"minutes": 99999}, {"minutes": "x"}, {}, [1]):
+            assert srv.call("POST", path, bad, headers={"X-Panel": "1"})[0] == 400, bad
+        assert srv.call("POST", "/api/plants/999/mute", {"minutes": 5}, headers={"X-Panel": "1"})[0] == 404
+        code, j = srv.call("POST", path, {"minutes": None}, headers={"X-Panel": "1"})
+        assert code == 200 and j == {"mute_until": None} and e.store.mute_until(pid) is None
+        code, j = srv.call("GET", "/api/plants")
+        assert code == 200 and "mute_until" in json.dumps(j)
+    finally:
+        srv.close()
+
+
+def test_panel_has_mute_control():
+    assert "function muteCtl" in PANEL and "data-mute" in PANEL and "/mute'" in PANEL and "'unmute'" in PANEL and "Тихо…" in PANEL
+
+
+# --- находки независимого ревью тишины
+
+def test_alert_opened_in_mute_and_closed_after_it_still_says_closed(env):
+    e = env
+    pid, _ = e.store.create_plant("Кир")
+    e.store.ingest(pid, pulse())
+    e.store.set_mute(pid, 60)
+    e.store.ingest(pid, pulse([mute_alert("a1", e.clk.t - 20)]))
+    assert rows(e) == []
+    e.clk.t += 3601
+    e.store.ingest(pid, pulse([mute_alert("a1c", e.clk.t - 5, state="closed")]))
+    assert rows(e) == [("alert", "closed", "camera_exposure")], "итог сказал бы «открыто», а «снято» не пришло бы — теперь приходит"
+
+
+def test_offline_in_mute_then_recovery_after_it_says_online(env):
+    e = env
+    pid, _ = e.store.create_plant("Кир")
+    e.store.ingest(pid, pulse())
+    e.store.set_mute(pid, 60)
+    e.clk.t += 31 * 60
+    e.store.check_offline()
+    assert rows(e) == [] and muted_rows(e)[-1] == ("muted", ms.MUTE_REASON)
+    e.clk.t += 40 * 60
+    e.store.ingest(pid, pulse())
+    assert [r[0] for r in rows(e)] == ["online"]
+
+
+def test_offline_reminder_counts_from_the_end_of_mute_not_instantly(env):
+    e = env
+    pid, _ = e.store.create_plant("Кир")
+    e.store.ingest(pid, pulse())
+    e.store.set_mute(pid, 60)
+    e.clk.t += 31 * 60
+    e.store.check_offline()
+    e.clk.t += 40 * 60
+    e.n.flush()
+    assert len(e.tg.sent()) == 1 and "нет связи" in e.tg.sent()[0], "после тишины — итог; напоминание сразу следом не нужно"
+    e.clk.t += 3600 + 21600 + 100
+    e.n.flush()
+    assert len(e.tg.sent()) == 2 and "Всё ещё нет пульса" in e.tg.sent()[1]
+
+
+def test_event_taken_out_of_the_queue_by_mute_is_counted_in_the_summary(env):
+    e = env
+    pid, _ = e.store.create_plant("Кир")
+    e.store.ingest(pid, pulse([mute_alert("a1", e.clk.t - 20)]))        # лежит в очереди (скажем, Telegram не отвечал)
+    e.clk.t += 100
+    e.store.set_mute(pid, 60)
+    e.n.flush()
+    assert e.tg.sent() == []
+    e.clk.t += 3601
+    e.store.ingest(pid, pulse())
+    e.n.flush()
+    assert len(e.tg.sent()) == 1 and "Пока молчали: 1 событие" in e.tg.sent()[0]
+
+
+def test_summary_waits_between_attempts_and_respects_retry_after(env):
+    e = env
+    pid, _ = e.store.create_plant("Кир")
+    e.store.ingest(pid, pulse())
+    e.store.set_mute(pid, 5)
+    e.clk.t += 301
+    e.tg.mode = "429"
+    e.tg.retry_after = 200
+    e.n.flush()
+    n = len([r for r in e.tg.requests if r["method"] == "sendMessage"])
+    e.tg.mode = "ok"
+    e.clk.t += 100
+    e.n.flush()
+    assert len([r for r in e.tg.requests if r["method"] == "sendMessage"]) == n, "Telegram просил подождать 200 с"
+    e.clk.t += 101
+    e.n.flush()
+    assert len(e.tg.sent()) == 1
+
+
+def test_broken_mute_summary_does_not_stop_other_messages(env, monkeypatch):
+    e = env
+    pid, _ = e.store.create_plant("Кир")
+    monkeypatch.setattr(e.store, "mute_finished", lambda now: 1 / 0)
+    e.store.ingest(pid, pulse([mute_alert("a1", e.clk.t - 20)]))
+    e.n.flush()
+    assert len(e.tg.sent()) == 1 and "экспозиция" in e.tg.sent()[0]
+
+
+def test_mute_record_without_from_is_ignored(env):
+    e = env
+    pid, _ = e.store.create_plant("Кир")
+    e.store.meta_set("mute:%d" % pid, '{"until": 5}')
+    assert e.store.mute_until(pid) is None and e.store.mute_finished(e.clk.t) == []
+    e.n.flush()
+
+
+def test_mute_until_morning_follows_the_configured_summary_time(tmp_path):
+    clk = Clock()
+    store = ms.Store(tmp_path / "m2.db", clock=clk, notify={"fresh_s": 900, "morning": (7, 30)})
+    try:
+        pid, _ = store.create_plant("Кир")
+        lt = time.localtime(store.set_mute(pid, "morning"))
+        assert (lt.tm_hour, lt.tm_min) == (7, 30)
+    finally:
+        store.close()
+    src = (MS / "server.py").read_text(encoding="utf-8")
+    assert '"morning": tg.get("morning")' in src, "общее время «утра» должно доходить до хранилища"
+
+
+def test_panel_does_not_collapse_the_mute_list_while_it_is_open():
+    assert "select[data-mute]" in PANEL and "focusout" in PANEL

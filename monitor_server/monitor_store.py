@@ -43,6 +43,8 @@ NOTIFY_LEVELS = ("critical", "high")                              # в Telegram 
 NOTIFY_KINDS = ("start", "alert", "plate_reboot", "offline", "app_stop")      # какие события бывают «открытием» тревоги
 OFFLINE_KINDS = ("offline", "offline_repeat")
 OUTAGE_MIN_S = 180               # приёмник молчал дольше — это перерыв (перезапуск занимает секунды)
+MUTE_MAX_MIN = 1440              # «Не беспокоить» не дольше суток: тишину нельзя забыть включённой навсегда
+MUTE_REASON = "не беспокоить"    # пометка у сообщений, которые не ушли в Telegram из-за тишины
 ENROLL_PENDING_MAX = 30          # заявок «ждут решения» не больше: ключ регистрации не должен позволять забить панель
 ENROLL_KEEP_DAYS = 14            # заявку, от которой 2 недели нет вестей, забываем
 
@@ -284,6 +286,85 @@ class Store:
             self.meta_set("pcfg:%d" % plant_id, json.dumps(cur))
         return self.plant_settings(plant_id)
 
+    # --- «Не беспокоить»: пока идёт тишина, события завода не уходят в Telegram (панель и журнал — как обычно)
+
+    def _mute_rec(self, plant_id: int) -> Optional[dict]:
+        """Запись тишины завода: {"from", "until", "done"}. Битую не слушаем."""
+        try:
+            v = json.loads(self.meta_get("mute:%d" % plant_id) or "null")
+        except ValueError:
+            return None
+        if not isinstance(v, dict) or any(isinstance(v.get(k), bool) or not isinstance(v.get(k), (int, float)) for k in ("from", "until")):
+            return None
+        return v
+
+    def mute_until(self, plant_id: int, now: Optional[float] = None) -> Optional[float]:
+        """До какого времени (unix) у завода тишина; None — её нет или она кончилась."""
+        now = self.clock() if now is None else now
+        v = self._mute_rec(plant_id)
+        return float(v["until"]) if v is not None and v["until"] > now else None
+
+    def mute_morning_due(self, now: Optional[float] = None) -> float:
+        """Когда наступит «утро» (время утренней сводки, по умолчанию 08:00 по часам ПК приёмника): ближайшее, но не дальше суток."""
+        now = self.clock() if now is None else now
+        hm = (self.notify_cfg or {}).get("morning") or (8, 0)
+        lt = time.localtime(now)
+        due = time.mktime((lt.tm_year, lt.tm_mon, lt.tm_mday, hm[0], hm[1], 0, 0, 0, -1))
+        if due <= now + 60:
+            due += 86400
+        return min(due, now + MUTE_MAX_MIN * 60)
+
+    def set_mute(self, plant_id: int, minutes) -> Optional[float]:
+        """Включить тишину на minutes минут (1…сутки) или до утра ("morning"); None — снять. Возвращает время конца (или None, если снято).
+        ValueError — срок не тот; LookupError — завода нет. Включение и снятие остаются строкой в журнале завода."""
+        if minutes != "morning" and minutes is not None and (not isinstance(minutes, int) or isinstance(minutes, bool) or not 1 <= minutes <= MUTE_MAX_MIN):
+            raise ValueError("Тишина: от 1 минуты до суток")
+        now = self.clock()
+        with self._lock, self.db:
+            if not self.db.execute("SELECT 1 FROM plants WHERE id=?", (plant_id,)).fetchone():
+                raise LookupError("Завода нет")
+            rec = self._mute_rec(plant_id)
+            active = rec is not None and rec["until"] > now
+            if minutes is None:
+                if active:                                      # снимаем: итог по тишине отправит Notifier
+                    self.meta_set("mute:%d" % plant_id, json.dumps({"from": rec["from"], "until": now, "done": False}))
+                    self._insert_event(plant_id, "srv-unmute-%d-%d" % (plant_id, int(now * 1000)), now, now, "mute", "info", "Тихий режим снят")
+                return None
+            until = self.mute_morning_due(now) if minutes == "morning" else now + minutes * 60
+            since = rec["from"] if rec is not None and not rec.get("done") else now      # итог прошлой тишины ещё не ушёл — считаем вместе
+            self.meta_set("mute:%d" % plant_id, json.dumps({"from": since, "until": until, "done": False}))
+            self._insert_event(plant_id, "srv-mute-%d-%d" % (plant_id, int(now * 1000)), now, now, "mute", "info",
+                               "Тихий режим до %s" % time.strftime("%H:%M", time.localtime(until)))
+            return until
+
+    def mute_finished(self, now: float) -> list:
+        """Тишины, которые кончились (по сроку или «Снять»), а итог ещё не отправлен: [{plant_id, name, since, until, count}].
+        count — сколько важных событий промолчали (тихие записи об обновлении не в счёт, кроме «обновлён, но что-то не поднялось»)."""
+        out = []
+        with self._lock:
+            for r in self.db.execute("SELECT key FROM meta WHERE key LIKE 'mute:%'").fetchall():
+                try:
+                    pid = int(r["key"].split(":", 1)[1])
+                except ValueError:
+                    continue
+                v = self._mute_rec(pid)
+                if v is None or v.get("done") or v["until"] > now:
+                    continue
+                p = self.db.execute("SELECT name FROM plants WHERE id=?", (pid,)).fetchone()
+                if p is None:
+                    continue
+                n = self.db.execute("SELECT COUNT(*) n FROM notify WHERE plant_id=? AND status='muted' AND reason=? AND COALESCE(sent_t, created_t)>=? AND COALESCE(sent_t, created_t)<=? "
+                                    "AND NOT (kind='update' AND state!='warn')", (pid, MUTE_REASON, v["from"], v["until"] + 1)).fetchone()["n"]
+                out.append({"plant_id": pid, "name": p["name"], "since": v["from"], "until": v["until"], "count": n})
+        return out
+
+    def mute_reported(self, plant_id: int, since: float) -> None:
+        """Итог тишины отправлен (или отправлять поздно): больше не напоминать о ней. Новую тишину, начатую за это время, не трогаем."""
+        with self._lock:
+            v = self._mute_rec(plant_id)
+            if v is not None and v["from"] == since and v["until"] <= self.clock() + 1:
+                self.meta_set("mute:%d" % plant_id, json.dumps({**v, "done": True}))
+
     def set_hidden_blocks_all(self, hidden) -> list[str]:
         """Один набор скрытых блоков всем заводам сразу («для всех» в «Виде»): единый стандарт. ValueError — блок неизвестен."""
         if not isinstance(hidden, list) or any(b not in VIEW_BLOCKS for b in hidden):
@@ -296,7 +377,7 @@ class Store:
 
     def delete_plant(self, plant_id: int) -> bool:
         with self._lock, self.db:
-            self.db.execute("DELETE FROM meta WHERE key IN (?, ?)", ("view:%d" % plant_id, "pcfg:%d" % plant_id))
+            self.db.execute("DELETE FROM meta WHERE key IN (?, ?, ?)", ("view:%d" % plant_id, "pcfg:%d" % plant_id, "mute:%d" % plant_id))
             self.db.execute("DELETE FROM events WHERE plant_id=?", (plant_id,))
             self.db.execute("DELETE FROM alerts WHERE plant_id=?", (plant_id,))
             self.db.execute("DELETE FROM positions WHERE plant_id=?", (plant_id,))
@@ -398,8 +479,9 @@ class Store:
 
     def _last_notified(self, plant_id: int, kinds: tuple, code: Optional[str] = None) -> Optional[sqlite3.Row]:
         marks = ",".join("?" * len(kinds))
-        sql = "SELECT * FROM notify WHERE plant_id=? AND kind IN (%s) AND status IN ('pending','sent')" % marks
-        args = [plant_id, *kinds]
+        # промолчанное в «Не беспокоить» тоже считается: Макс прочтёт об этом в итоге тишины, а «снято» / «связь восстановилась» должны прийти потом
+        sql = "SELECT * FROM notify WHERE plant_id=? AND kind IN (%s) AND (status IN ('pending','sent') OR (status='muted' AND reason=?))" % marks
+        args = [plant_id, *kinds, MUTE_REASON]
         if code is not None:
             sql += " AND code=?"
             args.append(code)
@@ -428,8 +510,10 @@ class Store:
         else:
             return
         row = self.db.execute("SELECT name FROM plants WHERE id=?", (plant_id,)).fetchone()
-        self.db.execute("INSERT OR IGNORE INTO notify (plant_id, plant_name, eid, t, created_t, level, kind, code, state, text) VALUES (?,?,?,?,?,?,?,?,?,?)",
-                        (plant_id, row["name"] if row else "?", eid, t, now, level, kind, code, state, text))
+        quiet = self.mute_until(plant_id, now) is not None          # «Не беспокоить»: в очередь для отправки не кладём, но помним — для итога
+        self.db.execute("INSERT OR IGNORE INTO notify (plant_id, plant_name, eid, t, created_t, level, kind, code, state, text, status, reason) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                        (plant_id, row["name"] if row else "?", eid, t, now, level, kind, code, state, text,
+                         "muted" if quiet else "pending", MUTE_REASON if quiet else ""))
 
     def notify_pending(self, now: float, limit: int = 100) -> list:
         with self._lock:
@@ -444,6 +528,11 @@ class Store:
             self.db.executemany("UPDATE notify SET status=?, reason=?, sent_t=? WHERE id=?",
                                 [(status, reason, now if status == "sent" else None, i) for i in ids])
 
+    def notify_hush(self, ids: list, now: float) -> None:
+        """Строки, что уже лежали в очереди, когда включили тишину: не отправляем, но помним для итога (время — когда замолчали, оно же в sent_t)."""
+        with self._lock, self.db:
+            self.db.executemany("UPDATE notify SET status='muted', reason=?, sent_t=? WHERE id=?", [(MUTE_REASON, now, i) for i in ids])
+
     def notify_retry(self, ids: list, next_try_t: float, reason: str) -> None:
         with self._lock, self.db:
             self.db.executemany("UPDATE notify SET tries=tries+1, next_try_t=?, reason=? WHERE id=?", [(next_try_t, reason[:200], i) for i in ids])
@@ -457,8 +546,17 @@ class Store:
                 repeat_s = st["offline_repeat_min"] * 60
                 if not st["offline_notify"] or repeat_s <= 0:                       # напоминания выключены для этого завода
                     continue
+                if self.mute_until(p["id"], now) is not None:                       # «Не беспокоить»: напоминания молчат
+                    continue
                 last = self._last_notified(p["id"], OFFLINE_KINDS)
-                if last is None or last["status"] != "sent" or now - (last["sent_t"] or now) < repeat_s:
+                if last is None or last["status"] not in ("sent", "muted"):
+                    continue
+                if last["status"] == "sent":
+                    anchor = last["sent_t"] or now
+                else:                                                               # об отключении промолчали в тишине: отсчёт — от конца тишины (итог тоже о нём скажет)
+                    rec = self._mute_rec(p["id"])
+                    anchor = max(last["created_t"], rec["until"] if rec is not None else 0)
+                if now - anchor < repeat_s:
                     continue
                 if self.db.execute("SELECT 1 FROM notify WHERE plant_id=? AND kind IN ('offline','offline_repeat') AND status='pending'", (p["id"],)).fetchone():
                     continue
@@ -670,6 +768,6 @@ class Store:
                 out.append({
                     "id": p["id"], "name": p["name"], "status": self._status(p, now), "created_t": p["created_t"],
                     "last_seen_t": p["last_seen_t"], "interval_s": p["interval_s"], "offline_since": p["offline_since"],
-                    "snapshot": snap, "alerts": alerts, "events": self.events(p["id"], 5), "hidden_blocks": self.hidden_blocks(p["id"]), "settings": self.plant_settings(p["id"]), "settings_custom": sorted(self.plant_overrides(p["id"])),
+                    "snapshot": snap, "alerts": alerts, "events": self.events(p["id"], 5), "hidden_blocks": self.hidden_blocks(p["id"]), "settings": self.plant_settings(p["id"]), "settings_custom": sorted(self.plant_overrides(p["id"])), "mute_until": self.mute_until(p["id"], now),
                     "closed_t": (lambda st: st["t"] if st is not None and st["level"] == "critical" else None)(self._last_stop(p["id"]))})
         return out

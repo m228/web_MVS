@@ -172,8 +172,10 @@ class MicroscopeFSM:
         self._settle_sec = max(0, int(pc.get("settle_sec", 2)))    # пауза после доезда движения (осадка датчика), с
         # осадка у стекла: пауза после подвода ПЕРЕД первым кадром (потёки/течение в капле гаснут), с
         self._glass_settle_sec = max(0, int(pc.get("glass_settle_sec", 5)))
-        # ВРЕМЕННО (эксперимент): не промывать СТЕКЛО в пробе (шаг 21) — только трубку. Галочка на вкладке «Цикл».
-        self._skip_glass_wash = bool(pc.get("skip_glass_wash", False))
+        # как часто промывать СТЕКЛО перед пробой (шаг 21): раз в N проб (1 — каждую, 0 — никогда). Трубка — каждую пробу.
+        self._glass_wash_every = max(0, int(pc.get("glass_wash_every", 1)))
+        self._probe_n = 0             # сколько проб начато (счётчик для «раз в N»)
+        self._glass_wash_now = True   # промывать стекло в ЭТОЙ пробе (решается на входе в шаг 21)
         # режим повтора пробы внутри цикла: "time" (по паузе), "sv" (по целому СВ в [from..to])
         # или "cv" (по готовности CV: прошлая проба разобрана → следующая, см. set_cv_dwell)
         self._trigger_mode = self._norm_trigger(pc.get("trigger_mode", "time"))
@@ -1044,8 +1046,8 @@ class MicroscopeFSM:
             elif m == 21:
                 if self.t <= self._pre_wash() * 10:
                     left = max(0, self._pre_wash() * 10 - self.t) // 10
-                    label = ("Промывка трубки (стекло без промывки): осталось %d с" if self._skip_glass_wash
-                             else "Промывка стекла+трубки: осталось %d с") % left
+                    label = ("Промывка стекла+трубки: осталось %d с" if self._glass_wash_now
+                             else "Промывка трубки (стекло — не в этой пробе): осталось %d с") % left
                 else:
                     left = max(0, (self._pre_wash() + self._post_wash()) * 10 - self.t + 9) // 10
                     label = "Пауза после промывки: %d с" % max(1, left)
@@ -1383,10 +1385,14 @@ class MicroscopeFSM:
                 # промывка стекла + трубки перед пробой (pre_wash_sec), затем ПАУЗА
                 # post_wash_pause_sec с закрытыми клапанами (стекло стекло/успокоилось) -> подвод
                 self._redrive = 0; self._in_range = 0
+                if self.t == 0:                        # вход в шаг: стекло промываем раз в N проб (1-я проба — с промывкой)
+                    n = self._glass_wash_every
+                    self._glass_wash_now = n > 0 and self._probe_n % n == 0
+                    self._probe_n += 1
                 self.t += 1
                 if self.t <= self._pre_wash() * 10:
-                    self.cw0 = True                    # идёт промывка (оба клапана)
-                    self.cw1 = not self._skip_glass_wash   # эксперимент: без промывки стекла — только трубка
+                    self.cw0 = True                    # трубка — каждую пробу
+                    self.cw1 = self._glass_wash_now    # стекло — раз в N проб
                 else:
                     self.cw0 = False                   # промывка кончилась — пауза перед подводом
                     self.cw1 = False

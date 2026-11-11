@@ -354,19 +354,27 @@ def test_autocal_abort_by_operator_manual_keeps_manual(fsm):
     assert not fsm._cal_active and fsm.manual and not fsm._cal_return_manual
 
 
-def _wash_valves(skip):
-    # промывка перед пробой 3 с: какие клапаны открывались за цикл (skip_glass_wash — только трубка)
+def _glass_washes(every, probes):
+    # сколько проб из `probes` промывали стекло (клапан glass открывался на шаге 21); трубка — в каждой пробе
     cfg = copy.deepcopy(plate_config.DEFAULTS)
-    cfg["probe_cycle"].update({"pause_sec": 1, "trigger_mode": "time", "pre_wash_sec": 3,
+    cfg["probe_cycle"].update({"pause_sec": 1, "trigger_mode": "time", "pre_wash_sec": 1,
                                "post_wash_pause_sec": 0, "dwell_sec": 0, "settle_sec": 0, "glass_settle_sec": 0,
-                               "skip_glass_wash": skip})
+                               "glass_wash_every": every})
     cfg["probe_cycle"]["fast"]["enabled"] = False
     f = MicroscopeFSM(FakePlate(), cfg)
-    _start_cycle(f)
-    _run_until(f, lambda: f.mode == 23)
-    return {k for k, on in f.plate.valves if on}
+    res = []
+    for _ in range(probes):
+        f.plate.valves.clear()
+        _start_cycle(f)
+        _run_until(f, lambda: f.mode == 23)
+        on = {k for k, v in f.plate.valves if v}
+        assert "tube" in on                       # трубка промывается в каждой пробе
+        res.append("glass" in on)
+        _run_until(f, lambda: f.mode == 0, max_ticks=400)
+    return res
 
 
-def test_skip_glass_wash_opens_only_tube_valve():
-    assert _wash_valves(False) == {"tube", "glass"}    # как раньше: промывка стекла + трубки
-    assert _wash_valves(True) == {"tube"}              # эксперимент: клапан стекла не открывался
+def test_glass_wash_every_n_probes():
+    assert _glass_washes(1, 3) == [True, True, True]               # как раньше: каждую пробу
+    assert _glass_washes(3, 7) == [True, False, False, True, False, False, True]
+    assert _glass_washes(0, 2) == [False, False]                   # 0 — стекло не промывать

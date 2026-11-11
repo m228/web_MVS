@@ -3699,6 +3699,9 @@ input.micro-cam-num { width: 56px; min-width: 0; flex: 0 0 auto; padding: 4px 5p
 .micro-ap-tbl td { text-align: right; padding: 3px 6px; }
 .micro-ap-tbl tr.is-frac td { background: rgba(226,75,74,.08); }
 .micro-ap-adv { color: var(--danger, #e24b4a); }
+.micro-ap-done { color: var(--success, #2e9e5b); }
+.micro-ap-tbl .micro-ap-chk { display: inline-flex; flex-direction: row; align-items: center; gap: 6px; cursor: pointer; white-space: nowrap; }
+.micro-ap-chk input[type="checkbox"] { width: 15px; height: 15px; min-height: 0; margin: 0; padding: 0; flex: 0 0 auto; accent-color: var(--accent, #2563eb); }
 .micro-ap-cap { color: var(--muted, #8a94a6); }
 
 /* Рассев — полоски групп */

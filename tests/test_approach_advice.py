@@ -85,3 +85,61 @@ def test_service_hands_last_approach_to_one_probe_only():
     assert s._take_approach() is None                           # одна запись — одна проба
     s._on_probe_positions({"t": time.time() - 3600, "step": "подвод", "row": 3, "ai": 1.0})
     assert s._take_approach() is None                           # час назад — уже не «эта» проба
+
+
+def _svc_with_table():
+    from microscope_service import MicroscopeService
+    import plate_config
+    plate_config.save({"SP": [40000, 100, 600, 800, 1000, 1400, 1600], "SVSP": [0, 75, 81, 83, 85, 88, 95]})
+    s = MicroscopeService()
+    s.cfg = plate_config.load()
+    return s
+
+
+def test_apply_advice_writes_sp_row_and_can_be_undone(data_dir):
+    import plate_config
+    s = _svc_with_table()
+    r = s.approach_apply(4, 1000, 1100, True)                        # строка СВ от 85: 1000 -> 1100
+    assert r == {"status": "ok", "row": 4, "sp": 1100, "on": True}
+    assert plate_config.load()["SP"][4] == 1100 and s.cfg["SP"][4] == 1100
+    assert plate_config.load()["SP"][3] == 800 and plate_config.load()["SVSP"][4] == 85   # соседние строки и СВ не тронуты
+    assert plate_config.load()["approach_correction"]["applied"]["4"]["active"] is True
+    back = s.approach_apply(4, None, None, False)                    # галочку сняли — прежний зазор
+    assert back["status"] == "ok" and back["sp"] == 1000 and plate_config.load()["SP"][4] == 1000
+    assert plate_config.load()["approach_correction"]["applied"]["4"]["active"] is False
+
+
+def test_apply_advice_refuses_stale_ceiling_and_unknown_row(data_dir):
+    import plate_config
+    s = _svc_with_table()
+    assert "изменилась" in s.approach_apply(4, 900, 1000, True)["error"]            # совет считался от другого SP
+    assert "предельного" in s.approach_apply(5, 1400, 1600, True)["error"]          # выше 1500
+    assert "отодвигать" in s.approach_apply(4, 1000, 900, True)["error"]            # не дальше
+    assert "нет в таблице" in s.approach_apply(40, 1000, 1100, True)["error"]
+    assert plate_config.load()["SP"] == [40000, 100, 600, 800, 1000, 1400, 1600]    # ни один отказ ничего не записал
+    s.approach_apply(4, 1000, 1100, True)
+    plate_config.save({"SP": [40000, 100, 600, 800, 1250, 1400, 1600]})            # таблицу потом правили руками
+    s.cfg = plate_config.load()
+    assert "менялся" in s.approach_apply(4, None, None, False)["error"]             # откат не затирает ручную правку
+
+
+def test_advice_marks_applied_row(data_dir):
+    s = _svc_with_table()
+    s.approach_apply(4, 1000, 1100, True)
+    rows = s.approach_advice("S1")["rows"]
+    r4 = [r for r in rows if r["row"] == 4][0]
+    assert r4["applied"]["from"] == 1000 and r4["applied"]["to"] == 1100
+    assert not [r for r in rows if r["row"] == 3][0].get("applied")
+    s.approach_apply(4, None, None, False)
+    assert "applied" not in [r for r in s.approach_advice("S1")["rows"] if r["row"] == 4][0]
+
+
+def test_apply_advice_moves_live_fsm_table(data_dir):
+    class _F:
+        SP = [40000, 100, 600, 800, 1000, 1400, 1600]
+    s = _svc_with_table()
+    s.fsm = _F()
+    s.approach_apply(4, 1000, 1100, True)
+    assert s.fsm.SP[4] == 1100                                       # автомат подхватил без перезапуска
+    s.approach_apply(4, None, None, False)
+    assert s.fsm.SP[4] == 1000

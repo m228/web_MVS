@@ -19,7 +19,11 @@
     api("/api/cv/approach/advice" + q).then((a) => {
       const rows = (a && a.rows) || [];
       const f = (v) => (v == null ? "—" : String(Math.round(v)));
-      const adv = (r) => r.status === "advice" ? '<b class="micro-ap-adv">' + r.sp + " → " + r.proposed + "</b>"
+      // совет с галочкой: отметил — предложенный зазор уходит в СВ-таблицу против этого СВ; сняла — прежний возвращается
+      const chk = (r, on, from, to, cls) => '<label class="micro-ap-chk" title="' + (on ? "применено — снять галочку вернёт " + from : "записать в СВ-таблицу зазор " + to + " для СВ от " + r.sv_from) +
+        '"><input type="checkbox" data-row="' + r.row + '" data-from="' + from + '" data-to="' + to + '"' + (on ? " checked" : "") + '><span class="' + cls + '">' + from + " → " + to + "</span></label>";
+      const adv = (r) => r.applied ? chk(r, true, r.applied.from, r.applied.to, "micro-ap-done")
+        : r.status === "advice" ? chk(r, false, Math.round(r.sp), r.proposed, "micro-ap-adv")
         : r.status === "ceiling" ? '<span class="micro-ap-cap">потолок ' + Math.round(a.max_gap_um) + "</span>" : "";
       const html = '<tr><th>СВ от</th><th>зазор</th><th>проб</th><th>разлом</th><th title="средний аналоговый датчик на приходе: разломные / чистые">аналог</th><th>совет</th></tr>' +
         rows.map((r) => "<tr" + (r.status === "advice" || r.status === "ceiling" ? ' class="is-frac"' : "") + "><td>" + r.sv_from + "</td><td>" + f(r.sp) + "</td><td>" +
@@ -27,6 +31,28 @@
           (r.ai_frac != null || r.ai_ok != null ? f(r.ai_frac) + " / " + f(r.ai_ok) : "—") + "</td><td>" + adv(r) + "</td></tr>").join("");
       if (tb.__h !== html) { tb.innerHTML = rows.length ? html : "<tr><td>нет строк таблицы</td></tr>"; tb.__h = html; }
     }).catch(() => {});
+  }
+  // после применения совета — тот же зазор в редакторе таблицы подвода (строка конфига i = i-я по порядку строка с СВ > 0)
+  function apSyncTable(row, sp) {
+    if (typeof cfg !== "object" || !cfg) return;
+    if (cfg.SP) cfg.SP[row] = sp;
+    const SVSP = cfg.SVSP || []; let k = -1;
+    for (let i = 1; i <= row; i++) if (Number(SVSP[i]) > 0) k++;
+    const tr = document.querySelectorAll("#svspBody tr")[k], gap = tr && tr.querySelector(".svsp-gap");
+    if (gap) gap.value = sp;
+  }
+  async function apToggle(box) {
+    const row = +box.dataset.row, from = +box.dataset.from, to = +box.dataset.to, on = box.checked;
+    const h = $("apSaveHint");
+    box.disabled = true;
+    try {
+      const r = await (await fetch("/api/cv/approach/apply", { method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ row, sp_from: from, sp_to: to, on }) })).json();
+      if (r.status === "ok") { apSyncTable(row, r.sp); if (h) { h.textContent = on ? "записано в таблицу" : "возвращено"; setTimeout(() => (h.textContent = ""), 2500); } }
+      else { box.checked = !on; if (h) { h.textContent = r.error || "не применено"; setTimeout(() => (h.textContent = ""), 6000); } }
+    } catch (e) { box.checked = !on; if (h) h.textContent = "ошибка связи"; }
+    box.disabled = false;
+    apRender();
   }
   function fracRender() {
     const q = cvSerialQ() ? "?" + cvSerialQ() : "";
@@ -92,6 +118,8 @@
           dark_thr: num("fracDarkThr"), confirm_frames: num("fracConfirm"), min_area_frac: num("fracMinArea") }) }).catch(() => {});
       const h = $("fracSaveHint"); if (h) { h.textContent = "сохранено"; setTimeout(() => (h.textContent = ""), 1500); }
     });
+    const apt = $("apAdvice");
+    if (apt) apt.addEventListener("change", (e) => { if (e.target.matches('input[type="checkbox"][data-row]')) apToggle(e.target); });
     const aps = $("apSaveBtn");
     if (aps) aps.addEventListener("click", async () => {
       await fetch("/api/cv/approach/settings", { method: "POST", headers: { "Content-Type": "application/json" },

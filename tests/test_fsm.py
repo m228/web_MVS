@@ -352,3 +352,21 @@ def test_autocal_abort_by_operator_manual_keeps_manual(fsm):
     fsm.set_manual(True)
     fsm.tick()
     assert not fsm._cal_active and fsm.manual and not fsm._cal_return_manual
+
+
+def _wash_valves(skip):
+    # промывка перед пробой 3 с: какие клапаны открывались за цикл (skip_glass_wash — только трубка)
+    cfg = copy.deepcopy(plate_config.DEFAULTS)
+    cfg["probe_cycle"].update({"pause_sec": 1, "trigger_mode": "time", "pre_wash_sec": 3,
+                               "post_wash_pause_sec": 0, "dwell_sec": 0, "settle_sec": 0, "glass_settle_sec": 0,
+                               "skip_glass_wash": skip})
+    cfg["probe_cycle"]["fast"]["enabled"] = False
+    f = MicroscopeFSM(FakePlate(), cfg)
+    _start_cycle(f)
+    _run_until(f, lambda: f.mode == 23)
+    return {k for k, on in f.plate.valves if on}
+
+
+def test_skip_glass_wash_opens_only_tube_valve():
+    assert _wash_valves(False) == {"tube", "glass"}    # как раньше: промывка стекла + трубки
+    assert _wash_valves(True) == {"tube"}              # эксперимент: клапан стекла не открывался

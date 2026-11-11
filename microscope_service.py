@@ -976,7 +976,59 @@ class MicroscopeService:
         res = approach_advice.compute(cv_store.approach_rows(serial), cfg.get("SP") or [], cfg.get("SVSP") or [],
                                       step_um=ap.get("step_um", 100), min_zones=ap.get("min_zones", 1), max_gap_um=ap.get("max_gap_um", 1500))
         res["mode"] = "advise"
+        applied = ap.get("applied") or {}
+        SP = cfg.get("SP") or []
+        for r in res["rows"]:                          # совет уже применён и стоит в таблице → галочка отмечена (снять = вернуть прежний SP)
+            a = applied.get(str(r["row"]))
+            if a and a.get("active") and r["row"] < len(SP) and abs(float(SP[r["row"]]) - float(a.get("to", -1))) <= 0.5:
+                r["applied"] = {"from": a.get("from"), "to": a.get("to"), "ts": a.get("ts")}
         return res
+
+    def approach_apply(self, row, sp_from, sp_to, on=True):
+        """Галочка у совета: on — записать sp_to в SP строки СВ-таблицы (sp_from — SP, от которого считался совет), off — вернуть прежний SP.
+        Без reload автомата: правим конфиг и живой список SP автомата — следующий подвод пойдёт уже по новому зазору."""
+        cfg = self.cfg or plate_config.load()
+        SP = [float(x) for x in (cfg.get("SP") or [])]
+        SVSP = cfg.get("SVSP") or []
+        try:
+            row = int(row)
+        except (TypeError, ValueError):
+            return {"status": "error", "error": "нет номера строки"}
+        if not (1 <= row < len(SP) and row < len(SVSP) and SVSP[row] > 0):
+            return {"status": "error", "error": "такой строки нет в таблице подвода"}
+        ap = cfg.get("approach_correction") or {}
+        cap = float(ap.get("max_gap_um", 1500))
+        rec = dict((ap.get("applied") or {}).get(str(row)) or {})
+        if on:
+            try:
+                sp_from, sp_to = float(sp_from), float(sp_to)
+            except (TypeError, ValueError):
+                return {"status": "error", "error": "нет значений зазора"}
+            if abs(SP[row] - sp_from) > 0.5:
+                return {"status": "error", "error": "таблица изменилась: зазор строки сейчас %d, совет считался от %d — обнови список" % (SP[row], sp_from)}
+            if sp_to <= SP[row]:
+                return {"status": "error", "error": "совет должен отодвигать подвод (больше текущего зазора)"}
+            if sp_to > cap:
+                return {"status": "error", "error": "выше предельного зазора %d мкм" % cap}
+            new = int(round(sp_to))
+            rec = {"from": int(SP[row]), "to": new, "sv": SVSP[row], "ts": time.time(), "active": True}
+        else:
+            if not rec.get("active") or abs(SP[row] - float(rec.get("to", -1))) > 0.5:
+                return {"status": "error", "error": "зазор строки менялся после совета — вернуть нечего, правь таблицу руками"}
+            new = int(rec["from"])
+            rec["active"] = False
+        SP[row] = new
+        out = [int(round(x)) for x in SP]
+        plate_config.save({"SP": out, "approach_correction": {"applied": {str(row): rec}}})
+        if self.cfg is not None:
+            self.cfg["SP"] = out
+            self.cfg.setdefault("approach_correction", {}).setdefault("applied", {})[str(row)] = rec
+        if self.fsm is not None and row < len(self.fsm.SP):
+            self.fsm.SP[row] = new                     # живая правка: автомат читает SP[i] на каждом подводе
+        log_event("microscope_service", "Совет по подводу %s: строка %d (СВ от %s), зазор %s → %s мкм" % (
+            "применён" if on else "снят", row, SVSP[row], int(rec["from"]) if on else int(rec["to"]), new), "info",
+            {"row": row, "from": rec.get("from"), "to": rec.get("to"), "on": bool(on)})
+        return {"status": "ok", "row": row, "sp": new, "on": bool(on)}
 
     def set_approach(self, patch):
         """Живое обновление настроек советов по подводу (шаг мкм / порог зон / предельный зазор)."""

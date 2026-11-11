@@ -1143,8 +1143,17 @@ def cv_approach_set(patch: dict = Body(...)):
 
 @app.get("/api/cv/approach/advice")
 def cv_approach_advice(serial: str = ""):
-    """Советы по подводу от разломов по строкам СВ-таблицы (только предложения, мотор и таблица не меняются)."""
+    """Советы по подводу от разломов по строкам СВ-таблицы (расчёт; в таблицу пишет только галочка — /api/cv/approach/apply)."""
     return micro.approach_advice(_cv_serial(serial or None))
+
+
+@app.post("/api/cv/approach/apply")
+def cv_approach_apply(body: dict = Body(...)):
+    """Галочка у совета: записать предложенный зазор в СВ-таблицу (on=true) или вернуть прежний (on=false)."""
+    res = micro.approach_apply(body.get("row"), body.get("sp_from"), body.get("sp_to"), bool(body.get("on", True)))
+    if res.get("status") != "ok":                      # успех пишет сам сервис; тут — отказы (таблица изменилась, потолок)
+        api_log("api.cv.approach_apply", "Совет по подводу не применён: " + str(res.get("error")), "warn", payload={"body": body})
+    return res
 
 
 # --- калибровка разломов по своим кадрам (см. fracture_lab.py) ---

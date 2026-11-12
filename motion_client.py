@@ -107,6 +107,18 @@ def level_import(service_url: str, ini_text: str) -> dict:
     return _call(service_url, "/level/import", {"ini": ini_text}, timeout=8.0)
 
 
+def level_shot(service_url: str, cam: str, group: str, ts: float, direction: int = 0, timeout: float = 5.0):
+    """(jpeg-байты, время снимка) — снимок графика уровня, ближайший к ts (direction −1/+1 — соседний раньше/позже),
+    или None (нет снимка / сервис молчит)."""
+    q = urllib.parse.urlencode({"group": group, "ts": float(ts), "dir": int(direction)})
+    url = _base(service_url) + "/cameras/%s/level_shot?%s" % (urllib.parse.quote(cam, safe=""), q)
+    try:
+        with _opener.open(url, timeout=timeout) as r:
+            return r.read(), int(r.headers.get("X-Shot-Ts") or 0)
+    except Exception:
+        return None
+
+
 def snapshot(service_url: str, cam: str, width: int = 0, timeout: float = 5.0):
     """(jpeg-байты, ширина оригинала, высота оригинала) или None, если кадра нет/сервис молчит."""
     url = _base(service_url) + "/cameras/%s/snapshot?w=%d" % (urllib.parse.quote(cam, safe=""), int(width))

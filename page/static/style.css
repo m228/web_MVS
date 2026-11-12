@@ -4883,6 +4883,12 @@ body.micro-rep-doc .micro-cmp-strips { grid-template-columns: repeat(6, 1fr); ga
 .lv-web .lv-web__nums input.lv-web__n[type=number]::-webkit-inner-spin-button, .lv-web .lv-web__nums input.lv-web__n[type=number]::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
 .lv-web .micro-check { margin-top: 10px; }
 .lv-web__url { margin-top: 8px; font-size: 12px; word-break: break-all; }
+/* кадр уровня по клику на графике */
+.lv-shot__card { width: min(720px, 96vw); max-width: 96vw; }
+.lv-shot__img { display: block; width: 100%; height: auto; border-radius: 6px; background: #000; }
+.lv-shot__nav { display: flex; align-items: center; gap: 10px; margin-top: 10px; }
+.lv-shot__nav .btn-secondary { flex: none; min-width: 40px; }
+.lv-shot__vals { flex: 1; text-align: center; font-size: 13px; }
 .lv-web__url.is-bad, .lv-web .md-dim.is-bad { color: var(--danger); }
 /* маленький квадратик-переключатель */
 .lv-sq { position: relative; width: 18px; height: 18px; flex: none; cursor: pointer; }

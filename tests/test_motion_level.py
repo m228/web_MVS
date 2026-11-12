@@ -574,3 +574,123 @@ def test_level_config_frames_defaults_and_limits():
     for bad in ({"frames_keep": 1}, {"frames_every_s": 0}, {"frames_hours": 0}):
         with pytest.raises(ValueError):
             level_cam(**bad)
+
+
+# ───────────────────── осадок в верхнем стекле: считаем верхнее только при полном нижнем ─────────────────────
+def test_upper_ignored_until_lower_reaches_gate():
+    # завод 12.11: корка на дне верхнего стекла даёт 14–15 % сырого; на кадре с 15,1 (> glass2_min 15) нижнее уходило в 100 %
+    p = ml.LevelProcessor(alpha=0, glass1_min=15, glass2_min=15, glass2_gate=80)
+    r = p.update(0.20, 0.151)
+    assert (round(r["glass1"], 3), r["glass2"]) == (10.0, 0.0), "нижнее 20 % — в верхнем только осадок: не считаем и нижнее не форсим"
+    r = p.update(0.85, 0.30)
+    assert (round(r["glass1"], 3), round(r["glass2"], 3)) == (50.0, 15.0), "нижнее ≥ 80 % — верхнее живое, нижнее полное"
+
+
+def test_gate_drops_upper_full_hold_at_once():
+    p = ml.LevelProcessor(alpha=0, glass1_min=0, glass2_min=0, glass2_gate=80)
+    assert round(p.update(1.0, 0.98)["glass2"], 3) == 50.0, "верхнее полное — держим 100 %"
+    assert p.update(0.5, 0.98)["glass2"] == 0.0, "нижнее просело ниже ворот — верхнее сразу 0, без лишнего тика «полного»"
+
+
+def test_nearest_trend_shot_rejects_nan(tmp_path):
+    (tmp_path / "1000.jpg").write_bytes(b"x")
+    assert ml.nearest_trend_shot(tmp_path, float("nan"), 90, now=1000) is None
+
+
+def test_gate_zero_keeps_lvldec_behaviour():
+    p = ml.LevelProcessor(alpha=0, glass1_min=15, glass2_min=15)
+    assert round(p.update(0.20, 0.151)["glass1"], 3) == 50.0, "0 — как в LVLDec: верхнее > 0 ⇒ нижнее 100 %"
+
+
+def test_gate_uses_calibrated_lower():
+    p = ml.LevelProcessor(alpha=0, glass1_min=0, glass2_min=0, glass1_full=85, glass2_gate=80)
+    assert round(p.update(0.70, 0.30)["glass2"], 3) == 15.0, "70 сырого при «полном» 85 = 82 % ≥ 80 — верхнее считаем"
+
+
+def test_factory_trend_has_no_spikes_with_gate():
+    # ряд с завода (12.11 13:32): нижнее сырое ~20 %, верхнее (осадок) 14,2…15,1 %; alpha 0,7, отсечки 15/15
+    up = [14.2, 15.1, 14.2, 14.2, 14.6, 15.1, 14.6, 14.7, 14.7, 15.1, 15.0, 14.7]
+    lo = [19.6, 20.5, 19.5, 20.2, 19.9, 19.2, 19.6, 20.5, 18.8, 19.4, 19.4, 20.5]
+    def run(gate):
+        p = ml.LevelProcessor(alpha=0.7, glass1_min=15, glass2_min=15, glass2_gate=gate)
+        p.smooth_g1 = 0.2
+        return max(p.update(a / 100, b / 100)["glass1"] * 2 for a, b in zip(lo, up))
+    assert run(0) > 40, "без ворот — всплески нижнего (на тренде 44–73 %)"
+    assert run(80) < 21, "с воротами нижнее ровное ~20 %"
+
+
+def test_level_config_gate_and_shots_defaults_and_limits():
+    g = level_cam()["groups"][0]
+    assert (g["glass2_gate"], g["shots_every_s"]) == (80, 60)
+    assert level_cam(shots_every_s=0)["groups"][0]["shots_every_s"] == 0, "0 — снимки выключены"
+    for bad in ({"glass2_gate": 101}, {"shots_every_s": -1}, {"shots_every_s": 3601}):
+        with pytest.raises(ValueError):
+            level_cam(**bad)
+
+
+# ───────────────────── снимки для графика уровня ─────────────────────
+def test_trend_shot_small_jpeg_and_old_ones_removed(tmp_path):
+    f = tmp_path / "s"
+    frame = np.full((1080, 1920, 3), 120, np.uint8)
+    p = ml.save_trend_shot(f, frame, 10000.0)
+    assert p.name == "10000.jpg" and cv2.imread(str(p)).shape[:2] == (360, 640), "ужат до 640 по ширине"
+    ml.save_trend_shot(f, frame, 10000.0 + 7000)
+    ml.save_trend_shot(f, frame, 10000.0 + 7300)                # первому уже больше 2 ч — стёрт
+    assert sorted(p.name for p in f.iterdir()) == ["17000.jpg", "17300.jpg"]
+
+
+def test_nearest_trend_shot(tmp_path):
+    f = tmp_path / "s"
+    f.mkdir()
+    for t in (1000, 1060, 1120):
+        (f / ("%d.jpg" % t)).write_bytes(b"x")
+    (f / "junk.jpg").write_bytes(b"x")
+    assert ml.nearest_trend_shot(f, 1070, 90, now=1200)[1] == 1060
+    assert ml.nearest_trend_shot(f, 1300, 90, now=1200) is None, "дальше max_dt — нет"
+    assert ml.nearest_trend_shot(f, 1070, 90, now=1100 + 7200)[1] == 1120, "старше 2 ч не отдаём (1060 ближе, но протух), даже если файл ещё лежит"
+    assert ml.nearest_trend_shot(tmp_path / "нет", 1000, 90) is None
+    (f / "1500.jpg").write_bytes(b"x")                          # дыра 380 с: камера стояла
+    assert ml.nearest_trend_shot(f, 1500, 90, now=1600, direction=-1)[1] == 1120, "соседний раньше — через дыру, max_dt не мешает"
+    assert ml.nearest_trend_shot(f, 1120, 90, now=1600, direction=1)[1] == 1500
+    assert ml.nearest_trend_shot(f, 1500, 90, now=1600, direction=1) is None, "позже нет"
+    assert ml.nearest_trend_shot(f, 1000, 90, now=1600, direction=-1) is None, "раньше нет"
+
+
+def test_infer_takes_trend_shot_every_shots_every_s(tmp_path):
+    li = _infer_step(tmp_path, [], shots_every_s=60)
+    li.shots_dir = tmp_path / "shots"
+    li.step()
+    li.step()                                                  # сразу ещё раз — рано
+    assert len(list((tmp_path / "shots").glob("*.jpg"))) == 1
+    li._last_shot -= 61
+    li.step()
+    assert len(list((tmp_path / "shots").glob("*.jpg"))) in (1, 2), "та же секунда перезаписывает файл, иначе — второй"
+    off = _infer_step(tmp_path, [], shots_every_s=0)
+    off.shots_dir = tmp_path / "off"
+    off.step()
+    assert not (tmp_path / "off").exists(), "0 — не снимаем"
+
+
+def test_level_shot_endpoint(tmp_path):
+    import importlib.util
+    from fastapi import HTTPException
+    spec = importlib.util.spec_from_file_location("motion_server_lvshot", MS / "server.py")
+    srv = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(srv)
+    app = srv.create_app(tmp_path / "data")
+    cam = level_cam()
+    cam["enabled"] = False
+    put = next(r.endpoint for r in app.router.routes if getattr(r, "path", "") == "/config" and "PUT" in r.methods)
+    call = next(r.endpoint for r in app.router.routes if getattr(r, "path", "") == "/cameras/{cid}/level_shot")
+    put({"cameras": [cam]})
+    w = app.state.mgr.workers["dec"]
+    now = time.time()
+    ml.save_trend_shot(w.level_shots_dir("lvl"), np.zeros((H, W, 3), np.uint8), now - 30)
+    r = call("dec", "lvl", now)
+    assert r.media_type == "image/jpeg" and r.headers["X-Shot-Ts"] == str(int(now - 30))
+    ml.save_trend_shot(w.level_shots_dir("lvl"), np.zeros((H, W, 3), np.uint8), now - 1000)
+    assert call("dec", "lvl", int(now - 30), -1).headers["X-Shot-Ts"] == str(int(now - 1000)), "стрелка «раньше» — соседний снимок"
+    for args in (("dec", "lvl", now - 600), ("dec", "../../x", now)):
+        with pytest.raises(HTTPException) as e:
+            call(*args)
+        assert e.value.status_code == 404

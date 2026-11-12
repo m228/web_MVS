@@ -26,7 +26,7 @@ import cv2
 import numpy as np
 
 from motion_engine import CameraEngine, scale_points
-from motion_level import LevelInfer, post_infer
+from motion_level import LevelInfer, nearest_trend_shot, post_infer
 from motion_webview import WebView
 from motion_store import store_for
 from motion_trends import TrendLog
@@ -260,6 +260,26 @@ class CameraWorker(threading.Thread):
         if f is None or (st is not None and not st.get("alive")) or time.time() - self._last_good > 5.0:
             return None
         return f
+
+    def level_shots_dir(self, gid: str) -> Path:
+        """Папка снимков графика уровня группы gid: data\\level_shots\\<камера>\\<группа>."""
+        safe = lambda s: re.sub(r"[^\w.-]", "_", str(s))     # noqa: E731
+        return self.data_dir / "level_shots" / safe(self.id) / safe(gid)
+
+    def level_shot(self, gid: str, ts: float, direction: int = 0) -> Optional[tuple]:
+        """(jpeg-байты, время снимка) — снимок графика уровня, ближайший к ts (direction −1/+1 — соседний раньше/позже), или None.
+        Группа — только из своего конфига."""
+        g = next((x for x in self.cfg["groups"] if x["type"] == "level" and x["id"] == gid), None)
+        if g is None:
+            return None
+        hit = nearest_trend_shot(self.level_shots_dir(gid), ts, max(90.0, float(g.get("shots_every_s") or 0) * 1.5),
+                                 direction=(direction > 0) - (direction < 0))
+        if hit is None:
+            return None
+        try:
+            return hit[0].read_bytes(), hit[1]
+        except OSError:                                # как раз стёрли по сроку
+            return None
 
     def snapshot_jpeg(self, max_w: int = 0) -> Optional[tuple]:
         """(jpeg-байты, (ширина, высота) оригинала) последнего кадра или None."""
@@ -616,8 +636,9 @@ class CameraWorker(threading.Thread):
             return
         self._writer = threading.Thread(target=self._plc_loop, daemon=True, name="plc-" + self.id)
         self._writer.start()
-        for lv in self.engine.levels.values():         # группы-уровни: свой поток модели на каждую (обычно одна — декантатор)
-            LevelInfer(lv, self._level_frame, self._halt, self.level_post, save_dir=self.data_dir / "level_frames").start()
+        for gid, lv in self.engine.levels.items():     # группы-уровни: свой поток модели на каждую (обычно одна — декантатор)
+            LevelInfer(lv, self._level_frame, self._halt, self.level_post, save_dir=self.data_dir / "level_frames",
+                       shots_dir=self.level_shots_dir(gid)).start()
         wv = cfg.get("webview")
         if wv and wv["enabled"]:
             self._web = WebView(self.id, wv, self._web_source, self._halt)

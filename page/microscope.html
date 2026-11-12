@@ -719,9 +719,81 @@
                   <span class="micro-cv-block__title" style="margin:0">Разломы кристаллов</span>
                   <span class="micro-cv-status" id="fracStatus">—</span>
                 </div>
-                <p class="micro-plc-note">Лопнутые/раздавленные кристаллы (тёмное+хаос). Красный контур — на кадре в окне «Комп. зрение» и в галерее. Подтверждение по серии кадров убирает фейки.</p>
+                <p class="micro-plc-note">Лопнутые/раздавленные кристаллы. Красный контур — на кадре в окне «Комп. зрение». Нажми на точку тренда — откроется кадр этой пробы.</p>
 
-                <!-- Калибровка по своим кадрам: ломаешь кристаллы, снимаешь, двигаешь пороги ниже и видишь зоны -->
+                <!-- Последняя проба: вердикт крупно + три числа -->
+                <div class="micro-cv-block">
+                  <div class="micro-cv-block__title">Последняя проба <span class="micro-cv-hint" id="fracWhen"></span></div>
+                  <div class="frac-last">
+                    <div class="frac-verdict" id="fracVerdict">—</div>
+                    <div class="micro-tile"><span>Зон</span><b id="fracZones">—</b></div>
+                    <div class="micro-tile"><span>Площадь</span><b id="fracArea">—</b></div>
+                    <div class="micro-tile"><span>Уверенность</span><b id="fracConf">—</b></div>
+                  </div>
+                </div>
+
+                <!-- Тренд разломов: клик по точке — кадр пробы в окне «Комп. зрение» -->
+                <div class="micro-cv-block">
+                  <div class="micro-cv-block__title">Тренд разломов по пробам</div>
+                  <div class="micro-cv-series" id="fracSeries">
+                    <label><input type="checkbox" value="frac_zones" checked /><span class="dot" style="background:#e24b4a"></span>зоны</label>
+                    <label><input type="checkbox" value="frac_pct" checked /><span class="dot" style="background:#ba7517"></span>% площади</label>
+                  </div>
+                  <div class="micro-cv-trendwrap frac-trendwrap">
+                    <canvas id="fracTrend" class="micro-cv-trend frac-trend"></canvas>
+                    <div id="fracTrendTip" class="micro-cv-tip" hidden></div>
+                  </div>
+                </div>
+
+                <!-- Советы по подводу: «дальше» (разлом) красным, «ближе» (подряд чистые) зелёным; галочка пишет зазор в СВ-таблицу -->
+                <div class="micro-cv-block">
+                  <div class="micro-cv-block__title">Советы по подводу
+                    <span class="micro-cv-hint">галочка — записать зазор в СВ-таблицу, снять — вернуть</span>
+                  </div>
+                  <div class="micro-ap-wrap"><table class="micro-ap-tbl" id="apAdvice"></table></div>
+                  <span class="micro-conn-hint" id="apSaveHint"></span>
+                  <details class="frac-fold">
+                    <summary>Настройки совета</summary>
+                    <div class="micro-cycle-cols">
+                      <div class="micro-cycle-col">
+                        <label class="micro-cycle-f" title="На сколько двигать зазор за один совет (в обе стороны)"><span>Шаг, мкм</span><input type="number" id="apStep" step="10" min="10" /></label>
+                        <label class="micro-cycle-f" title="Совет «ближе» не уводит зазор ниже этого значения"><span>Мин. зазор, мкм</span><input type="number" id="apMinGap" step="50" /></label>
+                        <label class="micro-cycle-f" title="Совет «дальше» не уводит зазор выше этого значения"><span>Макс. зазор, мкм</span><input type="number" id="apMaxGap" step="100" /></label>
+                      </div>
+                      <div class="micro-cycle-col">
+                        <label class="micro-cycle-f" title="Сколько чистых проб подряд при текущем зазоре — и совет «ближе»"><span>Чистых для «ближе»</span><input type="number" id="apCleanN" step="1" min="1" /></label>
+                        <label class="micro-cycle-f" title="Со скольких подтверждённых зон проба разломная"><span>Разлом — от зон</span><input type="number" id="apMinZones" step="1" min="1" /></label>
+                        <label class="micro-cycle-f" title="Разлом меньше этой доли кадра — слабый след, проба считается чистой (0 — выкл)"><span>Слабый, % площади &lt;</span><input type="number" id="apWeakPct" step="1" min="0" /></label>
+                      </div>
+                    </div>
+                    <div class="micro-cycle-btns">
+                      <button type="button" id="apSaveBtn" class="toolbar-btn toolbar-btn--primary">Сохранить</button>
+                    </div>
+                    <p class="micro-plc-note">По каждой строке СВ-таблицы — пробы при её текущем зазоре за 30 суток. Был разлом — «дальше» на шаг (не выше макс.). Подряд чистые — «ближе» на шаг (не ниже мин.): ближе к стеклу кристаллы ложатся в один слой. «Ближе» не советуется туда, где на этой строке разломы уже были часто (по аналоговому датчику, а не по заданию: подвод бывает перелетает). Поправили таблицу — счёт строки начинается заново. Само ничего не двигается: только галочкой, со следующего подвода.</p>
+                  </details>
+                </div>
+
+                <!-- Детектор: пороги и калибровка по своим кадрам — внизу, свёрнуто -->
+                <details class="micro-cv-block frac-fold" id="fracDetFold">
+                  <summary>Настройка детектора</summary>
+                  <div class="micro-cycle-cols">
+                    <div class="micro-cycle-col">
+                      <label class="micro-cycle-f"><span>Порог увер. C</span><input type="number" id="fracConfThr" step="0.05" min="0" max="1" /></label>
+                      <label class="micro-cycle-f"><span>Вес тёмности D</span><input type="number" id="fracWDark" step="0.05" min="0" max="1" /></label>
+                      <label class="micro-cycle-f"><span>Порог тёмного</span><input type="number" id="fracDarkThr" step="1" /></label>
+                    </div>
+                    <div class="micro-cycle-col">
+                      <label class="micro-cycle-f"><span>Кадров подтв.</span><input type="number" id="fracConfirm" step="1" min="1" /></label>
+                      <label class="micro-cycle-f"><span>Вес текстуры T</span><input type="number" id="fracWTex" step="0.05" min="0" max="1" /></label>
+                      <label class="micro-cycle-f"><span>Мин. площадь</span><input type="number" id="fracMinArea" step="0.0005" /></label>
+                    </div>
+                  </div>
+                  <div class="micro-cycle-btns">
+                    <button type="button" id="fracSaveBtn" class="toolbar-btn toolbar-btn--primary">Сохранить пороги</button>
+                    <span class="micro-conn-hint" id="fracSaveHint"></span>
+                  </div>
+
+                <!-- Калибровка по своим кадрам: ломаешь кристаллы, снимаешь, двигаешь пороги выше и видишь зоны -->
                 <label class="micro-switch" for="fracLabToggle" title="Режим калибровки: свои кадры (сломанные и целые кристаллы), метки и подбор порогов. Боевую пробу не трогает.">
                   <input type="checkbox" id="fracLabToggle" />
                   <span class="micro-switch__track"><span class="micro-switch__thumb"></span></span>
@@ -729,7 +801,7 @@
                 </label>
                 <div class="micro-cv-block frac-lab" id="fracLab" hidden>
                   <div class="micro-cv-block__title">Калибровка разломов</div>
-                  <p class="micro-plc-note">Ручной режим → сломай кристаллы стеклом → «Снять как РАЗЛОМ». Целые снимай «как НОРМА». Выбери кадр: красным — зоны, которые детектор считает разломом при текущих порогах (ниже), серым — отброшенные (число = уверенность). Двигай пороги — картинка и счётчик меняются сразу. «Подобрать» ищет веса и порог по всем размеченным кадрам.</p>
+                  <p class="micro-plc-note">Ручной режим → сломай кристаллы стеклом → «Снять как РАЗЛОМ». Целые снимай «как НОРМА». Выбери кадр: красным — зоны, которые детектор считает разломом при текущих порогах (выше), серым — отброшенные (число = уверенность). Двигай пороги — картинка и счётчик меняются сразу. «Подобрать» ищет веса и порог по всем размеченным кадрам.</p>
                   <div class="micro-cycle-btns">
                     <button type="button" id="fracLabSnapBad" class="toolbar-btn toolbar-btn--danger" title="Снять живой кадр с камеры и сохранить с меткой «разлом»">Снять как РАЗЛОМ</button>
                     <button type="button" id="fracLabSnapOk" class="toolbar-btn toolbar-btn--primary" title="Снять живой кадр с камеры и сохранить с меткой «норма»">Снять как НОРМА</button>
@@ -754,72 +826,7 @@
                     <span class="micro-conn-hint" id="fracLabSug"></span>
                   </div>
                 </div>
-
-                <!-- Статистика последней пробы: узкие колонки -->
-                <div class="micro-cv-block">
-                  <div class="micro-cv-block__title">Последняя проба</div>
-                  <div class="micro-cv-stats micro-frac-stats">
-                    <div class="micro-tile"><span>Зон разлома</span><b id="fracZones">—</b></div>
-                    <div class="micro-tile"><span>Площадь</span><b id="fracArea">—</b></div>
-                    <div class="micro-tile"><span>Ср. увер.</span><b id="fracConf">—</b></div>
-                    <div class="micro-tile"><span>Кандидатов</span><b id="fracCand">—</b></div>
-                    <div class="micro-tile"><span>Подтв. кадров</span><b id="fracFrames">—</b></div>
-                    <div class="micro-tile"><span>Вердикт</span><b id="fracVerdict">—</b></div>
-                  </div>
-                </div>
-
-                <!-- Тренд разломов -->
-                <div class="micro-cv-block">
-                  <div class="micro-cv-block__title">Тренд разломов по пробам</div>
-                  <div class="micro-cv-series" id="fracSeries">
-                    <label><input type="checkbox" value="frac_zones" checked /><span class="dot" style="background:#e24b4a"></span>зоны</label>
-                    <label><input type="checkbox" value="frac_pct" checked /><span class="dot" style="background:#ba7517"></span>% площади</label>
-                  </div>
-                  <canvas id="fracTrend" class="micro-cv-trend" width="620" height="150"></canvas>
-                </div>
-
-                <!-- Пороги детекта разломов: узкие колонки -->
-                <div class="micro-cv-block">
-                  <div class="micro-cv-block__title">Пороги детекта (правятся на лету)</div>
-                  <div class="micro-cycle-cols">
-                    <div class="micro-cycle-col">
-                      <label class="micro-cycle-f"><span>Порог увер. C</span><input type="number" id="fracConfThr" step="0.05" min="0" max="1" /></label>
-                      <label class="micro-cycle-f"><span>Вес тёмности D</span><input type="number" id="fracWDark" step="0.05" min="0" max="1" /></label>
-                      <label class="micro-cycle-f"><span>Порог тёмного</span><input type="number" id="fracDarkThr" step="1" /></label>
-                    </div>
-                    <div class="micro-cycle-col">
-                      <label class="micro-cycle-f"><span>Кадров подтв.</span><input type="number" id="fracConfirm" step="1" min="1" /></label>
-                      <label class="micro-cycle-f"><span>Вес текстуры T</span><input type="number" id="fracWTex" step="0.05" min="0" max="1" /></label>
-                      <label class="micro-cycle-f"><span>Мин. площадь</span><input type="number" id="fracMinArea" step="0.0005" /></label>
-                    </div>
-                  </div>
-                  <div class="micro-cycle-btns">
-                    <button type="button" id="fracSaveBtn" class="toolbar-btn toolbar-btn--primary">Сохранить пороги</button>
-                    <span class="micro-conn-hint" id="fracSaveHint"></span>
-                  </div>
-                </div>
-
-                <!-- Часть C: советы по подводу от разломов; галочка у совета записывает зазор в СВ-таблицу -->
-                <div class="micro-cv-block">
-                  <div class="micro-cv-block__title">Советы по подводу
-                    <span class="micro-cv-hint">галочка у совета — записать зазор в СВ-таблицу, снять — вернуть</span>
-                  </div>
-                  <div class="micro-cycle-cols">
-                    <div class="micro-cycle-col">
-                      <label class="micro-cycle-f"><span>Шаг дальше, мкм</span><input type="number" id="apStep" step="10" min="10" /></label>
-                      <label class="micro-cycle-f"><span>Разлом — от зон</span><input type="number" id="apMinZones" step="1" min="1" /></label>
-                    </div>
-                    <div class="micro-cycle-col">
-                      <label class="micro-cycle-f" title="Совет не уводит зазор строки выше этого значения"><span>Предельный зазор, мкм</span><input type="number" id="apMaxGap" step="100" /></label>
-                    </div>
-                  </div>
-                  <div class="micro-cycle-btns">
-                    <button type="button" id="apSaveBtn" class="toolbar-btn toolbar-btn--primary">Сохранить</button>
-                    <span class="micro-conn-hint" id="apSaveHint"></span>
-                  </div>
-                  <div class="micro-ap-wrap"><table class="micro-ap-tbl" id="apAdvice"></table></div>
-                  <p class="micro-plc-note">Строка таблицы (по СВ): сколько проб и сколько с разломом при её текущем зазоре, средний аналоговый датчик подвода на разломных и чистых пробах. Совет — зазор строки + шаг, не выше предельного. Считается за 30 суток; поправили таблицу — счёт строки начинается заново. Автоматически ничего не двигается: зазор меняется только по галочке и со следующего подвода.</p>
-                </div>
+                </details>
               </div>
 
               <!-- «Рассев» и «Тренды»: пустые — блок из нижней полосы переезжает сюда, пока вкладка открыта (02-cv.js, cvPultBlocksSync) -->

@@ -114,7 +114,8 @@ def test_apply_advice_refuses_stale_ceiling_and_unknown_row(data_dir):
     s = _svc_with_table()
     assert "изменилась" in s.approach_apply(4, 900, 1000, True)["error"]            # совет считался от другого SP
     assert "предельного" in s.approach_apply(5, 1400, 1600, True)["error"]          # выше 1500
-    assert "отодвигать" in s.approach_apply(4, 1000, 900, True)["error"]            # не дальше
+    assert "минимального" in s.approach_apply(4, 1000, 450, True)["error"]          # ближе, но ниже 500
+    assert "менять нечего" in s.approach_apply(4, 1000, 1000, True)["error"]
     assert "нет в таблице" in s.approach_apply(40, 1000, 1100, True)["error"]
     assert plate_config.load()["SP"] == [40000, 100, 600, 800, 1000, 1400, 1600]    # ни один отказ ничего не записал
     s.approach_apply(4, 1000, 1100, True)
@@ -143,3 +144,61 @@ def test_apply_advice_moves_live_fsm_table(data_dir):
     assert s.fsm.SP[4] == 1100                                       # автомат подхватил без перезапуска
     s.approach_apply(4, None, None, False)
     assert s.fsm.SP[4] == 1000
+
+
+def test_apply_closer_writes_smaller_gap_and_undo(data_dir):
+    import plate_config
+    s = _svc_with_table()
+    r = s.approach_apply(4, 1000, 950, True)                         # «ближе»: 1000 -> 950
+    assert r["status"] == "ok" and plate_config.load()["SP"][4] == 950
+    assert s.approach_apply(4, None, None, False)["sp"] == 1000
+
+
+# ---- совет «ближе» (подряд чистые пробы) ----
+def _clean(n, row=3, sp=1400, ai=1400, t0=0):
+    return [_r("c%02d" % (t0 + k), row, sp, ai, 0) for k in range(n)]
+
+
+def test_five_clean_in_a_row_advise_closer_by_step():
+    r = _by(approach_advice.compute(_clean(5), SP, SVSP, step_um=50, min_gap_um=500, clean_n=5))[3]
+    assert r["status"] == "closer" and r["proposed"] == 1350 and r["n_clean_tail"] == 5
+
+
+def test_fewer_clean_than_needed_is_just_ok():
+    r = _by(approach_advice.compute(_clean(4), SP, SVSP, clean_n=5))[3]
+    assert r["status"] == "ok" and r["proposed"] is None and r["n_clean_tail"] == 4
+
+
+def test_closer_never_below_min_gap():
+    rows = _clean(5, row=2, sp=600, ai=600)
+    assert _by(approach_advice.compute(rows, SP, SVSP, step_um=150, min_gap_um=500, clean_n=5))[2]["proposed"] == 500
+    sp = [40000, 100, 500, 1400, 1600]
+    r = _by(approach_advice.compute(_clean(5, row=2, sp=500, ai=500), sp, SVSP, min_gap_um=500, clean_n=5))[2]
+    assert r["status"] == "floor" and r["proposed"] is None
+
+
+def test_fracture_still_wins_over_clean_run():
+    rows = _clean(6) + [_r("z9", 3, 1400, 1400, 2)]
+    r = _by(approach_advice.compute(rows, SP, SVSP, step_um=50, clean_n=5))[3]
+    assert r["status"] == "advice" and r["proposed"] == 1450
+
+
+def test_weak_fracture_area_counts_as_clean():
+    rows = [_r("c%02d" % k, 3, 1400, 1400, 2, frac_pct=6.0) for k in range(5)]
+    r = _by(approach_advice.compute(rows, SP, SVSP, step_um=50, clean_n=5, weak_pct=15))[3]
+    assert r["status"] == "closer" and r["n_frac"] == 0
+    rows.append(_r("c99", 3, 1400, 1400, 2, frac_pct=20.0))        # площадь выросла — уже разлом, отодвигаем
+    assert _by(approach_advice.compute(rows, SP, SVSP, step_um=50, clean_n=5, weak_pct=15))[3]["status"] == "advice"
+
+
+def test_swing_guard_by_real_sensor_position():
+    # раньше строка стояла на 1350 (SP), и там часто были разломы → «ближе» на 1350 не советуем
+    old = [_r("a1", 3, 1350, 1352, 1), _r("a2", 3, 1350, 1348, 2), _r("a3", 3, 1350, 1355, 0)]
+    r = _by(approach_advice.compute(old + _clean(5, t0=10), SP, SVSP, step_um=50, clean_n=5))[3]
+    assert r["status"] == "held" and r["proposed"] is None and r["hold"] == {"at": 1350, "n": 3, "n_frac": 2}
+    # один разлом там — случайность, пробуем снова
+    once = [_r("a1", 3, 1350, 1352, 1), _r("a2", 3, 1350, 1348, 0)]
+    assert _by(approach_advice.compute(once + _clean(5, t0=10), SP, SVSP, step_um=50, clean_n=5))[3]["status"] == "closer"
+    # задание было 1450, но датчик перелетел на 1350 и там поймал разломы: они относятся к 1350, а не к 1450
+    over = [_r("b1", 3, 1450, 1350, 1), _r("b2", 3, 1450, 1345, 1)]
+    assert _by(approach_advice.compute(over + _clean(5, t0=10), SP, SVSP, step_um=50, clean_n=5))[3]["status"] == "held"

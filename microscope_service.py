@@ -968,13 +968,14 @@ class MicroscopeService:
         return (self.cfg or {}).get("approach_correction", {}) if self.cfg else {}
 
     def approach_advice(self, serial):
-        """Советы по подводу: пробы за 30 суток по строкам СВ-таблицы → где был разлом и на сколько отодвинуть SP. Только расчёт, ничего не двигает."""
+        """Советы по подводу: пробы за 30 суток по строкам СВ-таблицы → «дальше» (был разлом) или «ближе» (подряд чистые). Только расчёт, ничего не двигает."""
         import approach_advice
         import cv_store
         cfg = self.cfg or plate_config.load()          # микроскоп выключен (cfg не загружен) — таблица всё равно читается из конфига
         ap = cfg.get("approach_correction") or {}
         res = approach_advice.compute(cv_store.approach_rows(serial), cfg.get("SP") or [], cfg.get("SVSP") or [],
-                                      step_um=ap.get("step_um", 100), min_zones=ap.get("min_zones", 1), max_gap_um=ap.get("max_gap_um", 1500))
+                                      step_um=ap.get("step_um", 50), min_zones=ap.get("min_zones", 1), max_gap_um=ap.get("max_gap_um", 1500),
+                                      min_gap_um=ap.get("min_gap_um", 500), clean_n=ap.get("clean_n", 5), weak_pct=ap.get("weak_pct", 15))
         res["mode"] = "advise"
         applied = ap.get("applied") or {}
         SP = cfg.get("SP") or []
@@ -1006,10 +1007,13 @@ class MicroscopeService:
                 return {"status": "error", "error": "нет значений зазора"}
             if abs(SP[row] - sp_from) > 0.5:
                 return {"status": "error", "error": "таблица изменилась: зазор строки сейчас %d, совет считался от %d — обнови список" % (SP[row], sp_from)}
-            if sp_to <= SP[row]:
-                return {"status": "error", "error": "совет должен отодвигать подвод (больше текущего зазора)"}
-            if sp_to > cap:
+            if abs(sp_to - SP[row]) <= 0.5:
+                return {"status": "error", "error": "зазор и так %d — менять нечего" % SP[row]}
+            if sp_to > SP[row] and sp_to > cap:
                 return {"status": "error", "error": "выше предельного зазора %d мкм" % cap}
+            low = float(ap.get("min_gap_um", 500))
+            if sp_to < SP[row] and sp_to < low:
+                return {"status": "error", "error": "ниже минимального зазора %d мкм" % low}
             new = int(round(sp_to))
             rec = {"from": int(SP[row]), "to": new, "sv": SVSP[row], "ts": time.time(), "active": True}
         else:

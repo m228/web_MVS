@@ -10,6 +10,8 @@
   GET  /state                     — состояние всех камер (биты зон, метрики flow/diff, группы, ПЛК) и сценариев записи.
   GET  /cameras/{id}/state        — то же по одной камере.
   GET  /cameras/{id}/snapshot     — последний кадр JPEG (?w=1280 — уменьшить; заголовки X-Frame-W/H — размер оригинала).
+  GET  /cameras/{id}/level_shot   — снимок для графика уровня, ближайший к моменту (?group=lvl&ts=unix-секунды; &dir=-1/1 — соседний
+                                    раньше/позже; X-Shot-Ts — его время).
   GET  /cameras/{id}/history      — ряды flow/diff/bit для графиков калибровки (?n=300).
   GET  /cameras/{id}/stats        — среднее / мин / макс flow и diff по зонам за последние ?window=10800 секунд (до суток).
   POST /cameras/{id}/record       — {"on": true|false}: писать метрики каждого кадра в базу data\\motion.db.
@@ -347,6 +349,14 @@ def create_app(data_dir: Optional[Path] = None, capture_factory: Callable = open
         data, (fw, fh) = r
         return Response(content=data, media_type="image/jpeg",
                         headers={"X-Frame-W": str(fw), "X-Frame-H": str(fh), "Cache-Control": "no-store"})
+
+    @app.get("/cameras/{cid}/level_shot")
+    def level_shot(cid: str, group: str, ts: float, dir: int = 0):      # noqa: A002 — имя параметра в адресе
+        r = mgr.worker(cid).level_shot(group, ts, dir)
+        if r is None:
+            raise HTTPException(404, "снимка на это время нет (их хранят 2 ч)")
+        data, t = r
+        return Response(content=data, media_type="image/jpeg", headers={"X-Shot-Ts": str(t), "Cache-Control": "no-store"})
 
     @app.get("/cameras/{cid}/history")
     def history(cid: str, n: int = 300, window: float = 0, points: int = 600):

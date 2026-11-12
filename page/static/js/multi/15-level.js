@@ -3,10 +3,11 @@
 // площади, залитая маской жидкости; Total = (нижнее + верхнее) · 50 %, в ПЛК уходит ×10 (54,3 % → 543). В ПЛК пишет сценарий
 // «Уровень · камера» со своей связью, выключенной по умолчанию. Серверная часть — motion_service/motion_level.py.
 const LV_DEF = { conf: 0.35, imgsz: 0, geometry: 'lvldec', infer_interval_s: 2, alpha: 0.93, warmup_s: 10, glass1_min: 15, glass2_min: 20,
-  glass1_full: 100, glass2_full: 100, hold_s: 30, contour: false, liquid_class: 'liquid', frames_on: false, frames_every_s: 60, frames_hours: 24, frames_keep: 1000 };
+  glass1_full: 100, glass2_full: 100, glass2_gate: 80, shots_every_s: 60, hold_s: 30, contour: false, liquid_class: 'liquid', frames_on: false, frames_every_s: 60, frames_hours: 24, frames_keep: 1000 };
 // [мин, макс] числовых параметров группы (как проверяет сервер)
 const LV_NUM = { conf: [0.01, 0.99], imgsz: [0, 4096], infer_interval_s: [0.2, 600], alpha: [0, 0.999], warmup_s: [0, 600],
-  glass1_min: [0, 100], glass2_min: [0, 100], glass1_full: [0, 100], glass2_full: [0, 100], hold_s: [1, 3600], frames_every_s: [1, 86400], frames_hours: [0.01, 720], frames_keep: [10, 100000] };
+  glass1_min: [0, 100], glass2_min: [0, 100], glass1_full: [0, 100], glass2_full: [0, 100], glass2_gate: [0, 100], shots_every_s: [0, 3600],
+  hold_s: [1, 3600], frames_every_s: [1, 86400], frames_hours: [0.01, 720], frames_keep: [10, 100000] };
 const LV = { svc: null, models: null, at: 0, busy: false, msg: '', msgCls: '' };
 // картинка камеры для SCADA и браузера (cam.webview; сервер — motion_service/motion_webview.py): значения по умолчанию и границы — как у сервера, имена — как в [webview] LVLDec
 const WV_DEF = { enabled: false, host: '0.0.0.0', port: 5000, update_sec: 5, jpeg_quality: 85, annotate: false,
@@ -102,6 +103,8 @@ function mdLevelTabHtml(mode, cam) {
       ${mdField('Осадок верхнее, %', num('glass2_min', lvP(g, 'glass2_min'), 0, 100, 1), 'Ниже этого заполнения верхнее стекло считается пустым: не форсит нижнее в 100 %')}
       ${mdField('Полное нижнее, %', num('glass1_full', lvP(g, 'glass1_full'), 0, 100, 1), 'Сырой уровень, который модель даёт при ПОЛНОМ стекле: растягивается до 100 %. 100 — без калибровки')}
       ${mdField('Полное верхнее, %', num('glass2_full', lvP(g, 'glass2_full'), 0, 100, 1), 'То же для верхнего стекла (на заводе LVLDec стояло 84)')}
+      ${mdField('Верхнее — от нижнего, %', num('glass2_gate', lvP(g, 'glass2_gate'), 0, 100, 1), 'Верхнее стекло считается, только когда нижнее заполнено хотя бы на столько: пока нижнее не полное, в верхнем видна лишь корка осадка. Сравнивается с нижним после «Полное нижнее»: если модель при полном стекле даёт меньше этого порога — сначала подберите «Полное нижнее». 0 — как в LVLDec (верхнее считается всегда)')}
+      ${mdField('Снимок для графика, с', num('shots_every_s', lvP(g, 'shots_every_s'), 0, 3600, 10), 'Как часто сохранять маленький кадр для графика уровня на «Зоны · тренды» (клик по графику — кадр на тот момент). Хранятся 2 часа. 0 — не снимать')}
       ${mdField('Геометрия маски', `<select ${a} data-f="geometry">${mdSel([['lvldec', 'как в LVLDec'], ['exact', 'точная']], lvP(g, 'geometry'))}</select>`,
         'Как в LVLDec — цифры совпадают с заводскими (маска растянута вместе с полями letterbox, края съезжают к центру). Точная — без растяжения; тогда «Полное» подберите заново')}
       ${mdField('Класс жидкости', `<input type="text" ${a} data-f="liquid_class" value="${escapeHtml(lvP(g, 'liquid_class'))}" />`, 'Имя класса модели, которое считается жидкостью (у моделей LVLDec — liquid)')}
@@ -487,8 +490,22 @@ function mdDrawLevelChart(cam, h) {
   c.fillText('100', 3, 10); c.fillText('0', 3, plotH - 2);
   c.fillText('−' + mdFmtWin(win), 3, hh - 1);
   c.textAlign = 'right'; c.fillText('сейчас', w - 3, hh - 1); c.textAlign = 'left';
+  cv._lv = null;                                         // точек нет — клик ничего не открывает (а не снимок по старому графику)
   if (n < 2) return;
   const tEnd = t[n - 1];
+  // клик по графику — снимок камеры на этот момент (lvShotOpen); данные графика нужны окну для подписи значений
+  cv._lv = { cam: cam.id, gid: g.id, every: lvP(g, 'shots_every_s'), tEnd, win, w, t, low: a.flow, up: b ? b.flow : null };
+  if (!cv._lvClick) {
+    cv._lvClick = true;
+    cv.style.cursor = 'pointer';
+    cv.title = 'Клик — кадр с камеры на этот момент (снимки хранятся 2 ч)';
+    cv.addEventListener('click', (e) => {
+      const d = cv._lv;
+      if (!d) return;
+      const x = e.clientX - cv.getBoundingClientRect().left;
+      lvShotOpen(d, d.tEnd - ((d.w - 1 - x) / (d.w - 2)) * d.win);
+    });
+  }
   const X = (i) => w - 1 - ((tEnd - t[i]) / win) * (w - 2);
   const dt = (t[n - 1] - t[0]) / (n - 1);
   const bw = Math.max(1.5, (dt / win) * w + 1);
@@ -510,4 +527,76 @@ function mdDrawLevelChart(cam, h) {
   if (b) line(b.flow, LV_COL.up, 1.2);
   line(a.flow, LV_COL.low, 1.2);
   line(a.flow.map((v, i) => v / 2 + (b ? b.flow[i] / 2 : 0)), lvTextColor(), 2);      // Total = (нижнее + верхнее) / 2 в процентах стекла
+}
+
+// ---------- снимок камеры по клику на графике уровня (сервис снимает раз в shots_every_s секунд, хранит 2 ч) ----------
+const LVS = { d: null, ts: 0, seq: 0, url: '' };
+const lvHms = (ts) => new Date(ts * 1000).toLocaleTimeString('ru-RU');
+
+function lvShotBind() {
+  if (LVS.bound) return;
+  LVS.bound = true;
+  const close = () => { closeModal('lvShotModal'); LVS.seq += 1; lvShotShowImg(null); };
+  mdEl('lvShotClose')?.addEventListener('click', close);
+  mdEl('lvShotPrev')?.addEventListener('click', () => lvShotLoad(LVS.ts, -1));
+  mdEl('lvShotNext')?.addEventListener('click', () => lvShotLoad(LVS.ts, 1));
+}
+
+function lvShotOpen(d, ts) {
+  lvShotBind();
+  LVS.d = d;
+  lvShotShowImg(null);                                   // прежний снимок не мелькает, пока грузится новый
+  mdEl('lvShotTime').textContent = '…';
+  mdEl('lvShotMsg').textContent = '';
+  mdEl('lvShotVals').textContent = '';
+  openModal('lvShotModal');
+  if (!d.every) { lvShotShow(null, ts, 'Снимки для графика выключены: вкладка «Уровень» → «Снимок для графика, с».'); return; }
+  lvShotLoad(ts, 0);
+}
+
+// dir: 0 — клик по графику (ближайший к моменту), −1/+1 — стрелки: соседний снимок раньше/позже (нет — остаёмся на прежнем)
+async function lvShotLoad(ts, dir) {
+  const d = LVS.d;
+  const seq = ++LVS.seq;
+  const q = '/api/motion/level_shot?camera=' + encodeURIComponent(d.cam) + '&group=' + encodeURIComponent(d.gid) + '&ts=' + ts.toFixed(1) + '&dir=' + dir;
+  let r = null;
+  try { r = await fetch(q); } catch (e) { r = null; }
+  if (seq !== LVS.seq) return;                          // пока грузили, кликнули ещё раз
+  if (!r || !r.ok) {
+    if (dir) { mdEl('lvShotMsg').textContent = dir < 0 ? 'Раньше снимков нет.' : 'Позже снимков нет.'; return; }
+    lvShotShow(null, ts, 'Снимка на ' + lvHms(ts) + ' нет: их снимают раз в ' + d.every + ' с и хранят 2 часа.');
+    return;
+  }
+  const shotTs = Number(r.headers.get('X-Shot-Ts')) || ts;
+  let blob = null;
+  try { blob = await r.blob(); } catch (e) { blob = null; }
+  if (!blob) { mdEl('lvShotMsg').textContent = 'Снимок не загрузился, попробуйте ещё раз.'; return; }
+  if (seq !== LVS.seq) return;
+  lvShotShow(blob, shotTs, '');
+}
+
+// картинка окна: blob или пусто; прежний object URL освобождаем
+function lvShotShowImg(blob) {
+  const img = mdEl('lvShotImg');
+  if (LVS.url) URL.revokeObjectURL(LVS.url);
+  LVS.url = blob ? URL.createObjectURL(blob) : '';
+  if (!img) return;
+  img.hidden = !blob;
+  if (blob) img.src = LVS.url; else img.removeAttribute('src');
+}
+
+function lvShotShow(blob, ts, msg) {
+  const d = LVS.d;
+  LVS.ts = ts;
+  lvShotShowImg(blob);
+  mdEl('lvShotTime').textContent = lvHms(ts);
+  mdEl('lvShotMsg').textContent = msg;
+  // значения графика на ближайший момент (то, что видно на линиях)
+  let k = -1;
+  d.t.forEach((t, i) => { if (k < 0 || Math.abs(t - ts) < Math.abs(d.t[k] - ts)) k = i; });
+  const vals = mdEl('lvShotVals');
+  if (k < 0 || Math.abs(d.t[k] - ts) > 120) { vals.textContent = ''; return; }
+  const lo = d.low[k], up = d.up ? d.up[k] : 0;
+  vals.innerHTML = `<span style="color:${LV_COL.low}">нижнее ${lvFmt(lo)} %</span>` + (d.up ? ` · <span style="color:${LV_COL.up}">верхнее ${lvFmt(up)} %</span>` : '') +
+    ` · Total <b>${lvFmt(lo / 2 + up / 2)} %</b>`;
 }

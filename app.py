@@ -1379,6 +1379,16 @@ def motion_snapshot(camera: str, w: int = 0):
     return Response(content=data, media_type="image/jpeg", headers={"X-Frame-W": str(fw), "X-Frame-H": str(fh), "Cache-Control": "no-store"})
 
 
+@app.get("/api/motion/level_shot")
+def motion_level_shot(camera: str, group: str, ts: float, dir: int = 0):     # noqa: A002 — имя параметра в адресе
+    """Снимок для графика уровня (декантатор), ближайший к моменту ts (dir −1/1 — соседний раньше/позже). Время снимка — в заголовке X-Shot-Ts."""
+    r = motion_client.level_shot(_motion_url(), camera, group, ts, dir)
+    if r is None:
+        return Response(status_code=404)
+    data, t = r
+    return Response(content=data, media_type="image/jpeg", headers={"X-Shot-Ts": str(t), "Cache-Control": "no-store"})
+
+
 @app.get("/api/motion/history")
 def motion_history(camera: str, n: int = 300, window: float = 0, points: int = 600):
     return motion_client.history(_motion_url(), camera, n, window, points)

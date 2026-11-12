@@ -5,6 +5,8 @@
   1. нет жидкости в кадре → берём прошлое значение (память);
   2. отсечка осадка: ниже glass1_min / glass2_min (% заполнения) — считаем 0;
   3. калибровка «полного»: glassX_full (%) — сырой уровень, который модель даёт при РЕАЛЬНО полном стекле, тянем в 100 %;
+  3а. (нет в LVLDec) верхнее стекло считаем, только когда нижнее заполнено не меньше glass2_gate (%): пока нижнее не полное, в
+      верхнем жидкости быть не может — там корка осадка на дне, и её дрожь у порога glass2_min бросала нижнее в 100 % (пики на тренде);
   4. верхнее стекло > 0 → нижнее заведомо полное (100 %);
   5. гистерезис у потолка: выше 96 % фиксируем 100 %, сбрасываем ниже 96 %;
   6. сглаживание EMA: smooth = smooth·alpha + level·(1 − alpha); первые warmup_s секунд — без сглаживания;
@@ -17,6 +19,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import shutil
 import threading
 import time
@@ -35,6 +38,8 @@ DEFAULT_URL = "http://127.0.0.1:8770"
 GEOMETRIES = ("lvldec", "exact")
 FRAMES_MIN_FREE = 2 * 1024 ** 3     # съёмка кадров для обучения встаёт, если на диске свободно меньше
 CONTOUR_MAX_PTS = 60               # контур жидкости для плитки: не больше стольких точек на контур
+TREND_KEEP_S = 7200                # снимки для графика уровня живут столько же, сколько самое длинное окно графика (2 ч)
+TREND_SHOT_W, TREND_SHOT_Q = 640, 70   # снимок графика: ширина, качество JPEG (≈ 40 КБ — разглядеть стёкла хватает)
 _opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))     # localhost без системного прокси (иначе виснет)
 
 
@@ -42,10 +47,11 @@ class LevelProcessor:
     """Шаги 1–7 из шапки. update(raw1, raw2): сырые уровни 0..1 или None (нет данных). Возвращает {'total','glass1','glass2'} в %."""
 
     def __init__(self, alpha: float = 0.93, glass1_min: float = 15.0, glass2_min: float = 20.0,
-                 glass1_full: float = 100.0, glass2_full: float = 100.0):
+                 glass1_full: float = 100.0, glass2_full: float = 100.0, glass2_gate: float = 0.0):
         self.alpha = alpha
         self.glass1_min, self.glass2_min = glass1_min, glass2_min
         self.glass1_full, self.glass2_full = glass1_full, glass2_full
+        self.glass2_gate = glass2_gate          # 0 — как в LVLDec (верхнее считается всегда)
         self.last_g1 = self.last_g2 = 0.0
         self.fix_g1_at_100 = self.fix_g2_at_100 = False
         self.smooth_g1 = self.smooth_g2 = 0.0
@@ -68,6 +74,9 @@ class LevelProcessor:
             g1 = min(1.0, g1 / (self.glass1_full / 100.0))
         if 0 < self.glass2_full < 100 and g2 > 0:
             g2 = min(1.0, g2 / (self.glass2_full / 100.0))
+        if g1 * 100 < self.glass2_gate:  # нижнее не полное ⇒ в верхнем только осадок
+            g2 = 0.0
+            self.fix_g2_at_100 = False   # и «полное верхнее» не держим ещё тик
         if g2 > 0:                       # жидкость в верхнем стекле ⇒ нижнее полное
             g1 = 1.0
             self.last_g1 = 1.0
@@ -151,7 +160,7 @@ class LevelRT:
         """С нуля: как свежий запуск LVLDec (память, сглаживание и гистерезис обнулены, прогрев заново)."""
         g = self.g
         with self._lock:
-            self.proc = LevelProcessor(g["alpha"], g["glass1_min"], g["glass2_min"], g["glass1_full"], g["glass2_full"])
+            self.proc = LevelProcessor(g["alpha"], g["glass1_min"], g["glass2_min"], g["glass1_full"], g["glass2_full"], g.get("glass2_gate", 0.0))
             self.t0 = self.clock()
             self.last_ok = 0.0
             self.res = {"total": 0.0, "glass1": 0.0, "glass2": 0.0}
@@ -296,6 +305,62 @@ def prune_frames(folder: Path, keep: int) -> tuple:
     return gone, freed
 
 
+def save_trend_shot(folder: Path, frame: np.ndarray, now: float, width: int = TREND_SHOT_W, quality: int = TREND_SHOT_Q,
+                    keep_s: float = TREND_KEEP_S) -> Path:
+    """Снимок для графика уровня: кадр, ужатый до width по ширине, JPEG quality → folder\\<unix-секунды>.jpg; старше keep_s — стираем."""
+    h, w = frame.shape[:2]
+    if w > width:
+        frame = cv2.resize(frame, (width, max(1, round(h * width / w))), interpolation=cv2.INTER_AREA)
+    ok, buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, quality])
+    if not ok:
+        raise ValueError("кадр не закодировался")
+    folder.mkdir(parents=True, exist_ok=True)
+    path = folder / ("%d.jpg" % int(now))
+    tmp = path.with_suffix(".tmp")
+    tmp.write_bytes(buf.tobytes())
+    tmp.replace(path)                                  # читатель не увидит недописанный файл
+    for p, ts in trend_shots(folder):
+        if ts < now - keep_s:
+            try:
+                p.unlink()
+            except OSError:
+                pass
+    return path
+
+
+def trend_shots(folder: Path) -> list:
+    """[(файл, unix-секунды)] снимков графика в folder (имя файла — время)."""
+    out = []
+    try:
+        for p in folder.glob("*.jpg"):
+            if p.stem.isdigit():
+                out.append((p, int(p.stem)))
+    except OSError:
+        pass
+    return out
+
+
+def nearest_trend_shot(folder: Path, ts: float, max_dt: float, now: Optional[float] = None, keep_s: float = TREND_KEEP_S,
+                       direction: int = 0):
+    """Снимок, ближайший к моменту ts (не дальше max_dt секунд и не старше keep_s): (файл, его время) или None.
+    direction −1 / +1 — соседний снимок строго раньше / позже ts на любом расстоянии (стрелки в окне; между снимками бывают дыры)."""
+    now = time.time() if now is None else now
+    if not math.isfinite(ts):
+        return None
+    best = None
+    for p, t in trend_shots(folder):
+        if t < now - keep_s:
+            continue
+        if direction:
+            if (t - ts) * direction <= 0:
+                continue
+        elif abs(t - ts) > max_dt:
+            continue
+        if best is None or abs(t - ts) < abs(best[1] - ts):
+            best = (p, t)
+    return best
+
+
 class LevelInfer(threading.Thread):
     """Раз в infer_interval_s: свежий кадр камеры → сервис уровня → LevelRT. Отдельный поток: модель на процессоре думает
     секунду, и разбор кадров камеры, и запись в ПЛК от этого не тормозят.
@@ -304,14 +369,20 @@ class LevelInfer(threading.Thread):
     сам: раз в frames_every_s секунд (не чаще опроса модели) тот же кадр, что ушёл в модель (полный размер, без разметки), кладётся в
     save_dir\\images, а в save_dir\\labels — то, что нашла модель, в формате YOLO-seg (заготовка для разметки и дообучения). Идёт
     frames_hours часов от нажатия и сама заканчивается (метка начала — в save_dir\\run.json, переживает перезапуск); хранится не больше
-    frames_keep кадров; свободного места на диске меньше FRAMES_MIN_FREE — съёмка встаёт, чтобы не забить диск."""
+    frames_keep кадров; свободного места на диске меньше FRAMES_MIN_FREE — съёмка встаёт, чтобы не забить диск.
+
+    Снимки для графика (shots_dir + shots_every_s в группе, 0 — выкл.): раз в shots_every_s секунд маленький JPEG того же кадра в
+    shots_dir; живут TREND_KEEP_S (2 ч, как окно графика). Клик по графику уровня в панели открывает ближайший к моменту снимок."""
 
     def __init__(self, rt: LevelRT, get_frame: Callable[[], Optional[np.ndarray]], halt: threading.Event,
-                 post: Callable = post_infer, jpeg_quality: int = 95, save_dir: Optional[Path] = None):
+                 post: Callable = post_infer, jpeg_quality: int = 95, save_dir: Optional[Path] = None,
+                 shots_dir: Optional[Path] = None):
         super().__init__(daemon=True, name="level-" + rt.g["id"])
         self.rt, self.get_frame, self.halt, self.post, self.q = rt, get_frame, halt, post, jpeg_quality
         self.save_dir = Path(save_dir) if save_dir else None
+        self.shots_dir = Path(shots_dir) if shots_dir else None
         self._last_save = 0.0
+        self._last_shot = 0.0
         self._run: Optional[tuple] = None          # (номер запуска из конфига, время начала по часам сервера)
         self._stats: Optional[list] = None         # [кадров на диске, байт] — считаем один раз, дальше по ходу дела
 
@@ -332,6 +403,7 @@ class LevelInfer(threading.Thread):
         if frame is None:
             self.rt.note_error("нет свежего кадра камеры", quiet=True)
             return
+        self._maybe_shot(frame)
         ok, buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, self.q])
         if not ok:
             self.rt.note_error("кадр не закодировался")
@@ -348,6 +420,18 @@ class LevelInfer(threading.Thread):
                 self._maybe_save(buf.tobytes(), res)
             except Exception as e:                       # диск полон / нет прав: уровень от этого не страдает
                 log.warning("[уровень %s] кадр для обучения не сохранён: %s", g["id"], e)
+
+    def _maybe_shot(self, frame: np.ndarray):
+        """Снимок для графика, если пора. Ошибка диска уровню не мешает — только строка в журнал."""
+        every = float(self.rt.g.get("shots_every_s") or 0)
+        now = time.time()
+        if not self.shots_dir or every <= 0 or now - self._last_shot < every:
+            return
+        self._last_shot = now
+        try:
+            save_trend_shot(self.shots_dir, frame, now)
+        except Exception as e:
+            log.warning("[уровень %s] снимок для графика не сохранён: %s", self.rt.g["id"], e)
 
     def _window(self, now: float) -> tuple:
         """(состояние съёмки: off | run | done, сколько секунд осталось). Начало окна — первое включение с новым frames_run."""

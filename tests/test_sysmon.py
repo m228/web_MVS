@@ -612,6 +612,33 @@ def test_cv_fail_needs_two_checks_in_a_row(sm):
     assert ag.tick(121.0) == [], "сбой на одну проверку — без тревоги и без «снято»"
 
 
+def test_cv_fail_from_previous_boil_is_not_alarm(sm):
+    """Усп 12.11 19:45: «не стримит» залип с прошлой варки, новая варка вошла в зону — тревоги нет, пока новая проба не повторит отказ."""
+    cv = {"state": "no_frames", "message": "нет кадров пробы: камера не отдала кадр", "t": 50.0}
+    st = {"stage": 2, "stage_ok": False, "cyclic": True}
+    ag = sm.Agent(sources=make_sources(cv=lambda: dict(cv), state=lambda: dict(st)), clock=Clock())
+    assert ag.tick(100.0) == []                       # между варками
+    st.update(stage=3, stage_ok=True)
+    assert ag.tick(200.0) == [] and ag.tick(215.0) == [], "старый отказ — не тревога"
+    cv["t"] = 220.0                                   # первая проба новой варки тоже без кадров
+    assert ag.tick(230.0) == []
+    ev = ag.tick(245.0)
+    assert [(e["data"]["code"], e["text"]) for e in ev] == [("cv_fail", "Проба не разобрана: нет кадров пробы: камера не отдала кадр")]
+
+
+def test_cv_fail_not_streaming_checks_camera_now(sm):
+    """«Камера не стримит»: тревога, только пока камера и правда не стримит; текст без «Проба не разобрана: проба не разобрана»."""
+    cv = {"state": "no_camera", "message": "проба не разобрана: камера не стримит", "t": 10.0}
+    cam = {"serial": "S1", "streaming": False}
+    ag = sm.Agent(sources=make_sources(cv=lambda: dict(cv), camera=lambda: dict(cam)), clock=Clock())
+    ag.tick(15.0)
+    ev = ag.tick(30.0)
+    assert [(e["data"]["code"], e["text"]) for e in ev] == [("cv_fail", "Проба не разобрана: камера не стримит")]
+    cam["streaming"] = True                           # страницу открыли, поток пошёл — следующая проба возьмёт кадр
+    ev = ag.tick(45.0)
+    assert [(e["data"]["code"], e["data"]["state"]) for e in ev] == [("cv_fail", "closed")]
+
+
 def test_retract_and_approach_are_counted_separately(sm):
     ag = configured_agent(sm)
     ag.add_positions(pos("отвод", target=20000, calc=20001, enc=20002, ai=20300))   # 300 мкм > 100

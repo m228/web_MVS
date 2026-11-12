@@ -4983,9 +4983,3 @@ body.micro-rep-doc .micro-cmp-strips { grid-template-columns: repeat(6, 1fr); ga
 .plc-link { font-size: 0.85em; color: var(--accent); align-self: center; text-decoration: none; }
 .plc-link:hover { text-decoration: underline; }
 #teleStripPlc[hidden] { display: none; }
-/* /multi: карточка внизу, свёрнута по умолчанию */
-.plc-card > summary { cursor: pointer; list-style: none; display: flex; align-items: center; gap: 10px; font-weight: 700; font-size: 1.05em; }
-.plc-card > summary::-webkit-details-marker { display: none; }
-.plc-card > summary::before { content: "▸"; color: var(--muted); }
-.plc-card[open] > summary::before { content: "▾"; }
-.plc-card[open] > summary { margin-bottom: 12px; }

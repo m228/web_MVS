@@ -225,6 +225,7 @@ function renderMotionDock() {
   if (MD.tab === 'plc') {
     body.innerHTML = mdPlcHtml();
     mdBindPlc();
+    mdMountPlcSource();
     if (MD.editGrp) mdSyncGroupEditor();
   } else if (MD.tab === 'cams') {
     body.innerHTML = mdCamsTabHtml();
@@ -884,7 +885,18 @@ function mdPlcHtml() {
         <span class="net-hint" id="mdPingInfo">Проверка только читает один регистр, в ПЛК ничего не пишется.</span>
       </div></div></div>
     <h3 class="md-h md-h--row md-h--sec"><button type="button" class="md-add" data-md="s" data-f="add" title="Добавить сценарий" aria-label="Добавить сценарий">+</button>Сценарии записи <span class="md-dim">единственное место, где пишем в ПЛК</span></h3>${scens}
-    ${mdGroupsSectionHtml()}`;
+    ${mdGroupsSectionHtml()}
+    <h3 class="md-h md-h--row md-h--sec">Вакуум-аппарат (ПЛК) <span class="md-dim">СВ, стадия, температура — только чтение</span></h3><div id="mdPlcSrcSlot"></div>`;
+}
+
+// «Вакуум-аппарат (ПЛК)» (plc-source.js) — один узел на страницу: при перерисовке вкладки переносится в новое тело,
+// поэтому несохранённые правки не теряются и опрос /api/plc/source не множится
+let mdPlcSrcNode = null;
+function mdMountPlcSource() {
+  const slot = mdEl('mdPlcSrcSlot');
+  if (!slot || !window.PlcSource) return;
+  if (!mdPlcSrcNode) { mdPlcSrcNode = document.createElement('div'); window.PlcSource.mount(mdPlcSrcNode); }
+  slot.replaceWith(mdPlcSrcNode);
 }
 
 const MD_SC_SIGNALS = [['pulp', 'Жом есть'], ['move', 'Движение']];

@@ -142,6 +142,9 @@ function drawMotionTile(index) {
     }
   }
 
+  // лента снимков уровня слева и открытый из неё снимок (15-level.js): пока снимок открыт, рисуется его разметка, а не живая
+  if (lvTileDraw(index, el, canvas, cam, on)) return;
+
   const g = tileFrameGeom(index);
   const w = g ? g.w : el.querySelector('[data-tile-screen]').clientWidth;
   const h = g ? g.h : el.querySelector('[data-tile-screen]').clientHeight;
@@ -183,11 +186,13 @@ function drawMotionTile(index) {
   drawLevelOnTile(ctx, cam, g, st, problem);
 }
 
-// уровень жидкости (декантатор): стёкла нижнее — голубое, верхнее — жёлтое; на каждом его заполнение, сверху по центру Total и вклад стёкол
+// уровень жидкости (декантатор): стёкла нижнее — голубое, верхнее — жёлтое; на каждом его заполнение, сверху по центру Total и вклад стёкол.
+// opts.labels === false — без надписей (миниатюры в ленте снимков: рамки, заливка, линия уровня и контур жидкости)
 const MV_LEVEL_COL = ['#38bdf8', '#fbbf24'];
-function drawLevelOnTile(ctx, cam, g, st, problem) {
+function drawLevelOnTile(ctx, cam, g, st, problem, opts) {
   const cg = (cam.groups || []).find((x) => x.type === 'level');
   if (!cg) return;
+  const labels = !(opts && opts.labels === false);
   const lg = ((st && st.groups) || []).find((x) => x.id === cg.id);
   const live = {};
   ((st && st.zones) || []).forEach((z) => { live[z.id] = z; });
@@ -212,6 +217,7 @@ function drawLevelOnTile(ctx, cam, g, st, problem) {
     ctx.fillStyle = col + '55'; ctx.fillRect(x0, yl, x1 - x0, y1 - yl);
     ctx.lineWidth = 3; ctx.strokeStyle = '#fff'; ctx.beginPath(); ctx.moveTo(x0, yl); ctx.lineTo(x1, yl); ctx.stroke();
     ctx.restore();
+    if (!labels) return;
     // подпись справа от стекла на высоте уровня: стрелка и заполнение стекла
     const label = Math.round(lz.level) + ' %';
     ctx.fillStyle = col;
@@ -229,6 +235,7 @@ function drawLevelOnTile(ctx, cam, g, st, problem) {
     });
     ctx.lineWidth = 2;
   }
+  if (!labels) return;
   const main = ok ? lvFmt(lg.total) + ' %' : '—';
   ctx.textAlign = 'center';
   ctx.font = 'bold 20px sans-serif';
@@ -300,7 +307,7 @@ function onMotionHover(event) {
   const index = tileEl ? Number(tileEl.dataset.tile) : -1;
   const tile = state.tiles[index];
   const cam = tile && tile.serial && tile.kind === 'rtsp' ? mvCam(tile.serial) : null;
-  const g = cam && cam.enabled ? tileFrameGeom(index) : null;
+  const g = cam && cam.enabled && !tile.lvView ? tileFrameGeom(index) : null;     // открыт снимок уровня — живые значения не подсказываем
   if (!g) { tip.hidden = true; return; }
   const r = screen.getBoundingClientRect();
   const pt = [event.clientX - r.left, event.clientY - r.top];
@@ -323,6 +330,7 @@ function startMotionPolling() {
     try {
       MV.tick += 1;
       if (MV.tick % 10 === 1) await mvRefreshConfig();          // конфиг подтягиваем раз в ~10 с
+      if (MV.tick % 15 === 2 && MV.online) lvStripsRefresh();    // лента снимков уровня (новый снимок раз в минуту) — без ожидания
       const any = MV.dockOpen || state.tiles.some((t) => t.serial && t.kind === 'rtsp' && mvEnabled(t.serial));
       if (MV.online && any) {
         const st = await mvApi('/api/motion/state');

@@ -498,12 +498,13 @@ function mdDrawLevelChart(cam, h) {
   if (!cv._lvClick) {
     cv._lvClick = true;
     cv.style.cursor = 'pointer';
-    cv.title = 'Клик — кадр с камеры на этот момент (снимки хранятся 2 ч)';
+    cv.title = 'Клик — кадр с камеры на этот момент с разметкой (снимки раз в минуту, хранятся 2 ч)';
     cv.addEventListener('click', (e) => {
       const d = cv._lv;
       if (!d) return;
       const x = e.clientX - cv.getBoundingClientRect().left;
-      lvShotOpen(d, d.tEnd - ((d.w - 1 - x) / (d.w - 2)) * d.win);
+      const ts = d.tEnd - ((d.w - 1 - x) / (d.w - 2)) * d.win;
+      if (!lvTileViewAt(d.cam, d.gid, ts)) lvShotOpen(d, ts);     // камера в ячейке — кадр с разметкой прямо в окне, иначе всплывающее окно
     });
   }
   const X = (i) => w - 1 - ((tEnd - t[i]) / win) * (w - 2);
@@ -599,4 +600,191 @@ function lvShotShow(blob, ts, msg) {
   const lo = d.low[k], up = d.up ? d.up[k] : 0;
   vals.innerHTML = `<span style="color:${LV_COL.low}">нижнее ${lvFmt(lo)} %</span>` + (d.up ? ` · <span style="color:${LV_COL.up}">верхнее ${lvFmt(up)} %</span>` : '') +
     ` · Total <b>${lvFmt(lo / 2 + up / 2)} %</b>`;
+}
+
+// ---------- лента снимков уровня слева в окне камеры (как лента проб на микроскопе) ----------
+// Сервис раз в shots_every_s кладёт снимок кадра и JSON с тем, что модель посчитала на нём (уровни, Total, контур жидкости).
+// Лента: новые сверху, миниатюра уже с рамками стёкол и контуром (drawLevelOnTile без надписей), под ней время и Total.
+// Клик — снимок крупно прямо в окне камеры с разметкой как на плитке; кнопка «● живое» возвращает поток.
+const LVG = {};                                            // камера → { gid, shots: [{ts, meta}], last, busy }
+const LV_KEEP_S = 7200;                                    // как у сервиса: снимки живут 2 ч
+const lvShotUrl = (camId, gid, ts) => '/api/motion/level_shot?camera=' + encodeURIComponent(camId) + '&group=' + encodeURIComponent(gid) + '&ts=' + ts;
+const lvHm = (ts) => new Date(ts * 1000).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
+
+// разметка снимка → состояние в форме опроса сервиса (для drawLevelOnTile)
+function lvMetaState(g, meta) {
+  const m = meta || {};
+  return {
+    zones: g.zones.map((zid, i) => ({ id: zid, level: (m.levels || [])[i] || 0 })),
+    groups: [{ id: g.id, type: 'level', valid: !!m.valid, total: m.total || 0, g1: m.g1 || 0, g2: m.g2 || 0, contour: m.contour || [], contour_wh: m.contour_wh || null }],
+  };
+}
+
+// кадр nw×nh вписан в область W×H (как tileFrameGeom)
+function lvGeom(W, H, nw, nh) {
+  const k = Math.min(W / nw, H / nh);
+  return { w: W, h: H, nw, nh, k, ox: (W - nw * k) / 2, oy: (H - nh * k) / 2 };
+}
+
+function lvShotTitle(s) {
+  const m = s.meta || {};
+  const t = new Date(s.ts * 1000).toLocaleTimeString('ru-RU');
+  if (!s.meta) return t + ' · разметки нет';
+  if (!m.valid) return t + ' · ' + (m.err || 'модель не ответила');
+  const raw = (m.raw || []).map((v) => (v == null ? '—' : lvFmt(v))).join(' / ');
+  return t + ' · Total ' + lvFmt(m.total) + ' % · нижнее ' + lvFmt((m.levels || [])[0] || 0) + ' %' +
+    ((m.levels || []).length > 1 ? ' · верхнее ' + lvFmt(m.levels[1]) + ' %' : '') + ' · сырое ' + raw + ' · уверенность ' + Number(m.conf || 0).toFixed(2);
+}
+
+// подтянуть новые снимки всех камер-уровней, что стоят в ячейках, и перерисовать их ленты
+async function lvStripsRefresh() {
+  const cams = [...new Set(state.tiles.filter((t) => t.serial && t.kind === 'rtsp').map((t) => t.serial))]
+    .map((id) => mvCam(id)).filter((c) => c && c.enabled && lvGroup(c));
+  await Promise.all(cams.map(async (cam) => {
+    const g = lvGroup(cam);
+    let s = LVG[cam.id];
+    if (!s || s.gid !== g.id) s = LVG[cam.id] = { gid: g.id, shots: [], last: 0, busy: false };
+    if (s.busy) return;
+    s.busy = true;
+    try {
+      const r = await mvApi('/api/motion/level_shots?camera=' + encodeURIComponent(cam.id) + '&group=' + encodeURIComponent(g.id) + '&since=' + s.last);
+      if (r && Array.isArray(r.shots) && r.shots.length) {
+        s.shots = s.shots.concat(r.shots);
+        s.last = s.shots[s.shots.length - 1].ts;
+        s.shots = s.shots.filter((x) => x.ts >= s.last - LV_KEEP_S);
+      }
+    } finally { s.busy = false; }
+  }));
+  state.tiles.forEach((t, i) => { if (t.serial && LVG[t.serial]) lvRenderStrip(i); });
+}
+
+// миниатюра: кадр + рамки стёкол, заливка, линия уровня и контур жидкости (без надписей)
+function lvDrawThumb(cv, cam, g, s, img) {
+  const ctx = cv.getContext('2d');
+  ctx.drawImage(img, 0, 0, cv.width, cv.height);
+  const m = s.meta;
+  if (m) drawLevelOnTile(ctx, cam, lvGeom(cv.width, cv.height, img.naturalWidth, img.naturalHeight), lvMetaState(g, m), m.valid ? '' : 'нет', { labels: false });
+}
+
+// лента ячейки: не перестраиваем целиком — новые сверху, протухшие убираем, остальное на месте (прокрутка не прыгает)
+function lvRenderStrip(index) {
+  const tile = state.tiles[index];
+  const el = getTileEl(index);
+  const cam = tile && tile.serial ? mvCam(tile.serial) : null;
+  const g = cam && lvGroup(cam);
+  const s = cam && LVG[cam.id];
+  const list = el && el.querySelector('[data-tile-lvlist]');
+  if (!list || !g || !s) return;
+  const have = new Map([...list.querySelectorAll('.tile-lv-strip__item')].map((b) => [Number(b.dataset.ts), b]));
+  const want = new Set(s.shots.map((x) => x.ts));
+  have.forEach((b, ts) => { if (!want.has(ts)) { b.remove(); have.delete(ts); } });
+  let prevEl = null;
+  s.shots.slice().reverse().forEach((sh) => {                // новые сверху
+    let b = have.get(sh.ts);
+    if (!b) {
+      const m = sh.meta || {};
+      b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'tile-lv-strip__item' + (sh.meta && !m.valid ? ' is-bad' : '');
+      b.dataset.ts = String(sh.ts);
+      b.title = lvShotTitle(sh);
+      const cv = document.createElement('canvas');
+      const fs = cam.frame_size || [16, 9];
+      cv.width = 240; cv.height = Math.round(240 * fs[1] / fs[0]);
+      const cap = document.createElement('span');
+      cap.textContent = lvHm(sh.ts) + ' · ' + (m.valid ? lvFmt(m.total) + ' %' : '—');
+      b.appendChild(cv); b.appendChild(cap);
+      const img = new Image();
+      img.onload = () => lvDrawThumb(cv, cam, g, sh, img);
+      img.src = lvShotUrl(cam.id, g.id, sh.ts);
+      b.addEventListener('click', (e) => { e.stopPropagation(); setFocus(index); lvTileView(index, sh); });
+      list.insertBefore(b, prevEl ? prevEl.nextSibling : list.firstChild);
+    }
+    prevEl = b;
+  });
+  let empty = list.querySelector('.tile-lv-strip__empty');
+  if (!s.shots.length && !empty) {
+    empty = document.createElement('div');
+    empty.className = 'tile-lv-strip__empty';
+    empty.textContent = lvP(g, 'shots_every_s') ? 'Снимков пока нет: первый — через минуту после старта' : 'Снимки выключены (вкладка «Уровень»)';
+    list.appendChild(empty);
+  } else if (s.shots.length && empty) empty.remove();
+  const cur = tile.lvView ? tile.lvView.ts : null;
+  list.querySelectorAll('.tile-lv-strip__item').forEach((b) => b.classList.toggle('is-active', Number(b.dataset.ts) === cur));
+}
+
+// открыть снимок в окне камеры (закрепляется, пока не нажать «живое»)
+function lvTileView(index, sh) {
+  const tile = state.tiles[index];
+  const el = getTileEl(index);
+  const cam = tile && mvCam(tile.serial);
+  const g = cam && lvGroup(cam);
+  if (!el || !g) return;
+  tile.lvView = { cam: cam.id, ts: sh.ts, meta: sh.meta };
+  const img = el.querySelector('[data-tile-shot]');
+  img.src = lvShotUrl(cam.id, g.id, sh.ts);                  // по загрузке — drawMotionTile (03-layout.js)
+  lvRenderStrip(index);
+  drawMotionTile(index);
+  const item = el.querySelector('.tile-lv-strip__item[data-ts="' + sh.ts + '"]');
+  if (item) item.scrollIntoView({ block: 'nearest' });
+}
+
+function lvTileLive(index) {
+  const tile = state.tiles[index];
+  if (!tile) return;
+  tile.lvView = null;
+  lvRenderStrip(index);
+  drawMotionTile(index);
+}
+
+// клик по графику уровня: камера стоит в ячейке и снимок рядом с моментом есть — показываем его в окне. false — не вышло
+function lvTileViewAt(camId, gid, ts) {
+  const index = state.tiles.findIndex((t) => t.serial === camId);
+  const s = LVG[camId];
+  if (index < 0 || !s || s.gid !== gid || !s.shots.length) return false;
+  let best = null;
+  s.shots.forEach((x) => { if (!best || Math.abs(x.ts - ts) < Math.abs(best.ts - ts)) best = x; });
+  if (Math.abs(best.ts - ts) > 90) return false;
+  setFocus(index);
+  lvTileView(index, best);
+  getTileEl(index).scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+  return true;
+}
+
+// из drawMotionTile: показать/спрятать ленту; открыт снимок — нарисовать его с разметкой и вернуть true (живую разметку не рисуем)
+function lvTileDraw(index, el, canvas, cam, on) {
+  const tile = state.tiles[index];
+  const g = on && cam ? lvGroup(cam) : null;
+  const strip = el.querySelector('[data-tile-lvstrip]');
+  const want = !!g && !!tile.serial;
+  if (strip && strip.hidden === want) {
+    strip.hidden = !want;
+    el.classList.toggle('has-lvstrip', want);
+  }
+  if (want && !LVG[cam.id] && MV.online) lvStripsRefresh();     // первая загрузка ленты (LVG заводится сразу, повторно не зовётся)
+  if (tile.lvView && (!g || tile.lvView.cam !== cam.id)) tile.lvView = null;     // камеру в ячейке сменили / КЗ выключили
+  const img = el.querySelector('[data-tile-shot]');
+  const back = el.querySelector('[data-tile-lvback]');
+  const v = tile.lvView;
+  if (img) img.classList.toggle('hidden', !v);
+  if (back) {
+    back.hidden = !v;
+    if (v) back.textContent = 'снимок ' + new Date(v.ts * 1000).toLocaleTimeString('ru-RU') + ' · ● живое';
+  }
+  if (!v) return false;
+  const screen = el.querySelector('[data-tile-screen]');
+  const w = screen.clientWidth, h = screen.clientHeight;
+  if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; }
+  const ctx = canvas.getContext('2d');
+  ctx.clearRect(0, 0, w, h);
+  if (!img.naturalWidth || tile.markupOff) return true;     // ещё грузится / разметка скрыта кнопкой
+  const m = v.meta;
+  if (m) drawLevelOnTile(ctx, cam, lvGeom(w, h, img.naturalWidth, img.naturalHeight), lvMetaState(g, m), m.valid ? '' : 'нет');
+  if (m && !m.valid) {
+    ctx.font = 'bold 14px sans-serif'; ctx.textAlign = 'center';
+    ctx.lineWidth = 4; ctx.strokeStyle = '#000'; ctx.strokeText(m.err || 'модель не ответила', w / 2, h - 14);
+    ctx.fillStyle = '#f87171'; ctx.fillText(m.err || 'модель не ответила', w / 2, h - 14);
+    ctx.textAlign = 'left'; ctx.lineWidth = 2;
+  }
+  return true;
 }

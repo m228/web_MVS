@@ -12,6 +12,7 @@
   GET  /cameras/{id}/snapshot     — последний кадр JPEG (?w=1280 — уменьшить; заголовки X-Frame-W/H — размер оригинала).
   GET  /cameras/{id}/level_shot   — снимок для графика уровня, ближайший к моменту (?group=lvl&ts=unix-секунды; &dir=-1/1 — соседний
                                     раньше/позже; X-Shot-Ts — его время).
+  GET  /cameras/{id}/level_shots  — снимки уровня с разметкой кадра (?group=lvl&since=unix — только новее): {"shots": [{ts, meta}]}.
   GET  /cameras/{id}/history      — ряды flow/diff/bit для графиков калибровки (?n=300).
   GET  /cameras/{id}/stats        — среднее / мин / макс flow и diff по зонам за последние ?window=10800 секунд (до суток).
   POST /cameras/{id}/record       — {"on": true|false}: писать метрики каждого кадра в базу data\\motion.db.
@@ -26,6 +27,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import os
 import sqlite3
 import sys
@@ -357,6 +359,13 @@ def create_app(data_dir: Optional[Path] = None, capture_factory: Callable = open
             raise HTTPException(404, "снимка на это время нет (их хранят 2 ч)")
         data, t = r
         return Response(content=data, media_type="image/jpeg", headers={"X-Shot-Ts": str(t), "Cache-Control": "no-store"})
+
+    @app.get("/cameras/{cid}/level_shots")
+    def level_shots(cid: str, group: str, since: float = 0.0):
+        rows = mgr.worker(cid).level_shot_list(group, since if math.isfinite(since) else 0.0)
+        if rows is None:
+            raise HTTPException(404, "нет такой группы-уровня: %s" % group)
+        return {"shots": rows}
 
     @app.get("/cameras/{cid}/history")
     def history(cid: str, n: int = 300, window: float = 0, points: int = 600):

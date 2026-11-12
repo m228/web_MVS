@@ -1389,6 +1389,12 @@ def motion_level_shot(camera: str, group: str, ts: float, dir: int = 0):     # n
     return Response(content=data, media_type="image/jpeg", headers={"X-Shot-Ts": str(t), "Cache-Control": "no-store"})
 
 
+@app.get("/api/motion/level_shots")
+def motion_level_shots(camera: str, group: str, since: float = 0.0):
+    """Снимки уровня с разметкой кадра (лента слева в окне камеры): {"shots": [{ts, meta}]}."""
+    return motion_client.level_shots(_motion_url(), camera, group, since)
+
+
 @app.get("/api/motion/history")
 def motion_history(camera: str, n: int = 300, window: float = 0, points: int = 600):
     return motion_client.history(_motion_url(), camera, n, window, points)

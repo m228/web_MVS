@@ -542,6 +542,7 @@ class Agent:
         self._seen: dict = {}               # code -> сколько проверок подряд правило срабатывало
         self._ready_since: Optional[float] = None
         self._auto_off_since: Optional[float] = None      # с какого момента варка идёт, а «Автомат» выключен / стоит «Ручной»
+        self._stage_off_t = 0.0      # последняя проверка, когда стадия была вне зоны цикла: статус CV старше — с прошлой варки, не тревога
         self._work_since: Optional[float] = None      # с какого момента автомат в работе (для «автокалибровки давно не было»)
         self._plate_up: Optional[float] = None
         self._plate_up_exact = False                   # _plate_up посчитан с кругами (иначе — голый 16-битный регистр)
@@ -773,12 +774,21 @@ class Agent:
                 found["black"] = ("high", black)
             elif cam.get("serial") and not cam.get("streaming"):
                 keep.add("black")                     # камера не стримит — не знаем, вернулся ли свет, тревога остаётся как была
-            if cv.get("state") == "black" and d.get("cv_enabled") and stage_ok:
+            # статус CV живёт до следующей пробы: отказ с прошлой варки (Усп 12.11 19:45) не тревога, пока новая проба его не повторит
+            if not stage_ok:
+                self._stage_off_t = now
+            cv_on = bool(d.get("cv_enabled") and stage_ok and (cv.get("t") is None or cv["t"] >= self._stage_off_t))
+            if cv.get("state") == "black" and cv_on:
                 found["black"] = ("high", self._black_text(d, "Проба пропущена: кадр абсолютно чёрный"))
-            elif cv.get("state") == "overexposed" and d.get("cv_enabled") and stage_ok:
+            elif cv.get("state") == "overexposed" and cv_on:
                 found["overexposed"] = ("high", "Кадры пересвечены, пробы пропускаются")
-            elif cv.get("state") in ("no_camera", "no_frames", "sidecar_offline") and d.get("cv_enabled") and stage_ok:
-                found["cv_fail"] = ("high", "Проба не разобрана: " + str(cv.get("message") or cv.get("state"))[:120])
+            elif cv.get("state") == "no_camera" and cam.get("streaming"):
+                pass                                  # «не стримит», а камера уже стримит — следующая проба возьмёт кадр
+            elif cv.get("state") in ("no_camera", "no_frames", "sidecar_offline") and cv_on:
+                msg = str(cv.get("message") or cv.get("state"))
+                if not msg.lower().startswith("проба не разобрана"):
+                    msg = "проба не разобрана: " + msg
+                found["cv_fail"] = ("high", (msg[:1].upper() + msg[1:])[:140])
 
             conn = (d.get("status") or {}).get("connected")
             if conn is False:

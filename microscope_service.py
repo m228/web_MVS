@@ -333,7 +333,8 @@ class MicroscopeService:
     def _set_cv_status(self, state, message=""):
         """Статус разбора для UI: idle / running / ok / no_camera / no_frames / overexposed / black /
         sidecar_offline / error. Любой отказ виден на странице, а не только в логе."""
-        self._cv_status = {"state": state, "message": message, "ts": time.strftime("%H:%M:%S")}
+        # t — эпоха: мониторинг по ней отличает свежий отказ от залипшего с прошлой варки
+        self._cv_status = {"state": state, "message": message, "ts": time.strftime("%H:%M:%S"), "t": time.time()}
 
     def cv_status(self):
         return dict(self._cv_status)

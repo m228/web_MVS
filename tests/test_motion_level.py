@@ -702,3 +702,67 @@ def test_level_shot_endpoint(tmp_path):
         with pytest.raises(HTTPException) as e:
             call(*args)
         assert e.value.status_code == 404
+
+
+# ───────────────────── разметка снимков для ленты в окне камеры ─────────────────────
+def test_shot_saved_with_markup_of_the_same_frame(tmp_path):
+    li = _infer_step(tmp_path, [], shots_every_s=60)
+    li.shots_dir = tmp_path / "shots"
+    li.step()
+    rows = ml.trend_shot_list(tmp_path / "shots")
+    assert len(rows) == 1
+    m = rows[0]["meta"]
+    assert m["valid"] and m["err"] == "" and m["contour_wh"] == [W, H]
+    assert m["levels"][0] == pytest.approx(100, abs=3) and m["total"] == pytest.approx(50, abs=2), "нижнее залито целиком — 100 %, Total 50"
+    assert m["contour"] and len(m["contour"][0]) >= 3, "контур жидкости есть, даже если contour на плитке выключен"
+
+
+def test_shot_on_model_error_has_err_and_no_levels(tmp_path):
+    cam = level_cam(shots_every_s=60)
+    zc = {z["id"]: z for z in cam["zones"]}
+    rtt = ml.LevelRT(cam["groups"][0], [zc["low"], zc["up"]], cam["frame_size"])
+    li = ml.LevelInfer(rtt, lambda: np.full((H, W, 3), 90, np.uint8), threading.Event(), lambda *a: {"error": "сервис уровня не отвечает"},
+                       shots_dir=tmp_path / "shots")
+    li.step()
+    m = ml.trend_shot_list(tmp_path / "shots")[0]["meta"]
+    assert m == {"valid": False, "err": "сервис уровня не отвечает"}, "кадр есть, разметки нет — видно, что модель молчала"
+
+
+def test_trend_shot_list_since_order_and_pruning(tmp_path):
+    f = tmp_path / "s"
+    frame = np.zeros((H, W, 3), np.uint8)
+    ml.save_trend_shot(f, frame, 10000.0, meta={"valid": True, "total": 10})
+    ml.save_trend_shot(f, frame, 10060.0, meta={"valid": True, "total": 20})
+    ml.save_trend_shot(f, frame, 10120.0)                       # без разметки (старый снимок)
+    rows = ml.trend_shot_list(f, now=10200)
+    assert [r["ts"] for r in rows] == [10000, 10060, 10120] and rows[1]["meta"]["total"] == 20 and rows[2]["meta"] is None
+    assert [r["ts"] for r in ml.trend_shot_list(f, since=10060, now=10200)] == [10120], "since — только новее"
+    (f / "10000.jpg.tmp").write_bytes(b"x")                     # брошенный недописанный
+    ml.save_trend_shot(f, frame, 10000.0 + 7230, meta={"valid": False, "err": ""})
+    names = sorted(p.name for p in f.iterdir())
+    assert "10000.jpg" not in names and "10000.json" not in names and "10000.jpg.tmp" not in names, "старше 2 ч — и картинка, и разметка, и .tmp"
+    assert "10060.json" in names
+
+
+def test_level_shots_endpoint(tmp_path):
+    import importlib.util
+    from fastapi import HTTPException
+    spec = importlib.util.spec_from_file_location("motion_server_lvshots", MS / "server.py")
+    srv = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(srv)
+    app = srv.create_app(tmp_path / "data")
+    cam = level_cam()
+    cam["enabled"] = False
+    put = next(r.endpoint for r in app.router.routes if getattr(r, "path", "") == "/config" and "PUT" in r.methods)
+    call = next(r.endpoint for r in app.router.routes if getattr(r, "path", "") == "/cameras/{cid}/level_shots")
+    put({"cameras": [cam]})
+    w = app.state.mgr.workers["dec"]
+    now = time.time()
+    ml.save_trend_shot(w.level_shots_dir("lvl"), np.zeros((H, W, 3), np.uint8), now - 30, meta={"valid": True, "total": 33.3})
+    body = call("dec", "lvl", 0.0)
+    assert [r["meta"]["total"] for r in body["shots"]] == [33.3]
+    assert call("dec", "lvl", float("nan"))["shots"], "since = NaN — как 0"
+    assert call("dec", "lvl", now)["shots"] == []
+    with pytest.raises(HTTPException) as e:
+        call("dec", "../x", 0.0)
+    assert e.value.status_code == 404

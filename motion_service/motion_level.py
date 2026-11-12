@@ -306,8 +306,10 @@ def prune_frames(folder: Path, keep: int) -> tuple:
 
 
 def save_trend_shot(folder: Path, frame: np.ndarray, now: float, width: int = TREND_SHOT_W, quality: int = TREND_SHOT_Q,
-                    keep_s: float = TREND_KEEP_S) -> Path:
-    """Снимок для графика уровня: кадр, ужатый до width по ширине, JPEG quality → folder\\<unix-секунды>.jpg; старше keep_s — стираем."""
+                    keep_s: float = TREND_KEEP_S, meta: Optional[dict] = None) -> Path:
+    """Снимок для графика уровня: кадр, ужатый до width по ширине, JPEG quality → folder\\<unix-секунды>.jpg; рядом <…>.json —
+    разметка этого кадра (meta: что посчитала модель — уровни, Total, контур жидкости), по ней панель рисует рамки как на плитке.
+    Старше keep_s — стираем оба файла."""
     h, w = frame.shape[:2]
     if w > width:
         frame = cv2.resize(frame, (width, max(1, round(h * width / w))), interpolation=cv2.INTER_AREA)
@@ -316,16 +318,55 @@ def save_trend_shot(folder: Path, frame: np.ndarray, now: float, width: int = TR
         raise ValueError("кадр не закодировался")
     folder.mkdir(parents=True, exist_ok=True)
     path = folder / ("%d.jpg" % int(now))
-    tmp = path.with_suffix(".tmp")
-    tmp.write_bytes(buf.tobytes())
-    tmp.replace(path)                                  # читатель не увидит недописанный файл
-    for p, ts in trend_shots(folder):
-        if ts < now - keep_s:
+    if meta is not None:                               # разметку — раньше картинки: список снимков идёт по .jpg
+        _write_atomic(path.with_suffix(".json"), json.dumps(meta, ensure_ascii=False).encode("utf-8"))
+    _write_atomic(path, buf.tobytes())
+    for p in folder.iterdir():                         # <ts>.jpg, <ts>.json и брошенные <ts>.jpg.tmp
+        stem = p.name.split(".")[0]
+        if p.suffix in (".jpg", ".json", ".tmp") and stem.isdigit() and int(stem) < now - keep_s:
             try:
                 p.unlink()
             except OSError:
                 pass
     return path
+
+
+def _write_atomic(path: Path, data: bytes):
+    """Через временный файл: читатель не увидит недописанный."""
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_bytes(data)
+    tmp.replace(path)
+
+
+def shot_meta(rt: "LevelRT", objs: Optional[list], err: str = "") -> dict:
+    """Разметка снимка: уровни после ответа модели на этот кадр (как на плитке) и контур жидкости. err — модель не ответила."""
+    s = rt.snapshot(None, True)
+    with rt._lock:
+        wh = list(rt.contour_wh) if rt.contour_wh else None
+    ok = not err and s["valid"]
+    out = {"valid": bool(ok), "err": err}
+    if ok:
+        out.update(total=round(s["total"], 1), g1=round(s["g1"], 1), g2=round(s["g2"], 1),
+                   levels=[round(s["s1"] * 100, 1), round(s["s2"] * 100, 1)],
+                   raw=[None if r is None else round(r * 100, 1) for r in s["raw"]], conf=round(s["conf"], 2),
+                   contour=contour_points(objs or [], rt.g["liquid_class"]), contour_wh=wh)
+    return out
+
+
+def trend_shot_list(folder: Path, since: float = 0.0, now: Optional[float] = None, keep_s: float = TREND_KEEP_S) -> list:
+    """[{"ts", "meta"}] снимков новее since (и не старше keep_s), по возрастанию времени. meta — разметка кадра или None (её нет)."""
+    now = time.time() if now is None else now
+    out = []
+    for p, t in sorted(trend_shots(folder), key=lambda x: x[1]):
+        if t <= since or t < now - keep_s:
+            continue
+        meta = None
+        try:
+            meta = json.loads(p.with_suffix(".json").read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            pass
+        out.append({"ts": t, "meta": meta})
+    return out
 
 
 def trend_shots(folder: Path) -> list:
@@ -372,7 +413,8 @@ class LevelInfer(threading.Thread):
     frames_keep кадров; свободного места на диске меньше FRAMES_MIN_FREE — съёмка встаёт, чтобы не забить диск.
 
     Снимки для графика (shots_dir + shots_every_s в группе, 0 — выкл.): раз в shots_every_s секунд маленький JPEG того же кадра в
-    shots_dir; живут TREND_KEEP_S (2 ч, как окно графика). Клик по графику уровня в панели открывает ближайший к моменту снимок."""
+    shots_dir (сразу после ответа модели на него, рядом JSON с разметкой); живут TREND_KEEP_S (2 ч, как окно графика). В панели —
+    лента снимков слева в окне камеры и клик по графику уровня."""
 
     def __init__(self, rt: LevelRT, get_frame: Callable[[], Optional[np.ndarray]], halt: threading.Event,
                  post: Callable = post_infer, jpeg_quality: int = 95, save_dir: Optional[Path] = None,
@@ -403,7 +445,6 @@ class LevelInfer(threading.Thread):
         if frame is None:
             self.rt.note_error("нет свежего кадра камеры", quiet=True)
             return
-        self._maybe_shot(frame)
         ok, buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, self.q])
         if not ok:
             self.rt.note_error("кадр не закодировался")
@@ -414,22 +455,25 @@ class LevelInfer(threading.Thread):
         res = self.post(g["service_url"], buf.tobytes(), params, max(10.0, g["infer_interval_s"] * 5))
         if "error" in res:
             self.rt.note_error(res["error"])
+            self._maybe_shot(frame, None, str(res["error"]))
         else:
             self.rt.ingest(res)
+            self._maybe_shot(frame, res.get("objects") or [])
             try:
                 self._maybe_save(buf.tobytes(), res)
             except Exception as e:                       # диск полон / нет прав: уровень от этого не страдает
                 log.warning("[уровень %s] кадр для обучения не сохранён: %s", g["id"], e)
 
-    def _maybe_shot(self, frame: np.ndarray):
-        """Снимок для графика, если пора. Ошибка диска уровню не мешает — только строка в журнал."""
+    def _maybe_shot(self, frame: np.ndarray, objs: Optional[list], err: str = ""):
+        """Снимок для графика, если пора: кадр + разметка по ответу модели на него (objs; модель не ответила — err).
+        Ошибка диска уровню не мешает — только строка в журнал."""
         every = float(self.rt.g.get("shots_every_s") or 0)
         now = time.time()
         if not self.shots_dir or every <= 0 or now - self._last_shot < every:
             return
         self._last_shot = now
         try:
-            save_trend_shot(self.shots_dir, frame, now)
+            save_trend_shot(self.shots_dir, frame, now, meta=shot_meta(self.rt, objs, err))
         except Exception as e:
             log.warning("[уровень %s] снимок для графика не сохранён: %s", self.rt.g["id"], e)
 

@@ -26,7 +26,7 @@ import cv2
 import numpy as np
 
 from motion_engine import CameraEngine, scale_points
-from motion_level import LevelInfer, nearest_trend_shot, post_infer
+from motion_level import LevelInfer, nearest_trend_shot, post_infer, trend_shot_list
 from motion_webview import WebView
 from motion_store import store_for
 from motion_trends import TrendLog
@@ -280,6 +280,12 @@ class CameraWorker(threading.Thread):
             return hit[0].read_bytes(), hit[1]
         except OSError:                                # как раз стёрли по сроку
             return None
+
+    def level_shot_list(self, gid: str, since: float = 0.0) -> Optional[list]:
+        """[{"ts", "meta"}] снимков группы новее since — для ленты в окне камеры; None — нет такой группы-уровня."""
+        if not any(x["type"] == "level" and x["id"] == gid for x in self.cfg["groups"]):
+            return None
+        return trend_shot_list(self.level_shots_dir(gid), since)
 
     def snapshot_jpeg(self, max_w: int = 0) -> Optional[tuple]:
         """(jpeg-байты, (ширина, высота) оригинала) последнего кадра или None."""

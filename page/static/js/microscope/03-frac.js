@@ -110,7 +110,7 @@
     const xOf = (i) => pad.l + pw * (n <= 1 ? 0.5 : i / (n - 1));
     const top = (arr, minTop) => { let mx = minTop; (arr || []).forEach((v) => { if (v != null) mx = Math.max(mx, v); }); return mx; };
     const nice = (v) => { const p = Math.pow(10, Math.floor(Math.log10(v))); return [1, 2, 2.5, 5, 10].map((k) => k * p).find((k) => k >= v) || v; };
-    const zMax = nice(top(S.frac_zones, 4)), pMax = nice(top(S.frac_pct, 5));
+    const zMax = Math.ceil(top(S.frac_zones, 4) / 4) * 4, pMax = nice(top(S.frac_pct, 5));   // зоны — целые подписи (4 деления)
     const yOf = (v, mx) => pad.t + ph * (1 - v / mx);
     ctx.font = "10px sans-serif"; ctx.lineWidth = 1;
     for (let k = 0; k <= 4; k++) {                                   // сетка + подписи: слева зоны, справа % площади

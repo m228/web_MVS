@@ -285,7 +285,7 @@ def _norm_group(g: dict, cam_id: str, zone_ids: list, cycle_ids=(), level_ids=()
             glass2_min=_num(g.get("glass2_min", 20), where + ".glass2_min", 0, 100),
             glass1_full=_num(g.get("glass1_full", 100), where + ".glass1_full", 0, 100),
             glass2_full=_num(g.get("glass2_full", 100), where + ".glass2_full", 0, 100),
-            glass2_gate=_num(g.get("glass2_gate", 80), where + ".glass2_gate", 0, 100),
+            glass2_gate=_num(g.get("glass2_gate", 90), where + ".glass2_gate", 0, 100),
             shots_every_s=_num(g.get("shots_every_s", 60), where + ".shots_every_s", 0, 3600),
             hold_s=_num(g.get("hold_s", 30), where + ".hold_s", 1, 3600),
             contour=bool(g.get("contour", False)),

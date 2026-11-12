@@ -597,6 +597,14 @@ def test_nearest_trend_shot_rejects_nan(tmp_path):
     assert ml.nearest_trend_shot(tmp_path, float("nan"), 90, now=1000) is None
 
 
+def test_default_gate_90_does_not_force_lower_while_filling():
+    # база завода 07–12.11: при жидкости в верхнем нижнее ≥ 90 у 98,8 % точек; на 80–90 (налив/слив) корка верхнего давала ранние 100 %
+    g = level_cam(glass1_min=15, glass2_min=15)["groups"][0]
+    p = ml.LevelProcessor(0, g["glass1_min"], g["glass2_min"], g["glass1_full"], g["glass2_full"], g["glass2_gate"])
+    assert round(p.update(0.85, 0.18)["glass1"] * 2, 3) == 85.0, "нижнее 85 %, в верхнем корка — нижнее не форсим"
+    assert round(p.update(0.94, 0.40)["glass2"] * 2, 3) == 40.0, "нижнее полное (94) — верхнее считаем"
+
+
 def test_gate_zero_keeps_lvldec_behaviour():
     p = ml.LevelProcessor(alpha=0, glass1_min=15, glass2_min=15)
     assert round(p.update(0.20, 0.151)["glass1"], 3) == 50.0, "0 — как в LVLDec: верхнее > 0 ⇒ нижнее 100 %"
@@ -621,7 +629,7 @@ def test_factory_trend_has_no_spikes_with_gate():
 
 def test_level_config_gate_and_shots_defaults_and_limits():
     g = level_cam()["groups"][0]
-    assert (g["glass2_gate"], g["shots_every_s"]) == (80, 60)
+    assert (g["glass2_gate"], g["shots_every_s"]) == (90, 60)
     assert level_cam(shots_every_s=0)["groups"][0]["shots_every_s"] == 0, "0 — снимки выключены"
     for bad in ({"glass2_gate": 101}, {"shots_every_s": -1}, {"shots_every_s": 3601}):
         with pytest.raises(ValueError):

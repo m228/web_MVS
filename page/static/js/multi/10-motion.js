@@ -324,6 +324,74 @@ function onMotionHover(event) {
   tip.hidden = false;
 }
 
+// ---------- подгонка радиуса вала: тянем за край окружности прямо на плитке ----------
+// Геометрия считается от реального кадра потока (tileFrameGeom), поэтому с цифровым зумом камеры работает так же:
+// радиус хранится в пикселях кадра, на котором идёт анализ.
+const ROD_GRAB_PX = 9;           // насколько близко к линии окружности курсор «цепляет» её
+
+function rodHit(event) {
+  const screen = event.target.closest && event.target.closest('[data-tile-screen]');
+  const tileEl = screen && screen.closest('.multi-tile');
+  if (!screen || !tileEl) return null;
+  const index = Number(tileEl.dataset.tile);
+  const tile = state.tiles[index];
+  const cam = tile && tile.serial && tile.kind === 'rtsp' ? mvCam(tile.serial) : null;
+  const g = cam && cam.enabled ? tileFrameGeom(index) : null;
+  if (!g) return null;
+  const fs = cam.frame_size || [g.nw, g.nh];
+  const sx = (g.nw / fs[0]) * g.k, sy = (g.nh / fs[1]) * g.k, s = (sx + sy) / 2;
+  const box = screen.getBoundingClientRect();
+  const px = event.clientX - box.left, py = event.clientY - box.top;
+  let best = null;
+  cam.zones.forEach((z) => {
+    if (z.type !== 'cycle' || z.enabled === false) return;
+    const cx = g.ox + z.center[0] * sx, cy = g.oy + z.center[1] * sy;
+    const off = Math.abs(Math.hypot(px - cx, py - cy) - z.radius * s);
+    if (off <= ROD_GRAB_PX && (!best || off < best.off)) best = { index, screen, cam, z, cx, cy, s, fs, off };
+  });
+  return best;
+}
+
+function initRodRadiusDrag() {
+  const grid = document.getElementById('multiGrid');
+  if (!grid) return;
+  let drag = null;
+
+  grid.addEventListener('mousemove', (e) => {
+    if (drag) return;
+    const hit = rodHit(e);
+    const screen = e.target.closest && e.target.closest('[data-tile-screen]');
+    if (screen) screen.style.cursor = hit ? 'nwse-resize' : '';
+  });
+
+  grid.addEventListener('mousedown', (e) => {
+    if (e.button !== 0) return;
+    const hit = rodHit(e);
+    if (!hit) return;
+    e.preventDefault();
+    e.stopPropagation();
+    drag = hit;
+    const box = hit.screen.getBoundingClientRect();
+    const move = (ev) => {
+      const r = Math.hypot(ev.clientX - box.left - drag.cx, ev.clientY - box.top - drag.cy) / drag.s;
+      drag.z.radius = Math.round(Math.max(20, Math.min(drag.fs[0], r)));
+      drawMotionTile(drag.index);
+    };
+    const up = () => {
+      document.removeEventListener('mousemove', move);
+      document.removeEventListener('mouseup', up, true);
+      const swallow = (ev) => { ev.stopPropagation(); };            // после перетаскивания не считаем клик кликом по плитке
+      document.addEventListener('click', swallow, { capture: true, once: true });
+      setTimeout(() => document.removeEventListener('click', swallow, true), 0);
+      drag = null;
+      if (typeof mdCommit === 'function') mdCommit();             // сохранить конфиг в сервис КЗ
+      if (typeof MD !== 'undefined' && MD) { MD.key = ''; if (typeof renderMotionDock === 'function') renderMotionDock(); }
+    };
+    document.addEventListener('mousemove', move);
+    document.addEventListener('mouseup', up, true);
+  }, true);
+}
+
 // ---------- опрос и инициализация ----------
 function startMotionPolling() {
   const loop = async () => {
@@ -353,5 +421,6 @@ function initMotionVision() {
   btn.addEventListener('click', (e) => { e.stopPropagation(); toggleMotionDock(); });
   document.getElementById('multiGrid')?.addEventListener('mousemove', onMotionHover);
   document.getElementById('multiGrid')?.addEventListener('mouseleave', () => { const t = document.getElementById('mvTip'); if (t) t.hidden = true; });
+  initRodRadiusDrag();
   if (typeof initMotionDock === 'function') initMotionDock();
 }

@@ -65,6 +65,16 @@ def save(entry):
             return load()
         previous = next((i for i in existing if i.get("url") == url), {})
         items = [i for i in existing if i.get("url") != url]
+        # serial — ключ воркера, КЗ, проекта и разметки: у двух разных камер он совпадать не может
+        serial = entry.get("serial") or previous.get("serial") or ""
+        taken = {i.get("serial") for i in items if i.get("serial")}
+        if serial and serial in taken:
+            n = 1
+            while "rtsp_%d" % n in taken:
+                n += 1
+            log_event("rtsp_store", "Serial занят другой камерой — выдан новый", "warn",
+                      {"old": serial, "new": "rtsp_%d" % n, "url": url})
+            serial = "rtsp_%d" % n
         items.append({
             "url": url,
             "label": entry.get("label") or "",
@@ -73,7 +83,7 @@ def save(entry):
             "fps": entry.get("fps") or 0,
             # серийник (ключ воркера и настроек автосохранения) фиксируем в базе:
             # иначе после перезапуска камера получила бы новый ключ и потеряла проект
-            "serial": entry.get("serial") or previous.get("serial") or "",
+            "serial": serial,
             # поднимать камеру при старте приложения (галочка в списке источников)
             "autostart": bool(entry.get("autostart", previous.get("autostart", False))),
         })

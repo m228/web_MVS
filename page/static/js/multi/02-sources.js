@@ -57,11 +57,14 @@ async function loadSavedRtsp() {
     if (!it.url) return;
     if (state.cameras.some((c) => c.kind === 'rtsp' && c.connection && c.connection.url === it.url)) return;
 
-    state.rtspCounter += 1;
+    // серийник берём из базы: тогда камера сохраняет свой ключ между запусками
+    // (а с ним — проект/интервал автосохранения и автоподключение)
+    const dup = !!it.serial && state.cameras.some((c) => c.serial === it.serial);
+    const serial = it.serial && !dup ? it.serial : nextRtspSerial();
+    // дубль serial из старой базы: закрепляем новый ключ, чтобы он не «прыгал» между запусками
+    if (dup) RtspApi.saveCam({ url: it.url, label: it.label, ip: it.ip, serial, scale: it.scale, fps: it.fps });
     state.cameras.push({
-      // серийник берём из базы: тогда камера сохраняет свой ключ между запусками
-      // (а с ним — проект/интервал автосохранения и автоподключение)
-      serial: it.serial || `rtsp_${state.rtspCounter}`,
+      serial,
       kind: 'rtsp',
       label: it.label || `RTSP ${it.ip || ''}`.trim(),
       model: 'RTSP',

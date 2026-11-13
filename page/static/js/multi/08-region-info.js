@@ -419,12 +419,11 @@ function addRtspSource() {
     return;
   }
 
-  state.rtspCounter += 1;
-  const serial = `rtsp_${state.rtspCounter}`;
+  const serial = nextRtspSerial();
   state.cameras.push({
     serial,
     kind: 'rtsp',
-    label: name || `RTSP ${ip || state.rtspCounter}`,
+    label: name || `RTSP ${ip || serial}`,
     model: 'RTSP',
     ip: ip || null,
     available: true,

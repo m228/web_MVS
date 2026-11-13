@@ -13,18 +13,26 @@ import stage_map
 
 FIELDS = tuple(plate_config.DEFAULTS["sv_source"]["fields"].keys())
 NODE_MAX = 512
-SEED_UNITS = {"kg": "кг", "l": "л", "pct": "%"}       # единица затравки: ключ в конфиге → подпись на экране
+SEED_UNITS = {"m3": "м³", "kg": "кг", "l": "л", "pct": "%"}       # единица затравки: ключ в конфиге → подпись на экране
 # виды затравки: поле ПЛК → (ключ единицы в sv_source, подпись). seed_qty — общая (первая версия, 2.1.51), остальные — по виду
 SEED_FIELDS = {"seed_qty": ("seed_unit", "Затравка"),
                "seed_slurry": ("seed_slurry_unit", "Затравка сларри"),
                "seed_mu": ("seed_mu_unit", "Затравка МУ (маточник)")}
+# какие единицы доступны виду затравки (первая — по умолчанию). Общая затравка — только кубы: клапан открывают на объём (Макс 13.11)
+SEED_FIELD_UNITS = {"seed_qty": ("m3",), "seed_slurry": ("kg", "l", "pct"), "seed_mu": ("kg", "l", "pct")}
+
+
+def seed_units_of(field: str = "seed_qty") -> tuple:
+    """Единицы, доступные виду затравки (ключи SEED_UNITS); первая — по умолчанию."""
+    return SEED_FIELD_UNITS.get(field, SEED_FIELD_UNITS["seed_qty"])
 
 
 def seed_unit(cfg: dict | None = None, field: str = "seed_qty") -> str:
-    """Единица затравки из конфига (kg | l | pct); мусор — kg. field — какое из полей SEED_FIELDS."""
+    """Единица затравки из конфига; недоступная этому виду (старое «кг» у общей затравки) или мусор — первая доступная."""
     key = SEED_FIELDS.get(field, SEED_FIELDS["seed_qty"])[0]
-    u = str(((cfg if cfg is not None else plate_config.load()).get("sv_source") or {}).get(key) or "kg")
-    return u if u in SEED_UNITS else "kg"
+    allowed = seed_units_of(field)
+    u = str(((cfg if cfg is not None else plate_config.load()).get("sv_source") or {}).get(key) or "")
+    return u if u in allowed else allowed[0]
 
 
 def _int(v, name, lo, hi):
@@ -64,11 +72,12 @@ def normalize(body: dict) -> tuple[dict, dict | None]:
             out["period_s"] = min(60.0, max(0.2, float(body["period_s"])))
         except (TypeError, ValueError):
             raise ValueError("период опроса — число секунд")
-    for key, _ in SEED_FIELDS.values():
+    for field, (key, title) in SEED_FIELDS.items():
         if key in body:
             u = str(body[key] or "").lower()
-            if u not in SEED_UNITS:
-                raise ValueError("единица затравки: кг, л или %")
+            allowed = seed_units_of(field)
+            if u not in allowed:
+                raise ValueError("%s: единица — %s" % (title, ", ".join(SEED_UNITS[a] for a in allowed)))
             out[key] = u
     if "stage_map" in body:
         out["stage_map"] = stage_map.normalize(body["stage_map"])
@@ -120,7 +129,8 @@ def public(cfg: dict | None = None) -> dict:
         "protocol": sv.get("protocol") or "modbus",
         "period_s": sv.get("period_s", 1.0),
         "seed_unit": seed_unit({"sv_source": sv}), "seed_units": SEED_UNITS,
-        "seed_fields": {f: {"unit_key": k, "title": t, "unit": seed_unit({"sv_source": sv}, f)} for f, (k, t) in SEED_FIELDS.items()},
+        "seed_fields": {f: {"unit_key": k, "title": t, "unit": seed_unit({"sv_source": sv}, f),
+                            "units": {u: SEED_UNITS[u] for u in seed_units_of(f)}} for f, (k, t) in SEED_FIELDS.items()},
         "stage_map": stage_map.public(sv),
         "modbus": {"host": sv.get("host", ""), "port": sv.get("port", 502), "unit": sv.get("unit", 255),
                    "fields": {k: {"reg": int((v or {}).get("reg", 0) or 0), "scale": (v or {}).get("scale", 1),

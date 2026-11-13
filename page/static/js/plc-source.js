@@ -165,7 +165,9 @@
     function fieldLabel(f) {
       const sf = S.cfg && S.cfg.seed_fields && S.cfg.seed_fields[f];
       if (!sf) return el("td", { text: LABELS[f] || f });
-      const units = (S.cfg && S.cfg.seed_units) || { kg: "кг", l: "л", pct: "%" };
+      const units = sf.units || (S.cfg && S.cfg.seed_units) || { kg: "кг", l: "л", pct: "%" };       // у вида — свои единицы (общая затравка — только м³)
+      const keys = Object.keys(units);
+      if (keys.length === 1) return el("td", { text: (LABELS[f] || sf.title) + ", " + units[keys[0]], title: "У этой затравки одна единица — " + units[keys[0]] });
       const sel = el("select", { class: "plc-in plc-unit", title: "В чём завод подписывает эту затравку — так она и подписана в трендах и отчёте",
         onclick: (e) => e.stopPropagation(),
         onchange: () => { S.seedUnits[f] = sel.value; unitSels.forEach((s) => { if (s._f === f) s.value = sel.value; }); } },
@@ -258,7 +260,7 @@
       });
       const op = { ...connBody(), fields: opFields };
       if (!op.password) delete op.password;                  // пусто — пароль на ПК остаётся прежним
-      const seedUnits = Object.fromEntries(Object.entries((S.cfg && S.cfg.seed_fields) || {}).map(([f, x]) => [x.unit_key, S.seedUnits[f] || "kg"]));   // seed_unit / seed_slurry_unit / seed_mu_unit
+      const seedUnits = Object.fromEntries(Object.entries((S.cfg && S.cfg.seed_fields) || {}).map(([f, x]) => [x.unit_key, S.seedUnits[f] || x.unit || "kg"]));   // seed_unit / seed_slurry_unit / seed_mu_unit
       return { enabled: inp.enabled.checked, protocol: S.proto, period_s: period, ...seedUnits,
         stage_map: { profile: inp.sm_profile.value, rows: smRows() },
         modbus: { host: inp.mb_host.value.trim(), port: Number(inp.mb_port.value) || 502, unit: Number(inp.mb_unit.value) || 0, fields: mbFields },

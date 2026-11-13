@@ -1,4 +1,4 @@
-"""Затравка по видам (10.11): сларри и из маточника МУ — рядом с общей seed_qty. У каждого вида свой тег и своя единица (кг / л / %).
+"""Затравка по видам (10.11): сларри и из маточника МУ — рядом с общей seed_qty. У каждого вида свой тег и своя единица (общая — м³, сларри и МУ — кг / л / %).
 
 Без железа и боевой базы (DATA_DIR → tmp, см. conftest.data_dir)."""
 import time
@@ -35,13 +35,14 @@ def test_kinds_in_config_both_protocols():
 
 
 def test_units_independent_and_validated(data_dir):
-    patch, _ = plc_source.normalize({"seed_unit": "kg", "seed_slurry_unit": "l", "seed_mu_unit": "pct"})
+    patch, _ = plc_source.normalize({"seed_unit": "m3", "seed_slurry_unit": "l", "seed_mu_unit": "pct"})
     plate_config.save({"sv_source": patch})
     pub = plc_source.public()
-    assert {k: v["unit"] for k, v in pub["seed_fields"].items()} == {"seed_qty": "kg", "seed_slurry": "l", "seed_mu": "pct"}
+    assert {k: v["unit"] for k, v in pub["seed_fields"].items()} == {"seed_qty": "m3", "seed_slurry": "l", "seed_mu": "pct"}
+    assert pub["seed_fields"]["seed_slurry"]["units"] == {"kg": "кг", "l": "л", "pct": "%"}      # у сларри и МУ — как было, без м³
     assert pub["seed_fields"]["seed_mu"]["unit_key"] == "seed_mu_unit" and pub["seed_fields"]["seed_slurry"]["title"].endswith("сларри")
-    assert plc_source.seed_unit(None, "seed_slurry") == "l" and plc_source.seed_unit(None, "seed_qty") == "kg"
-    for bad in ({"seed_slurry_unit": "тонны"}, {"seed_mu_unit": ""}):
+    assert plc_source.seed_unit(None, "seed_slurry") == "l" and plc_source.seed_unit(None, "seed_qty") == "m3"
+    for bad in ({"seed_slurry_unit": "тонны"}, {"seed_mu_unit": ""}, {"seed_mu_unit": "m3"}):
         with pytest.raises(ValueError):
             plc_source.normalize(bad)
     plate_config.save({"sv_source": {"seed_mu_unit": "мусор"}})     # испорченный конфиг — не падаем, берём кг
@@ -73,7 +74,7 @@ def test_kinds_per_boil_report_units_and_trend(data_dir):
     assert [x["seed_slurry"] for x in rep["boils"]] == [20.0, 15.0, None]
     assert [x["seed_mu"] for x in rep["boils"]] == [None, 3.0, None]
     assert [x["seed_qty"] for x in rep["boils"]] == [None, None, None]
-    assert rep["seed_units"] == {"seed_qty": "кг", "seed_slurry": "л", "seed_mu": "%"} and rep["seed_unit"] == "кг"
+    assert rep["seed_units"] == {"seed_qty": "м³", "seed_slurry": "л", "seed_mu": "%"} and rep["seed_unit"] == "м³"
     assert rep["totals"]["seed_slurry"]["n"] == 2 and rep["totals"]["seed_mu"]["n"] == 1
     tr = cv_store.trend_range("S3", BASE + OLD - 1, BASE + 2 * OLD - 1, series=["seed_slurry", "seed_mu"])
     assert tr["series"]["seed_slurry"] == [15.0] * 6 and tr["series"]["seed_mu"][:5] == [0.0, 1.0, 2.0, 3.0, 3.0]

@@ -31,8 +31,19 @@ def _fill(w, seconds=1200):
     base = (int(time.time()) // 600 - 3) * 600
     for i in range(seconds):
         ok = 0 if 300 <= i < 400 else 1
-        w._store.add_trend("dif", base + i, {"L": (0.0, 0.0, 1 if i % 10 < 8 else 0), "R": (0.0, 0.0, 1), "M": (0.0, 0.0, 0)}, ok)
+        w._store.add_trend("dif", base + i, {"L": (0.0, 0.5 if i % 10 < 8 else 0.0, 1 if i % 10 < 8 else 0), "R": (0.0, 0.5, 1), "M": (0.0, 0.0, 0)}, ok)
     return base
+
+
+def test_coast_without_confidence_is_not_counted_as_found(app):
+    """Удержание угла (бит 1, уверенность 0) — палка не найдена: так «залипшая» палка не рисует 100 %."""
+    w = app.state.mgr.workers["dif"]
+    base = (int(time.time()) // 600 - 3) * 600
+    for i in range(600):
+        w._store.add_trend("dif", base + i, {"L": (0.0, 0.0, 1), "R": (0.0, 0.5, 1), "M": (0.0, 0.0, 0)}, 1)
+    raw = w._store.visibility("dif", {"L", "R"}, base, base + 600, 600)
+    assert sum(f for _, f in raw["L"].values()) == 0
+    assert sum(f for _, f in raw["R"].values()) == 600
 
 
 def test_visibility_share_and_dead_camera_is_not_counted_as_lost_rod(app):

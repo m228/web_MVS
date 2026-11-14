@@ -247,6 +247,9 @@ function startMetricsPolling() {
       // индикатор зума в ячейке: кратность приходит в метриках RTSP
       if (metrics.zoom_factor !== undefined) {
         const zf = Number(metrics.zoom_factor) || 1;
+        const px = Number(metrics.zoom_pan_x), py = Number(metrics.zoom_pan_y);      // окно зума: разметка КЗ рисуется по нему
+        if (Number.isFinite(px)) tile.zoomPanX = px;
+        if (Number.isFinite(py)) tile.zoomPanY = py;
         if (zf !== tile.zoomFactor) { tile.zoomFactor = zf; renderTile(i); }
       }
 

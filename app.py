@@ -2333,6 +2333,8 @@ def rtsp_metrics(serial_number: str):
             "photo_count": worker.photo_saved_count,
             "video_elapsed": worker.video_elapsed(),
             "zoom_factor": worker.zoom_factor,
+            "zoom_pan_x": worker.zoom_pan_x,
+            "zoom_pan_y": worker.zoom_pan_y,
             # состояние фонового захвата и здоровья автосохранения (см. camera_core)
             "reconnecting": worker.reconnecting,
             "autostart": worker.autostart,

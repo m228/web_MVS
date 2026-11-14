@@ -237,6 +237,8 @@ class MicroscopeFSM:
         self._ac_armed = False       # эта пропарка ещё может запустить калибровку (ждём, пока автомат освободится)
         # состояние процедуры калибровки
         self._cal_active = False
+        self._cal_tn = 0             # такты калибровки (для трассы раз в секунду)
+        self._cal_trace = []         # трасса калибровки для autocal_trace.log
         self._cal_phase = None       # None / pre / find_zero / move / unflag / retract_go / retract / after
         self._cal_step = ""          # что делаем сейчас — для инфо-строки и статуса
         self._cal_trigger = ""       # кто запустил: "пропарка" / "кнопка"
@@ -715,6 +717,8 @@ class MicroscopeFSM:
         self._cal_active = True
         self._cal_trigger = trigger
         self._cal_phase = "pre"
+        self._cal_tn = 0
+        self._cal_trace = []
         self._cal_step = "замер до калибровки"
         self._cal_attempt = 0
         self._cal_wait = 60                    # замер «до» — если мотор не встал за 6 с, идём без него
@@ -798,12 +802,18 @@ class MicroscopeFSM:
                   "warn" if failed else "info", {"before": before, "after": after, "after_first": self._cal_after1})
         return {"ts": self._cal_last["ts"], "trigger": self._cal_trigger, "result": result,
                 "reason": self._cal_reason, "searches": self._cal_attempt,
-                "before": before, "after": after, "after_first": self._cal_after1, "last": dict(self._cal_last)}
+                "before": before, "after": after, "after_first": self._cal_after1, "last": dict(self._cal_last),
+                "trace": list(self._cal_trace), "retract_pos": self._retract_pos}
 
     def _cal_tick(self, pos1, pos_enc, pos1_ai):
         """Один такт процедуры калибровки. Возвращает итог (для журнала), когда закончили, иначе None."""
         self._cal_view = (pos1, pos_enc, pos1_ai)
         still = self._cal_track_still(pos1, pos_enc)
+        # диагностика: раз в секунду — фаза, цель, три датчика, «стоит» (уйдёт в autocal_trace.log по окончании)
+        self._cal_tn += 1
+        if self._cal_tn % 10 == 1 and len(self._cal_trace) < 900:
+            self._cal_trace.append("%ds\t%s\tsp=%s\tcalc=%s\tenc=%s\tsensor=%s\tstill=%s" % (
+                self._cal_tn // 10, self._cal_phase, self.m1_sp, pos1, pos_enc, pos1_ai, int(still)))
         if self._cal_grace > 0:
             self._cal_grace -= 1
             return None

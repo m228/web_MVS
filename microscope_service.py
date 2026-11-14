@@ -1307,6 +1307,12 @@ class MicroscopeService:
             path.parent.mkdir(parents=True, exist_ok=True)
             with open(path, "a", encoding="utf-8") as f:
                 f.write(line)
+            trace = info.get("trace") or []
+            if trace:                                    # трасса хода (раз в секунду) — разбор «куда поехал мотор»
+                with open(path.with_name("autocal_trace.log"), "a", encoding="utf-8") as f:
+                    f.write("# %s\t%s\t%s\tretract_pos=%s\n" % (info.get("ts"), info.get("trigger"),
+                                                                 info.get("result"), info.get("retract_pos")))
+                    f.write("\n".join(trace) + "\n")
         except Exception as e:
             log_event("microscope_service", "Не удалось записать журнал автокалибровки", "warn", {"error": str(e)})
         last = info.get("last")

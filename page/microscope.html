@@ -408,6 +408,34 @@
 
               </div>
 
+              <!-- Блокировки и автокалибровка нуля: та же вкладка «Моторы», но ОТДЕЛЬНАЯ панель без micro-gated —
+                   в Автомате (пульт заперт) настройки автокалибровки должны оставаться кликабельными -->
+              <div class="micro-ppane hidden" data-ppane="motors">
+                <div class="micro-locks">
+                  <div class="micro-locks__head"><b>Блокировки</b> <span class="micro-ro"># 1535</span></div>
+                  <div class="micro-locks__row" id="locksRow"><!-- 16 квадратиков строятся в JS --></div>
+                  <p class="micro-plc-note">Закрашен — блокировка <b>отключена</b>. В норме все пусты (все блокировки работают). Наведи на квадратик — название; клик — переключить (запись в плату, с подтверждением).</p>
+                </div>
+                <p class="micro-plc-note">Стоп М1, фильтр датчика и довод — в прошивке платы. Текущий порог Стоп М1 в плате: <b id="sStopSensor">—</b> мкм.</p>
+
+                <div class="micro-sub__title micro-sub__title--sep">Автокалибровка нуля М1 <span class="micro-ro">сама — в Автомате на пропарке; кнопкой — и из Ручного (потом ручной вернётся)</span></div>
+                <label class="micro-check" title="На пропарке раз в N варок (как только автомат свободен): «Поиск 0» → жду, пока мотор сам встанет (ноль ставит прошивка) → отвод → сверяю датчик с энкодером и расчётной (±100 мкм). Не сошлось — «Поиск 0» ещё раз (до 3 раз). Всё равно не сошлось — красная мигающая плашка с причиной. Журнал — autocal.log.">
+                  <input type="checkbox" id="autocalToggle" />
+                  <span class="micro-check__text">Автокалибровка на пропарке <span class="micro-ro">(раз в N варок)</span></span>
+                </label>
+                <div class="micro-lock__fields">
+                  <label><span>Через N варок</span><input type="number" id="acEveryN" step="1" min="1" value="3" /></label>
+                  <label title="Сколько ждать, пока мотор встанет после команды (меньше 15 с не бывает)"><span>Таймаут хода, с</span><input type="number" id="acTimeout" step="1" min="15" value="30" /></label>
+                </div>
+                <div class="micro-svsp-actions">
+                  <button type="button" id="acStart" class="toolbar-btn toolbar-btn--neutral">Калибровать сейчас</button>
+                  <button type="button" id="acReset" class="toolbar-btn toolbar-btn--neutral">Сброс счётчика</button>
+                  <span class="micro-conn-hint" id="acHint"></span>
+                </div>
+                <p class="micro-plc-note">Варок <b id="acCount">—</b>/<b id="acEveryNShow">—</b> · статус: <b id="acStatus">—</b> · последняя: <b id="acLast">—</b></p>
+                <p class="micro-ac-fail" id="acFail" hidden><span class="micro-ac-fail__txt">⚠ Автокалибровка не удалась — работаем дальше</span> <button type="button" class="micro-ac-fail__clear" data-ac-clear title="Убрать плашку (итог и журнал остаются)">сбросить</button></p>
+              </div>
+
               <!-- Защита: все блокировки/защиты в одном месте -->
               <!-- LED / DQ (объединены) -->
               <div class="micro-ppane micro-gated hidden" data-ppane="led">
@@ -457,30 +485,6 @@
                   <div class="micro-tile"><span>Воздух вкл / откл, °C</span><b id="cAirTh">—</b></div>
                   <div class="micro-tile"><span>Камера вкл / откл, °C</span><b id="cCamTh">—</b></div>
                 </div>
-
-                <div class="micro-locks">
-                  <div class="micro-locks__head"><b>Блокировки</b> <span class="micro-ro"># 1535</span></div>
-                  <div class="micro-locks__row" id="locksRow"><!-- 16 квадратиков строятся в JS --></div>
-                  <p class="micro-plc-note">Закрашен — блокировка <b>отключена</b>. В норме все пусты (все блокировки работают). Наведи на квадратик — название; клик — переключить (запись в плату, с подтверждением).</p>
-                </div>
-                <p class="micro-plc-note">Стоп М1, фильтр датчика и довод — в прошивке платы. Текущий порог Стоп М1 в плате: <b id="sStopSensor">—</b> мкм.</p>
-
-                <div class="micro-sub__title micro-sub__title--sep">Автокалибровка нуля М1 <span class="micro-ro">сама — в Автомате на пропарке; кнопкой — и из Ручного (потом ручной вернётся)</span></div>
-                <label class="micro-check" title="На пропарке раз в N варок (как только автомат свободен): «Поиск 0» → жду, пока мотор сам встанет (ноль ставит прошивка) → отвод → сверяю датчик с энкодером и расчётной (±100 мкм). Не сошлось — «Поиск 0» ещё раз (до 3 раз). Всё равно не сошлось — красная мигающая плашка с причиной. Журнал — autocal.log.">
-                  <input type="checkbox" id="autocalToggle" />
-                  <span class="micro-check__text">Автокалибровка на пропарке <span class="micro-ro">(раз в N варок)</span></span>
-                </label>
-                <div class="micro-lock__fields">
-                  <label><span>Через N варок</span><input type="number" id="acEveryN" step="1" min="1" value="3" /></label>
-                  <label title="Сколько ждать, пока мотор встанет после команды (меньше 15 с не бывает)"><span>Таймаут хода, с</span><input type="number" id="acTimeout" step="1" min="15" value="30" /></label>
-                </div>
-                <div class="micro-svsp-actions">
-                  <button type="button" id="acStart" class="toolbar-btn toolbar-btn--neutral">Калибровать сейчас</button>
-                  <button type="button" id="acReset" class="toolbar-btn toolbar-btn--neutral">Сброс счётчика</button>
-                  <span class="micro-conn-hint" id="acHint"></span>
-                </div>
-                <p class="micro-plc-note">Варок <b id="acCount">—</b>/<b id="acEveryNShow">—</b> · статус: <b id="acStatus">—</b> · последняя: <b id="acLast">—</b></p>
-                <p class="micro-ac-fail" id="acFail" hidden><span class="micro-ac-fail__txt">⚠ Автокалибровка не удалась — работаем дальше</span> <button type="button" class="micro-ac-fail__clear" data-ac-clear title="Убрать плашку (итог и журнал остаются)">сбросить</button></p>
               </div>
 
               <!-- Мнемосхема вакуум-аппарата (данные с ПЛК) -->

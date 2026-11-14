@@ -102,8 +102,16 @@ function tileFrameGeom(index) {
   if (!nat) return null;
   const w = screen.clientWidth, h = screen.clientHeight;
   const nw = nat[0], nh = nat[1];
-  const k = Math.min(w / nw, h / nh);
-  return { w, h, nw, nh, k, ox: (w - nw * k) / 2, oy: (h - nh * k) / 2 };
+  let k = Math.min(w / nw, h / nh);
+  let ox = (w - nw * k) / 2, oy = (h - nh * k) / 2;
+  // цифровой зум камеры (rtsp_worker._apply_digital_zoom) отдаёт в ячейку кроп 1/zf кадра, а КЗ считает по полному кадру:
+  // разметку приводим к тому же кропу — масштаб ×zf и сдвиг на левый верхний угол окна (pan 0..1 → [0 .. 1 − 1/zf])
+  const zf = Number(tile.zoomFactor) || 1;
+  if (zf > 1) {
+    const x0 = (1 - 1 / zf) * (tile.zoomPanX ?? 0.5), y0 = (1 - 1 / zf) * (tile.zoomPanY ?? 0.5);
+    ox -= x0 * zf * nw * k; oy -= y0 * zf * nh * k; k *= zf;
+  }
+  return { w, h, nw, nh, k, ox, oy };
 }
 
 // точки зоны хранятся в пикселях кадра, на котором размечали (frame_size), поэтому приводим к кадру ячейки

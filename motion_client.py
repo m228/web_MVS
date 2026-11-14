@@ -72,6 +72,15 @@ def mirror_table(service_url: str, cam: str, group: str) -> dict:
     return _call(service_url, "/cameras/%s/mirror_table" % urllib.parse.quote(cam, safe=""), {"group": str(group)}, timeout=10.0)
 
 
+def shafts_history(service_url: str, pair: str, window: float = 3600.0, points: int = 600) -> dict:
+    return _call(service_url, "/shafts/history?pair=%s&window=%s&points=%d" % (urllib.parse.quote(pair, safe=""), float(window), int(points)))
+
+
+def shafts_calibrate(service_url: str, pair: str) -> dict:
+    """Эталон разности углов пары валов = текущее положение (валы должны стоять «в ноль»)."""
+    return _call(service_url, "/shafts/calibrate", {"pair": str(pair)}, timeout=10.0)
+
+
 def record(service_url: str, cam: str, on: bool) -> dict:
     return _call(service_url, "/cameras/%s/record" % urllib.parse.quote(cam, safe=""), {"on": bool(on)})
 

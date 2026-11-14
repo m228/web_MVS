@@ -183,6 +183,19 @@ function drawMotionTile(index) {
     ctx.fillStyle = bad ? '#9ca3af' : lg.alarm ? '#f87171' : '#4ade80'; ctx.fillText(txt, g.w / 2, 26 + k * 24);
     ctx.textAlign = 'left'; ctx.font = 'bold 13px sans-serif'; ctx.lineWidth = 2;
   });
+  // разности валов в ряду и между рядами (вкладка «Валы»): строка на пару, в которой есть вал этой камеры; красная — тревога
+  const prs = typeof shPairsOfCamera === 'function' ? shPairsOfCamera(cam.id) : [];
+  if (prs.length) {
+    const mirrors = ((st && st.groups) || []).filter((lg) => lg.type === 'mirror').length;
+    ctx.font = 'bold 13px sans-serif'; ctx.textAlign = 'center';
+    prs.forEach((p, k) => {
+      const txt = p.short + (p.valid ? '   Δ ' + shSgn(p.angle_diff, 1) + '°   Δv ' + shSgn(p.rpm_diff, 2) : '   —');
+      const y = 26 + mirrors * 24 + 16 + k * 17;
+      ctx.lineWidth = 3; ctx.strokeStyle = '#000'; ctx.strokeText(txt, g.w / 2, y);
+      ctx.fillStyle = !p.valid || problem ? '#9ca3af' : (p.alarm_angle || p.alarm_rpm) ? '#f87171' : '#e5e7eb'; ctx.fillText(txt, g.w / 2, y);
+    });
+    ctx.textAlign = 'left'; ctx.lineWidth = 2;
+  }
   drawLevelOnTile(ctx, cam, g, st, problem);
 }
 
@@ -278,7 +291,9 @@ function drawCycleOnTile(ctx, z, cam, g, lz, mode) {
   ctx.setLineDash([]);
   // подпись под окружностью: вал со значком направления, ниже значения красного и синего концов (0–360° от вертикали по часовой)
   const x = cx - r * 0.55, y = cy + r + 16;
-  [[z.name + '  ' + mvDirIcon(lz.rpm) + (lz.coast ? '  ~' : ''), '#fff'], ['красный ' + Number(lz.angle).toFixed(1) + '°', MV_ROD_RED], ['синий ' + mvBlueAngle(lz.angle).toFixed(1) + '°', MV_ROD_BLUE]].forEach(([txt, col], i) => {
+  const sh = typeof shShaftOf === 'function' ? shShaftOf(cam.id, z.id) : null;          // вал назначен рядом камеры: НЛВ… и скорость
+  const rpmTxt = sh && lz.valid ? '  ' + Math.abs(lz.rpm).toFixed(1) + ' об/мин' : '';
+  [[(sh ? sh.short : z.name) + '  ' + mvDirIcon(lz.rpm) + rpmTxt + (lz.coast ? '  ~' : ''), '#fff'], ['красный ' + Number(lz.angle).toFixed(1) + '°', MV_ROD_RED], ['синий ' + mvBlueAngle(lz.angle).toFixed(1) + '°', MV_ROD_BLUE]].forEach(([txt, col], i) => {
     ctx.lineWidth = 3; ctx.strokeStyle = '#000'; ctx.strokeText(txt, x, y + i * 17);
     ctx.fillStyle = col; ctx.fillText(txt, x, y + i * 17);
   });
@@ -404,6 +419,7 @@ function startMotionPolling() {
         const st = await mvApi('/api/motion/state');
         if (st && st.cameras) st.cameras.forEach((c) => { MV.states[c.id] = c; });
         if (st && st.scenarios) MV.scen = st.scenarios;
+        if (st && st.shafts) MV.shafts = st.shafts;       // скорости и разности валов (вкладка «Валы», подписи на плитке)
         if (typeof paintMotionDockLive === 'function') paintMotionDockLive();
       }
       drawAllMotionTiles();

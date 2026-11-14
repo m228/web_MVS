@@ -51,6 +51,9 @@ FILL_RING_MARGIN = 1.0                 # «металл вокруг окна» 
 FILL_RING_GAP = 0.25                   # рамка окна (доля высоты), которая в металл не входит
 GROUP_OUT_KINDS = ("holding", "bits", "coils")
 AGGS = ("any", "majority", "all")
+CAMERA_ROWS = ("", "lower", "upper")           # ряд валов камеры: не задан / нижний (Н) / верхний (В) — для разностей валов (motion_shafts.py)
+SHAFT_IDS = ("nl", "np", "vl", "vp")           # НЛВ, НПВ, ВЛВ, ВПВ
+PAIR_IDS = ("nlr", "vlr", "lnv", "rnv")        # НЛВ–НПВ, ВЛВ–ВПВ, НЛВ–ВЛВ, НПВ–ВПВ
 
 # Пороги по умолчанию зависят от метрики: поток — безразмерный (0.3..2), diff — градации серого (после размытия).
 THRESH_DEFAULT = {"flow": (0.9, 0.6), "diff": (4.0, 2.0)}
@@ -59,7 +62,7 @@ DEFAULT_MODBUS = {"enable": False, "host": "192.168.1.20", "port": 502, "device_
 
 
 def default_config() -> dict:
-    return {"version": 1, "modbus": dict(DEFAULT_MODBUS), "cameras": [], "scenarios": []}
+    return {"version": 1, "modbus": dict(DEFAULT_MODBUS), "cameras": [], "scenarios": [], "shafts": normalize_shafts(None)}
 
 
 # ───────────────────────────── конфиг: проверка и значения по умолчанию ─────────────────────────────
@@ -340,6 +343,23 @@ def _norm_scenario(sc: dict, cams: list) -> dict:
             "modbus": normalize_modbus(mb, base=None) if mb else None}
 
 
+def normalize_shafts(raw: Optional[dict]) -> dict:
+    """Блок «валы»: куда писать скорость каждого вала и что считать/писать по четырём парам (motion_shafts.py). Всегда полный:
+    все 4 вала и 4 пары, пустое — по умолчанию (допуски 0 = тревога выключена, адреса нет = в ПЛК не пишем)."""
+    raw = raw if isinstance(raw, dict) else {}
+    rs, rp = raw.get("shafts") or {}, raw.get("pairs") or {}
+    shafts = {sid: {"out_rpm": _out((rs.get(sid) or {}).get("out_rpm"), ("holding",), "вал %s.out_rpm" % sid)} for sid in SHAFT_IDS}
+    pairs = {}
+    for pid in PAIR_IDS:
+        p, where = rp.get(pid) or {}, "пара %s" % pid
+        pairs[pid] = {"ref": _num(p.get("ref", 0), where + ".ref", -180, 180),
+                      "tol_angle": _num(p.get("tol_angle", 0), where + ".tol_angle", 0, 180),
+                      "tol_rpm": _num(p.get("tol_rpm", 0), where + ".tol_rpm", 0, 10000),
+                      "out_angle": _out(p.get("out_angle"), ("holding",), where + ".out_angle"),
+                      "out_rpm": _out(p.get("out_rpm"), ("holding",), where + ".out_rpm")}
+    return {"shafts": shafts, "pairs": pairs}
+
+
 WEBVIEW_DEFAULT = {"enabled": False, "host": "0.0.0.0", "port": 5000, "update_sec": 5.0, "jpeg_quality": 85, "annotate": False,
                    "crop_x1": 0, "crop_y1": 0, "crop_x2": 0, "crop_y2": 0, "output_w": 0, "output_h": 0}
 
@@ -394,6 +414,9 @@ def normalize_camera(c: dict) -> dict:
     if mb:
         mb = normalize_modbus(mb, base=None)
     wv = _norm_webview(c["webview"], cid) if c.get("webview") else None
+    row = str(c.get("row") or "").lower()
+    if row not in CAMERA_ROWS:
+        raise ValueError("камера %s: ряд валов — одно из %s" % (cid, ", ".join(r or "(не задан)" for r in CAMERA_ROWS)))
     return {
         "id": cid,
         "name": str(c.get("name") or cid),
@@ -402,6 +425,7 @@ def normalize_camera(c: dict) -> dict:
         "transport": transport,
         "hw_accel": hw,
         "substream": bool(c.get("substream", False)),
+        "row": row,
         "proc_fps": _num(c.get("proc_fps", 3), "камера %s.proc_fps" % cid, 0.2, 30),
         "frame_gap": _num(c.get("frame_gap", 1), "камера %s.frame_gap" % cid, 1, 10, True),
         "reconnect_delay_s": _num(c.get("reconnect_delay_s", 3.0), "камера %s.reconnect_delay_s" % cid, 0.5, 300),
@@ -446,7 +470,8 @@ def normalize_config(cfg: dict) -> dict:
     sids = [s["id"] for s in scs]
     if len(set(sids)) != len(sids):
         raise ValueError("id сценариев повторяются")
-    return {"version": 1, "modbus": normalize_modbus(cfg.get("modbus")), "cameras": cams, "scenarios": scs}
+    return {"version": 1, "modbus": normalize_modbus(cfg.get("modbus")), "cameras": cams, "scenarios": scs,
+            "shafts": normalize_shafts(cfg.get("shafts"))}
 
 
 # ───────────────────────────── метрики зоны ─────────────────────────────

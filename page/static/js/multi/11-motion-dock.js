@@ -186,7 +186,7 @@ function renderMotionDock() {
   if (dock.hidden) return;
   const { source, cam } = mdCamera();
   const all = mode === 'all';
-  if (MD.tab !== 'zones' && MD.tab !== 'plc' && MD.tab !== 'cams' && MD.tab !== 'level') MD.tab = 'zones';
+  if (MD.tab !== 'zones' && MD.tab !== 'plc' && MD.tab !== 'cams' && MD.tab !== 'level' && MD.tab !== 'shafts') MD.tab = 'zones';
 
   const cams = mdCfgCams();
   const camKey = all
@@ -229,6 +229,9 @@ function renderMotionDock() {
     if (MD.editGrp) mdSyncGroupEditor();
   } else if (MD.tab === 'cams') {
     body.innerHTML = mdCamsTabHtml();
+  } else if (MD.tab === 'shafts') {
+    body.innerHTML = mdShaftsTabHtml();
+    mdShaftsHist(true);
   } else if (MD.tab === 'level') {
     body.innerHTML = mdLevelTabHtml(mode, cam);
     lvPaintModel();
@@ -448,6 +451,7 @@ function mdCameraParamsHtml(cam) {
       ${mdField('Адрес потока', `<input type="text" ${a} data-f="url" value="${escapeHtml(cam.url)}" />`, '', 'md-wide')}
       ${mdField('Поток', `<select ${a} data-f="substream">${mdSel([['0', 'основной'], ['1', 'дополнительный (легче)']], cam.substream ? '1' : '0')}</select>`, 'Дополнительный поток камеры Dahua (subtype=1): картинка меньше, процессор нагружается заметно слабее. Пороги после смены снимите заново — значения diff и flow зависят от разрешения')}
       ${mdField('Декодирование', `<select ${a} data-f="hw_accel">${mdSel([['off', 'процессор'], ['auto', 'видеоядро (авто)'], ['d3d11', 'видеоядро (Direct3D 11)']], cam.hw_accel || 'auto')}</select>`, 'Видеоядро процессора (Intel UHD и т.п.) декодирует видео вместо процессора. Не открылось или не дало кадров — сервис сам вернётся на процессор')}
+      ${mdField('Ряд валов', `<select ${a} data-f="row">${mdSel([['', 'не задан'], ['lower', 'нижний (Н)'], ['upper', 'верхний (В)']], cam.row || '')}</select>`, 'Какой ряд валов видит камера: нижний (Н) или верхний (В). Нужен для разностей между валами разных камер — вкладка «Валы»')}
       <div class="md-sub">Анализ движения</div>
       ${mdField('Кадров/с в анализ', mdNum(a + ' data-f="proc_fps"', cam.proc_fps, 'min="0.2" max="30" step="0.5"'))}
       ${mdField('Шаг сравнения, кадров', mdNum(a + ' data-f="frame_gap"', cam.frame_gap, 'min="1" max="10"'), 'Сравнивать кадр не с соседним, а через N кадров: медленное движение виднее')}
@@ -627,8 +631,9 @@ function mdOnCamera(t, cam) {
     else if (f === 'frame_gap') cam[f] = parseInt(t.value, 10) || 1;
     else if (f === 'hw_accel') cam[f] = t.value;
     else if (f === 'substream') cam[f] = t.value === '1';
+    else if (f === 'row') cam.row = t.value;
     else cam[f] = parseFloat(t.value) || 0;
-  }, f === 'skind');
+  }, f === 'skind' || f === 'row');
 }
 
 // ---------- тренды ----------
@@ -1165,6 +1170,7 @@ function paintMotionDockLive() {
   if (!MV.dockOpen) return;
   const mode = mdMode();
   if (mode === 'none') return;
+  if (MD.tab === 'shafts' && typeof mdPaintShafts === 'function') mdPaintShafts();
   const { source, cam } = mdCamera();
   const pe = mdEl('mdPill');
   if (pe) {
@@ -1705,6 +1711,7 @@ function initMotionDock() {
     else if (kind === 's') mdOnScenario(t);
     else if (kind === 'cm') mdOnCamRow(t);
     else if (kind === 'lv') mdOnLevel(t);
+    else if (kind === 'sh') mdOnShafts(t);
     else if (kind === 'cs') mdSetEnabled(t.dataset.serial, t.checked, () => { t.checked = !t.checked; });
   };
   body?.addEventListener('change', (e) => { if (e.target.tagName !== 'BUTTON') dispatch(e); });

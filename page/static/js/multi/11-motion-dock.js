@@ -6,7 +6,7 @@ const MD_WIN_MIN = 30;
 const MD_WIN_MAX = 7200;
 // статистика зон (ср / мин / макс за окно): считает сервис движения, окно до суток
 const MD_STAT_KEY = 'mvStatWin';
-const MD_VIS_WINS = [[3600, '1 ч'], [10800, '3 ч'], [28800, '8 ч'], [86400, '24 ч'], [259200, '3 сут'], [604800, '7 сут']];
+const MD_VIS_WINS = [[7200, '2 ч'], [86400, '24 ч']];
 const MD_VIS_KEY = 'mdVisWin';
 const MD_VIS_COLORS = ['#6c7bff', '#f59e0b', '#34d399', '#f472b6'];     // левая — синяя, правая — оранжевая
 function mdLoadVisWin() {

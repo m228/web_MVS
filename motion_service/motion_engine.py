@@ -37,6 +37,8 @@ ZONE_TYPES = ("motion", "presence", "cycle", "level")
 METRICS = ("flow", "diff")
 GROUP_TYPES = ("sum", "monotonic", "worktimer", "mirror", "level")
 MIRROR_MODES = ("mirror", "same")
+BAN_DEG = 15.0           # полуширина запрета вокруг ложной неподвижной цели палки, градусы
+MAX_BANS = 3             # сколько ложных целей помним на палку
 CYCLE_WORK_R = 170       # радиус (px), до которого сжимается область вокруг оси палки перед поиском: быстро и не зависит от разрешения камеры
 CYCLE_RED_HSV = (16, 165, 50, 55)     # красный: H ≤ h_max или H ≥ h_min (круг оттенков), S ≥ s_min, V ≥ v_min; мягче прежнего: красный конец в сумерках бледнеет и желтеет
 CYCLE_RED_HSV_OLD = (12, 163, 70, 80)  # прежний умолчательный красный: зоны, сохранённые с ним нетронутыми, переходят на новый (свои значения не трогаем)
@@ -729,6 +731,7 @@ class CycleRT:
         self.ker = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (zcfg["thin"], zcfg["thin"])) if zcfg["thin"] >= 3 else None
         self.raw: deque = deque(maxlen=zcfg["smooth"])
         self.trk: deque = deque()               # (время, «развёрнутый» угол без скачков через 360°) за последние rpm_window секунд — для оборотов
+        self.bans: list = []                    # углы ложных неподвижных целей: при поиске по всему кругу вокруг них не смотрим (reset их не трогает)
         self.reset()
 
     def reset(self):
@@ -817,6 +820,10 @@ class CycleRT:
             sr, sb = red[self.ys, self.xs].mean(axis=1), blue[self.ys, self.xs].mean(axis=1)
             comb = sr + c["blue_w"] * np.roll(sb, -180)                    # красный на φ, синий на φ+180
             cand = comb
+            if not locked and self.bans:                                   # ложная неподвижная цель (рамка, лист): при поиске по кругу её как будто нет
+                for b in self.bans:                                        # (и в уверенности тоже: иначе она «вторая по силе» и режет conf настоящей палки)
+                    comb = np.where(np.abs(((PHIS - b + 180.0) % 360.0) - 180.0) <= BAN_DEG, 0.0, comb)
+                cand = comb
             if locked:
                 hw = min(90.0, c["jump_deg"] + max(0.0, dt - 2.0))         # при пропаже окно поиска понемногу растёт: 1°/с
                 near = np.abs(((PHIS - self._expected(now) + 180.0) % 360.0) - 180.0) <= hw
@@ -1073,6 +1080,13 @@ class CameraEngine:
             if not a or not b:
                 continue
             for x, y in ((a, b), (b, a)):
+                if x.moving is True:
+                    x.bans.clear()                                           # снова крутится — прежние запреты не нужны
+                elif x.valid and not x.coast and x.moving is False and y.valid and not y.coast and y.moving is True:
+                    # «нашлась», но стоит, пока парная крутится: это ложная цель — запоминаем угол и ищем палку заново
+                    x.bans = (x.bans + [x.angle])[-MAX_BANS:]
+                    x.reset()
+                    continue
                 if x.coast and y.valid and not y.coast and y.moving is not None:
                     x.moving = y.moving
                     x.hint_stop = y.moving is False

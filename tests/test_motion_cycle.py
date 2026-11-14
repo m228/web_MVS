@@ -671,3 +671,27 @@ def test_learned_shape_survives_restart_and_is_dropped_with_another_table(tmp_pa
     assert me.CameraEngine(other, path).learners["sync"].fresh                  # таблицу сменили — старая форма не подходит
     path.write_text("мусор", encoding="utf-8")
     assert me.CameraEngine(cfg, path).learners["sync"].fresh                    # битый файл не роняет сервис
+
+
+def test_static_decoy_is_banned_while_partner_spins_and_real_rod_is_found():
+    """Неподвижная «палка» (рамка, лист) на 198°: пока парная крутится, левая не должна на ней залипать — запрещаем этот угол и ищем настоящую."""
+    eng = me.CameraEngine(cam_cfg())
+    fps, t, a = 4.0, 0.0, 40.0
+    st = None
+    for seconds, real_visible in ((45, False), (45, True)):
+        for _ in range(int(seconds * fps)):
+            frames = {(700, 270): (360 - a) % 360}
+            if real_visible:
+                frames[(250, 270)] = a % 360
+            img = rod_frame(frames)
+            r = math.radians(198)
+            dx, dy = math.sin(r), -math.cos(r)
+            cv2.line(img, (250, 270), (int(250 + 150 * dx), int(270 + 150 * dy)), RED, 3)
+            cv2.line(img, (250, 270), (int(250 - 150 * dx), int(270 - 150 * dy)), BLUE, 3)
+            st = eng.process(cv2.cvtColor(img, cv2.COLOR_BGR2GRAY), t, img) or st
+            t += 1.0 / fps
+            a += 4.7 / fps
+    left, right = zone(st, "L"), zone(st, "R")
+    assert left["moving"] is True
+    d = (left["angle"] + right["angle"] - 360 + 180) % 360 - 180
+    assert abs(d) < 8

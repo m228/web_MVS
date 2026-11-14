@@ -1483,6 +1483,8 @@ def motion_vision(req: dict = Body(...)):
     cam["enabled"] = enabled
     if enabled and url:
         cam["url"] = url
+        if req.get("name"):
+            cam["name"] = str(req["name"])
     r = motion_client.put_config(service, cfg)
     if "error" not in r:
         log_event("motion", "CV (мультипросмотр): камера %s — анализ движения %s" % (serial, "включён" if enabled else "выключен"), "info")

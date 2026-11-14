@@ -40,7 +40,23 @@ async function mvRefreshConfig() {
   MV.online = !!(h && h.online);
   if (!MV.online) return;
   const cfg = await mvApi('/api/motion/config');
-  if (cfg && !cfg.error && !MV.dirty) MV.cfg = cfg;
+  if (cfg && !cfg.error && !MV.dirty) { MV.cfg = cfg; mvSyncUrls(cfg); }
+}
+
+// адрес потока камеры в сервисе КЗ берём из базы камер: он пишется только при включении КЗ и со временем расходится
+// (камеру пересохранили, серийники менялись) — тогда кадр и разметка относятся к чужой камере. Расхождение лечим сразу.
+const mvUrlFixed = new Set();
+function mvSyncUrls(cfg) {
+  (cfg.cameras || []).forEach((c) => {
+    const src = c.enabled && typeof getSource === 'function' ? getSource(c.id) : null;
+    const url = src && src.kind === 'rtsp' && src.connection && src.connection.url;
+    const key = c.id + '|' + url;
+    if (!url || url === c.url || mvUrlFixed.has(key)) return;
+    mvUrlFixed.add(key);
+    mvJson('/api/motion/vision', { serial: c.id, enabled: true, name: src.label || c.id, url }).then((r) => {
+      if (r && !r.error) { MV.cfg = r; log.warn('КЗ: адрес потока камеры исправлен по базе камер', { serial: c.id }); }
+    });
+  });
 }
 
 // состояние камеры для рисования: 'on' | 'off' | 'dead' (нет связи, фриз, битый поток)

@@ -482,6 +482,10 @@
       <div class="network-modal__body">
         <div class="motion-mark__stage" id="mmStage"><img id="mmImg" alt="Кадр камеры" /><canvas id="mmCanvas"></canvas></div>
         <p class="net-hint" id="mmHint">Кликайте по углам зоны. ПКМ — убрать точку. «Замкнуть» или Enter — готово (минимум 3 точки).</p>
+        <label class="net-hint" id="mmRodBox" hidden style="display:flex;align-items:center;gap:10px">Радиус окружности
+          <input type="range" id="mmRodR" min="3" max="30" step="1" value="17" style="flex:1" />
+          <span id="mmRodRv">17 %</span>
+        </label>
         <div class="motion-mark__form" id="mmForm" hidden>
           <label>Название <input type="text" id="mmName" placeholder="Лента 1" /></label>
           <label>Тип <select id="mmType"><option value="motion">motion — движется (датчик вращения)</option><option value="presence">presence — жом идёт (низкий поток)</option></select></label>

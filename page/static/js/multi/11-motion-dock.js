@@ -1473,7 +1473,8 @@ async function mdLoadMarkFrame() {
   m.busy = true;
   try {
     const r = await fetch('/api/motion/snapshot?camera=' + encodeURIComponent(m.cam) + '&w=1280&t=' + Date.now());
-    if (!r.ok) { mdEl('mmHint').textContent = 'Кадра ещё нет — камера не подключилась. Подождите или проверьте адрес потока.'; return; }
+    if (!r.ok) { m.noFrame = true; mdEl('mmHint').textContent = 'Кадра ещё нет — камера не подключилась. Подождите или проверьте адрес потока.'; return; }
+    if (m.noFrame) { m.noFrame = false; mdEl('mmHint').textContent = m.hint; }      // кадр пришёл — убрать устаревшее «кадра нет»
     m.fw = Number(r.headers.get('X-Frame-W')) || m.fw;
     m.fh = Number(r.headers.get('X-Frame-H')) || m.fh;
     const blob = await r.blob();
@@ -1498,10 +1499,14 @@ function openMarkModal(kind) {
   mdEl('mmOk').hidden = true;
   mdEl('mmClose').hidden = rods;
   mdEl('mmHint').textContent = rods
-    ? 'Кликните по оси левого вала (красная точка в центре палки), затем по оси правого. ПКМ — убрать точку. Enter — готово. Радиус и точное положение осей потом правятся в карточке.'
+    ? 'Кликните по оси левого вала (красная точка в центре палки), затем по оси правого. ПКМ — убрать точку. Радиус окружности — ползунком ниже (она должна доставать до концов палки). Enter — готово.'
     : glass
       ? 'Обведите НИЖНЕЕ (рабочее) стекло: клики по углам внутри стекла. ПКМ — убрать точку. Enter — замкнуть (минимум 3 точки). Потом обведите верхнее; если стекло одно — «Готово».'
       : 'Кликайте по углам зоны. ПКМ — убрать точку. «Замкнуть» или Enter — готово (минимум 3 точки). Кадр замирает после первой точки.';
+  MD.mark.hint = mdEl('mmHint').textContent;
+  MD.mark.rodPct = 17;
+  mdEl('mmRodR').value = 17; mdEl('mmRodRv').textContent = '17 %';
+  mdEl('mmRodBox').hidden = !rods;
   const modal = mdEl('motionMarkModal');
   modal.classList.add('show');
   modal.setAttribute('aria-hidden', 'false');
@@ -1539,7 +1544,7 @@ function mdMarkUi() {
 }
 
 // радиус поиска палки по умолчанию, пикселей кадра разметки: 17 % ширины (на 1920 — 326; достаёт до концов палки у ступицы)
-const mdRodRadius = (fs) => Math.round(fs[0] * 0.17);
+const mdRodRadius = (fs, pct) => Math.round(fs[0] * (pct || 17) / 100);
 
 function mdDrawMark() {
   const m = MD.mark, img = mdEl('mmImg'), cv = mdEl('mmCanvas');
@@ -1568,7 +1573,7 @@ function mdDrawMark() {
     g.strokeStyle = '#38bdf8'; g.fillStyle = '#38bdf8';
     m.pts.forEach((p) => {
       g.beginPath(); g.arc(p[0] * sx, p[1] * sy, 4, 0, 7); g.fill();
-      g.beginPath(); g.arc(p[0] * sx, p[1] * sy, mdRodRadius(rs) * (fw / rs[0]) * sx, 0, 7); g.stroke();
+      g.beginPath(); g.arc(p[0] * sx, p[1] * sy, mdRodRadius(rs, m.rodPct) * (fw / rs[0]) * sx, 0, 7); g.stroke();
     });
     return;
   }
@@ -1635,7 +1640,7 @@ function mdMarkSaveRods(m, cam, fw, fh) {
     const ids = [free('rod'), null];
     const mk = (id, name, p) => ({ id, name, enabled: true, type: 'cycle', metric: 'flow', points: [], on: 0, off: 0, invert: false, track_flow: false, smooth: 3,
       frames_to_on: 1, frames_to_off: 1, blur: 0, flicker_comp: false, out: null,
-      center: [Math.round(p[0] * fs[0] / fw), Math.round(p[1] * fs[1] / fh)], radius: mdRodRadius(fs) });
+      center: [Math.round(p[0] * fs[0] / fw), Math.round(p[1] * fs[1] / fh)], radius: mdRodRadius(fs, m.rodPct) });
     cam.zones.push(mk(ids[0], 'Вал левый', pts[0]));
     ids[1] = free('rod');
     cam.zones.push(mk(ids[1], 'Вал правый', pts[1]));
@@ -1762,6 +1767,12 @@ function initMotionDock() {
   cv?.addEventListener('contextmenu', (e) => { e.preventDefault(); mdMarkUndo(); });
   mdEl('mmImg')?.addEventListener('load', mdDrawMark);
   mdEl('mmUndo')?.addEventListener('click', mdMarkUndo);
+  mdEl('mmRodR')?.addEventListener('input', (e) => {
+    if (!MD.mark) return;
+    MD.mark.rodPct = Number(e.target.value) || 17;
+    mdEl('mmRodRv').textContent = MD.mark.rodPct + ' %';
+    mdDrawMark();
+  });
   mdEl('mmCancel')?.addEventListener('click', closeMarkModal);
   mdEl('mmX')?.addEventListener('click', closeMarkModal);
   mdEl('mmClose')?.addEventListener('click', mdMarkClose);

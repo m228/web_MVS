@@ -69,6 +69,7 @@ RECENT_MAX = 50
 POS_KEEP = 200              # записей положений датчиков в outbox: поток проб не должен вытеснить важные события при долгом обрыве
 POS_MEM = 20                # последних записей положений держим в памяти для правил
 POS_STALE_S = 6 * 3600      # плохая проба старше — уже не повод держать тревогу
+M1_EVENT_HOLD_S = 30 * 60   # «чёрный ящик» М1 поймал уход головы: тревога держится 30 мин, потом снимается сама
 STEP_KEYS = {"отвод": "retract", "подвод": "approach"}
 PUSH_CODES = ("pos_", "autocal_drift")     # жёлтые (не срочные) предупреждения, которые всё равно уходят сразу
 URGENT = ("critical", "high")
@@ -547,6 +548,7 @@ class Agent:
         self._plate_up: Optional[float] = None
         self._plate_up_exact = False                   # _plate_up посчитан с кругами (иначе — голый 16-битный регистр)
         self.positions: deque = deque(maxlen=POS_MEM)  # положения датчиков на отводе/подводе (с оценкой), старые — слева
+        self._m1_event: Optional[dict] = None          # последнее событие «чёрного ящика» М1 (t, reason)
         self._ac_seen_ts: Optional[float] = None       # какую по счёту автокалибровку уже учли в истории дрейфа нуля
         self._ac_drift: deque = deque(maxlen=5)        # (ноль уползал больше допуска?, на сколько мкм) по последним калибровкам
         self.recent: deque = deque(maxlen=RECENT_MAX)
@@ -668,6 +670,11 @@ class Agent:
                 self._kick.set()
         return ev
 
+    def add_m1_event(self, reason: str) -> None:
+        """Событие «чёрного ящика» М1 (m1_blackbox.py): запомнить; тревога откроется на ближайшей проверке правил."""
+        self._m1_event = {"t": self.clock(), "reason": str(reason)[:160]}
+        self._kick.set()
+
     def add_positions(self, info: dict) -> None:
         """Положения трёх датчиков на доезде отвода/подвода (колбэк автомата): оценить, запомнить для правил и положить в очередь —
         уйдёт с ближайшим пульсом. Срочно не отправляем: срочное — это тревога по плохой пробе (см. _position_rules)."""
@@ -760,6 +767,10 @@ class Agent:
                     found["camera_exposure"] = ("high", "Камера: " + ", ".join(parts))
             else:
                 keep.add("camera_exposure")           # камера не открыта — не знаем, остаётся как было
+
+        m1 = self._m1_event
+        if m1 and now - m1["t"] < M1_EVENT_HOLD_S:    # голова М1 ушла не туда — регистры вокруг момента лежат в m1_blackbox.log
+            found["m1_blackbox"] = ("high", "Голова М1: %s (регистры — m1_blackbox.log на заводе)" % m1["reason"])
 
         for name, st in (d.get("services") or {}).items():
             if st in ("gave_up", "spawn_error") and name in SERVICE_LABELS:
@@ -1227,6 +1238,13 @@ def start_reason() -> Optional[str]:
     """Почему стартовало это приложение (pc_reboot / app_restart / app_update / first) — по записи, которую агент сделал при старте."""
     ag = _agent
     return (ag.start_info or {}).get("reason") if ag is not None and ag.start_info else None
+
+
+def record_m1_event(reason: str) -> None:
+    """Событие чёрного ящика М1 -> тревога в мониторинге. Агент не запущен — молча ничего."""
+    ag = _agent
+    if ag is not None:
+        ag.add_m1_event(reason)
 
 
 def record_positions(info: dict) -> None:

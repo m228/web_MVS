@@ -34,8 +34,9 @@ def _s16(v):
 
 
 class M1BlackBox:
-    def __init__(self, path):
+    def __init__(self, path, on_event=None):
         self._path = path
+        self._on_event = on_event       # on_event(reason) — сообщить наружу (мониторинг); ошибки колбэка глотаем
         self._ring = collections.deque(maxlen=PRE_SAMPLES)
         self._prev = None
         self._post_left = 0
@@ -106,6 +107,11 @@ class M1BlackBox:
         lines = ["== %s\t%s" % (stamp, reason), _HEADER]
         lines.extend(self._fmt(r) for r in self._ring)
         self._append("\n".join(lines) + "\n")
+        if self._on_event is not None:
+            try:
+                self._on_event(reason)
+            except Exception:
+                pass
 
     def _write_rows(self, rows):
         self._append("\n".join(self._fmt(r) for r in rows) + "\n")

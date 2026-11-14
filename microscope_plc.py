@@ -83,7 +83,12 @@ class PlateClient:
         try:
             from paths import DATA_DIR
             from m1_blackbox import M1BlackBox
-            self._blackbox = M1BlackBox(DATA_DIR / "m1_blackbox.log")
+            try:
+                import sysmon
+                on_event = sysmon.record_m1_event
+            except Exception:
+                on_event = None
+            self._blackbox = M1BlackBox(DATA_DIR / "m1_blackbox.log", on_event=on_event)
         except Exception:
             self._blackbox = None
 

@@ -135,6 +135,7 @@ DEFAULTS = {
         "sensor":     {"reg": 1271, "scale": 10, "kind": "um"},   # датчик перемещения
         # --- выходы/LED ---
         "dq":         {"reg": 1250, "scale": 1,  "kind": "bits"},
+        "m1_sp_board_raw": {"reg": 1253, "scale": 1, "kind": "num"},   # цель М1 как её помнит плата (для «чёрного ящика»)
         "di":         {"reg": 150,  "scale": 1,  "kind": "bits"}, # дискретные входы (нативный)
         "led_bright": {"reg": 1257, "scale": 1,  "kind": "num"},
         "led_freq":   {"reg": 1202, "scale": 1,  "kind": "num"},

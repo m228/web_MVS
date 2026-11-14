@@ -5006,3 +5006,9 @@ body.micro-rep-doc .micro-cmp-strips { grid-template-columns: repeat(6, 1fr); ga
 .plc-link { font-size: 0.85em; color: var(--accent); align-self: center; text-decoration: none; }
 .plc-link:hover { text-decoration: underline; }
 #teleStripPlc[hidden] { display: none; }
+
+/* вкладка «Валы» панели КЗ: таблица скоростей */
+.md-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.md-table th { text-align: left; font-weight: 500; font-size: 11px; letter-spacing: .05em; text-transform: uppercase; color: var(--muted); padding: 4px 8px; border-bottom: 1px solid var(--border); }
+.md-table td { padding: 6px 8px; border-bottom: 1px solid var(--border); vertical-align: middle; }
+.md-table tr:last-child td { border-bottom: 0; }

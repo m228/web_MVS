@@ -1418,6 +1418,18 @@ def motion_mirror_table(req: dict = Body(...)):
     return motion_client.mirror_table(_motion_url(), str(req.get("camera") or ""), str(req.get("group") or ""))
 
 
+@app.get("/api/motion/shafts_history")
+def motion_shafts_history(pair: str, window: float = 3600.0, points: int = 600):
+    # разности пары валов (угол и скорость) для графика в панели КЗ
+    return motion_client.shafts_history(_motion_url(), pair, window, points)
+
+
+@app.post("/api/motion/shafts_calibrate")
+def motion_shafts_calibrate(req: dict = Body(...)):
+    # эталон разности углов пары валов: «ноль» = текущее положение валов
+    return motion_client.shafts_calibrate(_motion_url(), str(req.get("pair") or ""))
+
+
 @app.post("/api/motion/record")
 def motion_record(req: dict = Body(...)):
     return motion_client.record(_motion_url(), str(req.get("camera") or ""), bool(req.get("on")))

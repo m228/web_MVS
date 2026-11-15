@@ -29,13 +29,14 @@ LEVELS = ("critical", "high", "medium", "info")
 DEFAULT_INTERVAL_S = 300
 OFFLINE_GRACE_S = 120            # запас к двум пропущенным пульсам
 OFFLINE_AFTER_S = 1800           # «нет пульса» не раньше чем через полчаса молчания: пропавший пульс — ещё не беда (закрытое приложение сообщает само)
-EVENT_MAX = 200                  # событий принимаем из одного пульса
+MOTION_KINDS = ("stop", "near", "camera")        # виды эпизодов движения (motion_sync.py на заводе)
+EVENT_MAX = 200                 # событий принимаем из одного пульса
 TEXT_MAX = 300
 RETENTION_DAYS = 90
 SKEW_MAX_S = 7 * 86400           # время события от завода дальше недели от сейчас — часы врут, берём время приёма
 NAME_MAX = 40
 ERROR_KINDS = ("alert", "plate_reboot", "offline", "app_stop")                   # какие события журнала считаются ошибками (фильтр «Тревоги»)
-VIEW_BLOCKS = ["pc", "disk", "services", "camera", "motion", "brew", "autocal", "sensors", "plate"]      # общие для всех заводов, затем микроскопные
+VIEW_BLOCKS = ["pc", "disk", "services", "camera", "motion", "stops", "brew", "autocal", "sensors", "plate"]      # общие для всех заводов, затем микроскопные
 PLANT_SETTINGS = {"offline_after_min": (5, 1440), "offline_repeat_min": (0, 10080)}     # настройки завода и допустимые границы (минуты); повтор 0 — не напоминать
 DEFAULT_HIDDEN = ["plate"]                                          # что скрыто, пока Макс не настроил «Вид» (подробности про плату — по желанию)       # блоки карточки, которые можно скрыть в «Виде» (тревоги скрыть нельзя)
 ALERT_DEDUP_S = 120              # событие тревоги от завода и достроенное из снимка — одно и то же, если время рядом
@@ -100,6 +101,13 @@ class Store:
                 target REAL, calc REAL, enc REAL, ai REAL, gap REAL, ok INTEGER NOT NULL DEFAULT 1, timeout INTEGER NOT NULL DEFAULT 0,
                 why TEXT NOT NULL DEFAULT '', sv REAL, stage INTEGER, UNIQUE (plant_id, eid));
             CREATE INDEX IF NOT EXISTS ix_positions_plant ON positions (plant_id, t);
+            CREATE TABLE IF NOT EXISTS motion_episode (
+                id INTEGER PRIMARY KEY AUTOINCREMENT, plant_id INTEGER NOT NULL, eid TEXT NOT NULL, kind TEXT NOT NULL, cam TEXT NOT NULL,
+                cam_name TEXT NOT NULL DEFAULT '', zone TEXT NOT NULL DEFAULT '', zone_name TEXT NOT NULL DEFAULT '', t0 REAL NOT NULL, t1 REAL NOT NULL,
+                open INTEGER NOT NULL DEFAULT 0, vmin REAL, vmean REAL, on_v REAL, off_v REAL, reason TEXT NOT NULL DEFAULT '', UNIQUE (plant_id, eid));
+            CREATE INDEX IF NOT EXISTS ix_motion_plant ON motion_episode (plant_id, t0);
+            CREATE TABLE IF NOT EXISTS motion_cover (plant_id INTEGER PRIMARY KEY, from_t REAL NOT NULL, to_t REAL NOT NULL, cams TEXT NOT NULL DEFAULT '[]',
+                recv_t REAL NOT NULL);
             CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS outages (start_t REAL NOT NULL, end_t REAL NOT NULL);
             CREATE TABLE IF NOT EXISTS enroll (
@@ -381,6 +389,8 @@ class Store:
             self.db.execute("DELETE FROM events WHERE plant_id=?", (plant_id,))
             self.db.execute("DELETE FROM alerts WHERE plant_id=?", (plant_id,))
             self.db.execute("DELETE FROM positions WHERE plant_id=?", (plant_id,))
+            self.db.execute("DELETE FROM motion_episode WHERE plant_id=?", (plant_id,))
+            self.db.execute("DELETE FROM motion_cover WHERE plant_id=?", (plant_id,))
             self.db.execute("DELETE FROM notify WHERE plant_id=?", (plant_id,))
             self.db.execute("DELETE FROM enroll WHERE plant_id=?", (plant_id,))        # удалённый завод может зарегистрироваться заново
             return self.db.execute("DELETE FROM plants WHERE id=?", (plant_id,)).rowcount > 0
@@ -577,10 +587,43 @@ class Store:
              0 if d.get("ok") is False else 1, 1 if d.get("timeout") else 0, str(d.get("why") or "")[:TEXT_MAX], _num(d.get("sv")),
              int(stage) if isinstance(stage, int) and not isinstance(stage, bool) else None))
 
+    @staticmethod
+    def _motion_t_ok(t: float, now: float) -> bool:
+        """Время эпизода: история за дни — норма (общий _clamp_t подменил бы её на «сейчас»), отбрасываем только будущее и давнее хранения."""
+        return now - RETENTION_DAYS * 86400 <= t <= now + SKEW_MAX_S
+
+    def _insert_motion(self, plant_id: int, eid: str, d: dict, now: float) -> None:
+        """Эпизод движения (остановка ленты / «близко к порогу» / сбой камеры) с завода. Повтор с тем же eid обновляет конец и значения (остановка ещё шла)."""
+        kind = d.get("kind")
+        t0, t1 = _num(d.get("t0")), _num(d.get("t1"))
+        if kind not in MOTION_KINDS or t0 is None or t1 is None or t1 < t0 or not self._motion_t_ok(t0, now) or not self._motion_t_ok(t1, now):
+            return
+        s = lambda k, n=60: str(d.get(k) or "")[:n]
+        self.db.execute(
+            "INSERT INTO motion_episode (plant_id, eid, kind, cam, cam_name, zone, zone_name, t0, t1, open, vmin, vmean, on_v, off_v, reason) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) "
+            "ON CONFLICT (plant_id, eid) DO UPDATE SET t1=excluded.t1, open=excluded.open, vmin=excluded.vmin, vmean=excluded.vmean, reason=excluded.reason",
+            (plant_id, eid[:64], kind, s("cam"), s("cam_name"), s("zone"), s("zone_name"), t0, t1, 1 if d.get("open") else 0,
+             _num(d.get("min")), _num(d.get("mean")), _num(d.get("on")), _num(d.get("off")), s("reason", TEXT_MAX)))
+
+    def _set_motion_cover(self, plant_id: int, d: dict, now: float) -> None:
+        """Завод сообщил, за какой период он просмотрел движение и по каким камерам: «остановок не было» можно говорить только в этих границах."""
+        a, b = _num(d.get("from")), _num(d.get("to"))
+        if a is None or b is None or not self._motion_t_ok(a, now) or not self._motion_t_ok(b, now):
+            return
+        cams = [str(c)[:40] for c in (d.get("cams") or [])[:50]] if isinstance(d.get("cams"), list) else []
+        self.db.execute("INSERT OR REPLACE INTO motion_cover (plant_id, from_t, to_t, cams, recv_t) VALUES (?,?,?,?,?)",
+                        (plant_id, a, b, json.dumps(cams, ensure_ascii=False), now))
+
     def _client_event(self, plant_id: int, e, now: float) -> int:
         if not isinstance(e, dict) or not e.get("eid"):
             return 0
         data = e.get("data") if isinstance(e.get("data"), dict) else {}
+        if e.get("kind") == "motion":                   # не событие журнала: эпизод для блока «Движение»
+            self._insert_motion(plant_id, str(e["eid"]), data, now)
+            return 0
+        if e.get("kind") == "motion_sync":
+            self._set_motion_cover(plant_id, data, now)
+            return 0
         if e.get("kind") == "positions":                # не событие журнала: запись для таблицы и графика проб
             self._insert_position(plant_id, str(e["eid"]), self._clamp_t(e.get("t"), now), data)
             return 0
@@ -717,6 +760,7 @@ class Store:
         with self._lock, self.db:
             cutoff = self.clock() - self.retention_days * 86400
             self.db.execute("DELETE FROM positions WHERE t < ?", (cutoff,))
+            self.db.execute("DELETE FROM motion_episode WHERE t1 < ?", (cutoff,))
             self.db.execute("DELETE FROM notify WHERE t < ? AND status!='pending'", (cutoff,))
             self.db.execute("DELETE FROM enroll WHERE last_t < ?", (self.clock() - ENROLL_KEEP_DAYS * 86400,))      # давно молчащие заявки (в т.ч. непринятые)
             return self.db.execute("DELETE FROM events WHERE t < ?", (cutoff,)).rowcount
@@ -749,6 +793,30 @@ class Store:
         return [{"t": r["t"], "step": r["step"], "target": r["target"], "calc": r["calc"], "enc": r["enc"], "ai": r["ai"], "gap": r["gap"],
                  "ok": bool(r["ok"]), "timeout": bool(r["timeout"]), "why": r["why"], "sv": r["sv"], "stage": r["stage"]} for r in rows]
 
+    def motion(self, plant_id: int, days: float = 5.0, limit: int = 30) -> dict:
+        """Движение завода за days суток: что просмотрено ({from, to, cams, recv_t} — None, если завод ещё не присылал) и эпизоды трёх видов,
+        новые первыми (по limit каждого), плюс общие числа и «сколько стояла лента»."""
+        now = self.clock()
+        t_from = now - max(0.1, min(float(days), 90.0)) * 86400
+        limit = max(1, min(int(limit), 200))
+        with self._lock:
+            c = self.db.execute("SELECT * FROM motion_cover WHERE plant_id=?", (plant_id,)).fetchone()
+            out = {"days": days, "cover": None, "stop": [], "near": [], "camera": [], "count": {}, "stop_s": 0.0}
+            if c is not None:
+                out["cover"] = {"from": c["from_t"], "to": c["to_t"], "recv_t": c["recv_t"], "cams": json.loads(c["cams"] or "[]")}
+            for kind in MOTION_KINDS:
+                rows = self.db.execute("SELECT * FROM motion_episode WHERE plant_id=? AND kind=? AND t1>=? ORDER BY t0 DESC LIMIT ?",
+                                       (plant_id, kind, t_from, limit)).fetchall()
+                out[kind] = [{"cam": r["cam"], "cam_name": r["cam_name"], "zone": r["zone"], "zone_name": r["zone_name"], "t0": r["t0"], "t1": r["t1"],
+                              "dur_s": r["t1"] - r["t0"], "open": bool(r["open"]), "min": r["vmin"], "mean": r["vmean"], "on": r["on_v"], "off": r["off_v"],
+                              "reason": r["reason"]} for r in rows]
+                tot = self.db.execute("SELECT COUNT(*) n, COALESCE(SUM(t1-t0),0) s FROM motion_episode WHERE plant_id=? AND kind=? AND t1>=?",
+                                      (plant_id, kind, t_from)).fetchone()
+                out["count"][kind] = tot["n"]
+                if kind == "stop":
+                    out["stop_s"] = tot["s"]
+        return out
+
     def plant_names(self) -> list:
         with self._lock:
             return [r["name"] for r in self.db.execute("SELECT name FROM plants ORDER BY name")]
@@ -768,6 +836,6 @@ class Store:
                 out.append({
                     "id": p["id"], "name": p["name"], "status": self._status(p, now), "created_t": p["created_t"],
                     "last_seen_t": p["last_seen_t"], "interval_s": p["interval_s"], "offline_since": p["offline_since"],
-                    "snapshot": snap, "alerts": alerts, "events": self.events(p["id"], 5), "hidden_blocks": self.hidden_blocks(p["id"]), "settings": self.plant_settings(p["id"]), "settings_custom": sorted(self.plant_overrides(p["id"])), "mute_until": self.mute_until(p["id"], now),
+                    "snapshot": snap, "motion5": self.motion(p["id"], 5.0, 8), "alerts": alerts, "events": self.events(p["id"], 5), "hidden_blocks": self.hidden_blocks(p["id"]), "settings": self.plant_settings(p["id"]), "settings_custom": sorted(self.plant_overrides(p["id"])), "mute_until": self.mute_until(p["id"], now),
                     "closed_t": (lambda st: st["t"] if st is not None and st["level"] == "critical" else None)(self._last_stop(p["id"]))})
         return out

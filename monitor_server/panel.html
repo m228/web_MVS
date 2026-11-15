@@ -293,13 +293,14 @@ const ICONS = {
   camera: '<rect x="3" y="7" width="18" height="13" rx="2"/><circle cx="12" cy="13.5" r="3.5"/><path d="M8 7l1.5-3h5L16 7"/>',
   brew: '<path d="M9 3h6M10 3v6l-5 9a2 2 0 0 0 2 3h10a2 2 0 0 0 2-3l-5-9V3"/><path d="M7.5 15h9"/>',
   motion: '<rect x="3" y="6" width="13" height="12" rx="2"/><path d="M16 10l5-3v10l-5-3"/>',
+  stops: '<circle cx="12" cy="12" r="9"/><path d="M9 9h6v6H9z"/>',
   autocal: '<circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="2"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/>',
   sensors: '<path d="M4 12h16M8 8l-4 4 4 4M16 8l4 4-4 4"/>',
   plate: '<rect x="6" y="6" width="12" height="12" rx="2"/><path d="M9 2v4M15 2v4M9 18v4M15 18v4M2 9h4M2 15h4M18 9h4M18 15h4"/>',
   disk: '<ellipse cx="12" cy="6" rx="8" ry="3"/><path d="M4 6v6c0 1.7 3.6 3 8 3s8-1.3 8-3V6M4 12v6c0 1.7 3.6 3 8 3s8-1.3 8-3v-6"/>',
 };
 // порядок = порядок в карточке: сначала то, что есть у любого завода, потом микроскопное
-const BLOCK_NAMES = {pc: 'ПК и приложение', disk: 'Диск', services: 'Службы', camera: 'Камера', motion: 'Камеры движения', brew: 'Варка',
+const BLOCK_NAMES = {pc: 'ПК и приложение', disk: 'Диск', services: 'Службы', camera: 'Камера', motion: 'Камеры движения', stops: 'Остановки лент · 5 сут', brew: 'Варка',
   autocal: 'Автокалибровка', sensors: 'Отвод и подвод', plate: 'Плата и CV'};
 const MICRO_BLOCKS = ['brew', 'autocal', 'sensors', 'plate'];
 const SVC_NAMES = {cv: 'CV', video: 'видео', motion: 'движение'};
@@ -315,8 +316,24 @@ function fmtUp(s) {
 }
 
 // каждый блок возвращает html или '' (нет данных — блока нет); порядок = порядок в карточке
-function blockData(snap) {
+// «Остановки лент · 5 сут»: что завод прислал из базы движения (motion_sync.py). Остановка — лента стоит при нормальной картинке; сбой камеры — другое
+function stopsHtml(m) {
+  if (!m || !m.cover) return '';
+  const row = (e, label) => kv(esc(e.cam_name + (e.zone_name ? ' · ' + e.zone_name : '')),
+    esc(fmt(e.t0)) + ' · ' + esc(dur(e.dur_s)) + (e.open ? ' · идёт' : '') + (label ? ' · ' + label : ''), e.open ? 'bad' : 'warn');
+  const n = m.count || {};
+  let h = kv('Просмотрено', 'до ' + esc(fmt(m.cover.to)) + (m.cover.cams.length ? ' · камер ' + m.cover.cams.length : ''));
+  h += n.stop ? kv('Остановок', n.stop + ' · стояла ' + esc(dur(m.stop_s)), 'bad') : kv('Остановок', 'не было');
+  h += m.stop.slice(0, 5).map((e) => row(e)).join('');
+  if (n.near) h += kv('Близко к остановке', n.near + ' раз', 'warn') + m.near.slice(0, 3).map((e) => row(e, e.min == null ? '' : 'мин ' + (+e.min.toPrecision(3)))).join('');
+  if (n.camera) h += kv('Камера не в порядке', n.camera + ' раз', 'warn') + m.camera.slice(0, 3).map((e) => row(e, esc(e.reason).slice(0, 60))).join('');
+  return h;
+}
+
+function blockData(snap, p) {
   const out = {}, cam = snap.camera || {}, m = snap.micro, st = snap.start || {};
+  const sh0 = stopsHtml(p && p.motion5);
+  if (sh0) out.stops = sh0;
   if (snap.pc_up_s != null || snap.app_up_s != null) {
     out.pc = kv('ПК работает', fmtUp(snap.pc_up_s)) + kv('Приложение', fmtUp(snap.app_up_s)) +
       (snap.app_start_t ? kv('Запуск', fmt(snap.app_start_t) + (st.text ? '<br><span class="sub">' + esc(st.text) + '</span>' : '')) : '');
@@ -391,7 +408,7 @@ function blockData(snap) {
 }
 
 function blocksHtml(p, snap) {
-  const data = blockData(snap), hidden = p.hidden_blocks || [];
+  const data = blockData(snap, p), hidden = p.hidden_blocks || [];
   const html = Object.keys(BLOCK_NAMES).filter((k) => data[k] && !hidden.includes(k)).map((k) =>
     '<div class="blk"><div class="bh"><svg viewBox="0 0 24 24">' + ICONS[k] + '</svg>' + BLOCK_NAMES[k] + '</div>' + data[k] + '</div>').join('');
   if (Object.keys(data).length) return html ? '<div class="blocks">' + html + '</div>' : '';
@@ -399,7 +416,7 @@ function blocksHtml(p, snap) {
 }
 
 function viewMenu(p, snap) {
-  const data = blockData(snap), hidden = p.hidden_blocks || [], keys = Object.keys(BLOCK_NAMES).filter((k) => data[k]);
+  const data = blockData(snap, p), hidden = p.hidden_blocks || [], keys = Object.keys(BLOCK_NAMES).filter((k) => data[k]);
   if (!keys.length) return '';
   const row = (k) => '<label><input type="checkbox" data-blk="' + k + '"' + (hidden.includes(k) ? '' : ' checked') + '>' + BLOCK_NAMES[k] + '</label>';
   const common = keys.filter((k) => !MICRO_BLOCKS.includes(k)), micro = keys.filter((k) => MICRO_BLOCKS.includes(k));

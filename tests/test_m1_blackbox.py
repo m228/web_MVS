@@ -42,3 +42,15 @@ def test_find_zero_is_not_alarm_and_rearms(tmp_path):
     _run(box, 200, 200, 5)               # отвели -> перевзвод
     _run(box, 0, 200, bb.GLASS_HOLD_TICKS + 2)   # настоящий уход после этого — снова ловим
     assert len(ev) == 1
+
+
+def test_board_zero_is_log_only(tmp_path):
+    """«Плата 0, а в буфере ПК цель» — только в журнал, тревоги в мониторинг нет; настоящий уход всё ещё тревожит."""
+    box, ev = _box(tmp_path)
+    for _ in range(5):
+        box.feed(_raw(40), {"m1_sp_board_raw": 0}, 200)      # голова на 400 мкм, плата помнит 0
+    assert ev == []
+    log = (tmp_path / "m1.log").read_text(encoding="utf-8")
+    assert "только журнал" in log                           # но в m1_blackbox.log запись есть
+    _run(box, 0, 200, bb.GLASS_HOLD_TICKS + 2)              # а вот реальный уход к стеклу — тревога
+    assert len(ev) == 1 and "у стекла" in ev[0]

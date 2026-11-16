@@ -2575,6 +2575,19 @@ body.modal-open {
   border-bottom: 1px solid var(--border);
 }
 
+/* справа в шапке ячейки: статус и КЗ, под ними (для камеры уровня) переключатель «Камера | КЗ» */
+.multi-tile__right { display: flex; flex-direction: column; align-items: flex-end; gap: 6px; }
+.multi-tile__right-row { display: flex; align-items: center; gap: 10px; }
+.tile-view-seg { position: relative; display: grid; grid-template-columns: 1fr 1fr; padding: 2px; border-radius: 8px;
+  background: var(--surface-muted, rgba(131,151,179,.12)); border: 1px solid var(--border); }
+.tile-view-seg[hidden] { display: none; }
+.tile-view-seg::before { content: ''; position: absolute; top: 2px; left: 2px; width: calc(50% - 2px); height: calc(100% - 4px);
+  background: var(--accent, #2563eb); border-radius: 6px; transition: left .2s cubic-bezier(.4,0,.2,1); }
+.tile-view-seg.kz::before { left: 50%; }
+.tile-view-seg__btn { position: relative; z-index: 1; border: 0; background: transparent; cursor: pointer; padding: 2px 12px;
+  font-size: 12px; font-weight: 700; color: var(--muted); border-radius: 6px; white-space: nowrap; }
+.tile-view-seg__btn.is-active { color: var(--accent-contrast, #fff); }
+
 .multi-tile__serial {
   max-width: 70%;
   padding: 6px 8px;

@@ -45,8 +45,16 @@ function createTileEl() {
   el.innerHTML = `
     <div class="multi-tile__head">
       <select class="multi-tile__serial" data-tile-serial title="Камера в ячейке"></select>
-      <span class="multi-tile__badge" data-tile-badge></span>
-      <span class="tile-cv-badge" data-tile-cv hidden title="КЗ — компьютерное зрение">КЗ</span>
+      <div class="multi-tile__right">
+        <div class="multi-tile__right-row">
+          <span class="multi-tile__badge" data-tile-badge></span>
+          <span class="tile-cv-badge" data-tile-cv hidden title="КЗ — компьютерное зрение">КЗ</span>
+        </div>
+        <div class="tile-view-seg" data-tile-viewseg hidden role="tablist" aria-label="Что показывать в окне">
+          <button type="button" class="tile-view-seg__btn is-active" data-view="cam" title="Живой поток камеры">Камера</button>
+          <button type="button" class="tile-view-seg__btn" data-view="kz" title="Снимки КЗ с разметкой (лента слева)">КЗ</button>
+        </div>
+      </div>
     </div>
     <div class="multi-tile__body">
     <div class="tile-lv-strip" data-tile-lvstrip hidden><div class="tile-lv-strip__list" data-tile-lvlist></div></div>
@@ -130,6 +138,14 @@ function createTileEl() {
   el.querySelector('[data-tile-lvback]').addEventListener('click', (event) => {
     event.stopPropagation();
     lvTileLive(idx());
+  });
+  // переключатель «Камера | КЗ» под значком КЗ: КЗ — снимки с разметкой (последний), Камера — живой поток (15-level.js)
+  el.querySelector('[data-tile-viewseg]').addEventListener('click', (event) => {
+    event.stopPropagation();
+    const b = event.target.closest('[data-view]');
+    if (!b) return;
+    setFocus(idx());
+    if (b.dataset.view === 'kz') lvTileShowLast(idx()); else lvTileLive(idx());
   });
   el.querySelector('[data-tile-shot]').addEventListener('load', () => drawMotionTile(idx()));
   const marquee = el.querySelector('[data-tile-marquee]');

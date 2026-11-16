@@ -184,6 +184,9 @@ class PlateClient:
         """Послать мотору m команду-операцию op (find_zero/steps/home_start/.../goto/stop/set_zero)."""
         code = self.motor_code(m, op)
         if code is not None:
+            # голова М1 законно едет к стеклу/обнуляется — чёрный ящик не должен считать это «уходом в ноль»
+            if str(m) == "1" and op in ("find_zero", "set_zero", "home_start", "home_end") and self._blackbox is not None:
+                self._blackbox.expect_glass()
             self._write_motor_cmd_reg(m, code)
 
     def motor_goto(self, m, micrometers):

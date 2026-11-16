@@ -46,6 +46,8 @@ CONFIG_PATH = DATA_DIR / "monitor.json"
 SCHEMA = 1
 DEFAULTS = {"enabled": False, "url": "", "token": "", "plant": "", "interval_s": 300, "system_proxy": True, "no_probe_min": 30, "auto_off_min": 10, "allow_http": False,
             "auto_enroll": True,       # нет токена — самому просить его у приёмника (enroll_client); нужен ключ в сборке
+            "motion_sync": True,       # раз в motion_sync_h часов слать остановки лент и сбои камер движения за 5 суток (motion_sync.py)
+            "motion_sync_h": 3,
             # датчики микроскопа (правятся в monitor.json): допуски расхождения трёх датчиков, мкм — на отводе и на подводе; «ноль уполз» — |датчик − энкодер|
             # до автокалибровки, мкм. Везде 200 по решению Макса 04.11 (до этого отвод 150, подвод 200, ноль 100: сообщения с разными допусками путали);
             # автокалибровки нет дольше overdue_h часов работы; bad_streak плохих проб подряд — жёлтое предупреждение становится красной тревогой
@@ -65,6 +67,8 @@ RETRY_S = (15, 30, 60, 120)  # пауза перед повтором после
 HTTP_TIMEOUT_S = 10
 BATCH_MAX = 100             # событий в одном запросе
 OUTBOX_MAX = 500            # дольше сервер не отвечает — самые старые события отбрасываем
+MOTION_KEEP = 600           # эпизодов движения в очереди (отдельно от общего предела)
+MOTION_FIRST_DELAY_S = 90   # первая выгрузка движения — не раньше, чем через столько после старта
 RECENT_MAX = 50
 POS_KEEP = 200              # записей положений датчиков в outbox: поток проб не должен вытеснить важные события при долгом обрыве
 POS_MEM = 20                # последних записей положений держим в памяти для правил
@@ -260,7 +264,8 @@ def _clean_cfg(cfg: dict) -> dict:
     out["system_proxy"] = bool(cfg.get("system_proxy", True))
     out["allow_http"] = bool(cfg.get("allow_http", False))
     out["auto_enroll"] = bool(cfg.get("auto_enroll", True))
-    for k, lo, hi in (("interval_s", 60, 3600), ("no_probe_min", 5, 240), ("auto_off_min", 2, 240), ("gap_far_um", 10, 2000), ("gap_near_um", 10, 2000),
+    out["motion_sync"] = bool(cfg.get("motion_sync", True))
+    for k, lo, hi in (("motion_sync_h", 1, 24), ("interval_s", 60, 3600), ("no_probe_min", 5, 240), ("auto_off_min", 2, 240), ("gap_far_um", 10, 2000), ("gap_near_um", 10, 2000),
                       ("drift_um", 10, 5000), ("overdue_h", 1, 168), ("bad_streak", 1, 10)):
         try:
             out[k] = max(lo, min(hi, int(cfg.get(k, DEFAULTS[k]))))
@@ -348,6 +353,8 @@ def _db() -> sqlite3.Connection:
         c.execute("CREATE TABLE IF NOT EXISTS outbox (eid TEXT PRIMARY KEY, t REAL NOT NULL, kind TEXT NOT NULL, level TEXT NOT NULL, "
                   "text TEXT NOT NULL, data TEXT NOT NULL DEFAULT '{}')")
         c.execute("CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT)")
+        # что из эпизодов движения уже положено в очередь (sig — «чем кончился»), ok=1 — сервер подтвердил; не подтверждённое и пропавшее из очереди уйдёт заново
+        c.execute("CREATE TABLE IF NOT EXISTS motion_sent (eid TEXT PRIMARY KEY, sig TEXT NOT NULL, t REAL NOT NULL, ok INTEGER NOT NULL DEFAULT 0)")
         c.commit()
         _conn, _conn_path = c, DB_PATH
     return _conn
@@ -434,14 +441,19 @@ def beat(now: float) -> None:
         _db().commit()
 
 
-def outbox_add(kind: str, level: str, text: str, data: Optional[dict] = None, t: Optional[float] = None) -> dict:
-    ev = {"eid": uuid.uuid4().hex, "t": time.time() if t is None else t, "kind": kind, "level": level,
+def outbox_add(kind: str, level: str, text: str, data: Optional[dict] = None, t: Optional[float] = None, eid: Optional[str] = None) -> dict:
+    """eid задан — запись «по месту»: повтор с тем же eid заменяет прежнюю (эпизоды движения), сервер тоже обновляет, а не дублирует."""
+    ev = {"eid": eid or uuid.uuid4().hex, "t": time.time() if t is None else t, "kind": kind, "level": level,
           "text": mask_secrets(text), "data": mask_secrets(data or {})}
     with _lock:
         c = _db()
-        c.execute("INSERT INTO outbox (eid, t, kind, level, text, data) VALUES (?,?,?,?,?,?)",
+        c.execute("INSERT OR REPLACE INTO outbox (eid, t, kind, level, text, data) VALUES (?,?,?,?,?,?)",
                   (ev["eid"], ev["t"], kind, level, ev["text"], json.dumps(ev["data"], ensure_ascii=False)))
-        c.execute("DELETE FROM outbox WHERE rowid <= (SELECT MAX(rowid) FROM outbox) - ?", (OUTBOX_MAX,))
+        # движение — лавина при первой отправке: у неё свой предел, а общий не считает её, чтобы не вытеснить срочные события
+        if kind.startswith("motion"):
+            c.execute("DELETE FROM outbox WHERE kind LIKE 'motion%' AND rowid <= (SELECT MAX(rowid) FROM outbox WHERE kind LIKE 'motion%') - ?", (MOTION_KEEP,))
+        else:
+            c.execute("DELETE FROM outbox WHERE kind NOT LIKE 'motion%' AND rowid <= (SELECT MAX(rowid) FROM outbox WHERE kind NOT LIKE 'motion%') - ?", (OUTBOX_MAX,))
         if kind == "positions":
             c.execute("DELETE FROM outbox WHERE kind='positions' AND rowid <= (SELECT MAX(rowid) FROM outbox WHERE kind='positions') - ?", (POS_KEEP,))
         c.commit()
@@ -450,7 +462,7 @@ def outbox_add(kind: str, level: str, text: str, data: Optional[dict] = None, t:
 
 def outbox_batch(limit: int = BATCH_MAX) -> list[dict]:
     with _lock:
-        rows = _db().execute("SELECT * FROM outbox ORDER BY rowid LIMIT ?", (int(limit),)).fetchall()
+        rows = _db().execute("SELECT * FROM outbox ORDER BY (kind LIKE 'motion%'), rowid LIMIT ?", (int(limit),)).fetchall()     # срочное — вперёд движения
     return [{"eid": r["eid"], "t": r["t"], "kind": r["kind"], "level": r["level"], "text": r["text"], "data": json.loads(r["data"] or "{}")}
             for r in rows]
 
@@ -461,6 +473,7 @@ def outbox_done(eids: list[str]) -> None:
     with _lock:
         c = _db()
         c.executemany("DELETE FROM outbox WHERE eid=?", [(e,) for e in eids])
+        c.executemany("UPDATE motion_sent SET ok=1 WHERE eid=?", [(e,) for e in eids if e.startswith("mo-")])
         c.commit()
 
 
@@ -475,6 +488,7 @@ def default_sources() -> dict:
     """Откуда берём данные. Всё — функции без аргументов, только чтение; тесты подменяют их целиком."""
     import camera_params
     import db
+    import paths
     import plate_config
     import services
     from camera_core import manager
@@ -512,12 +526,18 @@ def default_sources() -> dict:
         """Свободное место на диске приложения: там лежат база, кадры, видео и записи — у всех заводов одинаково."""
         import shutil
 
-        import paths
         du = shutil.disk_usage(str(paths.DATA_DIR))
         return {"free": du.free, "total": du.total}
 
+    def motion_episodes():
+        """Остановки лент и сбои камер движения за 5 суток из базы сервиса движения (только чтение). Сервис не установлен — None."""
+        import motion_sync
+        d = paths.DATA_DIR / "motion_service" / "data"
+        return motion_sync.collect(d / "motion.db", d / "motion_config.json") if (d / "motion.db").is_file() else None
+
     return {
         "cfg": plate_config.load,
+        "motion_episodes": motion_episodes,
         "micro_on": lambda: services.micro_enabled(plate_config.load()),
         "state": micro.state, "status": micro.status, "ext": micro.ext, "cv": micro.cv_status, "guard": micro.guard_status,
         "services": services.states,
@@ -555,6 +575,8 @@ class Agent:
         self.last_data: Optional[dict] = None
         self.status = {"ok": None, "last_ok_t": None, "last_try_t": None, "error": "", "http": None, "fails": 0}
         self._next_send = 0.0
+        self._motion_next = 0.0                         # когда в следующий раз выгружать остановки движения
+        self.motion_last: dict = {}                     # итог последней выгрузки движения (для страницы «Мониторинг»)
         self._stop = threading.Event()
         self._kick = threading.Event()
         self._thread: Optional[threading.Thread] = None
@@ -611,12 +633,51 @@ class Agent:
                     self._sync_schedule()
                     self.tick(now)
                     next_watch = now + WATCH_EVERY_S
+                self.sync_motion(now)
                 if self._send_due(now):
                     self.send(now=now)
                 self._enroll(now)
             except Exception as e:                  # агент не должен умирать от случайной ошибки
                 log_event("sysmon", "Мониторинг: ошибка цикла: %s" % e, "error")
             self._stop.wait(TICK_S)
+
+    def sync_motion(self, now: float, force: bool = False) -> dict:
+        """Выгрузка остановок лент и сбоев камер движения (motion_sync.py): раз в motion_sync_h часов, первая — через MOTION_FIRST_DELAY_S после старта.
+        В очередь кладём только новое или изменившееся (журнал motion_sent): первая выгрузка — полная за 5 суток, дальше дописывается.
+        Уходит со следующим пульсом; нет связи — лежит в очереди и уйдёт в следующее окно. Возвращает итог (пусто, если сейчас не время)."""
+        cfg = self._cfg
+        if not force and (not configured(cfg) or not cfg.get("motion_sync") or now < self._motion_next
+                          or now < self.started_at + MOTION_FIRST_DELAY_S):
+            return {}
+        if "motion_episodes" not in (self.src or {}):
+            return {}
+        if _safe((self.src or {}).get("micro_on") or (lambda: False), False, [], "micro_on"):      # завод с микроскопом: остановки лент не нужны
+            return {}
+        self._motion_next = now + cfg["motion_sync_h"] * 3600
+        errs: list = []
+        res = _safe(self.src["motion_episodes"], None, errs, "motion_episodes")
+        if not res or not res.get("cams"):
+            self.motion_last = {"t": now, "ok": False, "error": "; ".join(map(str, errs)) or "нет базы или зон движения"}
+            return self.motion_last
+        queued = 0
+        with _lock:
+            c = _db()
+            for e in res["episodes"]:
+                sig = "%d|%d" % (int(e["t1"]), 1 if e.get("open") else 0)
+                row = c.execute("SELECT sig, ok FROM motion_sent WHERE eid=?", (e["eid"],)).fetchone()
+                pending = c.execute("SELECT 1 FROM outbox WHERE eid=?", (e["eid"],)).fetchone() is not None
+                if row and row["sig"] == sig and (row["ok"] or pending):
+                    continue
+                outbox_add("motion", "info", text_for_episode(e), e, e["t0"], eid=e["eid"])
+                c.execute("INSERT OR REPLACE INTO motion_sent (eid, sig, t, ok) VALUES (?,?,?,0)", (e["eid"], sig, now))
+                queued += 1
+            c.execute("DELETE FROM motion_sent WHERE t < ?", (now - 14 * 86400,))
+            c.commit()
+        kinds = {k: sum(1 for e in res["episodes"] if e["kind"] == k) for k in ("stop", "near", "camera")}
+        outbox_add("motion_sync", "info", "", {"from": res["from"], "to": res["to"], "cams": res["cams"], **{"n_" + k: v for k, v in kinds.items()}},
+                   now, eid="mo-sync-%d" % int(now))
+        self.motion_last = {"t": now, "ok": True, "queued": queued, "episodes": len(res["episodes"]), "cams": len(res["cams"])}
+        return self.motion_last
 
     def _enroll(self, now: float) -> None:
         """Токена нет — просим его у приёмника (раз в минуту, см. enroll_client). Получили — сохраняем и сразу шлём первый пульс."""
@@ -1035,6 +1096,11 @@ class Agent:
                 self._next_send = now + min(cfg["interval_s"], RETRY_S[min(st["fails"] - 1, len(RETRY_S) - 1)])
                 self._kick.clear()
             return {"ok": ok, "http": code, "error": err, "sent_events": len(events) if ok else 0}
+
+
+def text_for_episode(e: dict) -> str:
+    import motion_sync
+    return motion_sync.text(e)
 
 
 def _fmt_val(v) -> str:

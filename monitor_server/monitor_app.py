@@ -333,6 +333,14 @@ def create_app(store: monitor_store.Store, password: str, version: str, panel_ht
             return bad
         return {"positions": store.positions(plant_id, limit)}
 
+    @app.get("/api/plants/{plant_id}/motion")
+    def plant_motion(plant_id: int, request: Request, days: float = 5.0, limit: int = 30):
+        """Остановки лент / «близко к порогу» / сбои камер движения завода за days суток (присылает завод, motion_sync.py)."""
+        bad = panel_denied(request)
+        if bad is not None:
+            return bad
+        return store.motion(plant_id, days, limit)
+
     @app.post("/api/plants/{plant_id}/token")
     def plant_token(plant_id: int, request: Request):
         bad = write_denied(request)

@@ -44,6 +44,7 @@ class M1BlackBox:
         self._post_left = 0
         self._last_event = 0.0
         self._glass_armed = True        # событие «у стекла при далёкой цели» — раз на заход
+        self._alert = False             # последний найденный _detect повод — тревога (True) или только журнал (False)
         self._glass_ticks = 0           # сколько тактов подряд голова у стекла при далёкой цели
         self._jump_quiet_until = 0.0    # до этого момента скачок расчётной не считаем событием
         self._board_zero_armed = True   # событие «плата потеряла цель» — раз на потерю
@@ -88,16 +89,21 @@ class M1BlackBox:
             self._write_rows([row])
 
         reason = self._detect(row)
+        alert = self._alert
         self._prev = row
-        if reason and now - self._last_event >= COOLDOWN_SEC:
-            self._last_event = now
+        # событие только для журнала (alert=False) охлаждение не расходует: оно раз на потерю цели (_board_zero_armed)
+        if reason and (not alert or now - self._last_event >= COOLDOWN_SEC):
+            if alert:
+                self._last_event = now
             self._post_left = POST_SAMPLES
-            self._write_event(reason)
+            self._write_event(reason, alert)
 
     def _detect(self, row):
         calc, enc, pc, board = row[1], row[2], row[4], row[5]
         prev = self._prev
         reason = None
+        board_reason = None
+        self._alert = False
         # A. расчётная скакнула, а энкодер на месте — её переписала прошивка (датчик/ноль), а не ход
         if (prev is not None and time.time() >= self._jump_quiet_until
                 and abs(calc - prev[1]) >= JUMP_CALC and abs(enc - prev[2]) < STILL_ENC):
@@ -106,7 +112,9 @@ class M1BlackBox:
         if board is not None and pc:
             if board == 0 and self._board_zero_armed:
                 self._board_zero_armed = False
-                reason = reason or "плата видит цель 1253 = 0, а ПК записал %s" % pc
+                # Только в журнал: 1253 пишут двое (write_m1_sp и motor_goto), «Поиск 0» прошивка обнуляет цель сама,
+                # так что «плата 0, а в буфере ПК цель» — не поломка. Вред ловят A и C (голова реально ушла).
+                board_reason = "плата видит цель 1253 = 0, а в буфере ПК %s (только журнал, без тревоги)" % pc
             elif board != 0:
                 self._board_zero_armed = True
         # C. голова у стекла, хотя цель ПК далеко — именно «ушла в ноль»
@@ -119,14 +127,15 @@ class M1BlackBox:
             self._glass_ticks = 0
             if calc > GLASS_POS * 4:
                 self._glass_armed = True
-        return reason
+        self._alert = reason is not None
+        return reason or board_reason
 
-    def _write_event(self, reason):
+    def _write_event(self, reason, alert=True):
         stamp = datetime.now().isoformat(timespec="seconds")
         lines = ["== %s\t%s" % (stamp, reason), _HEADER]
         lines.extend(self._fmt(r) for r in self._ring)
         self._append("\n".join(lines) + "\n")
-        if self._on_event is not None:
+        if alert and self._on_event is not None:
             try:
                 self._on_event(reason)
             except Exception:

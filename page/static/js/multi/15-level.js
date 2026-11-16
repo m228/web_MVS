@@ -729,6 +729,14 @@ function lvTileView(index, sh) {
   if (item) item.scrollIntoView({ block: 'nearest' });
 }
 
+// переключатель «КЗ»: открыть самый свежий снимок (нет снимков — остаёмся на живом)
+function lvTileShowLast(index) {
+  const tile = state.tiles[index];
+  const s = tile && tile.serial && LVG[tile.serial];
+  if (!s || !s.shots.length) return;
+  lvTileView(index, s.shots[s.shots.length - 1]);
+}
+
 function lvTileLive(index) {
   const tile = state.tiles[index];
   if (!tile) return;
@@ -766,10 +774,16 @@ function lvTileDraw(index, el, canvas, cam, on) {
   const img = el.querySelector('[data-tile-shot]');
   const back = el.querySelector('[data-tile-lvback]');
   const v = tile.lvView;
+  const seg = el.querySelector('[data-tile-viewseg]');
+  if (seg) {
+    seg.hidden = !want;
+    seg.classList.toggle('kz', !!v);
+    seg.querySelectorAll('[data-view]').forEach((b) => b.classList.toggle('is-active', (b.dataset.view === 'kz') === !!v));
+  }
   if (img) img.classList.toggle('hidden', !v);
   if (back) {
     back.hidden = !v;
-    if (v) back.textContent = 'снимок ' + new Date(v.ts * 1000).toLocaleTimeString('ru-RU') + ' · ● живое';
+    if (v) back.textContent = 'снимок ' + new Date(v.ts * 1000).toLocaleTimeString('ru-RU');
   }
   if (!v) return false;
   const screen = el.querySelector('[data-tile-screen]');

@@ -793,14 +793,17 @@ class Store:
         return [{"t": r["t"], "step": r["step"], "target": r["target"], "calc": r["calc"], "enc": r["enc"], "ai": r["ai"], "gap": r["gap"],
                  "ok": bool(r["ok"]), "timeout": bool(r["timeout"]), "why": r["why"], "sv": r["sv"], "stage": r["stage"]} for r in rows]
 
-    def motion(self, plant_id: int, days: float = 5.0, limit: int = 30) -> dict:
+    def motion(self, plant_id: int, days: Optional[float] = 5.0, limit: int = 30) -> dict:
         """Движение завода за days суток: что просмотрено ({from, to, cams, recv_t} — None, если завод ещё не присылал) и эпизоды трёх видов,
         новые первыми (по limit каждого), плюс общие числа и «сколько стояла лента»."""
         now = self.clock()
-        t_from = now - max(0.1, min(float(days), 90.0)) * 86400
         limit = max(1, min(int(limit), 200))
         with self._lock:
             c = self.db.execute("SELECT * FROM motion_cover WHERE plant_id=?", (plant_id,)).fetchone()
+            if days is None:                                # «за всё, что завод просмотрел»: глубина зависит от его базы (12 сут, 30 сут)
+                days = max(0.1, (now - c["from_t"]) / 86400) if c is not None else 5.0
+            days = max(0.1, min(float(days), 90.0))
+            t_from = now - days * 86400
             out = {"days": days, "cover": None, "stop": [], "near": [], "camera": [], "count": {}, "stop_s": 0.0}
             if c is not None:
                 out["cover"] = {"from": c["from_t"], "to": c["to_t"], "recv_t": c["recv_t"], "cams": json.loads(c["cams"] or "[]")}
@@ -836,6 +839,6 @@ class Store:
                 out.append({
                     "id": p["id"], "name": p["name"], "status": self._status(p, now), "created_t": p["created_t"],
                     "last_seen_t": p["last_seen_t"], "interval_s": p["interval_s"], "offline_since": p["offline_since"],
-                    "snapshot": snap, "motion5": self.motion(p["id"], 5.0, 8), "alerts": alerts, "events": self.events(p["id"], 5), "hidden_blocks": self.hidden_blocks(p["id"]), "settings": self.plant_settings(p["id"]), "settings_custom": sorted(self.plant_overrides(p["id"])), "mute_until": self.mute_until(p["id"], now),
+                    "snapshot": snap, "motion5": self.motion(p["id"], None, 8), "alerts": alerts, "events": self.events(p["id"], 5), "hidden_blocks": self.hidden_blocks(p["id"]), "settings": self.plant_settings(p["id"]), "settings_custom": sorted(self.plant_overrides(p["id"])), "mute_until": self.mute_until(p["id"], now),
                     "closed_t": (lambda st: st["t"] if st is not None and st["level"] == "critical" else None)(self._last_stop(p["id"]))})
         return out

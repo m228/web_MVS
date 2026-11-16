@@ -243,3 +243,26 @@ def test_panel_has_stops_block_and_view_key():
     assert "stops" in mon.VIEW_BLOCKS
     html = (ROOT / "monitor_server" / "panel.html").read_text(encoding="utf-8")
     assert "stopsHtml" in html and "Остановки лент" in html
+
+
+# -------------------------------------------------------------------------------- глубина базы и заводы с микроскопом
+
+def test_collect_from_is_first_record_not_window_edge(tmp_path):
+    db, cfg = _make_db(tmp_path)                         # данные только за последние ~3 часа
+    res = msy.collect(db, cfg, now=NOW)
+    assert NOW - 3 * 3600 - 20 <= res["from"] <= NOW - 3 * 3600 + 20 and res["from"] > NOW - msy.DAYS * 86400
+
+
+def test_plant_with_microscope_sends_no_motion(sm):
+    a = sm.Agent(sources={"motion_episodes": lambda: _res(_ep(NOW - 1000, NOW - 700)), "micro_on": lambda: True}, clock=lambda: NOW)
+    a._cfg = sm.load_config()
+    assert a.sync_motion(NOW, force=True) == {}
+    assert not [e for e in sm.outbox_batch() if e["kind"].startswith("motion")]
+
+
+def test_receiver_motion_window_follows_plant_depth(store):
+    pid, _ = store.create_plant("Лен")
+    store.motion(pid, None)                              # завод ещё ничего не присылал — не падаем
+    _ingest(store, pid, [_ev("mo-sync-2", "motion_sync", {"from": NOW - 12 * 86400, "to": NOW, "cams": ["c1"]})])
+    m = store.motion(pid, None)
+    assert m["cover"]["from"] == pytest.approx(NOW - 12 * 86400) and m["days"] == pytest.approx(12, abs=0.1)

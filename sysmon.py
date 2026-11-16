@@ -651,6 +651,8 @@ class Agent:
             return {}
         if "motion_episodes" not in (self.src or {}):
             return {}
+        if _safe((self.src or {}).get("micro_on") or (lambda: False), False, [], "micro_on"):      # завод с микроскопом: остановки лент не нужны
+            return {}
         self._motion_next = now + cfg["motion_sync_h"] * 3600
         errs: list = []
         res = _safe(self.src["motion_episodes"], None, errs, "motion_episodes")

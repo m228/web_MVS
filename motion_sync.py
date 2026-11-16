@@ -25,7 +25,7 @@ CAM_GAP_S = 120             # дыра в данных дольше — каме
 STOP_MIN_S = 120            # лента стоит дольше — это остановка
 NEAR_MIN_S = 60             # «близко к порогу» дольше этого
 NEAR_K = 1.15               # близко: значение <= off * NEAR_K (но ещё выше off)
-DAYS = 5                    # за сколько суток считаем
+DAYS = 30                   # потолок окна, сут: берём всё, что есть в базе движения, но не глубже (глубина базы — в «from» итога)
 EP_MAX = 300                # эпизодов за один прогон (защита от лавины при неисправном пороге)
 REASON_NONE = "нет кадров в норме (сервис не работал, запись выключена или камера молчит)"
 
@@ -188,6 +188,7 @@ def collect(db_path: Path, cfg_path: Path, now: Optional[float] = None, days: fl
         db = _open_ro(db_path)
     except sqlite3.Error:
         return res
+    first = now
     try:
         for cam, cc in sorted(zones.items()):
             try:
@@ -196,6 +197,8 @@ def collect(db_path: Path, cfg_path: Path, now: Optional[float] = None, days: fl
                 continue
             keys = sorted({b[0] for zb in bins.values() for b in zb})
             res["cams"].append(cam)
+            if keys:
+                first = min(first, keys[0] * BIN_S)
             for a, b in camera_gaps(keys, now, t0):
                 res["episodes"].append({"kind": "camera", "cam": cam, "cam_name": cc["name"], "zone": "", "zone_name": "", "t0": a, "t1": b, "open": False,
                                         "reason": gap_reason(db, cam, a, b)})
@@ -206,6 +209,7 @@ def collect(db_path: Path, cfg_path: Path, now: Optional[float] = None, days: fl
                     res["episodes"].append(e)
     finally:
         db.close()
+    res["from"] = max(t0, first)            # «просмотрено» — с первой записи базы, а не с границы окна: база моложе окна — так и скажем (за 12 сут, а не за 30)
     for e in res["episodes"]:
         e["eid"] = "mo-%s-%s-%s-%d" % (e["kind"], e["cam"], e["zone"] or "-", int(e["t0"]))[:64]
     res["episodes"] = sorted(res["episodes"], key=lambda e: e["t0"])[-EP_MAX:]

@@ -3,17 +3,19 @@ rem Publish the built archives as a GitHub Release (called at the end of build.b
 rem   release.bat        - checks, asks "Y/N", then gh release create
 rem   release.bat dry    - only checks and prints what would be published
 rem Factory machines update from the "Latest" release, so nothing is published unless:
-rem   branch is main, tree is clean, main == origin/main, tag v<VERSION> is free, all five zips exist.
+rem   branch is main, tree is clean, main == origin/main, tag v<RELEASE> is free, all five zips exist.
 setlocal
 cd /d "%~dp0"
 
 set /p VER=<VERSION
-set "TAG=v%VER%"
-set "ZIP1=dist\web_MVS_v%VER%.zip"
-set "ZIP2=dist\cv_service_v%VER%.zip"
-set "ZIP3=dist\video_service_v%VER%.zip"
-set "ZIP4=dist\motion_service_v%VER%.zip"
-set "ZIP5=dist\level_service_v%VER%.zip"
+set /p REL=<RELEASE
+set "TAG=v%REL%"
+set "ZIP1=dist\web_MVS_v%REL%.zip"
+set "ZIP2=dist\cv_service_v%REL%.zip"
+set "ZIP3=dist\video_service_v%REL%.zip"
+set "ZIP4=dist\motion_service_v%REL%.zip"
+set "ZIP5=dist\level_service_v%REL%.zip"
+set "MANIFEST=dist\components.json"
 
 where gh >nul 2>&1 || (echo [release] gh CLI not found - install GitHub CLI and run "gh auth login" & exit /b 1)
 
@@ -32,13 +34,14 @@ for /f %%h in ('git rev-parse origin/main') do set "RMT=%%h"
 if not "%LOC%"=="%RMT%" (echo [release] STOP: local main differs from origin/main - git pull or git push first. & exit /b 1)
 
 gh release view %TAG% >nul 2>&1
-if not errorlevel 1 (echo [release] STOP: release %TAG% already exists - bump VERSION. & exit /b 1)
+if not errorlevel 1 (echo [release] STOP: release %TAG% already exists - bump RELEASE. & exit /b 1)
 
 if not exist "%ZIP1%" (echo [release] STOP: %ZIP1% not found - run build.bat first. & exit /b 1)
 if not exist "%ZIP2%" (echo [release] STOP: %ZIP2% not found - run build.bat first. & exit /b 1)
 if not exist "%ZIP3%" (echo [release] STOP: %ZIP3% not found - run build.bat first. & exit /b 1)
 if not exist "%ZIP4%" (echo [release] STOP: %ZIP4% not found - run build.bat first. & exit /b 1)
 if not exist "%ZIP5%" (echo [release] STOP: %ZIP5% not found - run build.bat first. & exit /b 1)
+if not exist "%MANIFEST%" (echo [release] STOP: %MANIFEST% not found - run build.bat first. & exit /b 1)
 
 echo [release] Ready to publish %TAG% from main (%LOC:~0,7%):
 echo           %ZIP1%
@@ -46,12 +49,13 @@ echo           %ZIP2%
 echo           %ZIP3%
 echo           %ZIP4%
 echo           %ZIP5%
+echo           %MANIFEST%
 echo [release] Factory machines (Bui, Kir) will pick it up as "Latest".
 if /i "%~1"=="dry" (echo [release] dry run - nothing published. & exit /b 0)
 
 choice /c YN /n /m "Publish release %TAG% to GitHub? [Y/N] "
 if errorlevel 2 (echo [release] cancelled - nothing published. & exit /b 0)
 
-gh release create %TAG% "%ZIP1%" "%ZIP2%" "%ZIP3%" "%ZIP4%" "%ZIP5%" -t %TAG% --generate-notes || (echo [release] FAILED & exit /b 1)
+gh release create %TAG% "%ZIP1%" "%ZIP2%" "%ZIP3%" "%ZIP4%" "%ZIP5%" "%MANIFEST%" -t %TAG% --generate-notes || (echo [release] FAILED & exit /b 1)
 echo [release] Published %TAG%.
 endlocal

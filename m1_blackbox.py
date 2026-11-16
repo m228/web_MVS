@@ -24,6 +24,8 @@ JUMP_CALC = 30          # скачок расчётной 1274 за такт, е
 STILL_ENC = 10          # энкодер 1285 при этом почти не сдвинулся, ед. (= 100 мкм)
 GLASS_POS = 5           # расчётная у стекла, ед. (= 50 мкм)
 FAR_TARGET = 30         # цель ПК, которая «далеко» от стекла, ед. (= 300 мкм)
+GLASS_HOLD_TICKS = 30   # «у стекла при далёкой цели» должно держаться столько тактов подряд (≈3 с)
+EXPECT_QUIET_SEC = 60.0  # после команды «Поиск 0/Ноль/Дом» скачок расчётной — штатный, не событие
 
 _HEADER = "t\tcalc1274\tenc1285\tsens1271\tpc1253\tboard1253\tmaxtravel1231\tlocks1535\tcalc_steps1280"
 
@@ -42,6 +44,8 @@ class M1BlackBox:
         self._post_left = 0
         self._last_event = 0.0
         self._glass_armed = True        # событие «у стекла при далёкой цели» — раз на заход
+        self._glass_ticks = 0           # сколько тактов подряд голова у стекла при далёкой цели
+        self._jump_quiet_until = 0.0    # до этого момента скачок расчётной не считаем событием
         self._board_zero_armed = True   # событие «плата потеряла цель» — раз на потерю
 
     def feed(self, raw, ext, pc_target):
@@ -49,6 +53,17 @@ class M1BlackBox:
         pc_target — что ПК записал в OUT[3] (1253). Возвращает None; ошибки глотает."""
         try:
             self._feed(raw, ext or {}, pc_target)
+        except Exception:
+            pass
+
+    def expect_glass(self):
+        """ПК сам послал мотору 1 «Поиск 0 / Ноль / Дом»: голова законно едет к стеклу (в 1253 при этом
+        лежит прежняя цель, например отвод), а расчётная законно скачет. Не считаем это уходом в ноль:
+        тревога C молчит, пока голова не отойдёт от стекла (штатный перевзвод при calc > 20)."""
+        try:
+            self._glass_armed = False
+            self._glass_ticks = 0
+            self._jump_quiet_until = time.time() + EXPECT_QUIET_SEC
         except Exception:
             pass
 
@@ -84,7 +99,8 @@ class M1BlackBox:
         prev = self._prev
         reason = None
         # A. расчётная скакнула, а энкодер на месте — её переписала прошивка (датчик/ноль), а не ход
-        if prev is not None and abs(calc - prev[1]) >= JUMP_CALC and abs(enc - prev[2]) < STILL_ENC:
+        if (prev is not None and time.time() >= self._jump_quiet_until
+                and abs(calc - prev[1]) >= JUMP_CALC and abs(enc - prev[2]) < STILL_ENC):
             reason = "скачок расчётной %s -> %s при неподвижном энкодере" % (prev[1], calc)
         # B. ПК записал цель, а плата её не помнит (после перезагрузки 1253 = 0 -> повтор goto уйдёт к стеклу)
         if board is not None and pc:
@@ -95,11 +111,14 @@ class M1BlackBox:
                 self._board_zero_armed = True
         # C. голова у стекла, хотя цель ПК далеко — именно «ушла в ноль»
         if pc is not None and pc >= FAR_TARGET and calc <= GLASS_POS:
-            if self._glass_armed:
+            self._glass_ticks += 1
+            if self._glass_armed and self._glass_ticks >= GLASS_HOLD_TICKS:
                 self._glass_armed = False
                 reason = reason or "расчётная %s у стекла при цели ПК %s" % (calc, pc)
-        elif calc > GLASS_POS * 4:
-            self._glass_armed = True
+        else:
+            self._glass_ticks = 0
+            if calc > GLASS_POS * 4:
+                self._glass_armed = True
         return reason
 
     def _write_event(self, reason):

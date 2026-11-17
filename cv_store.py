@@ -1484,6 +1484,8 @@ def trend(serial: str, series: Optional[list[str]] = None, limit: int = 200) -> 
                 data[s].append(frs.get("zones"))
             elif s == "frac_pct":
                 data[s].append(frs.get("area_pct"))
+            elif s == "sv":
+                data[s].append(smp.get("sv"))
             else:
                 data[s].append((summ.get("groups_pct") or {}).get(s))
     return {"ts": ts_list, "stage": stage_list, "series": data}

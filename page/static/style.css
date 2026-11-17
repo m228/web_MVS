@@ -3736,6 +3736,25 @@ input.micro-cam-num { width: 56px; min-width: 0; flex: 0 0 auto; padding: 4px 5p
 .micro-ap-tbl .micro-ap-chk { display: inline-flex; flex-direction: row; align-items: center; gap: 6px; cursor: pointer; white-space: nowrap; }
 .micro-ap-chk input[type="checkbox"] { width: 15px; height: 15px; min-height: 0; margin: 0; padding: 0; flex: 0 0 auto; accent-color: var(--accent, #2563eb); }
 .micro-ap-cap { color: var(--muted, #8a94a6); }
+/* совет «ближе» — зелёный, «дальше» — красный; применённый — галочка того же цвета */
+.micro-ap-closer { color: var(--success, #2e9e5b); }
+.micro-ap-tbl tr.is-closer td { background: rgba(46,158,91,.08); }
+.micro-ap-tbl .micro-ap-chk input.is-closer { accent-color: var(--success, #2e9e5b); }
+.micro-ap-tbl .micro-ap-chk input.is-farther { accent-color: var(--danger, #e24b4a); }
+.micro-ap-tbl td:first-child, .micro-ap-tbl th:first-child { text-align: left; }
+.micro-ap-tbl td.ap-adv-cell { text-align: left; }
+/* вкладка «Разломы»: вердикт последней пробы крупно + три числа; свёрнутые настройки */
+.frac-last { display: grid; grid-template-columns: 1.4fr repeat(3, minmax(0, 1fr)); gap: 6px; }
+.frac-verdict { display: flex; align-items: center; justify-content: center; border-radius: 8px; padding: 8px 10px; font-weight: 700;
+  letter-spacing: .02em; background: var(--surface-muted); color: var(--muted, #8a94a6); text-align: center; }
+.frac-verdict.is-frac { background: rgba(226,75,74,.14); color: var(--danger, #e24b4a); }
+.frac-verdict.is-ok { background: rgba(46,158,91,.14); color: var(--success, #2e9e5b); }
+.frac-fold > summary { cursor: pointer; font-size: 0.85em; color: var(--muted, #8a94a6); padding: 4px 0; user-select: none; }
+.frac-fold > summary:hover { color: inherit; }
+.frac-fold[open] > summary { margin-bottom: 8px; }
+details.micro-cv-block.frac-fold > summary { font-size: 0.9em; font-weight: 600; color: inherit; }
+.micro-ppane .micro-cv-trend.frac-trend { height: 200px; cursor: pointer; }
+@media (max-width: 520px) { .frac-last { grid-template-columns: repeat(3, minmax(0, 1fr)); } .frac-verdict { grid-column: 1 / -1; } }
 
 /* Рассев — полоски групп */
 .micro-cv-row { display: grid; grid-template-columns: 62px 1fr 26px 40px; align-items: center; gap: 8px; margin-bottom: 7px; font-size: 0.85em; }

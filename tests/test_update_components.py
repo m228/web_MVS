@@ -359,10 +359,13 @@ def test_build_and_release_scripts_ship_level_service():
     """build.bat собирает архив level_service и кладёт UpdaterLevel в бандл, release.bat без него не публикует (его нет в релизе — сайдкар не скачается)."""
     build = (ROOT / "build.bat").read_text(encoding="utf-8", errors="replace")
     rel = (ROOT / "release.bat").read_text(encoding="utf-8", errors="replace")
-    assert "dist\\level_service_v%VER%.zip" in build and "UpdaterLevel.bat" in build and "UpdaterLevel.ps1" in build
-    assert "level_service_v%VER%.zip" in rel and rel.count("%ZIP5%") >= 4, "release.bat проверяет и публикует пятый архив"
+    assert "dist\\level_service_v%REL%.zip" in build and "UpdaterLevel.bat" in build and "UpdaterLevel.ps1" in build
+    assert "level_service_v%REL%.zip" in rel and rel.count("%ZIP5%") >= 4, "release.bat проверяет и публикует пятый архив"
     for z in ("web_MVS", "cv_service", "video_service", "motion_service", "level_service"):
-        assert "dist\\%s_v%%VER%%.zip" % z in rel, z
+        assert "dist\\%s_v%%REL%%.zip" % z in rel, z
+    assert "make_manifest.py --write-versions" in build and "make_manifest.py --dist dist" in build, "версии сервисов и манифест — из make_manifest"
+    assert 'copy /Y VERSION "' not in build.replace('copy /Y VERSION "dist', ""), "версия сервисов больше не копируется из главного VERSION"
+    assert "%MANIFEST%" in rel and rel.count("%MANIFEST%") >= 3, "release.bat проверяет и публикует components.json"
     for f in ("UpdaterLevel.bat", "UpdaterLevel.ps1"):
         assert (ROOT / f).is_file()
     ps1 = (ROOT / "UpdaterLevel.ps1").read_text(encoding="ascii")

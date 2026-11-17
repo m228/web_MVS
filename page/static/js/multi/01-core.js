@@ -46,6 +46,17 @@ const state = {
   rtspCounter: 0,
 };
 
+// Уникальный serial для RTSP-камеры: счётчик не должен пересекаться с серийниками,
+// уже взятыми из базы (rtsp_2 от прошлых сессий), иначе две камеры делят один ключ.
+function nextRtspSerial() {
+  let serial;
+  do {
+    state.rtspCounter += 1;
+    serial = `rtsp_${state.rtspCounter}`;
+  } while (state.cameras.some((c) => c.serial === serial));
+  return serial;
+}
+
 function getSource(serial) {
   return state.cameras.find((c) => c.serial === serial) || null;
 }

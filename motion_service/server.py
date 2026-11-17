@@ -10,6 +10,9 @@
   GET  /state                     — состояние всех камер (биты зон, метрики flow/diff, группы, ПЛК) и сценариев записи.
   GET  /cameras/{id}/state        — то же по одной камере.
   GET  /cameras/{id}/snapshot     — последний кадр JPEG (?w=1280 — уменьшить; заголовки X-Frame-W/H — размер оригинала).
+  GET  /cameras/{id}/level_shot   — снимок для графика уровня, ближайший к моменту (?group=lvl&ts=unix-секунды; &dir=-1/1 — соседний
+                                    раньше/позже; X-Shot-Ts — его время).
+  GET  /cameras/{id}/level_shots  — снимки уровня с разметкой кадра (?group=lvl&since=unix — только новее): {"shots": [{ts, meta}]}.
   GET  /cameras/{id}/history      — ряды flow/diff/bit для графиков калибровки (?n=300).
   GET  /cameras/{id}/stats        — среднее / мин / макс flow и diff по зонам за последние ?window=10800 секунд (до суток).
   POST /cameras/{id}/record       — {"on": true|false}: писать метрики каждого кадра в базу data\\motion.db.
@@ -24,6 +27,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import os
 import sqlite3
 import sys
@@ -49,6 +53,7 @@ import motion_trends  # noqa: E402
 from motion_camera import CameraWorker, open_capture  # noqa: E402
 from motion_modbus import LinkRegistry, ModbusLink  # noqa: E402
 from motion_scenarios import ScenarioRunner  # noqa: E402
+from motion_shafts import ShaftRunner, PAIRS  # noqa: E402
 
 log = logging.getLogger("motion")
 
@@ -99,6 +104,7 @@ class Manager:
         self.rec_cams: set = set()              # камеры, у которых запись включена по одной (кнопка «●» камеры)
         self._lock = threading.RLock()
         self.scenarios = ScenarioRunner(self)
+        self.shafts = ShaftRunner(self)
         self._halt = threading.Event()
         self._hk: Optional[threading.Thread] = None
 
@@ -267,6 +273,7 @@ class Manager:
         self._load_rec()
         self.apply(self.cfg, save=False)
         self.scenarios.start()
+        self.shafts.start()
         if self.auto_record or self.shots_min > 0 or self.keep_days:
             self._hk = threading.Thread(target=self._housekeeping, daemon=True, name="housekeeping")
             self._hk.start()
@@ -274,6 +281,7 @@ class Manager:
     def shutdown(self):
         self._halt.set()
         self.scenarios.stop()
+        self.shafts.stop()
         with self._lock:
             for w in self.workers.values():
                 w.stop()
@@ -333,7 +341,28 @@ def create_app(data_dir: Optional[Path] = None, capture_factory: Callable = open
 
     @app.get("/state")
     def state():
-        return {"cameras": [w.state() for w in mgr.workers.values()], "scenarios": mgr.scenarios.snapshot()}
+        return {"cameras": [w.state() for w in mgr.workers.values()], "scenarios": mgr.scenarios.snapshot(), "shafts": mgr.shafts.snapshot()}
+
+    @app.get("/shafts/history")
+    def shafts_history(pair: str, window: float = 3600.0, points: int = 600):
+        # разности пары валов (угол, скорость) за последние window секунд, ужатые до points точек; история в памяти сервиса (≈5,5 ч)
+        if pair not in PAIRS:
+            raise HTTPException(404, "нет такой пары валов: %s" % pair)
+        return mgr.shafts.history(pair, max(0.0, min(float(window), 20000.0)), max(10, min(int(points), 2000)))
+
+    @app.post("/shafts/calibrate")
+    def shafts_calibrate(req: dict = Body(...)):
+        """Эталон разности углов пары: «ноль» = текущее положение валов. Валы должны стоять там, где разность углов считается нулевой."""
+        pid = str(req.get("pair") or "")
+        if pid not in PAIRS:
+            raise HTTPException(404, "нет такой пары валов: %s" % pid)
+        snap = mgr.shafts.snapshot()["pairs"].get(pid)
+        if not snap or not snap.get("valid") or snap.get("raw") is None:
+            raise HTTPException(409, "нет данных: у обоих валов пары палка должна быть найдена (ряд камеры задан, КЗ включено)")
+        cfg = json.loads(json.dumps(mgr.cfg))
+        cfg["shafts"]["pairs"][pid]["ref"] = round(engine.ang_diff(snap["raw"], 0.0), 2)
+        new = mgr.apply(cfg)
+        return {"pair": pid, "ref": new["shafts"]["pairs"][pid]["ref"]}
 
     @app.get("/cameras/{cid}/state")
     def cam_state(cid: str):
@@ -347,6 +376,21 @@ def create_app(data_dir: Optional[Path] = None, capture_factory: Callable = open
         data, (fw, fh) = r
         return Response(content=data, media_type="image/jpeg",
                         headers={"X-Frame-W": str(fw), "X-Frame-H": str(fh), "Cache-Control": "no-store"})
+
+    @app.get("/cameras/{cid}/level_shot")
+    def level_shot(cid: str, group: str, ts: float, dir: int = 0):      # noqa: A002 — имя параметра в адресе
+        r = mgr.worker(cid).level_shot(group, ts, dir)
+        if r is None:
+            raise HTTPException(404, "снимка на это время нет (их хранят 2 ч)")
+        data, t = r
+        return Response(content=data, media_type="image/jpeg", headers={"X-Shot-Ts": str(t), "Cache-Control": "no-store"})
+
+    @app.get("/cameras/{cid}/level_shots")
+    def level_shots(cid: str, group: str, since: float = 0.0):
+        rows = mgr.worker(cid).level_shot_list(group, since if math.isfinite(since) else 0.0)
+        if rows is None:
+            raise HTTPException(404, "нет такой группы-уровня: %s" % group)
+        return {"shots": rows}
 
     @app.get("/cameras/{cid}/history")
     def history(cid: str, n: int = 300, window: float = 0, points: int = 600):

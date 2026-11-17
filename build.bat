@@ -21,6 +21,7 @@ if exist "monitor_server\data\server.json" powershell -NoProfile -Command "try {
 if exist "enroll_key.txt" (echo [build] enroll_key.txt found: auto-registration will work in this build) else (echo [build] WARNING: no enroll_key.txt - this build will NOT auto-register on the monitor. Start the receiver once, then rebuild.)
 
 set /p VER=<VERSION
+set /p REL=<RELEASE
 echo [build] Building web_MVS %VER% ...
 pyinstaller --noconfirm web_MVS.spec || (echo [build] BUILD FAILED & exit /b 1)
 
@@ -44,34 +45,37 @@ copy /Y Uninstall.bat "dist\web_MVS\" >nul
 copy /Y Uninstall.ps1 "dist\web_MVS\" >nul
 
 echo [build] Packing main archive ...
-powershell -NoProfile -Command "Compress-Archive -Path 'dist\web_MVS\*' -DestinationPath 'dist\web_MVS_v%VER%.zip' -Force" || exit /b 1
+powershell -NoProfile -Command "Compress-Archive -Path 'dist\web_MVS\*' -DestinationPath 'dist\web_MVS_v%REL%.zip' -Force" || exit /b 1
 
+rem service versions come from component_versions.json (not from VERSION): write them into the service folders before packing
+python scripts\make_manifest.py --write-versions || (echo [build] write-versions FAILED & exit /b 1)
 echo [build] Packing CV add-on (cv_service, code only) ...
-copy /Y VERSION "cv_service\VERSION" >nul
-powershell -NoProfile -Command "$f=Get-ChildItem 'cv_service' -Recurse -File | Where-Object { $_.FullName -notmatch '\\\.venv\\' -and $_.FullName -notmatch '\\model\\' -and $_.FullName -notmatch '__pycache__' -and $_.Name -notlike 'service.log*' }; Compress-Archive -Path $f.FullName -DestinationPath 'dist\cv_service_v%VER%.zip' -Force" || exit /b 1
+powershell -NoProfile -Command "$f=Get-ChildItem 'cv_service' -Recurse -File | Where-Object { $_.FullName -notmatch '\\\.venv\\' -and $_.FullName -notmatch '\\model\\' -and $_.FullName -notmatch '__pycache__' -and $_.Name -notlike 'service.log*' }; Compress-Archive -Path $f.FullName -DestinationPath 'dist\cv_service_v%REL%.zip' -Force" || exit /b 1
 
 rem top-level items, not a flat file list: assets\ must keep its folder in the zip
 echo [build] Packing video add-on (video_service, code only) ...
-copy /Y VERSION "video_service\VERSION" >nul
-powershell -NoProfile -Command "$f=Get-ChildItem 'video_service' | Where-Object { $_.Name -notin @('.venv','venv','video','__pycache__') -and $_.Name -notlike 'service.log*' }; Compress-Archive -Path $f.FullName -DestinationPath 'dist\video_service_v%VER%.zip' -Force" || exit /b 1
+powershell -NoProfile -Command "$f=Get-ChildItem 'video_service' | Where-Object { $_.Name -notin @('.venv','venv','video','__pycache__') -and $_.Name -notlike 'service.log*' }; Compress-Archive -Path $f.FullName -DestinationPath 'dist\video_service_v%REL%.zip' -Force" || exit /b 1
 
 rem same: top-level items; data\ (camera settings) and .venv must never go into the zip
 echo [build] Packing motion add-on (motion_service, code only) ...
-copy /Y VERSION "motion_service\VERSION" >nul
-powershell -NoProfile -Command "$f=Get-ChildItem 'motion_service' | Where-Object { $_.Name -notin @('.venv','venv','data','__pycache__','tests') -and $_.Name -notlike 'service.log*' }; Compress-Archive -Path $f.FullName -DestinationPath 'dist\motion_service_v%VER%.zip' -Force" || exit /b 1
+powershell -NoProfile -Command "$f=Get-ChildItem 'motion_service' | Where-Object { $_.Name -notin @('.venv','venv','data','__pycache__','tests') -and $_.Name -notlike 'service.log*' }; Compress-Archive -Path $f.FullName -DestinationPath 'dist\motion_service_v%REL%.zip' -Force" || exit /b 1
 
 rem same: top-level items; .venv, model\ (uploaded YOLO models) and logs must never go into the zip
 echo [build] Packing level add-on (level_service, code only) ...
-copy /Y VERSION "level_service\VERSION" >nul
-powershell -NoProfile -Command "$f=Get-ChildItem 'level_service' | Where-Object { $_.Name -notin @('.venv','venv','model','__pycache__','bench_ov','bench_result.txt') -and $_.Name -notlike 'service.log*' }; Compress-Archive -Path $f.FullName -DestinationPath 'dist\level_service_v%VER%.zip' -Force" || exit /b 1
+powershell -NoProfile -Command "$f=Get-ChildItem 'level_service' | Where-Object { $_.Name -notin @('.venv','venv','model','__pycache__','bench_ov','bench_result.txt') -and $_.Name -notlike 'service.log*' }; Compress-Archive -Path $f.FullName -DestinationPath 'dist\level_service_v%REL%.zip' -Force" || exit /b 1
 
 echo.
 echo [build] Done:
-echo         dist\web_MVS_v%VER%.zip      (основное приложение, для всех)
-echo         dist\cv_service_v%VER%.zip   (CV-модуль, докачивается UpdaterCV.bat на микроскопных машинах)
-echo         dist\video_service_v%VER%.zip (video add-on, fetched by UpdaterVideo.bat on microscope machines)
-echo         dist\motion_service_v%VER%.zip (motion add-on, fetched by UpdaterMotion.bat on plant machines)
-echo         dist\level_service_v%VER%.zip (level add-on, YOLO + torch, fetched by UpdaterLevel.bat or the update menu)
+echo         dist\web_MVS_v%REL%.zip      (основное приложение, для всех)
+echo         dist\cv_service_v%REL%.zip   (CV-модуль, докачивается UpdaterCV.bat на микроскопных машинах)
+echo         dist\video_service_v%REL%.zip (video add-on, fetched by UpdaterVideo.bat on microscope machines)
+echo         dist\motion_service_v%REL%.zip (motion add-on, fetched by UpdaterMotion.bat on plant machines)
+echo         dist\level_service_v%REL%.zip (level add-on, YOLO + torch, fetched by UpdaterLevel.bat or the update menu)
+rem manifest: per-component versions + check that a changed service got a new version (needs the previous release manifest, fetched via gh)
+if exist "dist\prev_components.json" del /q "dist\prev_components.json"
+gh release download --pattern components.json --output "dist\prev_components.json" --clobber >nul 2>&1
+python scripts\make_manifest.py --dist dist --prev "dist\prev_components.json" || (echo [build] MANIFEST CHECK FAILED & exit /b 1)
+echo         dist\components.json          (versions of each component: clients update only what changed)
 if /i "%~1"=="nopush" (
     echo [build] nopush: release not published. Publish later with release.bat
     endlocal

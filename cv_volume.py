@@ -24,7 +24,7 @@ import re
 MODELS = ("m1", "m2", "m3")
 # Рассев по ситам (как в лаборатории): отверстия, мм. Фракции снизу вверх: дно (<0,2), 0,2–0,5, 0,5–0,7, 0,7–0,8, 0,8–1,0, 1,0–1,2, >1,2.
 # Размер кристалла — эквивалентный диаметр (как везде в CV); доля фракции — по объёму (объём ~ масса), % от всех кристаллов.
-CALC_VER = 8     # 2: в расчёт идут только хорошие кристаллы (брак — сросток/игла/кривой — отсеян); менять при смене логики: старые пробы пересчитаются
+CALC_VER = 9     # 9: средний размер кристалла (dsum); 2: в расчёт идут только хорошие кристаллы (брак — сросток/игла/кривой — отсеян); менять при смене логики: старые пробы пересчитаются
 SIEVE_MM = (0.2, 0.5, 0.7, 0.8, 1.0, 1.2)
 # МЕЛКИЙ РАССЕВ «в процентах»: фракции по 0,05 мм от 0 до 1 мм + «больше 1 мм» (21 фракция), ОДНА шкала для всех фаз (без масштаба фазы) —
 # чтобы видеть, где сидит основная масса мелких кристаллов. Доля — по объёму (M1–M3) и по площади, % от хороших кристаллов.
@@ -219,6 +219,9 @@ def empty_sums() -> dict:
     s["flat"] = {mod: 0.0 for mod in MODELS}      # объём хороших кристаллов мельче общего порога (fines_flat_um), без плавной кривой/фазы
     s["sieve"] = {mod: [0.0] * (len(SIEVE_MM) + 1) for mod in MODELS + ("area",)}   # объём (M1–M3, мкм³) и площадь ("area", мкм²) по фракциям рассева
     s["sieve_fine"] = {mod: [0.0] * FINE_N for mod in MODELS + ("area",)}           # то же, мелкий рассев по 0,05 мм
+    # для СРЕДНЕГО РАЗМЕРА кристалла: Σ(вес · диаметр) по хорошим кристаллам, вес — объём модели (M1–M3) или площадь ("area").
+    # Средний размер = dsum / total: средний кристалл «по массе», как средний размер по ситам в лаборатории (не по штукам, как в тренде)
+    s["dsum"] = {mod: 0.0 for mod in MODELS + ("area",)}
     return s
 
 
@@ -258,6 +261,8 @@ def sums_for(measures: list, cv_cfg: dict | None, count_fines: bool = True, phas
         for mod in MODELS:
             s["sieve_fine"][mod][fb] += vols[mod]
         s["sieve_fine"]["area"][fb] += parts["area"]
+        for key, val in parts.items():
+            s["dsum"][key] += val * m.size_um
         if kind == "fines":
             s["n"]["fines"] += 1
     return s
@@ -279,6 +284,8 @@ def add_sums(a: dict, b: dict) -> dict:
         out["sieve_fine"][mod] = [(fa[i] if fa else 0.0) + (fb[i] if fb else 0.0) for i in range(FINE_N)]
     for mod in MODELS:
         out["flat"][mod] = (a.get("flat") or {}).get(mod, 0.0) + (b.get("flat") or {}).get(mod, 0.0)
+    for mod in MODELS + ("area",):
+        out["dsum"][mod] = (a.get("dsum") or {}).get(mod, 0.0) + (b.get("dsum") or {}).get(mod, 0.0)
     if a.get("fines_off") or b.get("fines_off"):
         out["fines_off"] = True
     return out
@@ -305,6 +312,10 @@ def percents(sums: dict | None, ignore_off: bool = False) -> dict:
     # рассев: доля каждой фракции в общем объёме, % (по трём моделям); нет данных — не добавляем
     sv = {} if (sums.get("fines_off") and not ignore_off) else (sums.get("sieve") or {})     # рассев — как мука: только когда СВ дошёл до порога
     out["sieve"] = {mod: [round(100.0 * x / sum(sv[mod]), 3) for x in sv[mod]] for mod in MODELS + ("area",) if sv.get(mod) and sum(sv[mod]) > 0}
+    # средний размер кристалла, мкм (вес — объём модели / площадь): считается всегда, как площадь, — порог СВ муки его не гасит
+    ds = sums.get("dsum") or {}
+    out["mean_um"] = {mod: (round(ds[mod] / sums[mod]["total"], 1) if ds.get(mod) and (sums.get(mod) or {}).get("total", 0.0) > 0 else None)
+                      for mod in MODELS + ("area",)}
     fv = {} if (sums.get("fines_off") and not ignore_off) else (sums.get("sieve_fine") or {})
     out["sieve_fine"] = {mod: [round(100.0 * x / sum(fv[mod]), 3) for x in fv[mod]] for mod in MODELS + ("area",) if fv.get(mod) and sum(fv[mod]) > 0}
     return out

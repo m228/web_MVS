@@ -193,6 +193,19 @@ def test_plate_down_needs_four_checks(sm):
     assert [e["data"]["code"] for e in ev] == ["plate_down"]
 
 
+def test_m1_blackbox_alert(sm):
+    """Событие чёрного ящика М1 -> красная тревога на 30 мин, потом снимается сама."""
+    clk = Clock(10_000.0)
+    ag = sm.Agent(sources=make_sources(), clock=clk)
+    assert ag.tick(clk.t) == []
+    ag.add_m1_event("плата видит цель 1253 = 0, а ПК записал 100")
+    ev = ag.tick(clk.t + 1)
+    assert ev and ev[0]["data"]["code"] == "m1_blackbox" and ev[0]["level"] == "high" and "1253 = 0" in ev[0]["text"]
+    assert ag.tick(clk.t + 60) == [], "пока держится — не повторяется"
+    ev = ag.tick(clk.t + sm.M1_EVENT_HOLD_S + 10)
+    assert ev and ev[0]["data"]["state"] == "closed"
+
+
 def test_fault_alert(sm):
     ag = sm.Agent(sources=make_sources(state=lambda: {"stage": 7, "stage_ok": True, "fault": True, "fault_msg": "подвод не сошёлся"}),
                   clock=Clock())
@@ -610,6 +623,33 @@ def test_cv_fail_needs_two_checks_in_a_row(sm):
     assert ag.tick(91.0) == []
     cv["state"] = "ok"
     assert ag.tick(121.0) == [], "сбой на одну проверку — без тревоги и без «снято»"
+
+
+def test_cv_fail_from_previous_boil_is_not_alarm(sm):
+    """Усп 12.11 19:45: «не стримит» залип с прошлой варки, новая варка вошла в зону — тревоги нет, пока новая проба не повторит отказ."""
+    cv = {"state": "no_frames", "message": "нет кадров пробы: камера не отдала кадр", "t": 50.0}
+    st = {"stage": 2, "stage_ok": False, "cyclic": True}
+    ag = sm.Agent(sources=make_sources(cv=lambda: dict(cv), state=lambda: dict(st)), clock=Clock())
+    assert ag.tick(100.0) == []                       # между варками
+    st.update(stage=3, stage_ok=True)
+    assert ag.tick(200.0) == [] and ag.tick(215.0) == [], "старый отказ — не тревога"
+    cv["t"] = 220.0                                   # первая проба новой варки тоже без кадров
+    assert ag.tick(230.0) == []
+    ev = ag.tick(245.0)
+    assert [(e["data"]["code"], e["text"]) for e in ev] == [("cv_fail", "Проба не разобрана: нет кадров пробы: камера не отдала кадр")]
+
+
+def test_cv_fail_not_streaming_checks_camera_now(sm):
+    """«Камера не стримит»: тревога, только пока камера и правда не стримит; текст без «Проба не разобрана: проба не разобрана»."""
+    cv = {"state": "no_camera", "message": "проба не разобрана: камера не стримит", "t": 10.0}
+    cam = {"serial": "S1", "streaming": False}
+    ag = sm.Agent(sources=make_sources(cv=lambda: dict(cv), camera=lambda: dict(cam)), clock=Clock())
+    ag.tick(15.0)
+    ev = ag.tick(30.0)
+    assert [(e["data"]["code"], e["text"]) for e in ev] == [("cv_fail", "Проба не разобрана: камера не стримит")]
+    cam["streaming"] = True                           # страницу открыли, поток пошёл — следующая проба возьмёт кадр
+    ev = ag.tick(45.0)
+    assert [(e["data"]["code"], e["data"]["state"]) for e in ev] == [("cv_fail", "closed")]
 
 
 def test_retract_and_approach_are_counted_separately(sm):

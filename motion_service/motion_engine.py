@@ -37,6 +37,8 @@ ZONE_TYPES = ("motion", "presence", "cycle", "level")
 METRICS = ("flow", "diff")
 GROUP_TYPES = ("sum", "monotonic", "worktimer", "mirror", "level")
 MIRROR_MODES = ("mirror", "same")
+BAN_DEG = 15.0           # полуширина запрета вокруг ложной неподвижной цели палки, градусы
+MAX_BANS = 3             # сколько ложных целей помним на палку
 CYCLE_WORK_R = 170       # радиус (px), до которого сжимается область вокруг оси палки перед поиском: быстро и не зависит от разрешения камеры
 CYCLE_RED_HSV = (16, 165, 50, 55)     # красный: H ≤ h_max или H ≥ h_min (круг оттенков), S ≥ s_min, V ≥ v_min; мягче прежнего: красный конец в сумерках бледнеет и желтеет
 CYCLE_RED_HSV_OLD = (12, 163, 70, 80)  # прежний умолчательный красный: зоны, сохранённые с ним нетронутыми, переходят на новый (свои значения не трогаем)
@@ -51,6 +53,9 @@ FILL_RING_MARGIN = 1.0                 # «металл вокруг окна» 
 FILL_RING_GAP = 0.25                   # рамка окна (доля высоты), которая в металл не входит
 GROUP_OUT_KINDS = ("holding", "bits", "coils")
 AGGS = ("any", "majority", "all")
+CAMERA_ROWS = ("", "lower", "upper")           # ряд валов камеры: не задан / нижний (Н) / верхний (В) — для разностей валов (motion_shafts.py)
+SHAFT_IDS = ("nl", "np", "vl", "vp")           # НЛВ, НПВ, ВЛВ, ВПВ
+PAIR_IDS = ("nlr", "vlr", "lnv", "rnv")        # НЛВ–НПВ, ВЛВ–ВПВ, НЛВ–ВЛВ, НПВ–ВПВ
 
 # Пороги по умолчанию зависят от метрики: поток — безразмерный (0.3..2), diff — градации серого (после размытия).
 THRESH_DEFAULT = {"flow": (0.9, 0.6), "diff": (4.0, 2.0)}
@@ -59,7 +64,7 @@ DEFAULT_MODBUS = {"enable": False, "host": "192.168.1.20", "port": 502, "device_
 
 
 def default_config() -> dict:
-    return {"version": 1, "modbus": dict(DEFAULT_MODBUS), "cameras": [], "scenarios": []}
+    return {"version": 1, "modbus": dict(DEFAULT_MODBUS), "cameras": [], "scenarios": [], "shafts": normalize_shafts(None)}
 
 
 # ───────────────────────────── конфиг: проверка и значения по умолчанию ─────────────────────────────
@@ -285,6 +290,8 @@ def _norm_group(g: dict, cam_id: str, zone_ids: list, cycle_ids=(), level_ids=()
             glass2_min=_num(g.get("glass2_min", 20), where + ".glass2_min", 0, 100),
             glass1_full=_num(g.get("glass1_full", 100), where + ".glass1_full", 0, 100),
             glass2_full=_num(g.get("glass2_full", 100), where + ".glass2_full", 0, 100),
+            glass2_gate=_num(g.get("glass2_gate", 90), where + ".glass2_gate", 0, 100),
+            shots_every_s=_num(g.get("shots_every_s", 60), where + ".shots_every_s", 0, 3600),
             hold_s=_num(g.get("hold_s", 30), where + ".hold_s", 1, 3600),
             contour=bool(g.get("contour", False)),
             frames_on=bool(g.get("frames_on", False)),
@@ -336,6 +343,23 @@ def _norm_scenario(sc: dict, cams: list) -> dict:
     return {"id": sid, "name": str(sc.get("name") or sid), "rule": rule, "signal": signal, "sources": srcs,
             "out": _out(sc.get("out"), ZONE_OUT_KINDS, where + ".out"),
             "modbus": normalize_modbus(mb, base=None) if mb else None}
+
+
+def normalize_shafts(raw: Optional[dict]) -> dict:
+    """Блок «валы»: куда писать скорость каждого вала и что считать/писать по четырём парам (motion_shafts.py). Всегда полный:
+    все 4 вала и 4 пары, пустое — по умолчанию (допуски 0 = тревога выключена, адреса нет = в ПЛК не пишем)."""
+    raw = raw if isinstance(raw, dict) else {}
+    rs, rp = raw.get("shafts") or {}, raw.get("pairs") or {}
+    shafts = {sid: {"out_rpm": _out((rs.get(sid) or {}).get("out_rpm"), ("holding",), "вал %s.out_rpm" % sid)} for sid in SHAFT_IDS}
+    pairs = {}
+    for pid in PAIR_IDS:
+        p, where = rp.get(pid) or {}, "пара %s" % pid
+        pairs[pid] = {"ref": _num(p.get("ref", 0), where + ".ref", -180, 180),
+                      "tol_angle": _num(p.get("tol_angle", 0), where + ".tol_angle", 0, 180),
+                      "tol_rpm": _num(p.get("tol_rpm", 0), where + ".tol_rpm", 0, 10000),
+                      "out_angle": _out(p.get("out_angle"), ("holding",), where + ".out_angle"),
+                      "out_rpm": _out(p.get("out_rpm"), ("holding",), where + ".out_rpm")}
+    return {"shafts": shafts, "pairs": pairs}
 
 
 WEBVIEW_DEFAULT = {"enabled": False, "host": "0.0.0.0", "port": 5000, "update_sec": 5.0, "jpeg_quality": 85, "annotate": False,
@@ -392,6 +416,9 @@ def normalize_camera(c: dict) -> dict:
     if mb:
         mb = normalize_modbus(mb, base=None)
     wv = _norm_webview(c["webview"], cid) if c.get("webview") else None
+    row = str(c.get("row") or "").lower()
+    if row not in CAMERA_ROWS:
+        raise ValueError("камера %s: ряд валов — одно из %s" % (cid, ", ".join(r or "(не задан)" for r in CAMERA_ROWS)))
     return {
         "id": cid,
         "name": str(c.get("name") or cid),
@@ -400,6 +427,7 @@ def normalize_camera(c: dict) -> dict:
         "transport": transport,
         "hw_accel": hw,
         "substream": bool(c.get("substream", False)),
+        "row": row,
         "proc_fps": _num(c.get("proc_fps", 3), "камера %s.proc_fps" % cid, 0.2, 30),
         "frame_gap": _num(c.get("frame_gap", 1), "камера %s.frame_gap" % cid, 1, 10, True),
         "reconnect_delay_s": _num(c.get("reconnect_delay_s", 3.0), "камера %s.reconnect_delay_s" % cid, 0.5, 300),
@@ -444,7 +472,8 @@ def normalize_config(cfg: dict) -> dict:
     sids = [s["id"] for s in scs]
     if len(set(sids)) != len(sids):
         raise ValueError("id сценариев повторяются")
-    return {"version": 1, "modbus": normalize_modbus(cfg.get("modbus")), "cameras": cams, "scenarios": scs}
+    return {"version": 1, "modbus": normalize_modbus(cfg.get("modbus")), "cameras": cams, "scenarios": scs,
+            "shafts": normalize_shafts(cfg.get("shafts"))}
 
 
 # ───────────────────────────── метрики зоны ─────────────────────────────
@@ -702,6 +731,7 @@ class CycleRT:
         self.ker = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (zcfg["thin"], zcfg["thin"])) if zcfg["thin"] >= 3 else None
         self.raw: deque = deque(maxlen=zcfg["smooth"])
         self.trk: deque = deque()               # (время, «развёрнутый» угол без скачков через 360°) за последние rpm_window секунд — для оборотов
+        self.bans: list = []                    # углы ложных неподвижных целей: при поиске по всему кругу вокруг них не смотрим (reset их не трогает)
         self.reset()
 
     def reset(self):
@@ -790,6 +820,10 @@ class CycleRT:
             sr, sb = red[self.ys, self.xs].mean(axis=1), blue[self.ys, self.xs].mean(axis=1)
             comb = sr + c["blue_w"] * np.roll(sb, -180)                    # красный на φ, синий на φ+180
             cand = comb
+            if not locked and self.bans:                                   # ложная неподвижная цель (рамка, лист): при поиске по кругу её как будто нет
+                for b in self.bans:                                        # (и в уверенности тоже: иначе она «вторая по силе» и режет conf настоящей палки)
+                    comb = np.where(np.abs(((PHIS - b + 180.0) % 360.0) - 180.0) <= BAN_DEG, 0.0, comb)
+                cand = comb
             if locked:
                 hw = min(90.0, c["jump_deg"] + max(0.0, dt - 2.0))         # при пропаже окно поиска понемногу растёт: 1°/с
                 near = np.abs(((PHIS - self._expected(now) + 180.0) % 360.0) - 180.0) <= hw
@@ -1046,6 +1080,13 @@ class CameraEngine:
             if not a or not b:
                 continue
             for x, y in ((a, b), (b, a)):
+                if x.moving is True:
+                    x.bans.clear()                                           # снова крутится — прежние запреты не нужны
+                elif x.valid and not x.coast and x.moving is False and y.valid and not y.coast and y.moving is True:
+                    # «нашлась», но стоит, пока парная крутится: это ложная цель — запоминаем угол и ищем палку заново
+                    x.bans = (x.bans + [x.angle])[-MAX_BANS:]
+                    x.reset()
+                    continue
                 if x.coast and y.valid and not y.coast and y.moving is not None:
                     x.moving = y.moving
                     x.hint_stop = y.moving is False

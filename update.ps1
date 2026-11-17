@@ -372,6 +372,9 @@ function Invoke-Update {
             $asset = $rel.assets | Where-Object { $_.name -like 'web_MVS_*.zip' } | Select-Object -First 1
             if (-not $asset) { throw 'в последнем релизе нет файла web_MVS_*.zip' }
             $latest = ([string]$rel.tag_name).Trim().TrimStart('v', 'V')
+            $script:relCache = $rel; $script:relTried = $true      # тот же ответ GitHub пригодится дополнениям
+            $mv = Get-ManifestVersion 'main'                        # версия приложения по манифесту релиза; без манифеста — тег
+            if ($mv) { $latest = $mv }
         } catch {
             Log 'последняя версия: NaN (не удалось определить)' 'Yellow'
             Log ("причина: " + $_.Exception.Message) 'Yellow'
@@ -585,6 +588,35 @@ function Get-Release {
     return $script:relCache
 }
 
+$script:manifest = $null
+$script:manifestTried = $false
+function Get-Manifest {
+    # components.json последнего релиза: версии компонентов (у каждого своя). Нет файла или релиза — $null, тогда версия = тег релиза, как раньше
+    if ($script:manifestTried) { return $script:manifest }
+    $script:manifestTried = $true
+    $rel = Get-Release
+    if (-not $rel) { return $null }
+    $a = $rel.assets | Where-Object { $_.name -eq 'components.json' } | Select-Object -First 1
+    if (-not $a) { return $null }
+    try {
+        $r = Invoke-WithRetry { Invoke-WebRequest -Uri $a.browser_download_url -Headers @{ 'User-Agent' = 'web_MVS-update' } -UseBasicParsing }
+        $txt = $r.Content
+        if ($txt -is [byte[]]) { $txt = [System.Text.Encoding]::UTF8.GetString($txt) }
+        $script:manifest = ([string]$txt).TrimStart([char]0xFEFF) | ConvertFrom-Json
+    } catch { Log ("components.json не прочитан, версии по тегу релиза: " + $_.Exception.Message) 'Yellow' }
+    return $script:manifest
+}
+
+function Get-ManifestVersion([string]$key) {
+    # версия компонента в последнем релизе по манифесту; $null — манифеста нет или версия не разобралась
+    $m = Get-Manifest
+    if ($m -and $m.components) {
+        $c = $m.components.$key
+        if ($c) { $v = ([string]$c.version).Trim().TrimStart('v', 'V'); if (Test-VersionString $v) { return $v } }
+    }
+    return $null
+}
+
 function Get-ZipDirVersion([string]$zip) {
     # версия внутри архива: у основного приложения _internal/VERSION, у дополнений VERSION
     Add-Type -AssemblyName System.IO.Compression.FileSystem
@@ -609,6 +641,8 @@ function Get-LatestVersionFor($d) {
     if ($z) { return (Get-ZipDirVersion $z.FullName) }
     if ($ZipDir) { return 'NaN' }
     $rel = Get-Release
+    $mv = Get-ManifestVersion $d.Key
+    if ($mv) { return $mv }
     if ($rel) { $v = ([string]$rel.tag_name).Trim().TrimStart('v', 'V'); if (Test-VersionString $v) { return $v } }
     return 'NaN'
 }
@@ -711,6 +745,8 @@ function Update-Addon($d) {
             $asset = $rel.assets | Where-Object { $_.name -like $d.Asset } | Select-Object -First 1
             if (-not $asset) { throw "в последнем релизе нет файла $($d.Asset)" }
             $latest = ([string]$rel.tag_name).Trim().TrimStart('v', 'V')
+            $mv = Get-ManifestVersion $d.Key            # у каждого компонента своя версия (манифест релиза); без манифеста — тег
+            if ($mv) { $latest = $mv }
         }
         Log "доступно: $latest"
         if ($installed -and (Test-VersionString $latest) -and (Test-VersionString $cur) -and -not $Force) {

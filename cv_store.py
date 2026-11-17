@@ -77,6 +77,10 @@ def _volume_cols(s: dict, vp: dict, n_frames: int) -> dict:
         if fv.get(mod):
             for i in range(cv_volume.FINE_N):
                 out["fsieve_%s_b%d" % (mod, i)] = fv[mod][i]
+    mu = vp.get("mean_um") or {}
+    for mod in ("m1", "m2", "m3", "area"):           # средний размер кристалла, мкм: msize_<m1|m2|m3|area> (вес — объём модели / площадь)
+        if mu.get(mod) is not None:
+            out["msize_" + mod] = mu[mod]
     out["good_n"], out["rej_n"] = (sums.get("n") or {}).get("total"), (sums.get("n") or {}).get("agg")     # хороших кристаллов / отсеянного брака в пробе (штук, все кадры)
     out["fines_side_mm"], out["fines_um"] = cfg.get("fines_side_mm"), cfg.get("fines_um")
     out["k_thick"], out["fines_from_sv"] = cfg.get("k_thick"), cfg.get("fines_from_sv")
@@ -516,7 +520,8 @@ def probe_sieve(serial: str, ts: str) -> Optional[dict]:
     r = next((x for x in reversed(_gated_rows(serial, t, t + 60)) if x.get("ts") == ts), None)   # +60 с: t в журнале с долями секунды, ts — без
     if r is None:
         return None
-    return {"ts": ts, "t": r["t"], "sv": r.get("sv"), "stage": r.get("stage"), "phase": r.get("phase"), "fsieve": _fsieve([r])}
+    return {"ts": ts, "t": r["t"], "sv": r.get("sv"), "stage": r.get("stage"), "phase": r.get("phase"), "fsieve": _fsieve([r]),
+            "msize": {m: r.get("msize_" + m) for m in ("m1", "m2", "m3", "area")}}     # средний размер кристалла пробы, мкм
 
 
 def trend_range(serial: str, t_from: float, t_to: float, series: Optional[list[str]] = None,
@@ -674,6 +679,9 @@ def _vol_block(sel: list) -> dict:
     # рассев по объёму (M1–M3, вес — общий объём пробы) и по площади (area, простое среднее по пробам)
     out["sieve"] = {m: [r3(_wmean(fin, "sieve_%s_b%d" % (m, i), ("vtot_" + m) if m != "area" else None)) for i in range(len(cv_volume.SIEVE_MM) + 1)] for m in ("m1", "m2", "m3", "area")}
     out["fsieve"] = _fsieve(fin)
+    # средний размер кристалла, мкм: по моделям M1–M3 (вес — общий объём пробы, как у рассева) и по площади (простое среднее по пробам)
+    out["msize"] = {m: (None if v is None else round(v, 1)) for m, v in
+                    ((m, _wmean(fin, "msize_" + m, ("vtot_" + m) if m != "area" else None)) for m in ("m1", "m2", "m3", "area"))}
     return out
 
 

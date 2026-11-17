@@ -333,7 +333,8 @@ class MicroscopeService:
     def _set_cv_status(self, state, message=""):
         """Статус разбора для UI: idle / running / ok / no_camera / no_frames / overexposed / black /
         sidecar_offline / error. Любой отказ виден на странице, а не только в логе."""
-        self._cv_status = {"state": state, "message": message, "ts": time.strftime("%H:%M:%S")}
+        # t — эпоха: мониторинг по ней отличает свежий отказ от залипшего с прошлой варки
+        self._cv_status = {"state": state, "message": message, "ts": time.strftime("%H:%M:%S"), "t": time.time()}
 
     def cv_status(self):
         return dict(self._cv_status)
@@ -1312,6 +1313,12 @@ class MicroscopeService:
             path.parent.mkdir(parents=True, exist_ok=True)
             with open(path, "a", encoding="utf-8") as f:
                 f.write(line)
+            trace = info.get("trace") or []
+            if trace:                                    # трасса хода (раз в секунду) — разбор «куда поехал мотор»
+                with open(path.with_name("autocal_trace.log"), "a", encoding="utf-8") as f:
+                    f.write("# %s\t%s\t%s\tretract_pos=%s\n" % (info.get("ts"), info.get("trigger"),
+                                                                 info.get("result"), info.get("retract_pos")))
+                    f.write("\n".join(trace) + "\n")
         except Exception as e:
             log_event("microscope_service", "Не удалось записать журнал автокалибровки", "warn", {"error": str(e)})
         last = info.get("last")

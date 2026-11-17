@@ -35,6 +35,9 @@ from paths import DATA_DIR, read_version
 REPO = "m228/web_MVS"
 API_LATEST = f"https://api.github.com/repos/{REPO}/releases/latest"
 ASSET_PREFIX = "web_MVS_"
+MANIFEST_ASSET = "components.json"      # версии компонентов релиза (build.bat → scripts/make_manifest.py)
+URGENT_MARK = "[urgent]"                 # метка в тексте релиза: ставить сразу, без выдержки
+_latest_extra = {"published_at": "", "manifest": None}   # дополнение к ответу _fetch_latest_meta: дата выхода релиза и его манифест
 
 STAGING = DATA_DIR / ".update"      # сюда качаем и распаковываем обновление
 STAGED = STAGING / "staged"          # распакованное содержимое архива
@@ -127,15 +130,69 @@ def _fetch_latest_meta(max_age: float = 0.0):
     with urllib.request.urlopen(req, timeout=15) as resp:
         data = json.loads(resp.read().decode("utf-8"))
 
-    asset = None
+    asset, manifest_asset = None, None
     for item in data.get("assets", []):
         name = str(item.get("name", ""))
-        if name.startswith(ASSET_PREFIX) and name.endswith(".zip"):
+        if name.startswith(ASSET_PREFIX) and name.endswith(".zip") and asset is None:
             asset = item
-            break
+        elif name == MANIFEST_ASSET:
+            manifest_asset = item
+    manifest = None
+    if manifest_asset is not None:                          # нет или не прочитался — работаем по-старому (одна версия на весь релиз = тег)
+        try:
+            mreq = urllib.request.Request(manifest_asset["browser_download_url"], headers={"User-Agent": "web_MVS-update"})
+            with urllib.request.urlopen(mreq, timeout=15) as mresp:
+                manifest = parse_manifest(json.loads(mresp.read().decode("utf-8-sig")))
+        except Exception as exc:
+            log_event("updater.check", "Манифест релиза не прочитан — версии по тегу", "warn", {"error": str(exc)})
+    _latest_extra.update(published_at=str(data.get("published_at") or ""), manifest=manifest)
     meta = (data.get("tag_name") or "", asset, data.get("body") or "")
     _meta_cache = (time.time(), meta)
     return meta
+
+
+_VERSION_RE = re.compile(r"^\d+(\.\d+){1,3}$")
+
+
+def parse_manifest(data):
+    """components.json релиза → {"release": "3.0.0", "components": {"main": "3.0.0", "cv": "3.0.1", ...}} или None, если формат не тот.
+    Версии компонентов ходят независимо друг от друга (у релиза свой номер — тег)."""
+    if not isinstance(data, dict) or not isinstance(data.get("components"), dict):
+        return None
+    comps = {}
+    for key, val in data["components"].items():
+        ver = _norm(str(val.get("version") if isinstance(val, dict) else val))
+        if _VERSION_RE.match(ver):
+            comps[str(key)] = ver
+    if "main" not in comps:
+        return None
+    return {"release": _norm(str(data.get("release") or "")), "components": comps}
+
+
+def _component_version(key: str, tag: str) -> str:
+    """Какая версия компонента в последнем релизе: из манифеста; релиз без манифеста — все компоненты той же версии, что и тег."""
+    m = _latest_extra.get("manifest")
+    ver = ((m or {}).get("components") or {}).get(key)
+    return ver or _norm(tag)
+
+
+def addon_installed_version(addon: dict) -> str:
+    try:
+        return (DATA_DIR / addon["dir"] / "VERSION").read_text(encoding="utf-8").strip().lstrip("vV")
+    except OSError:
+        return ""
+
+
+def addons_due(tag: str) -> list:
+    """Установленные дополнения, версия которых в релизе новее: [{"key", "current", "latest"}]. Не установленные не трогаем."""
+    out = []
+    for a in ADDONS:
+        if not (DATA_DIR / a["dir"] / a["marker"]).is_file():
+            continue
+        cur, latest = addon_installed_version(a), _component_version(a["key"], tag)
+        if _version_tuple(latest) > _version_tuple(cur):
+            out.append({"key": a["key"], "current": cur, "latest": latest})
+    return out
 
 
 _last_check_logged = None   # (current, latest, available) последней записи в журнал: тихая проверка пишет только при смене
@@ -154,7 +211,7 @@ def check_latest(quiet: bool = False):
         return {"current": current, "latest": None, "update_available": False,
                 "error": "Не удалось связаться с GitHub: " + str(exc)}
 
-    latest = _norm(tag)
+    latest = _component_version("main", tag)         # версия основного приложения (без манифеста — тег)
     # апдейт доступен только если релиз строго новее текущей — не предлагаем даунгрейд
     available = asset is not None and _version_tuple(latest) > _version_tuple(current)
     downloading = _DL_LOCK.locked()
@@ -162,12 +219,17 @@ def check_latest(quiet: bool = False):
     if staged and _version_tuple(staged) <= _version_tuple(current) and STAGING.exists():
         shutil.rmtree(STAGING, ignore_errors=True)         # архив уже установлен — лишние ~80 МБ не держим
         staged = ""
-    key = (current, latest, available)
+    due = addons_due(tag)
+    key = (current, latest, available, tuple((d["key"], d["latest"]) for d in due))
     if not quiet or key != _last_check_logged:
         log_event("updater.check", "Проверка обновлений", "info",
-                  {"current": current, "latest": latest, "available": available})
+                  {"current": current, "latest": latest, "available": available, "addons_due": due})
     _last_check_logged = key
     return {
+        "published_at": _latest_extra.get("published_at") or None,   # когда вышел релиз (для выдержки автообновления)
+        "urgent": URGENT_MARK in (notes or "").lower(),               # [urgent] в тексте релиза — выдержку не ждём
+        "addons_due": due,                                            # сервисы, которым нужно обновление (приложение при этом не трогаем)
+        "manifest": _latest_extra.get("manifest") is not None,
         "current": current,
         "latest": latest or None,
         "update_available": available,
@@ -329,6 +391,7 @@ def _download_latest_locked(extract: bool, delta_only: bool = False):
         return {"ok": False, "error": "В последнем релизе нет файла web_MVS_*.zip"}
 
     # архив этой версии уже скачан и проверен (фоновое автообновление или прошлое нажатие) — не стираем и не качаем заново
+    tag = _component_version("main", tag)               # дальше «tag» — версия основного приложения в релизе (по манифесту)
     if staged_version() == _norm(tag) and (not extract or (STAGED / "web_MVS.exe").is_file()):
         return {"ok": True, "version": _norm(tag), "already": True}
 

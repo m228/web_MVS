@@ -160,7 +160,7 @@ def test_restart_after_window_held_and_warning(env):
     assert len(env.runs) == 1
     port, kw = env.runs[0]
     assert port == 8000 and kw["staged"] is True and kw["no_browser"] is True
-    assert kw["components"] == "main,motion"           # основное + установленные дополнения
+    assert kw["components"] == "main"                  # только основное: сервисы не изменились — их не трогаем
     env.tick(60)
     assert len(env.runs) == 1                          # второй раз не запускаем
 

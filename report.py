@@ -284,7 +284,7 @@ def build(serial: str, t_from: float, t_to: float, min_probes: int = MIN_PROBES,
 
 
 def _seed_unit_label(field: str = "seed_qty") -> str:
-    """Подпись единицы затравки (кг / л / %) — как выбрано на вкладке «ПЛК» для этого вида затравки."""
+    """Подпись единицы затравки (общая — м³; сларри и МУ — кг / л / %, как выбрано на вкладке «ПЛК»)."""
     try:
         import plc_source
         return plc_source.SEED_UNITS[plc_source.seed_unit(None, field)]

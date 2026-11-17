@@ -354,6 +354,20 @@ def test_autocal_abort_by_operator_manual_keeps_manual(fsm):
     assert not fsm._cal_active and fsm.manual and not fsm._cal_return_manual
 
 
+def test_autocal_trace_is_collected_and_given_to_log_on_finish(fsm):
+    # диагностика отвода: раз в секунду пишем фазу/цель/датчики, по окончании отдаём в колбэк журнала
+    got = []
+    fsm.on_autocal_done = got.append
+    fsm.manual = True
+    fsm.start_autocal()
+    for _ in range(25):
+        fsm.tick()
+    assert len(fsm._cal_trace) >= 2 and "pre" in fsm._cal_trace[0]
+    fsm.set_movement_inhibit(True)
+    fsm.tick()
+    assert got and got[0]["trace"] and got[0]["retract_pos"] == fsm._retract_pos
+
+
 def _glass_washes(every, probes):
     # сколько проб из `probes` промывали стекло (клапан glass открывался на шаге 21); трубка — в каждой пробе
     cfg = copy.deepcopy(plate_config.DEFAULTS)

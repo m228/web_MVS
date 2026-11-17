@@ -1379,6 +1379,22 @@ def motion_snapshot(camera: str, w: int = 0):
     return Response(content=data, media_type="image/jpeg", headers={"X-Frame-W": str(fw), "X-Frame-H": str(fh), "Cache-Control": "no-store"})
 
 
+@app.get("/api/motion/level_shot")
+def motion_level_shot(camera: str, group: str, ts: float, dir: int = 0):     # noqa: A002 — имя параметра в адресе
+    """Снимок для графика уровня (декантатор), ближайший к моменту ts (dir −1/1 — соседний раньше/позже). Время снимка — в заголовке X-Shot-Ts."""
+    r = motion_client.level_shot(_motion_url(), camera, group, ts, dir)
+    if r is None:
+        return Response(status_code=404)
+    data, t = r
+    return Response(content=data, media_type="image/jpeg", headers={"X-Shot-Ts": str(t), "Cache-Control": "no-store"})
+
+
+@app.get("/api/motion/level_shots")
+def motion_level_shots(camera: str, group: str, since: float = 0.0):
+    """Снимки уровня с разметкой кадра (лента слева в окне камеры): {"shots": [{ts, meta}]}."""
+    return motion_client.level_shots(_motion_url(), camera, group, since)
+
+
 @app.get("/api/motion/history")
 def motion_history(camera: str, n: int = 300, window: float = 0, points: int = 600):
     return motion_client.history(_motion_url(), camera, n, window, points)
@@ -1400,6 +1416,18 @@ def motion_visibility(camera: str, window: float = 86400.0):
 def motion_mirror_table(req: dict = Body(...)):
     # таблица поправки зеркальности двух валов по последним минутам (снимают, пока валы ровные); сохраняет интерфейс
     return motion_client.mirror_table(_motion_url(), str(req.get("camera") or ""), str(req.get("group") or ""))
+
+
+@app.get("/api/motion/shafts_history")
+def motion_shafts_history(pair: str, window: float = 3600.0, points: int = 600):
+    # разности пары валов (угол и скорость) для графика в панели КЗ
+    return motion_client.shafts_history(_motion_url(), pair, window, points)
+
+
+@app.post("/api/motion/shafts_calibrate")
+def motion_shafts_calibrate(req: dict = Body(...)):
+    # эталон разности углов пары валов: «ноль» = текущее положение валов
+    return motion_client.shafts_calibrate(_motion_url(), str(req.get("pair") or ""))
 
 
 @app.post("/api/motion/record")
@@ -1455,6 +1483,8 @@ def motion_vision(req: dict = Body(...)):
     cam["enabled"] = enabled
     if enabled and url:
         cam["url"] = url
+        if req.get("name"):
+            cam["name"] = str(req["name"])
     r = motion_client.put_config(service, cfg)
     if "error" not in r:
         log_event("motion", "CV (мультипросмотр): камера %s — анализ движения %s" % (serial, "включён" if enabled else "выключен"), "info")
@@ -2303,6 +2333,8 @@ def rtsp_metrics(serial_number: str):
             "photo_count": worker.photo_saved_count,
             "video_elapsed": worker.video_elapsed(),
             "zoom_factor": worker.zoom_factor,
+            "zoom_pan_x": worker.zoom_pan_x,
+            "zoom_pan_y": worker.zoom_pan_y,
             # состояние фонового захвата и здоровья автосохранения (см. camera_core)
             "reconnecting": worker.reconnecting,
             "autostart": worker.autostart,

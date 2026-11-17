@@ -360,7 +360,7 @@
   // показывать ли отдельные модели M1–M3 (по умолчанию скрыты: «Среднее» и «Площадь» понятнее)
   let cvShowModels = false;
   try { cvShowModels = localStorage.getItem("microCvShowModels") === "1"; } catch (e) { }
-  let cvSieveLast = null, cvSieveScale = 1, cvSievePhase = "boil";     // cvSievePhase: boil | p1 | g1 | p2 | g2 — какая плитка рассева выбрана
+  let cvSieveLast = null, cvSieveSize = null, cvSieveScale = 1, cvSievePhase = "boil";     // cvSievePhase: boil | p1 | g1 | p2 | g2 — какая плитка рассева выбрана
   // строки таблицы рассева: диапазон МУКИ (0–0,20 мм) — по 0,05 мм, оранжевые; крупнее — по 0,1 мм (те же 21 фракция, сложенные парами).
   // Галочка «скрыть крупнее 0,20» оставляет только муку и одну итоговую строку «≥ 0,20» — чтобы доли по-прежнему давали 100 %.
   const CV_SIEVE_ROWS = (() => {
@@ -374,11 +374,17 @@
   const CV_SIEVE_REST = { label: "≥ 0,20", idx: Array.from({ length: CV_FINE_N - CV_FINES_ROWS }, (_, n) => CV_FINES_ROWS + n), fines: false, rest: true };
   let cvSieveOnlyFines = false;
   try { cvSieveOnlyFines = localStorage.getItem("microCvSieveOnlyFines") === "1"; } catch (e) { }
-  function cvRenderSieve(sv, scale) {      // sv = {m1:[21], m2:[21], m3:[21], area:[21]} в %: объём по трём моделям и площадь; scale не нужен (шкала одна); нет данных — прочерки
+  function cvRenderSieve(sv, scale, size) {      // sv = {m1:[21], m2:[21], m3:[21], area:[21]} в %: объём по трём моделям и площадь; scale не нужен (шкала одна); нет данных — прочерки
     cvSieveLast = sv; cvSieveScale = scale || 1;
-    cvFillSieve($("cvSieveGrid"), sv);
+    if (size !== undefined) cvSieveSize = size;     // перерисовка по кнопке M1–M3 размер не передаёт — берём прежний
+    cvFillSieve($("cvSieveGrid"), sv, cvSieveSize);
   }
-  function cvFillSieve(g, sv) {            // таблица рассева в элемент g — одна и для вкладки «Распознавание», и для режима «Рассев» тренда
+  // size — средний размер кристалла, мкм: {m1, m2, m3, area} (по варке/фазе — blk.msize, по пробе — volume_pct.mean_um / msize журнала).
+  // Под таблицей черта и строка «Средний размер»: в столбце модели — с весом её объёма, «Площадь» — с весом площади, «Среднее» — среднее M1–M3
+  const CV_SIZE_TIP = "Средний размер кристалла (диаметр), мкм — средний кристалл «по массе», как средний размер по ситам в лаборатории. " +
+    "M1–M3 — с весом объёма модели, «Площадь» — с весом площади, «Среднее» — среднее M1–M3. Только хорошие кристаллы (брак отсеян). " +
+    "В тренде «средний размер» — по штукам, поэтому там он меньше";
+  function cvFillSieve(g, sv, size) {            // таблица рассева в элемент g — одна и для вкладки «Распознавание», и для режима «Рассев» тренда
     if (!g) return;
     const one = (m, k) => (sv && sv[m] && sv[m][k] != null ? sv[m][k] : null);
     const sum = (m, idx) => { let s = null; idx.forEach((k) => { const v = one(m, k); if (v != null) s = (s || 0) + v; }); return s; };
@@ -396,6 +402,11 @@
         const v = val(c, r.idx), bar = v != null && mx[c] > 0 ? Math.round(100 * v / mx[c]) : 0;
         html += '<em class="' + (v == null || v < 0.05 ? "is-zero" : "") + fn + '"><span class="bar"><i style="width:' + bar + '%"></i></span><span class="num">' + fmtPct(v) + "</span></em>";   // полоска слева, число справа — не заходят друг на друга
       });
+    });
+    html += '<i class="micro-sieve__sep" aria-hidden="true"></i><span class="micro-sieve__size" title="' + CV_SIZE_TIP + '">средний размер, мкм</span>';
+    cols.forEach((c) => {
+      const v = size ? (c === "avg" ? cvAvg3(size) : size[c]) : null;
+      html += '<em class="micro-sieve__size">' + (v == null ? "—" : String(Math.round(v))) + "</em>";
     });
     cvSetHtml(g, html);
   }
@@ -542,7 +553,7 @@
     if (b && ph === "boil") cvSievePhase = "boil";
     const pscale = ph !== "boil" ? ((b.cfg || {})["phase_scale_" + ph] || CV_PHASE_SCALE[ph]) / 100 : 1;
     const blk = b ? (ph !== "boil" ? b.phases[ph] : (b.tail || b)) : null;            // по варке — пробы последних ~2 СВ
-    cvRenderSieve(blk ? blk.fsieve : null, 1);
+    cvRenderSieve(blk ? blk.fsieve : null, 1, blk ? blk.msize : null);
     cvShowSv(cvSvRange(blk, ph !== "boil" ? blk.dur_s : (b ? b.dur_s : null)));
     if (!b) {
       cvSetText(lbl, "варок пока нет");
@@ -624,7 +635,7 @@
   function cvRenderVolume(s) {
     if (cvVolMode !== "probe") { cvRenderBoil(); return; }
     const vp = (s && s.volume_pct) || {}, cfg = (s && s.volume_cfg) || {};
-    cvRenderSieve(vp.sieve_fine, 1);                    // мелкий рассев пробы — шкала общая для всех фаз
+    cvRenderSieve(vp.sieve_fine, 1, vp.mean_um || null);                    // мелкий рассев пробы — шкала общая для всех фаз
     cvRenderSieveTiles(null);
     cvShowSv("");
     document.querySelectorAll("#cvVolGrid [data-v]").forEach((el) => {
@@ -1411,9 +1422,9 @@
   const CV_REGIME = ["temp", "vac", "level", "current", "cook_time", "seed_age", "seed_qty", "seed_slurry", "seed_mu", "fines_avg", "fines_flat"];   // fines_avg — мука, среднее M1–M3: сплошной, но на общей шкале 0–100 % (как мелкая/средняя/крупная): 30 % всегда на одной высоте при любом приближении
   const CV_SOLID = ["fines_avg", "fines_flat"];   // мука (плавная и плоская): сплошные линии на шкале 0–100 %, пропуск данных внутри варки линию не рвёт
   const CV_AUTO_SPAN = { temp: 10, vac: 0.5, current: 5, cook_time: 60, seed_age: 60, seed_qty: 1, seed_slurry: 1, seed_mu: 1 };
-  // единица затравки — как выбрано на вкладке «ПЛК» (кг / л / %): подпись строки тренда и подсказки
+  // единица затравки (общая — м³; сларри и МУ — как выбрано на вкладке «ПЛК»: кг / л / %): подпись строки тренда и подсказки
   const CV_SEEDS = { seed_qty: "затравка", seed_slurry: "затравка сларри", seed_mu: "затравка МУ" };   // виды затравки из ПЛК, у каждого своя единица
-  const cvSeedUnits = { seed_qty: "кг", seed_slurry: "кг", seed_mu: "кг" };
+  const cvSeedUnits = { seed_qty: "м³", seed_slurry: "кг", seed_mu: "кг" };
   (async () => {
     try {
       const c = ((await (await fetch("/api/plc/source", { cache: "no-store" })).json()) || {}).config || {};
@@ -1789,7 +1800,7 @@
     const box = $("cvTrSieveTiles");
     box.innerHTML = ""; box.hidden = probe;              // у одной пробы фаз нет — вместо плиток её время и СВ
     if (probe) {
-      cvFillSieve($("cvTrSieveGrid"), cvTrProbe ? cvTrProbe.fsieve : null);
+      cvFillSieve($("cvTrSieveGrid"), cvTrProbe ? cvTrProbe.fsieve : null, cvTrProbe ? cvTrProbe.msize : null);
       cvShowTrSv(cvTrProbe ? cvTrProbeLabel(cvTrProbe) : "кликни пробу на графике");
       return;
     }
@@ -1802,7 +1813,7 @@
       box.appendChild(bt);
     });
     const blk = b ? (cvTrSievePhase !== "boil" ? b.phases[cvTrSievePhase] : (b.tail || b)) : null;
-    cvFillSieve($("cvTrSieveGrid"), blk ? blk.fsieve : null);
+    cvFillSieve($("cvTrSieveGrid"), blk ? blk.fsieve : null, blk ? blk.msize : null);
     cvShowTrSv(b ? cvBoilName(cvBoils.indexOf(b)) + " · " + cvSvRange(blk, cvTrSievePhase !== "boil" ? blk.dur_s : b.dur_s) : "варок пока нет");
   }
   function cvShowTrSv(t) { const e = $("cvTrSieveSv"); if (e && e.textContent !== t) e.textContent = t; }

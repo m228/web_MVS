@@ -6,7 +6,7 @@ const MD_WIN_MIN = 30;
 const MD_WIN_MAX = 7200;
 // статистика зон (ср / мин / макс за окно): считает сервис движения, окно до суток
 const MD_STAT_KEY = 'mvStatWin';
-const MD_VIS_WINS = [[3600, '1 ч'], [10800, '3 ч'], [28800, '8 ч'], [86400, '24 ч'], [259200, '3 сут'], [604800, '7 сут']];
+const MD_VIS_WINS = [[7200, '2 ч'], [86400, '24 ч']];
 const MD_VIS_KEY = 'mdVisWin';
 const MD_VIS_COLORS = ['#6c7bff', '#f59e0b', '#34d399', '#f472b6'];     // левая — синяя, правая — оранжевая
 function mdLoadVisWin() {
@@ -186,7 +186,7 @@ function renderMotionDock() {
   if (dock.hidden) return;
   const { source, cam } = mdCamera();
   const all = mode === 'all';
-  if (MD.tab !== 'zones' && MD.tab !== 'plc' && MD.tab !== 'cams' && MD.tab !== 'level') MD.tab = 'zones';
+  if (MD.tab !== 'zones' && MD.tab !== 'plc' && MD.tab !== 'cams' && MD.tab !== 'level' && MD.tab !== 'shafts') MD.tab = 'zones';
 
   const cams = mdCfgCams();
   const camKey = all
@@ -225,9 +225,13 @@ function renderMotionDock() {
   if (MD.tab === 'plc') {
     body.innerHTML = mdPlcHtml();
     mdBindPlc();
+    mdMountPlcSource();
     if (MD.editGrp) mdSyncGroupEditor();
   } else if (MD.tab === 'cams') {
     body.innerHTML = mdCamsTabHtml();
+  } else if (MD.tab === 'shafts') {
+    body.innerHTML = mdShaftsTabHtml();
+    mdShaftsHist(true);
   } else if (MD.tab === 'level') {
     body.innerHTML = mdLevelTabHtml(mode, cam);
     lvPaintModel();
@@ -447,6 +451,7 @@ function mdCameraParamsHtml(cam) {
       ${mdField('Адрес потока', `<input type="text" ${a} data-f="url" value="${escapeHtml(cam.url)}" />`, '', 'md-wide')}
       ${mdField('Поток', `<select ${a} data-f="substream">${mdSel([['0', 'основной'], ['1', 'дополнительный (легче)']], cam.substream ? '1' : '0')}</select>`, 'Дополнительный поток камеры Dahua (subtype=1): картинка меньше, процессор нагружается заметно слабее. Пороги после смены снимите заново — значения diff и flow зависят от разрешения')}
       ${mdField('Декодирование', `<select ${a} data-f="hw_accel">${mdSel([['off', 'процессор'], ['auto', 'видеоядро (авто)'], ['d3d11', 'видеоядро (Direct3D 11)']], cam.hw_accel || 'auto')}</select>`, 'Видеоядро процессора (Intel UHD и т.п.) декодирует видео вместо процессора. Не открылось или не дало кадров — сервис сам вернётся на процессор')}
+      ${mdField('Ряд валов', `<select ${a} data-f="row">${mdSel([['', 'не задан'], ['lower', 'нижний (Н)'], ['upper', 'верхний (В)']], cam.row || '')}</select>`, 'Какой ряд валов видит камера: нижний (Н) или верхний (В). Нужен для разностей между валами разных камер — вкладка «Валы»')}
       <div class="md-sub">Анализ движения</div>
       ${mdField('Кадров/с в анализ', mdNum(a + ' data-f="proc_fps"', cam.proc_fps, 'min="0.2" max="30" step="0.5"'))}
       ${mdField('Шаг сравнения, кадров', mdNum(a + ' data-f="frame_gap"', cam.frame_gap, 'min="1" max="10"'), 'Сравнивать кадр не с соседним, а через N кадров: медленное движение виднее')}
@@ -626,8 +631,9 @@ function mdOnCamera(t, cam) {
     else if (f === 'frame_gap') cam[f] = parseInt(t.value, 10) || 1;
     else if (f === 'hw_accel') cam[f] = t.value;
     else if (f === 'substream') cam[f] = t.value === '1';
+    else if (f === 'row') cam.row = t.value;
     else cam[f] = parseFloat(t.value) || 0;
-  }, f === 'skind');
+  }, f === 'skind' || f === 'row');
 }
 
 // ---------- тренды ----------
@@ -884,7 +890,18 @@ function mdPlcHtml() {
         <span class="net-hint" id="mdPingInfo">Проверка только читает один регистр, в ПЛК ничего не пишется.</span>
       </div></div></div>
     <h3 class="md-h md-h--row md-h--sec"><button type="button" class="md-add" data-md="s" data-f="add" title="Добавить сценарий" aria-label="Добавить сценарий">+</button>Сценарии записи <span class="md-dim">единственное место, где пишем в ПЛК</span></h3>${scens}
-    ${mdGroupsSectionHtml()}`;
+    ${mdGroupsSectionHtml()}
+    <h3 class="md-h md-h--row md-h--sec">Вакуум-аппарат (ПЛК) <span class="md-dim">СВ, стадия, температура — только чтение</span></h3><div id="mdPlcSrcSlot"></div>`;
+}
+
+// «Вакуум-аппарат (ПЛК)» (plc-source.js) — один узел на страницу: при перерисовке вкладки переносится в новое тело,
+// поэтому несохранённые правки не теряются и опрос /api/plc/source не множится
+let mdPlcSrcNode = null;
+function mdMountPlcSource() {
+  const slot = mdEl('mdPlcSrcSlot');
+  if (!slot || !window.PlcSource) return;
+  if (!mdPlcSrcNode) { mdPlcSrcNode = document.createElement('div'); window.PlcSource.mount(mdPlcSrcNode); }
+  slot.replaceWith(mdPlcSrcNode);
 }
 
 const MD_SC_SIGNALS = [['pulp', 'Жом есть'], ['move', 'Движение']];
@@ -1153,6 +1170,7 @@ function paintMotionDockLive() {
   if (!MV.dockOpen) return;
   const mode = mdMode();
   if (mode === 'none') return;
+  if (MD.tab === 'shafts' && typeof mdPaintShafts === 'function') mdPaintShafts();
   const { source, cam } = mdCamera();
   const pe = mdEl('mdPill');
   if (pe) {
@@ -1455,7 +1473,8 @@ async function mdLoadMarkFrame() {
   m.busy = true;
   try {
     const r = await fetch('/api/motion/snapshot?camera=' + encodeURIComponent(m.cam) + '&w=1280&t=' + Date.now());
-    if (!r.ok) { mdEl('mmHint').textContent = 'Кадра ещё нет — камера не подключилась. Подождите или проверьте адрес потока.'; return; }
+    if (!r.ok) { m.noFrame = true; mdEl('mmHint').textContent = 'Кадра ещё нет — камера не подключилась. Подождите или проверьте адрес потока.'; return; }
+    if (m.noFrame) { m.noFrame = false; mdEl('mmHint').textContent = m.hint; }      // кадр пришёл — убрать устаревшее «кадра нет»
     m.fw = Number(r.headers.get('X-Frame-W')) || m.fw;
     m.fh = Number(r.headers.get('X-Frame-H')) || m.fh;
     const blob = await r.blob();
@@ -1480,10 +1499,14 @@ function openMarkModal(kind) {
   mdEl('mmOk').hidden = true;
   mdEl('mmClose').hidden = rods;
   mdEl('mmHint').textContent = rods
-    ? 'Кликните по оси левого вала (красная точка в центре палки), затем по оси правого. ПКМ — убрать точку. Enter — готово. Радиус и точное положение осей потом правятся в карточке.'
+    ? 'Кликните по оси левого вала (красная точка в центре палки), затем по оси правого. ПКМ — убрать точку. Радиус окружности — ползунком ниже (она должна доставать до концов палки). Enter — готово.'
     : glass
       ? 'Обведите НИЖНЕЕ (рабочее) стекло: клики по углам внутри стекла. ПКМ — убрать точку. Enter — замкнуть (минимум 3 точки). Потом обведите верхнее; если стекло одно — «Готово».'
       : 'Кликайте по углам зоны. ПКМ — убрать точку. «Замкнуть» или Enter — готово (минимум 3 точки). Кадр замирает после первой точки.';
+  MD.mark.hint = mdEl('mmHint').textContent;
+  MD.mark.rodPct = 17;
+  mdEl('mmRodR').value = 17; mdEl('mmRodRv').textContent = '17 %';
+  mdEl('mmRodBox').hidden = !rods;
   const modal = mdEl('motionMarkModal');
   modal.classList.add('show');
   modal.setAttribute('aria-hidden', 'false');
@@ -1521,7 +1544,7 @@ function mdMarkUi() {
 }
 
 // радиус поиска палки по умолчанию, пикселей кадра разметки: 17 % ширины (на 1920 — 326; достаёт до концов палки у ступицы)
-const mdRodRadius = (fs) => Math.round(fs[0] * 0.17);
+const mdRodRadius = (fs, pct) => Math.round(fs[0] * (pct || 17) / 100);
 
 function mdDrawMark() {
   const m = MD.mark, img = mdEl('mmImg'), cv = mdEl('mmCanvas');
@@ -1550,7 +1573,7 @@ function mdDrawMark() {
     g.strokeStyle = '#38bdf8'; g.fillStyle = '#38bdf8';
     m.pts.forEach((p) => {
       g.beginPath(); g.arc(p[0] * sx, p[1] * sy, 4, 0, 7); g.fill();
-      g.beginPath(); g.arc(p[0] * sx, p[1] * sy, mdRodRadius(rs) * (fw / rs[0]) * sx, 0, 7); g.stroke();
+      g.beginPath(); g.arc(p[0] * sx, p[1] * sy, mdRodRadius(rs, m.rodPct) * (fw / rs[0]) * sx, 0, 7); g.stroke();
     });
     return;
   }
@@ -1617,7 +1640,7 @@ function mdMarkSaveRods(m, cam, fw, fh) {
     const ids = [free('rod'), null];
     const mk = (id, name, p) => ({ id, name, enabled: true, type: 'cycle', metric: 'flow', points: [], on: 0, off: 0, invert: false, track_flow: false, smooth: 3,
       frames_to_on: 1, frames_to_off: 1, blur: 0, flicker_comp: false, out: null,
-      center: [Math.round(p[0] * fs[0] / fw), Math.round(p[1] * fs[1] / fh)], radius: mdRodRadius(fs) });
+      center: [Math.round(p[0] * fs[0] / fw), Math.round(p[1] * fs[1] / fh)], radius: mdRodRadius(fs, m.rodPct) });
     cam.zones.push(mk(ids[0], 'Вал левый', pts[0]));
     ids[1] = free('rod');
     cam.zones.push(mk(ids[1], 'Вал правый', pts[1]));
@@ -1693,6 +1716,7 @@ function initMotionDock() {
     else if (kind === 's') mdOnScenario(t);
     else if (kind === 'cm') mdOnCamRow(t);
     else if (kind === 'lv') mdOnLevel(t);
+    else if (kind === 'sh') mdOnShafts(t);
     else if (kind === 'cs') mdSetEnabled(t.dataset.serial, t.checked, () => { t.checked = !t.checked; });
   };
   body?.addEventListener('change', (e) => { if (e.target.tagName !== 'BUTTON') dispatch(e); });
@@ -1743,6 +1767,12 @@ function initMotionDock() {
   cv?.addEventListener('contextmenu', (e) => { e.preventDefault(); mdMarkUndo(); });
   mdEl('mmImg')?.addEventListener('load', mdDrawMark);
   mdEl('mmUndo')?.addEventListener('click', mdMarkUndo);
+  mdEl('mmRodR')?.addEventListener('input', (e) => {
+    if (!MD.mark) return;
+    MD.mark.rodPct = Number(e.target.value) || 17;
+    mdEl('mmRodRv').textContent = MD.mark.rodPct + ' %';
+    mdDrawMark();
+  });
   mdEl('mmCancel')?.addEventListener('click', closeMarkModal);
   mdEl('mmX')?.addEventListener('click', closeMarkModal);
   mdEl('mmClose')?.addEventListener('click', mdMarkClose);

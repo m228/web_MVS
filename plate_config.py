@@ -135,6 +135,7 @@ DEFAULTS = {
         "sensor":     {"reg": 1271, "scale": 10, "kind": "um"},   # датчик перемещения
         # --- выходы/LED ---
         "dq":         {"reg": 1250, "scale": 1,  "kind": "bits"},
+        "m1_sp_board_raw": {"reg": 1253, "scale": 1, "kind": "num"},   # цель М1 как её помнит плата (для «чёрного ящика»)
         "di":         {"reg": 150,  "scale": 1,  "kind": "bits"}, # дискретные входы (нативный)
         "led_bright": {"reg": 1257, "scale": 1,  "kind": "num"},
         "led_freq":   {"reg": 1202, "scale": 1,  "kind": "num"},
@@ -467,7 +468,7 @@ DEFAULTS = {
         },
         # карта стадий (stage_map.py): "ours" — код стадии с контроллера как есть; "custom" — чужой контроллер, код переводится в наш по таблице rows
         "stage_map": {"profile": "ours"},
-        "seed_unit": "kg",     # единица затравки на экране: kg | l | pct (выбор на вкладке «ПЛК»)
+        "seed_unit": "m3",     # единица общей затравки: только кубы (клапан открывают на объём); у сларри и МУ ниже — kg | l | pct
         "seed_slurry_unit": "kg",   # то же для затравки сларри
         "seed_mu_unit": "kg",       # и для затравки из маточника (МУ)
         # OPC UA (protocol="opcua"): адрес сервера, защита, теги. Логин/пароль — НЕ здесь, а в data\opcua_secret.json.

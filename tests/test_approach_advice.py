@@ -135,6 +135,20 @@ def test_advice_marks_applied_row(data_dir):
     assert "applied" not in [r for r in s.approach_advice("S1")["rows"] if r["row"] == 4][0]
 
 
+def test_new_advice_appears_after_applied_one(data_dir, monkeypatch):
+    import cv_store
+    s = _svc_with_table()
+    s.approach_apply(4, 1000, 1100, True)                            # 1000 -> 1100, проб на новом зазоре ещё нет
+    assert [r for r in s.approach_advice("S1")["rows"] if r["row"] == 4][0]["applied"]["to"] == 1100
+    probes = [{"ts": "2026-11-17_10_00_00", "ap_row": 4, "ap_sp": 1100, "ap_ai": 1120, "frac_zones": 2, "frac_pct": 30}]
+    monkeypatch.setattr(cv_store, "approach_rows", lambda serial: probes)
+    r4 = [r for r in s.approach_advice("S1")["rows"] if r["row"] == 4][0]
+    assert r4["status"] == "advice" and r4["proposed"] == 1150      # разлом и на 1100 — предлагаем ещё дальше
+    assert "applied" not in r4                                      # старая отметка не прячет новый совет
+    assert s.approach_apply(4, 1100, 1150, True)["sp"] == 1150      # и его можно применить: второй сдвиг подряд
+    assert s.cfg["approach_correction"]["applied"]["4"]["from"] == 1100
+
+
 def test_apply_advice_moves_live_fsm_table(data_dir):
     class _F:
         SP = [40000, 100, 600, 800, 1000, 1400, 1600]

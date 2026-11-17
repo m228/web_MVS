@@ -980,6 +980,8 @@ class MicroscopeService:
         applied = ap.get("applied") or {}
         SP = cfg.get("SP") or []
         for r in res["rows"]:                          # совет уже применён и стоит в таблице → галочка отмечена (снять = вернуть прежний SP)
+            if r.get("status") in ("advice", "closer"):
+                continue                               # на новом зазоре набрался новый совет (ещё дальше/ближе) — он важнее старой отметки
             a = applied.get(str(r["row"]))
             if a and a.get("active") and r["row"] < len(SP) and abs(float(SP[r["row"]]) - float(a.get("to", -1))) <= 0.5:
                 r["applied"] = {"from": a.get("from"), "to": a.get("to"), "ts": a.get("ts")}

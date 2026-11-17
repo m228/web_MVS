@@ -368,6 +368,66 @@ def test_autocal_trace_is_collected_and_given_to_log_on_finish(fsm):
     assert got and got[0]["trace"] and got[0]["retract_pos"] == fsm._retract_pos
 
 
+def test_slip_detected_needs_sensor_at_glass_swing_and_reversals():
+    from microscope_fsm import slip_detected
+    wiggle = [0, 150, 0, 120, 0, 150, 10, 140, 0, 150] * 2          # 0–150 туда-сюда
+    assert slip_detected(wiggle, 5)
+    assert not slip_detected(wiggle, 900)                           # датчик далеко от стекла — это не буксование
+    assert not slip_detected(wiggle[:10], 5)                        # окно ещё не набралось
+    ride = [i * 20 for i in range(20)]                              # честный ход к нулю: одна сторона
+    assert not slip_detected(ride, 5)
+    assert not slip_detected([0, 20, 0, 20] * 5, 5)                 # дрожь меньше размаха
+    assert not slip_detected(wiggle, None)
+
+
+def _slip_run(fsm, slips_wanted, max_ticks=2500):
+    """Автокалибровка; в «Поиске 0» энкодер долбит 0–150 (датчик у нуля) slips_wanted раз подряд, потом честно встаёт."""
+    calls = []
+    p = fsm.plate
+    p.motor_stop = lambda m: calls.append("stop")
+    p.motor_find_zero = lambda m: calls.append("find_zero")
+    p.motor_steps = lambda m, n: calls.append("steps0")
+    fsm.manual = True
+    fsm.start_autocal()
+    n = 0
+    for _ in range(max_ticks):
+        ph = fsm._cal_phase
+        if ph == "move":
+            n += 1
+            v = 150 if n % 2 else 0
+            if calls.count("stop") >= slips_wanted:
+                v = 0                                               # дальше без буксования — мотор встаёт у нуля
+            p.telemetry.update({"pos1": v, "pos1_enc": v, "pos1_ai": 5})
+        elif p.m1_sp is not None and ph not in ("pre", "find_zero"):
+            v = p.m1_sp
+            p.telemetry.update({"pos1": v, "pos1_enc": v, "pos1_ai": v / fsm._sensor_scale})   # сырой датчик: FSM умножает на масштаб
+        fsm.tick()
+        if not fsm._cal_active:
+            break
+    return calls
+
+
+def test_autocal_slip_stop_retract_and_retry_succeeds(fsm):
+    # буксование один раз: Стоп М1, «шаги 0» (снять флаг поиска), отвод на 3000, «Поиск 0» ещё раз — и калибровка сошлась
+    calls = _slip_run(fsm, 1)
+    assert calls[:4] == ["find_zero", "stop", "steps0", "find_zero"], calls
+    assert calls.count("stop") == 1 and fsm._cal_slips == 1
+    assert not fsm._cal_failed, fsm._cal_fail_msg
+
+
+def test_autocal_slip_twice_gives_red_alarm(fsm):
+    # повтор тоже забуксовал: больше не пробуем — красная плашка (она уходит в мониторинг), голова отведена
+    calls = _slip_run(fsm, 2)
+    assert calls.count("stop") == 2 and calls.count("find_zero") == 2, calls
+    assert fsm._cal_failed and "буксует" in fsm._cal_fail_msg, fsm._cal_fail_msg
+    assert not fsm._cal_active
+
+
+def test_autocal_without_slip_never_sends_stop(fsm):
+    calls = _slip_run(fsm, 0)
+    assert "stop" not in calls and fsm._cal_slips == 0
+
+
 def _glass_washes(every, probes):
     # сколько проб из `probes` промывали стекло (клапан glass открывался на шаге 21); трубка — в каждой пробе
     cfg = copy.deepcopy(plate_config.DEFAULTS)

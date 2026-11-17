@@ -55,6 +55,36 @@ CAL_MOVE_MIN_TICKS = 10   # после команды движения 1 с не
 CAL_MOVE_MIN_S = 15       # таймаут хода не короче, даже если в настройке меньше
 CAL_RECHECK_TICKS = 50    # расхождение на отводе: перемерить через 5 с (датчик мог не устояться), потом повтор «Поиска 0»
 CAL_CMD_GAP_TICKS = 3     # пауза между командами в один командный регистр: две записи подряд плата может слить в одну
+# буксование энкодера у стекла в «Поиске 0»: датчик у нуля, а энкодер мечется туда-сюда (0–100–150) и «мотор не встаёт».
+# Поймали → «Стоп М1», снять флаг поиска, отвод на CAL_SLIP_RETRACT_UM, «Поиск 0» ещё раз; повтор не помог → красная плашка.
+CAL_SLIP_SENSOR_UM = 300      # датчик 1271 не выше (у стекла)
+CAL_SLIP_SWING_UM = 100       # размах энкодера в окне не меньше
+CAL_SLIP_WINDOW_TICKS = 20    # окно (2 с при такте 100 мс)
+CAL_SLIP_REVERSALS = 2        # смен направления энкодера в окне не меньше (честный ход к нулю идёт в одну сторону)
+CAL_SLIP_NOISE_UM = 10        # приращения энкодера меньше этого — шум (шаг регистров 10 мкм), направление не считаем
+CAL_SLIP_RETRACT_UM = 3000    # куда отводим после стопа перед повтором «Поиска 0»
+CAL_SLIP_RETRIES = 1          # сколько раз повторяем «Поиск 0» после буксования
+
+
+def slip_detected(buf, sensor, sensor_max=CAL_SLIP_SENSOR_UM, swing_min=CAL_SLIP_SWING_UM,
+                  window=CAL_SLIP_WINDOW_TICKS, reversals_min=CAL_SLIP_REVERSALS, noise=CAL_SLIP_NOISE_UM):
+    """Буксование энкодера: датчик у стекла (sensor <= sensor_max), а энкодер за окно прошёл размах >= swing_min
+    и сменил направление >= reversals_min раз. buf — последние значения энкодера (по такту). Чистая функция."""
+    if sensor is None or sensor > sensor_max or len(buf) < window:
+        return False
+    vals = list(buf)[-window:]
+    if max(vals) - min(vals) < swing_min:
+        return False
+    rev, last = 0, 0
+    for a, b in zip(vals, vals[1:]):
+        d = b - a
+        if abs(d) < noise:
+            continue
+        s = 1 if d > 0 else -1
+        if last and s != last:
+            rev += 1
+        last = s
+    return rev >= reversals_min
 
 # Повтор команды «идти» в цикле: плата за ОДИН goto делает лишь шаг к цели (как ручная
 # кнопка «Идти»), поэтому в шагах движения цикла повторяем импульс каждые REDRIVE_TICKS
@@ -247,7 +277,9 @@ class MicroscopeFSM:
         self._cal_move_min = 0       # ещё столько тиков не проверяем остановку после команды движения
         self._cal_redrive = 0        # счётчик повтора goto на отводе после калибровки
         self._cal_grace = 0          # пауза перед следующей командой/замером (тики)
-        self._cal_emit = None        # команда калибровки на плату в этом такте: ("find_zero",) / ("steps0",)
+        self._cal_emit = None        # команда калибровки на плату в этом такте: ("find_zero",) / ("steps0",) / ("stop",)
+        self._cal_slips = 0          # поймано буксований энкодера у стекла в этой калибровке
+        self._cal_slip_buf = deque(maxlen=CAL_SLIP_WINDOW_TICKS)   # энкодер по тактам — для slip_detected
         self._cal_still = 0          # тиков подряд мотор стоит
         self._cal_anchor = None      # (расчётная, энкодер) в начале окна «стоит»
         self._cal_samples = []       # замер стоя: [(расчётная, энкодер, датчик)]
@@ -721,6 +753,8 @@ class MicroscopeFSM:
         self._cal_trace = []
         self._cal_step = "замер до калибровки"
         self._cal_attempt = 0
+        self._cal_slips = 0                    # сколько раз поймали буксование энкодера в этой калибровке
+        self._cal_slip_buf.clear()
         self._cal_wait = 60                    # замер «до» — если мотор не встал за 6 с, идём без него
         self._cal_grace = 0
         self._cal_emit = None
@@ -818,6 +852,8 @@ class MicroscopeFSM:
             self._cal_grace -= 1
             return None
         ph = self._cal_phase
+        if ph == "move" and pos_enc is not None:
+            self._cal_slip_buf.append(pos_enc)     # ряд энкодера для детектора буксования (только пока едем в «Поиске 0»)
         if not still and ph in ("pre", "after"):
             self._cal_samples = []                 # замер только стоя: поехал — копим заново
         if ph == "pre":
@@ -839,8 +875,42 @@ class MicroscopeFSM:
                 self._cal_move_min -= 1
             elif still:
                 self._cal_go("unflag", "мотор встал — отвожу")
+            elif slip_detected(self._cal_slip_buf, pos1_ai):
+                self._cal_slips += 1
+                swing = max(self._cal_slip_buf) - min(self._cal_slip_buf)
+                log_event("microscope_fsm", "Автокалибровка: энкодер буксует у стекла (датчик %s, размах %d мкм) — Стоп М1 (%d)" %
+                          (pos1_ai, swing, self._cal_slips), "warn", {"sensor": pos1_ai, "swing": swing, "slips": self._cal_slips})
+                self._cal_emit = ("stop",)
+                self._cal_slip_buf.clear()
+                self._cal_go("slip_stop", "энкодер буксует — Стоп М1", grace=CAL_CMD_GAP_TICKS * 2)
             elif self._cal_wait <= 0:
                 self._cal_fail("мотор не встал за %d с" % (self._cal_move_ticks() // 10))
+        elif ph == "slip_stop":
+            if self._cal_slips > CAL_SLIP_RETRIES:
+                # повтор тоже забуксовал — сами не лечим: «шаги 0», отвод в retract_pos и красная плашка (тревога в мониторинге)
+                self._cal_fail("энкодер буксует у стекла (%d раза подряд) — Стоп М1, ноль не найден" % self._cal_slips)
+            else:
+                self._cal_emit = ("steps0",)            # стоп не снимает флаг «Поиска 0» — иначе отвод обнулит координаты в своей точке
+                self._cal_go("slip_back", "энкодер буксует — отвожу на %d мкм" % CAL_SLIP_RETRACT_UM, grace=CAL_CMD_GAP_TICKS)
+        elif ph == "slip_back":
+            self.m1_sp = CAL_SLIP_RETRACT_UM
+            self.m1_sp_old = CAL_SLIP_RETRACT_UM
+            self._step_start = pos_enc
+            self._cal_redrive = 0
+            self._emit_cmd1 = True
+            self._cal_wait = self._step_timeout_ticks
+            self._cal_go("slip_retract", "энкодер буксует — отвожу на %d мкм" % CAL_SLIP_RETRACT_UM, grace=10)
+        elif ph == "slip_retract":
+            self.m1_sp = CAL_SLIP_RETRACT_UM
+            self._cal_wait -= 1
+            if self._reached_retract(pos_enc, CAL_SLIP_RETRACT_UM) or self._cal_wait <= 0:
+                self._cal_slip_buf.clear()
+                self._cal_go("find_zero", "после буксования — «Поиск 0» ещё раз", grace=CAL_CMD_GAP_TICKS)
+            else:
+                self._cal_redrive += 1
+                if self._cal_redrive >= REDRIVE_TICKS:
+                    self._cal_redrive = 0
+                    self._emit_cmd1 = True
         elif ph == "unflag":
             # «шаги 0»: мотор не едет, а висящий флаг «Поиска 0» снят — отвод не обнулит координаты в своей точке
             self._cal_emit = ("steps0",)
@@ -922,6 +992,8 @@ class MicroscopeFSM:
             p.motor_find_zero(1)
         elif op == "steps0":
             p.motor_steps(1, 0)
+        elif op == "stop":
+            p.motor_stop(1)
 
     def _enter_manual_locked(self):
         """Вернуть РУЧНОЙ режим (под локом) — зеркало set_manual(True): автомат не пишет плату, залипшие команды погашены,
@@ -1546,7 +1618,7 @@ class MicroscopeFSM:
             pos_rec = self._pp_emit; self._pp_emit = None
             cal_emit = self._cal_emit; self._cal_emit = None
             # на отводе после калибровки движение пишем обычным путём (цель + goto), поэтому «калибровка рулит сама» — только до него
-            cal_owns = self._cal_active and self._cal_phase not in ("retract", "after")
+            cal_owns = self._cal_active and self._cal_phase not in ("retract", "after", "slip_retract")
             # «шаги 0» после стопа: отсчёт идёт, а последний тик ждёт связи
             unflag = []
             for m in (1, 2):

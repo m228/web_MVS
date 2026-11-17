@@ -4662,6 +4662,20 @@ body.micro-rep-doc .micro-cmp-strips { grid-template-columns: repeat(6, 1fr); ga
 .md-ar { color: var(--muted); font-size: 11px; cursor: help; }
 .md-zr__del { margin-top: auto; align-self: flex-end; }
 .md-zr__del .md-x, .md-zr__del .md-x[data-f="del"] { color: var(--danger); width: auto; height: auto; border-radius: 10px; padding: 3px 12px; white-space: nowrap; }
+/* обучение порогов зоны «стоит / движется» */
+.md-learn { flex-wrap: wrap; }
+.md-lbtn, .md-learn__apply { min-height: 0; padding: 2px 10px; font-size: 12px; border-radius: 10px; white-space: nowrap; }
+.md-lbtn.is-rec { color: #ef4444; border-color: #ef4444; font-variant-numeric: tabular-nums; }
+.md-lbtn.is-done { color: var(--success); }
+.md-learn select { font-size: 12px; }
+.md-learn__res { font-size: 12px; line-height: 1.5; color: var(--muted); display: flex; flex-direction: column; gap: 4px; }
+.md-learn__res:empty { display: none; }
+.md-learn__line { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; font-variant-numeric: tabular-nums; }
+.md-learn__line b { color: var(--text); }
+.md-learn--good { color: var(--success); }
+.md-learn--weak { color: var(--warning); }
+.md-learn--bad { color: var(--danger); }
+.md-learn__reset { margin-left: auto; }
 /* сценарии записи: компактные строки с раскрытием */
 .md-sbox { border: 1px solid var(--border); border-radius: 12px; overflow: hidden; background: var(--surface-strong); }
 .md-sr { --zst: var(--border-strong); border-bottom: 1px solid var(--border); }

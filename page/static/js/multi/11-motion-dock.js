@@ -313,6 +313,7 @@ function mdZoneCardHtml(cam, z, i) {
           <select ${a} data-f="metric">${mdSel([['diff', 'diff'], ['flow', 'flow']], z.metric)}</select></div>
         <div class="md-zone__row"><span class="md-lbl">порог</span>${arrows(mdNum(a + ' data-f="on"', z.on, 'step="0.05" min="0"'), mdNum(a + ' data-f="off"', z.off, 'step="0.05" min="0"'))}</div>
         <div class="md-zone__row"><span class="md-lbl" title="Защита от одиночных всплесков: бит зоны меняется, только когда порог выполнен столько кадров анализа ПОДРЯД. Один проскочивший кадр счёт сбрасывает.">кадров подряд</span>${arrows(mdNum(a + ' data-f="fon"', z.frames_to_on == null ? 3 : z.frames_to_on, 'min="1" max="1000"'), mdNum(a + ' data-f="foff"', z.frames_to_off == null ? 4 : z.frames_to_off, 'min="1" max="1000"'))}</div>
+        ${mdLearnHtml(cam, z, a)}
         <div class="md-zstat" id="md-st-${k}" title="Значения диффа и потока по зоне: сейчас, среднее, минимум и максимум за выбранный период (только кадры в норме). Жирным — метрика, по которой решает зона."></div>
       </div>
       <div class="md-zr__col">
@@ -556,6 +557,7 @@ function mdZonesTabHtml(mode, cam) {
 function mdOnZone(t, cam) {
   const i = Number(t.dataset.i), f = t.dataset.f, z = cam.zones[i];
   if (!z) return;
+  if (mdOnLearn(t, cam, z)) return;
   if (f === 'del') {
     if (!confirm('Удалить зону «' + z.name + '»?')) return;
     mdEdit(() => {
@@ -1195,6 +1197,7 @@ function paintMotionDockLive() {
   mdCfgCams().forEach((c) => {
     const st = MV.states[c.id];
     const res = st && st.result;
+    mdLearnTick(c, res);
     ((res && res.zones) || []).forEach((z) => {
       const bit = mdEl('md-zb-' + c.id + '-' + z.id);
       if (bit) { bit.textContent = z.bit; bit.classList.toggle('on', z.bit === 1); }

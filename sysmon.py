@@ -37,6 +37,7 @@ from typing import Callable, Optional
 from urllib.parse import urlparse
 
 import enroll_client
+import substages
 from logger import log_event, mask_secrets
 from paths import DATA_DIR, read_version
 
@@ -81,9 +82,7 @@ URGENT = ("critical", "high")
 CONFIRM = {"service_cv": 2, "service_video": 2, "service_motion": 2, "plate_down": 4, "camera_exposure": 2, "cv_fail": 2, "black": 2}
 NEAR_MEDIAN_N = 3           # подвод: расхождение датчиков судим по медиане стольких последних проб, а не по одной (у Kir бывают одиночные пики)
 
-STAGE_NAMES = {1: "Остановлен", 2: "Набор", 3: "Сгущение", 4: "Затравка", 5: "Подкачка", 6: "Стабилизация", 7: "Рост", 8: "Уваривание",
-               9: "Готовность", 10: "Выгрузка", 11: "Пропарка", 12: "Надвыгрузка", 13: "Собрать аппарат", 14: "Термоудар",
-               20: "УНВ", 21: "Пауза"}
+STAGE_NAMES = {n: substages.stage_title(n) for n in substages.STAGE_NAMES}   # одна таблица на приложение (substages.py)
 START_LEVEL = {"pc_reboot": "critical", "app_restart": "critical", "app_update": "info", "first": "info"}
 PARAM_LABELS = {"exposure_time": "экспозиция", "gain": "усиление", "exposure_auto": "авто-экспозиция", "gain_auto": "авто-усиление",
                 "pixel_format": "формат кадра", "width": "ширина кадра", "height": "высота кадра", "offset_x": "смещение X",

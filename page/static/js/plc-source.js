@@ -12,8 +12,8 @@
   };
   const POLICY_LABEL = { None: "без защиты", Basic256Sha256: "Basic256Sha256", Aes128_Sha256_RsaOaep: "Aes128_Sha256_RsaOaep", Aes256_Sha256_RsaPss: "Aes256_Sha256_RsaPss" };
   // наши стадии (M.mode) — в таблице карты стадий выбираем, во что перевести код чужого контроллера
-  const OUR_STAGES = { 1: "Остановлен", 2: "Набор", 3: "Сгущение", 4: "Затравка", 5: "Подкачка", 6: "Стабилизация", 7: "Рост", 8: "Уваривание",
-    9: "Готовность", 10: "Выгрузка", 11: "Пропарка", 12: "Надвыгрузка", 13: "Собрать аппарат", 14: "Термоудар", 20: "УНВ", 21: "Пауза" };
+  // названия — с сервера (stage-names.js, одна таблица substages.py); load() ждёт их до заполнения таблицы
+  const OUR_STAGES = window.StageNames.titles;
   const MODE_LABEL = { Sign: "подпись", SignAndEncrypt: "подпись + шифрование" };
 
   function el(tag, attrs, ...kids) {
@@ -145,6 +145,7 @@
       const code = el("input", { type: "number", class: "plc-in plc-in--s", min: "0", max: "65535", value: r.code ?? "" });
       const name = el("input", { type: "text", class: "plc-in plc-in--m", maxlength: "40", value: r.name || "", spellcheck: "false" });
       const to = el("select", { class: "plc-in" }, ...Object.entries(OUR_STAGES).map(([k, v]) => el("option", { value: k, text: k + " " + v })));
+      if (r.to != null && !(String(r.to) in OUR_STAGES)) to.append(el("option", { value: String(r.to), text: String(r.to) }));   // названий нет — номер не теряем
       to.value = String(r.to);
       const tr = el("tr", {}, el("td", {}, code), el("td", {}, name), el("td", {}, to),
         el("td", {}, el("button", { type: "button", class: "plc-x", title: "Убрать строку", text: "×", onclick: () => tr.remove() })));
@@ -479,6 +480,7 @@
 
     // ── загрузка и опрос (только пока панель видна) ──
     async function load() {
+      await window.StageNames.ready;      // иначе выпадающие «Наша стадия» в карте стадий построятся пустыми
       const r = await get("/api/plc/source");
       if (!r || !r.config) return say("Не удалось загрузить настройки ПЛК: " + ((r && r.error) || "нет ответа"), "err");
       S.status = r.live; S.running = r.running;

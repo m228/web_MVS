@@ -728,7 +728,8 @@ class CycleRT:
         self.rs = np.arange(max(3.0, r1 * zcfg["r_min"]), r1, 1.0)
         self.xs = np.clip(np.rint(self.ox + self.rs[None, :] * _PHI_SIN).astype(int), 0, max(0, int((self.x1 - self.x0) * self.k) - 1))
         self.ys = np.clip(np.rint(self.oy - self.rs[None, :] * _PHI_COS).astype(int), 0, max(0, int((self.y1 - self.y0) * self.k) - 1))
-        self.ker = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (zcfg["thin"], zcfg["thin"])) if zcfg["thin"] >= 3 else None
+        n = max(3, int(round(zcfg["thin"] / self.k))) | 1                  # «тонкое» задано в рабочем масштабе, а маски считаем в родном: ядро растёт в 1/k раз
+        self.ker = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (n, n)) if zcfg["thin"] >= 3 else None
         self.raw: deque = deque(maxlen=zcfg["smooth"])
         self.trk: deque = deque()               # (время, «развёрнутый» угол без скачков через 360°) за последние rpm_window секунд — для оборотов
         self.bans: list = []                    # углы ложных неподвижных целей: при поиске по всему кругу вокруг них не смотрим (reset их не трогает)
@@ -799,6 +800,10 @@ class CycleRT:
         if self.ker is not None:                                           # оставляем только тонкое: то, что не пережило «открытие»
             red &= 1 - cv2.morphologyEx(red, cv2.MORPH_OPEN, self.ker)
             blue &= 1 - cv2.morphologyEx(blue, cv2.MORPH_OPEN, self.ker)
+        if self.k < 1.0:                                                   # сжимаем уже маски, а не картинку: палка в ~8 px при сжатии кадра
+            red = cv2.resize(red.astype(np.float32), None, fx=self.k, fy=self.k, interpolation=cv2.INTER_AREA)   # смешивалась с корпусом
+            blue = cv2.resize(blue.astype(np.float32), None, fx=self.k, fy=self.k, interpolation=cv2.INTER_AREA) # и теряла цвет
+            red, blue = np.minimum(1.0, red * 3.0), np.minimum(1.0, blue * 3.0)   # доля покрытия пикселя → «есть» (тонкая линия закрывает 1/3 пикселя)
         return cv2.dilate(red.astype(np.float32), _K3), cv2.dilate(blue.astype(np.float32), _K3)
 
     def _expected(self, now: float) -> float:
@@ -813,10 +818,7 @@ class CycleRT:
         dt = now - self.last_t
         locked = self.last is not None and dt <= c["coast_s"]
         if frame is not None and frame.ndim == 3:
-            crop = frame[self.y0:self.y1, self.x0:self.x1]
-            if self.k < 1.0:
-                crop = cv2.resize(crop, None, fx=self.k, fy=self.k, interpolation=cv2.INTER_AREA)
-            red, blue = self._liks(crop)
+            red, blue = self._liks(frame[self.y0:self.y1, self.x0:self.x1])   # маски — в родном разрешении, сжатие внутри
             sr, sb = red[self.ys, self.xs].mean(axis=1), blue[self.ys, self.xs].mean(axis=1)
             comb = sr + c["blue_w"] * np.roll(sb, -180)                    # красный на φ, синий на φ+180
             cand = comb

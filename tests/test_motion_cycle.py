@@ -815,3 +815,9 @@ def test_halves_that_disagree_do_not_get_averaged():
         rt.step(half_frame(100.0), i * 0.25)
     rt.step(half_frame(100.0, blue_off=70.0), 1.5)                         # синяя «уехала» на 70°: это не палка
     assert rt.src in ("red", "blue") and abs(d_ang(rt.angle, 100.0)) < 3.0
+
+
+def test_state_exposes_source_of_the_arrow():
+    st = run(me.CameraEngine(cam_cfg()), 70, 320)
+    z = zone(st, "L")
+    assert z["src"] in ("both", "red", "blue") and 0.0 <= z["lvl_r"] <= 1.0 and 0.0 <= z["lvl_b"] <= 1.0 and "off_b" in z

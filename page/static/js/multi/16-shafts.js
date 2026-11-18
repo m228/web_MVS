@@ -220,11 +220,13 @@ function mdShaftsTabHtml() {
   const pairs = SH_PAIRS.map((id) => mdShaftPairHtml(id, sc.pairs[id])).join('');
   const colors = mdRodColorsHtml();
   const loss = mdLossHtml();
+  const autocal = mdAutocalHtml();
   return `<details class="md-det" open><summary>Ряды камер ${mdHelp('Задайте каждой камере ряд валов. Левый и правый вал в ряду определяются по положению оси в кадре: левее — левый. У камеры должны быть размечены две зоны-цикла (кнопка «Разметить валы»).')}</summary>
       <div class="md-camlist">${rows || '<span class="net-hint">В сервисе движения камер нет.</span>'}</div></details>
     <details class="md-det" open><summary>Скорости валов ${mdHelp('Скорость вала — обороты в минуту по наклону угла за окно (в карточке зоны). Регистр пишется ×100; 0 — нет данных. То же, что «скорость» в зоне-цикле, только по названию вала.')}</summary>
       <table class="md-table"><thead><tr><th>Вал</th><th>Откуда</th><th>Угол</th><th>Скорость</th><th>Регистр скорости в ПЛК</th></tr></thead><tbody>${shafts}</tbody></table></details>
     <details class="md-det" open><summary>Карта потерь ${mdHelp('Где и когда палка пропадает: кольцо — по углу красного конца (0° вверху, по часовой), столбики — по часам суток. Помогает понять, виновато ли освещение в определённый час или палка теряется в одном положении (блик, тень, цвет корпуса).')}</summary>${loss}</details>
+    <details class="md-det" open><summary>Автоподгонка ${mdHelp('Сама подбирает цвета красной и синей половин палки, центр оси и радиус по записи вращения. Нужна после сдвига камеры, смены света или когда палка то пропадает, то ловится. Результат применяется только вашей кнопкой.')}</summary>${autocal}</details>
     <details class="md-det"><summary>Цвета палок ${mdHelp('Красная и синяя половины палки находятся по цвету. Если палка то пропадает, то ловится — подберите пороги: картинка показывает, что именно попадает в маску. У каждого вала свои пороги (ракурс и свет разные).')}</summary>${colors}</details>
     <div class="md-sub">Разности валов</div>
     <div class="net-hint" id="md-sh-note"></div>
@@ -324,6 +326,7 @@ function mdPaintShafts() {
   mdShaftsHist();
   shPrevPaint();
   shLossRefresh(false);
+  shAcPaintAll();
 }
 
 // графики разностей: тянем историю сервиса раз в 5 с, пока вкладка открыта
@@ -349,4 +352,100 @@ function mdDrawShaftChart(id) {
   const pc = (shCfg() || { pairs: {} }).pairs[id] || {};
   if (ca) { const m = span(h.angle, 5); mdDrawSeries(ca, h.t, h.angle, ok, -m, m, { lines: [{ v: 0, color: '#64748b' }].concat(pc.tol_angle ? [{ v: pc.tol_angle, color: '#f59e0b' }, { v: -pc.tol_angle, color: '#f59e0b' }] : []) }); }
   if (cr) { const m = span(h.rpm, 1); mdDrawSeries(cr, h.t, h.rpm, ok, -m, m, { lines: [{ v: 0, color: '#64748b' }].concat(pc.tol_rpm ? [{ v: pc.tol_rpm, color: '#f59e0b' }, { v: -pc.tol_rpm, color: '#f59e0b' }] : []) }); }
+}
+
+// ---- автоподгонка валов: запись вращения (≈2 оборота) → подбор цветов, оси и радиуса → «было → стало» → «Применить» ----
+// Считает сервис движения (motion_autocal.py); тут кнопка, ход, результат. Результат — предложение: настройки меняются только по «Применить».
+const SHAC = { data: {}, at: {}, busy: {}, sec: 150 };
+const shAcRunning = (d) => !!d && ['starting', 'recording', 'tuning'].includes(d.state);
+
+function mdAutocalHtml() {
+  const cams = mdCfgCams().filter((c) => (c.zones || []).some((z) => z.type === 'cycle' && z.enabled !== false));
+  if (!cams.length) return '<span class="net-hint">Размеченных валов нет: нужны зоны-цикл («Разметить валы»).</span>';
+  return `<div class="net-hint">Палки крутятся сами, ничего двигать не надо. Сервис запишет вращение (по умолчанию 150 с — около двух оборотов), подберёт цвета красной и синей половин, центр оси и радиус и покажет, что стало лучше. Применяется кнопкой.</div>` + cams.map((c) => {
+    const k = escapeHtml(c.id);
+    return `<div class="md-zone sh-ac" data-shac="${k}"><div class="md-zone__ctl">
+      <div class="md-zone__row"><b>${escapeHtml(c.name)}</b>${mdIpTag(c.url)}<span class="md-sp"></span>
+        <span class="md-lbl" title="Сколько секунд записывать вращение. Вал делает оборот примерно за 75 с; от 75 до 300 с">запись, с</span>${mdNum(`data-md="shac" data-cam="${k}" data-f="sec"`, SHAC.sec, 'min="75" max="300" step="15"')}
+        <button type="button" class="btn-secondary md-x" data-md="shac" data-cam="${k}" data-f="start" title="Записать вращение палок и подобрать цвета, центр и радиус">Подогнать валы</button></div>
+      <div data-shacst="${k}"></div></div></div>`;
+  }).join('');
+}
+
+const shPct = (v) => Math.round(100 * v) + ' %';
+function shAcResultHtml(d) {
+  const ids = Object.keys(d.results || {});
+  const rows = ids.map((zid) => {
+    const r = d.results[zid], b = r.before, a = r.after;
+    const lost = Math.abs(b.rpm) < 0.25;                              // до подгонки палку не удавалось отслеживать (залипала на неподвижной цели)
+    const sect = (a.sectors || []).map((p, i) => `<i style="background:${shLossColor(p)}" title="${i * 30}–${i * 30 + 30}°: ${shPct(p)}"></i>`).join('');
+    const o = r.old, n = r.new, hs = (v) => 'H ' + v[0] + '–' + v[1] + ', S ≥ ' + v[2] + ', V ≥ ' + v[3];
+    const rd = (v) => 'красный H ≤ ' + v[0] + ' или ≥ ' + v[1] + ', S ≥ ' + v[2] + ', V ≥ ' + v[3];
+    const tip = `Было: ось ${o.center.map(Math.round).join(', ')}, радиус ${Math.round(o.radius)}; ${rd(o.red_hsv)}; синий ${hs(o.blue_hsv)}.\n` +
+      `Стало: ось ${n.center.map(Math.round).join(', ')}, радиус ${Math.round(n.radius)}; ${rd(n.red_hsv)}; синий ${hs(n.blue_hsv)}.\n` +
+      `Кадров в записи ${r.frames}, расчёт ${Math.round(r.seconds)} с. На кадрах, не участвовавших в подборе, найдена ${shPct(r.after_val.found)}.`;
+    const verdict = (d.applied || []).includes(zid) ? '<b>применено</b>' : (r.improved ? '' : '<span class="net-hint">лучше не стало — не предлагаю</span>');
+    return `<div class="md-zone__row sh-acrow" title="${escapeHtml(tip)}"><b>${escapeHtml(r.name)}</b>
+      <span>найдена ${lost ? '<span class="net-hint">до: сбивалась</span>' : '<span class="net-hint">' + shPct(b.found) + '</span>'} → <b>${shPct(a.found)}</b></span>
+      <span class="sh-strip">${sect}</span>
+      <span class="net-hint">${a.revs.toFixed(1).replace('.', ',')} оборота в записи · ${Math.abs(a.rpm).toFixed(2).replace('.', ',')} об/мин</span>${verdict}</div>`;
+  }).join('');
+  const any = ids.some((k) => d.results[k].improved && !(d.applied || []).includes(k));
+  return rows + (any ? `<div class="md-zone__row"><button type="button" class="btn-secondary md-x" data-md="shac" data-cam="${escapeHtml(d.camera)}" data-f="apply" title="Записать найденные настройки в зоны. Прежний конфиг остаётся в резервной копии (data\\backups)">Применить</button></div>` : '');
+}
+
+function shAcPaint(cam) {
+  const box = document.querySelector(`[data-shacst="${cam}"]`);
+  if (!box) return;
+  const d = SHAC.data[cam];
+  let html = '';
+  if (!d || d.state === 'idle') html = '';
+  else if (shAcRunning(d)) html = `<div class="sh-bar"><i style="width:${Math.round(100 * (d.progress || 0))}%"></i></div><div class="md-zone__row"><span class="net-hint">${escapeHtml(d.text || '')}</span><span class="md-sp"></span>` +
+    `<button type="button" class="btn-secondary md-x" data-md="shac" data-cam="${escapeHtml(cam)}" data-f="cancel">Отмена</button></div>`;
+  else if (d.state === 'error') html = `<div class="net-hint" style="color:#f87171">Не вышло: ${escapeHtml(d.error || 'ошибка')}</div>`;
+  else if (d.state === 'cancelled') html = '<div class="net-hint">Отменено.</div>';
+  else if (d.state === 'done') html = shAcResultHtml(d);
+  if (box.dataset.h !== html) { box.dataset.h = html; box.innerHTML = html; }
+}
+
+async function shAcRefresh(cam, force) {
+  const d = SHAC.data[cam];
+  const every = shAcRunning(d) ? 1500 : 30000;
+  if (SHAC.busy[cam] || (!force && Date.now() - (SHAC.at[cam] || 0) < every)) return;
+  SHAC.busy[cam] = true;
+  try {
+    const r = await mvApi('/api/motion/autocal?camera=' + encodeURIComponent(cam));
+    SHAC.at[cam] = Date.now();
+    SHAC.data[cam] = r && r.error ? { state: 'error', error: /HTTP 404|HTTP 405/.test(r.error) ? 'сервис движения старой версии: обновите его (UpdaterMotion.bat)' : r.error } : r;
+  } finally { SHAC.busy[cam] = false; }
+  shAcPaint(cam);
+}
+
+function shAcPaintAll() {
+  document.querySelectorAll('[data-shac]').forEach((b) => { shAcPaint(b.dataset.shac); shAcRefresh(b.dataset.shac, false); });
+}
+
+async function mdOnShAc(t) {
+  const cam = t.dataset.cam, f = t.dataset.f;
+  if (f === 'sec') { SHAC.sec = shClamp(parseInt(t.value, 10) || 150, 75, 300); t.value = SHAC.sec; return; }
+  if (f === 'start') {
+    if (MV.dirty) { clearTimeout(MD.saveTimer); await mdFlush(); }
+    const r = await mvJson('/api/motion/autocal', { camera: cam, zones: [], seconds: SHAC.sec });
+    SHAC.data[cam] = r && r.error ? { state: 'error', error: r.error } : r;
+    SHAC.at[cam] = Date.now();
+    shAcPaint(cam);
+  } else if (f === 'cancel') {
+    await mvJson('/api/motion/autocal/cancel', { camera: cam });
+    shAcRefresh(cam, true);
+  } else if (f === 'apply') {
+    if (!confirm('Записать найденные настройки (ось, радиус, цвета) в зоны камеры? Прежний конфиг останется в резервной копии (data\\backups).')) return;
+    if (MV.dirty) { clearTimeout(MD.saveTimer); await mdFlush(); }
+    const r = await mvJson('/api/motion/autocal/apply', { camera: cam, zones: [] });
+    if (r && r.error) { SHAC.data[cam] = Object.assign({}, SHAC.data[cam], { state: 'error', error: r.error }); shAcPaint(cam); return; }
+    MV.dirty = false;
+    await mvRefreshConfig();
+    await shAcRefresh(cam, true);
+    MD.key = '';
+    renderMotionDock();
+  }
 }

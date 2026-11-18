@@ -4738,6 +4738,11 @@ body.micro-rep-doc .micro-cmp-strips { grid-template-columns: repeat(6, 1fr); ga
 .sh-loss__ch canvas[data-shlossring] { width: 170px; height: 170px; }
 .sh-loss__ch canvas[data-shlosshour] { width: 360px; height: 84px; }
 .sh-prev img { max-width: 100%; border-radius: 6px; background: #111; min-height: 40px; display: block; }
+.sh-acrow { flex-wrap: wrap; gap: 4px 14px; align-items: center; }
+.sh-strip { display: inline-flex; gap: 2px; }
+.sh-strip i { display: block; width: 9px; height: 14px; border-radius: 2px; }
+.sh-bar { height: 6px; border-radius: 3px; background: rgba(148, 163, 184, .25); overflow: hidden; margin: 8px 0 4px; }
+.sh-bar i { display: block; height: 100%; background: #a855f7; transition: width .6s linear; }
 .md-camrow { display: inline-flex; flex-direction: row; align-items: center; gap: 8px; font-size: 13px; color: var(--text); cursor: pointer; }
 
 .md-cols { display: grid; grid-template-columns: minmax(300px, 1fr) minmax(360px, 1.4fr); gap: 20px; }

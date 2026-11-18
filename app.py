@@ -1429,6 +1429,27 @@ def motion_loss_map(camera: str, window: float = 7 * 86400.0):
     return motion_client.loss_map(_motion_url(), camera, window)
 
 
+@app.post("/api/motion/autocal")
+def motion_autocal_start(req: dict = Body(...)):
+    # «Подогнать валы»: запись вращения палок и подбор цветов/оси/радиуса (сервис движения); результат применяется отдельной кнопкой
+    return motion_client.autocal_start(_motion_url(), str(req.get("camera") or ""), [str(z) for z in (req.get("zones") or [])], float(req.get("seconds") or 150))
+
+
+@app.get("/api/motion/autocal")
+def motion_autocal_status(camera: str):
+    return motion_client.autocal_status(_motion_url(), camera)
+
+
+@app.post("/api/motion/autocal/cancel")
+def motion_autocal_cancel(req: dict = Body(...)):
+    return motion_client.autocal_cancel(_motion_url(), str(req.get("camera") or ""))
+
+
+@app.post("/api/motion/autocal/apply")
+def motion_autocal_apply(req: dict = Body(...)):
+    return motion_client.autocal_apply(_motion_url(), str(req.get("camera") or ""), [str(z) for z in (req.get("zones") or [])])
+
+
 @app.post("/api/motion/mirror_table")
 def motion_mirror_table(req: dict = Body(...)):
     # таблица поправки зеркальности двух валов по последним минутам (снимают, пока валы ровные); сохраняет интерфейс

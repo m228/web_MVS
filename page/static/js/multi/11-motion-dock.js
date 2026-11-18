@@ -1744,6 +1744,7 @@ function initMotionDock() {
     else if (kind === 'lv') mdOnLevel(t);
     else if (kind === 'sh') mdOnShafts(t);
     else if (kind === 'shloss') mdOnShLoss(t);
+    else if (kind === 'shac') mdOnShAc(t);
     else if (kind === 'cs') mdSetEnabled(t.dataset.serial, t.checked, () => { t.checked = !t.checked; });
   };
   body?.addEventListener('change', (e) => { if (e.target.tagName !== 'BUTTON') dispatch(e); });

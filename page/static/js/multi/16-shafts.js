@@ -143,7 +143,7 @@ const SH_END = { red: ['Красный конец', MV_ROD_RED, 0], blue: ['Си
 const SH_HUE_TRK = 'linear-gradient(90deg,' + Array.from({ length: 13 }, (_, i) => `hsl(${Math.round(i * 29.8)},85%,50%)`).join(',') + ')';
 const SH_PREV_W = 240;
 const shView = {};                                         // вал → 'mask' | 'raw': что показывать на картинке
-const SHP = { act: null };                                 // активная пипетка: { key, w, n — сколько кликов сделано }
+const SHP = { act: null };                                 // открытое окно пипетки: { key, w } (подробности — shPip ниже)
 
 function shHsvOf(z, w) {
   const v = z[w + '_hsv'];
@@ -157,11 +157,10 @@ function shTrack(col, base) {
 
 function shColorRowHtml(w, z, a, key) {
   const v = shHsvOf(z, w), [name, color, base] = SH_END[w];
-  const on = SHP.act && SHP.act.key === key && SHP.act.w === w;
   const cells = SH_HSV_COLS[w].map(([lbl, k, max, tip]) => `<label class="sh-hsv" title="${escapeHtml(tip)}">` +
     `<input type="range" class="sh-rng" style="--trk:${shTrack(k, base)}" ${a} data-f="hsv" data-w="${w}" data-k="${k}" min="0" max="${max}" step="1" value="${v[k]}" /><output>${v[k]}</output></label>`).join('');
   return `<div class="sh-tn"><i class="sh-dot" style="background:${color}"></i>${name}</div>${cells}` +
-    `<div class="sh-tact"><button type="button" class="btn-secondary md-x sh-pipbtn${on ? ' on' : ''}" data-md="shpick" data-w="${w}" data-f="pip" title="Кликните по ${w === 'red' ? 'красному' : 'синему'} концу палки на картинке: если такого цвета в списке нет, он добавится отдельной строкой «ещё цвет». Оттенков у одного конца может быть несколько (светлый, тёмный, на солнце)">${on ? 'готово' : 'пипетка'}</button></div>`;
+    `<div class="sh-tact"><button type="button" class="btn-secondary md-x sh-pipbtn" data-md="shpick" data-w="${w}" data-f="pip" title="Откроется большой кадр: наведите на ${w === 'red' ? 'красный' : 'синий'} конец палки — лупа покажет цвет и «ловится / не ловится», клик добавит цвет отдельной строкой «ещё цвет». Оттенков у одного конца может быть несколько (светлый, тёмный, на солнце)">пипетка</button></div>`;
 }
 
 // дополнительный цвет конца палки (red_more / blue_more): обычный диапазон «от и до» с теми же тремя порогами; в маску он добавляется «ИЛИ»
@@ -182,7 +181,7 @@ function mdRodColorsHtml() {
       const k = escapeHtml(c.id + '/' + z.id);
       const head = SH_HSV_COLS.red.map(([lbl, , , tip]) => `<div class="sh-th" title="${escapeHtml(tip)}">${lbl}</div>`).join('');
       const more = (w) => (z[w + '_more'] || []).map((_, n) => shExtraRowHtml(w, z, a, n)).join('');
-      blocks.push(`<div class="sh-col${SHP.act && SHP.act.key === c.id + '/' + z.id ? ' picking' : ''}" data-shcol="${k}" data-cam="${escapeHtml(c.id)}" data-zone="${escapeHtml(z.id)}">
+      blocks.push(`<div class="sh-col" data-shcol="${k}" data-cam="${escapeHtml(c.id)}" data-zone="${escapeHtml(z.id)}">
         <div class="sh-col__head"><b>${escapeHtml(sh ? sh.short : z.name)}</b><span class="net-hint">${escapeHtml(c.name)} · ${escapeHtml(z.name)}</span><span class="md-sp"></span>
           <button type="button" class="btn-secondary md-x" ${a} data-f="hsvreset" title="Вернуть пороги цвета этого вала к значениям по умолчанию">по умолчанию</button></div>
         <div class="sh-col__body">
@@ -195,7 +194,7 @@ function mdRodColorsHtml() {
     });
   });
   if (!blocks.length) return '<span class="net-hint">Размеченных валов нет: нужны зоны-цикл («Разметить валы»).</span>';
-  return `<div class="net-hint sh-colhint">Палка красно-синяя: ловим её красный и синий конец по цвету. На картинке красные точки — то, что принято за красный конец, голубые — за синий; нужно, чтобы палка светилась целиком, а корпус и фон — нет. Двигайте ползунки или нажмите «пипетка» и кликните по палке: цвет возьмётся сам и добавится отдельной строкой «ещё цвет» (у одного конца их может быть до шести: светлый, тёмный, на солнце). Изменения сохраняются сразу.</div><div class="sh-cols">${blocks.join('')}</div>`;
+  return `<div class="net-hint sh-colhint">Палка красно-синяя: ловим её красный и синий конец по цвету. На картинке красные точки — то, что принято за красный конец, голубые — за синий; нужно, чтобы палка светилась целиком, а корпус и фон — нет. Двигайте ползунки или нажмите «пипетка»: откроется большой кадр, наведите на палку и кликните — цвет добавится отдельной строкой «ещё цвет» (у одного конца их может быть до шести: светлый, тёмный, на солнце). Изменения сохраняются сразу.</div><div class="sh-cols">${blocks.join('')}</div>`;
 }
 
 // превью: пробные пороги берём прямо с ползунков, сервис возвращает кадр вокруг оси с масками; не чаще раза в 4 с на вал, при правке — сразу
@@ -236,71 +235,234 @@ function shOnSlide(t) {                                   // ползунок д
   shSlideTimer = setTimeout(() => shPrevLoad(block, true), 250);
 }
 
-// пипетка и переключатель «маска / кадр»
-function shPipStop() {
-  SHP.act = null;
-  document.querySelectorAll('.sh-col.picking').forEach((b) => b.classList.remove('picking'));
-  document.querySelectorAll('.sh-pipbtn.on').forEach((b) => { b.classList.remove('on'); b.textContent = 'пипетка'; });
+// ---- пипетка: большое окно с кадром вокруг оси, лупа под курсором и «ловится / не ловится» ----
+// Кадр берём с сервера (rod_mask?raw=1, родное разрешение) и обновляем не чаще раза в SH_PIP_EVERY секунд, чтобы успеть нажать (есть «стоп-кадр»).
+// Цвет под курсором считаем здесь, по тому кадру, который виден: палка за 5 с поворачивается на ~24°, цвет с более позднего кадра с сервера был бы чужим.
+const SH_PIP_EVERY = 5;
+const SH_PIP_W = 900;
+const shPip = { el: null, key: '', w: 'red', cv: null, ctx: null, lp: null, lctx: null, timer: 0, left: SH_PIP_EVERY, freeze: false, tint: false, loaded: false, busy: false };
+
+function shRgb2Hsv(r, g, b) {                              // как в OpenCV: оттенок 0..179, насыщенность и яркость 0..255
+  const mx = Math.max(r, g, b), mn = Math.min(r, g, b), d = mx - mn;
+  let h = 0;
+  if (d > 0) {
+    if (mx === r) h = ((g - b) / d) % 6; else if (mx === g) h = (b - r) / d + 2; else h = (r - g) / d + 4;
+    h *= 60;
+    if (h < 0) h += 360;
+  }
+  return [Math.round(h / 2) % 180, mx ? Math.round(255 * d / mx) : 0, mx];
 }
+
+// цвет «с кончика пипетки»: в окне ±3 px берём пиксели, сильнее всего отличающиеся от фона окна (медианы) — это и есть тонкая палка; оттенок усредняем по кругу
+function shPipSample(cx, cy) {
+  const W = shPip.cv.width, H = shPip.cv.height, r = 3;
+  const x0 = Math.max(0, cx - r), y0 = Math.max(0, cy - r), x1 = Math.min(W, cx + r + 1), y1 = Math.min(H, cy + r + 1);
+  const w = x1 - x0, h = y1 - y0;
+  if (w < 1 || h < 1) return null;
+  const d = shPip.ctx.getImageData(x0, y0, w, h).data, n = w * h;
+  const med = (ch) => { const a = []; for (let i = 0; i < n; i++) a.push(d[i * 4 + ch]); a.sort((p, q) => p - q); return a[n >> 1]; };
+  const m = [med(0), med(1), med(2)];
+  const px = [];
+  for (let i = 0; i < n; i++) {
+    const R = d[i * 4], G = d[i * 4 + 1], B = d[i * 4 + 2], hsv = shRgb2Hsv(R, G, B);
+    px.push({ R, G, B, hsv, dist: Math.hypot(R - m[0], G - m[1], B - m[2]), live: hsv[1] >= 40 && hsv[2] >= 40 });
+  }
+  const pool = px.filter((p) => p.live).length >= 3 ? px.filter((p) => p.live) : px;      // тени и блёклое — не палка
+  pool.sort((p, q) => q.dist - p.dist);
+  const top = pool.slice(0, Math.max(3, Math.round(0.04 * n)));
+  const sx = top.reduce((a, p) => a + Math.sin(p.hsv[0] * 2 * Math.PI / 180), 0), cxs = top.reduce((a, p) => a + Math.cos(p.hsv[0] * 2 * Math.PI / 180), 0);
+  const hue = Math.round(((Math.atan2(sx, cxs) * 180 / Math.PI + 360) % 360) / 2) % 180;
+  const mid = (arr) => arr.sort((p, q) => p - q)[arr.length >> 1];
+  return { h: hue, s: mid(top.map((p) => p.hsv[1])), v: mid(top.map((p) => p.hsv[2])), rgb: [Math.round(top.reduce((a, p) => a + p.R, 0) / top.length), Math.round(top.reduce((a, p) => a + p.G, 0) / top.length), Math.round(top.reduce((a, p) => a + p.B, 0) / top.length)] };
+}
+
+// какие диапазоны сейчас у конца палки (читаем с ползунков карточки: там то, что видит детектор)
+function shPipRanges(key, w) {
+  const block = document.querySelector(`[data-shcol="${key}"]`);
+  const out = { main: [0, 0, 0, 0], more: [] };
+  if (!block) return out;
+  const val = (sel) => { const r = block.querySelector(sel); return r ? parseInt(r.value, 10) || 0 : 0; };
+  out.main = [0, 1, 2, 3].map((k) => val(`input[data-f="hsv"][data-w="${w}"][data-k="${k}"]`));
+  const rows = {};
+  block.querySelectorAll(`input[data-f="hsvx"][data-w="${w}"]`).forEach((i) => { (rows[i.dataset.n] = rows[i.dataset.n] || [])[Number(i.dataset.k)] = parseInt(i.value, 10) || 0; });
+  out.more = Object.keys(rows).sort((a, b) => a - b).map((n) => rows[n]);
+  return out;
+}
+// ловится ли цвет: '' — нет, иначе чем именно («основной» / «ещё цвет N»)
+function shPipCovered(key, w, h, s, v) {
+  const R = shPipRanges(key, w), m = R.main;
+  if (s >= m[2] && v >= m[3] && (w === 'red' ? (h <= m[0] || h >= m[1]) : (h >= m[0] && h <= m[1]))) return 'основной диапазон';
+  const i = R.more.findIndex((r) => h >= r[0] && h <= r[1] && s >= r[2] && v >= r[3]);
+  return i >= 0 ? 'ещё цвет ' + (i + 1) : '';
+}
+
+function shPipOpen(key, w) {
+  shPipClose();
+  const block = document.querySelector(`[data-shcol="${key}"]`);
+  if (!block) return;
+  const name = (block.querySelector('.sh-col__head b') || {}).textContent || '';
+  const sub = (block.querySelector('.sh-col__head .net-hint') || {}).textContent || '';
+  SHP.act = { key, w };
+  Object.assign(shPip, { key, w, left: SH_PIP_EVERY, freeze: false, tint: false, loaded: false });
+  const el = document.createElement('div');
+  el.className = 'sh-pipov';
+  el.innerHTML = `<div class="sh-pipov__box" role="dialog" aria-label="Пипетка">
+    <div class="sh-pipov__head"><b>Пипетка</b><span class="net-hint">${escapeHtml(name)} · ${escapeHtml(sub)}</span>
+      <div class="sh-seg" data-pipend><button type="button" data-w="red">красный конец</button><button type="button" data-w="blue">синий конец</button></div>
+      <span class="md-sp"></span>
+      <span class="net-hint" data-pipclock></span>
+      <label class="sh-chk"><input type="checkbox" data-pipfreeze /> стоп-кадр</label>
+      <label class="sh-chk"><input type="checkbox" data-piptint /> показать, что ловится</label>
+      <button type="button" class="btn-secondary md-x" data-pipnow>обновить кадр</button>
+      <button type="button" class="btn-secondary md-x" data-pipdone>готово</button></div>
+    <div class="sh-pipov__stage"><canvas data-pipcv></canvas><canvas data-piptc class="sh-pipov__tint"></canvas>
+      <div class="sh-loupe" data-piploupe hidden><canvas width="120" height="120"></canvas><div class="sh-loupe__tag" data-piptag></div></div>
+      <div class="sh-pipov__msg" data-pipmsg>загружаю кадр…</div></div>
+    <div class="sh-pipov__foot" data-pipfoot></div></div>`;
+  document.body.appendChild(el);
+  shPip.el = el;
+  shPip.cv = el.querySelector('[data-pipcv]');
+  shPip.ctx = shPip.cv.getContext('2d', { willReadFrequently: true });
+  shPip.lp = el.querySelector('[data-piploupe] canvas');
+  shPip.lctx = shPip.lp.getContext('2d');
+  shPip.lctx.imageSmoothingEnabled = false;
+  el.addEventListener('mousedown', (e) => { if (e.target === el) shPipClose(); });
+  el.querySelector('[data-pipdone]').addEventListener('click', shPipClose);
+  el.querySelector('[data-pipnow]').addEventListener('click', () => { shPip.left = SH_PIP_EVERY; shPipLoad(); });
+  el.querySelector('[data-pipfreeze]').addEventListener('change', (e) => { shPip.freeze = e.target.checked; shPipClock(); });
+  el.querySelector('[data-piptint]').addEventListener('change', (e) => { shPip.tint = e.target.checked; shPipTint(); });
+  el.querySelectorAll('[data-pipend] button').forEach((b) => b.addEventListener('click', () => { shPip.w = SHP.act.w = b.dataset.w; shPipEnd(); shPipTint(); }));
+  shPip.cv.addEventListener('mousemove', shPipMove);
+  shPip.cv.addEventListener('mouseleave', () => { const l = el.querySelector('[data-piploupe]'); if (l) l.hidden = true; });
+  shPip.cv.addEventListener('click', shPipClick);
+  document.addEventListener('keydown', shPipKey);
+  shPipEnd();
+  shPipLoad();
+  shPip.timer = setInterval(() => { if (!shPip.freeze && --shPip.left <= 0) { shPip.left = SH_PIP_EVERY; shPipLoad(); } shPipClock(); }, 1000);
+}
+function shPipKey(e) { if (e.key === 'Escape') shPipClose(); }
+function shPipClose() {
+  clearInterval(shPip.timer);
+  document.removeEventListener('keydown', shPipKey);
+  if (shPip.el) shPip.el.remove();
+  shPip.el = null;
+  SHP.act = null;
+}
+function shPipClock() {
+  const c = shPip.el && shPip.el.querySelector('[data-pipclock]');
+  if (c) c.textContent = shPip.freeze ? 'кадр стоит' : 'кадр обновится через ' + shPip.left + ' с';
+}
+// какой конец сейчас берём и что в его списке цветов
+function shPipEnd() {
+  if (!shPip.el) return;
+  shPip.el.querySelectorAll('[data-pipend] button').forEach((b) => b.classList.toggle('on', b.dataset.w === shPip.w));
+  const R = shPipRanges(shPip.key, shPip.w), dotH = (r) => Math.round(r[0] + r[1]);
+  const m = R.main, mainDot = shPip.w === 'red' ? 0 : Math.round(m[0] + m[1]);
+  const chip = (txt, hue) => `<span class="sh-chip"><i class="sh-dot" style="background:hsl(${hue},75%,48%)"></i>${txt}</span>`;
+  const mainTxt = shPip.w === 'red' ? `основной: оттенок ≤ ${m[0]} или ≥ ${m[1]}, насыщ. ≥ ${m[2]}, ярк. ≥ ${m[3]}` : `основной: оттенок ${m[0]}–${m[1]}, насыщ. ≥ ${m[2]}, ярк. ≥ ${m[3]}`;
+  shPip.el.querySelector('[data-pipfoot]').innerHTML = '<span class="net-hint">Что сейчас ловится у ' + (shPip.w === 'red' ? 'красного' : 'синего') + ' конца:</span>' + chip(mainTxt, mainDot) +
+    R.more.map((r, i) => chip(`ещё цвет ${i + 1}: оттенок ${r[0]}–${r[1]}, насыщ. ≥ ${r[2]}, ярк. ≥ ${r[3]}`, dotH(r))).join('') +
+    '<span class="net-hint">Наведите на палку: в лупе — цвет, который возьмётся; зелёная галочка — такой цвет уже ловится, красный плюс — клик добавит его.</span>';
+}
+async function shPipLoad() {
+  if (!shPip.el || shPip.busy) return;
+  shPip.busy = true;
+  const block = document.querySelector(`[data-shcol="${shPip.key}"]`);
+  const msg = shPip.el.querySelector('[data-pipmsg]');
+  try {
+    const r = await fetch('/api/motion/rod_mask?camera=' + encodeURIComponent(block.dataset.cam) + '&zone=' + encodeURIComponent(block.dataset.zone) + '&raw=1&w=' + SH_PIP_W + '&t=' + Date.now());
+    if (!r.ok) throw new Error(r.status);
+    const bmp = await createImageBitmap(await r.blob());
+    if (!shPip.el) return;
+    shPip.cv.width = bmp.width; shPip.cv.height = bmp.height;
+    shPip.ctx.drawImage(bmp, 0, 0);
+    const tc = shPip.el.querySelector('[data-piptc]');
+    tc.width = bmp.width; tc.height = bmp.height;
+    shPip.loaded = true;
+    msg.hidden = true;
+    shPipTint();
+  } catch (e) {
+    if (!shPip.loaded) { msg.hidden = false; msg.textContent = 'Кадра нет: камера не подключена или сервис движения старой версии.'; }
+  } finally { shPip.busy = false; }
+}
+// подсветка того, что ловится сейчас (по ползункам карточки): красным для красного конца, голубым для синего
+function shPipTint() {
+  const tc = shPip.el && shPip.el.querySelector('[data-piptint]') ? shPip.el.querySelector('[data-piptc]') : null;
+  if (!tc || !shPip.loaded) return;
+  const t = tc.getContext('2d');
+  t.clearRect(0, 0, tc.width, tc.height);
+  if (!shPip.tint) return;
+  const R = shPipRanges(shPip.key, shPip.w), m = R.main, red = shPip.w === 'red';
+  const src = shPip.ctx.getImageData(0, 0, tc.width, tc.height), out = t.createImageData(tc.width, tc.height), d = src.data, o = out.data;
+  for (let i = 0; i < d.length; i += 4) {
+    const [h, s, v] = shRgb2Hsv(d[i], d[i + 1], d[i + 2]);
+    const hit = (s >= m[2] && v >= m[3] && (red ? (h <= m[0] || h >= m[1]) : (h >= m[0] && h <= m[1]))) || R.more.some((r) => h >= r[0] && h <= r[1] && s >= r[2] && v >= r[3]);
+    if (hit) { o[i] = red ? 255 : 40; o[i + 1] = red ? 40 : 200; o[i + 2] = red ? 40 : 255; o[i + 3] = 175; }
+  }
+  t.putImageData(out, 0, 0);
+}
+function shPipPos(e) {
+  const r = shPip.cv.getBoundingClientRect();
+  return { x: Math.floor((e.clientX - r.left) * shPip.cv.width / r.width), y: Math.floor((e.clientY - r.top) * shPip.cv.height / r.height), r };
+}
+function shPipMove(e) {
+  if (!shPip.loaded) return;
+  const { x, y, r } = shPipPos(e), loupe = shPip.el.querySelector('[data-piploupe]');
+  const smp = shPipSample(x, y);
+  if (!smp) { loupe.hidden = true; return; }
+  const by = shPipCovered(shPip.key, shPip.w, smp.h, smp.s, smp.v);
+  const ok = !!by, N = 15, S = shPip.lp.width;
+  shPip.lctx.clearRect(0, 0, S, S);
+  shPip.lctx.drawImage(shPip.cv, x - (N >> 1), y - (N >> 1), N, N, 0, 0, S, S);     // 15×15 пикселей кадра, увеличенных, без сглаживания
+  shPip.lctx.strokeStyle = '#fff'; shPip.lctx.lineWidth = 1;
+  shPip.lctx.strokeRect(S / 2 - S / N / 2, S / 2 - S / N / 2, S / N, S / N);
+  loupe.className = 'sh-loupe ' + (ok ? 'ok' : 'no');
+  loupe.querySelector('[data-piptag]').innerHTML = `<i class="sh-dot sh-dot--lg" style="background:rgb(${smp.rgb.join(',')})"></i><span><b>${ok ? '✓ ловится' : '＋ не ловится'}</b><br><small>${ok ? escapeHtml(by) : 'клик добавит цвет'} · H ${smp.h} S ${smp.s} V ${smp.v}</small></span>`;
+  const st = shPip.el.querySelector('.sh-pipov__stage').getBoundingClientRect();
+  loupe.hidden = false;                                    // размер лупы с подписью — после заполнения: у края кадра она переходит на другую сторону курсора
+  let lx = e.clientX - st.left + 22, ly = e.clientY - st.top + 24;
+  const lw = loupe.offsetWidth + 6, lh = loupe.offsetHeight + 6;
+  if (lx + lw > st.width) lx = e.clientX - st.left - lw - 22;
+  if (ly + lh > st.height) ly = e.clientY - st.top - lh - 18;
+  loupe.style.left = Math.max(0, lx) + 'px';
+  loupe.style.top = Math.max(0, ly) + 'px';
+  loupe.hidden = false;
+  shPip.cur = smp;
+}
+function shPipClick(e) {
+  if (!shPip.loaded) return;
+  const { x, y } = shPipPos(e), smp = shPipSample(x, y);
+  const msg = (html) => { const f = shPip.el && shPip.el.querySelector('[data-pipmsg]'); if (f) { f.hidden = false; f.innerHTML = html; clearTimeout(shPip.msgT); shPip.msgT = setTimeout(() => { f.hidden = true; }, 3500); } };
+  if (!smp) return;
+  const key = shPip.key, w = shPip.w, by = shPipCovered(key, w, smp.h, smp.s, smp.v);
+  if (by) { msg('Этот цвет уже ловится (' + escapeHtml(by) + ')'); return; }
+  const block = document.querySelector(`[data-shcol="${key}"]`);
+  const cam = block && mvCam(block.dataset.cam), z = cam && cam.zones.find((q) => q.id === block.dataset.zone);
+  if (!z) return;
+  if ((z[w + '_more'] || []).length >= 6) { msg('Не больше шести дополнительных цветов на конец палки — уберите ненужный в таблице.'); return; }
+  const cl = (q, hi) => Math.max(0, Math.min(hi, Math.round(q)));
+  const range = [cl(smp.h - 6, 179), cl(smp.h + 6, 179), cl(Math.max(10, smp.s - 45), 255), cl(Math.max(10, smp.v - 50), 255)];
+  mdEdit(() => { z[w + '_more'] = (z[w + '_more'] || []).concat([range]); }, true);      // сохраняет и перерисовывает карточки; окно остаётся
+  msg('Добавлен цвет: H ' + smp.h + ', S ' + smp.s + ', V ' + smp.v);
+  shPipEnd();
+  shPipTint();
+  const nb = document.querySelector(`[data-shcol="${key}"]`);
+  if (nb) shPrevLoad(nb, true);
+  shPipMove(e);
+}
+
 function mdOnShPick(t) {
   const block = t.closest('[data-shcol]');
   if (!block) return;
   const key = block.dataset.shcol;
-  if (t.dataset.f === 'view') {
+  if (t.dataset.f === 'view') {                            // переключатель «маска / кадр» на маленькой картинке карточки
     shView[key] = t.dataset.v;
     block.querySelectorAll('.sh-seg button').forEach((b) => b.classList.toggle('on', b === t));
     shPrevLoad(block, true);
     return;
   }
-  const same = SHP.act && SHP.act.key === key && SHP.act.w === t.dataset.w;
-  shPipStop();
-  if (same) return;
-  SHP.act = { key, w: t.dataset.w, n: 0 };
-  block.classList.add('picking');
-  t.classList.add('on');
-  t.textContent = 'готово';
-  const note = block.querySelector('[data-shprevn]');
-  if (note) note.textContent = 'Кликните по ' + (t.dataset.w === 'red' ? 'красному' : 'синему') + ' концу палки на картинке. Ещё клик — добавит цвет в диапазон. «Готово» — выйти из пипетки.';
-  if (shView[key] !== 'raw') { shView[key] = 'raw'; block.querySelectorAll('.sh-seg button').forEach((b) => b.classList.toggle('on', b.dataset.v === 'raw')); shPrevLoad(block, true); }   // на голом кадре палку видно лучше
+  shPipOpen(key, t.dataset.w);                             // пипетка: большое окно
 }
-
-// цвет из пипетки: уже ловится основным диапазоном или одним из дополнительных — ничего не делаем, иначе добавляем строку «ещё цвет»
-function shPipCovered(block, w, h, s, v) {
-  const val = (sel) => { const r = block.querySelector(sel); return r ? parseInt(r.value, 10) || 0 : 0; };
-  const m = [0, 1, 2, 3].map((k) => val(`input[data-f="hsv"][data-w="${w}"][data-k="${k}"]`));
-  const mainOk = s >= m[2] && v >= m[3] && (w === 'red' ? (h <= m[0] || h >= m[1]) : (h >= m[0] && h <= m[1]));
-  if (mainOk) return true;
-  const rows = {};
-  block.querySelectorAll(`input[data-f="hsvx"][data-w="${w}"]`).forEach((i) => { (rows[i.dataset.n] = rows[i.dataset.n] || [])[Number(i.dataset.k)] = parseInt(i.value, 10) || 0; });
-  return Object.values(rows).some((r) => h >= r[0] && h <= r[1] && s >= r[2] && v >= r[3]);
-}
-async function shPipClick(img, e) {
-  const act = SHP.act, block = img.closest('[data-shcol]');
-  if (!act || !block || block.dataset.shcol !== act.key) return;
-  const key = act.key, w = act.w;
-  const r = img.getBoundingClientRect();
-  const u = (e.clientX - r.left) / Math.max(1, r.width), v = (e.clientY - r.top) / Math.max(1, r.height);
-  const say = (html) => { const n = document.querySelector(`[data-shprevn="${key}"]`); if (n) n.innerHTML = html; };
-  const p = await mvApi('/api/motion/rod_pick?camera=' + encodeURIComponent(block.dataset.cam) + '&zone=' + encodeURIComponent(block.dataset.zone) + '&u=' + u.toFixed(4) + '&v=' + v.toFixed(4));
-  if (!p || p.error) { say('Не вышло взять цвет: ' + escapeHtml((p && p.error) || 'нет ответа')); return; }
-  const dot = '<i class="sh-dot" style="background:hsl(' + p.h * 2 + ',' + Math.round(p.s / 2.55) + '%,' + Math.round(p.v / 2.55 * 0.6) + '%)"></i>';
-  const info = dot + ' оттенок ' + p.h + ', насыщенность ' + p.s + ', яркость ' + p.v;
-  if (shPipCovered(block, w, p.h, p.s, p.v)) { say('Этот цвет уже ловится: ' + info + '. Кликните по другому месту палки или нажмите «готово».'); return; }
-  const cam = mvCam(block.dataset.cam), z = cam && cam.zones.find((x) => x.id === block.dataset.zone);
-  if (!z) return;
-  if ((z[w + '_more'] || []).length >= 6) { say('Не больше шести дополнительных цветов на конец палки — уберите ненужный.'); return; }
-  const cl = (x, hi) => Math.max(0, Math.min(hi, Math.round(x)));
-  const range = [cl(p.h - 6, 179), cl(p.h + 6, 179), cl(Math.max(10, p.s - 45), 255), cl(Math.max(10, p.v - 50), 255)];
-  act.n++;
-  mdEdit(() => { z[w + '_more'] = (z[w + '_more'] || []).concat([range]); }, true);      // сохраняет и перерисовывает; пипетка остаётся включённой
-  say('Добавлен цвет: ' + info + '. Кликните ещё раз, чтобы добавить другой оттенок, или нажмите «готово».');
-  const nb = document.querySelector(`[data-shcol="${key}"]`);
-  if (nb) shPrevLoad(nb, true);
-}
-document.addEventListener('click', (e) => {
-  const img = e.target && e.target.closest ? e.target.closest('img[data-shprev]') : null;
-  if (img && SHP.act) shPipClick(img, e);
-});
 
 function mdShaftsTabHtml() {
   const sc = shCfg();

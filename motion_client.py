@@ -72,6 +72,24 @@ def loss_map(service_url: str, cam: str, window: float = 7 * 86400.0) -> dict:
     return _call(service_url, "/cameras/%s/loss_map?window=%s" % (urllib.parse.quote(cam, safe=""), float(window)), timeout=30.0)
 
 
+def autocal_start(service_url: str, cam: str, zones: list, seconds: float = 150.0) -> dict:
+    """Запустить подгонку валов: запись вращения (75–300 с) и подбор цветов, оси и радиуса."""
+    return _call(service_url, "/cameras/%s/autocal" % urllib.parse.quote(cam, safe=""), {"zones": list(zones or []), "seconds": float(seconds)}, timeout=10.0)
+
+
+def autocal_status(service_url: str, cam: str) -> dict:
+    return _call(service_url, "/cameras/%s/autocal" % urllib.parse.quote(cam, safe=""), timeout=10.0)
+
+
+def autocal_cancel(service_url: str, cam: str) -> dict:
+    return _call(service_url, "/cameras/%s/autocal/cancel" % urllib.parse.quote(cam, safe=""), {}, timeout=10.0)
+
+
+def autocal_apply(service_url: str, cam: str, zones: list) -> dict:
+    """Применить результат подгонки (сохраняет настройки зон камеры)."""
+    return _call(service_url, "/cameras/%s/autocal/apply" % urllib.parse.quote(cam, safe=""), {"zones": list(zones or [])}, timeout=20.0)
+
+
 def mirror_table(service_url: str, cam: str, group: str) -> dict:
     """Таблица поправки зеркальности валов по последним минутам работы (снимать, пока валы ровные)."""
     return _call(service_url, "/cameras/%s/mirror_table" % urllib.parse.quote(cam, safe=""), {"group": str(group)}, timeout=10.0)
@@ -139,14 +157,25 @@ def level_shots(service_url: str, cam: str, group: str, since: float = 0.0) -> d
     return _call(service_url, "/cameras/%s/level_shots?%s" % (urllib.parse.quote(cam, safe=""), q), timeout=8.0)
 
 
-def rod_mask(service_url: str, cam: str, zone: str, red: str = "", blue: str = "", width: int = 640, timeout: float = 8.0):
+def rod_mask(service_url: str, cam: str, zone: str, red: str = "", blue: str = "", width: int = 640, timeout: float = 8.0, raw: bool = False, red_more=None, blue_more=None):
     """JPEG «что видит детектор палки» с пробными порогами цвета или None (кадра нет / сервис старый / зоны нет)."""
-    q = urllib.parse.urlencode({"zone": zone, "red": red, "blue": blue, "w": int(width)})
+    args = {"zone": zone, "red": red, "blue": blue, "w": int(width), "raw": 1 if raw else 0}
+    if red_more is not None:                                  # дополнительные цвета конца палки: «H1,H2,S,V;H1,H2,S,V» (пусто — без них); нет параметра — как в настройках
+        args["red_more"] = red_more
+    if blue_more is not None:
+        args["blue_more"] = blue_more
+    q = urllib.parse.urlencode(args)
     try:
         with _opener.open(_base(service_url) + "/cameras/%s/rod_mask?%s" % (urllib.parse.quote(cam, safe=""), q), timeout=timeout) as r:
             return r.read()
     except Exception:
         return None
+
+
+def rod_pick(service_url: str, cam: str, zone: str, u: float, v: float) -> dict:
+    """Пипетка: цвет палки в точке картинки rod_mask (u, v — доли 0..1) → {h, s, v, x, y, n} или {"error": …}."""
+    q = urllib.parse.urlencode({"zone": zone, "u": float(u), "v": float(v)})
+    return _call(service_url, "/cameras/%s/rod_pick?%s" % (urllib.parse.quote(cam, safe=""), q), timeout=8.0)
 
 
 def snapshot(service_url: str, cam: str, width: int = 0, timeout: float = 5.0):

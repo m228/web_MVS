@@ -1390,12 +1390,18 @@ def motion_snapshot(camera: str, w: int = 0):
 
 
 @app.get("/api/motion/rod_mask")
-def motion_rod_mask(camera: str, zone: str, red: str = "", blue: str = "", w: int = 640):
+def motion_rod_mask(camera: str, zone: str, red: str = "", blue: str = "", w: int = 640, raw: int = 0, red_more: str | None = None, blue_more: str | None = None):
     """Превью детектора палки по зоне-циклу с пробными порогами цвета (красный/синий «H1,H2,S,V»): что именно попадает в маску."""
-    data = motion_client.rod_mask(_motion_url(), camera, zone, red, blue, w)
+    data = motion_client.rod_mask(_motion_url(), camera, zone, red, blue, w, raw=bool(raw), red_more=red_more, blue_more=blue_more)
     if data is None:
         return Response(status_code=404)
     return Response(content=data, media_type="image/jpeg", headers={"Cache-Control": "no-store"})
+
+
+@app.get("/api/motion/rod_pick")
+def motion_rod_pick(camera: str, zone: str, u: float, v: float):
+    # пипетка на вкладке «Валы»: цвет палки в точке превью (оттенок 0..179 — шкала OpenCV, как в порогах)
+    return motion_client.rod_pick(_motion_url(), camera, zone, u, v)
 
 
 @app.get("/api/motion/level_shot")
@@ -1435,6 +1441,27 @@ def motion_visibility(camera: str, window: float = 86400.0):
 def motion_loss_map(camera: str, window: float = 7 * 86400.0):
     # карта потерь палки: где (сектор угла) и когда (час суток) палка пропадает, за период до 14 суток
     return motion_client.loss_map(_motion_url(), camera, window)
+
+
+@app.post("/api/motion/autocal")
+def motion_autocal_start(req: dict = Body(...)):
+    # «Подогнать валы»: запись вращения палок и подбор цветов/оси/радиуса (сервис движения); результат применяется отдельной кнопкой
+    return motion_client.autocal_start(_motion_url(), str(req.get("camera") or ""), [str(z) for z in (req.get("zones") or [])], float(req.get("seconds") or 150))
+
+
+@app.get("/api/motion/autocal")
+def motion_autocal_status(camera: str):
+    return motion_client.autocal_status(_motion_url(), camera)
+
+
+@app.post("/api/motion/autocal/cancel")
+def motion_autocal_cancel(req: dict = Body(...)):
+    return motion_client.autocal_cancel(_motion_url(), str(req.get("camera") or ""))
+
+
+@app.post("/api/motion/autocal/apply")
+def motion_autocal_apply(req: dict = Body(...)):
+    return motion_client.autocal_apply(_motion_url(), str(req.get("camera") or ""), [str(z) for z in (req.get("zones") or [])])
 
 
 @app.post("/api/motion/mirror_table")

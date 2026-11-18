@@ -12,7 +12,11 @@
   GET  /cameras/{id}/snapshot     — последний кадр JPEG (?w=1280 — уменьшить; заголовки X-Frame-W/H — размер оригинала).
   GET  /cameras/{id}/loss_map     — карта потерь палки: доля «найдена» по секторам угла и по часам суток (?window=секунды, до 14 суток).
   GET  /cameras/{id}/rod_mask     — что видит детектор палки: кадр вокруг оси зоны-цикла с масками красной/синей половин
-                                    (?zone=id&red=H1,H2,S,V&blue=H1,H2,S,V — пробные пороги цвета; пусто — настроенные; ?w=640).
+                                    (?zone=id&red=H1,H2,S,V&blue=H1,H2,S,V — пробные пороги цвета; &red_more=H1,H2,S,V;… и &blue_more= — дополнительные цвета конца палки; пусто — настроенные; ?w=640).
+  POST /cameras/{id}/autocal      — {"zones": [id…], "seconds": 150}: записать вращение палок и подогнать цвета, ось и радиус (75–300 с, ≥1 оборота).
+  GET  /cameras/{id}/autocal      — ход и результат подгонки: до/после по каждой палке (найдена, обороты, сектора), новые настройки.
+  POST /cameras/{id}/autocal/cancel — отменить.   POST /cameras/{id}/autocal/apply — {"zones": [id…]}: применить результат (сохраняет настройки).
+  GET  /cameras/{id}/rod_pick     — пипетка: цвет палки в точке картинки rod_mask (?zone=id&u=0..1&v=0..1) → {h, s, v}; rod_mask принимает ещё ?raw=1 (кадр без масок).
   GET  /cameras/{id}/level_shot   — снимок для графика уровня, ближайший к моменту (?group=lvl&ts=unix-секунды; &dir=-1/1 — соседний
                                     раньше/позже; X-Shot-Ts — его время).
   GET  /cameras/{id}/level_shots  — снимки уровня с разметкой кадра (?group=lvl&since=unix — только новее): {"shots": [{ts, meta}]}.
@@ -53,6 +57,7 @@ import motion_lvldec  # noqa: E402
 import motion_records  # noqa: E402
 import motion_store  # noqa: E402
 import motion_trends  # noqa: E402
+from motion_autocal_job import AutocalJob  # noqa: E402
 from motion_camera import CameraWorker, open_capture  # noqa: E402
 from motion_modbus import LinkRegistry, ModbusLink  # noqa: E402
 from motion_scenarios import ScenarioRunner  # noqa: E402
@@ -110,6 +115,52 @@ class Manager:
         self.shafts = ShaftRunner(self)
         self._halt = threading.Event()
         self._hk: Optional[threading.Thread] = None
+        self.autocal: dict[str, AutocalJob] = {}   # подгонка валов по камере (последнее задание; пересоздание воркеров при сохранении настроек его не трогает)
+
+    # --- автоподгонка валов ---
+    def autocal_start(self, cid: str, zones: list, seconds: float) -> dict:
+        """Запустить подгонку. KeyError — нет камеры, ValueError — нечего подгонять, RuntimeError — уже идёт (одна на сервис)."""
+        with self._lock:
+            w = self.workers.get(cid)
+            if not w:
+                raise KeyError(cid)
+            if not any(z["type"] == "cycle" and z["enabled"] and (not zones or z["id"] in zones) for z in w.cfg["zones"]):
+                raise ValueError("у камеры нет включённых зон-палок%s" % (" с такими id" if zones else ""))
+            busy = next((c for c, j in self.autocal.items() if j.running), None)
+            if busy:
+                raise RuntimeError("подгонка уже идёт (камера %s) — дождитесь конца или отмените" % busy)
+            job = AutocalJob(cid, lambda c: self.workers.get(c), zones, seconds)
+            self.autocal[cid] = job
+            job.start()
+            return job.status()
+
+    def autocal_apply(self, cid: str, zones: list) -> dict:
+        """Результат подгонки → в настройки зон (ось, радиус, цвета, тонкость). Применяются только улучшившие (improved) палки. KeyError — нет результата."""
+        with self._lock:
+            job = self.autocal.get(cid)
+            st = job.status() if job else None
+            if not st or st["state"] != "done":
+                raise KeyError(cid)
+            cfg = json.loads(json.dumps(self.cfg))
+            cam = next((c for c in cfg["cameras"] if c["id"] == cid), None)
+            if cam is None:
+                raise KeyError(cid)
+            done, skipped = [], []
+            for zid, r in st["results"].items():
+                if zones and zid not in zones:
+                    continue
+                z = next((x for x in cam["zones"] if x["id"] == zid), None)
+                if z is None or not r["improved"]:
+                    skipped.append(zid)
+                    continue
+                z.update(center=r["new"]["center"], radius=r["new"]["radius"], red_hsv=r["new"]["red_hsv"], blue_hsv=r["new"]["blue_hsv"],
+                         thin=r["new"]["thin"], blue_alone=r["new"]["blue_alone"])
+                done.append(zid)
+            if done:
+                self.apply(cfg)
+                job.mark_applied(done)
+                log.info("[%s] результат автоподгонки применён: %s", cid, ", ".join(done))
+            return {"applied": done, "skipped": skipped}
 
     # --- конфиг ---
     def load(self):
@@ -283,6 +334,8 @@ class Manager:
 
     def shutdown(self):
         self._halt.set()
+        for j in self.autocal.values():
+            j.cancel()
         self.scenarios.stop()
         self.shafts.stop()
         with self._lock:
@@ -389,18 +442,63 @@ def create_app(data_dir: Optional[Path] = None, capture_factory: Callable = open
         return r
 
     @app.get("/cameras/{cid}/rod_mask")
-    def rod_mask(cid: str, zone: str, red: str = "", blue: str = "", w: int = 640):
+    def rod_mask(cid: str, zone: str, red: str = "", blue: str = "", w: int = 640, raw: int = 0, red_more: Optional[str] = None, blue_more: Optional[str] = None):
         """Что видит детектор палки: кадр вокруг оси с масками красной и синей половин. red/blue — пробные пороги «H1,H2,S,V» (пусто — настроенные)."""
         def hsv(txt, default, name, pair_ok):
             return None if not txt.strip() else engine._hsv4([float(x) for x in txt.split(",")], default, name, pair_ok)
         try:
             r, b = hsv(red, None, "red", True), hsv(blue, None, "blue", False)
-            data = mgr.worker(cid).rod_mask_jpeg(zone, r, b, max(160, min(int(w), 1600)))
+            more = lambda txt, name: None if txt is None else engine._more([[float(x) for x in item.split(",")] for item in txt.split(";") if item.strip()], name)   # noqa: E731 — «H1,H2,S,V;H1,H2,S,V»; пусто — без дополнительных
+            data = mgr.worker(cid).rod_mask_jpeg(zone, r, b, max(120, min(int(w), 1600)), bool(raw), more(red_more, "red_more"), more(blue_more, "blue_more"))
         except ValueError as e:
             raise HTTPException(400, str(e))
         if data is None:
             raise HTTPException(404, "кадра ещё нет (камера не подключилась)")
         return Response(content=data, media_type="image/jpeg", headers={"Cache-Control": "no-store"})
+
+    @app.post("/cameras/{cid}/autocal")
+    def autocal_start(cid: str, req: dict = Body(default={})):
+        """Записать вращение палок (по умолчанию 150 с ≈ 2 оборота) и подогнать цвета, ось и радиус. Применяет человек: POST …/autocal/apply."""
+        try:
+            return mgr.autocal_start(cid, [str(z) for z in (req.get("zones") or [])], float(req.get("seconds") or 150))
+        except KeyError:
+            raise HTTPException(404, "нет такой камеры: %s" % cid)
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+        except RuntimeError as e:
+            raise HTTPException(409, str(e))
+
+    @app.get("/cameras/{cid}/autocal")
+    def autocal_status(cid: str):
+        j = mgr.autocal.get(cid)
+        return j.status() if j else {"state": "idle", "camera": cid, "progress": 0.0, "text": "", "results": {}, "applied": []}
+
+    @app.post("/cameras/{cid}/autocal/cancel")
+    def autocal_cancel(cid: str):
+        j = mgr.autocal.get(cid)
+        if j and j.running:
+            j.cancel()
+        return {"ok": True}
+
+    @app.post("/cameras/{cid}/autocal/apply")
+    def autocal_apply(cid: str, req: dict = Body(default={})):
+        try:
+            return mgr.autocal_apply(cid, [str(z) for z in (req.get("zones") or [])])
+        except KeyError:
+            raise HTTPException(409, "готового результата подгонки нет")
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+
+    @app.get("/cameras/{cid}/rod_pick")
+    def rod_pick(cid: str, zone: str, u: float, v: float):
+        """Пипетка: цвет палки в точке картинки rod_mask (u, v — доли 0..1 по ширине и высоте): {h, s, v, x, y, n}, оттенок 0..179 (шкала OpenCV)."""
+        try:
+            r = mgr.worker(cid).rod_pick(zone, u, v)
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+        if r is None:
+            raise HTTPException(404, "кадра ещё нет (камера не подключилась)")
+        return r
 
     @app.get("/cameras/{cid}/level_shot")
     def level_shot(cid: str, group: str, ts: float, dir: int = 0):      # noqa: A002 — имя параметра в адресе

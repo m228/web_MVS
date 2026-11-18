@@ -300,8 +300,8 @@ class CameraWorker(threading.Thread):
         ok, buf = cv2.imencode(".jpg", f, [cv2.IMWRITE_JPEG_QUALITY, 80])
         return (buf.tobytes(), (w, h)) if ok else None
 
-    def rod_mask_jpeg(self, zone_id: str, red=None, blue=None, max_w: int = 640) -> Optional[bytes]:
-        """JPEG «что видит детектор» по зоне-циклу с пробными порогами цвета (None — кадра ещё нет). ValueError — нет такой зоны."""
+    def rod_mask_jpeg(self, zone_id: str, red=None, blue=None, max_w: int = 640, raw: bool = False, red_more=None, blue_more=None) -> Optional[bytes]:
+        """JPEG «что видит детектор» по зоне-циклу с пробными порогами цвета (None — кадра ещё нет); raw — сам кадр без масок. ValueError — нет такой зоны."""
         cyc = self.engine.cycles.get(zone_id)
         if cyc is None:
             raise ValueError("нет зоны-цикла «%s» у камеры" % zone_id)
@@ -309,8 +309,26 @@ class CameraWorker(threading.Thread):
             f = self._frame
         if f is None or f.ndim != 3:
             return None
-        ok, buf = cv2.imencode(".jpg", cyc.mask_preview(f, red, blue, max_w), [cv2.IMWRITE_JPEG_QUALITY, 85])
+        ok, buf = cv2.imencode(".jpg", cyc.mask_preview(f, red, blue, max_w, raw, red_more, blue_more), [cv2.IMWRITE_JPEG_QUALITY, 85])
         return buf.tobytes() if ok else None
+
+    def rod_pick(self, zone_id: str, u: float, v: float) -> Optional[dict]:
+        """Пипетка: цвет палки в точке превью (u, v — доли картинки rod_mask). None — кадра ещё нет. ValueError — нет такой зоны."""
+        cyc = self.engine.cycles.get(zone_id)
+        if cyc is None:
+            raise ValueError("нет зоны-цикла «%s» у камеры" % zone_id)
+        with self._lock:
+            f = self._frame
+        return cyc.pick_color(f, u, v) if f is not None else None
+
+    def autocal_frame(self) -> tuple:
+        """(цветной кадр, метка его прихода) для записи подгонки валов. (None, 0.0) — кадра нет, он старше 5 с или камера застыла/мертва.
+        Кадр после приёма не меняется (воркер кладёт новый массив), так что резать вырез можно без копии всего кадра."""
+        with self._lock:
+            f, st, stamp = self._frame, self._state, self._last_good
+        if f is None or f.ndim != 3 or (st is not None and not st.get("alive")) or time.time() - stamp > 5.0:
+            return None, 0.0
+        return f, stamp
 
     def mirror_samples(self, zone_ids: list, mode: str = "mirror") -> list:
         """[(θ1, θ1±θ2)] по кадрам в норме, где найдены обе палки — из покадровой истории (последние ~5 мин). Для таблицы поправки зеркальности.

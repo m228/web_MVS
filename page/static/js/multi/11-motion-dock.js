@@ -559,7 +559,25 @@ function mdOnZone(t, cam) {
   if (!z) return;
   if (mdOnLearn(t, cam, z)) return;
   if (f === 'hsvreset') {
-    mdEdit(() => { z.red_hsv = SH_RED_DEF.slice(); z.blue_hsv = SH_BLUE_DEF.slice(); }, true);
+    mdEdit(() => { z.red_hsv = SH_RED_DEF.slice(); z.blue_hsv = SH_BLUE_DEF.slice(); z.red_more = []; z.blue_more = []; }, true);
+    return;
+  }
+  if (f === 'hsvxdel') {                                          // убрать дополнительный цвет конца палки
+    mdEdit(() => { (z[t.dataset.w + '_more'] || []).splice(Number(t.dataset.n), 1); }, true);
+    return;
+  }
+  if (f === 'hsvx') {                                             // порог дополнительного цвета (строка «ещё цвет»)
+    const w = t.dataset.w, n = Number(t.dataset.n), k = Number(t.dataset.k);
+    let fixed = false;
+    mdEdit(() => {
+      const arr = (z[w + '_more'] || []).map((r) => r.slice());
+      const r = arr[n];
+      if (!r) return;
+      r[k] = Math.max(0, Math.min(k < 2 ? 179 : 255, parseInt(t.value, 10) || 0));
+      if (r[0] > r[1]) { if (k === 0) r[1] = r[0]; else r[0] = r[1]; fixed = true; }   // нижняя граница оттенка не выше верхней
+      z[w + '_more'] = arr;
+    }, false);
+    if (fixed) { MD.key = ''; renderMotionDock(); }
     return;
   }
   if (f === 'hsv') {                                              // пороги цвета палки (вкладка «Валы»): H/S/V красной и синей половин
@@ -1744,10 +1762,12 @@ function initMotionDock() {
     else if (kind === 'lv') mdOnLevel(t);
     else if (kind === 'sh') mdOnShafts(t);
     else if (kind === 'shloss') mdOnShLoss(t);
+    else if (kind === 'shac') mdOnShAc(t);
+    else if (kind === 'shpick') mdOnShPick(t);
     else if (kind === 'cs') mdSetEnabled(t.dataset.serial, t.checked, () => { t.checked = !t.checked; });
   };
   body?.addEventListener('change', (e) => { if (e.target.tagName !== 'BUTTON') dispatch(e); });
-  body?.addEventListener('input', (e) => { if (e.target.dataset && e.target.dataset.f === 'hsv' && typeof shOnSlide === 'function') shOnSlide(e.target); });
+  body?.addEventListener('input', (e) => { if (e.target.dataset && (e.target.dataset.f === 'hsv' || e.target.dataset.f === 'hsvx') && typeof shOnSlide === 'function') shOnSlide(e.target); });
   body?.addEventListener('click', (e) => { if (e.target.tagName === 'BUTTON' && e.target.dataset.md) dispatch(e); });
   body?.addEventListener('change', (e) => {
     if (e.target.id === 'geType') mdSyncGroupEditor();

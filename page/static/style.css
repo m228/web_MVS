@@ -4724,6 +4724,14 @@ body.micro-rep-doc .micro-cmp-strips { grid-template-columns: repeat(6, 1fr); ga
 .md-det { margin-top: 12px; }
 .md-det > summary { cursor: pointer; font-weight: 700; font-size: 13px; color: var(--muted); margin-bottom: 6px; }
 .md-camlist { display: flex; flex-wrap: wrap; gap: 8px 26px; }
+.sh-hsvrow { flex-wrap: wrap; gap: 4px 14px; }
+.sh-hsvname { min-width: 120px; font-size: 12px; }
+.sh-hsv { display: inline-flex; flex-direction: row; align-items: center; gap: 5px; margin: 0; font-size: 12px; color: var(--muted, #9ca3af); }
+.sh-hsv span { white-space: nowrap; }
+.sh-hsv output { display: inline; }
+.sh-hsv input[type=range] { width: 86px; }
+.sh-hsv output { min-width: 26px; text-align: right; color: var(--text); font-variant-numeric: tabular-nums; }
+.sh-prev img { max-width: 100%; border-radius: 6px; background: #111; min-height: 40px; display: block; }
 .md-camrow { display: inline-flex; flex-direction: row; align-items: center; gap: 8px; font-size: 13px; color: var(--text); cursor: pointer; }
 
 .md-cols { display: grid; grid-template-columns: minmax(300px, 1fr) minmax(360px, 1.4fr); gap: 20px; }

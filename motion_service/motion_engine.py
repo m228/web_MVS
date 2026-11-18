@@ -795,12 +795,13 @@ class CycleRT:
         elif rng >= 1.6 * self.cfg["stop_deg"]:
             self.moving = True
 
-    def _liks(self, bgr: np.ndarray):
+    def _liks(self, bgr: np.ndarray, red_hsv=None, blue_hsv=None):
+        """Маски красной и синей половин (доли 0..1 в рабочем масштабе). red_hsv/blue_hsv — свои пороги вместо настроенных (для превью на панели)."""
         hsv = cv2.cvtColor(bgr, cv2.COLOR_BGR2HSV)
         h, s, v = [c.astype(np.int32) for c in cv2.split(hsv)]
-        hm, hn, rs_, rv = self.cfg["red_hsv"]
+        hm, hn, rs_, rv = red_hsv or self.cfg["red_hsv"]
         red = (((h <= hm) | (h >= hn)) & (s >= rs_) & (v >= rv)).astype(np.uint8)
-        b1, b2, bs, bv = self.cfg["blue_hsv"]
+        b1, b2, bs, bv = blue_hsv or self.cfg["blue_hsv"]
         blue = ((h >= b1) & (h <= b2) & (s >= bs) & (v >= bv)).astype(np.uint8)
         if self.ker is not None:                                           # оставляем только тонкое: то, что не пережило «открытие»
             red &= 1 - cv2.morphologyEx(red, cv2.MORPH_OPEN, self.ker)
@@ -856,6 +857,22 @@ class CycleRT:
         if red_ok:
             return pr[0], "red"
         return (ab - self.off_b) % 360.0, "blue"
+
+    def mask_preview(self, frame: np.ndarray, red_hsv=None, blue_hsv=None, max_w: int = 640) -> np.ndarray:
+        """Что видит детектор: область вокруг оси (в рабочем масштабе), красные точки — маска красной половины, голубые — синей,
+        окружность поиска и ось. Пороги можно подставить свои — подбирать цвета, не меняя настройки."""
+        red, blue = self._liks(frame[self.y0:self.y1, self.x0:self.x1], red_hsv, blue_hsv)
+        crop = cv2.resize(frame[self.y0:self.y1, self.x0:self.x1], (red.shape[1], red.shape[0]), interpolation=cv2.INTER_AREA)
+        img = (crop.astype(np.float32) * 0.55).astype(np.uint8)
+        img[red > 0.5] = (40, 40, 255)
+        img[blue > 0.5] = (255, 200, 40)
+        sc = max(1.0, max_w / float(max(1, img.shape[1])))
+        if sc > 1.0:
+            img = cv2.resize(img, None, fx=sc, fy=sc, interpolation=cv2.INTER_NEAREST)
+        o = (int(round(self.ox * sc)), int(round(self.oy * sc)))
+        cv2.circle(img, o, int(round(float(self.rs[-1] if len(self.rs) else 3) * sc)), (200, 200, 200), 1, cv2.LINE_AA)
+        cv2.circle(img, o, 3, (255, 255, 255), -1)
+        return img
 
     def _expected(self, now: float) -> float:
         """Где палка должна быть сейчас: прошлый угол + скорость × время (скорость — по последним оборотам, не больше 30°/с)."""

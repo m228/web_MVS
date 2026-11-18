@@ -72,6 +72,23 @@ def test_purge_removes_only_old_finished(ev):
     assert [r["kind"] for r in ev.episodes("c1", now=now)] == ["b"]
 
 
+def test_journal_keeps_a_year_but_old_shots_are_unlinked(ev):
+    """Эпизоды живут год, снимки — SHOT_RETENTION_DAYS: у эпизода старше снимок гасится, чтобы журнал не звал пропавший файл."""
+    day = 86400.0
+    assert ev.RETENTION_DAYS == 365 and ev.SHOT_RETENTION_DAYS < ev.RETENTION_DAYS
+    ev.sync("c1", ["a"], {("a", ""): ""}, 0.0)
+    ev.set_shot(ev.open_id("c1", "a"), "c1/1970-01-01/a.jpg")
+    ev.sync("c1", ["a"], {}, 10.0)
+    t_new = (ev.SHOT_RETENTION_DAYS + 5) * day
+    ev.sync("c1", ["a"], {("a", ""): ""}, t_new)
+    ev.set_shot(ev.open_id("c1", "a"), "c1/x/b.jpg")
+    ev.sync("c1", ["a"], {}, t_new + 10)
+    now = t_new + 20
+    assert ev.purge(now) == 0, "эпизод моложе года не удаляется"
+    shots = {r["t0"]: r["shot"] for r in ev.episodes("c1", now=now)}
+    assert shots == {0.0: False, t_new: True}
+
+
 # ---------- монитор ----------
 class FakeWorker:
     def __init__(self):

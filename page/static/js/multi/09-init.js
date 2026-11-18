@@ -54,6 +54,7 @@ function initToolbar() {
     document.getElementById('multiVideoCard'), document.getElementById('multiVideoBtn'));
   document.getElementById('multiPhotoBtn')?.addEventListener('click', (e) => { e.stopPropagation(); openPhotoPopup(); });
   document.getElementById('multiVideoBtn')?.addEventListener('click', (e) => { e.stopPropagation(); openVideoPopup(); });
+  document.getElementById('multiDayCapRestart')?.addEventListener('click', restartDayCapture);
   document.getElementById('multiPhotoCard')?.addEventListener('click', (e) => e.stopPropagation());
   document.getElementById('multiVideoCard')?.addEventListener('click', (e) => e.stopPropagation());
   document.addEventListener('click', (e) => {

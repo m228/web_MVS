@@ -184,6 +184,7 @@ class UltralyticsDetector(Detector):
         self.model_path = model_path
         self.model = YOLO(model_path)
         self._device = device or self._auto_device()
+        self.device_name = self._device_name(self._device)
         self.name = "yolo:" + model_path.rsplit("/", 1)[-1].rsplit("\\", 1)[-1]
         # seg-модель, если у неё есть маски (task=segment)
         self.is_seg = getattr(self.model, "task", "") == "segment"
@@ -256,6 +257,20 @@ class UltralyticsDetector(Detector):
         except Exception:
             return "cpu"
 
+    @staticmethod
+    def _device_name(device) -> str:
+        """На чём реально считаем — для статуса на вкладке CV: «GPU NVIDIA GeForce GTX 1050 Ti» / «CPU». Сборка torch под AMD (ROCm)
+        тоже идёт через torch.cuda — там будет имя Radeon; если на AMD стоит обычный torch, увидим «CPU»."""
+        d = str(device)
+        if d == "cpu":
+            return "CPU"
+        try:
+            import torch
+            tail = d.split(":")[-1]
+            return "GPU " + torch.cuda.get_device_name(int(tail) if tail.isdigit() else 0)
+        except Exception:
+            return "GPU " + d
+
     def infer(self, image: np.ndarray, conf: float = 0.25) -> list[Detection]:
         res = self.model.predict(image, conf=conf, imgsz=self.imgsz, device=self._device,
                                  max_det=self.max_det, verbose=False)[0]
@@ -279,7 +294,7 @@ class UltralyticsDetector(Detector):
         return dets
 
     def info(self) -> dict:
-        return {"name": self.name, "seg": self.is_seg, "device": str(self._device),
+        return {"name": self.name, "seg": self.is_seg, "device": str(self._device), "device_name": self.device_name,
                 "imgsz": self.imgsz, **self._meta}
 
 

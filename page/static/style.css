@@ -1095,6 +1095,12 @@ input[type="range"] {
   margin-bottom: 14px;
 }
 
+/* окно «Фото»: суточная съёмка камеры под автосохранением */
+.day-cap { margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--border); }
+.day-cap[hidden] { display: none; }
+.day-cap h2 { margin-bottom: 6px; }
+.day-cap__state { margin: 0 0 10px; color: var(--muted); font-size: .92em; }
+
 /* окно «Сеть»: текущие значения, поля нового адреса, подсказка */
 .net-current {
   background: var(--surface-muted);

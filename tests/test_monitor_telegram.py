@@ -280,18 +280,27 @@ def test_telegram_429_retry_after_is_respected(env):
     assert e.store.notify_pending(e.clk.t + 10**6)[0]["next_try_t"] >= e.clk.t + 500
 
 
-def test_hourly_cap_mutes_the_rest_and_sends_one_summary(env):
+def test_hourly_cap_is_per_plant_and_one_summary_per_plant(env):
+    """Потолок max_per_hour — на каждый завод: лавина на Кире не глушит тревогу Буи; итог «ещё N» — с названием завода."""
     e = env
-    e.cfg["max_per_hour"] = 3
-    for i in range(5):
-        pid, _ = e.store.create_plant("Завод%d" % i)
-        e.store.ingest(pid, pulse([ev("s%d" % i, e.clk.t - 5, "ПК перезагрузился", kind="start", level="critical")]))
-    assert e.n.flush() == 4
-    sent = e.tg.sent()
-    assert len(sent) == 4 and sent[3].startswith("⚠ Слишком много событий за час: ещё 2")
+    e.cfg["max_per_hour"] = 2
+    kir, _ = e.store.create_plant("Кир")
+    bui, _ = e.store.create_plant("Буи")
+    for i in range(4):                                       # 4 прохода — 4 отдельных сообщения Кира
+        e.store.ingest(kir, pulse([ev("k%d" % i, e.clk.t - 5, "ПК перезагрузился", kind="start", level="critical")]))
+        e.n.flush()
+        e.clk.t += 30
+    assert len([s for s in e.tg.sent() if s.startswith("🔴 Кир")]) == 2, "Киру — не больше потолка"
+    assert [s for s in e.tg.sent() if s.startswith("⚠ Кир: слишком много событий за час, ещё 1")], "итог про Кир"
+    e.store.ingest(bui, pulse([ev("b1", e.clk.t - 5, "ПК перезагрузился", kind="start", level="critical")]))
+    e.n.flush()
+    assert [s for s in e.tg.sent() if s.startswith("🔴 Буи")], "лавина на Кире не глушит тревогу Буи"
+    assert len([s for s in e.tg.sent() if s.startswith("⚠ Кир")]) == 1, "итог про завод — раз в час"
     assert e.store.notify_count() == 0
-    e.clk.t += 60
-    assert e.n.flush() == 0
+    e.clk.t += 3601                                          # час прошёл — Кир снова слышен
+    e.store.ingest(kir, pulse([ev("k9", e.clk.t - 5, "ПК перезагрузился", kind="start", level="critical")]))
+    e.n.flush()
+    assert len([s for s in e.tg.sent() if s.startswith("🔴 Кир")]) == 3
 
 
 def test_events_pending_too_long_are_dropped_not_sent(env):

@@ -202,6 +202,14 @@
       <button type="button" class="btn-secondary" id="multiPhotoOff">Выключить</button>
     </div>
     <p class="record-path" id="multiPhotoSavePath" hidden></p>
+    <!-- суточная съёмка (day_capture.py): раз в 20 мин кадр, сутки; заново — после перестановки камеры. Только RTSP -->
+    <div class="day-cap" id="multiDayCap" hidden>
+      <h2>Суточная съёмка</h2>
+      <p class="day-cap__state" id="multiDayCapState">—</p>
+      <div class="popup-actions">
+        <button type="button" class="btn-secondary" id="multiDayCapRestart" title="Камеру переставили — снять ещё сутки: кадр раз в 20 минут, днём и ночью">Снять сутки заново</button>
+      </div>
+    </div>
   </div>
 
   <!-- popup видео (под иконкой) -->
@@ -276,7 +284,8 @@
           <span class="cj-f">Камера <select id="cjCam"></select></span>
           <span class="cj-f">За <select id="cjHours">
             <option value="1">1 час</option><option value="8">8 часов</option><option value="24" selected>сутки</option>
-            <option value="168">неделю</option><option value="720">30 суток</option></select></span>
+            <option value="168">неделю</option><option value="720">30 суток</option><option value="2160">90 суток</option>
+            <option value="8760">год</option></select></span>
           <span class="cj-f" title="Короткие вспышки (мигание зоны на границе порога) скрываются">Не короче <select id="cjMin">
             <option value="0">любые</option><option value="5" selected>5 с</option><option value="30">30 с</option><option value="300">5 мин</option></select></span>
           <label class="micro-check"><input type="checkbox" data-cj-kind="link" checked /><span class="micro-check__text">Связь</span></label>

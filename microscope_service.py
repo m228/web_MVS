@@ -1258,6 +1258,16 @@ class MicroscopeService:
             return self.fsm.clear_fault()
         return {"status": "no_fsm"}
 
+    def set_fault_guard(self, m1_timeouts):
+        """Порог Аварии «М1 не доехал N раз подряд» (0 — выкл.): сразу в автомат + persist в конфиг."""
+        patch = {"m1_timeouts": max(0, min(20, int(m1_timeouts)))}
+        res = self.fsm.set_fault_guard(**patch) if self.fsm else patch
+        plate_config.save({"fault_guard": patch})
+        if self.cfg is not None:
+            self.cfg.setdefault("fault_guard", {}).update(patch)
+        log_event("microscope_service", "Порог аварии по таймаутам М1", "info", patch)
+        return {"status": "ok", **res}
+
     def _persist_varka(self, count):
         """Колбэк FSM: сохранить счётчик варок в конфиг (переживает перезапуск)."""
         plate_config.save({"autocal": {"count": int(count)}})

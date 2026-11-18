@@ -1002,14 +1002,18 @@
         const sfS = $("sensorFilterSec");
         if (sfS) { if (sf.avg_sec != null) sfS.value = sf.avg_sec; sfS.disabled = !(sfT && sfT.checked); }
         const sds = $("sensorDisplayScale"); if (sds && cfg.sensor_display_scale != null) sds.value = cfg.sensor_display_scale;
+        // числовое поле из конфига (нет значения — не трогаем). Без этой строки (снесена в 3.0.7 вместе с доводом) загрузка
+        // настроек падала на ReferenceError, и кнопки «Сохранить» оставались запертыми
+        const faSet = (id, v) => { const e = $(id); if (e && v != null) e.value = v; };
         // автокалибровка нуля М1
         const ac = cfg.autocal || {};
         const acT = $("autocalToggle"); if (acT) acT.checked = !!ac.enabled;
         faSet("acEveryN", ac.every_n); faSet("acTimeout", ac.timeout_sec);
+        faSet("faM1Timeouts", (cfg.fault_guard || {}).m1_timeouts);   // порог Аварии «М1 не доехал подряд»
         cfgSerial = cfg.camera_serial || "";
         loadedOk = true;
       }
-    } catch (e) { /* конфиг недоступен */ }
+    } catch (e) { console.warn("загрузка настроек:", e); }   // сеть или ошибка в коде — не глотаем молча
     if (!loadedOk) {
       cfgLoaded = false; lockSaves(true);
       loadHint("загрузка настроек с сервера… (попытка " + (cfgTries + 1) + ")");
@@ -1426,7 +1430,15 @@
     // сброс аварии автомата
     const faCF = $("faClearFault");
     if (faCF) faCF.addEventListener("click", () => {
-      api("/api/micro/clear_fault").then(() => sentCmd("Авария сброшена")).catch(() => {});
+      faCF.hidden = true;                       // прячем сразу, опрос подтвердит
+      api("/api/micro/clear_fault").then(() => sentCmd("Авария сброшена — «Автомат» включите сами")).catch((e) => sentCmd("ошибка: " + e.message));
+    });
+    // порог Аварии «М1 N раз подряд не доехал за таймаут шага» (0 — выкл.)
+    const faTo = $("faM1Timeouts");
+    if (faTo) faTo.addEventListener("change", () => {
+      api("/api/micro/fault_guard", { m1_timeouts: faTo.value })
+        .then((r) => { faTo.value = r.m1_timeouts; if (cfg) cfg.fault_guard = { m1_timeouts: r.m1_timeouts }; sentCmd("Авария по таймаутам М1: " + (r.m1_timeouts ? r.m1_timeouts + " подряд" : "выкл")); })
+        .catch((e) => sentCmd("ошибка: " + e.message));
     });
 
     // автокалибровка нуля М1: галочка + поля + ручной старт + сброс счётчика

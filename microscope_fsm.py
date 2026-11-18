@@ -307,6 +307,9 @@ class MicroscopeFSM:
         # предохранитель шага цикла (тики по 100мс): нормальный выход — «доехал», а это
         # защита от зависания. Большой, т.к. реальная плата едет медленно (см. step_timeout_s).
         self._step_timeout_ticks = max(1, int(config.get("step_timeout_s", 300)) * 10)
+        # Авария, если М1 N раз подряд не доехал за этот таймаут (см. _m1_timeout_check); 0 — выкл.
+        self._m1_timeout_limit = max(0, int((config.get("fault_guard") or {}).get("m1_timeouts", 3)))
+        self._m1_timeouts = 0
 
         # входы (задаются извне; на этапе A заменятся чтением из ПЛК)
         self.sv = float(config.get("manual_sv", 0.0))
@@ -620,12 +623,37 @@ class MicroscopeFSM:
         self.sw3 = True
         log_event("microscope_fsm", "АВАРИЯ: " + msg, "error", {"msg": msg})
 
+    def _m1_timeout_check(self, step, timed_out):
+        """Ход М1 цикла (отвод/подвод/возврат) закончился (под локом). Доехал — счётчик «таймаутов подряд» с нуля;
+        не доехал за таймаут шага N раз подряд (fault_guard.m1_timeouts, 0 — выкл.) — Авария: мотор встал или датчик
+        врёт, а цикл без неё часами «брал бы пробы» мимо стекла. True — Авария поднята (дальше по шагам не идём)."""
+        if not timed_out:
+            self._m1_timeouts = 0
+            return False
+        self._m1_timeouts += 1
+        log_event("microscope_fsm", "М1 не доехал за таймаут шага", "warn",
+                  {"step": step, "in_row": self._m1_timeouts, "limit": self._m1_timeout_limit})
+        if self._m1_timeout_limit and self._m1_timeouts >= self._m1_timeout_limit:
+            n, self._m1_timeouts = self._m1_timeouts, 0
+            self._raise_fault("М1 не доехал за таймаут шага, подряд: %d (последний — %s)" % (n, step))
+            return True
+        return False
+
+    def set_fault_guard(self, m1_timeouts=None):
+        """Порог Аварии «М1 не доехал N раз подряд» на лету (0 — выкл.)."""
+        with self._lock:
+            if m1_timeouts is not None:
+                self._m1_timeout_limit = max(0, int(m1_timeouts))
+            return {"m1_timeouts": self._m1_timeout_limit}
+
     def clear_fault(self):
-        """Сброс аварии оператором: снять запрет движения, погасить флаг."""
+        """Сброс аварии оператором: снять запрет движения, погасить флаг. «Автомат» остаётся выключенным —
+        оператор проверяет мотор и включает его сам."""
         with self._lock:
             self._fault = False
             self._fault_msg = ""
             self.sw3 = False
+            self._m1_timeouts = 0
         return {"status": "cleared"}
 
     def set_sensor_scale(self, value):
@@ -1030,7 +1058,7 @@ class MicroscopeFSM:
             step_left = (max(0, self._step_timeout_ticks - self.t) // 10) if m in (20, 22, 24) else None
             # человекочитаемая подпись текущего действия (для вкладки «Цикл»)
             if self._fault:
-                label = "⚠ АВАРИЯ: %s — снимите на вкладке «Настр»" % self._fault_msg
+                label = "⚠ АВАРИЯ: %s" % self._fault_msg       # рядом кнопка «Сбросить аварию»
             elif self._cal_active:
                 # калибровка идёт в автомате (mode=0) — что делает алгоритм и живые цифры (видно, почему не сходится)
                 num = lambda v: "—" if v is None else "%d" % round(v)
@@ -1101,6 +1129,8 @@ class MicroscopeFSM:
                 "step_timeout_left_s": step_left,   # тикающий отсчёт до таймаута шага движения
                 "fault": self._fault,
                 "fault_msg": self._fault_msg,
+                "m1_timeouts": self._m1_timeouts,              # таймаутов М1 подряд сейчас (Авария на m1_timeouts_limit)
+                "m1_timeouts_limit": self._m1_timeout_limit,
                 "autocal": {
                     "enabled": self._ac_enabled,
                     "every_n": self._ac_every_n,
@@ -1362,10 +1392,11 @@ class MicroscopeFSM:
                 # отвод: стоп СРАЗУ, как выбранный датчик перешёл черту retract_pos (не ждём выдержки)
                 if self._reached_retract(pos_sel, self._retract_pos) or self.t > self._step_timeout_ticks:
                     if self._settle_wait():        # приехал → пауза settle (осадка датчика) → дальше
-                        self._note_positions("отвод", self._retract_pos, pos1, pos_enc, pos1_ai,
-                                             not self._reached_retract(pos_sel, self._retract_pos))
+                        timed_out = not self._reached_retract(pos_sel, self._retract_pos)
+                        self._note_positions("отвод", self._retract_pos, pos1, pos_enc, pos1_ai, timed_out)
                         self.t = 0
-                        self.mode = 21
+                        if not self._m1_timeout_check("отвод", timed_out):
+                            self.mode = 21
                 else:
                     self._redrive_goto()           # повторяем goto до доезда (как ручная «Идти»)
             elif self.mode == 21:
@@ -1418,11 +1449,12 @@ class MicroscopeFSM:
                     if self._settle_wait(self._glass_settle_ticks):   # приехал → осадка у стекла (потёки гаснут) → выдержка
                         self._note_positions("подвод", self.m1_sp, pos1, pos_enc, pos1_ai, not arrived)
                         self.t = 0
-                        self._dwell_left = self._dwell_sec * 10
-                        self._shot_t = 0
-                        self._cv_release = False; self._cv_done = 0
-                        self._photo_request = True     # первый скрин сразу у стекла (видео не пишем)
-                        self.mode = 23
+                        if not self._m1_timeout_check("подвод", not arrived):
+                            self._dwell_left = self._dwell_sec * 10
+                            self._shot_t = 0
+                            self._cv_release = False; self._cv_done = 0
+                            self._photo_request = True     # первый скрин сразу у стекла (видео не пишем)
+                            self.mode = 23
                 else:
                     self._redrive_goto()               # повторяем goto до доезда
             elif self.mode == 23 and self._cv_dwell:
@@ -1465,6 +1497,7 @@ class MicroscopeFSM:
                     if self._settle_wait():        # приехал → пауза settle (осадка датчика) → дальше
                         self.t = 0
                         self.mode = 0
+                        self._m1_timeout_check("возврат", not self._reached_retract(pos_sel, self._retract_pos))
                 else:
                     self._redrive_goto()               # повторяем goto до доезда
 

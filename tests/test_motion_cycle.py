@@ -695,3 +695,56 @@ def test_static_decoy_is_banned_while_partner_spins_and_real_rod_is_found():
     assert left["moving"] is True
     d = (left["angle"] + right["angle"] - 360 + 180) % 360 - 180
     assert abs(d) < 8
+
+
+# ── маски в родном разрешении (v3.0.5): на кадре 2688×1520 палка в ~8 px не должна терять цвет при сжатии ──
+
+HI_W, HI_H = 2688, 1520
+VIDEO_HI = Path(r"E:\grib_dif\val_18_11_2026_09_11_29.avi")       # val_Down 18.11, без вшитой разметки
+
+
+def hi_zone(cx, cy):
+    z = me._norm_cycle({"id": "z", "name": "z", "center": [cx, cy], "radius": 600.0}, "z", "z")
+    return me.CycleRT(z, [HI_W, HI_H], (HI_W, HI_H))
+
+
+def test_native_masks_find_stick_on_full_hd_plus_frame():
+    rt = hi_zone(680, 815)
+    assert rt.k < 0.5                                              # рабочая область сжимается — именно этот путь и проверяем
+    img = np.full((HI_H, HI_W, 3), (150, 140, 60), np.uint8)       # бирюзовый корпус
+    for a in (20.0, 140.0, 300.0):
+        dx, dy = math.sin(math.radians(a)), -math.cos(math.radians(a))
+        f = img.copy()
+        cv2.line(f, (680, 815), (int(680 + 450 * dx), int(815 + 450 * dy)), RED, 8)
+        cv2.line(f, (680, 815), (int(680 - 450 * dx), int(815 - 450 * dy)), BLUE, 8)
+        rt.reset()
+        assert rt.step(f, 0.0)
+        assert abs((rt.angle - a + 180) % 360 - 180) < 3.0
+
+
+def test_native_thin_kernel_scales_with_work_scale():
+    small = me.CycleRT(me._norm_cycle({"id": "z", "name": "z", "center": [100, 100], "radius": 100.0}, "z", "z"), [W, H], (W, H))
+    big = hi_zone(680, 815)
+    assert small.k == 1.0 and small.ker.shape == (9, 9)           # маленький кадр: как раньше
+    assert big.ker.shape[0] > 9 and big.ker.shape[0] % 2 == 1      # большой: ядро растёт в 1/k раз, чтобы «тонкое» осталось тонким
+
+
+@pytest.mark.skipif(not VIDEO_HI.exists(), reason="нет записи val_Down 18.11 на этом компьютере")
+def test_real_val_down_clip_found_rate_not_worse_than_native_masks():
+    """Раньше (сжатие кадра до масок) палка находилась в 79 % / 64 % кадров, в родном разрешении — 88 % / 76 %."""
+    cap = cv2.VideoCapture(str(VIDEO_HI))
+    rts = {"rod1": hi_zone(679, 817), "rod2": hi_zone(1951, 798)}
+    found = {k: 0 for k in rts}
+    n, t = 0, 0.0
+    while n < 300:
+        ok, fr = cap.read()
+        if not ok:
+            break
+        for k, rt in rts.items():
+            found[k] += bool(rt.step(fr, t))
+        n += 1
+        t += 0.45
+    cap.release()
+    assert n >= 200
+    assert found["rod1"] / n >= 0.84
+    assert found["rod2"] / n >= 0.70

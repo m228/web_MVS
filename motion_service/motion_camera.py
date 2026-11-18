@@ -377,6 +377,35 @@ class CameraWorker(threading.Thread):
         return {"window_s": window_s, "step_s": step, "t": [k * step for k in range(k0, k1 + 1)],
                 "zones": series, "avg": avg, "names": {z["id"]: z["name"] for z in zones}}
 
+    LOSS_SECTOR_DEG = 15
+
+    def loss_map(self, window_s: float) -> dict:
+        """Карта потерь палок (зоны-циклы) за последние window_s секунд (до 14 суток, секундные тренды на диске): где и когда палка пропадает.
+        sector — по углу красного конца, секторов 360/sector_deg (с 0° по часовой): n — секунд с данными, f — секунд «найдена».
+        hour — по часам суток (местное время), сюда входят и секунды полной потери угла. Время без картинки (ok=0) не считается."""
+        window_s = max(3600.0, min(float(window_s), 14 * 86400.0))
+        now = time.time()
+        zones = [z for z in self.cfg["zones"] if z["enabled"] and z["type"] == "cycle"]
+        nsec = 360 // self.LOSS_SECTOR_DEG
+        try:
+            raw = self._store.loss_map(self.id, {z["id"] for z in zones}, now - window_s, now + 1, self.LOSS_SECTOR_DEG)
+        except Exception as e:  # noqa: BLE001 — диск не должен ронять запрос
+            return {"error": "тренды не прочитались: %s" % e}
+        out: dict = {}
+        for z in zones:
+            sn, sf, hn, hf = [0] * nsec, [0] * nsec, [0] * 24, [0] * 24
+            for (h, s), (n, f) in raw.get(z["id"], {}).items():
+                if 0 <= h < 24:
+                    hn[h] += n
+                    hf[h] += f
+                if 0 <= s < nsec:
+                    sn[s] += n
+                    sf[s] += f
+            tot_n, tot_f = sum(hn), sum(hf)
+            out[z["id"]] = {"name": z["name"], "sector": {"n": sn, "f": sf}, "hour": {"n": hn, "f": hf},
+                            "avg": round(100.0 * tot_f / tot_n, 1) if tot_n else None, "seconds": tot_n}
+        return {"window_s": window_s, "sector_deg": self.LOSS_SECTOR_DEG, "zones": out}
+
     def stats(self, window_s: float) -> dict:
         """Среднее / минимум / максимум flow и diff по каждой зоне за последние window_s секунд (до суток), только по кадрам в норме
         (битые, застывшие и «каша» не считаются). Значения — те же, что в графиках и CSV (сглаженные по `smooth` кадров).

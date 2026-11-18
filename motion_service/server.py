@@ -10,6 +10,7 @@
   GET  /state                     — состояние всех камер (биты зон, метрики flow/diff, группы, ПЛК) и сценариев записи.
   GET  /cameras/{id}/state        — то же по одной камере.
   GET  /cameras/{id}/snapshot     — последний кадр JPEG (?w=1280 — уменьшить; заголовки X-Frame-W/H — размер оригинала).
+  GET  /cameras/{id}/loss_map     — карта потерь палки: доля «найдена» по секторам угла и по часам суток (?window=секунды, до 14 суток).
   GET  /cameras/{id}/rod_mask     — что видит детектор палки: кадр вокруг оси зоны-цикла с масками красной/синей половин
                                     (?zone=id&red=H1,H2,S,V&blue=H1,H2,S,V — пробные пороги цвета; пусто — настроенные; ?w=640).
   GET  /cameras/{id}/level_shot   — снимок для графика уровня, ближайший к моменту (?group=lvl&ts=unix-секунды; &dir=-1/1 — соседний
@@ -378,6 +379,14 @@ def create_app(data_dir: Optional[Path] = None, capture_factory: Callable = open
         data, (fw, fh) = r
         return Response(content=data, media_type="image/jpeg",
                         headers={"X-Frame-W": str(fw), "X-Frame-H": str(fh), "Cache-Control": "no-store"})
+
+    @app.get("/cameras/{cid}/loss_map")
+    def loss_map(cid: str, window: float = 7 * 86400.0):
+        """Где и когда палка пропадает: по секторам угла и по часам суток, за ?window секунд (от часа до 14 суток)."""
+        r = mgr.worker(cid).loss_map(window if math.isfinite(window) else 7 * 86400.0)
+        if r.get("error"):
+            raise HTTPException(500, r["error"])
+        return r
 
     @app.get("/cameras/{cid}/rod_mask")
     def rod_mask(cid: str, zone: str, red: str = "", blue: str = "", w: int = 640):

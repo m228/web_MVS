@@ -1026,7 +1026,7 @@ def save_sample(serial: str, stage, frames: list[dict], images: list, timing: di
         return None
 
 
-KEEP_MAX_PROBES = 2000      # жёсткий потолок проб в архиве (≈ 10 ГБ), что бы ни стояло в «варок в архиве»
+KEEP_MAX_PROBES = 2000      # жёсткий потолок ЧИСЛА проб в архиве, что бы ни стояло в «варок в архиве»; объём держит cv.archive_max_gb
 
 
 def _boil_starts(serial: str) -> list[float]:

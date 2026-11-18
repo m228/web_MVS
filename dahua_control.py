@@ -4,12 +4,13 @@
 не добавляем (см. CLAUDE.md: бандл раздаётся на «чистые» Windows). Учётные данные
 берём из rtsp_url воркера, поэтому отдельно пароли не храним.
 
-Проверено на живой камере DH-IPC-HFW2449TLP-S-LED-0280B-PRO
-(прошивка 3.120, 2025-09-25):
+Первая проверенная камера — DH-IPC-HFW2449TLP-S-LED-0280B-PRO (прошивка 3.120, 2025-09-25):
 - белый прожектор: table.Lighting_V2[0][профиль][0] с LightType=WhiteLight,
   Mode = Auto | Manual | Off; яркость MiddleLight[0].Light (1..100);
-- оптического зума нет (фикс-объектив, ptz caps без Zoom);
+- у неё фикс-объектив: оптического зума нет (ptz caps без Zoom);
 - coaxialControlIO — Not Implemented (это для аналоговых HDCVI).
+Камеры с моторным объективом (motorized lens) умеют оптический зум и фокус через ptz.cgi
+(optical_zoom, focus). Что умеет конкретная камера, определяется по её ptz caps.
 """
 import ipaddress
 import urllib.error
@@ -112,8 +113,8 @@ def get_capabilities(host, user, password):
         log_event("dahua_control", "Не удалось прочитать конфиг света", "warn",
                   {"host": host, "error": str(e)})
 
-    # 3) оптический зум: у PTZ-камер caps содержит поддержку Zoom;
-    #    у фикс-объектива (наш случай) таких ключей нет
+    # 3) оптический зум: у PTZ-камер и камер с моторным объективом caps содержит поддержку Zoom;
+    #    у фикс-объектива таких ключей нет
     try:
         ptz = _parse_kv(_cgi(host, user, password,
                              "ptz.cgi?action=getCurrentProtocolCaps&channel=0"))

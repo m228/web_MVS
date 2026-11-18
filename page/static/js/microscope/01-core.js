@@ -978,12 +978,6 @@
         const sfS = $("sensorFilterSec");
         if (sfS) { if (sf.avg_sec != null) sfS.value = sf.avg_sec; sfS.disabled = !(sfT && sfT.checked); }
         const sds = $("sensorDisplayScale"); if (sds && cfg.sensor_display_scale != null) sds.value = cfg.sensor_display_scale;
-        // довод по абсолютнику (гибридный доезд подвода): галочка + допуски/повторы/пауза
-        const fa = cfg.fine_approach || {};
-        const faT = $("fineApproachToggle"); if (faT) faT.checked = !!fa.enabled;
-        const faSet = (id, v) => { const e = $(id); if (e && v != null) e.value = v; };
-        faSet("faCoarse", fa.coarse_tol_um); faSet("faFine", fa.fine_tol_um);
-        faSet("faRetry", fa.max_retry); faSet("faPause", fa.pause_sec);
         // автокалибровка нуля М1
         const ac = cfg.autocal || {};
         const acT = $("autocalToggle"); if (acT) acT.checked = !!ac.enabled;
@@ -1250,12 +1244,6 @@
       setValve("cycTube", f.valve_tube);
       setValve("cycGlass", f.valve_glass);
 
-      // DEBUG live-строка (обратная связь ручного ввода СВ): шаг/СВ/зазор/позиция
-      set("dbgStep", f.step == null ? "—" : f.step + " (" + f.mode + ")");
-      set("dbgSv", f.sv == null ? "—" : Number(f.sv).toFixed(2));
-      set("dbgSp", f.m1_sp == null ? "—" : um(f.m1_sp));
-      set("dbgPos", um(t.pos1));
-
       // система
       set("tSerial", num(e.serial));
       // регистр секунд 16-битный и обнуляется каждые 18 ч 12 мин; круги считает отдельный регистр
@@ -1405,22 +1393,7 @@
       } catch (e) { if (h) h.textContent = "ошибка: " + e.message; }
     });
 
-    // довод по абсолютнику: галочка + поля (каждое по change шлёт настройку) + сброс аварии
-    const faT = $("fineApproachToggle");
-    if (faT) faT.addEventListener("change", () => {
-      api("/api/micro/fine_approach", { enabled: faT.checked ? 1 : 0 }).catch(() => {});
-      if (cfg) (cfg.fine_approach = cfg.fine_approach || {}).enabled = faT.checked;
-      sentCmd("Довод по абсолютнику: " + (faT.checked ? "вкл" : "выкл"));
-    });
-    [["faCoarse", "coarse_tol_um"], ["faFine", "fine_tol_um"], ["faRetry", "max_retry"], ["faPause", "pause_sec"]]
-      .forEach(([id, key]) => {
-        const el = $(id);
-        if (el) el.addEventListener("change", () => {
-          const p = {}; p[key] = el.value;
-          api("/api/micro/fine_approach", p).catch(() => {});
-          if (cfg) (cfg.fine_approach = cfg.fine_approach || {})[key] = Number(el.value);
-        });
-      });
+    // сброс аварии автомата
     const faCF = $("faClearFault");
     if (faCF) faCF.addEventListener("click", () => {
       api("/api/micro/clear_fault").then(() => sentCmd("Авария сброшена")).catch(() => {});
@@ -1495,34 +1468,6 @@
     if (ifT) ifT.addEventListener("change", () => {
       api("/api/micro/ignore_focus", { on: ifT.checked ? 1 : 0 }).catch(() => {});
       sentCmd("Фокус по таблице: " + (ifT.checked ? "не использовать" : "использовать"));
-    });
-
-    // DEBUG: ручной ввод СВ/стадии для отладки цикла (убрать после отладки)
-    const svOv = $("svOverrideToggle");
-    if (svOv) svOv.addEventListener("change", async () => {
-      try {
-        await api("/api/micro/sv_override", { on: svOv.checked ? 1 : 0 });
-        const h = $("svDebugHint");
-        if (h) h.textContent = svOv.checked ? "ПЛК перехвачен — ручной СВ держится" : "ПЛК ведёт СВ";
-        sentCmd("DEBUG перехват ПЛК: " + (svOv.checked ? "вкл" : "выкл"));
-      } catch (e) { const h = $("svDebugHint"); if (h) h.textContent = "ошибка: " + e.message; }
-    });
-    if ($("svManualApply")) $("svManualApply").addEventListener("click", async () => {
-      const sv = $("svManualInp").value, stage = $("stageManualInp").value;
-      try {
-        await api("/api/micro/sv", { value: sv });
-        await api("/api/micro/stage", { value: stage });
-        const h = $("svDebugHint"); if (h) h.textContent = "применено: СВ " + sv + ", стадия " + stage;
-        sentCmd("DEBUG СВ " + sv + " / стадия " + stage);
-      } catch (e) { const h = $("svDebugHint"); if (h) h.textContent = "ошибка: " + e.message; }
-    });
-    // DEBUG: запустить цикл немедленно (cmd=100 -> отвод SP[0] -> подвод по СВ)
-    if ($("svCycleNow")) $("svCycleNow").addEventListener("click", async () => {
-      try {
-        await api("/api/micro/command", { cmd: 100 });
-        const h = $("svDebugHint"); if (h) h.textContent = "цикл запущен — смотри «Шаг» ниже (20→21→22→23→24)";
-        sentCmd("DEBUG запуск цикла (cmd 100)");
-      } catch (e) { const h = $("svDebugHint"); if (h) h.textContent = "ошибка: " + e.message; }
     });
 
     // режим съёмки камеры — галочка (слева поток / справа автомат)

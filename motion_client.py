@@ -67,6 +67,11 @@ def visibility(service_url: str, cam: str, window: float = 86400.0) -> dict:
     return _call(service_url, "/cameras/%s/visibility?window=%s" % (urllib.parse.quote(cam, safe=""), float(window)), timeout=15.0)
 
 
+def loss_map(service_url: str, cam: str, window: float = 7 * 86400.0) -> dict:
+    """Карта потерь палок: доля «найдена» по секторам угла и часам суток за период."""
+    return _call(service_url, "/cameras/%s/loss_map?window=%s" % (urllib.parse.quote(cam, safe=""), float(window)), timeout=30.0)
+
+
 def mirror_table(service_url: str, cam: str, group: str) -> dict:
     """Таблица поправки зеркальности валов по последним минутам работы (снимать, пока валы ровные)."""
     return _call(service_url, "/cameras/%s/mirror_table" % urllib.parse.quote(cam, safe=""), {"group": str(group)}, timeout=10.0)

@@ -1401,6 +1401,12 @@ def motion_visibility(camera: str, window: float = 86400.0):
     return motion_client.visibility(_motion_url(), camera, window)
 
 
+@app.get("/api/motion/loss_map")
+def motion_loss_map(camera: str, window: float = 7 * 86400.0):
+    # карта потерь палки: где (сектор угла) и когда (час суток) палка пропадает, за период до 14 суток
+    return motion_client.loss_map(_motion_url(), camera, window)
+
+
 @app.post("/api/motion/mirror_table")
 def motion_mirror_table(req: dict = Body(...)):
     # таблица поправки зеркальности двух валов по последним минутам (снимают, пока валы ровные); сохраняет интерфейс

@@ -253,6 +253,27 @@ class MotionStore:
                     out[ids[z]][int(k)] = (int(n), int(f or 0))
         return out
 
+    def loss_map(self, cam: str, zone_ids: set, t0: float, t1: float, sector_deg: int = 15) -> dict:
+        """Карта потерь палки: {зона: {(час суток, сектор угла или -1): (секунд с данными, секунд «найдена»)}}.
+        Сектор — угол красного конца из тренда (flow, 0..360 → сектор шириной sector_deg); при полной потере угла нет (flow = 0 и бита нет) —
+        такие секунды идут в сектор −1 (в часах учитываются, в секторах нет). Час — местный. Считаем только секунды с нормальной картинкой (ok=1);
+        «найдена» — как в видимости: бит и уверенность > 0 (удержание угла не считается)."""
+        sec = max(1, int(sector_deg))
+        nsec = 360 // sec
+        with self._lock:
+            self.flush()
+            c = self._id(cam)
+            ids = {self._id(z): z for z in zone_ids}
+            out: dict = {z: {} for z in zone_ids}
+            for z, h, s, n, f in self._c.execute(
+                    "SELECT zone, CAST(strftime('%H', ts / 10, 'unixepoch', 'localtime') AS INTEGER) AS h, "
+                    "CASE WHEN bit = 0 AND flow = 0 THEN -1 ELSE (flow / ?) % ? END AS s, COUNT(*), SUM(bit AND diff > 0) "
+                    "FROM trend WHERE cam=? AND ts>=? AND ts<? AND ok=1 GROUP BY zone, h, s",
+                    (sec * SCALE, nsec, c, int(t0 * 10), int(t1 * 10))):
+                if z in ids:
+                    out[ids[z]][(int(h), int(s))] = (int(n), int(f or 0))
+        return out
+
     # ───────────── записи по кадрам ─────────────
     def rec_start(self, cam: str, zone_ids: list, fill_ids: set, t: float) -> int:
         with self._lock:

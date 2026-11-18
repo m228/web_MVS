@@ -1524,7 +1524,7 @@ def _motion_service():
     assert "error" in motion_client.record_all("http://127.0.0.1:1", True) and motion_client.records_zip("http://127.0.0.1:1", timeout=0.5)[0] is None, "запись всех и архив без сервиса — ошибка, не исключение"
     import app as _app
     paths = {getattr(r, "path", "") for r in _app.app.routes}
-    need = {"/motion", "/api/motion/health", "/api/motion/config", "/api/motion/state", "/api/motion/snapshot", "/api/motion/rod_mask", "/api/motion/history",
+    need = {"/motion", "/api/motion/health", "/api/motion/config", "/api/motion/state", "/api/motion/snapshot", "/api/motion/rod_mask", "/api/motion/loss_map", "/api/motion/history",
             "/api/motion/record", "/api/motion/record_all", "/api/motion/records.zip", "/api/motion/modbus_ping", "/api/motion/logs", "/api/motion/vision"}
     assert need <= paths, "нет маршрутов: %s" % sorted(need - paths)
     assert not (Path(BUNDLE_DIR) / "page" / "motion.html").exists(), "отдельной страницы «Движение» больше нет — всё в мультипросмотре"

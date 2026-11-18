@@ -134,3 +134,50 @@ def test_mirror_stats_average_min_max_with_correction_skip_hold(app):
     assert s["sync"]["delta"] == {"avg": 1.0, "min": -1.0, "max": 3.0}
     assert s["sync"]["corr"] == {"avg": 2.0, "min": -2.0, "max": 5.0}
     assert w.stats(30)["groups"] == {}                                           # окно короче данных — пусто, не ошибка
+
+
+# ── карта потерь: по секторам угла и часам суток ──
+
+def _day_start():
+    t = time.localtime(time.time() - 86400)
+    return int(time.mktime((t.tm_year, t.tm_mon, t.tm_mday, 0, 0, 0, 0, 0, -1)))
+
+
+def _fill_loss(w):
+    """Вчера: час 0 — палка на 90°, всегда найдена; час 1 — на 200°: 600 с найдена, 600 с удержание (бит 0, угол 200), 600 с полная потеря (угла нет),
+    ещё 1800 с камера «мёртвая» (ok=0) — в расчёт не входят."""
+    base = _day_start()
+    for i in range(3600):
+        w._store.add_trend("dif", base + i, {"L": (90.0, 0.5, 1), "R": (10.0, 0.5, 1)}, 1)
+    for i in range(3600, 3600 + 1800):
+        k = (i - 3600) // 600
+        z = (200.0, 0.5, 1) if k == 0 else (200.0, 0.0, 0) if k == 1 else (0.0, 0.0, 0)
+        w._store.add_trend("dif", base + i, {"L": z, "R": (10.0, 0.5, 1)}, 1)
+    for i in range(5400, 7200):
+        w._store.add_trend("dif", base + i, {"L": (200.0, 0.5, 1), "R": (10.0, 0.5, 1)}, 0)
+    return base
+
+
+def test_loss_map_by_sector_and_hour(app):
+    w = app.state.mgr.workers["dif"]
+    _fill_loss(w)
+    r = w.loss_map(3 * 86400)
+    assert r["sector_deg"] == 15 and set(r["zones"]) == {"L", "R"}
+    z = r["zones"]["L"]
+    assert z["hour"]["n"][0] == 3600 and z["hour"]["f"][0] == 3600
+    assert z["hour"]["n"][1] == 1800 and z["hour"]["f"][1] == 600          # мёртвые 1800 с не считаются; потеря угла — в часе есть
+    assert z["sector"]["n"][6] == 3600 and z["sector"]["f"][6] == 3600     # 90° → сектор 6
+    assert z["sector"]["n"][13] == 1200 and z["sector"]["f"][13] == 600    # 200° → сектор 13: найдена + удержание; полная потеря в сектор не попадает
+    assert sum(z["sector"]["n"]) == 3600 + 1200
+    assert z["avg"] == pytest.approx(100.0 * 4200 / 5400, abs=0.1) and z["seconds"] == 5400
+    assert r["zones"]["R"]["sector"]["n"][0] == 5400 and r["zones"]["R"]["avg"] == 100.0
+
+
+def test_loss_map_window_and_endpoint(app):
+    w = app.state.mgr.workers["dif"]
+    _fill_loss(w)
+    call = next(r.endpoint for r in app.router.routes if getattr(r, "path", "") == "/cameras/{cid}/loss_map")
+    assert call("dif", 3 * 86400)["zones"]["L"]["seconds"] == 5400
+    assert call("dif", 1e9)["window_s"] == 14 * 86400                     # окно ограничено
+    assert w.loss_map(3600)["zones"]["L"]["seconds"] == 0                 # час назад данных нет — пусто, не ошибка
+    assert w.loss_map(3600)["zones"]["L"]["avg"] is None

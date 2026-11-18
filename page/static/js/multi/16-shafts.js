@@ -28,6 +28,105 @@ function shPairsOfCamera(camId) {
   return SH_PAIRS.map((id) => s.pairs[id]).filter((p) => p && (s.shafts[p.a].camera === camId || s.shafts[p.b].camera === camId));
 }
 
+// ---- карта потерь: где (угол палки) и когда (час суток) палка пропадает, по секундным трендам сервиса ----
+const SH_LOSS_WINS = [[86400, '24 ч'], [7 * 86400, '7 сут'], [14 * 86400, '14 сут']];
+const SH_LOSS_KEY = 'mvs_sh_loss_win';
+const shLoss = { win: (() => { try { const v = Number(localStorage.getItem(SH_LOSS_KEY)); if (SH_LOSS_WINS.some(([x]) => x === v)) return v; } catch (e) { /* не критично */ } return 7 * 86400; })(), data: {}, at: {}, busy: false };
+
+function mdLossHtml() {
+  const blocks = [];
+  mdCfgCams().forEach((c) => {
+    (c.zones || []).forEach((z) => {
+      if (z.type !== 'cycle' || z.enabled === false) return;
+      const sh = shShaftOf(c.id, z.id);
+      const k = escapeHtml(c.id + '/' + z.id);
+      blocks.push(`<div class="md-zone sh-loss" data-shloss="${k}" data-cam="${escapeHtml(c.id)}" data-zone="${escapeHtml(z.id)}">
+        <div class="md-zone__ctl">
+          <div class="md-zone__row"><b>${escapeHtml(sh ? sh.short : z.name)}</b><span class="net-hint">${escapeHtml(c.name)}</span></div>
+          <div class="md-zstat" data-shlosst="${k}">загружаю…</div>
+        </div>
+        <div class="md-zone__chart sh-loss__ch"><canvas width="170" height="170" data-shlossring="${k}"></canvas><canvas width="360" height="84" data-shlosshour="${k}"></canvas></div>
+      </div>`);
+    });
+  });
+  if (!blocks.length) return '<span class="net-hint">Размеченных валов нет: нужны зоны-цикл («Разметить валы»).</span>';
+  return `<div class="md-zone__row"><span class="md-lbl">за</span><select data-md="shloss" title="За какой период показать карту">${mdSel(SH_LOSS_WINS, shLoss.win)}</select>
+    <span class="net-hint" title="Секунда считается «найдена», если палку увидели хотя бы в одном кадре секунды. Время без картинки (обрыв связи) в расчёт не идёт. Секунды полной потери (угла нет) входят в часы, но не в углы.">зелёный — палка найдена, красный — теряется, серый — мало данных</span></div>${blocks.join('')}`;
+}
+
+const shLossColor = (p) => `hsl(${Math.round(120 * Math.max(0, Math.min(1, p)))}, 62%, 44%)`;
+
+function shDrawLoss(block) {
+  const k = block.dataset.shloss, d = shLoss.data[k], note = block.querySelector('[data-shlosst]');
+  const ring = block.querySelector('[data-shlossring]'), hrs = block.querySelector('[data-shlosshour]');
+  if (!d || !ring || !hrs) return;
+  if (d.error) { note.textContent = d.error; return; }
+  const MINN = 120;                                           // меньше секунд — «мало данных»
+  const nsec = d.sector.n.length, deg = 360 / nsec;
+  const g = ring.getContext('2d'), W = ring.width, cx = W / 2, R = W / 2 - 4, r0 = R * 0.5;
+  g.clearRect(0, 0, W, W);
+  let worstS = null;
+  for (let i = 0; i < nsec; i += 1) {
+    const n = d.sector.n[i], p = n >= MINN ? d.sector.f[i] / n : null;
+    const a0 = ((i * deg - 90) * Math.PI) / 180, a1 = (((i + 1) * deg - 90) * Math.PI) / 180;
+    g.beginPath(); g.arc(cx, cx, R, a0, a1); g.arc(cx, cx, r0, a1, a0, true); g.closePath();
+    g.fillStyle = p === null ? 'rgba(120,120,130,.35)' : shLossColor(p); g.fill();
+    g.strokeStyle = 'rgba(0,0,0,.35)'; g.lineWidth = 1; g.stroke();
+    if (p !== null && (worstS === null || p < worstS.p)) worstS = { p, i };
+  }
+  g.fillStyle = '#6b7280'; g.font = 'bold 13px sans-serif'; g.textAlign = 'center'; g.textBaseline = 'middle';
+  g.fillText(d.avg === null ? '—' : Math.round(d.avg) + ' %', cx, cx);
+  g.font = '10px sans-serif'; g.fillText('0°', cx, 11);
+  const h = hrs.getContext('2d'), HW = hrs.width, HH = hrs.height, bw = HW / 24, top = 12, bot = 14;
+  h.clearRect(0, 0, HW, HH);
+  let worstH = null;
+  for (let i = 0; i < 24; i += 1) {
+    const n = d.hour.n[i], p = n >= MINN ? d.hour.f[i] / n : null;
+    const bh = p === null ? 6 : Math.max(2, p * (HH - top - bot));
+    h.fillStyle = p === null ? 'rgba(120,120,130,.35)' : shLossColor(p);
+    h.fillRect(i * bw + 1, HH - bot - bh, bw - 2, bh);
+    if (p !== null && (worstH === null || p < worstH.p)) worstH = { p, i };
+  }
+  h.fillStyle = '#9ca3af'; h.font = '10px sans-serif'; h.textAlign = 'center';
+  [0, 6, 12, 18, 23].forEach((x) => h.fillText(String(x), x * bw + bw / 2, HH - 2));
+  const days = Math.round(d.window_s / 86400 * 10) / 10;
+  note.innerHTML = d.seconds < MINN ? 'за этот период данных почти нет' :
+    `найдена в среднем <b>${d.avg} %</b> времени` +
+    (worstS && worstS.p < d.avg / 100 - 0.05 ? ` · хуже всего на углах <b>${worstS.i * deg}–${(worstS.i + 1) * deg}°</b> (${Math.round(worstS.p * 100)} %)` : '') +
+    (worstH && worstH.p < d.avg / 100 - 0.05 ? ` · хуже всего в <b>${worstH.i}–${worstH.i + 1} ч</b> (${Math.round(worstH.p * 100)} %)` : '') +
+    (worstS && worstH && worstS.p >= d.avg / 100 - 0.05 && worstH.p >= d.avg / 100 - 0.05 ? (d.avg >= 97 ? ' · потерь почти нет' : ' · потери равномерные: ни угол, ни час не выделяются') : '');
+  ring.title = 'Доля «найдена» по углу красного конца палки (0° — вверх, по часовой), ' + deg + '° на сектор. За ' + days + ' сут.';
+  hrs.title = 'Доля «найдена» по часам суток (местное время). За ' + days + ' сут.';
+}
+
+async function shLossRefresh(force) {
+  if (MD.tab !== 'shafts' || shLoss.busy) return;
+  const blocks = [...document.querySelectorAll('[data-shloss]')];
+  if (!blocks.length) return;
+  const now = Date.now(), cams = [...new Set(blocks.map((b) => b.dataset.cam))];
+  const stale = cams.filter((id) => force || !shLoss.at[id] || shLoss.at[id].win !== shLoss.win || now - shLoss.at[id].t > 60000);
+  blocks.forEach((b) => { if (shLoss.data[b.dataset.shloss] && !stale.includes(b.dataset.cam)) shDrawLoss(b); });
+  if (!stale.length) return;
+  shLoss.busy = true;
+  try {
+    await Promise.all(stale.map(async (id) => {
+      shLoss.at[id] = { t: now, win: shLoss.win };
+      const r = await mvApi('/api/motion/loss_map?camera=' + encodeURIComponent(id) + '&window=' + shLoss.win);
+      blocks.filter((b) => b.dataset.cam === id).forEach((b) => {
+        const one = r && !r.error && r.zones ? r.zones[b.dataset.zone] : null;
+        shLoss.data[b.dataset.shloss] = one ? Object.assign({ window_s: r.window_s }, one) : { error: (r && r.error) || 'нет ответа сервиса (или он старой версии)' };
+        shDrawLoss(b);
+      });
+    }));
+  } finally { shLoss.busy = false; }
+}
+
+function mdOnShLoss(t) {
+  shLoss.win = Number(t.value);
+  try { localStorage.setItem(SH_LOSS_KEY, String(shLoss.win)); } catch (e) { /* не критично */ }
+  shLossRefresh(true);
+}
+
 // ---- цвета палок: пороги красной и синей половин по каждому валу + превью того, что попадает в маску ----
 const SH_RED_DEF = [16, 165, 50, 55];
 const SH_BLUE_DEF = [82, 135, 55, 60];
@@ -120,10 +219,12 @@ function mdShaftsTabHtml() {
   }).join('');
   const pairs = SH_PAIRS.map((id) => mdShaftPairHtml(id, sc.pairs[id])).join('');
   const colors = mdRodColorsHtml();
+  const loss = mdLossHtml();
   return `<details class="md-det" open><summary>Ряды камер ${mdHelp('Задайте каждой камере ряд валов. Левый и правый вал в ряду определяются по положению оси в кадре: левее — левый. У камеры должны быть размечены две зоны-цикла (кнопка «Разметить валы»).')}</summary>
       <div class="md-camlist">${rows || '<span class="net-hint">В сервисе движения камер нет.</span>'}</div></details>
     <details class="md-det" open><summary>Скорости валов ${mdHelp('Скорость вала — обороты в минуту по наклону угла за окно (в карточке зоны). Регистр пишется ×100; 0 — нет данных. То же, что «скорость» в зоне-цикле, только по названию вала.')}</summary>
       <table class="md-table"><thead><tr><th>Вал</th><th>Откуда</th><th>Угол</th><th>Скорость</th><th>Регистр скорости в ПЛК</th></tr></thead><tbody>${shafts}</tbody></table></details>
+    <details class="md-det" open><summary>Карта потерь ${mdHelp('Где и когда палка пропадает: кольцо — по углу красного конца (0° вверху, по часовой), столбики — по часам суток. Помогает понять, виновато ли освещение в определённый час или палка теряется в одном положении (блик, тень, цвет корпуса).')}</summary>${loss}</details>
     <details class="md-det"><summary>Цвета палок ${mdHelp('Красная и синяя половины палки находятся по цвету. Если палка то пропадает, то ловится — подберите пороги: картинка показывает, что именно попадает в маску. У каждого вала свои пороги (ракурс и свет разные).')}</summary>${colors}</details>
     <div class="md-sub">Разности валов</div>
     <div class="net-hint" id="md-sh-note"></div>
@@ -222,6 +323,7 @@ function mdPaintShafts() {
   if (SH.noteCls === '' && !SH.note) shSetNote('', '');
   mdShaftsHist();
   shPrevPaint();
+  shLossRefresh(false);
 }
 
 // графики разностей: тянем историю сервиса раз в 5 с, пока вкладка открыта

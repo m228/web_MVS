@@ -34,6 +34,7 @@ if not errorlevel 1 (echo [release] STOP: release %TAG% already exists - bump RE
 
 if not exist "%LIST%" (echo [release] STOP: %LIST% not found - run build.bat first. & exit /b 1)
 if not exist "%NOTES%" (echo [release] STOP: %NOTES% not found - run build.bat first. & exit /b 1)
+findstr /c:"\"release\": \"%REL%\"" "dist\components.json" >nul || (echo [release] STOP: dist\components.json was built for another RELEASE than %REL% - run build.bat again. & exit /b 1)
 
 set "FILES="
 echo [release] Ready to publish %TAG% from main (%LOC:~0,7%):

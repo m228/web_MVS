@@ -22,6 +22,7 @@ del /q "dist\*.zip" "dist\components.json" "dist\release_files.txt" "dist\releas
 
 rem what changed: compare component versions with the manifest of the latest release (fetched via gh; no manifest = build everything)
 gh release download --pattern components.json --output "dist\prev_components.json" --clobber >nul 2>&1
+if not exist "dist\prev_components.json" echo [build] WARNING: previous release manifest NOT fetched (gh missing, not logged in, no network?) - building EVERYTHING, change checks skipped.
 python scripts\make_manifest.py --plan "dist\plan.cmd" --prev "dist\prev_components.json" || (echo [build] PLAN FAILED & exit /b 1)
 call "dist\plan.cmd"
 set /p REL=<RELEASE
@@ -84,6 +85,8 @@ powershell -NoProfile -Command "$f=Get-ChildItem 'level_service' | Where-Object 
 
 rem manifest: per-component versions (+ tag/asset: which release holds each archive), check that a changed service got a new version, list of files to publish
 python scripts\make_manifest.py --dist dist --prev "dist\prev_components.json" || (echo [build] MANIFEST CHECK FAILED & exit /b 1)
+rem unchanged components point to archives in older releases: they must still exist there (never delete releases that components.json refers to)
+python scripts\make_manifest.py --verify --dist dist || (echo [build] MANIFEST VERIFY FAILED & exit /b 1)
 echo.
 echo [build] Done. Release v%REL% will publish only the changed components:
 type "dist\release_files.txt"

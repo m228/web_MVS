@@ -87,6 +87,7 @@ def _fake_github(monkeypatch, routes: dict, calls: list):
             raise OSError("нет маршрута " + url)
         return _Resp(routes[url])
     monkeypatch.setattr(updater.urllib.request, "urlopen", fn)
+    monkeypatch.setattr(updater, "_tag_cache", {})        # память о релизах по тегу — у каждого теста своя
     for k in ("manifest", "published_at"):              # _fetch_latest_meta пишет их в общий словарь: вернуть как было, не влиять на другие тесты
         monkeypatch.setitem(updater._latest_extra, k, updater._latest_extra.get(k))
 
@@ -417,3 +418,70 @@ def test_update_ps1_finds_component_asset_in_older_release(tmp_path):
         assert "asset level=null" in out, out
     finally:
         srv.shutdown()
+
+
+def test_verify_carried_archives_must_exist_in_their_release():
+    man = {"release": "3.0.6", "components": {
+        "main": {"version": "3.0.5", "tag": "v3.0.5", "asset": "web_MVS_v3.0.5.zip"},
+        "cv": {"version": "3.0.0", "tag": "v3.0.5", "asset": "cv_service_v3.0.5.zip"},
+        "motion": {"version": "3.0.6", "tag": "v3.0.6", "asset": "motion_service_v3.0.6.zip"},
+        "video": {"version": "3.0.0"}}}
+    calls = []
+
+    def lister(tag):
+        calls.append(tag)
+        if tag == "v3.0.5":
+            return {"web_MVS_v3.0.5.zip", "cv_service_v3.0.5.zip"}
+        raise RuntimeError("404")
+    errs = mm.verify_carried(man, ["motion_service_v3.0.6.zip"], lister)
+    assert calls == ["v3.0.5"], "релиз с общим тегом опрашивается один раз, свой (v3.0.6) — нет"
+    assert len(errs) == 1 and errs[0].startswith("video:") and "tag/asset" in errs[0], errs
+    del man["components"]["video"]
+    assert mm.verify_carried(man, ["motion_service_v3.0.6.zip"], lister) == []
+    errs = mm.verify_carried(man, ["motion_service_v3.0.6.zip"], lambda tag: {"web_MVS_v3.0.5.zip"})      # cv_service в релизе нет
+    assert len(errs) == 1 and "cv_service_v3.0.5.zip" in errs[0]
+    errs = mm.verify_carried(man, ["motion_service_v3.0.6.zip"], lambda tag: (_ for _ in ()).throw(RuntimeError("release not found")))
+    assert len(errs) == 2 and all("нельзя удалять" in e for e in errs), errs
+
+
+def test_main_survives_prev_manifest_that_is_not_an_object(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(mm, "ROOT", _repo(tmp_path))
+    prev = tmp_path / "prev.json"
+    prev.write_text("[1, 2]", encoding="utf-8")
+    plan = tmp_path / "plan.cmd"
+    assert mm.main(["--plan", str(plan), "--prev", str(prev)]) == 0 and 'set "BUILD_main=1"' in plan.read_text(encoding="ascii")
+    assert "не того формата" in capsys.readouterr().out
+
+
+def test_main_verify_cli_reads_dist_files(tmp_path, monkeypatch):
+    dist = tmp_path / "dist"
+    dist.mkdir()
+    man = {"release": "3.0.6", "components": {"main": {"version": "3.0.5", "tag": "v3.0.5", "asset": "web_MVS_v3.0.5.zip"},
+                                               "motion": {"version": "3.0.6", "tag": "v3.0.6", "asset": "motion_service_v3.0.6.zip"}}}
+    (dist / "components.json").write_text(json.dumps(man), encoding="utf-8")
+    (dist / "release_files.txt").write_text("dist\\motion_service_v3.0.6.zip\ndist\\components.json\n", encoding="utf-8")
+    monkeypatch.setattr(mm, "gh_release_assets", lambda tag: {"web_MVS_v3.0.5.zip"})
+    assert mm.main(["--verify", "--dist", str(dist)]) == 0
+    monkeypatch.setattr(mm, "gh_release_assets", lambda tag: set())
+    assert mm.main(["--verify", "--dist", str(dist)]) == 1, "в релизе v3.0.5 нет архива приложения"
+
+
+def test_updater_cache_notes_and_asset_missing(tmp_path, monkeypatch):
+    """Релиз по тегу запрашивается один раз за проверку и помнится; заметки старого релиза (там может быть [urgent]) доходят до check_latest."""
+    routes = _partial_release_routes()
+    tags_url = "https://api.github.com/repos/%s/releases/tags/v3.0.4" % updater.REPO
+    routes[tags_url]["body"] = "Приложение. [URGENT]"
+    calls = []
+    _fake_github(monkeypatch, routes, calls)
+    monkeypatch.setattr(updater, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(updater, "read_version", lambda: "3.0.3")
+    monkeypatch.setattr(updater, "staged_version", lambda: "")
+    r1 = updater.check_latest(quiet=True)
+    r2 = updater.check_latest(quiet=True)
+    assert r1["urgent"] is True and r1["update_available"] and r1["asset_missing"] is False and r2["urgent"] is True
+    assert sum(1 for c in calls if c == tags_url) == 1, "второй проверкой релиз v3.0.4 не запрашивается заново"
+    # релиз из манифеста не открылся: не «обновлений нет», а явный признак asset_missing
+    del routes[tags_url]
+    monkeypatch.setattr(updater, "_tag_cache", {})
+    r3 = updater.check_latest(quiet=True)
+    assert r3["update_available"] is False and r3["asset_missing"] is True and r3["has_asset"] is False

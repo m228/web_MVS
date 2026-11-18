@@ -373,6 +373,10 @@ function Invoke-Update {
             $script:relCache = $rel; $script:relTried = $true      # тот же ответ GitHub пригодится дополнениям
             $mv = Get-ManifestVersion 'main'                        # версия приложения по манифесту релиза; без манифеста — тег
             if ($mv) { $latest = $mv }
+            elseif (-not ($rel.assets | Where-Object { $_.name -like 'web_MVS_*.zip' })) {
+                # релиз частичный (приложения в нём нет), а манифест не прочитался: версию приложения по тегу не определить
+                throw 'в последнем релизе нет web_MVS_*.zip, а components.json не прочитан — версию приложения определить нельзя'
+            }
         } catch {
             Log 'последняя версия: NaN (не удалось определить)' 'Yellow'
             Log ("причина: " + $_.Exception.Message) 'Yellow'

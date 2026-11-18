@@ -11,6 +11,7 @@
 
   python scripts/make_manifest.py --write-versions                — записать VERSION в папки сервисов (до упаковки архивов)
   python scripts/make_manifest.py --plan plan.cmd [--prev p.json] — что собирать: plan.cmd (set BUILD_main=0/1, VER_<ключ>=версия)
+  python scripts/make_manifest.py --verify [--dist dist]          — по GitHub (gh): архивы не менявшихся компонентов лежат в релизах из манифеста
   python scripts/make_manifest.py [--prev prev.json]              — собрать dist/components.json, список dist/release_files.txt
       (что выкладывать) и dist/release_notes.txt; лишние архивы из dist убрать. Проверки:
       * номер релиза больше прошлого;
@@ -23,6 +24,7 @@ import argparse
 import hashlib
 import json
 import re
+import subprocess
 import sys
 import zipfile
 from pathlib import Path
@@ -174,16 +176,61 @@ def check_against_prev(new: dict, prev) -> list:
     return errs
 
 
+def gh_release_assets(tag: str) -> set:
+    """Имена файлов релиза tag (gh release view). Бросает RuntimeError, если релиз не открылся."""
+    p = subprocess.run(["gh", "release", "view", tag, "--json", "assets", "--jq", ".assets[].name"],
+                       capture_output=True, text=True, encoding="utf-8", timeout=120)
+    if p.returncode != 0:
+        raise RuntimeError((p.stderr or p.stdout or "gh вернул ошибку").strip())
+    return set(p.stdout.split())
+
+
+def verify_carried(manifest: dict, publish: list, lister=None) -> list:
+    """Каждый компонент, чей архив лежит в прошлом релизе, обязан там быть: клиенты берут его по (tag, asset) из манифеста.
+    Нет в релизе, релиз удалён или у записи нет tag/asset — ошибка (иначе неверная запись переезжала бы из манифеста в манифест)."""
+    errs, cache = [], {}
+    lister = lister or gh_release_assets
+    for key, c in manifest["components"].items():
+        tag, asset = c.get("tag"), c.get("asset")
+        if asset in publish:
+            continue
+        if not tag or not asset:
+            errs.append("%s: в манифесте нет tag/asset — не знаю, где лежит архив (в прошлом манифесте нет поля release?)" % key)
+            continue
+        if tag not in cache:
+            try:
+                cache[tag] = lister(tag)
+            except Exception as exc:
+                cache[tag] = exc
+        names = cache[tag]
+        if isinstance(names, Exception):
+            errs.append("%s: релиз %s не открылся (%s) — релизы из манифеста нельзя удалять" % (key, tag, names))
+        elif asset not in names:
+            errs.append("%s: в релизе %s нет файла %s" % (key, tag, asset))
+    return errs
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--write-versions", action="store_true")
     ap.add_argument("--plan", default="")
+    ap.add_argument("--verify", action="store_true", help="проверить по GitHub, что архивы не менявшихся компонентов лежат там, куда ссылается манифест")
     ap.add_argument("--dist", default=str(ROOT / "dist"))
     ap.add_argument("--prev", default="")
     a = ap.parse_args(argv)
     if a.write_versions:
         write_service_versions(ROOT)
         return 0
+    if a.verify:
+        dist = Path(a.dist)
+        manifest = json.loads((dist / "components.json").read_text(encoding="utf-8-sig"))
+        publish = [Path(line.strip()).name for line in (dist / "release_files.txt").read_text(encoding="utf-8").splitlines() if line.strip()]
+        errs = verify_carried(manifest, publish)
+        for e in errs:
+            print("[manifest] STOP: " + e)
+        if not errs:
+            print("[manifest] архивы не менявшихся компонентов на месте (GitHub)")
+        return 1 if errs else 0
     prev = None
     if a.prev and Path(a.prev).is_file():
         try:
@@ -192,7 +239,8 @@ def main(argv=None) -> int:
             print("[manifest] WARNING: прошлый манифест не читается — собираем всё, проверка изменений пропущена")
     else:
         print("[manifest] WARNING: прошлого манифеста нет (первый релиз с манифестом или нет связи) — собираем всё, проверка изменений пропущена")
-    if prev is not None and not isinstance(prev.get("components"), dict):
+    if prev is not None and not (isinstance(prev, dict) and isinstance(prev.get("components"), dict)):
+        print("[manifest] WARNING: прошлый манифест не того формата — собираем всё, проверка изменений пропущена")
         prev = None
     if a.plan:
         plan = make_plan(ROOT, prev)

@@ -146,7 +146,9 @@
       if (h.online) {
         const d = (h.service && h.service.detector) || {};
         cvLastModel = d.name || null;
-        cvSetStatus("сервис: онлайн · " + (d.name || "?") + tail, failed ? "off" : "ok");
+        // на чём считает модель: имя видеокарты или CPU (старый сервис без device_name — по полю device: "cpu" / номер GPU)
+        const dev = d.device_name || (d.device == null ? "" : String(d.device) === "cpu" ? "CPU" : "GPU");
+        cvSetStatus("сервис: онлайн · " + (d.name || "?") + (dev ? " · " + dev : "") + tail, failed ? "off" : "ok");
       } else { cvSetStatus("сервис: НЕ отвечает (" + (h.service_url || "") + ")" + tail, "off"); }
       return a.state;
     } catch (e) { cvSetStatus("сервис: —", ""); return null; }

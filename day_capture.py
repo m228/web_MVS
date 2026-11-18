@@ -104,6 +104,49 @@ class DayCapture:
             changed = True
         return changed
 
+    # ---------- окно «Фото» на /multi: состояние и «снять сутки заново» ----------
+    def _ready(self, now: float) -> None:
+        """Под локом: состояние прочитано, план совпадает с базой камер."""
+        cams = [c for c in (self.store_fn() or []) if c.get("url")]
+        if not self._loaded:
+            self._load(cams, now)
+        if self._sync(cams, now):
+            self._save()
+
+    def _find(self, serial: str) -> tuple:
+        for url, p in self._plans.items():
+            if serial and p.get("serial") == serial:
+                return url, p
+        return None, None
+
+    def status(self, serial: str, now: Optional[float] = None) -> Optional[dict]:
+        """Как идёт съёмка камеры: None — камеры нет в базе RTSP. state: done (снято или старая камера) / waiting (ждёт первый кадр) /
+        running (идёт); left_s — сколько осталось до конца суток."""
+        now = self.clock() if now is None else now
+        with self._lock:
+            self._ready(now)
+            _, p = self._find(serial)
+            if p is None:
+                return None
+            state = "done" if p["done"] else "waiting" if p["start"] is None else "running"
+            left = None if state != "running" else max(0, round(p["start"] + self.span_s - now))
+            return {"state": state, "count": p["count"], "left_s": left, "step_s": self.step_s,
+                    "folder": str(self.out_dir / _safe(p.get("label") or p.get("serial")))}
+
+    def restart(self, serial: str, now: Optional[float] = None) -> bool:
+        """Снять сутки заново (камеру переставили, нужны свежие дневные и ночные кадры): план с нуля, первый кадр — на ближайшем
+        проходе. Старые кадры не трогаем — их удалит обычная чистка. False — камеры нет в базе RTSP."""
+        now = self.clock() if now is None else now
+        with self._lock:
+            self._ready(now)
+            url, p = self._find(serial)
+            if p is None:
+                return False
+            self._plans[url] = self._plan({"serial": p["serial"], "label": p["label"]}, now)
+            self._save()
+        log_event("day_capture", "Суточная съёмка камеры запущена заново", "info", {"camera": p.get("label") or p.get("serial")})
+        return True
+
     # ---------- съёмка ----------
     def run_once(self, now: Optional[float] = None) -> int:
         """Один проход: обновить список камер, снять те, кому пора, раз в 6 ч почистить старое. Возвращает, сколько кадров снято."""

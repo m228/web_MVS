@@ -10,7 +10,8 @@
   zone_off    — зона «стоит»
 
 Из эпизодов собираются и журнал камер, и отчёт по смене. Пишет фоновый монитор (cam_monitor.py) — работает без открытой страницы.
-Файл cam_events.db лежит в каталоге данных (переживает обновление), хранится RETENTION_DAYS дней.
+Файл cam_events.db лежит в каталоге данных (переживает обновление), эпизоды хранятся RETENTION_DAYS дней (год),
+снимки событий — SHOT_RETENTION_DAYS.
 """
 from __future__ import annotations
 
@@ -27,7 +28,11 @@ from logger import log_event
 from paths import DATA_DIR
 
 DB_PATH = DATA_DIR / "cam_events.db"
-RETENTION_DAYS = 30
+# Эпизоды журнала храним год — для разбора долгих простоев лент (решение Макса 18.11). Объём по ленте: ~0,8 МБ базы в сутки,
+# ≈ 300 МБ в год. Снимки событий тяжелее (до ~5 МБ в сутки на камеру) — их держим SHOT_RETENTION_DAYS, у эпизода старше
+# снимок гасится (поле shot = '').
+RETENTION_DAYS = 365
+SHOT_RETENTION_DAYS = 90
 BEAT_EVERY_S = 10.0        # как часто «пульс» (последний момент, когда монитор точно работал) пишем на диск
 
 _lock = threading.RLock()
@@ -113,10 +118,11 @@ def sync(cam: str, scope: Iterable[str], active: dict, now: float) -> None:
 
 
 def purge(now: float) -> int:
-    """Удалить завершённые эпизоды старше RETENTION_DAYS."""
+    """Удалить завершённые эпизоды старше RETENTION_DAYS; у эпизодов старше SHOT_RETENTION_DAYS погасить снимок (папки чистит purge_shots)."""
     with _lock:
         c = _db()
         n = c.execute("DELETE FROM episodes WHERE t1 IS NOT NULL AND t1 < ?", (now - RETENTION_DAYS * 86400,)).rowcount
+        c.execute("UPDATE episodes SET shot='' WHERE shot != '' AND t0 < ?", (now - SHOT_RETENTION_DAYS * 86400,))
         c.commit()
     n_shots = purge_shots(now)
     if n or n_shots:
@@ -192,11 +198,11 @@ _DAY_DIR = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 
 def purge_shots(now: float) -> int:
-    """Удалить папки кадров старше RETENTION_DAYS. Трогаем только папки event_shots/<камера>/<ГГГГ-ММ-ДД> со строгим именем-датой."""
+    """Удалить папки кадров старше SHOT_RETENTION_DAYS. Трогаем только папки event_shots/<камера>/<ГГГГ-ММ-ДД> со строгим именем-датой."""
     base = shots_dir()
     if not base.is_dir():
         return 0
-    cutoff = datetime.fromtimestamp(now - RETENTION_DAYS * 86400).strftime("%Y-%m-%d")
+    cutoff = datetime.fromtimestamp(now - SHOT_RETENTION_DAYS * 86400).strftime("%Y-%m-%d")
     n = 0
     for cam_dir in (p for p in base.iterdir() if p.is_dir()):
         for day in (p for p in cam_dir.iterdir() if p.is_dir() and _DAY_DIR.match(p.name)):

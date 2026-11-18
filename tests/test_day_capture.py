@@ -74,6 +74,28 @@ def test_new_camera_is_filmed_every_20_min_for_exactly_one_day(env):
     assert not [p for p in env.out.rglob("*") if "old" in str(p)]
 
 
+def test_known_camera_can_be_filmed_again_after_restart(env):
+    """Камеру переставили: «Снять сутки заново» — ещё сутки кадров раз в 20 мин; статус показывает, как идёт."""
+    env.cams = [cam()]
+    d = env.make()
+    d.run_once(T0)                                           # старая камера: известная, не снимается
+    assert d.status("rtsp_1", T0) == {"state": "done", "count": 0, "left_s": None, "step_s": STEP,
+                                       "folder": str(env.out / "val")}
+    assert d.status("нет_такой", T0) is None and d.restart("нет_такой", T0) is False
+    assert d.restart("rtsp_1", T0 + 60) is True
+    assert d.status("rtsp_1", T0 + 61)["state"] == "waiting"
+    d.run_once(T0 + 70)
+    st = d.status("rtsp_1", T0 + 70 + 3600)
+    assert st["state"] == "running" and st["count"] == 1 and st["left_s"] == 86400 - 3600
+    t = T0 + 70
+    for _ in range(26 * 3):                                  # 26 часов шагами по 20 мин
+        t += STEP
+        d.run_once(t)
+    assert d.status("rtsp_1", t)["state"] == "done" and len(files(env)) == 73
+    d2 = env.make()                                          # перезапуск приложения: план с диска
+    assert d2.status("rtsp_1", t)["count"] == 73
+
+
 def test_frame_is_saved_full_size_in_date_folder(env):
     env.cams = []
     d = env.make()

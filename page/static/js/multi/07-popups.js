@@ -24,7 +24,58 @@ function openPhotoPopup() {
   const source = focusedSource();
   if (!source || !multiPhotoPopup) return;
   multiPhotoPopup.toggle();
-  if (multiPhotoPopup.isOpen()) { showSavePath('multiPhotoSavePath', null); prefillMultiSaveSettings(source.serial, source.kind); }
+  if (multiPhotoPopup.isOpen()) {
+    showSavePath('multiPhotoSavePath', null); prefillMultiSaveSettings(source.serial, source.kind);
+    refreshDayCapture(source);
+  }
+}
+
+// ---------- суточная съёмка RTSP-камеры (day_capture.py) в окне «Фото» ----------
+function dayCaptureText(st) {
+  if (st.state === 'running') {
+    const h = Math.floor((st.left_s || 0) / 3600), m = Math.round(((st.left_s || 0) % 3600) / 60);
+    return `Идёт: ${st.count} кадр. · до конца ${h ? h + ' ч ' : ''}${m} мин`;
+  }
+  if (st.state === 'waiting') return 'Ждёт первого кадра';
+  return st.count ? `Снята: ${st.count} кадр.` : 'Не идёт';
+}
+
+async function refreshDayCapture(source) {
+  const box = document.getElementById('multiDayCap');
+  if (!box) return;
+  box.hidden = !source || source.kind !== 'rtsp';
+  if (box.hidden) return;
+  const line = document.getElementById('multiDayCapState');
+  const btn = document.getElementById('multiDayCapRestart');
+  box.dataset.serial = source.serial;
+  const st = await apiGet(`/api/cam/day_capture?serial=${encodeURIComponent(source.serial)}`, 'Суточная съёмка:', { timeout: 10000 });
+  if (box.dataset.serial !== source.serial) return;           // пока ждали ответ, фокус ушёл на другую камеру
+  if (!st || st.status !== 'ok') {
+    line.textContent = st ? 'Камеры нет в базе RTSP' : 'Нет ответа';
+    btn.disabled = true;
+    return;
+  }
+  line.textContent = dayCaptureText(st);
+  line.title = st.folder || '';
+  btn.disabled = st.state !== 'done';                         // идёт или ждёт — перезапуск ничего не даст
+}
+
+async function restartDayCapture() {
+  const box = document.getElementById('multiDayCap');
+  const serial = box && box.dataset.serial;
+  if (!serial) return;
+  const btn = document.getElementById('multiDayCapRestart');
+  btn.disabled = true;
+  try {
+    const r = await fetch(`/api/cam/day_capture/restart?serial=${encodeURIComponent(serial)}`,
+      { method: 'POST', signal: AbortSignal.timeout(10000) });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+  } catch (e) {
+    document.getElementById('multiDayCapState').textContent = 'Не удалось: ' + e.message;
+    btn.disabled = false;
+    return;
+  }
+  refreshDayCapture(getSource(serial));
 }
 function openVideoPopup() {
   const source = focusedSource();

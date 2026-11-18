@@ -551,7 +551,7 @@ def multi_layout(layout: int, tiles: str = "[]"):
 
 @app.get("/api/cam/events")
 def cam_events_list(cam: str = "", hours: float = 24, kinds: str = "", min_s: float = 0, limit: int = 500):
-    # эпизоды камер за последние hours часов (до 30 суток), новые сверху; идущие имеют t1 = null
+    # эпизоды камер за последние hours часов (до года — cam_events.RETENTION_DAYS), новые сверху; идущие имеют t1 = null
     now = time.time()
     hours = max(0.01, min(float(hours), cam_events.RETENTION_DAYS * 24))
     items = cam_events.episodes(cam or None, now - hours * 3600, now, [k for k in kinds.split(",") if k], min_s, limit, now)
@@ -559,6 +559,21 @@ def cam_events_list(cam: str = "", hours: float = 24, kinds: str = "", min_s: fl
     for it in items:
         it["label"] = labels.get(it["cam"]) or it["cam"]
     return {"now": now, "events": items}
+
+
+@app.get("/api/cam/day_capture")
+def cam_day_capture(serial: str):
+    # суточная съёмка RTSP-камеры (окно «Фото» на /multi): идёт ли, сколько кадров, сколько осталось
+    st = day_cap.status(serial)
+    return {"status": "ok", **st} if st else {"status": "absent"}
+
+
+@app.post("/api/cam/day_capture/restart")
+def cam_day_capture_restart(serial: str):
+    # «Снять сутки заново»: камеру переставили — раз в 20 мин кадр, ещё сутки
+    ok = day_cap.restart(serial)
+    api_log("api.cam.day_capture", "Суточная съёмка заново", payload={"serial": serial, "ok": ok})
+    return {"status": "ok"} if ok else {"status": "absent"}
 
 
 @app.get("/api/cam/shot")

@@ -5,7 +5,8 @@
 Сообщения об обновлении завода (вид update: скачана, обновлён и всё поднялось, откат) приходят «в историю» — без звука; со звуком
 только «обновлён, но не всё поднялось» (is_quiet). Тревоги и «в историю» уходят отдельными сообщениями, тихие потолок не едят.
 Старые события (пачка после обрыва связи) в чат не идут. Несколько событий одного завода в одном проходе — одно сообщение. Не больше
-max_per_hour сообщений в час: остальное одной строкой «ещё N событий, смотри панель».
+max_per_hour сообщений в час С КАЖДОГО ЗАВОДА (лавина на одном не глушит тревоги другого): остальное одной строкой «ещё N событий,
+смотри панель».
 
 Кроме уведомлений бот отвечает на вопросы: кнопки с названиями заводов (Кир, Буи, «Все заводы») — нажал, пришла текстовая сводка
 по заводу: статус, диск, тревоги, датчики последней пробы, последние события — и кнопки управления тем же, что на карточке в панели:
@@ -197,8 +198,8 @@ class Notifier:
     def __init__(self, store, client: TelegramClient, cfg: dict, clock: Callable[[], float] = time.time, releases=None):
         self.store, self.client, self.cfg, self.clock, self.releases = store, client, cfg, clock, releases
         self.state = {"last_ok_t": None, "last_error": "", "last_try_t": None, "sent_messages": 0}
-        self._sent_times: deque = deque()       # когда ушли последние сообщения (потолок max_per_hour)
-        self._summary_t = 0.0
+        self._sent_times: dict = {}             # завод -> deque моментов отправки тревог (потолок max_per_hour — на КАЖДЫЙ завод)
+        self._summary_t: dict = {}              # завод -> когда последний раз писали «слишком много событий»
         self._mute_retry_t = 0.0                # раньше этого времени итог тишины заново не шлём (Telegram не ответил / просил подождать)
         self._kick = threading.Event()
         self._stop = threading.Event()
@@ -238,10 +239,12 @@ class Notifier:
                 return False, max(wait, w), e
         return True, 0.0, ""
 
-    def _recent(self, now: float) -> int:
-        while self._sent_times and now - self._sent_times[0] > 3600:
-            self._sent_times.popleft()
-        return len(self._sent_times)
+    def _recent(self, plant_id, now: float) -> int:
+        """Сколько тревог завода ушло за последний час. Потолок свой у каждого завода: лавина на одном не глушит другой."""
+        times = self._sent_times.setdefault(plant_id, deque())
+        while times and now - times[0] > 3600:
+            times.popleft()
+        return len(times)
 
     def flush(self) -> int:
         """Один проход: напоминания «нет связи», затем отправка очереди. Возвращает, сколько сообщений ушло."""
@@ -267,7 +270,7 @@ class Notifier:
             by_plant: dict = {}
             for r in rows:
                 by_plant.setdefault(r["plant_id"], []).append(r)
-            muted = 0
+            muted: dict = {}                                     # завод -> [название, сколько заглушено потолком]
             groups = []                                          # (строки, тихо?): у завода тревоги и «история» уходят отдельными сообщениями
             for plant_rows in by_plant.values():
                 loud = [r for r in plant_rows if not is_quiet(r)]
@@ -275,9 +278,10 @@ class Notifier:
                 groups += [(g, silent) for g, silent in ((loud, False), (quiet, True)) if g]
             for group_rows, silent in groups:
                 ids = [r["id"] for r in group_rows]
-                if not silent and self._recent(now) >= self.cfg["max_per_hour"]:      # тихие потолок не едят: бюджет — для тревог
+                pid = group_rows[0]["plant_id"]
+                if not silent and self._recent(pid, now) >= self.cfg["max_per_hour"]:      # тихие потолок не едят: бюджет — для тревог
                     self.store.notify_mark(ids, "muted", now, "потолок сообщений в час")
-                    muted += len(ids)
+                    muted.setdefault(pid, [group_rows[0]["plant_name"], 0])[1] += len(ids)
                     continue
                 markup = None if silent or not wants_mute_button(group_rows) else {"inline_keyboard": [[
                     {"text": "🔕 Тихо %d ч" % (MUTE_QUICK_MIN // 60), "callback_data": "mt:%d:%d" % (group_rows[0]["plant_id"], MUTE_QUICK_MIN)}]]}
@@ -286,7 +290,7 @@ class Notifier:
                 if ok:
                     self.store.notify_mark(ids, "sent", now)
                     if not silent:
-                        self._sent_times.append(now)
+                        self._sent_times.setdefault(pid, deque()).append(now)
                     self.state.update(last_ok_t=now, last_error="", sent_messages=self.state["sent_messages"] + 1)
                     sent += 1
                 else:
@@ -296,11 +300,12 @@ class Notifier:
                     self.state["last_error"] = err
                     log.warning("Telegram: %s (повтор через %d с)", err, delay)
                     break                                        # связи нет — остальные заводы тоже не уйдут, не долбим
-            if muted and now - self._summary_t > 3600:
-                self._summary_t = now
-                ok, _, err = self._send_all("⚠ Слишком много событий за час: ещё %d не отправлено. Смотри панель." % muted)
-                if ok:
-                    sent += 1
+            for pid, (name, n) in muted.items():                 # итог — раз в час на завод, с его названием
+                if now - self._summary_t.get(pid, 0.0) > 3600:
+                    self._summary_t[pid] = now
+                    ok, _, err = self._send_all("⚠ %s: слишком много событий за час, ещё %d не отправлено. Смотри панель." % (name, n))
+                    if ok:
+                        sent += 1
             return sent
 
     def _mute_summaries(self, now: float) -> int:

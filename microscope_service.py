@@ -43,9 +43,6 @@ class MicroscopeService:
         self._started = False
         self._last_approach = None       # последний приход подвода {row, sp_row, ai, enc, calc, …} — уходит в ближайшую пробу
         self._lock = threading.Lock()
-        # DEBUG (убрать после отладки цикла): перехват ПЛК — при True данные СВ/стадии
-        # из sv_source игнорируются, работает ручной ввод со страницы (см. sv_override).
-        self._sv_override = False
         # CV: сессия пробы — фоновый поток «кадр → разбор → следующий» на время выдержки
         self._probe_collecting = False            # сессия сейчас набирает кадры у стекла
         self._cv_run_lock = threading.Lock()      # один разбор за раз
@@ -72,11 +69,9 @@ class MicroscopeService:
             self.fsm.on_varka_count = self._persist_varka   # persist счётчика варок (автокалибровка)
             self.fsm.on_mode_change = self._log_mode        # режим автомата (Автомат / выключен / Ручной / авария) -> журнал режима
             self.fsm.on_autocal_done = self._log_autocal    # итог автокалибровки -> autocal.log + «последняя»
-            self.fsm.on_approach_fail = self._log_approach_fail   # «довод не сошёлся» -> отдельный лог
             self.fsm.on_probe_positions = self._on_probe_positions   # три датчика на отводе/подводе -> мониторинг
-            # довод по абсолютнику ушёл в прошивку — гасим в рантайме (конфиг не перезаписываем),
-            # доезд цикла идёт по энкодеру. Автокалибровка нуля работает в ПК (см. set_autocal).
-            self.fsm.set_fine_approach(enabled=False)
+            # довод по датчику делает прошивка платы, доезд цикла идёт по выбранному датчику (энкодер/аналог).
+            # Автокалибровка нуля работает в ПК (см. set_autocal).
             self._sync_cv_fsm()                    # выдержка «по CV» (N кадров), если CV включён
             self.plate.start()
             self.fsm.start()
@@ -171,13 +166,11 @@ class MicroscopeService:
 
     def restart_window(self):
         """Окно для перезапуска приложения (автообновление): (True, "") или (False, причина). Кроме автомата смотрит связь с ПЛК
-        (стадия без связи «залипает»), перехват ПЛК, набор/разбор пробы и проверку модели."""
+        (стадия без связи «залипает»), набор/разбор пробы и проверку модели."""
         import model_check
         fsm = self.fsm
         if not self._started or fsm is None:
             return False, "микроскоп выключен"
-        if self._sv_override:
-            return False, "включён перехват ПЛК"
         if self.sv_source is None or not self.sv_source.status().get("connected"):
             return False, "нет связи с ПЛК"
         if self._probe_collecting or self._cv_run_lock.locked():
@@ -771,10 +764,7 @@ class MicroscopeService:
 
     def _on_sv(self, sv, stage):
         # СВ/стадия из ПЛК -> в автомат (заменяет ручной ввод, пока источник жив)
-        self._note_stage(stage)      # заводку отслеживаем всегда, даже при перехвате ПЛК
-        # DEBUG: при перехвате ПЛК не затираем ручной ввод со страницы
-        if self._sv_override:
-            return
+        self._note_stage(stage)
         if self.fsm:
             if sv is not None:
                 self.fsm.set_sv(sv)
@@ -1262,31 +1252,8 @@ class MicroscopeService:
         log_event("microscope_service", "Фильтр датчика 1271", "info", patch)
         return {"status": "ok", **patch}
 
-    def set_fine_approach(self, enabled=None, coarse_tol_um=None, fine_tol_um=None,
-                          max_retry=None, pause_sec=None):
-        """Гибридный доезд подвода (грубо по 1274 → точно по датчику 1271): вкл/выкл + допуски/
-        повторы/пауза. Сразу, без reload; persist в конфиг."""
-        patch = {}
-        if enabled is not None:
-            patch["enabled"] = bool(enabled)
-        if coarse_tol_um is not None:
-            patch["coarse_tol_um"] = int(coarse_tol_um)
-        if fine_tol_um is not None:
-            patch["fine_tol_um"] = int(fine_tol_um)
-        if max_retry is not None:
-            patch["max_retry"] = int(max_retry)
-        if pause_sec is not None:
-            patch["pause_sec"] = max(0.5, float(pause_sec))
-        res = self.fsm.set_fine_approach(**patch) if self.fsm else patch
-        if patch:
-            plate_config.save({"fine_approach": patch})
-            if self.cfg is not None:
-                self.cfg.setdefault("fine_approach", {}).update(patch)
-        log_event("microscope_service", "Довод по абсолютнику", "info", patch)
-        return {"status": "ok", **res}
-
     def clear_fault(self):
-        """Сброс аварии оператором (подгон не сошёлся и т.п.): снять запрет, погасить флаг."""
+        """Сброс аварии оператором: снять запрет, погасить флаг."""
         if self.fsm:
             return self.fsm.clear_fault()
         return {"status": "no_fsm"}
@@ -1326,23 +1293,6 @@ class MicroscopeService:
             plate_config.save({"autocal": {"last": last}})
             if self.cfg is not None:
                 self.cfg.setdefault("autocal", {})["last"] = last
-
-    def _log_approach_fail(self, info):
-        """Колбэк FSM: подгон по датчику не сошёлся — пошли на след. этап. Пишем момент в
-        ОТДЕЛЬНЫЙ файл (approach_fails.log в каталоге данных), чтобы разобрать/починить потом."""
-        from datetime import datetime
-        from paths import DATA_DIR
-        try:
-            line = "%s\ttarget=%s\tsensor=%s\tdelta=%s\tretry=%s\tsv=%s\n" % (
-                datetime.now().isoformat(timespec="seconds"),
-                info.get("target"), info.get("sensor"), info.get("delta"),
-                info.get("retry"), info.get("sv"))
-            path = DATA_DIR / "approach_fails.log"
-            path.parent.mkdir(parents=True, exist_ok=True)
-            with open(path, "a", encoding="utf-8") as f:
-                f.write(line)
-        except Exception as e:
-            log_event("microscope_service", "Не удалось записать лог довода", "warn", {"error": str(e)})
 
     def _on_probe_positions(self, info):
         """Колбэк FSM: три датчика на доезде отвода/подвода -> мониторинг заводских ПК (sysmon). Только чтение."""
@@ -1533,12 +1483,6 @@ class MicroscopeService:
         if self.fsm:
             return self.fsm.skip_step()
         return {"status": "no_fsm"}
-
-    def sv_override(self, on):
-        """DEBUG (убрать после отладки): перехват ПЛК. При True sv_source перестаёт
-        затирать ручной СВ/стадию со страницы — можно вбивать значения и смотреть цикл."""
-        self._sv_override = bool(on)
-        return {"sv_override": self._sv_override}
 
     def stop_movement(self, on):
         if self.fsm:

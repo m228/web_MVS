@@ -622,21 +622,9 @@ def micro_ignore_focus(on: int):
     return micro.set_ignore_focus(bool(on))
 
 
-@app.get("/api/micro/fine_approach")
-def micro_fine_approach(enabled: int | None = None, coarse_tol_um: int | None = None,
-                        fine_tol_um: int | None = None, max_retry: int | None = None,
-                        pause_sec: float | None = None):
-    # гибридный доезд подвода: грубо по расчётной 1274 → точный подгон по датчику 1271
-    res = micro.set_fine_approach(
-        None if enabled is None else bool(enabled),
-        coarse_tol_um, fine_tol_um, max_retry, pause_sec)
-    api_log("api.micro.fine_approach", "Довод по абсолютнику", payload=res)
-    return res
-
-
 @app.get("/api/micro/clear_fault")
 def micro_clear_fault():
-    # сброс аварии (подгон по датчику не сошёлся и т.п.)
+    # сброс аварии автомата
     res = micro.clear_fault()
     api_log("api.micro.clear_fault", "Сброс аварии микроскопа", payload=res)
     return res
@@ -724,14 +712,6 @@ def micro_cyclic(on: int):
     micro.set_cyclic(bool(on))
     api_log("api.micro.cyclic", "Циклический режим микроскопа", payload={"on": bool(on)})
     return {"status": "ok", "cyclic": bool(on)}
-
-
-@app.get("/api/micro/sv_override")
-def micro_sv_override(on: int):
-    # DEBUG (убрать после отладки цикла): перехват ПЛК — ручной СВ не затирается sv_source
-    res = micro.sv_override(bool(on))
-    api_log("api.micro.sv_override", "DEBUG: перехват ПЛК (ручной СВ)", payload={"on": bool(on)})
-    return {"status": "ok", **res}
 
 
 @app.get("/api/micro/stop")

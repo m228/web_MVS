@@ -3540,6 +3540,12 @@ input.micro-cam-num { width: 56px; min-width: 0; flex: 0 0 auto; padding: 4px 5p
 /* пульт */
 .micro-pult__head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 10px; flex-wrap: wrap; }
 .micro-pult__title { font-weight: 600; font-size: 1.05em; }
+/* «Началась варка — перейти в Автомат?» вместо системного confirm (страница не замирает) */
+.micro-autoask { display: flex; align-items: center; justify-content: space-between; gap: 8px 12px; flex-wrap: wrap; margin-bottom: 10px;
+  padding: 10px 12px; border: 1px solid var(--warning); border-radius: 10px; background: var(--warning-soft); }
+.micro-autoask[hidden] { display: none; }
+.micro-autoask__text { font-size: .92em; }
+.micro-autoask__btns { display: flex; gap: 8px; flex-wrap: wrap; }
 
 /* иконки-вкладки */
 /* вкладки резиновые (44–58px), чтобы все влезали в один ряд; перенос — только на совсем узком пульте */

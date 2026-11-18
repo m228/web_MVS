@@ -5,23 +5,20 @@
 
   const $ = (id) => document.getElementById(id);
   const POLL_MS = 600;
+  const POLL_TIMEOUT_MS = 8000;     // опрос телеметрии: дольше не ждём — следующий такт спросит заново
 
-  // Стадии варки (M.mode) — расшифровка для показа "2 (Набор)". SubMode показываем числом как есть.
-  const STAGE_NAMES = {
-    1: "Остановлен", 2: "Набор", 3: "Сгущение", 4: "Затравка", 5: "Подкачка",
-    6: "Стабилизация", 7: "Рост", 8: "Уваривание", 9: "Готовность", 10: "Выгрузка",
-    11: "Пропарка", 12: "Надвыгрузка", 13: "Собрать аппарат", 14: "Термоудар",
-    20: "УНВ", 21: "Пауза",
-  };
+  // Стадии варки (M.mode) — расшифровка для показа "2 (Набор)". Одна таблица на приложение — substages.py,
+  // приходит с сервера (stage-names.js); пока не пришла, показываем номер. Объекты заполняются на месте.
+  const STAGE_NAMES = window.StageNames.titles;
   const stageLabel = (m) => {
     if (m == null || m === "") return "(—)";
     const n = stageNameOf(Number(m));
     return n ? `${m} (${n})` : String(m);
   };
 
-  // Подстадии (регистр Submode = этап·10 + подэтап: 73 → рост 2). Названия — как в SCADA, таблица та же, что substages.py
-  const SUBSTAGE_NAMES = { 10: "останов", 20: "набор", 21: "набор", 22: "набор 1", 23: "набор 2", 24: "набор 3", 25: "набор 4", 26: "набор 5", 27: "набор 6", 28: "донабор", 30: "сгущение", 31: "сгущение", 32: "сгущение 1", 33: "сгущение 2", 34: "сгущение 3", 35: "сгущение 4", 36: "сгущение 5", 37: "сгущение 6", 38: "сгущение 7", 39: "сгущение 8", 40: "затравка", 41: "затравка: подтверждение", 42: "затравка: внесение", 50: "подкачка", 51: "подкачка", 52: "подкачка 1", 53: "подкачка 2", 54: "подкачка 3", 55: "подкачка 4", 56: "подкачка 5", 57: "подкачка 6", 58: "подкачка 7", 59: "расчистка", 60: "стабилизация", 61: "стабилизация", 62: "стабилизация 1", 63: "стабилизация 2", 64: "стабилизация 3", 65: "стабилизация 4", 66: "стабилизация 5", 67: "стабилизация 6", 68: "стабилизация 7", 69: "стабилизация 8", 70: "рост", 71: "рост", 72: "рост 1", 73: "рост 2", 74: "рост 3", 75: "рост 4", 76: "рост 5", 77: "рост 6", 78: "рост БП", 79: "рост ЗП", 80: "уваривание", 90: "готовность", 100: "выгрузка: подтверждение", 101: "выгрузка: закрытие вакуума", 102: "выгрузка: ожидание сброса", 105: "выгрузка", 106: "выгрузка L", 107: "выгрузка T", 108: "выгрузка", 110: "пропарка", 111: "пропарка", 112: "пропарка", 113: "пропарка", 114: "пропарка", 115: "пропарка", 116: "пропарка", 117: "пропарка", 118: "пропарка", 119: "пропарка", 120: "надвыгрузка", 130: "собрать ВА", 140: "термоудар", 141: "термоудар", 142: "термоудар 1", 143: "термоудар 2", 144: "термоудар 3", 145: "термоудар 4", 146: "термоудар 5", 147: "термоудар 6", 148: "термоудар 7", 149: "термоудар 8" };
-  const SUBSTAGE_STAGES = { 1: "останов", 2: "набор", 3: "сгущение", 4: "затравка", 5: "подкачка", 6: "стабилизация", 7: "рост", 8: "уваривание", 9: "готовность", 10: "выгрузка", 11: "пропарка", 12: "надвыгрузка", 13: "собрать ВА", 14: "термоудар", 20: "УНВ" };
+  // Подстадии (регистр Submode = этап·10 + подэтап: 73 → рост 2). Названия — как в SCADA, с сервера (substages.NAMES)
+  const SUBSTAGE_NAMES = window.StageNames.substages;
+  const SUBSTAGE_STAGES = window.StageNames.stages;      // «сгущение» — основа имени подстадии по формуле
   // нет кода в таблице — имя по формуле «этап·10 + подэтап» (73 → «рост 3», 114 → «пропарка 4»)
   const substageName = (c) => {
     if (c == null || c === "") return null;
@@ -75,6 +72,7 @@
   };
   async function pcStageNamesLoad() {
     try { stageMapApply(((await api("/api/plc/source")).config || {}).stage_map); } catch (e) { }
+    await window.StageNames.ready;          // подписи «3 Сгущение → 9 Готовность» — когда названия пришли с сервера
     pcStageHintUpdate();
   }
   window.addEventListener("stagemap-changed", (ev) => { stageMapApply(ev.detail); pcStageHintUpdate(); });
@@ -82,7 +80,6 @@
   let manualOn = false;
   let cfg = null;
   let camSerial = "";
-  let manualConfirmShown = false;   // показан ли диалог «варка началась, выйти из ручного?»
   let autostartDone = false;        // автосеквенция «автостарт цикла» уже запущена?
 
   // авто-доводка мотора «Идти в позицию»: плата за одно нажатие делает лишь ОДИН шаг к цели,
@@ -92,11 +89,22 @@
   const DRIVE_STOP_UM = 20;                    // ближе этого к цели — стоп (мкм)
   const DRIVE_TICK_MS = 700;
 
-  async function api(path, params) {
+  // запрос к серверу с таймаутом: зависший сервер (перезапуск, обновление) не должен вешать fetch навсегда.
+  // 60 с по умолчанию — с запасом для долгих (разбор CV, отчёт, сравнение); опрос телеметрии ждёт меньше (POLL_TIMEOUT_MS)
+  async function api(path, params, timeoutMs = 60000) {
     const q = params ? "?" + new URLSearchParams(params).toString() : "";
-    const res = await fetch(path + q);
-    if (!res.ok) throw new Error("HTTP " + res.status);
-    return res.json();
+    const ctl = new AbortController();
+    const timer = setTimeout(() => ctl.abort(), timeoutMs);
+    try {
+      const res = await fetch(path + q, { signal: ctl.signal });
+      if (!res.ok) throw new Error("HTTP " + res.status);
+      return await res.json();
+    } catch (e) {
+      if (e.name === "AbortError") throw new Error("сервер не ответил за " + Math.round(timeoutMs / 1000) + " с");
+      throw e;
+    } finally {
+      clearTimeout(timer);
+    }
   }
 
   function sentCmd(label) {
@@ -104,8 +112,24 @@
     if (el) el.textContent = label + " · " + new Date().toLocaleTimeString("ru-RU");
   }
 
+  // плашка «Началась варка — перейти в Автомат?» (видна, пока сервер держит manual_confirm; показ — в pollOnce)
+  function wireAutoConfirm() {
+    const answer = async (yes) => {
+      try {
+        await api("/api/micro/" + (yes ? "confirm_auto" : "decline_auto"));
+        if (yes) { const mt = $("manualToggle"); if (mt) mt.checked = false; }
+        const ac = $("autoConfirm"); if (ac) ac.hidden = true;
+        sentCmd(yes ? "Варка: перешли в Автомат" : "Варка: остаёмся в ручном");
+      } catch (e) { sentCmd("ошибка: " + e.message); }
+    };
+    const yes = $("autoConfirmYes"), no = $("autoConfirmNo");
+    if (yes) yes.addEventListener("click", () => answer(true));
+    if (no) no.addEventListener("click", () => answer(false));
+  }
+
   // вкладка «Цикл»: кнопка «Взять пробу» + сохранение параметров цикла
   function wireCycle() {
+    wireAutoConfirm();
     const take = $("takeSampleBtn");
     if (take) take.addEventListener("click", async () => {
       try {
@@ -1134,22 +1158,28 @@
   }
 
   // ---- опрос ----
+  // poll зовётся раз в POLL_MS (04-init.js): пока прошлый опрос не вернулся, новый не запускаем — иначе при зависшем
+  // сервере запросы копятся друг поверх друга
+  let pollBusy = false;
   async function poll() {
+    if (pollBusy) return;
+    pollBusy = true;
+    try { await pollOnce(); } finally { pollBusy = false; }
+  }
+
+  async function pollOnce() {
     try {
-      const d = await api("/api/micro/telemetry");
+      const d = await api("/api/micro/telemetry", null, POLL_TIMEOUT_MS);
       const t = d.telemetry || {}, f = d.fsm || {}, e = d.ext || {};
       setConn(d.connection || {});
 
-      // подтверждение перехода в Автомат: варка вошла в стадию 3, а мы в ручном
-      if (f.manual_confirm && !manualConfirmShown) {
-        manualConfirmShown = true;
-        const yes = confirm("Началась варка (стадия " + (f.stage != null ? f.stage : 3) +
-          "). Выйти из ручного режима и запустить авто-цикл?");
-        api("/api/micro/" + (yes ? "confirm_auto" : "decline_auto")).then(() => {
-          if (yes) { const mt = $("manualToggle"); if (mt) mt.checked = false; }
-        }).catch(() => {});
+      // варка вошла в рабочие стадии, а включён Ручной: плашка «Перейти в Автомат?» с кнопками (wireAutoConfirm).
+      // Не системный confirm(): тот замораживал вкладку, пока оператор не ответит
+      const askEl = $("autoConfirm");
+      if (askEl) {
+        askEl.hidden = !f.manual_confirm;
+        if (f.manual_confirm) set("autoConfirmStage", stageLabel(f.stage));
       }
-      if (!f.manual_confirm) manualConfirmShown = false;
 
       // позиции (сверху и в пульте)
       set("tPos1", um(t.pos1)); set("tPos2", um(t.pos2));

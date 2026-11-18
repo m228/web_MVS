@@ -183,6 +183,14 @@
                 <span class="micro-switch__label" id="manualState">Автомат</span>
               </label>
             </div>
+            <!-- варка вошла в рабочие стадии, а включён Ручной: спросить, не замораживая страницу (показ — 01-core.js pollOnce) -->
+            <div class="micro-autoask" id="autoConfirm" role="alert" hidden>
+              <span class="micro-autoask__text">Началась варка, стадия <b id="autoConfirmStage">—</b>. Включён ручной режим.</span>
+              <span class="micro-autoask__btns">
+                <button type="button" id="autoConfirmYes" class="toolbar-btn toolbar-btn--primary">В автомат</button>
+                <button type="button" id="autoConfirmNo" class="toolbar-btn toolbar-btn--neutral">Остаться в ручном</button>
+              </span>
+            </div>
 
             <div class="micro-ptabs" role="tablist">
               <button type="button" class="micro-ptab is-active" data-ptab="cam" title="Параметры камеры" aria-label="Параметры камеры">
@@ -1350,6 +1358,7 @@
 
       <script src="/static/js/api.js"></script>
       <script src="/static/js/update-state.js"></script>
+      <script src="/static/js/stage-names.js"></script>
       <script src="/static/js/plc-source.js"></script>
       <script src="/static/js/microscope/01-core.js"></script>
       <script src="/static/js/microscope/02-cv.js"></script>

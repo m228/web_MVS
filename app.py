@@ -40,6 +40,7 @@ import day_capture
 import cam_report
 import services
 import sysmon
+import substages
 import fracture_lab
 import cv_store
 import db
@@ -826,6 +827,12 @@ def micro_config_dump():
 def api_version():
     """Версия программы (для шапки страницы микроскопа)."""
     return {"app": read_version()}
+
+
+@app.get("/api/stage_names")
+def api_stage_names():
+    """Названия стадий (M.mode) и подстадий (Submode) — одна таблица на приложение (substages.py); страницы берут отсюда."""
+    return {"stages": substages.STAGE_NAMES, "substages": substages.NAMES}
 
 
 @app.get("/api/micro/config_snapshots")

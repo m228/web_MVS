@@ -1,6 +1,8 @@
 @echo off
 rem Build the web_MVS bundle on the build machine (needs Python 3.11 + .venv with deps).
-rem Output: dist\web_MVS\ and dist\web_MVS_v<version>.zip for GitHub Releases.
+rem Partial release: only components whose version is higher than in the previous release manifest are published
+rem (VERSION = main app, component_versions.json = cv/video/motion/level). The main app (PyInstaller, ~90 MB) is built only if its VERSION was raised.
+rem Output: dist\<component>_v<its version>.zip + dist\components.json + dist\release_files.txt (what release.bat publishes).
 rem After the build release.bat checks the tree and, after a Y/N question, publishes the release. "build.bat nopush" skips that.
 rem run.bat is bundled INTO the archive so the zip is self-sufficient to run.
 setlocal
@@ -14,15 +16,28 @@ if not exist ".venv\Scripts\activate.bat" (
 )
 call ".venv\Scripts\activate.bat"
 
+if not exist "dist" mkdir "dist"
+rem leftovers of an earlier build must not reach the release
+del /q "dist\*.zip" "dist\components.json" "dist\release_files.txt" "dist\release_notes.txt" "dist\plan.cmd" "dist\prev_components.json" >nul 2>&1
+
+rem what changed: compare component versions with the manifest of the latest release (fetched via gh; no manifest = build everything)
+gh release download --pattern components.json --output "dist\prev_components.json" --clobber >nul 2>&1
+python scripts\make_manifest.py --plan "dist\plan.cmd" --prev "dist\prev_components.json" || (echo [build] PLAN FAILED & exit /b 1)
+call "dist\plan.cmd"
+set /p REL=<RELEASE
+
+if "%BUILD_main%"=="0" (
+    echo [build] Main app %VER_main% is unchanged - PyInstaller build and main archive skipped.
+    goto services
+)
+
 python -m pip install --upgrade pyinstaller || exit /b 1
 
 rem enrollment key for monitoring auto-registration: same key as the receiver (monitor_server\data\server.json); kept out of git
 if exist "monitor_server\data\server.json" powershell -NoProfile -Command "try { $k = (Get-Content 'monitor_server\data\server.json' -Raw -Encoding UTF8 | ConvertFrom-Json).enroll_key; if ($k) { [IO.File]::WriteAllText('enroll_key.txt', $k.Trim()) } } catch { }"
 if exist "enroll_key.txt" (echo [build] enroll_key.txt found: auto-registration will work in this build) else (echo [build] WARNING: no enroll_key.txt - this build will NOT auto-register on the monitor. Start the receiver once, then rebuild.)
 
-set /p VER=<VERSION
-set /p REL=<RELEASE
-echo [build] Building web_MVS %VER% ...
+echo [build] Building web_MVS %VER_main% ...
 pyinstaller --noconfirm web_MVS.spec || (echo [build] BUILD FAILED & exit /b 1)
 
 echo [build] Adding run.bat + update + UpdaterCV + UpdaterVideo + UpdaterMotion + UpdaterLevel to the bundle ...
@@ -45,37 +60,34 @@ copy /Y Uninstall.bat "dist\web_MVS\" >nul
 copy /Y Uninstall.ps1 "dist\web_MVS\" >nul
 
 echo [build] Packing main archive ...
-powershell -NoProfile -Command "Compress-Archive -Path 'dist\web_MVS\*' -DestinationPath 'dist\web_MVS_v%REL%.zip' -Force" || exit /b 1
+powershell -NoProfile -Command "Compress-Archive -Path 'dist\web_MVS\*' -DestinationPath 'dist\web_MVS_v%VER_main%.zip' -Force" || exit /b 1
 
+:services
+rem Services are packed every time (cheap): the manifest step compares their content with the previous release and stops if the code
+rem changed but the version was not raised. Archives of unchanged services are then dropped from dist\ and are not published.
 rem service versions come from component_versions.json (not from VERSION): write them into the service folders before packing
 python scripts\make_manifest.py --write-versions || (echo [build] write-versions FAILED & exit /b 1)
 echo [build] Packing CV add-on (cv_service, code only) ...
-powershell -NoProfile -Command "$f=Get-ChildItem 'cv_service' -Recurse -File | Where-Object { $_.FullName -notmatch '\\\.venv\\' -and $_.FullName -notmatch '\\model\\' -and $_.FullName -notmatch '__pycache__' -and $_.Name -notlike 'service.log*' }; Compress-Archive -Path $f.FullName -DestinationPath 'dist\cv_service_v%REL%.zip' -Force" || exit /b 1
+powershell -NoProfile -Command "$f=Get-ChildItem 'cv_service' -Recurse -File | Where-Object { $_.FullName -notmatch '\\\.venv\\' -and $_.FullName -notmatch '\\model\\' -and $_.FullName -notmatch '__pycache__' -and $_.Name -notlike 'service.log*' }; Compress-Archive -Path $f.FullName -DestinationPath 'dist\cv_service_v%VER_cv%.zip' -Force" || exit /b 1
 
 rem top-level items, not a flat file list: assets\ must keep its folder in the zip
 echo [build] Packing video add-on (video_service, code only) ...
-powershell -NoProfile -Command "$f=Get-ChildItem 'video_service' | Where-Object { $_.Name -notin @('.venv','venv','video','__pycache__') -and $_.Name -notlike 'service.log*' }; Compress-Archive -Path $f.FullName -DestinationPath 'dist\video_service_v%REL%.zip' -Force" || exit /b 1
+powershell -NoProfile -Command "$f=Get-ChildItem 'video_service' | Where-Object { $_.Name -notin @('.venv','venv','video','__pycache__') -and $_.Name -notlike 'service.log*' }; Compress-Archive -Path $f.FullName -DestinationPath 'dist\video_service_v%VER_video%.zip' -Force" || exit /b 1
 
 rem same: top-level items; data\ (camera settings) and .venv must never go into the zip
 echo [build] Packing motion add-on (motion_service, code only) ...
-powershell -NoProfile -Command "$f=Get-ChildItem 'motion_service' | Where-Object { $_.Name -notin @('.venv','venv','data','__pycache__','tests') -and $_.Name -notlike 'service.log*' }; Compress-Archive -Path $f.FullName -DestinationPath 'dist\motion_service_v%REL%.zip' -Force" || exit /b 1
+powershell -NoProfile -Command "$f=Get-ChildItem 'motion_service' | Where-Object { $_.Name -notin @('.venv','venv','data','__pycache__','tests') -and $_.Name -notlike 'service.log*' }; Compress-Archive -Path $f.FullName -DestinationPath 'dist\motion_service_v%VER_motion%.zip' -Force" || exit /b 1
 
 rem same: top-level items; .venv, model\ (uploaded YOLO models) and logs must never go into the zip
 echo [build] Packing level add-on (level_service, code only) ...
-powershell -NoProfile -Command "$f=Get-ChildItem 'level_service' | Where-Object { $_.Name -notin @('.venv','venv','model','__pycache__','bench_ov','bench_result.txt') -and $_.Name -notlike 'service.log*' }; Compress-Archive -Path $f.FullName -DestinationPath 'dist\level_service_v%REL%.zip' -Force" || exit /b 1
+powershell -NoProfile -Command "$f=Get-ChildItem 'level_service' | Where-Object { $_.Name -notin @('.venv','venv','model','__pycache__','bench_ov','bench_result.txt') -and $_.Name -notlike 'service.log*' }; Compress-Archive -Path $f.FullName -DestinationPath 'dist\level_service_v%VER_level%.zip' -Force" || exit /b 1
 
-echo.
-echo [build] Done:
-echo         dist\web_MVS_v%REL%.zip      (основное приложение, для всех)
-echo         dist\cv_service_v%REL%.zip   (CV-модуль, докачивается UpdaterCV.bat на микроскопных машинах)
-echo         dist\video_service_v%REL%.zip (video add-on, fetched by UpdaterVideo.bat on microscope machines)
-echo         dist\motion_service_v%REL%.zip (motion add-on, fetched by UpdaterMotion.bat on plant machines)
-echo         dist\level_service_v%REL%.zip (level add-on, YOLO + torch, fetched by UpdaterLevel.bat or the update menu)
-rem manifest: per-component versions + check that a changed service got a new version (needs the previous release manifest, fetched via gh)
-if exist "dist\prev_components.json" del /q "dist\prev_components.json"
-gh release download --pattern components.json --output "dist\prev_components.json" --clobber >nul 2>&1
+rem manifest: per-component versions (+ tag/asset: which release holds each archive), check that a changed service got a new version, list of files to publish
 python scripts\make_manifest.py --dist dist --prev "dist\prev_components.json" || (echo [build] MANIFEST CHECK FAILED & exit /b 1)
-echo         dist\components.json          (versions of each component: clients update only what changed)
+echo.
+echo [build] Done. Release v%REL% will publish only the changed components:
+type "dist\release_files.txt"
+echo [build] (components.json lists the version and the release of every component: clients update only what is behind)
 if /i "%~1"=="nopush" (
     echo [build] nopush: release not published. Publish later with release.bat
     endlocal

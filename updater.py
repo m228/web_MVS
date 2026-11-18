@@ -145,6 +145,7 @@ def _fetch_latest_meta(max_age: float = 0.0):
                 manifest = parse_manifest(json.loads(mresp.read().decode("utf-8-sig")))
         except Exception as exc:
             log_event("updater.check", "Манифест релиза не прочитан — версии по тегу", "warn", {"error": str(exc)})
+    asset = _main_asset(manifest, asset)
     _latest_extra.update(published_at=str(data.get("published_at") or ""), manifest=manifest)
     meta = (data.get("tag_name") or "", asset, data.get("body") or "")
     _meta_cache = (time.time(), meta)
@@ -166,7 +167,42 @@ def parse_manifest(data):
             comps[str(key)] = ver
     if "main" not in comps:
         return None
-    return {"release": _norm(str(data.get("release") or "")), "components": comps}
+    out = {"release": _norm(str(data.get("release") or "")), "components": comps}
+    where = {}                                                # частичные релизы: в каком релизе (tag) лежит актуальный архив (asset) компонента
+    for key, val in data["components"].items():
+        if key in comps and isinstance(val, dict) and val.get("tag") and val.get("asset"):
+            where[str(key)] = {"tag": str(val["tag"]), "asset": str(val["asset"])}
+    if where:
+        out["assets"] = where
+    return out
+
+
+def release_asset(tag: str, name: str):
+    """Архив name из релиза tag (GitHub API releases/tags/<tag>) или None: для компонентов, чей архив остался в одном из прошлых релизов."""
+    try:
+        req = urllib.request.Request(f"https://api.github.com/repos/{REPO}/releases/tags/{tag}", headers={
+            "User-Agent": "web_MVS-update", "Accept": "application/vnd.github+json"})
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+    except Exception as exc:
+        log_event("updater.check", "Релиз %s с архивом %s не открылся" % (tag, name), "warn", {"error": str(exc)})
+        return None
+    for item in data.get("assets", []):
+        if item.get("name") == name:
+            return item
+    log_event("updater.check", "В релизе %s нет архива %s" % (tag, name), "warn")
+    return None
+
+
+def _main_asset(manifest, asset):
+    """Архив основного приложения по манифесту: в частичном релизе его может не быть среди файлов последнего релиза — тогда он в том, что
+    указан в манифесте. Лишний запрос — только когда приложение в манифесте новее установленного (иначе обновлять нечего)."""
+    ent = ((manifest or {}).get("assets") or {}).get("main")
+    if not ent or (asset is not None and asset.get("name") == ent["asset"]):
+        return asset
+    if _version_tuple(manifest["components"]["main"]) <= _version_tuple(read_version()):
+        return asset
+    return release_asset(ent["tag"], ent["asset"]) or asset
 
 
 def _component_version(key: str, tag: str) -> str:

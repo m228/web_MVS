@@ -3505,6 +3505,8 @@ input.micro-cam-num { width: 56px; min-width: 0; flex: 0 0 auto; padding: 4px 5p
 .micro-cycle-step { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .micro-cycle-badge { font-size: 0.72em; font-weight: 700; letter-spacing: .02em; text-transform: uppercase; color: var(--accent); background: var(--accent-soft); border-radius: 6px; padding: 3px 8px; white-space: nowrap; }
 .micro-cycle-step b { font-size: 1.02em; }
+.micro-fault-clear { padding: 4px 12px; font-size: 13px; }       /* «Сбросить аварию» рядом с красной подписью */
+.micro-fault-clear[hidden] { display: none; }
 .micro-cycle-tiles { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; margin-top: 10px; }
 .micro-cycle-tiles .micro-tile { background: var(--surface-elevated); }
 .micro-cycle-hint { margin: 10px 0 0; font-size: 0.82em; color: var(--muted); }

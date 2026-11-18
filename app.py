@@ -646,6 +646,14 @@ def micro_clear_fault():
     return res
 
 
+@app.get("/api/micro/fault_guard")
+def micro_fault_guard(m1_timeouts: int):
+    # Авария, если М1 столько раз подряд не доехал за таймаут шага цикла (0 — выкл.)
+    res = micro.set_fault_guard(m1_timeouts)
+    api_log("api.micro.fault_guard", "Порог аварии по таймаутам М1", payload=res)
+    return res
+
+
 @app.get("/api/micro/autocal")
 def micro_autocal(enabled: int | None = None, every_n: int | None = None,
                   sensor_lo: int | None = None, sensor_hi: int | None = None,

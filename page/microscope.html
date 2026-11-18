@@ -263,6 +263,7 @@
                   <div class="micro-cycle-step">
                     <span class="micro-cycle-badge" id="cycStepBadge">Ожидание</span>
                     <b id="cycLabel">—</b>
+                    <button type="button" id="faClearFault" class="toolbar-btn toolbar-btn--danger micro-fault-clear" hidden title="Снять Аварию. «Автомат» останется выключен — проверьте М1 и включите его сами">Сбросить аварию</button>
                   </div>
                   <p class="micro-ac-fail" id="cycAcFail" hidden><span class="micro-ac-fail__txt">⚠ Автокалибровка не удалась — работаем дальше</span> <button type="button" class="micro-ac-fail__clear" data-ac-clear title="Убрать плашку (итог и журнал остаются)">сбросить</button></p>
                   <div class="micro-cycle-tiles">
@@ -425,6 +426,9 @@
                   <p class="micro-plc-note">Закрашен — блокировка <b>отключена</b>. В норме все пусты (все блокировки работают). Наведи на квадратик — название; клик — переключить (запись в плату, с подтверждением).</p>
                 </div>
                 <p class="micro-plc-note">Стоп М1, фильтр датчика и довод — в прошивке платы. Текущий порог Стоп М1 в плате: <b id="sStopSensor">—</b> мкм.</p>
+                <div class="micro-lock__fields">
+                  <label title="Ход М1 в цикле (отвод, подвод, возврат) столько раз ПОДРЯД не уложился в таймаут шага — Авария: цикл стоп, «Автомат» выключается, тревога в Telegram. Нормальный доезд обнуляет счёт. 0 — защита выключена."><span>Авария после N таймаутов М1</span><input type="number" id="faM1Timeouts" step="1" min="0" max="20" value="3" /></label>
+                </div>
 
                 <div class="micro-sub__title micro-sub__title--sep">Автокалибровка нуля М1 <span class="micro-ro">сама — в Автомате на пропарке; кнопкой — и из Ручного (потом ручной вернётся)</span></div>
                 <label class="micro-check" title="На пропарке раз в N варок (как только автомат свободен): «Поиск 0» → жду, пока мотор сам встанет (ноль ставит прошивка) → отвод → сверяю датчик с энкодером и расчётной (±100 мкм). Не сошлось — «Поиск 0» ещё раз (до 3 раз). Всё равно не сошлось — красная мигающая плашка с причиной. Журнал — autocal.log.">

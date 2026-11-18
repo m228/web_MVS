@@ -299,6 +299,13 @@ const mvBlueAngle = (red) => (Number(red) + 180) % 360;
 const MV_ROD_RED = '#ef4444';
 const MV_ROD_BLUE = '#38bdf8';
 
+// чем держится угол вала: какие половины палки сейчас видны. Сервер без src (старый) — считаем, что обе.
+// both — обе, red — только красная, blue — только синяя, hold — не видно (угол по скорости)
+function mvRodUse(lz) {
+  const s = lz && lz.src;
+  return { red: s !== 'blue', blue: s !== 'red' };
+}
+
 // зона-цикл: окружность поиска вокруг оси вала и палка — красный конец на найденном угле, синий напротив
 function drawCycleOnTile(ctx, z, cam, g, lz, mode) {
   const fs = cam.frame_size || [g.nw, g.nh];
@@ -310,18 +317,22 @@ function drawCycleOnTile(ctx, z, cam, g, lz, mode) {
   const a = (lz.angle * Math.PI) / 180, dx = Math.sin(a) * r, dy = -Math.cos(a) * r;
   ctx.lineWidth = 3;
   if (lz.coast) ctx.setLineDash([6, 5]);                   // палки не видно — угол держится по скорости вращения (пунктир)
+  const use = mvRodUse(lz);                                  // половина, которой угол не держится, бледнее — видно, на чём стоит стрелка
+  ctx.globalAlpha = use.red ? 1 : 0.3;
   ctx.strokeStyle = MV_ROD_RED; ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(cx + dx, cy + dy); ctx.stroke();
+  ctx.globalAlpha = use.blue ? 1 : 0.3;
   ctx.strokeStyle = MV_ROD_BLUE; ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(cx - dx, cy - dy); ctx.stroke();
-  ctx.setLineDash([]);
+  ctx.globalAlpha = 1; ctx.setLineDash([]);
   // подпись под окружностью: вал со значком направления, ниже значения красного и синего концов (0–360° от вертикали по часовой)
   const x = cx - r * 0.55, y = cy + r + 16;
   const sh = typeof shShaftOf === 'function' ? shShaftOf(cam.id, z.id) : null;          // вал назначен рядом камеры: НЛВ… и скорость
   const rpmTxt = sh && lz.valid ? '  ' + Math.abs(lz.rpm).toFixed(1) + ' об/мин' : '';
   [[(sh ? sh.short : z.name) + '  ' + mvDirIcon(lz.rpm) + rpmTxt + (lz.coast ? '  ~' : ''), '#fff'], ['красный ' + Number(lz.angle).toFixed(1) + '°', MV_ROD_RED], ['синий ' + mvBlueAngle(lz.angle).toFixed(1) + '°', MV_ROD_BLUE]].forEach(([txt, col], i) => {
+    ctx.globalAlpha = i === 1 && !use.red || i === 2 && !use.blue ? 0.45 : 1;      // строка половины, по которой угол не считается, бледнее
     ctx.lineWidth = 3; ctx.strokeStyle = '#000'; ctx.strokeText(txt, x, y + i * 17);
     ctx.fillStyle = col; ctx.fillText(txt, x, y + i * 17);
   });
-  ctx.lineWidth = 2;
+  ctx.globalAlpha = 1; ctx.lineWidth = 2;
 }
 
 function drawAllMotionTiles() {

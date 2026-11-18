@@ -670,9 +670,16 @@ function mdRodAnglesHtml(z) {
   return `<span style="color:${MV_ROD_RED}">красный <b>${Number(z.angle).toFixed(1)}°</b></span> · <span style="color:${MV_ROD_BLUE}">синий <b>${mvBlueAngle(z.angle).toFixed(1)}°</b></span> · <b title="Скорость вращения вала">${speed}</b> <span title="Направление вращения: ↻ по часовой, ↺ против, ■ стоит">${mvDirIcon(z.rpm)}</span>`;
 }
 
+// чем держится угол: показываем только когда видна одна половина палки (обе видны — это норма)
+function mdRodSrcHtml(z) {
+  const t = z.src === 'red' ? 'только красная половина' : z.src === 'blue' ? 'только синяя половина' : '';
+  const col = z.src === 'red' ? MV_ROD_RED : MV_ROD_BLUE;
+  return t ? ` · <span style="color:${col}" title="Вторая половина палки сейчас не видна, угол считается по этой">${t}</span>` : '';
+}
+
 function mdZoneStatHtml(z, cur, st) {
   if (z.type === 'cycle') {
-    return cur && cur.valid ? `${mdRodAnglesHtml(cur)} · ${cur.coast ? '<span title="Палки не видно (переход по тёмному, блик): угол держится по скорости вращения до coast_s секунд">не видно, держу по скорости</span>' : 'уверенность ' + Number(cur.conf).toFixed(2)}` : 'палка не найдена';
+    return cur && cur.valid ? `${mdRodAnglesHtml(cur)} · ${cur.coast ? '<span title="Палки не видно (переход по тёмному, блик): угол держится по скорости вращения до coast_s секунд">не видно, держу по скорости</span>' : 'уверенность ' + Number(cur.conf).toFixed(2) + mdRodSrcHtml(cur)}` : 'палка не найдена';
   }
   const row = (m) => {
     const c = cur ? mdNumFmt(Number(cur[m])) : '–';

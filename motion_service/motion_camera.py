@@ -312,6 +312,15 @@ class CameraWorker(threading.Thread):
         ok, buf = cv2.imencode(".jpg", cyc.mask_preview(f, red, blue, max_w), [cv2.IMWRITE_JPEG_QUALITY, 85])
         return buf.tobytes() if ok else None
 
+    def autocal_frame(self) -> tuple:
+        """(цветной кадр, метка его прихода) для записи подгонки валов. (None, 0.0) — кадра нет, он старше 5 с или камера застыла/мертва.
+        Кадр после приёма не меняется (воркер кладёт новый массив), так что резать вырез можно без копии всего кадра."""
+        with self._lock:
+            f, st, stamp = self._frame, self._state, self._last_good
+        if f is None or f.ndim != 3 or (st is not None and not st.get("alive")) or time.time() - stamp > 5.0:
+            return None, 0.0
+        return f, stamp
+
     def mirror_samples(self, zone_ids: list, mode: str = "mirror") -> list:
         """[(θ1, θ1±θ2)] по кадрам в норме, где найдены обе палки — из покадровой истории (последние ~5 мин). Для таблицы поправки зеркальности.
         Берём именно покадровую историю, а не секундную: там берётся максимум за секунду, а он у вращающихся навстречу палок смещён."""

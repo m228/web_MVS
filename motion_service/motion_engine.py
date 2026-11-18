@@ -881,13 +881,19 @@ class CycleRT:
 
     def step(self, frame: Optional[np.ndarray], now: float = 0.0) -> bool:
         """Новый цветной кадр (now — его время, с) → угол и обороты. True, если палка найдена на этом кадре."""
+        if frame is not None and frame.ndim == 3:
+            red, blue = self._liks(frame[self.y0:self.y1, self.x0:self.x1])   # маски — в родном разрешении, сжатие внутри
+            return self.step_profiles(red[self.ys, self.xs].mean(axis=1), blue[self.ys, self.xs].mean(axis=1), now)
+        return self.step_profiles(None, None, now)
+
+    def step_profiles(self, sr: Optional[np.ndarray], sb: Optional[np.ndarray], now: float = 0.0) -> bool:
+        """То же по готовым профилям лучей: sr/sb — доля красных/синих точек на луче φ (360 чисел, φ = 0..359); None — кадра нет.
+        Вынесено из step: автоподгонка (motion_autocal) гоняет этот же боевой разбор по профилям, посчитанным для разных цветов и осей."""
         c = self.cfg
         found = False
         dt = now - self.last_t
         locked = self.last is not None and dt <= c["coast_s"]
-        if frame is not None and frame.ndim == 3:
-            red, blue = self._liks(frame[self.y0:self.y1, self.x0:self.x1])   # маски — в родном разрешении, сжатие внутри
-            sr, sb = red[self.ys, self.xs].mean(axis=1), blue[self.ys, self.xs].mean(axis=1)
+        if sr is not None and sb is not None:
             comb = sr + c["blue_w"] * np.roll(sb, -180)                    # красный на φ, синий на φ+180
             cand = comb
             if not locked and self.bans:                                   # ложная неподвижная цель (рамка, лист): при поиске по кругу её как будто нет

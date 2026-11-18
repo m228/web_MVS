@@ -356,16 +356,18 @@ def test_update_ps1_installs_level_service_heavy_first_install_needs_yes(tmp_pat
 
 
 def test_build_and_release_scripts_ship_level_service():
-    """build.bat собирает архив level_service и кладёт UpdaterLevel в бандл, release.bat без него не публикует (его нет в релизе — сайдкар не скачается)."""
+    """build.bat собирает архив level_service (по его версии) и кладёт UpdaterLevel в бандл; release.bat выкладывает ровно то, что build.bat записал
+    в dist\\release_files.txt (частичный релиз: только изменившиеся компоненты + components.json)."""
     build = (ROOT / "build.bat").read_text(encoding="utf-8", errors="replace")
     rel = (ROOT / "release.bat").read_text(encoding="utf-8", errors="replace")
-    assert "dist\\level_service_v%REL%.zip" in build and "UpdaterLevel.bat" in build and "UpdaterLevel.ps1" in build
-    assert "level_service_v%REL%.zip" in rel and rel.count("%ZIP5%") >= 4, "release.bat проверяет и публикует пятый архив"
-    for z in ("web_MVS", "cv_service", "video_service", "motion_service", "level_service"):
-        assert "dist\\%s_v%%REL%%.zip" % z in rel, z
+    assert "dist\\level_service_v%VER_level%.zip" in build and "UpdaterLevel.bat" in build and "UpdaterLevel.ps1" in build
+    for z, ver in (("web_MVS", "main"), ("cv_service", "cv"), ("video_service", "video"), ("motion_service", "motion"), ("level_service", "level")):
+        assert "dist\\%s_v%%VER_%s%%.zip" % (z, ver) in build, "архив назван по версии компонента: " + z
     assert "make_manifest.py --write-versions" in build and "make_manifest.py --dist dist" in build, "версии сервисов и манифест — из make_manifest"
+    assert "make_manifest.py --plan" in build and 'if "%BUILD_main%"=="0"' in build, "приложение не менялось — PyInstaller не запускается"
     assert 'copy /Y VERSION "' not in build.replace('copy /Y VERSION "dist', ""), "версия сервисов больше не копируется из главного VERSION"
-    assert "%MANIFEST%" in rel and rel.count("%MANIFEST%") >= 3, "release.bat проверяет и публикует components.json"
+    assert "release_files.txt" in rel and "--notes-file" in rel and "!FILES!" in rel, "release.bat публикует список из release_files.txt"
+    assert "%ZIP" not in rel, "жёсткого списка из пяти архивов больше нет"
     for f in ("UpdaterLevel.bat", "UpdaterLevel.ps1"):
         assert (ROOT / f).is_file()
     ps1 = (ROOT / "UpdaterLevel.ps1").read_text(encoding="ascii")

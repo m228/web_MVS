@@ -145,8 +145,12 @@ def _fetch_latest_meta(max_age: float = 0.0):
                 manifest = parse_manifest(json.loads(mresp.read().decode("utf-8-sig")))
         except Exception as exc:
             log_event("updater.check", "Манифест релиза не прочитан — версии по тегу", "warn", {"error": str(exc)})
+    asset = _main_asset(manifest, asset)
     _latest_extra.update(published_at=str(data.get("published_at") or ""), manifest=manifest)
-    meta = (data.get("tag_name") or "", asset, data.get("body") or "")
+    body = data.get("body") or ""
+    if _latest_extra.get("main_notes"):                      # приложение выходило раньше последнего (частичного) релиза: его заметки и [urgent] тоже считаются
+        body = (body + "\n\n" + _latest_extra["main_notes"]).strip()
+    meta = (data.get("tag_name") or "", asset, body)
     _meta_cache = (time.time(), meta)
     return meta
 
@@ -166,7 +170,64 @@ def parse_manifest(data):
             comps[str(key)] = ver
     if "main" not in comps:
         return None
-    return {"release": _norm(str(data.get("release") or "")), "components": comps}
+    out = {"release": _norm(str(data.get("release") or "")), "components": comps}
+    where = {}                                                # частичные релизы: в каком релизе (tag) лежит актуальный архив (asset) компонента
+    for key, val in data["components"].items():
+        if key in comps and isinstance(val, dict) and val.get("tag") and val.get("asset"):
+            where[str(key)] = {"tag": str(val["tag"]), "asset": str(val["asset"])}
+    if where:
+        out["assets"] = where
+    return out
+
+
+_tag_cache = {}                 # tag -> (время, ответ GitHub или None): проверка раз в 30 мин не должна по 15 с стучаться в один и тот же релиз
+TAG_CACHE_OK_S, TAG_CACHE_FAIL_S = 600, 120
+
+
+def _release_by_tag(tag: str):
+    """Ответ GitHub API releases/tags/<tag> (с короткой памятью, в том числе о неудаче) или None, если релиз не открылся."""
+    now = time.time()
+    hit = _tag_cache.get(tag)
+    if hit and now - hit[0] < (TAG_CACHE_OK_S if hit[1] is not None else TAG_CACHE_FAIL_S):
+        return hit[1]
+    data = None
+    try:
+        req = urllib.request.Request(f"https://api.github.com/repos/{REPO}/releases/tags/{tag}", headers={
+            "User-Agent": "web_MVS-update", "Accept": "application/vnd.github+json"})
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+    except Exception as exc:
+        log_event("updater.check", "Релиз %s не открылся" % tag, "warn", {"error": str(exc)})
+    _tag_cache[tag] = (now, data)
+    return data
+
+
+def release_asset(tag: str, name: str):
+    """Архив name из релиза tag или None: для компонентов, чей архив остался в одном из прошлых релизов."""
+    data = _release_by_tag(tag)
+    if data is None:
+        return None
+    for item in data.get("assets", []):
+        if item.get("name") == name:
+            return item
+    log_event("updater.check", "В релизе %s нет архива %s" % (tag, name), "warn")
+    return None
+
+
+def _main_asset(manifest, asset):
+    """Архив основного приложения по манифесту: в частичном релизе его может не быть среди файлов последнего релиза — тогда он в том, что
+    указан в манифесте. Лишний запрос — только когда приложение в манифесте новее установленного (иначе обновлять нечего).
+    Текст того релиза (там может быть [urgent] для приложения) кладём в _latest_extra["main_notes"]."""
+    _latest_extra["main_notes"] = ""
+    ent = ((manifest or {}).get("assets") or {}).get("main")
+    if not ent or (asset is not None and asset.get("name") == ent["asset"]):
+        return asset
+    if _version_tuple(manifest["components"]["main"]) <= _version_tuple(read_version()):
+        return asset
+    found = release_asset(ent["tag"], ent["asset"])
+    if found is not None:
+        _latest_extra["main_notes"] = str((_release_by_tag(ent["tag"]) or {}).get("body") or "")
+    return found or asset
 
 
 def _component_version(key: str, tag: str) -> str:
@@ -234,6 +295,7 @@ def check_latest(quiet: bool = False):
         "latest": latest or None,
         "update_available": available,
         "has_asset": asset is not None,
+        "asset_missing": asset is None and _version_tuple(latest) > _version_tuple(current),   # по манифесту приложение новее, но архив не нашёлся (нет связи с релизом?)
         "notes": notes,
         "staged": staged or None,              # версия, уже скачанная и готовая к перезапуску
         "downloading": downloading,            # скачивание идёт прямо сейчас (страницу могли перезагрузить)

@@ -369,12 +369,14 @@ function Invoke-Update {
         Log 'смотрю последний релиз на GitHub...'
         try {
             $rel = Invoke-WithRetry { Invoke-RestMethod -Uri "https://api.github.com/repos/$repo/releases/latest" -Headers @{ 'User-Agent' = 'web_MVS-update' } -UseBasicParsing }
-            $asset = $rel.assets | Where-Object { $_.name -like 'web_MVS_*.zip' } | Select-Object -First 1
-            if (-not $asset) { throw 'в последнем релизе нет файла web_MVS_*.zip' }
             $latest = ([string]$rel.tag_name).Trim().TrimStart('v', 'V')
             $script:relCache = $rel; $script:relTried = $true      # тот же ответ GitHub пригодится дополнениям
             $mv = Get-ManifestVersion 'main'                        # версия приложения по манифесту релиза; без манифеста — тег
             if ($mv) { $latest = $mv }
+            elseif (-not ($rel.assets | Where-Object { $_.name -like 'web_MVS_*.zip' })) {
+                # релиз частичный (приложения в нём нет), а манифест не прочитался: версию приложения по тегу не определить
+                throw 'в последнем релизе нет web_MVS_*.zip, а components.json не прочитан — версию приложения определить нельзя'
+            }
         } catch {
             Log 'последняя версия: NaN (не удалось определить)' 'Yellow'
             Log ("причина: " + $_.Exception.Message) 'Yellow'
@@ -401,6 +403,8 @@ function Invoke-Update {
 
     # --- скачать и проверить ---
     if (-not $zipFile) {
+        $asset = Get-ComponentAsset (Get-ComponentDef 'main')       # архив приложения: по манифесту (может лежать в одном из прошлых релизов), иначе по маске в последнем
+        if (-not $asset) { throw 'не нашёл архив web_MVS_*.zip ни в последнем релизе, ни в релизе из манифеста' }
         $zipFile = Join-Path $tmp $asset.name
         Log ("скачиваю {0} ({1:N1} МБ)..." -f $asset.name, ($asset.size / 1MB))
         Save-Download $asset.browser_download_url $zipFile ([int64]$asset.size) (Get-AssetSha $asset)
@@ -617,6 +621,36 @@ function Get-ManifestVersion([string]$key) {
     return $null
 }
 
+$script:tagRelCache = @{}
+function Get-ComponentAsset($d) {
+    # архив компонента. Релизы частичные: у каждого компонента в манифесте есть tag и asset — в каком релизе лежит его актуальный архив
+    # (не обязательно в последнем). Нет записи в манифесте (старый релиз) — по маске имени в последнем релизе. $null — архива не нашли
+    $rel = Get-Release
+    $m = Get-Manifest
+    $c = $null
+    if ($m -and $m.components) { $c = $m.components.($d.Key) }
+    if ($c -and $c.tag -and $c.asset) {
+        $tag = [string]$c.tag
+        $name = [string]$c.asset
+        $r = $null
+        if ($rel -and ([string]$rel.tag_name) -eq $tag) { $r = $rel }
+        else {
+            if (-not $script:tagRelCache.ContainsKey($tag)) {
+                try { $script:tagRelCache[$tag] = Invoke-WithRetry { Invoke-RestMethod -Uri "https://api.github.com/repos/$repo/releases/tags/$tag" -Headers @{ 'User-Agent' = 'web_MVS-update' } -UseBasicParsing } }
+                catch { $script:tagRelCache[$tag] = $null; Log ("релиз $tag недоступен: " + $_.Exception.Message) 'Yellow' }
+            }
+            $r = $script:tagRelCache[$tag]
+        }
+        if ($r) {
+            $a = $r.assets | Where-Object { $_.name -eq $name } | Select-Object -First 1
+            if ($a) { return $a }
+        }
+        Log ("архив $name в релизе $tag не найден — ищу по маске в последнем релизе") 'Yellow'
+    }
+    if ($rel) { return ($rel.assets | Where-Object { $_.name -like $d.Asset } | Select-Object -First 1) }
+    return $null
+}
+
 function Get-ZipDirVersion([string]$zip) {
     # версия внутри архива: у основного приложения _internal/VERSION, у дополнений VERSION
     Add-Type -AssemblyName System.IO.Compression.FileSystem
@@ -742,8 +776,6 @@ function Update-Addon($d) {
         else {
             $rel = Get-Release
             if (-not $rel) { throw 'не удалось получить релиз GitHub (нет связи?). Скачайте архивы на другом компьютере и запустите с -ZipDir <папка>' }
-            $asset = $rel.assets | Where-Object { $_.name -like $d.Asset } | Select-Object -First 1
-            if (-not $asset) { throw "в последнем релизе нет файла $($d.Asset)" }
             $latest = ([string]$rel.tag_name).Trim().TrimStart('v', 'V')
             $mv = Get-ManifestVersion $d.Key            # у каждого компонента своя версия (манифест релиза); без манифеста — тег
             if ($mv) { $latest = $mv }
@@ -766,6 +798,8 @@ function Update-Addon($d) {
 
         # --- скачать и проверить ---
         if (-not $zip) {
+            $asset = Get-ComponentAsset $d                  # по манифесту (tag/asset — в каком релизе лежит архив), иначе по маске в последнем релизе
+            if (-not $asset) { throw "не нашёл архив $($d.Asset) ни в последнем релизе, ни в релизе из манифеста" }
             $zip = Join-Path $tmp $asset.name
             Log ("скачиваю {0} ({1:N1} МБ)..." -f $asset.name, ($asset.size / 1MB))
             Save-Download $asset.browser_download_url $zip ([int64]$asset.size) (Get-AssetSha $asset)

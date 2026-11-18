@@ -300,6 +300,18 @@ class CameraWorker(threading.Thread):
         ok, buf = cv2.imencode(".jpg", f, [cv2.IMWRITE_JPEG_QUALITY, 80])
         return (buf.tobytes(), (w, h)) if ok else None
 
+    def rod_mask_jpeg(self, zone_id: str, red=None, blue=None, max_w: int = 640) -> Optional[bytes]:
+        """JPEG «что видит детектор» по зоне-циклу с пробными порогами цвета (None — кадра ещё нет). ValueError — нет такой зоны."""
+        cyc = self.engine.cycles.get(zone_id)
+        if cyc is None:
+            raise ValueError("нет зоны-цикла «%s» у камеры" % zone_id)
+        with self._lock:
+            f = self._frame
+        if f is None or f.ndim != 3:
+            return None
+        ok, buf = cv2.imencode(".jpg", cyc.mask_preview(f, red, blue, max_w), [cv2.IMWRITE_JPEG_QUALITY, 85])
+        return buf.tobytes() if ok else None
+
     def mirror_samples(self, zone_ids: list, mode: str = "mirror") -> list:
         """[(θ1, θ1±θ2)] по кадрам в норме, где найдены обе палки — из покадровой истории (последние ~5 мин). Для таблицы поправки зеркальности.
         Берём именно покадровую историю, а не секундную: там берётся максимум за секунду, а он у вращающихся навстречу палок смещён."""

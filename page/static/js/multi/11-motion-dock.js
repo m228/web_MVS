@@ -558,6 +558,22 @@ function mdOnZone(t, cam) {
   const i = Number(t.dataset.i), f = t.dataset.f, z = cam.zones[i];
   if (!z) return;
   if (mdOnLearn(t, cam, z)) return;
+  if (f === 'hsvreset') {
+    mdEdit(() => { z.red_hsv = SH_RED_DEF.slice(); z.blue_hsv = SH_BLUE_DEF.slice(); }, true);
+    return;
+  }
+  if (f === 'hsv') {                                              // пороги цвета палки (вкладка «Валы»): H/S/V красной и синей половин
+    const w = t.dataset.w, k = Number(t.dataset.k);
+    let fixed = false;
+    mdEdit(() => {
+      const arr = shHsvOf(z, w).slice();
+      arr[k] = Math.max(0, Math.min(k < 2 ? 179 : 255, parseInt(t.value, 10) || 0));
+      if (w === 'blue' && arr[0] > arr[1]) { if (k === 0) arr[1] = arr[0]; else arr[0] = arr[1]; fixed = true; }   // у синего нижняя граница не выше верхней
+      z[w + '_hsv'] = arr;
+    }, false);
+    if (fixed) { MD.key = ''; renderMotionDock(); }
+    return;
+  }
   if (f === 'del') {
     if (!confirm('Удалить зону «' + z.name + '»?')) return;
     mdEdit(() => {
@@ -1730,6 +1746,7 @@ function initMotionDock() {
     else if (kind === 'cs') mdSetEnabled(t.dataset.serial, t.checked, () => { t.checked = !t.checked; });
   };
   body?.addEventListener('change', (e) => { if (e.target.tagName !== 'BUTTON') dispatch(e); });
+  body?.addEventListener('input', (e) => { if (e.target.dataset && e.target.dataset.f === 'hsv' && typeof shOnSlide === 'function') shOnSlide(e.target); });
   body?.addEventListener('click', (e) => { if (e.target.tagName === 'BUTTON' && e.target.dataset.md) dispatch(e); });
   body?.addEventListener('change', (e) => {
     if (e.target.id === 'geType') mdSyncGroupEditor();

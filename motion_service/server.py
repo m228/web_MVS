@@ -10,6 +10,8 @@
   GET  /state                     — состояние всех камер (биты зон, метрики flow/diff, группы, ПЛК) и сценариев записи.
   GET  /cameras/{id}/state        — то же по одной камере.
   GET  /cameras/{id}/snapshot     — последний кадр JPEG (?w=1280 — уменьшить; заголовки X-Frame-W/H — размер оригинала).
+  GET  /cameras/{id}/rod_mask     — что видит детектор палки: кадр вокруг оси зоны-цикла с масками красной/синей половин
+                                    (?zone=id&red=H1,H2,S,V&blue=H1,H2,S,V — пробные пороги цвета; пусто — настроенные; ?w=640).
   GET  /cameras/{id}/level_shot   — снимок для графика уровня, ближайший к моменту (?group=lvl&ts=unix-секунды; &dir=-1/1 — соседний
                                     раньше/позже; X-Shot-Ts — его время).
   GET  /cameras/{id}/level_shots  — снимки уровня с разметкой кадра (?group=lvl&since=unix — только новее): {"shots": [{ts, meta}]}.
@@ -376,6 +378,20 @@ def create_app(data_dir: Optional[Path] = None, capture_factory: Callable = open
         data, (fw, fh) = r
         return Response(content=data, media_type="image/jpeg",
                         headers={"X-Frame-W": str(fw), "X-Frame-H": str(fh), "Cache-Control": "no-store"})
+
+    @app.get("/cameras/{cid}/rod_mask")
+    def rod_mask(cid: str, zone: str, red: str = "", blue: str = "", w: int = 640):
+        """Что видит детектор палки: кадр вокруг оси с масками красной и синей половин. red/blue — пробные пороги «H1,H2,S,V» (пусто — настроенные)."""
+        def hsv(txt, default, name, pair_ok):
+            return None if not txt.strip() else engine._hsv4([float(x) for x in txt.split(",")], default, name, pair_ok)
+        try:
+            r, b = hsv(red, None, "red", True), hsv(blue, None, "blue", False)
+            data = mgr.worker(cid).rod_mask_jpeg(zone, r, b, max(160, min(int(w), 1600)))
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+        if data is None:
+            raise HTTPException(404, "кадра ещё нет (камера не подключилась)")
+        return Response(content=data, media_type="image/jpeg", headers={"Cache-Control": "no-store"})
 
     @app.get("/cameras/{cid}/level_shot")
     def level_shot(cid: str, group: str, ts: float, dir: int = 0):      # noqa: A002 — имя параметра в адресе

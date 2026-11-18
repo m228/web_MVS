@@ -28,6 +28,82 @@ function shPairsOfCamera(camId) {
   return SH_PAIRS.map((id) => s.pairs[id]).filter((p) => p && (s.shafts[p.a].camera === camId || s.shafts[p.b].camera === camId));
 }
 
+// ---- цвета палок: пороги красной и синей половин по каждому валу + превью того, что попадает в маску ----
+const SH_RED_DEF = [16, 165, 50, 55];
+const SH_BLUE_DEF = [82, 135, 55, 60];
+const SH_HSV_FIELDS = {
+  red: [['оттенок до', 179, 'Красный лежит по краям круга оттенков: от 0 до этого значения и от «оттенок от» до 179'], ['оттенок от', 179, 'Красный лежит по краям круга оттенков: от 0 до «оттенок до» и от этого значения до 179'],
+    ['насыщ. от', 255, 'Минимальная насыщенность. Ниже — цвет считается блёклым (корпус, фон)'], ['яркость от', 255, 'Минимальная яркость. Ниже — тень']],
+  blue: [['оттенок от', 179, 'Голубой/синий: нижняя граница оттенка (0–179, шкала OpenCV)'], ['оттенок до', 179, 'Верхняя граница оттенка'],
+    ['насыщ. от', 255, 'Минимальная насыщенность. Бирюзовый корпус рядом по цвету, поэтому слишком низкое значение захватывает и его'], ['яркость от', 255, 'Минимальная яркость']],
+};
+
+function shHsvOf(z, w) {
+  const v = z[w + '_hsv'];
+  return Array.isArray(v) && v.length === 4 ? v : (w === 'red' ? SH_RED_DEF : SH_BLUE_DEF);
+}
+
+function shColorRowHtml(w, z, a) {
+  const v = shHsvOf(z, w);
+  const cells = SH_HSV_FIELDS[w].map(([lbl, max, tip], k) => `<label class="sh-hsv" title="${escapeHtml(tip)}"><span>${lbl}</span>` +
+    `<input type="range" ${a} data-f="hsv" data-w="${w}" data-k="${k}" min="0" max="${max}" step="1" value="${v[k]}" /><output>${v[k]}</output></label>`).join('');
+  return `<div class="md-zone__row sh-hsvrow"><b class="sh-hsvname" style="color:${w === 'red' ? MV_ROD_RED : MV_ROD_BLUE}">${w === 'red' ? 'красная' : 'синяя'} половина</b>${cells}</div>`;
+}
+
+function mdRodColorsHtml() {
+  const blocks = [];
+  mdCfgCams().forEach((c) => {
+    (c.zones || []).forEach((z, i) => {
+      if (z.type !== 'cycle' || z.enabled === false) return;
+      const a = `data-md="z" data-cam="${escapeHtml(c.id)}" data-i="${i}"`;
+      const sh = shShaftOf(c.id, z.id);
+      const k = escapeHtml(c.id + '/' + z.id);
+      blocks.push(`<div class="md-zone sh-col" data-shcol="${k}" data-cam="${escapeHtml(c.id)}" data-zone="${escapeHtml(z.id)}">
+        <div class="md-zone__ctl">
+          <div class="md-zone__row"><b>${escapeHtml(sh ? sh.short : z.name)}</b><span class="net-hint">${escapeHtml(c.name)}</span><span class="md-sp"></span>
+            <button type="button" class="btn-secondary md-x" ${a} data-f="hsvreset" title="Вернуть пороги цвета этого вала к значениям по умолчанию">по умолчанию</button></div>
+          ${shColorRowHtml('red', z, a)}${shColorRowHtml('blue', z, a)}
+        </div>
+        <div class="md-zone__chart sh-prev"><img alt="" data-shprev="${k}" /><div class="net-hint" data-shprevn="${k}"></div></div>
+      </div>`);
+    });
+  });
+  if (!blocks.length) return '<span class="net-hint">Размеченных валов нет: нужны зоны-цикл («Разметить валы»).</span>';
+  return `<div class="net-hint">Красные точки на картинке — то, что детектор считает красной половиной палки, голубые — синей. Двигайте пороги и смотрите, чтобы палка была целиком, а корпус и фон не светились. Изменения сохраняются сразу.</div>${blocks.join('')}`;
+}
+
+// превью: пробные пороги берём прямо с ползунков, сервис возвращает кадр вокруг оси с масками; не чаще раза в 4 с на вал, при правке — сразу
+const shPrevAt = {};
+function shHsvStr(block, w) {
+  return [0, 1, 2, 3].map((k) => { const r = block.querySelector(`input[data-w="${w}"][data-k="${k}"]`); return r ? r.value : ''; }).join(',');
+}
+function shPrevLoad(block, force) {
+  const k = block.dataset.shcol, img = block.querySelector('img[data-shprev]'), note = block.querySelector('[data-shprevn]');
+  if (!img || (!force && Date.now() - (shPrevAt[k] || 0) < 4000)) return;
+  shPrevAt[k] = Date.now();
+  const url = '/api/motion/rod_mask?camera=' + encodeURIComponent(block.dataset.cam) + '&zone=' + encodeURIComponent(block.dataset.zone) +
+    '&red=' + shHsvStr(block, 'red') + '&blue=' + shHsvStr(block, 'blue') + '&t=' + Date.now();
+  fetch(url).then((r) => (r.ok ? r.blob() : Promise.reject(r.status))).then((b) => {
+    const u = URL.createObjectURL(b);
+    const old = img.src;
+    img.src = u;
+    if (old && old.startsWith('blob:')) URL.revokeObjectURL(old);
+    if (note) note.textContent = '';
+  }).catch(() => { if (note) note.textContent = 'картинки нет: камера не подключена или сервис движения старой версии'; });
+}
+function shPrevPaint() {
+  document.querySelectorAll('[data-shcol]').forEach((b) => shPrevLoad(b, false));
+}
+let shSlideTimer = 0;
+function shOnSlide(t) {                                   // ползунок двигают: значение рядом + быстрое обновление картинки
+  const o = t.parentElement && t.parentElement.querySelector('output');
+  if (o) o.textContent = t.value;
+  const block = t.closest('[data-shcol]');
+  if (!block) return;
+  clearTimeout(shSlideTimer);
+  shSlideTimer = setTimeout(() => shPrevLoad(block, true), 250);
+}
+
 function mdShaftsTabHtml() {
   const sc = shCfg();
   if (!MV.cfg) return '<p class="net-hint">Нет связи с сервисом движения.</p>';
@@ -43,10 +119,12 @@ function mdShaftsTabHtml() {
       `<td>${mdOutCell(o, `data-md="sh" data-id="${id}"`, false, 'sr', [['', 'нет'], ['holding', 'регистр']])}</td></tr>`;
   }).join('');
   const pairs = SH_PAIRS.map((id) => mdShaftPairHtml(id, sc.pairs[id])).join('');
+  const colors = mdRodColorsHtml();
   return `<details class="md-det" open><summary>Ряды камер ${mdHelp('Задайте каждой камере ряд валов. Левый и правый вал в ряду определяются по положению оси в кадре: левее — левый. У камеры должны быть размечены две зоны-цикла (кнопка «Разметить валы»).')}</summary>
       <div class="md-camlist">${rows || '<span class="net-hint">В сервисе движения камер нет.</span>'}</div></details>
     <details class="md-det" open><summary>Скорости валов ${mdHelp('Скорость вала — обороты в минуту по наклону угла за окно (в карточке зоны). Регистр пишется ×100; 0 — нет данных. То же, что «скорость» в зоне-цикле, только по названию вала.')}</summary>
       <table class="md-table"><thead><tr><th>Вал</th><th>Откуда</th><th>Угол</th><th>Скорость</th><th>Регистр скорости в ПЛК</th></tr></thead><tbody>${shafts}</tbody></table></details>
+    <details class="md-det"><summary>Цвета палок ${mdHelp('Красная и синяя половины палки находятся по цвету. Если палка то пропадает, то ловится — подберите пороги: картинка показывает, что именно попадает в маску. У каждого вала свои пороги (ракурс и свет разные).')}</summary>${colors}</details>
     <div class="md-sub">Разности валов</div>
     <div class="net-hint" id="md-sh-note"></div>
     ${pairs}`;
@@ -143,6 +221,7 @@ function mdPaintShafts() {
   });
   if (SH.noteCls === '' && !SH.note) shSetNote('', '');
   mdShaftsHist();
+  shPrevPaint();
 }
 
 // графики разностей: тянем историю сервиса раз в 5 с, пока вкладка открыта

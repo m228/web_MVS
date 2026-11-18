@@ -1359,6 +1359,15 @@ def motion_snapshot(camera: str, w: int = 0):
     return Response(content=data, media_type="image/jpeg", headers={"X-Frame-W": str(fw), "X-Frame-H": str(fh), "Cache-Control": "no-store"})
 
 
+@app.get("/api/motion/rod_mask")
+def motion_rod_mask(camera: str, zone: str, red: str = "", blue: str = "", w: int = 640):
+    """Превью детектора палки по зоне-циклу с пробными порогами цвета (красный/синий «H1,H2,S,V»): что именно попадает в маску."""
+    data = motion_client.rod_mask(_motion_url(), camera, zone, red, blue, w)
+    if data is None:
+        return Response(status_code=404)
+    return Response(content=data, media_type="image/jpeg", headers={"Cache-Control": "no-store"})
+
+
 @app.get("/api/motion/level_shot")
 def motion_level_shot(camera: str, group: str, ts: float, dir: int = 0):     # noqa: A002 — имя параметра в адресе
     """Снимок для графика уровня (декантатор), ближайший к моменту ts (dir −1/1 — соседний раньше/позже). Время снимка — в заголовке X-Shot-Ts."""

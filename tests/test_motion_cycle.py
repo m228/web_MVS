@@ -821,3 +821,26 @@ def test_state_exposes_source_of_the_arrow():
     st = run(me.CameraEngine(cam_cfg()), 70, 320)
     z = zone(st, "L")
     assert z["src"] in ("both", "red", "blue") and 0.0 <= z["lvl_r"] <= 1.0 and 0.0 <= z["lvl_b"] <= 1.0 and "off_b" in z
+
+
+# ── превью детектора: что попадает в маски красной и синей половин (для подбора цветов на панели) ──
+
+def test_mask_preview_shows_masks_and_respects_trial_thresholds():
+    rt = one_rt()
+    f = half_frame(70.0)
+    img = rt.mask_preview(f)
+    assert img.ndim == 3 and img.shape[2] == 3 and img.shape[1] >= 300
+    red_px = int(((img[..., 2] > 200) & (img[..., 0] < 80)).sum())
+    blue_px = int(((img[..., 0] > 200) & (img[..., 2] < 80) & (img[..., 1] > 150)).sum())
+    assert red_px > 50 and blue_px > 50
+    none = rt.mask_preview(f, red_hsv=[0, 179, 255, 255], blue_hsv=[0, 179, 255, 255])        # невозможные пороги — масок нет
+    assert int(((none[..., 2] > 200) & (none[..., 0] < 80)).sum()) == 0
+    assert rt.cfg["red_hsv"] == me.CYCLE_RED_HSV or list(rt.cfg["red_hsv"]) == list(me.CYCLE_RED_HSV)   # настроенные пороги превью не трогает
+
+
+def test_liks_default_thresholds_unchanged_by_override_args():
+    rt = one_rt()
+    f = half_frame(70.0)[rt.y0:rt.y1, rt.x0:rt.x1]
+    a, b = rt._liks(f)
+    a2, b2 = rt._liks(f, None, None)
+    assert np.array_equal(a, a2) and np.array_equal(b, b2)

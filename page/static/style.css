@@ -4746,8 +4746,28 @@ body.micro-rep-doc .micro-cmp-strips { grid-template-columns: repeat(6, 1fr); ga
 .sh-tn--more { font-weight: 500; font-size: 12px; color: var(--muted, #9ca3af); padding-left: 18px; }
 .sh-dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; flex: none; vertical-align: middle; }
 .sh-tact { text-align: right; }
-.sh-pipbtn.on { background: rgba(168, 85, 247, .35); }
-.sh-col.picking .sh-prev img { cursor: crosshair; outline: 2px solid #a855f7; }
+/* окно пипетки: большой кадр, лупа под курсором, «ловится / не ловится» */
+.sh-pipov { position: fixed; inset: 0; z-index: 3000; background: rgba(2, 6, 23, .72); display: flex; align-items: center; justify-content: center; padding: 18px; }
+.sh-pipov__box { background: var(--surface-strong, #111827); color: var(--text, #e5e7eb); border: 1px solid var(--border-strong, rgba(148, 163, 184, .35)); border-radius: 12px; padding: 12px 14px; max-width: min(1100px, 100%); max-height: 100%; display: flex; flex-direction: column; gap: 10px; box-shadow: 0 20px 60px rgba(0, 0, 0, .55); }
+.sh-pipov__head { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.sh-pipov .sh-chk { display: inline-flex; flex-direction: row; align-items: center; gap: 6px; font-size: 12px; margin: 0; cursor: pointer; white-space: nowrap; }
+.sh-pipov .sh-chk input { width: 15px; height: 15px; min-height: 0; padding: 0; margin: 0; flex: none; }
+.sh-pipov__head .sh-seg { margin-top: 0; }
+.sh-pipov__stage { position: relative; display: flex; justify-content: center; background: #05070d; border-radius: 8px; overflow: hidden; min-height: 80px; }
+.sh-pipov__stage canvas[data-pipcv] { display: block; max-width: 100%; max-height: calc(100vh - 210px); width: auto; height: auto; cursor: crosshair; }
+.sh-pipov__tint { position: absolute; top: 0; left: 50%; transform: translateX(-50%); max-width: 100%; max-height: calc(100vh - 210px); pointer-events: none; opacity: .85; }
+.sh-pipov__msg { position: absolute; left: 50%; top: 12px; transform: translateX(-50%); background: rgba(15, 23, 42, .92); border: 1px solid rgba(148, 163, 184, .35); padding: 6px 12px; border-radius: 8px; font-size: 13px; pointer-events: none; }
+.sh-pipov__foot { display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: center; font-size: 12px; }
+.sh-chip { display: inline-flex; align-items: center; gap: 6px; border: 1px solid rgba(148, 163, 184, .3); border-radius: 999px; padding: 2px 10px; }
+.sh-loupe { position: absolute; z-index: 5; width: max-content; min-width: 130px; pointer-events: none; display: flex; flex-direction: column; align-items: center; gap: 6px; }
+.sh-loupe canvas { width: 120px; height: 120px; border-radius: 50%; border: 4px solid #64748b; background: #000; box-shadow: 0 6px 22px rgba(0, 0, 0, .6); }
+.sh-loupe.ok canvas { border-color: #22c55e; }
+.sh-loupe.no canvas { border-color: #ef4444; }
+.sh-loupe__tag { display: flex; align-items: center; gap: 8px; background: rgba(15, 23, 42, .94); border: 1px solid rgba(148, 163, 184, .35); border-radius: 10px; padding: 5px 10px; font-size: 13px; line-height: 1.25; white-space: nowrap; }
+.sh-loupe.ok .sh-loupe__tag b { color: #4ade80; }
+.sh-loupe.no .sh-loupe__tag b { color: #f87171; }
+.sh-loupe__tag small { color: #94a3b8; font-size: 11px; }
+.sh-dot--lg { width: 22px; height: 22px; border: 2px solid rgba(255, 255, 255, .55); }
 .sh-col__note { min-height: 18px; margin-top: 6px; }
 .sh-hsv .sh-rng { -webkit-appearance: none; appearance: none; flex: 1; min-width: 0; width: 100%; height: 8px; min-height: 0; padding: 0; border: 0; box-shadow: none; border-radius: 4px; background: var(--trk, #475569); outline: none; margin: 0; cursor: pointer; }
 .sh-rng::-webkit-slider-thumb { -webkit-appearance: none; width: 14px; height: 14px; border-radius: 50%; background: #fff; border: 2px solid #7c3aed; box-shadow: 0 0 0 1px rgba(0, 0, 0, .45); }

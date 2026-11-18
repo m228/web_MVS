@@ -881,18 +881,18 @@ class CycleRT:
     def mask_preview(self, frame: np.ndarray, red_hsv=None, blue_hsv=None, max_w: int = 640, raw: bool = False, red_more=None, blue_more=None) -> np.ndarray:
         """Что видит детектор: область вокруг оси (в рабочем масштабе), красные точки — маска красной половины, голубые — синей,
         окружность поиска и ось. Пороги можно подставить свои — подбирать цвета, не меняя настройки. raw — сам кадр без масок (искать палку глазами,
-        брать цвет пипеткой). Картинка всегда вся область, целиком: по долям (u, v) от её размера пипетка (pick_color) находит точку в кадре."""
+        брать цвет пипеткой): в родном разрешении (хоть 900 px и больше), без окружности и оси. Картинка всегда вся область, целиком."""
         crop_src = frame[self.y0:self.y1, self.x0:self.x1]
-        if raw:
-            img = cv2.resize(crop_src, (max(2, int(round(crop_src.shape[1] * self.k))), max(2, int(round(crop_src.shape[0] * self.k)))), interpolation=cv2.INTER_AREA)
-            sc = 1.0
-        else:
-            red, blue = self._liks(crop_src, red_hsv, blue_hsv, red_more, blue_more)
-            crop = cv2.resize(crop_src, (red.shape[1], red.shape[0]), interpolation=cv2.INTER_AREA)
-            img = (crop.astype(np.float32) * 0.55).astype(np.uint8)
-            img[red > 0.5] = (40, 40, 255)
-            img[blue > 0.5] = (255, 200, 40)
-            sc = 1.0
+        if raw:                                                            # сам кадр области в родном разрешении и без рисунка: окно пипетки читает цвета прямо с картинки
+            w0, h0 = crop_src.shape[1], crop_src.shape[0]
+            if max_w == w0:
+                return crop_src.copy()
+            return cv2.resize(crop_src, (max_w, max(2, int(round(h0 * max_w / float(w0))))), interpolation=cv2.INTER_AREA if max_w < w0 else cv2.INTER_CUBIC)
+        red, blue = self._liks(crop_src, red_hsv, blue_hsv, red_more, blue_more)
+        crop = cv2.resize(crop_src, (red.shape[1], red.shape[0]), interpolation=cv2.INTER_AREA)
+        img = (crop.astype(np.float32) * 0.55).astype(np.uint8)
+        img[red > 0.5] = (40, 40, 255)
+        img[blue > 0.5] = (255, 200, 40)
         sc = max_w / float(max(1, img.shape[1]))                           # и увеличить, и уменьшить до нужной ширины
         if sc > 1.0:
             img = cv2.resize(img, None, fx=sc, fy=sc, interpolation=cv2.INTER_NEAREST)

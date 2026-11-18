@@ -103,6 +103,7 @@ def cfg_hw(cfg: dict) -> str:
 
 
 OPEN_GAP_S = 2.0
+FREEZE_REOPEN_S = 30.0           # картинка стоит дольше (и не меньше 2·freeze_timeout_s) — поток открываем заново, потом повторяем так же
 _open_lock = threading.Lock()
 _open_next = 0.0
 
@@ -656,8 +657,9 @@ class CameraWorker(threading.Thread):
         last_proc = 0.0
         last_gray = None
         freeze_time = 0.0
+        last_diff = 0.0                        # последняя разница соседних кадров (в лог при «застыла»)
         frozen = False
-        bad_since = 0.0                        # когда началась «серая каша» (0 — кадр нормальный)
+        bad_since = 0.0                       # когда началась «серая каша» (0 — кадр нормальный)
         bad_until = 0.0                        # пока не истечёт — кадры после каши не считаем
         was_bad = False
         got_frame = False                      # с этого открытия потока уже пришёл хоть один кадр
@@ -716,7 +718,8 @@ class CameraWorker(threading.Thread):
             self._hw_fail = 0
             # детектор зависшей картинки: живой поток всегда чуть «дышит» (шум матрицы)
             if last_gray is not None and last_gray.shape == gray.shape:
-                if float(cv2.absdiff(last_gray, gray).mean()) < cfg["freeze_eps"]:
+                last_diff = float(cv2.absdiff(last_gray, gray).mean())
+                if last_diff < cfg["freeze_eps"]:
                     freeze_time += dt
                 else:
                     freeze_time = 0.0
@@ -744,7 +747,19 @@ class CameraWorker(threading.Thread):
                 self.engine.buf.clear()
             now_frozen = freeze_time >= timeout
             if now_frozen:
+                if not frozen:
+                    log.warning("[%s] картинка застыла: разница соседних кадров %.3f < %.3f уже %.0f с", self.id, last_diff, cfg["freeze_eps"], freeze_time)
                 frozen = True
+                if not file_src and freeze_time >= max(2 * timeout, FREEZE_REOPEN_S):
+                    # залипший захват (декодер отдаёт один и тот же кадр, а grab() успешен) сам не оживает — открываем поток заново
+                    log.warning("[%s] картинка стоит %.0f с — переоткрываю поток", self.id, freeze_time)
+                    with self._lock:
+                        self._rec_write(now, {}, "событие: картинка стоит, переоткрываю поток", event=True)
+                    cap.release()
+                    cap = None
+                    self._publish(self.engine.dead_state(now, "картинка застыла"), frame, True)
+                    self._halt.wait(cfg["reconnect_delay_s"])
+                    continue
                 self._publish(self.engine.dead_state(now, "картинка застыла"), frame, True)
                 continue
             if frozen:                         # камера ожила — состояния с нуля

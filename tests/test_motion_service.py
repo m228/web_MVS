@@ -608,6 +608,23 @@ def test_worker_frozen_camera_gives_zeros_and_status_zero(tmp_path):
         w.stop()
 
 
+def test_worker_reopens_stream_when_picture_stays_frozen(tmp_path, monkeypatch):
+    """Залипший захват (grab() успешен, кадр один и тот же) сам не оживает — поток переоткрывается и камера возвращается в норму."""
+    monkeypatch.setattr(mcam, "FREEZE_REOPEN_S", 0.0)
+    frames = make_frames(40)
+    opened = []
+
+    def factory(url, tr):
+        opened.append(1)
+        return FakeCap(frames, frozen=len(opened) == 1)        # первое открытие «залипло», второе живое
+    w, _ = _worker(tmp_path, frames, cap_factory=factory, url="rtsp://h/cam", reconnect_delay_s=0.5, freeze_timeout_s=1)
+    try:
+        assert _wait(lambda: len(opened) >= 2, 15), "после долгой заморозки поток открыт заново"
+        assert _wait(lambda: (w.state()["result"] or {}).get("alive") is True, 15)
+    finally:
+        w.stop()
+
+
 def test_garbage_ratio_detects_grey_mush_not_live_frames():
     rng = np.random.default_rng(3)
     live = np.clip(rng.normal(60, 6, (H, W)), 0, 255).astype(np.uint8)      # тёмная лента с шумом матрицы

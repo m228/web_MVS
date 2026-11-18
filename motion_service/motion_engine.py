@@ -224,6 +224,8 @@ def _norm_cycle(z: dict, zid: str, where: str) -> dict:
         "red_min": _num(z.get("red_min", 0.12), where + ".red_min", 0, 1),
         "blue_alone": _num(z.get("blue_alone", 0.6), where + ".blue_alone", 0, 1),
         "blue_w": _num(z.get("blue_w", 0.5), where + ".blue_w", 0, 1),
+        "blue_min": _num(z.get("blue_min", 0.3), where + ".blue_min", 0, 1),
+        "agree_deg": _num(z.get("agree_deg", 20), where + ".agree_deg", 2, 90),
         "thin": _num(z.get("thin", 9), where + ".thin", 0, 51, True),
         "rpm_window": _num(z.get("rpm_window", 20), where + ".rpm_window", 2, 300),
         "stop_s": _num(z.get("stop_s", 10), where + ".stop_s", 2, 300),
@@ -732,6 +734,7 @@ class CycleRT:
         self.ker = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (n, n)) if zcfg["thin"] >= 3 else None
         self.raw: deque = deque(maxlen=zcfg["smooth"])
         self.trk: deque = deque()               # (время, «развёрнутый» угол без скачков через 360°) за последние rpm_window секунд — для оборотов
+        self.off_b = 0.0                        # на сколько синяя половина «довёрнута» от красной (град), учится, пока видны обе; reset не трогает
         self.bans: list = []                    # углы ложных неподвижных целей: при поиске по всему кругу вокруг них не смотрим (reset их не трогает)
         self.reset()
 
@@ -749,6 +752,8 @@ class CycleRT:
         self.angle = 0.0
         self.conf = 0.0
         self.score = 0.0
+        self.src = "none"                       # чем держим угол: both (обе половины) / red / blue / hold (не видно, ожидаемый) / none
+        self.lvl_r = self.lvl_b = 0.0           # насколько видна красная / синяя половина на найденном луче, 0..1
         self.rpm = 0.0                          # обороты, об/мин: «+» по часовой стрелке, «−» против; 0 — стоит или пока мало данных
         self.valid = False
 
@@ -806,6 +811,52 @@ class CycleRT:
             red, blue = np.minimum(1.0, red * 3.0), np.minimum(1.0, blue * 3.0)   # доля покрытия пикселя → «есть» (тонкая линия закрывает 1/3 пикселя)
         return cv2.dilate(red.astype(np.float32), _K3), cv2.dilate(blue.astype(np.float32), _K3)
 
+    @staticmethod
+    def _peak(s: np.ndarray, centre: float, hw: int = 15):
+        """Лучший угол профиля s в окне ±hw° вокруг centre, уточнённый до долей градуса: (угол, сила 0..1) или None."""
+        idx = (int(round(centre)) + np.arange(-hw, hw + 1)) % 360
+        j = int(idx[np.argmax(s[idx])])
+        v = float(s[j])
+        if v <= 1e-6:
+            return None
+        i2 = (j + np.arange(-4, 5)) % 360
+        w = np.clip(s[i2] - 0.5 * v, 0.0, None)
+        r = np.radians(PHIS[i2])
+        a = float(np.degrees(np.arctan2((w * np.sin(r)).sum(), (w * np.cos(r)).sum())) % 360.0) if w.sum() > 0 else float(PHIS[j])
+        return a, v
+
+    def _fuse(self, sr: np.ndarray, sb: np.ndarray, i: int, fallback: float, now: float, locked: bool):
+        """Одна стрелка из двух половин. Красный пик около i и синий около i+180 ищем по отдельности.
+        Видны обе и согласны (разница с учётом off_b ≤ agree_deg) → среднее по силе; видна одна → по ней;
+        не согласны → та, что ближе к ожидаемому углу (при поиске по кругу — сильнее). Возвращает (угол, src)."""
+        c = self.cfg
+        pr = self._peak(sr, i)
+        pb = self._peak(sb, (i + 180) % 360)
+        red_ok = pr is not None and pr[1] >= c["red_min"]
+        blue_ok = pb is not None and pb[1] >= min(c["blue_min"], c["blue_alone"])
+        self.lvl_r = pr[1] if pr else 0.0
+        self.lvl_b = pb[1] if pb else 0.0
+        if not red_ok and not blue_ok:
+            return fallback, "red"
+        ab = None if pb is None else (pb[0] + 180.0) % 360.0                # синий пик, пересчитанный в «красный» угол
+        if red_ok and blue_ok:
+            d = ang_diff(ab, pr[0])
+            if abs(d - self.off_b) <= c["agree_deg"]:
+                self.off_b += 0.05 * (d - self.off_b)                       # учим смещение, пока половины согласны
+                ab_c = (ab - self.off_b) % 360.0
+                w1, w2 = pr[1], pb[1]
+                r = np.radians([pr[0], ab_c])
+                a = float(np.degrees(np.arctan2(w1 * np.sin(r[0]) + w2 * np.sin(r[1]), w1 * np.cos(r[0]) + w2 * np.cos(r[1]))) % 360.0)
+                return a, "both"
+            ab_c = (ab - self.off_b) % 360.0
+            if locked:
+                e = self._expected(now)
+                return (pr[0], "red") if abs(ang_diff(pr[0], e)) <= abs(ang_diff(ab_c, e)) else (ab_c, "blue")
+            return (pr[0], "red") if pr[1] >= pb[1] else (ab_c, "blue")
+        if red_ok:
+            return pr[0], "red"
+        return (ab - self.off_b) % 360.0, "blue"
+
     def _expected(self, now: float) -> float:
         """Где палка должна быть сейчас: прошлый угол + скорость × время (скорость — по последним оборотам, не больше 30°/с)."""
         rate = 0.0 if self.hint_stop else max(-30.0, min(30.0, self.rpm * 6.0))
@@ -840,7 +891,8 @@ class CycleRT:
                 idx = (i + np.arange(-4, 5)) % 360                          # уточнение до долей градуса: центр тяжести вокруг пика
                 w = np.clip(comb[idx] - 0.5 * best, 0.0, None)
                 r = np.radians(PHIS[idx])
-                ang = float(np.degrees(np.arctan2((w * np.sin(r)).sum(), (w * np.cos(r)).sum())) % 360.0) if w.sum() > 0 else float(PHIS[i])
+                ang0 = float(np.degrees(np.arctan2((w * np.sin(r)).sum(), (w * np.cos(r)).sum())) % 360.0) if w.sum() > 0 else float(PHIS[i])
+                ang, self.src = self._fuse(sr, sb, i, ang0, now, locked)    # одна стрелка из красной и синей половин
                 if self.coast:
                     self.mv.clear()                                          # скачок при возврате палки — не ход вала
                     self.raw.clear()                                         # сглаживание не тянет к ожидаемому углу из пропажи
@@ -858,10 +910,12 @@ class CycleRT:
                 self.angle = self._expected(now)
                 self.coast, self.valid = True, True
                 self.conf = 0.0
+                self.src, self.lvl_r, self.lvl_b = "hold", 0.0, 0.0
             else:
                 self.valid, self.coast = False, False
                 self.last = None
                 self.raw.clear()
+                self.src, self.lvl_r, self.lvl_b = "none", 0.0, 0.0
                 self._lost()
         return found
 
@@ -1155,7 +1209,9 @@ class CameraEngine:
         rpm = round(c.rpm, 3) if ok and moving is not False else 0.0         # стоит — обороты 0 сразу, не ждём окно 20 с
         return {"id": zc["id"], "name": zc["name"], "type": "cycle", "metric": "flow", "enabled": zc["enabled"],
                 "bit": int(ok and not coast), "flow": angle, "diff": conf, "value": angle, "on": 0.0, "off": 0.0,
-                "angle": angle, "conf": conf, "rpm": rpm, "score": round(c.score, 3) if c else 0.0, "valid": ok, "coast": coast, "moving": moving}
+                "angle": angle, "conf": conf, "rpm": rpm, "score": round(c.score, 3) if c else 0.0, "valid": ok, "coast": coast, "moving": moving,
+                "src": c.src if ok else "none", "lvl_r": round(c.lvl_r, 2) if ok else 0.0, "lvl_b": round(c.lvl_b, 2) if ok else 0.0,
+                "off_b": round(c.off_b, 1) if c else 0.0}
 
     def _level_zone(self, zc: dict, now: float, alive: bool) -> dict:
         """Зона-стекло → запись состояния. flow = уровень стекла 0..100 %, diff = сырой уровень (до отсечки и сглаживания), bit — в стекле есть жидкость."""

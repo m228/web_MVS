@@ -1382,12 +1382,18 @@ def motion_snapshot(camera: str, w: int = 0):
 
 
 @app.get("/api/motion/rod_mask")
-def motion_rod_mask(camera: str, zone: str, red: str = "", blue: str = "", w: int = 640):
+def motion_rod_mask(camera: str, zone: str, red: str = "", blue: str = "", w: int = 640, raw: int = 0, red_more: str | None = None, blue_more: str | None = None):
     """Превью детектора палки по зоне-циклу с пробными порогами цвета (красный/синий «H1,H2,S,V»): что именно попадает в маску."""
-    data = motion_client.rod_mask(_motion_url(), camera, zone, red, blue, w)
+    data = motion_client.rod_mask(_motion_url(), camera, zone, red, blue, w, raw=bool(raw), red_more=red_more, blue_more=blue_more)
     if data is None:
         return Response(status_code=404)
     return Response(content=data, media_type="image/jpeg", headers={"Cache-Control": "no-store"})
+
+
+@app.get("/api/motion/rod_pick")
+def motion_rod_pick(camera: str, zone: str, u: float, v: float):
+    # пипетка на вкладке «Валы»: цвет палки в точке превью (оттенок 0..179 — шкала OpenCV, как в порогах)
+    return motion_client.rod_pick(_motion_url(), camera, zone, u, v)
 
 
 @app.get("/api/motion/level_shot")

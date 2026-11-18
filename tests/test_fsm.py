@@ -452,3 +452,85 @@ def test_glass_wash_every_n_probes():
     assert _glass_washes(1, 3) == [True, True, True]               # как раньше: каждую пробу
     assert _glass_washes(3, 7) == [True, False, False, True, False, False, True]
     assert _glass_washes(0, 2) == [False, False]                   # 0 — стекло не промывать
+
+
+# ---------- Авария: М1 N раз подряд не доехал за таймаут шага (fault_guard.m1_timeouts) ----------
+
+def _stuck(fsm, recs, n, max_ticks=600):
+    """Мотор «стоит» (телеметрия не едет): крутим, пока не наберётся n записей доезда (отвод/подвод) или Аварии."""
+    _run_until(fsm, lambda: len(recs) >= n or fsm._fault, max_ticks=max_ticks, track_arrival=False)
+
+
+def test_three_m1_timeouts_in_row_raise_fault(fsm):
+    # отвод, подвод, возврат — все три не доехали: Авария, цикл стоп, «Автомат» выкл., в режиме — fault
+    recs = []
+    fsm.on_probe_positions = recs.append
+    fsm._step_timeout_ticks = 5
+    _start_cycle(fsm)
+    _stuck(fsm, recs, 99)
+    assert fsm._fault, "Авария не поднялась после трёх таймаутов"
+    assert [r["step"] for r in recs] == ["отвод", "подвод"]      # возврат записей не пишет — третий таймаут на нём
+    assert fsm.mode == 0 and fsm.sw0 is False and fsm.sw3 is True
+    assert fsm.mode_state() == "fault"
+    st = fsm.state
+    assert st["fault"] and "подряд: 3" in st["fault_msg"] and "возврат" in st["fault_msg"]
+
+
+def test_fault_after_approach_timeout_skips_dwell(fsm):
+    # порог 2: отвод и подвод не доехали — Авария на подводе, выдержки (кадры мимо стекла) нет
+    fsm.set_fault_guard(m1_timeouts=2)
+    fsm._step_timeout_ticks = 5
+    photos = []
+    fsm.on_photo = lambda: photos.append(1)
+    _start_cycle(fsm)
+    seen = _run_until(fsm, lambda: fsm._fault, max_ticks=600, track_arrival=False)
+    assert fsm._fault and "подвод" in fsm._fault_msg
+    assert 23 not in seen and not photos
+    for _ in range(50):                       # Авария держится: новых проб нет
+        fsm.tick()
+    assert fsm.mode == 0
+
+
+def test_normal_arrival_resets_m1_timeout_count(fsm):
+    # два таймаута, потом нормальный доезд — счёт с нуля, Аварии нет
+    recs = []
+    fsm.on_probe_positions = recs.append
+    fsm._step_timeout_ticks = 5
+    _start_cycle(fsm)
+    _stuck(fsm, recs, 2)
+    assert fsm._m1_timeouts == 2 and not fsm._fault
+    _run_until(fsm, lambda: fsm.mode == 0, max_ticks=400)      # возврат доехал
+    assert fsm._m1_timeouts == 0 and not fsm._fault
+
+
+def test_m1_timeout_guard_off_with_zero(fsm):
+    assert fsm.set_fault_guard(m1_timeouts=0) == {"m1_timeouts": 0}
+    recs = []
+    fsm.on_probe_positions = recs.append
+    fsm._step_timeout_ticks = 5
+    _start_cycle(fsm)
+    _stuck(fsm, recs, 6, max_ticks=2000)       # три цикла подряд мимо — защита выключена
+    assert len(recs) >= 6 and not fsm._fault
+
+
+def test_clear_fault_keeps_auto_off(fsm):
+    fsm.set_fault_guard(m1_timeouts=1)
+    fsm._step_timeout_ticks = 5
+    _start_cycle(fsm)
+    _run_until(fsm, lambda: fsm._fault, max_ticks=300, track_arrival=False)
+    assert fsm._fault
+    assert fsm.clear_fault() == {"status": "cleared"}
+    assert not fsm._fault and fsm.sw3 is False and fsm._m1_timeouts == 0
+    assert fsm.sw0 is False and fsm.mode_state() == "off"       # «Автомат» оператор включает сам
+    for _ in range(30):
+        fsm.tick()
+    assert fsm.mode == 0
+
+
+def test_fault_guard_default_from_config():
+    cfg = copy.deepcopy(plate_config.DEFAULTS)
+    assert cfg["fault_guard"]["m1_timeouts"] == 3
+    cfg["fault_guard"]["m1_timeouts"] = 5
+    assert MicroscopeFSM(FakePlate(), cfg).state["m1_timeouts_limit"] == 5
+    del cfg["fault_guard"]                     # старый конфиг без раздела — умолчание 3
+    assert MicroscopeFSM(FakePlate(), cfg)._m1_timeout_limit == 3

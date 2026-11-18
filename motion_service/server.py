@@ -12,10 +12,11 @@
   GET  /cameras/{id}/snapshot     — последний кадр JPEG (?w=1280 — уменьшить; заголовки X-Frame-W/H — размер оригинала).
   GET  /cameras/{id}/loss_map     — карта потерь палки: доля «найдена» по секторам угла и по часам суток (?window=секунды, до 14 суток).
   GET  /cameras/{id}/rod_mask     — что видит детектор палки: кадр вокруг оси зоны-цикла с масками красной/синей половин
-                                    (?zone=id&red=H1,H2,S,V&blue=H1,H2,S,V — пробные пороги цвета; пусто — настроенные; ?w=640).
+                                    (?zone=id&red=H1,H2,S,V&blue=H1,H2,S,V — пробные пороги цвета; &red_more=H1,H2,S,V;… и &blue_more= — дополнительные цвета конца палки; пусто — настроенные; ?w=640).
   POST /cameras/{id}/autocal      — {"zones": [id…], "seconds": 150}: записать вращение палок и подогнать цвета, ось и радиус (75–300 с, ≥1 оборота).
   GET  /cameras/{id}/autocal      — ход и результат подгонки: до/после по каждой палке (найдена, обороты, сектора), новые настройки.
   POST /cameras/{id}/autocal/cancel — отменить.   POST /cameras/{id}/autocal/apply — {"zones": [id…]}: применить результат (сохраняет настройки).
+  GET  /cameras/{id}/rod_pick     — пипетка: цвет палки в точке картинки rod_mask (?zone=id&u=0..1&v=0..1) → {h, s, v}; rod_mask принимает ещё ?raw=1 (кадр без масок).
   GET  /cameras/{id}/level_shot   — снимок для графика уровня, ближайший к моменту (?group=lvl&ts=unix-секунды; &dir=-1/1 — соседний
                                     раньше/позже; X-Shot-Ts — его время).
   GET  /cameras/{id}/level_shots  — снимки уровня с разметкой кадра (?group=lvl&since=unix — только новее): {"shots": [{ts, meta}]}.
@@ -441,13 +442,14 @@ def create_app(data_dir: Optional[Path] = None, capture_factory: Callable = open
         return r
 
     @app.get("/cameras/{cid}/rod_mask")
-    def rod_mask(cid: str, zone: str, red: str = "", blue: str = "", w: int = 640):
+    def rod_mask(cid: str, zone: str, red: str = "", blue: str = "", w: int = 640, raw: int = 0, red_more: Optional[str] = None, blue_more: Optional[str] = None):
         """Что видит детектор палки: кадр вокруг оси с масками красной и синей половин. red/blue — пробные пороги «H1,H2,S,V» (пусто — настроенные)."""
         def hsv(txt, default, name, pair_ok):
             return None if not txt.strip() else engine._hsv4([float(x) for x in txt.split(",")], default, name, pair_ok)
         try:
             r, b = hsv(red, None, "red", True), hsv(blue, None, "blue", False)
-            data = mgr.worker(cid).rod_mask_jpeg(zone, r, b, max(160, min(int(w), 1600)))
+            more = lambda txt, name: None if txt is None else engine._more([[float(x) for x in item.split(",")] for item in txt.split(";") if item.strip()], name)   # noqa: E731 — «H1,H2,S,V;H1,H2,S,V»; пусто — без дополнительных
+            data = mgr.worker(cid).rod_mask_jpeg(zone, r, b, max(120, min(int(w), 1600)), bool(raw), more(red_more, "red_more"), more(blue_more, "blue_more"))
         except ValueError as e:
             raise HTTPException(400, str(e))
         if data is None:
@@ -486,6 +488,17 @@ def create_app(data_dir: Optional[Path] = None, capture_factory: Callable = open
             raise HTTPException(409, "готового результата подгонки нет")
         except ValueError as e:
             raise HTTPException(400, str(e))
+
+    @app.get("/cameras/{cid}/rod_pick")
+    def rod_pick(cid: str, zone: str, u: float, v: float):
+        """Пипетка: цвет палки в точке картинки rod_mask (u, v — доли 0..1 по ширине и высоте): {h, s, v, x, y, n}, оттенок 0..179 (шкала OpenCV)."""
+        try:
+            r = mgr.worker(cid).rod_pick(zone, u, v)
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+        if r is None:
+            raise HTTPException(404, "кадра ещё нет (камера не подключилась)")
+        return r
 
     @app.get("/cameras/{cid}/level_shot")
     def level_shot(cid: str, group: str, ts: float, dir: int = 0):      # noqa: A002 — имя параметра в адресе

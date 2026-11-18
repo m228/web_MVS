@@ -194,6 +194,19 @@ def _hsv4(v, default, name, hue_pair_ok):
     return [h1, h2, s, val]
 
 
+MAX_MORE = 6                                       # сколько дополнительных цветов может быть у каждого конца палки (red_more / blue_more)
+
+
+def _more(v, name: str) -> list:
+    """Дополнительные цвета конца палки: [[H1, H2, S_min, V_min], …] — к основному диапазону (red_hsv / blue_hsv) добавляются «ИЛИ».
+    Оттенков красного несколько (светлый, тёмный, розоватый), одним диапазоном их без лишнего не покрыть."""
+    if not v:
+        return []
+    if not isinstance(v, (list, tuple)) or len(v) > MAX_MORE:
+        raise ValueError("%s: не больше %d цветов" % (name, MAX_MORE))
+    return [_hsv4(x, None, name, False) for x in v]
+
+
 def _norm_cycle(z: dict, zid: str, where: str) -> dict:
     """Зона-«цикл»: палка из красной и синей половин на оси; центр + радиус вместо полигона. Результат — угол красного конца
     от вертикали по часовой (0..360). Полигона нет (points = []), метрик потока/разности нет."""
@@ -217,6 +230,8 @@ def _norm_cycle(z: dict, zid: str, where: str) -> dict:
         "r_min": _num(z.get("r_min", 0.1), where + ".r_min", 0.0, 0.8),
         "red_hsv": _hsv4(None if tuple(z.get("red_hsv") or ()) == CYCLE_RED_HSV_OLD else z.get("red_hsv"), CYCLE_RED_HSV, where + ".red_hsv", True),
         "blue_hsv": _hsv4(z.get("blue_hsv"), CYCLE_BLUE_HSV, where + ".blue_hsv", False),
+        "red_more": _more(z.get("red_more"), where + ".red_more"),
+        "blue_more": _more(z.get("blue_more"), where + ".blue_more"),
         "min_score": _num(z.get("min_score", 0.4), where + ".min_score", 0.01, 2),
         "min_conf": _num(z.get("min_conf", 0.1), where + ".min_conf", 0, 1),
         "jump_deg": _num(z.get("jump_deg", 25), where + ".jump_deg", 3, 180),
@@ -795,14 +810,19 @@ class CycleRT:
         elif rng >= 1.6 * self.cfg["stop_deg"]:
             self.moving = True
 
-    def _liks(self, bgr: np.ndarray, red_hsv=None, blue_hsv=None):
-        """Маски красной и синей половин (доли 0..1 в рабочем масштабе). red_hsv/blue_hsv — свои пороги вместо настроенных (для превью на панели)."""
+    def _liks(self, bgr: np.ndarray, red_hsv=None, blue_hsv=None, red_more=None, blue_more=None):
+        """Маски красной и синей половин (доли 0..1 в рабочем масштабе). red_hsv/blue_hsv/red_more/blue_more — свои пороги вместо настроенных (для превью на панели).
+        Дополнительные цвета (red_more / blue_more) добавляются к основному диапазону «ИЛИ» — до фильтра «тонкого»."""
         hsv = cv2.cvtColor(bgr, cv2.COLOR_BGR2HSV)
         h, s, v = [c.astype(np.int32) for c in cv2.split(hsv)]
         hm, hn, rs_, rv = red_hsv or self.cfg["red_hsv"]
         red = (((h <= hm) | (h >= hn)) & (s >= rs_) & (v >= rv)).astype(np.uint8)
         b1, b2, bs, bv = blue_hsv or self.cfg["blue_hsv"]
         blue = ((h >= b1) & (h <= b2) & (s >= bs) & (v >= bv)).astype(np.uint8)
+        for h1, h2, s_, v_ in (self.cfg.get("red_more") or []) if red_more is None else red_more:
+            red |= ((h >= h1) & (h <= h2) & (s >= s_) & (v >= v_)).astype(np.uint8)
+        for h1, h2, s_, v_ in (self.cfg.get("blue_more") or []) if blue_more is None else blue_more:
+            blue |= ((h >= h1) & (h <= h2) & (s >= s_) & (v >= v_)).astype(np.uint8)
         if self.ker is not None:                                           # оставляем только тонкое: то, что не пережило «открытие»
             red &= 1 - cv2.morphologyEx(red, cv2.MORPH_OPEN, self.ker)
             blue &= 1 - cv2.morphologyEx(blue, cv2.MORPH_OPEN, self.ker)
@@ -858,21 +878,54 @@ class CycleRT:
             return pr[0], "red"
         return (ab - self.off_b) % 360.0, "blue"
 
-    def mask_preview(self, frame: np.ndarray, red_hsv=None, blue_hsv=None, max_w: int = 640) -> np.ndarray:
+    def mask_preview(self, frame: np.ndarray, red_hsv=None, blue_hsv=None, max_w: int = 640, raw: bool = False, red_more=None, blue_more=None) -> np.ndarray:
         """Что видит детектор: область вокруг оси (в рабочем масштабе), красные точки — маска красной половины, голубые — синей,
-        окружность поиска и ось. Пороги можно подставить свои — подбирать цвета, не меняя настройки."""
-        red, blue = self._liks(frame[self.y0:self.y1, self.x0:self.x1], red_hsv, blue_hsv)
-        crop = cv2.resize(frame[self.y0:self.y1, self.x0:self.x1], (red.shape[1], red.shape[0]), interpolation=cv2.INTER_AREA)
-        img = (crop.astype(np.float32) * 0.55).astype(np.uint8)
-        img[red > 0.5] = (40, 40, 255)
-        img[blue > 0.5] = (255, 200, 40)
-        sc = max(1.0, max_w / float(max(1, img.shape[1])))
+        окружность поиска и ось. Пороги можно подставить свои — подбирать цвета, не меняя настройки. raw — сам кадр без масок (искать палку глазами,
+        брать цвет пипеткой). Картинка всегда вся область, целиком: по долям (u, v) от её размера пипетка (pick_color) находит точку в кадре."""
+        crop_src = frame[self.y0:self.y1, self.x0:self.x1]
+        if raw:
+            img = cv2.resize(crop_src, (max(2, int(round(crop_src.shape[1] * self.k))), max(2, int(round(crop_src.shape[0] * self.k)))), interpolation=cv2.INTER_AREA)
+            sc = 1.0
+        else:
+            red, blue = self._liks(crop_src, red_hsv, blue_hsv, red_more, blue_more)
+            crop = cv2.resize(crop_src, (red.shape[1], red.shape[0]), interpolation=cv2.INTER_AREA)
+            img = (crop.astype(np.float32) * 0.55).astype(np.uint8)
+            img[red > 0.5] = (40, 40, 255)
+            img[blue > 0.5] = (255, 200, 40)
+            sc = 1.0
+        sc = max_w / float(max(1, img.shape[1]))                           # и увеличить, и уменьшить до нужной ширины
         if sc > 1.0:
             img = cv2.resize(img, None, fx=sc, fy=sc, interpolation=cv2.INTER_NEAREST)
+        elif sc < 1.0:
+            img = cv2.resize(img, None, fx=sc, fy=sc, interpolation=cv2.INTER_AREA)
         o = (int(round(self.ox * sc)), int(round(self.oy * sc)))
         cv2.circle(img, o, int(round(float(self.rs[-1] if len(self.rs) else 3) * sc)), (200, 200, 200), 1, cv2.LINE_AA)
         cv2.circle(img, o, 3, (255, 255, 255), -1)
         return img
+
+    def pick_color(self, frame: np.ndarray, u: float, v: float) -> Optional[dict]:
+        """Пипетка: u, v — доли (0..1) картинки превью по ширине и высоте (картинка — вся область вокруг оси). Тонкая палка при клике по маленькой
+        картинке попадает неточно, поэтому в окне вокруг точки берём пиксели, сильнее всего отличающиеся от фона окна (медианы), и усредняем их цвет:
+        это и есть палка. -> {"h": 0..179, "s": 0..255, "v": 0..255, "x", "y" — точка в кадре, "n" — сколько пикселей усреднено} или None."""
+        if frame is None or frame.ndim != 3:
+            return None
+        u, v = min(1.0, max(0.0, float(u))), min(1.0, max(0.0, float(v)))
+        x = int(round(self.x0 + u * (self.x1 - self.x0 - 1)))
+        y = int(round(self.y0 + v * (self.y1 - self.y0 - 1)))
+        r = int(max(6, min(24, 0.03 * (self.x1 - self.x0))))
+        patch = frame[max(0, y - r):y + r + 1, max(0, x - r):x + r + 1]
+        if patch.size == 0:
+            return None
+        px = patch.reshape(-1, 3).astype(np.float32)
+        d = np.linalg.norm(px - np.median(px, axis=0), axis=1)
+        hsv = cv2.cvtColor(patch, cv2.COLOR_BGR2HSV).reshape(-1, 3).astype(np.int32)
+        live = (hsv[:, 1] >= 40) & (hsv[:, 2] >= 40)                        # тени и блёклое — не палка
+        d = np.where(live, d, -1.0) if live.sum() >= 3 else d
+        k = max(3, int(0.04 * len(d)))
+        top = np.argsort(-d)[:k]
+        ang = np.radians(hsv[top, 0] * 2.0)                                  # оттенок — по кругу: 176 и 2 — соседи
+        h = int(round((np.degrees(np.arctan2(np.sin(ang).mean(), np.cos(ang).mean())) % 360.0) / 2.0)) % 180
+        return {"h": h, "s": int(np.median(hsv[top, 1])), "v": int(np.median(hsv[top, 2])), "x": x, "y": y, "n": int(k)}
 
     def _expected(self, now: float) -> float:
         """Где палка должна быть сейчас: прошлый угол + скорость × время (скорость — по последним оборотам, не больше 30°/с)."""

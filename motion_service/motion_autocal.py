@@ -85,7 +85,7 @@ def _compress(m: np.ndarray, k: float) -> np.ndarray:
     return cv2.dilate(m.astype(np.float32), me._K3)
 
 
-def colour_mask(hsv: np.ndarray, kind: str, p: Sequence[int], ker, k: float, fast: bool = True) -> np.ndarray:
+def colour_mask(hsv: np.ndarray, kind: str, p: Sequence[int], ker, k: float, fast: bool = True, extra: Sequence = ()) -> np.ndarray:
     """Маска одной половины палки в рабочем масштабе k (то же, что CycleRT._liks, но один цвет и без повторной конвертации в HSV).
     fast: «открытие» (самое дорогое) считаем на каждом втором пикселе — для перебора; итог всё равно проверяет боевой разбор."""
     if kind == "red":
@@ -94,6 +94,8 @@ def colour_mask(hsv: np.ndarray, kind: str, p: Sequence[int], ker, k: float, fas
     else:
         b1, b2, s, v = p
         m = cv2.inRange(hsv, (b1, s, v), (b2, 255, 255))
+    for h1, h2, s_, v_ in extra:                                        # дополнительные цвета конца палки (red_more / blue_more) — «ИЛИ»
+        m |= cv2.inRange(hsv, (h1, s_, v_), (h2, 255, 255))
     m = (m != 0).astype(np.uint8)
     if ker is not None:
         if fast and k <= 0.5 and ker.shape[0] >= 15:
@@ -201,6 +203,7 @@ class RodTuner:
                     "red_hsv": list(base["red_hsv"]), "blue_hsv": list(base["blue_hsv"]),
                     "thin": int(base["thin"]), "blue_alone": float(base["blue_alone"])}
         self.old = {k: (list(v) if isinstance(v, list) else v) for k, v in self.cur.items()}
+        self.extra = {"red": [tuple(x) for x in (base.get("red_more") or [])], "blue": [tuple(x) for x in (base.get("blue_more") or [])]}   # дополнительные цвета подбор не трогает, но учитывает
         self.max_radius = float(max_radius) if max_radius else RADIUS_MAX_K * float(radius)
         self.train, self.val = split_frames(self.n)
         self._progress, self._cancelled = progress, cancelled
@@ -289,12 +292,12 @@ class RodTuner:
             bgr = f0 if n_ == 0 else self.store.get(i)
             hsv = cv2.cvtColor(bgr[z.y0:z.y1, z.x0:z.x1], cv2.COLOR_BGR2HSV)
             for q in red_opts:
-                SR[tuple(q)].append(ray_profile(colour_mask(hsv, "red", q, ker, z.k), z.xs, z.ys))
+                SR[tuple(q)].append(ray_profile(colour_mask(hsv, "red", q, ker, z.k, extra=self.extra["red"]), z.xs, z.ys))
             for q in blue_opts:
-                SB[tuple(q)].append(ray_profile(colour_mask(hsv, "blue", q, ker, z.k), z.xs, z.ys))
+                SB[tuple(q)].append(ray_profile(colour_mask(hsv, "blue", q, ker, z.k, extra=self.extra["blue"]), z.xs, z.ys))
             for t, (a, b, kk) in TH.items():
-                a.append(ray_profile(colour_mask(hsv, "red", P["red_hsv"], kk, z.k), z.xs, z.ys))
-                b.append(ray_profile(colour_mask(hsv, "blue", P["blue_hsv"], kk, z.k), z.xs, z.ys))
+                a.append(ray_profile(colour_mask(hsv, "red", P["red_hsv"], kk, z.k, extra=self.extra["red"]), z.xs, z.ys))
+                b.append(ray_profile(colour_mask(hsv, "blue", P["blue_hsv"], kk, z.k, extra=self.extra["blue"]), z.xs, z.ys))
             self._tick(p0 + pw * (n_ + 1) / len(idx), label)
         base_sc = self._score(cfg0, SR[tuple(P["red_hsv"])], SB[tuple(P["blue_hsv"])], times, sel)
         best = base_sc
@@ -345,7 +348,7 @@ class RodTuner:
         for n_, i in enumerate(idx):
             bgr = f0 if n_ == 0 else self.store.get(i)
             hsv = cv2.cvtColor(bgr[Y0:Y1, X0:X1], cv2.COLOR_BGR2HSV)
-            cache.append((colour_mask(hsv, "red", P["red_hsv"], ker, kB).astype(np.float32), colour_mask(hsv, "blue", P["blue_hsv"], ker, kB).astype(np.float32)))
+            cache.append((colour_mask(hsv, "red", P["red_hsv"], ker, kB, extra=self.extra["red"]).astype(np.float32), colour_mask(hsv, "blue", P["blue_hsv"], ker, kB, extra=self.extra["blue"]).astype(np.float32)))
             self._tick(p0 + pw * 0.35 * (n_ + 1) / len(idx), label)
         r_min = self.base["r_min"]
         wB = self.base["blue_w"]

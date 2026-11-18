@@ -222,3 +222,66 @@ def test_manager_apply_patches_only_improved_zones(tmp_path, monkeypatch):
     assert zb["center"] == [20.0, 20.0] and zb["radius"] == 100.0           # не улучшившаяся палка не тронута
     with pytest.raises(KeyError):
         mgr.autocal_apply("nope", [])
+
+
+# ───────────── несколько цветов на конец палки, пипетка, превью без масок ─────────────
+def test_more_colours_normalize():
+    z = lambda **kw: me.normalize_camera({"id": "c", "url": "x", "frame_size": [W, H], "zones": [dict({"id": "r", "type": "cycle", "center": [CX, CY], "radius": R}, **kw)]})["zones"][0]
+    assert z()["red_more"] == [] and z()["blue_more"] == []
+    assert z(red_more=[[20, 30, 100, 90]])["red_more"] == [[20, 30, 100, 90]]
+    with pytest.raises(ValueError):
+        z(red_more=[[1, 2, 3, 4]] * 7)                                       # не больше шести
+    with pytest.raises(ValueError):
+        z(blue_more=[[90, 80, 50, 50]])                                      # нижняя граница оттенка выше верхней
+    with pytest.raises(ValueError):
+        z(red_more=[[1, 2, 3]])
+
+
+def test_extra_colour_extends_mask_or_and_is_not_default():
+    orange = hsv_bgr(25, 230, 220)                                           # оттенок вне основного красного (H ≤ 16 или ≥ 165)
+    img = np.full((H, W, 3), BG, np.uint8)
+    cv2.line(img, (CX, CY), (CX + 150, CY), orange, 5)
+    mk = lambda **kw: me.CycleRT(dict(base_cfg(), center=[CX, CY], radius=R, thin=9, **kw), [W, H], (W, H))
+    z0, z1 = mk(), mk(red_more=[[20, 30, 100, 100]])
+    r0, _ = z0._liks(img[z0.y0:z0.y1, z0.x0:z0.x1])
+    r1, _ = z1._liks(img[z1.y0:z1.y1, z1.x0:z1.x1])
+    assert r0.sum() < 1.0 and r1.sum() > 50                                  # без дополнительного цвета палки нет в маске, с ним — есть
+    r2, _ = z0._liks(img[z0.y0:z0.y1, z0.x0:z0.x1], None, None, [[20, 30, 100, 100]], None)
+    assert abs(float(r2.sum()) - float(r1.sum())) < 1e-6                    # пробные цвета для превью = настроенные
+    # основной цвет по-прежнему работает рядом с дополнительным
+    f = frame(90)
+    red, blue = z1._liks(f[z1.y0:z1.y1, z1.x0:z1.x1])
+    assert red.sum() > 50 and blue.sum() > 50
+
+
+def test_autocal_mask_respects_extra_colours():
+    orange = hsv_bgr(25, 230, 220)
+    hsv = cv2.cvtColor(np.full((60, 60, 3), BG, np.uint8), cv2.COLOR_BGR2HSV)
+    cv2.line(hsv, (5, 30), (55, 30), (25, 230, 220), 3)
+    assert ac.colour_mask(hsv, "red", [16, 165, 50, 55], None, 1.0).sum() < 1.0
+    assert ac.colour_mask(hsv, "red", [16, 165, 50, 55], None, 1.0, extra=[(20, 30, 100, 100)]).sum() > 50
+    del orange
+
+
+def test_pick_color_finds_the_stick_near_a_sloppy_click():
+    z = me.CycleRT(dict(base_cfg(), center=[CX, CY], radius=R), [W, H], (W, H))
+    f = frame(90)                                                            # красный конец вправо от оси, синий влево
+    w = z.x1 - z.x0 - 1
+    u = lambda x: (x - z.x0) / w
+    v = lambda y: (y - z.y0) / (z.y1 - z.y0 - 1)
+    red = z.pick_color(f, u(CX + 100), v(CY + 4))                           # клик мимо на 4 px: пипетка всё равно берёт палку
+    blue = z.pick_color(f, u(CX - 100), v(CY - 4))
+    assert red and (red["h"] >= 170 or red["h"] <= 4) and red["s"] > 150, red
+    assert blue and 95 <= blue["h"] <= 105 and blue["s"] > 150, blue
+    assert z.pick_color(None, 0.5, 0.5) is None
+    assert z.pick_color(f, 7.0, -3.0) is not None                           # координаты за краем прижимаются
+
+
+def test_mask_preview_raw_and_width():
+    z = me.CycleRT(dict(base_cfg(), center=[CX, CY], radius=R), [W, H], (W, H))
+    f = frame(40)
+    for w in (120, 240, 640):
+        assert z.mask_preview(f, max_w=w, raw=True).shape[1] == w
+        assert z.mask_preview(f, max_w=w).shape[1] == w
+    a, b = z.mask_preview(f, max_w=240, raw=True), z.mask_preview(f, max_w=240)
+    assert a.shape == b.shape and np.abs(a.astype(int) - b.astype(int)).mean() > 1.0     # с масками и без — разные картинки

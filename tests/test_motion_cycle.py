@@ -109,9 +109,10 @@ def test_mirror_alarm_and_signed_delta_when_one_rod_is_off():
     g = st["groups"][0]
     assert 27 <= g["delta"] <= 33 and g["alarm"] == 1 and g["bits"] == [1]
     eng2 = me.CameraEngine(cam_cfg())
-    g2 = run(eng2, 40 - 25, 320, n=12)["groups"][0]
+    st2 = run(eng2, 40 - 25, 320, n=12)
+    g2 = st2["groups"][0]
     assert -28 <= g2["delta"] <= -22 and g2["alarm"] == 1
-    w = dict(((k, a), v) for k, a, v in eng2.compute_writes(run(eng2, 40 - 25, 320, n=12)))
+    w = dict(((k, a), v) for k, a, v in eng2.compute_writes(st2))        # запись — из того же состояния (второй прогон доучил бы смещение синей)
     assert w[("holding", 12)] == (int(round(g2["delta"] * 10)) & 0xFFFF) and w[("holding", 12)] > 60000   # знаковое → дополнительный код
 
 
@@ -748,3 +749,69 @@ def test_real_val_down_clip_found_rate_not_worse_than_native_masks():
     assert n >= 200
     assert found["rod1"] / n >= 0.84
     assert found["rod2"] / n >= 0.70
+
+
+# ── одна стрелка из двух половин (v3.0.3): src, смещение синей, одна половина вместо двух ──
+
+def half_frame(a, red=True, blue=True, blue_off=0.0):
+    """Палка на оси (250,270) под углом a красным концом; blue_off — на сколько синяя половина довёрнута от прямой."""
+    rng = np.random.default_rng(2)
+    img = np.full((H, W, 3), (60, 130, 70), np.uint8)
+    img = np.clip(img.astype(np.int16) + rng.integers(-10, 10, img.shape), 0, 255).astype(np.uint8)
+    r = math.radians(a)
+    if red:
+        cv2.line(img, (250, 270), (int(250 + 150 * math.sin(r)), int(270 - 150 * math.cos(r))), RED, 3)
+    if blue:
+        rb = math.radians(a + 180.0 + blue_off)
+        cv2.line(img, (250, 270), (int(250 + 150 * math.sin(rb)), int(270 - 150 * math.cos(rb))), BLUE, 3)
+    return img
+
+
+def one_rt(**over):
+    return me.CycleRT(me._norm_cycle({"id": "z", "name": "z", "center": [250, 270], "radius": 170.0, **over}, "z", "z"), [W, H], (W, H))
+
+
+def d_ang(a, b):
+    return (a - b + 180) % 360 - 180
+
+
+def test_both_halves_seen_source_is_both_and_angle_exact():
+    rt = one_rt()
+    for i in range(6):
+        assert rt.step(half_frame(70.0), i * 0.25)
+    assert rt.src == "both" and abs(d_ang(rt.angle, 70.0)) < 2.0
+    assert rt.lvl_r > 0.3 and rt.lvl_b > 0.3
+
+
+def test_red_missing_blue_holds_the_arrow():
+    rt = one_rt()
+    for i in range(6):
+        rt.step(half_frame(70.0), i * 0.25)
+    for i in range(6, 12):
+        assert rt.step(half_frame(70.0, red=False), i * 0.25)           # красного нет — стрелка по синей
+    assert rt.src == "blue" and abs(d_ang(rt.angle, 70.0)) < 3.0 and not rt.coast
+
+
+def test_blue_missing_red_holds_the_arrow():
+    rt = one_rt()
+    for i in range(6):
+        assert rt.step(half_frame(200.0, blue=False), i * 0.25)
+    assert rt.src == "red" and abs(d_ang(rt.angle, 200.0)) < 2.0
+
+
+def test_blue_offset_is_learned_so_single_blue_matches_red():
+    rt = one_rt()
+    for i in range(80):
+        rt.step(half_frame(40.0, blue_off=6.0), i * 0.25)                 # палка «ломаная»: синяя на 6° в стороне
+    assert abs(rt.off_b - 6.0) < 1.5
+    for i in range(80, 86):
+        rt.step(half_frame(40.0, red=False, blue_off=6.0), i * 0.25)
+    assert rt.src == "blue" and abs(d_ang(rt.angle, 40.0)) < 2.5            # без смещения было бы ~6° ошибки
+
+
+def test_halves_that_disagree_do_not_get_averaged():
+    rt = one_rt()
+    for i in range(6):
+        rt.step(half_frame(100.0), i * 0.25)
+    rt.step(half_frame(100.0, blue_off=70.0), 1.5)                         # синяя «уехала» на 70°: это не палка
+    assert rt.src in ("red", "blue") and abs(d_ang(rt.angle, 100.0)) < 3.0

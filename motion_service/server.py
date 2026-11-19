@@ -61,7 +61,7 @@ from motion_autocal_job import AutocalJob  # noqa: E402
 from motion_camera import CameraWorker, open_capture  # noqa: E402
 from motion_modbus import LinkRegistry, ModbusLink  # noqa: E402
 from motion_scenarios import ScenarioRunner  # noqa: E402
-from motion_shafts import ShaftRunner, PAIRS  # noqa: E402
+from motion_shafts import AUTO_REF_MIN_POINTS, PAIRS, ShaftRunner  # noqa: E402
 
 log = logging.getLogger("motion")
 
@@ -406,12 +406,32 @@ def create_app(data_dir: Optional[Path] = None, capture_factory: Callable = open
             raise HTTPException(404, "нет такой пары валов: %s" % pair)
         return mgr.shafts.history(pair, max(0.0, min(float(window), 20000.0)), max(10, min(int(points), 2000)))
 
+    @app.get("/shafts/stats")
+    def shafts_stats(pair: str, window: float = 3600.0):
+        # среднее / мин / макс / по модулю разности углов и скоростей пары за window секунд (до 5 ч) + эталон «по среднему»; кадры с удержанием не считаются
+        if pair not in PAIRS:
+            raise HTTPException(404, "нет такой пары валов: %s" % pair)
+        return mgr.shafts.stats(pair, float(window) if math.isfinite(window) else 3600.0)
+
     @app.post("/shafts/calibrate")
     def shafts_calibrate(req: dict = Body(...)):
-        """Эталон разности углов пары: «ноль» = текущее положение валов. Валы должны стоять там, где разность углов считается нулевой."""
+        """Эталон разности углов пары. Без window: «ноль» = текущее положение валов (валы должны стоять там, где разность считается нулевой).
+        С window (секунды): ноль = среднее сырого угла за это окно — для случая, когда валы идут и точного «нуля» не поймать."""
         pid = str(req.get("pair") or "")
         if pid not in PAIRS:
             raise HTTPException(404, "нет такой пары валов: %s" % pid)
+        if req.get("window") is not None:
+            try:
+                win = float(req["window"])
+            except (TypeError, ValueError):
+                raise HTTPException(400, "window — число секунд")
+            st = mgr.shafts.stats(pid, win if math.isfinite(win) else 3600.0)
+            if st["n"] < AUTO_REF_MIN_POINTS or st["ref_suggest"] is None:
+                raise HTTPException(409, "мало данных: за окно набралось %d с с видимыми палками без удержания, нужно хотя бы %d" % (st["n"], AUTO_REF_MIN_POINTS))
+            cfg = json.loads(json.dumps(mgr.cfg))
+            cfg["shafts"]["pairs"][pid]["ref"] = st["ref_suggest"]
+            new = mgr.apply(cfg)
+            return {"pair": pid, "ref": new["shafts"]["pairs"][pid]["ref"], "before": st["ref"], "n": st["n"], "span_s": st["span_s"]}
         snap = mgr.shafts.snapshot()["pairs"].get(pid)
         if not snap or not snap.get("valid") or snap.get("raw") is None:
             raise HTTPException(409, "нет данных: у обоих валов пары палка должна быть найдена (ряд камеры задан, КЗ включено)")

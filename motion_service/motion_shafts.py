@@ -12,7 +12,8 @@
 Для каждой пары считаем две разности:
   rpm_diff   — |скорость первого| − |скорость второго|, об/мин (направление вращения у левого и правого разное, поэтому по модулю);
   angle_diff — отклонение углов от эталона ref, градусы −180..180. Камеры смотрят под разными ракурсами, поэтому «ноль» разности
-               углов снимается вручную (calibrate), когда валы стоят в нужном положении: ref = текущее значение.
+               углов снимается вручную (calibrate), когда валы стоят в нужном положении: ref = текущее значение,
+               или по среднему за период (calibrate с window): ref = среднее сырого угла за окно, где палки видны без удержания.
 
 Расчёт compute() — чистая функция «конфиг + состояния камер → снимок», без потоков и сети (проверяется тестами).
 ShaftRunner раз в секунду зовёт её, ведёт историю для графика и пишет разности в ПЛК тем же каналом, что и сценарии.
@@ -20,6 +21,7 @@ ShaftRunner раз в секунду зовёт её, ведёт историю 
 from __future__ import annotations
 
 import logging
+import math
 import threading
 import time
 from collections import deque
@@ -40,6 +42,8 @@ PAIRS = {"nlr": ("nl", "np", "mirror"), "vlr": ("vl", "vp", "mirror"),
          "lnv": ("nl", "vl", "same"), "rnv": ("np", "vp", "same")}
 PAIR_ORDER = PAIR_IDS
 HISTORY_LEN = 20000           # точек на пару (раз в секунду ≈ 5,5 часа)
+STATS_MAX_S = 18000.0         # окно статистики и авто-эталона: 5 ч, чтобы не выходить за историю
+AUTO_REF_MIN_POINTS = 30      # меньше точек (секунд с видимыми палками) — эталон по среднему не снимаем
 
 
 def shaft_short(sid: str) -> str:
@@ -157,6 +161,33 @@ class ShaftRunner(threading.Thread):
             rows = [rows[int(i * step)] for i in range(points)]
         return {"pair": pair, "t": [round(r[0], 1) for r in rows], "angle": [r[1] for r in rows], "rpm": [r[2] for r in rows]}
 
+    def stats(self, pair: str, window_s: float = 3600.0, now: Optional[float] = None) -> dict:
+        """Среднее / мин / макс / среднее по модулю разности углов и скоростей пары за window_s секунд.
+
+        Берутся секундные точки, где видны оба вала и ни у одного нет удержания (coast). Угол считается от ТЕКУЩЕГО эталона по сырому значению,
+        поэтому после смены эталона цифры сразу честные. ref_suggest — эталон, при котором среднее Δ угла было бы нулём (круговое среднее сырого угла).
+        span_s — сколько секунд реально накоплено (не больше окна)."""
+        now = time.time() if now is None else now
+        window_s = max(1.0, min(float(window_s), STATS_MAX_S))
+        t0 = now - window_s
+        rows = [r for r in list(self.hist.get(pair, ())) if r[0] >= t0 and not r[3]]
+        out = {"pair": pair, "window_s": window_s, "n": len(rows), "span_s": 0.0, "angle": None, "rpm": None, "ref": None, "ref_suggest": None}
+        pc = ((self.mgr.cfg.get("shafts") or {}).get("pairs") or {}).get(pair) or {}
+        ref = float(pc.get("ref", 0.0))
+        out["ref"] = ref
+        if not rows:
+            return out
+        out["span_s"] = round(min(window_s, now - rows[0][0]), 1)
+        ang = [ang_diff(r[4], ref) for r in rows]
+        rpm = [r[2] for r in rows]
+        agg = lambda v: {"avg": round(sum(v) / len(v), 2), "min": round(min(v), 2), "max": round(max(v), 2),
+                         "avg_abs": round(sum(abs(x) for x in v) / len(v), 2)}
+        out["angle"], out["rpm"] = agg(ang), agg(rpm)
+        sx = sum(math.cos(math.radians(r[4])) for r in rows)
+        sy = sum(math.sin(math.radians(r[4])) for r in rows)
+        out["ref_suggest"] = round(ang_diff(math.degrees(math.atan2(sy, sx)), 0.0), 2)
+        return out
+
     def _alarm(self, pid: str, kind: str, tol: float, value: Optional[float]) -> int:
         """Тревога по допуску: tol 0 — выкл; нет данных — сброс (нечего судить)."""
         key = (pid, kind)
@@ -178,7 +209,8 @@ class ShaftRunner(threading.Thread):
             p["alarm_angle"] = self._alarm(pid, "angle", p["tol_angle"], p["angle_diff"])
             p["alarm_rpm"] = self._alarm(pid, "rpm", p["tol_rpm"], p["rpm_diff"])
             if p["valid"]:
-                self.hist[pid].append((now, p["angle_diff"], p["rpm_diff"]))
+                coast = bool(snap["shafts"][p["a"]]["coast"] or snap["shafts"][p["b"]]["coast"])
+                self.hist[pid].append((now, p["angle_diff"], p["rpm_diff"], coast, p["raw"]))
         self.snap = snap
         mb = cfg["modbus"]
         if not mb.get("enable"):

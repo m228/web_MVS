@@ -99,9 +99,16 @@ def shafts_history(service_url: str, pair: str, window: float = 3600.0, points: 
     return _call(service_url, "/shafts/history?pair=%s&window=%s&points=%d" % (urllib.parse.quote(pair, safe=""), float(window), int(points)))
 
 
-def shafts_calibrate(service_url: str, pair: str) -> dict:
-    """Эталон разности углов пары валов = текущее положение (валы должны стоять «в ноль»)."""
-    return _call(service_url, "/shafts/calibrate", {"pair": str(pair)}, timeout=10.0)
+def shafts_stats(service_url: str, pair: str, window: float = 3600.0) -> dict:
+    return _call(service_url, "/shafts/stats?pair=%s&window=%s" % (urllib.parse.quote(pair, safe=""), float(window)))
+
+
+def shafts_calibrate(service_url: str, pair: str, window: Optional[float] = None) -> dict:
+    """Эталон разности углов пары валов = текущее положение (валы должны стоять «в ноль») или, с window, среднее за последние window секунд."""
+    body = {"pair": str(pair)}
+    if window is not None:
+        body["window"] = float(window)
+    return _call(service_url, "/shafts/calibrate", body, timeout=10.0)
 
 
 def record(service_url: str, cam: str, on: bool) -> dict:

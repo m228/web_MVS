@@ -221,6 +221,58 @@ def test_history_window_and_downsample():
     assert r.history("nope")["t"] == []
 
 
+def set_dn(M, dn):
+    M.workers["dn"].s = states(dn=dn)["dn"]
+
+
+def test_stats_avg_min_max_abs_and_ref_suggest():
+    r, _, M = runner(cfg_two_rows(), states())
+    assert r.stats("lnv", 3600, now=1000.0)["n"] == 0 and r.stats("lnv", 3600, now=1000.0)["angle"] is None     # истории нет
+    for i in range(40):                                              # сырая разность НЛВ–ВЛВ: 10° и 12° по очереди, эталон 0
+        set_dn(M, (110.0 + 2 * (i % 2), 260.0, 5.0, -5.0))
+        r.tick(1000.0 + i)
+    st = r.stats("lnv", 3600, now=1040.0)
+    assert st["n"] == 40 and st["span_s"] == 40.0
+    assert st["angle"] == {"avg": 11.0, "min": 10.0, "max": 12.0, "avg_abs": 11.0}
+    assert st["rpm"]["avg"] == 1.0 and st["ref"] == 0.0               # |5| − |4| у каждого кадра
+    assert st["ref_suggest"] == pytest.approx(11.0, abs=0.05)
+    M.cfg["shafts"]["pairs"]["lnv"]["ref"] = st["ref_suggest"]       # после эталона среднее ≈ 0, размах сохраняется
+    st2 = r.stats("lnv", 3600, now=1040.0)
+    assert abs(st2["angle"]["avg"]) < 0.05 and st2["angle"]["min"] == pytest.approx(-1.0, abs=0.05) and st2["angle"]["max"] == pytest.approx(1.0, abs=0.05)
+    assert st2["angle"]["avg_abs"] == pytest.approx(1.0, abs=0.05)    # без компенсации + и −
+
+
+def test_stats_window_cuts_old_points_and_caps_at_5h():
+    r, _, M = runner(cfg_two_rows(), states())
+    for i in range(100):
+        r.tick(1000.0 + i)
+    assert r.stats("nlr", 30, now=1100.0)["n"] == 30                 # точки 1070…1099
+    assert r.stats("nlr", 999999, now=1100.0)["window_s"] == ms.STATS_MAX_S
+
+
+def test_stats_skip_coast_points():
+    r, _, M = runner(cfg_two_rows(), states())
+    for i in range(20):
+        r.tick(1000.0 + i)
+    set_dn(M, (150.0, 260.0, 5.0, -5.0))
+    M.workers["dn"].s["result"]["zones"][0]["coast"] = True          # НЛВ держится по скорости: палку не видно
+    for i in range(20, 30):
+        r.tick(1000.0 + i)
+    assert r.stats("lnv", 3600, now=1030.0)["n"] == 20               # кадры удержания не считаются
+    assert r.stats("vlr", 3600, now=1030.0)["n"] == 30               # а у пары без этого вала — все
+    assert len(r.history("lnv", window_s=0, points=100)["t"]) == 30  # на график удержание по-прежнему идёт
+
+
+def test_stats_ref_suggest_wraps_around_360():
+    r, _, M = runner(cfg_two_rows(), states())
+    for i in range(40):                                              # зеркальная пара: сумма углов 359° и 361° по очереди — норма около 0/360
+        set_dn(M, (99.0 + 2 * (i % 2), 260.0, 5.0, -5.0))
+        r.tick(1000.0 + i)
+    st = r.stats("nlr", 3600, now=1040.0)
+    assert st["ref_suggest"] == pytest.approx(0.0, abs=0.05)         # а не 180°
+    assert abs(st["angle"]["avg"]) < 0.05 and st["angle"]["min"] == pytest.approx(-1.0, abs=0.05) and st["angle"]["max"] == pytest.approx(1.0, abs=0.05)
+
+
 def test_http_calibrate_sets_ref_and_state_exposes_shafts(tmp_path):
     import importlib.util
     import json
@@ -311,6 +363,18 @@ def test_http_calibrate_sets_ref_and_state_exposes_shafts(tmp_path):
         h = http("/shafts/history?pair=lnv&window=0&points=50")[1]
         assert h["pair"] == "lnv" and len(h["t"]) >= 2 and h["angle"][-1] == 0.0
         assert http("/shafts/history?pair=bad")[0] == 404
+        assert http("/shafts/stats?pair=bad")[0] == 404
+        assert http("/shafts/calibrate", {"pair": "lnv", "window": 3600})[0] == 409     # истории мало — эталон по среднему не снимаем
+        mgr.workers = {k: W(v) for k, v in states(dn=(150.0, 230.0, 5, -5)).items()}    # нижний левый ушёл вперёд: сырая разность 50°, эталон 30°
+        for _ in range(40):
+            mgr.shafts.tick()
+        st = http("/shafts/stats?pair=lnv&window=3600")[1]
+        assert st["n"] >= 42 and st["ref"] == 30.0 and st["angle"]["max"] == 20.0 and st["angle"]["min"] == 0.0
+        assert 45.0 < st["ref_suggest"] < 50.0
+        code, body = http("/shafts/calibrate", {"pair": "lnv", "window": 3600})          # эталон = среднее за период
+        assert code == 200 and body["before"] == 30.0 and 45.0 < body["ref"] < 50.0 and body["n"] >= 42
+        assert mgr.cfg["shafts"]["pairs"]["lnv"]["ref"] == body["ref"]
+        assert http("/shafts/calibrate", {"pair": "lnv", "window": "abc"})[0] == 400
     finally:
         server.should_exit = True
         th.join(5)

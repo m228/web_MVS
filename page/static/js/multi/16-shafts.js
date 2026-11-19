@@ -8,7 +8,11 @@ const SH_NAME = { nl: 'НЛВ', np: 'НПВ', vl: 'ВЛВ', vp: 'ВПВ' };
 const SH_FULL = { nl: 'нижний левый вал', np: 'нижний правый вал', vl: 'верхний левый вал', vp: 'верхний правый вал' };
 const SH_PAIR_NAME = { nlr: 'НЛВ–НПВ', vlr: 'ВЛВ–ВПВ', lnv: 'НЛВ–ВЛВ', rnv: 'НПВ–ВПВ' };
 const SH_PAIR_NOTE = { nlr: 'левый и правый нижнего ряда', vlr: 'левый и правый верхнего ряда', lnv: 'левые валы двух рядов', rnv: 'правые валы двух рядов' };
-const SH = { histAt: 0, busy: false, hist: {}, note: '', noteCls: '' };
+// статистика разностей за период (ср / мин / макс / по модулю): считает сервис по секундной истории (до 5 ч, в памяти, без кадров с удержанием)
+const SH_STAT_WINS = [[300, '5 мин'], [900, '15 мин'], [1800, '30 мин'], [3600, '1 ч'], [7200, '2 ч'], [10800, '3 ч'], [18000, '5 ч']];
+const SH_STAT_KEY = 'mvs_sh_stat_win';
+const shLoadStatWin = () => { try { const v = Number(localStorage.getItem(SH_STAT_KEY)); if (SH_STAT_WINS.some(([x]) => x === v)) return v; } catch (e) { /* не критично */ } return 3600; };
+const SH = { histAt: 0, busy: false, hist: {}, note: '', noteCls: '', statWin: shLoadStatWin(), stats: {}, statAt: 0, statBusy: false };
 
 const shCfg = () => (MV.cfg && MV.cfg.shafts) || null;
 const shSnap = () => MV.shafts || null;
@@ -490,6 +494,7 @@ function mdShaftsTabHtml() {
     <details class="md-det" open><summary>Автоподгонка ${mdHelp('Сама подбирает цвета красной и синей половин палки, центр оси и радиус по записи вращения. Нужна после сдвига камеры, смены света или когда палка то пропадает, то ловится. Результат применяется только вашей кнопкой.')}</summary>${autocal}</details>
     <details class="md-det"><summary>Цвета палок ${mdHelp('Красная и синяя половины палки находятся по цвету. Если палка то пропадает, то ловится — подберите пороги: картинка показывает, что именно попадает в маску. У каждого вала свои пороги (ракурс и свет разные).')}</summary>${colors}</details>
     <div class="md-sub">Разности валов</div>
+    <div class="md-statwin">Среднее / мин / макс за <select data-md="sh" data-f="statwin">${mdSel(SH_STAT_WINS, SH.statWin)}</select> ${mdHelp('Среднее, минимум, максимум и среднее по модулю Δ угла и Δ скорости каждой пары за выбранный период — по всем четырём парам сразу. Берутся только секунды, когда видны обе палки и ни у одной нет удержания. История копится в сервисе движения (до 5 ч) и после его перезапуска начинается заново.')}</div>
     <div class="net-hint" id="md-sh-note"></div>
     ${pairs}`;
 }
@@ -500,11 +505,13 @@ function mdShaftPairHtml(id, p) {
     <div class="md-zone__ctl">
       <div class="md-zone__row"><b>${SH_PAIR_NAME[id]}</b><span class="net-hint">${SH_PAIR_NOTE[id]}</span><span class="md-sp"></span>
         <span class="cv-bit" id="md-shb-${id}" title="Тревога: разность больше допуска (угла или скорости)">–</span></div>
+      <div class="md-zstat" id="md-shst-${id}"></div>
       <div class="md-zone__row"><span class="md-lbl" title="Отклонение углов от эталона, °. Левый и правый вал одного ряда — зеркально (сумма), левые и правые валы рядов — одинаково (разность)">Δ угла</span><span class="md-num" id="md-sha-p-${id}">–</span>
         <span class="md-lbl" title="|скорость первого| − |скорость второго|, об/мин. Направление вращения не важно">Δ скорости</span><span class="md-num" id="md-shr-${id}">–</span></div>
       <div class="md-zone__row md-mx-set"><span class="md-lbl" title="Тревога, когда |Δ угла| не меньше допуска. 0 — тревога по углу выключена">допуск угла, °</span>${mdNum(a + ' data-f="tol_angle"', p.tol_angle, 'min="0" max="180" step="0.5"')}
         <span class="md-lbl" title="Какое значение считать нулём. Камеры смотрят под разными ракурсами, поэтому ноль снимается вручную, когда валы стоят в нужном положении">эталон, °</span>${mdNum(a + ' data-f="ref"', p.ref, 'min="-180" max="180" step="0.5"')}
-        <button type="button" class="btn-secondary md-x" ${a} data-f="calib" title="Принять текущее положение валов за ноль разности углов (нужны оба вала в кадре)">эталон = сейчас</button></div>
+        <button type="button" class="btn-secondary md-x" ${a} data-f="calib" title="Принять текущее положение валов за ноль разности углов (нужны оба вала в кадре)">эталон = сейчас</button>
+        <button type="button" class="btn-secondary md-x" ${a} data-f="calibavg" title="Автоподбор: ноль = среднее значение разности углов за период, выбранный вверху блока. Валы при этом идут как обычно, точно ловить «ноль» не нужно">эталон = среднее за период</button></div>
       <div class="md-zone__row md-mx-set"><span class="md-lbl" title="Тревога, когда |Δ скорости| не меньше допуска. 0 — тревога по скорости выключена">допуск скорости, об/мин</span>${mdNum(a + ' data-f="tol_rpm"', p.tol_rpm, 'min="0" step="0.1"')}</div>
       <div class="md-zone__row md-mx-set"><span class="md-lbl" title="Регистр: Δ угла в 0,1° со знаком (uint16). Адрес не задан — в ПЛК не пишется. ПЛК включается на вкладке «ПЛК · сценарии · группы»">Δ угла → ПЛК</span>${mdOutCell(p.out_angle, a, false, 'oa', [['', 'нет'], ['holding', 'регистр']])}
         <span class="md-lbl" title="Регистр: Δ скорости в 0,01 об/мин со знаком (uint16)">Δ скорости → ПЛК</span>${mdOutCell(p.out_rpm, a, false, 'or', [['', 'нет'], ['holding', 'регистр']])}</div>
@@ -522,7 +529,16 @@ async function mdOnShafts(t) {
   const sc = shCfg();
   if (!sc) return;
   const id = t.dataset.id, f = t.dataset.f;
+  if (f === 'statwin') {                                     // период статистики: один на весь блок
+    SH.statWin = Number(t.value);
+    SH.stats = {};
+    try { localStorage.setItem(SH_STAT_KEY, String(SH.statWin)); } catch (e) { /* не критично */ }
+    mdPaintShaftStats();
+    mdShaftsStats(true);
+    return;
+  }
   if (f === 'calib') { shCalibrate(id); return; }
+  if (f === 'calibavg') { shCalibrateAvg(id); return; }
   const out = (cur, kindF) => (f === kindF ? (t.value ? { kind: t.value, address: (cur && cur.address) || 0 } : null) : cur);
   mdEdit(() => {
     if (SH_PAIRS.includes(id)) {
@@ -564,6 +580,62 @@ async function shCalibrate(pid) {
   shSetNote('Эталон ' + SH_PAIR_NAME[pid] + ' = ' + shSgn(r.ref, 1) + '°, разность углов теперь около нуля.', 'ok');
 }
 
+// автоподбор эталона: ноль = среднее Δ угла за выбранный период. Разовое действие по кнопке (не постоянная подстройка:
+// постоянная впитала бы настоящий рассинхрон). Если за период валы реально разошлись, эталон тоже съедет — поэтому показываем цифры и спрашиваем.
+async function shCalibrateAvg(pid) {
+  const st = SH.stats[pid];
+  const need = 30;
+  if (!st || st.window_s !== SH.statWin || !st.angle || st.n < need || st.ref_suggest == null) {
+    shSetNote('Мало данных для ' + SH_PAIR_NAME[pid] + ': за ' + mdFmtWin(SH.statWin) + ' набралось ' + ((st && st.n) || 0) + ' с с видимыми палками без удержания, нужно хотя бы ' + need + '. Подождите или выберите период короче.', 'bad');
+    return;
+  }
+  const a = st.angle;
+  const after = shSgn(a.min - a.avg, 1) + '…' + shSgn(a.max - a.avg, 1);
+  if (!confirm('Принять за ноль среднее ' + SH_PAIR_NAME[pid] + ' за ' + mdFmtWin(st.span_s) + ' (' + st.n + ' с)?\n\n' +
+    'Эталон: ' + shSgn(st.ref, 1) + '° → ' + shSgn(st.ref_suggest, 1) + '°\n' +
+    'Среднее Δ сейчас ' + shSgn(a.avg, 1) + '°, после эталона среднее станет ≈ 0, колебания ' + after + '°.\n\n' +
+    'Делайте, когда валы работают штатно: если за этот период они реально разошлись, расхождение уйдёт в эталон.')) return;
+  if (MV.dirty) { clearTimeout(MD.saveTimer); await mdFlush(); }
+  const r = await mvJson('/api/motion/shafts_calibrate', { pair: pid, window: SH.statWin });
+  if (!r || r.error) { shSetNote('Эталон не снят: ' + ((r && r.error) || 'нет ответа'), 'bad'); return; }
+  MV.dirty = false;
+  await mvRefreshConfig();
+  MD.key = '';
+  renderMotionDock();
+  SH.stats = {};
+  mdShaftsStats(true);
+  shSetNote('Эталон ' + SH_PAIR_NAME[pid] + ': ' + shSgn(r.before, 1) + '° → ' + shSgn(r.ref, 1) + '° (среднее за ' + mdFmtWin(r.span_s) + ').', 'ok');
+}
+
+// ср / мин / макс за период под каждой парой (значения приходят раз в 5 с, перерисовка — вместе с общим опросом)
+const shFmtStat = (a, unit, d) => `ср <b class="md-zstat__cur">${shSgn(a.avg, d)}${unit}</b> · мин ${shSgn(a.min, d)} · макс ${shSgn(a.max, d)} · по модулю ${Number(a.avg_abs).toFixed(d)}`;
+function mdPaintShaftStats() {
+  SH_PAIRS.forEach((id) => {
+    const el = mdEl('md-shst-' + id);
+    if (!el) return;
+    const st = SH.stats[id];
+    if (!st) { el.innerHTML = ''; return; }
+    if (!st.angle) { el.innerHTML = `<div class="md-zstat__row">за ${mdFmtWin(st.window_s)} нет данных: палки не видны или идёт удержание</div>`; return; }
+    const note = st.span_s < st.window_s * 0.9 ? ` <span class="md-zstat__note">накоплено за ${mdFmtWin(st.span_s)}</span>` : '';
+    el.innerHTML = `<div class="md-zstat__row is-main" title="Отклонение углов от эталона за период; «по модулю» — среднее |Δ|, показывает, насколько валы расходятся в целом, без взаимной компенсации + и −">Δ угла за ${mdFmtWin(st.window_s)}: ${shFmtStat(st.angle, '°', 1)}${note}</div>` +
+      `<div class="md-zstat__row" title="|скорость первого| − |скорость второго| за период">Δ скорости: ${shFmtStat(st.rpm, ' об/мин', 2)}</div>`;
+  });
+}
+
+async function mdShaftsStats(force) {
+  if (MD.tab !== 'shafts' || SH.statBusy || (!force && Date.now() - SH.statAt < 5000)) return;
+  SH.statBusy = true;
+  SH.statAt = Date.now();
+  const win = SH.statWin;
+  try {
+    for (const id of SH_PAIRS) {
+      const r = await mvApi('/api/motion/shafts_stats?pair=' + id + '&window=' + win);
+      if (r && !r.error && win === SH.statWin) SH.stats[id] = r;
+    }
+  } finally { SH.statBusy = false; }
+  mdPaintShaftStats();
+}
+
 // живые значения: таблица валов и разности пар (раз в секунду вместе с опросом сервиса)
 function mdPaintShafts() {
   const s = shSnap();
@@ -585,6 +657,8 @@ function mdPaintShafts() {
   });
   if (SH.noteCls === '' && !SH.note) shSetNote('', '');
   mdShaftsHist();
+  mdShaftsStats();
+  mdPaintShaftStats();
   shPrevPaint();
   shLossRefresh(false);
   shAcPaintAll();

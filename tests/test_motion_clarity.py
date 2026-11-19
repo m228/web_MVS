@@ -348,3 +348,12 @@ def test_level_not_valid_when_uncalibrated():
     eng = me.CameraEngine(cam_cfg())
     z = zone(run(eng, frame({c: CLEAN for c in CENTERS})), "g1")
     assert z["valid"] is False and z["level_name"] == "clear"
+
+
+def test_clarity_step_records_perf():
+    from perf_stats import PERF
+    PERF.drop("juice:")
+    zs, _, _ = calibrated_cfg()
+    run(me.CameraEngine(cam_cfg(zs)), frame({CENTERS[0]: CLEAN}), n=3)
+    s = PERF.snapshot()["juice:juice"]
+    assert s["of"] == len(CENTERS) and s["n"] >= 1

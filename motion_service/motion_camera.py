@@ -26,6 +26,7 @@ import cv2
 import numpy as np
 
 import juice_base
+from perf_stats import PERF
 from motion_engine import CameraEngine, scale_points
 from motion_level import LevelInfer, nearest_trend_shot, post_infer, trend_shot_list
 from motion_webview import WebView
@@ -805,11 +806,14 @@ class CameraWorker(threading.Thread):
             now = time.time()
             if now - last_proc < interval:
                 continue
+            t_dec = time.perf_counter()
             ok, frame = cap.retrieve()
             if not ok or frame is None:
                 self._dead(now, timeout, "нет кадров")
                 continue
             gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY) if frame.ndim == 3 else frame
+            PERF.record(self.id + ":frame", (time.perf_counter() - t_dec) * 1000.0, budget_ms=interval * 1000.0,
+                        note="%d×%d%s" % (frame.shape[1], frame.shape[0], " · " + self._decoder if self._decoder else ""))
             dt = now - last_proc if last_proc else interval
             last_proc = now
             self._last_good = now

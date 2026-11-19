@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Скорость обработки</title>
+  <link rel="stylesheet" href="/static/style.css" />
+  <script src="/static/js/logger.js"></script>
+  <script src="/static/js/theme.js" defer></script>
+</head>
+<body>
+  <div class="layout">
+    <main class="content">
+      <div class="app-shell">
+        <header class="topbar">
+          <div class="theme-panel">
+            <span class="theme-panel__label">Тема интерфейса</span>
+            <div class="theme-switcher" data-theme-switcher></div>
+          </div>
+          <div class="brand-slot" aria-label="Логотип компании">
+            <div class="brand-slot__logo-wrap">
+              <a class="brand-link" href="https://max-automation.ru/" target="_blank" rel="noopener" title="Перейти на сайт Maximum Automation">
+                <img class="brand-logo" data-theme-logo data-logo-light="/static/icon/Logo_Black.png" data-logo-dark="/static/icon/Logo_White.png" src="/static/icon/Logo_Black.png" alt="MA logo" />
+              </a>
+            </div>
+          </div>
+        </header>
+
+        <section class="card page-hero">
+          <div class="page-hero__content">
+            <p class="page-hero__eyebrow">Диагностика</p>
+            <h1 class="page-hero__title">Скорость обработки</h1>
+            <p class="page-hero__subtitle">
+              Сколько времени уходит на обработку одного кадра в каждом месте: валы, зоны, сок, уровень декантатора,
+              микроскоп и разломы. Цифры за последние ~200 кадров. «Загрузка» — время расчёта к интервалу между кадрами:
+              выше 100 % компьютер не успевает.
+            </p>
+          </div>
+          <div class="page-hero__actions">
+            <a href="/" class="btn btn-secondary">На главную</a>
+            <span class="perf-state" id="perfState">—</span>
+          </div>
+        </section>
+
+        <div id="perfBody"></div>
+      </div>
+    </main>
+  </div>
+  <script src="/static/js/perf.js"></script>
+</body>
+</html>

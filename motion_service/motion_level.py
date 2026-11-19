@@ -32,6 +32,8 @@ from typing import Callable, Optional
 import cv2
 import numpy as np
 
+from perf_stats import PERF
+
 log = logging.getLogger("motion.level")
 
 DEFAULT_URL = "http://127.0.0.1:8770"
@@ -445,6 +447,7 @@ class LevelInfer(threading.Thread):
         if frame is None:
             self.rt.note_error("нет свежего кадра камеры", quiet=True)
             return
+        t_all = time.perf_counter()
         ok, buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, self.q])
         if not ok:
             self.rt.note_error("кадр не закодировался")
@@ -458,6 +461,9 @@ class LevelInfer(threading.Thread):
             self._maybe_shot(frame, None, str(res["error"]))
         else:
             self.rt.ingest(res)
+            budget = g["infer_interval_s"] * 1000.0
+            PERF.record(g["id"] + ":level", (time.perf_counter() - t_all) * 1000.0, got=len(res.get("objects") or []), budget_ms=budget)
+            PERF.record(g["id"] + ":level_model", float((res.get("timing") or {}).get("ms") or 0), budget_ms=budget, note=str(res.get("model") or ""))
             self._maybe_shot(frame, res.get("objects") or [])
             try:
                 self._maybe_save(buf.tobytes(), res)

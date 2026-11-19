@@ -21,12 +21,14 @@ import json
 import os
 import re
 import threading
+import time
 from collections import deque
 from typing import Optional
 
 import cv2
 import numpy as np
 
+from perf_stats import PERF
 from motion_level import DEFAULT_URL as LEVEL_URL, GEOMETRIES as LEVEL_GEOMETRIES, LevelRT
 
 CALIB_DT = 0.33          # интервал между кадрами, при котором калибровались пороги потока (камеры ~3 fps)
@@ -1397,11 +1399,23 @@ class CameraEngine:
             return None
         prev = self.buf[0]
         dt = self.gap * self.proc_interval
+        cid, budget = self.cfg["id"], self.proc_interval * 1000.0
+        t0 = time.perf_counter()
         bits = {z.id: z.step(prev, gray, dt) for z in self.zones}
+        t1 = time.perf_counter()
         for c in self.cycles.values():
             bits[c.id] = int(c.step(frame, now))
+        t2 = time.perf_counter()
         for c in self.clarity.values():
             bits[c.id] = int(c.step(frame, now))
+        t3 = time.perf_counter()
+        if self.zones:
+            PERF.record(cid + ":zones", (t1 - t0) * 1000.0, got=sum(1 for z in self.zones if bits[z.id]), of=len(self.zones), budget_ms=budget)
+        if self.cycles:
+            PERF.record(cid + ":shafts", (t2 - t1) * 1000.0, got=sum(1 for c in self.cycles.values() if c.valid and not c.coast),
+                        of=len(self.cycles), budget_ms=budget)
+        if self.clarity:
+            PERF.record(cid + ":juice", (t3 - t2) * 1000.0, got=sum(1 for c in self.clarity.values() if c.valid), of=len(self.clarity), budget_ms=budget)
         self._link_partners()
         self.last_state = self._state(bits, now, alive=True)
         self._learn_save(now)

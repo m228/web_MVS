@@ -34,6 +34,7 @@ import cv_client
 import video_client
 import motion_client
 import level_client
+from perf_stats import PERF
 import cam_events
 import cam_monitor
 import day_capture
@@ -171,6 +172,11 @@ def rtsp_page():
 @app.get("/multi")
 def multi_page():
     return _page("multi.html")
+
+
+@app.get("/perf")
+def perf_page():
+    return _page("perf.html")
 
 
 @app.get("/network")
@@ -1372,6 +1378,13 @@ def motion_put_config(cfg: dict = Body(...)):
     else:
         log_event("motion", "Настройки сервиса движения отклонены: " + str(r["error"]), "warn")
     return r
+
+
+@app.get("/api/perf")
+def api_perf():
+    """Сколько времени уходит на обработку картинок везде: приложение (микроскоп, разломы) + сервис движения (валы, зоны, сок, уровень)."""
+    mo = motion_client.perf(_motion_url())
+    return {"app": PERF.snapshot(), "motion": mo if "error" not in mo else None, "motion_error": mo.get("error")}
 
 
 @app.get("/api/motion/state")

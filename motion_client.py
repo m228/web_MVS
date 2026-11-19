@@ -95,6 +95,11 @@ def mirror_table(service_url: str, cam: str, group: str) -> dict:
     return _call(service_url, "/cameras/%s/mirror_table" % urllib.parse.quote(cam, safe=""), {"group": str(group)}, timeout=10.0)
 
 
+def clarity_sample(service_url: str, cam: str, zones: list, seconds: float = 30.0) -> dict:
+    """Цвет кругов-прозрачности за последние секунды (медиана Lab) — эталон «чистый» / «грязный»; сохраняет интерфейс."""
+    return _call(service_url, "/cameras/%s/clarity_sample" % urllib.parse.quote(cam, safe=""), {"zones": list(zones or []), "seconds": float(seconds)}, timeout=10.0)
+
+
 def shafts_history(service_url: str, pair: str, window: float = 3600.0, points: int = 600) -> dict:
     return _call(service_url, "/shafts/history?pair=%s&window=%s&points=%d" % (urllib.parse.quote(pair, safe=""), float(window), int(points)))
 

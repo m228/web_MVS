@@ -186,7 +186,7 @@ function renderMotionDock() {
   if (dock.hidden) return;
   const { source, cam } = mdCamera();
   const all = mode === 'all';
-  if (MD.tab !== 'zones' && MD.tab !== 'plc' && MD.tab !== 'cams' && MD.tab !== 'level' && MD.tab !== 'shafts') MD.tab = 'zones';
+  if (MD.tab !== 'zones' && MD.tab !== 'plc' && MD.tab !== 'cams' && MD.tab !== 'level' && MD.tab !== 'shafts' && MD.tab !== 'juice') MD.tab = 'zones';
 
   const cams = mdCfgCams();
   const camKey = all
@@ -205,6 +205,7 @@ function renderMotionDock() {
   mdEl('mdMark').hidden = all;
   mdEl('mdMarkRods').hidden = all;
   mdEl('mdMarkGlass').hidden = all;
+  if (mdEl('mdMarkJuice')) { mdEl('mdMarkJuice').hidden = all; mdEl('mdMarkJuice').disabled = !(cam && cam.enabled); }
   mdEl('mdRec').hidden = all;
   mdEl('mdAll').hidden = all;
   mdEl('mdMark').disabled = !(cam && cam.enabled);
@@ -232,6 +233,9 @@ function renderMotionDock() {
   } else if (MD.tab === 'shafts') {
     body.innerHTML = mdShaftsTabHtml();
     mdShaftsHist(true);
+  } else if (MD.tab === 'juice') {
+    body.innerHTML = jcTabHtml(mode, cam);
+    jcRefresh(true);
   } else if (MD.tab === 'level') {
     body.innerHTML = mdLevelTabHtml(mode, cam);
     lvPaintModel();
@@ -496,7 +500,7 @@ function mdCamsTabHtml() {
   const rows = info.map(({ c, u }) => {
     const ip = mdIp(c.url);
     const twins = (byIp[ip] || []).filter((x) => x.id !== c.id);
-    const flows = c.zones.filter((z) => z.type !== 'level' && (z.metric === 'flow' || z.track_flow !== false)).length;
+    const flows = c.zones.filter((z) => z.type !== 'level' && z.type !== 'clarity' && (z.metric === 'flow' || z.track_flow !== false)).length;
     const inUi = state.cameras.some((q) => q.serial === c.id);
     const use = u.used
       ? [u.scen.length ? 'сценарии: ' + u.scen.map(escapeHtml).join(', ') : '', u.plc.length ? 'в ПЛК: ' + u.plc.map(escapeHtml).join(', ') : ''].filter(Boolean).join('<br>')
@@ -524,7 +528,8 @@ function mdOnCamRow(t) {
 }
 
 // есть что показать на вкладке «Зоны · тренды»: обычные зоны (стёкла уровня — не в счёт) или карточка уровня
-const mdHasZoneCards = (c) => c.zones.some((z) => z.type !== 'level') || !!lvGroup(c);
+// (круги прозрачности сока — отдельная вкладка «Сок»)
+const mdHasZoneCards = (c) => c.zones.some((z) => z.type !== 'level' && z.type !== 'clarity') || !!lvGroup(c);
 
 function mdZonesTabHtml(mode, cam) {
   const all = mode === 'all';
@@ -543,7 +548,7 @@ function mdZonesTabHtml(mode, cam) {
     shown.forEach((c) => {
       if (!mdHasZoneCards(c)) return;
       if (all) html += `<div class="md-camhead"><b>${escapeHtml(c.name)}${mdIpTag(c.url)}</b><span class="motion-dock__pill" id="md-cp-${escapeHtml(c.id)}"></span></div>`;
-      html += c.zones.map((z, i) => (z.type === 'level' ? '' : mdZoneCardHtml(c, z, i))).join('');      // стёкла уровня — на вкладке «Уровень»
+      html += c.zones.map((z, i) => (z.type === 'level' || z.type === 'clarity' ? '' : mdZoneCardHtml(c, z, i))).join('');      // стёкла уровня — на вкладке «Уровень»
       html += mdVisHtml(c);
       html += mdLevelCardHtml(c);
       html += (c.groups || []).filter((g) => g.type === 'mirror').map((g) => mdMirrorCardHtml(c, g)).join('');
@@ -788,7 +793,7 @@ function mdDrawSeries(cv, t, vals, ok, lo, hi, opts) {
   if (cv.width !== w) cv.width = w;
   const g = cv.getContext('2d');
   g.clearRect(0, 0, w, hh);
-  const plotH = hh - 13, win = MD.win, n = vals.length;
+  const plotH = hh - 13, win = (opts && opts.win) || MD.win, n = vals.length;
   const Y = (v) => plotH - ((v - lo) / (hi - lo)) * (plotH - 6) - 1;
   g.fillStyle = '#94a3b8'; g.font = '10px sans-serif';
   g.fillText(String(hi), 3, 10); g.fillText(String(lo), 3, plotH - 2);
@@ -903,7 +908,7 @@ function mdOnWheel(e) {
 function mdSourceOptions() {
   const out = [];
   mdCfgCams().forEach((c) => {
-    c.zones.forEach((z) => { if (z.type !== 'cycle' && z.type !== 'level') out.push({ camera: c.id, zone: z.id, key: c.id + '/' + z.id, label: c.name + ' · ' + z.name, ip: mdIpTag(c.url) }); });
+    c.zones.forEach((z) => { if (z.type !== 'cycle' && z.type !== 'level' && z.type !== 'clarity') out.push({ camera: c.id, zone: z.id, key: c.id + '/' + z.id, label: c.name + ' · ' + z.name, ip: mdIpTag(c.url) }); });
     (c.groups || []).forEach((g) => { if (g.type !== 'mirror' && g.type !== 'level') out.push({ camera: c.id, group: g.id, key: 'g:' + c.id + '/' + g.id, label: c.name + ' · ' + g.name, ip: '' }); });
   });
   return out;
@@ -1082,7 +1087,7 @@ function mdGroupsSectionHtml() {
 }
 
 function mdGeZonesHtml(cam, g) {
-  const zs = cam.zones.filter((z) => z.type !== 'level');
+  const zs = cam.zones.filter((z) => z.type !== 'level' && z.type !== 'clarity');
   if (!zs.length) return '<span class="net-hint">у камеры нет зон</span>';
   return zs.map((z) => `<label class="md-chk"><input type="checkbox" value="${escapeHtml(z.id)}"${g.zones.includes(z.id) ? ' checked' : ''} />${escapeHtml(z.name)}</label>`).join('');
 }
@@ -1333,6 +1338,7 @@ function paintMotionDockLive() {
     });
   }
   if (MD.tab === 'level') mdLevelPaintLive();
+  if (MD.tab === 'juice') jcPaintLive();
   if (MD.tab === 'zones') mdPaintZoneStats();
   if (MD.tab === 'zones' && (MV.tick % 2 === 0)) mdDrawTrends();
 }
@@ -1532,25 +1538,28 @@ async function mdLoadMarkFrame() {
 function openMarkModal(kind) {
   const { source, cam } = mdCamera();
   if (!source || !cam || !cam.enabled) return;
-  const rods = kind === true, glass = kind === 'glass';       // слушатель click передаёт событие, а не флаг
-  MD.mark = { cam: cam.id, pts: [], cursor: null, fw: 0, fh: 0, closed: false, busy: false, rods, glass, polys: [] };
+  const rods = kind === true, glass = kind === 'glass', juice = kind === 'juice';       // слушатель click передаёт событие, а не флаг
+  MD.mark = { cam: cam.id, pts: [], cursor: null, fw: 0, fh: 0, closed: false, busy: false, rods, glass, juice, polys: [] };
   mdEl('mmCam').textContent = source.label || source.serial;
-  mdEl('mmTitle').textContent = rods ? 'Разметка валов' : glass ? 'Разметка стёкол' : 'Разметка зоны';
-  mdEl('mmOk').textContent = rods ? 'Добавить валы' : glass ? 'Готово' : 'Добавить зону';
+  mdEl('mmTitle').textContent = rods ? 'Разметка валов' : glass ? 'Разметка стёкол' : juice ? 'Разметка стаканов' : 'Разметка зоны';
+  mdEl('mmOk').textContent = rods ? 'Добавить валы' : glass ? 'Готово' : juice ? 'Добавить стаканы' : 'Добавить зону';
   mdEl('mmClose').textContent = 'Замкнуть (Enter)';
   mdEl('mmImg').removeAttribute('src');
   mdEl('mmForm').hidden = true;
   mdEl('mmOk').hidden = true;
-  mdEl('mmClose').hidden = rods;
-  mdEl('mmHint').textContent = rods
+  mdEl('mmClose').hidden = rods || juice;
+  mdEl('mmHint').textContent = juice
+    ? 'Кликайте по центру каждого стакана по порядку: первый клик — стакан 1, и так далее. ПКМ — убрать последнюю точку. Радиус кружка — ползунком ниже (кружок должен лежать внутри стакана, на соке, без стенки). Enter — готово.'
+    : rods
     ? 'Кликните по оси левого вала (красная точка в центре палки), затем по оси правого. ПКМ — убрать точку. Радиус окружности — ползунком ниже (она должна доставать до концов палки). Enter — готово.'
     : glass
       ? 'Обведите НИЖНЕЕ (рабочее) стекло: клики по углам внутри стекла. ПКМ — убрать точку. Enter — замкнуть (минимум 3 точки). Потом обведите верхнее; если стекло одно — «Готово».'
       : 'Кликайте по углам зоны. ПКМ — убрать точку. «Замкнуть» или Enter — готово (минимум 3 точки). Кадр замирает после первой точки.';
   MD.mark.hint = mdEl('mmHint').textContent;
-  MD.mark.rodPct = 17;
-  mdEl('mmRodR').value = 17; mdEl('mmRodRv').textContent = '17 %';
-  mdEl('mmRodBox').hidden = !rods;
+  MD.mark.rodPct = juice ? 4 : 17;                 // стакан — маленький кружок (4 % ширины кадра), вал — большая окружность
+  mdEl('mmRodR').min = juice ? 1 : 3;
+  mdEl('mmRodR').value = MD.mark.rodPct; mdEl('mmRodRv').textContent = MD.mark.rodPct + ' %';
+  mdEl('mmRodBox').hidden = !(rods || juice);
   const modal = mdEl('motionMarkModal');
   modal.classList.add('show');
   modal.setAttribute('aria-hidden', 'false');
@@ -1574,6 +1583,10 @@ function mdMarkUi() {
   if (!m) return;
   if (m.rods) {
     mdEl('mmOk').hidden = m.pts.length < 2;
+    mdEl('mmUndo').disabled = !m.pts.length;
+  } else if (m.juice) {
+    mdEl('mmOk').hidden = !m.pts.length;
+    mdEl('mmOk').textContent = m.pts.length ? 'Добавить стаканы: ' + m.pts.length : 'Добавить стаканы';
     mdEl('mmUndo').disabled = !m.pts.length;
   } else if (m.glass) {
     mdEl('mmClose').textContent = m.polys.length ? 'Замкнуть верхнее (Enter)' : 'Замкнуть нижнее (Enter)';
@@ -1606,13 +1619,25 @@ function mdDrawMark() {
   ((cam && cam.zones) || []).forEach((z) => {      // уже размеченные зоны — для ориентира
     g.strokeStyle = '#9ca3af'; g.fillStyle = 'rgba(156,163,175,.14)';
     g.beginPath();
-    if (z.type === 'cycle') {
+    if (z.type === 'cycle' || z.type === 'clarity') {
       g.arc(z.center[0] * (fw / rs[0]) * sx, z.center[1] * (fh / rs[1]) * sy, z.radius * (fw / rs[0]) * sx, 0, 7); g.stroke();
       return;
     }
     z.points.forEach((p, i) => { const x = p[0] * (fw / rs[0]) * sx, y = p[1] * (fh / rs[1]) * sy; if (i) g.lineTo(x, y); else g.moveTo(x, y); });
     g.closePath(); g.fill(); g.stroke();
   });
+  if (m.juice) {                                   // стаканы: номер и кружок выбранного радиуса у каждой точки
+    const n0 = jcNextNumber(cam);
+    g.strokeStyle = '#34d399'; g.fillStyle = '#34d399'; g.textAlign = 'center';
+    m.pts.forEach((p, i) => {
+      const x = p[0] * sx, y = p[1] * sy;
+      g.beginPath(); g.arc(x, y, 3, 0, 7); g.fill();
+      g.beginPath(); g.arc(x, y, mdRodRadius(rs, m.rodPct) * (fw / rs[0]) * sx, 0, 7); g.stroke();
+      g.fillText(String(n0 + i), x, y - mdRodRadius(rs, m.rodPct) * (fw / rs[0]) * sx - 5);
+    });
+    g.textAlign = 'left';
+    return;
+  }
   if (m.rods) {                                    // валы: точка оси и окружность поиска стандартного радиуса
     g.strokeStyle = '#38bdf8'; g.fillStyle = '#38bdf8';
     m.pts.forEach((p) => {
@@ -1700,6 +1725,7 @@ function mdMarkSave() {
   if (!cam) return;
   const fw = m.fw || mdEl('mmImg').naturalWidth, fh = m.fh || mdEl('mmImg').naturalHeight;
   if (m.rods) { mdMarkSaveRods(m, cam, fw, fh); return; }
+  if (m.juice) { jcMarkSave(m, cam, fw, fh); return; }
   if (m.glass) { lvMarkSave(m, cam, fw, fh); return; }
   const metric = mdEl('mmMetric').value, type = mdEl('mmType').value;
   const name = mdEl('mmName').value.trim();
@@ -1735,6 +1761,7 @@ function initMotionDock() {
   mdEl('mdMark')?.addEventListener('click', () => openMarkModal(false));
   mdEl('mdMarkRods')?.addEventListener('click', () => openMarkModal(true));
   mdEl('mdMarkGlass')?.addEventListener('click', () => openMarkModal('glass'));
+  mdEl('mdMarkJuice')?.addEventListener('click', () => openMarkModal('juice'));
   mdEl('mdRec')?.addEventListener('click', mdOnRec);
   mdEl('mdRecAll')?.addEventListener('click', mdOnRecAll);
   mdEl('mdRecZip')?.addEventListener('click', mdOnRecZip);
@@ -1761,6 +1788,7 @@ function initMotionDock() {
     else if (kind === 'cm') mdOnCamRow(t);
     else if (kind === 'lv') mdOnLevel(t);
     else if (kind === 'sh') mdOnShafts(t);
+    else if (kind === 'jc') jcOnEvent(t);
     else if (kind === 'shloss') mdOnShLoss(t);
     else if (kind === 'shac') mdOnShAc(t);
     else if (kind === 'shpick') mdOnShPick(t);
@@ -1830,6 +1858,7 @@ function initMotionDock() {
     if (e.key === 'Escape') closeMarkModal();
     else if (MD.mark.glass) { if (e.key === 'Enter') { if (MD.mark.pts.length >= 3) mdMarkClose(); else if (MD.mark.polys.length) mdMarkSave(); } }
     else if (MD.mark.rods) { if (e.key === 'Enter' && MD.mark.pts.length >= 2) mdMarkSave(); }
+    else if (MD.mark.juice) { if (e.key === 'Enter' && MD.mark.pts.length) mdMarkSave(); }
     else if (e.key === 'Enter' && !MD.mark.closed && !/INPUT|SELECT|TEXTAREA/.test((e.target || {}).tagName || '')) mdMarkClose();
     else if (e.key === 'Enter' && MD.mark.closed) mdMarkSave();
   });

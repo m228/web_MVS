@@ -184,6 +184,7 @@ function drawMotionTile(index) {
   cam.zones.forEach((z) => {
     if (z.enabled === false) return;
     if (z.type === 'cycle') { drawCycleOnTile(ctx, z, cam, g, live[z.id], mvZoneMode(st, live[z.id])); return; }
+    if (z.type === 'clarity') { drawClarityOnTile(ctx, z, cam, g, live[z.id], !!problem); return; }
     if (z.type === 'level') return;                 // стёкла уровня рисует drawLevelOnTile ниже
     const pts = zonePointsOnTile(z, cam, g);
     const lz = live[z.id];
@@ -287,6 +288,57 @@ function drawLevelOnTile(ctx, cam, g, st, problem, opts) {
   ctx.textAlign = 'left'; ctx.font = 'bold 13px sans-serif'; ctx.lineWidth = 2;
 }
 
+// прозрачность сока: круг на стакане, цвет по мутности (0 — зелёный, 100 — красный), подпись «название  число»; нет значения — серый и «—»
+const mvClarityColor = (t) => `hsl(${Math.round(120 * (1 - Math.max(0, Math.min(100, t)) / 100))}, 85%, 52%)`;
+function drawClarityOnTile(ctx, z, cam, g, lz, problem) {
+  const fs = cam.frame_size || [g.nw, g.nh];
+  const sx = (g.nw / fs[0]) * g.k, sy = (g.nh / fs[1]) * g.k;
+  const cx = g.ox + z.center[0] * sx, cy = g.oy + z.center[1] * sy, r = z.radius * (sx + sy) / 2;
+  const ok = !problem && !!lz && !!lz.valid;
+  const col = ok ? mvClarityColor(lz.turb) : '#9ca3af';
+  ctx.lineWidth = 3; ctx.strokeStyle = col;
+  ctx.beginPath(); ctx.arc(cx, cy, r, 0, 7); ctx.stroke();
+  if (ok) { ctx.globalAlpha = 0.22; ctx.fillStyle = col; ctx.fill(); ctx.globalAlpha = 1; }
+  const label = z.name + '  ' + (ok ? Math.round(lz.turb) : '—');
+  ctx.font = 'bold 13px sans-serif'; ctx.textAlign = 'center';
+  ctx.lineWidth = 3; ctx.strokeStyle = '#000'; ctx.strokeText(label, cx, cy - r - 6);
+  ctx.fillStyle = '#fff'; ctx.fillText(label, cx, cy - r - 6);
+  ctx.textAlign = 'left'; ctx.lineWidth = 2;
+}
+
+// круг прозрачности под курсором (по видимому радиусу): { index, z, cam } — для подсказки и переименования двойным кликом
+function clarityHit(event) {
+  const screen = event.target.closest && event.target.closest('[data-tile-screen]');
+  const tileEl = screen && screen.closest('.multi-tile');
+  if (!screen || !tileEl) return null;
+  const index = Number(tileEl.dataset.tile);
+  const tile = state.tiles[index];
+  const cam = tile && tile.serial && tile.kind === 'rtsp' ? mvCam(tile.serial) : null;
+  const g = cam && cam.enabled && !tile.markupOff ? tileFrameGeom(index) : null;
+  if (!g) return null;
+  const fs = cam.frame_size || [g.nw, g.nh];
+  const sx = (g.nw / fs[0]) * g.k, sy = (g.nh / fs[1]) * g.k;
+  const box = screen.getBoundingClientRect();
+  const px = event.clientX - box.left, py = event.clientY - box.top;
+  const z = cam.zones.find((q) => q.type === 'clarity' && q.enabled !== false && Math.hypot(px - (g.ox + q.center[0] * sx), py - (g.oy + q.center[1] * sy)) <= q.radius * (sx + sy) / 2);
+  return z ? { index, z, cam } : null;
+}
+
+// двойной клик по кружку стакана — сменить название сборника (имя в панели «Сок» то же)
+function initClarityRename() {
+  const grid = document.getElementById('multiGrid');
+  if (!grid) return;
+  grid.addEventListener('dblclick', (e) => {
+    const hit = clarityHit(e);
+    if (!hit) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const name = prompt('Название сборника', hit.z.name);
+    if (name === null || !name.trim()) return;
+    mdEdit(() => { hit.z.name = name.trim(); }, true);
+  });
+}
+
 // направление вращения вала значком: ↻ по часовой, ↺ против, ■ стоит (числа оборотов не показываем)
 function mvDirIcon(rpm) {
   const v = Number(rpm) || 0;
@@ -362,11 +414,14 @@ function onMotionHover(event) {
   const r = screen.getBoundingClientRect();
   const pt = [event.clientX - r.left, event.clientY - r.top];
   const st = (MV.states[tile.serial] || {}).result;
-  const hit = cam.zones.find((z) => z.enabled !== false && pointInPoly(pt, zonePointsOnTile(z, cam, g)));
+  const jc = clarityHit(event);
+  const hit = jc ? jc.z : cam.zones.find((z) => z.enabled !== false && pointInPoly(pt, zonePointsOnTile(z, cam, g)));
   if (!hit) { tip.hidden = true; return; }
   const lz = ((st && st.zones) || []).find((z) => z.id === hit.id);
   const problem = tileMotionStatusText(st);
-  tip.textContent = hit.name + (problem ? ' — ' + problem : lz && hit.type === 'level'
+  tip.textContent = hit.type === 'clarity'
+    ? hit.name + (problem ? ' — ' + problem : lz && lz.valid ? ' · мутность ' + Math.round(lz.turb) + ' из 100' : ' · нет значения: ' + ((lz && lz.reason) || 'нет данных')) + ' · двойной клик — переименовать'
+    : hit.name + (problem ? ' — ' + problem : lz && hit.type === 'level'
     ? ' · заполнено ' + Number(lz.level).toFixed(1) + ' % · сырое ' + Number(lz.raw).toFixed(1) + ' %' : lz
     ? ' · ' + (lz.bit ? 'крутится' : 'стоит') + ' · diff ' + Number(lz.diff).toFixed(2) + ' · flow ' + Number(lz.flow).toFixed(2) : '');
   tip.style.left = Math.min(event.clientX + 14, window.innerWidth - 260) + 'px';
@@ -474,6 +529,7 @@ function initMotionVision() {
   document.getElementById('multiGrid')?.addEventListener('mousemove', onMotionHover);
   document.getElementById('multiGrid')?.addEventListener('mouseleave', () => { const t = document.getElementById('mvTip'); if (t) t.hidden = true; });
   initRodRadiusDrag();
+  initClarityRename();
   if (typeof initMotionDock === 'function') initMotionDock();
   if (typeof shwInit === 'function') shwInit();                 // значок и плавающий виджет «разность валов»
 }

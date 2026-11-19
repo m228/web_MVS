@@ -25,6 +25,7 @@ from typing import Callable, Optional
 import cv2
 import numpy as np
 
+import juice_base
 from motion_engine import CameraEngine, scale_points
 from motion_level import LevelInfer, nearest_trend_shot, post_infer, trend_shot_list
 from motion_webview import WebView
@@ -186,6 +187,8 @@ class CameraWorker(threading.Thread):
         self._angle_ids = frozenset(z["id"] for z in cam_cfg["zones"] if z["type"] in ("cycle", "clarity"))
         self._mstats: deque = deque(maxlen=STATS_LEN)   # корзины статистики синхронности валов: [номер 10-секундки, {группа: [n, Σ delta, min, max, Σ поправка, min, max]}] (в памяти)
         self._mbucket: Optional[list] = None
+        self._juice_last = 0.0                # база «Сок»: когда последний раз писали кадр и когда чистили старое
+        self._juice_purged = 0.0
         self._writes: Optional[list] = None   # что должно лежать в ПЛК (последнее)
         self._writes_evt = threading.Event()
         self._store = store_for(self.data_dir)
@@ -670,6 +673,23 @@ class CameraWorker(threading.Thread):
             self._writes = writes
             self._rec_write(state["ts"], {z["id"]: z for z in state["zones"]}, "ok" if state["alive"] else (state["reason"] or "нет данных"))
         self._writes_evt.set()
+        self._juice_tick(state, frame, count_frame)
+
+    def _juice_tick(self, state: dict, frame: Optional[np.ndarray], count_frame: bool):
+        """База «Сок»: раз в every_min минут кадр и значения стаканов на диск (если оператор включил). Только живые кадры."""
+        jb = self.cfg.get("juice_base") or {}
+        if not (jb.get("on") and count_frame and frame is not None and state.get("alive")):
+            return
+        ts = state["ts"]
+        if ts - self._juice_last < jb["every_min"] * 60 - 1:
+            return
+        rows = juice_base.rows_for(state, self.cfg["zones"])
+        if not any(r[7] for r in rows):                      # ни один стакан не дал значения — снимок бесполезен
+            return
+        self._juice_last = ts
+        if juice_base.save(self.data_dir, self.id, ts, frame, rows) and ts - self._juice_purged > 86400:
+            self._juice_purged = ts
+            juice_base.purge(self.data_dir, self.id, ts)
 
     def _publish_held(self, now: float, frame: np.ndarray):
         """Каша: показываем последнее состояние с отметкой corrupt, историю и запись в ПЛК не двигаем."""

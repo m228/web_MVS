@@ -5,6 +5,8 @@
 // тут только разметка, калибровка, живые значения и тренд за 2 часа. Круги на кадре рисует 10-motion.js (drawClarityOnTile).
 const JC_WIN = 7200;                                         // тренд за 2 часа (дальше сервис в быстрой истории не хранит)
 const JC_SEC = [[10, '10 с'], [30, '30 с'], [60, '1 мин'], [120, '2 мин']];
+const JC_LABELS = [['', '— не задана'], ['clear', 'прозрачный'], ['turbid', 'мутный'], ['dirty', 'грязный']];
+const JC_BASE_STEPS = [[1, '1 мин'], [2, '2 мин'], [5, '5 мин'], [10, '10 мин']];
 const JC_SEC_KEY = 'mvs_jc_sec';
 const jcLoadSec = () => { try { const v = Number(localStorage.getItem(JC_SEC_KEY)); if (JC_SEC.some(([x]) => x === v)) return v; } catch (e) { /* не критично */ } return 30; };
 const JC = { sec: jcLoadSec(), msg: {}, hist: {}, stats: {}, at: 0, busy: false };
@@ -61,10 +63,13 @@ function jcRowHtml(cam, z) {
         <button type="button" class="btn-secondary md-x" ${a} data-f="clean" title="В этом стакане сейчас чистый сок: его цвет за последние ${JC.sec} с запомнится как «чистый» (0)">чистый</button>${jcMark(jcHasClean(z), 'Цвет «чистого» сока этого стакана задан')}
         <button type="button" class="btn-secondary md-x" ${a} data-f="dirty" title="В этом стакане сейчас самый мутный сок (100). ${own ? 'Цвет запомнится как «грязный» только этого стакана' : 'Запомнится сдвиг цвета от «чистого» этого стакана — он общий для всех стаканов в режиме «общий»'}">грязный</button>${jcMark(jcHasDirty(cam, z), own ? 'Свой цвет «грязного» задан' : 'Общий сдвиг «грязного» задан, и у стакана есть «чистый»')}
         <select ${a} data-f="dmode" title="«Грязный» общий: один сдвиг цвета от «чистого» на все стаканы (мутный сок нужен лишь в одном). «Свой»: у этого стакана собственный цвет «грязного»">${mdSel([['shared', 'грязный: общий'], ['own', 'грязный: свой']], z.dirty_mode || 'shared')}</select></div>
+      <div class="md-zone__row"><span class="md-lbl" title="Ваша метка этого стакана для базы: что в нём на самом деле. Пишется в index.csv вместе с цветом, потом сравним с авто-состоянием">метка для базы</span>
+        <select ${a} data-f="label">${mdSel(JC_LABELS, z.label || '')}</select></div>
       <div class="jc-st" id="jc-s-${k}"></div>
       <details class="jc-more"><summary>положение, отбор точек, ПЛК</summary>
         <div class="md-zone__row"><span class="md-lbl" title="Центр кружка на кадре (пиксели кадра разметки)">центр x, y</span>${mdNum(a + ' data-f="cx"', Math.round(z.center[0]), 'min="0" step="1"')}${mdNum(a + ' data-f="cy"', Math.round(z.center[1]), 'min="0" step="1"')}
-          <span class="md-lbl" title="Радиус кружка, пиксели кадра разметки">радиус</span>${mdNum(a + ' data-f="radius"', z.radius, 'min="3" step="1"')}</div>
+          <span class="md-lbl" title="Радиус кружка, пиксели кадра разметки">радиус</span>${mdNum(a + ' data-f="radius"', z.radius, 'min="3" step="1"')}
+          <span class="md-lbl" title="Сдвинуть кружок на 1 пиксель. Мышью его можно таскать прямо на кадре">сдвиг</span>${[['←', -1, 0], ['→', 1, 0], ['↑', 0, -1], ['↓', 0, 1]].map(([s, dx, dy]) => `<button type="button" class="btn-secondary md-x" ${a} data-f="nudge" data-dx="${dx}" data-dy="${dy}">${s}</button>`).join('')}</div>
         <div class="md-zone__row"><span class="md-lbl" title="Какая часть радиуса берётся для цвета: меньше — дальше от стенки стакана">берём, %</span>${mdNum(a + ' data-f="core"', Math.round((z.core || 0.7) * 100), 'min="20" max="100" step="5"')}
           <span class="md-lbl" title="Сколько самых ярких точек круга отбросить (блики, пена). 0 — ничего не отбрасывать">блики, %</span>${mdNum(a + ' data-f="glare"', z.glare_pct == null ? 10 : z.glare_pct, 'min="0" max="50" step="1"')}
           <span class="md-lbl" title="Цвет дальше от шкалы «чистый — грязный», чем столько её длин, не считается мутностью (рука, чужой предмет). 0 — не проверять">не на шкале</span>${mdNum(a + ' data-f="offmax"', z.off_max == null ? 1 : z.off_max, 'min="0" max="100" step="0.1"')}</div>
@@ -77,6 +82,7 @@ function jcRowHtml(cam, z) {
 
 function jcCamHtml(cam, all) {
   const zs = jcZones(cam);
+  const jb = cam.juice_base || { on: false, every_min: 2 };
   return (all ? `<div class="md-camhead"><b>${escapeHtml(cam.name)}${mdIpTag(cam.url)}</b></div>` : '') +
     `<div class="md-zone__row jc-bar"><span class="md-lbl" title="За сколько последних секунд берётся цвет для эталона (медиана)">эталон по последним</span>
       <select data-md="jc" data-f="sec">${mdSel(JC_SEC, JC.sec)}</select>
@@ -84,6 +90,9 @@ function jcCamHtml(cam, all) {
       <span class="md-lbl" title="С какой мутности сок считается грязным (красный). Общий для всех стаканов камеры">грязный от</span>${mdNum(`data-md="jc" data-cam="${escapeHtml(cam.id)}" data-f="tdirty"`, jcT(zs[0], 't_dirty', JC_T_DIRTY), 'min="1" max="100" step="1"')}
       <button type="button" class="btn-secondary md-x" data-md="jc" data-cam="${escapeHtml(cam.id)}" data-f="cleanall" title="Налейте во все стаканы чистый сок, подождите и нажмите: цвет каждого стакана запомнится как «чистый» (0)">Все стаканы — чистые</button>
       <span class="net-hint" id="jc-m-${escapeHtml(cam.id)}">${escapeHtml(JC.msg[cam.id] || '')}</span></div>` +
+    `<div class="md-zone__row jc-bar"><label class="md-lbl" title="Раз в N минут сервис пишет кадр и цвет, мутность, состояние и вашу метку каждого стакана в папку data\\juice_base\\${escapeHtml(cam.id)}\\<день>. Для набора базы, например на ночь. Старше 14 суток удаляется"><input type="checkbox" data-md="jc" data-cam="${escapeHtml(cam.id)}" data-f="jbon"${jb.on ? ' checked' : ''} /> собирать базу</label>
+      <span class="md-lbl">каждые</span><select data-md="jc" data-cam="${escapeHtml(cam.id)}" data-f="jbstep">${mdSel(JC_BASE_STEPS, jb.every_min)}</select>
+      <span class="net-hint" title="Общий сдвиг цвета «грязного» от «чистого» (Lab). Снимается кнопкой «грязный» на любом стакане и действует на все стаканы в режиме «общий»">${Array.isArray(cam.clarity_shift) ? 'грязный задан: ΔL ' + cam.clarity_shift[0].toFixed(0) + ' · Δa ' + cam.clarity_shift[1].toFixed(0) + ' · Δb ' + cam.clarity_shift[2].toFixed(0) : 'общий «грязный» не задан — нажмите «грязный» на мутном стакане'}</span></div>` +
     zs.map((z) => jcRowHtml(cam, z)).join('');
 }
 
@@ -140,6 +149,14 @@ function jcOnEvent(t) {
   const cam = mvCam(t.dataset.cam);
   if (!cam) return;
   if (f === 'cleanall') { jcCalibrate(cam, jcZones(cam).map((z) => z.id), 'clean'); return; }
+  if (f === 'jbon' || f === 'jbstep') {                       // сбор базы: на всю камеру
+    mdEdit(() => {
+      const jb = cam.juice_base = Object.assign({ on: false, every_min: 2 }, cam.juice_base);
+      if (f === 'jbon') jb.on = !!t.checked; else jb.every_min = Number(t.value) || 2;
+    }, false);
+    jcSay(cam.id, f === 'jbon' ? (t.checked ? 'база пишется' : 'база выключена') : '');
+    return;
+  }
   if (f === 'tturb' || f === 'tdirty') {                      // пороги одним числом на все стаканы камеры; «мутный» обязан быть ниже «грязного» — иначе сервис отклонит конфиг
     const v = Math.max(0, Math.min(100, parseFloat(t.value) || 0)), zs = jcZones(cam);
     const lo = f === 'tturb' ? v : jcT(zs[0], 't_turb', JC_T_TURB), hi = f === 'tdirty' ? v : jcT(zs[0], 't_dirty', JC_T_DIRTY);
@@ -160,8 +177,13 @@ function jcOnEvent(t) {
     }, true);
     return;
   }
+  if (f === 'nudge') {
+    mdEdit(() => { z.center = [Math.max(0, z.center[0] + Number(t.dataset.dx)), Math.max(0, z.center[1] + Number(t.dataset.dy))]; }, true);
+    return;
+  }
   mdEdit(() => {
-    if (f === 'name') z.name = t.value;
+    if (f === 'label') z.label = t.value;
+    else if (f === 'name') z.name = t.value;
     else if (f === 'dmode') z.dirty_mode = t.value;
     else if (f === 'cx' || f === 'cy') z.center[f === 'cx' ? 0 : 1] = Math.max(0, parseFloat(t.value) || 0);
     else if (f === 'radius') z.radius = Math.max(3, parseFloat(t.value) || 3);

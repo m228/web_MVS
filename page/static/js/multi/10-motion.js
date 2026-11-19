@@ -303,13 +303,13 @@ function drawClarityOnTile(ctx, z, cam, g, lz, problem) {
   ctx.lineWidth = 3; ctx.strokeStyle = col;
   ctx.beginPath(); ctx.arc(cx, cy, r, 0, 7); ctx.stroke();
   if (ok) { ctx.globalAlpha = 0.22; ctx.fillStyle = col; ctx.fill(); ctx.globalAlpha = 1; }
-  const label = z.name + '  ' + (ok ? Math.round(lz.turb) : '—');
+  const label = z.name + '  ' + (ok ? 'мут ' + Math.round(lz.turb) : '—');
   ctx.font = 'bold 13px sans-serif'; ctx.textAlign = 'center';
   ctx.lineWidth = 3; ctx.strokeStyle = '#000'; ctx.strokeText(label, cx, cy - r - 6);
   ctx.fillStyle = '#fff'; ctx.fillText(label, cx, cy - r - 6);
-  if (ok) {                                                    // слово состояния — под кружком, цветом состояния
-    const word = MV_CLARITY_WORDS[mvClarityLevel(lz)];
-    ctx.strokeText(word, cx, cy + r + 15); ctx.fillStyle = col; ctx.fillText(word, cx, cy + r + 15);
+  if (lz && lz.lab) {                                          // под кружком: яркость L (и слово состояния, если значение достоверно), цветом состояния
+    const txt = 'L ' + Math.round(lz.lab[0]) + (ok ? ' · ' + MV_CLARITY_WORDS[mvClarityLevel(lz)] : '');
+    ctx.strokeText(txt, cx, cy + r + 15); ctx.fillStyle = ok ? col : '#fff'; ctx.fillText(txt, cx, cy + r + 15);
   }
   ctx.textAlign = 'left'; ctx.lineWidth = 2;
 }
@@ -505,6 +505,48 @@ function initRodRadiusDrag() {
   }, true);
 }
 
+// сдвиг стакана: берём кружок мышью и тащим по кадру. Центр хранится в пикселях кадра анализа; эталоны («чистый» / «грязный») остаются
+function initClarityDrag() {
+  const grid = document.getElementById('multiGrid');
+  if (!grid) return;
+  grid.addEventListener('mousemove', (e) => {
+    const screen = e.target.closest && e.target.closest('[data-tile-screen]');
+    if (screen && !e.buttons) screen.style.cursor = clarityHit(e) ? 'move' : (screen.style.cursor === 'move' ? '' : screen.style.cursor);
+  });
+  grid.addEventListener('mousedown', (e) => {
+    if (e.button !== 0) return;
+    const hit = clarityHit(e);
+    if (!hit) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const g = tileFrameGeom(hit.index);
+    if (!g) return;
+    const fs = hit.cam.frame_size || [g.nw, g.nh];
+    const sx = (g.nw / fs[0]) * g.k, sy = (g.nh / fs[1]) * g.k;
+    const box = e.target.closest('[data-tile-screen]').getBoundingClientRect();
+    const dx = (e.clientX - box.left - g.ox) / sx - hit.z.center[0], dy = (e.clientY - box.top - g.oy) / sy - hit.z.center[1];   // где в кружке схватили
+    let moved = false;
+    const move = (ev) => {
+      const x = (ev.clientX - box.left - g.ox) / sx - dx, y = (ev.clientY - box.top - g.oy) / sy - dy;
+      hit.z.center = [Math.round(Math.max(0, Math.min(fs[0], x))), Math.round(Math.max(0, Math.min(fs[1], y)))];
+      moved = true;
+      drawMotionTile(hit.index);
+    };
+    const up = () => {
+      document.removeEventListener('mousemove', move);
+      document.removeEventListener('mouseup', up, true);
+      const swallow = (ev) => { ev.stopPropagation(); };            // после перетаскивания не считаем клик кликом по плитке
+      document.addEventListener('click', swallow, { capture: true, once: true });
+      setTimeout(() => document.removeEventListener('click', swallow, true), 0);
+      if (!moved) return;
+      if (typeof mdCommit === 'function') mdCommit();
+      if (typeof MD !== 'undefined' && MD) { MD.key = ''; if (typeof renderMotionDock === 'function') renderMotionDock(); }
+    };
+    document.addEventListener('mousemove', move);
+    document.addEventListener('mouseup', up, true);
+  }, true);
+}
+
 // ---------- опрос и инициализация ----------
 function startMotionPolling() {
   const loop = async () => {
@@ -538,6 +580,7 @@ function initMotionVision() {
   document.getElementById('multiGrid')?.addEventListener('mouseleave', () => { const t = document.getElementById('mvTip'); if (t) t.hidden = true; });
   initRodRadiusDrag();
   initClarityRename();
+  initClarityDrag();
   if (typeof initMotionDock === 'function') initMotionDock();
   if (typeof shwInit === 'function') shwInit();                 // значок и плавающий виджет «разность валов»
 }

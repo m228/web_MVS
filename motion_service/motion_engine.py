@@ -238,7 +238,21 @@ def _norm_clarity(z: dict, zid: str, where: str) -> dict:
         "t_turb": _num(z.get("t_turb", CLARITY_T_TURB), where + ".t_turb", 0, 100),       # с какой мутности сок «мутный»
         "t_dirty": _num(z.get("t_dirty", CLARITY_T_DIRTY), where + ".t_dirty", 0, 100),   # с какой — «грязный»
         "hyst": _num(z.get("hyst", CLARITY_HYST), where + ".hyst", 0, 50),                # гистерезис порогов, пункты мутности: против дрожания границы
+        "label": _label(z.get("label"), where + ".label"),                                # ручная метка оператора для базы: "" / clear / turbid / dirty
     }
+
+
+def _label(v, where: str) -> str:
+    v = str(v or "")
+    if v not in ("", "clear", "turbid", "dirty"):
+        raise ValueError("%s: метка %r не из '', clear, turbid, dirty" % (where, v))
+    return v
+
+
+def _juice_base(v, where: str) -> dict:
+    """Сбор базы «Сок»: {on, every_min}. Шаг 1..60 минут."""
+    v = v or {}
+    return {"on": bool(v.get("on", False)), "every_min": _num(v.get("every_min", 2), where + ".every_min", 1, 60, True)}
 
 
 def _hsv4(v, default, name, hue_pair_ok):
@@ -505,6 +519,7 @@ def normalize_camera(c: dict) -> dict:
         "substream": bool(c.get("substream", False)),
         "row": row,
         "clarity_shift": _lab3(c.get("clarity_shift"), "камера %s.clarity_shift" % cid, shift=True),    # общий сдвиг «грязного» от «чистого» (зоны прозрачности с dirty_mode=shared)
+        "juice_base": _juice_base(c.get("juice_base"), "камера %s.juice_base" % cid),
         "proc_fps": _num(c.get("proc_fps", 3), "камера %s.proc_fps" % cid, 0.2, 30),
         "frame_gap": _num(c.get("frame_gap", 1), "камера %s.frame_gap" % cid, 1, 10, True),
         "reconnect_delay_s": _num(c.get("reconnect_delay_s", 3.0), "камера %s.reconnect_delay_s" % cid, 0.5, 300),

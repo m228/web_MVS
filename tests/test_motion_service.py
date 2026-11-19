@@ -782,6 +782,8 @@ def test_server_end_to_end_with_video_file(tmp_path):
             return [z["bit"] for z in r["zones"]] if r else None
         assert _wait(lambda: bits() == [1, 0], 15), bits()
         assert _wait(lambda: (0, 1) in writes and (1, 0) in writes, 5), writes[-6:]
+        pf = _http(port, "/state")[1]["perf"]                  # панель КЗ берёт замеры кадра из того же /state
+        assert pf["belt:frame"]["n"] > 0 and pf["belt:zones"]["of"] == 2 and pf["belt:zones"]["load"] is not None
 
         code, jpg, hdr = _http(port, "/cameras/belt/snapshot?w=200")
         assert code == 200 and jpg[:2] == b"\xff\xd8" and {k.lower(): v for k, v in hdr.items()}["x-frame-w"] == str(W)

@@ -165,7 +165,45 @@ function mdPill(st, conn) {
   if (st.result && st.result.corrupt) return ['битый поток — результаты не учитываются', 'is-warn'];
   if (!st.connected) return ['нет связи с камерой', 'is-bad'];
   if (st.result && !st.result.alive) return [st.result.reason || 'нет данных', 'is-bad'];
-  return ['жива · ' + st.fps + ' к/с' + (st.decoder === 'gpu' ? ' · GPU' : ''), 'is-ok'];
+  const ld = mdPerfTotal(st.id).load;
+  const hot = ld != null && ld >= 60;
+  return ['жива · ' + st.fps + ' к/с' + (st.decoder === 'gpu' ? ' · GPU' : '') + (hot ? ' · загрузка ' + Math.round(ld) + ' %' : ''), ld != null && ld >= 100 ? 'is-bad' : hot ? 'is-warn' : 'is-ok'];
+}
+
+// ---------- замеры: сколько времени уходит на кадр (вкладка «Камеры») ----------
+// Этапы одного кадра идут друг за другом в потоке камеры, поэтому их среднее складываем и сравниваем с интервалом между кадрами.
+const MD_PERF_STAGES = [['frame', 'чтение кадра', 'Забрать кадр из потока и декодировать'], ['zones', 'зоны', 'Зоны «стоит / движется», в том числе шахта жома'],
+  ['shafts', 'валы', 'Поиск палок по цвету'], ['juice', 'сок', 'Мутность сока по кругам']];
+function mdMs(v) { return (v == null ? '—' : (Math.round(v * 10) / 10).toString().replace('.', ',')) + ' мс'; }
+function mdPerfTotal(cid) {
+  let sum = 0, mx = 0, budget = null, any = false;
+  MD_PERF_STAGES.forEach(([k]) => {
+    const m = MV.perf && MV.perf[cid + ':' + k];
+    if (!m) return;
+    any = true; sum += m.avg; mx += m.max;
+    if (m.budget_ms) budget = m.budget_ms;
+  });
+  return { any, sum, max: mx, budget, load: any && budget ? 100 * sum / budget : null };
+}
+function mdPerfHtml(c) {
+  const t = mdPerfTotal(c.id);
+  if (!t.any) return '<span class="md-dim">время обработки кадра: нет данных</span>';
+  const chip = (label, m, hint) => {
+    const cls = m.load != null && m.load >= 100 ? ' is-bad' : m.load != null && m.load >= 60 ? ' is-warn' : '';
+    return '<span class="md-perf__it' + cls + '" title="' + hint + '. Среднее ' + mdMs(m.avg) + ', p95 ' + mdMs(m.p95) + ', макс ' + mdMs(m.max) + ', кадров ' + m.n + '">'
+      + label + ' <b>' + mdMs(m.avg) + '</b></span>';
+  };
+  let h = MD_PERF_STAGES.map(([k, label, hint]) => {
+    const m = MV.perf[c.id + ':' + k];
+    return m ? chip(label, m, hint) : '';
+  }).join('');
+  (c.groups || []).filter((g) => g.type === 'level').forEach((g) => {     // уровень декантатора считается в своём потоке раз в infer_interval_s
+    const m = MV.perf[g.id + ':level'];
+    if (m) h += chip('уровень', m, 'Весь круг: кадр → сервис уровня → уровень');
+  });
+  const cls = t.load != null && t.load >= 100 ? ' is-bad' : t.load != null && t.load >= 60 ? ' is-warn' : '';
+  return '<span class="md-perf__sum' + cls + '" title="Сумма средних по этапам к интервалу между кадрами анализа (' + mdMs(t.budget) + '). Выше 100 % — не успеваем">на кадр <b>'
+    + mdMs(t.sum) + '</b> из ' + mdMs(t.budget).replace(' мс', '') + ' · ' + Math.round(t.load) + ' %</span>' + h;
 }
 
 // общий вид: сколько камер с КЗ и все ли живы
@@ -513,7 +551,8 @@ function mdCamsTabHtml() {
         <span class="motion-dock__pill" id="md-cr-${escapeHtml(c.id)}"></span></div>
       <div class="md-cam__load">${c.substream ? 'подпоток' : 'основной поток'} · ${c.proc_fps} к/с · зон: ${c.zones.length}${flows ? ' · flow считается: ' + flows : ''}${c.enabled ? '' : ' · выключена'}${twins.length ? '<br>та же камера, что: ' + twins.map((x) => escapeHtml(x.id)).join(', ') : ''}</div>
       <div class="md-cam__use">${use}</div>
-      <div class="md-cam__act">${btn}</div></div>`;
+      <div class="md-cam__act">${btn}</div>
+      <div class="md-perf" id="md-perf-${escapeHtml(c.id)}">${mdPerfHtml(c)}</div></div>`;
   }).join('');
   return `<p class="net-hint">Камер в сервисе: ${cams.length}, используется: ${cams.length - idle}${idle ? `, <b>не используется: ${idle}</b> (считают впустую и грузят процессор)` : ''}. Наведите на строку — покажу кадр с зонами.</p><div class="md-cams">${rows}</div>`;
 }
@@ -1335,6 +1374,8 @@ function paintMotionDockLive() {
       const [txt, cls] = mdPill(MV.states[c.id], c.enabled);
       p.textContent = txt;
       p.className = 'motion-dock__pill ' + cls;
+      const pf = mdEl('md-perf-' + c.id);
+      if (pf) pf.innerHTML = mdPerfHtml(c);
     });
   }
   if (MD.tab === 'level') mdLevelPaintLive();

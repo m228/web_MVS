@@ -57,6 +57,7 @@ import motion_lvldec  # noqa: E402
 import motion_records  # noqa: E402
 import motion_store  # noqa: E402
 import motion_trends  # noqa: E402
+from perf_stats import PERF  # noqa: E402
 from motion_autocal_job import AutocalJob  # noqa: E402
 from motion_camera import CameraWorker, open_capture  # noqa: E402
 from motion_modbus import LinkRegistry, ModbusLink  # noqa: E402
@@ -382,6 +383,14 @@ def create_app(data_dir: Optional[Path] = None, capture_factory: Callable = open
         alive = sum(1 for s in sts if s["result"] and s["result"]["alive"])
         return {"ok": True, "service": "motion", "version": SERVICE_VERSION, "cameras": len(sts), "alive": alive}
 
+    @app.get("/perf")
+    def perf():
+        """Сколько времени уходит на обработку кадра: по камерам (чтение, валы, зоны, сок) и по уровню декантатора."""
+        cams = [{"id": w.id, "name": w.cfg.get("name") or w.id, "proc_fps": w.cfg.get("proc_fps"),
+                 "groups": [{"id": g["id"], "name": g.get("name") or g["id"]} for g in w.cfg.get("groups", []) if g.get("type") == "level"]}
+                for w in mgr.workers.values()]
+        return {"cameras": cams, "perf": PERF.snapshot()}
+
     @app.get("/config")
     def get_config():
         return mgr.cfg
@@ -397,7 +406,8 @@ def create_app(data_dir: Optional[Path] = None, capture_factory: Callable = open
 
     @app.get("/state")
     def state():
-        return {"cameras": [w.state() for w in mgr.workers.values()], "scenarios": mgr.scenarios.snapshot(), "shafts": mgr.shafts.snapshot()}
+        return {"cameras": [w.state() for w in mgr.workers.values()], "scenarios": mgr.scenarios.snapshot(), "shafts": mgr.shafts.snapshot(),
+                "perf": PERF.snapshot()}      # сколько времени уходит на кадр по камерам (панель КЗ, вкладка «Камеры»)
 
     @app.get("/shafts/history")
     def shafts_history(pair: str, window: float = 3600.0, points: int = 600):

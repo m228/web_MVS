@@ -6,6 +6,7 @@ const MV = {
   online: false,
   cfg: null,          // последний конфиг сервиса (камеры, ПЛК, сценарии)
   states: {},         // id камеры -> состояние из /api/motion/state
+  perf: {},           // замеры времени на кадр из /api/motion/state: ключ «<камера>:<этап>» (вкладка «Камеры» панели КЗ)
   scen: [],           // состояние сценариев записи в ПЛК
   dockOpen: false,
   tick: 0,
@@ -559,6 +560,7 @@ function startMotionPolling() {
         const st = await mvApi('/api/motion/state');
         if (st && st.cameras) st.cameras.forEach((c) => { MV.states[c.id] = c; });
         if (st && st.scenarios) MV.scen = st.scenarios;
+        if (st && st.perf) MV.perf = st.perf;
         if (st && st.shafts) MV.shafts = st.shafts;       // скорости и разности валов (вкладка «Валы», подписи на плитке)
         if (typeof paintMotionDockLive === 'function') paintMotionDockLive();
       }

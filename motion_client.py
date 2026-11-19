@@ -37,6 +37,11 @@ def _call(service_url: str, path: str, body: Optional[dict] = None, method: Opti
         return {"error": "сервис движения не отвечает (%s)" % _base(service_url)}
 
 
+def perf(service_url: str, timeout: float = 2.0) -> dict:
+    """Замеры времени обработки кадров сервиса движения (валы, зоны, сок, уровень) — /perf."""
+    return _call(service_url, "/perf", timeout=timeout)
+
+
 def health(service_url: str, timeout: float = 1.0) -> Optional[dict]:
     """Статус сервиса или None, если не запущен."""
     r = _call(service_url, "/health", timeout=timeout)

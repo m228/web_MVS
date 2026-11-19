@@ -386,6 +386,9 @@
   const CV_SIZE_TIP = "Средний размер кристалла (диаметр), мкм — средний кристалл «по массе», как средний размер по ситам в лаборатории. " +
     "M1–M3 — с весом объёма модели, «Площадь» — с весом площади, «Среднее» — среднее M1–M3. Только хорошие кристаллы (брак отсеян). " +
     "В тренде «средний размер» — по штукам, поэтому там он меньше";
+  const CV_HET_TIP = "Неоднородность размера, % = 100 · σ / средний размер. σ — стандартное отклонение диаметра, средний — тот же «по массе», что строкой выше " +
+    "(вес — объём модели / площадь). Считается по всей массе кристаллов пробы, фазы или варки (а не средним из кадров). Только хорошие кристаллы. Меньше — ровнее";
+  const cvSz = (msize, het) => (msize ? Object.assign({}, msize, { het: het || null }) : null);      // размер + неоднородность одним объектом для таблицы рассева
   function cvFillSieve(g, sv, size) {            // таблица рассева в элемент g — одна и для вкладки «Распознавание», и для режима «Рассев» тренда
     if (!g) return;
     const one = (m, k) => (sv && sv[m] && sv[m][k] != null ? sv[m][k] : null);
@@ -410,6 +413,13 @@
       const v = size ? (c === "avg" ? cvAvg3(size) : size[c]) : null;
       html += '<em class="micro-sieve__size">' + (v == null ? "—" : String(Math.round(v))) + "</em>";
     });
+    // неоднородность — строкой ниже среднего размера: σ / средний, %, с теми же весами (масса / площадь)
+    html += '<span class="micro-sieve__size" title="' + CV_HET_TIP + '">неоднородность, %</span>';
+    cols.forEach((c) => {
+      const h = size && size.het ? (c === "avg" ? cvAvg3(size.het) : size.het[c]) : null;
+      html += '<em class="micro-sieve__size">' + (h == null ? "—" : h.toFixed(1).replace(".", ",")) + "</em>";
+    });
+    html += '<small class="micro-sieve__note">Неоднородность = разброс размера (σ), делённый на средний размер. Чем меньше — тем ровнее кристалл; ≈ 20 % значит, что основная масса лежит в пределах ±20 % от среднего.</small>';
     cvSetHtml(g, html);
   }
   function cvApplyModels() {              // скрыть/показать M1–M3 в обеих таблицах («Объём и мука» и рассев)
@@ -555,7 +565,7 @@
     if (b && ph === "boil") cvSievePhase = "boil";
     const pscale = ph !== "boil" ? ((b.cfg || {})["phase_scale_" + ph] || CV_PHASE_SCALE[ph]) / 100 : 1;
     const blk = b ? (ph !== "boil" ? b.phases[ph] : (b.tail || b)) : null;            // по варке — пробы последних ~2 СВ
-    cvRenderSieve(blk ? blk.fsieve : null, 1, blk ? blk.msize : null);
+    cvRenderSieve(blk ? blk.fsieve : null, 1, cvSz(blk && blk.msize, blk && blk.het));
     cvShowSv(cvSvRange(blk, ph !== "boil" ? blk.dur_s : (b ? b.dur_s : null)));
     if (!b) {
       cvSetText(lbl, "варок пока нет");
@@ -637,7 +647,7 @@
   function cvRenderVolume(s) {
     if (cvVolMode !== "probe") { cvRenderBoil(); return; }
     const vp = (s && s.volume_pct) || {}, cfg = (s && s.volume_cfg) || {};
-    cvRenderSieve(vp.sieve_fine, 1, vp.mean_um || null);                    // мелкий рассев пробы — шкала общая для всех фаз
+    cvRenderSieve(vp.sieve_fine, 1, cvSz(vp.mean_um, vp.het_pct));                    // мелкий рассев пробы — шкала общая для всех фаз
     cvRenderSieveTiles(null);
     cvShowSv("");
     document.querySelectorAll("#cvVolGrid [data-v]").forEach((el) => {
@@ -1802,7 +1812,7 @@
     const box = $("cvTrSieveTiles");
     box.innerHTML = ""; box.hidden = probe;              // у одной пробы фаз нет — вместо плиток её время и СВ
     if (probe) {
-      cvFillSieve($("cvTrSieveGrid"), cvTrProbe ? cvTrProbe.fsieve : null, cvTrProbe ? cvTrProbe.msize : null);
+      cvFillSieve($("cvTrSieveGrid"), cvTrProbe ? cvTrProbe.fsieve : null, cvTrProbe ? cvSz(cvTrProbe.msize, cvTrProbe.het) : null);
       cvShowTrSv(cvTrProbe ? cvTrProbeLabel(cvTrProbe) : "кликни пробу на графике");
       return;
     }
@@ -1815,7 +1825,7 @@
       box.appendChild(bt);
     });
     const blk = b ? (cvTrSievePhase !== "boil" ? b.phases[cvTrSievePhase] : (b.tail || b)) : null;
-    cvFillSieve($("cvTrSieveGrid"), blk ? blk.fsieve : null, blk ? blk.msize : null);
+    cvFillSieve($("cvTrSieveGrid"), blk ? blk.fsieve : null, cvSz(blk && blk.msize, blk && blk.het));
     cvShowTrSv(b ? cvBoilName(cvBoils.indexOf(b)) + " · " + cvSvRange(blk, cvTrSievePhase !== "boil" ? blk.dur_s : b.dur_s) : "варок пока нет");
   }
   function cvShowTrSv(t) { const e = $("cvTrSieveSv"); if (e && e.textContent !== t) e.textContent = t; }

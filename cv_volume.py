@@ -24,7 +24,7 @@ import re
 MODELS = ("m1", "m2", "m3")
 # Рассев по ситам (как в лаборатории): отверстия, мм. Фракции снизу вверх: дно (<0,2), 0,2–0,5, 0,5–0,7, 0,7–0,8, 0,8–1,0, 1,0–1,2, >1,2.
 # Размер кристалла — эквивалентный диаметр (как везде в CV); доля фракции — по объёму (объём ~ масса), % от всех кристаллов.
-CALC_VER = 9     # 9: средний размер кристалла (dsum); 2: в расчёт идут только хорошие кристаллы (брак — сросток/игла/кривой — отсеян); менять при смене логики: старые пробы пересчитаются
+CALC_VER = 10    # 10: неоднородность размера (d2sum); 9: средний размер кристалла (dsum); 2: в расчёт идут только хорошие кристаллы (брак — сросток/игла/кривой — отсеян); менять при смене логики: старые пробы пересчитаются
 SIEVE_MM = (0.2, 0.5, 0.7, 0.8, 1.0, 1.2)
 # МЕЛКИЙ РАССЕВ «в процентах»: фракции по 0,05 мм от 0 до 1 мм + «больше 1 мм» (21 фракция), ОДНА шкала для всех фаз (без масштаба фазы) —
 # чтобы видеть, где сидит основная масса мелких кристаллов. Доля — по объёму (M1–M3) и по площади, % от хороших кристаллов.
@@ -222,6 +222,8 @@ def empty_sums() -> dict:
     # для СРЕДНЕГО РАЗМЕРА кристалла: Σ(вес · диаметр) по хорошим кристаллам, вес — объём модели (M1–M3) или площадь ("area").
     # Средний размер = dsum / total: средний кристалл «по массе», как средний размер по ситам в лаборатории (не по штукам, как в тренде)
     s["dsum"] = {mod: 0.0 for mod in MODELS + ("area",)}
+    # для НЕОДНОРОДНОСТИ: Σ(вес · диаметр²) — те же веса; σ² = d2sum/total − mean², неоднородность = σ / mean (CV по массе)
+    s["d2sum"] = {mod: 0.0 for mod in MODELS + ("area",)}
     return s
 
 
@@ -263,6 +265,7 @@ def sums_for(measures: list, cv_cfg: dict | None, count_fines: bool = True, phas
         s["sieve_fine"]["area"][fb] += parts["area"]
         for key, val in parts.items():
             s["dsum"][key] += val * m.size_um
+            s["d2sum"][key] += val * m.size_um ** 2
         if kind == "fines":
             s["n"]["fines"] += 1
     return s
@@ -286,9 +289,17 @@ def add_sums(a: dict, b: dict) -> dict:
         out["flat"][mod] = (a.get("flat") or {}).get(mod, 0.0) + (b.get("flat") or {}).get(mod, 0.0)
     for mod in MODELS + ("area",):
         out["dsum"][mod] = (a.get("dsum") or {}).get(mod, 0.0) + (b.get("dsum") or {}).get(mod, 0.0)
+        out["d2sum"][mod] = (a.get("d2sum") or {}).get(mod, 0.0) + (b.get("d2sum") or {}).get(mod, 0.0)
     if a.get("fines_off") or b.get("fines_off"):
         out["fines_off"] = True
     return out
+
+
+def het_pct(mean: float | None, msq: float | None) -> float | None:
+    """Неоднородность размера, % = 100 · σ / средний, где σ² = E[d²] − E[d]² (взвешено по массе/площади). Нет данных — None."""
+    if not mean or msq is None or mean <= 0:
+        return None
+    return round(100.0 * math.sqrt(max(msq - mean * mean, 0.0)) / mean, 1)
 
 
 def percents(sums: dict | None, ignore_off: bool = False) -> dict:
@@ -316,6 +327,11 @@ def percents(sums: dict | None, ignore_off: bool = False) -> dict:
     ds = sums.get("dsum") or {}
     out["mean_um"] = {mod: (round(ds[mod] / sums[mod]["total"], 1) if ds.get(mod) and (sums.get(mod) or {}).get("total", 0.0) > 0 else None)
                       for mod in MODELS + ("area",)}
+    # вторые моменты размера, мкм² (Σw·d² / Σw): из них неоднородность (CV по массе) считается и для пробы, и для набора проб (см. cv_store)
+    d2 = sums.get("d2sum") or {}
+    out["msq_um2"] = {mod: (round(d2[mod] / sums[mod]["total"], 1) if d2.get(mod) and (sums.get(mod) or {}).get("total", 0.0) > 0 else None)
+                      for mod in MODELS + ("area",)}
+    out["het_pct"] = {mod: het_pct(out["mean_um"][mod], out["msq_um2"][mod]) for mod in MODELS + ("area",)}
     fv = {} if (sums.get("fines_off") and not ignore_off) else (sums.get("sieve_fine") or {})
     out["sieve_fine"] = {mod: [round(100.0 * x / sum(fv[mod]), 3) for x in fv[mod]] for mod in MODELS + ("area",) if fv.get(mod) and sum(fv[mod]) > 0}
     return out

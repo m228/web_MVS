@@ -288,14 +288,18 @@ function drawLevelOnTile(ctx, cam, g, st, problem, opts) {
   ctx.textAlign = 'left'; ctx.font = 'bold 13px sans-serif'; ctx.lineWidth = 2;
 }
 
-// прозрачность сока: круг на стакане, цвет по мутности (0 — зелёный, 100 — красный), подпись «название  число»; нет значения — серый и «—»
-const mvClarityColor = (t) => `hsl(${Math.round(120 * (1 - Math.max(0, Math.min(100, t)) / 100))}, 85%, 52%)`;
+// прозрачность сока: круг на стакане, цвет по состоянию (прозрачный — зелёный, мутный — оранжевый, грязный — красный), подпись «название  число · слово»;
+// нет значения — серый и «—». Состояние считает сервис по порогам зоны (t_turb / t_dirty), здесь только показ.
+const MV_CLARITY_COLORS = ['#22c55e', '#f59e0b', '#ef4444'];
+const MV_CLARITY_WORDS = ['прозрачный', 'мутный', 'грязный'];
+const mvClarityLevel = (lz) => Math.max(0, Math.min(2, Number(lz && lz.level) || 0));
+const mvClarityColor = (lz) => MV_CLARITY_COLORS[mvClarityLevel(lz)];
 function drawClarityOnTile(ctx, z, cam, g, lz, problem) {
   const fs = cam.frame_size || [g.nw, g.nh];
   const sx = (g.nw / fs[0]) * g.k, sy = (g.nh / fs[1]) * g.k;
   const cx = g.ox + z.center[0] * sx, cy = g.oy + z.center[1] * sy, r = z.radius * (sx + sy) / 2;
   const ok = !problem && !!lz && !!lz.valid;
-  const col = ok ? mvClarityColor(lz.turb) : '#9ca3af';
+  const col = ok ? mvClarityColor(lz) : '#9ca3af';
   ctx.lineWidth = 3; ctx.strokeStyle = col;
   ctx.beginPath(); ctx.arc(cx, cy, r, 0, 7); ctx.stroke();
   if (ok) { ctx.globalAlpha = 0.22; ctx.fillStyle = col; ctx.fill(); ctx.globalAlpha = 1; }
@@ -303,6 +307,10 @@ function drawClarityOnTile(ctx, z, cam, g, lz, problem) {
   ctx.font = 'bold 13px sans-serif'; ctx.textAlign = 'center';
   ctx.lineWidth = 3; ctx.strokeStyle = '#000'; ctx.strokeText(label, cx, cy - r - 6);
   ctx.fillStyle = '#fff'; ctx.fillText(label, cx, cy - r - 6);
+  if (ok) {                                                    // слово состояния — под кружком, цветом состояния
+    const word = MV_CLARITY_WORDS[mvClarityLevel(lz)];
+    ctx.strokeText(word, cx, cy + r + 15); ctx.fillStyle = col; ctx.fillText(word, cx, cy + r + 15);
+  }
   ctx.textAlign = 'left'; ctx.lineWidth = 2;
 }
 
@@ -420,7 +428,7 @@ function onMotionHover(event) {
   const lz = ((st && st.zones) || []).find((z) => z.id === hit.id);
   const problem = tileMotionStatusText(st);
   tip.textContent = hit.type === 'clarity'
-    ? hit.name + (problem ? ' — ' + problem : lz && lz.valid ? ' · мутность ' + Math.round(lz.turb) + ' из 100' : ' · нет значения: ' + ((lz && lz.reason) || 'нет данных')) + ' · двойной клик — переименовать'
+    ? hit.name + (problem ? ' — ' + problem : lz && lz.valid ? ' · ' + MV_CLARITY_WORDS[mvClarityLevel(lz)] + ' · мутность ' + Math.round(lz.turb) + ' из 100' :' · нет значения: ' + ((lz && lz.reason) || 'нет данных')) + ' · двойной клик — переименовать'
     : hit.name + (problem ? ' — ' + problem : lz && hit.type === 'level'
     ? ' · заполнено ' + Number(lz.level).toFixed(1) + ' % · сырое ' + Number(lz.raw).toFixed(1) + ' %' : lz
     ? ' · ' + (lz.bit ? 'крутится' : 'стоит') + ' · diff ' + Number(lz.diff).toFixed(2) + ' · flow ' + Number(lz.flow).toFixed(2) : '');

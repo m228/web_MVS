@@ -38,7 +38,11 @@ ZONE_TYPES = ("motion", "presence", "cycle", "level", "clarity")
 CLARITY_DIRTY_MODES = ("shared", "own")   # «грязный» цвет зоны: общий сдвиг камеры от «чистого» этой зоны / свой собственный
 CLARITY_NO_DATA = 65535                   # что уходит в ПЛК вместо мутности, когда её нет (нет эталонов, кадра, цвета): 0 — это «чистый»
 CLARITY_MIN_SPAN = 3.0                    # «чистый» и «грязный» ближе этого (ΔE по Lab) — шкалы нет, мутность не считаем
-CLARITY_KEEP_S = 600                      # сколько секунд сырых цветов храним для калибровки («чистый»/«грязный» по последним N секундам)
+CLARITY_T_TURB = 12.0                     # пороги по умолчанию (ролик со светом 19.11: чистые 0, мутные 1 и 5 ≈ 20–45, грязный 6 ≈ 100)
+CLARITY_T_DIRTY = 70.0
+CLARITY_HYST = 3.0
+CLARITY_LEVELS = ("clear", "turbid", "dirty")   # прозрачный / мутный / грязный
+CLARITY_KEEP_S = 600                    # сколько секунд сырых цветов храним для калибровки («чистый»/«грязный» по последним N секундам)
 METRICS = ("flow", "diff")
 GROUP_TYPES = ("sum", "monotonic", "worktimer", "mirror", "level")
 MIRROR_MODES = ("mirror", "same")
@@ -210,6 +214,8 @@ def _norm_clarity(z: dict, zid: str, where: str) -> dict:
     mode = z.get("dirty_mode", "shared")
     if mode not in CLARITY_DIRTY_MODES:
         raise ValueError("%s: dirty_mode %r не из %s" % (where, mode, list(CLARITY_DIRTY_MODES)))
+    if _num(z.get("t_turb", CLARITY_T_TURB), where + ".t_turb", 0, 100) >= _num(z.get("t_dirty", CLARITY_T_DIRTY), where + ".t_dirty", 0, 100):
+        raise ValueError("%s: порог «мутный» должен быть меньше порога «грязный»" % where)
     return {
         "id": zid,
         "name": str(z.get("name") or zid),
@@ -229,6 +235,9 @@ def _norm_clarity(z: dict, zid: str, where: str) -> dict:
         "clean": _lab3(z.get("clean"), where + ".clean"),
         "dirty": _lab3(z.get("dirty"), where + ".dirty"),
         "dirty_mode": mode,
+        "t_turb": _num(z.get("t_turb", CLARITY_T_TURB), where + ".t_turb", 0, 100),       # с какой мутности сок «мутный»
+        "t_dirty": _num(z.get("t_dirty", CLARITY_T_DIRTY), where + ".t_dirty", 0, 100),   # с какой — «грязный»
+        "hyst": _num(z.get("hyst", CLARITY_HYST), where + ".hyst", 0, 50),                # гистерезис порогов, пункты мутности: против дрожания границы
     }
 
 
@@ -686,6 +695,18 @@ class ClarityRT:
         self.off = 0.0                                      # насколько цвет в стороне от шкалы, в её длинах
         self.valid = False
         self.reason = "нет кадров"
+        self.level = 0                                      # 0 прозрачный, 1 мутный, 2 грязный (по порогам t_turb / t_dirty с гистерезисом)
+
+    def _set_level(self):
+        """Состояние по порогам. Гистерезис: вверх — сразу при пороге, вниз — только когда мутность ушла ниже порога на hyst пунктов."""
+        t, td, h = self.cfg["t_turb"], self.cfg["t_dirty"], self.cfg["hyst"]
+        lv = self.level
+        if self.turb >= td or (lv == 2 and self.turb >= td - h):
+            self.level = 2
+        elif self.turb >= t or (lv >= 1 and self.turb >= t - h):
+            self.level = 1
+        else:
+            self.level = 0
 
     def _fail(self, reason: str) -> bool:
         self.valid = False
@@ -722,6 +743,7 @@ class ClarityRT:
         t, off = self._project(self.lab)
         self.raw, self.off = t * 100.0, off
         self.turb = max(0.0, min(100.0, self.raw))
+        self._set_level()
         self.valid = True
         self.reason = ""
         return True
@@ -1470,7 +1492,8 @@ class CameraEngine:
         reason = "" if ok else ("нет кадров" if not alive else (c.reason if c else "зона выключена"))
         return {"id": zc["id"], "name": zc["name"], "type": "clarity", "metric": "flow", "enabled": zc["enabled"],
                 "bit": int(ok), "flow": turb, "diff": round(lab[0], 1) if lab else 0.0, "value": turb, "on": 0.0, "off": 0.0,
-                "turb": turb, "raw": round(c.raw, 1) if c else 0.0, "off_axis": round(c.off, 2) if c else 0.0, "lab": lab,
+                "turb": turb, "level": (c.level if c else 0), "level_name": (CLARITY_LEVELS[c.level] if c else "clear"),
+                "raw": round(c.raw, 1) if c else 0.0, "off_axis": round(c.off, 2) if c else 0.0, "lab": lab,
                 "valid": ok, "reason": reason, "calibrated": bool(c and c.clean is not None and c.dirty is not None)}
 
     def clarity_sample(self, zone_ids, seconds: float) -> dict:

@@ -307,3 +307,44 @@ def test_history_keeps_last_value_not_maximum():
     rows = [(float(i), {"g1": (90.0 if i < 5 else 5.0, 40.0, 1)}, 1) for i in range(10)]
     out = mc._squeeze(rows, 2, frozenset({"g1"}))
     assert out[-1][1]["g1"][0] == 5.0
+
+
+# ───────────── три состояния: прозрачный / мутный / грязный ─────────────
+def level_of(eng, t, n=30):
+    st = run(eng, frame({c: blend(t) for c in CENTERS}), n=n)
+    z = zone(st, "g1")
+    return z["level"], z["level_name"], z["turb"]
+
+
+def test_level_defaults_and_validation():
+    z = cam_cfg()["zones"][0]
+    assert (z["t_turb"], z["t_dirty"], z["hyst"]) == (12.0, 70.0, 3.0)
+    with pytest.raises(ValueError) as e:
+        cam_cfg([dict(zones()[0], t_turb=60, t_dirty=40)])
+    assert "порог" in str(e.value)
+
+
+def test_level_three_states():
+    zs, _, _ = calibrated_cfg(zones(dirty_mode="own"))
+    for t, want in ((0.0, "clear"), (0.05, "clear"), (0.3, "turbid"), (0.5, "turbid"), (0.9, "dirty"), (1.0, "dirty")):
+        eng = me.CameraEngine(cam_cfg(zs))                      # новый движок на каждое значение — без гистерезиса от прошлого
+        lv, name, turb = level_of(eng, t)
+        assert name == want, (t, turb, name)
+        assert lv == me.CLARITY_LEVELS.index(want)
+
+
+def test_level_hysteresis_holds_state_near_threshold():
+    zs, _, _ = calibrated_cfg(zones(dirty_mode="own", t_turb=20, t_dirty=70, hyst=5))
+    eng = me.CameraEngine(cam_cfg(zs))
+    assert level_of(eng, 0.30)[1] == "turbid"                   # выше порога 20 — мутный
+    t_in = 0.17                                                 # чуть ниже порога (17 < 20), но выше 20 − 5 = 15: остаётся мутным
+    lv, name, turb = level_of(eng, t_in)
+    assert 15 < turb < 20 and name == "turbid"
+    assert level_of(eng, 0.05)[1] == "clear"                    # ушли ниже 15 — снова прозрачный
+    assert level_of(eng, t_in)[1] == "clear"                    # в «мёртвой зоне» снизу вверх состояние не меняется, пока порог не пройден
+
+
+def test_level_not_valid_when_uncalibrated():
+    eng = me.CameraEngine(cam_cfg())
+    z = zone(run(eng, frame({c: CLEAN for c in CENTERS})), "g1")
+    assert z["valid"] is False and z["level_name"] == "clear"

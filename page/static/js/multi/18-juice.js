@@ -8,8 +8,10 @@ const JC_SEC = [[10, '10 с'], [30, '30 с'], [60, '1 мин'], [120, '2 мин'
 const JC_SEC_KEY = 'mvs_jc_sec';
 const jcLoadSec = () => { try { const v = Number(localStorage.getItem(JC_SEC_KEY)); if (JC_SEC.some(([x]) => x === v)) return v; } catch (e) { /* не критично */ } return 30; };
 const JC = { sec: jcLoadSec(), msg: {}, hist: {}, stats: {}, at: 0, busy: false };
-const JC_SPREAD_WARN = 6;                                     // разброс цвета за период (Lab) больше — цвет плавал, эталон шаткий
+const JC_T_TURB = 12, JC_T_DIRTY = 70;                       // пороги по умолчанию (как в сервисе): мутный с 12, грязный с 70 из 100
+const JC_SPREAD_WARN = 6;                                    // разброс цвета за период (Lab) больше — цвет плавал, эталон шаткий
 
+const jcT = (z, key, dflt) => (z && z[key] != null ? z[key] : dflt);   // порог зоны (у старых зон без порогов — по умолчанию)
 const jcZones = (cam) => ((cam && cam.zones) || []).filter((z) => z.type === 'clarity');
 
 // номер следующего стакана: после самого большого из уже размеченных (id j1, j2, …)
@@ -31,6 +33,7 @@ function jcMarkSave(m, cam, fw, fh) {
       on: 0, off: 0, invert: false, track_flow: false, smooth: 15, frames_to_on: 1, frames_to_off: 1, blur: 0, flicker_comp: false, out: null,
       center: [Math.round(p[0] * fs[0] / fw), Math.round(p[1] * fs[1] / fh)], radius: mdRodRadius(fs, m.rodPct),
       core: 0.7, glare_pct: 10, off_max: 1, clean: null, dirty: null, dirty_mode: 'shared',
+      t_turb: JC_T_TURB, t_dirty: JC_T_DIRTY, hyst: 3,
     }));
   }, true);
   log.success('КЗ: стаканы добавлены', { serial: cam.id, count: pts.length });
@@ -52,7 +55,7 @@ function jcRowHtml(cam, z) {
   return `<div class="md-zone jc-row" id="jc-r-${k}">
     <div class="md-zone__ctl">
       <div class="md-zone__row"><input type="text" ${a} data-f="name" value="${escapeHtml(z.name)}" title="Название сборника. Двойной клик по кружку на кадре тоже переименует" />
-        <span class="jc-v" id="jc-v-${k}" title="Мутность 0–100: 0 — прозрачный, 100 — самый мутный">—</span><span class="jc-trk"><i id="jc-b-${k}"></i></span>
+        <span class="jc-v" id="jc-v-${k}" title="Мутность 0–100: 0 — прозрачный, 100 — самый мутный">—</span><span class="jc-w" id="jc-w-${k}"></span><span class="jc-trk"><i id="jc-b-${k}"></i></span>
         <button type="button" class="btn-secondary md-x" ${a} data-f="del" title="Удалить стакан">✕</button></div>
       <div class="md-zone__row">
         <button type="button" class="btn-secondary md-x" ${a} data-f="clean" title="В этом стакане сейчас чистый сок: его цвет за последние ${JC.sec} с запомнится как «чистый» (0)">чистый</button>${jcMark(jcHasClean(z), 'Цвет «чистого» сока этого стакана задан')}
@@ -77,6 +80,8 @@ function jcCamHtml(cam, all) {
   return (all ? `<div class="md-camhead"><b>${escapeHtml(cam.name)}${mdIpTag(cam.url)}</b></div>` : '') +
     `<div class="md-zone__row jc-bar"><span class="md-lbl" title="За сколько последних секунд берётся цвет для эталона (медиана)">эталон по последним</span>
       <select data-md="jc" data-f="sec">${mdSel(JC_SEC, JC.sec)}</select>
+      <span class="md-lbl" title="С какой мутности сок считается мутным (оранжевый). Ниже — прозрачный (зелёный). Общий для всех стаканов камеры">мутный от</span>${mdNum(`data-md="jc" data-cam="${escapeHtml(cam.id)}" data-f="tturb"`, jcT(zs[0], 't_turb', JC_T_TURB), 'min="0" max="99" step="1"')}
+      <span class="md-lbl" title="С какой мутности сок считается грязным (красный). Общий для всех стаканов камеры">грязный от</span>${mdNum(`data-md="jc" data-cam="${escapeHtml(cam.id)}" data-f="tdirty"`, jcT(zs[0], 't_dirty', JC_T_DIRTY), 'min="1" max="100" step="1"')}
       <button type="button" class="btn-secondary md-x" data-md="jc" data-cam="${escapeHtml(cam.id)}" data-f="cleanall" title="Налейте во все стаканы чистый сок, подождите и нажмите: цвет каждого стакана запомнится как «чистый» (0)">Все стаканы — чистые</button>
       <span class="net-hint" id="jc-m-${escapeHtml(cam.id)}">${escapeHtml(JC.msg[cam.id] || '')}</span></div>` +
     zs.map((z) => jcRowHtml(cam, z)).join('');
@@ -135,6 +140,15 @@ function jcOnEvent(t) {
   const cam = mvCam(t.dataset.cam);
   if (!cam) return;
   if (f === 'cleanall') { jcCalibrate(cam, jcZones(cam).map((z) => z.id), 'clean'); return; }
+  if (f === 'tturb' || f === 'tdirty') {                      // пороги одним числом на все стаканы камеры; «мутный» обязан быть ниже «грязного» — иначе сервис отклонит конфиг
+    const v = Math.max(0, Math.min(100, parseFloat(t.value) || 0)), zs = jcZones(cam);
+    const lo = f === 'tturb' ? v : jcT(zs[0], 't_turb', JC_T_TURB), hi = f === 'tdirty' ? v : jcT(zs[0], 't_dirty', JC_T_DIRTY);
+    if (lo >= hi) { jcSay(cam.id, 'порог «мутный» должен быть ниже «грязного»', true); t.value = jcT(zs[0], f === 'tturb' ? 't_turb' : 't_dirty', f === 'tturb' ? JC_T_TURB : JC_T_DIRTY); return; }
+    mdEdit(() => zs.forEach((z) => { z[f === 'tturb' ? 't_turb' : 't_dirty'] = v; }), false);
+    jcSay(cam.id, '');
+    JC.at = 0;                                                // линии порогов на графиках перерисуем при ближайшем обновлении
+    return;
+  }
   const z = cam.zones[Number(t.dataset.i)];
   if (!z || z.type !== 'clarity') return;
   if (f === 'clean' || f === 'dirty') { jcCalibrate(cam, [z.id], f); return; }
@@ -170,10 +184,12 @@ function jcPaintLive() {
     jcZones(c).forEach((zc) => {
       const k = c.id + '-' + zc.id;
       const z = alive ? ((res.zones || []).find((q) => q.id === zc.id)) : null;
-      const v = mdEl('jc-v-' + k), b = mdEl('jc-b-' + k), s = mdEl('jc-s-' + k);
+      const v = mdEl('jc-v-' + k), b = mdEl('jc-b-' + k), s = mdEl('jc-s-' + k), w = mdEl('jc-w-' + k);
       const ok = !!(z && z.valid);
-      if (v) { v.textContent = ok ? jcFmt(z.turb) : '—'; v.style.color = ok ? mvClarityColor(z.turb) : ''; }
-      if (b) { b.style.width = ok ? Math.max(2, z.turb) + '%' : '0'; b.style.background = ok ? mvClarityColor(z.turb) : ''; }
+      const col = ok ? mvClarityColor(z) : '';
+      if (v) { v.textContent = ok ? jcFmt(z.turb) : '—'; v.style.color = col; }
+      if (w) { w.textContent = ok ? MV_CLARITY_WORDS[mvClarityLevel(z)] : ''; w.style.color = col; }
+      if (b) { b.style.width = ok ? Math.max(2, z.turb) + '%' : '0'; b.style.background = col; }
       if (s) {
         const st = sr && sr.zones && sr.zones[zc.id] && sr.zones[zc.id].flow;
         const stat = st ? ` · за 2 ч: ср ${jcFmt(st.avg)} · мин ${jcFmt(st.min)} · макс ${jcFmt(st.max)}` : '';
@@ -205,7 +221,7 @@ async function jcRefresh(force) {
       jcZones(c).forEach((z) => {
         const d = h.zones[z.id], cv = mdEl('jc-ch-' + c.id + '-' + z.id);
         if (!d || !cv) return;
-        mdDrawSeries(cv, h.t || [], d.flow.map((v, i) => (d.bit[i] ? v : null)), h.ok || [], 0, 100, { win: JC_WIN, h: 64, lines: [{ v: 50, color: '#64748b' }] });
+        mdDrawSeries(cv, h.t || [], d.flow.map((v, i) => (d.bit[i] ? v : null)), h.ok || [], 0, 100, { win: JC_WIN, h: 64, lines: [{ v: jcT(z, 't_turb', JC_T_TURB), color: MV_CLARITY_COLORS[1] }, { v: jcT(z, 't_dirty', JC_T_DIRTY), color: MV_CLARITY_COLORS[2] }] });
       });
     });
   } finally { JC.busy = false; }

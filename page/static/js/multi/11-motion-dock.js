@@ -1556,8 +1556,9 @@ function openMarkModal(kind) {
       ? 'Обведите НИЖНЕЕ (рабочее) стекло: клики по углам внутри стекла. ПКМ — убрать точку. Enter — замкнуть (минимум 3 точки). Потом обведите верхнее; если стекло одно — «Готово».'
       : 'Кликайте по углам зоны. ПКМ — убрать точку. «Замкнуть» или Enter — готово (минимум 3 точки). Кадр замирает после первой точки.';
   MD.mark.hint = mdEl('mmHint').textContent;
-  MD.mark.rodPct = juice ? 4 : 17;                 // стакан — маленький кружок (4 % ширины кадра), вал — большая окружность
+  MD.mark.rodPct = juice ? 2 : 17;                 // стакан — маленький кружок (2 % ширины кадра: ролик 19.11, 1920 px — стакан ≈ 40 px), вал — большая окружность
   mdEl('mmRodR').min = juice ? 1 : 3;
+  mdEl('mmRodR').step = juice ? 0.5 : 1;
   mdEl('mmRodR').value = MD.mark.rodPct; mdEl('mmRodRv').textContent = MD.mark.rodPct + ' %';
   mdEl('mmRodBox').hidden = !(rods || juice);
   const modal = mdEl('motionMarkModal');

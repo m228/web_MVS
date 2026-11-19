@@ -449,7 +449,7 @@ function startMotionPolling() {
       MV.tick += 1;
       if (MV.tick % 10 === 1) await mvRefreshConfig();          // конфиг подтягиваем раз в ~10 с
       if (MV.tick % 15 === 2 && MV.online) lvStripsRefresh();    // лента снимков уровня (новый снимок раз в минуту) — без ожидания
-      const any = MV.dockOpen || state.tiles.some((t) => t.serial && t.kind === 'rtsp' && mvEnabled(t.serial));
+      const any = MV.dockOpen || (typeof SHW !== 'undefined' && SHW.open) || state.tiles.some((t) => t.serial && t.kind === 'rtsp' && mvEnabled(t.serial));
       if (MV.online && any) {
         const st = await mvApi('/api/motion/state');
         if (st && st.cameras) st.cameras.forEach((c) => { MV.states[c.id] = c; });
@@ -457,6 +457,7 @@ function startMotionPolling() {
         if (st && st.shafts) MV.shafts = st.shafts;       // скорости и разности валов (вкладка «Валы», подписи на плитке)
         if (typeof paintMotionDockLive === 'function') paintMotionDockLive();
       }
+      if (typeof shwUpdate === 'function') shwUpdate();           // плавающий виджет «разность валов» (16-shafts.js)
       drawAllMotionTiles();
       updateMotionButton(focusedSource());
     } catch (e) { /* опрос не должен падать */ }
@@ -474,4 +475,5 @@ function initMotionVision() {
   document.getElementById('multiGrid')?.addEventListener('mouseleave', () => { const t = document.getElementById('mvTip'); if (t) t.hidden = true; });
   initRodRadiusDrag();
   if (typeof initMotionDock === 'function') initMotionDock();
+  if (typeof shwInit === 'function') shwInit();                 // значок и плавающий виджет «разность валов»
 }

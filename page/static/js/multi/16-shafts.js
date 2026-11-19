@@ -784,3 +784,134 @@ async function mdOnShAc(t) {
     renderMotionDock();
   }
 }
+
+// ---- плавающий виджет «разность валов»: четыре вала-круга с углами и разности углов (Верх / Низ / слева / справа), как на SCADA ----
+// Включается значком в верхней панели, двигается мышью (за любое место), колесо — размер; место, размер и «открыт» помнит браузер.
+// В кружке — угол красного конца вала (°, от вертикали по часовой); снаружи — разность углов пары от эталона (красная — выше допуска).
+const SH_WD = { w: 210, h: 280, r: 40 };
+const SH_WD_CIRCLE = { vl: [56, 82], vp: [154, 82], nl: [56, 198], np: [154, 198] };        // вал → центр круга
+const SH_WD_PAIR = { vlr: [105, 22, 'Верх'], nlr: [105, 258, 'Низ'], lnv: [56, 140, ''], rnv: [154, 140, ''] };   // пара → центр подписи и название
+const SHW_KEY = 'mvs_shafts_widget';
+const SHW = { open: false, x: null, y: null, s: 1.15, el: null, cv: null, drag: null };
+
+// сам рисунок в координатах SH_WD; off — данных нет (КЗ не работает): везде прочерки
+function shPaintWidget(ctx, s, off) {
+  const { w, h, r } = SH_WD, F = (px, b) => (b ? 'bold ' : '') + px + 'px sans-serif';
+  const bad = !off && SH_PAIRS.some((id) => s.pairs[id] && s.pairs[id].valid && s.pairs[id].alarm_angle);        // красное — только настоящий аларм по углу (допуск угла > 0 на вкладке «Валы»)
+  ctx.save();
+  ctx.clearRect(0, 0, w, h);
+  ctx.beginPath(); ctx.roundRect(0, 0, w, h, 18); ctx.fillStyle = 'rgba(15,17,22,.92)'; ctx.fill();
+  ctx.lineWidth = 2; ctx.strokeStyle = bad ? '#f87171' : 'rgba(148,163,184,.45)'; ctx.stroke();
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  SH_PAIRS.forEach((id) => {
+    const p = s.pairs[id], [x, y, name] = SH_WD_PAIR[id], ok = !off && p && p.valid;
+    ctx.font = F(22, true); ctx.fillStyle = !ok ? '#9ca3af' : (p.alarm_angle) ? '#f87171' : '#f3f4f6';
+    ctx.fillText(ok ? shSgn(p.angle_diff, 1) + '°' : '—', x, y);
+    if (name) { ctx.textAlign = 'left'; ctx.font = F(13); ctx.fillStyle = '#9ca3af'; ctx.fillText(name, 14, y); ctx.textAlign = 'center'; }
+  });
+  SH_IDS.forEach((id) => {
+    const x = s.shafts[id], [cx, cy] = SH_WD_CIRCLE[id], ok = !off && x && x.valid;
+    ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2); ctx.fillStyle = 'rgba(255,255,255,.08)'; ctx.fill();
+    ctx.lineWidth = 1.5; ctx.strokeStyle = 'rgba(148,163,184,.55)'; ctx.stroke();
+    if (ok) {                                  // стрелка вала: красная половина на угле, синяя напротив
+      const a = (x.angle * Math.PI) / 180, dx = Math.sin(a) * (r - 4), dy = -Math.cos(a) * (r - 4);
+      ctx.globalAlpha = x.coast ? 0.45 : 1; ctx.lineWidth = 4; ctx.lineCap = 'round';
+      ctx.strokeStyle = MV_ROD_BLUE; ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(cx - dx, cy - dy); ctx.stroke();
+      ctx.strokeStyle = MV_ROD_RED; ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(cx + dx, cy + dy); ctx.stroke();
+      ctx.globalAlpha = 1;
+    }
+    ctx.beginPath(); ctx.roundRect(cx - 27, cy - 11, 54, 22, 7); ctx.fillStyle = 'rgba(30,41,59,.95)'; ctx.fill();
+    ctx.lineWidth = 1; ctx.strokeStyle = 'rgba(148,163,184,.6)'; ctx.stroke();
+    ctx.font = F(15, true); ctx.fillStyle = !ok ? '#9ca3af' : x.coast ? '#7b828f' : '#f3f4f6';       // палка не видна (удержание) — угол тусклый, как и стрелка
+    ctx.fillText(ok ? (((Math.round(x.angle) % 360) + 360) % 360) + '°' : '—', cx, cy + 1);
+  });
+  ctx.restore();
+}
+
+function shwSave() {
+  try { localStorage.setItem(SHW_KEY, JSON.stringify({ open: SHW.open, x: SHW.x, y: SHW.y, s: SHW.s })); } catch (e) { /* не критично */ }
+}
+
+// не даём окну уехать за экран (после смены размера окна браузера или масштаба виджета)
+function shwClamp() {
+  const w = SH_WD.w * SHW.s, h = SH_WD.h * SHW.s;
+  SHW.x = Math.max(0, Math.min(window.innerWidth - w, SHW.x));
+  SHW.y = Math.max(0, Math.min(window.innerHeight - h, SHW.y));
+}
+
+function shwPlace() {
+  if (!SHW.el) return;
+  shwClamp();
+  const dpr = window.devicePixelRatio || 1, w = SH_WD.w * SHW.s, h = SH_WD.h * SHW.s;
+  SHW.el.style.left = SHW.x + 'px'; SHW.el.style.top = SHW.y + 'px';
+  SHW.el.style.width = w + 'px'; SHW.el.style.height = h + 'px';
+  SHW.cv.width = Math.round(w * dpr); SHW.cv.height = Math.round(h * dpr);
+  shwPaint();
+}
+
+function shwPaint() {
+  if (!SHW.open || !SHW.cv) return;
+  const s = shSnap();
+  if (!s || !s.shafts || !s.pairs) return;
+  const ctx = SHW.cv.getContext('2d'), k = SHW.cv.width / SH_WD.w;
+  ctx.setTransform(k, 0, 0, k, 0, 0);
+  shPaintWidget(ctx, s, !MV.online);
+}
+
+function shwBuild() {
+  if (SHW.el) return;
+  const el = document.createElement('div');
+  el.className = 'shw'; el.hidden = true;
+  el.title = 'Разность углов валов, °. Перетащи, чтобы подвинуть; колесо мыши — размер.';
+  el.innerHTML = '<canvas class="shw__cv"></canvas><button type="button" class="shw__x" title="Закрыть" aria-label="Закрыть">×</button>';
+  document.body.appendChild(el);
+  SHW.el = el; SHW.cv = el.querySelector('canvas');
+  el.querySelector('.shw__x').addEventListener('click', (e) => { e.stopPropagation(); shwSet(false); });
+  el.addEventListener('pointerdown', (e) => {
+    if (e.target.closest('.shw__x')) return;
+    SHW.drag = { dx: e.clientX - SHW.x, dy: e.clientY - SHW.y };
+    el.setPointerCapture(e.pointerId); el.classList.add('is-drag');
+  });
+  el.addEventListener('pointermove', (e) => {
+    if (!SHW.drag) return;
+    SHW.x = e.clientX - SHW.drag.dx; SHW.y = e.clientY - SHW.drag.dy;
+    shwClamp(); el.style.left = SHW.x + 'px'; el.style.top = SHW.y + 'px';
+  });
+  const end = () => { if (!SHW.drag) return; SHW.drag = null; el.classList.remove('is-drag'); shwSave(); };
+  el.addEventListener('pointerup', end); el.addEventListener('pointercancel', end);
+  el.addEventListener('wheel', (e) => {
+    e.preventDefault();
+    SHW.s = Math.max(0.7, Math.min(2.2, SHW.s * (e.deltaY < 0 ? 1.08 : 1 / 1.08)));
+    shwPlace(); shwSave();
+  }, { passive: false });
+  window.addEventListener('resize', () => { if (SHW.open) shwPlace(); });
+}
+
+function shwSet(on) {
+  SHW.open = !!on;
+  shwBuild();
+  SHW.el.hidden = !SHW.open;
+  document.getElementById('multiShaftsBtn')?.classList.toggle('is-on', SHW.open);
+  if (SHW.open) {
+    if (SHW.x === null) { SHW.x = window.innerWidth - SH_WD.w * SHW.s - 24; SHW.y = 110; }
+    shwPlace();
+  }
+  shwSave();
+}
+
+// значок виден, когда у камер назначены валы (иначе показывать нечего); вызывается раз в секунду из опроса КЗ
+function shwUpdate() {
+  const s = shSnap(), btn = document.getElementById('multiShaftsBtn');
+  const has = !!(s && s.shafts && SH_IDS.some((id) => s.shafts[id] && s.shafts[id].assigned));
+  if (btn) btn.hidden = !has;
+  if (SHW.open) shwPaint();
+}
+
+function shwInit() {
+  try {
+    const v = JSON.parse(localStorage.getItem(SHW_KEY) || 'null');
+    if (v) { SHW.x = Number.isFinite(v.x) ? v.x : null; SHW.y = Number.isFinite(v.y) ? v.y : null; SHW.s = Number.isFinite(v.s) ? Math.max(0.7, Math.min(2.2, v.s)) : SHW.s; SHW.open = !!v.open; }
+  } catch (e) { /* не критично */ }
+  document.getElementById('multiShaftsBtn')?.addEventListener('click', (e) => { e.stopPropagation(); shwSet(!SHW.open); });
+  if (SHW.open) shwSet(true);
+}

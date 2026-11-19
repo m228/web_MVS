@@ -513,11 +513,16 @@ function mdShaftPairHtml(id, p) {
         <button type="button" class="btn-secondary md-x" ${a} data-f="calib" title="Принять текущее положение валов за ноль разности углов (нужны оба вала в кадре)">эталон = сейчас</button>
         <button type="button" class="btn-secondary md-x" ${a} data-f="calibavg" title="Автоподбор: ноль = среднее значение разности углов за период, выбранный вверху блока. Валы при этом идут как обычно, точно ловить «ноль» не нужно">эталон = среднее за период</button></div>
       <div class="md-zone__row md-mx-set"><span class="md-lbl" title="Тревога, когда |Δ скорости| не меньше допуска. 0 — тревога по скорости выключена">допуск скорости, об/мин</span>${mdNum(a + ' data-f="tol_rpm"', p.tol_rpm, 'min="0" step="0.1"')}</div>
+      <div class="md-zone__row md-mx-set">
+        <label class="switch-toggle md-sw md-sw--sm" title="Волна Δ за оборот — перекос камер, он повторяется. Сервис сам выучивает её по скользящему окну и вычитает: Δ держится около эталона, а свет и положение камер подстраиваются. Учится только форма волны: настоящий разъезд валов в неё не уходит и виден в Δ сразу. Тревога и запись в ПЛК идут по Δ с коррекцией."><span class="switch"><input type="checkbox" ${a} data-f="learn"${p.learn === false ? '' : ' checked'} /><span class="switch-track"></span></span><span class="md-lbl md-lbl--on">автокоррекция</span></label>
+        <span class="md-lbl" title="За какое время учится форма: скользящее окно. Больше — спокойнее, меньше — быстрее следует за светом и камерой">окно</span>${mdNum(a + ' data-f="learnmin"', p.learn_min || 30, 'min="5" max="240" step="5"')}<span class="md-lbl">мин</span>
+        <span class="net-hint" id="md-shl-${id}"></span></div>
       <div class="md-zone__row md-mx-set"><span class="md-lbl" title="Регистр: Δ угла в 0,1° со знаком (uint16). Адрес не задан — в ПЛК не пишется. ПЛК включается на вкладке «ПЛК · сценарии · группы»">Δ угла → ПЛК</span>${mdOutCell(p.out_angle, a, false, 'oa', [['', 'нет'], ['holding', 'регистр']])}
         <span class="md-lbl" title="Регистр: Δ скорости в 0,01 об/мин со знаком (uint16)">Δ скорости → ПЛК</span>${mdOutCell(p.out_rpm, a, false, 'or', [['', 'нет'], ['holding', 'регистр']])}</div>
     </div>
     <div class="md-zone__chart md-mx2">
-      <div class="md-mxc"><span class="md-mxc__t">Δ угла, °</span><canvas id="md-shc-a-${id}" height="64"></canvas></div>
+      <div class="md-mxc"><span class="md-mxc__t">Δ угла без коррекции, °</span><canvas id="md-shc-w-${id}" height="64"></canvas></div>
+      <div class="md-mxc"><span class="md-mxc__t">Δ угла с коррекцией, °</span><canvas id="md-shc-a-${id}" height="64"></canvas></div>
       <div class="md-mxc"><span class="md-mxc__t">Δ скорости, об/мин</span><canvas id="md-shc-r-${id}" height="64"></canvas></div>
     </div>
   </div>`;
@@ -546,6 +551,8 @@ async function mdOnShafts(t) {
       if (f === 'tol_angle') p.tol_angle = shClamp(parseFloat(t.value) || 0, 0, 180);
       else if (f === 'tol_rpm') p.tol_rpm = Math.max(0, parseFloat(t.value) || 0);
       else if (f === 'ref') p.ref = shClamp(parseFloat(t.value) || 0, -180, 180);
+      else if (f === 'learn') p.learn = t.checked;
+      else if (f === 'learnmin') p.learn_min = shClamp(parseInt(t.value, 10) || 30, 5, 240);
       else if (f === 'oakind') p.out_angle = out(p.out_angle, 'oakind');
       else if (f === 'oaaddr') { if (p.out_angle) p.out_angle.address = shClamp(parseInt(t.value, 10) || 0, 0, 65535); }
       else if (f === 'orkind') p.out_rpm = out(p.out_rpm, 'orkind');
@@ -654,6 +661,8 @@ function mdPaintShafts() {
     if (a) { a.textContent = p.valid ? shSgn(p.angle_diff, 1) + '°' : '—'; a.style.color = p.valid && p.alarm_angle ? '#f87171' : ''; }
     if (r) { r.textContent = p.valid ? shSgn(p.rpm_diff, 2) + ' об/мин' : '—'; r.style.color = p.valid && p.alarm_rpm ? '#f87171' : ''; }
     if (b) { const al = p.alarm_angle || p.alarm_rpm ? 1 : 0; b.textContent = al; b.style.color = al ? '#f87171' : ''; }
+    const l = mdEl('md-shl-' + id);
+    if (l) l.textContent = !p.learn ? 'выключена' : (p.learn.ready ? 'учится · форма ±' + (p.learn.amp / 2).toFixed(1) + '°' : 'копит: ' + p.learn.bins + ' из 36 ячеек');
   });
   if (SH.noteCls === '' && !SH.note) shSetNote('', '');
   mdShaftsHist();
@@ -683,9 +692,11 @@ function mdDrawShaftChart(id) {
   if (!h || h.t.length < 2) return;
   const ok = h.t.map(() => 1);
   const span = (vals, min) => Math.max(min, Math.ceil(Math.max(...vals.map((v) => Math.abs(v))) * 1.2));
-  const ca = mdEl('md-shc-a-' + id), cr = mdEl('md-shc-r-' + id);
+  const ca = mdEl('md-shc-a-' + id), cr = mdEl('md-shc-r-' + id), cw = mdEl('md-shc-w-' + id);
   const pc = (shCfg() || { pairs: {} }).pairs[id] || {};
-  if (ca) { const m = span(h.angle, 5); mdDrawSeries(ca, h.t, h.angle, ok, -m, m, { lines: [{ v: 0, color: '#64748b' }].concat(pc.tol_angle ? [{ v: pc.tol_angle, color: '#f59e0b' }, { v: -pc.tol_angle, color: '#f59e0b' }] : []) }); }
+  const m = span((h.angle_raw || []).concat(h.angle), 5);             // один масштаб у обоих графиков угла: разницу с коррекцией и без видно сразу
+  if (cw && h.angle_raw) mdDrawSeries(cw, h.t, h.angle_raw, ok, -m, m, { lines: [{ v: 0, color: '#64748b' }] });
+  if (ca) { mdDrawSeries(ca, h.t, h.angle, ok, -m, m, { lines: [{ v: 0, color: '#64748b' }].concat(pc.tol_angle ? [{ v: pc.tol_angle, color: '#f59e0b' }, { v: -pc.tol_angle, color: '#f59e0b' }] : []) }); }
   if (cr) { const m = span(h.rpm, 1); mdDrawSeries(cr, h.t, h.rpm, ok, -m, m, { lines: [{ v: 0, color: '#64748b' }].concat(pc.tol_rpm ? [{ v: pc.tol_rpm, color: '#f59e0b' }, { v: -pc.tol_rpm, color: '#f59e0b' }] : []) }); }
 }
 

@@ -448,7 +448,10 @@ def normalize_shafts(raw: Optional[dict]) -> dict:
                       "tol_angle": _num(p.get("tol_angle", 0), where + ".tol_angle", 0, 180),
                       "tol_rpm": _num(p.get("tol_rpm", 0), where + ".tol_rpm", 0, 10000),
                       "out_angle": _out(p.get("out_angle"), ("holding",), where + ".out_angle"),
-                      "out_rpm": _out(p.get("out_rpm"), ("holding",), where + ".out_rpm")}
+                      "out_rpm": _out(p.get("out_rpm"), ("holding",), where + ".out_rpm"),
+                      # самоподстройка волны Δ угла за оборот (как learn у группы mirror): окно в минутах, 5..240
+                      "learn": bool(p.get("learn", True)),
+                      "learn_min": _num(p.get("learn_min", 30), where + ".learn_min", 5, 240, True)}
     return {"shafts": shafts, "pairs": pairs}
 
 

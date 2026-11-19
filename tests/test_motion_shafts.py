@@ -47,7 +47,8 @@ def test_camera_row_validated_and_shafts_block_always_full():
     cfg = cfg_two_rows()
     assert [c["row"] for c in cfg["cameras"]] == ["lower", "upper"]
     assert set(cfg["shafts"]["shafts"]) == set(me.SHAFT_IDS) and set(cfg["shafts"]["pairs"]) == set(me.PAIR_IDS)
-    assert cfg["shafts"]["pairs"]["nlr"] == {"ref": 0.0, "tol_angle": 0.0, "tol_rpm": 0.0, "out_angle": None, "out_rpm": None}
+    assert cfg["shafts"]["pairs"]["nlr"] == {"ref": 0.0, "tol_angle": 0.0, "tol_rpm": 0.0, "out_angle": None, "out_rpm": None,
+                                                 "learn": True, "learn_min": 30}
     with pytest.raises(ValueError, match="ряд валов"):
         me.normalize_config({"cameras": [{"id": "a", "url": "x", "row": "middle"}]})
     assert me.normalize_config({"cameras": [{"id": "a", "url": "x"}]})["cameras"][0]["row"] == ""        # старый конфиг без поля
@@ -378,3 +379,63 @@ def test_http_calibrate_sets_ref_and_state_exposes_shafts(tmp_path):
     finally:
         server.should_exit = True
         th.join(5)
+
+
+# ---- самоподстройка волны Δ угла пары (learn) ----
+
+def wave_run(r, M, turns, wave=7.0, shift=0.0, start=1000.0, moving=None):
+    """Левый НЛВ крутится на 10°/с, ВЛВ отстаёт на shift + wave·sin(угол): разность НЛВ–ВЛВ = −(shift + волна). Шаг 1 с."""
+    for i in range(turns):
+        a = (i * 10.0) % 360.0
+        b = a - shift - wave * __import__("math").sin(__import__("math").radians(a))
+        M.workers["dn"].s = states(dn=(a, 260.0, 5.0, -5.0))["dn"]
+        M.workers["up"].s = states(up=(b % 360.0, 260.0, 4.0, -4.0))["up"]
+        if moving is not None:
+            for w in M.workers.values():
+                for z in w.s["result"]["zones"]:
+                    z["moving"] = moving
+        r.tick(start + i)
+    return start + turns
+
+
+def test_learn_flattens_wave_but_keeps_level():
+    r, _, M = runner(cfg_two_rows(), states())
+    t = wave_run(r, M, 2400, shift=4.0)                    # 40 оборотов по 36 с, форма накопилась и выучена
+    p = r.snapshot()["pairs"]["lnv"]
+    assert p["learn"]["ready"] and p["learn"]["bins"] == 36
+    h = r.history("lnv", window_s=0, points=0)
+    tail = h["angle"][-360:]                                # последние 10 оборотов: после коррекции волны почти нет
+    raw = h["angle_raw"][-360:]
+    assert max(raw) - min(raw) > 10                         # без коррекции размах ≈ 14°
+    assert max(tail) - min(tail) < 3                        # с коррекцией — около 1–2° от интерполяции
+    assert sum(tail) / len(tail) == pytest.approx(sum(raw) / len(raw), abs=0.8)       # уровень не съеден: остаётся в Δ
+
+
+def test_learn_off_leaves_diff_untouched_and_real_jump_is_visible():
+    cfg = cfg_two_rows({"shafts": {"pairs": {"lnv": {"learn": False}}}})
+    r, _, M = runner(cfg, states())
+    wave_run(r, M, 2400)
+    p = r.snapshot()["pairs"]["lnv"]
+    assert p["learn"] is None and p["angle_diff"] == p["angle_diff_raw"] and p["corr"] == 0.0
+    r2, _, M2 = runner(cfg_two_rows(), states())
+    t = wave_run(r2, M2, 2400)
+    wave_run(r2, M2, 60, wave=7.0, shift=30.0, start=t)    # настоящий разъезд на 30° сразу виден в Δ
+    assert abs(r2.snapshot()["pairs"]["lnv"]["angle_diff"]) > 20
+
+
+def test_learn_skips_standing_and_coast_points():
+    r, _, M = runner(cfg_two_rows(), states())
+    wave_run(r, M, 2400, moving=False)                      # валы стоят: в обучение ничего не идёт
+    assert r.snapshot()["pairs"]["lnv"]["learn"]["bins"] == 0
+
+
+def test_learn_shape_survives_restart(tmp_path):
+    r, _, M = runner(cfg_two_rows(), states())
+    M.dir = tmp_path
+    r2 = ms.ShaftRunner(M)                                  # учитель с путём к файлу
+    wave_run(r2, M, 2400)
+    r2._learn_save(1e9)
+    assert (tmp_path / "shafts_learn.json").exists()
+    r3 = ms.ShaftRunner(M)                                  # «перезапуск»
+    lrn = r3._learner("lnv", M.cfg["shafts"]["pairs"]["lnv"])
+    assert lrn.amp() > 8 and not lrn.fresh

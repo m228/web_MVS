@@ -20,14 +20,16 @@ ShaftRunner раз в секунду зовёт её, ведёт историю 
 """
 from __future__ import annotations
 
+import json
 import logging
 import math
+import os
 import threading
 import time
 from collections import deque
 from typing import Optional
 
-from motion_engine import PAIR_IDS, SHAFT_IDS, Hysteresis, ang_diff, normalize_shafts
+from motion_engine import PAIR_IDS, SHAFT_IDS, Hysteresis, MirrorLearn, ang_diff, normalize_shafts
 
 log = logging.getLogger("motion.shafts")
 
@@ -115,7 +117,8 @@ def compute(cfg: dict, states: dict) -> dict:
                        "assigned": cam is not None, "valid": ok,
                        "angle": round(float(zs["angle"]), 2) if ok else None,
                        "rpm": round(float(zs.get("rpm", 0.0)), 3) if ok else None,
-                       "coast": bool(zs.get("coast")) if zs else False}
+                       "coast": bool(zs.get("coast")) if zs else False,
+                       "moving": zs.get("moving") if zs else None}
     pairs: dict = {}
     for pid in PAIR_ORDER:
         a_id, b_id, mode = PAIRS[pid]
@@ -144,6 +147,53 @@ class ShaftRunner(threading.Thread):
         self._hys: dict = {}              # (пара, "angle"/"rpm") → (допуск, Hysteresis)
         self._sent: dict = {}
         self.status: dict = {}            # ключ вывода → {ok, error}
+        self.learners: dict = {}          # пара → (окно в минутах, MirrorLearn): самоподстройка волны Δ угла за оборот
+        d = getattr(mgr, "dir", None)
+        self.learn_path = (d / "shafts_learn.json") if d else None
+        self._saved = self._learn_load()
+        self._learn_saved_at = 0.0
+
+    def _learn_load(self) -> dict:
+        if not self.learn_path:
+            return {}
+        try:
+            with open(self.learn_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            return data if isinstance(data, dict) else {}
+        except (OSError, ValueError):
+            return {}
+
+    def _learn_save(self, now: float) -> None:
+        """Раз в минуту, если форма менялась: data\\shafts_learn.json. Ошибка записи не мешает расчёту."""
+        if not self.learn_path or now - self._learn_saved_at < 60.0:
+            return
+        self._learn_saved_at = now
+        if not any(m.dirty for _, m in self.learners.values()):
+            return
+        try:
+            data = {pid: {"shape": [round(v, 2) for v in m.shape]} for pid, (_, m) in self.learners.items()}
+            tmp = str(self.learn_path) + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(data, f)
+            os.replace(tmp, self.learn_path)
+            for _, m in self.learners.values():
+                m.dirty = False
+            self._saved = data
+        except OSError:
+            pass
+
+    def _learner(self, pid: str, pc: dict) -> Optional[MirrorLearn]:
+        """Учитель пары по её настройкам: выключили — убираем, сменили окно — создаём заново (форму берём ту, что уже выучена)."""
+        if not pc.get("learn", True):
+            self.learners.pop(pid, None)
+            return None
+        win = int(pc.get("learn_min", 30))
+        cur = self.learners.get(pid)
+        if cur is None or cur[0] != win:
+            shape = cur[1].shape if cur else (self._saved.get(pid) or {}).get("shape")
+            cur = (win, MirrorLearn(win * 60.0, shape))
+            self.learners[pid] = cur
+        return cur[1]
 
     def stop(self):
         self._halt.set()
@@ -159,7 +209,8 @@ class ShaftRunner(threading.Thread):
         if points > 0 and len(rows) > points:
             step = len(rows) / float(points)
             rows = [rows[int(i * step)] for i in range(points)]
-        return {"pair": pair, "t": [round(r[0], 1) for r in rows], "angle": [r[1] for r in rows], "rpm": [r[2] for r in rows]}
+        return {"pair": pair, "t": [round(r[0], 1) for r in rows], "angle": [r[1] for r in rows], "rpm": [r[2] for r in rows],
+                "angle_raw": [r[5] for r in rows]}      # angle — после автокоррекции, angle_raw — до неё
 
     def stats(self, pair: str, window_s: float = 3600.0, now: Optional[float] = None) -> dict:
         """Среднее / мин / макс / среднее по модулю разности углов и скоростей пары за window_s секунд.
@@ -178,7 +229,7 @@ class ShaftRunner(threading.Thread):
         if not rows:
             return out
         out["span_s"] = round(min(window_s, now - rows[0][0]), 1)
-        ang = [ang_diff(r[4], ref) for r in rows]
+        ang = [ang_diff(ang_diff(r[4], ref), r[6]) for r in rows]      # от ТЕКУЩЕГО эталона и за вычетом выученной поправки того момента
         rpm = [r[2] for r in rows]
         agg = lambda v: {"avg": round(sum(v) / len(v), 2), "min": round(min(v), 2), "max": round(max(v), 2),
                          "avg_abs": round(sum(abs(x) for x in v) / len(v), 2)}
@@ -205,17 +256,31 @@ class ShaftRunner(threading.Thread):
         cfg = self.mgr.cfg
         states = {cid: w.state() for cid, w in list(self.mgr.workers.items())}
         snap = compute(cfg, states)
+        sc = cfg.get("shafts") or default_shafts_cfg()
         for pid, p in snap["pairs"].items():
+            sa, sb = snap["shafts"][p["a"]], snap["shafts"][p["b"]]
+            lrn = self._learner(pid, sc["pairs"][pid])
+            p["angle_diff_raw"] = p["angle_diff"]                  # до самоподстройки
+            corr = 0.0
+            if lrn:
+                if p["valid"] and not (sa["coast"] or sb["coast"]) and sa["moving"] is not False and sb["moving"] is not False:
+                    lrn.add(now, sa["angle"], p["angle_diff"])     # учим только когда оба вала видны и крутятся
+                lrn.step(now)
+                if p["valid"]:
+                    corr = lrn.corr(sa["angle"])
+                    p["angle_diff"] = round(ang_diff(p["angle_diff"], corr), 2)
+            p["corr"] = round(corr, 2)
+            p["learn"] = lrn.info() if lrn else None
             p["alarm_angle"] = self._alarm(pid, "angle", p["tol_angle"], p["angle_diff"])
             p["alarm_rpm"] = self._alarm(pid, "rpm", p["tol_rpm"], p["rpm_diff"])
             if p["valid"]:
-                coast = bool(snap["shafts"][p["a"]]["coast"] or snap["shafts"][p["b"]]["coast"])
-                self.hist[pid].append((now, p["angle_diff"], p["rpm_diff"], coast, p["raw"]))
+                coast = bool(sa["coast"] or sb["coast"])
+                self.hist[pid].append((now, p["angle_diff"], p["rpm_diff"], coast, p["raw"], p["angle_diff_raw"], p["corr"]))
+        self._learn_save(now)
         self.snap = snap
         mb = cfg["modbus"]
         if not mb.get("enable"):
             return
-        sc = cfg.get("shafts") or default_shafts_cfg()
         writes = []             # (ключ, kind, адрес, значение)
         for sid in SHAFT_ORDER:                                  # скорость вала ×100, 0 — нет данных (как у rpm_out зоны)
             out = sc["shafts"][sid].get("out_rpm")

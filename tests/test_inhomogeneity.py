@@ -62,3 +62,17 @@ def test_boil_block_pools_probes_not_averages_cv():
     assert blk["het"]["m1"] > 10                     # по массе крупные весят в 27 раз больше: CV ~12 % (по штукам был бы 50 %)
     old = dict(r1); del old["msq_m1"]                          # старая проба без момента не ломает расчёт
     assert cv_store._vol_block([old])["het"]["m1"] is None
+
+
+def test_trend_series_het():
+    """Тренд: линия неоднородности по пробе — среднее M1–M3 и по площади; у пробы без второго момента — None (линия рвётся)."""
+    def row(ms):
+        s = {"volume": cv_volume.sums_for(ms, _cfg())}
+        return cv_store._volume_cols(s, cv_volume.percents(s["volume"]), 1)
+    r = row([_m(100), _m(300), _m(250)])
+    p = cv_volume.percents(cv_volume.sums_for([_m(100), _m(300), _m(250)], _cfg()))["het_pct"]
+    assert cv_store._trend_val(r, "het_area") == pytest.approx(p["area"], abs=0.1)
+    assert cv_store._trend_val(r, "het_avg") == pytest.approx((p["m1"] + p["m2"] + p["m3"]) / 3, abs=0.1)
+    assert cv_store._trend_val(r, "het_m1") == pytest.approx(p["m1"], abs=0.1)
+    old = {k: v for k, v in r.items() if not k.startswith("msq_")}      # проба до v3.0.20
+    assert cv_store._trend_val(old, "het_avg") is None and cv_store._trend_val(old, "het_area") is None

@@ -5,7 +5,7 @@
   // ================= Компьютерное зрение (CV) =================
   // Вкладка «CV» + переключатель окна камера/распознавание. Данные с /api/cv/*.
   const CV_GROUPS = ["small", "medium", "large", "reject"];
-  const CV_SERIES_COLOR = { small: "#1d9e75", medium: "#378add", large: "#ba7517", reject: "#e24b4a", mean: "#7f77dd", median: "#d16fb8", sv: "#f2c94c",
+  const CV_SERIES_COLOR = { small: "#1d9e75", medium: "#378add", large: "#ba7517", reject: "#e24b4a", mean: "#7f77dd", median: "#d16fb8", het_avg: "#ff4d94", het_area: "#ffa3c4", sv: "#f2c94c",
     temp: "#ff8a4c", vac: "#4fd1e8", level: "#8aa4c8", current: "#a3d95b", cook_time: "#b9a98f", seed_age: "#ffb347", seed_qty: "#f78fb3", seed_slurry: "#ffa6c9", seed_mu: "#c08be0", fines_avg: "#e8c547", fines_flat: "#ff5c5c",
     fsv0: "#fff0a8", fsv1: "#f5d861", fsv2: "#e8b93c", fsv3: "#c98a1e", fsv4: "#1d9e75", fsv5: "#2bb3a3", fsv6: "#378add", fsv7: "#5b6fe0", fsv8: "#7f77dd", fsv9: "#a46fd6", fsv10: "#d16fb8", fsv11: "#e0708a", fsv12: "#ba7517" };   // fsv0–12 — фракции рассева в режиме «Рассев» тренда
   let cvWinOn = false;          // окно показывает CV (true) или камеру (false)
@@ -489,6 +489,8 @@
     if (CV_PHASE_SPECIAL[k]) return CV_PHASE_SPECIAL[k];
     return CV_PHASE_WORD[k[0]] && /^[1-9][0-9]?$/.test(k.slice(1)) ? CV_PHASE_WORD[k[0]] + " " + k.slice(1) : "";
   }
+  // короткая подпись плитки фазы: «стаб. 1», «подк. 3», «рост 1» — плиток может быть много (по числу подкачек), в одну строку; полное имя — в подсказке
+  function cvPhaseShort(k) { return cvPhaseTitle(k).replace("стабилизация", "стаб.").replace("подкачка", "подк."); }
   function cvPhaseFamily(k) {                                   // как cv_volume.phase_family: p1 / g1 / p2 / g2, у стабилизации — нет (общие сита)
     if (!k || k[0] === "s") return null;
     if (k === "p1" || k === "g1") return k;
@@ -526,13 +528,13 @@
     if (cvSievePhase !== "boil" && !have.includes(cvSievePhase)) cvSievePhase = "boil";
     const keys = ["boil", ...have], sig = keys.join(",");
     const titleOf = (k) => (k === "boil" ? "Рассев и мука по варке: пробы её конца (последние ~2 СВ)"
-      : "Рассев и мука только по пробам этой фазы (" + (b.phases[k].n || b.phases[k].probes) + " проб), сита и порог муки в её масштабе");
+      : cvPhaseTitle(k) + ": рассев и мука только по пробам этой фазы (" + (b.phases[k].n || b.phases[k].probes) + " проб), сита и порог муки в её масштабе");
     let rebuilt = false;
     if (sig !== cvSieveSig || !$("cvSievePill")) {                 // набор сегментов изменился (другая варка / началась новая фаза) — перестроить
       box.innerHTML = '<span class="micro-sieve__pill" id="cvSievePill" aria-hidden="true"></span>';       // скользящий ползунок под активным сегментом
       keys.forEach((k) => {
         const bt = document.createElement("button");
-        bt.type = "button"; bt.dataset.k = k; bt.className = "micro-sieve__tile"; bt.textContent = k === "boil" ? "варка" : cvPhaseTitle(k);
+        bt.type = "button"; bt.dataset.k = k; bt.className = "micro-sieve__tile"; bt.textContent = k === "boil" ? "варка" : cvPhaseShort(k);
         bt.addEventListener("click", () => { cvSievePhase = k; cvRenderBoil(); });
         box.appendChild(bt);
       });
@@ -1442,7 +1444,7 @@
   }
   const CV_TREND_KEY = "microCvTrendSeries7";   // 3: добавлены «стадия» и «СВ»; 5: в список попадают и скрытые режимом серии; 6: рассев разбит на 9 линий (fsv0–8); 7: крупные по 0,1 мм — 13 линий (fsv0–12) — прежние номера fsv не переносим
   const CV_TREND_KEY_OLD = "microCvTrendSeries6";   // из прошлого ключа переносим всё, кроме fsv
-  const CV_PCT_SERIES = ["small", "medium", "large", "reject", "sv", "fsv0", "fsv1", "fsv2", "fsv3", "fsv4", "fsv5", "fsv6", "fsv7", "fsv8", "fsv9", "fsv10", "fsv11", "fsv12"];   // шкала слева, % (СВ тоже в % — те же 0–100)
+  const CV_PCT_SERIES = ["small", "medium", "large", "reject", "het_avg", "het_area", "sv", "fsv0", "fsv1", "fsv2", "fsv3", "fsv4", "fsv5", "fsv6", "fsv7", "fsv8", "fsv9", "fsv10", "fsv11", "fsv12"];   // шкала слева, % (СВ тоже в % — те же 0–100)
   const CV_UM_SERIES = ["mean", "median"];                        // шкала справа, мкм
   // режим варки из ПЛК (рисуется пунктиром). Уровень — в %, на общей шкале 0–100; остальные — каждая на своей шкале
   // по видимому участку, но не уже «минимального размаха» (иначе шум на 0,2 °C выглядел бы бурей)
@@ -1490,7 +1492,7 @@
   }
   async function cvTrendFetch(a, b) {            // загрузить пробы [a,b] (epoch, сек)
     const seq = ++cvTrendSeq;
-    const q = [cvSerialQ(), "series=small,medium,large,reject,mean,median,count,stage,sv,fsv0,fsv1,fsv2,fsv3,fsv4,fsv5,fsv6,fsv7,fsv8,fsv9,fsv10,fsv11,fsv12," + CV_REGIME.join(","), "from=" + Math.floor(a), "to=" + Math.ceil(b), "limit=5000"].filter(Boolean).join("&");
+    const q = [cvSerialQ(), "series=small,medium,large,reject,mean,median,het_avg,het_area,count,stage,sv,fsv0,fsv1,fsv2,fsv3,fsv4,fsv5,fsv6,fsv7,fsv8,fsv9,fsv10,fsv11,fsv12," + CV_REGIME.join(","), "from=" + Math.floor(a), "to=" + Math.ceil(b), "limit=5000"].filter(Boolean).join("&");
     const d = await api("/api/cv/trend?" + q);
     if (seq !== cvTrendSeq) return false;        // пока грузили, запросили другое — это устарело
     CV_MIN_SERIES.forEach((k) => { if (d.series && d.series[k]) d.series[k] = d.series[k].map((x) => (x == null ? null : x / 60)); });
@@ -1834,8 +1836,8 @@
     ["boil", ...have].forEach((k) => {
       const bt = document.createElement("button");
       bt.type = "button"; bt.className = "micro-sieve__tile" + (k === cvTrSievePhase ? " is-active" : "");
-      bt.textContent = k === "boil" ? "варка" : cvPhaseTitle(k);
-      bt.title = k === "boil" ? "Рассев по варке: пробы её конца (последние ~2 СВ)" : "Рассев только по пробам этой фазы";
+      bt.textContent = k === "boil" ? "варка" : cvPhaseShort(k);
+      bt.title = k === "boil" ? "Рассев по варке: пробы её конца (последние ~2 СВ)" : cvPhaseTitle(k) + ": рассев только по пробам этой фазы";
       bt.addEventListener("click", () => { cvTrSievePhase = k; cvTrendSieveRender(); });
       box.appendChild(bt);
     });

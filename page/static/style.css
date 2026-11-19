@@ -5144,3 +5144,18 @@ body.micro-rep-doc .micro-cmp-strips { grid-template-columns: repeat(6, 1fr); ga
 .md-table th { text-align: left; font-weight: 500; font-size: 11px; letter-spacing: .05em; text-transform: uppercase; color: var(--muted); padding: 4px 8px; border-bottom: 1px solid var(--border); }
 .md-table td { padding: 6px 8px; border-bottom: 1px solid var(--border); vertical-align: middle; }
 .md-table tr:last-child td { border-bottom: 0; }
+
+/* страница «Скорость обработки» */
+.perf-state { color: var(--muted); font-size: .85em; align-self: center; }
+.perf-card { padding: 14px 16px; margin-top: 14px; }
+.perf-card__head { display: flex; align-items: baseline; gap: 10px; margin-bottom: 8px; }
+.perf-card__head h2 { margin: 0; font-size: 1.05em; }
+.perf-card__sub, .perf-note { color: var(--muted); font-size: .85em; }
+.perf-row { display: grid; grid-template-columns: 190px 1fr; gap: 10px; align-items: center; padding: 6px 0; border-top: 1px solid var(--border); }
+.perf-row:first-of-type { border-top: 0; }
+.perf-row__name { font-weight: 600; font-size: .92em; }
+.perf-row.is-stale { opacity: .55; }
+.perf-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 6px; }
+.perf-grid .micro-tile.perf-warn b { color: var(--warning); }
+.perf-grid .micro-tile.perf-bad b { color: var(--danger); }
+@media (max-width: 720px) { .perf-row { grid-template-columns: 1fr; } }

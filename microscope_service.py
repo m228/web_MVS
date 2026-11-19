@@ -12,6 +12,7 @@ import microscope_fsm
 import plate_config
 import stage_map
 import substages
+from perf_stats import PERF
 from board_guard import BoardGuard
 from microscope_plc import PlateClient
 from microscope_fsm import MicroscopeFSM
@@ -577,6 +578,7 @@ class MicroscopeService:
             run["plc"].append(snap)
         # --- кристаллы (сайдкар YOLO), если он поднят ---
         summary, objects = None, []
+        t_cv = time.perf_counter()
         if run["sidecar_ok"]:
             det = cv_pipeline.detect(run["url"], img, cv)
             if det:
@@ -596,8 +598,14 @@ class MicroscopeService:
                                           phase=run.get("phase"), seed_age_s=seed_age_s,
                                           boil_t_s=self._boil_t_s if self._seed_ts is not None else None)
                 summary, objects = res["summary"], res["objects"]
+                tm = run.get("timing") or {}
+                PERF.record("microscope:cv", (time.perf_counter() - t_cv) * 1000.0, got=len(objects),
+                            note="сайдкар %d мс (infer %d, NMS %d), частей %s" % (tm.get("total_ms") or 0, tm.get("infer_ms") or 0, tm.get("nms_ms") or 0, tm.get("tiles", "—")))
         # --- разломы (чистый OpenCV, всегда) ---
+        t_fr = time.perf_counter()
         run["zones"].append(cv_fracture.detect_zones(img, run["fr_cfg"]) if run["fr_on"] else [])
+        if run["fr_on"]:
+            PERF.record("microscope:fracture", (time.perf_counter() - t_fr) * 1000.0, got=len(run["zones"][-1]))
         run["frame_recs"].append({"file": "frame_%d" % len(run["overlays"]),
                                   "summary": summary, "objects": objects})
         run["overlays"].append(img)

@@ -766,3 +766,14 @@ def test_level_shots_endpoint(tmp_path):
     with pytest.raises(HTTPException) as e:
         call("dec", "../x", 0.0)
     assert e.value.status_code == 404
+
+
+def test_infer_step_records_perf(tmp_path):
+    """Круг уровня пишет в замеры: весь круг (получено — найдено объектов) и время самой модели из ответа сервиса."""
+    from perf_stats import PERF
+    PERF.drop("lvl:")
+    li = _infer_step(tmp_path, [])
+    li.step()
+    s = PERF.snapshot()
+    assert s["lvl:level"]["got"] == 1 and s["lvl:level"]["budget_ms"] == 200.0
+    assert s["lvl:level_model"]["last"] == 7.0

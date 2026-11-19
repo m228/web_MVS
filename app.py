@@ -174,11 +174,6 @@ def multi_page():
     return _page("multi.html")
 
 
-@app.get("/perf")
-def perf_page():
-    return _page("perf.html")
-
-
 @app.get("/network")
 def network_page():
     return _page("network.html")

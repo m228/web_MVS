@@ -182,7 +182,8 @@ class CameraWorker(threading.Thread):
         self._bucket: Optional[list] = None   # [ts, {зона: (flow, diff, bit)}, ok] — набирающаяся секунда длинной истории
         self._stats: deque = deque(maxlen=STATS_LEN)   # корзины статистики: [номер 10-секундки, {зона: [n, Σflow, min, max, Σdiff, min, max]}]
         self._sbucket: Optional[list] = None  # набирающаяся корзина статистики
-        self._angle_ids = frozenset(z["id"] for z in cam_cfg["zones"] if z["type"] == "cycle")      # зоны-палки: flow — угол
+        # зоны-палки (flow — угол) и зоны-прозрачность (flow — мутность): значение не «максимум за секунду», а самое позднее хорошее
+        self._angle_ids = frozenset(z["id"] for z in cam_cfg["zones"] if z["type"] in ("cycle", "clarity"))
         self._mstats: deque = deque(maxlen=STATS_LEN)   # корзины статистики синхронности валов: [номер 10-секундки, {группа: [n, Σ delta, min, max, Σ поправка, min, max]}] (в памяти)
         self._mbucket: Optional[list] = None
         self._writes: Optional[list] = None   # что должно лежать в ПЛК (последнее)
@@ -366,6 +367,10 @@ class CameraWorker(threading.Thread):
                 d["bit"].append(bit)
         return {"t": [round(t, 2) for t, _, _ in pts], "ok": [ok for _, _, ok in pts], "zones": zones}
 
+    def clarity_sample(self, zone_ids: list, seconds: float) -> dict:
+        """Цвет кругов-прозрачности за последние seconds секунд (медиана) — для калибровки «чистый» / «грязный»; сохраняет интерфейс."""
+        return self.engine.clarity_sample(list(zone_ids or []), max(2.0, min(float(seconds), 600.0)))
+
     VIS_STEPS = (30, 60, 120, 300, 600, 1200, 1800, 3600)       # шаг окна видимости, с: подбираем так, чтобы точек было ~70–140
 
     def visibility(self, window_s: float) -> dict:
@@ -519,6 +524,19 @@ class CameraWorker(threading.Thread):
             cv2.putText(f, "%s d=%.2f f=%.2f" % (zc["id"], z["diff"], z["flow"]) + (" t=%.1f L=%.0f r=%.2f" % (z["tex"], z["lum"], z["rel"]) if "tex" in z else ""),
                         (int(pts[:, 0].min()), max(14, int(pts[:, 1].min()) - 6)),
                         cv2.FONT_HERSHEY_SIMPLEX, max(0.4, fw / 1800.0), color, 1, cv2.LINE_AA)
+        for zc in self.cfg["zones"]:                # круги прозрачности: цвет по шкале зелёный → красный и число, нет значения — серый
+            if zc["type"] != "clarity":
+                continue
+            zs = next((z for z in (st or {}).get("zones", []) if z["id"] == zc["id"]), None)
+            if not zs:
+                continue
+            sx, sy = (w / float(size[0]), h / float(size[1])) if size else (1.0, 1.0)
+            cx, cy, rr = int(zc["center"][0] * sx * k), int(zc["center"][1] * sy * k), max(3, int(zc["radius"] * (sx + sy) / 2.0 * k))
+            t = zs["turb"]
+            color = (150, 150, 150) if not zs["valid"] else (0, int(200 * (1 - t / 100.0) + 55), int(60 + 170 * t / 100.0))
+            cv2.circle(f, (cx, cy), rr, color, 2)
+            cv2.putText(f, "%s %s" % (zc["name"], ("%.0f" % t) if zs["valid"] else "--"), (max(0, cx - rr), max(14, cy - rr - 6)),
+                        cv2.FONT_HERSHEY_SIMPLEX, max(0.4, fw / 1800.0), color, 1, cv2.LINE_AA)
         cv2.putText(f, "%s %s" % (self.id, time.strftime("%Y-%m-%d %H:%M:%S")), (8, fh - 10), cv2.FONT_HERSHEY_SIMPLEX,
                     max(0.45, fw / 1600.0), (255, 255, 255), 1, cv2.LINE_AA)
         ok, buf = cv2.imencode(".jpg", f, [cv2.IMWRITE_JPEG_QUALITY, 82])
@@ -645,7 +663,9 @@ class CameraWorker(threading.Thread):
                 zones = {z["id"]: (z["flow"], z["diff"], z["bit"]) for z in state["zones"]}
                 self._push_history(state["ts"], zones, 1 if state["alive"] else 0)
                 if state["alive"]:
-                    self._stats_add(state["ts"], zones)
+                    # мутность без значения (нет эталонов, цвет не на шкале) в среднее / мин / макс не идёт: ноль там означал бы «чистый»
+                    bad = {z["id"] for z in state["zones"] if z["type"] == "clarity" and not z["valid"]}
+                    self._stats_add(state["ts"], {k: v for k, v in zones.items() if k not in bad} if bad else zones)
                     self._mirror_stats_add(state["ts"], state.get("groups") or [])
             self._writes = writes
             self._rec_write(state["ts"], {z["id"]: z for z in state["zones"]}, "ok" if state["alive"] else (state["reason"] or "нет данных"))

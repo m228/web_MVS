@@ -20,6 +20,7 @@ import copy
 import json
 import os
 import re
+import threading
 from collections import deque
 from typing import Optional
 
@@ -33,7 +34,11 @@ FB = dict(pyr_scale=0.5, levels=3, winsize=15, iterations=3, poly_n=5, poly_sigm
 MIN_FLOW_SIDE = 16       # зона меньше этого (px) для Farneback не годится — поток = 0
 ID_RE = re.compile(r"^[A-Za-z0-9_\-]{1,40}$")
 
-ZONE_TYPES = ("motion", "presence", "cycle", "level")
+ZONE_TYPES = ("motion", "presence", "cycle", "level", "clarity")
+CLARITY_DIRTY_MODES = ("shared", "own")   # «грязный» цвет зоны: общий сдвиг камеры от «чистого» этой зоны / свой собственный
+CLARITY_NO_DATA = 65535                   # что уходит в ПЛК вместо мутности, когда её нет (нет эталонов, кадра, цвета): 0 — это «чистый»
+CLARITY_MIN_SPAN = 3.0                    # «чистый» и «грязный» ближе этого (ΔE по Lab) — шкалы нет, мутность не считаем
+CLARITY_KEEP_S = 600                      # сколько секунд сырых цветов храним для калибровки («чистый»/«грязный» по последним N секундам)
 METRICS = ("flow", "diff")
 GROUP_TYPES = ("sum", "monotonic", "worktimer", "mirror", "level")
 MIRROR_MODES = ("mirror", "same")
@@ -123,6 +128,8 @@ def _norm_zone(z: dict, cam_id: str) -> dict:
         return _norm_cycle(z, zid, where)
     if ztype == "level":
         return _norm_level_zone(z, zid, where)
+    if ztype == "clarity":
+        return _norm_clarity(z, zid, where)
     metric = z.get("metric", "flow")
     if metric not in METRICS:
         raise ValueError("%s: метрика %r не из %s" % (where, metric, list(METRICS)))
@@ -179,6 +186,49 @@ def _norm_level_zone(z: dict, zid: str, where: str) -> dict:
         "on": 0.0, "off": 0.0, "invert": False, "track_flow": False,
         "smooth": 1, "frames_to_on": 1, "frames_to_off": 1, "blur": 0, "flicker_comp": False,
         "out": None,
+    }
+
+
+def _lab3(v, name, shift=False):
+    """[L, a, b] цвета в пространстве Lab (OpenCV: L 0..100, a и b −127..127) или None. shift — это сдвиг цвета, а не сам цвет (пределы шире)."""
+    if v is None or v == "" or v == []:
+        return None
+    if not isinstance(v, (list, tuple)) or len(v) != 3:
+        raise ValueError("%s: нужно три числа [L, a, b]" % name)
+    lo, hi = (-200.0, 200.0) if shift else (0.0, 100.0)
+    return [round(_num(v[0], name, lo, hi), 2), round(_num(v[1], name, -256 if shift else -128, 256 if shift else 128), 2),
+            round(_num(v[2], name, -256 if shift else -128, 256 if shift else 128), 2)]
+
+
+def _norm_clarity(z: dict, zid: str, where: str) -> dict:
+    """Зона-«прозрачность»: круг на стакане с соком (центр + радиус, как у палки). Результат — мутность turb 0..100: 0 — цвет «чистого» сока,
+    100 — цвет «грязного» (оба задаёт оператор), между ними — по линейке в цветовом пространстве Lab. Полигона и метрик потока нет (points = [],
+    flow = turb, diff = яркость L — так мутность попадает в истории, тренды и CSV). Вывод в ПЛК — только holding."""
+    c = z.get("center")
+    if not c or len(c) != 2:
+        raise ValueError("%s: нужен центр круга [x, y]" % where)
+    mode = z.get("dirty_mode", "shared")
+    if mode not in CLARITY_DIRTY_MODES:
+        raise ValueError("%s: dirty_mode %r не из %s" % (where, mode, list(CLARITY_DIRTY_MODES)))
+    return {
+        "id": zid,
+        "name": str(z.get("name") or zid),
+        "enabled": bool(z.get("enabled", True)),
+        "type": "clarity",
+        "metric": "flow",
+        "points": [],
+        "on": 0.0, "off": 0.0, "invert": False, "track_flow": False,
+        "smooth": _num(z.get("smooth", 15), where + ".smooth", 1, 600, True),
+        "frames_to_on": 1, "frames_to_off": 1, "blur": 0, "flicker_comp": False,
+        "out": _out(z.get("out"), ("holding",), where + ".out"),
+        "center": [_num(c[0], where + ".center", 0), _num(c[1], where + ".center", 0)],
+        "radius": _num(z.get("radius", 40), where + ".radius", 3),
+        "core": _num(z.get("core", 0.7), where + ".core", 0.2, 1.0),             # какую часть радиуса берём (без стенки стакана и бликов на краю)
+        "glare_pct": _num(z.get("glare_pct", 10), where + ".glare_pct", 0, 50),   # сколько % самых ярких точек круга отбросить (блики, пена)
+        "off_max": _num(z.get("off_max", 1.0), where + ".off_max", 0, 100),       # цвет дальше от шкалы (в длинах шкалы) — «не уверен»; 0 — не проверять
+        "clean": _lab3(z.get("clean"), where + ".clean"),
+        "dirty": _lab3(z.get("dirty"), where + ".dirty"),
+        "dirty_mode": mode,
     }
 
 
@@ -445,6 +495,7 @@ def normalize_camera(c: dict) -> dict:
         "hw_accel": hw,
         "substream": bool(c.get("substream", False)),
         "row": row,
+        "clarity_shift": _lab3(c.get("clarity_shift"), "камера %s.clarity_shift" % cid, shift=True),    # общий сдвиг «грязного» от «чистого» (зоны прозрачности с dirty_mode=shared)
         "proc_fps": _num(c.get("proc_fps", 3), "камера %s.proc_fps" % cid, 0.2, 30),
         "frame_gap": _num(c.get("frame_gap", 1), "камера %s.frame_gap" % cid, 1, 10, True),
         "reconnect_delay_s": _num(c.get("reconnect_delay_s", 3.0), "камера %s.reconnect_delay_s" % cid, 0.5, 300),
@@ -592,6 +643,116 @@ class ZoneRT:
         self.rel = sum(v[2] for v in self.hist_fill) / n
         if self.fill_hys:
             self.fill = self.fill_hys.update({"tex": self.tex, "lum": self.lum, "rel": self.rel}[self.fill_metric])
+
+
+class ClarityRT:
+    """Круг на стакане: цвет сока → мутность 0..100 между двумя эталонами.
+
+    По кругу (внутренние `core` радиуса) берётся медиана цвета в Lab, без самых ярких `glare_pct` % точек (блики, пена). Цвет сглаживается
+    за `smooth` кадров. Эталоны: `clean` — цвет чистого сока (мутность 0), `dirty` — самого мутного (100). Мутность — проекция цвета
+    на отрезок clean → dirty: turb = (c − clean)·(dirty − clean) / |dirty − clean|² × 100, зажатая в 0..100. Цвет далеко от этого отрезка
+    (дальше `off_max` его длин в сторону: рука, чужой предмет, лампа) — valid = False, turb держит последнее хорошее значение.
+    «Грязный» бывает общий (dirty_mode = shared: clean этой зоны + сдвиг камеры clarity_shift) или свой (own)."""
+
+    def __init__(self, zcfg: dict, frame_size, cur_wh, shift=None):
+        self.cfg = zcfg
+        self.id, self.name = zcfg["id"], zcfg["name"]
+        W, H = cur_wh
+        sx = W / float(frame_size[0]) if frame_size else 1.0
+        sy = H / float(frame_size[1]) if frame_size else 1.0
+        cx, cy = zcfg["center"][0] * sx, zcfg["center"][1] * sy
+        rc = max(2.0, zcfg["radius"] * (sx + sy) / 2.0 * zcfg["core"])
+        x0, y0 = max(0, int(cx - rc)), max(0, int(cy - rc))
+        x1, y1 = min(W, int(cx + rc) + 1), min(H, int(cy + rc) + 1)
+        self.bbox = (x0, y0, x1, y1)
+        yy, xx = np.ogrid[y0:y1, x0:x1]
+        self.mask = ((xx - cx) ** 2 + (yy - cy) ** 2) <= rc * rc if (x1 > x0 and y1 > y0) else np.zeros((0, 0), bool)
+        self.geom_ok = bool(self.mask.sum() >= 9)           # круг целиком вне кадра — считать нечего
+        self.clean = np.array(zcfg["clean"], np.float64) if zcfg["clean"] else None
+        if zcfg["dirty_mode"] == "shared":
+            self.dirty = (self.clean + np.array(shift, np.float64)) if (self.clean is not None and shift) else None
+        else:
+            self.dirty = np.array(zcfg["dirty"], np.float64) if zcfg["dirty"] else None
+        self._hist: deque = deque(maxlen=zcfg["smooth"])
+        self._samples: deque = deque()                      # (время, L, a, b) сырые, за последние CLARITY_KEEP_S секунд — для калибровки
+        self._lock = threading.Lock()
+        self.reset()
+
+    def reset(self):
+        self._hist.clear()
+        self.lab: Optional[np.ndarray] = None
+        self.turb = 0.0                                     # последнее хорошее значение (держим, пока цвет «не на шкале»)
+        self.raw = 0.0                                      # то же без зажима в 0..100 (видно, насколько вышли за эталоны)
+        self.off = 0.0                                      # насколько цвет в стороне от шкалы, в её длинах
+        self.valid = False
+        self.reason = "нет кадров"
+
+    def _fail(self, reason: str) -> bool:
+        self.valid = False
+        self.reason = reason
+        return False
+
+    def step(self, frame: Optional[np.ndarray], now: float) -> bool:
+        """Следующий цветной кадр → обновить цвет и мутность. True — значение достоверно."""
+        if frame is None or frame.ndim != 3:
+            return self._fail("в кадре нет цвета")
+        if not self.geom_ok:
+            return self._fail("круг вне кадра")
+        x0, y0, x1, y1 = self.bbox
+        lab = cv2.cvtColor(frame[y0:y1, x0:x1].astype(np.float32) / 255.0, cv2.COLOR_BGR2Lab)[self.mask]
+        gp = self.cfg["glare_pct"]
+        if gp > 0 and len(lab) >= 20:
+            lab = lab[lab[:, 0] <= np.percentile(lab[:, 0], 100.0 - gp)]
+        med = np.median(lab, axis=0).astype(np.float64)
+        with self._lock:
+            self._samples.append((now, float(med[0]), float(med[1]), float(med[2])))
+            while self._samples and now - self._samples[0][0] > CLARITY_KEEP_S:
+                self._samples.popleft()
+        proj = self._project(med)
+        if isinstance(proj, str):                           # эталонов нет — цвет всё равно копим и показываем (для калибровки)
+            self._hist.append(med)
+            self.lab = np.mean(self._hist, axis=0)
+            return self._fail(proj)
+        if self.cfg["off_max"] > 0 and proj[1] > self.cfg["off_max"]:
+            # цвет сейчас не на шкале (рука, чужой предмет): в сглаживание его не берём — иначе переход к нему попадёт в «последнее хорошее» значение
+            self.off = proj[1]
+            return self._fail("цвет не на шкале «чистый — грязный»")
+        self._hist.append(med)
+        self.lab = np.mean(self._hist, axis=0)
+        t, off = self._project(self.lab)
+        self.raw, self.off = t * 100.0, off
+        self.turb = max(0.0, min(100.0, self.raw))
+        self.valid = True
+        self.reason = ""
+        return True
+
+    def _project(self, c: np.ndarray):
+        """Цвет → (положение на шкале clean→dirty, 0 — чистый, 1 — грязный; отклонение в сторону от шкалы, в её длинах) или текст, почему шкалы нет."""
+        if self.clean is None:
+            return "нет эталона «чистый»"
+        if self.dirty is None:
+            return "нет эталона «грязный»"
+        v = self.dirty - self.clean
+        vv = float(v @ v)
+        if vv < CLARITY_MIN_SPAN ** 2:
+            return "«чистый» и «грязный» почти совпадают"
+        d = c - self.clean
+        t = float(d @ v) / vv
+        return t, float(np.linalg.norm(d - t * v) / np.sqrt(vv))
+
+    def sample(self, seconds: float) -> dict:
+        """Медиана сырого цвета за последние `seconds` секунд → эталон. spread — разброс цвета (p90 − p10, наибольший по каналам): велик —
+        цвет плыл, эталон шаткий. Мало кадров — ValueError с понятным текстом."""
+        with self._lock:
+            rows = list(self._samples)
+        if not rows:
+            raise ValueError("зона %s: кадров нет — камера не отдаёт цвет" % self.name)
+        edge = rows[-1][0] - float(seconds)
+        a = np.array([r[1:] for r in rows if r[0] >= edge], np.float64)
+        if len(a) < 3:
+            raise ValueError("зона %s: за последние %.0f с набрано %d кадров, мало" % (self.name, seconds, len(a)))
+        return {"lab": [round(float(x), 2) for x in np.median(a, axis=0)], "n": int(len(a)),
+                "spread": round(float(np.max(np.percentile(a, 90, axis=0) - np.percentile(a, 10, axis=0))), 2)}
 
 
 MIRROR_BINS = 36         # таблица поправки зеркальности: 36 ячеек по 10° по углу первой палки
@@ -1119,7 +1280,8 @@ class CameraEngine:
         self.mirrors = {g["id"]: Hysteresis(g["tol"], g["tol"] * 0.7, False, g["frames_to_on"], g["frames_to_off"])
                         for g in cam_cfg["groups"] if g["type"] == "mirror"}
         self.cycles: dict = {}                  # id зоны-цикла → CycleRT (строятся вместе с зонами, на первом кадре)
-        zl = {z["id"]: z for z in cam_cfg["zones"] if z["type"] == "level"}
+        self.clarity: dict = {}                 # id зоны-прозрачности → ClarityRT (там же)
+        zl ={z["id"]: z for z in cam_cfg["zones"] if z["type"] == "level"}
         self.levels = {g["id"]: LevelRT(g, [zl[x] for x in g["zones"] if x in zl], cam_cfg["frame_size"])
                        for g in cam_cfg["groups"] if g["type"] == "level"}     # уровни живут от потока модели (LevelInfer), не от кадров камеры
         self.last_state: Optional[dict] = None
@@ -1168,6 +1330,8 @@ class CameraEngine:
             z.reset()
         for c in self.cycles.values():
             c.reset()
+        for c in self.clarity.values():
+            c.reset()
         for t in self.timers.values():
             t.reset()
         for m in self.mirrors.values():
@@ -1178,8 +1342,10 @@ class CameraEngine:
     def _build(self, gray):
         h, w = gray.shape[:2]
         self.frame_wh = (w, h)
-        self.zones = [ZoneRT(z, self.cfg["frame_size"], (w, h)) for z in self.cfg["zones"] if z["enabled"] and z["type"] not in ("cycle", "level")]
+        self.zones = [ZoneRT(z, self.cfg["frame_size"], (w, h)) for z in self.cfg["zones"] if z["enabled"] and z["type"] not in ("cycle", "level", "clarity")]
         self.cycles = {z["id"]: CycleRT(z, self.cfg["frame_size"], (w, h)) for z in self.cfg["zones"] if z["enabled"] and z["type"] == "cycle"}
+        self.clarity = {z["id"]: ClarityRT(z, self.cfg["frame_size"], (w, h), self.cfg.get("clarity_shift"))
+                        for z in self.cfg["zones"] if z["enabled"] and z["type"] == "clarity"}
         for m in self.mirrors.values():
             m.reset()
 
@@ -1196,6 +1362,8 @@ class CameraEngine:
         dt = self.gap * self.proc_interval
         bits = {z.id: z.step(prev, gray, dt) for z in self.zones}
         for c in self.cycles.values():
+            bits[c.id] = int(c.step(frame, now))
+        for c in self.clarity.values():
             bits[c.id] = int(c.step(frame, now))
         self._link_partners()
         self.last_state = self._state(bits, now, alive=True)
@@ -1241,6 +1409,9 @@ class CameraEngine:
                 continue
             if zc["type"] == "level":
                 zones.append(self._level_zone(zc, now, alive))
+                continue
+            if zc["type"] == "clarity":
+                zones.append(self._clarity_zone(zc, alive))
                 continue
             z = zs.get(zc["id"])
             zones.append({"id": zc["id"], "name": zc["name"], "type": zc["type"], "metric": zc["metric"],
@@ -1288,6 +1459,31 @@ class CameraEngine:
                 "angle": angle, "conf": conf, "rpm": rpm, "score": round(c.score, 3) if c else 0.0, "valid": ok, "coast": coast, "moving": moving,
                 "src": c.src if ok else "none", "lvl_r": round(c.lvl_r, 2) if ok else 0.0, "lvl_b": round(c.lvl_b, 2) if ok else 0.0,
                 "off_b": round(c.off_b, 1) if c else 0.0}
+
+    def _clarity_zone(self, zc: dict, alive: bool) -> dict:
+        """Зона-прозрачность → запись состояния. turb — мутность 0..100 (flow = turb, diff = яркость L — для историй, трендов и CSV), bit/valid —
+        значение достоверно (есть кадр и оба эталона, цвет на шкале). lab — сглаженный цвет, calibrated — оба эталона заданы (для интерфейса)."""
+        c = self.clarity.get(zc["id"])
+        ok = bool(alive and c and c.valid)
+        turb = round(c.turb, 1) if (c and alive) else 0.0
+        lab = [round(float(x), 2) for x in c.lab] if (c is not None and c.lab is not None) else None
+        reason = "" if ok else ("нет кадров" if not alive else (c.reason if c else "зона выключена"))
+        return {"id": zc["id"], "name": zc["name"], "type": "clarity", "metric": "flow", "enabled": zc["enabled"],
+                "bit": int(ok), "flow": turb, "diff": round(lab[0], 1) if lab else 0.0, "value": turb, "on": 0.0, "off": 0.0,
+                "turb": turb, "raw": round(c.raw, 1) if c else 0.0, "off_axis": round(c.off, 2) if c else 0.0, "lab": lab,
+                "valid": ok, "reason": reason, "calibrated": bool(c and c.clean is not None and c.dirty is not None)}
+
+    def clarity_sample(self, zone_ids, seconds: float) -> dict:
+        """Эталон цвета по последним `seconds` секундам для зон-прозрачности: {id: {lab, n, spread}} или {id: {error}}. zone_ids пуст — все."""
+        res = {}
+        for zid, c in self.clarity.items():
+            if zone_ids and zid not in zone_ids:
+                continue
+            try:
+                res[zid] = c.sample(seconds)
+            except ValueError as e:
+                res[zid] = {"error": str(e)}
+        return res
 
     def _level_zone(self, zc: dict, now: float, alive: bool) -> dict:
         """Зона-стекло → запись состояния. flow = уровень стекла 0..100 %, diff = сырой уровень (до отсечки и сглаживания), bit — в стекле есть жидкость."""
@@ -1377,7 +1573,10 @@ class CameraEngine:
         for zc in self.cfg["zones"]:
             o = zc["out"]
             if o and zc["enabled"]:
-                if zc["type"] == "cycle" and o["kind"] == "holding":
+                if zc["type"] == "clarity":
+                    a = za[zc["id"]]
+                    val = int(round(a["turb"])) if a["valid"] else CLARITY_NO_DATA      # нет значения — 65535, а не 0: ПЛК не должен принять это за «чистый»
+                elif zc["type"] == "cycle" and o["kind"] == "holding":
                     val = int(round(za[zc["id"]]["angle"] * 10)) % 3600 if za[zc["id"]]["valid"] else 0
                 else:
                     sv = zs.get(zc["id"]) if o.get("value") == "state" else None    # состояния нет (пороги не заданы) — пишем бит движения

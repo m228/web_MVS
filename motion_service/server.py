@@ -567,6 +567,18 @@ def create_app(data_dir: Optional[Path] = None, capture_factory: Callable = open
             raise HTTPException(400, str(e))
         return dict(info, table=table)
 
+    @app.post("/cameras/{cid}/clarity_sample")
+    def clarity_sample(cid: str, req: dict = Body(...)):
+        """Цвет кругов-прозрачности за последние `seconds` секунд (по умолчанию 30): медиана Lab, число кадров и разброс. Это эталон «чистый»
+        или «грязный»; конфиг не меняет — сохраняет интерфейс (zone.clean / zone.dirty / camera.clarity_shift)."""
+        if not any(c["id"] == cid for c in mgr.cfg["cameras"]):
+            raise HTTPException(404, "нет такой камеры")
+        zones = [str(z) for z in (req.get("zones") or [])]
+        res = mgr.worker(cid).clarity_sample(zones, float(req.get("seconds", 30)))
+        if not res:
+            raise HTTPException(404, "у камеры нет включённых кругов прозрачности")
+        return {"zones": res}
+
     @app.post("/cameras/{cid}/record")
     def record(cid: str, req: dict = Body(...)):
         return {"recording": mgr.record_camera(cid, bool(req.get("on")))}

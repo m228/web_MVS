@@ -4676,6 +4676,18 @@ body.micro-rep-doc .micro-cmp-strips { grid-template-columns: repeat(6, 1fr); ga
 .md-ar { color: var(--muted); font-size: 11px; cursor: help; }
 .md-zr__del { margin-top: auto; align-self: flex-end; }
 .md-zr__del .md-x, .md-zr__del .md-x[data-f="del"] { color: var(--danger); width: auto; height: auto; border-radius: 10px; padding: 3px 12px; white-space: nowrap; }
+/* вкладка «Сок»: прозрачность сока в стаканах — число 0–100, полоска, эталоны, тренд за 2 ч */
+.jc-bar { flex-wrap: wrap; margin: 2px 0 4px; }
+.jc-row .md-zone__chart canvas { height: 64px; }
+.jc-v { min-width: 42px; text-align: right; font-size: 22px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.jc-w { min-width: 72px; font-size: 12px; font-weight: 600; }
+.jc-trk { flex: 1; min-width: 60px; height: 8px; border-radius: 4px; background: var(--surface-strong); overflow: hidden; }
+.jc-trk i { display: block; height: 100%; width: 0; border-radius: 4px; transition: width .4s; }
+.jc-ok { font-size: 12px; color: var(--muted); min-width: 12px; }
+.jc-ok.is-set { color: var(--success); }
+.jc-st { font-size: 11px; color: var(--muted); min-height: 14px; }
+.jc-more summary { cursor: pointer; font-size: 11px; color: var(--muted); }
+.jc-more .md-zone__row { margin-top: 5px; flex-wrap: wrap; }
 /* обучение порогов зоны «стоит / движется» */
 .md-learn { flex-wrap: wrap; }
 .md-lbtn, .md-learn__apply { min-height: 0; padding: 2px 10px; font-size: 12px; border-radius: 10px; white-space: nowrap; }

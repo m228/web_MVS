@@ -46,6 +46,28 @@ def stage_title(n) -> str | None:
     return name[:1].upper() + name[1:] if name else None
 
 
+# Особые подстадии — свои фазы CV (отдельная таблица рассева), только по подстадии: по стадии их от обычной подкачки/роста не отличить
+SPECIAL_PHASES = {59: "clr", 78: "gbp", 79: "gzp"}      # расчистка, рост БП, рост ЗП
+PHASE_LETTER = {5: "p", 6: "s", 7: "g"}                  # стадия → буква фазы: подкачка / стабилизация / рост
+
+
+def phase_from_sub(stage, code) -> str | None:
+    """Ключ фазы CV по подстадии пробы (Submode = этап·10 + подэтап) или None, если номер по ней не определить.
+    Номер = подэтап − 1, как в таблице NAMES: 72 → g1 («рост 1»), 73 → g2, 52 → p1, 62 → s1; 70 / 71 — «рост» без номера → None.
+    59 / 78 / 79 — особые фазы (clr / gbp / gzp). Подстадия другого этапа, чем стадия пробы (ПЛК переключает регистры не одновременно), не годится."""
+    try:
+        st, c = int(stage), int(round(float(code)))
+    except (TypeError, ValueError):
+        return None
+    letter = PHASE_LETTER.get(st)
+    if letter is None or c // 10 != st:
+        return None
+    if c in SPECIAL_PHASES:
+        return SPECIAL_PHASES[c]
+    n = c - st * 10 - 1
+    return "%s%d" % (letter, n) if n >= 1 else None
+
+
 def name_of(code) -> str | None:
     try:
         c = int(round(float(code)))

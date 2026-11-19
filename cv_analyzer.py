@@ -914,7 +914,7 @@ def summarize(measures: list[CrystalMeasure], image_shape: tuple,
     n = len(measures) - n_cut - n_bubble - n_excl
     area_mm2 = (w * cfg["um_per_px"] / 1000.0) * (h * cfg["um_per_px"] / 1000.0)
     sizes_np = np.array(sizes) if sizes else np.array([0.0])
-    vol_sums = cv_volume.sums_for(measures, cfg, cv_volume.fines_on(cfg, sv) or phase is not None, phase, seed_age_s, boil_t_s)    # на фазе (подкачка/рост) мука считается всегда
+    vol_sums = cv_volume.sums_for(measures, cfg, cv_volume.fines_on(cfg, sv) or cv_volume.fines_always(phase), phase, seed_age_s, boil_t_s)    # на фазе (подкачка / стабилизация / рост) мука считается всегда
     quality = "ok"
     if blur is not None and blur < cfg["blur_min"]:
         quality = "low"

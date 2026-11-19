@@ -33,6 +33,7 @@ class MicroscopeService:
         # заводка: момент перехода «Сгущение(3) → Затравка и далее(4..9)»; None — варка не отслеживается
         self._last_stage = None
         self._pump_runs = 0              # сколько раз началась подкачка (стадия 5) в идущей варке
+        self._stab_runs = 0              # сколько раз началась стабилизация (стадия 6)
         self._grow_runs = 0              # сколько раз начался рост (стадия 7)
         self._phase_last = None          # прошлая стадия для счёта фаз
         self._phase_ready = False        # счётчики подтянуты из журнала (перезапуск посреди варки)
@@ -559,7 +560,7 @@ class MicroscopeService:
             "svs": [],       # СВ на момент каждого кадра: от него зависит, идёт ли брак в рассев
             "plc": [],       # снимки полей ПЛК (PLC_KEYS) на момент каждого кадра — в запись пробы
             "t0": time.time(),
-            "phase": self._current_phase(self.fsm.stage if self.fsm else None),    # фаза на начало пробы: она же и остаётся у пробы
+            "phase": self._current_phase(self.fsm.stage if self.fsm else None, (self._plc_snapshot() or {}).get("substage")),    # фаза на начало пробы (стадия + подстадия ПЛК): она же и остаётся у пробы
             "stage": self.fsm.stage if self.fsm else None,                          # стадия на начало пробы (9 = «готовность»: длительность варки становится известной)
         }
 
@@ -680,7 +681,7 @@ class MicroscopeService:
         try:
             import cv_store
             st = cv_store.phase_state(serial)
-            self._pump_runs, self._grow_runs, self._phase_last = st["pump"], st["grow"], st["last"]
+            self._pump_runs, self._stab_runs, self._grow_runs, self._phase_last = st["pump"], st["stab"], st["grow"], st["last"]
             if self._seed_ts is None and st.get("seed_ts") is not None:
                 self._seed_ts = st["seed_ts"]                  # заводка идущей варки — из журнала: иначе после перезапуска порог муки скачет на пороге фазы
                 self._boil_t_s = st.get("boil_t_s")
@@ -689,26 +690,27 @@ class MicroscopeService:
             log_event("microscope_service", "Счётчики фаз из журнала не подтянулись", "warn", {"error": str(e)})
 
     def _count_phases(self, stage):
-        """Фазы варки по порядку стадий: каждая новая «5» — новая подкачка, каждая новая «7» — новый рост; сгущение (2–3) — новая варка."""
+        """Фазы варки по порядку стадий: каждая новая «5» — новая подкачка, каждая новая «6» — новая стабилизация, каждая новая «7» — новый рост;
+        сгущение (2–3) — новая варка. Счёт нужен как запасной путь, когда подстадия ПЛК номера не несёт (50 / 70)."""
         self._phase_init()
         prev, self._phase_last = self._phase_last, stage
         if stage in (2, 3) and prev not in (2, 3):
-            self._pump_runs = self._grow_runs = 0
+            self._pump_runs = self._stab_runs = self._grow_runs = 0
         elif stage == 5 and prev != 5:
             self._pump_runs += 1
+        elif stage == 6 and prev != 6:
+            self._stab_runs += 1
         elif stage == 7 and prev != 7:
             self._grow_runs += 1
 
-    def _current_phase(self, stage):
-        """Фаза пробы, начатой на стадии stage: p1/p2 (подкачка), g1/g2 (рост) или None. 3-я и далее вливаются во 2-ю.
-        УНВ / пауза посреди варки — фаза последней настоящей стадии."""
+    def _current_phase(self, stage, sub=None):
+        """Фаза пробы, начатой на стадии stage (sub — подстадия ПЛК на этот момент): p<N> подкачка, s<N> стабилизация, g<N> рост, clr / gbp / gzp
+        или None. Номер — из подстадии (72 → g1), а нет его — по порядку входа в стадию. УНВ / пауза посреди варки — фаза последней настоящей стадии."""
         import cv_store
         if stage in cv_store.PAUSE_STAGES:
-            stage = self._phase_last
-        if stage == 5:
-            return "p%d" % min(max(self._pump_runs, 1), 2)
-        if stage == 7:
-            return "g%d" % min(max(self._grow_runs, 1), 2)
+            stage, sub = self._phase_last, None
+        if stage in (5, 6, 7):
+            return cv_store.phase_key(stage, {5: self._pump_runs, 6: self._stab_runs, 7: self._grow_runs}, sub)
         return None
 
     def _note_stage(self, stage):

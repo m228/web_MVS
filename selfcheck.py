@@ -2600,14 +2600,23 @@ def _cv_fines_latch():
     return "порог по варке: с первого достижения до конца, пропуски СВ линию не рвут"
 
 
-@check("CV", "фазы варки: порядок стадий 5/7 → p1 g1 p2 g2; сита и порог муки в масштабе фазы (20/40/40/80 %), свой порог фазы, режим сторона/объём")
+@check("CV", "фазы варки: подкачка / стабилизация / рост — каждая своя (p<N> s<N> g<N>; номер из подстадии, иначе по порядку стадий); сита и порог муки в масштабе фазы (20/40/40/80 %), свой порог фазы, режим сторона/объём")
 def _cv_phases():
     import cv_store, cv_volume, substages
     # 1. фазы по порядку стадий (рецепт: затравка → подкачка 1 → рост 1 → подкачка 2 → рост 2 → уваривание)
     seq = [3, 4, 5, 5, 7, 7, 7, 5, 5, 7, 7, 8, 9]
     got = cv_store.phases_for_boil(seq)
     assert got == [None, None, "p1", "p1", "g1", "g1", "g1", "p2", "p2", "g2", "g2", None, None], got
-    assert cv_store.phases_for_boil([5, 7, 5, 7, 5, 7]) == ["p1", "g1", "p2", "g2", "p2", "g2"], "третья подкачка/рост вливаются во вторую"
+    assert cv_store.phases_for_boil([5, 7, 5, 7, 5, 7]) == ["p1", "g1", "p2", "g2", "p3", "g3"], "третья подкачка/рост — свои фазы, не вливаются во вторую"
+    assert cv_store.phases_for_boil([5, 6, 6, 7, 6, 7]) == ["p1", "s1", "s1", "g1", "s2", "g2"], "стабилизация — своя фаза, у каждой стабилизации свой номер"
+    # номер из подстадии ПЛК (номер = подэтап − 1): 72 → рост 1, 73 → рост 2; 70 / 71 / пусто / чужой этап — по порядку входа в стадию
+    assert cv_store.phases_for_boil([7, 7, 7, 7], [70, 72, 73, 74]) == ["g1", "g1", "g2", "g3"], "рост по подстадии"
+    assert cv_store.phases_for_boil([5, 6, 7], [53, 62, 71]) == ["p2", "s1", "g1"], "подкачка 2 по 53, стабилизация 1 по 62, 71 — без номера"
+    assert cv_store.phases_for_boil([5, 5, 7, 7], [50, 59, 78, 79]) == ["p1", "clr", "gbp", "gzp"], "расчистка / рост БП / рост ЗП — свои фазы только по подстадии"
+    assert cv_store.phases_for_boil([6, 7], [70, 60]) == ["s1", "g1"], "подстадия другого этапа (отстаёт от стадии) — игнорируем, считаем по порядку"
+    assert cv_store.phases_for_boil([7, 7, 7], [73, None, 70]) == ["g2", "g1", "g1"], "смешанный случай: где номера нет — счётчик входов (1-й рост)"
+    assert substages.phase_from_sub(7, 72) == "g1" and substages.phase_from_sub(5, 52) == "p1" and substages.phase_from_sub(7, 70) is None
+    assert cv_store.phases_for_boil([5, 7, 5, 7], [None] * 4) == ["p1", "g1", "p2", "g2"], "подстадии нет — как раньше, по стадиям"
     assert cv_store.phases_for_boil([5, None, 5, 7]) == ["p1", "p1", "p1", "g1"], "стадия неизвестна — как у предыдущей пробы"
     # УНВ (20) / пауза (21) посреди роста — не новый рост (Кир 17.10 06:20: 7 → 20 → 7 давало g1 → None → g2)
     assert cv_store.phases_for_boil([5, 7, 20, 7, 8]) == ["p1", "g1", "g1", "g1", None], cv_store.phases_for_boil([5, 7, 20, 7, 8])
@@ -2619,6 +2628,12 @@ def _cv_phases():
     assert vc(None)["size_scale"] == 1.0 and vc(None)["fines_um"] == base and vc("zzz")["phase"] is None, "нет фазы — обычные сита и порог"
     assert [round(vc(ph)["size_scale"], 2) for ph in cv_volume.PHASES] == [0.2, 0.4, 0.4, 0.8], "масштаб по умолчанию 20/40/40/80 %"
     assert abs(vc("p1")["fines_um"] - base * 0.2) < 1e-6 and abs(vc("g2")["fines_um"] - base * 0.8) < 1e-6, "порог муки уменьшается вместе с ситами"
+    # новые фазы берут настройки своего семейства: подкачка 3 и расчистка = подкачка 2, рост 3 / БП / ЗП = рост 2; стабилизация — общие сита (как раньше)
+    assert [round(vc(ph)["size_scale"], 2) for ph in ("p3", "clr", "g3", "gbp", "gzp", "s1", "s2")] == [0.4, 0.4, 0.8, 0.8, 0.8, 1.0, 1.0], "масштаб новых фаз по семейству"
+    assert vc("s1")["fines_um"] == base and vc("s1")["phase"] == "s1", "стабилизация: порог общий, но фаза запомнена"
+    assert all(cv_volume.fines_always(p) for p in ("p3", "g1", "s1", "clr")) and not cv_volume.fines_always(None), "мука с начала — на любой фазе"
+    assert cv_volume.in_boil_total(None) and cv_volume.in_boil_total("s2") and not any(cv_volume.in_boil_total(p) for p in ("p1", "g2", "gbp")), "в итог варки — стабилизация, но не подкачка/рост"
+    assert [cv_volume.phase_title(p) for p in ("p3", "s2", "g1", "clr", "gbp", "gzp")] == ["подкачка 3", "стабилизация 2", "рост 1", "расчистка", "рост БП", "рост ЗП"]
     cfg = {"volume": {"phase_scale_g1": 50, "fines_side_p2": 0.05}}
     assert abs(vc("g1")["fines_um"] - base * 0.5) < 1e-6, "свой масштаб фазы"
     assert abs(vc("p2")["fines_um"] - cv_volume.fines_diameter_um(0.05)) < 1e-6, "свой порог фазы — как задан (мм), без масштаба"
@@ -3263,10 +3278,10 @@ def _service_phases():
     ms = MicroscopeService()
     ms._phase_ready = True                                       # без журнала: считаем только по ходу стадий
     got = []
-    for st in (2, 3, 4, 5, 5, 7, 7, 5, 5, 7, 8, 9, 10, 3, 4, 5, 7):
+    for st in (2, 3, 4, 5, 5, 6, 7, 7, 6, 7, 5, 5, 7, 8, 9, 10, 3, 4, 5, 7):
         ms._note_stage(st)
         got.append(ms._current_phase(st))
-    assert got == [None, None, None, "p1", "p1", "g1", "g1", "p2", "p2", "g2", None, None, None, None, None, "p1", "g1"], got
+    assert got == [None, None, None, "p1", "p1", "s1", "g1", "g1", "s2", "g2", "p2", "p2", "g3", None, None, None, None, None, "p1", "g1"], got
     got = []                                                     # УНВ посреди роста: проба на 20 — фаза роста, после неё рост тот же
     for st in (7, 20, 20, 7, 5):
         ms._note_stage(st)
@@ -3294,7 +3309,12 @@ def _service_phases():
         assert ms2._seed_ts is not None and abs(ms2._seed_ts - (now - 730)) < 1, "после перезапуска заводка восстановлена (иначе порог муки падает на порог фазы)"
         ms2._note_stage(7)
         assert ms2._current_phase(7) == "g2", "после 2-й подкачки — 2-й рост"
-        assert cv_store.phase_state("NOSUCH") == {"pump": 0, "grow": 0, "last": None, "seed_ts": None, "boil_t_s": None}
+        assert cv_store.phase_state("NOSUCH") == {"pump": 0, "stab": 0, "grow": 0, "last": None, "seed_ts": None, "boil_t_s": None}
+        # подстадия ПЛК главнее счётчика: по 74 — рост 3, хотя счётчик на 2-м росте; без номера (70) или без подстадии — по счётчику (2-й рост)
+        assert ms2._current_phase(7, 74) == "g3" and ms2._current_phase(7, 70) == "g2" and ms2._current_phase(7, None) == "g2"
+        assert ms2._current_phase(5, 59) == "clr" and ms2._current_phase(8, 80) is None, "расчистка по 59; уваривание — без фазы"
+        ms2._note_stage(6)
+        assert ms2._current_phase(6, 60) == "s1" and ms2._current_phase(6, 62) == "s1", "стабилизация: первая по счётчику / по подстадии 62"
     finally:
         db.set_path(old_path)
     return "p1 g1 p2 g2 по ходу стадий; сгущение — новая варка; перезапуск — из журнала"

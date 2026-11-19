@@ -480,9 +480,24 @@
       return true;
     } catch (e) { return false; }
   }
-  const CV_PHASES = ["p1", "g1", "p2", "g2"];
-  const CV_PHASE_TITLE = { p1: "подкачка 1", g1: "рост 1", p2: "подкачка 2", g2: "рост 2" };
+  const CV_PHASES = ["p1", "g1", "p2", "g2"];                 // семейства настроек (масштаб сит / свой порог): подкачка 2 и далее = p2, рост 2 и далее = g2
   const CV_PHASE_SCALE = { p1: 20, g1: 40, p2: 40, g2: 80 };
+  // Фаз в варке может быть сколько угодно (cv_volume.PHASE_RE): p<N> подкачка N, s<N> стабилизация N, g<N> рост N, clr / gbp / gzp.
+  const CV_PHASE_WORD = { p: "подкачка", s: "стабилизация", g: "рост" }, CV_PHASE_SPECIAL = { clr: "расчистка", gbp: "рост БП", gzp: "рост ЗП" };
+  function cvPhaseTitle(k) {                                    // p3 → «подкачка 3», clr → «расчистка»; пусто — не фаза
+    if (!k) return "";
+    if (CV_PHASE_SPECIAL[k]) return CV_PHASE_SPECIAL[k];
+    return CV_PHASE_WORD[k[0]] && /^[1-9][0-9]?$/.test(k.slice(1)) ? CV_PHASE_WORD[k[0]] + " " + k.slice(1) : "";
+  }
+  function cvPhaseFamily(k) {                                   // как cv_volume.phase_family: p1 / g1 / p2 / g2, у стабилизации — нет (общие сита)
+    if (!k || k[0] === "s") return null;
+    if (k === "p1" || k === "g1") return k;
+    return k[0] === "p" || k === "clr" ? "p2" : "g2";
+  }
+  function cvPhaseScale(cfg, k) { const f = cvPhaseFamily(k); return f ? ((cfg || {})["phase_scale_" + f] || CV_PHASE_SCALE[f]) / 100 : 1; }
+  function cvBoilPhases(b) {                                    // фазы варки в порядке появления (по времени первой пробы)
+    return Object.keys((b && b.phases) || {}).filter((k) => cvPhaseTitle(k)).sort((a, c) => String(b.phases[a].ts_from).localeCompare(String(b.phases[c].ts_from)));
+  }
   // плитки рассева: «варка» (итог по концу варки) + по одной на каждую фазу, которая в этой варке была; новая появляется, когда
   // началась новая стадия. Только для режимов по варке (в режиме «по пробе» плиток нет — у пробы свои сита по её фазе).
   let cvSieveSig = "";          // какие сегменты сейчас нарисованы (варка + фазы): пока набор тот же, DOM не пересоздаём — иначе ползунок «улетает» и возвращается
@@ -506,7 +521,7 @@
     if (cvVolMode === "probe") { box.hidden = true; return; }
     // «варка» — всегда; плитка фазы — только если такая фаза в ВЫБРАННОЙ варке была (идущая варка — новая появляется со стадией,
     // прошлые варки — какие были). Фазы, которых не было, не показываем вовсе.
-    const have = CV_PHASES.filter((p) => b && b.phases && b.phases[p]);
+    const have = cvBoilPhases(b);
     box.hidden = false;
     if (cvSievePhase !== "boil" && !have.includes(cvSievePhase)) cvSievePhase = "boil";
     const keys = ["boil", ...have], sig = keys.join(",");
@@ -517,7 +532,7 @@
       box.innerHTML = '<span class="micro-sieve__pill" id="cvSievePill" aria-hidden="true"></span>';       // скользящий ползунок под активным сегментом
       keys.forEach((k) => {
         const bt = document.createElement("button");
-        bt.type = "button"; bt.dataset.k = k; bt.className = "micro-sieve__tile"; bt.textContent = k === "boil" ? "варка" : CV_PHASE_TITLE[k];
+        bt.type = "button"; bt.dataset.k = k; bt.className = "micro-sieve__tile"; bt.textContent = k === "boil" ? "варка" : cvPhaseTitle(k);
         bt.addEventListener("click", () => { cvSievePhase = k; cvRenderBoil(); });
         box.appendChild(bt);
       });
@@ -563,7 +578,7 @@
     cvRenderSieveTiles(b);
     const ph = b && cvSievePhase !== "boil" && b.phases && b.phases[cvSievePhase] ? cvSievePhase : "boil";
     if (b && ph === "boil") cvSievePhase = "boil";
-    const pscale = ph !== "boil" ? ((b.cfg || {})["phase_scale_" + ph] || CV_PHASE_SCALE[ph]) / 100 : 1;
+    const pscale = ph !== "boil" ? cvPhaseScale(b.cfg, ph) : 1;
     const blk = b ? (ph !== "boil" ? b.phases[ph] : (b.tail || b)) : null;            // по варке — пробы последних ~2 СВ
     cvRenderSieve(blk ? blk.fsieve : null, 1, cvSz(blk && blk.msize, blk && blk.het));
     cvShowSv(cvSvRange(blk, ph !== "boil" ? blk.dur_s : (b ? b.dur_s : null)));
@@ -586,7 +601,7 @@
         " мкм, самый длинный " + (e.len_max != null ? Math.round(e.len_max) : "—") + " мкм <i>(хорошие, без брака и сростков)</i>.</div>" : "");
     if (ph !== "boil") {          // фаза: подробный текст про фазу вместо итогов варки
       const P = blk.probes != null ? blk.probes : blk.n;
-      cvSetHtml(box, "<div><b>" + CV_PHASE_TITLE[ph] + ":</b> все пробы фазы — " + P + " (" + cvTsLabel(blk.ts_from).slice(6, 11) + "–" + cvTsLabel(blk.ts_to).slice(6, 11) + "), хороших кристаллов " + (blk.good_n || 0) +
+      cvSetHtml(box, "<div><b>" + cvPhaseTitle(ph) + ":</b> все пробы фазы — " + P + " (" + cvTsLabel(blk.ts_from).slice(6, 11) + "–" + cvTsLabel(blk.ts_to).slice(6, 11) + "), хороших кристаллов " + (blk.good_n || 0) +
         ". Мука: <b>" + pc(cvAvg3(blk.fines)) + "</b>" + ci + " объёма (среднее M1–M3).</div>" + exLine(blk.size, "фазы"));
       return;
     }
@@ -1789,7 +1804,7 @@
     cvTrProbe = p; cvTrSieveSig = ""; cvDrawTrend();
   }
   function cvTrProbeLabel(p) {           // «18.10 17:08:37 · СВ 86,1 · стадия 7 · рост 2»
-    return [cvFmtT(p.t, true), p.sv != null ? "СВ " + String(p.sv).replace(".", ",") : "", p.stage != null ? "стадия " + p.stage : "", CV_PHASE_TITLE[p.phase] || "",
+    return [cvFmtT(p.t, true), p.sv != null ? "СВ " + String(p.sv).replace(".", ",") : "", p.stage != null ? "стадия " + p.stage : "", cvPhaseTitle(p.phase),
       p.fsieve ? "" : "рассев не считался — СВ ниже «Мука с СВ»"].filter(Boolean).join(" · ");
   }
   function cvTrendSieveBoil() {          // варка рассева: растянутая на тренде; иначе та, что пересекает видимое окно (новые первыми); иначе самая свежая
@@ -1802,7 +1817,7 @@
     card.hidden = cvTrendMode !== "sieve";
     if (card.hidden) return;
     const probe = cvTrSieveSrc === "probe";
-    const b = probe ? null : cvTrendSieveBoil(), have = CV_PHASES.filter((p) => b && b.phases && b.phases[p]);
+    const b = probe ? null : cvTrendSieveBoil(), have = cvBoilPhases(b);
     if (!probe && cvTrSievePhase !== "boil" && !have.includes(cvTrSievePhase)) cvTrSievePhase = "boil";
     const sig = [cvTrSieveSrc, probe ? (cvTrProbe ? cvTrProbe.ts : "-") : (b ? b.id + ":" + b.n : "-"), cvTrSievePhase, cvShowModels, cvSieveOnlyFines, have.join(",")].join("|");
     if (sig === cvTrSieveSig) return;                      // та же варка/проба и фаза — не перерисовываем на каждое движение мыши
@@ -1819,7 +1834,7 @@
     ["boil", ...have].forEach((k) => {
       const bt = document.createElement("button");
       bt.type = "button"; bt.className = "micro-sieve__tile" + (k === cvTrSievePhase ? " is-active" : "");
-      bt.textContent = k === "boil" ? "варка" : CV_PHASE_TITLE[k];
+      bt.textContent = k === "boil" ? "варка" : cvPhaseTitle(k);
       bt.title = k === "boil" ? "Рассев по варке: пробы её конца (последние ~2 СВ)" : "Рассев только по пробам этой фазы";
       bt.addEventListener("click", () => { cvTrSievePhase = k; cvTrendSieveRender(); });
       box.appendChild(bt);

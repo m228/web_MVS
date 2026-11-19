@@ -1007,7 +1007,8 @@
                     <span class="micro-info" tabindex="0" aria-label="Как считаются фазы">ⓘ
                       <span class="micro-info__pop micro-vol__pop" role="tooltip">
                         <b>Фазы варки и масштаб сит</b>
-                        <div class="in">Фазы идут по порядку стадий рецепта: 1-я подкачка (стадия 5) → 1-й рост (7) → 2-я подкачка (5) → 2-й рост (7). Проба принадлежит фазе, в которой началась.</div>
+                        <div class="in">Каждая подкачка (стадия 5), стабилизация (6) и рост (7) — своя фаза со своей плиткой рассева. Номер берётся из подстадии ПЛК (72 — рост 1, 73 — рост 2; 59 — расчистка, 78 — рост БП, 79 — рост ЗП), а если ПЛК номер не отдаёт (50 / 70) — по порядку входа в стадию. Проба принадлежит фазе, в которой началась.</div>
+                        <div class="in">Масштаб и порог задаются для четырёх строк: «подкачка 2 и далее» действует и на подкачку 3, 4…, расчистку; «рост 2 и далее» — на рост 3, 4…, рост БП и ЗП. Стабилизация считается общими ситами и порогом (100 %), как раньше.</div>
                         <div class="in"><code>100 % = обычные сита 0,2 · 0,5 · 0,7 · 0,8 · 1,0 мм и общий порог «Мука»</code></div>
                         <small>На ранних фазах кристаллы ещё мелкие, поэтому и сита, и порог муки уменьшаются: при 40 % сито 0,2 мм становится 0,08 мм, порог муки — в 2,5 раза мельче. Проценты подбираются по опыту: по мере накопления данных меняй поля.</small>
                         <small>«Свой порог» — если нужно задать порог муки фазы прямо, а не масштабом (пусто — авто = общий порог × %).</small>
@@ -1023,8 +1024,8 @@
                     <tbody>
                       <tr data-ph="p1"><td>подкачка 1</td><td><input type="number" id="cvScaleP1" min="1" max="200" step="1" value="20" /></td><td class="micro-phase__calc" data-c="edge"></td><td><input type="number" id="cvFinesP1" min="0" step="0.01" placeholder="авто" /></td><td class="micro-phase__calc" data-c="fines"></td></tr>
                       <tr data-ph="g1"><td>рост 1</td><td><input type="number" id="cvScaleG1" min="1" max="200" step="1" value="40" /></td><td class="micro-phase__calc" data-c="edge"></td><td><input type="number" id="cvFinesG1" min="0" step="0.01" placeholder="авто" /></td><td class="micro-phase__calc" data-c="fines"></td></tr>
-                      <tr data-ph="p2"><td>подкачка 2</td><td><input type="number" id="cvScaleP2" min="1" max="200" step="1" value="40" /></td><td class="micro-phase__calc" data-c="edge"></td><td><input type="number" id="cvFinesP2" min="0" step="0.01" placeholder="авто" /></td><td class="micro-phase__calc" data-c="fines"></td></tr>
-                      <tr data-ph="g2"><td>рост 2</td><td><input type="number" id="cvScaleG2" min="1" max="200" step="1" value="80" /></td><td class="micro-phase__calc" data-c="edge"></td><td><input type="number" id="cvFinesG2" min="0" step="0.01" placeholder="авто" /></td><td class="micro-phase__calc" data-c="fines"></td></tr>
+                      <tr data-ph="p2"><td>подкачка 2 и далее</td><td><input type="number" id="cvScaleP2" min="1" max="200" step="1" value="40" /></td><td class="micro-phase__calc" data-c="edge"></td><td><input type="number" id="cvFinesP2" min="0" step="0.01" placeholder="авто" /></td><td class="micro-phase__calc" data-c="fines"></td></tr>
+                      <tr data-ph="g2"><td>рост 2 и далее</td><td><input type="number" id="cvScaleG2" min="1" max="200" step="1" value="80" /></td><td class="micro-phase__calc" data-c="edge"></td><td><input type="number" id="cvFinesG2" min="0" step="0.01" placeholder="авто" /></td><td class="micro-phase__calc" data-c="fines"></td></tr>
                     </tbody>
                   </table>
                   </div>

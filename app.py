@@ -1476,10 +1476,16 @@ def motion_shafts_history(pair: str, window: float = 3600.0, points: int = 600):
     return motion_client.shafts_history(_motion_url(), pair, window, points)
 
 
+@app.get("/api/motion/shafts_stats")
+def motion_shafts_stats(pair: str, window: float = 3600.0):
+    # среднее / мин / макс разностей пары валов за период (блок «Разности валов»)
+    return motion_client.shafts_stats(_motion_url(), pair, window)
+
+
 @app.post("/api/motion/shafts_calibrate")
 def motion_shafts_calibrate(req: dict = Body(...)):
-    # эталон разности углов пары валов: «ноль» = текущее положение валов
-    return motion_client.shafts_calibrate(_motion_url(), str(req.get("pair") or ""))
+    # эталон разности углов пары валов: «ноль» = текущее положение валов, а с window — среднее за период
+    return motion_client.shafts_calibrate(_motion_url(), str(req.get("pair") or ""), req.get("window"))
 
 
 @app.post("/api/motion/record")

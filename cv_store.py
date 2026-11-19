@@ -81,6 +81,10 @@ def _volume_cols(s: dict, vp: dict, n_frames: int) -> dict:
     for mod in ("m1", "m2", "m3", "area"):           # средний размер кристалла, мкм: msize_<m1|m2|m3|area> (вес — объём модели / площадь)
         if mu.get(mod) is not None:
             out["msize_" + mod] = mu[mod]
+    mq = vp.get("msq_um2") or {}
+    for mod in ("m1", "m2", "m3", "area"):           # второй момент размера, мкм² (Σw·d²/Σw): из него неоднородность пробы и набора проб
+        if mq.get(mod) is not None:
+            out["msq_" + mod] = mq[mod]
     out["good_n"], out["rej_n"] = (sums.get("n") or {}).get("total"), (sums.get("n") or {}).get("agg")     # хороших кристаллов / отсеянного брака в пробе (штук, все кадры)
     out["fines_side_mm"], out["fines_um"] = cfg.get("fines_side_mm"), cfg.get("fines_um")
     out["k_thick"], out["fines_from_sv"] = cfg.get("k_thick"), cfg.get("fines_from_sv")
@@ -521,7 +525,8 @@ def probe_sieve(serial: str, ts: str) -> Optional[dict]:
     if r is None:
         return None
     return {"ts": ts, "t": r["t"], "sv": r.get("sv"), "stage": r.get("stage"), "phase": r.get("phase"), "fsieve": _fsieve([r]),
-            "msize": {m: r.get("msize_" + m) for m in ("m1", "m2", "m3", "area")}}     # средний размер кристалла пробы, мкм
+            "msize": {m: r.get("msize_" + m) for m in ("m1", "m2", "m3", "area")},     # средний размер кристалла пробы, мкм
+            "het": {m: cv_volume.het_pct(r.get("msize_" + m), r.get("msq_" + m)) for m in ("m1", "m2", "m3", "area")}}     # неоднородность размера пробы, %
 
 
 def trend_range(serial: str, t_from: float, t_to: float, series: Optional[list[str]] = None,
@@ -682,6 +687,13 @@ def _vol_block(sel: list) -> dict:
     # средний размер кристалла, мкм: по моделям M1–M3 (вес — общий объём пробы, как у рассева) и по площади (простое среднее по пробам)
     out["msize"] = {m: (None if v is None else round(v, 1)) for m, v in
                     ((m, _wmean(fin, "msize_" + m, ("vtot_" + m) if m != "area" else None)) for m in ("m1", "m2", "m3", "area"))}
+    # неоднородность размера, %: σ/средний по ВСЕЙ массе набора проб. Пробы складываем по моментам (среднее и средний квадрат с тем же весом),
+    # а не усредняем их CV: так получается один честный CV всех кристаллов варки/фазы. Пробы без второго момента (старые) не входят
+    out["het"] = {}
+    for m in ("m1", "m2", "m3", "area"):
+        wk = ("vtot_" + m) if m != "area" else None
+        both = [r for r in fin if r.get("msize_" + m) is not None and r.get("msq_" + m) is not None]
+        out["het"][m] = cv_volume.het_pct(_wmean(both, "msize_" + m, wk), _wmean(both, "msq_" + m, wk))
     return out
 
 

@@ -515,9 +515,25 @@ def _apply_fines_gate(rows: list[dict], thr: Optional[float] = None) -> list[dic
     return rows
 
 
+def het_row(r: dict, mod: str) -> Optional[float]:
+    """Неоднородность размера пробы, % (σ/средний по массе; area — по площади): из среднего размера и второго момента строки журнала.
+    Пробы, посчитанные до v3.0.20 и без кадров на диске, второго момента не имеют — None."""
+    return cv_volume.het_pct(r.get("msize_" + mod), r.get("msq_" + mod))
+
+
+def het_avg(r: dict) -> Optional[float]:
+    """Неоднородность, % — среднее трёх моделей M1–M3 (как «Среднее» в таблице рассева); модели без значения пропускаем."""
+    v = [x for x in (het_row(r, m) for m in ("m1", "m2", "m3")) if x is not None]
+    return round(sum(v) / len(v), 1) if v else None
+
+
 def _trend_val(r: dict, name: str):
     if name == "fines_avg":
         return fines_avg(r)
+    if name == "het_avg":
+        return het_avg(r)
+    if name in ("het_m1", "het_m2", "het_m3", "het_area"):
+        return het_row(r, name[4:])
     if name == "fines_flat":
         return r.get("_fines_flat")
     if name.startswith("fsv") and name[3:].isdigit() and int(name[3:]) < len(FSV_GROUPS):

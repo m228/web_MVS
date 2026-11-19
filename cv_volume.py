@@ -50,9 +50,49 @@ DEFAULTS = {"fines_side_mm": 0.2, "k_thick": 0.88, "fines_from_sv": 88.0, "avg_n
 # На каждой фазе сита рассева и порог «Мука» уменьшаются в phase_scale_<фаза> % от обычных (100 % = SIEVE_MM и общий порог):
 # кристаллы ещё мелкие. Порог можно и задать прямо: fines_side_<фаза> (мм) / fines_vol_<фаза> (мм³); 0 — «общий × масштаб».
 # Критерий: "side" — сторона квадрата, мм (по площади); "volume" — объём, мм³ (шар эквивалентного диаметра).
-PHASES = ("p1", "g1", "p2", "g2")
-PHASE_TITLES = {"p1": "подкачка 1", "g1": "рост 1", "p2": "подкачка 2", "g2": "рост 2"}
+# Фаз может быть сколько угодно: p<N> подкачка N, s<N> стабилизация N, g<N> рост N (N — по подстадии ПЛК или по порядку входа в стадию,
+# см. cv_store.phases_for_boil), плюс особые clr / gbp / gzp (расчистка, рост БП, рост ЗП — только по подстадии).
+# Настройки (масштаб, свой порог) хранятся для четырёх «семейств»: p1, g1, p2 («подкачка 2 и далее», расчистка), g2 («рост 2 и далее», рост БП/ЗП).
+# Стабилизация считается как раньше — общими ситами и порогом (масштаб 100 %), но в свою фазу и свою таблицу рассева.
+PHASES = ("p1", "g1", "p2", "g2")                  # семейства настроек (поля масштаба / своего порога на вкладке CV)
 PHASE_SCALE_DEFAULT = {"p1": 20.0, "g1": 40.0, "p2": 40.0, "g2": 80.0}      # % от обычных сит; подбираются по опыту
+PHASE_RE = re.compile(r"^(?:[psg][1-9][0-9]?|clr|gbp|gzp)$")
+_PHASE_NAMES = {"p": "подкачка", "s": "стабилизация", "g": "рост", "clr": "расчистка", "gbp": "рост БП", "gzp": "рост ЗП"}
+
+
+def is_phase(ph) -> bool:
+    """Ключ фазы варки: p3, s2, g1, clr, gbp, gzp… (не None и не мусор)."""
+    return isinstance(ph, str) and bool(PHASE_RE.match(ph))
+
+
+def phase_title(ph) -> str:
+    """«подкачка 3», «стабилизация 2», «рост БП»."""
+    if ph in _PHASE_NAMES:
+        return _PHASE_NAMES[ph]
+    return "%s %s" % (_PHASE_NAMES.get(ph[:1], ph), ph[1:]) if is_phase(ph) else str(ph)
+
+
+def phase_family(ph):
+    """Семейство настроек фазы: p1 / g1 / p2 / g2 или None (стабилизация — без масштаба, считается общими ситами)."""
+    if not is_phase(ph) or ph[0] == "s":
+        return None
+    if ph in ("p1", "g1"):
+        return ph
+    return "p2" if ph[0] == "p" or ph == "clr" else "g2"
+
+
+def fines_always(ph) -> bool:
+    """Мука на фазе считается с самого начала (порог «Мука с СВ» её не гасит): у любой фазы — подкачки, стабилизации, роста, особых.
+    Что посчитано на стадии, то и показываем."""
+    return is_phase(ph)
+
+
+def in_boil_total(ph) -> bool:
+    """Идёт ли проба фазы в итог «по варке» (финиш, средняя мука варки). Подкачка / рост / особые — нет: их сита и порог в масштабе фазы,
+    смешивать с финишем нельзя. Стабилизация — да: у неё общие сита и порог (масштаб 100 %), как у финиша; нет фазы — да."""
+    return not is_phase(ph) or ph[0] == "s"
+
+
 MODE_DEFAULTS = {"fines_mode": "side", "fines_vol_mm3": 0.006}
 GROUP_KEYS = tuple("fines_side_%s" % g for g in PHASES) + tuple("fines_vol_%s" % g for g in PHASES)
 
@@ -107,8 +147,8 @@ def fines_diameter_from_volume_um(vol_mm3: float) -> float:
 
 
 def volume_cfg(cv_cfg: dict | None, phase=None, seed_age_s=None, boil_t_s=None) -> dict:
-    """Настройки объёма из блока cv (с дефолтами и защитой от мусора). phase — фаза варки пробы (p1/g1/p2/g2) или None:
-    сита и порог муки берутся в масштабе phase_scale_<фаза> % (или порог — из своего поля фазы)."""
+    """Настройки объёма из блока cv (с дефолтами и защитой от мусора). phase — фаза варки пробы (p1, g3, s2, clr…) или None:
+    сита и порог муки берутся в масштабе phase_scale_<семейство фазы> % (или порог — из своего поля семейства)."""
     v = dict(DEFAULTS)
     src = (cv_cfg or {}).get("volume") or {}
     for key in DEFAULTS:
@@ -139,12 +179,13 @@ def volume_cfg(cv_cfg: dict | None, phase=None, seed_age_s=None, boil_t_s=None) 
         except (TypeError, ValueError):
             x = 0.0
         v["phase_scale_" + ph] = x if x > 0 else PHASE_SCALE_DEFAULT[ph]
-    ph = phase if phase in PHASES else None
+    ph = phase if is_phase(phase) else None
+    fam = phase_family(ph)                                       # настройки — по семейству фазы (подкачка 3 = как подкачка 2)
     v["phase"] = ph
-    scale = v["phase_scale_" + ph] / 100.0 if ph else 1.0
+    scale = v["phase_scale_" + fam] / 100.0 if fam else 1.0
     v["size_scale"] = scale
     side, vol = v["fines_side_mm"], v["fines_vol_mm3"]
-    own = (v["fines_vol_%s" % ph] if v["fines_mode"] == "volume" else v["fines_side_%s" % ph]) if ph else 0.0
+    own = (v["fines_vol_%s" % fam] if v["fines_mode"] == "volume" else v["fines_side_%s" % fam]) if fam else 0.0
     if own:                                                      # свой порог фазы — как задан
         if v["fines_mode"] == "volume":
             vol = own

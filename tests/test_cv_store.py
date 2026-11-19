@@ -20,13 +20,64 @@ def _row(t, sv, cook, stage=7, phase=None, fines=4.0):
 
 
 def test_phases_for_boil_order():
-    # порядок стадий 5/7 → p1 g1 p2 g2; 3-я подкачка вливается в p2
+    # порядок стадий 5/6/7 → p1 g1 p2 g2 …; 3-я подкачка — своя фаза p3 (раньше вливалась в p2)
     stages = [3, 5, 5, 7, 7, 5, 7, 5]
-    assert cv_store.phases_for_boil(stages) == [None, "p1", "p1", "g1", "g1", "p2", "g2", "p2"]
+    assert cv_store.phases_for_boil(stages) == [None, "p1", "p1", "g1", "g1", "p2", "g2", "p3"]
+
+
+def test_phases_stabilization_has_own_phase():
+    assert cv_store.phases_for_boil([5, 6, 6, 7, 6, 7, 8]) == ["p1", "s1", "s1", "g1", "s2", "g2", None]
+
+
+def test_phases_by_substage_number():
+    # номер = подэтап − 1: 72 → рост 1, 73 → рост 2; 70 / 71 / пусто / подстадия другого этапа — по порядку входа в стадию
+    assert cv_store.phases_for_boil([7, 7, 7, 7], [70, 72, 73, 74]) == ["g1", "g1", "g2", "g3"]
+    assert cv_store.phases_for_boil([5, 6], [53, 62]) == ["p2", "s1"]
+    assert cv_store.phases_for_boil([6, 7], [70, 60]) == ["s1", "g1"]
+    assert cv_store.phases_for_boil([5, 7, 5, 7], [None] * 4) == ["p1", "g1", "p2", "g2"]
+
+
+def test_phases_special_substages():
+    # расчистка / рост БП / рост ЗП — свои фазы, только по подстадии
+    assert cv_store.phases_for_boil([5, 5, 7, 7], [50, 59, 78, 79]) == ["p1", "clr", "gbp", "gzp"]
+    assert cv_store.phases_for_boil([5, 7], [59, 70]) == ["clr", "g1"]
 
 
 def test_phases_none_inherits_previous():
     assert cv_store.phases_for_boil([5, None, 7]) == ["p1", "p1", "g1"]
+
+
+def test_boil_summary_phase_blocks_include_stabilization():
+    # стабилизация — своя плитка рассева (блок phases), но в итог варки входит (сита и порог у неё общие, как у финиша)
+    def row(i, stage, phase, fines):
+        r = {"ts": "2026-10-06_10_%02d_00" % i, "t": 1000.0 + i * 90, "sv": 86.0, "stage": stage, "phase": phase, "cook_time": 600 + 90 * i,
+             "fines_m3": fines, "fines_m1": fines, "fines_m2": fines, "vtot_m1": 1.0, "vtot_m2": 1.0, "vtot_m3": 1.0, "good_n": 100}
+        for m in ("m1", "m2", "m3", "area"):
+            for b in range(7):
+                r["sieve_%s_b%d" % (m, b)] = 100.0 if b == 1 else 0.0
+        return r
+    rows = [row(0, 5, "p1", 60.0), row(1, 6, "s1", 20.0), row(2, 7, "g1", 30.0), row(3, 6, "s2", 10.0), row(4, 7, "g2", 12.0), row(5, 8, None, 8.0)]
+    sm = cv_store._boil_summary(rows, True)
+    assert list(sm["phases"]) == ["p1", "s1", "g1", "s2", "g2"], "фазы в порядке появления в варке"
+    assert sm["phases"]["s1"]["title"] == "стабилизация 1" and sm["phases"]["s2"]["title"] == "стабилизация 2"
+    assert sm["counted"] == 3, "в итоге варки: стабилизации и проба без фазы (подкачка/рост — отдельно)"
+
+
+def test_rephase_journal_relabels_once(data_dir):
+    # старые пробы: стабилизация без фазы, 3-я подкачка названа p2 → один раз пересчитываем подписи; повторно не трогаем
+    base = 1_760_300_000
+    stages = [4, 5, 6, 7, 5, 7, 5, 8]
+    old = ["x", "p1", None, "g1", "p2", "g2", "p2", None]
+    rows = []
+    for i, (st, ph) in enumerate(zip(stages, old)):
+        r = _row(base + i * 90, 85.0 + i * 0.2, 600 + i * 90, stage=st)
+        r["phase"] = None if ph == "x" else ph
+        rows.append(r)
+    _seed("RP1", rows)
+    assert cv_store.rephase_journal("RP1") == 2                      # стабилизация → s1, 3-я подкачка → p3; остальные подписи уже верные
+    ph =[r["phase"] for r in sorted(db.read_rows("RP1"), key=lambda r: r["t"])]
+    assert ph == [None, "p1", "s1", "g1", "p2", "g2", "p3", None], ph
+    assert cv_store.rephase_journal("RP1") == 0, "метка в meta: второй раз не запускается"
 
 
 def test_group_boils_splits_on_long_gap(data_dir):

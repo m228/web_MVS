@@ -64,7 +64,18 @@ SERIES = [  # (ключ, подпись, единица, знаков, цвет)
 
 STAGE_NAMES = {3: "сгущение", 4: "затравка", 5: "подкачка", 6: "стабилизация", 7: "рост", 8: "уваривание",
                9: "готовность", 10: "выгрузка", 20: "УНВ", 21: "пауза"}
-PHASE_TITLES = {"p1": "подкачка 1", "g1": "рост 1", "p2": "подкачка 2", "g2": "рост 2"}
+_PHASE_WORDS = {"p": "подкачка", "s": "стабилизация", "g": "рост"}
+_PHASE_SPECIAL = {"clr": "расчистка", "gbp": "рост БП", "gzp": "рост ЗП"}
+
+
+def phase_title(ph) -> Optional[str]:
+    """Название фазы варки по её ключу: p3 → «подкачка 3», s1 → «стабилизация 1», g2 → «рост 2», clr → «расчистка»; не фаза → None.
+    (Те же ключи, что у cv_store / cv_volume.phase_title; видеосервис отдельный компонент, поэтому копия здесь.)"""
+    if not isinstance(ph, str):
+        return None
+    if ph in _PHASE_SPECIAL:
+        return _PHASE_SPECIAL[ph]
+    return "%s %s" % (_PHASE_WORDS[ph[0]], ph[1:]) if len(ph) > 1 and ph[0] in _PHASE_WORDS and ph[1:].isdigit() else None
 STAGE_COLORS = {"подкачка": "#3a6ea5", "рост": "#2f8f6b", "стабилизация": "#5a6b8c", "уваривание": "#b07a2a",
                 "готовность": "#b8484a", "затравка": "#7a5aa8", "сгущение": "#6b7a8f"}
 
@@ -151,8 +162,9 @@ class Probe:
 
     @property
     def label(self) -> str:          # что сейчас идёт: фаза рецепта или стадия варки
-        if self.phase in PHASE_TITLES:
-            return PHASE_TITLES[self.phase]
+        title = phase_title(self.phase)
+        if title:
+            return title
         return STAGE_NAMES.get(self.stage, f"стадия {self.stage}" if self.stage is not None else "—")
 
 

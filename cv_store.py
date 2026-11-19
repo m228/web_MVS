@@ -26,6 +26,7 @@ import numpy as np
 
 import cv_volume
 import db
+import substages
 from logger import log_event
 from paths import DATA_DIR
 
@@ -94,26 +95,29 @@ def _volume_cols(s: dict, vp: dict, n_frames: int) -> dict:
 PAUSE_STAGES = (20, 21)     # УНВ / пауза: приходят посреди роста, это не этап рецепта — фазу не обрывают, подкачки/росты не считают
 
 
-def phases_for_boil(stages: list) -> list:
-    """Фаза каждой пробы варки по ПОРЯДКУ стадий (рецепт идёт строго по порядку): стадия 5 = подкачка, 7 = рост. 1-я «5» → p1,
-    1-я «7» → g1, 2-я «5» → p2, 2-я «7» → g2 (3-я и далее вливаются во 2-ю). Прочие стадии (сгущение, затравка, уваривание…) — None.
+def phase_key(stage: int, runs: dict, sub=None) -> str:
+    """Ключ фазы пробы стадии 5 / 6 / 7: по подстадии (substages.phase_from_sub: 72 → g1, 59 → clr), а нет номера в подстадии
+    (50 / 70, пусто, чужой этап) — по порядку входа в эту стадию в варке: runs = {5: подкачек, 6: стабилизаций, 7: ростов}."""
+    return substages.phase_from_sub(stage, sub) or "%s%d" % (substages.PHASE_LETTER[stage], max(runs.get(stage, 0), 1))
+
+
+def phases_for_boil(stages: list, subs: Optional[list] = None) -> list:
+    """Фаза каждой пробы варки: стадия 5 = подкачка (p), 6 = стабилизация (s), 7 = рост (g), каждая — своя фаза со своим номером.
+    Номер берём из подстадии, если ПЛК его отдаёт (Submode: 72 → рост 1, 73 → рост 2; 59 / 78 / 79 — особые), иначе — по ПОРЯДКУ входа
+    в стадию (рецепт идёт строго по порядку: 1-я «7» → g1, 2-я «7» → g2, 3-я → g3…). Прочие стадии (сгущение, затравка, уваривание…) — None.
     УНВ / пауза (PAUSE_STAGES) посреди роста — как у предыдущей пробы: рост 7 → 20 → 7 остаётся одним ростом.
     Стадия пробы — на момент её начала: проба, начатая в подкачке, остаётся в подкачке, даже если к концу стадия сменилась."""
-    pump = grow = 0
+    runs = {5: 0, 6: 0, 7: 0}
     last, prev, out = None, None, []
-    for st in stages:
+    for i, st in enumerate(stages):
         if st is None or int(st) in PAUSE_STAGES:
             out.append(prev)                                   # стадия неизвестна или УНВ/пауза — как у предыдущей пробы
             continue
         st = int(st)
-        if st == 5:
-            if last != 5:
-                pump += 1
-            prev = "p%d" % min(pump, 2)
-        elif st == 7:
-            if last != 7:
-                grow += 1
-            prev = "g%d" % min(grow, 2)
+        if st in runs:
+            if last != st:
+                runs[st] += 1
+            prev = phase_key(st, runs, subs[i] if subs and i < len(subs) else None)
         else:
             prev = None
         out.append(prev)
@@ -132,37 +136,57 @@ def phase_map(serial: str, max_age: float = 30.0) -> dict:
     if hit and now - hit[0] < max_age:
         return hit[1]
     out = {}
-    for g in _group_boils(sorted(db.read_rows(tag), key=lambda r: r["t"])):
-        for r, ph in zip(g, phases_for_boil([r.get("stage") for r in g])):
+    for g in _group_boils(sorted(db.read_rows(tag, with_hidden=True), key=lambda r: r["t"])):
+        for r, ph in zip(g, phases_for_boil([r.get("stage") for r in g], [r.get("substage") for r in g])):
             out[r["ts"]] = ph
     _PHASE_CACHE[tag] = (now, out)
     return out
 
 
+PHASES_V2_KEY = "phases_v2:"       # метка в meta журнала: фазы всех старых проб уже пересчитаны по новым правилам (подкачка / стабилизация / рост N)
+
+
+def rephase_journal(serial: str, force: bool = False) -> int:
+    """Один раз пересчитать фазу (колонка phase) у ВСЕХ проб журнала по новым правилам: стабилизация — своя фаза s<N>, 3-я и далее подкачка / рост —
+    свои p3, g3… (раньше вливались во 2-ю), номер из подстадии, если он есть. Объём/муку не трогает: масштаб и порог у новых фаз те же, что были
+    у прежних (3-я подкачка = как 2-я, стабилизация = общие сита), поэтому меняются только подписи. Метка в meta — больше не запускается.
+    Возвращает число изменённых строк. Скрытые варки тоже."""
+    tag = _serial_dir(serial).name
+    if not force and db.meta_get(PHASES_V2_KEY + tag):
+        return 0
+    rows = sorted(db.read_rows(tag, with_hidden=True), key=lambda r: r["t"])
+    n = 0
+    for g in _group_boils(rows):
+        for r, ph in zip(g, phases_for_boil([r.get("stage") for r in g], [r.get("substage") for r in g])):
+            if (r.get("phase") or None) != ph and db.patch_row(tag, r["ts"], {"phase": ph}):
+                n += 1
+    db.meta_set(PHASES_V2_KEY + tag, int(time.time()))
+    _PHASE_CACHE.pop(tag, None)
+    return n
+
+
 def phase_state(serial: str, max_idle_s: float = 20 * 60) -> dict:
-    """Состояние счётчиков фаз ИДУЩЕЙ варки по журналу (для перезапуска приложения посреди варки): {"pump": n, "grow": n, "last": stage}.
+    """Состояние счётчиков фаз ИДУЩЕЙ варки по журналу (для перезапуска приложения посреди варки): {"pump": n, "stab": n, "grow": n, "last": stage}.
     Последняя проба старше max_idle_s — варка закончилась, счётчики с нуля.
     Ещё: seed_ts — момент заводки (epoch, по времени «с заводки» проб варки) и boil_t_s — время с заводки до «готовности», если она уже была:
     после перезапуска приложения посреди варки отсчёт не теряется."""
     tag = _serial_dir(serial).name
     rows = sorted(db.read_rows(tag, t_from=time.time() - 12 * 3600), key=lambda r: r["t"])
     if not rows or time.time() - rows[-1]["t"] > max_idle_s:
-        return {"pump": 0, "grow": 0, "last": None, "seed_ts": None, "boil_t_s": None}
+        return {"pump": 0, "stab": 0, "grow": 0, "last": None, "seed_ts": None, "boil_t_s": None}
     g = _group_boils(rows)[-1]
     seed_ts = _est_seed_ts(g)
     boil_t_s = next((r["seed_age"] for r in g if r.get("stage") == 9 and r.get("seed_age")), None)
-    pump = grow = 0
+    runs = {5: 0, 6: 0, 7: 0}
     last = None
     for r in g:
         st = r.get("stage")
         if st is None or st in PAUSE_STAGES:
             continue
-        if st == 5 and last != 5:
-            pump += 1
-        elif st == 7 and last != 7:
-            grow += 1
+        if st in runs and last != st:
+            runs[st] += 1
         last = st
-    return {"pump": pump, "grow": grow, "last": last, "seed_ts": seed_ts, "boil_t_s": boil_t_s}
+    return {"pump": runs[5], "stab": runs[6], "grow": runs[7], "last": last, "seed_ts": seed_ts, "boil_t_s": boil_t_s}
 
 
 def _est_seed_ts(group: list) -> Optional[float]:
@@ -428,6 +452,12 @@ def _hist_backfill(serial: str):
         import_legacy_journal(serial)       # старые jsonl (версии до 1.9.0) → база, один раз
     except Exception as e:
         log_event("cv_store", "Не удалось импортировать старый журнал в SQLite", "warn", {"error": str(e)})
+    try:
+        n = rephase_journal(serial)     # фазы по-новому (стабилизация, подкачка / рост N): один раз, до пересчёта объёма — он берёт фазу из журнала
+        if n:
+            log_event("cv_store", "Фазы проб журнала пересчитаны (подкачка / стабилизация / рост N)", "info", {"rows": n})
+    except Exception as e:
+        log_event("cv_store", "Фазы журнала не пересчитаны", "warn", {"error": repr(e)})
     sd = _serial_dir(serial)
     if not sd.exists():
         return
@@ -478,7 +508,7 @@ def _apply_fines_gate(rows: list[dict], thr: Optional[float] = None) -> list[dic
         sv = r.get("sv")
         if not latched and sv is not None and sv >= thr:
             latched = True
-        if not latched and not r.get("phase"):                # на фазе подкачка/рост мука нужна с самого начала — порог СВ её не гасит
+        if not latched and not cv_volume.fines_always(r.get("phase")):    # на любой фазе (подкачка / стабилизация / рост) мука нужна с самого начала — порог СВ её не гасит
             for k in list(r.keys()):
                 if k.startswith(_FINES_KEYS):
                     r[k] = None
@@ -709,7 +739,7 @@ def _fsieve(rows: list) -> dict:
 
 def phase_durations(rows: list) -> dict:
     """{фаза: секунд} по пробам варки (строки по времени). Фаза идёт от первой её пробы до первой пробы следующей (последняя проба
-    варки — до неё самой); несколько отрезков одной фазы (3-я и далее подкачка вливаются во 2-ю) складываются."""
+    варки — до неё самой); несколько отрезков одной фазы (например, 78 «рост БП» посреди роста 2 и снова после) складываются."""
     out: dict = {}
     i, n = 0, len(rows)
     while i < n:
@@ -734,9 +764,10 @@ def _boil_summary(rows: list, finished: bool, avg_n: int = 4) -> dict:
            "t_from": rows[0]["t"], "t_to": rows[-1]["t"], "n": len(rows), "finished": finished}
     svs = [r["sv"] for r in rows if r.get("sv") is not None]
     out["sv_min"], out["sv_max"] = (min(svs), max(svs)) if svs else (None, None)
-    # итоги варки (мука/рассев «по варке», финиш) — по пробам БЕЗ фазы (сгущение, затравка, уваривание…): на фазах подкачка/рост
-    # сита и порог муки в масштабе фазы, их смешивать с финишем нельзя (они идут отдельными блоками phases). Нет таких проб — берём все.
-    base = [r for r in rows if not r.get("phase")] or rows
+    # итоги варки (мука/рассев «по варке», финиш) — по пробам БЕЗ фазы (сгущение, затравка, уваривание…) и стабилизации (сита и порог у неё общие,
+    # как у финиша, поэтому она остаётся в итоге, хоть и имеет свои блоки phases): на фазах подкачка/рост сита и порог муки в масштабе фазы,
+    # их смешивать с финишем нельзя (они идут отдельными блоками phases). Нет таких проб — берём все.
+    base = [r for r in rows if cv_volume.in_boil_total(r.get("phase"))] or rows
     out["counted"] = sum(1 for r in base if r.get("fines_m3") is not None)   # проб, где мелочь считалась
     fines, agg, vtot = {}, {}, {}
     for m in ("m1", "m2", "m3"):
@@ -755,17 +786,19 @@ def _boil_summary(rows: list, finished: bool, avg_n: int = 4) -> dict:
     out["fsieve"] = _fsieve(fin)
     out["all"] = _vol_block(fin)                      # все пробы финиша варки
     out["tail"] = _vol_block(finish_probes(fin)[0])   # финиш: пробы последних ~2 СВ (раньше — последние N проб)
-    # по фазам (подкачка 1 / рост 1 / подкачка 2 / рост 2): ВСЕ пробы фазы, мука и рассев в масштабе фазы
+    # по фазам (подкачка N / стабилизация N / рост N, расчистка, рост БП / ЗП — в порядке появления в варке): ВСЕ пробы фазы, мука и рассев в масштабе фазы
     out["phases"] = {}
     out["dur_s"] = round(rows[-1]["t"] - rows[0]["t"])                       # вся варка по пробам, с
     durs = phase_durations(rows)
-    for ph in cv_volume.PHASES:
-        rp = [r for r in rows if r.get("phase") == ph]
-        if rp:
-            blk = _vol_block(rp)
-            blk["size"] = size_extremes(rp)
-            blk.update({"n": len(rp), "ts_from": rp[0]["ts"], "ts_to": rp[-1]["ts"], "title": cv_volume.PHASE_TITLES[ph], "dur_s": durs.get(ph)})
-            out["phases"][ph] = blk
+    by_ph: dict = {}
+    for r in rows:
+        if cv_volume.is_phase(r.get("phase")):
+            by_ph.setdefault(r["phase"], []).append(r)                      # порядок словаря = порядок первого появления фазы
+    for ph, rp in by_ph.items():
+        blk = _vol_block(rp)
+        blk["size"] = size_extremes(rp)
+        blk.update({"n": len(rp), "ts_from": rp[0]["ts"], "ts_to": rp[-1]["ts"], "title": cv_volume.phase_title(ph), "dur_s": durs.get(ph)})
+        out["phases"][ph] = blk
     last = rows[-1]
     out["cfg"] = {k: last.get(k) for k in ("fines_side_mm", "fines_um", "k_thick", "fines_from_sv", "avg_n")}
     out["cfg"]["avg_n"] = avg_n
@@ -1248,7 +1281,9 @@ def _with_volume(d: Path, r: dict, cfg: Optional[dict] = None, phase: Optional[s
     if not s:
         return r
     cfg = cfg if cfg is not None else _volume_cfg_now()
-    phase = phase or r.get("phase") or phase_map(d.parent.name).get(r.get("ts"))
+    if not phase:                                                  # фаза — по журналу (он главный: старые result.json несут прежние подписи p2 / без стабилизации)
+        pm = phase_map(d.parent.name)
+        phase = pm[r.get("ts")] if r.get("ts") in pm else r.get("phase")
     own_age = (r.get("plc") or {}).get("seed_age_s")           # время с заводки на начало пробы — для плавного порога муки
     if own_age is not None:
         seed_age_s = own_age
@@ -1266,7 +1301,7 @@ def _with_volume(d: Path, r: dict, cfg: Optional[dict] = None, phase: Optional[s
     try:
         from types import SimpleNamespace as NS
         tot = cv_volume.empty_sums()
-        fines_on = cv_volume.fines_on(cfg, s.get("sv", r.get("sv"))) or phase is not None
+        fines_on = cv_volume.fines_on(cfg, s.get("sv", r.get("sv"))) or cv_volume.fines_always(phase)
         for i in range(len(r.get("frames") or [1])):
             f = d / ("objects_%d.json" % i)
             objs = json.loads(f.read_text(encoding="utf-8")) if f.exists() else []     # кадр без кристаллов файла не пишет (save_sample) — это пустой кадр, а не ошибка

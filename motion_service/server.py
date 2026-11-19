@@ -406,7 +406,8 @@ def create_app(data_dir: Optional[Path] = None, capture_factory: Callable = open
 
     @app.get("/state")
     def state():
-        return {"cameras": [w.state() for w in mgr.workers.values()], "scenarios": mgr.scenarios.snapshot(), "shafts": mgr.shafts.snapshot()}
+        return {"cameras": [w.state() for w in mgr.workers.values()], "scenarios": mgr.scenarios.snapshot(), "shafts": mgr.shafts.snapshot(),
+                "perf": PERF.snapshot()}      # сколько времени уходит на кадр по камерам (панель КЗ, вкладка «Камеры»)
 
     @app.get("/shafts/history")
     def shafts_history(pair: str, window: float = 3600.0, points: int = 600):

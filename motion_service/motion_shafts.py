@@ -217,23 +217,25 @@ class ShaftRunner(threading.Thread):
 
         Берутся секундные точки, где видны оба вала и ни у одного нет удержания (coast). Угол считается от ТЕКУЩЕГО эталона по сырому значению,
         поэтому после смены эталона цифры сразу честные. ref_suggest — эталон, при котором среднее Δ угла было бы нулём (круговое среднее сырого угла).
-        span_s — сколько секунд реально накоплено (не больше окна)."""
+        angle — Δ угла с автокоррекцией, angle_raw — без неё (оба от текущего эталона). span_s — сколько секунд реально накоплено (не больше окна)."""
         now = time.time() if now is None else now
         window_s = max(1.0, min(float(window_s), STATS_MAX_S))
         t0 = now - window_s
         rows = [r for r in list(self.hist.get(pair, ())) if r[0] >= t0 and not r[3]]
-        out = {"pair": pair, "window_s": window_s, "n": len(rows), "span_s": 0.0, "angle": None, "rpm": None, "ref": None, "ref_suggest": None}
+        out = {"pair": pair, "window_s": window_s, "n": len(rows), "span_s": 0.0, "angle": None, "angle_raw": None, "rpm": None, "ref": None,
+               "ref_suggest": None}
         pc = ((self.mgr.cfg.get("shafts") or {}).get("pairs") or {}).get(pair) or {}
         ref = float(pc.get("ref", 0.0))
         out["ref"] = ref
         if not rows:
             return out
         out["span_s"] = round(min(window_s, now - rows[0][0]), 1)
-        ang = [ang_diff(ang_diff(r[4], ref), r[6]) for r in rows]      # от ТЕКУЩЕГО эталона и за вычетом выученной поправки того момента
+        raw = [ang_diff(r[4], ref) for r in rows]                       # от ТЕКУЩЕГО эталона, без автокоррекции
+        ang = [ang_diff(v, r[6]) for v, r in zip(raw, rows)]           # то же за вычетом выученной поправки того момента
         rpm = [r[2] for r in rows]
         agg = lambda v: {"avg": round(sum(v) / len(v), 2), "min": round(min(v), 2), "max": round(max(v), 2),
                          "avg_abs": round(sum(abs(x) for x in v) / len(v), 2)}
-        out["angle"], out["rpm"] = agg(ang), agg(rpm)
+        out["angle"], out["angle_raw"], out["rpm"] = agg(ang), agg(raw), agg(rpm)
         sx = sum(math.cos(math.radians(r[4])) for r in rows)
         sy = sum(math.sin(math.radians(r[4])) for r in rows)
         out["ref_suggest"] = round(ang_diff(math.degrees(math.atan2(sy, sx)), 0.0), 2)

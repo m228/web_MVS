@@ -235,6 +235,7 @@ def test_stats_avg_min_max_abs_and_ref_suggest():
     st = r.stats("lnv", 3600, now=1040.0)
     assert st["n"] == 40 and st["span_s"] == 40.0
     assert st["angle"] == {"avg": 11.0, "min": 10.0, "max": 12.0, "avg_abs": 11.0}
+    assert st["angle_raw"] == st["angle"]                            # поправка ещё не выучена (corr = 0): с коррекцией и без совпадают
     assert st["rpm"]["avg"] == 1.0 and st["ref"] == 0.0               # |5| − |4| у каждого кадра
     assert st["ref_suggest"] == pytest.approx(11.0, abs=0.05)
     M.cfg["shafts"]["pairs"]["lnv"]["ref"] = st["ref_suggest"]       # после эталона среднее ≈ 0, размах сохраняется
@@ -409,6 +410,9 @@ def test_learn_flattens_wave_but_keeps_level():
     assert max(raw) - min(raw) > 10                         # без коррекции размах ≈ 14°
     assert max(tail) - min(tail) < 3                        # с коррекцией — около 1–2° от интерполяции
     assert sum(tail) / len(tail) == pytest.approx(sum(raw) / len(raw), abs=0.8)       # уровень не съеден: остаётся в Δ
+    st = r.stats("lnv", 360, now=t)                         # статистика за период: и без коррекции, и с ней, от одного эталона
+    assert st["angle_raw"]["max"] - st["angle_raw"]["min"] > 10 and st["angle"]["max"] - st["angle"]["min"] < 3
+    assert st["angle"]["avg_abs"] < st["angle_raw"]["avg_abs"]
 
 
 def test_learn_off_leaves_diff_untouched_and_real_jump_is_visible():

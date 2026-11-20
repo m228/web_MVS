@@ -261,6 +261,7 @@ function renderMotionDock() {
   MD.key = key;
 
   const body = mdEl('mdBody');
+  const restoreUi = mdSnapUi(body);
   if (MD.tab === 'plc') {
     body.innerHTML = mdPlcHtml();
     mdBindPlc();
@@ -282,7 +283,24 @@ function renderMotionDock() {
     body.innerHTML = mdZonesTabHtml(mode, cam);
     mdDrawTrends();
   }
+  restoreUi();
   paintMotionDockLive();
+}
+
+// Перерисовка вкладки (выбор регистра, цвета и т.п.) пересоздаёт DOM: раскрытые <details> закрывались, а страница из-за
+// схлопнувшейся высоты прыгала вверх. Запоминаем раскрытые блоки и прокрутку и возвращаем после — только в той же вкладке.
+function mdSnapUi(body) {
+  if (MD.snapTab !== MD.tab) { MD.snapTab = MD.tab; return () => { }; }
+  const detKey = (d) => ((d.parentElement && d.parentElement.closest('[id]')) || {}).id + '|' + ((d.querySelector('summary') || {}).textContent || '').trim().slice(0, 40);
+  const open = {};
+  body.querySelectorAll('details').forEach((d) => { open[detKey(d)] = d.open; });
+  const x = window.scrollX, y = window.scrollY, h = body.offsetHeight;
+  body.style.minHeight = h + 'px';
+  return () => {
+    body.querySelectorAll('details').forEach((d) => { const k = detKey(d); if (k in open) d.open = open[k]; });
+    body.style.minHeight = '';
+    window.scrollTo(x, y);
+  };
 }
 
 const mdSel = (opts, cur) => opts.map(([v, t]) => `<option value="${v}"${String(v) === String(cur) ? ' selected' : ''}>${t}</option>`).join('');

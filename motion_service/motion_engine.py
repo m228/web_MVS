@@ -44,6 +44,8 @@ CLARITY_MIN_SPAN = 3.0                    # «чистый» и «грязный
 CLARITY_T_TURB = 12.0                     # пороги по умолчанию (ролик со светом 19.11: чистые 0, мутные 1 и 5 ≈ 20–45, грязный 6 ≈ 100)
 CLARITY_T_DIRTY = 70.0
 CLARITY_HYST = 3.0
+CLARITY_SMOOTH_S = 30.0                   # окно сглаживания цвета, с (медиана: короткие выбросы — пар над стаканом, блик — не доходят до значения). 0 — старое среднее за smooth кадров
+CLARITY_HOLD_S = 45.0                     # новое состояние должно продержаться столько секунд, прежде чем сменится (0 — сразу). По ночи 19→20.11: 6100 смен за 12 ч → 160
 CLARITY_LEVELS = ("clear", "turbid", "dirty")   # прозрачный / мутный / грязный
 CLARITY_KEEP_S = 600                    # сколько секунд сырых цветов храним для калибровки («чистый»/«грязный» по последним N секундам)
 METRICS = ("flow", "diff")
@@ -248,6 +250,8 @@ def _norm_clarity(z: dict, zid: str, where: str) -> dict:
         "dirty_mode": mode,
         "t_turb": _num(z.get("t_turb", CLARITY_T_TURB), where + ".t_turb", 0, 100),       # с какой мутности сок «мутный»
         "t_dirty": _num(z.get("t_dirty", CLARITY_T_DIRTY), where + ".t_dirty", 0, 100),   # с какой — «грязный»
+        "smooth_s": _num(z.get("smooth_s", CLARITY_SMOOTH_S), where + ".smooth_s", 0, 600),   # сглаживание цвета (медиана за N секунд)
+        "hold_s": _num(z.get("hold_s", CLARITY_HOLD_S), where + ".hold_s", 0, 3600),          # выдержка смены состояния, с
         "hyst": _num(z.get("hyst", CLARITY_HYST), where + ".hyst", 0, 50),                # гистерезис порогов, пункты мутности: против дрожания границы
         "label": _label(z.get("label"), where + ".label"),                                # ручная метка оператора для базы: "" / clear / turbid / dirty
     }
@@ -717,12 +721,16 @@ class ClarityRT:
         else:
             self.dirty = np.array(zcfg["dirty"], np.float64) if zcfg["dirty"] else None
         self._hist: deque = deque(maxlen=zcfg["smooth"])
+        self._th: deque = deque()                           # (время, цвет) за smooth_s секунд — для медианы
         self._samples: deque = deque()                      # (время, L, a, b) сырые, за последние CLARITY_KEEP_S секунд — для калибровки
         self._lock = threading.Lock()
         self.reset()
 
     def reset(self):
         self._hist.clear()
+        self._th.clear()
+        self._cand = None                                   # состояние-кандидат и с какого момента оно держится (выдержка hold_s)
+        self._cand_t = 0.0
         self.lab: Optional[np.ndarray] = None
         self.turb = 0.0                                     # последнее хорошее значение (держим, пока цвет «не на шкале»)
         self.raw = 0.0                                      # то же без зажима в 0..100 (видно, насколько вышли за эталоны)
@@ -731,16 +739,37 @@ class ClarityRT:
         self.reason = "нет кадров"
         self.level = 0                                      # 0 прозрачный, 1 мутный, 2 грязный (по порогам t_turb / t_dirty с гистерезисом)
 
-    def _set_level(self):
-        """Состояние по порогам. Гистерезис: вверх — сразу при пороге, вниз — только когда мутность ушла ниже порога на hyst пунктов."""
+    def _smooth(self, med: np.ndarray, now: float) -> np.ndarray:
+        """Цвет кадра → сглаженный. smooth_s > 0: медиана по каналам за последние smooth_s секунд (выбросы короче половины окна не проходят);
+        0 — прежнее среднее за smooth кадров."""
+        ss = self.cfg["smooth_s"]
+        if ss > 0:
+            self._th.append((now, med))
+            while len(self._th) > 1 and now - self._th[0][0] > ss:
+                self._th.popleft()
+            return np.median(np.array([c for _, c in self._th]), axis=0)
+        self._hist.append(med)
+        return np.mean(self._hist, axis=0)
+
+    def _set_level(self, now: float = 0.0):
+        """Состояние по порогам. Гистерезис: вверх — сразу при пороге, вниз — только когда мутность ушла ниже порога на hyst пунктов.
+        Выдержка hold_s: смена состояния происходит, только когда новое держится непрерывно hold_s секунд (пар, блик, рука не дёргают кружок)."""
         t, td, h = self.cfg["t_turb"], self.cfg["t_dirty"], self.cfg["hyst"]
         lv = self.level
         if self.turb >= td or (lv == 2 and self.turb >= td - h):
-            self.level = 2
+            new = 2
         elif self.turb >= t or (lv >= 1 and self.turb >= t - h):
-            self.level = 1
+            new = 1
         else:
-            self.level = 0
+            new = 0
+        hold = self.cfg["hold_s"]
+        if new == lv or hold <= 0:
+            self.level, self._cand = new, None
+            return
+        if self._cand != new:
+            self._cand, self._cand_t = new, now
+        if now - self._cand_t >= hold:
+            self.level, self._cand = new, None
 
     def _fail(self, reason: str) -> bool:
         self.valid = False
@@ -765,19 +794,17 @@ class ClarityRT:
                 self._samples.popleft()
         proj = self._project(med)
         if isinstance(proj, str):                           # эталонов нет — цвет всё равно копим и показываем (для калибровки)
-            self._hist.append(med)
-            self.lab = np.mean(self._hist, axis=0)
+            self.lab = self._smooth(med, now)
             return self._fail(proj)
         if self.cfg["off_max"] > 0 and proj[1] > self.cfg["off_max"]:
             # цвет сейчас не на шкале (рука, чужой предмет): в сглаживание его не берём — иначе переход к нему попадёт в «последнее хорошее» значение
             self.off = proj[1]
             return self._fail("цвет не на шкале «чистый — грязный»")
-        self._hist.append(med)
-        self.lab = np.mean(self._hist, axis=0)
+        self.lab = self._smooth(med, now)
         t, off = self._project(self.lab)
         self.raw, self.off = t * 100.0, off
         self.turb = max(0.0, min(100.0, self.raw))
-        self._set_level()
+        self._set_level(now)
         self.valid = True
         self.reason = ""
         return True

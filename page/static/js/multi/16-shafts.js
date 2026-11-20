@@ -878,17 +878,11 @@ function shPaintWidget(ctx, s, off, corr) {
     if (ok) {                                  // стрелка вала: красная половина на угле, синяя напротив
       const a = (x.angle * Math.PI) / 180, dx = Math.sin(a) * (r - 4), dy = -Math.cos(a) * (r - 4);
       ctx.globalAlpha = x.coast ? 0.45 : 1; ctx.lineWidth = 4; ctx.lineCap = 'round';
-      ctx.strokeStyle = MV_ROD_BLUE; ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(cx - dx, cy - dy); ctx.stroke();
-      ctx.strokeStyle = MV_ROD_RED; ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(cx + dx, cy + dy); ctx.stroke();
+      const sr = x.src, litR = sr === 'red' || sr === 'both', litB = sr === 'blue' || sr === 'both';      // половина видна — яркая, не видна — тёмная и тусклая
+      ctx.strokeStyle = litB ? MV_ROD_BLUE : '#1e3a52'; ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(cx - dx, cy - dy); ctx.stroke();
+      ctx.strokeStyle = litR ? MV_ROD_RED : '#5c2323'; ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(cx + dx, cy + dy); ctx.stroke();
       ctx.globalAlpha = 1;
     }
-    // подсветка: красная и синяя половины вала горят, когда видны (только красная / только синяя / обе); не видно ни одной — обе погашены
-    const sr = !off && x ? x.src : 'none';
-    [[-10, MV_ROD_RED, sr === 'red' || sr === 'both'], [10, MV_ROD_BLUE, sr === 'blue' || sr === 'both']].forEach(([dx, col, lit]) => {
-      ctx.beginPath(); ctx.arc(cx + dx, cy + 25, 5, 0, Math.PI * 2);
-      if (lit) { ctx.save(); ctx.shadowColor = col; ctx.shadowBlur = 8; ctx.fillStyle = col; ctx.fill(); ctx.restore(); }
-      else { ctx.fillStyle = 'rgba(148,163,184,.14)'; ctx.fill(); ctx.lineWidth = 1; ctx.strokeStyle = 'rgba(148,163,184,.4)'; ctx.stroke(); }
-    });
     ctx.beginPath(); ctx.roundRect(cx - 27, cy - 11, 54, 22, 7); ctx.fillStyle = 'rgba(30,41,59,.95)'; ctx.fill();
     ctx.lineWidth = 1; ctx.strokeStyle = 'rgba(148,163,184,.6)'; ctx.stroke();
     ctx.font = F(15, true); ctx.fillStyle = !ok ? '#9ca3af' : x.coast ? '#7b828f' : '#f3f4f6';       // палка не видна (удержание) — угол тусклый, как и стрелка

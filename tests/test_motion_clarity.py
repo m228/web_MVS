@@ -38,7 +38,7 @@ def frame(colors, size=(W, H), r=26, bg=(20, 22, 24), noise=0, seed=1):
 
 
 def zones(**over):
-    return [dict({"id": "g%d" % (i + 1), "name": "Стакан %d" % (i + 1), "type": "clarity", "center": list(c), "radius": 26, "smooth_s": 0, "hold_s": 0}, **over)   # тесты шкалы — без сглаживания по времени
+    return [dict({"id": "g%d" % (i + 1), "name": "Стакан %d" % (i + 1), "type": "clarity", "center": list(c), "radius": 26, "smooth_s": 0, "hold_s": 0, "scale": 2}, **over)   # тесты шкалы — без сглаживания по времени
             for i, c in enumerate(CENTERS)]
 
 
@@ -123,9 +123,9 @@ def test_scale_clean_dirty_and_middle():
     eng = me.CameraEngine(cam_cfg(zs2))
     cols = {CENTERS[0]: CLEAN, CENTERS[1]: DIRTY, CENTERS[2]: blend(0.5)}
     st = run(eng, frame(cols))
-    assert zone(st, "g1")["turb"] <= 3 and zone(st, "g1")["valid"]
-    assert zone(st, "g2")["turb"] >= 97
-    assert 35 <= zone(st, "g3")["turb"] <= 65, zone(st, "g3")["turb"]      # середина цвета — середина шкалы (Lab нелинеен по BGR, допуск широкий)
+    assert zone(st, "g1")["turb"] <= 13 and zone(st, "g1")["valid"]
+    assert zone(st, "g2")["turb"] >= 87
+    assert 38 <= zone(st, "g3")["turb"] <= 62, zone(st, "g3")["turb"]      # середина цвета — середина шкалы (Lab нелинеен по BGR, допуск широкий)
 
 
 def test_value_is_monotonic_with_dirt():
@@ -135,15 +135,16 @@ def test_value_is_monotonic_with_dirt():
     for t in (0, 0.2, 0.4, 0.6, 0.8, 1.0):
         st = run(eng, frame({CENTERS[0]: blend(t)}), n=40)               # 40 кадров — сглаживание (15) успевает перейти на новый цвет
         vals.append(zone(st, "g1")["turb"])
-    assert vals == sorted(vals) and vals[0] <= 3 and vals[-1] >= 97, vals
+    assert vals == sorted(vals) and vals[0] <= 13 and vals[-1] >= 87, vals
 
 
 def test_clamps_beyond_references():
     zs, _, _ = calibrated_cfg(zones(dirty_mode="own", off_max=0))
     eng = me.CameraEngine(cam_cfg(zs))
     st = run(eng, frame({CENTERS[0]: (10, 10, 12), CENTERS[1]: (130, 190, 230)}), n=40)
-    assert zone(st, "g1")["turb"] == 0.0 and zone(st, "g2")["turb"] == 100.0
-    assert zone(st, "g2")["raw"] > 100.0
+    assert zone(st, "g1")["raw"] < 10.0 and zone(st, "g1")["turb"] < 10.0      # чище эталона «чистый» (10) — ниже 10
+    assert zone(st, "g2")["raw"] > 90.0 and zone(st, "g2")["turb"] > 90.0      # грязнее эталона «грязный» (90) — выше 90
+    assert 0.0 <= zone(st, "g1")["turb"] and zone(st, "g2")["turb"] <= 100.0
 
 
 def test_light_change_moves_value_moderately():
@@ -200,7 +201,7 @@ def test_frame_size_mismatch_rescales_circle():
     eng = me.CameraEngine(cam_cfg(zs))
     big = {(c[0] * 2, c[1] * 2): (DIRTY if i == 1 else CLEAN) for i, c in enumerate(CENTERS)}
     st = run(eng, frame(big, size=(W * 2, H * 2), r=52), n=40)
-    assert zone(st, "g1")["turb"] <= 3 and zone(st, "g2")["turb"] >= 97
+    assert zone(st, "g1")["turb"] <= 13 and zone(st, "g2")["turb"] >= 87
 
 
 # ───────────── общий «грязный» ─────────────
@@ -215,10 +216,10 @@ def test_shared_dirty_shift_works_for_zones_with_different_light():
     zs[1]["clean"] = eng0.clarity_sample(["g2"], 30)["g2"]["lab"]
     eng = me.CameraEngine(cam_cfg(zs, clarity_shift=shift))
     st = run(eng, frame({CENTERS[0]: CLEAN, CENTERS[1]: lighter}), n=40)
-    assert zone(st, "g1")["turb"] <= 3 and zone(st, "g2")["turb"] <= 3
+    assert zone(st, "g1")["turb"] <= 13 and zone(st, "g2")["turb"] <= 13
     assert zone(st, "g1")["valid"] and zone(st, "g2")["valid"]
     st = run(eng, frame({CENTERS[0]: DIRTY}), n=40)
-    assert zone(st, "g1")["turb"] >= 95
+    assert zone(st, "g1")["turb"] >= 87
 
 
 def test_shared_without_shift_is_not_calibrated():
@@ -244,7 +245,7 @@ def test_writes_value_or_65535():
     eng = me.CameraEngine(cfg)
     st = run(eng, frame({CENTERS[0]: CLEAN, CENTERS[1]: DIRTY, CENTERS[2]: blend(0.5)}), n=40)
     w = {a: v for k, a, v in eng.compute_writes(st) if k == "holding"}
-    assert w[100] == 0 and w[101] == 100 and 35 <= w[102] <= 65
+    assert w[100] == 10 and w[101] == 90 and 38 <= w[102] <= 62
     dead = eng.dead_state(99.0, "нет кадров")
     assert all(v == me.CLARITY_NO_DATA for k, a, v in eng.compute_writes(dead) if 100 <= a < 107)
     plain = me.CameraEngine(cam_cfg(zones()))                                 # без эталонов
@@ -318,7 +319,7 @@ def level_of(eng, t, n=30):
 
 def test_level_defaults_and_validation():
     z = cam_cfg()["zones"][0]
-    assert (z["t_turb"], z["t_dirty"], z["hyst"]) == (12.0, 70.0, 3.0)
+    assert (z["t_turb"], z["t_dirty"], z["hyst"]) == (20.0, 66.0, 2.0)
     with pytest.raises(ValueError) as e:
         cam_cfg([dict(zones()[0], t_turb=60, t_dirty=40)])
     assert "порог" in str(e.value)
@@ -337,7 +338,7 @@ def test_level_hysteresis_holds_state_near_threshold():
     zs, _, _ = calibrated_cfg(zones(dirty_mode="own", t_turb=20, t_dirty=70, hyst=5))
     eng = me.CameraEngine(cam_cfg(zs))
     assert level_of(eng, 0.30)[1] == "turbid"                   # выше порога 20 — мутный
-    t_in = 0.17                                                 # чуть ниже порога (17 < 20), но выше 20 − 5 = 15: остаётся мутным
+    t_in = 0.09                                                 # чуть ниже порога (17 < 20), но выше 20 − 5 = 15: остаётся мутным
     lv, name, turb = level_of(eng, t_in)
     assert 15 < turb < 20 and name == "turbid"
     assert level_of(eng, 0.05)[1] == "clear"                    # ушли ниже 15 — снова прозрачный
@@ -375,9 +376,9 @@ def test_zone_without_own_clean_uses_camera_clean_and_shift():
     eng = me.CameraEngine(cam_cfg(zs, clarity_clean=clean_lab, clarity_shift=shift))
     st = run(eng, frame({CENTERS[0]: CLEAN, CENTERS[1]: blend(0.5), CENTERS[2]: DIRTY}))
     a, b, c = zone(st, "g1"), zone(st, "g2"), zone(st, "g3")
-    assert a["valid"] and a["ref_default"] and a["turb"] < 5 and a["level"] == 0
-    assert b["valid"] and 30 < b["turb"] < 70 and b["level"] == 1
-    assert c["valid"] and c["turb"] > 90 and c["level"] == 2
+    assert a["valid"] and a["ref_default"] and a["turb"] < 15 and a["level"] == 0
+    assert b["valid"] and 34 < b["turb"] < 66 and b["level"] == 1
+    assert c["valid"] and c["turb"] >= 85 and c["level"] == 2
 
 
 def test_own_clean_wins_over_camera_clean():
@@ -415,8 +416,8 @@ def test_shared_refs_ignore_own_cleans_and_use_one_scale():
     eng = me.CameraEngine(cam_cfg(zs, clarity_refs="shared", clarity_clean=clean_lab, clarity_shift=shift))
     st = run(eng, frame({CENTERS[0]: CLEAN, CENTERS[1]: CLEAN, CENTERS[2]: DIRTY}))
     a, b, c = zone(st, "g1"), zone(st, "g2"), zone(st, "g3")
-    assert a["valid"] and b["valid"] and abs(a["turb"] - b["turb"]) < 2 and a["turb"] < 5
-    assert c["valid"] and c["turb"] > 90 and c["level"] == 2
+    assert a["valid"] and b["valid"] and abs(a["turb"] - b["turb"]) < 2 and a["turb"] < 15
+    assert c["valid"] and c["turb"] >= 85 and c["level"] == 2
 
 
 def test_shared_refs_without_camera_clean_use_median_of_own():
@@ -459,9 +460,9 @@ def test_smoothing_defaults():
 def test_median_window_ignores_short_spike():
     eng = me.CameraEngine(_smooth_cfg(smooth_s=20, hold_s=0))
     res = _feed(eng, [(CLEAN, 60), (DIRTY, 6), (CLEAN, 60)])      # 1,5 секунды «грязного» посреди чистого
-    assert max(t for t, _, ok in res if ok) < 10                    # выброс до значения не дошёл
+    assert max(t for t, _, ok in res if ok) < 20                    # выброс до значения не дошёл
     eng2 = me.CameraEngine(_smooth_cfg(smooth_s=0, hold_s=0))      # без сглаживания по времени — доходит
-    assert max(t for t, _, ok in _feed(eng2, [(CLEAN, 60), (DIRTY, 6), (CLEAN, 60)]) if ok) > 20
+    assert max(t for t, _, ok in _feed(eng2, [(CLEAN, 60), (DIRTY, 6), (CLEAN, 60)]) if ok) > 30
 
 
 def test_hold_delays_state_change_and_ignores_blips():
@@ -478,18 +479,18 @@ def test_long_burst_is_waited_out_then_real_change_accelerates():
     """Пар/выброс 8 с — почти не двигает значение; настоящее изменение — сначала медленно, потом разгоняется и догоняет за ~полминуты."""
     burst = me.CameraEngine(_smooth_cfg(smooth_s=30, hold_s=0))
     res = _feed(burst, [(CLEAN, 120), (DIRTY, 32), (CLEAN, 120)])          # 8 секунд «грязного»
-    assert max(t for t, _, ok in res if ok) < 30
+    assert max(t for t, _, ok in res if ok) < 40
     real = me.CameraEngine(_smooth_cfg(smooth_s=30, hold_s=0))
     res = [t for t, _, ok in _feed(real, [(CLEAN, 480), (DIRTY, 480)]) if ok]   # 120 с чистого, затем 120 с грязного (4 кадра/с)
     after = lambda sec: res[480 - 1 + sec * 4]                             # мутность через sec секунд после ступени (первый кадр буфер — минус 1)
-    assert after(5) < 35 and after(15) < after(30) < after(60)             # сначала медленно, потом ускоряется
-    assert after(60) > 85                                                  # и догоняет
+    assert after(5) < 42 and after(15) < after(30) < after(60)             # сначала медленно, потом ускоряется
+    assert after(60) > 82                                                  # и догоняет
 
 
 def test_smoothing_off_is_instant_like_before():
     eng = me.CameraEngine(_smooth_cfg(smooth_s=0, hold_s=0))
     res = [t for t, _, ok in _feed(eng, [(CLEAN, 20), (DIRTY, 24)]) if ok]
-    assert res[-1] > 90
+    assert res[-1] >= 85
 
 
 def test_first_state_after_start_is_immediate():
@@ -498,3 +499,16 @@ def test_first_state_after_start_is_immediate():
     res = _feed(eng, [(DIRTY, 6)])
     ok = [lv for _, lv, v in res if v]
     assert ok and ok[0] == 2 and ok[-1] == 2
+
+
+def test_old_scale_thresholds_migrate_once():
+    """Зона, сохранённая на старой шкале (нет поля scale): пороги 12/70 и гистерезис 3 → 20/66 и 2,4; повторная нормализация их не двигает."""
+    old = {"id": "g1", "type": "clarity", "center": [80, 180], "radius": 26, "t_turb": 12, "t_dirty": 70, "hyst": 3}
+    cfg = cam_cfg([old])
+    z = cfg["zones"][0]
+    assert (z["t_turb"], z["t_dirty"], z["hyst"], z["scale"]) == (20.0, 66.0, 2.4, 2)
+    z2 = me._norm_zone(z, "c1")
+    assert (z2["t_turb"], z2["t_dirty"], z2["hyst"]) == (20.0, 66.0, 2.4)
+    new = cam_cfg([dict(old, scale=2)])["zones"][0]                 # уже на новой шкале — как записано
+    assert (new["t_turb"], new["t_dirty"], new["hyst"]) == (12.0, 70.0, 3.0)
+    assert cam_cfg([{"id": "g1", "type": "clarity", "center": [80, 180], "radius": 26}])["zones"][0]["scale"] == 2

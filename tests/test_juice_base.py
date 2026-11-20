@@ -66,3 +66,30 @@ def test_purge_old_days(tmp_path):
     jb.save(tmp_path, "juice", now, frame, rows)
     assert jb.purge(tmp_path, "juice", now) == 1
     assert len(list(jb.base_dir(tmp_path, "juice").iterdir())) == 1
+
+
+def test_rows_without_references_keep_color_and_blank_turb():
+    st = state()
+    st["zones"][0].update(valid=False, turb=0.0, level_name="clear")
+    rows = jb.rows_for(st, cam()["zones"])
+    assert rows[0][2:5] == [18.0, 2.0, -5.0] and rows[0][5] == "" and rows[0][6] == "" and rows[0][7] == 0
+    assert jb.worth_saving(rows) is True                    # цвет есть — снимок пишем, хотя эталонов нет
+
+
+def test_not_worth_saving_without_color():
+    st = state()
+    st["zones"][0].update(valid=False, lab=None)
+    assert jb.worth_saving(jb.rows_for(st, cam()["zones"])) is False
+
+
+def test_camera_tick_writes_even_without_references(tmp_path):
+    """Сквозная проверка: на стенде эталоны не были сняты (valid = False у всех), и база не писалась ни разу."""
+    from types import SimpleNamespace
+    import motion_camera as mc
+    st = state(valid=False)
+    st.update(ts=time.time(), alive=True)
+    cfg = cam(juice_base={"on": True, "every_min": 2}, zone={"label": ""})
+    stub = SimpleNamespace(cfg=cfg, data_dir=tmp_path, id="juice", _juice_last=0.0, _juice_purged=0.0)
+    mc.CameraWorker._juice_tick(stub, st, np.full((360, 640, 3), 90, np.uint8), True)
+    files = list((tmp_path / "juice_base" / "juice").rglob("*.jpg"))
+    assert len(files) == 1 and (files[0].parent / "index.csv").exists()

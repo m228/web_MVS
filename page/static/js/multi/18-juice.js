@@ -1,5 +1,5 @@
 // ---------- КЗ · вкладка «Сок»: прозрачность сока в стаканах ----------
-// Круг на каждом стакане (зона типа clarity), по цвету внутри круга сервис считает мутность 0–100: 0 — цвет «чистого» сока, 100 — цвет «грязного».
+// Круг на каждом стакане (зона типа clarity), по цвету внутри круга сервис считает мутность 0–100: «чистый» стоит на 10, «грязный» на 90 (чище — ниже 10, грязнее — выше 90).
 // Оба цвета задаёт оператор: наливает чистый сок, ждёт и жмёт «чистый»; на мутном — «грязный». «Чистый» у каждого стакана свой (свет разный),
 // «грязный» — общий для всех стаканов (сдвиг цвета от «чистого») или свой у стакана. Расчёт — motion_service/motion_engine.py (ClarityRT);
 // тут только разметка, калибровка, живые значения и тренд за 2 часа. Круги на кадре рисует 10-motion.js (drawClarityOnTile).
@@ -11,7 +11,7 @@ const JC_SEC_KEY = 'mvs_jc_sec';
 const jcLoadSec = () => { try { const v = Number(localStorage.getItem(JC_SEC_KEY)); if (JC_SEC.some(([x]) => x === v)) return v; } catch (e) { /* не критично */ } return 30; };
 const JC = { sec: jcLoadSec(), msg: {}, hist: {}, stats: {}, at: 0, busy: false };
 const JC_SMOOTH_S = 30, JC_HOLD_S = 20;                         // сглаживание цвета (медиана, с) и выдержка смены состояния (с) по умолчанию, как в сервисе
-const JC_T_TURB = 12, JC_T_DIRTY = 70;                       // пороги по умолчанию (как в сервисе): мутный с 12, грязный с 70 из 100
+const JC_T_TURB = 20, JC_T_DIRTY = 66;                       // пороги по умолчанию (как в сервисе, шкала 10/90): мутный с 20, грязный с 66 из 100
 const JC_SPREAD_WARN = 6;                                    // разброс цвета за период (Lab) больше — цвет плавал, эталон шаткий
 
 const jcT = (z, key, dflt) => (z && z[key] != null ? z[key] : dflt);   // порог зоны (у старых зон без порогов — по умолчанию)
@@ -36,7 +36,7 @@ function jcMarkSave(m, cam, fw, fh) {
       on: 0, off: 0, invert: false, track_flow: false, smooth: 15, frames_to_on: 1, frames_to_off: 1, blur: 0, flicker_comp: false, out: null,
       center: [Math.round(p[0] * fs[0] / fw), Math.round(p[1] * fs[1] / fh)], radius: mdRodRadius(fs, m.rodPct),
       core: 0.7, glare_pct: 10, off_max: 1, clean: null, dirty: null, dirty_mode: 'shared',
-      t_turb: JC_T_TURB, t_dirty: JC_T_DIRTY, hyst: 3,
+      t_turb: JC_T_TURB, t_dirty: JC_T_DIRTY, hyst: 2, scale: 2,
     }));
   }, true);
   log.success('КЗ: стаканы добавлены', { serial: cam.id, count: pts.length });
@@ -66,11 +66,11 @@ function jcRowHtml(cam, z) {
   return `<div class="md-zone jc-row" id="jc-r-${k}">
     <div class="md-zone__ctl">
       <div class="md-zone__row"><input type="text" ${a} data-f="name" value="${escapeHtml(z.name)}" title="Название сборника. Двойной клик по кружку на кадре тоже переименует" />
-        <span class="jc-v" id="jc-v-${k}" title="Мутность 0–100: 0 — прозрачный, 100 — самый мутный">—</span><span class="jc-w" id="jc-w-${k}"></span><span class="jc-trk"><i id="jc-b-${k}"></i></span>
+        <span class="jc-v" id="jc-v-${k}" title="Мутность 0–100: «чистый» эталон = 10, «грязный» = 90; чище — ниже, грязнее — выше">—</span><span class="jc-w" id="jc-w-${k}"></span><span class="jc-trk"><i id="jc-b-${k}"></i></span>
         <button type="button" class="btn-secondary md-x" ${a} data-f="del" title="Удалить стакан">✕</button></div>
       <div class="md-zone__row">
-        <button type="button" class="btn-secondary md-x" ${a} data-f="clean" title="В этом стакане сейчас чистый сок: его цвет за последние ${JC.sec} с запомнится как «чистый» (0)${shared ? ' — один на все стаканы' : ''}">чистый</button>${jcMark(jcHasClean(cam, z), jcShared(cam) ? 'Общий «чистый» на все стаканы задан' : Array.isArray(z.clean) ? 'Цвет «чистого» сока этого стакана задан' : 'Свой «чистый» не снят — берётся общий камеры')}
-        <button type="button" class="btn-secondary md-x" ${a} data-f="dirty" title="В этом стакане сейчас самый мутный сок (100). ${shared ? 'Цвет запомнится как «грязный» для всех стаканов' : own ? 'Цвет запомнится как «грязный» только этого стакана' : 'Запомнится сдвиг цвета от «чистого» этого стакана — он общий для всех стаканов в режиме «общий»'}">грязный</button>${jcMark(jcHasDirty(cam, z), own ? 'Свой цвет «грязного» задан' : 'Общий сдвиг «грязного» задан, и есть «чистый»')}
+        <button type="button" class="btn-secondary md-x" ${a} data-f="clean" title="В этом стакане сейчас чистый сок: его цвет за последние ${JC.sec} с запомнится как «чистый» (10)${shared ? ' — один на все стаканы' : ''}">чистый</button>${jcMark(jcHasClean(cam, z), jcShared(cam) ? 'Общий «чистый» на все стаканы задан' : Array.isArray(z.clean) ? 'Цвет «чистого» сока этого стакана задан' : 'Свой «чистый» не снят — берётся общий камеры')}
+        <button type="button" class="btn-secondary md-x" ${a} data-f="dirty" title="В этом стакане сейчас самый мутный сок (90). ${shared ? 'Цвет запомнится как «грязный» для всех стаканов' : own ? 'Цвет запомнится как «грязный» только этого стакана' : 'Запомнится сдвиг цвета от «чистого» этого стакана — он общий для всех стаканов в режиме «общий»'}">грязный</button>${jcMark(jcHasDirty(cam, z), own ? 'Свой цвет «грязного» задан' : 'Общий сдвиг «грязного» задан, и есть «чистый»')}
         ${shared ? '' : `<select ${a} data-f="dmode" title="«Грязный» общий: один сдвиг цвета от «чистого» на все стаканы (мутный сок нужен лишь в одном). «Свой»: у этого стакана собственный цвет «грязного»">${mdSel([['shared', 'грязный: общий'], ['own', 'грязный: свой']], z.dirty_mode || 'shared')}</select>`}</div>
       <div class="md-zone__row"><span class="md-lbl" title="Ваша метка этого стакана для базы: что в нём на самом деле. Пишется в index.csv вместе с цветом, потом сравним с авто-состоянием">метка для базы</span>
         <select ${a} data-f="label">${mdSel(JC_LABELS, z.label || '')}</select></div>
@@ -99,7 +99,7 @@ function jcCamHtml(cam, all) {
       <span class="md-lbl" title="С какой мутности сок считается грязным (красный). Общий для всех стаканов камеры">грязный от</span>${mdNum(`data-md="jc" data-cam="${escapeHtml(cam.id)}" data-f="tdirty"`, jcT(zs[0], 't_dirty', JC_T_DIRTY), 'min="1" max="100" step="1"')}
       <span class="md-lbl" title="Инерция значения. Цвет подтягивается к измеренному медленно (за столько секунд), а если отклонение держится — разгоняется. Пар над стаканом, блик, рука не успевают его сдвинуть, настоящее изменение подхватывается за это время. 0 — без сглаживания">сглаживание, с</span>${mdNum(`data-md="jc" data-cam="${escapeHtml(cam.id)}" data-f="tsmooth"`, jcT(zs[0], 'smooth_s', JC_SMOOTH_S), 'min="0" max="600" step="5"')}
       <span class="md-lbl" title="Состояние (прозрачный / мутный / грязный) меняется, только если новое держится столько секунд подряд. 0 — сразу">держать, с</span>${mdNum(`data-md="jc" data-cam="${escapeHtml(cam.id)}" data-f="thold"`, jcT(zs[0], 'hold_s', JC_HOLD_S), 'min="0" max="3600" step="5"')}
-      <button type="button" class="btn-secondary md-x" data-md="jc" data-cam="${escapeHtml(cam.id)}" data-f="cleanall" title="Налейте во все стаканы чистый сок, подождите и нажмите: цвет каждого стакана запомнится как «чистый» (0)">Все стаканы — чистые</button>
+      <button type="button" class="btn-secondary md-x" data-md="jc" data-cam="${escapeHtml(cam.id)}" data-f="cleanall" title="Налейте во все стаканы чистый сок, подождите и нажмите: цвет каждого стакана запомнится как «чистый» (10)">Все стаканы — чистые</button>
       <span class="net-hint" id="jc-m-${escapeHtml(cam.id)}">${escapeHtml(JC.msg[cam.id] || '')}</span></div>` +
     `<div class="md-zone__row jc-bar"><label class="switch-toggle md-sw md-sw--sm" title="Раз в N минут сервис пишет кадр и цвет, мутность, состояние и вашу метку каждого стакана в папку data\juice_base\${escapeHtml(cam.id)}\<день>. Для набора базы, например на ночь. Старше 14 суток удаляется"><span class="switch"><input type="checkbox" data-md="jc" data-cam="${escapeHtml(cam.id)}" data-f="jbon"${jb.on ? ' checked' : ''} /><span class="switch-track"></span></span><span class="md-lbl md-lbl--on" style="white-space:nowrap">собирать базу</span></label>
       <span class="md-lbl">каждые</span><select data-md="jc" data-cam="${escapeHtml(cam.id)}" data-f="jbstep">${mdSel(JC_BASE_STEPS, jb.every_min)}</select>

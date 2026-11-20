@@ -42,9 +42,12 @@ CLARITY_DIRTY_MODES = ("shared", "own")   # «грязный» цвет зоны
 CLARITY_REFS = ("shared", "own")            # эталоны камеры: общие на все стаканы / у каждого свои
 CLARITY_NO_DATA = 65535                   # что уходит в ПЛК вместо мутности, когда её нет (нет эталонов, кадра, цвета): 0 — это «чистый»
 CLARITY_MIN_SPAN = 3.0                    # «чистый» и «грязный» ближе этого (ΔE по Lab) — шкалы нет, мутность не считаем
-CLARITY_T_TURB = 12.0                     # пороги по умолчанию (ролик со светом 19.11: чистые 0, мутные 1 и 5 ≈ 20–45, грязный 6 ≈ 100)
-CLARITY_T_DIRTY = 70.0
-CLARITY_HYST = 3.0
+CLARITY_LO = 10.0                         # где на шкале 0..100 стоит эталон «чистый»: чище него — ниже 10 (запас вниз)
+CLARITY_HI = 90.0                         # где стоит эталон «грязный»: грязнее него — выше 90 (запас вверх)
+CLARITY_SCALE = 2                         # версия шкалы зоны: нет поля — старая (чистый 0, грязный 100), пороги при чтении пересчитываются
+CLARITY_T_TURB = 20.0                     # пороги по умолчанию на шкале 10/90 (ролик со светом 19.11: чистые ≈10, мутные 1 и 5 ≈ 26–46, грязный 6 ≈ 90)
+CLARITY_T_DIRTY = 66.0
+CLARITY_HYST = 2.0
 CLARITY_SMOOTH_S = 30.0                   # инерция цвета, с: сначала цвет подтягивается к измеренному медленно (постоянная времени S), при устойчивом отклонении разгоняется до S/10.
                                           # Пар, блик, рука не успевают сдвинуть значение; настоящее изменение подхватывается за ~S секунд. 0 — старое среднее за smooth кадров
 CLARITY_HOLD_S = 20.0                     # новое состояние должно продержаться столько секунд, прежде чем сменится (0 — сразу)
@@ -221,8 +224,8 @@ def _clarity_refs(v) -> str:
 
 
 def _norm_clarity(z: dict, zid: str, where: str) -> dict:
-    """Зона-«прозрачность»: круг на стакане с соком (центр + радиус, как у палки). Результат — мутность turb 0..100: 0 — цвет «чистого» сока,
-    100 — цвет «грязного» (оба задаёт оператор), между ними — по линейке в цветовом пространстве Lab. Полигона и метрик потока нет (points = [],
+    """Зона-«прозрачность»: круг на стакане с соком (центр + радиус, как у палки). Результат — мутность turb 0..100: эталон «чистый» стоит на 10,
+    «грязный» на 90 (оба задаёт оператор; чище — ниже 10, грязнее — выше 90), между ними — по линейке в цветовом пространстве Lab. Полигона и метрик потока нет (points = [],
     flow = turb, diff = яркость L — так мутность попадает в истории, тренды и CSV). Вывод в ПЛК — только holding."""
     c = z.get("center")
     if not c or len(c) != 2:
@@ -230,7 +233,18 @@ def _norm_clarity(z: dict, zid: str, where: str) -> dict:
     mode = z.get("dirty_mode", "shared")
     if mode not in CLARITY_DIRTY_MODES:
         raise ValueError("%s: dirty_mode %r не из %s" % (where, mode, list(CLARITY_DIRTY_MODES)))
-    if _num(z.get("t_turb", CLARITY_T_TURB), where + ".t_turb", 0, 100) >= _num(z.get("t_dirty", CLARITY_T_DIRTY), where + ".t_dirty", 0, 100):
+    t_turb = _num(z.get("t_turb", CLARITY_T_TURB), where + ".t_turb", 0, 100)
+    t_dirty = _num(z.get("t_dirty", CLARITY_T_DIRTY), where + ".t_dirty", 0, 100)
+    hyst = _num(z.get("hyst", CLARITY_HYST), where + ".hyst", 0, 50)
+    if z.get("scale") != CLARITY_SCALE:                  # зона сохранена на старой шкале (чистый 0, грязный 100): пороги переводим на 10/90 один раз
+        k = (CLARITY_HI - CLARITY_LO) / 100.0
+        if "t_turb" in z:
+            t_turb = float(round(CLARITY_LO + k * t_turb))
+        if "t_dirty" in z:
+            t_dirty = float(round(CLARITY_LO + k * t_dirty))
+        if "hyst" in z:
+            hyst = round(hyst * k, 1)
+    if t_turb >= t_dirty:
         raise ValueError("%s: порог «мутный» должен быть меньше порога «грязный»" % where)
     return {
         "id": zid,
@@ -251,11 +265,12 @@ def _norm_clarity(z: dict, zid: str, where: str) -> dict:
         "clean": _lab3(z.get("clean"), where + ".clean"),
         "dirty": _lab3(z.get("dirty"), where + ".dirty"),
         "dirty_mode": mode,
-        "t_turb": _num(z.get("t_turb", CLARITY_T_TURB), where + ".t_turb", 0, 100),       # с какой мутности сок «мутный»
-        "t_dirty": _num(z.get("t_dirty", CLARITY_T_DIRTY), where + ".t_dirty", 0, 100),   # с какой — «грязный»
+        "scale": CLARITY_SCALE,
+        "t_turb": t_turb,                                                                 # с какой мутности сок «мутный»
+        "t_dirty": t_dirty,                                                               # с какой — «грязный»
         "smooth_s": _num(z.get("smooth_s", CLARITY_SMOOTH_S), where + ".smooth_s", 0, 600),   # сглаживание цвета (медиана за N секунд)
         "hold_s": _num(z.get("hold_s", CLARITY_HOLD_S), where + ".hold_s", 0, 3600),          # выдержка смены состояния, с
-        "hyst": _num(z.get("hyst", CLARITY_HYST), where + ".hyst", 0, 50),                # гистерезис порогов, пункты мутности: против дрожания границы
+        "hyst": hyst,                                                                     # гистерезис порогов, пункты мутности: против дрожания границы
         "label": _label(z.get("label"), where + ".label"),                                # ручная метка оператора для базы: "" / clear / turbid / dirty
     }
 
@@ -703,7 +718,7 @@ class ClarityRT:
 
     По кругу (внутренние `core` радиуса) берётся медиана цвета в Lab, без самых ярких `glare_pct` % точек (блики, пена). Цвет сглаживается
     за `smooth` кадров. Эталоны: `clean` — цвет чистого сока (мутность 0), `dirty` — самого мутного (100). Мутность — проекция цвета
-    на отрезок clean → dirty: turb = (c − clean)·(dirty − clean) / |dirty − clean|² × 100, зажатая в 0..100. Цвет далеко от этого отрезка
+    на отрезок clean → dirty: t = (c − clean)·(dirty − clean) / |dirty − clean|², turb = 10 + 80·t, зажатая в 0..100. Цвет далеко от этого отрезка
     (дальше `off_max` его длин в сторону: рука, чужой предмет, лампа) — valid = False, turb держит последнее хорошее значение.
     «Грязный» бывает общий (dirty_mode = shared: clean этой зоны + сдвиг камеры clarity_shift) или свой (own)."""
 
@@ -833,7 +848,7 @@ class ClarityRT:
             return self._fail("цвет не на шкале «чистый — грязный»")
         self.lab = self._smooth(med, now)
         t, off = self._project(self.lab)
-        self.raw, self.off = t * 100.0, off
+        self.raw, self.off = CLARITY_LO + (CLARITY_HI - CLARITY_LO) * t, off
         self.turb = max(0.0, min(100.0, self.raw))
         self._set_level(now)
         self._fresh = False

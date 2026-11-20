@@ -228,11 +228,20 @@ function renderMotionDock() {
   if (MD.tab !== 'zones' && MD.tab !== 'plc' && MD.tab !== 'cams' && MD.tab !== 'level' && MD.tab !== 'shafts' && MD.tab !== 'juice') MD.tab = 'zones';
 
   const cams = mdCfgCams();
+  // вкладки «Уровень / Сок / Валы» есть, только когда это размечено (кнопки «Разметить …» в шапке); нет разметки — нет вкладки
+  const has = {
+    level: cams.some((c) => !!lvGroup(c) || c.zones.some((z) => z.type === 'level')),
+    juice: cams.some((c) => c.zones.some((z) => z.type === 'clarity')),
+    shafts: cams.some((c) => c.zones.some((z) => z.type === 'cycle') || (c.groups || []).some((g) => g.type === 'mirror')),
+  };
+  dock.querySelectorAll('[data-md-tab]').forEach((b) => { if (b.dataset.mdTab in has) b.hidden = !has[b.dataset.mdTab]; });
+  if (MD.tab in has && !has[MD.tab] && MV.cfg) MD.tab = 'zones';
   const camKey = all
     ? cams.map((c) => c.id + (c.enabled ? '1' : '0') + c.zones.length + '/' + (c.groups || []).length).join(',')
     : (cam ? [cam.enabled ? 1 : 0, cam.zones.length, (cam.groups || []).length].join('/') : 'x');
   const key = [mode, source ? source.serial : '', MD.tab, MV.online, camKey, JSON.stringify(MD.editGrp),
-    ((MV.cfg && MV.cfg.scenarios) || []).length, state.cameras.length, cams.length].join('|');
+    ((MV.cfg && MV.cfg.scenarios) || []).length, state.cameras.length, cams.length,
+    MD.tab === 'plc' ? mdPlcWritesRows().map((r) => r.name + r.to).join(',') : ''].join('|');
 
   // шапка: название, тумблер КЗ (серый, когда выключено), разметка, запись
   dock.classList.toggle('is-cv-off', all ? !cams.some((c) => c.enabled) : !(cam && cam.enabled));
@@ -266,7 +275,6 @@ function renderMotionDock() {
   if (MD.tab === 'plc') {
     body.innerHTML = mdPlcHtml();
     mdBindPlc();
-    mdMountPlcSource();
     if (MD.editGrp) mdSyncGroupEditor();
   } else if (MD.tab === 'cams') {
     body.innerHTML = mdCamsTabHtml();
@@ -972,6 +980,32 @@ function mdSourceOptions() {
   return out;
 }
 
+// «Что пишем в ПЛК»: все выходы, заданные у окон, стаканов, валов, групп и камер (кроме сценариев) — куда именно уходит значение
+const MD_WRITE_WHAT = { clarity: 'мутность сока', cycle: 'угол вала', level: 'уровень стекла' };
+function mdPlcWritesRows() {
+  const addr = (o) => (o.kind === 'coil' || o.kind === 'coils' ? 'coil ' : 'рег. ') + o.address;
+  const rows = [];
+  mdCfgCams().forEach((c) => {
+    const add = (what, name, o) => rows.push({ cam: c, name, what, to: addr(o) });
+    c.zones.forEach((z) => {
+      if (z.out && z.enabled !== false) add(MD_WRITE_WHAT[z.type] || (z.out.value === 'state' ? 'состояние окна' : 'движение'), z.name, z.out);
+      if (z.rpm_out && z.enabled !== false) add('обороты', z.name, z.rpm_out);
+    });
+    (c.groups || []).forEach((g) => { if (g.out) add(g.type === 'mirror' ? 'рассинхрон валов' : 'вычисление', g.name, g.out); });
+    if (c.status_out) add('камера жива', c.name, c.status_out);
+  });
+  return rows;
+}
+function mdPlcWritesHtml(m) {
+  const rows = mdPlcWritesRows();
+  const to = m.enable ? 'ПЛК ' + escapeHtml(m.host || '—') + ' : ' + escapeHtml(m.port) : 'ПЛК выключен — пока никуда не пишется';
+  const list = rows.length ? `<div class="md-sbox">${rows.map((r) => `<div class="md-sr"><div class="md-sr__head"><span class="md-zr__bar"></span>
+      <div class="md-sr__nm"><b>${escapeHtml(r.name)}</b><div class="md-sr__sum"><span>${escapeHtml(r.cam.name)} · ${escapeHtml(r.what)}</span></div></div>
+      <div class="md-sr__val"><b>${r.to}</b><span class="md-wst" data-cam="${escapeHtml(r.cam.id)}"></span></div></div></div>`).join('')}</div>`
+    : '<p class="net-hint">Пока ничего. Регистр задаётся в самой разметке: у окна, стакана («мутность в ПЛК»), вала или вычисления; здесь они появятся сами.</p>';
+  return `<h3 class="md-h md-h--row md-h--sec">Что пишем в ПЛК <span class="md-dim">${to}</span></h3>${list}`;
+}
+
 function mdPlcHtml() {
   const m = (MV.cfg && MV.cfg.modbus) || { enable: false, host: '', port: 502, device_id: 1, write_period_s: 1 };
   const a = 'data-md="p"';
@@ -995,19 +1029,9 @@ function mdPlcHtml() {
         </div>
         <span class="net-hint" id="mdPingInfo">Проверка только читает один регистр, в ПЛК ничего не пишется.</span>
       </div></div></div>
-    <h3 class="md-h md-h--row md-h--sec"><button type="button" class="md-add" data-md="s" data-f="add" title="Добавить сценарий" aria-label="Добавить сценарий">+</button>Сценарии записи <span class="md-dim">единственное место, где пишем в ПЛК</span></h3>${scens}
-    ${mdGroupsSectionHtml()}
-    <h3 class="md-h md-h--row md-h--sec">Вакуум-аппарат (ПЛК) <span class="md-dim">СВ, стадия, температура — только чтение</span></h3><div id="mdPlcSrcSlot"></div>`;
-}
-
-// «Вакуум-аппарат (ПЛК)» (plc-source.js) — один узел на страницу: при перерисовке вкладки переносится в новое тело,
-// поэтому несохранённые правки не теряются и опрос /api/plc/source не множится
-let mdPlcSrcNode = null;
-function mdMountPlcSource() {
-  const slot = mdEl('mdPlcSrcSlot');
-  if (!slot || !window.PlcSource) return;
-  if (!mdPlcSrcNode) { mdPlcSrcNode = document.createElement('div'); window.PlcSource.mount(mdPlcSrcNode); }
-  slot.replaceWith(mdPlcSrcNode);
+    ${mdPlcWritesHtml(m)}
+    <h3 class="md-h md-h--row md-h--sec"><button type="button" class="md-add" data-md="s" data-f="add" title="Добавить сценарий" aria-label="Добавить сценарий">+</button>Сценарии записи <span class="md-dim">объединяют окна и зоны в одно значение</span></h3>${scens}
+    ${mdGroupsSectionHtml()}`;
 }
 
 const MD_SC_SIGNALS = [['pulp', 'Жом есть'], ['move', 'Движение']];
@@ -1367,7 +1391,14 @@ function paintMotionDockLive() {
   const ps = mdEl('md-plcsum');
   if (ps) {
     const w = (MV.scen || []).filter((q) => q.plc && q.out);
-    ps.textContent = !(MV.cfg && MV.cfg.modbus && MV.cfg.modbus.enable) ? '' : !w.length ? ' · сценариев с записью нет' : w.some((q) => q.ok === false) ? ' · ошибка записи' : w.every((q) => q.ok) ? ' · связь есть, пишем ' + w.length : ' · ждём ответа';
+    const direct = mdPlcWritesRows(), n = w.length + direct.length;
+    const bad = w.some((q) => q.ok === false) || direct.some((r) => ((MV.states[r.cam.id] || {}).plc || {}).ok === false);
+    const good = w.every((q) => q.ok) && direct.every((r) => ((MV.states[r.cam.id] || {}).plc || {}).ok);
+    ps.textContent = !(MV.cfg && MV.cfg.modbus && MV.cfg.modbus.enable) ? '' : !n ? ' · пока нечего писать (регистры не заданы)' : bad ? ' · ошибка записи' : good ? ' · связь есть, пишем ' + n : ' · ждём ответа';
+    document.querySelectorAll('.md-wst').forEach((e) => {
+      const p = (MV.states[e.dataset.cam] || {}).plc || {};
+      e.textContent = !(MV.cfg.modbus && MV.cfg.modbus.enable) ? 'запись выключена' : p.ok == null ? 'ждёт' : p.ok ? 'записано' : 'ошибка ' + (p.error || '');
+    });
   }
   // точка у каждой зоны в списке источников: зелёная — крутится, красная — стоит, серая — нет кадров
   mdCfgCams().forEach((c) => {

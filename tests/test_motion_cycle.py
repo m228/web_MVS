@@ -36,6 +36,13 @@ def rod_frame(angles: dict, size=(W, H)):
     return img
 
 
+@pytest.fixture(autouse=True)
+def _no_spike_filter_by_default(monkeypatch):
+    """Часть тестов гонит ролики, записанные реже, чем идут метки времени кадров: вал на них «едет» в разы быстрее настоящего.
+    Фильтр выбросов по умолчанию выключаем, его проверяют тесты внизу (spike_deg задан явно)."""
+    monkeypatch.setattr(me, "SPIKE_DEG_DEFAULT", 0.0)
+
+
 def cam_cfg(**over):
     c = {"id": "dif", "url": "x", "frame_size": [W, H], "proc_fps": 4,
          "zones": [{"id": "L", "type": "cycle", "center": [250, 270], "radius": 170, "out": {"kind": "holding", "address": 10}},
@@ -844,3 +851,80 @@ def test_liks_default_thresholds_unchanged_by_override_args():
     a, b = rt._liks(f)
     a2, b2 = rt._liks(f, None, None)
     assert np.array_equal(a, a2) and np.array_equal(b, b2)
+
+
+# ───────────── фильтр выбросов угла (spike_deg) ─────────────
+def _profiles(angle):
+    """Профили лучей для палки под углом: красный пик на angle, синий на angle+180 (ширина ~6°)."""
+    phi = np.arange(360.0)
+    d = lambda c: np.abs(((phi - c + 180.0) % 360.0) - 180.0)
+    return np.exp(-(d(angle) / 4.0) ** 2) * 0.9, np.exp(-(d(angle + 180.0) / 4.0) ** 2) * 0.9
+
+
+def _spike_rt(**over):
+    cfg = cam_cfg()["zones"][0]
+    cfg = dict(cfg, **{"spike_deg": 3.0, **over})
+    return me.CycleRT(cfg, [W, H], (W, H))
+
+
+def _spike_drive(rt, angles, dt=0.18):
+    """Кадры подряд с шагом dt → список (угол, coast, spikes) после каждого."""
+    out = []
+    for k, a in enumerate(angles):
+        rt.step_profiles(*_profiles(a), now=1000.0 + k * dt)
+        out.append((rt.angle, rt.coast, rt.spikes))
+    return out
+
+
+def _angs(n, start=100.0, speed=4.7, dt=0.18):
+    return [(start + speed * dt * k) % 360.0 for k in range(n)]
+
+
+def test_spike_single_frame_is_ignored():
+    """Одиночный скачок на 9° при ровном вращении: угол не прыгает, кадр засчитан выбросом."""
+    base = _angs(60)
+    seq = list(base)
+    seq[40] = base[40] + 9.0
+    rt = _spike_rt()
+    out = _spike_drive(rt, seq)
+    assert rt.spikes == 1
+    assert out[40][1] is True                                   # держали ожидаемый угол
+    assert abs(((out[40][0] - base[40] + 180) % 360) - 180) < 2.0
+    assert out[41][1] is False                                  # следующий нормальный кадр принят
+
+
+def test_spike_filter_off_accepts_jump():
+    base = _angs(60)
+    seq = list(base)
+    seq[40] = base[40] + 9.0
+    rt = _spike_rt(spike_deg=0)
+    out = _spike_drive(rt, seq)
+    assert rt.spikes == 0 and out[40][1] is False
+
+
+def test_spike_none_on_smooth_rotation():
+    rt = _spike_rt()
+    _spike_drive(rt, _angs(120))
+    assert rt.spikes == 0
+
+
+def test_spike_real_step_is_accepted_after_hold():
+    """Вал реально сменил положение на +20° и остался там: после spike_hold_s подряд кадр принимается, угол не залипает."""
+    seq = _angs(160) + [(a + 20.0) % 360.0 for a in _angs(80, start=100.0 + 4.7 * 0.18 * 160)]      # обороты успели измериться (окно 20 с)
+    rt = _spike_rt()
+    out = _spike_drive(rt, seq)
+    assert rt.spikes >= 1
+    assert out[-1][1] is False
+    assert abs(((out[-1][0] - seq[-1] + 180) % 360) - 180) < 3.0
+
+
+def test_spike_hold_does_not_reset_smoothing_or_motion():
+    """Отброшенный выброс — не потеря палки: окно «крутится/стоит» не сбрасывается."""
+    base = _angs(120)
+    seq = list(base)
+    seq[100] = base[100] - 10.0
+    rt = _spike_rt()
+    _spike_drive(rt, seq[:99])
+    n_before = len(rt.mv)
+    _spike_drive(rt, seq[99:102])
+    assert len(rt.mv) >= n_before - 1                           # окно не обнулялось

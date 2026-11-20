@@ -342,6 +342,8 @@ def _norm_cycle(z: dict, zid: str, where: str) -> dict:
         "min_conf": _num(z.get("min_conf", 0.1), where + ".min_conf", 0, 1),
         "jump_deg": _num(z.get("jump_deg", 25), where + ".jump_deg", 3, 180),
         "coast_s": _num(z.get("coast_s", 30), where + ".coast_s", 0, 3600),
+        "spike_deg": _num(z.get("spike_deg", SPIKE_DEG_DEFAULT), where + ".spike_deg", 0, 45),
+        "spike_hold_s": _num(z.get("spike_hold_s", 3.0), where + ".spike_hold_s", 0.2, 60),
         "red_min": _num(z.get("red_min", 0.12), where + ".red_min", 0, 1),
         "blue_alone": _num(z.get("blue_alone", 0.6), where + ".blue_alone", 0, 1),
         "blue_w": _num(z.get("blue_w", 0.5), where + ".blue_w", 0, 1),
@@ -991,6 +993,7 @@ class MirrorLearn:
         return {"ready": bool(self.ready), "bins": int(self.filled), "amp": round(self.amp(), 1), "window_min": round(self.window_s / 60.0)}
 
 
+SPIKE_DEG_DEFAULT = 3.0                  # допуск выброса угла палки по умолчанию, ° (0 — фильтр выключен); тесты на сжатом по времени видео его гасят
 PHIS = np.arange(0, 360, 1.0)
 _PHI_SIN, _PHI_COS = np.sin(np.radians(PHIS))[:, None], np.cos(np.radians(PHIS))[:, None]
 _K3 = np.ones((3, 3), np.uint8)
@@ -1041,6 +1044,7 @@ class CycleRT:
         self.raw: deque = deque(maxlen=zcfg["smooth"])
         self.trk: deque = deque()               # (время, «развёрнутый» угол без скачков через 360°) за последние rpm_window секунд — для оборотов
         self.off_b = 0.0                        # на сколько синяя половина «довёрнута» от красной (град), учится, пока видны обе; reset не трогает
+        self.spikes = 0                         # сколько кадров отброшено как выброс (счётчик с запуска, reset его не трогает)
         self.bans: list = []                    # углы ложных неподвижных целей: при поиске по всему кругу вокруг них не смотрим (reset их не трогает)
         self.reset()
 
@@ -1055,6 +1059,7 @@ class CycleRT:
         self.moving: Optional[bool] = None      # вал крутится (True) / стоит (False); None — пока неизвестно
         self.hint_stop = False                  # палки не видно, а парная стоит: ожидаемый угол не двигаем
         self.coast = False                      # палки не видно, угол — ожидаемый по скорости (valid при этом сохраняется до coast_s)
+        self.hold_spike = False                 # coast из-за отброшенного выброса (а не потери палки): возврат не сбрасывает сглаживание и «крутится/стоит»
         self.angle = 0.0
         self.conf = 0.0
         self.score = 0.0
@@ -1235,6 +1240,7 @@ class CycleRT:
         Вынесено из step: автоподгонка (motion_autocal) гоняет этот же боевой разбор по профилям, посчитанным для разных цветов и осей."""
         c = self.cfg
         found = False
+        spike = False
         dt = now - self.last_t
         locked = self.last is not None and dt <= c["coast_s"]
         if sr is not None and sb is not None:
@@ -1260,22 +1266,35 @@ class CycleRT:
                 r = np.radians(PHIS[idx])
                 ang0 = float(np.degrees(np.arctan2((w * np.sin(r)).sum(), (w * np.cos(r)).sum())) % 360.0) if w.sum() > 0 else float(PHIS[i])
                 ang, self.src = self._fuse(sr, sb, i, ang0, now, locked)    # одна стрелка из красной и синей половин
-                if self.coast:
-                    self.mv.clear()                                          # скачок при возврате палки — не ход вала
-                    self.raw.clear()                                         # сглаживание не тянет к ожидаемому углу из пропажи
-                self.last, self.last_t = ang, now
-                self.raw.append(ang)
-                self.angle = circ_mean(list(self.raw))
-                self.miss = 0
-                self.valid, self.coast = True, False
-                found = True
-                self._track(now)
-                self._motion(now)
+                # Выброс: вал за кадр не уходит на градусы. Угол, далёкий от ожидаемого (прошлый + скорость·время), на коротком разрыве —
+                # одиночный сбой детектора (блик, перекрытие конца палки, первые кадры после пропажи): не принимаем, держим ожидаемый.
+                # Допуск растёт с разрывом (3°/с), после spike_hold_s подряд верим кадру — если вал правда сменил ход, не залипаем.
+                spike_deg = c.get("spike_deg", 0.0)                           # конфиг, собранный руками (автоподгонка, тесты), — без фильтра
+                far = locked and spike_deg > 0 and abs(ang_diff(ang, self._expected(now))) > spike_deg + 3.0 * max(0.0, dt)
+                if far and dt <= c.get("spike_hold_s", 3.0):
+                    spike = True
+                    self.spikes += 1
+                else:
+                    if far:                                                  # вал держался «выбросом» дольше spike_hold_s: он правда ушёл —
+                        self.trk.clear()                                     # заново: обороты по старой истории с этим скачком врали бы
+                        self.rpm, self.unw = 0.0, None
+                    if far or (self.coast and not self.hold_spike):
+                        self.mv.clear()                                      # скачок при возврате палки — не ход вала
+                        self.raw.clear()                                     # сглаживание не тянет к ожидаемому углу из пропажи
+                    self.last, self.last_t = ang, now
+                    self.raw.append(ang)
+                    self.angle = circ_mean(list(self.raw))
+                    self.miss = 0
+                    self.valid, self.coast, self.hold_spike = True, False, False
+                    found = True
+                    self._track(now)
+                    self._motion(now)
         if not found:
             self.miss += 1
             if locked:                                                       # не видно, но недавно была: держим ожидаемый угол и скорость
                 self.angle = self._expected(now)
                 self.coast, self.valid = True, True
+                self.hold_spike = spike
                 self.conf = 0.0
                 self.src, self.lvl_r, self.lvl_b = "hold", 0.0, 0.0
             else:

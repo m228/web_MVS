@@ -470,7 +470,10 @@ def normalize_shafts(raw: Optional[dict]) -> dict:
                       # самоподстройка волны Δ угла за оборот (как learn у группы mirror): окно в минутах, 5..240
                       "learn": bool(p.get("learn", True)),
                       "learn_min": _num(p.get("learn_min", 30), where + ".learn_min", 5, 240, True)}
-    return {"shafts": shafts, "pairs": pairs}
+    # align — сравнивать углы разных камер на ОДНОМ моменте времени съёмки (интерполяция), а не «последний кадр каждой»;
+    # avg_s — окно усреднения Δ угла пары для графика и тревоги, с (0 — без усреднения)
+    return {"shafts": shafts, "pairs": pairs, "align": bool(raw.get("align", True)),
+            "avg_s": _num(raw.get("avg_s", 4.0), "валы.avg_s", 0, 60)}
 
 
 WEBVIEW_DEFAULT = {"enabled": False, "host": "0.0.0.0", "port": 5000, "update_sec": 5.0, "jpeg_quality": 85, "annotate": False,
@@ -544,6 +547,9 @@ def normalize_camera(c: dict) -> dict:
         "clarity_shift": _lab3(c.get("clarity_shift"), "камера %s.clarity_shift" % cid, shift=True),    # общий сдвиг «грязного» от «чистого» (зоны прозрачности с dirty_mode=shared)
         "juice_base": _juice_base(c.get("juice_base"), "камера %s.juice_base" % cid),
         "proc_fps": _num(c.get("proc_fps", 3), "камера %s.proc_fps" % cid, 0.2, 30),
+        # задержка кадра камеры, с (кадр приходит позже, чем снят: очередь кодера/декодера); меряется tools/cam_latency_check.py.
+        # Углы валов разных камер сравниваются по времени СЪЁМКИ = приход − latency_s
+        "latency_s": _num(c.get("latency_s", 0.0), "камера %s.latency_s" % cid, 0, 15),
         "frame_gap": _num(c.get("frame_gap", 1), "камера %s.frame_gap" % cid, 1, 10, True),
         "reconnect_delay_s": _num(c.get("reconnect_delay_s", 3.0), "камера %s.reconnect_delay_s" % cid, 0.5, 300),
         "freeze_timeout_s": _num(c.get("freeze_timeout_s", 10), "камера %s.freeze_timeout_s" % cid, 1, 3600),

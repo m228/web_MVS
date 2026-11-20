@@ -484,12 +484,14 @@ function mdShaftsTabHtml() {
   }).join('');
   const pairs = SH_PAIRS.map((id) => mdShaftPairHtml(id, sc.pairs[id])).join('');
   const colors = mdRodColorsHtml();
+  const timing = mdShTimingHtml(sc, cams);
   const loss = mdLossHtml();
   const autocal = mdAutocalHtml();
   return `<details class="md-det" open><summary>Ряды камер ${mdHelp('Задайте каждой камере ряд валов. Левый и правый вал в ряду определяются по положению оси в кадре: левее — левый. У камеры должны быть размечены две зоны-цикла (кнопка «Разметить валы»).')}</summary>
       <div class="md-camlist">${rows || '<span class="net-hint">В сервисе движения камер нет.</span>'}</div></details>
     <details class="md-det" open><summary>Скорости валов ${mdHelp('Скорость вала — обороты в минуту по наклону угла за окно (в карточке зоны). Регистр пишется ×100; 0 — нет данных. То же, что «скорость» в зоне-цикле, только по названию вала.')}</summary>
       <table class="md-table"><thead><tr><th>Вал</th><th>Откуда</th><th>Угол</th><th>Скорость</th><th>Регистр скорости в ПЛК</th></tr></thead><tbody>${shafts}</tbody></table></details>
+    <details class="md-det" open><summary>Время кадров ${mdHelp('Камеры отдают кадр с задержкой (очередь кодера и декодера), и у разных камер она разная. Углы двух камер сравниваются по времени СЪЁМКИ кадра: приход минус задержка камеры. Задержку меряет tools\cam_latency_check.py (по времени, вшитому в картинку камеры). Здесь видно, идут ли камеры в такт: разъезд кадров — на сколько секунд разнесены последние кадры двух камер после поправки на задержку.')}</summary>${timing}</details>
     <details class="md-det" open><summary>Карта потерь ${mdHelp('Где и когда палка пропадает: кольцо — по углу красного конца (0° вверху, по часовой), столбики — по часам суток. Помогает понять, виновато ли освещение в определённый час или палка теряется в одном положении (блик, тень, цвет корпуса).')}</summary>${loss}</details>
     <details class="md-det" open><summary>Автоподгонка ${mdHelp('Сама подбирает цвета красной и синей половин палки, центр оси и радиус по записи вращения. Нужна после сдвига камеры, смены света или когда палка то пропадает, то ловится. Результат применяется только вашей кнопкой.')}</summary>${autocal}</details>
     <details class="md-det"><summary>Цвета палок ${mdHelp('Красная и синяя половины палки находятся по цвету. Если палка то пропадает, то ловится — подберите пороги: картинка показывает, что именно попадает в маску. У каждого вала свои пороги (ракурс и свет разные).')}</summary>${colors}</details>
@@ -499,6 +501,42 @@ function mdShaftsTabHtml() {
     ${pairs}`;
 }
 
+// «Время кадров»: выравнивание камер по времени съёмки, усреднение Δ, задержка и частота кадров каждой камеры, разъезд кадров пар
+function mdShTimingHtml(sc, cams) {
+  const rows = cams.filter((c) => c.row).map((c) => `<tr><td>${escapeHtml(c.name)}${mdIpTag(c.url)}</td><td class="md-num" id="md-sht-fps-${escapeHtml(c.id)}">–</td>` +
+    `<td class="md-num" id="md-sht-dt-${escapeHtml(c.id)}">–</td>` +
+    `<td>${mdNum(`data-md="c" data-cam="${escapeHtml(c.id)}" data-f="latency_s"`, c.latency_s || 0, 'min="0" max="15" step="0.05"')}</td></tr>`).join('');
+  const align = sc.align !== false;
+  const avg = sc.avg_s == null ? 4 : sc.avg_s;
+  return `<div class="md-zone__row md-mx-set">
+      <label class="switch-toggle md-sw md-sw--sm" title="Сравнивать углы двух камер на ОДИН момент времени съёмки (интерполяция между кадрами) вместо «последнего кадра каждой камеры». Результат запаздывает на задержку камер + 0,6 с — для тревоги это не важно"><span class="switch"><input type="checkbox" data-md="sh" data-id="_" data-f="align"${align ? ' checked' : ''} /><span class="switch-track"></span></span><span class="md-lbl md-lbl--on">по времени съёмки</span></label>
+      <span class="md-lbl" title="Δ угла каждой пары усредняется за это окно: шум распознавания ≈ ±1° сглаживается, настоящий сдвиг не прячется. Тревога и запись в ПЛК идут по среднему. 0 — без усреднения">усреднение Δ, с</span>${mdNum('data-md="sh" data-id="_" data-f="avg_s"', avg, 'min="0" max="60" step="0.5"')}</div>
+    <table class="md-table"><thead><tr><th>Камера</th><th>кадров/с</th><th>шаг кадров p50 / p95, мс</th><th title="Через сколько секунд после съёмки кадр приходит в сервис. Меряется tools\cam_latency_check.py">задержка кадра, с</th></tr></thead><tbody>${rows || '<tr><td colspan="4" class="net-hint">Задайте ряд камеры</td></tr>'}</tbody></table>
+    <div class="net-hint" id="md-sht-lag"></div><div class="md-zstat" id="md-sht-pairs"></div>`;
+}
+
+function mdPaintShTiming() {
+  const s = shSnap();
+  const t = s && s.timing;
+  if (!t) return;
+  Object.keys(t.cameras || {}).forEach((cid) => {
+    const c = t.cameras[cid];
+    const f = mdEl('md-sht-fps-' + cid), d = mdEl('md-sht-dt-' + cid);
+    if (f) f.textContent = c.fps == null ? '–' : c.fps.toFixed(1);
+    if (d) d.textContent = c.dt_p50_ms == null ? '–' : c.dt_p50_ms + ' / ' + c.dt_p95_ms;
+  });
+  const lag = mdEl('md-sht-lag');
+  if (lag) lag.textContent = t.aligned ? 'Сравнение на момент «сейчас − ' + t.compare_lag_s + ' с»: кадры обеих камер выровнены по времени съёмки.' : 'Кадры сравниваются «последний с каждой камеры» (выравнивание выключено или ряды ещё копятся).';
+  const p = mdEl('md-sht-pairs');
+  if (!p) return;
+  const rows = SH_PAIRS.filter((id) => t.pairs && t.pairs[id] && !t.pairs[id].same_camera && t.pairs[id].skew_avg_s != null).map((id) => {
+    const x = t.pairs[id];
+    const inStep = x.skew_avg_s < 0.5;
+    return `<div class="md-zstat__row" title="Разъезд = |время съёмки последнего кадра первой камеры − второй|. Задержки указаны верно — он порядка половины периода кадров (десятые доли секунды); если секунды, задержка камеры в настройке не та">${SH_PAIR_NAME[id]}: разъезд кадров ср <b class="md-zstat__cur">${x.skew_avg_s.toFixed(2)} с</b> (${x.skew_avg_deg.toFixed(1)}°) · макс ${x.skew_max_s.toFixed(2)} с (${x.skew_max_deg.toFixed(1)}°) · <span style="color:${inStep ? '#4ade80' : '#f59e0b'}">${inStep ? 'в такт' : 'не в такт — проверьте задержки'}</span></div>`;
+  });
+  p.innerHTML = rows.join('');
+}
+
 function mdShaftPairHtml(id, p) {
   const a = `data-md="sh" data-id="${id}"`;
   return `<div class="md-zone md-mirror" data-shpair="${id}">
@@ -506,7 +544,7 @@ function mdShaftPairHtml(id, p) {
       <div class="md-zone__row"><b>${SH_PAIR_NAME[id]}</b><span class="net-hint">${SH_PAIR_NOTE[id]}</span><span class="md-sp"></span>
         <span class="cv-bit" id="md-shb-${id}" title="Тревога: разность больше допуска (угла или скорости)">–</span></div>
       <div class="md-zstat" id="md-shst-${id}"></div>
-      <div class="md-zone__row"><span class="md-lbl" title="Отклонение углов от эталона, °. Левый и правый вал одного ряда — зеркально (сумма), левые и правые валы рядов — одинаково (разность)">Δ угла</span><span class="md-num" id="md-sha-p-${id}">–</span>
+      <div class="md-zone__row"><span class="md-lbl" title="Отклонение углов от эталона, °. Левый и правый вал одного ряда — зеркально (сумма), левые и правые валы рядов — одинаково (разность). Показано среднее за время усреднения (блок «Время кадров»), тревога идёт по нему же">Δ угла</span><span class="md-num" id="md-sha-p-${id}">–</span>
         <span class="md-lbl" title="|скорость первого| − |скорость второго|, об/мин. Направление вращения не важно">Δ скорости</span><span class="md-num" id="md-shr-${id}">–</span></div>
       <div class="md-zone__row md-mx-set"><span class="md-lbl" title="Тревога, когда |Δ угла| не меньше допуска. 0 — тревога по углу выключена">допуск угла, °</span>${mdNum(a + ' data-f="tol_angle"', p.tol_angle, 'min="0" max="180" step="0.5"')}
         <span class="md-lbl" title="Какое значение считать нулём. Камеры смотрят под разными ракурсами, поэтому ноль снимается вручную, когда валы стоят в нужном положении">эталон, °</span>${mdNum(a + ' data-f="ref"', p.ref, 'min="-180" max="180" step="0.5"')}
@@ -540,6 +578,10 @@ async function mdOnShafts(t) {
     try { localStorage.setItem(SH_STAT_KEY, String(SH.statWin)); } catch (e) { /* не критично */ }
     mdPaintShaftStats();
     mdShaftsStats(true);
+    return;
+  }
+  if (f === 'align' || f === 'avg_s') {                      // настройки блока «Время кадров»: на весь блок валов
+    mdEdit(() => { if (f === 'align') sc.align = t.checked; else sc.avg_s = shClamp(parseFloat(t.value) || 0, 0, 60); });
     return;
   }
   if (f === 'calib') { shCalibrate(id); return; }
@@ -673,6 +715,7 @@ function mdPaintShafts() {
   mdShaftsHist();
   mdShaftsStats();
   mdPaintShaftStats();
+  mdPaintShTiming();
   shPrevPaint();
   shLossRefresh(false);
   shAcPaintAll();

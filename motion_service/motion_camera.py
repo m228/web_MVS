@@ -105,6 +105,8 @@ def cfg_hw(cfg: dict) -> str:
 
 
 OPEN_GAP_S = 2.0
+PROC_TOLERANCE = 0.85            # кадр берём, если с прошлого прошло ≥ 85 % интервала proc_fps: джиттер камеры иначе «съедает» каждый второй (8 к/с и proc_fps 4 давали ≈3)
+ROD_HIST_LEN = 600               # точек ряда на палку (≈ 3–5 минут при 2–3 к/с)
 FREEZE_REOPEN_S = 30.0           # картинка стоит дольше (и не меньше 2·freeze_timeout_s) — поток открываем заново, потом повторяем так же
 _open_lock = threading.Lock()
 _open_next = 0.0
@@ -179,6 +181,7 @@ class CameraWorker(threading.Thread):
         self._error = ""
         self._last_good = 0.0                 # когда последний раз пришёл кадр
         self._stamps: deque = deque(maxlen=12)
+        self._rod_hist: dict = {}                # зона-цикл → deque (время прихода кадра, угол, valid, coast): ряд для сравнения валов по времени съёмки
         self._history: deque = deque(maxlen=HISTORY_LEN)
         self._long: deque = deque(maxlen=LONG_LEN)
         self._bucket: Optional[list] = None   # [ts, {зона: (flow, diff, bit)}, ok] — набирающаяся секунда длинной истории
@@ -250,6 +253,23 @@ class CameraWorker(threading.Thread):
                     "error": self._error, "decoder": self._decoder, "fps": round(fps, 2), "age_s": round(time.time() - self._last_good, 1) if self._last_good else None,
                     "recording": self._rec_name, "plc": dict(self.plc), "result": st,
                     "webview": self._web.status() if self._web else None}
+
+    def rod_track(self, zone_id: str) -> list:
+        """Ряд палки [(время прихода кадра, угол, valid, coast)] — копия, старые точки первыми."""
+        with self._lock:
+            return list(self._rod_hist.get(zone_id, ()))
+
+    def frame_timing(self) -> dict:
+        """Как идут обработанные кадры: частота, шаг (p50/p95, мс) и поправка задержки камеры — для панели «Время кадров»."""
+        with self._lock:
+            st = list(self._stamps)
+        out = {"fps": None, "dt_p50_ms": None, "dt_p95_ms": None, "latency_s": float(self.cfg.get("latency_s", 0.0))}
+        if len(st) >= 3 and st[-1] > st[0]:
+            dts = sorted(b - a for a, b in zip(st, st[1:]))
+            out["fps"] = round((len(st) - 1) / (st[-1] - st[0]), 2)
+            out["dt_p50_ms"] = round(dts[len(dts) // 2] * 1000.0)
+            out["dt_p95_ms"] = round(dts[min(len(dts) - 1, int(round(0.95 * (len(dts) - 1))))] * 1000.0)
+        return out
 
     def _web_source(self) -> Optional[tuple]:
         """Для картинки SCADA: (свежий кадр, данные разметки уровня) или None, если кадр старше 5 с / камера застыла."""
@@ -664,6 +684,13 @@ class CameraWorker(threading.Thread):
                 self._frame = frame
             if count_frame:
                 self._stamps.append(state["ts"])
+                if state["alive"]:
+                    for z in state["zones"]:
+                        if z.get("type") == "cycle":
+                            h = self._rod_hist.get(z["id"])
+                            if h is None:
+                                h = self._rod_hist[z["id"]] = deque(maxlen=ROD_HIST_LEN)
+                            h.append((state["ts"], z["angle"], bool(z["valid"]), bool(z["coast"])))
                 zones = {z["id"]: (z["flow"], z["diff"], z["bit"]) for z in state["zones"]}
                 self._push_history(state["ts"], zones, 1 if state["alive"] else 0)
                 if state["alive"]:
@@ -804,7 +831,7 @@ class CameraWorker(threading.Thread):
                 next_t += file_dt
                 self._halt.wait(max(0.0, next_t - time.time()))
             now = time.time()
-            if now - last_proc < interval:
+            if now - last_proc < interval * PROC_TOLERANCE:
                 continue
             t_dec = time.perf_counter()
             ok, frame = cap.retrieve()

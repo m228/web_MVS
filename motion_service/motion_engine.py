@@ -1389,8 +1389,12 @@ class CameraEngine:
         self.frame_wh = (w, h)
         self.zones = [ZoneRT(z, self.cfg["frame_size"], (w, h)) for z in self.cfg["zones"] if z["enabled"] and z["type"] not in ("cycle", "level", "clarity")]
         self.cycles = {z["id"]: CycleRT(z, self.cfg["frame_size"], (w, h)) for z in self.cfg["zones"] if z["enabled"] and z["type"] == "cycle"}
-        self.clarity = {z["id"]: ClarityRT(z, self.cfg["frame_size"], (w, h), self.cfg.get("clarity_shift"), self.cfg.get("clarity_clean"))
-                        for z in self.cfg["zones"] if z["enabled"] and z["type"] == "clarity"}
+        cz = [z for z in self.cfg["zones"] if z["enabled"] and z["type"] == "clarity"]
+        base = self.cfg.get("clarity_clean")
+        if base is None:                                    # общего нет — медиана «чистых» других стаканов (снятых хотя бы у одного)
+            own = [z["clean"] for z in cz if z["clean"]]
+            base = [round(float(np.median([c[k] for c in own])), 2) for k in range(3)] if own else None
+        self.clarity = {z["id"]: ClarityRT(z, self.cfg["frame_size"], (w, h), self.cfg.get("clarity_shift"), base) for z in cz}
         for m in self.mirrors.values():
             m.reset()
 

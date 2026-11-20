@@ -105,6 +105,10 @@ def clarity_sample(service_url: str, cam: str, zones: list, seconds: float = 30.
     return _call(service_url, "/cameras/%s/clarity_sample" % urllib.parse.quote(cam, safe=""), {"zones": list(zones or []), "seconds": float(seconds)}, timeout=10.0)
 
 
+def camera_state(service_url: str, cam: str) -> dict:
+    return _call(service_url, "/cameras/%s/state" % urllib.parse.quote(cam, safe=""), timeout=2.0)
+
+
 def shafts_live(service_url: str) -> dict:
     return _call(service_url, "/shafts/live", timeout=2.0)
 

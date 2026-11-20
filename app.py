@@ -1484,6 +1484,12 @@ def motion_clarity_sample(req: dict = Body(...)):
     return motion_client.clarity_sample(_motion_url(), str(req.get("camera") or ""), [str(z) for z in (req.get("zones") or [])], float(req.get("seconds") or 30))
 
 
+@app.get("/api/motion/camera_state")
+def motion_camera_state(camera: str):
+    # состояние одной камеры (зоны, палки) — лёгкий быстрый опрос для разметки на плитках
+    return motion_client.camera_state(_motion_url(), camera)
+
+
 @app.get("/api/motion/shafts_live")
 def motion_shafts_live():
     # лёгкий снимок углов валов для плавающего виджета (опрос несколько раз в секунду)

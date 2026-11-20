@@ -882,6 +882,13 @@ function shPaintWidget(ctx, s, off, corr) {
       ctx.strokeStyle = MV_ROD_RED; ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(cx + dx, cy + dy); ctx.stroke();
       ctx.globalAlpha = 1;
     }
+    // подсветка: красная и синяя половины вала горят, когда видны (только красная / только синяя / обе); не видно ни одной — обе погашены
+    const sr = !off && x ? x.src : 'none';
+    [[-10, MV_ROD_RED, sr === 'red' || sr === 'both'], [10, MV_ROD_BLUE, sr === 'blue' || sr === 'both']].forEach(([dx, col, lit]) => {
+      ctx.beginPath(); ctx.arc(cx + dx, cy + 25, 5, 0, Math.PI * 2);
+      if (lit) { ctx.save(); ctx.shadowColor = col; ctx.shadowBlur = 8; ctx.fillStyle = col; ctx.fill(); ctx.restore(); }
+      else { ctx.fillStyle = 'rgba(148,163,184,.14)'; ctx.fill(); ctx.lineWidth = 1; ctx.strokeStyle = 'rgba(148,163,184,.4)'; ctx.stroke(); }
+    });
     ctx.beginPath(); ctx.roundRect(cx - 27, cy - 11, 54, 22, 7); ctx.fillStyle = 'rgba(30,41,59,.95)'; ctx.fill();
     ctx.lineWidth = 1; ctx.strokeStyle = 'rgba(148,163,184,.6)'; ctx.stroke();
     ctx.font = F(15, true); ctx.fillStyle = !ok ? '#9ca3af' : x.coast ? '#7b828f' : '#f3f4f6';       // палка не видна (удержание) — угол тусклый, как и стрелка
@@ -969,6 +976,24 @@ function shwBuild() {
   window.addEventListener('resize', () => { if (SHW.open) shwPlace(); });
 }
 
+// живые значения (углы, разности пар, аварии) поверх секундного снимка MV.shafts — для подписей на плитках; остальное (скорости, ссылки на камеры) остаётся от секундного
+function shLiveMerge(r) {
+  const s = MV.shafts;
+  if (!s || !s.shafts || !s.pairs || !r || !r.shafts || !r.pairs) return;
+  Object.keys(r.shafts).forEach((id) => { if (s.shafts[id]) Object.assign(s.shafts[id], { valid: r.shafts[id].valid, angle: r.shafts[id].angle, coast: r.shafts[id].coast, src: r.shafts[id].src }); });
+  Object.keys(r.pairs).forEach((id) => {
+    const p = r.pairs[id];
+    if (s.pairs[id]) Object.assign(s.pairs[id], { valid: p.valid, angle_diff: p.angle_diff, angle_diff_raw: p.angle_diff_raw, alarm_angle: p.alarm_angle, alarm_rpm: p.alarm_rpm });
+  });
+}
+
+// один запрос лёгкого снимка; если виджет открыт и сам только что получил свежий — второй раз не ходим
+async function shLiveFetch() {
+  if (SHW.live && performance.now() - SHW.liveAt < SHW_LIVE_MS) return;
+  const r = await mvApi('/api/motion/shafts_live');
+  if (r && r.shafts && r.pairs && !r.error) { SHW.live = r; SHW.liveAt = performance.now(); shLiveMerge(r); }
+}
+
 // быстрый опрос лёгкого снимка валов: только пока виджет открыт, запросы идут строго по очереди (не копятся)
 async function shwLiveLoop() {
   clearTimeout(SHW.liveT);
@@ -976,8 +1001,8 @@ async function shwLiveLoop() {
   const t0 = performance.now();
   try {
     if (MV.online && !document.hidden) {
-      const r = await mvApi('/api/motion/shafts_live');
-      if (r && r.shafts && r.pairs && !r.error) { SHW.live = r; SHW.liveAt = performance.now(); shwPaint(); }
+      await shLiveFetch();
+      shwPaint();
     }
   } catch (e) { /* следующий шаг попробует снова */ }
   if (SHW.open) SHW.liveT = setTimeout(shwLiveLoop, Math.max(0, SHW_LIVE_MS - (performance.now() - t0)));
@@ -992,7 +1017,7 @@ function shwSet(on) {
     if (SHW.x === null) { SHW.x = window.innerWidth - SH_WD.w * SHW.s - 24; SHW.y = 110; }
     shwPlace();
     shwLiveLoop();
-  } else { clearTimeout(SHW.liveT); SHW.live = null; }
+  } else { clearTimeout(SHW.liveT); }
   shwSave();
 }
 

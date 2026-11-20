@@ -549,6 +549,38 @@ function initClarityDrag() {
   }, true);
 }
 
+// ---------- быстрое обновление разметки на плитках с палками (~8 Гц) ----------
+// Полный /state с секундным шагом остаётся для всего остального; тут только состояние одной камеры и только для плиток,
+// где есть палки валов. Запросы идут строго по очереди, на скрытой вкладке — пауза.
+const MV_FAST_MS = 125;
+function mvFastTiles() {
+  const out = [];
+  state.tiles.forEach((tile, i) => {
+    if (!tile || !tile.serial || tile.kind !== 'rtsp' || !tile.connected || tile.markupOff) return;
+    const cam = mvCam(tile.serial);
+    if (!cam || !cam.enabled) return;
+    const pairs = typeof shPairsOfCamera === 'function' && shPairsOfCamera(cam.id).length > 0;
+    if (pairs || cam.zones.some((z) => z.enabled !== false && z.type === 'cycle')) out.push({ i, id: cam.id, pairs });
+  });
+  return out;
+}
+
+async function mvFastLoop() {
+  const t0 = performance.now();
+  try {
+    if (MV.online && !document.hidden) {
+      const items = mvFastTiles();
+      if (items.length) {
+        const rs = await Promise.all(items.map((it) => mvApi('/api/motion/camera_state?camera=' + encodeURIComponent(it.id))));
+        rs.forEach((c, k) => { if (c && c.id && !c.error) MV.states[items[k].id] = c; });
+        if (items.some((it) => it.pairs) && typeof shLiveFetch === 'function') await shLiveFetch();
+        items.forEach((it) => drawMotionTile(it.i));
+      }
+    }
+  } catch (e) { /* опрос не должен падать */ }
+  setTimeout(mvFastLoop, Math.max(0, MV_FAST_MS - (performance.now() - t0)));
+}
+
 // ---------- опрос и инициализация ----------
 function startMotionPolling() {
   const loop = async () => {
@@ -559,7 +591,10 @@ function startMotionPolling() {
       const any = MV.dockOpen || (typeof SHW !== 'undefined' && SHW.open) || state.tiles.some((t) => t.serial && t.kind === 'rtsp' && mvEnabled(t.serial));
       if (MV.online && any) {
         const st = await mvApi('/api/motion/state');
-        if (st && st.cameras) st.cameras.forEach((c) => { MV.states[c.id] = c; });
+        if (st && st.cameras) st.cameras.forEach((c) => {         // быстрый опрос плиток мог уже принести более свежий кадр — назад не откатываем
+          const cur = MV.states[c.id];
+          if (!cur || !cur.result || !c.result || !(c.result.ts < cur.result.ts)) MV.states[c.id] = c;
+        });
         if (st && st.scenarios) MV.scen = st.scenarios;
         if (st && st.perf) MV.perf = st.perf;
         if (st && st.shafts) MV.shafts = st.shafts;       // скорости и разности валов (вкладка «Валы», подписи на плитке)
@@ -571,7 +606,7 @@ function startMotionPolling() {
     } catch (e) { /* опрос не должен падать */ }
     setTimeout(loop, 1000);
   };
-  mvRefreshConfig().then(() => { drawAllMotionTiles(); loop(); });
+  mvRefreshConfig().then(() => { drawAllMotionTiles(); loop(); mvFastLoop(); });
   window.addEventListener('resize', drawAllMotionTiles);
 }
 

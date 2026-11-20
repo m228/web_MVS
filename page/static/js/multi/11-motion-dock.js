@@ -118,6 +118,7 @@ function setMotionDock(open) {
 }
 
 // ---------- автосохранение ----------
+const MD_SAVE_DELAY = 3000;   // мс тишины после последней правки, потом уходит на сервис
 function mdPaintSave() {
   const el = mdEl('mdSave');
   if (el) { el.textContent = MD.saveLabel; el.className = 'motion-dock__save ' + MD.saveCls; }
@@ -126,11 +127,11 @@ function mdPaintSave() {
 function mdCommit() {
   MV.dirty = true;
   MD.rev += 1;
-  MD.saveLabel = 'сохраняю…';
+  MD.saveLabel = 'изменено, сохраню через 3 с…';
   MD.saveCls = '';
   mdPaintSave();
   clearTimeout(MD.saveTimer);
-  MD.saveTimer = setTimeout(mdFlush, 700);
+  MD.saveTimer = setTimeout(mdFlush, MD_SAVE_DELAY);
 }
 
 async function mdFlush() {
@@ -149,7 +150,7 @@ async function mdFlush() {
   mdPaintSave();
 }
 
-// правка → тут же в локальный конфиг, на сервис уйдёт через 0.7 с после последней правки
+// правка → тут же в локальный конфиг, на сервис уйдёт через 3 с после последней правки
 function mdEdit(mutate, rerender) {
   mutate();
   mdCommit();

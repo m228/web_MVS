@@ -851,7 +851,8 @@ const SH_WD = { w: 210, h: 280, r: 40 };
 const SH_WD_CIRCLE = { vl: [56, 82], vp: [154, 82], nl: [56, 198], np: [154, 198] };        // вал → центр круга
 const SH_WD_PAIR = { vlr: [105, 22, 'Верх'], nlr: [105, 258, 'Низ'], lnv: [56, 140, ''], rnv: [154, 140, ''] };   // пара → центр подписи и название
 const SHW_KEY = 'mvs_shafts_widget';
-const SHW = { open: false, x: null, y: null, s: 1.15, el: null, cv: null, drag: null, corr: true };       // corr: разности пар после автокоррекции (около нуля) или сырые
+const SHW_LIVE_MS = 125;          // живой опрос углов для виджета (~8 Гц); полный снимок КЗ приходит раз в секунду
+const SHW = { open: false, x: null, y: null, s: 1.15, el: null, cv: null, drag: null, corr: true, live: null, liveAt: 0, liveT: null };       // corr: разности пар после автокоррекции (около нуля) или сырые
 const SH_WD_TOGGLE = [146, 247, 56, 22];                    // переключатель «авто / сырые»: x, y, ширина, высота в координатах SH_WD
 
 // сам рисунок в координатах SH_WD; off — данных нет (КЗ не работает): везде прочерки
@@ -923,7 +924,8 @@ function shwPlace() {
 
 function shwPaint() {
   if (!SHW.open || !SHW.cv) return;
-  const s = shSnap();
+  const s0 = shSnap(), fresh = SHW.live && performance.now() - SHW.liveAt < 2500;       // живой снимок, пока идёт; иначе секундный
+  const s = fresh ? SHW.live : s0;
   if (!s || !s.shafts || !s.pairs) return;
   const ctx = SHW.cv.getContext('2d'), k = SHW.cv.width / SH_WD.w;
   ctx.setTransform(k, 0, 0, k, 0, 0);
@@ -967,6 +969,20 @@ function shwBuild() {
   window.addEventListener('resize', () => { if (SHW.open) shwPlace(); });
 }
 
+// быстрый опрос лёгкого снимка валов: только пока виджет открыт, запросы идут строго по очереди (не копятся)
+async function shwLiveLoop() {
+  clearTimeout(SHW.liveT);
+  if (!SHW.open) return;
+  const t0 = performance.now();
+  try {
+    if (MV.online && !document.hidden) {
+      const r = await mvApi('/api/motion/shafts_live');
+      if (r && r.shafts && r.pairs && !r.error) { SHW.live = r; SHW.liveAt = performance.now(); shwPaint(); }
+    }
+  } catch (e) { /* следующий шаг попробует снова */ }
+  if (SHW.open) SHW.liveT = setTimeout(shwLiveLoop, Math.max(0, SHW_LIVE_MS - (performance.now() - t0)));
+}
+
 function shwSet(on) {
   SHW.open = !!on;
   shwBuild();
@@ -975,7 +991,8 @@ function shwSet(on) {
   if (SHW.open) {
     if (SHW.x === null) { SHW.x = window.innerWidth - SH_WD.w * SHW.s - 24; SHW.y = 110; }
     shwPlace();
-  }
+    shwLiveLoop();
+  } else { clearTimeout(SHW.liveT); SHW.live = null; }
   shwSave();
 }
 

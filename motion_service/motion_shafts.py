@@ -177,6 +177,8 @@ class ShaftRunner(threading.Thread):
         self.status: dict = {}            # ключ вывода → {ok, error}
         self.learners: dict = {}          # пара → (окно в минутах, MirrorLearn): самоподстройка волны Δ угла за оборот
         self._avg: dict = {}              # пара → deque (время, Δ угла): усреднение за avg_s
+        self._avg_live: dict = {}         # то же для живого показа (виджет): окно по времени, частота опроса не важна
+        self._live_lock = threading.Lock()
         self._skew: dict = {p: deque(maxlen=SKEW_LEN) for p in PAIR_ORDER}   # пара → (время, разъезд кадров двух камер, с)
         d = getattr(mgr, "dir", None)
         self.learn_path = (d / "shafts_learn.json") if d else None
@@ -230,6 +232,31 @@ class ShaftRunner(threading.Thread):
 
     def snapshot(self) -> dict:
         return self.snap
+
+    def live(self, now: Optional[float] = None) -> dict:
+        """Лёгкий снимок для виджета, зовётся часто (6–8 Гц): те же углы на общий момент съёмки и разности пар, но БЕЗ побочных
+        эффектов — история, обучение, аварии и запись в ПЛК остаются на секундном тике. Поправка зеркальности и аварии берутся
+        из последнего тика; среднее за avg_s считается отдельным буфером по времени."""
+        now = time.time() if now is None else now
+        cfg = self.mgr.cfg
+        sc = cfg.get("shafts") or default_shafts_cfg()
+        states = {cid: w.state() for cid, w in list(self.mgr.workers.items())}
+        at, _t = self._aligned(cfg, sc, now)
+        snap = compute(cfg, states, at)
+        last = (self.snap.get("pairs") or {})
+        with self._live_lock:
+            for pid, p in snap["pairs"].items():
+                lp = last.get(pid) or {}
+                p["angle_diff_raw"] = p["angle_diff"]
+                if p["valid"]:
+                    p["angle_diff"] = round(ang_diff(p["angle_diff"], float(lp.get("corr") or 0.0)), 2)
+                self._average(pid, p, sc.get("avg_s", 4.0), now, self._avg_live)
+                p["alarm_angle"] = lp.get("alarm_angle", 0)
+                p["alarm_rpm"] = lp.get("alarm_rpm", 0)
+        return {"ts": now,
+                "shafts": {sid: {k: v[k] for k in ("id", "assigned", "valid", "angle", "coast")} for sid, v in snap["shafts"].items()},
+                "pairs": {pid: {k: v.get(k) for k in ("id", "valid", "angle_diff", "angle_diff_raw", "alarm_angle", "alarm_rpm")}
+                          for pid, v in snap["pairs"].items()}}
 
     def history(self, pair: str, window_s: float = 3600.0, points: int = 600) -> dict:
         rows = list(self.hist.get(pair, ()))
@@ -308,9 +335,10 @@ class ShaftRunner(threading.Thread):
             out[sid] = {"angle": r[0], "valid": r[1], "coast": r[2]}
         return out, t_cmp
 
-    def _average(self, pid: str, p: dict, avg_s: float, now: float) -> None:
-        """Δ угла пары → среднее за avg_s секунд (по кругу: от первой точки окна). Мгновенное значение остаётся в angle_diff_inst."""
-        buf = self._avg.setdefault(pid, deque())
+    def _average(self, pid: str, p: dict, avg_s: float, now: float, store: Optional[dict] = None) -> None:
+        """Δ угла пары → среднее за avg_s секунд (по кругу: от первой точки окна). Мгновенное значение остаётся в angle_diff_inst.
+        store — свой словарь буферов (живой показ); по умолчанию буферы секундного тика."""
+        buf = (self._avg if store is None else store).setdefault(pid, deque())
         p["angle_diff_inst"] = p["angle_diff"]
         if p["valid"] and p["angle_diff"] is not None:
             buf.append((now, p["angle_diff"]))

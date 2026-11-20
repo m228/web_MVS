@@ -1484,6 +1484,12 @@ def motion_clarity_sample(req: dict = Body(...)):
     return motion_client.clarity_sample(_motion_url(), str(req.get("camera") or ""), [str(z) for z in (req.get("zones") or [])], float(req.get("seconds") or 30))
 
 
+@app.get("/api/motion/shafts_live")
+def motion_shafts_live():
+    # лёгкий снимок углов валов для плавающего виджета (опрос несколько раз в секунду)
+    return motion_client.shafts_live(_motion_url())
+
+
 @app.get("/api/motion/shafts_history")
 def motion_shafts_history(pair: str, window: float = 3600.0, points: int = 600):
     # разности пары валов (угол и скорость) для графика в панели КЗ

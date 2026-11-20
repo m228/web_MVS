@@ -624,7 +624,12 @@ function mdPaintShaftStats() {
     if (!st) { el.innerHTML = ''; return; }
     if (!st.angle) { el.innerHTML = `<div class="md-zstat__row">за ${mdFmtWin(st.window_s)} нет данных: палки не видны или идёт удержание</div>`; return; }
     const note = st.span_s < st.window_s * 0.9 ? ` <span class="md-zstat__note">накоплено за ${mdFmtWin(st.span_s)}</span>` : '';
-    el.innerHTML = `<div class="md-zstat__row is-main" title="Отклонение углов от эталона за период; «по модулю» — среднее |Δ|, показывает, насколько валы расходятся в целом, без взаимной компенсации + и −">Δ угла за ${mdFmtWin(st.window_s)}: ${shFmtStat(st.angle, '°', 1)}${note}</div>` +
+    const tip = 'Отклонение углов от эталона за период; «по модулю» — среднее |Δ|, показывает, насколько валы расходятся в целом, без взаимной компенсации + и −';
+    const raw = st.angle_raw;                                          // старый сервис отдаёт одну строку (angle) — показываем как раньше
+    el.innerHTML = (raw
+      ? `<div class="md-zstat__row is-main" title="${tip}. Без автокоррекции: от эталона, волна за оборот не вычтена">Δ угла без коррекции за ${mdFmtWin(st.window_s)}: ${shFmtStat(raw, '°', 1)}${note}</div>` +
+        `<div class="md-zstat__row is-main" title="${tip}. С автокоррекцией: из Δ вычтена выученная волна за оборот; по этим числам идут тревога и запись в ПЛК">Δ угла с коррекцией: ${shFmtStat(st.angle, '°', 1)}</div>`
+      : `<div class="md-zstat__row is-main" title="${tip}">Δ угла за ${mdFmtWin(st.window_s)}: ${shFmtStat(st.angle, '°', 1)}${note}</div>`) +
       `<div class="md-zstat__row" title="|скорость первого| − |скорость второго| за период">Δ скорости: ${shFmtStat(st.rpm, ' об/мин', 2)}</div>`;
   });
 }

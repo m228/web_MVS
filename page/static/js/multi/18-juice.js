@@ -46,7 +46,14 @@ function jcMarkSave(m, cam, fw, fh) {
 }
 
 // ---- вкладка ----
-const jcHasClean = (cam, z) => Array.isArray(z.clean) || Array.isArray(cam.clarity_clean);   // свой «чистый» или общий камеры
+// общий «чистый» камеры; нет — медиана «чистых» других стаканов (как в сервисе)
+const jcBaseClean = (cam) => {
+  if (Array.isArray(cam.clarity_clean)) return cam.clarity_clean;
+  const own = cam.zones.filter((q) => Array.isArray(q.clean)).map((q) => q.clean);
+  if (!own.length) return null;
+  return [0, 1, 2].map((k) => { const v = own.map((c) => c[k]).sort((x, y) => x - y), m = v.length >> 1; return v.length % 2 ? v[m] : (v[m - 1] + v[m]) / 2; });
+};
+const jcHasClean = (cam, z) => Array.isArray(z.clean) || !!jcBaseClean(cam);
 const jcHasDirty = (cam, z) => (z.dirty_mode === 'own' ? Array.isArray(z.dirty) : Array.isArray(cam.clarity_shift) && jcHasClean(cam, z));
 const jcMark = (ok, tip) => `<span class="jc-ok${ok ? ' is-set' : ''}" title="${escapeHtml(tip)}">${ok ? '✓' : '—'}</span>`;
 
@@ -126,7 +133,7 @@ async function jcCalibrate(cam, ids, kind) {
       if (s.spread > JC_SPREAD_WARN) shaky.push(z.name);
       if (kind === 'clean') { z.clean = s.lab; if (!Array.isArray(cam.clarity_clean)) cam.clarity_clean = s.lab; done.push(z.name); return; }   // первый снятый «чистый» становится общим для стаканов без своего
       if (z.dirty_mode === 'own') { z.dirty = s.lab; done.push(z.name); return; }
-      const cl = z.clean || cam.clarity_clean;
+      const cl = z.clean || jcBaseClean(cam);
       if (!cl) { bad.push(z.name + ': сначала снимите «чистый» хотя бы у одного стакана'); return; }
       cam.clarity_shift = s.lab.map((v, k) => Math.round((v - cl[k]) * 100) / 100);        // общий сдвиг «грязного» от «чистого» этого стакана
       done.push(z.name);

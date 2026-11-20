@@ -745,6 +745,7 @@ class ClarityRT:
         self._dprev = None
         self._cand = None                                   # состояние-кандидат и с какого момента оно держится (выдержка hold_s)
         self._cand_t = 0.0
+        self._fresh = True                                  # первого достоверного значения ещё не было — состояние берём сразу, без выдержки
         self.lab: Optional[np.ndarray] = None
         self.turb = 0.0                                     # последнее хорошее значение (держим, пока цвет «не на шкале»)
         self.raw = 0.0                                      # то же без зажима в 0..100 (видно, насколько вышли за эталоны)
@@ -793,7 +794,7 @@ class ClarityRT:
         else:
             new = 0
         hold = self.cfg["hold_s"]
-        if new == lv or hold <= 0:
+        if new == lv or hold <= 0 or self._fresh:
             self.level, self._cand = new, None
             return
         if self._cand != new:
@@ -835,6 +836,7 @@ class ClarityRT:
         self.raw, self.off = t * 100.0, off
         self.turb = max(0.0, min(100.0, self.raw))
         self._set_level(now)
+        self._fresh = False
         self.valid = True
         self.reason = ""
         return True

@@ -49,6 +49,10 @@
               <input type="checkbox" id="multiAutostartToggle" />
               <span class="micro-check__text">Автостарт</span>
             </label>
+            <label class="micro-check" title="Для показа в приложении брать дополнительный (лёгкий) поток камеры, subtype=1. Анализ КЗ идёт по своему потоку и от этой галочки не зависит (по умолчанию — основной, лучшее качество). Применяется при следующем подключении камер: перезапустите приложение или остановите и запустите потоки. Фото и видео с плитки будут в качестве показа.">
+              <input type="checkbox" id="multiDisplaySubToggle" />
+              <span class="micro-check__text">Показ — подпоток</span>
+            </label>
             <a href="/" class="btn btn-secondary">К списку камер</a>
             <button type="button" id="multiUpdateBtn" class="btn btn-secondary" title="Обновить программу до последней версии: основное приложение и дополнения. Через 5 секунд (можно отменить) запустится апдейтер, камеры отключатся примерно на минуту и поднимутся сами">Обновить</button>
             <span class="mu-status" id="multiUpdateStatus" role="status" hidden></span>

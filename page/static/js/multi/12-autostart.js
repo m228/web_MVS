@@ -53,7 +53,29 @@ function restoreMultiLayout() {
   setFocus(0);
 }
 
+// какой поток камеры идёт на показ (основной / дополнительный); анализ КЗ выбирается отдельно и по умолчанию остаётся на основном
+async function initDisplayStreamToggle() {
+  const box = document.getElementById('multiDisplaySubToggle');
+  if (!box) return;
+  try {
+    const r = await fetch('/api/rtsp/display_stream').then((x) => x.json());
+    box.checked = !!(r && r.substream);
+  } catch (e) { /* галочка останется выключенной */ }
+  box.addEventListener('change', async () => {
+    const wanted = box.checked;
+    try {
+      const r = await fetch('/api/rtsp/display_stream', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ substream: wanted }) }).then((x) => x.json());
+      if (!r || r.status !== 'ok') throw new Error('нет ответа');
+      log.success('Показ: ' + (wanted ? 'дополнительный поток' : 'основной поток') + ' — применится при следующем подключении камер (перезапустите приложение)');
+    } catch (e) {
+      box.checked = !wanted;
+      log.warn('Не удалось изменить поток для показа');
+    }
+  });
+}
+
 function initMultiAutostart() {
+  initDisplayStreamToggle();
   const box = document.getElementById('multiAutostartToggle');
   if (!box) return;
   box.addEventListener('change', async () => {

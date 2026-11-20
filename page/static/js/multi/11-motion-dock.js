@@ -45,7 +45,7 @@ const MD = {
   peekKey: '',          // что сейчас показано во всплывающем кадре (пусто — ничего)
   peekFrames: {},       // id камеры → { t, p } кадр для подсказки (кэш на 3 с)
   statWin: mdLoadStatWin(),
-  visWin: mdLoadVisWin(),   // период графика «Видимость палок», с
+  visWin: mdLoadVisWin(),   // период графика «Видимость стрелок», с
   vis: {},              // id камеры → ответ /api/motion/visibility
   visAt: {},            // id камеры → когда и за какой период запрошено
   stats: {},            // id камеры → ответ /api/motion/stats
@@ -397,15 +397,15 @@ function mdZoneCardHtml(cam, z, i) {
   </div>`;
 }
 
-// «Видимость палок»: доля времени, когда палка найдена, окнами за период; смотреть, помогли ли подсветка, свет или сдвиг камеры
+// «Видимость стрелок»: доля времени, когда стрелка найдена, окнами за период; смотреть, помогли ли подсветка, свет или сдвиг камеры
 function mdVisHtml(cam) {
   if (!cam.zones.some((z) => z.type === 'cycle' && z.enabled !== false)) return '';
   const k = escapeHtml(cam.id);
   return `<div class="md-zone md-vis">
     <div class="md-zone__ctl">
-      <div class="md-zone__row"><b>Видимость палок</b><span class="md-sp"></span><span class="md-lbl">за</span><select data-md="vis" title="За какой период показать график и среднее">${mdSel(MD_VIS_WINS, MD.visWin)}</select></div>
+      <div class="md-zone__row"><b>Видимость стрелок</b><span class="md-sp"></span><span class="md-lbl">за</span><select data-md="vis" title="За какой период показать график и среднее">${mdSel(MD_VIS_WINS, MD.visWin)}</select></div>
       <div class="md-zstat" id="md-vl-${k}">загружаю…</div>
-      <div class="net-hint" title="Секунда считается «найдена», если палку увидели хотя бы в одном кадре секунды; когда палки нет или она достроена по скорости — «не найдена». Время без картинки (обрыв связи) в расчёт не идёт.">доля времени, когда палка найдена</div>
+      <div class="net-hint" title="Секунда считается «найдена», если стрелку увидели хотя бы в одном кадре секунды; когда стрелки нет или она достроена по скорости — «не найдена». Время без картинки (обрыв связи) в расчёт не идёт.">доля времени, когда стрелка найдена</div>
     </div>
     <div class="md-zone__chart"><canvas id="md-vis-${k}" height="84"></canvas></div>
   </div>`;

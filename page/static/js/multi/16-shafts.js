@@ -803,35 +803,12 @@ const SH_WD = { w: 210, h: 280, r: 40 };
 const SH_WD_CIRCLE = { vl: [56, 82], vp: [154, 82], nl: [56, 198], np: [154, 198] };        // вал → центр круга
 const SH_WD_PAIR = { vlr: [105, 22, 'Верх'], nlr: [105, 258, 'Низ'], lnv: [56, 140, ''], rnv: [154, 140, ''] };   // пара → центр подписи и название
 const SHW_KEY = 'mvs_shafts_widget';
-const SHW = { open: false, x: null, y: null, s: 1.15, el: null, cv: null, drag: null, corr: true };       // corr: показывать значения после автокоррекции (около нуля) или сырые
+const SHW = { open: false, x: null, y: null, s: 1.15, el: null, cv: null, drag: null, corr: true };       // corr: разности пар после автокоррекции (около нуля) или сырые
 const SH_WD_TOGGLE = [146, 247, 56, 22];                    // переключатель «авто / сырые»: x, y, ширина, высота в координатах SH_WD
-const SH_WD_EDGES = [['nlr', 'nl', 'np'], ['vlr', 'vl', 'vp'], ['lnv', 'nl', 'vl'], ['rnv', 'np', 'vp']];   // пара → (вал A, вал B): Δ пары = отклонение A − отклонение B
-
-// отклонение каждого вала от общего положения, °: подгонка по разностям пар (после автокоррекции), сумма отклонений = 0.
-// Если все валы в фазе, все четыре около нуля; разъехался один — он уходит от нуля, остальные почти не двигаются.
-function shwDeviations(s) {
-  const e = {}, edges = SH_WD_EDGES.filter(([pid]) => s.pairs[pid] && s.pairs[pid].valid && Number.isFinite(s.pairs[pid].angle_diff));
-  const ids = SH_IDS.filter((id) => edges.some(([, a, b]) => a === id || b === id));
-  ids.forEach((id) => { e[id] = 0; });
-  for (let it = 0; it < 60; it++) {                                   // Гаусс–Зейдель на задаче Δ(A,B) = e[A] − e[B]
-    ids.forEach((id) => {
-      let sum = 0, n = 0;
-      edges.forEach(([pid, a, b]) => {
-        const d = s.pairs[pid].angle_diff;
-        if (a === id) { sum += e[b] + d; n++; } else if (b === id) { sum += e[a] - d; n++; }
-      });
-      if (n) e[id] = sum / n;
-    });
-    const m = ids.reduce((t, id) => t + e[id], 0) / (ids.length || 1);
-    ids.forEach((id) => { e[id] -= m; });
-  }
-  return e;
-}
 
 // сам рисунок в координатах SH_WD; off — данных нет (КЗ не работает): везде прочерки
 function shPaintWidget(ctx, s, off, corr) {
   const { w, h, r } = SH_WD, F = (px, b) => (b ? 'bold ' : '') + px + 'px sans-serif';
-  const dev = corr ? shwDeviations(s) : null;
   const bad = !off && SH_PAIRS.some((id) => s.pairs[id] && s.pairs[id].valid && s.pairs[id].alarm_angle);        // красное — только настоящий аларм по углу (допуск угла > 0 на вкладке «Валы»)
   ctx.save();
   ctx.clearRect(0, 0, w, h);
@@ -859,8 +836,7 @@ function shPaintWidget(ctx, s, off, corr) {
     ctx.beginPath(); ctx.roundRect(cx - 27, cy - 11, 54, 22, 7); ctx.fillStyle = 'rgba(30,41,59,.95)'; ctx.fill();
     ctx.lineWidth = 1; ctx.strokeStyle = 'rgba(148,163,184,.6)'; ctx.stroke();
     ctx.font = F(15, true); ctx.fillStyle = !ok ? '#9ca3af' : x.coast ? '#7b828f' : '#f3f4f6';       // палка не видна (удержание) — угол тусклый, как и стрелка
-    const dd = dev && dev[id];
-    ctx.fillText(!ok ? '—' : dev ? (Number.isFinite(dd) ? shSgn(dd, 1) + '°' : '—') : (((Math.round(x.angle) % 360) + 360) % 360) + '°', cx, cy + 1);
+    ctx.fillText(ok ? (((Math.round(x.angle) % 360) + 360) % 360) + '°' : '—', cx, cy + 1);
   });
   const [tx, ty, tw, th] = SH_WD_TOGGLE;                       // переключатель: с автокоррекцией (значки волны → ровная линия) / без
   ctx.beginPath(); ctx.roundRect(tx, ty, tw, th, th / 2);
@@ -910,7 +886,7 @@ function shwBuild() {
   if (SHW.el) return;
   const el = document.createElement('div');
   el.className = 'shw'; el.hidden = true;
-  el.title = 'Разность углов валов, °. «авто» — значения после автокоррекции, около нуля; «сырые» — без неё (в кружках — угол вала). Переключатель — внизу справа. Перетащи, чтобы подвинуть; колесо мыши — размер.';
+  el.title = 'Разность углов валов, °. «авто» — разности пар после автокоррекции, около нуля; «сырые» — без неё. В кружках всегда угол вала. Переключатель — внизу справа. Перетащи, чтобы подвинуть; колесо мыши — размер.';
   el.innerHTML = '<canvas class="shw__cv"></canvas><button type="button" class="shw__x" title="Закрыть" aria-label="Закрыть">×</button>';
   document.body.appendChild(el);
   SHW.el = el; SHW.cv = el.querySelector('canvas');

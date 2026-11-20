@@ -218,7 +218,7 @@ function drawMotionTile(index) {
       const txt = p.short + (p.valid ? '   Δ ' + shSgn(p.angle_diff, 1) + '°   Δv ' + shSgn(p.rpm_diff, 2) : '   —');
       const y = 26 + mirrors * 24 + 16 + k * 17;
       ctx.lineWidth = 3; ctx.strokeStyle = '#000'; ctx.strokeText(txt, g.w / 2, y);
-      ctx.fillStyle = !p.valid || problem ? '#9ca3af' : (p.alarm_angle || p.alarm_rpm) ? '#f87171' : '#e5e7eb'; ctx.fillText(txt, g.w / 2, y);
+      ctx.fillStyle = !p.valid || problem || p.stale ? '#9ca3af' : (p.alarm_angle || p.alarm_rpm) ? '#f87171' : '#e5e7eb'; ctx.fillText(txt, g.w / 2, y);       // stale — кадры камер в очереди, Δ недостоверна
     });
     ctx.textAlign = 'left'; ctx.lineWidth = 2;
   }

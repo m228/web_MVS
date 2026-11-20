@@ -875,7 +875,9 @@ function shPaintWidget(ctx, s, off, corr) {
     const p = s.pairs[id], [x, y, name] = SH_WD_PAIR[id], ok = !off && p && p.valid;
     ctx.font = F(22, true); ctx.fillStyle = !ok ? '#9ca3af' : (p.alarm_angle) ? '#f87171' : '#f3f4f6';
     const dv = corr || !Number.isFinite(p && p.angle_diff_raw) ? (p && p.angle_diff) : p.angle_diff_raw;         // «сырые» — до автокоррекции (старый сервис отдаёт только одно значение)
+    ctx.globalAlpha = ok && p.stale ? 0.45 : 1;                // кадры одной из камер стоят в очереди: разность — это задержка, а не вал; цифра тусклая, тревога на это время не меняется
     ctx.fillText(ok ? shSgn(dv, 1) + '°' : '—', x, y);
+    ctx.globalAlpha = 1;
     if (name) { ctx.textAlign = 'left'; ctx.font = F(13); ctx.fillStyle = '#9ca3af'; ctx.fillText(name, 14, y); ctx.textAlign = 'center'; }
   });
   SH_IDS.forEach((id) => {
@@ -944,7 +946,7 @@ function shwBuild() {
   if (SHW.el) return;
   const el = document.createElement('div');
   el.className = 'shw'; el.hidden = true;
-  el.title = 'Разность углов валов, °. «авто» — разности пар после автокоррекции, около нуля; «сырые» — без неё. В кружках всегда угол вала. Переключатель — внизу справа. Перетащи, чтобы подвинуть; колесо мыши — размер.';
+  el.title = 'Разность углов валов, °. «авто» — разности пар после автокоррекции, около нуля; «сырые» — без неё. В кружках всегда угол вала. Тусклая разность — кадры одной из камер стоят в очереди (обработка не успевает), цифра недостоверна, тревога на это время не меняется. Переключатель — внизу справа. Перетащи, чтобы подвинуть; колесо мыши — размер.';
   el.innerHTML = '<canvas class="shw__cv"></canvas><button type="button" class="shw__x" title="Закрыть" aria-label="Закрыть">×</button>';
   document.body.appendChild(el);
   SHW.el = el; SHW.cv = el.querySelector('canvas');
@@ -984,7 +986,7 @@ function shLiveMerge(r) {
   Object.keys(r.shafts).forEach((id) => { if (s.shafts[id]) Object.assign(s.shafts[id], { valid: r.shafts[id].valid, angle: r.shafts[id].angle, coast: r.shafts[id].coast, src: r.shafts[id].src }); });
   Object.keys(r.pairs).forEach((id) => {
     const p = r.pairs[id];
-    if (s.pairs[id]) Object.assign(s.pairs[id], { valid: p.valid, angle_diff: p.angle_diff, angle_diff_raw: p.angle_diff_raw, alarm_angle: p.alarm_angle, alarm_rpm: p.alarm_rpm });
+    if (s.pairs[id]) Object.assign(s.pairs[id], { valid: p.valid, angle_diff: p.angle_diff, angle_diff_raw: p.angle_diff_raw, alarm_angle: p.alarm_angle, alarm_rpm: p.alarm_rpm, stale: p.stale });
   });
 }
 

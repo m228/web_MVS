@@ -46,30 +46,31 @@ function jcMarkSave(m, cam, fw, fh) {
 }
 
 // ---- вкладка ----
-// общий «чистый» камеры; нет — медиана «чистых» других стаканов (как в сервисе)
+const jcShared = (cam) => cam.clarity_refs !== 'own';          // один «чистый» и один «грязный» на все стаканы (по умолчанию)
+const jcMed = (arrs) => [0, 1, 2].map((k) => { const v = arrs.map((c) => c[k]).sort((x, y) => x - y), m = v.length >> 1; return Math.round((v.length % 2 ? v[m] : (v[m - 1] + v[m]) / 2) * 100) / 100; });
+// общий «чистый» камеры; нет — медиана «чистых» стаканов (как в сервисе)
 const jcBaseClean = (cam) => {
   if (Array.isArray(cam.clarity_clean)) return cam.clarity_clean;
   const own = cam.zones.filter((q) => Array.isArray(q.clean)).map((q) => q.clean);
-  if (!own.length) return null;
-  return [0, 1, 2].map((k) => { const v = own.map((c) => c[k]).sort((x, y) => x - y), m = v.length >> 1; return v.length % 2 ? v[m] : (v[m - 1] + v[m]) / 2; });
+  return own.length ? jcMed(own) : null;
 };
-const jcHasClean = (cam, z) => Array.isArray(z.clean) || !!jcBaseClean(cam);
-const jcHasDirty = (cam, z) => (z.dirty_mode === 'own' ? Array.isArray(z.dirty) : Array.isArray(cam.clarity_shift) && jcHasClean(cam, z));
+const jcHasClean = (cam, z) => (jcShared(cam) ? !!jcBaseClean(cam) : Array.isArray(z.clean) || !!jcBaseClean(cam));
+const jcHasDirty = (cam, z) => (!jcShared(cam) && z.dirty_mode === 'own' ? Array.isArray(z.dirty) : Array.isArray(cam.clarity_shift) && jcHasClean(cam, z));
 const jcMark = (ok, tip) => `<span class="jc-ok${ok ? ' is-set' : ''}" title="${escapeHtml(tip)}">${ok ? '✓' : '—'}</span>`;
 
 function jcRowHtml(cam, z) {
   const i = cam.zones.indexOf(z), a = `data-md="jc" data-cam="${escapeHtml(cam.id)}" data-i="${i}"`;
   const k = escapeHtml(cam.id + '-' + z.id);
-  const own = z.dirty_mode === 'own';
+  const shared = jcShared(cam), own = !shared && z.dirty_mode === 'own';
   return `<div class="md-zone jc-row" id="jc-r-${k}">
     <div class="md-zone__ctl">
       <div class="md-zone__row"><input type="text" ${a} data-f="name" value="${escapeHtml(z.name)}" title="Название сборника. Двойной клик по кружку на кадре тоже переименует" />
         <span class="jc-v" id="jc-v-${k}" title="Мутность 0–100: 0 — прозрачный, 100 — самый мутный">—</span><span class="jc-w" id="jc-w-${k}"></span><span class="jc-trk"><i id="jc-b-${k}"></i></span>
         <button type="button" class="btn-secondary md-x" ${a} data-f="del" title="Удалить стакан">✕</button></div>
       <div class="md-zone__row">
-        <button type="button" class="btn-secondary md-x" ${a} data-f="clean" title="В этом стакане сейчас чистый сок: его цвет за последние ${JC.sec} с запомнится как «чистый» (0)">чистый</button>${jcMark(jcHasClean(cam, z), Array.isArray(z.clean) ? 'Цвет «чистого» сока этого стакана задан' : 'Свой «чистый» не снят — берётся общий камеры')}
-        <button type="button" class="btn-secondary md-x" ${a} data-f="dirty" title="В этом стакане сейчас самый мутный сок (100). ${own ? 'Цвет запомнится как «грязный» только этого стакана' : 'Запомнится сдвиг цвета от «чистого» этого стакана — он общий для всех стаканов в режиме «общий»'}">грязный</button>${jcMark(jcHasDirty(cam, z), own ? 'Свой цвет «грязного» задан' : 'Общий сдвиг «грязного» задан, и у стакана есть «чистый»')}
-        <select ${a} data-f="dmode" title="«Грязный» общий: один сдвиг цвета от «чистого» на все стаканы (мутный сок нужен лишь в одном). «Свой»: у этого стакана собственный цвет «грязного»">${mdSel([['shared', 'грязный: общий'], ['own', 'грязный: свой']], z.dirty_mode || 'shared')}</select></div>
+        <button type="button" class="btn-secondary md-x" ${a} data-f="clean" title="В этом стакане сейчас чистый сок: его цвет за последние ${JC.sec} с запомнится как «чистый» (0)${shared ? ' — один на все стаканы' : ''}">чистый</button>${jcMark(jcHasClean(cam, z), jcShared(cam) ? 'Общий «чистый» на все стаканы задан' : Array.isArray(z.clean) ? 'Цвет «чистого» сока этого стакана задан' : 'Свой «чистый» не снят — берётся общий камеры')}
+        <button type="button" class="btn-secondary md-x" ${a} data-f="dirty" title="В этом стакане сейчас самый мутный сок (100). ${shared ? 'Цвет запомнится как «грязный» для всех стаканов' : own ? 'Цвет запомнится как «грязный» только этого стакана' : 'Запомнится сдвиг цвета от «чистого» этого стакана — он общий для всех стаканов в режиме «общий»'}">грязный</button>${jcMark(jcHasDirty(cam, z), own ? 'Свой цвет «грязного» задан' : 'Общий сдвиг «грязного» задан, и есть «чистый»')}
+        ${shared ? '' : `<select ${a} data-f="dmode" title="«Грязный» общий: один сдвиг цвета от «чистого» на все стаканы (мутный сок нужен лишь в одном). «Свой»: у этого стакана собственный цвет «грязного»">${mdSel([['shared', 'грязный: общий'], ['own', 'грязный: свой']], z.dirty_mode || 'shared')}</select>`}</div>
       <div class="md-zone__row"><span class="md-lbl" title="Ваша метка этого стакана для базы: что в нём на самом деле. Пишется в index.csv вместе с цветом, потом сравним с авто-состоянием">метка для базы</span>
         <select ${a} data-f="label">${mdSel(JC_LABELS, z.label || '')}</select></div>
       <div class="jc-st" id="jc-s-${k}"></div>
@@ -97,9 +98,10 @@ function jcCamHtml(cam, all) {
       <span class="md-lbl" title="С какой мутности сок считается грязным (красный). Общий для всех стаканов камеры">грязный от</span>${mdNum(`data-md="jc" data-cam="${escapeHtml(cam.id)}" data-f="tdirty"`, jcT(zs[0], 't_dirty', JC_T_DIRTY), 'min="1" max="100" step="1"')}
       <button type="button" class="btn-secondary md-x" data-md="jc" data-cam="${escapeHtml(cam.id)}" data-f="cleanall" title="Налейте во все стаканы чистый сок, подождите и нажмите: цвет каждого стакана запомнится как «чистый» (0)">Все стаканы — чистые</button>
       <span class="net-hint" id="jc-m-${escapeHtml(cam.id)}">${escapeHtml(JC.msg[cam.id] || '')}</span></div>` +
-    `<div class="md-zone__row jc-bar"><label class="md-lbl" title="Раз в N минут сервис пишет кадр и цвет, мутность, состояние и вашу метку каждого стакана в папку data\\juice_base\\${escapeHtml(cam.id)}\\<день>. Для набора базы, например на ночь. Старше 14 суток удаляется"><input type="checkbox" data-md="jc" data-cam="${escapeHtml(cam.id)}" data-f="jbon"${jb.on ? ' checked' : ''} /> собирать базу</label>
+    `<div class="md-zone__row jc-bar"><label class="switch-toggle md-sw md-sw--sm" title="Раз в N минут сервис пишет кадр и цвет, мутность, состояние и вашу метку каждого стакана в папку data\juice_base\${escapeHtml(cam.id)}\<день>. Для набора базы, например на ночь. Старше 14 суток удаляется"><span class="switch"><input type="checkbox" data-md="jc" data-cam="${escapeHtml(cam.id)}" data-f="jbon"${jb.on ? ' checked' : ''} /><span class="switch-track"></span></span><span class="md-lbl md-lbl--on" style="white-space:nowrap">собирать базу</span></label>
       <span class="md-lbl">каждые</span><select data-md="jc" data-cam="${escapeHtml(cam.id)}" data-f="jbstep">${mdSel(JC_BASE_STEPS, jb.every_min)}</select>
-      <span class="net-hint" title="Общий сдвиг цвета «грязного» от «чистого» (Lab). Снимается кнопкой «грязный» на любом стакане и действует на все стаканы в режиме «общий»">${Array.isArray(cam.clarity_shift) ? 'грязный задан: ΔL ' + cam.clarity_shift[0].toFixed(0) + ' · Δa ' + cam.clarity_shift[1].toFixed(0) + ' · Δb ' + cam.clarity_shift[2].toFixed(0) : 'общий «грязный» не задан — нажмите «грязный» на мутном стакане'}</span></div>` +
+      <label class="switch-toggle md-sw md-sw--sm" title="Включено: один «чистый» и один «грязный» на все стаканы — снимаются кнопками на любом стакане. Выключено: у каждого стакана свои"><span class="switch"><input type="checkbox" data-md="jc" data-cam="${escapeHtml(cam.id)}" data-f="refs"${jcShared(cam) ? ' checked' : ''} /><span class="switch-track"></span></span><span class="md-lbl md-lbl--on" style="white-space:nowrap">один эталон на все</span></label>
+      <span class="net-hint" title="Общий «чистый» и сдвиг «грязного» от него (Lab). Снимаются кнопками «чистый» и «грязный» на любом стакане">${(() => { const c = jcBaseClean(cam), d = cam.clarity_shift; return (c ? 'чистый: L ' + c[0].toFixed(0) + ' a ' + c[1].toFixed(0) + ' b ' + c[2].toFixed(0) : 'чистый не задан') + ' · ' + (Array.isArray(d) ? 'грязный: ΔL ' + d[0].toFixed(0) + ' Δa ' + d[1].toFixed(0) + ' Δb ' + d[2].toFixed(0) : 'грязный не задан — нажмите «грязный» на мутном стакане'); })()}</span></div>` +
     zs.map((z) => jcRowHtml(cam, z)).join('');
 }
 
@@ -124,20 +126,26 @@ async function jcCalibrate(cam, ids, kind) {
   jcSay(cam.id, 'снимаю цвет…');
   const r = await mvJson('/api/motion/clarity_sample', { camera: cam.id, zones: ids, seconds: JC.sec });
   if (!r || r.error || !r.zones) { jcSay(cam.id, 'не вышло: ' + ((r && (r.error || r.detail)) || 'нет ответа сервиса'), true); return; }
-  const done = [], bad = [], shaky = [];
+  const done = [], bad = [], shaky = [], cleans = [], shared = jcShared(cam);
   mdEdit(() => {
     ids.forEach((id) => {
       const z = cam.zones.find((q) => q.id === id), s = r.zones[id];
       if (!z) return;
       if (!s || s.error) { bad.push(z.name + ': ' + ((s && s.error) || 'нет данных')); return; }
       if (s.spread > JC_SPREAD_WARN) shaky.push(z.name);
-      if (kind === 'clean') { z.clean = s.lab; if (!Array.isArray(cam.clarity_clean)) cam.clarity_clean = s.lab; done.push(z.name); return; }   // первый снятый «чистый» становится общим для стаканов без своего
-      if (z.dirty_mode === 'own') { z.dirty = s.lab; done.push(z.name); return; }
-      const cl = z.clean || jcBaseClean(cam);
+      if (kind === 'clean') {
+        if (shared) cleans.push(s.lab);                    // общий режим: один «чистый» на все стаканы (по нескольким стаканам — медиана)
+        else { z.clean = s.lab; if (!Array.isArray(cam.clarity_clean)) cam.clarity_clean = s.lab; }   // свой; первый снятый становится общим для стаканов без своего
+        done.push(z.name);
+        return;
+      }
+      if (!shared && z.dirty_mode === 'own') { z.dirty = s.lab; done.push(z.name); return; }
+      const cl = shared ? jcBaseClean(cam) : (z.clean || jcBaseClean(cam));
       if (!cl) { bad.push(z.name + ': сначала снимите «чистый» хотя бы у одного стакана'); return; }
       cam.clarity_shift = s.lab.map((v, k) => Math.round((v - cl[k]) * 100) / 100);        // общий сдвиг «грязного» от «чистого» этого стакана
       done.push(z.name);
     });
+    if (cleans.length) cam.clarity_clean = jcMed(cleans);
   }, true);
   const what = kind === 'clean' ? '«чистый»' : '«грязный»';
   const parts = [];
@@ -157,6 +165,7 @@ function jcOnEvent(t) {
   const cam = mvCam(t.dataset.cam);
   if (!cam) return;
   if (f === 'cleanall') { jcCalibrate(cam, jcZones(cam).map((z) => z.id), 'clean'); return; }
+  if (f === 'refs') { mdEdit(() => { cam.clarity_refs = t.checked ? 'shared' : 'own'; }, true); jcSay(cam.id, t.checked ? 'один эталон на все стаканы' : 'у каждого стакана свой эталон'); return; }
   if (f === 'jbon' || f === 'jbstep') {                       // сбор базы: на всю камеру
     mdEdit(() => {
       const jb = cam.juice_base = Object.assign({ on: false, every_min: 2 }, cam.juice_base);

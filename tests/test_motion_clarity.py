@@ -43,7 +43,7 @@ def zones(**over):
 
 
 def cam_cfg(zs=None, **over):
-    c = {"id": "juice", "url": "x", "frame_size": [W, H], "proc_fps": 4, "zones": zs if zs is not None else zones()}
+    c = {"id": "juice", "url": "x", "frame_size": [W, H], "proc_fps": 4, "zones": zs if zs is not None else zones(), "clarity_refs": "own"}   # тесты шкалы — на своих эталонах
     c.update(over)
     return me.normalize_camera(c)
 
@@ -396,3 +396,32 @@ def test_no_camera_clean_falls_back_to_median_of_own_cleans():
     d, c = zone(st, "g6"), zone(st, "g7")
     assert d["valid"] and d["ref_default"] and d["level"] == 2
     assert c["valid"] and c["level"] == 0
+
+
+# ───────────── режим «один эталон на все стаканы» ─────────────
+def test_refs_mode_default_is_shared_and_validated():
+    base = {"id": "juice", "url": "x", "frame_size": [W, H], "zones": zones()}
+    assert me.normalize_camera(dict(base))["clarity_refs"] == "shared"
+    assert me.normalize_camera(dict(base, clarity_refs="own"))["clarity_refs"] == "own"
+    with pytest.raises(ValueError):
+        me.normalize_camera(dict(base, clarity_refs="x"))
+
+
+def test_shared_refs_ignore_own_cleans_and_use_one_scale():
+    zs, dirty_lab, clean_lab = calibrated_cfg()
+    for i, z in enumerate(zs):
+        z["clean"] = [clean_lab[0] + 6 * i, clean_lab[1], clean_lab[2]]   # у каждого стакана «свой» чистый — в общем режиме не нужен
+    shift = [round(d - c, 2) for d, c in zip(dirty_lab, clean_lab)]
+    eng = me.CameraEngine(cam_cfg(zs, clarity_refs="shared", clarity_clean=clean_lab, clarity_shift=shift))
+    st = run(eng, frame({CENTERS[0]: CLEAN, CENTERS[1]: CLEAN, CENTERS[2]: DIRTY}))
+    a, b, c = zone(st, "g1"), zone(st, "g2"), zone(st, "g3")
+    assert a["valid"] and b["valid"] and abs(a["turb"] - b["turb"]) < 2 and a["turb"] < 5
+    assert c["valid"] and c["turb"] > 90 and c["level"] == 2
+
+
+def test_shared_refs_without_camera_clean_use_median_of_own():
+    zs, dirty_lab, clean_lab = calibrated_cfg()
+    zs[3:] and [z.update(clean=None) for z in zs[3:]]
+    shift = [round(d - c, 2) for d, c in zip(dirty_lab, clean_lab)]
+    st = run(me.CameraEngine(cam_cfg(zs, clarity_refs="shared", clarity_shift=shift)), frame({CENTERS[5]: DIRTY, CENTERS[6]: CLEAN}))
+    assert zone(st, "g6")["level"] == 2 and zone(st, "g7")["level"] == 0 and zone(st, "g7")["valid"]

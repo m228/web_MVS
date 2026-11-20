@@ -38,6 +38,7 @@ ID_RE = re.compile(r"^[A-Za-z0-9_\-]{1,40}$")
 
 ZONE_TYPES = ("motion", "presence", "cycle", "level", "clarity")
 CLARITY_DIRTY_MODES = ("shared", "own")   # «грязный» цвет зоны: общий сдвиг камеры от «чистого» этой зоны / свой собственный
+CLARITY_REFS = ("shared", "own")            # эталоны камеры: общие на все стаканы / у каждого свои
 CLARITY_NO_DATA = 65535                   # что уходит в ПЛК вместо мутности, когда её нет (нет эталонов, кадра, цвета): 0 — это «чистый»
 CLARITY_MIN_SPAN = 3.0                    # «чистый» и «грязный» ближе этого (ΔE по Lab) — шкалы нет, мутность не считаем
 CLARITY_T_TURB = 12.0                     # пороги по умолчанию (ролик со светом 19.11: чистые 0, мутные 1 и 5 ≈ 20–45, грязный 6 ≈ 100)
@@ -204,6 +205,14 @@ def _lab3(v, name, shift=False):
     lo, hi = (-200.0, 200.0) if shift else (0.0, 100.0)
     return [round(_num(v[0], name, lo, hi), 2), round(_num(v[1], name, -256 if shift else -128, 256 if shift else 128), 2),
             round(_num(v[2], name, -256 if shift else -128, 256 if shift else 128), 2)]
+
+
+def _clarity_refs(v) -> str:
+    if v in (None, ""):
+        return "shared"
+    if v not in CLARITY_REFS:
+        raise ValueError("clarity_refs %r не из %s" % (v, list(CLARITY_REFS)))
+    return v
 
 
 def _norm_clarity(z: dict, zid: str, where: str) -> dict:
@@ -523,6 +532,7 @@ def normalize_camera(c: dict) -> dict:
         "hw_accel": hw,
         "substream": bool(c.get("substream", False)),
         "row": row,
+        "clarity_refs": _clarity_refs(c.get("clarity_refs")),    # shared — один «чистый» и один «грязный» на все стаканы камеры; own — у каждого стакана свои
         "clarity_clean": _lab3(c.get("clarity_clean"), "камера %s.clarity_clean" % cid),    # общий «чистый» камеры: для стаканов, у которых своего «чистого» нет
         "clarity_shift": _lab3(c.get("clarity_shift"), "камера %s.clarity_shift" % cid, shift=True),    # общий сдвиг «грязного» от «чистого» (зоны прозрачности с dirty_mode=shared)
         "juice_base": _juice_base(c.get("juice_base"), "камера %s.juice_base" % cid),
@@ -684,7 +694,7 @@ class ClarityRT:
     (дальше `off_max` его длин в сторону: рука, чужой предмет, лампа) — valid = False, turb держит последнее хорошее значение.
     «Грязный» бывает общий (dirty_mode = shared: clean этой зоны + сдвиг камеры clarity_shift) или свой (own)."""
 
-    def __init__(self, zcfg: dict, frame_size, cur_wh, shift=None, base_clean=None):
+    def __init__(self, zcfg: dict, frame_size, cur_wh, shift=None, base_clean=None, shared=False):
         self.cfg = zcfg
         self.id, self.name = zcfg["id"], zcfg["name"]
         W, H = cur_wh
@@ -698,10 +708,11 @@ class ClarityRT:
         yy, xx = np.ogrid[y0:y1, x0:x1]
         self.mask = ((xx - cx) ** 2 + (yy - cy) ** 2) <= rc * rc if (x1 > x0 and y1 > y0) else np.zeros((0, 0), bool)
         self.geom_ok = bool(self.mask.sum() >= 9)           # круг целиком вне кадра — считать нечего
-        base = zcfg["clean"] or base_clean                  # своего «чистого» нет — берём общий камеры (не требуем снимать каждый стакан)
+        # shared — один «чистый» (камеры) и один «грязный» (его сдвиг) на все стаканы; иначе — свой «чистый», а нет его — общий камеры
+        base = base_clean if shared else (zcfg["clean"] or base_clean)
         self.clean = np.array(base, np.float64) if base else None
-        self.clean_default = bool(not zcfg["clean"] and base_clean)
-        if zcfg["dirty_mode"] == "shared":
+        self.clean_default = bool(base_clean and (shared or not zcfg["clean"]))
+        if shared or zcfg["dirty_mode"] == "shared":
             self.dirty = (self.clean + np.array(shift, np.float64)) if (self.clean is not None and shift) else None
         else:
             self.dirty = np.array(zcfg["dirty"], np.float64) if zcfg["dirty"] else None
@@ -1394,7 +1405,7 @@ class CameraEngine:
         if base is None:                                    # общего нет — медиана «чистых» других стаканов (снятых хотя бы у одного)
             own = [z["clean"] for z in cz if z["clean"]]
             base = [round(float(np.median([c[k] for c in own])), 2) for k in range(3)] if own else None
-        self.clarity = {z["id"]: ClarityRT(z, self.cfg["frame_size"], (w, h), self.cfg.get("clarity_shift"), base) for z in cz}
+        self.clarity = {z["id"]: ClarityRT(z, self.cfg["frame_size"], (w, h), self.cfg.get("clarity_shift"), base, self.cfg.get("clarity_refs") == "shared") for z in cz}
         for m in self.mirrors.values():
             m.reset()
 

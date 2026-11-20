@@ -490,3 +490,11 @@ def test_smoothing_off_is_instant_like_before():
     eng = me.CameraEngine(_smooth_cfg(smooth_s=0, hold_s=0))
     res = [t for t, _, ok in _feed(eng, [(CLEAN, 20), (DIRTY, 24)]) if ok]
     assert res[-1] > 90
+
+
+def test_first_state_after_start_is_immediate():
+    """После запуска первое достоверное состояние берётся сразу: грязный стакан не «прозрачный» все hold_s секунд."""
+    eng = me.CameraEngine(_smooth_cfg(smooth_s=0, hold_s=20))
+    res = _feed(eng, [(DIRTY, 6)])
+    ok = [lv for _, lv, v in res if v]
+    assert ok and ok[0] == 2 and ok[-1] == 2

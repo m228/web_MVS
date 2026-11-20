@@ -246,6 +246,11 @@ class FakeClientNew:                                   # pymodbus ≥ 3.10: devi
         self.log.append(("coil", address, value, device_id))
         return FakeRes(self.fail)
 
+    def write_registers(self, address, values, device_id=1):          # функция 16: в журнал по регистру, как и раньше
+        for i, v in enumerate(values):
+            self.log.append(("holding", address + i, v, device_id))
+        return FakeRes(self.fail)
+
     def read_holding_registers(self, address, count=1, device_id=1):
         return FakeRes(self.fail, [42])
 
@@ -256,6 +261,9 @@ class FakeClientOld(FakeClientNew):                    # pymodbus 3.6–3.9: sla
 
     def write_coil(self, address, value, slave=1):
         return FakeClientNew.write_coil(self, address, value, slave)
+
+    def write_registers(self, address, values, slave=1):
+        return FakeClientNew.write_registers(self, address, values, slave)
 
     def read_holding_registers(self, address, count=1, slave=1):
         return FakeClientNew.read_holding_registers(self, address, count, slave)
@@ -753,6 +761,11 @@ def test_server_end_to_end_with_video_file(tmp_path):
     class Cl(FakeClientNew):
         def write_register(self, address, value, device_id=1):
             writes.append((address, value))
+            return FakeRes()
+
+        def write_registers(self, address, values, device_id=1):      # подряд идущие регистры приходят одним запросом
+            for i, v in enumerate(values):
+                writes.append((address + i, v))
             return FakeRes()
 
     srv = _load_server()

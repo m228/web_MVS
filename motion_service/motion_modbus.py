@@ -16,6 +16,8 @@ from typing import Optional
 
 log = logging.getLogger("motion.modbus")
 
+MAX_REGS = 100          # регистров в одном запросе (предел протокола 123, берём с запасом)
+
 
 class ModbusLink:
     def __init__(self, host: str, port: int = 502, device_id: int = 1, client_factory=None):
@@ -26,6 +28,8 @@ class ModbusLink:
         self._lock = threading.Lock()
         self._last_err_log = 0.0
         self.ok = False                 # последняя операция прошла
+        self.multi = True               # подряд идущие регистры — одним запросом (функция 16); False — контроллер её не принял
+        self.requests = 0               # сколько Modbus-запросов записи ушло (для проверки и диагностики)
         self.last_error = ""
         self.last_ok_ts = 0.0
 
@@ -69,8 +73,43 @@ class ModbusLink:
         self._client = None
 
     # --- операции ---
+    @staticmethod
+    def _runs(items) -> list:
+        """items → операции записи в порядке списка: ("regs", адрес, [значения]) — подряд идущие holding-адреса (≥ 2, не больше MAX_REGS)
+        одним запросом, ("reg", адрес, значение), ("coil", адрес, значение). Серия ставится на место первого своего регистра.
+        Повтор адреса в одной пачке — побеждает последнее значение."""
+        regs: dict = {}
+        for kind, addr, val in items:
+            if kind != "coil":
+                regs[int(addr)] = int(val) & 0xFFFF
+        run_of: dict = {}                      # адрес → (первый адрес серии, длина)
+        run: list = []
+        for a in sorted(regs) + [None]:
+            if run and (a is None or a != run[-1] + 1 or len(run) >= MAX_REGS):
+                for x in run:
+                    run_of[x] = (run[0], len(run))
+                run = []
+            if a is not None:
+                run.append(a)
+        ops: list = []
+        done: set = set()
+        for kind, addr, val in items:
+            if kind == "coil":
+                ops.append(("coil", int(addr), bool(val)))
+                continue
+            first, n = run_of[int(addr)]
+            if first in done:
+                continue
+            done.add(first)
+            ops.append(("regs", first, [regs[first + i] for i in range(n)]) if n > 1 else ("reg", first, regs[first]))
+        return ops
+
     def write(self, items) -> bool:
-        """items = [(kind, address, value)], kind: holding | coil. True — все записи прошли."""
+        """items = [(kind, address, value)], kind: holding | coil. True — все записи прошли.
+
+        Подряд идущие holding-регистры уходят ОДНИМ запросом (функция 16, Write Multiple Registers): все значения ложатся в ПЛК разом,
+        ПЛК не увидит «половину» набора. Контроллер не принял функцию 16 (ответил ошибкой Modbus) — те же регистры пишутся по одному
+        (функция 06), а к функции 16 на этом канале больше не возвращаемся (self.multi = False, одна запись в лог)."""
         if not items:
             return True
         with self._lock:
@@ -79,13 +118,24 @@ class ModbusLink:
                     self._err("Modbus: нет связи с %s:%s" % (self.host, self.port))
                     return False
                 kw = {self._unit_kw(): self.device_id}
-                for kind, addr, val in items:
+                for kind, addr, val in (self._runs(items) if self.multi else [(("coil" if k == "coil" else "reg"), int(a), (bool(v) if k == "coil" else int(v) & 0xFFFF)) for k, a, v in items]):
+                    if kind == "regs":
+                        res = self._client.write_registers(addr, val, **kw)
+                        self.requests += 1
+                        if res.isError():
+                            if not self._single(addr, val, kw):
+                                self._err("Modbus %s:%s: ошибка записи holding@%s..%s: %s" % (self.host, self.port, addr, addr + len(val) - 1, res))
+                                return False
+                            self.multi = False
+                            log.warning("Modbus %s:%s: контроллер не принял запись нескольких регистров (функция 16): %s; пишем по одному", self.host, self.port, res)
+                        continue
                     if kind == "coil":
-                        res = self._client.write_coil(int(addr), bool(val), **kw)
+                        res = self._client.write_coil(addr, bool(val), **kw)
                     else:
-                        res = self._client.write_register(int(addr), int(val) & 0xFFFF, **kw)
+                        res = self._client.write_register(addr, int(val) & 0xFFFF, **kw)
+                    self.requests += 1
                     if res.isError():
-                        self._err("Modbus %s:%s: ошибка записи %s@%s: %s" % (self.host, self.port, kind, addr, res))
+                        self._err("Modbus %s:%s: ошибка записи %s@%s: %s" % (self.host, self.port, "coil" if kind == "coil" else "holding", addr, res))
                         return False
                 self.ok, self.last_error, self.last_ok_ts = True, "", time.time()
                 return True
@@ -93,6 +143,15 @@ class ModbusLink:
                 self._err("Modbus %s:%s: исключение: %s" % (self.host, self.port, e))
                 self._drop()
                 return False
+
+    def _single(self, addr: int, vals: list, kw: dict) -> bool:
+        """Запасной путь: регистры пачки по одному (функция 06). True — все прошли."""
+        for i, v in enumerate(vals):
+            res = self._client.write_register(addr + i, int(v) & 0xFFFF, **kw)
+            self.requests += 1
+            if res.isError():
+                return False
+        return True
 
     def read_holding(self, address: int) -> tuple[bool, str]:
         """Только чтение одного регистра — проверка связи без записи в ПЛК. (успех, значение или текст ошибки)."""

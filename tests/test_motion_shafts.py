@@ -144,6 +144,15 @@ class FakeClient:
                 return False
         return R()
 
+    def write_registers(self, address, values, device_id=1):          # функция 16: в журнал по регистру
+        for i, v in enumerate(values):
+            self.write_register(address + i, v)
+
+        class R:
+            def isError(self):
+                return False
+        return R()
+
 
 def runner(cfg, st):
     clients = []

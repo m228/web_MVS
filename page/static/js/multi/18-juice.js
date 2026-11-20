@@ -10,7 +10,7 @@ const JC_BASE_STEPS = [[1, '1 мин'], [2, '2 мин'], [5, '5 мин'], [10, '
 const JC_SEC_KEY = 'mvs_jc_sec';
 const jcLoadSec = () => { try { const v = Number(localStorage.getItem(JC_SEC_KEY)); if (JC_SEC.some(([x]) => x === v)) return v; } catch (e) { /* не критично */ } return 30; };
 const JC = { sec: jcLoadSec(), msg: {}, hist: {}, stats: {}, at: 0, busy: false };
-const JC_SMOOTH_S = 30, JC_HOLD_S = 45;                         // сглаживание цвета (медиана, с) и выдержка смены состояния (с) по умолчанию, как в сервисе
+const JC_SMOOTH_S = 30, JC_HOLD_S = 20;                         // сглаживание цвета (медиана, с) и выдержка смены состояния (с) по умолчанию, как в сервисе
 const JC_T_TURB = 12, JC_T_DIRTY = 70;                       // пороги по умолчанию (как в сервисе): мутный с 12, грязный с 70 из 100
 const JC_SPREAD_WARN = 6;                                    // разброс цвета за период (Lab) больше — цвет плавал, эталон шаткий
 
@@ -97,7 +97,7 @@ function jcCamHtml(cam, all) {
       <select data-md="jc" data-f="sec">${mdSel(JC_SEC, JC.sec)}</select>
       <span class="md-lbl" title="С какой мутности сок считается мутным (оранжевый). Ниже — прозрачный (зелёный). Общий для всех стаканов камеры">мутный от</span>${mdNum(`data-md="jc" data-cam="${escapeHtml(cam.id)}" data-f="tturb"`, jcT(zs[0], 't_turb', JC_T_TURB), 'min="0" max="99" step="1"')}
       <span class="md-lbl" title="С какой мутности сок считается грязным (красный). Общий для всех стаканов камеры">грязный от</span>${mdNum(`data-md="jc" data-cam="${escapeHtml(cam.id)}" data-f="tdirty"`, jcT(zs[0], 't_dirty', JC_T_DIRTY), 'min="1" max="100" step="1"')}
-      <span class="md-lbl" title="Цвет сглаживается медианой за столько секунд: пар над стаканом, блик, рука не дёргают значение. 0 — почти без сглаживания. Больше — спокойнее, но медленнее реакция">сглаживание, с</span>${mdNum(`data-md="jc" data-cam="${escapeHtml(cam.id)}" data-f="tsmooth"`, jcT(zs[0], 'smooth_s', JC_SMOOTH_S), 'min="0" max="600" step="5"')}
+      <span class="md-lbl" title="Инерция значения. Цвет подтягивается к измеренному медленно (за столько секунд), а если отклонение держится — разгоняется. Пар над стаканом, блик, рука не успевают его сдвинуть, настоящее изменение подхватывается за это время. 0 — без сглаживания">сглаживание, с</span>${mdNum(`data-md="jc" data-cam="${escapeHtml(cam.id)}" data-f="tsmooth"`, jcT(zs[0], 'smooth_s', JC_SMOOTH_S), 'min="0" max="600" step="5"')}
       <span class="md-lbl" title="Состояние (прозрачный / мутный / грязный) меняется, только если новое держится столько секунд подряд. 0 — сразу">держать, с</span>${mdNum(`data-md="jc" data-cam="${escapeHtml(cam.id)}" data-f="thold"`, jcT(zs[0], 'hold_s', JC_HOLD_S), 'min="0" max="3600" step="5"')}
       <button type="button" class="btn-secondary md-x" data-md="jc" data-cam="${escapeHtml(cam.id)}" data-f="cleanall" title="Налейте во все стаканы чистый сок, подождите и нажмите: цвет каждого стакана запомнится как «чистый» (0)">Все стаканы — чистые</button>
       <span class="net-hint" id="jc-m-${escapeHtml(cam.id)}">${escapeHtml(JC.msg[cam.id] || '')}</span></div>` +

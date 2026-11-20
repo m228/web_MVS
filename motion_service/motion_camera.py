@@ -105,7 +105,15 @@ def cfg_hw(cfg: dict) -> str:
 
 
 OPEN_GAP_S = 2.0
-PROC_TOLERANCE = 0.85            # кадр берём, если с прошлого прошло ≥ 85 % интервала proc_fps: джиттер камеры иначе «съедает» каждый второй (8 к/с и proc_fps 4 давали ≈3)
+LAG_CATCHUP_S = 0.5              # очередь кадров длиннее — старые кадры выбрасываем (grab без обработки), пока не догоним
+LAG_MAX_SKIP_S = 3.0             # но хоть один кадр в столько секунд обрабатываем: камера не должна выглядеть мёртвой, если декодер не догоняет
+LAG_BASE_WIN_S = 600.0           # «нормальную» задержку потока ищем как минимум за столько секунд (уход часов камеры не копится)
+LAG_BUCKET_S = 30.0              # минимум держим по корзинам такой длины
+LAG_GOOD_N = 5                   # столько кадров подряд время потока должно расти, прежде чем ему верим (файл/заглушка его не дают)
+LAG_JUMP_BACK_MS = 1000.0        # время потока ушло назад больше чем на это, или вперёд больше чем на LAG_JUMP_FWD_MS, — поток начался заново
+LAG_JUMP_FWD_MS = 10000.0
+LAG_MAX_WIN_S = 60.0             # «макс очереди» на панели — за последнюю минуту
+PROC_TOLERANCE = 0.85           # кадр берём, если с прошлого прошло ≥ 85 % интервала proc_fps: джиттер камеры иначе «съедает» каждый второй (8 к/с и proc_fps 4 давали ≈3)
 ROD_HIST_LEN = 600               # точек ряда на палку (≈ 3–5 минут при 2–3 к/с)
 FREEZE_REOPEN_S = 30.0           # картинка стоит дольше (и не меньше 2·freeze_timeout_s) — поток открываем заново, потом повторяем так же
 _open_lock = threading.Lock()
@@ -126,6 +134,64 @@ def wait_open_turn(gap: Optional[float] = None, clock=time.monotonic, sleep=time
     if wait > 0:
         sleep(wait)
     return max(wait, 0.0)
+
+
+class QueueLag:
+    """Отставание обработки от потока: на сколько секунд кадр, взятый сейчас, старше самого свежего, что уже был в этом потоке.
+
+    Время потока кадра (CAP_PROP_POS_MSEC) идёт как часы камеры. Пока кадры берутся вовремя, «часы ПК − время потока» постоянно;
+    очередь в сокете и декодере (обработка медленнее камеры, просадка процессора или диска) поднимает его на свою длину. Постоянную
+    часть (задержку камеры и кодера) мы не знаем — берём минимум за окно: отставание = текущее − минимум. Минимум держим по корзинам
+    (окно LAG_BASE_WIN_S), чтобы уход часов камеры на десятки ppm не копился. Нет времени потока (файл, заглушка: оно не растёт)
+    или оно только что началось заново — None, и вызывающий ничего не пропускает и не считает."""
+
+    def __init__(self, window_s: float = LAG_BASE_WIN_S, bucket_s: float = LAG_BUCKET_S):
+        self.window_s, self.bucket_s = window_s, bucket_s
+        self.reset()
+
+    def reset(self) -> None:
+        self._mins: deque = deque()            # [начало корзины (часы ПК), минимум «часы ПК − время потока»]
+        self._last: Optional[float] = None     # время потока прошлого кадра, мс
+        self._good = 0                         # сколько кадров подряд время потока росло
+        self.lag: Optional[float] = None
+
+    def update(self, wall: float, pos_ms: Optional[float]) -> Optional[float]:
+        """wall — часы ПК в момент grab(), pos_ms — CAP_PROP_POS_MSEC после него. -> отставание, с (≥ 0) или None."""
+        if pos_ms is None or pos_ms != pos_ms:
+            self.lag = None
+            return None
+        pos_ms = float(pos_ms)
+        last, self._last = self._last, pos_ms
+        if last is None:
+            self._good = 0
+        elif pos_ms < last - LAG_JUMP_BACK_MS or pos_ms > last + LAG_JUMP_FWD_MS:
+            self._mins.clear()                 # поток открылся заново / время потока перескочило: прежняя база не годится
+            self._good = 0
+        elif pos_ms > last:
+            self._good = min(self._good + 1, LAG_GOOD_N)
+        else:
+            self._good = 0
+        if self._good < LAG_GOOD_N:
+            self.lag = None
+            return None
+        off = wall - pos_ms / 1000.0
+        if self._mins and wall - self._mins[-1][0] < self.bucket_s:
+            if off < self._mins[-1][1]:
+                self._mins[-1][1] = off
+        else:
+            self._mins.append([wall, off])
+        while self._mins and wall - self._mins[0][0] > self.window_s + self.bucket_s:
+            self._mins.popleft()
+        self.lag = max(0.0, off - min(m[1] for m in self._mins))
+        return self.lag
+
+
+def stream_pos_ms(cap) -> Optional[float]:
+    """Время потока последнего кадра, мс (None — источник его не отдаёт)."""
+    try:
+        return float(cap.get(cv2.CAP_PROP_POS_MSEC))
+    except Exception:
+        return None
 
 
 def decoder_kind(cap) -> str:
@@ -181,7 +247,11 @@ class CameraWorker(threading.Thread):
         self._error = ""
         self._last_good = 0.0                 # когда последний раз пришёл кадр
         self._stamps: deque = deque(maxlen=12)
-        self._rod_hist: dict = {}                # зона-цикл → deque (время прихода кадра, угол, valid, coast): ряд для сравнения валов по времени съёмки
+        self._qlag = QueueLag()                # отставание обработки от потока (очередь кадров), см. QueueLag
+        self._lag_s: Optional[float] = None    # оно же на последнем обработанном кадре; None — время потока источник не отдаёт
+        self._lag_hist: deque = deque()        # (время, отставание) обработанных кадров за последнюю минуту — «макс очереди» на панели
+        self._skipped = 0                      # сколько кадров выброшено из очереди с запуска (догонялка)
+        self._rod_hist: dict = {}                # зона-цикл → deque (время съёмки кадра, угол, valid, coast): ряд для сравнения валов по времени съёмки
         self._history: deque = deque(maxlen=HISTORY_LEN)
         self._long: deque = deque(maxlen=LONG_LEN)
         self._bucket: Optional[list] = None   # [ts, {зона: (flow, diff, bit)}, ok] — набирающаяся секунда длинной истории
@@ -251,6 +321,7 @@ class CameraWorker(threading.Thread):
                 fps = (len(self._stamps) - 1) / (self._stamps[-1] - self._stamps[0])
             return {"id": self.id, "name": self.cfg["name"], "enabled": self.cfg["enabled"], "connected": self._connected,
                     "error": self._error, "decoder": self._decoder, "fps": round(fps, 2), "age_s": round(time.time() - self._last_good, 1) if self._last_good else None,
+                    "lag_s": None if self._lag_s is None else round(self._lag_s, 2),
                     "recording": self._rec_name, "plc": dict(self.plc), "result": st,
                     "webview": self._web.status() if self._web else None}
 
@@ -263,7 +334,9 @@ class CameraWorker(threading.Thread):
         """Как идут обработанные кадры: частота, шаг (p50/p95, мс) и поправка задержки камеры — для панели «Время кадров»."""
         with self._lock:
             st = list(self._stamps)
-        out = {"fps": None, "dt_p50_ms": None, "dt_p95_ms": None, "latency_s": float(self.cfg.get("latency_s", 0.0))}
+            lag, lags, skipped = self._lag_s, [v for _, v in self._lag_hist], self._skipped
+        out = {"fps": None, "dt_p50_ms": None, "dt_p95_ms": None, "latency_s": float(self.cfg.get("latency_s", 0.0)),
+               "lag_s": None if lag is None else round(lag, 2), "lag_max_s": round(max(lags), 2) if lags else None, "skipped": skipped}
         if len(st) >= 3 and st[-1] > st[0]:
             dts = sorted(b - a for a, b in zip(st, st[1:]))
             out["fps"] = round((len(st) - 1) / (st[-1] - st[0]), 2)
@@ -684,13 +757,21 @@ class CameraWorker(threading.Thread):
                 self._frame = frame
             if count_frame:
                 self._stamps.append(state["ts"])
+                lag = self._lag_s or 0.0                  # время съёмки = когда взяли − сколько кадр простоял в очереди (время потока монотонно)
+                if self._lag_s is not None:
+                    self._lag_hist.append((state["ts"], self._lag_s))
+                while self._lag_hist and state["ts"] - self._lag_hist[0][0] > LAG_MAX_WIN_S:
+                    self._lag_hist.popleft()
                 if state["alive"]:
                     for z in state["zones"]:
                         if z.get("type") == "cycle":
                             h = self._rod_hist.get(z["id"])
                             if h is None:
                                 h = self._rod_hist[z["id"]] = deque(maxlen=ROD_HIST_LEN)
-                            h.append((state["ts"], z["angle"], bool(z["valid"]), bool(z["coast"])))
+                            t_cap = state["ts"] - lag
+                            if h and t_cap <= h[-1][0]:        # минимум базы мог сдвинуться больше шага кадра: ряд для интерполяции обязан идти строго вперёд
+                                t_cap = h[-1][0] + 1e-3
+                            h.append((t_cap, z["angle"], bool(z["valid"]), bool(z["coast"])))
                 zones = {z["id"]: (z["flow"], z["diff"], z["bit"]) for z in state["zones"]}
                 self._push_history(state["ts"], zones, 1 if state["alive"] else 0)
                 if state["alive"]:
@@ -804,6 +885,8 @@ class CameraWorker(threading.Thread):
                     continue
                 self._note_conn(True, "")
                 self._decoder = decoder_kind(cap)
+                self._qlag.reset()                 # поток открыт заново: время потока и очередь начинаются с нуля
+                self._lag_s = None
                 got_frame = False
                 if self._last_good and time.time() - self._last_good < timeout:
                     self.engine.buf.clear()    # короткий обрыв (короче freeze_timeout_s): сравнивать со старым кадром нельзя, а биты зон держим
@@ -831,8 +914,17 @@ class CameraWorker(threading.Thread):
                 next_t += file_dt
                 self._halt.wait(max(0.0, next_t - time.time()))
             now = time.time()
+            # Очередь кадров: цикл медленнее камеры (или просел процессор/диск) — кадры копятся в сокете и декодере, и обрабатываются
+            # ВСЕ по порядку, ничего не пропуская: отставание растёт и тает лишь на запасе скорости (минуты). Берём время потока кадра и,
+            # пока очередь длиннее LAG_CATCHUP_S, выбрасываем кадры без разбора: grab() дёшев, очередь уходит за секунду-две.
+            lag = None if file_src else self._qlag.update(now, stream_pos_ms(cap))
+            if lag is not None and lag > LAG_CATCHUP_S and now - last_proc < LAG_MAX_SKIP_S:
+                self._skipped += 1
+                self._last_good = now
+                continue
             if now - last_proc < interval * PROC_TOLERANCE:
                 continue
+            self._lag_s = lag
             t_dec = time.perf_counter()
             ok, frame = cap.retrieve()
             if not ok or frame is None:

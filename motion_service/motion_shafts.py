@@ -51,6 +51,7 @@ ALIGN_MARGIN_S = 0.6          # запас назад от «сейчас»: к 
 MAX_GAP_S = 1.5               # соседние кадры ряда дальше друг от друга — интерполировать нельзя
 SKEW_LEN = 300                # секунд истории «разъезда кадров» пары для панели
 DEFAULT_RPM = 0.758           # когда скорость вала неизвестна (для перевода секунд в градусы)
+STALE_LAG_S = 1.0             # очередь кадров камеры длиннее (и камеры разные) — Δ углов пары недостоверна: тревогу не двигаем, самоподстройку не учим
 
 
 def shaft_short(sid: str) -> str:
@@ -249,14 +250,18 @@ class ShaftRunner(threading.Thread):
             for pid, p in snap["pairs"].items():
                 lp = last.get(pid) or {}
                 p["angle_diff_raw"] = p["angle_diff"]
+                p["stale"] = bool(p["valid"] and self._stale(p, snap, states))
                 if p["valid"]:
                     p["angle_diff"] = round(ang_diff(p["angle_diff"], float(lp.get("corr") or 0.0)), 2)
-                self._average(pid, p, sc.get("avg_s", 4.0), now, self._avg_live)
+                if p["stale"]:
+                    p["angle_diff_inst"] = p["angle_diff"]
+                else:
+                    self._average(pid, p, sc.get("avg_s", 4.0), now, self._avg_live)
                 p["alarm_angle"] = lp.get("alarm_angle", 0)
                 p["alarm_rpm"] = lp.get("alarm_rpm", 0)
         return {"ts": now,
                 "shafts": {sid: {k: v[k] for k in ("id", "assigned", "valid", "angle", "coast", "src")} for sid, v in snap["shafts"].items()},
-                "pairs": {pid: {k: v.get(k) for k in ("id", "valid", "angle_diff", "angle_diff_raw", "alarm_angle", "alarm_rpm")}
+                "pairs": {pid: {k: v.get(k) for k in ("id", "valid", "angle_diff", "angle_diff_raw", "alarm_angle", "alarm_rpm", "stale")}
                           for pid, v in snap["pairs"].items()}}
 
     def history(self, pair: str, window_s: float = 3600.0, points: int = 600) -> dict:
@@ -298,6 +303,20 @@ class ShaftRunner(threading.Thread):
         sy = sum(math.sin(math.radians(r[4])) for r in rows)
         out["ref_suggest"] = round(ang_diff(math.degrees(math.atan2(sy, sx)), 0.0), 2)
         return out
+
+    @staticmethod
+    def _stale(p: dict, snap: dict, states: dict) -> bool:
+        """Углы пары сняты с разных камер, и у какой-то кадры стоят в очереди дольше STALE_LAG_S: разность — это задержка, а не вал.
+        У пары на одной камере (оба вала из одного кадра) очередь ничего не искажает."""
+        cams = {snap["shafts"][p["a"]]["camera"], snap["shafts"][p["b"]]["camera"]} - {None}
+        if len(cams) < 2:
+            return False
+        return any(((states.get(c) or {}).get("lag_s") or 0.0) > STALE_LAG_S for c in cams)
+
+    def _alarm_keep(self, pid: str, kind: str) -> int:
+        """Тревога как есть: ни включить, ни выключить, ни накопить счёт (как в удержании)."""
+        cur = self._hys.get((pid, kind))
+        return int(cur[1].state) if cur else 0
 
     def _alarm(self, pid: str, kind: str, tol: float, value: Optional[float]) -> int:
         """Тревога по допуску: tol 0 — выкл; нет данных — сброс (нечего судить)."""
@@ -388,23 +407,28 @@ class ShaftRunner(threading.Thread):
         for pid, p in snap["pairs"].items():
             sa, sb = snap["shafts"][p["a"]], snap["shafts"][p["b"]]
             lrn = self._learner(pid, sc["pairs"][pid])
+            stale = bool(p["valid"] and self._stale(p, snap, states))
+            p["stale"] = stale
             p["angle_diff_raw"] = p["angle_diff"]                  # до самоподстройки
             p["angle_diff_inst"] = None
             corr = 0.0
             if lrn:
-                if p["valid"] and not (sa["coast"] or sb["coast"]) and sa["moving"] is not False and sb["moving"] is not False:
-                    lrn.add(now, sa["angle"], p["angle_diff"])     # учим только когда оба вала видны и крутятся
+                if p["valid"] and not (sa["coast"] or sb["coast"] or stale) and sa["moving"] is not False and sb["moving"] is not False:
+                    lrn.add(now, sa["angle"], p["angle_diff"])     # учим только когда оба вала видны и крутятся (и кадры камер не в очереди)
                 lrn.step(now)
                 if p["valid"]:
                     corr = lrn.corr(sa["angle"])
                     p["angle_diff"] = round(ang_diff(p["angle_diff"], corr), 2)
             p["corr"] = round(corr, 2)
-            self._average(pid, p, sc.get("avg_s", 4.0), now)
+            if stale:
+                p["angle_diff_inst"] = p["angle_diff"]             # в среднее очередь не кладём: оно потом держало бы задержку ещё avg_s секунд
+            else:
+                self._average(pid, p, sc.get("avg_s", 4.0), now)
             p["learn"] = lrn.info() if lrn else None
-            p["alarm_angle"] = self._alarm(pid, "angle", p["tol_angle"], p["angle_diff"])
+            p["alarm_angle"] = self._alarm_keep(pid, "angle") if stale else self._alarm(pid, "angle", p["tol_angle"], p["angle_diff"])
             p["alarm_rpm"] = self._alarm(pid, "rpm", p["tol_rpm"], p["rpm_diff"])
             if p["valid"]:
-                coast = bool(sa["coast"] or sb["coast"])
+                coast = bool(sa["coast"] or sb["coast"] or stale)
                 self.hist[pid].append((now, p["angle_diff"], p["rpm_diff"], coast, p["raw"], p["angle_diff_raw"], p["corr"]))
         self._learn_save(now)
         snap["timing"] = self._timing(cfg, states, snap, at is not None, now, t_cmp)

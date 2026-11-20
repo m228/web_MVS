@@ -505,13 +505,14 @@ function mdShaftsTabHtml() {
 function mdShTimingHtml(sc, cams) {
   const rows = cams.filter((c) => c.row).map((c) => `<tr><td>${escapeHtml(c.name)}${mdIpTag(c.url)}</td><td class="md-num" id="md-sht-fps-${escapeHtml(c.id)}">–</td>` +
     `<td class="md-num" id="md-sht-dt-${escapeHtml(c.id)}">–</td>` +
+    `<td class="md-num" id="md-sht-q-${escapeHtml(c.id)}">–</td>` +
     `<td>${mdNum(`data-md="c" data-cam="${escapeHtml(c.id)}" data-f="latency_s"`, c.latency_s || 0, 'min="0" max="15" step="0.05"')}</td></tr>`).join('');
   const align = sc.align !== false;
   const avg = sc.avg_s == null ? 4 : sc.avg_s;
   return `<div class="md-zone__row md-mx-set">
       <label class="switch-toggle md-sw md-sw--sm" title="Сравнивать углы двух камер на ОДИН момент времени съёмки (интерполяция между кадрами) вместо «последнего кадра каждой камеры». Результат запаздывает на задержку камер + 0,6 с — для тревоги это не важно"><span class="switch"><input type="checkbox" data-md="sh" data-id="_" data-f="align"${align ? ' checked' : ''} /><span class="switch-track"></span></span><span class="md-lbl md-lbl--on">по времени съёмки</span></label>
       <span class="md-lbl" title="Δ угла каждой пары усредняется за это окно: шум распознавания ≈ ±1° сглаживается, настоящий сдвиг не прячется. Тревога и запись в ПЛК идут по среднему. 0 — без усреднения">усреднение Δ, с</span>${mdNum('data-md="sh" data-id="_" data-f="avg_s"', avg, 'min="0" max="60" step="0.5"')}</div>
-    <table class="md-table"><thead><tr><th>Камера</th><th>кадров/с</th><th>шаг кадров p50 / p95, мс</th><th title="Через сколько секунд после съёмки кадр приходит в сервис. Меряется tools\cam_latency_check.py">задержка кадра, с</th></tr></thead><tbody>${rows || '<tr><td colspan="4" class="net-hint">Задайте ряд камеры</td></tr>'}</tbody></table>
+    <table class="md-table"><thead><tr><th>Камера</th><th>кадров/с</th><th>шаг кадров p50 / p95, мс</th><th title="Сколько секунд кадр простоял в очереди: обработка не успевала за камерой (камера даёт кадров больше, чем сервис разбирает). Сервис сам выбрасывает кадры из очереди, пока она длиннее 0,5 с. Дольше 1 с — Δ между камерами не доверяем: тревога стоит как есть, самоподстройка не учится. Растёт или часто красная — снизьте «Кадров/с в анализ» (вал ≈ 4°/с, хватает 4–5)">очередь, с (сейчас / макс за мин.)</th><th title="Через сколько секунд после съёмки кадр приходит в сервис. Меряется tools\cam_latency_check.py">задержка кадра, с</th></tr></thead><tbody>${rows || '<tr><td colspan="5" class="net-hint">Задайте ряд камеры</td></tr>'}</tbody></table>
     <div class="net-hint" id="md-sht-lag"></div><div class="md-zstat" id="md-sht-pairs"></div>`;
 }
 
@@ -524,6 +525,12 @@ function mdPaintShTiming() {
     const f = mdEl('md-sht-fps-' + cid), d = mdEl('md-sht-dt-' + cid);
     if (f) f.textContent = c.fps == null ? '–' : c.fps.toFixed(1);
     if (d) d.textContent = c.dt_p50_ms == null ? '–' : c.dt_p50_ms + ' / ' + c.dt_p95_ms;
+    const q = mdEl('md-sht-q-' + cid);
+    if (q) {                                                  // очередь кадров: null — источник не отдаёт время потока (файл) и очередь не меряется
+      const mx = c.lag_max_s == null ? 0 : c.lag_max_s;
+      q.textContent = c.lag_s == null ? '–' : c.lag_s.toFixed(2) + ' / ' + mx.toFixed(2) + (c.skipped ? ' · выброшено ' + c.skipped : '');
+      q.style.color = mx > 1 ? '#f87171' : mx > 0.5 ? '#f59e0b' : '';
+    }
   });
   const lag = mdEl('md-sht-lag');
   if (lag) lag.textContent = t.aligned ? 'Сравнение на момент «сейчас − ' + t.compare_lag_s + ' с»: кадры обеих камер выровнены по времени съёмки.' : 'Кадры сравниваются «последний с каждой камеры» (выравнивание выключено или ряды ещё копятся).';

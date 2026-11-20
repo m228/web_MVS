@@ -38,8 +38,14 @@ def rows_for(state: dict, zones_cfg: list) -> list:
         if z.get("type") != "clarity" or z["id"] not in label:
             continue
         lab = z.get("lab") or [None, None, None]
-        out.append([z["id"], z.get("name", z["id"]), lab[0], lab[1], lab[2], z.get("turb", ""), z.get("level_name", ""), int(bool(z.get("valid"))), label[z["id"]]])
+        ok = bool(z.get("valid"))                          # нет эталонов / цвет не на шкале: мутность и состояние пустые (не «0 — чистый»), цвет всё равно пишем
+        out.append([z["id"], z.get("name", z["id"]), lab[0], lab[1], lab[2], z.get("turb", "") if ok else "", z.get("level_name", "") if ok else "", int(ok), label[z["id"]]])
     return out
+
+
+def worth_saving(rows: list) -> bool:
+    """Снимок нужен, если хоть у одного стакана есть цвет — даже без эталонов: база для обучения и нужна, чтобы эталоны потом подобрать по данным."""
+    return any(r[2] not in (None, "") for r in rows)
 
 
 def save(data_dir: Path, cam_id: str, ts: float, frame: Optional[np.ndarray], rows: list) -> Optional[Path]:

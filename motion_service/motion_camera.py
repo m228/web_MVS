@@ -685,7 +685,7 @@ class CameraWorker(threading.Thread):
         if ts - self._juice_last < jb["every_min"] * 60 - 1:
             return
         rows = juice_base.rows_for(state, self.cfg["zones"])
-        if not any(r[7] for r in rows):                      # ни один стакан не дал значения — снимок бесполезен
+        if not juice_base.worth_saving(rows):                # цвета нет ни у одного стакана (нет кадра) — снимок бесполезен; без эталонов цвет есть, пишем
             return
         self._juice_last = ts
         if juice_base.save(self.data_dir, self.id, ts, frame, rows) and ts - self._juice_purged > 86400:

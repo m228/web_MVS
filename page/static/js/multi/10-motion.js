@@ -293,6 +293,7 @@ function drawLevelOnTile(ctx, cam, g, st, problem, opts) {
 // нет значения — серый и «—». Состояние считает сервис по порогам зоны (t_turb / t_dirty), здесь только показ.
 const MV_CLARITY_COLORS = ['#22c55e', '#f59e0b', '#ef4444'];
 const MV_CLARITY_WORDS = ['прозрачный', 'мутный', 'грязный'];
+const MV_CLARITY_SHORT = ['чист', 'мутн', 'гряз'];                // короткие слова для подписи на кадре
 const mvClarityLevel = (lz) => Math.max(0, Math.min(2, Number(lz && lz.level) || 0));
 const mvClarityColor = (lz) => MV_CLARITY_COLORS[mvClarityLevel(lz)];
 function drawClarityOnTile(ctx, z, cam, g, lz, problem) {
@@ -304,13 +305,13 @@ function drawClarityOnTile(ctx, z, cam, g, lz, problem) {
   ctx.lineWidth = 3; ctx.strokeStyle = col;
   ctx.beginPath(); ctx.arc(cx, cy, r, 0, 7); ctx.stroke();
   if (ok) { ctx.globalAlpha = 0.22; ctx.fillStyle = col; ctx.fill(); ctx.globalAlpha = 1; }
-  const label = z.name + '  ' + (ok ? 'мут ' + Math.round(lz.turb) : '—');
-  ctx.font = 'bold 13px sans-serif'; ctx.textAlign = 'center';
-  ctx.lineWidth = 3; ctx.strokeStyle = '#000'; ctx.strokeText(label, cx, cy - r - 6);
-  ctx.fillStyle = '#fff'; ctx.fillText(label, cx, cy - r - 6);
-  if (lz && lz.lab) {                                          // под кружком: яркость L (и слово состояния, если значение достоверно), цветом состояния
-    const txt = 'L ' + Math.round(lz.lab[0]) + (ok ? ' · ' + MV_CLARITY_WORDS[mvClarityLevel(lz)] : '');
-    ctx.strokeText(txt, cx, cy + r + 15); ctx.fillStyle = ok ? col : '#fff'; ctx.fillText(txt, cx, cy + r + 15);
+  ctx.font = 'bold 13px sans-serif'; ctx.textAlign = 'center'; ctx.lineWidth = 3; ctx.strokeStyle = '#000';
+  const put = (t, y, c) => { ctx.strokeText(t, cx, y); ctx.fillStyle = c; ctx.fillText(t, cx, y); };
+  put(ok ? 'мут ' + Math.round(lz.turb) : '—', cy - r - 6, '#fff');            // над кружком в два ряда: название, под ним мутность
+  put(z.name, cy - r - 21, '#fff');
+  if (lz && lz.lab) {                                          // под кружком в два ряда: яркость L, под ней короткое слово состояния (цветом состояния)
+    put('L ' + Math.round(lz.lab[0]), cy + r + 15, ok ? col : '#fff');
+    if (ok) put(MV_CLARITY_SHORT[mvClarityLevel(lz)], cy + r + 30, col);
   }
   ctx.textAlign = 'left'; ctx.lineWidth = 2;
 }

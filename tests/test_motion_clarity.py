@@ -453,7 +453,7 @@ def _smooth_cfg(**over):
 
 def test_smoothing_defaults():
     z = cam_cfg([{"id": "g1", "type": "clarity", "center": [80, 180], "radius": 26}])["zones"][0]
-    assert z["smooth_s"] == 30.0 and z["hold_s"] == 45.0
+    assert z["smooth_s"] == 30.0 and z["hold_s"] == 20.0
 
 
 def test_median_window_ignores_short_spike():
@@ -472,3 +472,21 @@ def test_hold_delays_state_change_and_ignores_blips():
     res2 = _feed(eng2, [(CLEAN, 40), (DIRTY, 80)])                 # 20 секунд грязного — состояние сменилось, но не сразу
     lv = [l for _, l, ok in res2 if ok]
     assert lv[40] == 0 and lv[-1] == 2
+
+
+def test_long_burst_is_waited_out_then_real_change_accelerates():
+    """Пар/выброс 8 с — почти не двигает значение; настоящее изменение — сначала медленно, потом разгоняется и догоняет за ~полминуты."""
+    burst = me.CameraEngine(_smooth_cfg(smooth_s=30, hold_s=0))
+    res = _feed(burst, [(CLEAN, 120), (DIRTY, 32), (CLEAN, 120)])          # 8 секунд «грязного»
+    assert max(t for t, _, ok in res if ok) < 30
+    real = me.CameraEngine(_smooth_cfg(smooth_s=30, hold_s=0))
+    res = [t for t, _, ok in _feed(real, [(CLEAN, 480), (DIRTY, 480)]) if ok]   # 120 с чистого, затем 120 с грязного (4 кадра/с)
+    after = lambda sec: res[480 - 1 + sec * 4]                             # мутность через sec секунд после ступени (первый кадр буфер — минус 1)
+    assert after(5) < 35 and after(15) < after(30) < after(60)             # сначала медленно, потом ускоряется
+    assert after(60) > 85                                                  # и догоняет
+
+
+def test_smoothing_off_is_instant_like_before():
+    eng = me.CameraEngine(_smooth_cfg(smooth_s=0, hold_s=0))
+    res = [t for t, _, ok in _feed(eng, [(CLEAN, 20), (DIRTY, 24)]) if ok]
+    assert res[-1] > 90

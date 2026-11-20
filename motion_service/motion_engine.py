@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import copy
 import json
+import math
 import os
 import re
 import threading
@@ -44,8 +45,10 @@ CLARITY_MIN_SPAN = 3.0                    # «чистый» и «грязный
 CLARITY_T_TURB = 12.0                     # пороги по умолчанию (ролик со светом 19.11: чистые 0, мутные 1 и 5 ≈ 20–45, грязный 6 ≈ 100)
 CLARITY_T_DIRTY = 70.0
 CLARITY_HYST = 3.0
-CLARITY_SMOOTH_S = 30.0                   # окно сглаживания цвета, с (медиана: короткие выбросы — пар над стаканом, блик — не доходят до значения). 0 — старое среднее за smooth кадров
-CLARITY_HOLD_S = 45.0                     # новое состояние должно продержаться столько секунд, прежде чем сменится (0 — сразу). По ночи 19→20.11: 6100 смен за 12 ч → 160
+CLARITY_SMOOTH_S = 30.0                   # инерция цвета, с: сначала цвет подтягивается к измеренному медленно (постоянная времени S), при устойчивом отклонении разгоняется до S/10.
+                                          # Пар, блик, рука не успевают сдвинуть значение; настоящее изменение подхватывается за ~S секунд. 0 — старое среднее за smooth кадров
+CLARITY_HOLD_S = 20.0                     # новое состояние должно продержаться столько секунд, прежде чем сменится (0 — сразу)
+CLARITY_DEAD_DE = 2.0                     # отклонение цвета от сглаженного меньше этого (ΔE по Lab) — шум, на разгон не работает
 CLARITY_LEVELS = ("clear", "turbid", "dirty")   # прозрачный / мутный / грязный
 CLARITY_KEEP_S = 600                    # сколько секунд сырых цветов храним для калибровки («чистый»/«грязный» по последним N секундам)
 METRICS = ("flow", "diff")
@@ -721,7 +724,8 @@ class ClarityRT:
         else:
             self.dirty = np.array(zcfg["dirty"], np.float64) if zcfg["dirty"] else None
         self._hist: deque = deque(maxlen=zcfg["smooth"])
-        self._th: deque = deque()                           # (время, цвет) за smooth_s секунд — для медианы
+        self._th: deque = deque()                           # (время, цвет) за smooth_s / 3 секунд — для медианы-фильтра выбросов
+        self._y: Optional[np.ndarray] = None                # сглаженный цвет (подтягивается к медиане с разгоном)
         self._samples: deque = deque()                      # (время, L, a, b) сырые, за последние CLARITY_KEEP_S секунд — для калибровки
         self._lock = threading.Lock()
         self.reset()
@@ -729,6 +733,10 @@ class ClarityRT:
     def reset(self):
         self._hist.clear()
         self._th.clear()
+        self._y = None
+        self._last_t = 0.0
+        self._persist = 0.0                                 # сколько секунд подряд цвет уходит в одну сторону — чем дольше, тем быстрее подгонка
+        self._dprev = None
         self._cand = None                                   # состояние-кандидат и с какого момента оно держится (выдержка hold_s)
         self._cand_t = 0.0
         self.lab: Optional[np.ndarray] = None
@@ -740,16 +748,32 @@ class ClarityRT:
         self.level = 0                                      # 0 прозрачный, 1 мутный, 2 грязный (по порогам t_turb / t_dirty с гистерезисом)
 
     def _smooth(self, med: np.ndarray, now: float) -> np.ndarray:
-        """Цвет кадра → сглаженный. smooth_s > 0: медиана по каналам за последние smooth_s секунд (выбросы короче половины окна не проходят);
-        0 — прежнее среднее за smooth кадров."""
-        ss = self.cfg["smooth_s"]
-        if ss > 0:
-            self._th.append((now, med))
-            while len(self._th) > 1 and now - self._th[0][0] > ss:
-                self._th.popleft()
-            return np.median(np.array([c for _, c in self._th]), axis=0)
-        self._hist.append(med)
-        return np.mean(self._hist, axis=0)
+        """Цвет кадра → сглаженный. smooth_s = S > 0: медиана за S/3 секунд (отсекает короткие выбросы), затем цвет подтягивается к ней
+        с постоянной времени S; если отклонение держится в одну сторону, постоянная времени падает до S/10 (разгон за ~S секунд).
+        Пар на 5–10 с почти не двигает значение, а настоящее изменение проходит за ~S секунд. S = 0 — прежнее среднее за smooth кадров."""
+        S = self.cfg["smooth_s"]
+        if S <= 0:
+            self._hist.append(med)
+            return np.mean(self._hist, axis=0)
+        self._th.append((now, med))
+        while len(self._th) > 1 and now - self._th[0][0] > S / 3.0:
+            self._th.popleft()
+        target = np.median(np.array([c for _, c in self._th]), axis=0)
+        if self._y is None or now - self._last_t > S:        # первый кадр или долгий перерыв — стартуем с измеренного
+            self._y, self._last_t, self._persist, self._dprev = target.copy(), now, 0.0, None
+            return self._y
+        dt = max(0.0, now - self._last_t)
+        self._last_t = now
+        d = target - self._y
+        if float(np.linalg.norm(d)) > CLARITY_DEAD_DE:
+            same = self._dprev is not None and float(d @ self._dprev) > 0
+            self._persist = self._persist + dt if same else 0.0
+            self._dprev = d
+        else:
+            self._persist = max(0.0, self._persist - 2.0 * dt)
+        tau = S - (S - S / 10.0) * min(1.0, self._persist / S)
+        self._y = self._y + (1.0 - math.exp(-dt / tau)) * d
+        return self._y
 
     def _set_level(self, now: float = 0.0):
         """Состояние по порогам. Гистерезис: вверх — сразу при пороге, вниз — только когда мутность ушла ниже порога на hyst пунктов.

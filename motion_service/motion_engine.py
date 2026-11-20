@@ -523,6 +523,7 @@ def normalize_camera(c: dict) -> dict:
         "hw_accel": hw,
         "substream": bool(c.get("substream", False)),
         "row": row,
+        "clarity_clean": _lab3(c.get("clarity_clean"), "камера %s.clarity_clean" % cid),    # общий «чистый» камеры: для стаканов, у которых своего «чистого» нет
         "clarity_shift": _lab3(c.get("clarity_shift"), "камера %s.clarity_shift" % cid, shift=True),    # общий сдвиг «грязного» от «чистого» (зоны прозрачности с dirty_mode=shared)
         "juice_base": _juice_base(c.get("juice_base"), "камера %s.juice_base" % cid),
         "proc_fps": _num(c.get("proc_fps", 3), "камера %s.proc_fps" % cid, 0.2, 30),
@@ -683,7 +684,7 @@ class ClarityRT:
     (дальше `off_max` его длин в сторону: рука, чужой предмет, лампа) — valid = False, turb держит последнее хорошее значение.
     «Грязный» бывает общий (dirty_mode = shared: clean этой зоны + сдвиг камеры clarity_shift) или свой (own)."""
 
-    def __init__(self, zcfg: dict, frame_size, cur_wh, shift=None):
+    def __init__(self, zcfg: dict, frame_size, cur_wh, shift=None, base_clean=None):
         self.cfg = zcfg
         self.id, self.name = zcfg["id"], zcfg["name"]
         W, H = cur_wh
@@ -697,7 +698,9 @@ class ClarityRT:
         yy, xx = np.ogrid[y0:y1, x0:x1]
         self.mask = ((xx - cx) ** 2 + (yy - cy) ** 2) <= rc * rc if (x1 > x0 and y1 > y0) else np.zeros((0, 0), bool)
         self.geom_ok = bool(self.mask.sum() >= 9)           # круг целиком вне кадра — считать нечего
-        self.clean = np.array(zcfg["clean"], np.float64) if zcfg["clean"] else None
+        base = zcfg["clean"] or base_clean                  # своего «чистого» нет — берём общий камеры (не требуем снимать каждый стакан)
+        self.clean = np.array(base, np.float64) if base else None
+        self.clean_default = bool(not zcfg["clean"] and base_clean)
         if zcfg["dirty_mode"] == "shared":
             self.dirty = (self.clean + np.array(shift, np.float64)) if (self.clean is not None and shift) else None
         else:
@@ -1386,8 +1389,12 @@ class CameraEngine:
         self.frame_wh = (w, h)
         self.zones = [ZoneRT(z, self.cfg["frame_size"], (w, h)) for z in self.cfg["zones"] if z["enabled"] and z["type"] not in ("cycle", "level", "clarity")]
         self.cycles = {z["id"]: CycleRT(z, self.cfg["frame_size"], (w, h)) for z in self.cfg["zones"] if z["enabled"] and z["type"] == "cycle"}
-        self.clarity = {z["id"]: ClarityRT(z, self.cfg["frame_size"], (w, h), self.cfg.get("clarity_shift"))
-                        for z in self.cfg["zones"] if z["enabled"] and z["type"] == "clarity"}
+        cz = [z for z in self.cfg["zones"] if z["enabled"] and z["type"] == "clarity"]
+        base = self.cfg.get("clarity_clean")
+        if base is None:                                    # общего нет — медиана «чистых» других стаканов (снятых хотя бы у одного)
+            own = [z["clean"] for z in cz if z["clean"]]
+            base = [round(float(np.median([c[k] for c in own])), 2) for k in range(3)] if own else None
+        self.clarity = {z["id"]: ClarityRT(z, self.cfg["frame_size"], (w, h), self.cfg.get("clarity_shift"), base) for z in cz}
         for m in self.mirrors.values():
             m.reset()
 
@@ -1526,7 +1533,8 @@ class CameraEngine:
                 "bit": int(ok), "flow": turb, "diff": round(lab[0], 1) if lab else 0.0, "value": turb, "on": 0.0, "off": 0.0,
                 "turb": turb, "level": (c.level if c else 0), "level_name": (CLARITY_LEVELS[c.level] if c else "clear"),
                 "raw": round(c.raw, 1) if c else 0.0, "off_axis": round(c.off, 2) if c else 0.0, "lab": lab,
-                "valid": ok, "reason": reason, "calibrated": bool(c and c.clean is not None and c.dirty is not None)}
+                "valid": ok, "reason": reason, "calibrated": bool(c and c.clean is not None and c.dirty is not None),
+                "ref_default": bool(c and c.clean_default)}
 
     def clarity_sample(self, zone_ids, seconds: float) -> dict:
         """Эталон цвета по последним `seconds` секундам для зон-прозрачности: {id: {lab, n, spread}} или {id: {error}}. zone_ids пуст — все."""

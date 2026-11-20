@@ -357,3 +357,42 @@ def test_clarity_step_records_perf():
     run(me.CameraEngine(cam_cfg(zs)), frame({CENTERS[0]: CLEAN}), n=3)
     s = PERF.snapshot()["juice:juice"]
     assert s["of"] == len(CENTERS) and s["n"] >= 1
+
+
+# ───────────── общий «чистый» камеры: не снимать каждый стакан ─────────────
+def test_camera_clean_is_normalized():
+    assert cam_cfg(clarity_clean=[19, -5, 0])["clarity_clean"] == [19.0, -5.0, 0.0]
+    assert cam_cfg()["clarity_clean"] is None
+    with pytest.raises(ValueError):
+        cam_cfg(clarity_clean=[1, 2])
+
+
+def test_zone_without_own_clean_uses_camera_clean_and_shift():
+    zs, dirty_lab, clean_lab = calibrated_cfg()
+    shift = [round(d - c, 2) for d, c in zip(dirty_lab, clean_lab)]
+    for z in zs:
+        z["clean"] = None                                   # ни у одного стакана своего «чистого»
+    eng = me.CameraEngine(cam_cfg(zs, clarity_clean=clean_lab, clarity_shift=shift))
+    st = run(eng, frame({CENTERS[0]: CLEAN, CENTERS[1]: blend(0.5), CENTERS[2]: DIRTY}))
+    a, b, c = zone(st, "g1"), zone(st, "g2"), zone(st, "g3")
+    assert a["valid"] and a["ref_default"] and a["turb"] < 5 and a["level"] == 0
+    assert b["valid"] and 30 < b["turb"] < 70 and b["level"] == 1
+    assert c["valid"] and c["turb"] > 90 and c["level"] == 2
+
+
+def test_own_clean_wins_over_camera_clean():
+    zs, _, clean_lab = calibrated_cfg(zones(dirty_mode="own"))
+    st = run(me.CameraEngine(cam_cfg(zs, clarity_clean=[90, 0, 0])), frame({CENTERS[0]: CLEAN}))
+    z = zone(st, "g1")
+    assert z["ref_default"] is False and z["calibrated"] is True
+
+
+def test_no_camera_clean_falls_back_to_median_of_own_cleans():
+    zs, dirty_lab, clean_lab = calibrated_cfg()
+    shift = [round(d - c, 2) for d, c in zip(dirty_lab, clean_lab)]
+    for z in zs[3:]:
+        z["clean"] = None                                   # «чистый» снят у первых трёх, у остальных нет, общего камеры тоже нет
+    st = run(me.CameraEngine(cam_cfg(zs, clarity_shift=shift)), frame({CENTERS[5]: DIRTY, CENTERS[6]: CLEAN}))
+    d, c = zone(st, "g6"), zone(st, "g7")
+    assert d["valid"] and d["ref_default"] and d["level"] == 2
+    assert c["valid"] and c["level"] == 0

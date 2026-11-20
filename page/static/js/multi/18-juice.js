@@ -46,8 +46,15 @@ function jcMarkSave(m, cam, fw, fh) {
 }
 
 // ---- вкладка ----
-const jcHasClean = (z) => Array.isArray(z.clean);
-const jcHasDirty = (cam, z) => (z.dirty_mode === 'own' ? Array.isArray(z.dirty) : Array.isArray(cam.clarity_shift) && jcHasClean(z));
+// общий «чистый» камеры; нет — медиана «чистых» других стаканов (как в сервисе)
+const jcBaseClean = (cam) => {
+  if (Array.isArray(cam.clarity_clean)) return cam.clarity_clean;
+  const own = cam.zones.filter((q) => Array.isArray(q.clean)).map((q) => q.clean);
+  if (!own.length) return null;
+  return [0, 1, 2].map((k) => { const v = own.map((c) => c[k]).sort((x, y) => x - y), m = v.length >> 1; return v.length % 2 ? v[m] : (v[m - 1] + v[m]) / 2; });
+};
+const jcHasClean = (cam, z) => Array.isArray(z.clean) || !!jcBaseClean(cam);
+const jcHasDirty = (cam, z) => (z.dirty_mode === 'own' ? Array.isArray(z.dirty) : Array.isArray(cam.clarity_shift) && jcHasClean(cam, z));
 const jcMark = (ok, tip) => `<span class="jc-ok${ok ? ' is-set' : ''}" title="${escapeHtml(tip)}">${ok ? '✓' : '—'}</span>`;
 
 function jcRowHtml(cam, z) {
@@ -60,7 +67,7 @@ function jcRowHtml(cam, z) {
         <span class="jc-v" id="jc-v-${k}" title="Мутность 0–100: 0 — прозрачный, 100 — самый мутный">—</span><span class="jc-w" id="jc-w-${k}"></span><span class="jc-trk"><i id="jc-b-${k}"></i></span>
         <button type="button" class="btn-secondary md-x" ${a} data-f="del" title="Удалить стакан">✕</button></div>
       <div class="md-zone__row">
-        <button type="button" class="btn-secondary md-x" ${a} data-f="clean" title="В этом стакане сейчас чистый сок: его цвет за последние ${JC.sec} с запомнится как «чистый» (0)">чистый</button>${jcMark(jcHasClean(z), 'Цвет «чистого» сока этого стакана задан')}
+        <button type="button" class="btn-secondary md-x" ${a} data-f="clean" title="В этом стакане сейчас чистый сок: его цвет за последние ${JC.sec} с запомнится как «чистый» (0)">чистый</button>${jcMark(jcHasClean(cam, z), Array.isArray(z.clean) ? 'Цвет «чистого» сока этого стакана задан' : 'Свой «чистый» не снят — берётся общий камеры')}
         <button type="button" class="btn-secondary md-x" ${a} data-f="dirty" title="В этом стакане сейчас самый мутный сок (100). ${own ? 'Цвет запомнится как «грязный» только этого стакана' : 'Запомнится сдвиг цвета от «чистого» этого стакана — он общий для всех стаканов в режиме «общий»'}">грязный</button>${jcMark(jcHasDirty(cam, z), own ? 'Свой цвет «грязного» задан' : 'Общий сдвиг «грязного» задан, и у стакана есть «чистый»')}
         <select ${a} data-f="dmode" title="«Грязный» общий: один сдвиг цвета от «чистого» на все стаканы (мутный сок нужен лишь в одном). «Свой»: у этого стакана собственный цвет «грязного»">${mdSel([['shared', 'грязный: общий'], ['own', 'грязный: свой']], z.dirty_mode || 'shared')}</select></div>
       <div class="md-zone__row"><span class="md-lbl" title="Ваша метка этого стакана для базы: что в нём на самом деле. Пишется в index.csv вместе с цветом, потом сравним с авто-состоянием">метка для базы</span>
@@ -124,10 +131,11 @@ async function jcCalibrate(cam, ids, kind) {
       if (!z) return;
       if (!s || s.error) { bad.push(z.name + ': ' + ((s && s.error) || 'нет данных')); return; }
       if (s.spread > JC_SPREAD_WARN) shaky.push(z.name);
-      if (kind === 'clean') { z.clean = s.lab; done.push(z.name); return; }
+      if (kind === 'clean') { z.clean = s.lab; if (!Array.isArray(cam.clarity_clean)) cam.clarity_clean = s.lab; done.push(z.name); return; }   // первый снятый «чистый» становится общим для стаканов без своего
       if (z.dirty_mode === 'own') { z.dirty = s.lab; done.push(z.name); return; }
-      if (!z.clean) { bad.push(z.name + ': сначала «чистый» этого стакана'); return; }
-      cam.clarity_shift = s.lab.map((v, k) => Math.round((v - z.clean[k]) * 100) / 100);        // общий сдвиг «грязного» от «чистого» этого стакана
+      const cl = z.clean || jcBaseClean(cam);
+      if (!cl) { bad.push(z.name + ': сначала снимите «чистый» хотя бы у одного стакана'); return; }
+      cam.clarity_shift = s.lab.map((v, k) => Math.round((v - cl[k]) * 100) / 100);        // общий сдвиг «грязного» от «чистого» этого стакана
       done.push(z.name);
     });
   }, true);

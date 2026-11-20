@@ -525,6 +525,22 @@ def multi_config():
     return {"autostart": bool(cfg.get("multi_autostart")), "layout": cfg.get("multi_layout") or {}}
 
 
+@app.get("/api/rtsp/display_stream")
+def rtsp_display_stream():
+    # какой поток камеры идёт на показ в приложении: основной или дополнительный (subtype=1). КЗ от этого не зависит — у него свой выбор («Поток» в панели КЗ)
+    return {"substream": bool((plate_config.load().get("rtsp") or {}).get("substream"))}
+
+
+@app.put("/api/rtsp/display_stream")
+def rtsp_display_stream_set(req: dict = Body(...)):
+    on = bool(req.get("substream"))
+    rcfg = dict(plate_config.load().get("rtsp") or {})
+    rcfg["substream"] = on
+    plate_config.save({"rtsp": rcfg})
+    log_event("rtsp", "Поток для показа: " + ("дополнительный (subtype=1)" if on else "основной") + " — применится при следующем подключении камер", "info")
+    return {"status": "ok", "substream": on}
+
+
 @app.get("/api/multi/autostart")
 def multi_autostart(on: int):
     # включение гасит «Автостарт цикла» микроскопа (и наоборот, см. set_cycle_autostart): открывается что-то одно

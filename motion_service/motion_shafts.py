@@ -20,6 +20,7 @@ ShaftRunner раз в секунду зовёт её, ведёт историю 
 """
 from __future__ import annotations
 
+import bisect
 import json
 import logging
 import math
@@ -46,6 +47,10 @@ PAIR_ORDER = PAIR_IDS
 HISTORY_LEN = 20000           # точек на пару (раз в секунду ≈ 5,5 часа)
 STATS_MAX_S = 18000.0         # окно статистики и авто-эталона: 5 ч, чтобы не выходить за историю
 AUTO_REF_MIN_POINTS = 30      # меньше точек (секунд с видимыми палками) — эталон по среднему не снимаем
+ALIGN_MARGIN_S = 0.6          # запас назад от «сейчас»: к моменту сравнения обе камеры должны успеть прислать кадр ПОСЛЕ него
+MAX_GAP_S = 1.5               # соседние кадры ряда дальше друг от друга — интерполировать нельзя
+SKEW_LEN = 300                # секунд истории «разъезда кадров» пары для панели
+DEFAULT_RPM = 0.758           # когда скорость вала неизвестна (для перевода секунд в градусы)
 
 
 def shaft_short(sid: str) -> str:
@@ -98,13 +103,31 @@ def _zone_state(states: dict, cam: str, zone: str) -> Optional[dict]:
     return None
 
 
+def track_at(series: list, t: float, max_gap: float = MAX_GAP_S) -> Optional[tuple]:
+    """Угол палки на момент t по ряду [(время съёмки, угол, valid, coast)]: линейно между соседними кадрами по кратчайшей дуге.
+    -> (угол 0..360, valid, coast) или None: t вне ряда или соседние кадры дальше max_gap. valid — оба соседа valid, coast — любой в удержании."""
+    n = len(series)
+    if n < 2 or t < series[0][0] or t > series[-1][0]:
+        return None
+    i = bisect.bisect_right([p[0] for p in series], t) - 1
+    if i >= n - 1:
+        a = series[-1]
+        return (a[1] % 360.0, bool(a[2]), bool(a[3]))
+    a, b = series[i], series[i + 1]
+    if b[0] - a[0] > max_gap:
+        return None
+    f = (t - a[0]) / (b[0] - a[0]) if b[0] > a[0] else 0.0
+    return ((a[1] + f * ang_diff(b[1], a[1])) % 360.0, bool(a[2] and b[2]), bool(a[3] or b[3]))
+
+
 def raw_angle(mode: str, a: float, b: float) -> float:
     """Сырое значение угла пары до вычета эталона: сумма (зеркально) или разность (одинаково)."""
     return a + b if mode == "mirror" else a - b
 
 
-def compute(cfg: dict, states: dict) -> dict:
-    """Конфиг сервиса + {id камеры: state()} → снимок валов и пар. Валы без данных — valid False, значения None."""
+def compute(cfg: dict, states: dict, at: Optional[dict] = None) -> dict:
+    """Конфиг сервиса + {id камеры: state()} → снимок валов и пар. Валы без данных — valid False, значения None.
+    at — {id вала: {"angle", "valid", "coast"}}: угол на общий момент времени съёмки (интерполяция по ряду) вместо «последнего кадра»."""
     sc = cfg.get("shafts") or default_shafts_cfg()
     assign = assign_shafts(cfg.get("cameras", []))
     cam_names = {c["id"]: c.get("name") or c["id"] for c in cfg.get("cameras", [])}
@@ -113,11 +136,16 @@ def compute(cfg: dict, states: dict) -> dict:
         cam, zone = assign.get(sid, (None, None))
         zs = _zone_state(states, cam, zone) if cam else None
         ok = bool(zs and zs.get("valid"))
+        ov = (at or {}).get(sid)
+        angle = zs.get("angle") if zs else None
+        coast = bool(zs.get("coast")) if zs else False
+        if ov is not None and ok:
+            ok, angle, coast = bool(ov["valid"] and ov["angle"] is not None), ov["angle"], bool(ov["coast"])
         shafts[sid] = {"id": sid, "short": shaft_short(sid), "camera": cam, "camera_name": cam_names.get(cam), "zone": zone,
                        "assigned": cam is not None, "valid": ok,
-                       "angle": round(float(zs["angle"]), 2) if ok else None,
+                       "angle": round(float(angle), 2) if ok else None,
                        "rpm": round(float(zs.get("rpm", 0.0)), 3) if ok else None,
-                       "coast": bool(zs.get("coast")) if zs else False,
+                       "coast": coast,
                        "moving": zs.get("moving") if zs else None}
     pairs: dict = {}
     for pid in PAIR_ORDER:
@@ -148,6 +176,8 @@ class ShaftRunner(threading.Thread):
         self._sent: dict = {}
         self.status: dict = {}            # ключ вывода → {ok, error}
         self.learners: dict = {}          # пара → (окно в минутах, MirrorLearn): самоподстройка волны Δ угла за оборот
+        self._avg: dict = {}              # пара → deque (время, Δ угла): усреднение за avg_s
+        self._skew: dict = {p: deque(maxlen=SKEW_LEN) for p in PAIR_ORDER}   # пара → (время, разъезд кадров двух камер, с)
         d = getattr(mgr, "dir", None)
         self.learn_path = (d / "shafts_learn.json") if d else None
         self._saved = self._learn_load()
@@ -253,16 +283,84 @@ class ShaftRunner(threading.Thread):
             self._hys[key] = cur
         return int(cur[1].update(abs(value)))
 
+    def _aligned(self, cfg: dict, sc: dict, now: float) -> tuple:
+        """Углы всех назначенных валов на ОДИН момент времени съёмки T = сейчас − (макс. задержка камер) − запас.
+        Время съёмки кадра = время прихода − latency_s камеры. -> ({id вала: {angle, valid, coast}} или None, T или None).
+        Нет ряда у какого-то вала (камера только запустилась, нет кадров) — вся пара тиков считается по-старому (последний кадр)."""
+        if not sc.get("align", True):
+            return None, None
+        assign = assign_shafts(cfg.get("cameras", []))
+        lat = {c["id"]: float(c.get("latency_s", 0.0) or 0.0) for c in cfg.get("cameras", [])}
+        cams = {cam for cam, _ in assign.values()}
+        if not cams:
+            return None, None
+        t_cmp = now - max(lat.get(c, 0.0) for c in cams) - ALIGN_MARGIN_S
+        out: dict = {}
+        for sid, (cam, zone) in assign.items():
+            w = self.mgr.workers.get(cam)
+            track = getattr(w, "rod_track", None)
+            if track is None:
+                return None, None
+            d = lat.get(cam, 0.0)
+            r = track_at([(t - d, a, v, c) for t, a, v, c in track(zone)], t_cmp)
+            if r is None:
+                return None, None
+            out[sid] = {"angle": r[0], "valid": r[1], "coast": r[2]}
+        return out, t_cmp
+
+    def _average(self, pid: str, p: dict, avg_s: float, now: float) -> None:
+        """Δ угла пары → среднее за avg_s секунд (по кругу: от первой точки окна). Мгновенное значение остаётся в angle_diff_inst."""
+        buf = self._avg.setdefault(pid, deque())
+        p["angle_diff_inst"] = p["angle_diff"]
+        if p["valid"] and p["angle_diff"] is not None:
+            buf.append((now, p["angle_diff"]))
+        while buf and now - buf[0][0] > max(avg_s, 0.0):
+            buf.popleft()
+        if avg_s > 0 and p["valid"] and buf:
+            base = buf[0][1]
+            p["angle_diff"] = round(ang_diff(base + sum(ang_diff(v, base) for _, v in buf) / len(buf), 0.0), 2)
+
+    def _timing(self, cfg: dict, states: dict, snap: dict, aligned: bool, now: float, t_cmp: Optional[float]) -> dict:
+        """Панель «Время кадров»: по камерам — частота, шаг кадров, поправка задержки; по парам — разъезд кадров двух камер
+        (на сколько секунд разнесены последние кадры) и сколько это градусов при текущей скорости вала."""
+        cams: dict = {}
+        for c in cfg.get("cameras", []):
+            w = self.mgr.workers.get(c["id"])
+            ft = getattr(w, "frame_timing", None)
+            if ft is not None and any(z.get("type") == "cycle" for z in c.get("zones", [])):
+                cams[c["id"]] = dict(ft(), name=c.get("name") or c["id"], row=c.get("row") or "")
+        lat = {cid: v["latency_s"] for cid, v in cams.items()}
+        pairs: dict = {}
+        for pid in PAIR_ORDER:
+            p = snap["pairs"][pid]
+            sa, sb = snap["shafts"][p["a"]], snap["shafts"][p["b"]]
+            ca, cb = sa["camera"], sb["camera"]
+            ta = ((states.get(ca) or {}).get("result") or {}).get("ts") if ca else None
+            tb = ((states.get(cb) or {}).get("result") or {}).get("ts") if cb else None
+            same = bool(ca and ca == cb)
+            if ta is not None and tb is not None and not same:
+                self._skew[pid].append((now, abs((ta - lat.get(ca, 0.0)) - (tb - lat.get(cb, 0.0)))))
+            rows = [v for t, v in self._skew[pid] if now - t <= SKEW_LEN]
+            rpm = abs(sa["rpm"]) if sa.get("rpm") else DEFAULT_RPM
+            deg = rpm * 6.0
+            pairs[pid] = {"same_camera": same, "skew_avg_s": round(sum(rows) / len(rows), 3) if rows else None,
+                          "skew_max_s": round(max(rows), 3) if rows else None, "deg_per_s": round(deg, 2),
+                          "skew_avg_deg": round(deg * sum(rows) / len(rows), 2) if rows else None,
+                          "skew_max_deg": round(deg * max(rows), 2) if rows else None}
+        return {"aligned": aligned, "compare_lag_s": round(now - t_cmp, 2) if t_cmp is not None else None, "cameras": cams, "pairs": pairs}
+
     def tick(self, now: Optional[float] = None):
         now = time.time() if now is None else now
         cfg = self.mgr.cfg
         states = {cid: w.state() for cid, w in list(self.mgr.workers.items())}
-        snap = compute(cfg, states)
         sc = cfg.get("shafts") or default_shafts_cfg()
+        at, t_cmp = self._aligned(cfg, sc, now)
+        snap = compute(cfg, states, at)
         for pid, p in snap["pairs"].items():
             sa, sb = snap["shafts"][p["a"]], snap["shafts"][p["b"]]
             lrn = self._learner(pid, sc["pairs"][pid])
             p["angle_diff_raw"] = p["angle_diff"]                  # до самоподстройки
+            p["angle_diff_inst"] = None
             corr = 0.0
             if lrn:
                 if p["valid"] and not (sa["coast"] or sb["coast"]) and sa["moving"] is not False and sb["moving"] is not False:
@@ -272,6 +370,7 @@ class ShaftRunner(threading.Thread):
                     corr = lrn.corr(sa["angle"])
                     p["angle_diff"] = round(ang_diff(p["angle_diff"], corr), 2)
             p["corr"] = round(corr, 2)
+            self._average(pid, p, sc.get("avg_s", 4.0), now)
             p["learn"] = lrn.info() if lrn else None
             p["alarm_angle"] = self._alarm(pid, "angle", p["tol_angle"], p["angle_diff"])
             p["alarm_rpm"] = self._alarm(pid, "rpm", p["tol_rpm"], p["rpm_diff"])
@@ -279,6 +378,7 @@ class ShaftRunner(threading.Thread):
                 coast = bool(sa["coast"] or sb["coast"])
                 self.hist[pid].append((now, p["angle_diff"], p["rpm_diff"], coast, p["raw"], p["angle_diff_raw"], p["corr"]))
         self._learn_save(now)
+        snap["timing"] = self._timing(cfg, states, snap, at is not None, now, t_cmp)
         self.snap = snap
         mb = cfg["modbus"]
         if not mb.get("enable"):

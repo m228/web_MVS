@@ -30,6 +30,7 @@ def cfg_two_rows(extra=None):
                        cam("up", "upper", [cycle("l", 500), cycle("r", 1400)])],
            "modbus": {"enable": True, "host": "plc", "write_period_s": 0.2}}
     raw.update(extra or {})
+    raw.setdefault("shafts", {}).setdefault("avg_s", 0)           # старые тесты про мгновенные значения; усреднение — в test_motion_timing.py
     return me.normalize_config(raw)
 
 

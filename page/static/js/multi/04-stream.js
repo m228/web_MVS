@@ -148,6 +148,8 @@ function updateTileMetrics(index, m) {
   const el = getTileEl(index);
   if (!el) return;
   setMetric(el, 'fps', Number(m.fps ?? 0).toFixed(2));
+  const fpsTip = el.querySelector('[data-metric-tip="fps"]');
+  if (fpsTip) fpsTip.title = `Кадров в секунду от камеры. В браузер и запись уходит ${Number(m.fps_out ?? 0).toFixed(1)}`;
   setMetric(el, 'images', m.image_number ?? 0);
   setMetric(el, 'bandwidth', Number(m.bandwidth_mbps ?? 0).toFixed(1));
   setMetric(el, 'resolution', `${m.width ?? 0} × ${m.height ?? 0}`);

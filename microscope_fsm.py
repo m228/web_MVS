@@ -48,6 +48,12 @@ ARRIVE_HOLD_TICKS = 20  # держать в диапазоне ±50 перед �
 # сама прошивка, а лишняя запись в неудачный момент его портит. Процедура: «Поиск 0» -> ждём, пока мотор САМ встанет
 # (20–30 с) -> отвод в retract_pos -> там датчик, энкодер и расчётная сходятся (CAL_FAR_TOL_UM)? Да — готово.
 # Нет — «Поиск 0» ещё раз (не больше CAL_ATTEMPTS раз), не сошлось — красная плашка. Команды — только когда мотор СТОИТ.
+M1_OVERTRAVEL_UM = 9000      # любой из трёх датчиков М1 выше — «Стоп М1» + тревога (config m1_overtravel_um, 0 — выкл.)
+OT_TICKS = 2                # выше порога столько тактов подряд (датчик шумит ±10 мкм)
+OT_RELEASE_UM = 500         # тревога снимается, когда все датчики ниже порога на столько
+OT_STOP_EVERY_TICKS = 5     # пока выше порога — повтор «Стоп М1» (команда стоп в очередь прошивки не встаёт)
+OT_STOP_MAX = 40            # не больше стопов за один заход
+OT_REALERT_SEC = 300.0      # повтор тревоги, пока датчик всё ещё выше порога
 CAL_ATTEMPTS = 3          # «Поисков 0» подряд, пока на отводе не сойдётся
 CAL_FAR_TOL_UM = 100      # на отводе: |датчик − энкодер| и |датчик − расчётная| не больше, иначе повтор «Поиска 0»
 CAL_STILL_TICKS = 15      # «мотор стоит»: расчётная и энкодер не сдвинулись больше 10 мкм за 1,5 с
@@ -189,7 +195,7 @@ class MicroscopeFSM:
 
         # параметры нового цикла пробы (правятся на вкладке «Цикл», persist в plate_config)
         pc = config.get("probe_cycle", {})
-        self._retract_pos = int(pc.get("retract_pos", 20000))       # отвод/возврат, мкм
+        self._retract_pos = int(pc.get("retract_pos", 5000))       # отвод/возврат, мкм
         self._pre_wash_sec = int(pc.get("pre_wash_sec", 4))         # промывка перед подводом, с
         self._post_wash_pause_sec = int(pc.get("post_wash_pause_sec", 2))  # пауза после промывки перед подводом, с
         fp = pc.get("fast") or {}                                  # быстрый цикл на подкачке (стадия 5)
@@ -244,6 +250,13 @@ class MicroscopeFSM:
         # датчик отдаёт значение в ~10 раз крупнее реальных мкм — приводим к масштабу задания/
         # расчётной позиции, иначе дельта «задание−датчик» огромная (тысячи).
         self._sensor_scale = float(config.get("sensor_display_scale", 0.1) or 0.1)
+
+        # защита от убегания М1: любой датчик выше порога -> «Стоп М1» (повтором) + тревога в Telegram, см. _overtravel_guard
+        self._ot_limit = int(config.get("m1_overtravel_um", M1_OVERTRAVEL_UM) or 0)
+        self._ot_active = False
+        self._ot_ticks = 0
+        self._ot_stops = 0
+        self._ot_alert_t = 0.0
 
         # автокалибровка нуля М1 (раз в every_n варок на пропарке — стадия 11)
         ac = config.get("autocal", {}) or {}
@@ -611,6 +624,61 @@ class MicroscopeFSM:
         if self._redrive >= REDRIVE_TICKS:
             self._redrive = 0
             self._emit_cmd1 = True
+
+    def _overtravel_guard(self, pos1, pos_enc, pos1_ai):
+        """Любой из трёх датчиков М1 (расчётная, энкодер, аналоговый) выше m1_overtravel_um -> «Стоп М1» повтором, пока выше,
+        и срочная тревога high (Telegram). Штатных ходов дальше ~5000 мкм нет (retract_pos ≤ 5000), поэтому срабатывание — всегда
+        поломка: очередь прошивки уехала дальше цели, датчик/энкодер врут. В авто (не в ручном) ещё и Авария: цикл и автокалибровка
+        встают, повторный goto не уйдёт. Вызывается ВНЕ лока."""
+        lim = self._ot_limit
+        if lim <= 0:
+            return
+        vals = {"calc": pos1, "enc": pos_enc, "ai": pos1_ai}
+        nums = {k: v for k, v in vals.items() if isinstance(v, (int, float)) and not isinstance(v, bool)}
+        over = {k: v for k, v in nums.items() if v > lim}
+        if not over:
+            self._ot_ticks = 0
+            if self._ot_active and all(v <= lim - OT_RELEASE_UM for v in nums.values()):
+                self._ot_active = False
+                log_event("microscope_fsm", "М1 вернулся ниже порога %d мкм" % lim, "info", vals)
+            return
+        self._ot_ticks += 1
+        if self._ot_ticks < OT_TICKS:
+            return
+        now = time.monotonic()
+        first = not self._ot_active
+        if first:
+            self._ot_active = True
+            self._ot_stops = 0
+            self._ot_alert_t = now
+        if first or (self._ot_ticks % OT_STOP_EVERY_TICKS == 0 and self._ot_stops < OT_STOP_MAX):
+            self._ot_stops += 1
+            try:
+                self.plate.motor_stop(1)
+                if first:
+                    self.plate.motor_steps(1, 0)       # снять висящий флаг «Поиска 0» (стоп его не снимает)
+            except Exception as e:
+                log_event("microscope_fsm", "Не удалось послать «Стоп М1» при уходе за порог", "error", {"error": str(e)})
+        if first or now - self._ot_alert_t >= OT_REALERT_SEC:
+            self._ot_alert_t = now
+            what = ", ".join("%s %d" % ({"calc": "расчётная", "enc": "энкодер", "ai": "аналоговый"}[k], round(v))
+                              for k, v in over.items())
+            with self._lock:
+                manual, mode, stage = self.manual, self.mode, self.stage
+            text = "М1 ушёл за %d мкм (%s) — послан «Стоп М1»%s" % (
+                lim, what, "" if first else " · всё ещё выше порога")
+            data = {"limit_um": lim, "calc": nums.get("calc"), "enc": nums.get("enc"), "ai": nums.get("ai"),
+                    "manual": manual, "mode": mode, "stage": stage, "stops": self._ot_stops}
+            log_event("microscope_fsm", text, "error", data)
+            try:
+                import sysmon
+                sysmon.report("m1_overtravel", "high", text, data)
+            except Exception as e:
+                log_event("microscope_fsm", "Тревога об уходе М1 не отправлена", "warn", {"error": str(e)})
+        if first:
+            with self._lock:
+                if not self.manual and not self._fault:
+                    self._raise_fault("М1 ушёл за %d мкм — послан «Стоп М1»" % lim)
 
     def _raise_fault(self, msg):
         """Авария (вызывается ПОД локом): стоп цикла + авто-цикла + аварийный стоп моторов.
@@ -1234,6 +1302,9 @@ class MicroscopeFSM:
         if pos_sel is None:
             pos_sel = pos_enc
         connected = self.plate.status.get("connected", False)
+
+        # защита от убегания М1 — первой, до любой логики: работает всегда (авто, ручной, калибровка)
+        self._overtravel_guard(pos1, pos_enc, pos1_ai)
 
         with self._lock:
             # 0) подтверждение перехода из ручного: фронт входа стадии в рабочую зону (3..9),

@@ -10,6 +10,7 @@ const JC_BASE_STEPS = [[1, '1 мин'], [2, '2 мин'], [5, '5 мин'], [10, '
 const JC_SEC_KEY = 'mvs_jc_sec';
 const jcLoadSec = () => { try { const v = Number(localStorage.getItem(JC_SEC_KEY)); if (JC_SEC.some(([x]) => x === v)) return v; } catch (e) { /* не критично */ } return 30; };
 const JC = { sec: jcLoadSec(), msg: {}, hist: {}, stats: {}, at: 0, busy: false };
+const JC_SMOOTH_S = 30, JC_HOLD_S = 45;                         // сглаживание цвета (медиана, с) и выдержка смены состояния (с) по умолчанию, как в сервисе
 const JC_T_TURB = 12, JC_T_DIRTY = 70;                       // пороги по умолчанию (как в сервисе): мутный с 12, грязный с 70 из 100
 const JC_SPREAD_WARN = 6;                                    // разброс цвета за период (Lab) больше — цвет плавал, эталон шаткий
 
@@ -96,6 +97,8 @@ function jcCamHtml(cam, all) {
       <select data-md="jc" data-f="sec">${mdSel(JC_SEC, JC.sec)}</select>
       <span class="md-lbl" title="С какой мутности сок считается мутным (оранжевый). Ниже — прозрачный (зелёный). Общий для всех стаканов камеры">мутный от</span>${mdNum(`data-md="jc" data-cam="${escapeHtml(cam.id)}" data-f="tturb"`, jcT(zs[0], 't_turb', JC_T_TURB), 'min="0" max="99" step="1"')}
       <span class="md-lbl" title="С какой мутности сок считается грязным (красный). Общий для всех стаканов камеры">грязный от</span>${mdNum(`data-md="jc" data-cam="${escapeHtml(cam.id)}" data-f="tdirty"`, jcT(zs[0], 't_dirty', JC_T_DIRTY), 'min="1" max="100" step="1"')}
+      <span class="md-lbl" title="Цвет сглаживается медианой за столько секунд: пар над стаканом, блик, рука не дёргают значение. 0 — почти без сглаживания. Больше — спокойнее, но медленнее реакция">сглаживание, с</span>${mdNum(`data-md="jc" data-cam="${escapeHtml(cam.id)}" data-f="tsmooth"`, jcT(zs[0], 'smooth_s', JC_SMOOTH_S), 'min="0" max="600" step="5"')}
+      <span class="md-lbl" title="Состояние (прозрачный / мутный / грязный) меняется, только если новое держится столько секунд подряд. 0 — сразу">держать, с</span>${mdNum(`data-md="jc" data-cam="${escapeHtml(cam.id)}" data-f="thold"`, jcT(zs[0], 'hold_s', JC_HOLD_S), 'min="0" max="3600" step="5"')}
       <button type="button" class="btn-secondary md-x" data-md="jc" data-cam="${escapeHtml(cam.id)}" data-f="cleanall" title="Налейте во все стаканы чистый сок, подождите и нажмите: цвет каждого стакана запомнится как «чистый» (0)">Все стаканы — чистые</button>
       <span class="net-hint" id="jc-m-${escapeHtml(cam.id)}">${escapeHtml(JC.msg[cam.id] || '')}</span></div>` +
     `<div class="md-zone__row jc-bar"><label class="switch-toggle md-sw md-sw--sm" title="Раз в N минут сервис пишет кадр и цвет, мутность, состояние и вашу метку каждого стакана в папку data\juice_base\${escapeHtml(cam.id)}\<день>. Для набора базы, например на ночь. Старше 14 суток удаляется"><span class="switch"><input type="checkbox" data-md="jc" data-cam="${escapeHtml(cam.id)}" data-f="jbon"${jb.on ? ' checked' : ''} /><span class="switch-track"></span></span><span class="md-lbl md-lbl--on" style="white-space:nowrap">собирать базу</span></label>
@@ -172,6 +175,13 @@ function jcOnEvent(t) {
       if (f === 'jbon') jb.on = !!t.checked; else jb.every_min = Number(t.value) || 2;
     }, false);
     jcSay(cam.id, f === 'jbon' ? (t.checked ? 'база пишется' : 'база выключена') : '');
+    return;
+  }
+  if (f === 'tsmooth' || f === 'thold') {                     // сглаживание и выдержка: одним числом на все стаканы камеры
+    const key = f === 'tsmooth' ? 'smooth_s' : 'hold_s', v = Math.max(0, Math.min(f === 'tsmooth' ? 600 : 3600, parseFloat(t.value) || 0));
+    mdEdit(() => jcZones(cam).forEach((z) => { z[key] = v; }), false);
+    t.value = v;
+    jcSay(cam.id, f === 'tsmooth' ? 'сглаживание: ' + v + ' с' : 'состояние держится: ' + v + ' с');
     return;
   }
   if (f === 'tturb' || f === 'tdirty') {                      // пороги одним числом на все стаканы камеры; «мутный» обязан быть ниже «грязного» — иначе сервис отклонит конфиг

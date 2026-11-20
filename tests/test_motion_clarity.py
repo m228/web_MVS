@@ -38,7 +38,7 @@ def frame(colors, size=(W, H), r=26, bg=(20, 22, 24), noise=0, seed=1):
 
 
 def zones(**over):
-    return [dict({"id": "g%d" % (i + 1), "name": "Стакан %d" % (i + 1), "type": "clarity", "center": list(c), "radius": 26}, **over)
+    return [dict({"id": "g%d" % (i + 1), "name": "Стакан %d" % (i + 1), "type": "clarity", "center": list(c), "radius": 26, "smooth_s": 0, "hold_s": 0}, **over)   # тесты шкалы — без сглаживания по времени
             for i, c in enumerate(CENTERS)]
 
 
@@ -425,3 +425,50 @@ def test_shared_refs_without_camera_clean_use_median_of_own():
     shift = [round(d - c, 2) for d, c in zip(dirty_lab, clean_lab)]
     st = run(me.CameraEngine(cam_cfg(zs, clarity_refs="shared", clarity_shift=shift)), frame({CENTERS[5]: DIRTY, CENTERS[6]: CLEAN}))
     assert zone(st, "g6")["level"] == 2 and zone(st, "g7")["level"] == 0 and zone(st, "g7")["valid"]
+
+
+# ───────────── сглаживание по времени и выдержка смены состояния ─────────────
+def _feed(eng, seq, dt=0.25):
+    """seq — [(цвет BGR или None→чистый, число кадров)] → список (мутность, уровень) после каждого кадра у g1."""
+    out, now = [], 0.0
+    for col, n in seq:
+        img = frame({CENTERS[0]: col})
+        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        for _ in range(n):
+            now += dt
+            st = eng.process(gray, now, img)
+            if st is None:                                          # первый кадр только заполняет буфер
+                continue
+            z = zone(st, "g1")
+            out.append((z["turb"], z["level"], z["valid"]))
+    return out
+
+
+def _smooth_cfg(**over):
+    zs, dirty_lab, clean_lab = calibrated_cfg(zones(dirty_mode="own"))
+    for z in zs:
+        z.update(over)
+    return cam_cfg(zs)
+
+
+def test_smoothing_defaults():
+    z = cam_cfg([{"id": "g1", "type": "clarity", "center": [80, 180], "radius": 26}])["zones"][0]
+    assert z["smooth_s"] == 30.0 and z["hold_s"] == 45.0
+
+
+def test_median_window_ignores_short_spike():
+    eng = me.CameraEngine(_smooth_cfg(smooth_s=20, hold_s=0))
+    res = _feed(eng, [(CLEAN, 60), (DIRTY, 6), (CLEAN, 60)])      # 1,5 секунды «грязного» посреди чистого
+    assert max(t for t, _, ok in res if ok) < 10                    # выброс до значения не дошёл
+    eng2 = me.CameraEngine(_smooth_cfg(smooth_s=0, hold_s=0))      # без сглаживания по времени — доходит
+    assert max(t for t, _, ok in _feed(eng2, [(CLEAN, 60), (DIRTY, 6), (CLEAN, 60)]) if ok) > 20
+
+
+def test_hold_delays_state_change_and_ignores_blips():
+    eng = me.CameraEngine(_smooth_cfg(smooth_s=0, hold_s=10))
+    res = _feed(eng, [(CLEAN, 40), (DIRTY, 24), (CLEAN, 40)])     # 6 секунд грязного: короче выдержки 10 с
+    assert all(lv == 0 for _, lv, ok in res if ok)
+    eng2 = me.CameraEngine(_smooth_cfg(smooth_s=0, hold_s=10))
+    res2 = _feed(eng2, [(CLEAN, 40), (DIRTY, 80)])                 # 20 секунд грязного — состояние сменилось, но не сразу
+    lv = [l for _, l, ok in res2 if ok]
+    assert lv[40] == 0 and lv[-1] == 2

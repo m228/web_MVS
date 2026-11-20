@@ -803,11 +803,35 @@ const SH_WD = { w: 210, h: 280, r: 40 };
 const SH_WD_CIRCLE = { vl: [56, 82], vp: [154, 82], nl: [56, 198], np: [154, 198] };        // вал → центр круга
 const SH_WD_PAIR = { vlr: [105, 22, 'Верх'], nlr: [105, 258, 'Низ'], lnv: [56, 140, ''], rnv: [154, 140, ''] };   // пара → центр подписи и название
 const SHW_KEY = 'mvs_shafts_widget';
-const SHW = { open: false, x: null, y: null, s: 1.15, el: null, cv: null, drag: null };
+const SHW = { open: false, x: null, y: null, s: 1.15, el: null, cv: null, drag: null, corr: true };       // corr: показывать значения после автокоррекции (около нуля) или сырые
+const SH_WD_TOGGLE = [146, 247, 56, 22];                    // переключатель «авто / сырые»: x, y, ширина, высота в координатах SH_WD
+const SH_WD_EDGES = [['nlr', 'nl', 'np'], ['vlr', 'vl', 'vp'], ['lnv', 'nl', 'vl'], ['rnv', 'np', 'vp']];   // пара → (вал A, вал B): Δ пары = отклонение A − отклонение B
+
+// отклонение каждого вала от общего положения, °: подгонка по разностям пар (после автокоррекции), сумма отклонений = 0.
+// Если все валы в фазе, все четыре около нуля; разъехался один — он уходит от нуля, остальные почти не двигаются.
+function shwDeviations(s) {
+  const e = {}, edges = SH_WD_EDGES.filter(([pid]) => s.pairs[pid] && s.pairs[pid].valid && Number.isFinite(s.pairs[pid].angle_diff));
+  const ids = SH_IDS.filter((id) => edges.some(([, a, b]) => a === id || b === id));
+  ids.forEach((id) => { e[id] = 0; });
+  for (let it = 0; it < 60; it++) {                                   // Гаусс–Зейдель на задаче Δ(A,B) = e[A] − e[B]
+    ids.forEach((id) => {
+      let sum = 0, n = 0;
+      edges.forEach(([pid, a, b]) => {
+        const d = s.pairs[pid].angle_diff;
+        if (a === id) { sum += e[b] + d; n++; } else if (b === id) { sum += e[a] - d; n++; }
+      });
+      if (n) e[id] = sum / n;
+    });
+    const m = ids.reduce((t, id) => t + e[id], 0) / (ids.length || 1);
+    ids.forEach((id) => { e[id] -= m; });
+  }
+  return e;
+}
 
 // сам рисунок в координатах SH_WD; off — данных нет (КЗ не работает): везде прочерки
-function shPaintWidget(ctx, s, off) {
+function shPaintWidget(ctx, s, off, corr) {
   const { w, h, r } = SH_WD, F = (px, b) => (b ? 'bold ' : '') + px + 'px sans-serif';
+  const dev = corr ? shwDeviations(s) : null;
   const bad = !off && SH_PAIRS.some((id) => s.pairs[id] && s.pairs[id].valid && s.pairs[id].alarm_angle);        // красное — только настоящий аларм по углу (допуск угла > 0 на вкладке «Валы»)
   ctx.save();
   ctx.clearRect(0, 0, w, h);
@@ -817,7 +841,8 @@ function shPaintWidget(ctx, s, off) {
   SH_PAIRS.forEach((id) => {
     const p = s.pairs[id], [x, y, name] = SH_WD_PAIR[id], ok = !off && p && p.valid;
     ctx.font = F(22, true); ctx.fillStyle = !ok ? '#9ca3af' : (p.alarm_angle) ? '#f87171' : '#f3f4f6';
-    ctx.fillText(ok ? shSgn(p.angle_diff, 1) + '°' : '—', x, y);
+    const dv = corr || !Number.isFinite(p && p.angle_diff_raw) ? (p && p.angle_diff) : p.angle_diff_raw;         // «сырые» — до автокоррекции (старый сервис отдаёт только одно значение)
+    ctx.fillText(ok ? shSgn(dv, 1) + '°' : '—', x, y);
     if (name) { ctx.textAlign = 'left'; ctx.font = F(13); ctx.fillStyle = '#9ca3af'; ctx.fillText(name, 14, y); ctx.textAlign = 'center'; }
   });
   SH_IDS.forEach((id) => {
@@ -834,13 +859,25 @@ function shPaintWidget(ctx, s, off) {
     ctx.beginPath(); ctx.roundRect(cx - 27, cy - 11, 54, 22, 7); ctx.fillStyle = 'rgba(30,41,59,.95)'; ctx.fill();
     ctx.lineWidth = 1; ctx.strokeStyle = 'rgba(148,163,184,.6)'; ctx.stroke();
     ctx.font = F(15, true); ctx.fillStyle = !ok ? '#9ca3af' : x.coast ? '#7b828f' : '#f3f4f6';       // палка не видна (удержание) — угол тусклый, как и стрелка
-    ctx.fillText(ok ? (((Math.round(x.angle) % 360) + 360) % 360) + '°' : '—', cx, cy + 1);
+    const dd = dev && dev[id];
+    ctx.fillText(!ok ? '—' : dev ? (Number.isFinite(dd) ? shSgn(dd, 1) + '°' : '—') : (((Math.round(x.angle) % 360) + 360) % 360) + '°', cx, cy + 1);
   });
+  const [tx, ty, tw, th] = SH_WD_TOGGLE;                       // переключатель: с автокоррекцией (значки волны → ровная линия) / без
+  ctx.beginPath(); ctx.roundRect(tx, ty, tw, th, th / 2);
+  ctx.fillStyle = corr ? 'rgba(56,189,248,.22)' : 'rgba(148,163,184,.12)'; ctx.fill();
+  ctx.lineWidth = 1; ctx.strokeStyle = corr ? 'rgba(56,189,248,.8)' : 'rgba(148,163,184,.5)'; ctx.stroke();
+  ctx.lineWidth = 1.6; ctx.lineCap = 'round'; ctx.strokeStyle = corr ? '#7dd3fc' : '#9ca3af';
+  ctx.beginPath();
+  if (corr) { ctx.moveTo(tx + 8, ty + th / 2); ctx.lineTo(tx + 20, ty + th / 2); }
+  else { ctx.moveTo(tx + 8, ty + th / 2 + 4); ctx.bezierCurveTo(tx + 11, ty + th / 2 - 8, tx + 14, ty + th / 2 + 8, tx + 17, ty + th / 2 - 4); ctx.lineTo(tx + 20, ty + th / 2 + 3); }
+  ctx.stroke();
+  ctx.textAlign = 'left'; ctx.font = F(11, true); ctx.fillStyle = corr ? '#7dd3fc' : '#9ca3af';
+  ctx.fillText(corr ? 'авто' : 'сырые', tx + 25, ty + th / 2 + 0.5);
   ctx.restore();
 }
 
 function shwSave() {
-  try { localStorage.setItem(SHW_KEY, JSON.stringify({ open: SHW.open, x: SHW.x, y: SHW.y, s: SHW.s })); } catch (e) { /* не критично */ }
+  try { localStorage.setItem(SHW_KEY, JSON.stringify({ open: SHW.open, x: SHW.x, y: SHW.y, s: SHW.s, corr: SHW.corr })); } catch (e) { /* не критично */ }
 }
 
 // не даём окну уехать за экран (после смены размера окна браузера или масштаба виджета)
@@ -866,21 +903,21 @@ function shwPaint() {
   if (!s || !s.shafts || !s.pairs) return;
   const ctx = SHW.cv.getContext('2d'), k = SHW.cv.width / SH_WD.w;
   ctx.setTransform(k, 0, 0, k, 0, 0);
-  shPaintWidget(ctx, s, !MV.online);
+  shPaintWidget(ctx, s, !MV.online, SHW.corr);
 }
 
 function shwBuild() {
   if (SHW.el) return;
   const el = document.createElement('div');
   el.className = 'shw'; el.hidden = true;
-  el.title = 'Разность углов валов, °. Перетащи, чтобы подвинуть; колесо мыши — размер.';
+  el.title = 'Разность углов валов, °. «авто» — значения после автокоррекции, около нуля; «сырые» — без неё (в кружках — угол вала). Переключатель — внизу справа. Перетащи, чтобы подвинуть; колесо мыши — размер.';
   el.innerHTML = '<canvas class="shw__cv"></canvas><button type="button" class="shw__x" title="Закрыть" aria-label="Закрыть">×</button>';
   document.body.appendChild(el);
   SHW.el = el; SHW.cv = el.querySelector('canvas');
   el.querySelector('.shw__x').addEventListener('click', (e) => { e.stopPropagation(); shwSet(false); });
   el.addEventListener('pointerdown', (e) => {
     if (e.target.closest('.shw__x')) return;
-    SHW.drag = { dx: e.clientX - SHW.x, dy: e.clientY - SHW.y };
+    SHW.drag = { dx: e.clientX - SHW.x, dy: e.clientY - SHW.y, x0: e.clientX, y0: e.clientY };
     el.setPointerCapture(e.pointerId); el.classList.add('is-drag');
   });
   el.addEventListener('pointermove', (e) => {
@@ -888,7 +925,15 @@ function shwBuild() {
     SHW.x = e.clientX - SHW.drag.dx; SHW.y = e.clientY - SHW.drag.dy;
     shwClamp(); el.style.left = SHW.x + 'px'; el.style.top = SHW.y + 'px';
   });
-  const end = () => { if (!SHW.drag) return; SHW.drag = null; el.classList.remove('is-drag'); shwSave(); };
+  const end = (e) => {
+    if (!SHW.drag) return;
+    const d = SHW.drag; SHW.drag = null; el.classList.remove('is-drag');
+    if (e.type === 'pointerup' && Math.hypot(e.clientX - d.x0, e.clientY - d.y0) < 4) {             // клик без перетаскивания по переключателю
+      const [tx, ty, tw, th] = SH_WD_TOGGLE, px = (e.clientX - SHW.x) / SHW.s, py = (e.clientY - SHW.y) / SHW.s;
+      if (px >= tx - 4 && px <= tx + tw + 4 && py >= ty - 4 && py <= ty + th + 4) { SHW.corr = !SHW.corr; shwPaint(); }
+    }
+    shwSave();
+  };
   el.addEventListener('pointerup', end); el.addEventListener('pointercancel', end);
   el.addEventListener('wheel', (e) => {
     e.preventDefault();
@@ -921,7 +966,7 @@ function shwUpdate() {
 function shwInit() {
   try {
     const v = JSON.parse(localStorage.getItem(SHW_KEY) || 'null');
-    if (v) { SHW.x = Number.isFinite(v.x) ? v.x : null; SHW.y = Number.isFinite(v.y) ? v.y : null; SHW.s = Number.isFinite(v.s) ? Math.max(0.7, Math.min(2.2, v.s)) : SHW.s; SHW.open = !!v.open; }
+    if (v) { SHW.x = Number.isFinite(v.x) ? v.x : null; SHW.y = Number.isFinite(v.y) ? v.y : null; SHW.s = Number.isFinite(v.s) ? Math.max(0.7, Math.min(2.2, v.s)) : SHW.s; SHW.open = !!v.open; if (typeof v.corr === 'boolean') SHW.corr = v.corr; }
   } catch (e) { /* не критично */ }
   document.getElementById('multiShaftsBtn')?.addEventListener('click', (e) => { e.stopPropagation(); shwSet(!SHW.open); });
   if (SHW.open) shwSet(true);

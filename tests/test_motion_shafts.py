@@ -444,3 +444,27 @@ def test_learn_shape_survives_restart(tmp_path):
     r3 = ms.ShaftRunner(M)                                  # «перезапуск»
     lrn = r3._learner("lnv", M.cfg["shafts"]["pairs"]["lnv"])
     assert lrn.amp() > 8 and not lrn.fresh
+
+
+def test_live_snapshot_has_src_and_is_side_effect_free():
+    """Живой снимок для виджета: src (какая половина видна) доходит до вала; истории и обучения он не трогает."""
+    cfg = cfg_two_rows()
+    st = states()
+    st["dn"]["result"]["zones"][0]["src"] = "red"
+    st["dn"]["result"]["zones"][1]["src"] = "both"
+
+    class W:
+        def __init__(self, s): self.s = s
+        def state(self): return self.s
+
+    class Mgr:
+        pass
+
+    m = Mgr(); m.cfg = cfg; m.workers = {k: W(v) for k, v in st.items()}
+    r = ms.ShaftRunner(m)
+    live = r.live(now=100.0)
+    srcs = {sid: v["src"] for sid, v in live["shafts"].items()}
+    assert sorted(srcs.values()).count("red") == 1 and sorted(srcs.values()).count("both") == 1
+    assert set(live["pairs"]["nlr"]) >= {"valid", "angle_diff", "angle_diff_raw", "alarm_angle"}
+    assert all(len(h) == 0 for h in r.hist.values())
+

@@ -4,6 +4,7 @@
 """
 import threading
 import time
+from collections import deque
 import cv2
 from logger import log_event
 import dahua_control
@@ -13,6 +14,10 @@ from .utils import DEFAULT_VIDEO_FPS, RTSP_RECONNECT_BACKOFF, RTSP_RECONNECT_LOG
 from .base_worker import BaseCameraWorker
 from .frame_quality import GARBAGE_THRESHOLD, SAMPLE_PERIOD_S, frame_garbage
 from .hw_decode import decoder_kind, hw_params, normalize_mode, wait_open_turn
+
+
+FPS_WINDOW_S = 3.0           # окно, за которое считаем реальную частоту кадров от камеры
+EMIT_TOLERANCE = 0.85        # кадр не пропускаем, если с прошлой отдачи прошло ≥ 85 % интервала (джиттер камеры иначе «съедает» каждый второй)
 
 
 class RtspCameraWorker(BaseCameraWorker):
@@ -66,6 +71,10 @@ class RtspCameraWorker(BaseCameraWorker):
         # параметры отдачи: масштаб кадра (%) и целевой fps — задаёт подключающийся зритель
         self.stream_scale = 100
         self.target_fps = None
+        # времена кадров, пришедших ОТ КАМЕРЫ (любой успешный grab/read), для честного fps; fps_out — сколько уходит в браузер
+        self._in_times = deque()
+        self._out_times = deque()
+        self.metrics["fps_out"] = 0.0
         # качество кадров (выборка раз в секунду): gray_now — последний кадр «серая каша»; счётчики — с запуска приложения
         self.gray_now = False
         self.gray_ratio = 0.0
@@ -80,6 +89,28 @@ class RtspCameraWorker(BaseCameraWorker):
         self._hw_zero = 0
 
     # ---------- фоновый захват ----------
+
+    # учёт кадра, пришедшего от камеры: metrics['fps'] — реальная частота потока камеры за FPS_WINDOW_S (а не то, что ушло в браузер)
+    @staticmethod
+    def _window_rate(q, now):
+        """Кадров/с по временам из очереди q за FPS_WINDOW_S (старые выбрасываем); None — мало точек."""
+        q.append(now)
+        while q and now - q[0] > FPS_WINDOW_S:
+            q.popleft()
+        if len(q) >= 2 and q[-1] > q[0]:
+            return (len(q) - 1) / (q[-1] - q[0])
+        return None
+
+    def _note_frame_in(self, now):
+        rate = self._window_rate(self._in_times, now)
+        if rate is not None:
+            self.metrics["fps"] = rate
+
+    def _reset_frames_in(self):
+        self._in_times.clear()
+        self._out_times.clear()
+        self.metrics["fps"] = 0.0
+        self.metrics["fps_out"] = 0.0
 
     # проверка кадра на «серую кашу» — не чаще раза в секунду, ошибка проверки захват не роняет
     def _sample_quality(self, raw, now):
@@ -253,15 +284,32 @@ class RtspCameraWorker(BaseCameraWorker):
                 # Кадр этого тика не нужен (отдаём/пишем не чаще target_fps): декодируем его, потому что поток надо вычитывать,
                 # но без read() — не копируем с видеоядра в память и не пересчитываем в BGR. На 4 камерах 2,7 Мп это основная
                 # нагрузка процессора.
-                skip = self.target_fps and (time.time() - last_emit) < 1.0 / self.target_fps and hasattr(capture, "grab")
-                if skip:
+                counted = False            # кадр уже учтён в fps камеры (ниже второй раз не считаем)
+                if self.target_fps and hasattr(capture, "grab") and hasattr(capture, "retrieve"):
+                    # решаем по моменту ПРИХОДА кадра, а не до ожидания: grab() ждёт кадр, и уже по нему видно, пора ли отдавать.
+                    # (Раньше решали до grab: на камере 8 к/с и целевых 8 каждый второй кадр шёл в пропуск, отдача падала вдвое.)
                     if capture.grab():
-                        self._last_frame_at = time.time()
+                        t_in = time.time()
+                        self._last_frame_at = t_in
+                        self._note_frame_in(t_in)
+                        counted = True
                         got_frame = True
-                        continue
-                    ok, raw = False, None
+                        if t_in - last_emit < EMIT_TOLERANCE / self.target_fps:
+                            continue
+                        ok, raw = capture.retrieve()
+                    else:
+                        ok, raw = False, None
                 else:
-                    ok, raw = capture.read()
+                    skip = self.target_fps and (time.time() - last_emit) < EMIT_TOLERANCE / self.target_fps and hasattr(capture, "grab")
+                    if skip:
+                        if capture.grab():
+                            self._last_frame_at = time.time()
+                            self._note_frame_in(self._last_frame_at)
+                            got_frame = True
+                            continue
+                        ok, raw = False, None
+                    else:
+                        ok, raw = capture.read()
 
                 if not ok or raw is None:
                     self.metrics["errors"] += 1
@@ -276,6 +324,7 @@ class RtspCameraWorker(BaseCameraWorker):
                                        "retry_in": self._backoff_delay(attempt),
                                        "stall_seconds": round(time.time() - self._last_frame_at, 1)})
                         self._hw_giveup_check(got_frame)
+                        self._reset_frames_in()
                         try:
                             capture.release()
                         except Exception:
@@ -289,7 +338,9 @@ class RtspCameraWorker(BaseCameraWorker):
                         time.sleep(0.05)
                     continue
 
-                self._last_frame_at = time.time()
+                if not counted:
+                    self._last_frame_at = time.time()
+                    self._note_frame_in(self._last_frame_at)
                 got_frame = True
                 # кадры снова пошли после «тишины» — гасим тревогу сторожа
                 if self._stall_reported:
@@ -304,7 +355,7 @@ class RtspCameraWorker(BaseCameraWorker):
                 self._sample_quality(raw, now)
                 # троттлинг отдачи/записи: читаем всё (иначе растёт буфер), но
                 # кодируем и сохраняем не чаще целевого fps
-                min_interval = (1.0 / self.target_fps) if self.target_fps else 0.0
+                min_interval = (EMIT_TOLERANCE / self.target_fps) if self.target_fps else 0.0
                 if min_interval and (now - last_emit) < min_interval:
                     continue
                 last_emit = now
@@ -335,13 +386,14 @@ class RtspCameraWorker(BaseCameraWorker):
                 self.metrics["width"] = img.shape[1]
                 self.metrics["height"] = img.shape[0]
 
-                if last_frame_time is not None:
-                    dt = now - last_frame_time
-                    if dt > 0:
-                        self.metrics["fps"] = 1.0 / dt
+                # отдача в браузер/запись (скользящее окно); metrics["fps"] — частота камеры, её считает _note_frame_in
+                out_rate = self._window_rate(self._out_times, now)
+                if out_rate is not None:
+                    self.metrics["fps_out"] = out_rate
 
-                if frame is not None and self.metrics["fps"] > 0:
-                    self.metrics["bandwidth_mbps"] = (len(frame) * 8 * self.metrics["fps"]) / 1_000_000
+                if frame is not None and self.metrics["fps_out"] > 0:
+                    # размер JPEG, уходящего в браузер, × fps отдачи — это НЕ битрейт камеры (его через OpenCV не измерить)
+                    self.metrics["bandwidth_mbps"] = (len(frame) * 8 * self.metrics["fps_out"]) / 1_000_000
                 elif frame is None:
                     # в браузер ничего не уходит — не показываем старую цифру
                     self.metrics["bandwidth_mbps"] = 0.0
@@ -365,6 +417,7 @@ class RtspCameraWorker(BaseCameraWorker):
 
         finally:
             self.running = False
+            self._reset_frames_in()
             self.reconnecting = False
             self.gray_now = False
             self._stall_reported = False

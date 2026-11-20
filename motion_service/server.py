@@ -409,6 +409,11 @@ def create_app(data_dir: Optional[Path] = None, capture_factory: Callable = open
         return {"cameras": [w.state() for w in mgr.workers.values()], "scenarios": mgr.scenarios.snapshot(), "shafts": mgr.shafts.snapshot(),
                 "perf": PERF.snapshot()}      # сколько времени уходит на кадр по камерам (панель КЗ, вкладка «Камеры»)
 
+    @app.get("/shafts/live")
+    def shafts_live():
+        # лёгкий снимок углов и разностей для плавающего виджета (опрос 6–8 раз в секунду, без побочных эффектов)
+        return mgr.shafts.live()
+
     @app.get("/shafts/history")
     def shafts_history(pair: str, window: float = 3600.0, points: int = 600):
         # разности пары валов (угол, скорость) за последние window секунд, ужатые до points точек; история в памяти сервиса (≈5,5 ч)

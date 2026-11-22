@@ -330,6 +330,9 @@ class MicroscopeService:
         sidecar_offline / error. Любой отказ виден на странице, а не только в логе."""
         # t — эпоха: мониторинг по ней отличает свежий отказ от залипшего с прошлой варки
         self._cv_status = {"state": state, "message": message, "ts": time.strftime("%H:%M:%S"), "t": time.time()}
+        if state != "running":      # «разобрано кадров N из M» идёт на каждый кадр — в журнал не пишем; остальное (итог пробы, отказы) — да
+            log_event("cv_status", "CV: %s — %s" % (state, message), "info" if state in ("idle", "ok") else "warn",
+                      {"state": state, "stage": getattr(self.fsm, "stage", None)})
 
     def cv_status(self):
         return dict(self._cv_status)

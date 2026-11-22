@@ -1,3 +1,6 @@
+import json
+import logging
+import logging.handlers
 import re
 from collections import deque
 from datetime import datetime
@@ -24,6 +27,69 @@ def mask_secrets(value):
     return value
 
 
+# ---- файловый журнал событий (logs\events.log): всё, что идёт через log_event, плюс срабатывания и переходы тревог мониторинга.
+# Память держит лишь 1000 последних событий и пропадает при перезапуске — по файлу можно разбирать «задним числом», что и когда было.
+_FILE_MAX_BYTES = 5 * 1024 * 1024
+_FILE_BACKUPS = 5                    # events.log + events.log.1 … .5 (до ~30 МБ)
+_PAYLOAD_MAX = 1500                  # длиннее — обрезаем, чтобы одна строка не раздула журнал
+_file_logger = None
+_file_last = None                    # (level, source, message) последней записанной строки — подряд идущие повторы склеиваем
+_file_repeat = 0
+
+
+def enable_file(path) -> bool:
+    """Включить запись событий в файл с ротацией. Вызывается один раз при старте приложения. False — папку/файл открыть не удалось
+    (приложение работает как раньше, журнал только в памяти)."""
+    global _file_logger
+    try:
+        from pathlib import Path
+        Path(path).parent.mkdir(parents=True, exist_ok=True)
+        h = logging.handlers.RotatingFileHandler(str(path), maxBytes=_FILE_MAX_BYTES, backupCount=_FILE_BACKUPS, encoding="utf-8", errors="replace")
+        h.setFormatter(logging.Formatter("%(message)s"))
+        lg = logging.getLogger("web_mvs.events")
+        lg.handlers.clear()
+        lg.propagate = False
+        lg.setLevel(logging.INFO)
+        lg.addHandler(h)
+        _file_logger = lg
+        return True
+    except Exception:
+        _file_logger = None
+        return False
+
+
+def disable_file() -> None:
+    global _file_logger, _file_last, _file_repeat
+    lg, _file_logger = _file_logger, None
+    _file_last, _file_repeat = None, 0
+    if lg is not None:
+        for h in list(lg.handlers):
+            lg.removeHandler(h)
+            h.close()
+
+
+def _write_file(item: dict) -> None:
+    """Одна строка: время [уровень] источник: сообщение {payload}. Ошибка записи журнал не роняет."""
+    global _file_last, _file_repeat
+    lg = _file_logger
+    if lg is None:
+        return
+    try:
+        key = (item["level"], item["source"], item["message"], json.dumps(item["payload"], ensure_ascii=False, default=str, sort_keys=True)[:_PAYLOAD_MAX])
+        if key == _file_last:
+            _file_repeat += 1
+            return
+        if _file_repeat:
+            lg.info("%s    (предыдущая строка повторилась ещё %d раз)", item["time"].replace("T", " "), _file_repeat)
+        _file_last, _file_repeat = key, 0
+        line = "%s [%s] %s: %s" % (item["time"].replace("T", " "), item["level"], item["source"], item["message"])
+        if item["payload"]:
+            line += " " + key[3]
+        lg.info(line.replace("\n", " "))
+    except Exception:
+        pass
+
+
 def log_event(source: str, message: str, level: str = "info", payload: dict | None = None):
     global _last_id
     message = mask_secrets(message)
@@ -40,6 +106,7 @@ def log_event(source: str, message: str, level: str = "info", payload: dict | No
             "payload": payload or {},
         }
         _events.append(item)
+        _write_file(item)
         return item
 
 

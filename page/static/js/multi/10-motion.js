@@ -291,25 +291,31 @@ function drawLevelOnTile(ctx, cam, g, st, problem, opts) {
 
 // прозрачность сока: круг на стакане, цвет по состоянию (прозрачный — зелёный, мутный — оранжевый, грязный — красный), подпись «название  число · слово»;
 // нет значения — серый и «—». Состояние считает сервис по порогам зоны (t_turb / t_dirty), здесь только показ.
-const MV_CLARITY_COLORS = ['#22c55e', '#f59e0b', '#ef4444'];
-const MV_CLARITY_WORDS = ['прозрачный', 'мутный', 'грязный'];
-const MV_CLARITY_SHORT = ['чист', 'мутн', 'гряз'];                // короткие слова для подписи на кадре
-const mvClarityLevel = (lz) => Math.max(0, Math.min(2, Number(lz && lz.level) || 0));
+// Пустой стакан (нет движения, включено на вкладке «Сок»): уровень 3 — тёмно-серый пунктирный кружок и «пусто»; от серого «нет значения» (#9ca3af, сплошной) отличается
+// цветом и пунктиром.
+const MV_CLARITY_COLORS = ['#22c55e', '#f59e0b', '#ef4444', '#64748b'];
+const MV_CLARITY_WORDS = ['прозрачный', 'мутный', 'грязный', 'пусто'];
+const MV_CLARITY_SHORT = ['чист', 'мутн', 'гряз', 'пусто'];       // короткие слова для подписи на кадре
+const mvClarityEmpty = (lz) => !!(lz && lz.empty);
+const mvClarityLevel = (lz) => (mvClarityEmpty(lz) ? 3 : Math.max(0, Math.min(2, Number(lz && lz.level) || 0)));
 const mvClarityColor = (lz) => MV_CLARITY_COLORS[mvClarityLevel(lz)];
 function drawClarityOnTile(ctx, z, cam, g, lz, problem) {
   const fs = cam.frame_size || [g.nw, g.nh];
   const sx = (g.nw / fs[0]) * g.k, sy = (g.nh / fs[1]) * g.k;
   const cx = g.ox + z.center[0] * sx, cy = g.oy + z.center[1] * sy, r = z.radius * (sx + sy) / 2;
+  const empty = !problem && mvClarityEmpty(lz);
   const ok = !problem && !!lz && !!lz.valid;
-  const col = ok ? mvClarityColor(lz) : '#9ca3af';
+  const col = ok || empty ? mvClarityColor(lz) : '#9ca3af';
   ctx.lineWidth = 3; ctx.strokeStyle = col;
+  if (empty) ctx.setLineDash([6, 4]);
   ctx.beginPath(); ctx.arc(cx, cy, r, 0, 7); ctx.stroke();
-  if (ok) { ctx.globalAlpha = 0.22; ctx.fillStyle = col; ctx.fill(); ctx.globalAlpha = 1; }
+  ctx.setLineDash([]);
+  if (ok || empty) { ctx.globalAlpha = 0.22; ctx.fillStyle = col; ctx.fill(); ctx.globalAlpha = 1; }
   ctx.font = 'bold 13px sans-serif'; ctx.textAlign = 'center'; ctx.lineWidth = 3; ctx.strokeStyle = '#000';
   const put = (t, y, c) => { ctx.strokeText(t, cx, y); ctx.fillStyle = c; ctx.fillText(t, cx, y); };
-  put(ok ? 'мут ' + Math.round(lz.turb) : '—', cy - r - 6, '#fff');            // над кружком в два ряда: название, под ним мутность
+  put(empty ? 'пусто' : ok ? 'мут ' + Math.round(lz.turb) : '—', cy - r - 6, '#fff');            // над кружком в два ряда: название, под ним мутность
   put(z.name, cy - r - 21, '#fff');
-  if (lz && lz.lab) {                                          // под кружком в два ряда: яркость L, под ней короткое слово состояния (цветом состояния)
+  if (lz && lz.lab && !empty) {                                // под кружком в два ряда: яркость L, под ней короткое слово состояния (цветом состояния)
     put('L ' + Math.round(lz.lab[0]), cy + r + 15, ok ? col : '#fff');
     if (ok) put(MV_CLARITY_SHORT[mvClarityLevel(lz)], cy + r + 30, col);
   }
@@ -430,7 +436,7 @@ function onMotionHover(event) {
   const lz = ((st && st.zones) || []).find((z) => z.id === hit.id);
   const problem = tileMotionStatusText(st);
   tip.textContent = hit.type === 'clarity'
-    ? hit.name + (problem ? ' — ' + problem : lz && lz.valid ? ' · ' + MV_CLARITY_WORDS[mvClarityLevel(lz)] + ' · мутность ' + Math.round(lz.turb) + ' из 100' :' · нет значения: ' + ((lz && lz.reason) || 'нет данных')) + ' · двойной клик — переименовать'
+    ? hit.name + (problem ? ' — ' + problem : mvClarityEmpty(lz) ? ' · пусто (движение ' + Number(lz.move).toFixed(2) + ' ниже ' + Number(hit.mv_lo != null ? hit.mv_lo : 0.9).toFixed(2) + ') · мутность 0' : lz && lz.valid ? ' · ' + MV_CLARITY_WORDS[mvClarityLevel(lz)] + ' · мутность ' + Math.round(lz.turb) + ' из 100' :' · нет значения: ' + ((lz && lz.reason) || 'нет данных')) + ' · двойной клик — переименовать'
     : hit.name + (problem ? ' — ' + problem : lz && hit.type === 'level'
     ? ' · заполнено ' + Number(lz.level).toFixed(1) + ' % · сырое ' + Number(lz.raw).toFixed(1) + ' %' : lz
     ? ' · ' + (lz.bit ? 'крутится' : 'стоит') + ' · diff ' + Number(lz.diff).toFixed(2) + ' · flow ' + Number(lz.flow).toFixed(2) : '');

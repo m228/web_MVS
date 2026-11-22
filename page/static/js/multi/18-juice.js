@@ -13,9 +13,13 @@ const JC = { sec: jcLoadSec(), msg: {}, hist: {}, stats: {}, at: 0, busy: false 
 const JC_SMOOTH_S = 30, JC_HOLD_S = 20;                         // сглаживание цвета (медиана, с) и выдержка смены состояния (с) по умолчанию, как в сервисе
 const JC_T_TURB = 20, JC_T_DIRTY = 66;                       // пороги по умолчанию (как в сервисе, шкала 10/90): мутный с 20, грязный с 66 из 100
 const JC_SPREAD_WARN = 6;                                    // разброс цвета за период (Lab) больше — цвет плавал, эталон шаткий
+// «Сок есть / пусто» по движению в кружке (как в сервисе): пороги у каждого стакана свои, окно / сглаживание / выдержка — одни на камеру
+const JC_MV_HI = 1.1, JC_MV_LO = 0.9, JC_MV_WIN_S = 10, JC_MV_SMOOTH_S = 20, JC_MV_HOLD_S = 30;
+const JC_MV_UP = 1.35, JC_MV_DOWN = 1.12;                    // кнопка «пусто»: «сок есть от» = шум × 1,35 (не меньше +0,2), «пусто ниже» = шум × 1,12
 
 const jcT = (z, key, dflt) => (z && z[key] != null ? z[key] : dflt);   // порог зоны (у старых зон без порогов — по умолчанию)
 const jcZones = (cam) => ((cam && cam.zones) || []).filter((z) => z.type === 'clarity');
+const jcMvOn = (cam) => jcZones(cam).some((z) => z.mv_on);
 
 // номер следующего стакана: после самого большого из уже размеченных (id j1, j2, …)
 function jcNextNumber(cam) {
@@ -82,7 +86,12 @@ function jcRowHtml(cam, z) {
         <div class="md-zone__row"><span class="md-lbl" title="Какая часть радиуса берётся для цвета: меньше — дальше от стенки стакана">берём, %</span>${mdNum(a + ' data-f="core"', Math.round((z.core || 0.7) * 100), 'min="20" max="100" step="5"')}
           <span class="md-lbl" title="Сколько самых ярких точек круга отбросить (блики, пена). 0 — ничего не отбрасывать">блики, %</span>${mdNum(a + ' data-f="glare"', z.glare_pct == null ? 10 : z.glare_pct, 'min="0" max="50" step="1"')}
           <span class="md-lbl" title="Цвет дальше от шкалы «чистый — грязный», чем столько её длин, не считается мутностью (рука, чужой предмет). 0 — не проверять">не на шкале</span>${mdNum(a + ' data-f="offmax"', z.off_max == null ? 1 : z.off_max, 'min="0" max="100" step="0.1"')}</div>
-        <div class="md-zone__row"><span class="md-lbl">мутность в ПЛК</span>${mdOutCell(z.out, a, false, 'o', [['', 'нет'], ['holding', 'регистр']])}<span class="net-hint" title="0–100; нет значения (нет эталонов, кадра, цвет не на шкале) — 65535, чтобы не спутать с «чистый»">регистр: 0–100, нет данных — 65535</span></div>
+        <div class="md-zone__row"><span class="md-lbl">мутность в ПЛК</span>${mdOutCell(z.out, a, false, 'o', [['', 'нет'], ['holding', 'регистр']])}<span class="net-hint" title="0–100; пустой стакан (нет движения) — 0; нет значения (нет эталонов, кадра, цвет не на шкале) — 65535, чтобы не спутать с «чистый»">регистр: 0–100, пусто — 0, нет данных — 65535</span></div>
+        ${jcMvOn(cam) ? `<div class="md-zone__row"><span class="md-lbl" title="Движение в кружке: насколько отличаются средние старой и новой половин последних кадров (размытие и усреднение гасят шум камеры). Сок течёт — число растёт, стакан пуст — держится на уровне шума. Выше этого порога сок есть">сок есть от</span>${mdNum(a + ' data-f="mvhi"', jcT(z, 'mv_hi', JC_MV_HI), 'min="0.01" step="0.05"')}
+          <span class="md-lbl" title="Ниже этого порога стакан пуст (мутность 0, серый кружок). Между порогами состояние не меняется — гистерезис">пусто ниже</span>${mdNum(a + ' data-f="mvlo"', jcT(z, 'mv_lo', JC_MV_LO), 'min="0" step="0.05"')}
+          <button type="button" class="btn-secondary md-x" ${a} data-f="mvcal" title="В этом стакане сейчас пусто: шум движения за последние ${JC.sec} с запомнится, пороги встанут сами («сок есть от» = шум × ${JC_MV_UP}, «пусто ниже» = шум × ${JC_MV_DOWN}). Потом их можно поправить руками по графику">пусто</button>
+          <span class="net-hint" id="jc-mvv-${k}"></span></div>
+        <div class="jc-mvchart"><canvas id="jc-mv-${k}" height="56"></canvas></div>` : '<div class="net-hint">Движение не определяется: включите «пустой стакан — по движению» над стаканами.</div>'}
       </details>
     </div>
     <div class="md-zone__chart"><canvas id="jc-ch-${k}" height="64"></canvas></div>
@@ -105,6 +114,11 @@ function jcCamHtml(cam, all) {
       <span class="md-lbl">каждые</span><select data-md="jc" data-cam="${escapeHtml(cam.id)}" data-f="jbstep">${mdSel(JC_BASE_STEPS, jb.every_min)}</select>
       <label class="switch-toggle md-sw md-sw--sm" title="Включено: один «чистый» и один «грязный» на все стаканы — снимаются кнопками на любом стакане. Выключено: у каждого стакана свои"><span class="switch"><input type="checkbox" data-md="jc" data-cam="${escapeHtml(cam.id)}" data-f="refs"${jcShared(cam) ? ' checked' : ''} /><span class="switch-track"></span></span><span class="md-lbl md-lbl--on" style="white-space:nowrap">один эталон на все</span></label>
       <span class="net-hint" title="Общий «чистый» и сдвиг «грязного» от него (Lab). Снимаются кнопками «чистый» и «грязный» на любом стакане">${(() => { const c = jcBaseClean(cam), d = cam.clarity_shift; return (c ? 'чистый: L ' + c[0].toFixed(0) + ' a ' + c[1].toFixed(0) + ' b ' + c[2].toFixed(0) : 'чистый не задан') + ' · ' + (Array.isArray(d) ? 'грязный: ΔL ' + d[0].toFixed(0) + ' Δa ' + d[1].toFixed(0) + ' Δb ' + d[2].toFixed(0) : 'грязный не задан — нажмите «грязный» на мутном стакане'); })()}</span></div>` +
+    `<div class="md-zone__row jc-bar"><label class="switch-toggle md-sw md-sw--sm" title="Включено: нет движения в кружке — стакан пуст (серый кружок «пусто», мутность 0, в ПЛК 0); есть движение — сок есть, мутность считается по цвету. Для стаканов, из которых временно убрали сок"><span class="switch"><input type="checkbox" data-md="jc" data-cam="${escapeHtml(cam.id)}" data-f="mvon"${jcMvOn(cam) ? ' checked' : ''} /><span class="switch-track"></span></span><span class="md-lbl md-lbl--on" style="white-space:nowrap">пустой стакан — по движению</span></label>
+      ${jcMvOn(cam) ? `<span class="md-lbl" title="Сколько последних секунд кадров сравниваем: окно делится пополам, движение — разница средних картинок половин. Больше — устойчивее к шуму, но медленнее">окно, с</span>${mdNum(`data-md="jc" data-cam="${escapeHtml(cam.id)}" data-f="mvwin"`, jcT(zs[0], 'mv_win_s', JC_MV_WIN_S), 'min="2" max="120" step="1"')}
+      <span class="md-lbl" title="Медиана движения за столько секунд: короткие всплески (рука, пар) не меняют значение. 0 — без сглаживания">сглаживание, с</span>${mdNum(`data-md="jc" data-cam="${escapeHtml(cam.id)}" data-f="mvsmooth"`, jcT(zs[0], 'mv_smooth_s', JC_MV_SMOOTH_S), 'min="0" max="600" step="5"')}
+      <span class="md-lbl" title="«Сок есть» / «пусто» меняется, только если новое состояние держится столько секунд подряд. Сок вводят постепенно — резко он не пропадает. 0 — сразу">держать, с</span>${mdNum(`data-md="jc" data-cam="${escapeHtml(cam.id)}" data-f="mvhold"`, jcT(zs[0], 'mv_hold_s', JC_MV_HOLD_S), 'min="0" max="3600" step="5"')}
+      <button type="button" class="btn-secondary md-x" data-md="jc" data-cam="${escapeHtml(cam.id)}" data-f="mvcalall" title="Во всех стаканах сейчас пусто: у каждого шум движения за последние ${JC.sec} с запомнится, пороги встанут сами">Все стаканы — пусто</button>` : ''}</div>` +
     zs.map((z) => jcRowHtml(cam, z)).join('');
 }
 
@@ -158,6 +172,30 @@ async function jcCalibrate(cam, ids, kind) {
   jcSay(cam.id, parts.join(' · ') || 'нечего задавать', !done.length || !!bad.length);
 }
 
+// «пусто»: шум движения за последние секунды (сервис отдаёт его вместе с цветом) → пороги зоны. «Сок есть от» = шум × 1,35 (не меньше +0,2), «пусто ниже» = шум × 1,12.
+async function jcCalibrateMove(cam, ids) {
+  jcSay(cam.id, 'снимаю шум движения…');
+  const r = await mvJson('/api/motion/clarity_sample', { camera: cam.id, zones: ids, seconds: JC.sec });
+  if (!r || r.error || !r.zones) { jcSay(cam.id, 'не вышло: ' + ((r && (r.error || r.detail)) || 'нет ответа сервиса'), true); return; }
+  const done = [], bad = [];
+  mdEdit(() => {
+    ids.forEach((id) => {
+      const z = cam.zones.find((q) => q.id === id), s = r.zones[id];
+      if (!z) return;
+      if (!s || s.error) { bad.push(z.name + ': ' + ((s && s.error) || 'нет данных')); return; }
+      if (!s.move) { bad.push(z.name + ': движение ещё не посчитано (подождите около ' + Math.round(jcT(z, 'mv_win_s', JC_MV_WIN_S) + jcT(z, 'mv_smooth_s', JC_MV_SMOOTH_S) / 2) + ' с после включения)'); return; }
+      const fl = s.move.floor;
+      z.mv_hi = Math.round(Math.max(fl * JC_MV_UP, fl + 0.2) * 100) / 100;
+      z.mv_lo = Math.round(fl * JC_MV_DOWN * 100) / 100;
+      done.push(z.name + ' ' + fl.toFixed(2));
+    });
+  }, true);
+  const parts = [];
+  if (done.length) parts.push('пусто: шум ' + (done.length > 3 ? done.length + ' стаканов' : done.join(', ')) + ' — пороги заданы');
+  if (bad.length) parts.push(bad.join('; '));
+  jcSay(cam.id, parts.join(' · ') || 'нечего задавать', !done.length || !!bad.length);
+}
+
 function jcOnEvent(t) {
   const f = t.dataset.f;
   if (f === 'sec') {
@@ -168,6 +206,20 @@ function jcOnEvent(t) {
   const cam = mvCam(t.dataset.cam);
   if (!cam) return;
   if (f === 'cleanall') { jcCalibrate(cam, jcZones(cam).map((z) => z.id), 'clean'); return; }
+  if (f === 'mvcalall') { jcCalibrateMove(cam, jcZones(cam).map((z) => z.id)); return; }
+  if (f === 'mvon') {                                         // определение «сок есть / пусто» — на всю камеру
+    mdEdit(() => jcZones(cam).forEach((z) => { z.mv_on = !!t.checked; }), true);
+    jcSay(cam.id, t.checked ? 'движение определяется: подождите ~' + (JC_MV_WIN_S + JC_MV_SMOOTH_S / 2) + ' с, потом «Все стаканы — пусто», если они пусты' : 'определение по движению выключено');
+    return;
+  }
+  if (f === 'mvwin' || f === 'mvsmooth' || f === 'mvhold') {   // окно, сглаживание, выдержка — одним числом на все стаканы камеры
+    const key = { mvwin: 'mv_win_s', mvsmooth: 'mv_smooth_s', mvhold: 'mv_hold_s' }[f], max = { mvwin: 120, mvsmooth: 600, mvhold: 3600 }[f], min = f === 'mvwin' ? 2 : 0;
+    const v = Math.max(min, Math.min(max, parseFloat(t.value) || 0));
+    mdEdit(() => jcZones(cam).forEach((z) => { z[key] = v; }), false);
+    t.value = v;
+    jcSay(cam.id, '');
+    return;
+  }
   if (f === 'refs') { mdEdit(() => { cam.clarity_refs = t.checked ? 'shared' : 'own'; }, true); jcSay(cam.id, t.checked ? 'один эталон на все стаканы' : 'у каждого стакана свой эталон'); return; }
   if (f === 'jbon' || f === 'jbstep') {                       // сбор базы: на всю камеру
     mdEdit(() => {
@@ -196,6 +248,15 @@ function jcOnEvent(t) {
   const z = cam.zones[Number(t.dataset.i)];
   if (!z || z.type !== 'clarity') return;
   if (f === 'clean' || f === 'dirty') { jcCalibrate(cam, [z.id], f); return; }
+  if (f === 'mvcal') { jcCalibrateMove(cam, [z.id]); return; }
+  if (f === 'mvhi' || f === 'mvlo') {                         // «пусто ниже» обязан быть меньше «сок есть от» — иначе сервис отклонит конфиг
+    const v = Math.max(0, parseFloat(t.value) || 0), hi = f === 'mvhi' ? v : jcT(z, 'mv_hi', JC_MV_HI), lo = f === 'mvlo' ? v : jcT(z, 'mv_lo', JC_MV_LO);
+    if (lo >= hi || hi <= 0) { jcSay(cam.id, 'порог «пусто ниже» должен быть меньше «сок есть от»', true); t.value = jcT(z, f === 'mvhi' ? 'mv_hi' : 'mv_lo', f === 'mvhi' ? JC_MV_HI : JC_MV_LO); return; }
+    mdEdit(() => { z.mv_hi = hi; z.mv_lo = lo; }, false);
+    jcSay(cam.id, '');
+    JC.at = 0;                                                // линии порогов на графике перерисуем при ближайшем обновлении
+    return;
+  }
   if (f === 'del') {
     if (!confirm('Удалить «' + z.name + '»?')) return;
     mdEdit(() => {
@@ -234,16 +295,21 @@ function jcPaintLive() {
       const k = c.id + '-' + zc.id;
       const z = alive ? ((res.zones || []).find((q) => q.id === zc.id)) : null;
       const v = mdEl('jc-v-' + k), b = mdEl('jc-b-' + k), s = mdEl('jc-s-' + k), w = mdEl('jc-w-' + k);
-      const ok = !!(z && z.valid);
-      const col = ok ? mvClarityColor(z) : '';
-      if (v) { v.textContent = ok ? jcFmt(z.turb) : '—'; v.style.color = col; }
-      if (w) { w.textContent = ok ? MV_CLARITY_WORDS[mvClarityLevel(z)] : ''; w.style.color = col; }
+      const ok = !!(z && z.valid), empty = !!(z && z.empty);
+      const col = ok || empty ? mvClarityColor(z) : '';
+      if (v) { v.textContent = ok ? jcFmt(z.turb) : empty ? '0' : '—'; v.style.color = col; }
+      if (w) { w.textContent = ok || empty ? MV_CLARITY_WORDS[mvClarityLevel(z)] : ''; w.style.color = col; }
       if (b) { b.style.width = ok ? Math.max(2, z.turb) + '%' : '0'; b.style.background = col; }
+      const mvv = mdEl('jc-mvv-' + k);
+      if (mvv) mvv.textContent = z && z.juice != null ? 'сейчас ' + Number(z.move).toFixed(2) + (z.juice ? ' — сок есть' : ' — пусто') : alive ? 'движение считается… (' + Math.round(jcT(zc, 'mv_win_s', JC_MV_WIN_S) + jcT(zc, 'mv_smooth_s', JC_MV_SMOOTH_S) / 2) + ' с после включения)' : '';
       if (s) {
         const st = sr && sr.zones && sr.zones[zc.id] && sr.zones[zc.id].flow;
         const stat = st ? ` · за 2 ч: ср ${jcFmt(st.avg)} · мин ${jcFmt(st.min)} · макс ${jcFmt(st.max)}` : '';
-        s.textContent = ok ? 'цвет L ' + z.lab[0].toFixed(0) + ' a ' + z.lab[1].toFixed(0) + ' b ' + z.lab[2].toFixed(0) + stat
-          : !alive ? (res && (res.reason || 'нет данных')) || 'нет данных' : z ? z.reason + (z.lab ? ' · цвет L ' + z.lab[0].toFixed(0) + ' a ' + z.lab[1].toFixed(0) + ' b ' + z.lab[2].toFixed(0) : '') : 'зона ещё не считается (ждём кадр)';
+        const mv = z && z.juice != null ? ' · движение ' + Number(z.move).toFixed(2) : '';
+        const lab = z && z.lab ? 'цвет L ' + z.lab[0].toFixed(0) + ' a ' + z.lab[1].toFixed(0) + ' b ' + z.lab[2].toFixed(0) : '';
+        s.textContent = ok ? lab + stat + mv
+          : empty ? 'нет сока: нет движения' + mv + (lab ? ' · ' + lab : '')
+          : !alive ? (res && (res.reason || 'нет данных')) || 'нет данных' : z ? z.reason + (z.lab ? ' · ' + lab : '') + mv : 'зона ещё не считается (ждём кадр)';
       }
     });
   });
@@ -271,8 +337,22 @@ async function jcRefresh(force) {
         const d = h.zones[z.id], cv = mdEl('jc-ch-' + c.id + '-' + z.id);
         if (!d || !cv) return;
         mdDrawSeries(cv, h.t || [], d.flow.map((v, i) => (d.bit[i] ? v : null)), h.ok || [], 0, 100, { win: JC_WIN, h: 64, lines: [{ v: jcT(z, 't_turb', JC_T_TURB), color: MV_CLARITY_COLORS[1] }, { v: jcT(z, 't_dirty', JC_T_DIRTY), color: MV_CLARITY_COLORS[2] }] });
+        const cm = mdEl('jc-mv-' + c.id + '-' + z.id);          // график движения (diff в истории): зелёный пунктир — «сок есть от», серый — «пусто ниже»
+        if (cm && jcMvOn(c)) {
+          const hi = jcT(z, 'mv_hi', JC_MV_HI), lo = jcT(z, 'mv_lo', JC_MV_LO);
+          // до 22.11 в diff лежала яркость L (15–60): такие значения при масштабе не учитываем, ещё два часа они уходят из окна
+          const mx = d.diff.reduce((m, v) => (v > m && v < 20 ? v : m), 0);
+          const top = Math.min(20, Math.max(3, Math.ceil(Math.max(mx * 1.1, hi * 1.8))));
+          mdDrawSeries(cm, h.t || [], d.diff.map((v) => (v > 0 && v < 20 ? v : null)), h.ok || [], 0, top, { win: JC_WIN, h: 56, lines: [{ v: hi, color: MV_CLARITY_COLORS[0] }, { v: lo, color: MV_CLARITY_COLORS[3] }] });
+        }
       });
     });
   } finally { JC.busy = false; }
   jcPaintLive();
 }
+
+// график движения лежит в закрытой клетке «положение, отбор точек, ПЛК» (ширина 0, рисовать нечем): открыли — сразу обновляем
+document.addEventListener('toggle', (e) => {
+  const d = e.target;
+  if (d && d.classList && d.classList.contains('jc-more') && d.open) jcRefresh(true);
+}, true);

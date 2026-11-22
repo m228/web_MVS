@@ -54,6 +54,17 @@ CLARITY_HOLD_S = 20.0                     # новое состояние дол
 CLARITY_DEAD_DE = 2.0                     # отклонение цвета от сглаженного меньше этого (ΔE по Lab) — шум, на разгон не работает
 CLARITY_LEVELS = ("clear", "turbid", "dirty")   # прозрачный / мутный / грязный
 CLARITY_KEEP_S = 600                    # сколько секунд сырых цветов храним для калибровки («чистый»/«грязный» по последним N секундам)
+# «Есть ли сок» по движению (22.11): в кружке сок течёт — картинка шевелится; стакан пуст — стоит. Подобрано на роликах пустых стаканов (22.11) и полных (19.11):
+# у пустых шум после размытия и усреднения ≈ 0,6–1,0, у стаканов с соком 1,1–4 и выше. Пороги у каждого стакана свои (кнопка «пусто» снимает шум).
+CLARITY_MV_HI = 1.1                     # движение от этого — сок есть
+CLARITY_MV_LO = 0.9                     # ниже этого — стакан пуст (между порогами состояние не меняется — гистерезис)
+CLARITY_MV_WIN_S = 10.0                 # окно кадров, с: делится пополам по числу кадров, сравниваются средние половин
+CLARITY_MV_SMOOTH_S = 20.0              # медиана значения движения за столько секунд (против одиночных всплесков)
+CLARITY_MV_HOLD_S = 30.0                # новое состояние «сок / пусто» должно продержаться столько секунд
+CLARITY_MV_N = 48                       # круг приводится к N×N, чтобы метрика не зависела от разрешения камеры
+CLARITY_MV_SIGMA = 2.5                  # размытие (в точках N×N): шум сжатия мелкий, течение сока — крупнее
+CLARITY_MV_MIN_FRAMES = 4               # меньше стольких разных кадров в окне — движение не считаем (по два в каждой половине)
+CLARITY_MV_DUP_EPS = 0.05               # кадр, отличающийся от прежнего меньше этого (средний |Δ| серого), — дубль потока, в окно не берём
 METRICS = ("flow", "diff")
 GROUP_TYPES = ("sum", "monotonic", "worktimer", "mirror", "level")
 MIRROR_MODES = ("mirror", "same")
@@ -226,7 +237,7 @@ def _clarity_refs(v) -> str:
 def _norm_clarity(z: dict, zid: str, where: str) -> dict:
     """Зона-«прозрачность»: круг на стакане с соком (центр + радиус, как у палки). Результат — мутность turb 0..100: эталон «чистый» стоит на 10,
     «грязный» на 90 (оба задаёт оператор; чище — ниже 10, грязнее — выше 90), между ними — по линейке в цветовом пространстве Lab. Полигона и метрик потока нет (points = [],
-    flow = turb, diff = яркость L — так мутность попадает в истории, тренды и CSV). Вывод в ПЛК — только holding."""
+    flow = turb, diff = движение в кружке (mv_*, «сок есть / пусто»; до 22.11 тут была яркость L) — так они попадают в истории, тренды и CSV). Вывод в ПЛК — только holding."""
     c = z.get("center")
     if not c or len(c) != 2:
         raise ValueError("%s: нужен центр круга [x, y]" % where)
@@ -246,6 +257,10 @@ def _norm_clarity(z: dict, zid: str, where: str) -> dict:
             hyst = round(hyst * k, 1)
     if t_turb >= t_dirty:
         raise ValueError("%s: порог «мутный» должен быть меньше порога «грязный»" % where)
+    mv_hi = _num(z.get("mv_hi", CLARITY_MV_HI), where + ".mv_hi", 0.01, 1000)
+    mv_lo = _num(z.get("mv_lo", CLARITY_MV_LO), where + ".mv_lo", 0, 1000)
+    if mv_lo >= mv_hi:
+        raise ValueError("%s: порог «нет сока ниже» должен быть меньше порога «сок есть от»" % where)
     return {
         "id": zid,
         "name": str(z.get("name") or zid),
@@ -272,6 +287,12 @@ def _norm_clarity(z: dict, zid: str, where: str) -> dict:
         "hold_s": _num(z.get("hold_s", CLARITY_HOLD_S), where + ".hold_s", 0, 3600),          # выдержка смены состояния, с
         "hyst": hyst,                                                                     # гистерезис порогов, пункты мутности: против дрожания границы
         "label": _label(z.get("label"), where + ".label"),                                # ручная метка оператора для базы: "" / clear / turbid / dirty
+        "mv_on": bool(z.get("mv_on", False)),                                             # определять «сок есть / пусто» по движению (нет движения → мутность 0, кружок серый)
+        "mv_hi": mv_hi,                                                                   # движение от этого — сок есть
+        "mv_lo": mv_lo,                                                                   # ниже этого — пусто
+        "mv_win_s": _num(z.get("mv_win_s", CLARITY_MV_WIN_S), where + ".mv_win_s", 2, 120),
+        "mv_smooth_s": _num(z.get("mv_smooth_s", CLARITY_MV_SMOOTH_S), where + ".mv_smooth_s", 0, 600),
+        "mv_hold_s": _num(z.get("mv_hold_s", CLARITY_MV_HOLD_S), where + ".mv_hold_s", 0, 3600),
     }
 
 
@@ -749,6 +770,13 @@ class ClarityRT:
         self._y: Optional[np.ndarray] = None                # сглаженный цвет (подтягивается к медиане с разгоном)
         self._samples: deque = deque()                      # (время, L, a, b) сырые, за последние CLARITY_KEEP_S секунд — для калибровки
         self._lock = threading.Lock()
+        # движение: квадрат по полному радиусу (не по «ядру») → серый N×N; маска круга «ядра» на этой сетке
+        N = CLARITY_MV_N
+        rf = max(2.0, zcfg["radius"] * (sx + sy) / 2.0)
+        self.mbox = (max(0, int(cx - rf)), max(0, int(cy - rf)), min(W, int(cx + rf) + 1), min(H, int(cy + rf) + 1))
+        self.mv_geom_ok = bool(self.mbox[2] - self.mbox[0] >= 6 and self.mbox[3] - self.mbox[1] >= 6)
+        yy2, xx2 = np.ogrid[:N, :N]
+        self._mmask = ((xx2 - (N - 1) / 2.0) ** 2 + (yy2 - (N - 1) / 2.0) ** 2) <= (N / 2.0 * zcfg["core"]) ** 2
         self.reset()
 
     def reset(self):
@@ -768,6 +796,100 @@ class ClarityRT:
         self.valid = False
         self.reason = "нет кадров"
         self.level = 0                                      # 0 прозрачный, 1 мутный, 2 грязный (по порогам t_turb / t_dirty с гистерезисом)
+        self._mf: deque = deque()                           # (время, размытый серый круг) разных кадров за mv_win_s
+        self._mlast: Optional[np.ndarray] = None            # прежний кадр круга — чтобы отличить дубль потока
+        self._mraw: deque = deque()                         # (время, движение) за mv_smooth_s — для медианы
+        self._mhist: deque = deque()                        # (время, сглаженное движение) за CLARITY_KEEP_S — для кнопки «пусто»
+        self.move: Optional[float] = None                   # сглаженное движение; None — ещё не посчитано (мало кадров) или выключено
+        self.juice: Optional[bool] = None                   # True — сок есть, False — пусто, None — не знаем
+        self._jcand: Optional[bool] = None
+        self._jcand_t = 0.0
+
+    @property
+    def empty(self) -> bool:
+        """Стакан пуст: определение по движению включено, движения нет (с выдержкой). Тогда мутность — 0, кружок серый."""
+        return bool(self.cfg["mv_on"] and self.juice is False)
+
+    def _reset_color(self):
+        """Цвет «забываем», пока стакан пуст: когда сок вернётся, мутность считается с нуля, а не подтягивается от цвета осадка."""
+        self._hist.clear()
+        self._th.clear()
+        self._y = None
+        self._persist = 0.0
+        self._dprev = None
+        self._cand = None
+        self._fresh = True
+        self.turb = self.raw = self.off = 0.0
+        self.level = 0
+
+    def step_move(self, frame: Optional[np.ndarray], now: float) -> None:
+        """Следующий кадр → движение в кружке и состояние «сок / пусто». Движение = насколько отличаются средние старой и новой половин окна кадров
+        (размытие гасит шум сжатия, усреднение — шум матрицы; общая яркость снята, блики отброшены). Дубли кадров потока в окно не берём."""
+        cfg = self.cfg
+        if not cfg["mv_on"]:
+            if self.juice is not None or self.move is not None:
+                self._mf.clear(); self._mraw.clear(); self._mhist.clear(); self._mlast = None
+                self.move = self.juice = None
+            return
+        if frame is None or not self.mv_geom_ok:
+            return
+        x0, y0, x1, y1 = self.mbox
+        sq = frame[y0:y1, x0:x1]
+        g = cv2.cvtColor(sq, cv2.COLOR_BGR2GRAY) if sq.ndim == 3 else sq
+        N = CLARITY_MV_N
+        g = cv2.resize(g, (N, N), interpolation=cv2.INTER_AREA).astype(np.float32)
+        dup = self._mlast is not None and float(np.abs(g - self._mlast).mean()) < CLARITY_MV_DUP_EPS
+        if not dup:
+            self._mlast = g
+            self._mf.append((now, cv2.GaussianBlur(g, (0, 0), CLARITY_MV_SIGMA)[self._mmask]))
+            while self._mf and now - self._mf[0][0] > cfg["mv_win_s"]:
+                self._mf.popleft()
+            if len(self._mf) >= CLARITY_MV_MIN_FRAMES:
+                arr = np.stack([v for _, v in self._mf])
+                k = len(arr) // 2
+                ma, mb = arr[:k].mean(0), arr[k:].mean(0)
+                keep = ma <= np.percentile(ma, 100.0 - cfg["glare_pct"]) if cfg["glare_pct"] > 0 else np.ones(len(ma), bool)
+                raw = float(np.abs((ma - ma.mean()) - (mb - mb.mean()))[keep].mean())
+                self._mraw.append((now, raw))
+                S = cfg["mv_smooth_s"]
+                while len(self._mraw) > 1 and now - self._mraw[0][0] > S:
+                    self._mraw.popleft()
+                if S <= 0 or now - self._mraw[0][0] >= 0.5 * S:       # набрали хотя бы полокна сглаживания — иначе первое же значение решало бы всё
+                    self.move = float(np.median([v for _, v in self._mraw]))
+                    with self._lock:
+                        self._mhist.append((now, self.move))
+                        while self._mhist and now - self._mhist[0][0] > CLARITY_KEEP_S:
+                            self._mhist.popleft()
+        self._set_juice(now)
+
+    def _set_juice(self, now: float) -> None:
+        """Состояние по порогам с гистерезисом и выдержкой mv_hold_s (первое значение берём сразу)."""
+        if self.move is None:
+            return
+        cfg = self.cfg
+        cur = self.juice
+        new = self.move >= cfg["mv_hi"] or (cur is True and self.move >= cfg["mv_lo"])
+        if cur is None or cfg["mv_hold_s"] <= 0 or new == cur:
+            self.juice, self._jcand = new, None
+        else:
+            if self._jcand != new:
+                self._jcand, self._jcand_t = new, now
+            if now - self._jcand_t >= cfg["mv_hold_s"]:
+                self.juice, self._jcand = new, None
+        if self.empty:
+            self._reset_color()
+
+    def move_sample(self, seconds: float) -> dict:
+        """Шум пустого стакана по последним `seconds` секундам: floor — почти максимум сглаженного движения (p95), median. Для кнопки «пусто»."""
+        with self._lock:
+            rows = list(self._mhist)
+        if not rows:
+            raise ValueError("зона %s: движение ещё не посчитано (нужно %.0f с кадров или определение выключено)" % (self.name, self.cfg["mv_win_s"] + 0.5 * self.cfg["mv_smooth_s"]))
+        edge = rows[-1][0] - float(seconds)
+        a = np.array([v for t, v in rows if t >= edge], np.float64)
+        if len(a) < 3:
+            raise ValueError("зона %s: за последние %.0f с набрано %d значений движения, мало" % (self.name, seconds, len(a)))
+        return {"floor": round(float(np.percentile(a, 95)), 3), "median": round(float(np.median(a)), 3), "n": int(len(a))}
 
     def _smooth(self, med: np.ndarray, now: float) -> np.ndarray:
         """Цвет кадра → сглаженный. smooth_s = S > 0: медиана за S/3 секунд (отсекает короткие выбросы), затем цвет подтягивается к ней
@@ -838,6 +960,12 @@ class ClarityRT:
             self._samples.append((now, float(med[0]), float(med[1]), float(med[2])))
             while self._samples and now - self._samples[0][0] > CLARITY_KEEP_S:
                 self._samples.popleft()
+        if self.empty:                                      # стакан пуст (нет движения): мутности нет, цвет осадка в неё не идёт — показываем только сырой цвет
+            self.lab = med
+            return self._fail("нет сока: нет движения в кружке")
+        if self.cfg["mv_on"] and self.juice is None:        # сок есть или пусто — ещё не знаем (после старта нужно набрать кадры): мутность по цвету осадка выдавать нельзя
+            self.lab = med
+            return self._fail("считаю движение: нужно %.0f с разных кадров" % (self.cfg["mv_win_s"] + 0.5 * self.cfg["mv_smooth_s"]))
         proj = self._project(med)
         if isinstance(proj, str):                           # эталонов нет — цвет всё равно копим и показываем (для калибровки)
             self.lab = self._smooth(med, now)
@@ -881,8 +1009,13 @@ class ClarityRT:
         a = np.array([r[1:] for r in rows if r[0] >= edge], np.float64)
         if len(a) < 3:
             raise ValueError("зона %s: за последние %.0f с набрано %d кадров, мало" % (self.name, seconds, len(a)))
-        return {"lab": [round(float(x), 2) for x in np.median(a, axis=0)], "n": int(len(a)),
-                "spread": round(float(np.max(np.percentile(a, 90, axis=0) - np.percentile(a, 10, axis=0))), 2)}
+        res = {"lab": [round(float(x), 2) for x in np.median(a, axis=0)], "n": int(len(a)),
+               "spread": round(float(np.max(np.percentile(a, 90, axis=0) - np.percentile(a, 10, axis=0))), 2)}
+        try:                                                # шум движения для кнопки «пусто»; нет его (определение выключено, рано) — просто без ключа
+            res["move"] = self.move_sample(seconds)
+        except ValueError:
+            res["move"] = None
+        return res
 
 
 MIRROR_BINS = 36         # таблица поправки зеркальности: 36 ячеек по 10° по углу первой палки
@@ -1502,6 +1635,7 @@ class CameraEngine:
             bits[c.id] = int(c.step(frame, now))
         t2 = time.perf_counter()
         for c in self.clarity.values():
+            c.step_move(frame, now)                         # сначала движение: пустой стакан цвет в мутность не пускает
             bits[c.id] = int(c.step(frame, now))
         t3 = time.perf_counter()
         if self.zones:
@@ -1607,19 +1741,23 @@ class CameraEngine:
                 "off_b": round(c.off_b, 1) if c else 0.0}
 
     def _clarity_zone(self, zc: dict, alive: bool) -> dict:
-        """Зона-прозрачность → запись состояния. turb — мутность 0..100 (flow = turb, diff = яркость L — для историй, трендов и CSV), bit/valid —
-        значение достоверно (есть кадр и оба эталона, цвет на шкале). lab — сглаженный цвет, calibrated — оба эталона заданы (для интерфейса)."""
+        """Зона-прозрачность → запись состояния. turb — мутность 0..100 (flow = turb, diff = движение в кружке — для историй, трендов и CSV; раньше тут
+        была яркость L, она осталась в lab), bit/valid — значение достоверно (есть кадр и оба эталона, цвет на шкале, стакан не пуст). lab — сглаженный
+        цвет, calibrated — оба эталона заданы (для интерфейса). empty — нет движения, стакан пуст: turb = 0, valid = False; move / juice — движение и «сок есть»."""
         c = self.clarity.get(zc["id"])
         ok = bool(alive and c and c.valid)
-        turb = round(c.turb, 1) if (c and alive) else 0.0
+        empty = bool(alive and c and c.empty)
+        turb = round(c.turb, 1) if (c and alive and not empty) else 0.0
         lab = [round(float(x), 2) for x in c.lab] if (c is not None and c.lab is not None) else None
+        move = round(c.move, 3) if (c and alive and c.move is not None) else 0.0
         reason = "" if ok else ("нет кадров" if not alive else (c.reason if c else "зона выключена"))
         return {"id": zc["id"], "name": zc["name"], "type": "clarity", "metric": "flow", "enabled": zc["enabled"],
-                "bit": int(ok), "flow": turb, "diff": round(lab[0], 1) if lab else 0.0, "value": turb, "on": 0.0, "off": 0.0,
-                "turb": turb, "level": (c.level if c else 0), "level_name": (CLARITY_LEVELS[c.level] if c else "clear"),
+                "bit": int(ok), "flow": turb, "diff": move, "value": turb, "on": 0.0, "off": 0.0,
+                "turb": turb, "level": (c.level if c else 0), "level_name": ("empty" if empty else CLARITY_LEVELS[c.level] if c else "clear"),
                 "raw": round(c.raw, 1) if c else 0.0, "off_axis": round(c.off, 2) if c else 0.0, "lab": lab,
                 "valid": ok, "reason": reason, "calibrated": bool(c and c.clean is not None and c.dirty is not None),
-                "ref_default": bool(c and c.clean_default)}
+                "ref_default": bool(c and c.clean_default),
+                "move": move, "juice": (None if (c is None or c.juice is None or not c.cfg["mv_on"]) else int(c.juice)), "empty": empty}
 
     def clarity_sample(self, zone_ids, seconds: float) -> dict:
         """Эталон цвета по последним `seconds` секундам для зон-прозрачности: {id: {lab, n, spread}} или {id: {error}}. zone_ids пуст — все."""
@@ -1723,7 +1861,8 @@ class CameraEngine:
             if o and zc["enabled"]:
                 if zc["type"] == "clarity":
                     a = za[zc["id"]]
-                    val = int(round(a["turb"])) if a["valid"] else CLARITY_NO_DATA      # нет значения — 65535, а не 0: ПЛК не должен принять это за «чистый»
+                    # пусто (нет движения) — 0 (решение Макса 22.11: «прозрачно и всё»); нет значения иначе — 65535, а не 0: ПЛК не должен принять это за «чистый»
+                    val = 0 if a.get("empty") else (int(round(a["turb"])) if a["valid"] else CLARITY_NO_DATA)
                 elif zc["type"] == "cycle" and o["kind"] == "holding":
                     val = int(round(za[zc["id"]]["angle"] * 10)) % 3600 if za[zc["id"]]["valid"] else 0
                 else:

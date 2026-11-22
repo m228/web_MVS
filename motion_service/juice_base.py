@@ -39,7 +39,8 @@ def rows_for(state: dict, zones_cfg: list) -> list:
             continue
         lab = z.get("lab") or [None, None, None]
         ok = bool(z.get("valid"))                          # нет эталонов / цвет не на шкале: мутность и состояние пустые (не «0 — чистый»), цвет всё равно пишем
-        out.append([z["id"], z.get("name", z["id"]), lab[0], lab[1], lab[2], z.get("turb", "") if ok else "", z.get("level_name", "") if ok else "", int(ok), label[z["id"]]])
+        empty = bool(z.get("empty"))                       # нет движения: стакан пуст — пишем состояние «empty», мутность пустая (осадок — не сок)
+        out.append([z["id"], z.get("name", z["id"]), lab[0], lab[1], lab[2], z.get("turb", "") if ok else "", "empty" if empty else z.get("level_name", "") if ok else "", int(ok), label[z["id"]]])
     return out
 
 

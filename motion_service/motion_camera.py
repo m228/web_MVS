@@ -632,7 +632,7 @@ class CameraWorker(threading.Thread):
             t = zs["turb"]
             color = (150, 150, 150) if not zs["valid"] else (0, int(200 * (1 - t / 100.0) + 55), int(60 + 170 * t / 100.0))
             cv2.circle(f, (cx, cy), rr, color, 2)
-            cv2.putText(f, "%s %s" % (zc["name"], ("%.0f" % t) if zs["valid"] else "--"), (max(0, cx - rr), max(14, cy - rr - 6)),
+            cv2.putText(f, "%s %s" % (zc["name"], "pusto" if zs.get("empty") else ("%.0f" % t) if zs["valid"] else "--"), (max(0, cx - rr), max(14, cy - rr - 6)),
                         cv2.FONT_HERSHEY_SIMPLEX, max(0.4, fw / 1800.0), color, 1, cv2.LINE_AA)
         cv2.putText(f, "%s %s" % (self.id, time.strftime("%Y-%m-%d %H:%M:%S")), (8, fh - 10), cv2.FONT_HERSHEY_SIMPLEX,
                     max(0.45, fw / 1600.0), (255, 255, 255), 1, cv2.LINE_AA)

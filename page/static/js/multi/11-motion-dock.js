@@ -872,6 +872,7 @@ function mdDrawSeries(cv, t, vals, ok, lo, hi, opts) {
   const bw = Math.max(1.5, (dt / win) * w + 1);
   const gap = Math.max(dt * 3, 5);
   for (let i = 0; i < n; i += 1) if (ok[i] === 0) { g.fillStyle = 'rgba(156,163,175,.30)'; g.fillRect(X(i) - bw, 0, bw, plotH); }
+  if (opts.band) { g.fillStyle = opts.band.color; g.fillRect(0, Y(opts.band.hi), w, Y(opts.band.lo) - Y(opts.band.hi)); }     // подсвеченная полоса между двумя значениями (зона гистерезиса)
   g.setLineDash([4, 3]); g.lineWidth = 1;
   (opts.lines || []).forEach((l) => { g.strokeStyle = l.color; g.beginPath(); g.moveTo(0, Y(l.v)); g.lineTo(w, Y(l.v)); g.stroke(); });
   g.setLineDash([]);

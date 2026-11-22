@@ -90,6 +90,31 @@ class RingLog(logging.Handler):
             pass
 
 
+# «Мягкие» поля зоны-стакана: движок читает их из конфига на каждом кадре, поэтому смена не требует перезапуска камеры (иначе каждая правка порога
+# = переподключение потока и ~20 с «считаю движение» с 65535 в ПЛК). Геометрия (центр, радиус, ядро), эталоны, вывод в ПЛК, mv_on — перезапуск как раньше.
+HOT_CLARITY_KEYS = ("t_turb", "t_dirty", "hyst", "hold_s", "smooth_s", "glare_pct", "off_max", "mv_hi", "mv_lo", "mv_win_s", "mv_smooth_s", "mv_hold_s", "label", "name")
+
+
+def _strip_hot(cam: dict) -> dict:
+    """Камера без «мягких» полей стаканов — для сравнения «изменилось только мягкое?»."""
+    out = dict(cam)
+    out["zones"] = [({k: v for k, v in z.items() if k not in HOT_CLARITY_KEYS} if z.get("type") == "clarity" else z) for z in cam["zones"]]
+    return out
+
+
+def _hot_update(worker, new_cam: dict) -> bool:
+    """Камера отличается от работающей только мягкими полями стаканов → записать их в конфиг рабочего потока на месте (True); иначе False."""
+    old = worker.cfg
+    if _strip_hot(old) != _strip_hot(new_cam):
+        return False
+    for oz, nz in zip(old["zones"], new_cam["zones"]):
+        if oz.get("type") == "clarity":
+            for k in HOT_CLARITY_KEYS:
+                if k in nz:
+                    oz[k] = nz[k]
+    return True
+
+
 class Manager:
     """Конфиг на диске + рабочие потоки камер."""
 
@@ -226,7 +251,7 @@ class Manager:
             keep = {}
             for c in new["cameras"]:
                 w = self.workers.get(c["id"])
-                if w and old_cams.get(c["id"]) == c and same_mb and w.is_alive():
+                if w and same_mb and w.is_alive() and (old_cams.get(c["id"]) == c or _hot_update(w, c)):
                     keep[c["id"]] = w
             for cid, w in list(self.workers.items()):
                 if cid not in keep:

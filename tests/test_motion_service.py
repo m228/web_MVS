@@ -1181,3 +1181,36 @@ def test_scenario_normalize_keeps_group_sources_and_drops_missing_or_mirror():
                                "scenarios": [{"id": "s1", "rule": "sum", "sources": [{"camera": "a", "group": "g1"}, {"camera": "a", "group": "g1"},
                                                                                        {"camera": "a", "group": "g9"}, {"camera": "a", "zone": "z1"}]}]})
     assert cfg["scenarios"][0]["sources"] == [{"camera": "a", "group": "g1"}, {"camera": "a", "zone": "z1"}]
+
+
+def test_soft_clarity_edit_keeps_worker_but_geometry_edit_restarts_it(tmp_path):
+    """Пороги, окна, метка и имя стакана меняются на ходу (камера не переподключается, движение не считается заново);
+    центр, радиус и прочее — перезапуск камеры, как раньше."""
+    import copy
+    srv = _load_server()
+    raw = {"id": "w", "name": "Сок", "url": "fake", "hw_accel": "off", "proc_fps": 20, "freeze_timeout_s": 1, "zones": [
+        {"id": "j1", "name": "Стакан 1", "type": "clarity", "center": [100, 100], "radius": 20, "mv_on": True, "scale": 2}]}
+    m = srv.Manager(tmp_path / "data", capture_factory=lambda u, t: FakeCap(make_frames(400)))
+    m.start()
+    try:
+        m.apply({"cameras": [raw]})
+        w1 = m.workers["w"]
+        assert _wait(w1.is_alive, 5)
+        soft = copy.deepcopy(raw)
+        soft["zones"][0].update(mv_hi=2.0, mv_lo=1.0, t_turb=30, t_dirty=70, mv_hold_s=5, label="clear", name="Сок 1")
+        m.apply({"cameras": [soft]})
+        assert m.workers["w"] is w1, "мягкая правка не перезапускает камеру"
+        z = w1.cfg["zones"][0]
+        assert (z["mv_hi"], z["mv_lo"], z["t_turb"], z["t_dirty"], z["mv_hold_s"], z["label"], z["name"]) == (2.0, 1.0, 30, 70, 5, "clear", "Сок 1")
+        assert m.cfg["cameras"][0]["zones"][0]["mv_hi"] == 2.0
+        hard = copy.deepcopy(soft)
+        hard["zones"][0]["center"] = [120, 100]
+        m.apply({"cameras": [hard]})
+        assert m.workers["w"] is not w1, "центр круга — перезапуск"
+        hard2 = copy.deepcopy(hard)
+        hard2["zones"][0]["mv_on"] = False
+        w2 = m.workers["w"]
+        m.apply({"cameras": [hard2]})
+        assert m.workers["w"] is not w2, "переключатель определения по движению — перезапуск"
+    finally:
+        m.shutdown()

@@ -404,7 +404,7 @@ function mdZoneCardHtml(cam, z, i) {
       (fm ? `<div class="md-zone__row"><span class="md-lbl">порог</span>${fillArrows(mdNum(a + ' data-f="fllon"', z.fill_on || 0, 'step="0.01" min="0" title="Верхний порог вида окна. 0 — пороги не заданы, только измерение"'), mdNum(a + ' data-f="flloff"', z.fill_off || 0, 'step="0.01" min="0" title="Нижний порог вида окна"'))}
           <label class="md-lbl" title="Перевернуть решение: жом есть, когда значение НИЖЕ порога off (пусто — когда выше on). Включайте, если жом в этом окне темнее, чем пустое окно (например, конец засвечен)."><input type="checkbox" ${a} data-f="finvert"${z.fill_invert ? ' checked' : ''} /> инверсия</label></div>
         <div class="md-zone__row"><span class="md-lbl md-fill" id="md-zf-${k}">–</span></div>
-        <div class="md-zone__chart"><canvas id="md-fch-${k}" height="72"></canvas></div>
+        <div class="md-zone__chart"><canvas id="md-fch-${k}" height="52"></canvas></div>
         <div class="md-zstat" id="md-fst-${k}" title="Признаки вида окна: сейчас, среднее, минимум и максимум за выбранный период (только кадры в норме). Жирным — признак, по которому решает окно."></div>` : '') +
       (z.out ? `<div class="md-zone__row"><span class="md-lbl" title="Прямой вывод из карточки зоны больше не настраивается: пишите в ПЛК через сценарий. Старый вывод продолжает работать, пока его не убрать.">ПЛК (старый вывод): ${z.out.kind === 'coil' ? 'coil' : 'рег.'} ${z.out.address}</span><button type="button" class="btn-secondary md-x" ${a} data-f="oclear" title="Убрать старый вывод из зоны">убрать</button></div>` : '') + `
         <div class="md-zr__del"><button type="button" class="btn-secondary md-x" ${a} data-f="del" title="Удалить зону">удалить окно</button></div>

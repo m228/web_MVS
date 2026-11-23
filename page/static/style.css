@@ -4988,7 +4988,7 @@ body.micro-rep-doc .micro-cmp-strips { grid-template-columns: repeat(6, 1fr); ga
 .md-zstat__row.is-main { color: var(--text); }
 .md-zstat__cur { color: var(--text); }
 .md-zstat__note { font-size: 11px; opacity: .8; }
-.md-zr__col .md-zone__chart canvas { height: 72px; }
+.md-zr__col .md-zone__chart canvas { height: 52px; }
 .md-ctip { position: fixed; z-index: 10001; pointer-events: none; padding: 4px 8px; border-radius: 8px; background: rgba(5, 8, 13, .95); color: #e7eefb; font-size: 12px; font-variant-numeric: tabular-nums; white-space: nowrap; box-shadow: 0 4px 16px rgba(0, 0, 0, .4); }
 .md-ctipline { position: fixed; z-index: 10000; pointer-events: none; width: 1px; background: rgba(148, 163, 184, .7); }
 .md-ctip[hidden], .md-ctipline[hidden] { display: none; }

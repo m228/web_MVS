@@ -251,14 +251,9 @@ function renderMotionDock() {
   sw.checked = !!(cam && cam.enabled);
   mdEl('mdSwitchWrap').hidden = all;
   mdEl('mdMark').hidden = all;
-  mdEl('mdMarkRods').hidden = all;
-  mdEl('mdMarkGlass').hidden = all;
-  if (mdEl('mdMarkJuice')) { mdEl('mdMarkJuice').hidden = all; mdEl('mdMarkJuice').disabled = !(cam && cam.enabled); }
   mdEl('mdRec').hidden = all;
   mdEl('mdAll').hidden = all;
   mdEl('mdMark').disabled = !(cam && cam.enabled);
-  mdEl('mdMarkRods').disabled = !(cam && cam.enabled);
-  mdEl('mdMarkGlass').disabled = !(cam && cam.enabled);
   mdEl('mdRec').disabled = !(cam && cam.enabled);
   mdEl('mdRecAll').hidden = !all;
   mdEl('mdRecZip').hidden = !all;
@@ -1627,16 +1622,32 @@ async function mdLoadMarkFrame() {
   } catch (e) { /* ждём следующий кадр */ } finally { m.busy = false; }
 }
 
+// вкладки окна разметки: одна кнопка «Разметить», внутри — что размечаем
+function mdMarkKindOf(kind) { return kind === true || kind === 'rods' ? 'rods' : kind === 'glass' || kind === 'juice' ? kind : 'zone'; }   // false/событие click → зона
+
 function openMarkModal(kind) {
   const { source, cam } = mdCamera();
   if (!source || !cam || !cam.enabled) return;
-  const rods = kind === true, glass = kind === 'glass', juice = kind === 'juice';       // слушатель click передаёт событие, а не флаг
-  MD.mark = { cam: cam.id, pts: [], cursor: null, fw: 0, fh: 0, closed: false, busy: false, rods, glass, juice, polys: [] };
+  MD.mark = { cam: cam.id, fw: 0, fh: 0, busy: false };
   mdEl('mmCam').textContent = source.label || source.serial;
+  mdEl('mmImg').removeAttribute('src');
+  mdMarkSetKind(mdMarkKindOf(kind));
+  const modal = mdEl('motionMarkModal');
+  modal.classList.add('show');
+  modal.setAttribute('aria-hidden', 'false');
+  mdLoadMarkFrame();
+  MD.markTimer = setInterval(mdLoadMarkFrame, 1000);
+  mdMarkUi();
+}
+
+// переключить вид разметки (вкладка): точки и форма сбрасываются, кадр и камера остаются
+function mdMarkSetKind(kind) {
+  const rods = kind === 'rods', glass = kind === 'glass', juice = kind === 'juice';
+  Object.assign(MD.mark, { kind, pts: [], cursor: null, closed: false, rods, glass, juice, polys: [] });   // тот же объект: загрузка кадра держит на него ссылку
+  document.querySelectorAll('#mmTabs [data-mm-kind]').forEach((b) => b.classList.toggle('is-active', b.dataset.mmKind === kind));
   mdEl('mmTitle').textContent = rods ? 'Разметка валов' : glass ? 'Разметка стёкол' : juice ? 'Разметка стаканов' : 'Разметка зоны';
   mdEl('mmOk').textContent = rods ? 'Добавить валы' : glass ? 'Готово' : juice ? 'Добавить стаканы' : 'Добавить зону';
   mdEl('mmClose').textContent = 'Замкнуть (Enter)';
-  mdEl('mmImg').removeAttribute('src');
   mdEl('mmForm').hidden = true;
   mdEl('mmOk').hidden = true;
   mdEl('mmClose').hidden = rods || juice;
@@ -1653,11 +1664,6 @@ function openMarkModal(kind) {
   mdEl('mmRodR').step = juice ? 0.5 : 1;
   mdEl('mmRodR').value = MD.mark.rodPct; mdEl('mmRodRv').textContent = MD.mark.rodPct + ' %';
   mdEl('mmRodBox').hidden = !(rods || juice);
-  const modal = mdEl('motionMarkModal');
-  modal.classList.add('show');
-  modal.setAttribute('aria-hidden', 'false');
-  mdLoadMarkFrame();
-  MD.markTimer = setInterval(mdLoadMarkFrame, 1000);
   mdMarkUi();
 }
 
@@ -1893,10 +1899,11 @@ function initMotionDock() {
     if (source) mdSetEnabled(source.serial, e.target.checked, () => { e.target.checked = !e.target.checked; });
   });
   mdEl('mdAll')?.addEventListener('click', () => setFocus(-1));   // общий вид: фокус снимаем
-  mdEl('mdMark')?.addEventListener('click', () => openMarkModal(false));
-  mdEl('mdMarkRods')?.addEventListener('click', () => openMarkModal(true));
-  mdEl('mdMarkGlass')?.addEventListener('click', () => openMarkModal('glass'));
-  mdEl('mdMarkJuice')?.addEventListener('click', () => openMarkModal('juice'));
+  mdEl('mdMark')?.addEventListener('click', () => openMarkModal('zone'));
+  mdEl('mmTabs')?.addEventListener('click', (e) => {
+    const b = e.target.closest('[data-mm-kind]');
+    if (b && MD.mark && MD.mark.kind !== b.dataset.mmKind) mdMarkSetKind(b.dataset.mmKind);
+  });
   mdEl('mdRec')?.addEventListener('click', mdOnRec);
   mdEl('mdRecAll')?.addEventListener('click', mdOnRecAll);
   mdEl('mdRecZip')?.addEventListener('click', mdOnRecZip);

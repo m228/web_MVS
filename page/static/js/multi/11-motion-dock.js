@@ -331,7 +331,21 @@ const MD_FILL_METRICS = [['off', 'нет'], ['rel', 'яркость к мета�
 const MD_FILL_STATE = ['пусто', 'жом стоит', 'движется'];
 const MD_FILL_HELP = 'Вид окна — есть ли в нём жом. По движению пустое окно и окно со стоящим жомом неотличимы; вид окна различает их.\n' +
   'Яркость к металлу — яркость окна, делённая на яркость металла вокруг него (свет и солнце на неё почти не влияют: жом светлый ≈ 0.9, пустое окно тёмное ≈ 0.65). Яркость — средний свет в окне, зернистость — резкость мелких деталей. Пока пороги on/off равны 0, значения только измеряются (в панели и в записи CSV), решения нет.\n' +
-  'Когда пороги заданы: выше on (или ниже off, если выбрано «жом при низком») — жом есть. Состояние окна: 0 пусто, 1 жом стоит, 2 движется.';
+  'Когда пороги заданы: выше on — жом есть (с галочкой «инверсия» наоборот: ниже off — жом есть). Состояние окна: 0 пусто, 1 жом стоит, 2 движется.\n' +
+  'Под порогами — график признака (2 часа назад, колесо мыши — масштаб; наведите курсор — значение и время) и среднее / мин / макс за выбранный период: так видно, чем «жом есть» отличается от «пусто». Копится в сервисе движения в памяти, после его перезапуска начинается заново.';
+const MD_FILL_NAME = { rel: 'яркость к металлу', lum: 'яркость', tex: 'зернистость' };
+const mdFillFmt = (m, v) => (v == null || Number.isNaN(Number(v)) ? '–' : Number(v).toFixed(m === 'lum' ? 0 : 2));
+
+// ср / мин / макс признаков вида окна за период (st — zones[id].fill из /api/motion/stats), главный признак жирным
+function mdFillStatHtml(z, cur, st) {
+  const row = (m) => {
+    const s = st && st[m];
+    const c = cur && cur.tex !== undefined ? mdFillFmt(m, cur[m]) : '–';
+    const txt = `${MD_FILL_NAME[m]}: сейчас <b class="md-zstat__cur">${c}</b>` + (s ? ` · ср ${mdFillFmt(m, s.avg)} · мин ${mdFillFmt(m, s.min)} · макс ${mdFillFmt(m, s.max)}` : ' · ср – · мин – · макс –');
+    return `<div class="md-zstat__row${z.fill_metric === m ? ' is-main' : ''}">${txt}</div>`;
+  };
+  return (z.fill_metric === 'rel' ? row('rel') : '') + row('lum') + row('tex');       // «к металлу» считается только когда выбран (кольцо вокруг окна), у остальных он ноль
+}
 function mdFillText(z) {
   if (!z || z.tex === undefined) return '–';
   const base = z.fill_metric === 'lum' ? 'яркость ' + Number(z.lum).toFixed(0) : z.fill_metric === 'rel' ? 'отн. яркость ' + Number(z.rel).toFixed(2) : 'зерн. ' + Number(z.tex).toFixed(2);
@@ -360,6 +374,10 @@ function mdZoneCardHtml(cam, z, i) {
   const open = MD.openAll || MD.open[k];
   const fm = z.fill_metric && z.fill_metric !== 'off';
   const arrows = (hi, lo, extra) => `<span class="md-ar" title="включить, когда значение ${z.invert ? 'НИЖЕ off' : 'ВЫШЕ on'}">▲</span>${hi}<span class="md-ar" title="выключить, когда значение ${z.invert ? 'выше on' : 'ниже off'}">▼</span>${lo}${extra || ''}`;
+  // пороги вида окна: сначала тот, при котором жом ЕСТЬ. Обычно — выше on; с инверсией — ниже off (стрелки и подписи меняются местами)
+  const fillArrows = (hi, lo) => (z.fill_invert
+    ? `<span class="md-ar" title="жом есть, когда значение НИЖЕ off">▼</span>${lo}<span class="md-ar" title="жома нет, когда значение выше on">▲</span>${hi}`
+    : `<span class="md-ar" title="жом есть, когда значение ВЫШЕ on">▲</span>${hi}<span class="md-ar" title="жома нет, когда значение ниже off">▼</span>${lo}`);
   return `<div class="md-zr${open ? ' is-open' : ''}" id="md-zr-${k}" data-st="n">
     <div class="md-zr__head" data-zt="${k}" title="Нажмите, чтобы раскрыть настройки окна">
       <span class="md-zr__bar"></span>
@@ -383,8 +401,11 @@ function mdZoneCardHtml(cam, z, i) {
       <div class="md-zr__col">
         <div class="md-zr__t">Вид окна ${mdHelp(MD_FILL_HELP)}</div>
         <div class="md-zone__row"><span class="md-lbl">признак</span><select ${a} data-f="fmetric">${mdSel(MD_FILL_METRICS, z.fill_metric || 'off')}</select></div>` +
-      (fm ? `<div class="md-zone__row"><span class="md-lbl">порог</span>${arrows(mdNum(a + ' data-f="fllon"', z.fill_on || 0, 'step="0.01" min="0" title="Верхний порог вида окна. 0 — пороги не заданы, только измерение"'), mdNum(a + ' data-f="flloff"', z.fill_off || 0, 'step="0.01" min="0" title="Нижний порог вида окна"'))}</div>
-        <div class="md-zone__row"><span class="md-lbl md-fill" id="md-zf-${k}">–</span></div>` : '') +
+      (fm ? `<div class="md-zone__row"><span class="md-lbl">порог</span>${fillArrows(mdNum(a + ' data-f="fllon"', z.fill_on || 0, 'step="0.01" min="0" title="Верхний порог вида окна. 0 — пороги не заданы, только измерение"'), mdNum(a + ' data-f="flloff"', z.fill_off || 0, 'step="0.01" min="0" title="Нижний порог вида окна"'))}
+          <label class="md-lbl" title="Перевернуть решение: жом есть, когда значение НИЖЕ порога off (пусто — когда выше on). Включайте, если жом в этом окне темнее, чем пустое окно (например, конец засвечен)."><input type="checkbox" ${a} data-f="finvert"${z.fill_invert ? ' checked' : ''} /> инверсия</label></div>
+        <div class="md-zone__row"><span class="md-lbl md-fill" id="md-zf-${k}">–</span></div>
+        <div class="md-zone__chart"><canvas id="md-fch-${k}" height="52"></canvas></div>
+        <div class="md-zstat" id="md-fst-${k}" title="Признаки вида окна: сейчас, среднее, минимум и максимум за выбранный период (только кадры в норме). Жирным — признак, по которому решает окно."></div>` : '') +
       (z.out ? `<div class="md-zone__row"><span class="md-lbl" title="Прямой вывод из карточки зоны больше не настраивается: пишите в ПЛК через сценарий. Старый вывод продолжает работать, пока его не убрать.">ПЛК (старый вывод): ${z.out.kind === 'coil' ? 'coil' : 'рег.'} ${z.out.address}</span><button type="button" class="btn-secondary md-x" ${a} data-f="oclear" title="Убрать старый вывод из зоны">убрать</button></div>` : '') + `
         <div class="md-zr__del"><button type="button" class="btn-secondary md-x" ${a} data-f="del" title="Удалить зону">удалить окно</button></div>
       </div>
@@ -683,9 +704,10 @@ function mdOnZone(t, cam) {
     else if (f === 'raddr' && z.rpm_out) z.rpm_out.address = parseInt(t.value, 10) || 0;
     else if (f === 'oval' && z.out) z.out.value = t.value;
     else if (f === 'fmetric') { z.fill_metric = t.value; z.fill_invert = t.value === 'tex'; }   // яркость: жом светлее; зернистость: жом гладче
+    else if (f === 'finvert') z.fill_invert = t.checked;
     else if (f === 'fllon' || f === 'flloff') z[f === 'fllon' ? 'fill_on' : 'fill_off'] = Math.max(0, parseFloat(t.value) || 0);
     else if (f === 'oclear') z.out = null;
-  }, f === 'type' || f === 'metric' || f === 'okind' || f === 'rkind' || f === 'fmetric' || f === 'oclear');
+  }, f === 'type' || f === 'metric' || f === 'okind' || f === 'rkind' || f === 'fmetric' || f === 'finvert' || f === 'oclear');
 }
 
 // «Проверить связь с сервером»: пульс на сервер мониторинга прямо сейчас (тот же, что шлёт приложение раз в несколько минут) и ответ сервера
@@ -751,7 +773,7 @@ async function mdDrawTrends() {
   MD.trendBusy = false;
   res.forEach((h, k) => {
     if (!h || h.error || !h.zones) return;
-    cams[k].zones.forEach((z) => mdDrawChart(cams[k], z, h.zones[z.id], h.t || [], h.ok || []));
+    cams[k].zones.forEach((z) => { mdDrawChart(cams[k], z, h.zones[z.id], h.t || [], h.ok || []); mdDrawFillChart(cams[k], z, h.fill); });
     mdDrawMirrorCharts(cams[k], h);
     mdDrawLevelChart(cams[k], h);
   });
@@ -813,6 +835,11 @@ function mdPaintZoneStats() {
     ((res && res.zones) || []).forEach((z) => { live[z.id] = z; });
     mdLevelCardLive(c, sr);
     c.zones.forEach((z) => {
+      const fe = mdEl('md-fst-' + c.id + '-' + z.id);
+      if (fe && z.fill_metric && z.fill_metric !== 'off') {
+        const zs = sr && sr.zones && sr.zones[z.id];
+        fe.innerHTML = mdFillStatHtml(z, live[z.id], zs && zs.fill);
+      }
       const el = mdEl('md-st-' + c.id + '-' + z.id);
       if (!el) return;
       el.innerHTML = mdZoneStatHtml(z, live[z.id], sr && sr.zones && sr.zones[z.id]);
@@ -854,19 +881,23 @@ function mdDrawSeries(cv, t, vals, ok, lo, hi, opts) {
   if (cv.width !== w) cv.width = w;
   const g = cv.getContext('2d');
   g.clearRect(0, 0, w, hh);
-  const plotH = hh - 13, win = (opts && opts.win) || MD.win, n = vals.length;
+  const strip = opts && opts.strip ? 7 : 0;          // полоска состояния под графиком (цвет на каждую точку)
+  const plotH = hh - 13 - strip, win = (opts && opts.win) || MD.win, n = vals.length;
   const Y = (v) => plotH - ((v - lo) / (hi - lo)) * (plotH - 6) - 1;
   g.fillStyle = '#94a3b8'; g.font = '10px sans-serif';
   g.fillText(String(hi), 3, 10); g.fillText(String(lo), 3, plotH - 2);
   g.fillText('−' + mdFmtWin(win), 3, hh - 1);
   g.textAlign = 'right'; g.fillText('сейчас', w - 3, hh - 1); g.textAlign = 'left';
+  cv._hv = null;
   if (n < 2) return;
   const tEnd = t[n - 1];
   const X = (i) => w - 1 - ((tEnd - t[i]) / win) * (w - 2);
   const dt = (t[n - 1] - t[0]) / (n - 1);
   const bw = Math.max(1.5, (dt / win) * w + 1);
   const gap = Math.max(dt * 3, 5);
+  if (opts.tip) cv._hv = { t, vals, ok, win, w, tEnd, dt, tip: opts.tip };      // для подсказки при наведении (mdOnChartHover)
   for (let i = 0; i < n; i += 1) if (ok[i] === 0) { g.fillStyle = 'rgba(156,163,175,.30)'; g.fillRect(X(i) - bw, 0, bw, plotH); }
+  if (strip) for (let i = 0; i < n; i += 1) { g.fillStyle = ok[i] === 0 || !opts.strip[i] ? '#9ca3af' : opts.strip[i]; g.fillRect(X(i) - bw, plotH + 3, bw, strip); }
   if (opts.band) { g.fillStyle = opts.band.color; g.fillRect(0, Y(opts.band.hi), w, Y(opts.band.lo) - Y(opts.band.hi)); }     // подсвеченная полоса между двумя значениями (зона гистерезиса)
   g.setLineDash([4, 3]); g.lineWidth = 1;
   (opts.lines || []).forEach((l) => { g.strokeStyle = l.color; g.beginPath(); g.moveTo(0, Y(l.v)); g.lineTo(w, Y(l.v)); g.stroke(); });
@@ -880,6 +911,62 @@ function mdDrawSeries(cv, t, vals, ok, lo, hi, opts) {
     pen = true;
   });
   g.stroke();
+}
+
+// график признака вида окна (яркость к металлу / яркость / зернистость): линия, пороги, полоска «жом есть / пусто»; fh — h.fill из /api/motion/history
+function mdDrawFillChart(cam, z, fh) {
+  const cv = mdEl('md-fch-' + cam.id + '-' + z.id);
+  const m = z.fill_metric;
+  if (!cv || !m || m === 'off') return;
+  const d = fh && fh.zones && fh.zones[z.id];
+  const vals = d ? d[m] : [];
+  const decide = (z.fill_on || 0) > 0;
+  const seen = vals.filter((v) => v != null).concat(decide ? [z.fill_on, z.fill_off] : []);
+  let lo = seen.length ? Math.min(...seen) : 0, hi = seen.length ? Math.max(...seen) : 1;
+  const pad = Math.max((hi - lo) * 0.1, m === 'lum' ? 2 : 0.02);
+  lo -= pad; hi += pad;
+  if (m === 'lum') { lo = Math.max(0, Math.floor(lo)); hi = Math.min(255, Math.ceil(hi)); } else { lo = Math.max(0, Math.round(lo * 100) / 100); hi = Math.round(hi * 100) / 100; }
+  const fill = d ? d.fill : [];
+  const lines = decide ? [{ v: z.fill_on, color: '#ef4444' }, { v: z.fill_off, color: '#f59e0b' }] : [];
+  const tip = (i) => {
+    const f = fill[i];
+    return MD_FILL_NAME[m] + ' <b>' + mdFillFmt(m, vals[i]) + '</b>' + (decide && f != null ? ' · ' + (f ? 'жом есть' : 'пусто') : '');
+  };
+  mdDrawSeries(cv, fh ? fh.t || [] : [], vals, fh ? fh.ok || [] : [], lo, hi, { h: cv.height || 72, lines, tip, strip: decide ? fill.map((f) => (f == null ? null : f ? '#4ade80' : '#f87171')) : null });
+}
+
+// подсказка при наведении на график с _hv: ближайшая точка по времени — значение и время (подсказка и вертикальная линия — два плавающих элемента)
+function mdTipEls() {
+  let tip = document.getElementById('mdChartTip'), line = document.getElementById('mdChartTipLine');
+  if (!tip) {
+    tip = document.createElement('div'); tip.id = 'mdChartTip'; tip.className = 'md-ctip'; tip.hidden = true;
+    line = document.createElement('div'); line.id = 'mdChartTipLine'; line.className = 'md-ctipline'; line.hidden = true;
+    document.body.append(line, tip);
+  }
+  return [tip, line];
+}
+function mdOnChartHover(e) {
+  const cv = e.target.closest && e.target.closest('canvas');
+  const hv = cv && cv._hv;
+  const [tip, line] = mdTipEls();
+  if (!hv) { tip.hidden = true; line.hidden = true; return; }
+  const r = cv.getBoundingClientRect();
+  const x = Math.max(0, Math.min(hv.w - 1, (e.clientX - r.left) * (hv.w / r.width)));
+  const tc = hv.tEnd - ((hv.w - 1 - x) / (hv.w - 2)) * hv.win;
+  let a = 0, b = hv.t.length - 1;                       // ближайшая по времени точка (ряд отсортирован)
+  while (b - a > 1) { const mid = (a + b) >> 1; if (hv.t[mid] < tc) a = mid; else b = mid; }
+  const i = Math.abs(hv.t[a] - tc) <= Math.abs(hv.t[b] - tc) ? a : b;
+  const d = new Date(hv.t[i] * 1000), p2 = (v) => String(v).padStart(2, '0');
+  const when = p2(d.getHours()) + ':' + p2(d.getMinutes()) + ':' + p2(d.getSeconds());
+  const gap = Math.abs(hv.t[i] - tc) > Math.max(hv.dt * 3, 5);
+  tip.innerHTML = gap || hv.vals[i] == null || hv.ok[i] === 0 ? 'нет данных · ' + when : hv.tip(i) + ' · ' + when;
+  tip.hidden = false;
+  tip.style.left = Math.min(e.clientX + 12, window.innerWidth - tip.offsetWidth - 8) + 'px';
+  tip.style.top = Math.max(4, r.top - tip.offsetHeight - 6) + 'px';
+  line.hidden = false;
+  line.style.left = (r.left + (x * r.width) / hv.w) + 'px';
+  line.style.top = r.top + 'px';
+  line.style.height = r.height + 'px';
 }
 
 // поправка по таблице (36 ячеек по 10°, линейно по кругу) — как mirror_corr в сервисе; нет таблицы — 0
@@ -921,6 +1008,7 @@ function mdDrawChart(cam, z, d, t, ok) {
   if (cv.width !== w) cv.width = w;
   const g = cv.getContext('2d');
   g.clearRect(0, 0, w, hh);
+  cv._hv = null;
   const ys = z.metric === 'flow' ? d.flow : d.diff, n = ys.length;
   const win = MD.win;
   const plotH = hh - strip - 13;
@@ -936,6 +1024,7 @@ function mdDrawChart(cam, z, d, t, ok) {
   const dt = (t[n - 1] - t[0]) / (n - 1);
   const bw = Math.max(1.5, (dt / win) * w + 1);
   const gap = Math.max(dt * 3, 5);   // разрыв в данных (камера молчала) — линию не тянем
+  cv._hv = { t, vals: ys, ok, win, w, tEnd, dt, tip: (i) => z.metric + ' <b>' + mdNumFmt(ys[i]) + '</b>' };      // подсказка при наведении
   for (let i = 0; i < n; i += 1) {
     const bad = ok[i] === 0;
     const x = X(i) - bw;
@@ -1964,6 +2053,8 @@ function initMotionDock() {
     body.querySelectorAll('.md-zr').forEach((r) => r.classList.toggle('is-open', MD.openAll));
   });
   body?.addEventListener('wheel', mdOnWheel, { passive: false });
+  body?.addEventListener('mousemove', mdOnChartHover);
+  body?.addEventListener('mouseleave', () => { const [tip, line] = mdTipEls(); tip.hidden = true; line.hidden = true; });
   body?.addEventListener('change', (e) => {
     if (e.target.id !== 'mdStatWin') return;
     MD.statWin = Number(e.target.value);

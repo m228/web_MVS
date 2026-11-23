@@ -251,14 +251,9 @@ function renderMotionDock() {
   sw.checked = !!(cam && cam.enabled);
   mdEl('mdSwitchWrap').hidden = all;
   mdEl('mdMark').hidden = all;
-  mdEl('mdMarkRods').hidden = all;
-  mdEl('mdMarkGlass').hidden = all;
-  if (mdEl('mdMarkJuice')) { mdEl('mdMarkJuice').hidden = all; mdEl('mdMarkJuice').disabled = !(cam && cam.enabled); }
   mdEl('mdRec').hidden = all;
   mdEl('mdAll').hidden = all;
   mdEl('mdMark').disabled = !(cam && cam.enabled);
-  mdEl('mdMarkRods').disabled = !(cam && cam.enabled);
-  mdEl('mdMarkGlass').disabled = !(cam && cam.enabled);
   mdEl('mdRec').disabled = !(cam && cam.enabled);
   mdEl('mdRecAll').hidden = !all;
   mdEl('mdRecZip').hidden = !all;
@@ -1627,16 +1622,32 @@ async function mdLoadMarkFrame() {
   } catch (e) { /* ждём следующий кадр */ } finally { m.busy = false; }
 }
 
+// вкладки окна разметки: одна кнопка «Разметить», внутри — что размечаем
+function mdMarkKindOf(kind) { return kind === true || kind === 'rods' ? 'rods' : kind === 'glass' || kind === 'juice' ? kind : 'zone'; }   // false/событие click → зона
+
 function openMarkModal(kind) {
   const { source, cam } = mdCamera();
   if (!source || !cam || !cam.enabled) return;
-  const rods = kind === true, glass = kind === 'glass', juice = kind === 'juice';       // слушатель click передаёт событие, а не флаг
-  MD.mark = { cam: cam.id, pts: [], cursor: null, fw: 0, fh: 0, closed: false, busy: false, rods, glass, juice, polys: [] };
+  MD.mark = { cam: cam.id, fw: 0, fh: 0, busy: false };
   mdEl('mmCam').textContent = source.label || source.serial;
+  mdEl('mmImg').removeAttribute('src');
+  mdMarkSetKind(mdMarkKindOf(kind));
+  const modal = mdEl('motionMarkModal');
+  modal.classList.add('show');
+  modal.setAttribute('aria-hidden', 'false');
+  mdLoadMarkFrame();
+  MD.markTimer = setInterval(mdLoadMarkFrame, 1000);
+  mdMarkUi();
+}
+
+// переключить вид разметки (вкладка): точки и форма сбрасываются, кадр и камера остаются
+function mdMarkSetKind(kind) {
+  const rods = kind === 'rods', glass = kind === 'glass', juice = kind === 'juice';
+  Object.assign(MD.mark, { kind, pts: [], cursor: null, closed: false, rods, glass, juice, polys: [] });   // тот же объект: загрузка кадра держит на него ссылку
+  document.querySelectorAll('#mmTabs [data-mm-kind]').forEach((b) => b.classList.toggle('is-active', b.dataset.mmKind === kind));
   mdEl('mmTitle').textContent = rods ? 'Разметка валов' : glass ? 'Разметка стёкол' : juice ? 'Разметка стаканов' : 'Разметка зоны';
   mdEl('mmOk').textContent = rods ? 'Добавить валы' : glass ? 'Готово' : juice ? 'Добавить стаканы' : 'Добавить зону';
   mdEl('mmClose').textContent = 'Замкнуть (Enter)';
-  mdEl('mmImg').removeAttribute('src');
   mdEl('mmForm').hidden = true;
   mdEl('mmOk').hidden = true;
   mdEl('mmClose').hidden = rods || juice;
@@ -1653,11 +1664,6 @@ function openMarkModal(kind) {
   mdEl('mmRodR').step = juice ? 0.5 : 1;
   mdEl('mmRodR').value = MD.mark.rodPct; mdEl('mmRodRv').textContent = MD.mark.rodPct + ' %';
   mdEl('mmRodBox').hidden = !(rods || juice);
-  const modal = mdEl('motionMarkModal');
-  modal.classList.add('show');
-  modal.setAttribute('aria-hidden', 'false');
-  mdLoadMarkFrame();
-  MD.markTimer = setInterval(mdLoadMarkFrame, 1000);
   mdMarkUi();
 }
 
@@ -1703,12 +1709,20 @@ function mdDrawMark() {
   if (cv.width !== w || cv.height !== h) { cv.width = w; cv.height = h; }
   const g = cv.getContext('2d');
   g.clearRect(0, 0, w, h);
+  mdPaintMark(g, 1);
+  mdDrawLoupe();
+}
+
+// метки разметки (зоны-ориентиры, точки, окружности) в координатах отображаемого кадра; u — толщина «единицы» (1/увеличение в лупе)
+function mdPaintMark(g, u) {
+  const m = MD.mark, img = mdEl('mmImg');
+  const w = img.clientWidth, h = img.clientHeight;
   const cam = mvCam(m.cam);
   const fw = m.fw || img.naturalWidth, fh = m.fh || img.naturalHeight;
   if (!fw || !fh) return;
   const sx = w / fw, sy = h / fh;
   const rs = (cam && cam.frame_size) || [fw, fh];
-  g.lineWidth = 2; g.font = 'bold 14px sans-serif';
+  g.lineWidth = 2 * u; g.font = 'bold ' + 14 * u + 'px sans-serif';
   ((cam && cam.zones) || []).forEach((z) => {      // уже размеченные зоны — для ориентира
     g.strokeStyle = '#9ca3af'; g.fillStyle = 'rgba(156,163,175,.14)';
     g.beginPath();
@@ -1724,9 +1738,9 @@ function mdDrawMark() {
     g.strokeStyle = '#34d399'; g.fillStyle = '#34d399'; g.textAlign = 'center';
     m.pts.forEach((p, i) => {
       const x = p[0] * sx, y = p[1] * sy;
-      g.beginPath(); g.arc(x, y, 3, 0, 7); g.fill();
+      g.beginPath(); g.arc(x, y, 3 * u, 0, 7); g.fill();
       g.beginPath(); g.arc(x, y, mdRodRadius(rs, m.rodPct) * (fw / rs[0]) * sx, 0, 7); g.stroke();
-      g.fillText(String(n0 + i), x, y - mdRodRadius(rs, m.rodPct) * (fw / rs[0]) * sx - 5);
+      g.fillText(String(n0 + i), x, y - mdRodRadius(rs, m.rodPct) * (fw / rs[0]) * sx - 5 * u);
     });
     g.textAlign = 'left';
     return;
@@ -1734,7 +1748,7 @@ function mdDrawMark() {
   if (m.rods) {                                    // валы: точка оси и окружность поиска стандартного радиуса
     g.strokeStyle = '#38bdf8'; g.fillStyle = '#38bdf8';
     m.pts.forEach((p) => {
-      g.beginPath(); g.arc(p[0] * sx, p[1] * sy, 4, 0, 7); g.fill();
+      g.beginPath(); g.arc(p[0] * sx, p[1] * sy, 4 * u, 0, 7); g.fill();
       g.beginPath(); g.arc(p[0] * sx, p[1] * sy, mdRodRadius(rs, m.rodPct) * (fw / rs[0]) * sx, 0, 7); g.stroke();
     });
     return;
@@ -1751,7 +1765,41 @@ function mdDrawMark() {
   if (m.closed) g.closePath();
   else if (m.cursor) g.lineTo(m.cursor[0] * sx, m.cursor[1] * sy);
   g.stroke();
-  m.pts.forEach((p) => { g.beginPath(); g.arc(p[0] * sx, p[1] * sy, 4, 0, 7); g.fill(); });
+  m.pts.forEach((p) => { g.beginPath(); g.arc(p[0] * sx, p[1] * sy, 4 * u, 0, 7); g.fill(); });
+}
+
+// лупа справа сверху: кусок кадра вокруг курсора в MD_LOUPE_K раз крупнее, с метками и прицелом — чтобы ставить точки точно
+const MD_LOUPE = 220, MD_LOUPE_K = 4;
+function mdDrawLoupe() {
+  const m = MD.mark, lp = mdEl('mmLoupe'), img = mdEl('mmImg');
+  if (!lp) return;
+  if (!m || m.closed || !m.mouse || !img.clientWidth || !img.naturalWidth) { lp.hidden = true; return; }
+  const w = img.clientWidth, h = img.clientHeight;
+  const fw = m.fw || img.naturalWidth, fh = m.fh || img.naturalHeight;
+  const sx = w / fw, sy = h / fh;
+  const cx = m.mouse[0] * sx, cy = m.mouse[1] * sy;            // центр лупы в отображаемых пикселях
+  const dpr = window.devicePixelRatio || 1, L = Math.round(MD_LOUPE * dpr);
+  if (lp.width !== L) { lp.width = L; lp.height = L; }
+  lp.hidden = false;
+  lp.classList.toggle('left', cx > w - MD_LOUPE - 40 && cy < MD_LOUPE + 40);      // курсор подошёл к лупе — она уходит влево
+  const g = lp.getContext('2d');
+  g.setTransform(1, 0, 0, 1, 0, 0);
+  g.fillStyle = '#000'; g.fillRect(0, 0, L, L);
+  const hx = MD_LOUPE / (2 * MD_LOUPE_K) / sx, hy = MD_LOUPE / (2 * MD_LOUPE_K) / sy;   // полуразмер области в пикселях кадра
+  const kx = img.naturalWidth / fw, ky = img.naturalHeight / fh;
+  g.imageSmoothingEnabled = true;
+  g.drawImage(img, (m.mouse[0] - hx) * kx, (m.mouse[1] - hy) * ky, 2 * hx * kx, 2 * hy * ky, 0, 0, L, L);
+  const k = MD_LOUPE_K * dpr;                                   // метки: из отображаемых пикселей в пиксели лупы
+  g.setTransform(k, 0, 0, k, L / 2 - cx * k, L / 2 - cy * k);
+  mdPaintMark(g, 1 / MD_LOUPE_K);
+  g.setTransform(1, 0, 0, 1, 0, 0);                             // прицел по центру: тёмная подложка + белая линия, с зазором вокруг точки
+  const c = L / 2, gap = 7 * dpr, len = 22 * dpr;
+  [['#000', 3 * dpr], ['#fff', 1.2 * dpr]].forEach(([col, lw]) => {
+    g.strokeStyle = col; g.lineWidth = lw; g.beginPath();
+    g.moveTo(c - gap - len, c); g.lineTo(c - gap, c); g.moveTo(c + gap, c); g.lineTo(c + gap + len, c);
+    g.moveTo(c, c - gap - len); g.lineTo(c, c - gap); g.moveTo(c, c + gap); g.lineTo(c, c + gap + len);
+    g.stroke();
+  });
 }
 
 function mdMarkPoint(event) {
@@ -1851,10 +1899,11 @@ function initMotionDock() {
     if (source) mdSetEnabled(source.serial, e.target.checked, () => { e.target.checked = !e.target.checked; });
   });
   mdEl('mdAll')?.addEventListener('click', () => setFocus(-1));   // общий вид: фокус снимаем
-  mdEl('mdMark')?.addEventListener('click', () => openMarkModal(false));
-  mdEl('mdMarkRods')?.addEventListener('click', () => openMarkModal(true));
-  mdEl('mdMarkGlass')?.addEventListener('click', () => openMarkModal('glass'));
-  mdEl('mdMarkJuice')?.addEventListener('click', () => openMarkModal('juice'));
+  mdEl('mdMark')?.addEventListener('click', () => openMarkModal('zone'));
+  mdEl('mmTabs')?.addEventListener('click', (e) => {
+    const b = e.target.closest('[data-mm-kind]');
+    if (b && MD.mark && MD.mark.kind !== b.dataset.mmKind) mdMarkSetKind(b.dataset.mmKind);
+  });
   mdEl('mdRec')?.addEventListener('click', mdOnRec);
   mdEl('mdRecAll')?.addEventListener('click', mdOnRecAll);
   mdEl('mdRecZip')?.addEventListener('click', mdOnRecZip);
@@ -1932,7 +1981,8 @@ function initMotionDock() {
     m.pts.push(mdMarkPoint(e));
     mdMarkUi();
   });
-  cv?.addEventListener('mousemove', (e) => { if (MD.mark && !MD.mark.closed) { MD.mark.cursor = mdMarkPoint(e); mdDrawMark(); } });
+  cv?.addEventListener('mousemove', (e) => { if (MD.mark && !MD.mark.closed) { MD.mark.cursor = MD.mark.mouse = mdMarkPoint(e); mdDrawMark(); } });
+  cv?.addEventListener('mouseleave', () => { if (MD.mark) MD.mark.mouse = null; mdDrawLoupe(); });
   cv?.addEventListener('contextmenu', (e) => { e.preventDefault(); mdMarkUndo(); });
   mdEl('mmImg')?.addEventListener('load', mdDrawMark);
   mdEl('mmUndo')?.addEventListener('click', mdMarkUndo);

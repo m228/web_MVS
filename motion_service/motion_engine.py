@@ -343,6 +343,34 @@ def _more(v, name: str) -> list:
     return [_hsv4(x, None, name, False) for x in v]
 
 
+def _box6(v, name: str) -> list:
+    """[H1, H2, S1, S2, V1, V2] — «ящик» цвета: оттенок 0..179 (H1 > H2 — через ноль круга, так лежит красный), насыщенность и яркость 0..255 «от и до»."""
+    if not isinstance(v, (list, tuple)) or len(v) != 6:
+        raise ValueError("%s: нужно шесть чисел [H1, H2, S1, S2, V1, V2]" % name)
+    h1, h2 = _num(v[0], name, 0, 179, True), _num(v[1], name, 0, 179, True)
+    s1, s2, v1, v2 = [_num(x, name, 0, 255, True) for x in v[2:]]
+    if s1 > s2 or v1 > v2:
+        raise ValueError("%s: нижняя граница насыщенности или яркости выше верхней" % name)
+    return [h1, h2, s1, s2, v1, v2]
+
+
+def _nots(v, name: str) -> list:
+    """Исключённые цвета конца палки (red_not / blue_not): [[H1, H2, S1, S2, V1, V2], …] — вырезаются из маски этого конца, что бы ни ловили
+    основной диапазон и «ещё цвет». Так убирают цвет корпуса, блик или пластину рядом с палкой."""
+    if not v:
+        return []
+    if not isinstance(v, (list, tuple)) or len(v) > MAX_MORE:
+        raise ValueError("%s: не больше %d цветов" % (name, MAX_MORE))
+    return [_box6(x, name) for x in v]
+
+
+def hsv_box_hit(h, s, v, box):
+    """Булева маска пикселей, попавших в «ящик» [H1, H2, S1, S2, V1, V2]; H1 > H2 — оттенок по кругу через ноль."""
+    h1, h2, s1, s2, v1, v2 = box
+    hue = ((h >= h1) & (h <= h2)) if h1 <= h2 else ((h >= h1) | (h <= h2))
+    return hue & (s >= s1) & (s <= s2) & (v >= v1) & (v <= v2)
+
+
 def _norm_cycle(z: dict, zid: str, where: str) -> dict:
     """Зона-«цикл»: палка из красной и синей половин на оси; центр + радиус вместо полигона. Результат — угол красного конца
     от вертикали по часовой (0..360). Полигона нет (points = []), метрик потока/разности нет."""
@@ -368,6 +396,8 @@ def _norm_cycle(z: dict, zid: str, where: str) -> dict:
         "blue_hsv": _hsv4(z.get("blue_hsv"), CYCLE_BLUE_HSV, where + ".blue_hsv", False),
         "red_more": _more(z.get("red_more"), where + ".red_more"),
         "blue_more": _more(z.get("blue_more"), where + ".blue_more"),
+        "red_not": _nots(z.get("red_not"), where + ".red_not"),
+        "blue_not": _nots(z.get("blue_not"), where + ".blue_not"),
         "min_score": _num(z.get("min_score", 0.4), where + ".min_score", 0.01, 2),
         "min_conf": _num(z.get("min_conf", 0.1), where + ".min_conf", 0, 1),
         "jump_deg": _num(z.get("jump_deg", 25), where + ".jump_deg", 3, 180),
@@ -1244,9 +1274,9 @@ class CycleRT:
         elif rng >= 1.6 * self.cfg["stop_deg"]:
             self.moving = True
 
-    def _liks(self, bgr: np.ndarray, red_hsv=None, blue_hsv=None, red_more=None, blue_more=None):
-        """Маски красной и синей половин (доли 0..1 в рабочем масштабе). red_hsv/blue_hsv/red_more/blue_more — свои пороги вместо настроенных (для превью на панели).
-        Дополнительные цвета (red_more / blue_more) добавляются к основному диапазону «ИЛИ» — до фильтра «тонкого»."""
+    def _liks(self, bgr: np.ndarray, red_hsv=None, blue_hsv=None, red_more=None, blue_more=None, red_not=None, blue_not=None):
+        """Маски красной и синей половин (доли 0..1 в рабочем масштабе). red_hsv/blue_hsv/red_more/blue_more/red_not/blue_not — свои пороги вместо настроенных (для превью на панели).
+        Дополнительные цвета (red_more / blue_more) добавляются к основному диапазону «ИЛИ», исключённые (red_not / blue_not) вычитаются из итога — всё до фильтра «тонкого»."""
         hsv = cv2.cvtColor(bgr, cv2.COLOR_BGR2HSV)
         h, s, v = [c.astype(np.int32) for c in cv2.split(hsv)]
         hm, hn, rs_, rv = red_hsv or self.cfg["red_hsv"]
@@ -1257,6 +1287,10 @@ class CycleRT:
             red |= ((h >= h1) & (h <= h2) & (s >= s_) & (v >= v_)).astype(np.uint8)
         for h1, h2, s_, v_ in (self.cfg.get("blue_more") or []) if blue_more is None else blue_more:
             blue |= ((h >= h1) & (h <= h2) & (s >= s_) & (v >= v_)).astype(np.uint8)
+        for box in (self.cfg.get("red_not") or []) if red_not is None else red_not:      # исключённые цвета: вычитаем из маски своего конца
+            red[hsv_box_hit(h, s, v, box)] = 0
+        for box in (self.cfg.get("blue_not") or []) if blue_not is None else blue_not:
+            blue[hsv_box_hit(h, s, v, box)] = 0
         if self.ker is not None:                                           # оставляем только тонкое: то, что не пережило «открытие»
             red &= 1 - cv2.morphologyEx(red, cv2.MORPH_OPEN, self.ker)
             blue &= 1 - cv2.morphologyEx(blue, cv2.MORPH_OPEN, self.ker)
@@ -1312,7 +1346,7 @@ class CycleRT:
             return pr[0], "red"
         return (ab - self.off_b) % 360.0, "blue"
 
-    def mask_preview(self, frame: np.ndarray, red_hsv=None, blue_hsv=None, max_w: int = 640, raw: bool = False, red_more=None, blue_more=None) -> np.ndarray:
+    def mask_preview(self, frame: np.ndarray, red_hsv=None, blue_hsv=None, max_w: int = 640, raw: bool = False, red_more=None, blue_more=None, red_not=None, blue_not=None) -> np.ndarray:
         """Что видит детектор: область вокруг оси (в рабочем масштабе), красные точки — маска красной половины, голубые — синей,
         окружность поиска и ось. Пороги можно подставить свои — подбирать цвета, не меняя настройки. raw — сам кадр без масок (искать палку глазами,
         брать цвет пипеткой): в родном разрешении (хоть 900 px и больше), без окружности и оси. Картинка всегда вся область, целиком."""
@@ -1322,7 +1356,7 @@ class CycleRT:
             if max_w == w0:
                 return crop_src.copy()
             return cv2.resize(crop_src, (max_w, max(2, int(round(h0 * max_w / float(w0))))), interpolation=cv2.INTER_AREA if max_w < w0 else cv2.INTER_CUBIC)
-        red, blue = self._liks(crop_src, red_hsv, blue_hsv, red_more, blue_more)
+        red, blue = self._liks(crop_src, red_hsv, blue_hsv, red_more, blue_more, red_not, blue_not)
         crop = cv2.resize(crop_src, (red.shape[1], red.shape[0]), interpolation=cv2.INTER_AREA)
         img = (crop.astype(np.float32) * 0.55).astype(np.uint8)
         img[red > 0.5] = (40, 40, 255)

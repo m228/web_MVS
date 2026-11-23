@@ -402,7 +402,7 @@ class CameraWorker(threading.Thread):
         ok, buf = cv2.imencode(".jpg", f, [cv2.IMWRITE_JPEG_QUALITY, 80])
         return (buf.tobytes(), (w, h)) if ok else None
 
-    def rod_mask_jpeg(self, zone_id: str, red=None, blue=None, max_w: int = 640, raw: bool = False, red_more=None, blue_more=None) -> Optional[bytes]:
+    def rod_mask_jpeg(self, zone_id: str, red=None, blue=None, max_w: int = 640, raw: bool = False, red_more=None, blue_more=None, red_not=None, blue_not=None) -> Optional[bytes]:
         """JPEG «что видит детектор» по зоне-циклу с пробными порогами цвета (None — кадра ещё нет); raw — сам кадр без масок. ValueError — нет такой зоны."""
         cyc = self.engine.cycles.get(zone_id)
         if cyc is None:
@@ -411,7 +411,7 @@ class CameraWorker(threading.Thread):
             f = self._frame
         if f is None or f.ndim != 3:
             return None
-        ok, buf = cv2.imencode(".jpg", cyc.mask_preview(f, red, blue, max_w, raw, red_more, blue_more), [cv2.IMWRITE_JPEG_QUALITY, 85])
+        ok, buf = cv2.imencode(".jpg", cyc.mask_preview(f, red, blue, max_w, raw, red_more, blue_more, red_not, blue_not), [cv2.IMWRITE_JPEG_QUALITY, 85])
         return buf.tobytes() if ok else None
 
     def rod_pick(self, zone_id: str, u: float, v: float) -> Optional[dict]:

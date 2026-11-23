@@ -517,14 +517,18 @@ def create_app(data_dir: Optional[Path] = None, capture_factory: Callable = open
         return r
 
     @app.get("/cameras/{cid}/rod_mask")
-    def rod_mask(cid: str, zone: str, red: str = "", blue: str = "", w: int = 640, raw: int = 0, red_more: Optional[str] = None, blue_more: Optional[str] = None):
-        """Что видит детектор палки: кадр вокруг оси с масками красной и синей половин. red/blue — пробные пороги «H1,H2,S,V» (пусто — настроенные)."""
+    def rod_mask(cid: str, zone: str, red: str = "", blue: str = "", w: int = 640, raw: int = 0, red_more: Optional[str] = None, blue_more: Optional[str] = None,
+                 red_not: Optional[str] = None, blue_not: Optional[str] = None):
+        """Что видит детектор палки: кадр вокруг оси с масками красной и синей половин. red/blue — пробные пороги «H1,H2,S,V» (пусто — настроенные);
+        red_not / blue_not — пробные исключённые цвета «H1,H2,S1,S2,V1,V2;…» (пусто — без них, нет параметра — как в настройках)."""
         def hsv(txt, default, name, pair_ok):
             return None if not txt.strip() else engine._hsv4([float(x) for x in txt.split(",")], default, name, pair_ok)
         try:
             r, b = hsv(red, None, "red", True), hsv(blue, None, "blue", False)
             more = lambda txt, name: None if txt is None else engine._more([[float(x) for x in item.split(",")] for item in txt.split(";") if item.strip()], name)   # noqa: E731 — «H1,H2,S,V;H1,H2,S,V»; пусто — без дополнительных
-            data = mgr.worker(cid).rod_mask_jpeg(zone, r, b, max(120, min(int(w), 1600)), bool(raw), more(red_more, "red_more"), more(blue_more, "blue_more"))
+            nots = lambda txt, name: None if txt is None else engine._nots([[float(x) for x in item.split(",")] for item in txt.split(";") if item.strip()], name)   # noqa: E731
+            data = mgr.worker(cid).rod_mask_jpeg(zone, r, b, max(120, min(int(w), 1600)), bool(raw), more(red_more, "red_more"), more(blue_more, "blue_more"),
+                                                 nots(red_not, "red_not"), nots(blue_not, "blue_not"))
         except ValueError as e:
             raise HTTPException(400, str(e))
         if data is None:

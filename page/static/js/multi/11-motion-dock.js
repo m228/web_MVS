@@ -1703,12 +1703,20 @@ function mdDrawMark() {
   if (cv.width !== w || cv.height !== h) { cv.width = w; cv.height = h; }
   const g = cv.getContext('2d');
   g.clearRect(0, 0, w, h);
+  mdPaintMark(g, 1);
+  mdDrawLoupe();
+}
+
+// метки разметки (зоны-ориентиры, точки, окружности) в координатах отображаемого кадра; u — толщина «единицы» (1/увеличение в лупе)
+function mdPaintMark(g, u) {
+  const m = MD.mark, img = mdEl('mmImg');
+  const w = img.clientWidth, h = img.clientHeight;
   const cam = mvCam(m.cam);
   const fw = m.fw || img.naturalWidth, fh = m.fh || img.naturalHeight;
   if (!fw || !fh) return;
   const sx = w / fw, sy = h / fh;
   const rs = (cam && cam.frame_size) || [fw, fh];
-  g.lineWidth = 2; g.font = 'bold 14px sans-serif';
+  g.lineWidth = 2 * u; g.font = 'bold ' + 14 * u + 'px sans-serif';
   ((cam && cam.zones) || []).forEach((z) => {      // уже размеченные зоны — для ориентира
     g.strokeStyle = '#9ca3af'; g.fillStyle = 'rgba(156,163,175,.14)';
     g.beginPath();
@@ -1724,9 +1732,9 @@ function mdDrawMark() {
     g.strokeStyle = '#34d399'; g.fillStyle = '#34d399'; g.textAlign = 'center';
     m.pts.forEach((p, i) => {
       const x = p[0] * sx, y = p[1] * sy;
-      g.beginPath(); g.arc(x, y, 3, 0, 7); g.fill();
+      g.beginPath(); g.arc(x, y, 3 * u, 0, 7); g.fill();
       g.beginPath(); g.arc(x, y, mdRodRadius(rs, m.rodPct) * (fw / rs[0]) * sx, 0, 7); g.stroke();
-      g.fillText(String(n0 + i), x, y - mdRodRadius(rs, m.rodPct) * (fw / rs[0]) * sx - 5);
+      g.fillText(String(n0 + i), x, y - mdRodRadius(rs, m.rodPct) * (fw / rs[0]) * sx - 5 * u);
     });
     g.textAlign = 'left';
     return;
@@ -1734,7 +1742,7 @@ function mdDrawMark() {
   if (m.rods) {                                    // валы: точка оси и окружность поиска стандартного радиуса
     g.strokeStyle = '#38bdf8'; g.fillStyle = '#38bdf8';
     m.pts.forEach((p) => {
-      g.beginPath(); g.arc(p[0] * sx, p[1] * sy, 4, 0, 7); g.fill();
+      g.beginPath(); g.arc(p[0] * sx, p[1] * sy, 4 * u, 0, 7); g.fill();
       g.beginPath(); g.arc(p[0] * sx, p[1] * sy, mdRodRadius(rs, m.rodPct) * (fw / rs[0]) * sx, 0, 7); g.stroke();
     });
     return;
@@ -1751,7 +1759,41 @@ function mdDrawMark() {
   if (m.closed) g.closePath();
   else if (m.cursor) g.lineTo(m.cursor[0] * sx, m.cursor[1] * sy);
   g.stroke();
-  m.pts.forEach((p) => { g.beginPath(); g.arc(p[0] * sx, p[1] * sy, 4, 0, 7); g.fill(); });
+  m.pts.forEach((p) => { g.beginPath(); g.arc(p[0] * sx, p[1] * sy, 4 * u, 0, 7); g.fill(); });
+}
+
+// лупа справа сверху: кусок кадра вокруг курсора в MD_LOUPE_K раз крупнее, с метками и прицелом — чтобы ставить точки точно
+const MD_LOUPE = 220, MD_LOUPE_K = 4;
+function mdDrawLoupe() {
+  const m = MD.mark, lp = mdEl('mmLoupe'), img = mdEl('mmImg');
+  if (!lp) return;
+  if (!m || m.closed || !m.mouse || !img.clientWidth || !img.naturalWidth) { lp.hidden = true; return; }
+  const w = img.clientWidth, h = img.clientHeight;
+  const fw = m.fw || img.naturalWidth, fh = m.fh || img.naturalHeight;
+  const sx = w / fw, sy = h / fh;
+  const cx = m.mouse[0] * sx, cy = m.mouse[1] * sy;            // центр лупы в отображаемых пикселях
+  const dpr = window.devicePixelRatio || 1, L = Math.round(MD_LOUPE * dpr);
+  if (lp.width !== L) { lp.width = L; lp.height = L; }
+  lp.hidden = false;
+  lp.classList.toggle('left', cx > w - MD_LOUPE - 40 && cy < MD_LOUPE + 40);      // курсор подошёл к лупе — она уходит влево
+  const g = lp.getContext('2d');
+  g.setTransform(1, 0, 0, 1, 0, 0);
+  g.fillStyle = '#000'; g.fillRect(0, 0, L, L);
+  const hx = MD_LOUPE / (2 * MD_LOUPE_K) / sx, hy = MD_LOUPE / (2 * MD_LOUPE_K) / sy;   // полуразмер области в пикселях кадра
+  const kx = img.naturalWidth / fw, ky = img.naturalHeight / fh;
+  g.imageSmoothingEnabled = true;
+  g.drawImage(img, (m.mouse[0] - hx) * kx, (m.mouse[1] - hy) * ky, 2 * hx * kx, 2 * hy * ky, 0, 0, L, L);
+  const k = MD_LOUPE_K * dpr;                                   // метки: из отображаемых пикселей в пиксели лупы
+  g.setTransform(k, 0, 0, k, L / 2 - cx * k, L / 2 - cy * k);
+  mdPaintMark(g, 1 / MD_LOUPE_K);
+  g.setTransform(1, 0, 0, 1, 0, 0);                             // прицел по центру: тёмная подложка + белая линия, с зазором вокруг точки
+  const c = L / 2, gap = 7 * dpr, len = 22 * dpr;
+  [['#000', 3 * dpr], ['#fff', 1.2 * dpr]].forEach(([col, lw]) => {
+    g.strokeStyle = col; g.lineWidth = lw; g.beginPath();
+    g.moveTo(c - gap - len, c); g.lineTo(c - gap, c); g.moveTo(c + gap, c); g.lineTo(c + gap + len, c);
+    g.moveTo(c, c - gap - len); g.lineTo(c, c - gap); g.moveTo(c, c + gap); g.lineTo(c, c + gap + len);
+    g.stroke();
+  });
 }
 
 function mdMarkPoint(event) {
@@ -1932,7 +1974,8 @@ function initMotionDock() {
     m.pts.push(mdMarkPoint(e));
     mdMarkUi();
   });
-  cv?.addEventListener('mousemove', (e) => { if (MD.mark && !MD.mark.closed) { MD.mark.cursor = mdMarkPoint(e); mdDrawMark(); } });
+  cv?.addEventListener('mousemove', (e) => { if (MD.mark && !MD.mark.closed) { MD.mark.cursor = MD.mark.mouse = mdMarkPoint(e); mdDrawMark(); } });
+  cv?.addEventListener('mouseleave', () => { if (MD.mark) MD.mark.mouse = null; mdDrawLoupe(); });
   cv?.addEventListener('contextmenu', (e) => { e.preventDefault(); mdMarkUndo(); });
   mdEl('mmImg')?.addEventListener('load', mdDrawMark);
   mdEl('mmUndo')?.addEventListener('click', mdMarkUndo);

@@ -197,7 +197,8 @@ def level_shots(service_url: str, cam: str, group: str, since: float = 0.0) -> d
     return _call(service_url, "/cameras/%s/level_shots?%s" % (urllib.parse.quote(cam, safe=""), q), timeout=8.0)
 
 
-def rod_mask(service_url: str, cam: str, zone: str, red: str = "", blue: str = "", width: int = 640, timeout: float = 8.0, raw: bool = False, red_more=None, blue_more=None, red_not=None, blue_not=None):
+def rod_mask(service_url: str, cam: str, zone: str, red: str = "", blue: str = "", width: int = 640, timeout: float = 8.0, raw: bool = False, red_more=None, blue_more=None, red_not=None, blue_not=None,
+             tip=None):
     """JPEG «что видит детектор палки» с пробными порогами цвета или None (кадра нет / сервис старый / зоны нет)."""
     args = {"zone": zone, "red": red, "blue": blue, "w": int(width), "raw": 1 if raw else 0}
     if red_more is not None:                                  # дополнительные цвета конца палки: «H1,H2,S,V;H1,H2,S,V» (пусто — без них); нет параметра — как в настройках
@@ -208,6 +209,8 @@ def rod_mask(service_url: str, cam: str, zone: str, red: str = "", blue: str = "
         args["red_not"] = red_not
     if blue_not is not None:
         args["blue_not"] = blue_not
+    if tip is not None:                                       # цвета светоотражателей на концах палки — тот же вид «H1,H2,S1,S2,V1,V2;…»
+        args["tip"] = tip
     q = urllib.parse.urlencode(args)
     try:
         with _opener.open(_base(service_url) + "/cameras/%s/rod_mask?%s" % (urllib.parse.quote(cam, safe=""), q), timeout=timeout) as r:

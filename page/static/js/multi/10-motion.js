@@ -366,9 +366,10 @@ const mvBlueAngle = (red) => (Number(red) + 180) % 360;
 
 const MV_ROD_RED = '#ef4444';
 const MV_ROD_BLUE = '#38bdf8';
+const MV_ROD_TIP = '#facc15';                                // светоотражатели на концах палки
 
 // чем держится угол вала: какие половины палки сейчас видны. Сервер без src (старый) — считаем, что обе.
-// both — обе, red — только красная, blue — только синяя, hold — не видно (угол по скорости)
+// both — обе, red — только красная, blue — только синяя, tip — только светоотражатели на концах, hold — не видно (угол по скорости)
 function mvRodUse(lz) {
   const s = lz && lz.src;
   return { red: s !== 'blue', blue: s !== 'red' };
@@ -391,6 +392,10 @@ function drawCycleOnTile(ctx, z, cam, g, lz, mode) {
   ctx.globalAlpha = use.blue ? 1 : 0.3;
   ctx.strokeStyle = MV_ROD_BLUE; ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(cx - dx, cy - dy); ctx.stroke();
   ctx.globalAlpha = 1; ctx.setLineDash([]);
+  if (!lz.coast && Number(lz.lvl_t) >= 0.25) {               // светоотражатели пойманы — жёлтые точки на концах стрелки
+    ctx.fillStyle = MV_ROD_TIP;
+    [[cx + dx, cy + dy], [cx - dx, cy - dy]].forEach(([px, py]) => { ctx.beginPath(); ctx.arc(px, py, 4, 0, 7); ctx.fill(); });
+  }
   // подпись под окружностью: вал со значком направления, ниже значения красного и синего концов (0–360° от вертикали по часовой)
   const x = cx - r * 0.55, y = cy + r + 16;
   const sh = typeof shShaftOf === 'function' ? shShaftOf(cam.id, z.id) : null;          // вал назначен рядом камеры: НЛВ… и скорость

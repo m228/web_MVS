@@ -143,7 +143,8 @@ const SH_HSV_COLS = {
   blue: [['оттенок от', 0, 179, 'Голубой/синий: нижняя граница оттенка (0–179, шкала OpenCV)'], ['оттенок до', 1, 179, 'Верхняя граница оттенка'],
     ['насыщенность от', 2, 255, 'Минимальная насыщенность. Бирюзовый корпус рядом по цвету, поэтому слишком низкое значение захватывает и его'], ['яркость от', 3, 255, 'Минимальная яркость']],
 };
-const SH_END = { red: ['Красный конец', MV_ROD_RED, 0], blue: ['Синий конец', MV_ROD_BLUE, 200] };    // подпись, цвет точки, базовый оттенок (°) для заливки ползунков
+const SH_END = { red: ['Красный конец', MV_ROD_RED, 0], blue: ['Синий конец', MV_ROD_BLUE, 200], tip: ['Светоотражатели', MV_ROD_TIP, 50] };    // подпись, цвет точки, базовый оттенок (°) для заливки ползунков
+const SH_TIP_WHITE = [0, 179, 0, 60, 235, 255];            // «пересвет»: отражатель под прожектором белый, яркость под 255, насыщенность почти 0 (оттенок любой)
 const SH_HUE_TRK = 'linear-gradient(90deg,' + Array.from({ length: 13 }, (_, i) => `hsl(${Math.round(i * 29.8)},85%,50%)`).join(',') + ')';
 const SH_PREV_W = 240;
 const shView = {};                                         // вал → 'mask' | 'raw': что показывать на картинке
@@ -176,14 +177,24 @@ function shHsv2Css(h, s, v) {
 function shNotMidHue(r) { return r[0] <= r[1] ? (r[0] + r[1]) / 2 : ((r[0] + r[1] + 180) / 2) % 180; }   // середина диапазона оттенка; «от» выше «до» — через ноль круга
 
 // исключённый цвет конца палки (red_not / blue_not): «ящик» оттенок/насыщенность/яркость «от и до», вырезается из маски этого конца. Две строки сетки: оттенок от/до, насыщ. от, ярк. от — и под ними насыщ. до, ярк. до
+// w = 'tip' — та же строка «ящика» для цвета светоотражателя (tip_hsv): он не вырезается, а ловится как кончик палки
 function shNotRowHtml(w, z, a, n) {
-  const r = (z[w + '_not'] || [])[n], base = SH_END[w][2];
-  const cell = (k, cap, tip) => `<label class="sh-hsv"${tip ? ` title="${escapeHtml(tip)}"` : ''}>${cap ? `<span class="sh-hsv__cap">${cap}</span>` : ''}<input type="range" class="sh-rng" style="--trk:${shTrack(k < 2 ? 0 : (k < 4 ? 2 : 3), base)}" ${a} data-f="hsvn" data-w="${w}" data-n="${n}" data-k="${k}" min="0" max="${k < 2 ? 179 : 255}" step="1" value="${r[k]}" /><output>${r[k]}</output></label>`;
+  const tip = w === 'tip', r = (tip ? z.tip_hsv || [] : z[w + '_not'] || [])[n], base = SH_END[w][2];
+  const cell = (k, cap, tt) => `<label class="sh-hsv"${tt ? ` title="${escapeHtml(tt)}"` : ''}>${cap ? `<span class="sh-hsv__cap">${cap}</span>` : ''}<input type="range" class="sh-rng" style="--trk:${shTrack(k < 2 ? 0 : (k < 4 ? 2 : 3), base)}" ${a} data-f="hsvn" data-w="${w}" data-n="${n}" data-k="${k}" min="0" max="${k < 2 ? 179 : 255}" step="1" value="${r[k]}" /><output>${r[k]}</output></label>`;
   const dot = shHsv2Css(shNotMidHue(r), (r[2] + r[3]) / 2, (r[4] + r[5]) / 2);
-  return `<div class="sh-tn sh-tn--more"><i class="sh-dot sh-dot--not" style="background:${dot}"></i>не ловить</div>` +
-    cell(0, '', 'Оттенок «от». Если «от» выше «до» — диапазон идёт через ноль круга оттенков (так лежит красный)') + cell(1, '', 'Оттенок «до»') + cell(2, '', 'Насыщенность «от»') + cell(4, '', 'Яркость «от»') +
-    `<div class="sh-tact"><button type="button" class="btn-secondary md-x" ${a} data-f="hsvndel" data-w="${w}" data-n="${n}" title="Убрать этот цвет из исключений">убрать</button></div>` +
-    '<div></div><div></div><div></div>' + cell(3, 'до', 'Насыщенность «до»') + cell(5, 'до', 'Яркость «до»') + '<div></div>';
+  return `<div class="sh-tn sh-tn--more"><i class="sh-dot${tip ? '' : ' sh-dot--not'}" style="background:${dot}"></i>${tip ? 'отражатель' : 'не ловить'}</div>` +
+    cell(0, '', 'Оттенок «от». Если «от» выше «до» — диапазон идёт через ноль круга оттенков (так лежит красный)' + (tip ? '. Белый пересвет — оттенок любой: 0–179' : '')) + cell(1, '', 'Оттенок «до»') + cell(2, '', 'Насыщенность «от»') + cell(4, '', 'Яркость «от»' + (tip ? ': отражатель под прожектором почти в пересвете, 220–255' : '')) +
+    `<div class="sh-tact"><button type="button" class="btn-secondary md-x" ${a} data-f="hsvndel" data-w="${w}" data-n="${n}" title="${tip ? 'Убрать этот цвет отражателя' : 'Убрать этот цвет из исключений'}">убрать</button></div>` +
+    '<div></div><div></div><div></div>' + cell(3, 'до', 'Насыщенность «до»' + (tip ? ': у белого пересвета — низкая (до 60)' : '')) + cell(5, 'до', 'Яркость «до»') + '<div></div>';
+}
+
+// строка «Светоотражатели»: заголовок с кнопками; цвета отражателя — строками-«ящиками» ниже (shNotRowHtml с w = 'tip')
+function shTipHeadHtml(z, a) {
+  const n = (z.tip_hsv || []).length;
+  return `<div class="sh-tn"><i class="sh-dot" style="background:${MV_ROD_TIP}"></i>Светоотражатели</div>` +
+    `<div class="net-hint sh-tipnote">${n ? 'кончики палки ловятся — на маске жёлтым' : 'не заданы: угол только по цвету'}</div>` +
+    `<div class="sh-tact"><button type="button" class="btn-secondary md-x sh-pipbtn" data-md="shpick" data-w="tip" data-f="pip" data-mode="tip" title="Откроется большой кадр: кликните по светоотражателю на конце палки — его цвет добавится строкой «отражатель». Белый пересвет и жёлтый — разные строки">пипетка</button>` +
+    `<button type="button" class="btn-secondary md-x" ${a} data-f="tipwhite" title="Добавить «пересвет»: белое, яркость 235–255, насыщенность до 60 — так выглядит отражатель под прожектором"${(z.tip_hsv || []).some((r) => r.join() === SH_TIP_WHITE.join()) ? ' disabled' : ''}>+ пересвет</button></div>`;
 }
 
 // дополнительный цвет конца палки (red_more / blue_more): обычный диапазон «от и до» с теми же тремя порогами; в маску он добавляется «ИЛИ»
@@ -210,14 +221,14 @@ function mdRodColorsHtml() {
         <div class="sh-col__body">
           <div class="sh-prev"><img alt="" width="${SH_PREV_W}" data-shprev="${k}" />
             <div class="sh-seg"><button type="button" class="on" data-md="shpick" data-f="view" data-v="mask" title="Что считает палкой детектор: красные точки — красный конец, голубые — синий">маска</button><button type="button" data-md="shpick" data-f="view" data-v="raw" title="Сам кадр без масок: найти палку и взять цвет пипеткой">кадр</button></div></div>
-          <div class="sh-tbl"><div class="sh-th"></div>${head}<div class="sh-th"></div>${shColorRowHtml('red', z, a, c.id + '/' + z.id)}${more('red')}${shColorRowHtml('blue', z, a, c.id + '/' + z.id)}${more('blue')}</div>
+          <div class="sh-tbl"><div class="sh-th"></div>${head}<div class="sh-th"></div>${shColorRowHtml('red', z, a, c.id + '/' + z.id)}${more('red')}${shColorRowHtml('blue', z, a, c.id + '/' + z.id)}${more('blue')}${shTipHeadHtml(z, a)}${(z.tip_hsv || []).map((_, n) => shNotRowHtml('tip', z, a, n)).join('')}</div>
         </div>
         <div class="net-hint sh-col__note" data-shprevn="${k}"></div>
       </div>`);
     });
   });
   if (!blocks.length) return '<span class="net-hint">Размеченных валов нет: нужны зоны-цикл («Разметить валы»).</span>';
-  return `<div class="net-hint sh-colhint">Палка красно-синяя: ловим её красный и синий конец по цвету. На картинке красные точки — то, что принято за красный конец, голубые — за синий; нужно, чтобы палка светилась целиком, а корпус и фон — нет. Двигайте ползунки или нажмите «пипетка»: откроется большой кадр, наведите на палку и кликните — цвет добавится отдельной строкой «ещё цвет» (у одного конца их может быть до шести: светлый, тёмный, на солнце). Если в маску лезет лишнее (бирюзовый корпус, блик) — «не ловить»: тот же большой кадр, но клик по лишнему цвету вырезает его из маски этого конца. Изменения сохраняются сразу.</div><div class="sh-cols">${blocks.join('')}</div>`;
+  return `<div class="net-hint sh-colhint">Палка красно-синяя: ловим её красный и синий конец по цвету. На картинке красные точки — то, что принято за красный конец, голубые — за синий; нужно, чтобы палка светилась целиком, а корпус и фон — нет. Двигайте ползунки или нажмите «пипетка»: откроется большой кадр, наведите на палку и кликните — цвет добавится отдельной строкой «ещё цвет» (у одного конца их может быть до шести: светлый, тёмный, на солнце). Если в маску лезет лишнее (бирюзовый корпус, блик) — «не ловить»: тот же большой кадр, но клик по лишнему цвету вырезает его из маски этого конца. Светоотражатели на концах палки — «+ пересвет» (белое под прожектором) или пипеткой по кончику (жёлтый): они видны и там, где цвет теряется, и держат угол точнее; неподвижные блики (люк, лампа) отсеиваются сами, пока вал крутится. Изменения сохраняются сразу.</div><div class="sh-cols">${blocks.join('')}</div>`;
 }
 
 // превью: пробные пороги берём прямо с ползунков, сервис возвращает кадр вокруг оси с масками; не чаще раза в 4 с на вал, при правке — сразу
@@ -230,7 +241,7 @@ function shMoreStr(block, w) {                            // «H1,H2,S,V;H1,H2,S
   block.querySelectorAll(`input[data-f="hsvx"][data-w="${w}"]`).forEach((i) => { (rows[i.dataset.n] = rows[i.dataset.n] || [])[Number(i.dataset.k)] = i.value; });
   return Object.keys(rows).sort((x, y) => x - y).map((n) => rows[n].join(',')).join(';');
 }
-function shNotStr(block, w) {                             // «H1,H2,S1,S2,V1,V2;…» по строкам «не ловить»; пустая строка тоже посылается: «исключений нет»
+function shNotStr(block, w) {                             // «H1,H2,S1,S2,V1,V2;…» по строкам «не ловить» (w = 'tip' — по строкам «отражатель»); пустая строка тоже посылается: «исключений нет»
   const rows = {};
   block.querySelectorAll(`input[data-f="hsvn"][data-w="${w}"]`).forEach((i) => { (rows[i.dataset.n] = rows[i.dataset.n] || [])[Number(i.dataset.k)] = i.value; });
   return Object.keys(rows).sort((x, y) => x - y).map((n) => rows[n].join(',')).join(';');
@@ -241,7 +252,7 @@ function shPrevLoad(block, force) {
   shPrevAt[k] = Date.now();
   const raw = shView[k] === 'raw' ? '&raw=1' : '';
   const url = '/api/motion/rod_mask?camera=' + encodeURIComponent(block.dataset.cam) + '&zone=' + encodeURIComponent(block.dataset.zone) +
-    '&red=' + shHsvStr(block, 'red') + '&blue=' + shHsvStr(block, 'blue') + '&red_more=' + shMoreStr(block, 'red') + '&blue_more=' + shMoreStr(block, 'blue') + '&red_not=' + shNotStr(block, 'red') + '&blue_not=' + shNotStr(block, 'blue') + '&w=' + SH_PREV_W * 2 + raw + '&t=' + Date.now();      // вдвое больше, чем показываем: чётче на плотных экранах
+    '&red=' + shHsvStr(block, 'red') + '&blue=' + shHsvStr(block, 'blue') + '&red_more=' + shMoreStr(block, 'red') + '&blue_more=' + shMoreStr(block, 'blue') + '&red_not=' + shNotStr(block, 'red') + '&blue_not=' + shNotStr(block, 'blue') + '&tip=' + shNotStr(block, 'tip') + '&w=' + SH_PREV_W * 2 + raw + '&t=' + Date.now();      // вдвое больше, чем показываем: чётче на плотных экранах
   fetch(url).then((r) => (r.ok ? r.blob() : Promise.reject(r.status))).then((b) => {
     const u = URL.createObjectURL(b);
     const old = img.src;
@@ -322,7 +333,37 @@ function shPipSampleFlat(cx, cy) {
   const mid = (arr) => arr.sort((p, q) => p - q)[arr.length >> 1];
   return { h: Math.round(((Math.atan2(sx, cxs) * 180 / Math.PI + 360) % 360) / 2) % 180, s: mid(ss), v: mid(vs), rgb: [Math.round(R / n), Math.round(G / n), Math.round(B / n)] };
 }
-const shPipSmp = (x, y) => (shPip.mode === 'not' ? shPipSampleFlat(x, y) : shPipSample(x, y));
+// цвет для режима «отражатель»: кончик — самое яркое место (пересвет, часто белый — поэтому не «самое цветное», как у палки):
+// в окне ±3 px берём четверть самых ярких пикселей, медиана насыщенности и яркости, оттенок по кругу
+function shPipSampleBright(cx, cy) {
+  const W = shPip.cv.width, H = shPip.cv.height, r = 3;
+  const x0 = Math.max(0, cx - r), y0 = Math.max(0, cy - r), x1 = Math.min(W, cx + r + 1), y1 = Math.min(H, cy + r + 1);
+  const w = x1 - x0, h = y1 - y0;
+  if (w < 1 || h < 1) return null;
+  const d = shPip.ctx.getImageData(x0, y0, w, h).data, n = w * h, px = [];
+  for (let i = 0; i < n; i++) px.push({ R: d[i * 4], G: d[i * 4 + 1], B: d[i * 4 + 2], hsv: shRgb2Hsv(d[i * 4], d[i * 4 + 1], d[i * 4 + 2]) });
+  px.sort((p, q) => q.hsv[2] - p.hsv[2]);
+  const top = px.slice(0, Math.max(3, Math.round(n / 4)));
+  const sx = top.reduce((a, p) => a + Math.sin(p.hsv[0] * Math.PI / 90), 0), cxs = top.reduce((a, p) => a + Math.cos(p.hsv[0] * Math.PI / 90), 0);
+  const mid = (arr) => arr.sort((p, q) => p - q)[arr.length >> 1];
+  return { h: Math.round(((Math.atan2(sx, cxs) * 180 / Math.PI + 360) % 360) / 2) % 180, s: mid(top.map((p) => p.hsv[1])), v: mid(top.map((p) => p.hsv[2])),
+    rgb: [0, 1, 2].map((c) => Math.round(top.reduce((a, p) => a + [p.R, p.G, p.B][c], 0) / top.length)) };
+}
+const shPipSmp = (x, y) => (shPip.mode === 'not' ? shPipSampleFlat(x, y) : shPip.mode === 'tip' ? shPipSampleBright(x, y) : shPipSample(x, y));
+
+// цвета светоотражателей (строки «отражатель», читаем с ползунков карточки) и в какую строку попадает цвет (номер с 1 или 0)
+function shPipTipBoxes(key) {
+  const block = document.querySelector(`[data-shcol="${key}"]`), rows = {};
+  if (block) block.querySelectorAll('input[data-f="hsvn"][data-w="tip"]').forEach((i) => { (rows[i.dataset.n] = rows[i.dataset.n] || [])[Number(i.dataset.k)] = parseInt(i.value, 10) || 0; });
+  return Object.keys(rows).sort((a, b) => a - b).map((n) => rows[n]);
+}
+const shPipTipHit = (key, h, s, v) => shPipTipBoxes(key).findIndex((r) => shBoxHit(r, h, s, v)) + 1;
+// «ящик» вокруг цвета отражателя: белый (насыщенность < 50) — оттенок любой, насыщенность до s+50; цветной — оттенок ±10, насыщенность от s−70; яркость от v−40 до 255
+function shTipBox(smp) {
+  const cl = (q, hi) => Math.max(0, Math.min(hi, Math.round(q)));
+  if (smp.s < 50) return [0, 179, 0, cl(smp.s + 50, 255), cl(smp.v - 40, 255), 255];
+  return [(smp.h - 10 + 180) % 180, (smp.h + 10) % 180, cl(smp.s - 70, 255), 255, cl(smp.v - 40, 255), 255];
+}
 
 // какие диапазоны сейчас у конца палки (читаем с ползунков карточки: там то, что видит детектор)
 function shPipRanges(key, w) {
@@ -363,13 +404,14 @@ function shPipOpen(key, w, mode) {
   const name = (block.querySelector('.sh-col__head b') || {}).textContent || '';
   const sub = (block.querySelector('.sh-col__head .net-hint') || {}).textContent || '';
   SHP.act = { key, w };
-  Object.assign(shPip, { key, w, mode: mode === 'not' ? 'not' : 'add', left: SH_PIP_EVERY, freeze: false, tint: false, loaded: false });
+  Object.assign(shPip, { key, w, mode: mode === 'not' || mode === 'tip' ? mode : 'add', left: SH_PIP_EVERY, freeze: false, tint: false, loaded: false });
   const el = document.createElement('div');
   el.className = 'sh-pipov';
-  const notMode = shPip.mode === 'not';
-  el.innerHTML = `<div class="sh-pipov__box" role="dialog" aria-label="${notMode ? 'Пипетка: не ловить' : 'Пипетка'}">
-    <div class="sh-pipov__head"><b>${notMode ? 'Пипетка · не ловить' : 'Пипетка'}</b><span class="net-hint">${escapeHtml(name)} · ${escapeHtml(sub)}</span>
-      <div class="sh-seg" data-pipend><button type="button" data-w="red">красный конец</button><button type="button" data-w="blue">синий конец</button></div>
+  const notMode = shPip.mode === 'not', tipMode = shPip.mode === 'tip';
+  const title = tipMode ? 'Пипетка · светоотражатель' : notMode ? 'Пипетка · не ловить' : 'Пипетка';
+  el.innerHTML = `<div class="sh-pipov__box" role="dialog" aria-label="${title}">
+    <div class="sh-pipov__head"><b>${title}</b><span class="net-hint">${escapeHtml(name)} · ${escapeHtml(sub)}</span>
+      ${tipMode ? '' : '<div class="sh-seg" data-pipend><button type="button" data-w="red">красный конец</button><button type="button" data-w="blue">синий конец</button></div>'}
       <span class="md-sp"></span>
       <span class="net-hint" data-pipclock></span>
       <label class="sh-chk"><input type="checkbox" data-pipfreeze /> стоп-кадр</label>
@@ -416,6 +458,13 @@ function shPipClock() {
 // какой конец сейчас берём и что в его списке цветов
 function shPipEnd() {
   if (!shPip.el) return;
+  if (shPip.mode === 'tip') {
+    const boxes = shPipTipBoxes(shPip.key);
+    shPip.el.querySelector('[data-pipfoot]').innerHTML = '<span class="net-hint">Цвета светоотражателей:</span>' +
+      (boxes.length ? boxes.map((r, i) => `<span class="sh-chip"><i class="sh-dot" style="background:${shHsv2Css(shNotMidHue(r), (r[2] + r[3]) / 2, (r[4] + r[5]) / 2)}"></i>отражатель ${i + 1}: оттенок ${r[0]}${r[0] > r[1] ? '→' : '–'}${r[1]}, насыщ. ${r[2]}–${r[3]}, ярк. ${r[4]}–${r[5]}</span>`).join('') : '<span class="net-hint">пока нет</span>') +
+      '<span class="net-hint">Наведите на светоотражатель на конце палки: зелёная галочка — такой цвет уже ловится, жёлтый плюс — клик добавит его. «Показать, что ловится» подсветит всё, что сейчас примется за отражатель (неподвижные блики сервис отсеет сам, пока вал крутится).</span>';
+    return;
+  }
   shPip.el.querySelectorAll('[data-pipend] button').forEach((b) => b.classList.toggle('on', b.dataset.w === shPip.w));
   const R = shPipRanges(shPip.key, shPip.w), dotH = (r) => Math.round(r[0] + r[1]);
   const m = R.main, mainDot = shPip.w === 'red' ? 0 : Math.round(m[0] + m[1]);
@@ -458,6 +507,15 @@ function shPipTint() {
   if (!shPip.tint) return;
   const R = shPipRanges(shPip.key, shPip.w), m = R.main, red = shPip.w === 'red';
   const src = shPip.ctx.getImageData(0, 0, tc.width, tc.height), out = t.createImageData(tc.width, tc.height), d = src.data, o = out.data;
+  if (shPip.mode === 'tip') {                              // отражатели — жёлтым
+    const boxes = shPipTipBoxes(shPip.key);
+    for (let i = 0; i < d.length; i += 4) {
+      const [h, s, v] = shRgb2Hsv(d[i], d[i + 1], d[i + 2]);
+      if (boxes.some((r) => shBoxHit(r, h, s, v))) { o[i] = 250; o[i + 1] = 204; o[i + 2] = 21; o[i + 3] = 200; }
+    }
+    t.putImageData(out, 0, 0);
+    return;
+  }
   for (let i = 0; i < d.length; i += 4) {
     const [h, s, v] = shRgb2Hsv(d[i], d[i + 1], d[i + 2]);
     const hit = ((s >= m[2] && v >= m[3] && (red ? (h <= m[0] || h >= m[1]) : (h >= m[0] && h <= m[1]))) || R.more.some((r) => h >= r[0] && h <= r[1] && s >= r[2] && v >= r[3])) && !R.not.some((r) => shBoxHit(r, h, s, v));
@@ -474,12 +532,14 @@ function shPipMove(e) {
   const { x, y, r } = shPipPos(e), loupe = shPip.el.querySelector('[data-piploupe]');
   const smp = shPipSmp(x, y);
   if (!smp) { loupe.hidden = true; return; }
-  const by = shPipCovered(shPip.key, shPip.w, smp.h, smp.s, smp.v), ex = shPipExcluded(shPip.key, shPip.w, smp.h, smp.s, smp.v);
+  const tipMode = shPip.mode === 'tip';
+  const by = tipMode ? (shPipTipHit(shPip.key, smp.h, smp.s, smp.v) ? 'отражатель ' + shPipTipHit(shPip.key, smp.h, smp.s, smp.v) : '') : shPipCovered(shPip.key, shPip.w, smp.h, smp.s, smp.v);
+  const ex = tipMode ? 0 : shPipExcluded(shPip.key, shPip.w, smp.h, smp.s, smp.v);
   const notMode = shPip.mode === 'not';
   // режим «ловить»: ✓ — уже ловится, ＋ — клик добавит, ⊘ — исключён. Режим «не ловить»: ✓ — уже исключён или и так не ловится, － — сейчас ловится, клик вырежет
   const ok = notMode ? !by : !!by, N = 15, S = shPip.lp.width;
   const head = notMode ? (ok ? (ex ? '✓ уже исключён' : '✓ и так не ловится') : '－ ловится') : (by ? '✓ ловится' : (ex ? '⊘ исключён' : '＋ не ловится'));
-  const sub = notMode ? (ok ? (ex ? 'не ловить ' + ex : 'исключать нечего') : escapeHtml(by) + ' · клик вырежет') : (by ? escapeHtml(by) : (ex ? 'не ловить ' + ex + ' — уберите строку' : 'клик добавит цвет'));
+  const sub = notMode ? (ok ? (ex ? 'не ловить ' + ex : 'исключать нечего') : escapeHtml(by) + ' · клик вырежет') : (by ? escapeHtml(by) : (ex ? 'не ловить ' + ex + ' — уберите строку' : (tipMode ? 'клик добавит цвет отражателя' : 'клик добавит цвет')));
   shPip.lctx.clearRect(0, 0, S, S);
   shPip.lctx.drawImage(shPip.cv, x - (N >> 1), y - (N >> 1), N, N, 0, 0, S, S);     // 15×15 пикселей кадра, увеличенных, без сглаживания
   shPip.lctx.strokeStyle = '#fff'; shPip.lctx.lineWidth = 1;
@@ -502,6 +562,23 @@ function shPipClick(e) {
   const { x, y } = shPipPos(e), smp = shPipSmp(x, y);
   const msg = (html) => { const f = shPip.el && shPip.el.querySelector('[data-pipmsg]'); if (f) { f.hidden = false; f.innerHTML = html; clearTimeout(shPip.msgT); shPip.msgT = setTimeout(() => { f.hidden = true; }, 3500); } };
   if (!smp) return;
+  if (shPip.mode === 'tip') {                              // светоотражатель: «ящик» вокруг цвета кончика строкой «отражатель»
+    const key = shPip.key, hit = shPipTipHit(key, smp.h, smp.s, smp.v);
+    if (hit) { msg('Этот цвет уже ловится (отражатель ' + hit + ')'); return; }
+    const block = document.querySelector(`[data-shcol="${key}"]`);
+    const cam = block && mvCam(block.dataset.cam), z = cam && cam.zones.find((q) => q.id === block.dataset.zone);
+    if (!z) return;
+    if ((z.tip_hsv || []).length >= 6) { msg('Не больше шести цветов отражателя — уберите ненужный в таблице.'); return; }
+    const box = shTipBox(smp);
+    mdEdit(() => { z.tip_hsv = (z.tip_hsv || []).concat([box]); }, true);
+    msg('Добавлен цвет отражателя: H ' + smp.h + ', S ' + smp.s + ', V ' + smp.v);
+    shPipEnd();
+    shPipTint();
+    const nb = document.querySelector(`[data-shcol="${key}"]`);
+    if (nb) shPrevLoad(nb, true);
+    shPipMove(e);
+    return;
+  }
   const key = shPip.key, w = shPip.w, by = shPipCovered(key, w, smp.h, smp.s, smp.v), ex = shPipExcluded(key, w, smp.h, smp.s, smp.v), notMode = shPip.mode === 'not';
   if (notMode && !by) { msg(ex ? 'Этот цвет уже исключён (не ловить ' + ex + ')' : 'Этот цвет и так не ловится — исключать нечего'); return; }
   if (!notMode && by) { msg('Этот цвет уже ловится (' + escapeHtml(by) + ')'); return; }
@@ -978,6 +1055,10 @@ function shPaintWidget(ctx, s, off, corr) {
       const sr = x.src, litR = sr === 'red' || sr === 'both', litB = sr === 'blue' || sr === 'both';      // половина видна — яркая, не видна — тёмная и тусклая
       ctx.strokeStyle = litB ? MV_ROD_BLUE : '#1e3a52'; ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(cx - dx, cy - dy); ctx.stroke();
       ctx.strokeStyle = litR ? MV_ROD_RED : '#5c2323'; ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(cx + dx, cy + dy); ctx.stroke();
+      if (sr === 'tip') {                      // цвета не видно, держится по светоотражателям — жёлтые точки на концах
+        ctx.fillStyle = MV_ROD_TIP;
+        [[cx + dx, cy + dy], [cx - dx, cy - dy]].forEach(([px, py]) => { ctx.beginPath(); ctx.arc(px, py, 3, 0, Math.PI * 2); ctx.fill(); });
+      }
       ctx.globalAlpha = 1;
     }
     ctx.beginPath(); ctx.roundRect(cx - 27, cy - 11, 54, 22, 7); ctx.fillStyle = 'rgba(30,41,59,.95)'; ctx.fill();

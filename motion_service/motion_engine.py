@@ -74,6 +74,12 @@ CYCLE_WORK_R = 170       # радиус (px), до которого сжимае
 CYCLE_RED_HSV = (16, 165, 50, 55)     # красный: H ≤ h_max или H ≥ h_min (круг оттенков), S ≥ s_min, V ≥ v_min; мягче прежнего: красный конец в сумерках бледнеет и желтеет
 CYCLE_RED_HSV_OLD = (12, 163, 70, 80)  # прежний умолчательный красный: зоны, сохранённые с ним нетронутыми, переходят на новый (свои значения не трогаем)
 CYCLE_BLUE_HSV = (82, 135, 55, 60)    # синий/голубой: h_lo ≤ H ≤ h_hi, S ≥ s_min, V ≥ v_min (голубая половина тоже сюда)
+TIP_DIR_MIN = 0.05       # светоотражатели на обоих концах одинаковы: где красный конец, при поиске по всему кругу подсказывает цвет — его сила на луче не меньше этой
+TIP_PREC = 2.0           # вес угла по светоотражателям против угла по цвету при слиянии: кончики на полном радиусе, угол по ним точнее
+TIP_FLIP = 0.12          # отражатели не знают, где красный конец: голос цвета «за» противоположный луч (больше этого) или «против» (меньше минус этого)
+TIP_FLIP_DEG = 90.0      # стрелку, ведомую отражателями, разворачиваем на 180°, если вал прошёл столько градусов при голосе «за» без единого «против»
+TIP_BG_TAU = 30.0        # память неподвижных бликов, с: что светится на одном месте, пока вал крутится, — не кончик (люк, рамка, лампа)
+TIP_BG_MAX = 0.35        # точка горит дольше этой доли времени — неподвижный блик, из маски отражателей её убираем
 HW_ACCEL_MODES = ("off", "auto", "d3d11")    # аппаратное декодирование видео: выкл / любое доступное / Direct3D 11 (видеоядро Intel, AMD, NVIDIA)
 ZONE_OUT_KINDS = ("holding", "coil")
 SCENARIO_SIGNALS = ("move", "pulp")    # что сценарий берёт у зон: бит «движется» или «жом есть» (вид окна)
@@ -398,6 +404,12 @@ def _norm_cycle(z: dict, zid: str, where: str) -> dict:
         "blue_more": _more(z.get("blue_more"), where + ".blue_more"),
         "red_not": _nots(z.get("red_not"), where + ".red_not"),
         "blue_not": _nots(z.get("blue_not"), where + ".blue_not"),
+        "tip_hsv": _nots(z.get("tip_hsv"), where + ".tip_hsv"),          # цвета светоотражателей на концах палки — те же «ящики»; пусто — отражатели не ищем
+        "tip_w": _num(z.get("tip_w", 1.0), where + ".tip_w", 0, 3),      # вес отражателей в поиске угла (0 — не использовать)
+        "tip_min": _num(z.get("tip_min", 0.3), where + ".tip_min", 0.05, 1),   # отражатель считается видимым от этой силы (1 — кончик целиком, 0,5 — один из двух)
+        "tip_r0": _num(z.get("tip_r0", 0.55), where + ".tip_r0", 0.2, 1.0),    # кольцо, где ищем кончики: от tip_r0 до tip_r1 радиуса
+        "tip_r1": _num(z.get("tip_r1", 1.15), where + ".tip_r1", 1.0, 1.5),    # за радиус: кончик бывает чуть дальше окружности поиска
+        "tip_len": _num(z.get("tip_len", 0.06), where + ".tip_len", 0.01, 0.5),  # длина кончика в долях радиуса: столько точек на луче = «кончик целиком»
         "min_score": _num(z.get("min_score", 0.4), where + ".min_score", 0.01, 2),
         "min_conf": _num(z.get("min_conf", 0.1), where + ".min_conf", 0, 1),
         "jump_deg": _num(z.get("jump_deg", 25), where + ".jump_deg", 3, 180),
@@ -1211,10 +1223,25 @@ class CycleRT:
         self.ys = np.clip(np.rint(self.oy - self.rs[None, :] * _PHI_COS).astype(int), 0, max(0, int((self.y1 - self.y0) * self.k) - 1))
         n = max(3, int(round(zcfg["thin"] / self.k))) | 1                  # «тонкое» задано в рабочем масштабе, а маски считаем в родном: ядро растёт в 1/k раз
         self.ker = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (n, n)) if zcfg["thin"] >= 3 else None
+        # светоотражатели на концах палки: ищем в кольце tip_r0..tip_r1 радиуса — оно выходит за окружность поиска, поэтому своя (расширенная) область;
+        # в ней же картинка превью и кадр для пипетки (кончик за окружностью тоже можно взять). Масштаб k общий с цветом.
+        Rt = R * float(zcfg.get("tip_r1", 1.15))
+        self.tx0, self.ty0 = max(0, int(cx - Rt)), max(0, int(cy - Rt))
+        self.tx1, self.ty1 = min(W, int(cx + Rt) + 1), min(H, int(cy + Rt) + 1)
+        self.tox, self.toy = (cx - self.tx0) * self.k, (cy - self.ty0) * self.k
+        self.tip_on = bool(zcfg.get("tip_hsv")) and float(zcfg.get("tip_w", 1.0)) > 0
+        rt = np.arange(max(3.0, r1 * float(zcfg.get("tip_r0", 0.55))), r1 * float(zcfg.get("tip_r1", 1.15)), 1.0)
+        tw, th = max(1, int((self.tx1 - self.tx0) * self.k)), max(1, int((self.ty1 - self.ty0) * self.k))
+        self.txs = np.clip(np.rint(self.tox + rt[None, :] * _PHI_SIN).astype(int), 0, tw - 1)
+        self.tys = np.clip(np.rint(self.toy - rt[None, :] * _PHI_COS).astype(int), 0, th - 1)
+        self.tip_n = max(1.0, float(zcfg.get("tip_len", 0.06)) * r1)       # столько «отражающих» точек на луче — кончик виден целиком (сила 1)
+        self.r_tip = (float(rt[0]) if len(rt) else 0.0, float(rt[-1]) if len(rt) else 0.0)
         self.raw: deque = deque(maxlen=zcfg["smooth"])
         self.trk: deque = deque()               # (время, «развёрнутый» угол без скачков через 360°) за последние rpm_window секунд — для оборотов
         self.off_b = 0.0                        # на сколько синяя половина «довёрнута» от красной (град), учится, пока видны обе; reset не трогает
         self.bans: list = []                    # углы ложных неподвижных целей: при поиске по всему кругу вокруг них не смотрим (reset их не трогает)
+        self.tip_bg: Optional[np.ndarray] = None   # доля времени, когда точка «отражает», пока вал крутится (неподвижные блики); reset не трогает
+        self.tip_bg_t = 0.0
         self.reset()
 
     def reset(self):
@@ -1233,6 +1260,8 @@ class CycleRT:
         self.score = 0.0
         self.src = "none"                       # чем держим угол: both (обе половины) / red / blue / hold (не видно, ожидаемый) / none
         self.lvl_r = self.lvl_b = 0.0           # насколько видна красная / синяя половина на найденном луче, 0..1
+        self.lvl_t = 0.0                        # насколько видны светоотражатели на концах (среднее двух кончиков), 0..1; 0 — не видны или не настроены
+        self.flip_v = 0.0                       # сколько градусов вал прошёл, пока цвет «за» разворот (≥ TIP_FLIP_DEG — стрелку разворачиваем на 180°)
         self.rpm = 0.0                          # обороты, об/мин: «+» по часовой стрелке, «−» против; 0 — стоит или пока мало данных
         self.valid = False
 
@@ -1300,6 +1329,49 @@ class CycleRT:
             red, blue = np.minimum(1.0, red * 3.0), np.minimum(1.0, blue * 3.0)   # доля покрытия пикселя → «есть» (тонкая линия закрывает 1/3 пикселя)
         return cv2.dilate(red.astype(np.float32), _K3), cv2.dilate(blue.astype(np.float32), _K3)
 
+    def _tipmask(self, bgr: np.ndarray, tip_hsv=None) -> np.ndarray:
+        """Маска светоотражателей (доли 0..1 в рабочем масштабе) по расширенной области вокруг оси. Отражатель от прожектора даёт пересвет:
+        белое (V под 255, насыщенность почти 0) или яркий жёлтый — цвета задаются «ящиками» tip_hsv. Большие яркие пятна (лампа, белая стена,
+        блик на корпусе) срезает тот же фильтр «тонкого», что и у цветных половин: кончик — короткая полоска, а не пятно."""
+        boxes = (self.cfg.get("tip_hsv") or []) if tip_hsv is None else tip_hsv
+        s2 = min(1.0, 2.0 * self.k)                                        # кончик толще палки: цвет читаем с кадра вдвое крупнее рабочего, а не с родного —
+        if s2 < 1.0:                                                       # область отражателей большая, в родном разрешении это десятки мс на вал
+            bgr = cv2.resize(bgr, None, fx=s2, fy=s2, interpolation=cv2.INTER_AREA)
+        hsv = cv2.cvtColor(bgr, cv2.COLOR_BGR2HSV)
+        m = np.zeros(hsv.shape[:2], np.uint8)
+        for h1, h2, s1, s2_, v1, v2 in boxes:                              # inRange по uint8 — быстрее сравнений в int32
+            if h1 <= h2:
+                m |= cv2.inRange(hsv, (h1, s1, v1), (h2, s2_, v2))
+            else:                                                          # оттенок через ноль круга (красноватый)
+                m |= cv2.inRange(hsv, (h1, s1, v1), (179, s2_, v2)) | cv2.inRange(hsv, (0, s1, v1), (h2, s2_, v2))
+        m = (m > 0).astype(np.float32)
+        if s2 > self.k:                                                    # в рабочий масштаб: доля покрытия → «есть» (как у цветных масок)
+            m = np.minimum(1.0, cv2.resize(m, None, fx=self.k / s2, fy=self.k / s2, interpolation=cv2.INTER_AREA) * 2.0)
+        if self.cfg["thin"] >= 3:                                          # «тонкое» задано в рабочем масштабе — здесь и фильтруем
+            b = (m >= 0.5).astype(np.uint8)
+            kt = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (int(self.cfg["thin"]) | 1,) * 2)
+            m = m * (1 - cv2.morphologyEx(b, cv2.MORPH_OPEN, kt))
+        return cv2.dilate(m.astype(np.float32), _K3)
+
+    def _tip_static(self, tm: np.ndarray, now: float) -> np.ndarray:
+        """Убрать из маски отражателей неподвижные блики: доля времени, когда точка светится, копится, пока вал крутится (или ещё неизвестно);
+        кончик пробегает точку за доли секунды раз в оборот, а люк или лампа светятся всё время. Вал стоит — не копим: иначе его же кончики
+        записались бы в блики."""
+        if self.tip_bg is None or self.tip_bg.shape != tm.shape:
+            self.tip_bg = np.zeros_like(tm)
+            self.tip_bg_t = now
+        eff = np.where(self.tip_bg < TIP_BG_MAX, tm, 0.0)
+        if self.moving is not False:
+            a = min(0.2, max(0.0, now - self.tip_bg_t) / TIP_BG_TAU)
+            self.tip_bg += a * (tm - self.tip_bg)
+        self.tip_bg_t = now
+        return eff
+
+    def _tip_profile(self, tmask: np.ndarray) -> np.ndarray:
+        """Сила отражателя на луче φ (0..1): сколько отражающих точек в кольце у конца палки, к длине кончика (tip_n точек — кончик целиком)."""
+        h, w = tmask.shape[:2]
+        return np.minimum(1.0, tmask[np.minimum(self.tys, h - 1), np.minimum(self.txs, w - 1)].sum(axis=1) / self.tip_n)
+
     @staticmethod
     def _peak(s: np.ndarray, centre: float, hw: int = 15):
         """Лучший угол профиля s в окне ±hw° вокруг centre, уточнённый до долей градуса: (угол, сила 0..1) или None."""
@@ -1314,10 +1386,32 @@ class CycleRT:
         a = float(np.degrees(np.arctan2((w * np.sin(r)).sum(), (w * np.cos(r)).sum())) % 360.0) if w.sum() > 0 else float(PHIS[j])
         return a, v
 
-    def _fuse(self, sr: np.ndarray, sb: np.ndarray, i: int, fallback: float, now: float, locked: bool):
-        """Одна стрелка из двух половин. Красный пик около i и синий около i+180 ищем по отдельности.
+    def _fuse(self, sr: np.ndarray, sb: np.ndarray, i: int, fallback: float, now: float, locked: bool, ts: Optional[np.ndarray] = None):
+        """Одна стрелка из двух половин и светоотражателей. Угол по цвету — _fuse_color; ts — сила пары отражателей по лучам (None — не ищем).
+        Отражатели видны и согласны с цветом (≤ agree_deg) → среднее с весом TIP_PREC·tip_w·сила (кончики на полном радиусе — угол точнее);
+        цвета нет → угол по отражателям (src «tip»); не согласны → при слежении то, что ближе к ожидаемому углу, при поиске по кругу — цвет."""
+        a, src = self._fuse_color(sr, sb, i, fallback, now, locked)
+        self.lvl_t = 0.0
+        pt = self._peak(ts, i) if ts is not None else None
+        self.lvl_t = pt[1] if pt else 0.0
+        if pt is None or pt[1] < self.cfg.get("tip_min", 0.3):
+            return a, ("red" if src == "none" else src)                    # как раньше: обе половины слабые — угол по общему пику, src «red»
+        if src == "none":                                                  # цвета на луче нет — держимся за отражатели
+            return pt[0], "tip"
+        if abs(ang_diff(pt[0], a)) <= self.cfg["agree_deg"]:
+            wc = max(self.lvl_r, self.lvl_b, 1e-3)
+            wt = TIP_PREC * float(self.cfg.get("tip_w", 1.0)) * pt[1]
+            r = np.radians([a, pt[0]])
+            return float(np.degrees(np.arctan2(wc * np.sin(r[0]) + wt * np.sin(r[1]), wc * np.cos(r[0]) + wt * np.cos(r[1]))) % 360.0), src
+        if locked:
+            e = self._expected(now)
+            return (pt[0], "tip") if abs(ang_diff(pt[0], e)) < abs(ang_diff(a, e)) else (a, src)
+        return a, src
+
+    def _fuse_color(self, sr: np.ndarray, sb: np.ndarray, i: int, fallback: float, now: float, locked: bool):
+        """Угол по двум цветным половинам. Красный пик около i и синий около i+180 ищем по отдельности.
         Видны обе и согласны (разница с учётом off_b ≤ agree_deg) → среднее по силе; видна одна → по ней;
-        не согласны → та, что ближе к ожидаемому углу (при поиске по кругу — сильнее). Возвращает (угол, src)."""
+        не согласны → та, что ближе к ожидаемому углу (при поиске по кругу — сильнее). Возвращает (угол, src); ни одной — (fallback, «none»)."""
         c = self.cfg
         pr = self._peak(sr, i)
         pb = self._peak(sb, (i + 180) % 360)
@@ -1326,7 +1420,7 @@ class CycleRT:
         self.lvl_r = pr[1] if pr else 0.0
         self.lvl_b = pb[1] if pb else 0.0
         if not red_ok and not blue_ok:
-            return fallback, "red"
+            return fallback, "none"
         ab = None if pb is None else (pb[0] + 180.0) % 360.0                # синий пик, пересчитанный в «красный» угол
         if red_ok and blue_ok:
             d = ang_diff(ab, pr[0])
@@ -1346,28 +1440,42 @@ class CycleRT:
             return pr[0], "red"
         return (ab - self.off_b) % 360.0, "blue"
 
-    def mask_preview(self, frame: np.ndarray, red_hsv=None, blue_hsv=None, max_w: int = 640, raw: bool = False, red_more=None, blue_more=None, red_not=None, blue_not=None) -> np.ndarray:
-        """Что видит детектор: область вокруг оси (в рабочем масштабе), красные точки — маска красной половины, голубые — синей,
-        окружность поиска и ось. Пороги можно подставить свои — подбирать цвета, не меняя настройки. raw — сам кадр без масок (искать палку глазами,
-        брать цвет пипеткой): в родном разрешении (хоть 900 px и больше), без окружности и оси. Картинка всегда вся область, целиком."""
-        crop_src = frame[self.y0:self.y1, self.x0:self.x1]
+    def mask_preview(self, frame: np.ndarray, red_hsv=None, blue_hsv=None, max_w: int = 640, raw: bool = False, red_more=None, blue_more=None, red_not=None, blue_not=None,
+                     tip_hsv=None) -> np.ndarray:
+        """Что видит детектор: область вокруг оси (в рабочем масштабе), красные точки — маска красной половины, голубые — синей, жёлтые — светоотражатели,
+        окружность поиска, кольцо, где ищем кончики (пунктир), и ось. Пороги можно подставить свои — подбирать цвета, не меняя настройки. raw — сам кадр без масок
+        (искать палку глазами, брать цвет пипеткой): в родном разрешении (хоть 900 px и больше), без рисунка. Картинка — расширенная область (с кольцом отражателей), целиком."""
+        crop_src = frame[self.ty0:self.ty1, self.tx0:self.tx1]
         if raw:                                                            # сам кадр области в родном разрешении и без рисунка: окно пипетки читает цвета прямо с картинки
             w0, h0 = crop_src.shape[1], crop_src.shape[0]
             if max_w == w0:
                 return crop_src.copy()
             return cv2.resize(crop_src, (max_w, max(2, int(round(h0 * max_w / float(w0))))), interpolation=cv2.INTER_AREA if max_w < w0 else cv2.INTER_CUBIC)
         red, blue = self._liks(crop_src, red_hsv, blue_hsv, red_more, blue_more, red_not, blue_not)
+        tips = (self.cfg.get("tip_hsv") or []) if tip_hsv is None else tip_hsv
         crop = cv2.resize(crop_src, (red.shape[1], red.shape[0]), interpolation=cv2.INTER_AREA)
         img = (crop.astype(np.float32) * 0.55).astype(np.uint8)
         img[red > 0.5] = (40, 40, 255)
         img[blue > 0.5] = (255, 200, 40)
+        if tips:                                                           # отражатели — жёлтым; неподвижные блики, которые разбор уже отсеял, — тускло-оливковым
+            tm = self._tipmask(crop_src, tips)[:img.shape[0], :img.shape[1]] > 0.5
+            if self.tip_bg is not None and self.tip_bg.shape[0] >= tm.shape[0] and self.tip_bg.shape[1] >= tm.shape[1]:
+                stat = self.tip_bg[:tm.shape[0], :tm.shape[1]] >= TIP_BG_MAX
+                img[tm & stat] = (0, 110, 130)
+                tm &= ~stat
+            img[tm] = (0, 230, 255)
         sc = max_w / float(max(1, img.shape[1]))                           # и увеличить, и уменьшить до нужной ширины
         if sc > 1.0:
             img = cv2.resize(img, None, fx=sc, fy=sc, interpolation=cv2.INTER_NEAREST)
         elif sc < 1.0:
             img = cv2.resize(img, None, fx=sc, fy=sc, interpolation=cv2.INTER_AREA)
-        o = (int(round(self.ox * sc)), int(round(self.oy * sc)))
+        o = (int(round(self.tox * sc)), int(round(self.toy * sc)))
         cv2.circle(img, o, int(round(float(self.rs[-1] if len(self.rs) else 3) * sc)), (200, 200, 200), 1, cv2.LINE_AA)
+        if tips:                                                           # кольцо, где ищем кончики: две тонкие окружности жёлтым пунктиром
+            for rr in self.r_tip:
+                rp = int(round(rr * sc))
+                for a0 in range(0, 360, 12):
+                    cv2.ellipse(img, o, (rp, rp), 0, a0, a0 + 6, (0, 200, 230), 1, cv2.LINE_AA)
         cv2.circle(img, o, 3, (255, 255, 255), -1)
         return img
 
@@ -1378,8 +1486,8 @@ class CycleRT:
         if frame is None or frame.ndim != 3:
             return None
         u, v = min(1.0, max(0.0, float(u))), min(1.0, max(0.0, float(v)))
-        x = int(round(self.x0 + u * (self.x1 - self.x0 - 1)))
-        y = int(round(self.y0 + v * (self.y1 - self.y0 - 1)))
+        x = int(round(self.tx0 + u * (self.tx1 - self.tx0 - 1)))          # картинка превью — расширенная область (с кольцом отражателей)
+        y = int(round(self.ty0 + v * (self.ty1 - self.ty0 - 1)))
         r = int(max(6, min(24, 0.03 * (self.x1 - self.x0))))
         patch = frame[max(0, y - r):y + r + 1, max(0, x - r):x + r + 1]
         if patch.size == 0:
@@ -1404,39 +1512,79 @@ class CycleRT:
         """Новый цветной кадр (now — его время, с) → угол и обороты. True, если палка найдена на этом кадре."""
         if frame is not None and frame.ndim == 3:
             red, blue = self._liks(frame[self.y0:self.y1, self.x0:self.x1])   # маски — в родном разрешении, сжатие внутри
-            return self.step_profiles(red[self.ys, self.xs].mean(axis=1), blue[self.ys, self.xs].mean(axis=1), now)
+            st = self._tip_profile(self._tip_static(self._tipmask(frame[self.ty0:self.ty1, self.tx0:self.tx1]), now)) if self.tip_on else None
+            return self.step_profiles(red[self.ys, self.xs].mean(axis=1), blue[self.ys, self.xs].mean(axis=1), now, st)
         return self.step_profiles(None, None, now)
 
-    def step_profiles(self, sr: Optional[np.ndarray], sb: Optional[np.ndarray], now: float = 0.0) -> bool:
+    def step_profiles(self, sr: Optional[np.ndarray], sb: Optional[np.ndarray], now: float = 0.0, st: Optional[np.ndarray] = None) -> bool:
         """То же по готовым профилям лучей: sr/sb — доля красных/синих точек на луче φ (360 чисел, φ = 0..359); None — кадра нет.
-        Вынесено из step: автоподгонка (motion_autocal) гоняет этот же боевой разбор по профилям, посчитанным для разных цветов и осей."""
+        st — сила светоотражателя на луче φ (None — отражатели не ищем). Вынесено из step: автоподгонка (motion_autocal) гоняет этот же
+        боевой разбор по профилям, посчитанным для разных цветов и осей.
+
+        Отражатели на обоих концах одинаковые, поэтому дают ось палки, но не направление: пара кончиков ts(φ) = (st(φ) + st(φ+180)) / 2.
+        При слежении направление держит окно вокруг ожидаемого угла — пара добавляется к профилю целиком, и палку ведут даже одни отражатели.
+        При поиске по кругу пара идёт только в ту сторону, где цвет сильнее (красный на φ против φ+180), — уверенность от этого не падает."""
         c = self.cfg
         found = False
         dt = now - self.last_t
         locked = self.last is not None and dt <= c["coast_s"]
         if sr is not None and sb is not None:
             comb = sr + c["blue_w"] * np.roll(sb, -180)                    # красный на φ, синий на φ+180
+            ts = None
+            if st is not None and c.get("tip_w", 1.0) > 0:
+                ts = 0.5 * (st + np.roll(st, -180))
+                colr = comb
+                own = colr >= np.roll(colr, -180)                          # отражатели — в сторону, где цвет сильнее (ничья — в обе)
+                tw = c.get("tip_w", 1.0) * ts
+                comb = colr + tw * own                                     # профиль для уверенности и для поиска по кругу
+                comb_lk = colr + tw                                        # при слежении: направление держит окно
             cand = comb
             if not locked and self.bans:                                   # ложная неподвижная цель (рамка, лист): при поиске по кругу её как будто нет
                 for b in self.bans:                                        # (и в уверенности тоже: иначе она «вторая по силе» и режет conf настоящей палки)
                     comb = np.where(np.abs(((PHIS - b + 180.0) % 360.0) - 180.0) <= BAN_DEG, 0.0, comb)
                 cand = comb
+            prof = comb_lk if (locked and ts is not None) else comb
             if locked:
                 hw = min(90.0, c["jump_deg"] + max(0.0, dt - 2.0))         # при пропаже окно поиска понемногу растёт: 1°/с
                 near = np.abs(((PHIS - self._expected(now) + 180.0) % 360.0) - 180.0) <= hw
-                cand = np.where(near, comb, -1.0)
+                cand = np.where(near, prof, -1.0)
             i = int(np.argmax(cand))
-            best = float(comb[i])
+            best = float(prof[i])
             far = np.abs(((PHIS - PHIS[i] + 180.0) % 360.0) - 180.0) > 20.0
             second = float(comb[far].max()) if far.any() else 0.0
-            conf = 1.0 - second / best if best > 1e-6 else 0.0
+            conf = 1.0 - second / float(comb[i]) if comb[i] > 1e-6 else 0.0
             self.score, self.conf = best, max(0.0, conf)
-            if cand[i] >= 0 and best >= c["min_score"] and (sr[i] >= c["red_min"] or sb[(i + 180) % 360] >= c["blue_alone"]) and (locked or conf >= c["min_conf"]):
+            anti = (i + 180) % 360
+            color_ok = sr[i] >= c["red_min"] or sb[anti] >= c["blue_alone"]
+            tip_ok = ts is not None and ts[i] >= c.get("tip_min", 0.3) and (locked or (colr[i] >= TIP_DIR_MIN and colr[i] > colr[anti]))
+            if cand[i] >= 0 and best >= c["min_score"] and (color_ok or tip_ok) and (locked or conf >= c["min_conf"]):
                 idx = (i + np.arange(-4, 5)) % 360                          # уточнение до долей градуса: центр тяжести вокруг пика
-                w = np.clip(comb[idx] - 0.5 * best, 0.0, None)
+                w = np.clip(prof[idx] - 0.5 * best, 0.0, None)
                 r = np.radians(PHIS[idx])
                 ang0 = float(np.degrees(np.arctan2((w * np.sin(r)).sum(), (w * np.cos(r)).sum())) % 360.0) if w.sum() > 0 else float(PHIS[i])
-                ang, self.src = self._fuse(sr, sb, i, ang0, now, locked)    # одна стрелка из красной и синей половин
+                ang, self.src = self._fuse(sr, sb, i, ang0, now, locked, ts)   # одна стрелка из красной и синей половин и отражателей
+                if ts is not None and locked:                                # отражатели ведут без направления: обе половины устойчиво «за» обратный луч — разворот
+                    # голосуют видимые половины: красный сильнее на обратном луче, синий — на прямом. Видны обе — голос меньший из двух: неподвижный
+                    # цветной предмет (коричневые спицы колеса при мягком красном) «за» разворот только у одной половины, вторая против — стрелка стоит
+                    rv, bv = float(sr[anti] - sr[i]), float(sb[i] - sb[anti])
+                    see_r, see_b = max(sr[i], sr[anti]) >= c["red_min"], max(sb[i], sb[anti]) >= 0.5 * c["blue_min"]
+                    vote = min(rv, bv) if (see_r and see_b) else rv if see_r else bv if see_b else 0.0
+                    # копим не кадры, а пройденный угол: перевёрнутая стрелка ошибается во всех секторах оборота, а косой центр или пятно цвета
+                    # «голосуют» только в одном секторе — дальше голос «против» обнуляет счёт
+                    if vote > TIP_FLIP:
+                        self.flip_v += abs(ang_diff(ang, self.last)) if self.last is not None else 0.0
+                    elif vote < -TIP_FLIP:
+                        self.flip_v = 0.0
+                    if self.flip_v >= TIP_FLIP_DEG:
+                        ang = (ang + 180.0) % 360.0
+                        self.flip_v = 0.0
+                        self.raw.clear()
+                        self.trk.clear()
+                        self.unw = None
+                        self.mv.clear()
+                        self.src = "tip"                                     # на этом кадре угол — по отражателям, направление — по цвету
+                else:
+                    self.flip_v = 0.0
                 if self.coast:
                     self.mv.clear()                                          # скачок при возврате палки — не ход вала
                     self.raw.clear()                                         # сглаживание не тянет к ожидаемому углу из пропажи
@@ -1454,12 +1602,12 @@ class CycleRT:
                 self.angle = self._expected(now)
                 self.coast, self.valid = True, True
                 self.conf = 0.0
-                self.src, self.lvl_r, self.lvl_b = "hold", 0.0, 0.0
+                self.src, self.lvl_r, self.lvl_b, self.lvl_t = "hold", 0.0, 0.0, 0.0
             else:
                 self.valid, self.coast = False, False
                 self.last = None
                 self.raw.clear()
-                self.src, self.lvl_r, self.lvl_b = "none", 0.0, 0.0
+                self.src, self.lvl_r, self.lvl_b, self.lvl_t = "none", 0.0, 0.0, 0.0
                 self._lost()
         return found
 
@@ -1782,7 +1930,7 @@ class CameraEngine:
                 "bit": int(ok and not coast), "flow": angle, "diff": conf, "value": angle, "on": 0.0, "off": 0.0,
                 "angle": angle, "conf": conf, "rpm": rpm, "score": round(c.score, 3) if c else 0.0, "valid": ok, "coast": coast, "moving": moving,
                 "src": c.src if ok else "none", "lvl_r": round(c.lvl_r, 2) if ok else 0.0, "lvl_b": round(c.lvl_b, 2) if ok else 0.0,
-                "off_b": round(c.off_b, 1) if c else 0.0}
+                "lvl_t": round(c.lvl_t, 2) if ok else 0.0, "off_b": round(c.off_b, 1) if c else 0.0}
 
     def _clarity_zone(self, zc: dict, alive: bool) -> dict:
         """Зона-прозрачность → запись состояния. turb — мутность 0..100 (flow = turb, diff = движение в кружке — для историй, трендов и CSV; раньше тут

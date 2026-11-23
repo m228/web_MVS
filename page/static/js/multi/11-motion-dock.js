@@ -649,15 +649,19 @@ function mdOnZone(t, cam) {
     mdEdit(() => { z.red_hsv = SH_RED_DEF.slice(); z.blue_hsv = SH_BLUE_DEF.slice(); z.red_more = []; z.blue_more = []; z.red_not = []; z.blue_not = []; }, true);
     return;
   }
-  if (f === 'hsvndel') {                                          // убрать исключённый цвет («не ловить») конца палки
-    mdEdit(() => { (z[t.dataset.w + '_not'] || []).splice(Number(t.dataset.n), 1); }, true);
+  if (f === 'tipwhite') {                                         // светоотражатели: добавить «пересвет» (белое под прожектором) одной кнопкой
+    mdEdit(() => { const arr = z.tip_hsv || []; if (arr.length < 6 && !arr.some((r) => r.join() === SH_TIP_WHITE.join())) z.tip_hsv = arr.concat([SH_TIP_WHITE.slice()]); }, true);
     return;
   }
-  if (f === 'hsvn') {                                             // порог исключённого цвета: [H1, H2, S1, S2, V1, V2]; оттенок «от» выше «до» — через ноль круга (красный), его не правим
-    const w = t.dataset.w, n = Number(t.dataset.n), k = Number(t.dataset.k);
+  if (f === 'hsvndel') {                                       // убрать исключённый цвет («не ловить») конца палки или цвет светоотражателя (w = 'tip')
+    mdEdit(() => { (z[t.dataset.w === 'tip' ? 'tip_hsv' : t.dataset.w + '_not'] || []).splice(Number(t.dataset.n), 1); }, true);
+    return;
+  }
+  if (f === 'hsvn') {                                             // порог «ящика» [H1, H2, S1, S2, V1, V2]: исключённый цвет конца (red/blue_not) или светоотражатель (tip_hsv); оттенок «от» выше «до» — через ноль круга
+    const w = t.dataset.w, n = Number(t.dataset.n), k = Number(t.dataset.k), key = w === 'tip' ? 'tip_hsv' : w + '_not';
     let fixed = false;
     mdEdit(() => {
-      const arr = (z[w + '_not'] || []).map((r) => r.slice());
+      const arr = (z[key] || []).map((r) => r.slice());
       const r = arr[n];
       if (!r) return;
       r[k] = Math.max(0, Math.min(k < 2 ? 179 : 255, parseInt(t.value, 10) || 0));
@@ -665,7 +669,7 @@ function mdOnZone(t, cam) {
         const lo = k & ~1, hi = lo + 1;
         if (r[lo] > r[hi]) { if (k === lo) r[hi] = r[lo]; else r[lo] = r[hi]; fixed = true; }
       }
-      z[w + '_not'] = arr;
+      z[key] = arr;
     }, false);
     if (fixed) { MD.key = ''; renderMotionDock(); }
     return;
@@ -815,6 +819,7 @@ function mdRodAnglesHtml(z) {
 
 // чем держится угол: показываем только когда видна одна половина палки (обе видны — это норма)
 function mdRodSrcHtml(z) {
+  if (z.src === 'tip') return ` · <span style="color:${MV_ROD_TIP}" title="Цветные половины палки сейчас не видны, угол держится по светоотражателям на концах">по светоотражателям</span>`;
   const t = z.src === 'red' ? 'только красная половина' : z.src === 'blue' ? 'только синяя половина' : '';
   const col = z.src === 'red' ? MV_ROD_RED : MV_ROD_BLUE;
   return t ? ` · <span style="color:${col}" title="Вторая половина палки сейчас не видна, угол считается по этой">${t}</span>` : '';

@@ -867,7 +867,7 @@ class MicroscopeService:
         return bool(self._started)
 
     CYCLE_LABELS = {"ignore_stage": "варить без стадии", "stage_from": "стадия от", "stage_to": "стадия до", "stage_extra": "плюс стадии", "sv_from": "СВ от", "sv_to": "СВ до", "trigger_mode": "триггер",
-                    "pause_sec": "пауза, с", "dwell_sec": "выдержка, с", "arrive_sensor": "датчик прихода", "retract_pos": "отвод, мкм",
+                    "pause_sec": "пауза, с", "dwell_sec": "выдержка, с", "arrive_sensor": "датчик прихода", "arrive_tol_um": "допуск подвода, мкм", "retract_pos": "отвод, мкм",
                     "pre_wash_sec": "промывка, с", "shot_interval_sec": "скрин каждые, с", "photo_format": "формат кадра"}
     MODE_LABELS = {"auto": "Автомат включён", "off": "Автомат выключен — проб нет", "manual": "Ручной режим", "fault": "Авария автомата"}
 

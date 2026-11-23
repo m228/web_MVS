@@ -646,7 +646,28 @@ function mdOnZone(t, cam) {
   if (!z) return;
   if (mdOnLearn(t, cam, z)) return;
   if (f === 'hsvreset') {
-    mdEdit(() => { z.red_hsv = SH_RED_DEF.slice(); z.blue_hsv = SH_BLUE_DEF.slice(); z.red_more = []; z.blue_more = []; }, true);
+    mdEdit(() => { z.red_hsv = SH_RED_DEF.slice(); z.blue_hsv = SH_BLUE_DEF.slice(); z.red_more = []; z.blue_more = []; z.red_not = []; z.blue_not = []; }, true);
+    return;
+  }
+  if (f === 'hsvndel') {                                          // убрать исключённый цвет («не ловить») конца палки
+    mdEdit(() => { (z[t.dataset.w + '_not'] || []).splice(Number(t.dataset.n), 1); }, true);
+    return;
+  }
+  if (f === 'hsvn') {                                             // порог исключённого цвета: [H1, H2, S1, S2, V1, V2]; оттенок «от» выше «до» — через ноль круга (красный), его не правим
+    const w = t.dataset.w, n = Number(t.dataset.n), k = Number(t.dataset.k);
+    let fixed = false;
+    mdEdit(() => {
+      const arr = (z[w + '_not'] || []).map((r) => r.slice());
+      const r = arr[n];
+      if (!r) return;
+      r[k] = Math.max(0, Math.min(k < 2 ? 179 : 255, parseInt(t.value, 10) || 0));
+      if (k >= 2) {                                               // «от» насыщенности/яркости не выше «до»: пары (2,3) и (4,5)
+        const lo = k & ~1, hi = lo + 1;
+        if (r[lo] > r[hi]) { if (k === lo) r[hi] = r[lo]; else r[lo] = r[hi]; fixed = true; }
+      }
+      z[w + '_not'] = arr;
+    }, false);
+    if (fixed) { MD.key = ''; renderMotionDock(); }
     return;
   }
   if (f === 'hsvxdel') {                                          // убрать дополнительный цвет конца палки
@@ -2026,7 +2047,7 @@ function initMotionDock() {
     else if (kind === 'cs') mdSetEnabled(t.dataset.serial, t.checked, () => { t.checked = !t.checked; });
   };
   body?.addEventListener('change', (e) => { if (e.target.tagName !== 'BUTTON') dispatch(e); });
-  body?.addEventListener('input', (e) => { if (e.target.dataset && (e.target.dataset.f === 'hsv' || e.target.dataset.f === 'hsvx') && typeof shOnSlide === 'function') shOnSlide(e.target); });
+  body?.addEventListener('input', (e) => { if (e.target.dataset && (e.target.dataset.f === 'hsv' || e.target.dataset.f === 'hsvx' || e.target.dataset.f === 'hsvn') && typeof shOnSlide === 'function') shOnSlide(e.target); });
   body?.addEventListener('click', (e) => { if (e.target.tagName === 'BUTTON' && e.target.dataset.md) dispatch(e); });
   body?.addEventListener('change', (e) => {
     if (e.target.id === 'geType') mdSyncGroupEditor();

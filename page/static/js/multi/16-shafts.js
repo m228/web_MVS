@@ -164,7 +164,26 @@ function shColorRowHtml(w, z, a, key) {
   const cells = SH_HSV_COLS[w].map(([lbl, k, max, tip]) => `<label class="sh-hsv" title="${escapeHtml(tip)}">` +
     `<input type="range" class="sh-rng" style="--trk:${shTrack(k, base)}" ${a} data-f="hsv" data-w="${w}" data-k="${k}" min="0" max="${max}" step="1" value="${v[k]}" /><output>${v[k]}</output></label>`).join('');
   return `<div class="sh-tn"><i class="sh-dot" style="background:${color}"></i>${name}</div>${cells}` +
-    `<div class="sh-tact"><button type="button" class="btn-secondary md-x sh-pipbtn" data-md="shpick" data-w="${w}" data-f="pip" title="Откроется большой кадр: наведите на ${w === 'red' ? 'красный' : 'синий'} конец палки — лупа покажет цвет и «ловится / не ловится», клик добавит цвет отдельной строкой «ещё цвет». Оттенков у одного конца может быть несколько (светлый, тёмный, на солнце)">пипетка</button></div>`;
+    `<div class="sh-tact"><button type="button" class="btn-secondary md-x sh-pipbtn" data-md="shpick" data-w="${w}" data-f="pip" title="Откроется большой кадр: наведите на ${w === 'red' ? 'красный' : 'синий'} конец палки — лупа покажет цвет и «ловится / не ловится», клик добавит цвет отдельной строкой «ещё цвет». Оттенков у одного конца может быть несколько (светлый, тёмный, на солнце)">пипетка</button>` +
+    `<button type="button" class="btn-secondary md-x sh-pipbtn" data-md="shpick" data-w="${w}" data-f="pip" data-mode="not" title="Пипетка наоборот: кликните по цвету, который ${w === 'red' ? 'красному' : 'синему'} концу НЕ нужен (корпус, блик, пластина) — он вырежется из маски этого конца отдельной строкой «не ловить»">не ловить</button></div>`;
+}
+
+// OpenCV HSV (оттенок 0..179, насыщенность и яркость 0..255) → цвет CSS hsl(): для точки-образца в строке
+function shHsv2Css(h, s, v) {
+  const sv = s / 255, vv = v / 255, l = vv * (1 - sv / 2), sl = (l === 0 || l === 1) ? 0 : (vv - l) / Math.min(l, 1 - l);
+  return `hsl(${Math.round(h * 2)},${Math.round(sl * 100)}%,${Math.round(l * 100)}%)`;
+}
+function shNotMidHue(r) { return r[0] <= r[1] ? (r[0] + r[1]) / 2 : ((r[0] + r[1] + 180) / 2) % 180; }   // середина диапазона оттенка; «от» выше «до» — через ноль круга
+
+// исключённый цвет конца палки (red_not / blue_not): «ящик» оттенок/насыщенность/яркость «от и до», вырезается из маски этого конца. Две строки сетки: оттенок от/до, насыщ. от, ярк. от — и под ними насыщ. до, ярк. до
+function shNotRowHtml(w, z, a, n) {
+  const r = (z[w + '_not'] || [])[n], base = SH_END[w][2];
+  const cell = (k, cap, tip) => `<label class="sh-hsv"${tip ? ` title="${escapeHtml(tip)}"` : ''}>${cap ? `<span class="sh-hsv__cap">${cap}</span>` : ''}<input type="range" class="sh-rng" style="--trk:${shTrack(k < 2 ? 0 : (k < 4 ? 2 : 3), base)}" ${a} data-f="hsvn" data-w="${w}" data-n="${n}" data-k="${k}" min="0" max="${k < 2 ? 179 : 255}" step="1" value="${r[k]}" /><output>${r[k]}</output></label>`;
+  const dot = shHsv2Css(shNotMidHue(r), (r[2] + r[3]) / 2, (r[4] + r[5]) / 2);
+  return `<div class="sh-tn sh-tn--more"><i class="sh-dot sh-dot--not" style="background:${dot}"></i>не ловить</div>` +
+    cell(0, '', 'Оттенок «от». Если «от» выше «до» — диапазон идёт через ноль круга оттенков (так лежит красный)') + cell(1, '', 'Оттенок «до»') + cell(2, '', 'Насыщенность «от»') + cell(4, '', 'Яркость «от»') +
+    `<div class="sh-tact"><button type="button" class="btn-secondary md-x" ${a} data-f="hsvndel" data-w="${w}" data-n="${n}" title="Убрать этот цвет из исключений">убрать</button></div>` +
+    '<div></div><div></div><div></div>' + cell(3, 'до', 'Насыщенность «до»') + cell(5, 'до', 'Яркость «до»') + '<div></div>';
 }
 
 // дополнительный цвет конца палки (red_more / blue_more): обычный диапазон «от и до» с теми же тремя порогами; в маску он добавляется «ИЛИ»
@@ -184,7 +203,7 @@ function mdRodColorsHtml() {
       const sh = shShaftOf(c.id, z.id);
       const k = escapeHtml(c.id + '/' + z.id);
       const head = SH_HSV_COLS.red.map(([lbl, , , tip]) => `<div class="sh-th" title="${escapeHtml(tip)}">${lbl}</div>`).join('');
-      const more = (w) => (z[w + '_more'] || []).map((_, n) => shExtraRowHtml(w, z, a, n)).join('');
+      const more = (w) => (z[w + '_more'] || []).map((_, n) => shExtraRowHtml(w, z, a, n)).join('') + (z[w + '_not'] || []).map((_, n) => shNotRowHtml(w, z, a, n)).join('');
       blocks.push(`<div class="sh-col" data-shcol="${k}" data-cam="${escapeHtml(c.id)}" data-zone="${escapeHtml(z.id)}">
         <div class="sh-col__head"><b>${escapeHtml(sh ? sh.short : z.name)}</b><span class="net-hint">${escapeHtml(c.name)} · ${escapeHtml(z.name)}</span><span class="md-sp"></span>
           <button type="button" class="btn-secondary md-x" ${a} data-f="hsvreset" title="Вернуть пороги цвета этого вала к значениям по умолчанию">по умолчанию</button></div>
@@ -198,7 +217,7 @@ function mdRodColorsHtml() {
     });
   });
   if (!blocks.length) return '<span class="net-hint">Размеченных валов нет: нужны зоны-цикл («Разметить валы»).</span>';
-  return `<div class="net-hint sh-colhint">Палка красно-синяя: ловим её красный и синий конец по цвету. На картинке красные точки — то, что принято за красный конец, голубые — за синий; нужно, чтобы палка светилась целиком, а корпус и фон — нет. Двигайте ползунки или нажмите «пипетка»: откроется большой кадр, наведите на палку и кликните — цвет добавится отдельной строкой «ещё цвет» (у одного конца их может быть до шести: светлый, тёмный, на солнце). Изменения сохраняются сразу.</div><div class="sh-cols">${blocks.join('')}</div>`;
+  return `<div class="net-hint sh-colhint">Палка красно-синяя: ловим её красный и синий конец по цвету. На картинке красные точки — то, что принято за красный конец, голубые — за синий; нужно, чтобы палка светилась целиком, а корпус и фон — нет. Двигайте ползунки или нажмите «пипетка»: откроется большой кадр, наведите на палку и кликните — цвет добавится отдельной строкой «ещё цвет» (у одного конца их может быть до шести: светлый, тёмный, на солнце). Если в маску лезет лишнее (бирюзовый корпус, блик) — «не ловить»: тот же большой кадр, но клик по лишнему цвету вырезает его из маски этого конца. Изменения сохраняются сразу.</div><div class="sh-cols">${blocks.join('')}</div>`;
 }
 
 // превью: пробные пороги берём прямо с ползунков, сервис возвращает кадр вокруг оси с масками; не чаще раза в 4 с на вал, при правке — сразу
@@ -211,13 +230,18 @@ function shMoreStr(block, w) {                            // «H1,H2,S,V;H1,H2,S
   block.querySelectorAll(`input[data-f="hsvx"][data-w="${w}"]`).forEach((i) => { (rows[i.dataset.n] = rows[i.dataset.n] || [])[Number(i.dataset.k)] = i.value; });
   return Object.keys(rows).sort((x, y) => x - y).map((n) => rows[n].join(',')).join(';');
 }
+function shNotStr(block, w) {                             // «H1,H2,S1,S2,V1,V2;…» по строкам «не ловить»; пустая строка тоже посылается: «исключений нет»
+  const rows = {};
+  block.querySelectorAll(`input[data-f="hsvn"][data-w="${w}"]`).forEach((i) => { (rows[i.dataset.n] = rows[i.dataset.n] || [])[Number(i.dataset.k)] = i.value; });
+  return Object.keys(rows).sort((x, y) => x - y).map((n) => rows[n].join(',')).join(';');
+}
 function shPrevLoad(block, force) {
   const k = block.dataset.shcol, img = block.querySelector('img[data-shprev]'), note = block.querySelector('[data-shprevn]');
   if (!img || (!force && Date.now() - (shPrevAt[k] || 0) < 4000)) return;
   shPrevAt[k] = Date.now();
   const raw = shView[k] === 'raw' ? '&raw=1' : '';
   const url = '/api/motion/rod_mask?camera=' + encodeURIComponent(block.dataset.cam) + '&zone=' + encodeURIComponent(block.dataset.zone) +
-    '&red=' + shHsvStr(block, 'red') + '&blue=' + shHsvStr(block, 'blue') + '&red_more=' + shMoreStr(block, 'red') + '&blue_more=' + shMoreStr(block, 'blue') + '&w=' + SH_PREV_W * 2 + raw + '&t=' + Date.now();      // вдвое больше, чем показываем: чётче на плотных экранах
+    '&red=' + shHsvStr(block, 'red') + '&blue=' + shHsvStr(block, 'blue') + '&red_more=' + shMoreStr(block, 'red') + '&blue_more=' + shMoreStr(block, 'blue') + '&red_not=' + shNotStr(block, 'red') + '&blue_not=' + shNotStr(block, 'blue') + '&w=' + SH_PREV_W * 2 + raw + '&t=' + Date.now();      // вдвое больше, чем показываем: чётче на плотных экранах
   fetch(url).then((r) => (r.ok ? r.blob() : Promise.reject(r.status))).then((b) => {
     const u = URL.createObjectURL(b);
     const old = img.src;
@@ -244,7 +268,7 @@ function shOnSlide(t) {                                   // ползунок д
 // Цвет под курсором считаем здесь, по тому кадру, который виден: палка за 5 с поворачивается на ~24°, цвет с более позднего кадра с сервера был бы чужим.
 const SH_PIP_EVERY = 5;
 const SH_PIP_W = 900;
-const shPip = { el: null, key: '', w: 'red', cv: null, ctx: null, lp: null, lctx: null, timer: 0, left: SH_PIP_EVERY, freeze: false, tint: false, loaded: false, busy: false };
+const shPip = { el: null, key: '', w: 'red', mode: 'add', cv: null, ctx: null, lp: null, lctx: null, timer: 0, left: SH_PIP_EVERY, freeze: false, tint: false, loaded: false, busy: false };
 
 function shRgb2Hsv(r, g, b) {                              // как в OpenCV: оттенок 0..179, насыщенность и яркость 0..255
   const mx = Math.max(r, g, b), mn = Math.min(r, g, b), d = mx - mn;
@@ -280,38 +304,71 @@ function shPipSample(cx, cy) {
   return { h: hue, s: mid(top.map((p) => p.hsv[1])), v: mid(top.map((p) => p.hsv[2])), rgb: [Math.round(top.reduce((a, p) => a + p.R, 0) / top.length), Math.round(top.reduce((a, p) => a + p.G, 0) / top.length), Math.round(top.reduce((a, p) => a + p.B, 0) / top.length)] };
 }
 
+// цвет для режима «не ловить»: лишнее (корпус, блик) — обычно пятно, а не тонкая палка, поэтому берём не «самое отличное от фона», а типичный цвет окна ±4 px:
+// медиана насыщенности и яркости, оттенок усредняем по кругу
+function shPipSampleFlat(cx, cy) {
+  const W = shPip.cv.width, H = shPip.cv.height, r = 4;
+  const x0 = Math.max(0, cx - r), y0 = Math.max(0, cy - r), x1 = Math.min(W, cx + r + 1), y1 = Math.min(H, cy + r + 1);
+  const w = x1 - x0, h = y1 - y0;
+  if (w < 1 || h < 1) return null;
+  const d = shPip.ctx.getImageData(x0, y0, w, h).data, n = w * h, hs = [], ss = [], vs = [];
+  let sx = 0, cxs = 0, R = 0, G = 0, B = 0;
+  for (let i = 0; i < n; i++) {
+    const hsv = shRgb2Hsv(d[i * 4], d[i * 4 + 1], d[i * 4 + 2]);
+    hs.push(hsv[0]); ss.push(hsv[1]); vs.push(hsv[2]);
+    sx += Math.sin(hsv[0] * 2 * Math.PI / 180); cxs += Math.cos(hsv[0] * 2 * Math.PI / 180);
+    R += d[i * 4]; G += d[i * 4 + 1]; B += d[i * 4 + 2];
+  }
+  const mid = (arr) => arr.sort((p, q) => p - q)[arr.length >> 1];
+  return { h: Math.round(((Math.atan2(sx, cxs) * 180 / Math.PI + 360) % 360) / 2) % 180, s: mid(ss), v: mid(vs), rgb: [Math.round(R / n), Math.round(G / n), Math.round(B / n)] };
+}
+const shPipSmp = (x, y) => (shPip.mode === 'not' ? shPipSampleFlat(x, y) : shPipSample(x, y));
+
 // какие диапазоны сейчас у конца палки (читаем с ползунков карточки: там то, что видит детектор)
 function shPipRanges(key, w) {
   const block = document.querySelector(`[data-shcol="${key}"]`);
-  const out = { main: [0, 0, 0, 0], more: [] };
+  const out = { main: [0, 0, 0, 0], more: [], not: [] };
   if (!block) return out;
   const val = (sel) => { const r = block.querySelector(sel); return r ? parseInt(r.value, 10) || 0 : 0; };
   out.main = [0, 1, 2, 3].map((k) => val(`input[data-f="hsv"][data-w="${w}"][data-k="${k}"]`));
   const rows = {};
   block.querySelectorAll(`input[data-f="hsvx"][data-w="${w}"]`).forEach((i) => { (rows[i.dataset.n] = rows[i.dataset.n] || [])[Number(i.dataset.k)] = parseInt(i.value, 10) || 0; });
   out.more = Object.keys(rows).sort((a, b) => a - b).map((n) => rows[n]);
+  const nrows = {};
+  block.querySelectorAll(`input[data-f="hsvn"][data-w="${w}"]`).forEach((i) => { (nrows[i.dataset.n] = nrows[i.dataset.n] || [])[Number(i.dataset.k)] = parseInt(i.value, 10) || 0; });
+  out.not = Object.keys(nrows).sort((a, b) => a - b).map((n) => nrows[n]);
   return out;
 }
-// ловится ли цвет: '' — нет, иначе чем именно («основной» / «ещё цвет N»)
+// «ящик» исключения [H1, H2, S1, S2, V1, V2]: оттенок «от» выше «до» — через ноль круга (как hsv_box_hit на сервере)
+function shBoxHit(r, h, s, v) {
+  return (r[0] <= r[1] ? (h >= r[0] && h <= r[1]) : (h >= r[0] || h <= r[1])) && s >= r[2] && s <= r[3] && v >= r[4] && v <= r[5];
+}
+// в какое исключение попал цвет: номер строки «не ловить» (с 1) или 0
+function shPipExcluded(key, w, h, s, v) {
+  return shPipRanges(key, w).not.findIndex((r) => shBoxHit(r, h, s, v)) + 1;
+}
+// ловится ли цвет: '' — нет, иначе чем именно («основной» / «ещё цвет N»); исключённый цвет не ловится, что бы ни говорили диапазоны
 function shPipCovered(key, w, h, s, v) {
   const R = shPipRanges(key, w), m = R.main;
+  if (R.not.some((r) => shBoxHit(r, h, s, v))) return '';
   if (s >= m[2] && v >= m[3] && (w === 'red' ? (h <= m[0] || h >= m[1]) : (h >= m[0] && h <= m[1]))) return 'основной диапазон';
   const i = R.more.findIndex((r) => h >= r[0] && h <= r[1] && s >= r[2] && v >= r[3]);
   return i >= 0 ? 'ещё цвет ' + (i + 1) : '';
 }
 
-function shPipOpen(key, w) {
+function shPipOpen(key, w, mode) {
   shPipClose();
   const block = document.querySelector(`[data-shcol="${key}"]`);
   if (!block) return;
   const name = (block.querySelector('.sh-col__head b') || {}).textContent || '';
   const sub = (block.querySelector('.sh-col__head .net-hint') || {}).textContent || '';
   SHP.act = { key, w };
-  Object.assign(shPip, { key, w, left: SH_PIP_EVERY, freeze: false, tint: false, loaded: false });
+  Object.assign(shPip, { key, w, mode: mode === 'not' ? 'not' : 'add', left: SH_PIP_EVERY, freeze: false, tint: false, loaded: false });
   const el = document.createElement('div');
   el.className = 'sh-pipov';
-  el.innerHTML = `<div class="sh-pipov__box" role="dialog" aria-label="Пипетка">
-    <div class="sh-pipov__head"><b>Пипетка</b><span class="net-hint">${escapeHtml(name)} · ${escapeHtml(sub)}</span>
+  const notMode = shPip.mode === 'not';
+  el.innerHTML = `<div class="sh-pipov__box" role="dialog" aria-label="${notMode ? 'Пипетка: не ловить' : 'Пипетка'}">
+    <div class="sh-pipov__head"><b>${notMode ? 'Пипетка · не ловить' : 'Пипетка'}</b><span class="net-hint">${escapeHtml(name)} · ${escapeHtml(sub)}</span>
       <div class="sh-seg" data-pipend><button type="button" data-w="red">красный конец</button><button type="button" data-w="blue">синий конец</button></div>
       <span class="md-sp"></span>
       <span class="net-hint" data-pipclock></span>
@@ -366,7 +423,10 @@ function shPipEnd() {
   const mainTxt = shPip.w === 'red' ? `основной: оттенок ≤ ${m[0]} или ≥ ${m[1]}, насыщ. ≥ ${m[2]}, ярк. ≥ ${m[3]}` : `основной: оттенок ${m[0]}–${m[1]}, насыщ. ≥ ${m[2]}, ярк. ≥ ${m[3]}`;
   shPip.el.querySelector('[data-pipfoot]').innerHTML = '<span class="net-hint">Что сейчас ловится у ' + (shPip.w === 'red' ? 'красного' : 'синего') + ' конца:</span>' + chip(mainTxt, mainDot) +
     R.more.map((r, i) => chip(`ещё цвет ${i + 1}: оттенок ${r[0]}–${r[1]}, насыщ. ≥ ${r[2]}, ярк. ≥ ${r[3]}`, dotH(r))).join('') +
-    '<span class="net-hint">Наведите на палку: в лупе — цвет, который возьмётся; зелёная галочка — такой цвет уже ловится, красный плюс — клик добавит его.</span>';
+    R.not.map((r, i) => `<span class="sh-chip sh-chip--not"><i class="sh-dot sh-dot--not" style="background:${shHsv2Css(shNotMidHue(r), (r[2] + r[3]) / 2, (r[4] + r[5]) / 2)}"></i>не ловить ${i + 1}: оттенок ${r[0]}${r[0] > r[1] ? '→' : '–'}${r[1]}, насыщ. ${r[2]}–${r[3]}, ярк. ${r[4]}–${r[5]}</span>`).join('') +
+    (shPip.mode === 'not'
+      ? '<span class="net-hint">Наведите на то, что ловиться НЕ должно (корпус, блик): в лупе — цвет, который исключится; красный минус — сейчас ловится, клик вырежет его; зелёная галочка — уже исключён или и так не ловится.</span>'
+      : '<span class="net-hint">Наведите на палку: в лупе — цвет, который возьмётся; зелёная галочка — такой цвет уже ловится, красный плюс — клик добавит его.</span>');
 }
 async function shPipLoad() {
   if (!shPip.el || shPip.busy) return;
@@ -400,7 +460,7 @@ function shPipTint() {
   const src = shPip.ctx.getImageData(0, 0, tc.width, tc.height), out = t.createImageData(tc.width, tc.height), d = src.data, o = out.data;
   for (let i = 0; i < d.length; i += 4) {
     const [h, s, v] = shRgb2Hsv(d[i], d[i + 1], d[i + 2]);
-    const hit = (s >= m[2] && v >= m[3] && (red ? (h <= m[0] || h >= m[1]) : (h >= m[0] && h <= m[1]))) || R.more.some((r) => h >= r[0] && h <= r[1] && s >= r[2] && v >= r[3]);
+    const hit = ((s >= m[2] && v >= m[3] && (red ? (h <= m[0] || h >= m[1]) : (h >= m[0] && h <= m[1]))) || R.more.some((r) => h >= r[0] && h <= r[1] && s >= r[2] && v >= r[3])) && !R.not.some((r) => shBoxHit(r, h, s, v));
     if (hit) { o[i] = red ? 255 : 40; o[i + 1] = red ? 40 : 200; o[i + 2] = red ? 40 : 255; o[i + 3] = 175; }
   }
   t.putImageData(out, 0, 0);
@@ -412,16 +472,20 @@ function shPipPos(e) {
 function shPipMove(e) {
   if (!shPip.loaded) return;
   const { x, y, r } = shPipPos(e), loupe = shPip.el.querySelector('[data-piploupe]');
-  const smp = shPipSample(x, y);
+  const smp = shPipSmp(x, y);
   if (!smp) { loupe.hidden = true; return; }
-  const by = shPipCovered(shPip.key, shPip.w, smp.h, smp.s, smp.v);
-  const ok = !!by, N = 15, S = shPip.lp.width;
+  const by = shPipCovered(shPip.key, shPip.w, smp.h, smp.s, smp.v), ex = shPipExcluded(shPip.key, shPip.w, smp.h, smp.s, smp.v);
+  const notMode = shPip.mode === 'not';
+  // режим «ловить»: ✓ — уже ловится, ＋ — клик добавит, ⊘ — исключён. Режим «не ловить»: ✓ — уже исключён или и так не ловится, － — сейчас ловится, клик вырежет
+  const ok = notMode ? !by : !!by, N = 15, S = shPip.lp.width;
+  const head = notMode ? (ok ? (ex ? '✓ уже исключён' : '✓ и так не ловится') : '－ ловится') : (by ? '✓ ловится' : (ex ? '⊘ исключён' : '＋ не ловится'));
+  const sub = notMode ? (ok ? (ex ? 'не ловить ' + ex : 'исключать нечего') : escapeHtml(by) + ' · клик вырежет') : (by ? escapeHtml(by) : (ex ? 'не ловить ' + ex + ' — уберите строку' : 'клик добавит цвет'));
   shPip.lctx.clearRect(0, 0, S, S);
   shPip.lctx.drawImage(shPip.cv, x - (N >> 1), y - (N >> 1), N, N, 0, 0, S, S);     // 15×15 пикселей кадра, увеличенных, без сглаживания
   shPip.lctx.strokeStyle = '#fff'; shPip.lctx.lineWidth = 1;
   shPip.lctx.strokeRect(S / 2 - S / N / 2, S / 2 - S / N / 2, S / N, S / N);
   loupe.className = 'sh-loupe ' + (ok ? 'ok' : 'no');
-  loupe.querySelector('[data-piptag]').innerHTML = `<i class="sh-dot sh-dot--lg" style="background:rgb(${smp.rgb.join(',')})"></i><span><b>${ok ? '✓ ловится' : '＋ не ловится'}</b><br><small>${ok ? escapeHtml(by) : 'клик добавит цвет'} · H ${smp.h} S ${smp.s} V ${smp.v}</small></span>`;
+  loupe.querySelector('[data-piptag]').innerHTML = `<i class="sh-dot sh-dot--lg" style="background:rgb(${smp.rgb.join(',')})"></i><span><b>${head}</b><br><small>${sub} · H ${smp.h} S ${smp.s} V ${smp.v}</small></span>`;
   const st = shPip.el.querySelector('.sh-pipov__stage').getBoundingClientRect();
   loupe.hidden = false;                                    // размер лупы с подписью — после заполнения: у края кадра она переходит на другую сторону курсора
   let lx = e.clientX - st.left + 22, ly = e.clientY - st.top + 24;
@@ -435,19 +499,29 @@ function shPipMove(e) {
 }
 function shPipClick(e) {
   if (!shPip.loaded) return;
-  const { x, y } = shPipPos(e), smp = shPipSample(x, y);
+  const { x, y } = shPipPos(e), smp = shPipSmp(x, y);
   const msg = (html) => { const f = shPip.el && shPip.el.querySelector('[data-pipmsg]'); if (f) { f.hidden = false; f.innerHTML = html; clearTimeout(shPip.msgT); shPip.msgT = setTimeout(() => { f.hidden = true; }, 3500); } };
   if (!smp) return;
-  const key = shPip.key, w = shPip.w, by = shPipCovered(key, w, smp.h, smp.s, smp.v);
-  if (by) { msg('Этот цвет уже ловится (' + escapeHtml(by) + ')'); return; }
+  const key = shPip.key, w = shPip.w, by = shPipCovered(key, w, smp.h, smp.s, smp.v), ex = shPipExcluded(key, w, smp.h, smp.s, smp.v), notMode = shPip.mode === 'not';
+  if (notMode && !by) { msg(ex ? 'Этот цвет уже исключён (не ловить ' + ex + ')' : 'Этот цвет и так не ловится — исключать нечего'); return; }
+  if (!notMode && by) { msg('Этот цвет уже ловится (' + escapeHtml(by) + ')'); return; }
+  if (!notMode && ex) { msg('Этот цвет исключён (не ловить ' + ex + '): уберите строку в таблице, если он нужен'); return; }
   const block = document.querySelector(`[data-shcol="${key}"]`);
   const cam = block && mvCam(block.dataset.cam), z = cam && cam.zones.find((q) => q.id === block.dataset.zone);
   if (!z) return;
-  if ((z[w + '_more'] || []).length >= 6) { msg('Не больше шести дополнительных цветов на конец палки — уберите ненужный в таблице.'); return; }
   const cl = (q, hi) => Math.max(0, Math.min(hi, Math.round(q)));
-  const range = [cl(smp.h - 6, 179), cl(smp.h + 6, 179), cl(Math.max(10, smp.s - 45), 255), cl(Math.max(10, smp.v - 50), 255)];
-  mdEdit(() => { z[w + '_more'] = (z[w + '_more'] || []).concat([range]); }, true);      // сохраняет и перерисовывает карточки; окно остаётся
-  msg('Добавлен цвет: H ' + smp.h + ', S ' + smp.s + ', V ' + smp.v);
+  if (notMode) {
+    if ((z[w + '_not'] || []).length >= 6) { msg('Не больше шести исключённых цветов на конец палки — уберите ненужный в таблице.'); return; }
+    // «ящик» вокруг цвета: оттенок ±7 (у края круга — через ноль: «от» выше «до»), насыщенность ±40, яркость ±45
+    const box = [(smp.h - 7 + 180) % 180, (smp.h + 7) % 180, cl(smp.s - 40, 255), cl(smp.s + 40, 255), cl(smp.v - 45, 255), cl(smp.v + 45, 255)];
+    mdEdit(() => { z[w + '_not'] = (z[w + '_not'] || []).concat([box]); }, true);
+    msg('Исключён цвет: H ' + smp.h + ', S ' + smp.s + ', V ' + smp.v);
+  } else {
+    if ((z[w + '_more'] || []).length >= 6) { msg('Не больше шести дополнительных цветов на конец палки — уберите ненужный в таблице.'); return; }
+    const range = [cl(smp.h - 6, 179), cl(smp.h + 6, 179), cl(Math.max(10, smp.s - 45), 255), cl(Math.max(10, smp.v - 50), 255)];
+    mdEdit(() => { z[w + '_more'] = (z[w + '_more'] || []).concat([range]); }, true);      // сохраняет и перерисовывает карточки; окно остаётся
+    msg('Добавлен цвет: H ' + smp.h + ', S ' + smp.s + ', V ' + smp.v);
+  }
   shPipEnd();
   shPipTint();
   const nb = document.querySelector(`[data-shcol="${key}"]`);
@@ -465,7 +539,7 @@ function mdOnShPick(t) {
     shPrevLoad(block, true);
     return;
   }
-  shPipOpen(key, t.dataset.w);                             // пипетка: большое окно
+  shPipOpen(key, t.dataset.w, t.dataset.mode);             // пипетка: большое окно («не ловить» — режим исключения)
 }
 
 function mdShaftsTabHtml() {

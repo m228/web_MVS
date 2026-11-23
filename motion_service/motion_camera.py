@@ -32,6 +32,7 @@ from motion_level import LevelInfer, nearest_trend_shot, post_infer, trend_shot_
 from motion_webview import WebView
 from motion_store import store_for
 from motion_trends import TrendLog
+from motion_fill_trend import fill_trend_for
 from motion_modbus import LinkRegistry
 
 log = logging.getLogger("motion.camera")
@@ -257,6 +258,9 @@ class CameraWorker(threading.Thread):
         self._bucket: Optional[list] = None   # [ts, {зона: (flow, diff, bit)}, ok] — набирающаяся секунда длинной истории
         self._stats: deque = deque(maxlen=STATS_LEN)   # корзины статистики: [номер 10-секундки, {зона: [n, Σflow, min, max, Σdiff, min, max]}]
         self._sbucket: Optional[list] = None  # набирающаяся корзина статистики
+        # тренды признака «вид окна» (tex / lum / rel): только в памяти, живут через пересоздание камеры; см. motion_fill_trend
+        self._fill = fill_trend_for((str(self.data_dir), self.id), {z["id"]: repr((z.get("points"), z["fill_metric"])) for z in cam_cfg["zones"]
+                                                                    if z.get("fill_metric", "off") != "off"})
         # зоны-палки (flow — угол) и зоны-прозрачность (flow — мутность): значение не «максимум за секунду», а самое позднее хорошее
         self._angle_ids = frozenset(z["id"] for z in cam_cfg["zones"] if z["type"] in ("cycle", "clarity"))
         self._mstats: deque = deque(maxlen=STATS_LEN)   # корзины статистики синхронности валов: [номер 10-секундки, {группа: [n, Σ delta, min, max, Σ поправка, min, max]}] (в памяти)
@@ -462,7 +466,12 @@ class CameraWorker(threading.Thread):
                 d["flow"].append(fl)
                 d["diff"].append(df)
                 d["bit"].append(bit)
-        return {"t": [round(t, 2) for t, _, _ in pts], "ok": [ok for _, _, ok in pts], "zones": zones}
+        out = {"t": [round(t, 2) for t, _, _ in pts], "ok": [ok for _, _, ok in pts], "zones": zones}
+        if window_s and window_s > 0:
+            fill = self._fill.history(window_s, points)       # признак «вид окна» — свой ряд времени: правый край тот же «сейчас»
+            if fill:
+                out["fill"] = fill
+        return out
 
     def clarity_sample(self, zone_ids: list, seconds: float) -> dict:
         """Цвет кругов-прозрачности за последние seconds секунд (медиана) — для калибровки «чистый» / «грязный»; сохраняет интерфейс."""
@@ -568,6 +577,9 @@ class CameraWorker(threading.Thread):
                        "flow": {"avg": round(a[1] / a[0], 4), "min": round(a[2], 4), "max": round(a[3], 4)},
                        "diff": {"avg": round(a[4] / a[0], 4), "min": round(a[5], 4), "max": round(a[6], 4)}}
                  for zid, a in acc.items() if a[0]}
+        for zid, f in self._fill.stats(window_s).items():       # вид окна: tex / lum / rel — ср / мин / макс
+            if zid in zones:
+                zones[zid]["fill"] = f
         span = round(min(window_s, time.time() - first * STATS_STEP_S), 1) if first is not None else 0.0
         return {"window_s": window_s, "span_s": max(0.0, span), "zones": zones, "groups": groups}
 
@@ -712,6 +724,11 @@ class CameraWorker(threading.Thread):
                     b[1][zid] = (max(old[0], fl), max(old[1], df), max(old[2], bit))
             b[2] = min(b[2], ok)
 
+    @staticmethod
+    def _fill_zones(zones: list) -> dict:
+        """Зоны с включённым признаком «вид окна» (у остальных в состоянии нет tex): {зона: (tex, lum, rel, жом есть|None)}."""
+        return {z["id"]: (z["tex"], z["lum"], z["rel"], z.get("fill")) for z in zones if z.get("tex") is not None}
+
     def _stats_add(self, ts: float, zones: dict):
         """Кадр в норме — в 10-секундную корзину статистики. Звать под self._lock."""
         key = int(ts // STATS_STEP_S)
@@ -774,6 +791,7 @@ class CameraWorker(threading.Thread):
                             h.append((t_cap, z["angle"], bool(z["valid"]), bool(z["coast"])))
                 zones = {z["id"]: (z["flow"], z["diff"], z["bit"]) for z in state["zones"]}
                 self._push_history(state["ts"], zones, 1 if state["alive"] else 0)
+                self._fill.add(state["ts"], self._fill_zones(state["zones"]), bool(state["alive"]))
                 if state["alive"]:
                     # мутность без значения (нет эталонов, цвет не на шкале) в среднее / мин / макс не идёт: ноль там означал бы «чистый»
                     bad = {z["id"] for z in state["zones"] if z["type"] == "clarity" and not z["valid"]}
@@ -812,6 +830,7 @@ class CameraWorker(threading.Thread):
                 self._state = st
                 self._stamps.append(now)
                 self._push_history(now, {z["id"]: (z["flow"], z["diff"], z["bit"]) for z in st["zones"]}, 0)
+                self._fill.add(now, self._fill_zones(st["zones"]), False)
                 self._rec_write(now, {z["id"]: z for z in st["zones"]}, "битый кадр (серая каша)")
 
     def _plc_loop(self):

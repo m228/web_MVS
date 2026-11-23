@@ -764,8 +764,11 @@ function mdAutocalHtml() {
   const cams = mdCfgCams().filter((c) => (c.zones || []).some((z) => z.type === 'cycle' && z.enabled !== false));
   if (!cams.length) return '<span class="net-hint">Размеченных валов нет: нужны зоны-цикл («Разметить валы»).</span>';
   return `<div class="net-hint">Палки крутятся сами, ничего двигать не надо. Сервис запишет вращение (по умолчанию 150 с — около двух оборотов), подберёт цвета красной и синей половин, центр оси и радиус и покажет, что стало лучше. Применяется кнопкой.</div>` + cams.map((c) => {
-    const k = escapeHtml(c.id);
+    const k = escapeHtml(c.id), w = Object.assign({ on: false, min_pct: 95 }, c.autocal_watch);
     return `<div class="md-zone sh-ac" data-shac="${k}"><div class="md-zone__ctl">
+      <div class="md-zone__row"><label class="switch-toggle md-sw md-sw--sm" title="Раз в 30 минут сервис смотрит, как часто палки находятся. Если реже порога — сам подгоняет цвета, ось и радиус, применяет результат, если он заметно лучше, и через 30 минут сверяет: стало хуже — возвращает прежние настройки. Всё пишется в журнал."><span class="switch"><input type="checkbox" data-md="shac" data-cam="${k}" data-f="watch"${w.on ? ' checked' : ''} /><span class="switch-track"></span></span><span class="md-lbl md-lbl--on">следить и подгонять сам</span></label>
+        <span class="md-lbl" title="Ниже этой видимости палки за 30 минут — подгонка запускается сама">порог, %</span>${mdNum(`data-md="shac" data-cam="${k}" data-f="watchpct"`, w.min_pct, 'min="50" max="100" step="1"')}
+        <a class="net-hint" href="/api/motion/autocal/report?camera=${k}" target="_blank" rel="noopener" title="Видимость палок днём и ночью, проверка текущих настроек на снимках, история подгонок">отчёт день / ночь</a></div>
       <div class="md-zone__row"><b>${escapeHtml(c.name)}</b>${mdIpTag(c.url)}<span class="md-sp"></span>
         <span class="md-lbl" title="Сколько секунд записывать вращение. Вал делает оборот примерно за 75 с; от 75 до 300 с">запись, с</span>${mdNum(`data-md="shac" data-cam="${k}" data-f="sec"`, SHAC.sec, 'min="75" max="300" step="15"')}
         <button type="button" class="btn-secondary md-x" data-md="shac" data-cam="${k}" data-f="start" title="Записать вращение палок и подобрать цвета, центр и радиус">Подогнать валы</button></div>
@@ -829,6 +832,17 @@ function shAcPaintAll() {
 async function mdOnShAc(t) {
   const cam = t.dataset.cam, f = t.dataset.f;
   if (f === 'sec') { SHAC.sec = shClamp(parseInt(t.value, 10) || 150, 75, 300); t.value = SHAC.sec; return; }
+  if (f === 'watch' || f === 'watchpct') {                    // сторож подгонки: настройка камеры (сохраняется вместе с конфигом КЗ)
+    const c = mvCam(cam);
+    if (!c) return;
+    const pct = shClamp(parseFloat(t.value) || 95, 50, 100);
+    mdEdit(() => {
+      const w = c.autocal_watch = Object.assign({ on: false, min_pct: 95, check_min: 30, cooldown_h: 2 }, c.autocal_watch);
+      if (f === 'watch') w.on = !!t.checked; else w.min_pct = pct;
+    }, false);
+    if (f === 'watchpct') t.value = pct;
+    return;
+  }
   if (f === 'start') {
     if (MV.dirty) { clearTimeout(MD.saveTimer); await mdFlush(); }
     const r = await mvJson('/api/motion/autocal', { camera: cam, zones: [], seconds: SHAC.sec });

@@ -34,7 +34,9 @@ CMD_SET_SP2 = 0x2006   # команда мотору М2 «установить 
 # допуск «мотор доехал» (мкм). Реальная плата почти никогда не встаёт РОВНО в цель
 # (энкодер даёт 39990 вместо 40000) — точное pos==цель почти не срабатывает, и шаг
 # цикла ждал полный таймаут 10 с. Считаем «доехал», если в пределах допуска.
-ARRIVE_TOL_UM = 50   # доезд: энкодер в пределах ±50 мкм от цели
+ARRIVE_TOL_UM = 50   # доезд: энкодер в пределах ±50 мкм от цели (для подвода — настройка probe_cycle.arrive_tol_um, это её значение по умолчанию)
+ARRIVE_TOL_MIN_UM = 10    # границы настройки допуска подвода: меньше — не поймать дрожание датчика, больше — «доехал» уже не про цель
+ARRIVE_TOL_MAX_UM = 300
 GLASS_AI = 20        # pos1_ai < GLASS_AI = аналог «у стекла» (страховка на подводе)
 AI_HIST_LEN = 3          # сколько замеров аналога подвода усредняем для записи в пробу
 AI_HIST_EVERY_TICKS = 5  # замер раз в 0,5 с: 3 замера = ~1 с стоянки у стекла
@@ -209,6 +211,8 @@ class MicroscopeFSM:
         self._settle_sec = max(0, int(pc.get("settle_sec", 2)))    # пауза после доезда движения (осадка датчика), с
         # осадка у стекла: пауза после подвода ПЕРЕД первым кадром (потёки/течение в капле гаснут), с
         self._glass_settle_sec = max(0, int(pc.get("glass_settle_sec", 5)))
+        # допуск прихода ПОДВОДА, мкм (было зашито 50): датчик прихода должен ARRIVE_HOLD_TICKS подряд быть в ±допуск от цели
+        self._arrive_tol_um = max(ARRIVE_TOL_MIN_UM, min(ARRIVE_TOL_MAX_UM, int(pc.get("arrive_tol_um", ARRIVE_TOL_UM))))
         # как часто промывать СТЕКЛО перед пробой (шаг 21): раз в N проб (1 — каждую, 0 — никогда). Трубка — каждую пробу.
         self._glass_wash_every = max(0, int(pc.get("glass_wash_every", 1)))
         self._probe_n = 0             # сколько проб начато (счётчик для «раз в N»)
@@ -567,9 +571,10 @@ class MicroscopeFSM:
         # ДОЕЗД. prefer_ai=True (подвод) — ориентир по АНАЛОГОВОМУ датчику pos1_ai (рег. 1271,
         # «абсолютная позиция по датчику»): он точнее энкодера. Сравниваем |pos1_ai - target|.
         # Иначе (отвод/возврат) — по энкодеру pos1 ±ARRIVE_TOL_UM, аналог лишь страховка «у стекла».
+        # Используется только подводом (_reached_hold) — допуск берём из настройки «Допуск прихода подвода».
         if prefer_ai and pos_ai is not None:
-            return abs(pos_ai - target) <= ARRIVE_TOL_UM
-        near = pos_enc is not None and abs(pos_enc - target) <= ARRIVE_TOL_UM
+            return abs(pos_ai - target) <= self._arrive_tol_um
+        near = pos_enc is not None and abs(pos_enc - target) <= self._arrive_tol_um
         at_glass = pos_ai is not None and pos_ai < GLASS_AI
         return near or at_glass
 

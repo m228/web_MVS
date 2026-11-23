@@ -15,6 +15,8 @@
                                     (?zone=id&red=H1,H2,S,V&blue=H1,H2,S,V — пробные пороги цвета; &red_more=H1,H2,S,V;… и &blue_more= — дополнительные цвета конца палки; пусто — настроенные; ?w=640).
   POST /cameras/{id}/autocal      — {"zones": [id…], "seconds": 150}: записать вращение палок и подогнать цвета, ось и радиус (75–300 с, ≥1 оборота).
   GET  /cameras/{id}/autocal      — ход и результат подгонки: до/после по каждой палке (найдена, обороты, сектора), новые настройки.
+  GET  /cameras/{id}/autocal/report — HTML-отчёт «день / ночь» по видимости палок (?days=10&shots=16 — сколько дневных и ночных снимков прогнать).
+  GET  /autocal/watch             — сторож подгонки: состояние по камерам и последние события (включается на камере: autocal_watch.on).
   POST /cameras/{id}/autocal/cancel — отменить.   POST /cameras/{id}/autocal/apply — {"zones": [id…]}: применить результат (сохраняет настройки).
   GET  /cameras/{id}/rod_pick     — пипетка: цвет палки в точке картинки rod_mask (?zone=id&u=0..1&v=0..1) → {h, s, v}; rod_mask принимает ещё ?raw=1 (кадр без масок).
   GET  /cameras/{id}/level_shot   — снимок для графика уровня, ближайший к моменту (?group=lvl&ts=unix-секунды; &dir=-1/1 — соседний
@@ -59,6 +61,8 @@ import motion_store  # noqa: E402
 import motion_trends  # noqa: E402
 from perf_stats import PERF  # noqa: E402
 from motion_autocal_job import AutocalJob  # noqa: E402
+from motion_autocal_report import build_report  # noqa: E402
+from motion_autocal_watch import AutocalWatch  # noqa: E402
 from motion_camera import CameraWorker, open_capture  # noqa: E402
 from motion_modbus import LinkRegistry, ModbusLink  # noqa: E402
 from motion_scenarios import ScenarioRunner  # noqa: E402
@@ -98,6 +102,7 @@ HOT_CLARITY_KEYS = ("t_turb", "t_dirty", "hyst", "hold_s", "smooth_s", "glare_pc
 def _strip_hot(cam: dict) -> dict:
     """Камера без «мягких» полей стаканов — для сравнения «изменилось только мягкое?»."""
     out = dict(cam)
+    out.pop("autocal_watch", None)              # настройка сторожа подгонки читается из конфига сервиса, потоку камеры не нужна
     out["zones"] = [({k: v for k, v in z.items() if k not in HOT_CLARITY_KEYS} if z.get("type") == "clarity" else z) for z in cam["zones"]]
     return out
 
@@ -107,6 +112,7 @@ def _hot_update(worker, new_cam: dict) -> bool:
     old = worker.cfg
     if _strip_hot(old) != _strip_hot(new_cam):
         return False
+    old["autocal_watch"] = new_cam["autocal_watch"]
     for oz, nz in zip(old["zones"], new_cam["zones"]):
         if oz.get("type") == "clarity":
             for k in HOT_CLARITY_KEYS:
@@ -142,6 +148,7 @@ class Manager:
         self._halt = threading.Event()
         self._hk: Optional[threading.Thread] = None
         self.autocal: dict[str, AutocalJob] = {}   # подгонка валов по камере (последнее задание; пересоздание воркеров при сохранении настроек его не трогает)
+        self.watch = AutocalWatch(self)            # сторож видимости палок: сам запускает подгонку при просадке и откатывает, если стало хуже
 
     # --- автоподгонка валов ---
     def autocal_start(self, cid: str, zones: list, seconds: float) -> dict:
@@ -354,12 +361,14 @@ class Manager:
         self.apply(self.cfg, save=False)
         self.scenarios.start()
         self.shafts.start()
+        self.watch.start()
         if self.auto_record or self.shots_min > 0 or self.keep_days:
             self._hk = threading.Thread(target=self._housekeeping, daemon=True, name="housekeeping")
             self._hk.start()
 
     def shutdown(self):
         self._halt.set()
+        self.watch.stop()
         for j in self.autocal.values():
             j.cancel()
         self.scenarios.stop()
@@ -432,7 +441,13 @@ def create_app(data_dir: Optional[Path] = None, capture_factory: Callable = open
     @app.get("/state")
     def state():
         return {"cameras": [w.state() for w in mgr.workers.values()], "scenarios": mgr.scenarios.snapshot(), "shafts": mgr.shafts.snapshot(),
-                "perf": PERF.snapshot()}      # сколько времени уходит на кадр по камерам (панель КЗ, вкладка «Камеры»)
+                "perf": PERF.snapshot(),      # сколько времени уходит на кадр по камерам (панель КЗ, вкладка «Камеры»)
+                "autocal_events": mgr.watch.recent()}      # что сделал сторож подгонки валов (приложение переносит это в свой журнал)
+
+    @app.get("/autocal/watch")
+    def autocal_watch_state():
+        # состояние сторожа подгонки по камерам (фаза, кулдаун, последняя видимость) и последние события, включая тихие проверки
+        return mgr.watch.snapshot()
 
     @app.get("/shafts/live")
     def shafts_live():
@@ -532,6 +547,20 @@ def create_app(data_dir: Optional[Path] = None, capture_factory: Callable = open
     def autocal_status(cid: str):
         j = mgr.autocal.get(cid)
         return j.status() if j else {"state": "idle", "camera": cid, "progress": 0.0, "text": "", "results": {}, "applied": []}
+
+    @app.get("/cameras/{cid}/autocal/report")
+    def autocal_report(cid: str, days: int = 10, shots: int = 16):
+        """Отчёт «день / ночь» (HTML): видимость палок по периодам неизменных настроек, текущие настройки на дневных и ночных снимках, журнал сторожа.
+        shots — сколько дневных и сколько ночных снимков прогнать (0 — не прогонять, быстрее)."""
+        cam = next((c for c in mgr.cfg["cameras"] if c["id"] == cid), None)
+        if cam is None:
+            raise HTTPException(404, "нет такой камеры: %s" % cid)
+        try:
+            page = build_report(mgr.dir, cid, cam, max(1, min(int(days), 30)), shots > 0, shots_per_part=max(1, min(int(shots), 200)))
+        except Exception as e:  # noqa: BLE001 — отчёт вспомогательный: причина — в ответ, сервис не страдает
+            log.exception("отчёт день/ночь не собрался")
+            raise HTTPException(500, "отчёт не собрался: %s" % e)
+        return Response(page, media_type="text/html; charset=utf-8")
 
     @app.post("/cameras/{cid}/autocal/cancel")
     def autocal_cancel(cid: str):

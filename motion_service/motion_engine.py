@@ -309,6 +309,15 @@ def _juice_base(v, where: str) -> dict:
     return {"on": bool(v.get("on", False)), "every_min": _num(v.get("every_min", 2), where + ".every_min", 1, 60, True)}
 
 
+def _autocal_watch(v, where: str) -> dict:
+    """Сторож подгонки валов: {on, min_pct, check_min, cooldown_h}. Видимость ниже min_pct % за check_min минут → сама подгонка (motion_autocal_watch)."""
+    v = v or {}
+    return {"on": bool(v.get("on", False)),
+            "min_pct": _num(v.get("min_pct", 95.0), where + ".min_pct", 50, 100),
+            "check_min": _num(v.get("check_min", 30.0), where + ".check_min", 10, 180),
+            "cooldown_h": _num(v.get("cooldown_h", 2.0), where + ".cooldown_h", 0.5, 48)}
+
+
 def _hsv4(v, default, name, hue_pair_ok):
     """[h1, h2, s_min, v_min] — оттенок 0..179 (шкала OpenCV), насыщенность и яркость 0..255."""
     v = list(v) if v else list(default)
@@ -582,6 +591,7 @@ def normalize_camera(c: dict) -> dict:
         "clarity_clean": _lab3(c.get("clarity_clean"), "камера %s.clarity_clean" % cid),    # общий «чистый» камеры: для стаканов, у которых своего «чистого» нет
         "clarity_shift": _lab3(c.get("clarity_shift"), "камера %s.clarity_shift" % cid, shift=True),    # общий сдвиг «грязного» от «чистого» (зоны прозрачности с dirty_mode=shared)
         "juice_base": _juice_base(c.get("juice_base"), "камера %s.juice_base" % cid),
+        "autocal_watch": _autocal_watch(c.get("autocal_watch"), "камера %s.autocal_watch" % cid),
         "proc_fps": _num(c.get("proc_fps", 3), "камера %s.proc_fps" % cid, 0.2, 30),
         # задержка кадра камеры, с (кадр приходит позже, чем снят: очередь кодера/декодера); меряется tools/cam_latency_check.py.
         # Углы валов разных камер сравниваются по времени СЪЁМКИ = приход − latency_s

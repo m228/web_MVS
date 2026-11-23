@@ -1480,6 +1480,15 @@ def motion_autocal_status(camera: str):
     return motion_client.autocal_status(_motion_url(), camera)
 
 
+@app.get("/api/motion/autocal/report")
+def motion_autocal_report(camera: str, days: int = 10, shots: int = 16):
+    # HTML-отчёт «день / ночь» по видимости палок (открывается в новой вкладке из панели «Автоподгонка»)
+    page, err = motion_client.autocal_report(_motion_url(), camera, days, shots)
+    if page is None:
+        return HTMLResponse("<meta charset=utf-8><body style='font:14px sans-serif;padding:24px'>Отчёт не собрался: %s</body>" % str(err or "ошибка").replace("&", "&amp;").replace("<", "&lt;"), status_code=502)
+    return HTMLResponse(page)
+
+
 @app.post("/api/motion/autocal/cancel")
 def motion_autocal_cancel(req: dict = Body(...)):
     return motion_client.autocal_cancel(_motion_url(), str(req.get("camera") or ""))

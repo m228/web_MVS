@@ -95,6 +95,21 @@ def autocal_apply(service_url: str, cam: str, zones: list) -> dict:
     return _call(service_url, "/cameras/%s/autocal/apply" % urllib.parse.quote(cam, safe=""), {"zones": list(zones or [])}, timeout=20.0)
 
 
+def autocal_report(service_url: str, cam: str, days: int = 10, shots: int = 16) -> tuple:
+    """HTML-отчёт «день / ночь» по видимости палок (собирается секунд 10–30): (страница, None) или (None, текст ошибки)."""
+    url = _base(service_url) + "/cameras/%s/autocal/report?days=%d&shots=%d" % (urllib.parse.quote(cam, safe=""), int(days), int(shots))
+    try:
+        with _opener.open(urllib.request.Request(url), timeout=120.0) as r:
+            return r.read().decode("utf-8"), None
+    except urllib.error.HTTPError as e:
+        try:
+            return None, json.loads(e.read().decode("utf-8")).get("detail") or "HTTP %d" % e.code
+        except Exception:
+            return None, "HTTP %d" % e.code
+    except Exception:
+        return None, "сервис движения не отвечает (%s)" % _base(service_url)
+
+
 def mirror_table(service_url: str, cam: str, group: str) -> dict:
     """Таблица поправки зеркальности валов по последним минутам работы (снимать, пока валы ровные)."""
     return _call(service_url, "/cameras/%s/mirror_table" % urllib.parse.quote(cam, safe=""), {"group": str(group)}, timeout=10.0)

@@ -671,7 +671,7 @@ function mdShTimingHtml(sc, cams) {
       <label class="switch-toggle md-sw md-sw--sm" title="Сравнивать углы двух камер на ОДИН момент времени съёмки (интерполяция между кадрами) вместо «последнего кадра каждой камеры». Результат запаздывает на задержку камер + 0,6 с — для тревоги это не важно"><span class="switch"><input type="checkbox" data-md="sh" data-id="_" data-f="align"${align ? ' checked' : ''} /><span class="switch-track"></span></span><span class="md-lbl md-lbl--on">по времени съёмки</span></label>
       <span class="md-lbl" title="Δ угла каждой пары усредняется за это окно: шум распознавания ≈ ±1° сглаживается, настоящий сдвиг не прячется. Тревога и запись в ПЛК идут по среднему. 0 — без усреднения">усреднение Δ, с</span>${mdNum('data-md="sh" data-id="_" data-f="avg_s"', avg, 'min="0" max="60" step="0.5"')}</div>
     <table class="md-table"><thead><tr><th>Камера</th><th>кадров/с</th><th>шаг кадров p50 / p95, мс</th><th title="Сколько секунд кадр простоял в очереди: обработка не успевала за камерой (камера даёт кадров больше, чем сервис разбирает). Сервис сам выбрасывает кадры из очереди, пока она длиннее 0,5 с. Дольше 1 с — Δ между камерами не доверяем: тревога стоит как есть, самоподстройка не учится. Растёт или часто красная — снизьте «Кадров/с в анализ» (вал ≈ 4°/с, хватает 4–5)">очередь, с (сейчас / макс за мин.)</th><th title="Через сколько секунд после съёмки кадр приходит в сервис. Меряется tools\cam_latency_check.py">задержка кадра, с</th></tr></thead><tbody>${rows || '<tr><td colspan="5" class="net-hint">Задайте ряд камеры</td></tr>'}</tbody></table>
-    <div class="net-hint" id="md-sht-lag"></div><div class="md-zstat" id="md-sht-pairs"></div>`;
+    <div class="net-hint" id="md-sht-lag"></div><div class="md-zstat" id="md-sht-pairs"></div><div class="md-zstat" id="md-sht-off"></div>`;
 }
 
 function mdPaintShTiming() {
@@ -692,6 +692,8 @@ function mdPaintShTiming() {
   });
   const lag = mdEl('md-sht-lag');
   if (lag) lag.textContent = t.aligned ? 'Сравнение на момент «сейчас − ' + t.compare_lag_s + ' с»: кадры обеих камер выровнены по времени съёмки.' : 'Кадры сравниваются «последний с каждой камеры» (выравнивание выключено или ряды ещё копятся).';
+  const off = mdEl('md-sht-off');
+  if (off) off.innerHTML = mdShOffsetHtml(t.offset);
   const p = mdEl('md-sht-pairs');
   if (!p) return;
   const rows = SH_PAIRS.filter((id) => t.pairs && t.pairs[id] && !t.pairs[id].same_camera && t.pairs[id].skew_avg_s != null).map((id) => {
@@ -700,6 +702,18 @@ function mdPaintShTiming() {
     return `<div class="md-zstat__row" title="Разъезд = |время съёмки последнего кадра первой камеры − второй|. Задержки указаны верно — он порядка половины периода кадров (десятые доли секунды); если секунды, задержка камеры в настройке не та">${SH_PAIR_NAME[id]}: разъезд кадров ср <b class="md-zstat__cur">${x.skew_avg_s.toFixed(2)} с</b> (${x.skew_avg_deg.toFixed(1)}°) · макс ${x.skew_max_s.toFixed(2)} с (${x.skew_max_deg.toFixed(1)}°) · <span style="color:${inStep ? '#4ade80' : '#f59e0b'}">${inStep ? 'в такт' : 'не в такт — проверьте задержки'}</span></div>`;
   });
   p.innerHTML = rows.join('');
+}
+
+// Оценка расхождения камер по Δ углов левых/правых валов двух рядов (сервис: motion_shafts.camera_offset): чья камера старше и на сколько секунд
+function mdShOffsetHtml(o) {
+  if (!o) return '';
+  const tip = 'Оценка по Δ углов пар НЛВ–ВЛВ и НПВ–ВПВ за последние 5 минут: Δ делим на скорость вала. Левые и правые валы крутятся навстречу, поэтому задержка камеры даёт Δ с разными знаками, а ошибка эталона или ракурса — с одинаковыми. Δ меряется от эталона: оценка показывает, на сколько камеры разошлись с момента, когда снят эталон. Влияют только секунды, в которые оба вала видны и крутятся.';
+  const s = o.s, name = escapeHtml(o.name);
+  if (s < 0.3) return `<div class="md-zstat__row" title="${tip}">Оценка расхождения камер: <span style="color:#4ade80">в такт (меньше 0,3 с)</span></div>`;
+  if (o.agree === false) return `<div class="md-zstat__row" title="${tip}">Оценка расхождения камер: <span style="color:#f59e0b">пары не согласны — похоже, это не задержка камеры (эталон или ракурс)</span></div>`;
+  const cur = o.latency_s == null ? 0 : o.latency_s;
+  const note = o.agree === true ? 'обе пары согласны' : 'по одной паре';
+  return `<div class="md-zstat__row" title="${tip}">Оценка расхождения камер: кадры «${name}» старше на <b class="md-zstat__cur">${s.toFixed(1)} с</b> (${note}) · <span style="color:#f59e0b">задержка кадра ${name}: сейчас ${cur.toFixed(2)} → ${(cur + s).toFixed(2)} с; после правки снимите эталон заново</span></div>`;
 }
 
 function mdShaftPairHtml(id, p) {

@@ -51,6 +51,10 @@ ALIGN_MARGIN_S = 0.6          # запас назад от «сейчас»: к 
 MAX_GAP_S = 1.5               # соседние кадры ряда дальше друг от друга — интерполировать нельзя
 SKEW_LEN = 300                # секунд истории «разъезда кадров» пары для панели
 DEFAULT_RPM = 0.758           # когда скорость вала неизвестна (для перевода секунд в градусы)
+OFFSET_WIN_S = 300.0          # оценка расхождения камер по Δ углов: окно, с (оборот вала ≈ 85 с — волна перекоса за оборот усредняется)
+OFFSET_MIN_N = 60             # меньше секундных точек в окне — оценку не показываем
+OFFSET_MIN_RPM = 0.2          # вал медленнее — угол от времени почти не зависит, секунды из градусов не получить
+OFFSET_AGREE_S = 0.5          # две пары (левые и правые валы) дают одно расхождение с точностью до этого (или 30 %) — считаем, что это задержка, а не эталон
 STALE_LAG_S = 1.0             # очередь кадров камеры длиннее (и камеры разные) — Δ углов пары недостоверна: тревогу не двигаем, самоподстройку не учим
 
 
@@ -167,6 +171,22 @@ def compute(cfg: dict, states: dict, at: Optional[dict] = None) -> dict:
     return {"shafts": shafts, "pairs": pairs}
 
 
+def camera_offset(buf, now: float) -> Optional[float]:
+    """Расхождение кадров двух камер по Δ углов пары «одинаково», с: τ(A) − τ(B), где τ — на сколько кадр камеры старше «приход − latency_s».
+    Кадр камеры A показывает угол θ(t − τA), Δ = θA − θB − ref = −rate·(τA − τB) (rate, °/с — со знаком: «+» по часовой), отсюда
+    τA − τB = −Δ/rate. «+» — кадры первой камеры старее; Δ мерится от эталона, поэтому это изменение расхождения с момента эталона.
+    buf — [(время, Δ, rate)]; нужно ≥ OFFSET_MIN_N точек за OFFSET_WIN_S. None — данных мало."""
+    rows = [r for r in buf if now - r[0] <= OFFSET_WIN_S]
+    if len(rows) < OFFSET_MIN_N:
+        return None
+    base = rows[0][1]
+    d = base + sum(ang_diff(r[1], base) for r in rows) / len(rows)
+    rate = sum(r[2] for r in rows) / len(rows)
+    if abs(rate) < OFFSET_MIN_RPM * 6.0:
+        return None
+    return -ang_diff(d, 0.0) / rate
+
+
 class ShaftRunner(threading.Thread):
     """Раз в секунду: снимок валов → история (для графика) → тревоги → запись в ПЛК (если задан адрес и ПЛК включён)."""
 
@@ -184,6 +204,7 @@ class ShaftRunner(threading.Thread):
         self._avg_live: dict = {}         # то же для живого показа (виджет): окно по времени, частота опроса не важна
         self._live_lock = threading.Lock()
         self._skew: dict = {p: deque(maxlen=SKEW_LEN) for p in PAIR_ORDER}   # пара → (время, разъезд кадров двух камер, с)
+        self._off: dict = {p: deque() for p in PAIR_ORDER if PAIRS[p][2] == "same"}   # пара → (время, Δ угла до автокоррекции, °, град/с первого вала)
         d = getattr(mgr, "dir", None)
         self.learn_path = (d / "shafts_learn.json") if d else None
         self._saved = self._learn_load()
@@ -381,6 +402,7 @@ class ShaftRunner(threading.Thread):
                 cams[c["id"]] = dict(ft(), name=c.get("name") or c["id"], row=c.get("row") or "")
         lat = {cid: v["latency_s"] for cid, v in cams.items()}
         pairs: dict = {}
+        offs: dict = {}               # пара → (оценка τA − τB, камера A, камера B)
         for pid in PAIR_ORDER:
             p = snap["pairs"][pid]
             sa, sb = snap["shafts"][p["a"]], snap["shafts"][p["b"]]
@@ -396,8 +418,45 @@ class ShaftRunner(threading.Thread):
             pairs[pid] = {"same_camera": same, "skew_avg_s": round(sum(rows) / len(rows), 3) if rows else None,
                           "skew_max_s": round(max(rows), 3) if rows else None, "deg_per_s": round(deg, 2),
                           "skew_avg_deg": round(deg * sum(rows) / len(rows), 2) if rows else None,
-                          "skew_max_deg": round(deg * max(rows), 2) if rows else None}
-        return {"aligned": aligned, "compare_lag_s": round(now - t_cmp, 2) if t_cmp is not None else None, "cameras": cams, "pairs": pairs}
+                          "skew_max_deg": round(deg * max(rows), 2) if rows else None, "offset_s": None}
+            if pid in self._off:
+                off = self._offset(pid, p, sa, sb, now) if not same else None
+                if off is not None:
+                    pairs[pid]["offset_s"] = round(off, 2)
+                    offs[pid] = (off, ca, cb)
+        return {"aligned": aligned, "compare_lag_s": round(now - t_cmp, 2) if t_cmp is not None else None, "cameras": cams, "pairs": pairs,
+                "offset": self._offset_verdict(offs, cams)}
+
+    def _offset(self, pid: str, p: dict, sa: dict, sb: dict, now: float) -> Optional[float]:
+        """Копим Δ пары (до автокоррекции) в секунды, когда она честная: оба вала видны и крутятся, кадры не в очереди. -> camera_offset или None."""
+        buf = self._off[pid]
+        while buf and now - buf[0][0] > OFFSET_WIN_S:
+            buf.popleft()
+        rpm = sa.get("rpm") or 0.0
+        if (p["valid"] and not p.get("stale") and not (sa["coast"] or sb["coast"]) and sa["moving"] is not False and sb["moving"] is not False
+                and abs(rpm) >= OFFSET_MIN_RPM and p.get("angle_diff_raw") is not None):
+            buf.append((now, p["angle_diff_raw"], rpm * 6.0))
+        return camera_offset(buf, now)
+
+    @staticmethod
+    def _offset_verdict(offs: dict, cams: dict) -> Optional[dict]:
+        """Итог по парам: чья камера отстаёт и на сколько. Одна пара — оценка без проверки; две (левые и правые валы) должны сойтись на одной
+        камере и одной величине — иначе Δ вызвана не задержкой камеры (эталон, ракурс). None — оценок нет."""
+        if not offs:
+            return None
+        old = {}                                 # пара → (камера, которая старше, на сколько секунд)
+        for pid, (s, ca, cb) in offs.items():
+            old[pid] = (ca if s > 0 else cb, abs(s))
+        vals = list(old.values())
+        if len(vals) == 1:
+            cam, s = vals[0]
+            agree = None
+        else:
+            cam, s = vals[0]
+            agree = all(c == cam for c, _ in vals) and max(v for _, v in vals) - min(v for _, v in vals) <= max(OFFSET_AGREE_S, 0.3 * max(v for _, v in vals))
+            s = sum(v for _, v in vals) / len(vals)
+        return {"cam": cam, "name": (cams.get(cam) or {}).get("name") or cam, "s": round(s, 2), "agree": agree,
+                "latency_s": (cams.get(cam) or {}).get("latency_s"), "pairs": sorted(offs)}
 
     def tick(self, now: Optional[float] = None):
         now = time.time() if now is None else now

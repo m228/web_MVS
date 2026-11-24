@@ -79,7 +79,8 @@ TIP_PREC = 2.0           # вес угла по светоотражателям
 TIP_FLIP = 0.12          # отражатели не знают, где красный конец: голос цвета «за» противоположный луч (больше этого) или «против» (меньше минус этого)
 TIP_FLIP_DEG = 90.0      # стрелку, ведомую отражателями, разворачиваем на 180°, если вал прошёл столько градусов при голосе «за» без единого «против»
 TIP_BG_TAU = 30.0        # память неподвижных бликов, с: что светится на одном месте, пока вал крутится, — не кончик (люк, рамка, лампа)
-TIP_BG_MAX = 0.35        # точка горит дольше этой доли времени — неподвижный блик, из маски отражателей её убираем
+TIP_END_HW = 6          # видимость отражателя каждого конца: сила кончика в ±столько градусов от стрелки (и от обратного луча)
+TIP_BG_MAX = 0.35       # точка горит дольше этой доли времени — неподвижный блик, из маски отражателей её убираем
 HW_ACCEL_MODES = ("off", "auto", "d3d11")    # аппаратное декодирование видео: выкл / любое доступное / Direct3D 11 (видеоядро Intel, AMD, NVIDIA)
 ZONE_OUT_KINDS = ("holding", "coil")
 SCENARIO_SIGNALS = ("move", "pulp")    # что сценарий берёт у зон: бит «движется» или «жом есть» (вид окна)
@@ -406,6 +407,7 @@ def _norm_cycle(z: dict, zid: str, where: str) -> dict:
         "blue_not": _nots(z.get("blue_not"), where + ".blue_not"),
         "tip_hsv": _nots(z.get("tip_hsv"), where + ".tip_hsv"),          # цвета светоотражателей на концах палки — те же «ящики»; пусто — отражатели не ищем
         "tip_w": _num(z.get("tip_w", 1.0), where + ".tip_w", 0, 3),      # вес отражателей в поиске угла (0 — не использовать)
+        "tip_lead": bool(z.get("tip_lead", False)),                      # вести по отражателям: видны — угол по ним, цвет только говорит, где красный конец
         "tip_min": _num(z.get("tip_min", 0.3), where + ".tip_min", 0.05, 1),   # отражатель считается видимым от этой силы (1 — кончик целиком, 0,5 — один из двух)
         "tip_r0": _num(z.get("tip_r0", 0.55), where + ".tip_r0", 0.2, 1.0),    # кольцо, где ищем кончики: от tip_r0 до tip_r1 радиуса
         "tip_r1": _num(z.get("tip_r1", 1.15), where + ".tip_r1", 1.0, 1.5),    # за радиус: кончик бывает чуть дальше окружности поиска
@@ -1261,6 +1263,8 @@ class CycleRT:
         self.src = "none"                       # чем держим угол: both (обе половины) / red / blue / hold (не видно, ожидаемый) / none
         self.lvl_r = self.lvl_b = 0.0           # насколько видна красная / синяя половина на найденном луче, 0..1
         self.lvl_t = 0.0                        # насколько видны светоотражатели на концах (среднее двух кончиков), 0..1; 0 — не видны или не настроены
+        self.lvl_tr = self.lvl_tb = 0.0         # то же по каждому концу: отражатель красного конца (на угле) и синего (напротив), 0..1
+        self.lead = "color"                     # откуда угол на этом кадре: color — по цвету (или среднее с отражателями), tip — по отражателям
         self.flip_v = 0.0                       # сколько градусов вал прошёл, пока цвет «за» разворот (≥ TIP_FLIP_DEG — стрелку разворачиваем на 180°)
         self.rpm = 0.0                          # обороты, об/мин: «+» по часовой стрелке, «−» против; 0 — стоит или пока мало данных
         self.valid = False
@@ -1389,15 +1393,21 @@ class CycleRT:
     def _fuse(self, sr: np.ndarray, sb: np.ndarray, i: int, fallback: float, now: float, locked: bool, ts: Optional[np.ndarray] = None):
         """Одна стрелка из двух половин и светоотражателей. Угол по цвету — _fuse_color; ts — сила пары отражателей по лучам (None — не ищем).
         Отражатели видны и согласны с цветом (≤ agree_deg) → среднее с весом TIP_PREC·tip_w·сила (кончики на полном радиусе — угол точнее);
-        цвета нет → угол по отражателям (src «tip»); не согласны → при слежении то, что ближе к ожидаемому углу, при поиске по кругу — цвет."""
+        цвета нет → угол по отражателям (src «tip»); не согласны → при слежении то, что ближе к ожидаемому углу, при поиске по кругу — цвет.
+        «Вести по отражателям» (tip_lead): отражатели видны → угол только по ним, цвет не усредняется (src — по-прежнему какие половины видны).
+        self.lead — откуда угол на этом кадре: «tip» — по отражателям, «color» — по цвету или среднее."""
         a, src = self._fuse_color(sr, sb, i, fallback, now, locked)
-        self.lvl_t = 0.0
+        self.lead = "color"
         pt = self._peak(ts, i) if ts is not None else None
         self.lvl_t = pt[1] if pt else 0.0
         if pt is None or pt[1] < self.cfg.get("tip_min", 0.3):
             return a, ("red" if src == "none" else src)                    # как раньше: обе половины слабые — угол по общему пику, src «red»
         if src == "none":                                                  # цвета на луче нет — держимся за отражатели
+            self.lead = "tip"
             return pt[0], "tip"
+        if self.cfg.get("tip_lead"):                                       # ведём по отражателям: кончики видны — угол по ним, цвет нужен только для направления
+            self.lead = "tip"
+            return pt[0], src
         if abs(ang_diff(pt[0], a)) <= self.cfg["agree_deg"]:
             wc = max(self.lvl_r, self.lvl_b, 1e-3)
             wt = TIP_PREC * float(self.cfg.get("tip_w", 1.0)) * pt[1]
@@ -1405,7 +1415,10 @@ class CycleRT:
             return float(np.degrees(np.arctan2(wc * np.sin(r[0]) + wt * np.sin(r[1]), wc * np.cos(r[0]) + wt * np.cos(r[1]))) % 360.0), src
         if locked:
             e = self._expected(now)
-            return (pt[0], "tip") if abs(ang_diff(pt[0], e)) < abs(ang_diff(a, e)) else (a, src)
+            if abs(ang_diff(pt[0], e)) < abs(ang_diff(a, e)):
+                self.lead = "tip"
+                return pt[0], "tip"
+            return a, src
         return a, src
 
     def _fuse_color(self, sr: np.ndarray, sb: np.ndarray, i: int, fallback: float, now: float, locked: bool):
@@ -1535,7 +1548,7 @@ class CycleRT:
                 ts = 0.5 * (st + np.roll(st, -180))
                 colr = comb
                 own = colr >= np.roll(colr, -180)                          # отражатели — в сторону, где цвет сильнее (ничья — в обе)
-                tw = c.get("tip_w", 1.0) * ts
+                tw = c.get("tip_w", 1.0) * ts     # и при «вести по отражателям» вес тот же: удвоенный при сбитом центре разворачивал стрелку (ролик 23.11)
                 comb = colr + tw * own                                     # профиль для уверенности и для поиска по кругу
                 comb_lk = colr + tw                                        # при слежении: направление держит окно
             cand = comb
@@ -1585,6 +1598,12 @@ class CycleRT:
                         self.src = "tip"                                     # на этом кадре угол — по отражателям, направление — по цвету
                 else:
                     self.flip_v = 0.0
+                if st is not None:                                           # отражатель каждого конца по отдельности: на стрелке — красный конец, напротив — синий
+                    ia = int(round(ang)) % 360
+                    self.lvl_tr = float(st[(ia + np.arange(-TIP_END_HW, TIP_END_HW + 1)) % 360].max())
+                    self.lvl_tb = float(st[(ia + 180 + np.arange(-TIP_END_HW, TIP_END_HW + 1)) % 360].max())
+                else:
+                    self.lvl_tr = self.lvl_tb = 0.0
                 if self.coast:
                     self.mv.clear()                                          # скачок при возврате палки — не ход вала
                     self.raw.clear()                                         # сглаживание не тянет к ожидаемому углу из пропажи
@@ -1603,11 +1622,15 @@ class CycleRT:
                 self.coast, self.valid = True, True
                 self.conf = 0.0
                 self.src, self.lvl_r, self.lvl_b, self.lvl_t = "hold", 0.0, 0.0, 0.0
+                self.lvl_tr = self.lvl_tb = 0.0
+                self.lead = "color"
             else:
                 self.valid, self.coast = False, False
                 self.last = None
                 self.raw.clear()
                 self.src, self.lvl_r, self.lvl_b, self.lvl_t = "none", 0.0, 0.0, 0.0
+                self.lvl_tr = self.lvl_tb = 0.0
+                self.lead = "color"
                 self._lost()
         return found
 
@@ -1930,7 +1953,10 @@ class CameraEngine:
                 "bit": int(ok and not coast), "flow": angle, "diff": conf, "value": angle, "on": 0.0, "off": 0.0,
                 "angle": angle, "conf": conf, "rpm": rpm, "score": round(c.score, 3) if c else 0.0, "valid": ok, "coast": coast, "moving": moving,
                 "src": c.src if ok else "none", "lvl_r": round(c.lvl_r, 2) if ok else 0.0, "lvl_b": round(c.lvl_b, 2) if ok else 0.0,
-                "lvl_t": round(c.lvl_t, 2) if ok else 0.0, "off_b": round(c.off_b, 1) if c else 0.0}
+                "lvl_t": round(c.lvl_t, 2) if ok else 0.0, "off_b": round(c.off_b, 1) if c else 0.0,
+                "tip_on": bool(c and c.tip_on),                                  # отражатели настроены: на плитке и в виджете концы рисуются всегда (видны — ярко, нет — тускло)
+                "lvl_tr": round(c.lvl_tr, 2) if ok else 0.0, "lvl_tb": round(c.lvl_tb, 2) if ok else 0.0,   # отражатель красного / синего конца, 0..1
+                "lead": c.lead if ok else "color"}                               # угол на этом кадре: по отражателям (tip) или по цвету (color)
 
     def _clarity_zone(self, zc: dict, alive: bool) -> dict:
         """Зона-прозрачность → запись состояния. turb — мутность 0..100 (flow = turb, diff = движение в кружке — для историй, трендов и CSV; раньше тут

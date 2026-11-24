@@ -188,11 +188,18 @@ function shNotRowHtml(w, z, a, n) {
     '<div></div><div></div><div></div>' + cell(3, 'до', 'Насыщенность «до»' + (tip ? ': у белого пересвета — низкая (до 60)' : '')) + cell(5, 'до', 'Яркость «до»') + '<div></div>';
 }
 
+// переключатель «вести»: по цвету (отражатели помогают, угол — среднее) / по отражателям (видны — угол по ним, цвет только говорит, где красный конец)
+function shTipLeadHtml(z, a) {
+  const on = !!z.tip_lead;
+  const b = (v, txt, tt) => `<button type="button" class="${(v === '1') === on ? 'on' : ''}" ${a} data-f="tiplead" data-v="${v}" title="${escapeHtml(tt)}">${txt}</button>`;
+  return `<span class="sh-seg sh-seg--lead">${b('0', 'по цвету', 'Угол — по красной и синей половинам, отражатели уточняют (среднее)')}${b('1', 'по отражателям', 'Отражатели видны — угол только по ним (точнее, на полном радиусе); цвет нужен, чтобы знать, где красный конец. Не видны — по цвету')}</span>`;
+}
+
 // строка «Светоотражатели»: заголовок с кнопками; цвета отражателя — строками-«ящиками» ниже (shNotRowHtml с w = 'tip')
 function shTipHeadHtml(z, a) {
   const n = (z.tip_hsv || []).length;
   return `<div class="sh-tn"><i class="sh-dot" style="background:${MV_ROD_TIP}"></i>Светоотражатели</div>` +
-    `<div class="net-hint sh-tipnote">${n ? 'кончики палки ловятся — на маске жёлтым' : 'не заданы: угол только по цвету'}</div>` +
+    `<div class="net-hint sh-tipnote">${n ? shTipLeadHtml(z, a) : 'не заданы: угол только по цвету'}</div>` +
     `<div class="sh-tact"><button type="button" class="btn-secondary md-x sh-pipbtn" data-md="shpick" data-w="tip" data-f="pip" data-mode="tip" title="Откроется большой кадр: кликните по светоотражателю на конце палки — его цвет добавится строкой «отражатель». Белый пересвет и жёлтый — разные строки">пипетка</button>` +
     `<button type="button" class="btn-secondary md-x" ${a} data-f="tipwhite" title="Добавить «пересвет»: белое, яркость 235–255, насыщенность до 60 — так выглядит отражатель под прожектором"${(z.tip_hsv || []).some((r) => r.join() === SH_TIP_WHITE.join()) ? ' disabled' : ''}>+ пересвет</button></div>`;
 }
@@ -612,7 +619,7 @@ function mdOnShPick(t) {
   const key = block.dataset.shcol;
   if (t.dataset.f === 'view') {                            // переключатель «маска / кадр» на маленькой картинке карточки
     shView[key] = t.dataset.v;
-    block.querySelectorAll('.sh-seg button').forEach((b) => b.classList.toggle('on', b === t));
+    t.closest('.sh-seg').querySelectorAll('button').forEach((b) => b.classList.toggle('on', b === t));   // только свой переключатель: в карточке есть и «вести»
     shPrevLoad(block, true);
     return;
   }
@@ -1055,9 +1062,11 @@ function shPaintWidget(ctx, s, off, corr) {
       const sr = x.src, litR = sr === 'red' || sr === 'both', litB = sr === 'blue' || sr === 'both';      // половина видна — яркая, не видна — тёмная и тусклая
       ctx.strokeStyle = litB ? MV_ROD_BLUE : '#1e3a52'; ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(cx - dx, cy - dy); ctx.stroke();
       ctx.strokeStyle = litR ? MV_ROD_RED : '#5c2323'; ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(cx + dx, cy + dy); ctx.stroke();
-      if (sr === 'tip') {                      // цвета не видно, держится по светоотражателям — жёлтые точки на концах
-        ctx.fillStyle = MV_ROD_TIP;
-        [[cx + dx, cy + dy], [cx - dx, cy - dy]].forEach(([px, py]) => { ctx.beginPath(); ctx.arc(px, py, 3, 0, Math.PI * 2); ctx.fill(); });
+      // светоотражатели на концах: виден — жёлтая точка, не виден — тёмная; старый сервис (без tip) — как раньше, только когда держится по ним
+      const te = Array.isArray(x.tip) ? [!x.coast && x.tip[0] >= MV_TIP_SEEN, !x.coast && x.tip[1] >= MV_TIP_SEEN] : x.tip === undefined && sr === 'tip' ? [true, true] : null;
+      if (te) {
+        ctx.globalAlpha = 1;                   // тёмная точка и так тусклая — прозрачность удержания на неё не накладываем
+        [[cx + dx, cy + dy, te[0]], [cx - dx, cy - dy, te[1]]].forEach(([px, py, on]) => { ctx.fillStyle = on ? MV_ROD_TIP : MV_ROD_TIP_OFF; ctx.beginPath(); ctx.arc(px, py, 3.5, 0, Math.PI * 2); ctx.fill(); });
       }
       ctx.globalAlpha = 1;
     }

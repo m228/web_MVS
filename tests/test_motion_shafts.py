@@ -468,3 +468,22 @@ def test_live_snapshot_has_src_and_is_side_effect_free():
     assert set(live["pairs"]["nlr"]) >= {"valid", "angle_diff", "angle_diff_raw", "alarm_angle"}
     assert all(len(h) == 0 for h in r.hist.values())
 
+
+def test_live_snapshot_has_tip_ends_only_when_configured():
+    """Отражатели концов [красный, синий] доходят до виджета; у зоны без отражателей — None (точки не рисуются)."""
+    cfg = cfg_two_rows()
+    st = states()
+    st["dn"]["result"]["zones"][0].update({"tip_on": True, "lvl_tr": 0.9, "lvl_tb": 0.1})
+
+    class W:
+        def __init__(self, s): self.s = s
+        def state(self): return self.s
+
+    class Mgr:
+        pass
+
+    m = Mgr(); m.cfg = cfg; m.workers = {k: W(v) for k, v in st.items()}
+    live = ms.ShaftRunner(m).live(now=100.0)
+    tips = [v["tip"] for v in live["shafts"].values() if v["assigned"]]
+    assert [0.9, 0.1] in tips and tips.count(None) == len(tips) - 1
+

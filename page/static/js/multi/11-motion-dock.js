@@ -653,6 +653,10 @@ function mdOnZone(t, cam) {
     mdEdit(() => { const arr = z.tip_hsv || []; if (arr.length < 6 && !arr.some((r) => r.join() === SH_TIP_WHITE.join())) z.tip_hsv = arr.concat([SH_TIP_WHITE.slice()]); }, true);
     return;
   }
+  if (f === 'tiplead') {                                          // светоотражатели: вести по цвету (0) / по отражателям (1)
+    mdEdit(() => { z.tip_lead = t.dataset.v === '1'; }, true);
+    return;
+  }
   if (f === 'hsvndel') {                                       // убрать исключённый цвет («не ловить») конца палки или цвет светоотражателя (w = 'tip')
     mdEdit(() => { (z[t.dataset.w === 'tip' ? 'tip_hsv' : t.dataset.w + '_not'] || []).splice(Number(t.dataset.n), 1); }, true);
     return;

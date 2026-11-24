@@ -156,7 +156,7 @@ def check_shots(cam: dict, shots: list, per_part: int = 24) -> dict:
         h, w = frame.shape[:2]
         for z in cycles:
             rt = me.CycleRT(z, cam.get("frame_size"), (w, h))
-            found = bool(rt.step(frame, 0.0)) and rt.src in ("both", "red", "blue")
+            found = bool(rt.step(frame, 0.0)) and rt.src in ("both", "red", "blue", "tip")
             v = float(cv2.cvtColor(frame[rt.y0:rt.y1, rt.x0:rt.x1], cv2.COLOR_BGR2HSV)[..., 2].mean())
             res[z["id"]]["day" if is_day(ts) else "night"].append((found, float(rt.conf), v, ts))
     return res

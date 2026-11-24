@@ -286,7 +286,7 @@ def test_mask_preview_raw_and_width():
     a, b = z.mask_preview(f, max_w=240, raw=True), z.mask_preview(f, max_w=240)
     assert abs(a.shape[0] - b.shape[0]) <= 1 and a.shape[1] == b.shape[1]
     ca = z.mask_preview(f, max_w=240, raw=True)
-    crop = f[z.y0:z.y1, z.x0:z.x1]
+    crop = f[z.ty0:z.ty1, z.tx0:z.tx1]                                     # область превью — с кольцом светоотражателей (за окружностью поиска)
     assert np.array_equal(ca, cv2.resize(crop, (240, ca.shape[0]), interpolation=cv2.INTER_AREA))      # кадр области как есть: без масок, окружности и оси
     big = z.mask_preview(f, max_w=crop.shape[1] * 2, raw=True)
     assert big.shape[1] == crop.shape[1] * 2 and np.array_equal(z.mask_preview(f, max_w=crop.shape[1], raw=True), crop)    # в родном разрешении — ровно кадр

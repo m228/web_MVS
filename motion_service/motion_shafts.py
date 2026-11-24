@@ -56,6 +56,33 @@ OFFSET_MIN_N = 60             # меньше секундных точек в о
 OFFSET_MIN_RPM = 0.2          # вал медленнее — угол от времени почти не зависит, секунды из градусов не получить
 OFFSET_AGREE_S = 0.5          # две пары (левые и правые валы) дают одно расхождение с точностью до этого (или 30 %) — считаем, что это задержка, а не эталон
 STALE_LAG_S = 1.0             # очередь кадров камеры длиннее (и камеры разные) — Δ углов пары недостоверна: тревогу не двигаем, самоподстройку не учим
+FLIP_MIN_DEG = 150.0          # |Δ| не меньше — похоже, что одна палка держит противоположный конец (красный и синий перепутались), а не вал убежал на пол-оборота
+FLIP_GRACE_S = 300.0          # так долго такую Δ не считаем тревогой (на пуске это 1–3 мин); держится дольше — это уже настоящий разъезд, тревога как обычно
+STAND_RESUME_S = 5.0          # вал считается поехавшим, только если «крутится» держится столько секунд подряд: дрожание стоящего вала счёт остановки не сбрасывает
+
+
+class StandWatch:
+    """Тревога «вал стоит»: вал не крутится дольше stop_s секунд подряд. moving: True крутится / False стоит / None неизвестно
+    (палку не видно) — неизвестно ничего не меняет: ни не запускает счёт, ни не сбрасывает его и не гасит тревогу. stop_s 0 — выключена."""
+
+    def __init__(self):
+        self.since: Optional[float] = None          # с какого момента стоит
+        self._run: Optional[float] = None           # с какого момента подряд «крутится»
+
+    def update(self, now: float, moving: Optional[bool], stop_s: float) -> int:
+        if not stop_s:
+            self.since = self._run = None
+            return 0
+        if moving is False:
+            self._run = None
+            if self.since is None:
+                self.since = now
+        elif moving is True:
+            if self._run is None:
+                self._run = now
+            if now - self._run >= STAND_RESUME_S:
+                self.since = None
+        return int(self.since is not None and now - self.since >= stop_s)
 
 
 def shaft_short(sid: str) -> str:
@@ -197,6 +224,8 @@ class ShaftRunner(threading.Thread):
         self.snap: dict = {"shafts": {}, "pairs": {}}
         self.hist: dict = {p: deque(maxlen=HISTORY_LEN) for p in PAIR_ORDER}
         self._hys: dict = {}              # (пара, "angle"/"rpm") → (допуск, Hysteresis)
+        self._stand: dict = {sid: StandWatch() for sid in SHAFT_ORDER}      # вал → тревога «стоит»
+        self._flip: dict = {}             # пара → с какого момента |Δ| ≥ FLIP_MIN_DEG
         self._sent: dict = {}
         self.status: dict = {}            # ключ вывода → {ok, error}
         self.learners: dict = {}          # пара → (окно в минутах, MirrorLearn): самоподстройка волны Δ угла за оборот
@@ -282,8 +311,11 @@ class ShaftRunner(threading.Thread):
                     self._average(pid, p, sc.get("avg_s", 4.0), now, self._avg_live)
                 p["alarm_angle"] = lp.get("alarm_angle", 0)
                 p["alarm_rpm"] = lp.get("alarm_rpm", 0)
+        lsh = self.snap.get("shafts") or {}
         return {"ts": now,
-                "shafts": {sid: {k: v[k] for k in ("id", "assigned", "valid", "angle", "coast", "src", "tip")} for sid, v in snap["shafts"].items()},
+                "shafts": {sid: dict({k: v[k] for k in ("id", "assigned", "valid", "angle", "coast", "src", "tip")},
+                                     alarm_stop=int((lsh.get(sid) or {}).get("alarm_stop", 0)))      # тревога «стоит» — из последнего тика, как и аварии пар
+                           for sid, v in snap["shafts"].items()},
                 "pairs": {pid: {k: v.get(k) for k in ("id", "valid", "angle_diff", "angle_diff_raw", "alarm_angle", "alarm_rpm", "stale")}
                           for pid, v in snap["pairs"].items()}}
 
@@ -340,6 +372,15 @@ class ShaftRunner(threading.Thread):
         """Тревога как есть: ни включить, ни выключить, ни накопить счёт (как в удержании)."""
         cur = self._hys.get((pid, kind))
         return int(cur[1].state) if cur else 0
+
+    def _flipping(self, pid: str, p: dict, now: float) -> bool:
+        """Δ около ±180° первые FLIP_GRACE_S секунд: палка схватила не тот конец (на пуске после стоянки так бывает 1–3 мин). Тревогу по углу
+        на это время не двигаем (как при очереди кадров); не прошло само за FLIP_GRACE_S — настоящий разъезд, дальше тревога как обычно."""
+        d = p["angle_diff"]
+        if not p["valid"] or d is None or abs(d) < FLIP_MIN_DEG:
+            self._flip.pop(pid, None)
+            return False
+        return now - self._flip.setdefault(pid, now) < FLIP_GRACE_S
 
     def _alarm(self, pid: str, kind: str, tol: float, value: Optional[float]) -> int:
         """Тревога по допуску: tol 0 — выкл; нет данных — сброс (нечего судить)."""
@@ -465,6 +506,9 @@ class ShaftRunner(threading.Thread):
         sc = cfg.get("shafts") or default_shafts_cfg()
         at, t_cmp = self._aligned(cfg, sc, now)
         snap = compute(cfg, states, at)
+        stop_s = float(sc.get("stop_s") or 0.0)
+        for sid, sh in snap["shafts"].items():                    # «вал стоит» — своя тревога, на Δ пар не влияет (и Δ при остановке тревожит как обычно)
+            sh["alarm_stop"] = self._stand[sid].update(now, sh["moving"] if sh["assigned"] else None, stop_s)
         for pid, p in snap["pairs"].items():
             sa, sb = snap["shafts"][p["a"]], snap["shafts"][p["b"]]
             lrn = self._learner(pid, sc["pairs"][pid])
@@ -486,7 +530,8 @@ class ShaftRunner(threading.Thread):
             else:
                 self._average(pid, p, sc.get("avg_s", 4.0), now)
             p["learn"] = lrn.info() if lrn else None
-            p["alarm_angle"] = self._alarm_keep(pid, "angle") if stale else self._alarm(pid, "angle", p["tol_angle"], p["angle_diff"])
+            p["flip"] = self._flipping(pid, p, now)
+            p["alarm_angle"] = self._alarm_keep(pid, "angle") if stale or p["flip"] else self._alarm(pid, "angle", p["tol_angle"], p["angle_diff"])
             p["alarm_rpm"] = self._alarm(pid, "rpm", p["tol_rpm"], p["rpm_diff"])
             if p["valid"]:
                 coast = bool(sa["coast"] or sb["coast"] or stale)

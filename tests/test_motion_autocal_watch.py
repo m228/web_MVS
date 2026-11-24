@@ -77,7 +77,8 @@ class Env:
         self.mgr = FakeMgr(tmp, **kw)
         self.t = 1000.0
         self.vis = {"rod1": 100.0, "rod2": 100.0}
-        self.w = aw.AutocalWatch(self.mgr, clock=lambda: self.t, vis_fn=self._vis)
+        self.standing = False                          # вал сейчас стоит (по скорости)
+        self.w = aw.AutocalWatch(self.mgr, clock=lambda: self.t, vis_fn=self._vis, stand_fn=lambda cid: self.standing)
         self.w._started = self.t - 10000.0
 
     def _vis(self, cid, zids, t0, t1):
@@ -130,6 +131,45 @@ def test_low_visibility_starts_only_bad_zones(env):
     assert env.mgr.started == [("c1", ["rod1"], aw.SEED_SECONDS)]
     assert env.st["phase"] == "running" and env.st["before"] == {"rod1": 60.0}
     assert env.w.recent()[0]["kind"] == "start"
+
+
+def test_standing_shaft_blocks_start_until_a_window_has_passed(env):
+    env.vis["rod1"] = 5.0                            # на остановке палки не находятся — видимость падает сама
+    env.standing = True
+    env.tick()
+    assert env.mgr.started == [] and env.kinds() == ["check"] and "стоял" in env.w.events[-1]["msg"]
+    env.standing = False                             # вал поехал, но окно проверки (30 мин) ещё захватывает остановку
+    env.tick(600)
+    assert env.mgr.started == [] and len(env.w.events) == 1
+    env.tick(1200)                                   # остановка ушла из окна, видимость всё ещё низкая — теперь настоящая просадка
+    assert env.mgr.started == [("c1", ["rod1"], aw.SEED_SECONDS)]
+
+
+def test_stop_in_verify_window_postpones_rollback(env):
+    env.vis["rod1"] = 80.0
+    env.tick()
+    finish_job(env, {"rod1": result("rod1")})
+    env.tick(60)
+    env.vis["rod1"] = 20.0                           # «хуже, чем до» — но только потому, что вал встал
+    env.standing = True
+    env.tick(aw.VERIFY_SETTLE_S + 1800 + 60)
+    assert env.kinds()[-1] != "rollback" and env.st["phase"] == "verifying"
+    env.standing = False
+    env.vis["rod1"] = 97.0
+    env.tick(1800 + 300)                             # остановка вышла из окна сверки
+    assert env.kinds()[-1] == "confirm" and env.mgr.applied_cfgs == []
+
+
+def test_long_stop_in_verify_never_rolls_back_blindly(env):
+    env.vis["rod1"] = 80.0
+    env.tick()
+    finish_job(env, {"rod1": result("rod1")})
+    env.tick(60)
+    env.vis["rod1"] = 0.0
+    env.standing = True
+    for _ in range(40):                              # стоит больше 3 часов, тик за тиком (сторож проходит каждые 30 с)
+        env.tick(300)
+    assert env.st["phase"] == "verifying" and env.mgr.applied_cfgs == [] and env.kinds()[-1] == "apply"
 
 
 def test_off_does_nothing(tmp_path):

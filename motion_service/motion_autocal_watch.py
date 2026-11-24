@@ -54,10 +54,12 @@ def zone_params(z: dict) -> dict:
 
 
 class AutocalWatch:
-    def __init__(self, mgr, clock: Callable[[], float] = time.time, vis_fn: Optional[Callable] = None):
+    def __init__(self, mgr, clock: Callable[[], float] = time.time, vis_fn: Optional[Callable] = None, stand_fn: Optional[Callable] = None):
         self.mgr = mgr
         self.clock = clock
         self.vis_fn = vis_fn or self._store_vis          # (камера, [зоны], t0, t1) -> {зона: (секунд с данными, секунд «найдена»)}
+        self.stand_fn = stand_fn or self._standing       # камера -> стоит ли сейчас хоть один её вал
+        self._stand_at: dict = {}                        # камера -> когда в последний раз видели стоящий вал (только в памяти: после перезапуска первый же проход заново)
         self.path = Path(mgr.dir) / "autocal_watch.json"
         self.log_path = Path(mgr.dir) / "autocal_watch.jsonl"
         self.st: dict = {}
@@ -149,6 +151,19 @@ class AutocalWatch:
     def _zones(cam: dict) -> list:
         return [z for z in cam["zones"] if z["type"] == "cycle" and z["enabled"]]
 
+    def _standing(self, cid: str) -> bool:
+        """Хоть один вал камеры сейчас стоит (по скорости: за 10 с угол сдвинулся меньше 5°). Неизвестно (палку не видно) — не считаем стоящим."""
+        w = (getattr(self.mgr, "workers", None) or {}).get(cid)
+        if w is None:
+            return False
+        zs = (((w.state() or {}).get("result")) or {}).get("zones") or []
+        return any(z.get("type") == "cycle" and z.get("moving") is False for z in zs)
+
+    def _stood_within(self, cid: str, since: float) -> bool:
+        """Вал камеры стоял после момента since. На остановке палки не находятся (видимость падает сама), и по ней судить нельзя."""
+        t = self._stand_at.get(cid)
+        return t is not None and t > since
+
     # --- ход ---
     def tick(self, now: Optional[float] = None):
         now = self.clock() if now is None else now
@@ -160,6 +175,8 @@ class AutocalWatch:
                 cid = cam["id"]
                 st = self._cam_state(cid)
                 try:
+                    if self.stand_fn(cid):
+                        self._stand_at[cid] = now
                     getattr(self, "_" + st["phase"])(cam, cw, st, now)
                 except Exception as e:  # noqa: BLE001 — сторож вспомогательный: любая поломка не должна ронять сервис
                     log.exception("[%s] сторож подгонки: сбой", cid)
@@ -174,6 +191,10 @@ class AutocalWatch:
         st["next_check"] = now + window
         zones = self._zones(cam)
         if not zones:
+            return
+        if self._stood_within(cid, now - window):              # вал стоял или стоит: видимость в окне просела из-за остановки, а не из-за цветов
+            st["next_check"] = max(now + 300.0, self._stand_at[cid] + window)
+            self._event(cid, "check", "вал стоял в последние %d мин — по видимости не сужу, подгонку не запускаю" % round(window / 60.0), "info")
             return
         pct = self._pct(cid, [z["id"] for z in zones], now - window, now, MIN_DATA_FRAC)
         st["pct"], st["pct_at"] = pct, now
@@ -251,7 +272,7 @@ class AutocalWatch:
 
     def _verifying(self, cam: dict, cw: dict, st: dict, now: float):
         cid, window = cam["id"], float(cw["check_min"]) * 60.0
-        t0 = st["applied_at"] + VERIFY_SETTLE_S
+        t0 = max(st["applied_at"] + VERIFY_SETTLE_S, self._stand_at.get(cid, 0.0))     # остановка: на ней палки не находятся, «после» просело бы само и откат был бы ложным — окно сверки начинаем заново
         if now < t0 + window or now < st.get("next_verify", 0.0):
             return
         applied = st["applied"]

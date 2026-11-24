@@ -561,9 +561,11 @@ def normalize_shafts(raw: Optional[dict]) -> dict:
                       "learn": bool(p.get("learn", True)),
                       "learn_min": _num(p.get("learn_min", 30), where + ".learn_min", 5, 240, True)}
     # align — сравнивать углы разных камер на ОДНОМ моменте времени съёмки (интерполяция), а не «последний кадр каждой»;
-    # avg_s — окно усреднения Δ угла пары для графика и тревоги, с (0 — без усреднения)
+    # avg_s — окно усреднения Δ угла пары для графика и тревоги, с (0 — без усреднения);
+    # stop_s — тревога «вал стоит»: вал не крутится дольше стольких секунд (0 — выключена, как и допуски)
     return {"shafts": shafts, "pairs": pairs, "align": bool(raw.get("align", True)),
-            "avg_s": _num(raw.get("avg_s", 4.0), "валы.avg_s", 0, 60)}
+            "avg_s": _num(raw.get("avg_s", 4.0), "валы.avg_s", 0, 60),
+            "stop_s": _num(raw.get("stop_s", 0), "валы.stop_s", 0, 3600)}
 
 
 WEBVIEW_DEFAULT = {"enabled": False, "host": "0.0.0.0", "port": 5000, "update_sec": 5.0, "jpeg_quality": 85, "annotate": False,

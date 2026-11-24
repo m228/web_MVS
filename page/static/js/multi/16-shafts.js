@@ -666,9 +666,11 @@ function mdShTimingHtml(sc, cams) {
     `<td>${mdNum(`data-md="c" data-cam="${escapeHtml(c.id)}" data-f="latency_s"`, c.latency_s || 0, 'min="0" max="15" step="0.05"')}</td></tr>`).join('');
   const align = sc.align !== false;
   const avg = sc.avg_s == null ? 4 : sc.avg_s;
+  const stopS = sc.stop_s == null ? 0 : sc.stop_s;
   return `<div class="md-zone__row md-mx-set">
       <label class="switch-toggle md-sw md-sw--sm" title="Сравнивать углы двух камер на ОДИН момент времени съёмки (интерполяция между кадрами) вместо «последнего кадра каждой камеры». Результат запаздывает на задержку камер + 0,6 с — для тревоги это не важно"><span class="switch"><input type="checkbox" data-md="sh" data-id="_" data-f="align"${align ? ' checked' : ''} /><span class="switch-track"></span></span><span class="md-lbl md-lbl--on">по времени съёмки</span></label>
-      <span class="md-lbl" title="Δ угла каждой пары усредняется за это окно: шум распознавания ≈ ±1° сглаживается, настоящий сдвиг не прячется. Тревога и запись в ПЛК идут по среднему. 0 — без усреднения">усреднение Δ, с</span>${mdNum('data-md="sh" data-id="_" data-f="avg_s"', avg, 'min="0" max="60" step="0.5"')}</div>
+      <span class="md-lbl" title="Δ угла каждой пары усредняется за это окно: шум распознавания ≈ ±1° сглаживается, настоящий сдвиг не прячется. Тревога и запись в ПЛК идут по среднему. 0 — без усреднения">усреднение Δ, с</span>${mdNum('data-md="sh" data-id="_" data-f="avg_s"', avg, 'min="0" max="60" step="0.5"')}
+      <span class="md-lbl" title="Тревога «вал стоит»: вал не крутится (за 10 с угол сдвинулся меньше 5°) дольше стольких секунд. Горит отдельно от тревоги по Δ угла и не гасит её. Палку не видно — счёт не сбрасывается. 0 — выключена">тревога «стоит», с</span>${mdNum('data-md="sh" data-id="_" data-f="stop_s"', stopS, 'min="0" max="3600" step="5"')}</div>
     <table class="md-table"><thead><tr><th>Камера</th><th>кадров/с</th><th>шаг кадров p50 / p95, мс</th><th title="Сколько секунд кадр простоял в очереди: обработка не успевала за камерой (камера даёт кадров больше, чем сервис разбирает). Сервис сам выбрасывает кадры из очереди, пока она длиннее 0,5 с. Дольше 1 с — Δ между камерами не доверяем: тревога стоит как есть, самоподстройка не учится. Растёт или часто красная — снизьте «Кадров/с в анализ» (вал ≈ 4°/с, хватает 4–5)">очередь, с (сейчас / макс за мин.)</th><th title="Через сколько секунд после съёмки кадр приходит в сервис. Меряется tools\cam_latency_check.py">задержка кадра, с</th></tr></thead><tbody>${rows || '<tr><td colspan="5" class="net-hint">Задайте ряд камеры</td></tr>'}</tbody></table>
     <div class="net-hint" id="md-sht-lag"></div><div class="md-zstat" id="md-sht-pairs"></div><div class="md-zstat" id="md-sht-off"></div>`;
 }
@@ -758,8 +760,8 @@ async function mdOnShafts(t) {
     mdShaftsStats(true);
     return;
   }
-  if (f === 'align' || f === 'avg_s') {                      // настройки блока «Время кадров»: на весь блок валов
-    mdEdit(() => { if (f === 'align') sc.align = t.checked; else sc.avg_s = shClamp(parseFloat(t.value) || 0, 0, 60); });
+  if (f === 'align' || f === 'avg_s' || f === 'stop_s') {    // настройки блока «Время кадров» и тревога «стоит»: на весь блок валов
+    mdEdit(() => { if (f === 'align') sc.align = t.checked; else if (f === 'stop_s') sc.stop_s = shClamp(parseFloat(t.value) || 0, 0, 3600); else sc.avg_s = shClamp(parseFloat(t.value) || 0, 0, 60); });
     return;
   }
   if (f === 'calib') { shCalibrate(id); return; }
@@ -1054,7 +1056,8 @@ const SH_WD_TOGGLE = [146, 247, 56, 22];                    // переключ�
 // сам рисунок в координатах SH_WD; off — данных нет (КЗ не работает): везде прочерки
 function shPaintWidget(ctx, s, off, corr) {
   const { w, h, r } = SH_WD, F = (px, b) => (b ? 'bold ' : '') + px + 'px sans-serif';
-  const bad = !off && SH_PAIRS.some((id) => s.pairs[id] && s.pairs[id].valid && s.pairs[id].alarm_angle);        // красное — только настоящий аларм по углу (допуск угла > 0 на вкладке «Валы»)
+  const bad = !off && (SH_PAIRS.some((id) => s.pairs[id] && s.pairs[id].valid && s.pairs[id].alarm_angle)        // красное — только настоящий аларм по углу (допуск угла > 0 на вкладке «Валы»)
+    || SH_IDS.some((id) => s.shafts[id] && s.shafts[id].alarm_stop));                                           // или вал стоит дольше «тревога „стоит“» (0 — выключена)
   ctx.save();
   ctx.clearRect(0, 0, w, h);
   ctx.beginPath(); ctx.roundRect(0, 0, w, h, 18); ctx.fillStyle = 'rgba(15,17,22,.92)'; ctx.fill();
@@ -1072,7 +1075,8 @@ function shPaintWidget(ctx, s, off, corr) {
   SH_IDS.forEach((id) => {
     const x = s.shafts[id], [cx, cy] = SH_WD_CIRCLE[id], ok = !off && x && x.valid;
     ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2); ctx.fillStyle = 'rgba(255,255,255,.08)'; ctx.fill();
-    ctx.lineWidth = 1.5; ctx.strokeStyle = 'rgba(148,163,184,.55)'; ctx.stroke();
+    const stop = !off && x && x.alarm_stop;                    // вал стоит дольше допуска: красный кружок и подпись (стрелку не прячем — видно, где встал)
+    ctx.lineWidth = stop ? 3 : 1.5; ctx.strokeStyle = stop ? '#f87171' : 'rgba(148,163,184,.55)'; ctx.stroke();
     if (ok) {                                  // стрелка вала: красная половина на угле, синяя напротив
       const a = (x.angle * Math.PI) / 180, dx = Math.sin(a) * (r - 4), dy = -Math.cos(a) * (r - 4);
       ctx.globalAlpha = x.coast ? 0.45 : 1; ctx.lineWidth = 4; ctx.lineCap = 'round';
@@ -1091,6 +1095,7 @@ function shPaintWidget(ctx, s, off, corr) {
     ctx.lineWidth = 1; ctx.strokeStyle = 'rgba(148,163,184,.6)'; ctx.stroke();
     ctx.font = F(15, true); ctx.fillStyle = !ok ? '#9ca3af' : x.coast ? '#7b828f' : '#f3f4f6';       // палка не видна (удержание) — угол тусклый, как и стрелка
     ctx.fillText(ok ? (((Math.round(x.angle) % 360) + 360) % 360) + '°' : '—', cx, cy + 1);
+    if (stop) { ctx.font = F(11, true); ctx.fillStyle = '#f87171'; ctx.fillText('СТОИТ', cx, cy + 25); }
   });
   const [tx, ty, tw, th] = SH_WD_TOGGLE;                       // переключатель: с автокоррекцией (значки волны → ровная линия) / без
   ctx.beginPath(); ctx.roundRect(tx, ty, tw, th, th / 2);
@@ -1178,7 +1183,7 @@ function shwBuild() {
 function shLiveMerge(r) {
   const s = MV.shafts;
   if (!s || !s.shafts || !s.pairs || !r || !r.shafts || !r.pairs) return;
-  Object.keys(r.shafts).forEach((id) => { if (s.shafts[id]) Object.assign(s.shafts[id], { valid: r.shafts[id].valid, angle: r.shafts[id].angle, coast: r.shafts[id].coast, src: r.shafts[id].src }); });
+  Object.keys(r.shafts).forEach((id) => { if (s.shafts[id]) Object.assign(s.shafts[id], { valid: r.shafts[id].valid, angle: r.shafts[id].angle, coast: r.shafts[id].coast, src: r.shafts[id].src, alarm_stop: r.shafts[id].alarm_stop }); });
   Object.keys(r.pairs).forEach((id) => {
     const p = r.pairs[id];
     if (s.pairs[id]) Object.assign(s.pairs[id], { valid: p.valid, angle_diff: p.angle_diff, angle_diff_raw: p.angle_diff_raw, alarm_angle: p.alarm_angle, alarm_rpm: p.alarm_rpm, stale: p.stale });

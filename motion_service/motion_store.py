@@ -2,6 +2,7 @@
 
 Таблицы (компактно: имена камер/зон/статусов — числами из names, время — целым, значения — целыми ×10000):
   trend    — точка раз в секунду на зону (cam, ts в 0,1 с, zone) → flow, diff, bit, ok          — «сырое», хранится keep_days
+  tip      — видимость отражателей: секунда на вал (cam, ts в секундах, zone) → красный конец виден, синий виден — «сырое», хранится keep_days
   stat     — корзина 10 с на зону (cam, key, zone) → n, Σflow, min, max, Σdiff, min, max        — навсегда (на порядок меньше сырого)
   rec_run  — один запуск записи камеры (t0 … t1; t1 пусто — идёт); rec — строка на кадр (cam, ts в мс) → alive, status;
   rec_zone — значения зон кадра                                                                 — «сырое», хранится keep_days
@@ -102,6 +103,8 @@ class MotionStore:
             CREATE TABLE IF NOT EXISTS names (id INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE);
             CREATE TABLE IF NOT EXISTS trend (cam INTEGER NOT NULL, ts INTEGER NOT NULL, zone INTEGER NOT NULL, flow INTEGER NOT NULL,
                 diff INTEGER NOT NULL, bit INTEGER NOT NULL, ok INTEGER NOT NULL, PRIMARY KEY (cam, ts, zone)) WITHOUT ROWID;
+            CREATE TABLE IF NOT EXISTS tip (cam INTEGER NOT NULL, ts INTEGER NOT NULL, zone INTEGER NOT NULL, tr INTEGER NOT NULL,
+                tb INTEGER NOT NULL, PRIMARY KEY (cam, ts, zone)) WITHOUT ROWID;
             CREATE TABLE IF NOT EXISTS stat (cam INTEGER NOT NULL, key INTEGER NOT NULL, zone INTEGER NOT NULL, n INTEGER NOT NULL,
                 sum_flow INTEGER NOT NULL, min_flow INTEGER NOT NULL, max_flow INTEGER NOT NULL,
                 sum_diff INTEGER NOT NULL, min_diff INTEGER NOT NULL, max_diff INTEGER NOT NULL, PRIMARY KEY (cam, key, zone)) WITHOUT ROWID;
@@ -119,6 +122,7 @@ class MotionStore:
         self._names: dict = {name: i for i, name in c.execute("SELECT id, name FROM names")}
         self._by_id: dict = {i: n for n, i in self._names.items()}
         self._tr: list = []
+        self._tp: list = []
         self._st: list = []
         self._rc: list = []
         self._rz: list = []
@@ -166,6 +170,8 @@ class MotionStore:
             try:
                 if self._tr:
                     c.executemany("INSERT OR REPLACE INTO trend VALUES (?,?,?,?,?,?,?)", self._tr)
+                if self._tp:
+                    c.executemany("INSERT OR REPLACE INTO tip VALUES (?,?,?,?,?)", self._tp)
                 if self._st:
                     c.executemany("INSERT OR REPLACE INTO stat VALUES (?,?,?,?,?,?,?,?,?,?)", self._st)
                 if self._rc:
@@ -178,13 +184,13 @@ class MotionStore:
                     c.rollback()
                 except sqlite3.Error:
                     pass
-                for name in ("_tr", "_st", "_rc", "_rz"):          # диск не принимает — держим хвост в памяти, но не бесконечно
+                for name in ("_tr", "_tp", "_st", "_rc", "_rz"):    # диск не принимает — держим хвост в памяти, но не бесконечно
                     buf = getattr(self, name)
                     if len(buf) > MAX_BUF:
                         log.warning("буфер %s переполнен (диск не пишется): отбрасываю старые строки", name[1:])
                         del buf[:len(buf) - MAX_BUF]
                 raise
-            self._tr, self._st, self._rc, self._rz = [], [], [], []
+            self._tr, self._tp, self._st, self._rc, self._rz = [], [], [], [], []
 
     def close(self) -> None:
         with self._lock:
@@ -204,6 +210,13 @@ class MotionStore:
         with self._lock:
             c = self._id(cam)
             self._tr += [(c, int(round(ts * 10)), self._id(z), _q(v[0]), _q(v[1]), int(v[2]), int(ok)) for z, v in zones.items()]
+
+    def add_tip(self, cam: str, ts: float, zones: dict) -> None:
+        """Видимость отражателей за секунду: zones = {зона: (красный конец виден, синий конец виден)}; только живые кадры."""
+        with self._lock:
+            c = self._id(cam)
+            sec = int(ts)
+            self._tp += [(c, sec, self._id(z), int(bool(v[0])), int(bool(v[1]))) for z, v in zones.items()]
 
     def add_stat(self, cam: str, key: int, zones: dict) -> None:
         """zones = {зона: [n, Σflow, min, max, Σdiff, min, max]}"""
@@ -251,6 +264,22 @@ class MotionStore:
                     (step * 10, c, int(t0 * 10), int(t1 * 10))):
                 if z in ids:
                     out[ids[z]][int(k)] = (int(n), int(f or 0))
+        return out
+
+    def tip_visibility(self, cam: str, zone_ids: set, t0: float, t1: float, step_s: int) -> dict:
+        """Видимость отражателей по окнам step_s: {зона: {номер окна: (секунд с данными, секунд «красный отражатель виден», секунд «синий виден»)}}.
+        Секунда «виден» — хотя бы в одном кадре секунды сила кончика ≥ порога и угол не достроен по скорости; пишутся только живые кадры."""
+        step = max(1, int(step_s))
+        with self._lock:
+            self.flush()
+            c = self._id(cam)
+            ids = {self._id(z): z for z in zone_ids}
+            out: dict = {z: {} for z in zone_ids}
+            for k, z, n, r, b in self._c.execute(
+                    "SELECT ts / ? AS k, zone, COUNT(*), SUM(tr), SUM(tb) FROM tip WHERE cam=? AND ts>=? AND ts<? GROUP BY k, zone",
+                    (step, c, int(t0), int(t1))):
+                if z in ids:
+                    out[ids[z]][int(k)] = (int(n), int(r or 0), int(b or 0))
         return out
 
     def loss_map(self, cam: str, zone_ids: set, t0: float, t1: float, sector_deg: int = 15) -> dict:
@@ -426,7 +455,7 @@ class MotionStore:
             cams = [r[0] for r in self._c.execute("SELECT id FROM names").fetchall()]
         n = 0
         for c in cams:
-            for table, unit in (("trend", 10), ("rec", 1000), ("rec_zone", 1000)):
+            for table, unit in (("trend", 10), ("tip", 1), ("rec", 1000), ("rec_zone", 1000)):
                 cut = int(edge * unit)
                 step = PURGE_CHUNK_S * unit
                 while True:

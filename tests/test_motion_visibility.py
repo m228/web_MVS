@@ -17,7 +17,8 @@ def app(tmp_path):
     spec.loader.exec_module(srv)
     app = srv.create_app(tmp_path / "data")
     cfg = {"cameras": [{"id": "dif", "name": "d", "enabled": False, "url": "x", "frame_size": [960, 540],
-                        "zones": [{"id": "L", "name": "Вал левый", "type": "cycle", "center": [250, 270]},
+                        "zones": [{"id": "L", "name": "Вал левый", "type": "cycle", "center": [250, 270],
+                                   "tip_hsv": [[0, 179, 0, 60, 235, 255]]},
                                   {"id": "R", "name": "Вал правый", "type": "cycle", "center": [700, 270]},
                                   {"id": "M", "name": "Лента", "type": "motion", "points": [[10, 10], [50, 10], [50, 50]]}],
                         "groups": []}]}
@@ -72,6 +73,47 @@ def test_visibility_endpoint(app):
     _fill(app.state.mgr.workers["dif"])
     r = call("dif", 3600)
     assert r["avg"]["R"] == 100.0 and len(r["t"]) == len(r["zones"]["L"])
+
+
+# ───────────── видимость отражателей: красный и синий конец по секундам ─────────────
+def _zs(lvl_tr, lvl_tb, coast=False, tip_on=True, zid="L", typ="cycle"):
+    return {"id": zid, "type": typ, "tip_on": tip_on, "lvl_tr": lvl_tr, "lvl_tb": lvl_tb, "coast": coast}
+
+
+def test_tip_visibility_share_by_end_and_only_for_zones_with_tips(app):
+    w = app.state.mgr.workers["dif"]
+    base = (int(time.time()) // 600 - 3) * 600
+    for i in range(600):                                   # красный виден 8 с из 10, синий — 5 с из 10
+        w._store.add_tip("dif", base + i, {"L": (i % 10 < 8, i % 10 < 5)})
+    r = w.visibility(3600)
+    assert set(r["tips"]) == {"L"}                          # у правого вала отражателей нет — линии нет
+    assert r["tips_avg"]["L"] == {"r": 80.0, "b": 50.0}
+    j = r["t"].index(base + 30)
+    assert r["tips"]["L"]["r"][j] == pytest.approx(80.0, abs=4) and r["tips"]["L"]["b"][j] == pytest.approx(50.0, abs=4)
+    assert r["tips"]["L"]["r"][0] is None                   # до начала данных — пусто, а не 0 %
+
+
+def test_tip_second_bucket_needs_live_frame_threshold_and_no_coast(app):
+    w = app.state.mgr.workers["dif"]
+    t0 = 7000.0
+    with w._lock:
+        w._tip_add(t0 + 0.1, [_zs(0.1, 0.1)])                                  # слабый кончик — не виден
+        w._tip_add(t0 + 0.5, [_zs(0.5, 0.1)])                                  # красный виден хотя бы в одном кадре секунды
+        w._tip_add(t0 + 0.9, [_zs(0.9, 0.9, coast=True)])                      # достроено по скорости — не считается
+        w._tip_add(t0 + 0.9, [_zs(0.9, 0.9, tip_on=False, zid="R")])           # отражатели не настроены — зоны нет
+        w._tip_add(t0 + 0.9, [_zs(0.9, 0.9, typ="motion", zid="M")])           # не палка
+        w._tip_add(t0 + 1.2, [_zs(0.0, 0.0)])                                  # следующая секунда — прошлая уходит на диск
+    raw = w._store.tip_visibility("dif", {"L", "R", "M"}, t0, t0 + 1, 1)
+    assert raw["L"] == {int(t0): (1, 1, 0)} and raw["R"] == {} and raw["M"] == {}
+
+
+def test_tip_rows_are_purged_with_raw_trends(app):
+    w = app.state.mgr.workers["dif"]
+    w._store.add_tip("dif", 1000.0, {"L": (True, True)})
+    w._store.add_tip("dif", time.time(), {"L": (True, True)})
+    w._store.purge_raw(time.time() - 86400, 0)
+    raw = w._store.tip_visibility("dif", {"L"}, 0, time.time() + 10, 100000)
+    assert sum(n for n, _, _ in raw["L"].values()) == 1
 
 
 # ───────────── история углов: сжатие окна не должно портить сумму углов двух валов ─────────────

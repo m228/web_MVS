@@ -6,7 +6,7 @@ const MD_WIN_MIN = 30;
 const MD_WIN_MAX = 7200;
 // статистика зон (ср / мин / макс за окно): считает сервис движения, окно до суток
 const MD_STAT_KEY = 'mvStatWin';
-const MD_VIS_WINS = [[7200, '2 ч'], [86400, '24 ч']];
+const MD_VIS_WINS = [[7200, '2 ч'], [14400, '4 ч'], [86400, '24 ч']];
 const MD_VIS_KEY = 'mdVisWin';
 const MD_VIS_COLORS = ['#6c7bff', '#f59e0b', '#34d399', '#f472b6'];     // левая — синяя, правая — оранжевая
 function mdLoadVisWin() {
@@ -151,6 +151,33 @@ async function mdFlush() {
 }
 
 // правка → тут же в локальный конфиг, на сервис уйдёт через 3 с после последней правки
+// «вести»: по цвету / по отражателям — одним переключателем на все валы камеры (под кнопкой «Разметить»)
+const mdLeadZones = (cam) => (cam ? cam.zones.filter((z) => z.type === 'cycle' && z.enabled !== false && (z.tip_hsv || []).length) : []);
+
+function mdPaintLead(cam) {
+  const box = mdEl('mdLead');
+  if (!box) return;
+  const cyc = !!cam && cam.zones.some((z) => z.type === 'cycle' && z.enabled !== false);
+  box.hidden = !cyc;
+  if (!cyc) return;
+  const zs = mdLeadZones(cam), n = zs.filter((z) => z.tip_lead).length;
+  const cur = !zs.length ? '' : n === zs.length ? '1' : n === 0 ? '0' : 'mix';
+  box.classList.toggle('is-off', !zs.length || !cam.enabled);
+  box.querySelectorAll('button').forEach((b) => {
+    b.classList.toggle('on', b.dataset.v === cur);
+    b.disabled = !zs.length || !cam.enabled;
+  });
+  box.title = !zs.length ? 'Отражатели не заданы ни у одного вала: угол только по цвету (вкладка «Валы» → «Цвета палок» → «Светоотражатели»)'
+    : cur === 'mix' ? 'У валов по-разному: нажмите, чтобы выровнять' : 'Чем вести угол вала: по цвету (отражатели уточняют) или по отражателям (цвет показывает, где красный конец)';
+}
+
+function mdOnLead(e) {
+  const b = e.target.closest('button[data-v]');
+  const { cam } = mdCamera();
+  if (!b || b.disabled || !cam) return;
+  mdEdit(() => { mdLeadZones(cam).forEach((z) => { z.tip_lead = b.dataset.v === '1'; }); }, true);
+}
+
 function mdEdit(mutate, rerender) {
   mutate();
   mdCommit();
@@ -255,6 +282,7 @@ function renderMotionDock() {
   mdEl('mdAll').hidden = all;
   mdEl('mdMark').disabled = !(cam && cam.enabled);
   mdEl('mdRec').disabled = !(cam && cam.enabled);
+  mdPaintLead(all ? null : cam);
   mdEl('mdRecAll').hidden = !all;
   mdEl('mdRecZip').hidden = !all;
   mdEl('mdRecAll').disabled = !cams.some((c) => c.enabled);
@@ -419,11 +447,11 @@ function mdVisHtml(cam) {
   const k = escapeHtml(cam.id);
   return `<div class="md-zone md-vis">
     <div class="md-zone__ctl">
-      <div class="md-zone__row"><b>Видимость стрелок</b><span class="md-sp"></span><span class="md-lbl">за</span><select data-md="vis" title="За какой период показать график и среднее">${mdSel(MD_VIS_WINS, MD.visWin)}</select></div>
+      <div class="md-zone__row"><b>Видимость стрелок и отражателей</b><span class="md-sp"></span><span class="md-lbl">за</span><select data-md="vis" title="За какой период показать график и среднее">${mdSel(MD_VIS_WINS, MD.visWin)}</select></div>
       <div class="md-zstat" id="md-vl-${k}">загружаю…</div>
-      <div class="net-hint" title="Секунда считается «найдена», если стрелку увидели хотя бы в одном кадре секунды; когда стрелки нет или она достроена по скорости — «не найдена». Время без картинки (обрыв связи) в расчёт не идёт.">доля времени, когда стрелка найдена</div>
+      <div class="net-hint" title="Секунда считается «найдена», если стрелку увидели хотя бы в одном кадре секунды; когда стрелки нет или она достроена по скорости — «не найдена». Отражатель конца «виден», если хотя бы в одном кадре секунды сила кончика не меньше 0,3 и угол не достроен по скорости. Красный конец — тот, что по цвету определён как красный. Время без картинки (обрыв связи) в расчёт не идёт. Сплошная линия — стрелка, пунктир — отражатель красного конца, точки — отражатель синего.">доля времени, когда стрелка найдена · сплошная — стрелка, пунктир — красный отражатель, точки — синий</div>
     </div>
-    <div class="md-zone__chart"><canvas id="md-vis-${k}" height="84"></canvas></div>
+    <div class="md-zone__chart"><canvas id="md-vis-${k}" height="110"></canvas></div>
   </div>`;
 }
 
@@ -440,19 +468,23 @@ function mdDrawVis(cam) {
   const ids = d && d.zones ? Object.keys(d.zones) : [];
   if (lg) {
     lg.innerHTML = !d ? 'загружаю…' : d.error ? escapeHtml(d.error)
-      : ids.map((id, n) => `<div style="color:${MD_VIS_COLORS[n % MD_VIS_COLORS.length]}">● ${escapeHtml((d.names && d.names[id]) || id)} <b>${d.avg[id] == null ? '—' : d.avg[id].toFixed(1) + ' %'}</b></div>`).join('');
+      : ids.map((id, n) => {
+        const nm = escapeHtml((d.names && d.names[id]) || id), col = MD_VIS_COLORS[n % MD_VIS_COLORS.length], pc = (v) => (v == null ? '—' : v.toFixed(1) + ' %');
+        const ta = d.tips_avg && d.tips_avg[id];
+        return `<div style="color:${col}">● ${nm} — стрелка <b>${pc(d.avg[id])}</b></div>` +
+          (ta ? `<div style="color:${col}">┄ ${nm} — отражатель красного конца <b>${pc(ta.r)}</b> · синего <b>${pc(ta.b)}</b></div>` : '');
+      }).join('') + (!d.tips && mdCamHasTips(cam) ? '<div class="net-hint">отражатели: обновите сервис движения</div>' : '');
   }
-  const w = cv.clientWidth, hh = cv.height || 84;
+  const w = cv.clientWidth, hh = cv.height || 110;
   if (!w) return;
   if (cv.width !== w) cv.width = w;
   const g = cv.getContext('2d');
   g.clearRect(0, 0, w, hh);
   g.font = '10px sans-serif'; g.fillStyle = '#94a3b8';
-  const vals = ids.flatMap((id) => d.zones[id]).filter((v) => v != null);
+  const vals = ids.flatMap((id) => d.zones[id]).filter((v) => v != null);   // пусто у стрелок — рисуем только если есть хоть какие-то данные
   if (!d || !d.t || !vals.length) { g.fillText(d && d.error ? '' : d ? 'нет данных за период' : 'загружаю…', 8, hh / 2); return; }
   const padL = 30, padB = 14, plotW = w - padL - 4, plotH = hh - padB - 6;
-  const lo = Math.min(90, Math.floor((Math.min(...vals) - 2) / 5) * 5), hi = 100;
-  const stepV = hi - lo > 30 ? 20 : hi - lo > 15 ? 10 : 5;
+  const lo = 0, hi = 100, stepV = 20;                       // шкала всегда 0–100 %
   const X = (i) => padL + (d.t.length > 1 ? (i / (d.t.length - 1)) * plotW : 0);
   const Y = (v) => 3 + plotH - ((v - lo) / (hi - lo)) * plotH;
   g.lineWidth = 1; g.strokeStyle = 'rgba(148,163,184,.22)';
@@ -475,8 +507,24 @@ function mdDrawVis(cam) {
       pen = true;
     });
     g.stroke();
+    const tp = d.tips && d.tips[id];
+    if (!tp) return;
+    [['r', [6, 3], 1.6], ['b', [1.5, 3], 1.3]].forEach(([k, dash, lw]) => {      // отражатель красного конца — пунктир, синего — точки
+      g.strokeStyle = MD_VIS_COLORS[n % MD_VIS_COLORS.length]; g.lineWidth = lw; g.setLineDash(dash); g.beginPath();
+      let on = false;
+      tp[k].forEach((v, i) => {
+        if (v == null) { on = false; return; }
+        if (on) g.lineTo(X(i), Y(v)); else g.moveTo(X(i), Y(v));
+        on = true;
+      });
+      g.stroke();
+    });
+    g.setLineDash([]);
   });
 }
+
+// у камеры есть зона-цикл с отражателями (для подсказки «обновите сервис», если он не прислал tips)
+const mdCamHasTips = (cam) => cam.zones.some((z) => z.type === 'cycle' && z.enabled !== false && (z.tip_hsv || []).length && Number(z.tip_w == null ? 1 : z.tip_w) > 0);
 
 // подтянуть с сервиса (не чаще раза в минуту, сразу при смене периода) и нарисовать
 async function mdVisRefresh(cams, force) {
@@ -651,10 +699,6 @@ function mdOnZone(t, cam) {
   }
   if (f === 'tipwhite') {                                         // светоотражатели: добавить «пересвет» (белое под прожектором) одной кнопкой
     mdEdit(() => { const arr = z.tip_hsv || []; if (arr.length < 6 && !arr.some((r) => r.join() === SH_TIP_WHITE.join())) z.tip_hsv = arr.concat([SH_TIP_WHITE.slice()]); }, true);
-    return;
-  }
-  if (f === 'tiplead') {                                          // светоотражатели: вести по цвету (0) / по отражателям (1)
-    mdEdit(() => { z.tip_lead = t.dataset.v === '1'; }, true);
     return;
   }
   if (f === 'hsvndel') {                                       // убрать исключённый цвет («не ловить») конца палки или цвет светоотражателя (w = 'tip')
@@ -2019,6 +2063,7 @@ function initMotionDock() {
   });
   mdEl('mdAll')?.addEventListener('click', () => setFocus(-1));   // общий вид: фокус снимаем
   mdEl('mdMark')?.addEventListener('click', () => openMarkModal('zone'));
+  mdEl('mdLead')?.addEventListener('click', mdOnLead);
   mdEl('mmTabs')?.addEventListener('click', (e) => {
     const b = e.target.closest('[data-mm-kind]');
     if (b && MD.mark && MD.mark.kind !== b.dataset.mmKind) mdMarkSetKind(b.dataset.mmKind);

@@ -945,9 +945,13 @@ function shAcResultHtml(d) {
     const rd = (v) => 'красный H ≤ ' + v[0] + ' или ≥ ' + v[1] + ', S ≥ ' + v[2] + ', V ≥ ' + v[3];
     const tip = `Было: ось ${o.center.map(Math.round).join(', ')}, радиус ${Math.round(o.radius)}; ${rd(o.red_hsv)}; синий ${hs(o.blue_hsv)}.\n` +
       `Стало: ось ${n.center.map(Math.round).join(', ')}, радиус ${Math.round(n.radius)}; ${rd(n.red_hsv)}; синий ${hs(n.blue_hsv)}.\n` +
-      `Кадров в записи ${r.frames}, расчёт ${Math.round(r.seconds)} с. На кадрах, не участвовавших в подборе, найдена ${shPct(r.after_val.found)}.`;
+      `Кадров в записи ${r.frames}, расчёт ${Math.round(r.seconds)} с. На кадрах, не участвовавших в подборе, найдена ${shPct(r.after_val.found)}.` +
+      (n.tip_hsv ? `\nОтражатели: ${n.tip_hsv.length} цв., длина кончика ${n.tip_len}, кольцо ${n.tip_r0}–${n.tip_r1} радиуса${n.tip_thin ? ', «тонкое» ' + n.tip_thin : ''}.` : '');
+    const tp = r.tips || {};                                          // ось по кончикам светоотражателей: найдена — на сколько сдвинули; не нашли — почему
+    const tipNote = tp.applied ? `<span class="net-hint" style="color:${MV_ROD_TIP}" title="Ось найдена по кончикам светоотражателей: ${tp.kept} прямых, разброс ${tp.dist_med} px. Цвета кончика: ${tp.chosen === 'fitted' ? 'подобраны' : 'прежние'}">ось по отражателям: сдвиг ${Math.round(tp.shift_px)} px</span>`
+      : (tp.ran ? `<span class="net-hint" title="${escapeHtml(tp.reason || '')}">отражатели: ось не найдена</span>` : '');
     const verdict = (d.applied || []).includes(zid) ? '<b>применено</b>' : (r.improved ? '' : '<span class="net-hint">лучше не стало — не предлагаю</span>');
-    return `<div class="md-zone__row sh-acrow" title="${escapeHtml(tip)}"><b>${escapeHtml(r.name)}</b>
+    return `<div class="md-zone__row sh-acrow" title="${escapeHtml(tip)}"><b>${escapeHtml(r.name)}</b>${tipNote}
       <span>найдена ${lost ? '<span class="net-hint">до: сбивалась</span>' : '<span class="net-hint">' + shPct(b.found) + '</span>'} → <b>${shPct(a.found)}</b></span>
       <span class="sh-strip">${sect}</span>
       <span class="net-hint">${a.revs.toFixed(1).replace('.', ',')} оборота в записи · ${Math.abs(a.rpm).toFixed(2).replace('.', ',')} об/мин</span>${verdict}</div>`;

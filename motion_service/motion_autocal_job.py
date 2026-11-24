@@ -165,6 +165,9 @@ class AutocalJob(threading.Thread):
                    "thin": new["thin"], "blue_alone": new["blue_alone"]}
         cfg_old = {"center": list(z["center"]), "radius": z["radius"], "red_hsv": list(z["red_hsv"]), "blue_hsv": list(z["blue_hsv"]),
                    "thin": z["thin"], "blue_alone": z["blue_alone"]}
+        for k in ac.TIP_KEYS:                                          # отражатели (только у зон, где они заданы): подобранные цвет, длина, кольцо, «тонкое»
+            if k in new:
+                cfg_new[k], cfg_old[k] = new[k], z.get(k)
         return {"name": z["name"], "old": cfg_old, "new": cfg_new, "improved": res["improved"], "gain_val": res["gain_val"],
                 "before": res["before"], "after": res["after"], "before_val": res["before_val"], "after_val": res["after_val"],
-                "frames": res["frames"], "seconds": res["seconds"], "log": res["log"]}
+                "frames": res["frames"], "seconds": res["seconds"], "log": res["log"], "tips": res.get("tips")}

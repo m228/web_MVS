@@ -27,7 +27,8 @@ def hsv_bgr(h, s, v):
 BG, BLUE, RED = hsv_bgr(88, 150, 150), hsv_bgr(100, 210, 210), hsv_bgr(176, 220, 210)
 
 
-def frame(angle, seed=0, colour=True, tips=True, static=False):
+def frame(angle, seed=0, colour=True, tips=True, static=False, coff=0.0, ends=(1, -1)):
+    """coff — палка по цвету довёрнута на столько градусов от настоящей (кончики — на настоящем месте); ends — какие кончики рисовать: 1 — красный, −1 — синий."""
     rng = np.random.default_rng(seed)
     img = np.full((H, W, 3), BG, np.uint8)
     img = np.clip(img.astype(np.int16) + rng.integers(-10, 10, img.shape), 0, 255).astype(np.uint8)
@@ -35,13 +36,15 @@ def frame(angle, seed=0, colour=True, tips=True, static=False):
         a = math.radians(200)
         p = (int(CX + 168 * math.sin(a)), int(CY - 168 * math.cos(a)))
         cv2.line(img, p, (p[0] + 12, p[1] + 3), (255, 255, 255), 6)
+    rc = math.radians(angle + coff)
+    if colour:
+        cdx, cdy = math.sin(rc), -math.cos(rc)
+        cv2.line(img, (CX, CY), (int(CX + 150 * cdx), int(CY + 150 * cdy)), RED, 4)
+        cv2.line(img, (CX, CY), (int(CX - 150 * cdx), int(CY - 150 * cdy)), BLUE, 4)
     r = math.radians(angle)
     dx, dy = math.sin(r), -math.cos(r)
-    if colour:
-        cv2.line(img, (CX, CY), (int(CX + 150 * dx), int(CY + 150 * dy)), RED, 4)
-        cv2.line(img, (CX, CY), (int(CX - 150 * dx), int(CY - 150 * dy)), BLUE, 4)
     if tips:
-        for sg in (1, -1):
+        for sg in ends:
             cv2.line(img, (int(CX + sg * 152 * dx), int(CY + sg * 152 * dy)), (int(CX + sg * 176 * dx), int(CY + sg * 176 * dy)), (255, 255, 255), 6)
     return img
 
@@ -204,3 +207,67 @@ def test_preview_shows_tips_and_state_has_lvl_t():
         st = eng.process(cv2.cvtColor(g, cv2.COLOR_BGR2GRAY), i * 0.5, g)
     zs = [x for x in st["zones"] if x["id"] == "r"][0]
     assert zs["valid"] and zs["lvl_t"] >= 0.8
+
+
+# ---- «вести по отражателям» (tip_lead) и видимость каждого конца ----
+
+def test_tip_lead_config_default_off():
+    assert zone()["tip_lead"] is False and zone(tip_lead=True)["tip_lead"] is True
+
+
+def test_tip_lead_takes_angle_from_tips_not_colour_mean():
+    """Палка по цвету довёрнута на 6° (изгиб, косая разметка цвета), кончики на настоящем месте:
+    по цвету — среднее и ошибка ~2°, по отражателям — угол кончиков, ошибка почти ноль; цвет по-прежнему виден (src both)."""
+    mix, lead = rt(tip_hsv=[WHITE_BOX]), rt(tip_hsv=[WHITE_BOX], tip_lead=True)
+    e_mix, e_lead = [], []
+    for i in range(120):
+        ang = (40 + 4.8 * i * 0.5) % 360
+        f = frame(ang, seed=i, coff=6.0)
+        assert mix.step(f, i * 0.5) and lead.step(f, i * 0.5)
+        e_mix.append(adiff(mix.last, ang))
+        e_lead.append(adiff(lead.last, ang))
+        assert lead.lead == "tip" and lead.src in ("both", "red", "blue") and mix.lead == "color"
+    assert np.mean(e_mix) > 1.2
+    assert np.percentile(e_lead, 95) < 1.0
+
+
+def test_tip_lead_falls_back_to_colour_without_tips():
+    z = rt(tip_hsv=[WHITE_BOX], tip_lead=True)
+    errs = []
+    for i in range(60):
+        ang = (40 + 4.8 * i * 0.5) % 360
+        assert z.step(frame(ang, seed=i, tips=False), i * 0.5)
+        errs.append(adiff(z.last, ang))
+        assert z.lead == "color" and z.lvl_tr == 0.0 and z.lvl_tb == 0.0
+    assert max(errs) < 3
+
+
+def test_tip_lead_keeps_direction_from_colour():
+    """Отражатели одинаковы на обоих концах: стрелка по ним не переворачивается — красный конец там, где красная половина."""
+    z = rt(tip_hsv=[WHITE_BOX], tip_lead=True)
+    for i in range(80):
+        ang = (250 + 4.8 * i * 0.5) % 360
+        assert z.step(frame(ang, seed=i), i * 0.5)
+        assert adiff(z.last, ang) < 3
+
+
+def test_tip_end_visibility_per_end():
+    """Виден только кончик красного конца — lvl_tr высокий, lvl_tb около нуля; и наоборот. В состоянии зоны — tip_on, lvl_tr, lvl_tb, lead."""
+    z = rt(tip_hsv=[WHITE_BOX])
+    for i in range(20):
+        z.step(frame((80 + 2.4 * i) % 360, seed=i, ends=(1,)), i * 0.5)
+    assert z.lvl_tr >= 0.8 and z.lvl_tb < 0.1
+    for i in range(20, 40):
+        z.step(frame((80 + 2.4 * i) % 360, seed=i, ends=(-1,)), i * 0.5)
+    assert z.lvl_tb >= 0.8 and z.lvl_tr < 0.1
+    cam = {"id": "c", "url": "x", "frame_size": [W, H], "zones": [{"id": "r", "type": "cycle", "center": [CX, CY], "radius": R, "tip_hsv": [WHITE_BOX], "tip_lead": True}]}
+    eng = me.CameraEngine(me.normalize_camera(cam))
+    for i in range(6):
+        g = frame(45 + i, seed=i)
+        st = eng.process(cv2.cvtColor(g, cv2.COLOR_BGR2GRAY), i * 0.5, g)
+    zs = [x for x in st["zones"] if x["id"] == "r"][0]
+    assert zs["tip_on"] is True and zs["lvl_tr"] >= 0.8 and zs["lvl_tb"] >= 0.8 and zs["lead"] == "tip"
+    eng0 = me.CameraEngine(me.normalize_camera(dict(cam, zones=[{"id": "r", "type": "cycle", "center": [CX, CY], "radius": R}])))
+    for i in range(2):                                                   # первый кадр — только запомнить (состояния ещё нет)
+        st0 = eng0.process(cv2.cvtColor(g, cv2.COLOR_BGR2GRAY), i * 0.5, g)
+    assert [x for x in st0["zones"] if x["id"] == "r"][0]["tip_on"] is False

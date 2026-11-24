@@ -148,6 +148,8 @@ def compute(cfg: dict, states: dict, at: Optional[dict] = None) -> dict:
                        "rpm": round(float(zs.get("rpm", 0.0)), 3) if ok else None,
                        "coast": coast,
                        "src": (zs.get("src") or "none") if zs else "none",       # чем виден вал: both / red / blue / hold / none — для подсветки красной и синей половин
+                       # отражатели концов [красный, синий] 0..1 — в виджете жёлтые точки, видно — ярко, нет — тускло; None — отражатели не настроены
+                       "tip": [float(zs.get("lvl_tr") or 0.0), float(zs.get("lvl_tb") or 0.0)] if zs and zs.get("tip_on") else None,
                        "moving": zs.get("moving") if zs else None}
     pairs: dict = {}
     for pid in PAIR_ORDER:
@@ -260,7 +262,7 @@ class ShaftRunner(threading.Thread):
                 p["alarm_angle"] = lp.get("alarm_angle", 0)
                 p["alarm_rpm"] = lp.get("alarm_rpm", 0)
         return {"ts": now,
-                "shafts": {sid: {k: v[k] for k in ("id", "assigned", "valid", "angle", "coast", "src")} for sid, v in snap["shafts"].items()},
+                "shafts": {sid: {k: v[k] for k in ("id", "assigned", "valid", "angle", "coast", "src", "tip")} for sid, v in snap["shafts"].items()},
                 "pairs": {pid: {k: v.get(k) for k in ("id", "valid", "angle_diff", "angle_diff_raw", "alarm_angle", "alarm_rpm", "stale")}
                           for pid, v in snap["pairs"].items()}}
 

@@ -367,6 +367,17 @@ const mvBlueAngle = (red) => (Number(red) + 180) % 360;
 const MV_ROD_RED = '#ef4444';
 const MV_ROD_BLUE = '#38bdf8';
 const MV_ROD_TIP = '#facc15';                                // светоотражатели на концах палки
+const MV_ROD_TIP_OFF = '#5b4d12';                            // отражатель настроен, но сейчас не виден — тёмно-жёлтая точка
+const MV_TIP_SEEN = 0.3;                                     // сила кончика (0..1), с которой отражатель конца считается видимым
+
+// отражатели концов стрелки → [красный конец виден, синий виден] или null (не настроены — точки не рисуем).
+// Сервис до 3.0.35 не знает концов по отдельности (нет tip_on): обе точки — по общей силе lvl_t, как раньше.
+function mvTipEnds(lz) {
+  if (!lz) return null;
+  if (lz.tip_on === undefined) return !lz.coast && Number(lz.lvl_t) >= 0.25 ? [true, true] : null;
+  if (!lz.tip_on) return null;
+  return lz.coast ? [false, false] : [Number(lz.lvl_tr) >= MV_TIP_SEEN, Number(lz.lvl_tb) >= MV_TIP_SEEN];
+}
 
 // чем держится угол вала: какие половины палки сейчас видны. Сервер без src (старый) — считаем, что обе.
 // both — обе, red — только красная, blue — только синяя, tip — только светоотражатели на концах, hold — не видно (угол по скорости)
@@ -392,9 +403,9 @@ function drawCycleOnTile(ctx, z, cam, g, lz, mode) {
   ctx.globalAlpha = use.blue ? 1 : 0.3;
   ctx.strokeStyle = MV_ROD_BLUE; ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(cx - dx, cy - dy); ctx.stroke();
   ctx.globalAlpha = 1; ctx.setLineDash([]);
-  if (!lz.coast && Number(lz.lvl_t) >= 0.25) {               // светоотражатели пойманы — жёлтые точки на концах стрелки
-    ctx.fillStyle = MV_ROD_TIP;
-    [[cx + dx, cy + dy], [cx - dx, cy - dy]].forEach(([px, py]) => { ctx.beginPath(); ctx.arc(px, py, 4, 0, 7); ctx.fill(); });
+  const tips = mvTipEnds(lz);                                // светоотражатели на концах: виден — жёлтая точка, не виден — тёмная
+  if (tips) {
+    [[cx + dx, cy + dy, tips[0]], [cx - dx, cy - dy, tips[1]]].forEach(([px, py, on]) => { ctx.fillStyle = on ? MV_ROD_TIP : MV_ROD_TIP_OFF; ctx.beginPath(); ctx.arc(px, py, 4, 0, 7); ctx.fill(); });
   }
   // подпись под окружностью: вал со значком направления, ниже значения красного и синего концов (0–360° от вертикали по часовой)
   const x = cx - r * 0.55, y = cy + r + 16;

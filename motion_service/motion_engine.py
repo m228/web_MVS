@@ -412,6 +412,7 @@ def _norm_cycle(z: dict, zid: str, where: str) -> dict:
         "tip_r0": _num(z.get("tip_r0", 0.55), where + ".tip_r0", 0.2, 1.0),    # кольцо, где ищем кончики: от tip_r0 до tip_r1 радиуса
         "tip_r1": _num(z.get("tip_r1", 1.15), where + ".tip_r1", 1.0, 1.5),    # за радиус: кончик бывает чуть дальше окружности поиска
         "tip_len": _num(z.get("tip_len", 0.06), where + ".tip_len", 0.01, 0.5),  # длина кончика в долях радиуса: столько точек на луче = «кончик целиком»
+        "tip_thin": _num(z.get("tip_thin", 0), where + ".tip_thin", 0, 51, True),   # «тонкое» для маски отражателя (рабочий масштаб); 0 — как у палки (thin). Широкую полоску thin вырезает как пятно
         "min_score": _num(z.get("min_score", 0.4), where + ".min_score", 0.01, 2),
         "min_conf": _num(z.get("min_conf", 0.1), where + ".min_conf", 0, 1),
         "jump_deg": _num(z.get("jump_deg", 25), where + ".jump_deg", 3, 180),
@@ -1351,9 +1352,10 @@ class CycleRT:
         m = (m > 0).astype(np.float32)
         if s2 > self.k:                                                    # в рабочий масштаб: доля покрытия → «есть» (как у цветных масок)
             m = np.minimum(1.0, cv2.resize(m, None, fx=self.k / s2, fy=self.k / s2, interpolation=cv2.INTER_AREA) * 2.0)
-        if self.cfg["thin"] >= 3:                                          # «тонкое» задано в рабочем масштабе — здесь и фильтруем
+        thin = self.cfg.get("tip_thin") or self.cfg["thin"]                # свой «тонкий» у отражателя: полоска шире палки, а палочный thin её вырезал бы
+        if thin >= 3:                                                      # «тонкое» задано в рабочем масштабе — здесь и фильтруем
             b = (m >= 0.5).astype(np.uint8)
-            kt = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (int(self.cfg["thin"]) | 1,) * 2)
+            kt = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (int(thin) | 1,) * 2)
             m = m * (1 - cv2.morphologyEx(b, cv2.MORPH_OPEN, kt))
         return cv2.dilate(m.astype(np.float32), _K3)
 

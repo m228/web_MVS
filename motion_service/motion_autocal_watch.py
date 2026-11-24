@@ -37,6 +37,7 @@ ROLLBACK_COOLDOWN_H = 6.0
 ERROR_COOLDOWN_S = 1800.0
 JOB_LIMIT_S = 1800.0             # подгонка идёт дольше — прерываем
 ZONE_KEYS = ("center", "radius", "red_hsv", "blue_hsv", "thin", "blue_alone")
+TIP_ZONE_KEYS = ("tip_hsv", "tip_len", "tip_r0", "tip_r1", "tip_thin")     # отражатели: учитываем только у зон, где они заданы (иначе [] против «нет» — ложная «ручная правка»)
 EVENTS_KEEP = 200
 JSONL_KEEP = 3000                # строк в data\autocal_watch.jsonl (при переполнении режем до половины)
 JOURNAL_KINDS = ("start", "apply", "skip", "rollback", "confirm", "error")   # «check» — тихая проверка: в журнал приложения не идёт
@@ -48,7 +49,8 @@ def default_watch() -> dict:
 
 def zone_params(z: dict) -> dict:
     """Настройки зоны, которые меняет подгонка, — копией."""
-    return json.loads(json.dumps({k: z.get(k) for k in ZONE_KEYS}))
+    keys = ZONE_KEYS + (TIP_ZONE_KEYS if z.get("tip_hsv") else ())
+    return json.loads(json.dumps({k: z.get(k) for k in keys}))
 
 
 class AutocalWatch:

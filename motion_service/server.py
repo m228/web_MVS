@@ -188,6 +188,7 @@ class Manager:
                     continue
                 z.update(center=r["new"]["center"], radius=r["new"]["radius"], red_hsv=r["new"]["red_hsv"], blue_hsv=r["new"]["blue_hsv"],
                          thin=r["new"]["thin"], blue_alone=r["new"]["blue_alone"])
+                z.update({k: r["new"][k] for k in ("tip_hsv", "tip_len", "tip_r0", "tip_r1", "tip_thin") if k in r["new"]})     # отражатели — если подгонка их считала
                 done.append(zid)
             if done:
                 self.apply(cfg)

@@ -145,7 +145,12 @@
               <button type="button" class="md-link" id="mdAll" title="Общий вид: все камеры с КЗ — зоны и тренды вместе">все камеры</button></div>
             <div class="motion-dock__tools">
               <span class="motion-dock__save" id="mdSave"></span>
-              <button type="button" class="btn-primary" id="mdMark" title="Разметка на кадре камеры: зона, валы, стёкла, стаканы — вкладки в окне">Разметить</button>
+              <div class="md-markcol">
+                <button type="button" class="btn-primary" id="mdMark" title="Разметка на кадре камеры: зона, валы, стёкла, стаканы — вкладки в окне">Разметить</button>
+                <span class="sh-seg sh-seg--lead md-lead" id="mdLead" hidden>
+                  <button type="button" data-v="0" title="Угол — по красной и синей половинам, отражатели уточняют (среднее)">по цвету</button><button type="button" data-v="1" title="Отражатели видны — угол только по ним (точнее, на полном радиусе); цвет нужен, чтобы знать, где красный конец. Не видны — по цвету">по отражателям</button>
+                </span>
+              </div>
               <button type="button" class="btn-secondary md-icon" id="mdRec" title="Писать метрики каждого кадра в CSV (для калибровки порогов)">●</button>
               <button type="button" class="btn-secondary md-icon md-wide" id="mdRecAll" hidden title="Писать метрики всех камер с КЗ в CSV сразу (по файлу на камеру) — чтобы потом разобрать, когда и какая камера пропадала">● все</button>
               <button type="button" class="btn-secondary md-icon md-wide" id="mdRecZip" hidden title="Скачать все записи одним архивом: CSV по камерам + summary.txt (сводка: когда и на сколько камеры пропадали)">⤓ архив</button>

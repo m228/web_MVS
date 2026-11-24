@@ -40,6 +40,7 @@ log = logging.getLogger("motion.camera")
 HISTORY_LEN = 900                # точек истории на камеру (~5 мин при 3 fps)
 LONG_STEP_S = 1.0                # длинная история: одна точка в секунду (максимум за секунду — всплеск не теряется)
 LONG_LEN = 7200                  # ... на 2 часа назад
+TIP_SEEN = 0.3                   # сила кончика (0..1), с которой отражатель конца считается видимым (как MV_TIP_SEEN в 10-motion.js)
 STATS_STEP_S = 10                # статистика зон (среднее/мин/макс): корзина на 10 с ...
 STATS_LEN = 8640                 # ... и сутки назад (8640 × 10 с)
 _OPEN_LOCK = threading.Lock()    # OPENCV_FFMPEG_CAPTURE_OPTIONS — переменная окружения процесса, выставляем под замком
@@ -256,6 +257,7 @@ class CameraWorker(threading.Thread):
         self._history: deque = deque(maxlen=HISTORY_LEN)
         self._long: deque = deque(maxlen=LONG_LEN)
         self._bucket: Optional[list] = None   # [ts, {зона: (flow, diff, bit)}, ok] — набирающаяся секунда длинной истории
+        self._tipb: Optional[list] = None     # [секунда, {зона: [красный конец виден, синий виден]}] — набирающаяся секунда видимости отражателей
         self._stats: deque = deque(maxlen=STATS_LEN)   # корзины статистики: [номер 10-секундки, {зона: [n, Σflow, min, max, Σdiff, min, max]}]
         self._sbucket: Optional[list] = None  # набирающаяся корзина статистики
         # тренды признака «вид окна» (tex / lum / rel): только в памяти, живут через пересоздание камеры; см. motion_fill_trend
@@ -504,8 +506,32 @@ class CameraWorker(threading.Thread):
                 vals.append(round(100.0 * f / n, 1) if n >= max(5, step * 0.2) else None)
             series[z["id"]] = vals
             avg[z["id"]] = round(100.0 * tot_f / tot_n, 1) if tot_n else None
-        return {"window_s": window_s, "step_s": step, "t": [k * step for k in range(k0, k1 + 1)],
-                "zones": series, "avg": avg, "names": {z["id"]: z["name"] for z in zones}}
+        out = {"window_s": window_s, "step_s": step, "t": [k * step for k in range(k0, k1 + 1)],
+               "zones": series, "avg": avg, "names": {z["id"]: z["name"] for z in zones}}
+        # отражатели: доля секунд, когда виден отражатель красного (r) и синего (b) конца; только у зон, где отражатели заданы
+        tz = [z for z in zones if z.get("tip_hsv") and float(z.get("tip_w", 1.0)) > 0]
+        tips: dict = {}
+        tavg: dict = {}
+        if tz:
+            try:
+                traw = self._store.tip_visibility(self.id, {z["id"] for z in tz}, k0 * step, (k1 + 1) * step, step)
+            except Exception as e:  # noqa: BLE001
+                traw = {}
+                log.warning("[%s] видимость отражателей не прочиталась: %s", self.id, e)
+            for z in tz:
+                rows = traw.get(z["id"], {})
+                sr, sb, tot = [], [], [0, 0, 0]
+                for k in range(k0, k1 + 1):
+                    n, r, b = rows.get(k, (0, 0, 0))
+                    tot[0] += n; tot[1] += r; tot[2] += b
+                    ok = n >= max(5, step * 0.2)
+                    sr.append(round(100.0 * r / n, 1) if ok else None)
+                    sb.append(round(100.0 * b / n, 1) if ok else None)
+                tips[z["id"]] = {"r": sr, "b": sb}
+                tavg[z["id"]] = {"r": round(100.0 * tot[1] / tot[0], 1) if tot[0] else None, "b": round(100.0 * tot[2] / tot[0], 1) if tot[0] else None}
+            out["tips"] = tips
+            out["tips_avg"] = tavg
+        return out
 
     LOSS_SECTOR_DEG = 15
 
@@ -725,6 +751,27 @@ class CameraWorker(threading.Thread):
                     b[1][zid] = (max(old[0], fl), max(old[1], df), max(old[2], bit))
             b[2] = min(b[2], ok)
 
+    def _tip_add(self, ts: float, zones: list):
+        """Живой кадр → секунда видимости отражателей (зоны с настроенными отражателями): конец «виден», если хоть в одном кадре секунды
+        сила кончика ≥ TIP_SEEN и угол не достроен по скорости. Звать под self._lock."""
+        seen = {z["id"]: (not z.get("coast") and float(z.get("lvl_tr") or 0.0) >= TIP_SEEN,
+                          not z.get("coast") and float(z.get("lvl_tb") or 0.0) >= TIP_SEEN)
+                for z in zones if z.get("type") == "cycle" and z.get("tip_on")}
+        if not seen:
+            return
+        sec = int(ts)
+        b = self._tipb
+        if b is not None and b[0] != sec:
+            self._trend.add_tip(b[0], {k: tuple(v) for k, v in b[1].items()})
+            b = None
+        if b is None:
+            self._tipb = [sec, {k: list(v) for k, v in seen.items()}]
+            return
+        for k, v in seen.items():
+            o = b[1].setdefault(k, [False, False])
+            o[0] = o[0] or v[0]
+            o[1] = o[1] or v[1]
+
     @staticmethod
     def _fill_zones(zones: list) -> dict:
         """Зоны с включённым признаком «вид окна» (у остальных в состоянии нет tex): {зона: (tex, lum, rel, жом есть|None)}."""
@@ -792,6 +839,8 @@ class CameraWorker(threading.Thread):
                             h.append((t_cap, z["angle"], bool(z["valid"]), bool(z["coast"])))
                 zones = {z["id"]: (z["flow"], z["diff"], z["bit"]) for z in state["zones"]}
                 self._push_history(state["ts"], zones, 1 if state["alive"] else 0)
+                if state["alive"]:
+                    self._tip_add(state["ts"], state["zones"])
                 self._fill.add(state["ts"], self._fill_zones(state["zones"]), bool(state["alive"]))
                 if state["alive"]:
                     # мутность без значения (нет эталонов, цвет не на шкале) в среднее / мин / макс не идёт: ноль там означал бы «чистый»

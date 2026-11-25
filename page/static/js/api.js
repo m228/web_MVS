@@ -437,6 +437,8 @@ const RtspApi = {
       // а значит и свои настройки автосохранения (проект/интервал)
       serial: entry.serial || '',
     });
+    // правка адреса: сервер заменит запись со старым URL, оставив камере serial и автостарт
+    if (entry.oldUrl) query.set('old_url', entry.oldUrl);
     return apiGet(`/api/rtsp/save?${query.toString()}`, 'Ошибка сохранения RTSP в базу:');
   },
 

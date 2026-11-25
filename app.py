@@ -2017,7 +2017,7 @@ def rtsp_saved():
 
 @app.get("/api/rtsp/save")
 def rtsp_save(url: str, label: str = "", ip: str = "", scale: int = 100, fps: float = 0,
-              serial: str = "", autostart: int | None = None):
+              serial: str = "", autostart: int | None = None, old_url: str = ""):
     # проверяем схему уже при сохранении, а не только при стриминге — иначе в базу
     # попадает мусор (напр. file://), который потом отклоняется при попытке смотреть
     if not _is_rtsp_scheme(url):
@@ -2028,7 +2028,7 @@ def rtsp_save(url: str, label: str = "", ip: str = "", scale: int = 100, fps: fl
     # (сменили масштаб/fps) не должно сбрасывать галочку автоподключения
     if autostart is not None:
         entry["autostart"] = bool(autostart)
-    items = rtsp_store.save(entry)
+    items = rtsp_store.save(entry, old_url=old_url or None)
     api_log("api.rtsp.save", "RTSP-камера сохранена в базу", payload={"url": url, "count": len(items)})
     return {"items": items}
 

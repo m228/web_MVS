@@ -22,6 +22,78 @@ function gtLine(r, t) {
   return [mix(r[0], r[3]), mix(r[1], r[2])];
 }
 
+// ---------- подгонка линейки под настоящий ход: «это 0 %» / «это 100 %» ----------
+// пределы сдвига стороны, доли длины линейки: дальше — это промах кнопкой или чужое красное. Наружу чуть больше, чем внутрь,
+// чтобы любую одну подгонку внутрь можно было вернуть той же кнопкой (0,25 / 0,75)
+const GT_CAL_IN = 0.25, GT_CAL_OUT = 0.34;
+const GT_CAL_STILL = 0.02;                                   // положение на кадре и значение (медиана кадров) расходятся сильнее — указатель движется или скачет
+const GT_CAL_AGE = 3;                                        // состояние камеры старше этого, с, — не по чему подгонять
+
+// высота точки по линейке без зажима: 0 — нижняя сторона, 1 — верхняя, меньше нуля — под линейкой. Линии уровня — как ruler_level в сервисе;
+// null — точка дальше GT_CAL_OUT за краем
+function gtLevelOf(r, p) {
+  const side = (t) => { const [a, b] = gtLine(r, t); return (b[0] - a[0]) * (p[1] - a[1]) - (b[1] - a[1]) * (p[0] - a[0]); };   // < 0 — точка выше линии
+  let lo = -GT_CAL_OUT, hi = 1 + GT_CAL_OUT;
+  if (side(lo) >= 0 || side(hi) <= 0) return null;
+  for (let i = 0; i < 40; i += 1) { const mid = (lo + hi) / 2; if (side(mid) < 0) lo = mid; else hi = mid; }
+  return (lo + hi) / 2;
+}
+
+// сторона линейки со значением 0 % (full = false) или 100 % (true) переезжает на высоту указателя pt, вторая стоит.
+// → { ruler, pct: что там было по старой разметке } или null — указатель слишком далеко от этой стороны
+function gtCalibrate(z, pt, full) {
+  const bottom = full === !!z.flip;                          // обычно 0 % снизу, с «0 % сверху» — наоборот
+  const k = gtLevelOf(z.ruler, pt);
+  if (k === null) return null;
+  const inward = bottom ? k : 1 - k;                         // больше нуля — линейка укорачивается
+  if (inward > GT_CAL_IN || inward < -GT_CAL_OUT) return null;
+  const r = z.ruler, side = gtLine(r, k).map((q) => q.map((v) => Math.round(v * 10) / 10));
+  const ruler = bottom ? [side[0], side[1], r[2], r[3]] : [r[0], r[1], side[1], side[0]];
+  return gtRulerOk(ruler) ? { ruler, pct: 100 * (z.flip ? 1 - k : k) } : null;
+}
+
+// запись зоны из состояния камеры st, по которой можно подгонять: свежая, камера жива, поток не битый, указатель виден на этом кадре
+// (не удержание), несохранённых правок нет (иначе сервис ищет указатель ещё по старым настройкам)
+function gtLive(st, zoneId) {
+  const res = MV.online && !MV.dirty && st && !(st.age_s > GT_CAL_AGE) ? st.result : null;
+  const z = res && res.alive && !res.corrupt ? (res.zones || []).find((q) => q.id === zoneId) : null;
+  return z && z.valid && !z.held && z.ptr ? z : null;
+}
+
+// что сделает кнопка по этому состоянию: { ruler, pct } или { error }
+function gtCalPlan(zone, live, full) {
+  if (!live) return { error: 'Сейчас подгонять нельзя: указателя не видно, камера не отвечает или настройки ещё сохраняются.' };
+  const res = gtCalibrate(zone, live.ptr, full);
+  if (!res) return { error: 'Указатель слишком далеко от стороны «' + (full ? '100 %' : '0 %') + '» (линейку можно укоротить не больше чем на четверть). Поставьте шибер в нужное положение или переразметьте линейку.' };
+  const now = Math.max(0, Math.min(100, res.pct)) / 100, med = (zone.flip ? 1 - live.t : live.t);
+  if (Math.abs(now - med) > GT_CAL_STILL) return { error: 'Указатель движется или значение скачет. Дождитесь, пока оно установится, и нажмите ещё раз.' };
+  return res;
+}
+
+function gtCalPaint(cam, z) {
+  const el = mdEl('md-gtc-' + cam.id + '-' + z.id);
+  if (el) el.querySelectorAll('button').forEach((b) => { b.disabled = !gtLive(MV.states[cam.id], z.id); });
+}
+
+async function gtOnCal(cam, z, full) {
+  const name = full ? '100 %' : '0 %';
+  // ключ cut сервис 3.0.43+ отдаёт всегда; старый выбросил бы запомненную линейку, и после подгонки её метки могли бы читаться как указатель
+  if (!('cut' in z)) { alert('Сервис движения старый: подгонка требует motion 3.0.43 или новее. Обновите программу и попробуйте ещё раз.'); return; }
+  const plan = gtCalPlan(z, gtLive(MV.states[cam.id], z.id), full);
+  if (plan.error) { alert(plan.error); return; }
+  if (!confirm('Сейчас по разметке ' + gtFmt(plan.pct) + '. Считать это положение за ' + name + '?\n\nСдвинется сторона «' + name +
+      '» линейки. Значение в ПЛК изменится, на несколько секунд уйдёт 65535 («нет данных»).')) return;
+  // пока висел вопрос, шибер мог уехать: спрашиваем сервис заново; пока ждали, опрос мог подменить конфиг — зону берём снова
+  const st = await mvApi('/api/motion/camera_state?camera=' + encodeURIComponent(cam.id));
+  const zone = ((mvCam(cam.id) || {}).zones || []).find((q) => q.id === z.id);
+  if (!zone) return;
+  const fresh = gtCalPlan(zone, gtLive(st, z.id), full);
+  if (fresh.error) { alert(fresh.error); return; }
+  if (Math.abs(fresh.pct - plan.pct) > 100 * GT_CAL_STILL) { alert('Указатель сдвинулся, пока был открыт вопрос. Нажмите кнопку ещё раз.'); return; }
+  mdEdit(() => { zone.cut = zone.cut || zone.ruler; zone.ruler = fresh.ruler; });   // метки вырезаются там, где линейка висит на самом деле
+  log.success('КЗ: шибер подогнан — текущее положение теперь ' + name, { serial: cam.id });
+}
+
 // ---------- плитка ----------
 function drawGateOnTile(ctx, z, cam, g, lz, problem) {
   if (!z.ruler || z.ruler.length !== 4) return;
@@ -103,6 +175,9 @@ function gtCardHtml(cam, z, i) {
         <span class="md-lbl" title="Пятно цвета меньше этого числа точек кадра за указатель не принимаем. Сколько точек у пятна сейчас — в строке выше">пятно от</span>${mdNum(a + ' data-f="gtarea"', gtNum(z.min_area, 200), 'min="1" step="50"')}
         <span class="md-lbl" title="Значение — медиана стольких последних кадров: гасит дрожание, но запаздывает примерно на половину этих кадров">кадров</span>${mdNum(a + ' data-f="gtsmooth"', gtNum(z.smooth, 5), 'min="1" max="100" step="1"')}</div>
       <div class="md-zone__row"><label class="md-lbl md-gate__chk" title="Обычно 0 % — нижняя сторона линейки. С галочкой — верхняя"><input type="checkbox" ${a} data-f="gtflip"${z.flip ? ' checked' : ''} /> 0 % сверху</label></div>
+      <div class="md-zone__row" id="md-gtc-${k}"><span class="md-lbl" title="Подогнать линейку под настоящий ход: поставьте шибер в крайнее положение и нажмите кнопку — эта сторона линейки встанет на высоту указателя. Кнопки активны, пока указатель виден">подгонка</span>
+        <button type="button" class="btn-secondary md-x" ${a} data-f="gtcal0" disabled title="Шибер сейчас в нуле: считать это положение за 0 %">это 0 %</button>
+        <button type="button" class="btn-secondary md-x" ${a} data-f="gtcal1" disabled title="Шибер сейчас в максимуме: считать это положение за 100 %">это 100 %</button></div>
       ${gtPlcHtml(cam, z, a)}
     </div>
     <div class="md-zone__chart"><canvas id="md-ch-${k}" height="84"></canvas></div>
@@ -136,6 +211,7 @@ function gtOnZone(t, cam, z) {
     MD.tab = 'plc'; MD.key = ''; renderMotionDock();
     return true;
   }
+  if (f === 'gtcal0' || f === 'gtcal1') { gtOnCal(cam, z, f === 'gtcal1'); return true; }
   if (f === 'gtflip') { mdEdit(() => { z.flip = t.checked; }); return true; }
   const num = { gthold: ['hold_s', 0, 3600], gtarea: ['min_area', 1, 10000000], gtsmooth: ['smooth', 1, 100] }[f];
   if (!num) return false;
@@ -179,7 +255,7 @@ function gtMarkSave(m, cam, fw, fh) {
     const sc = (p) => [Math.round(p[0] * fs[0] / fw), Math.round(p[1] * fs[1] / fh)];
     const geo = { ruler: gtOrder(m.polys[0].map(sc)), points: m.pts.map(sc) };
     const old = cam.zones.find((z) => z.type === 'gate');     // шибер на камере один: повторная разметка меняет только геометрию
-    if (old) { Object.assign(old, geo, { enabled: true }); return; }
+    if (old) { Object.assign(old, geo, { enabled: true }); if (old.cut) old.cut = null; return; }   // новая разметка — это и есть настоящая линейка
     let n = 1;
     while (cam.zones.some((z) => z.id === 'gate' + n) || (cam.groups || []).some((q) => q.id === 'gate' + n)) n += 1;
     cam.zones.push(Object.assign({ id: 'gate' + n, name: 'Шибер', enabled: true, type: 'gate', metric: 'flow', on: 0, off: 0, invert: false, track_flow: false, out: null,

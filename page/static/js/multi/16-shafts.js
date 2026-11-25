@@ -160,13 +160,13 @@ function shTrack(col, base) {
   return col === 2 ? `linear-gradient(90deg,#6b7280,hsl(${base},100%,50%))` : `linear-gradient(90deg,#000,hsl(${base},90%,62%))`;
 }
 
-function shColorRowHtml(w, z, a, key) {
-  const v = shHsvOf(z, w), [name, color, base] = SH_END[w];
+function shColorRowHtml(w, z, a, key, title) {            // title — своя подпись строки (шибер: «Указатель» вместо «Красный конец»)
+  const v = shHsvOf(z, w), [endName, color, base] = SH_END[w], name = title || endName, what = title ? 'указатель' : (w === 'red' ? 'красный' : 'синий') + ' конец палки';
   const cells = SH_HSV_COLS[w].map(([lbl, k, max, tip]) => `<label class="sh-hsv" title="${escapeHtml(tip)}">` +
     `<input type="range" class="sh-rng" style="--trk:${shTrack(k, base)}" ${a} data-f="hsv" data-w="${w}" data-k="${k}" min="0" max="${max}" step="1" value="${v[k]}" /><output>${v[k]}</output></label>`).join('');
   return `<div class="sh-tn"><i class="sh-dot" style="background:${color}"></i>${name}</div>${cells}` +
-    `<div class="sh-tact"><button type="button" class="btn-secondary md-x sh-pipbtn" data-md="shpick" data-w="${w}" data-f="pip" title="Откроется большой кадр: наведите на ${w === 'red' ? 'красный' : 'синий'} конец палки — лупа покажет цвет и «ловится / не ловится», клик добавит цвет отдельной строкой «ещё цвет». Оттенков у одного конца может быть несколько (светлый, тёмный, на солнце)">пипетка</button>` +
-    `<button type="button" class="btn-secondary md-x sh-pipbtn" data-md="shpick" data-w="${w}" data-f="pip" data-mode="not" title="Пипетка наоборот: кликните по цвету, который ${w === 'red' ? 'красному' : 'синему'} концу НЕ нужен (корпус, блик, пластина) — он вырежется из маски этого конца отдельной строкой «не ловить»">не ловить</button></div>`;
+    `<div class="sh-tact"><button type="button" class="btn-secondary md-x sh-pipbtn" data-md="shpick" data-w="${w}" data-f="pip" title="Откроется большой кадр: наведите на ${what} — лупа покажет цвет и «ловится / не ловится», клик добавит цвет отдельной строкой «ещё цвет». Оттенков у одного конца может быть несколько (светлый, тёмный, на солнце)">пипетка</button>` +
+    `<button type="button" class="btn-secondary md-x sh-pipbtn" data-md="shpick" data-w="${w}" data-f="pip" data-mode="not" title="Пипетка наоборот: кликните по цвету, который ловить НЕ нужно (корпус, блик, пластина) — он вырежется из маски отдельной строкой «не ловить»">не ловить</button></div>`;
 }
 
 // OpenCV HSV (оттенок 0..179, насыщенность и яркость 0..255) → цвет CSS hsl(): для точки-образца в строке
@@ -240,6 +240,7 @@ function mdRodColorsHtml() {
 // превью: пробные пороги берём прямо с ползунков, сервис возвращает кадр вокруг оси с масками; не чаще раза в 4 с на вал, при правке — сразу
 const shPrevAt = {};
 function shHsvStr(block, w) {
+  if (!block.querySelector(`input[data-f="hsv"][data-w="${w}"]`)) return '';      // у шибера синего конца нет — параметр пустой
   return [0, 1, 2, 3].map((k) => { const r = block.querySelector(`input[data-w="${w}"][data-k="${k}"]`); return r ? r.value : ''; }).join(',');
 }
 function shMoreStr(block, w) {                            // «H1,H2,S,V;H1,H2,S,V» по строкам «ещё цвет» — пустая строка тоже посылается: «дополнительных нет»
@@ -268,7 +269,7 @@ function shPrevLoad(block, force) {
   }).catch(() => { if (note) note.textContent = 'картинки нет: камера не подключена или сервис движения старой версии'; });
 }
 function shPrevPaint() {
-  document.querySelectorAll('[data-shcol]').forEach((b) => shPrevLoad(b, false));
+  document.querySelectorAll('[data-shcol]').forEach((b) => { if (!b.closest('details:not([open])')) shPrevLoad(b, false); });     // свёрнутый блок кадры не тянет
 }
 let shSlideTimer = 0;
 function shOnSlide(t) {                                   // ползунок двигают: значение рядом + быстрое обновление картинки
@@ -355,6 +356,7 @@ function shPipSampleBright(cx, cy) {
   return { h: Math.round(((Math.atan2(sx, cxs) * 180 / Math.PI + 360) % 360) / 2) % 180, s: mid(top.map((p) => p.hsv[1])), v: mid(top.map((p) => p.hsv[2])),
     rgb: [0, 1, 2].map((c) => Math.round(top.reduce((a, p) => a + [p.R, p.G, p.B][c], 0) / top.length)) };
 }
+const shPipGate = (key) => { const b = document.querySelector(`[data-shcol="${key}"]`); return !!b && b.dataset.shkind === 'gate'; };   // пипетка шибера: «указатель», без концов палки
 const shPipSmp = (x, y) => (shPip.mode === 'not' ? shPipSampleFlat(x, y) : shPip.mode === 'tip' ? shPipSampleBright(x, y) : shPipSample(x, y));
 
 // цвета светоотражателей (строки «отражатель», читаем с ползунков карточки) и в какую строку попадает цвет (номер с 1 или 0)
@@ -417,7 +419,7 @@ function shPipOpen(key, w, mode) {
   const title = tipMode ? 'Пипетка · светоотражатель' : notMode ? 'Пипетка · не ловить' : 'Пипетка';
   el.innerHTML = `<div class="sh-pipov__box" role="dialog" aria-label="${title}">
     <div class="sh-pipov__head"><b>${title}</b><span class="net-hint">${escapeHtml(name)} · ${escapeHtml(sub)}</span>
-      ${tipMode ? '' : '<div class="sh-seg" data-pipend><button type="button" data-w="red">красный конец</button><button type="button" data-w="blue">синий конец</button></div>'}
+      ${tipMode || shPipGate(key) ? '' : '<div class="sh-seg" data-pipend><button type="button" data-w="red">красный конец</button><button type="button" data-w="blue">синий конец</button></div>'}
       <span class="md-sp"></span>
       <span class="net-hint" data-pipclock></span>
       <label class="sh-chk"><input type="checkbox" data-pipfreeze /> стоп-кадр</label>
@@ -476,12 +478,13 @@ function shPipEnd() {
   const m = R.main, mainDot = shPip.w === 'red' ? 0 : Math.round(m[0] + m[1]);
   const chip = (txt, hue) => `<span class="sh-chip"><i class="sh-dot" style="background:hsl(${hue},75%,48%)"></i>${txt}</span>`;
   const mainTxt = shPip.w === 'red' ? `основной: оттенок ≤ ${m[0]} или ≥ ${m[1]}, насыщ. ≥ ${m[2]}, ярк. ≥ ${m[3]}` : `основной: оттенок ${m[0]}–${m[1]}, насыщ. ≥ ${m[2]}, ярк. ≥ ${m[3]}`;
-  shPip.el.querySelector('[data-pipfoot]').innerHTML = '<span class="net-hint">Что сейчас ловится у ' + (shPip.w === 'red' ? 'красного' : 'синего') + ' конца:</span>' + chip(mainTxt, mainDot) +
+  const gate = shPipGate(shPip.key), obj = gate ? 'указатель' : 'палку';
+  shPip.el.querySelector('[data-pipfoot]').innerHTML = '<span class="net-hint">Что сейчас ловится у ' + (gate ? 'указателя' : (shPip.w === 'red' ? 'красного' : 'синего') + ' конца') + ':</span>' + chip(mainTxt, mainDot) +
     R.more.map((r, i) => chip(`ещё цвет ${i + 1}: оттенок ${r[0]}–${r[1]}, насыщ. ≥ ${r[2]}, ярк. ≥ ${r[3]}`, dotH(r))).join('') +
     R.not.map((r, i) => `<span class="sh-chip sh-chip--not"><i class="sh-dot sh-dot--not" style="background:${shHsv2Css(shNotMidHue(r), (r[2] + r[3]) / 2, (r[4] + r[5]) / 2)}"></i>не ловить ${i + 1}: оттенок ${r[0]}${r[0] > r[1] ? '→' : '–'}${r[1]}, насыщ. ${r[2]}–${r[3]}, ярк. ${r[4]}–${r[5]}</span>`).join('') +
     (shPip.mode === 'not'
       ? '<span class="net-hint">Наведите на то, что ловиться НЕ должно (корпус, блик): в лупе — цвет, который исключится; красный минус — сейчас ловится, клик вырежет его; зелёная галочка — уже исключён или и так не ловится.</span>'
-      : '<span class="net-hint">Наведите на палку: в лупе — цвет, который возьмётся; зелёная галочка — такой цвет уже ловится, красный плюс — клик добавит его.</span>');
+      : '<span class="net-hint">Наведите на ' + obj + ': в лупе — цвет, который возьмётся; зелёная галочка — такой цвет уже ловится, красный плюс — клик добавит его.</span>');
 }
 async function shPipLoad() {
   if (!shPip.el || shPip.busy) return;
@@ -594,13 +597,13 @@ function shPipClick(e) {
   if (!z) return;
   const cl = (q, hi) => Math.max(0, Math.min(hi, Math.round(q)));
   if (notMode) {
-    if ((z[w + '_not'] || []).length >= 6) { msg('Не больше шести исключённых цветов на конец палки — уберите ненужный в таблице.'); return; }
+    if ((z[w + '_not'] || []).length >= 6) { msg('Не больше шести исключённых цветов — уберите ненужный в таблице.'); return; }
     // «ящик» вокруг цвета: оттенок ±7 (у края круга — через ноль: «от» выше «до»), насыщенность ±40, яркость ±45
     const box = [(smp.h - 7 + 180) % 180, (smp.h + 7) % 180, cl(smp.s - 40, 255), cl(smp.s + 40, 255), cl(smp.v - 45, 255), cl(smp.v + 45, 255)];
     mdEdit(() => { z[w + '_not'] = (z[w + '_not'] || []).concat([box]); }, true);
     msg('Исключён цвет: H ' + smp.h + ', S ' + smp.s + ', V ' + smp.v);
   } else {
-    if ((z[w + '_more'] || []).length >= 6) { msg('Не больше шести дополнительных цветов на конец палки — уберите ненужный в таблице.'); return; }
+    if ((z[w + '_more'] || []).length >= 6) { msg('Не больше шести дополнительных цветов — уберите ненужный в таблице.'); return; }
     const range = [cl(smp.h - 6, 179), cl(smp.h + 6, 179), cl(Math.max(10, smp.s - 45), 255), cl(Math.max(10, smp.v - 50), 255)];
     mdEdit(() => { z[w + '_more'] = (z[w + '_more'] || []).concat([range]); }, true);      // сохраняет и перерисовывает карточки; окно остаётся
     msg('Добавлен цвет: H ' + smp.h + ', S ' + smp.s + ', V ' + smp.v);

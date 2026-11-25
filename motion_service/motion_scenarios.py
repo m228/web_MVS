@@ -12,12 +12,16 @@ from typing import Optional
 
 log = logging.getLogger("motion.scenarios")
 
-RULES = ("or", "and", "sum")
+RULES = ("or", "and", "sum", "value")
 SIGNALS = ("move", "pulp")      # move — бит «движется» зоны, pulp — «жом есть» (вид окна; без включённого вида окна — 0)
+NO_DATA = 65535                 # value (шибер): значения нет — не 0, потому что 0 — это настоящие «0 %»
 
 
 def evaluate(rule: str, bits: list) -> int:
-    """Значения источников → значение сценария: or — хоть одно > 0, and — все > 0, sum — сумма значений (бит зоны 0/1, у группы — её значение)."""
+    """Значения источников → значение сценария: or — хоть одно > 0, and — все > 0, sum — сумма значений (бит зоны 0/1, у группы — её значение),
+    value — значение единственного источника как есть (шибер: % × 10, нет данных — 65535)."""
+    if rule == "value":
+        return int(bits[0]) if bits else NO_DATA
     if rule == "and":
         return 1 if bits and all(bits) else 0
     if rule == "sum":
@@ -25,14 +29,19 @@ def evaluate(rule: str, bits: list) -> int:
     return 1 if any(bits) else 0
 
 
-def source_bits(sources: list, states: dict, signal: str = "move") -> list:
+def source_bits(sources: list, states: dict, signal: str = "move", analog: bool = False) -> list:
     """[{camera, zone | group}] + {id камеры: state()} → значения; камеры/зоны/группы нет или она не жива → 0. Зона: signal move —
-    бит движения, pulp — «жом есть» (z["fill"] == 1; у зоны без вида окна или без порогов решения нет → 0). Группа: её значение."""
+    бит движения, pulp — «жом есть» (z["fill"] == 1; у зоны без вида окна или без порогов решения нет → 0). Группа: её значение.
+    analog (правило value, шибер): значение зоны % × 10; нет камеры, кадра или указателя → 65535."""
     out = []
     for s in sources:
         res = (states.get(s["camera"]) or {}).get("result") or {}
-        bit = 0
-        if res.get("alive") and s.get("group") is not None:
+        bit = NO_DATA if analog else 0
+        if analog:
+            z = next((q for q in res.get("zones") or [] if q["id"] == s.get("zone")), None) if res.get("alive") else None
+            if z and z.get("valid"):
+                bit = int(round(z["pct"] * 10))
+        elif res.get("alive") and s.get("group") is not None:
             for g in res.get("groups") or []:
                 if g["id"] == s["group"]:
                     bit = int(g["value"])
@@ -68,7 +77,7 @@ class ScenarioRunner(threading.Thread):
         live_ids = set()
         for sc in cfg.get("scenarios", []):
             live_ids.add(sc["id"])
-            bits = source_bits(sc["sources"], states, sc.get("signal", "move"))
+            bits = source_bits(sc["sources"], states, sc.get("signal", "move"), sc["rule"] == "value")
             value = evaluate(sc["rule"], bits)
             mb = sc.get("modbus") or cfg["modbus"]
             st = self.status.setdefault(sc["id"], {"ok": None, "error": ""})

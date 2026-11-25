@@ -186,6 +186,7 @@ function drawMotionTile(index) {
     if (z.enabled === false) return;
     if (z.type === 'cycle') { drawCycleOnTile(ctx, z, cam, g, live[z.id], mvZoneMode(st, live[z.id])); return; }
     if (z.type === 'clarity') { drawClarityOnTile(ctx, z, cam, g, live[z.id], !!problem); return; }
+    if (z.type === 'gate') { drawGateOnTile(ctx, z, cam, g, live[z.id], !!problem); return; }
     if (z.type === 'level') return;                 // стёкла уровня рисует drawLevelOnTile ниже
     const pts = zonePointsOnTile(z, cam, g);
     const lz = live[z.id];
@@ -453,6 +454,8 @@ function onMotionHover(event) {
   const problem = tileMotionStatusText(st);
   tip.textContent = hit.type === 'clarity'
     ? hit.name + (problem ? ' — ' + problem : mvClarityEmpty(lz) ? ' · пусто (движение ' + Number(lz.move).toFixed(2) + ' ниже ' + Number(hit.mv_lo != null ? hit.mv_lo : 0.9).toFixed(2) + ') · мутность 0' : lz && lz.valid ? ' · ' + MV_CLARITY_WORDS[mvClarityLevel(lz)] + ' · мутность ' + Math.round(lz.turb) + ' из 100' :' · нет значения: ' + ((lz && lz.reason) || 'нет данных')) + ' · двойной клик — переименовать'
+    : hit.type === 'gate'
+    ? hit.name + (problem ? ' — ' + problem : lz && lz.valid ? ' · заполнено ' + gtFmt(lz.pct) + (lz.held ? ' (указателя не видно, держу последнее)' : '') : ' · ' + ((lz && lz.reason) || 'нет данных'))
     : hit.name + (problem ? ' — ' + problem : lz && hit.type === 'level'
     ? ' · заполнено ' + Number(lz.level).toFixed(1) + ' % · сырое ' + Number(lz.raw).toFixed(1) + ' %' : lz
     ? ' · ' + (lz.bit ? 'крутится' : 'стоит') + ' · diff ' + Number(lz.diff).toFixed(2) + ' · flow ' + Number(lz.flow).toFixed(2) : '');

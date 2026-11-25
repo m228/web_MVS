@@ -37,7 +37,14 @@ FB = dict(pyr_scale=0.5, levels=3, winsize=15, iterations=3, poly_n=5, poly_sigm
 MIN_FLOW_SIDE = 16       # зона меньше этого (px) для Farneback не годится — поток = 0
 ID_RE = re.compile(r"^[A-Za-z0-9_\-]{1,40}$")
 
-ZONE_TYPES = ("motion", "presence", "cycle", "level", "clarity")
+ZONE_TYPES = ("motion", "presence", "cycle", "level", "clarity", "gate")
+# Шибер (25.11): цветной указатель ездит рядом с линейкой, значение — на какой высоте линейки он стоит, 0..100 %.
+GATE_RED_HSV = (10, 165, 100, 70)       # лента указателя [h_max, h_min, S_min, V_min]: строже, чем красный палки, — ржавчину рядом не берём
+GATE_NO_DATA = 65535                    # что уходит в ПЛК, когда указателя не видно: 0 — это настоящие «0 %», путать нельзя
+GATE_MIN_AREA = 200                     # пятно меньше этого (точек кадра разметки) за указатель не принимаем
+GATE_SMOOTH = 5                         # значение — медиана стольких последних кадров с указателем
+GATE_HOLD_S = 10.0                      # указатель пропал — держим последнее значение столько секунд, потом «нет данных»
+GATE_CLOSE_DIV = 128                    # разрывы ленты по горизонтали склеиваем ядром «ширина кадра / 128» (15 точек на 1920)
 CLARITY_DIRTY_MODES = ("shared", "own")   # «грязный» цвет зоны: общий сдвиг камеры от «чистого» этой зоны / свой собственный
 CLARITY_REFS = ("shared", "own")            # эталоны камеры: общие на все стаканы / у каждого свои
 CLARITY_NO_DATA = 65535                   # что уходит в ПЛК вместо мутности, когда её нет (нет эталонов, кадра, цвета): 0 — это «чистый»
@@ -163,6 +170,8 @@ def _norm_zone(z: dict, cam_id: str) -> dict:
         return _norm_level_zone(z, zid, where)
     if ztype == "clarity":
         return _norm_clarity(z, zid, where)
+    if ztype == "gate":
+        return _norm_gate(z, zid, where)
     metric = z.get("metric", "flow")
     if metric not in METRICS:
         raise ValueError("%s: метрика %r не из %s" % (where, metric, list(METRICS)))
@@ -219,6 +228,52 @@ def _norm_level_zone(z: dict, zid: str, where: str) -> dict:
         "on": 0.0, "off": 0.0, "invert": False, "track_flow": False,
         "smooth": 1, "frames_to_on": 1, "frames_to_off": 1, "blur": 0, "flicker_comp": False,
         "out": None,
+    }
+
+
+def order_ruler(pts) -> list:
+    """Четыре угла линейки в любом порядке → [низ слева, низ справа, верх справа, верх слева] (линейка стоит вертикально)."""
+    p = sorted(pts, key=lambda q: q[1])
+    top, bot = sorted(p[:2], key=lambda q: q[0]), sorted(p[2:], key=lambda q: q[0])
+    return [bot[0], bot[1], top[1], top[0]]
+
+
+def _norm_gate(z: dict, zid: str, where: str) -> dict:
+    """Зона-«шибер»: ruler — четыре угла линейки (нижняя сторона = 0 %, верхняя = 100 %; flip — наоборот), points — многоугольник, где ходит
+    указатель, цвет указателя — теми же полями, что красный конец палки (red_hsv / red_more / red_not). Значение — заполнение линейки 0..100 %
+    (flow = %, diff = площадь найденного пятна, bit = значение есть). В ПЛК — только сценарием: % × 10, нет данных — 65535."""
+    def pairs(v, name):
+        try:
+            return [[float(p[0]), float(p[1])] for p in v]
+        except Exception:
+            raise ValueError("%s: точки %s должны быть парами [x, y]" % (where, name))
+    ruler, pts = pairs(z.get("ruler") or [], "линейки"), pairs(z.get("points") or [], "зоны указателя")
+    if len(ruler) != 4:
+        raise ValueError("%s: у линейки нужны ровно четыре угла" % where)
+    if len(pts) < 3:
+        raise ValueError("%s: в зоне указателя меньше трёх точек" % where)
+    ruler = order_ruler(ruler)
+    bl, br, tr, tl = ruler
+    if min(bl[1], br[1]) - max(tl[1], tr[1]) < 4 or br[0] - bl[0] < 1 or tr[0] - tl[0] < 1:
+        raise ValueError("%s: линейка должна стоять вертикально: два угла внизу, два вверху" % where)
+    return {
+        "id": zid,
+        "name": str(z.get("name") or zid),
+        "enabled": bool(z.get("enabled", True)),
+        "type": "gate",
+        "metric": "flow",
+        "points": pts,
+        "on": 0.0, "off": 0.0, "invert": False, "track_flow": False,
+        "smooth": _num(z.get("smooth", GATE_SMOOTH), where + ".smooth", 1, 100, True),
+        "frames_to_on": 1, "frames_to_off": 1, "blur": 0, "flicker_comp": False,
+        "out": None,
+        "ruler": ruler,
+        "flip": bool(z.get("flip", False)),
+        "hold_s": _num(z.get("hold_s", GATE_HOLD_S), where + ".hold_s", 0, 3600),
+        "min_area": _num(z.get("min_area", GATE_MIN_AREA), where + ".min_area", 1, 10 ** 7, True),
+        "red_hsv": _hsv4(z.get("red_hsv"), GATE_RED_HSV, where + ".red_hsv", True),
+        "red_more": _more(z.get("red_more"), where + ".red_more"),
+        "red_not": _nots(z.get("red_not"), where + ".red_not"),
     }
 
 
@@ -519,8 +574,8 @@ def _norm_scenario(sc: dict, cams: list) -> dict:
         raise ValueError("сценарий %r: id — только латиница, цифры, _ и -" % sid)
     where = "сценарий %s" % sid
     rule = sc.get("rule", "or")
-    if rule not in ("or", "and", "sum"):
-        raise ValueError("%s: правило %r не из or/and/sum" % (where, rule))
+    if rule not in ("or", "and", "sum", "value"):
+        raise ValueError("%s: правило %r не из or/and/sum/value" % (where, rule))
     signal = sc.get("signal", "move")
     if signal not in SCENARIO_SIGNALS:
         raise ValueError("%s: сигнал %r не из %s" % (where, signal, "/".join(SCENARIO_SIGNALS)))
@@ -538,8 +593,18 @@ def _norm_scenario(sc: dict, cams: list) -> dict:
         if zone in zones.get(cam, ()) and not any(x["camera"] == cam and x.get("zone") == zone for x in srcs):
             srcs.append({"camera": cam, "zone": zone})
     mb = sc.get("modbus")
+    # шибер — число, а не бит: складывать его с окнами нельзя. Сценарий с шибером берёт его одного и пишет значение как есть (rule value).
+    gates = {c["id"]: {z["id"] for z in c["zones"] if z["type"] == "gate"} for c in cams}
+    analog = [s for s in srcs if s.get("zone") in gates.get(s["camera"], ())]
+    if analog:
+        rule, srcs = "value", analog[:1]
+    elif rule == "value" and srcs:
+        rule = "or"                 # шибер из источников убрали, остались обычные окна
+    out = _out(sc.get("out"), ZONE_OUT_KINDS, where + ".out")
+    if rule == "value" and out and out["kind"] != "holding":
+        raise ValueError("%s: значение шибера пишется только в регистр" % where)
     return {"id": sid, "name": str(sc.get("name") or sid), "rule": rule, "signal": signal, "sources": srcs,
-            "out": _out(sc.get("out"), ZONE_OUT_KINDS, where + ".out"),
+            "out": out,
             "modbus": normalize_modbus(mb, base=None) if mb else None}
 
 
@@ -1639,6 +1704,130 @@ class CycleRT:
         return found
 
 
+def ruler_level(ruler, pt) -> float:
+    """На какой высоте линейки точка pt: 0 — на нижней стороне, 1 — на верхней (за краями зажато). Линия уровня t соединяет точки на левой и
+    правой сторонах линейки (доля t от низа) и продолжается вбок — туда, где ходит указатель. Так наклон «горизонтали» плавно меняется
+    от нижней стороны к верхней, как его видит камера; поэтому нижнюю и верхнюю стороны при разметке ведут вдоль меток линейки."""
+    bl, br, tr, tl = [np.asarray(q, float) for q in ruler]
+
+    def side(t: float) -> float:                # меньше нуля — точка выше линии уровня t (ось y смотрит вниз)
+        a, b = bl + t * (tl - bl), br + t * (tr - br)
+        return float((b[0] - a[0]) * (pt[1] - a[1]) - (b[1] - a[1]) * (pt[0] - a[0]))
+
+    if side(0.0) >= 0:
+        return 0.0
+    if side(1.0) <= 0:
+        return 1.0
+    lo, hi = 0.0, 1.0
+    for _ in range(30):
+        mid = 0.5 * (lo + hi)
+        lo, hi = (mid, hi) if side(mid) < 0 else (lo, mid)
+    return 0.5 * (lo + hi)
+
+
+class GateRT:
+    """Шибер: самое крупное пятно цвета указателя внутри его зоны (саму линейку с её красными метками вырезаем) → высота центра пятна по
+    линейке → заполнение 0..100 %. Значение — медиана последних smooth кадров. Указатель пропал — hold_s секунд держим последнее значение
+    (held), потом «нет данных» (valid = False)."""
+
+    def __init__(self, zcfg: dict, frame_size, cur_wh):
+        self.cfg = zcfg
+        self.id, self.name = zcfg["id"], zcfg["name"]
+        W, H = cur_wh
+        self.sx = W / float(frame_size[0]) if frame_size else 1.0
+        self.sy = H / float(frame_size[1]) if frame_size else 1.0
+        trk = np.round(np.array(scale_points(zcfg["points"], frame_size, cur_wh))).astype(np.int32)
+        trk[:, 0] = np.clip(trk[:, 0], 0, W - 1)
+        trk[:, 1] = np.clip(trk[:, 1], 0, H - 1)
+        self.ruler = scale_points(zcfg["ruler"], frame_size, cur_wh)
+        x, y, w, h = cv2.boundingRect(trk)
+        self.bbox = (x, y, max(1, w), max(1, h))
+        m = np.zeros((self.bbox[3], self.bbox[2]), np.uint8)
+        cv2.fillPoly(m, [trk - [x, y]], 255)
+        cv2.fillPoly(m, [np.round(np.array(self.ruler)).astype(np.int32) - [x, y]], 0)   # метки линейки — того же цвета, их не берём
+        self.mask, self.track = m, trk
+        pad = max(8, int(round(0.08 * max(w, h))))                                       # превью и пипетка: зона указателя с полями
+        self.view = (max(0, x - pad), max(0, y - pad), min(W, x + w + pad), min(H, y + h + pad))
+        self.ker = cv2.getStructuringElement(cv2.MORPH_RECT, (max(3, int(round(W / float(GATE_CLOSE_DIV)))) | 1, 3))
+        self.min_area = zcfg["min_area"] * self.sx * self.sy
+        self.hist: deque = deque(maxlen=zcfg["smooth"])
+        self.reset()
+
+    def reset(self):
+        self.hist.clear()
+        self.valid = self.held = False
+        self.t = 0.0                    # высота по линейке 0..1 (0 — низ), без учёта flip
+        self.area = 0                   # площадь самого крупного пятна на последнем кадре, точек кадра разметки (и когда оно мало)
+        self.ptr = None                 # центр указателя, точки текущего кадра
+        self.box = None                 # его прямоугольник (x0, y0, x1, y1)
+        self.last_t: Optional[float] = None
+
+    @property
+    def pct(self) -> float:
+        t = 1.0 - self.t if self.cfg["flip"] else self.t
+        return 100.0 * t
+
+    def _color(self, bgr: np.ndarray, red_hsv=None, red_more=None, red_not=None) -> np.ndarray:
+        """Маска цвета указателя 0/255. Параметры — пробные значения вместо настроенных (превью на панели). Смысл полей — как у палки."""
+        hsv = cv2.cvtColor(bgr, cv2.COLOR_BGR2HSV)
+        hm, hn, s, v = red_hsv or self.cfg["red_hsv"]
+        m = cv2.inRange(hsv, (0, s, v), (hm, 255, 255)) | cv2.inRange(hsv, (hn, s, v), (179, 255, 255))
+        for h1, h2, s_, v_ in self.cfg["red_more"] if red_more is None else red_more:
+            m |= cv2.inRange(hsv, (h1, s_, v_), (h2, 255, 255))
+        nots = self.cfg["red_not"] if red_not is None else red_not
+        if nots:
+            h, sat, val = cv2.split(hsv)
+            for box in nots:
+                m[hsv_box_hit(h, sat, val, box)] = 0
+        return m
+
+    def step(self, frame: Optional[np.ndarray], now: float = 0.0) -> bool:
+        """Новый цветной кадр (now — его время, с). True — указатель найден на этом кадре."""
+        x, y, w, h = self.bbox
+        best = None
+        if frame is not None and frame.ndim == 3:
+            m = self._color(frame[y:y + h, x:x + w]) & self.mask
+            m = cv2.morphologyEx(m, cv2.MORPH_CLOSE, self.ker) & self.mask
+            n, _, st, cen = cv2.connectedComponentsWithStats(m)
+            if n > 1:
+                i = 1 + int(np.argmax(st[1:, cv2.CC_STAT_AREA]))
+                best = (int(st[i, cv2.CC_STAT_AREA]), float(cen[i][0]) + x, float(cen[i][1]) + y,
+                        (int(st[i, 0]) + x, int(st[i, 1]) + y, int(st[i, 0] + st[i, 2]) + x, int(st[i, 1] + st[i, 3]) + y))
+        self.area = int(round(best[0] / (self.sx * self.sy))) if best else 0
+        fresh = self.last_t is not None and now - self.last_t <= self.cfg["hold_s"]
+        if best and best[0] >= self.min_area:
+            self.ptr, self.box = (best[1], best[2]), best[3]
+            self.hist.append(ruler_level(self.ruler, self.ptr))
+            self.t = float(np.median(self.hist))
+            self.valid, self.held, self.last_t = True, False, now
+            return True
+        self.valid = self.held = bool(fresh)
+        if not fresh:
+            self.hist.clear()                              # после долгой пропажи старые значения в медиану не идут
+        return False
+
+    def mask_preview(self, frame: np.ndarray, red_hsv=None, blue_hsv=None, max_w: int = 640, raw: bool = False, red_more=None, blue_more=None, red_not=None,
+                     blue_not=None, tip_hsv=None) -> np.ndarray:
+        """Что видит детектор: зона указателя с полями. Красным — то, что принято за цвет указателя (только внутри зоны и вне линейки),
+        жёлтым — границы зоны, голубым — линейка. raw — сам кадр (для пипетки). Вызов — как у палки (CycleRT.mask_preview), синего у шибера нет."""
+        vx0, vy0, vx1, vy1 = self.view
+        crop = frame[vy0:vy1, vx0:vx1]
+        sc = max_w / float(max(1, crop.shape[1]))
+        if raw:
+            img = crop.copy()
+        else:
+            x, y, w, h = self.bbox
+            m = self._color(frame[y:y + h, x:x + w], red_hsv, red_more, red_not) & self.mask
+            img = (crop.astype(np.float32) * 0.55).astype(np.uint8)
+            part = img[y - vy0:y - vy0 + m.shape[0], x - vx0:x - vx0 + m.shape[1]]
+            part[m > 0] = (40, 40, 255)
+            cv2.polylines(img, [self.track - [vx0, vy0]], True, (0, 220, 255), 1, cv2.LINE_AA)
+            cv2.polylines(img, [np.round(np.array(self.ruler)).astype(np.int32) - [vx0, vy0]], True, (255, 200, 0), 1, cv2.LINE_AA)
+        if max_w == img.shape[1]:
+            return img
+        return cv2.resize(img, (max_w, max(2, int(round(img.shape[0] * sc)))), interpolation=cv2.INTER_AREA if sc < 1 else cv2.INTER_NEAREST if not raw else cv2.INTER_CUBIC)
+
+
 def flow_metric(a: np.ndarray, b: np.ndarray, mask: np.ndarray, dt: float) -> float:
     """Средняя величина оптического потока в полигоне, приведённая к калибровочному dt."""
     if a.shape[0] < MIN_FLOW_SIDE or a.shape[1] < MIN_FLOW_SIDE:
@@ -1763,6 +1952,7 @@ class CameraEngine:
                         for g in cam_cfg["groups"] if g["type"] == "mirror"}
         self.cycles: dict = {}                  # id зоны-цикла → CycleRT (строятся вместе с зонами, на первом кадре)
         self.clarity: dict = {}                 # id зоны-прозрачности → ClarityRT (там же)
+        self.gates: dict = {}                   # id зоны-шибера → GateRT (там же)
         zl ={z["id"]: z for z in cam_cfg["zones"] if z["type"] == "level"}
         self.levels = {g["id"]: LevelRT(g, [zl[x] for x in g["zones"] if x in zl], cam_cfg["frame_size"])
                        for g in cam_cfg["groups"] if g["type"] == "level"}     # уровни живут от потока модели (LevelInfer), не от кадров камеры
@@ -1814,6 +2004,8 @@ class CameraEngine:
             c.reset()
         for c in self.clarity.values():
             c.reset()
+        for c in self.gates.values():
+            c.reset()
         for t in self.timers.values():
             t.reset()
         for m in self.mirrors.values():
@@ -1824,8 +2016,9 @@ class CameraEngine:
     def _build(self, gray):
         h, w = gray.shape[:2]
         self.frame_wh = (w, h)
-        self.zones = [ZoneRT(z, self.cfg["frame_size"], (w, h)) for z in self.cfg["zones"] if z["enabled"] and z["type"] not in ("cycle", "level", "clarity")]
+        self.zones = [ZoneRT(z, self.cfg["frame_size"], (w, h)) for z in self.cfg["zones"] if z["enabled"] and z["type"] not in ("cycle", "level", "clarity", "gate")]
         self.cycles = {z["id"]: CycleRT(z, self.cfg["frame_size"], (w, h)) for z in self.cfg["zones"] if z["enabled"] and z["type"] == "cycle"}
+        self.gates = {z["id"]: GateRT(z, self.cfg["frame_size"], (w, h)) for z in self.cfg["zones"] if z["enabled"] and z["type"] == "gate"}
         cz = [z for z in self.cfg["zones"] if z["enabled"] and z["type"] == "clarity"]
         base = self.cfg.get("clarity_clean")
         if base is None:                                    # общего нет — медиана «чистых» других стаканов (снятых хотя бы у одного)
@@ -1857,6 +2050,11 @@ class CameraEngine:
             c.step_move(frame, now)                         # сначала движение: пустой стакан цвет в мутность не пускает
             bits[c.id] = int(c.step(frame, now))
         t3 = time.perf_counter()
+        for c in self.gates.values():
+            bits[c.id] = int(c.step(frame, now))
+        if self.gates:
+            PERF.record(cid + ":gate", (time.perf_counter() - t3) * 1000.0, got=sum(1 for c in self.gates.values() if c.valid and not c.held),
+                        of=len(self.gates), budget_ms=budget)
         if self.zones:
             PERF.record(cid + ":zones", (t1 - t0) * 1000.0, got=sum(1 for z in self.zones if bits[z.id]), of=len(self.zones), budget_ms=budget)
         if self.cycles:
@@ -1911,6 +2109,9 @@ class CameraEngine:
                 continue
             if zc["type"] == "clarity":
                 zones.append(self._clarity_zone(zc, alive))
+                continue
+            if zc["type"] == "gate":
+                zones.append(self._gate_zone(zc, alive))
                 continue
             z = zs.get(zc["id"])
             zones.append({"id": zc["id"], "name": zc["name"], "type": zc["type"], "metric": zc["metric"],
@@ -1980,6 +2181,22 @@ class CameraEngine:
                 "valid": ok, "reason": reason, "calibrated": bool(c and c.clean is not None and c.dirty is not None),
                 "ref_default": bool(c and c.clean_default),
                 "move": move, "juice": (None if (c is None or c.juice is None or not c.cfg["mv_on"]) else int(c.juice)), "empty": empty}
+
+    def _gate_zone(self, zc: dict, alive: bool) -> dict:
+        """Зона-шибер → запись состояния. pct — заполнение линейки 0..100 % (flow = pct — для историй, трендов и CSV), diff = площадь пятна
+        указателя, bit/valid — значение есть (в том числе удержанное, held). t — высота по линейке от низа 0..1, ptr и box — где указатель,
+        в точках кадра разметки (для рисования на плитке)."""
+        c = self.gates.get(zc["id"])
+        ok = bool(alive and c and c.valid)
+        pct = round(c.pct, 1) if ok else 0.0
+        area = c.area if (c and alive) else 0
+        return {"id": zc["id"], "name": zc["name"], "type": "gate", "metric": "flow", "enabled": zc["enabled"],
+                "bit": int(ok), "flow": pct, "diff": area, "value": pct, "on": 0.0, "off": 0.0,
+                "pct": pct, "valid": ok, "held": bool(ok and c.held), "area": area,
+                "reason": "" if ok else ("нет кадров" if not alive else "указатель не найден"),
+                "t": round(c.t, 4) if ok else 0.0,
+                "ptr": [round(c.ptr[0] / c.sx, 1), round(c.ptr[1] / c.sy, 1)] if ok else None,
+                "box": [round(c.box[0] / c.sx), round(c.box[1] / c.sy), round(c.box[2] / c.sx), round(c.box[3] / c.sy)] if ok else None}
 
     def clarity_sample(self, zone_ids, seconds: float) -> dict:
         """Эталон цвета по последним `seconds` секундам для зон-прозрачности: {id: {lab, n, spread}} или {id: {error}}. zone_ids пуст — все."""

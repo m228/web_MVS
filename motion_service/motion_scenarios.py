@@ -14,12 +14,12 @@ log = logging.getLogger("motion.scenarios")
 
 RULES = ("or", "and", "sum", "value")
 SIGNALS = ("move", "pulp")      # move — бит «движется» зоны, pulp — «жом есть» (вид окна; без включённого вида окна — 0)
-NO_DATA = 65535                 # value (шибер): значения нет — не 0, потому что 0 — это настоящие «0 %»
+NO_DATA = -1                    # value (уровнемер): значения нет — не 0, потому что 0 — это настоящие «0 %». В регистре −1 = 65535: в ПЛК читать как INT
 
 
 def evaluate(rule: str, bits: list) -> int:
     """Значения источников → значение сценария: or — хоть одно > 0, and — все > 0, sum — сумма значений (бит зоны 0/1, у группы — её значение),
-    value — значение единственного источника как есть (шибер: % × 10 или целые %, нет данных — 65535)."""
+    value — значение единственного источника как есть (уровнемер: % × 10 или целые %, нет данных — −1)."""
     if rule == "value":
         return int(bits[0]) if bits else NO_DATA
     if rule == "and":
@@ -29,18 +29,19 @@ def evaluate(rule: str, bits: list) -> int:
     return 1 if any(bits) else 0
 
 
-def source_bits(sources: list, states: dict, signal: str = "move", analog: bool = False, scale: int = 10) -> list:
+def source_bits(sources: list, states: dict, signal: str = "move", analog: bool = False, scale: int = 10, now: Optional[float] = None) -> list:
     """[{camera, zone | group}] + {id камеры: state()} → значения; камеры/зоны/группы нет или она не жива → 0. Зона: signal move —
     бит движения, pulp — «жом есть» (z["fill"] == 1; у зоны без вида окна или без порогов решения нет → 0). Группа: её значение.
-    analog (правило value, шибер): проценты зоны × scale (10 — 54,3 % → 543, 1 — 54), половина округляется вверх;
-    нет камеры, кадра или указателя → 65535 при любом scale."""
+    analog (правило value, уровнемер): проценты зоны × scale (10 — 54,3 % → 543, 1 — 54), половина округляется вверх. Камера может быть и не
+    жива: пока не вышло «держать», уровнемер отдаёт последнее значение (valid). Значения нет, нет камеры или состояние устарело (now позже
+    until: поток камеры завис и состояние не обновляется) → −1 при любом scale."""
     out = []
     for s in sources:
         res = (states.get(s["camera"]) or {}).get("result") or {}
         bit = NO_DATA if analog else 0
         if analog:
-            z = next((q for q in res.get("zones") or [] if q["id"] == s.get("zone")), None) if res.get("alive") else None
-            if z and z.get("valid"):
+            z = next((q for q in res.get("zones") or [] if q["id"] == s.get("zone")), None)
+            if z and z.get("valid") and not (now is not None and z.get("until") is not None and now > z["until"]):
                 bit = int(z["pct"] * scale + 0.5)     # не round(): тот даёт 54,5 → 54
         elif res.get("alive") and s.get("group") is not None:
             for g in res.get("groups") or []:
@@ -79,7 +80,7 @@ class ScenarioRunner(threading.Thread):
         for sc in cfg.get("scenarios", []):
             live_ids.add(sc["id"])
             scale = sc.get("scale", 10)
-            bits = source_bits(sc["sources"], states, sc.get("signal", "move"), sc["rule"] == "value", scale)
+            bits = source_bits(sc["sources"], states, sc.get("signal", "move"), sc["rule"] == "value", scale, now)
             value = evaluate(sc["rule"], bits)
             mb = sc.get("modbus") or cfg["modbus"]
             st = self.status.setdefault(sc["id"], {"ok": None, "error": ""})

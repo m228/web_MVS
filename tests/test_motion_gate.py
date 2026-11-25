@@ -145,18 +145,36 @@ def test_other_resolution_than_marking():
     assert z["pct"] == pytest.approx(50, abs=0.6) and z["box"][0] == pytest.approx(420, abs=2), "точки — в кадре разметки"
 
 
-def test_dead_camera_and_no_direct_plc_write():
+def test_dead_camera_holds_then_no_data_and_no_direct_plc_write():
     eng = me.CameraEngine(cam())
     st = run(eng, frame(270))
     assert eng.compute_writes(st) == []
-    dead = eng.dead_state(10.0, "нет связи")["zones"][0]
-    assert not dead["valid"] and dead["reason"] == "нет кадров"
+    held = eng.dead_state(10.0, "нет связи")["zones"][0]
+    assert held["valid"] and held["held"] and held["pct"] == pytest.approx(50, abs=0.6) and held["reason"] == "нет кадров"
+    assert held["hold_left"] == pytest.approx(50, abs=1) and held["ptr"][1] == pytest.approx(270, abs=1.5)
+    gone = eng.dead_state(100.0, "нет связи")["zones"][0]
+    assert not gone["valid"] and gone["reason"] == "нет кадров" and gone["until"] is None and gone["ptr"] is None
+
+
+def test_hold_survives_reconnect():
+    """Поток переоткрылся (reset), а указателя всё ещё не видно — последнее значение держится до конца hold_s, а не пропадает сразу."""
+    eng = me.CameraEngine(cam(zones=[gate(hold_s=60)]))
+    run(eng, frame(430), 0.0, 5)
+    eng.reset()
+    z = run(eng, frame(None), 20.0, 3)["zones"][0]
+    assert z["valid"] and z["held"] and z["pct"] == pytest.approx(10, abs=0.6)
+    assert not run(eng, frame(None), 70.0, 3)["zones"][0]["valid"]
+
+
+def test_default_hold_is_a_minute_and_stored_value_kept():
+    assert cam()["zones"][0]["hold_s"] == 60
+    assert cam(zones=[gate(hold_s=10)])["zones"][0]["hold_s"] == 10, "настроенное на заводе не меняем"
 
 
 def test_preview_mask_and_raw():
     eng = me.CameraEngine(cam())
     run(eng, frame(270))
-    g = eng.gates["g1"]
+    g = eng.gauges["g1"]
     img = frame(270)
     marked = lambda m: int(((m[:, :, 2] > 230) & (m[:, :, 1] < 80) & (m[:, :, 0] < 80)).sum())     # красные точки маски (рамки жёлтые и голубые)
     m = g.mask_preview(img, max_w=300)
@@ -192,9 +210,14 @@ def test_scenario_value_and_no_data():
     states = {"sh": {"result": st}}
     assert ms.evaluate("value", ms.source_bits([G], states, analog=True)) == pytest.approx(500, abs=6)
     lost = run(me.CameraEngine(cam()), frame(None))
-    for bad in ({"sh": {"result": lost}}, {"sh": {"result": dict(st, alive=False)}}, {}):
-        assert ms.evaluate("value", ms.source_bits([G], bad, analog=True)) == 65535
-    assert ms.evaluate("value", []) == 65535
+    for bad in ({"sh": {"result": lost}}, {}):
+        assert ms.evaluate("value", ms.source_bits([G], bad, analog=True)) == -1
+    assert ms.evaluate("value", []) == -1
+    # состояние не обновляется (поток завис на переоткрытии): после until значение из него брать нельзя
+    until = st["zones"][0]["until"]
+    assert until == pytest.approx(60.4, abs=0.2)
+    assert ms.source_bits([G], states, analog=True, now=until - 1) != [-1]
+    assert ms.source_bits([G], states, analog=True, now=until + 1) == [-1]
 
 
 def test_scenario_scale_default_saved_and_validated():
@@ -216,12 +239,15 @@ def test_scenario_value_in_both_scales(pct, x10, raw):
 
 
 @pytest.mark.parametrize("scale", [10, 1])
-def test_scenario_no_data_is_65535_in_both_scales(scale):
+def test_scenario_no_data_is_minus_one_in_both_scales(scale):
     lost = {"sh": {"result": {"alive": True, "zones": [{"id": "g1", "valid": False, "pct": 0.0}]}}}
-    dead = {"sh": {"result": {"alive": False, "zones": [{"id": "g1", "valid": True, "pct": 50.0}]}}}
+    dead = {"sh": {"result": {"alive": False, "zones": [{"id": "g1", "valid": False, "pct": 0.0}]}}}
     for states in (lost, dead, {}):
-        assert ms.evaluate("value", ms.source_bits([G], states, analog=True, scale=scale)) == 65535
-    assert ms.evaluate("value", ms.source_bits([], lost, analog=True, scale=scale)) == 65535
+        assert ms.evaluate("value", ms.source_bits([G], states, analog=True, scale=scale)) == -1
+    assert ms.evaluate("value", ms.source_bits([], lost, analog=True, scale=scale)) == -1
+    # камера не жива, но уровнемер ещё держит значение — в ПЛК идёт оно
+    held = {"sh": {"result": {"alive": False, "zones": [{"id": "g1", "valid": True, "pct": 50.0, "until": 100.0}]}}}
+    assert ms.source_bits([G], held, analog=True, scale=scale, now=90.0) == [50 * scale]
 
 
 @pytest.mark.parametrize("extra, scale", [({}, 10), ({"scale": 10}, 10), ({"scale": 1}, 1)])

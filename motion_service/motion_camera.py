@@ -27,7 +27,7 @@ import numpy as np
 
 import juice_base
 from perf_stats import PERF
-from motion_engine import CameraEngine, scale_points
+from motion_engine import GAUGE_TYPES, CameraEngine, TubeRT, scale_points
 from motion_level import LevelInfer, nearest_trend_shot, post_infer, trend_shot_list
 from motion_webview import WebView
 from motion_store import store_for
@@ -263,8 +263,8 @@ class CameraWorker(threading.Thread):
         # тренды признака «вид окна» (tex / lum / rel): только в памяти, живут через пересоздание камеры; см. motion_fill_trend
         self._fill = fill_trend_for((str(self.data_dir), self.id), {z["id"]: repr((z.get("points"), z["fill_metric"])) for z in cam_cfg["zones"]
                                                                     if z.get("fill_metric", "off") != "off"})
-        # зоны-палки (flow — угол), прозрачность (flow — мутность) и шибер (flow — %): значение не «максимум за секунду», а самое позднее хорошее
-        self._angle_ids = frozenset(z["id"] for z in cam_cfg["zones"] if z["type"] in ("cycle", "clarity", "gate"))
+        # зоны-палки (flow — угол), прозрачность (flow — мутность) и уровнемеры (flow — %): значение не «максимум за секунду», а самое позднее хорошее
+        self._angle_ids = frozenset(z["id"] for z in cam_cfg["zones"] if z["type"] in ("cycle", "clarity") + GAUGE_TYPES)
         self._mstats: deque = deque(maxlen=STATS_LEN)   # корзины статистики синхронности валов: [номер 10-секундки, {группа: [n, Σ delta, min, max, Σ поправка, min, max]}] (в памяти)
         self._mbucket: Optional[list] = None
         self._juice_last = 0.0                # база «Сок»: когда последний раз писали кадр и когда чистили старое
@@ -405,17 +405,21 @@ class CameraWorker(threading.Thread):
         return (buf.tobytes(), (w, h)) if ok else None
 
     def rod_mask_jpeg(self, zone_id: str, red=None, blue=None, max_w: int = 640, raw: bool = False, red_more=None, blue_more=None, red_not=None, blue_not=None,
-                      tip=None) -> Optional[bytes]:
-        """JPEG «что видит детектор» по зоне-циклу или шиберу с пробными порогами цвета (None — кадра ещё нет); raw — сам кадр без масок.
-        ValueError — нет такой зоны."""
-        cyc = self.engine.cycles.get(zone_id) or self.engine.gates.get(zone_id)
+                      tip=None, fill=None, empty=None, tol=None) -> Optional[bytes]:
+        """JPEG «что видит детектор» по зоне-циклу или уровнемеру с пробными порогами цвета (None — кадра ещё нет); raw — сам кадр без масок.
+        fill / empty / tol — пробные образцы цвета и допуск уровнемера-столбика. ValueError — нет такой зоны."""
+        cyc = self.engine.cycles.get(zone_id) or self.engine.gauges.get(zone_id)
         if cyc is None:
-            raise ValueError("нет зоны-цикла «%s» у камеры" % zone_id)
+            raise ValueError("нет зоны «%s» у камеры" % zone_id)
         with self._lock:
             f = self._frame
         if f is None or f.ndim != 3:
             return None
-        ok, buf = cv2.imencode(".jpg", cyc.mask_preview(f, red, blue, max_w, raw, red_more, blue_more, red_not, blue_not, tip), [cv2.IMWRITE_JPEG_QUALITY, 85])
+        if isinstance(cyc, TubeRT):
+            img = cyc.preview(f, max_w, raw, fill, empty, tol)
+        else:
+            img = cyc.mask_preview(f, red, blue, max_w, raw, red_more, blue_more, red_not, blue_not, tip)
+        ok, buf = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, 92 if raw and isinstance(cyc, TubeRT) else 85])
         return buf.tobytes() if ok else None
 
     def rod_pick(self, zone_id: str, u: float, v: float) -> Optional[dict]:
@@ -653,7 +657,7 @@ class CameraWorker(threading.Thread):
         size = self.cfg.get("frame_size")
         for zc in self.cfg["zones"]:
             z = zones.get(zc["id"])
-            if not z or not zc.get("points"):
+            if not z or not zc.get("points") or zc["type"] == "tube":
                 continue
             pts = np.round(np.array(scale_points(zc["points"], size, (w, h))) * k).astype(np.int32)
             color = (60, 200, 60) if z["bit"] else (50, 50, 230)
@@ -661,11 +665,13 @@ class CameraWorker(threading.Thread):
             cv2.putText(f, "%s d=%.2f f=%.2f" % (zc["id"], z["diff"], z["flow"]) + (" t=%.1f L=%.0f r=%.2f" % (z["tex"], z["lum"], z["rel"]) if "tex" in z else ""),
                         (int(pts[:, 0].min()), max(14, int(pts[:, 1].min()) - 6)),
                         cv2.FONT_HERSHEY_SIMPLEX, max(0.4, fw / 1800.0), color, 1, cv2.LINE_AA)
-        for zc in self.cfg["zones"]:                # шибер: линейка с заполнением в процентах (зону указателя нарисовал общий цикл выше)
-            if zc["type"] != "gate":
+        for zc in self.cfg["zones"]:                # уровнемеры: шкала с процентами (линейка стрелки или разметка столбика; зону указателя нарисовал общий цикл выше)
+            if zc["type"] not in GAUGE_TYPES:
                 continue
             zs = next((z for z in (st or {}).get("zones", []) if z["id"] == zc["id"]), None)
-            rl = np.round(np.array(scale_points(zc["ruler"], size, (w, h))) * k).astype(np.int32)
+            rl = np.round(np.array(scale_points(zc["ruler" if zc["type"] == "gate" else "points"], size, (w, h))) * k).astype(np.int32)
+            if zc["type"] == "tube" and len(rl) == 4:
+                rl = cv2.convexHull(rl).reshape(-1, 2)
             color = (60, 200, 60) if zs and zs["valid"] else (150, 150, 150)
             cv2.polylines(f, [rl], True, color, 2)
             cv2.putText(f, "%s %s" % (zc["id"], "%.0f%%" % zs["pct"] if zs and zs["valid"] else "--"), (int(rl[:, 0].min()), max(14, int(rl[:, 1].min()) - 6)),
@@ -853,9 +859,9 @@ class CameraWorker(threading.Thread):
                     self._tip_add(state["ts"], state["zones"])
                 self._fill.add(state["ts"], self._fill_zones(state["zones"]), bool(state["alive"]))
                 if state["alive"]:
-                    # мутность без значения (нет эталонов, цвет не на шкале) и шибер без указателя в среднее / мин / макс не идут:
+                    # мутность без значения (нет эталонов, цвет не на шкале) и уровнемер без значения в среднее / мин / макс не идут:
                     # ноль там означал бы «чистый» / «0 %»
-                    bad = {z["id"] for z in state["zones"] if z["type"] in ("clarity", "gate") and not z["valid"]}
+                    bad = {z["id"] for z in state["zones"] if z["type"] in ("clarity",) + GAUGE_TYPES and not z["valid"]}
                     self._stats_add(state["ts"], {k: v for k, v in zones.items() if k not in bad} if bad else zones)
                     self._mirror_stats_add(state["ts"], state.get("groups") or [])
             self._writes = writes
@@ -887,6 +893,7 @@ class CameraWorker(threading.Thread):
         if st is not None:
             st["corrupt"] = True
             st["ts"] = now
+            st["zones"] = self.engine.held_zones(st["zones"], now)
             with self._lock:
                 self._state = st
                 self._stamps.append(now)
@@ -972,7 +979,7 @@ class CameraWorker(threading.Thread):
                     self.engine.buf.clear()    # короткий обрыв (короче freeze_timeout_s): сравнивать со старым кадром нельзя, а биты зон держим
                 else:
                     self.engine.reset()
-                last_gray, last_proc, freeze_time, frozen = None, 0.0, 0.0, False
+                last_proc, freeze_time, frozen = 0.0, 0.0, False      # last_gray остаётся: залипший захват после переоткрытия отдаёт тот же кадр
                 if file_src:
                     fps = cap.get(cv2.CAP_PROP_FPS) or 25.0
                     file_dt = 1.0 / max(1.0, fps)
@@ -1019,10 +1026,12 @@ class CameraWorker(threading.Thread):
             got_frame = True
             self._hw_fail = 0
             # детектор зависшей картинки: живой поток всегда чуть «дышит» (шум матрицы)
+            still = False                      # картинка не изменилась с прошлого кадра (в том числе кадра до переоткрытия потока)
             if last_gray is not None and last_gray.shape == gray.shape:
                 last_diff = float(cv2.absdiff(last_gray, gray).mean())
                 if last_diff < cfg["freeze_eps"]:
                     freeze_time += dt
+                    still = True
                 else:
                     freeze_time = 0.0
             last_gray = gray
@@ -1067,7 +1076,7 @@ class CameraWorker(threading.Thread):
             if frozen:                         # камера ожила — состояния с нуля
                 frozen = False
                 self.engine.reset()
-            st = self.engine.process(gray, now, frame)
+            st = self.engine.process(gray, now, frame, fresh=not still)
             if st is not None:
                 self._publish(st, frame, True)
             else:

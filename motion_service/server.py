@@ -97,27 +97,33 @@ class RingLog(logging.Handler):
 # «Мягкие» поля зоны-стакана: движок читает их из конфига на каждом кадре, поэтому смена не требует перезапуска камеры (иначе каждая правка порога
 # = переподключение потока и ~20 с «считаю движение» с 65535 в ПЛК). Геометрия (центр, радиус, ядро), эталоны, вывод в ПЛК, mv_on — перезапуск как раньше.
 HOT_CLARITY_KEYS = ("t_turb", "t_dirty", "hyst", "hold_s", "smooth_s", "glare_pct", "off_max", "mv_hi", "mv_lo", "mv_win_s", "mv_smooth_s", "mv_hold_s", "label", "name")
+# То же у уровнемеров: подбор цвета пипеткой и допуска не должен рвать поток и сбрасывать удерживаемое значение. Разметка и направление — перезапуск.
+HOT_GAUGE_KEYS = ("name", "smooth", "hold_s", "min_area", "flip", "red_hsv", "red_more", "red_not", "fill_colors", "empty_colors", "tol", "min_quality")
+
+
+def _hot_keys(zone: dict) -> tuple:
+    kind = zone.get("type")
+    return HOT_CLARITY_KEYS if kind == "clarity" else HOT_GAUGE_KEYS if kind in engine.GAUGE_TYPES else ()
 
 
 def _strip_hot(cam: dict) -> dict:
-    """Камера без «мягких» полей стаканов — для сравнения «изменилось только мягкое?»."""
+    """Камера без «мягких» полей стаканов и уровнемеров — для сравнения «изменилось только мягкое?»."""
     out = dict(cam)
     out.pop("autocal_watch", None)              # настройка сторожа подгонки читается из конфига сервиса, потоку камеры не нужна
-    out["zones"] = [({k: v for k, v in z.items() if k not in HOT_CLARITY_KEYS} if z.get("type") == "clarity" else z) for z in cam["zones"]]
+    out["zones"] = [{k: v for k, v in z.items() if k not in _hot_keys(z)} for z in cam["zones"]]
     return out
 
 
 def _hot_update(worker, new_cam: dict) -> bool:
-    """Камера отличается от работающей только мягкими полями стаканов → записать их в конфиг рабочего потока на месте (True); иначе False."""
+    """Камера отличается от работающей только мягкими полями стаканов и уровнемеров → записать их в конфиг рабочего потока на месте (True); иначе False."""
     old = worker.cfg
     if _strip_hot(old) != _strip_hot(new_cam):
         return False
     old["autocal_watch"] = new_cam["autocal_watch"]
     for oz, nz in zip(old["zones"], new_cam["zones"]):
-        if oz.get("type") == "clarity":
-            for k in HOT_CLARITY_KEYS:
-                if k in nz:
-                    oz[k] = nz[k]
+        for k in _hot_keys(oz):
+            if k in nz:
+                oz[k] = nz[k]
     return True
 
 
@@ -519,18 +525,24 @@ def create_app(data_dir: Optional[Path] = None, capture_factory: Callable = open
 
     @app.get("/cameras/{cid}/rod_mask")
     def rod_mask(cid: str, zone: str, red: str = "", blue: str = "", w: int = 640, raw: int = 0, red_more: Optional[str] = None, blue_more: Optional[str] = None,
-                 red_not: Optional[str] = None, blue_not: Optional[str] = None, tip: Optional[str] = None):
-        """Что видит детектор палки: кадр вокруг оси с масками красной и синей половин. red/blue — пробные пороги «H1,H2,S,V» (пусто — настроенные);
+                 red_not: Optional[str] = None, blue_not: Optional[str] = None, tip: Optional[str] = None,
+                 fill: Optional[str] = None, empty: Optional[str] = None, tol: Optional[float] = None):
+        """Что видит детектор палки или уровнемера: кадр вокруг зоны с масками. red/blue — пробные пороги «H1,H2,S,V» (пусто — настроенные);
         red_not / blue_not — пробные исключённые цвета «H1,H2,S1,S2,V1,V2;…» (пусто — без них, нет параметра — как в настройках);
-        tip — пробные цвета светоотражателей в том же виде (жёлтым на маске; пусто — без них, нет параметра — как в настройках)."""
+        tip — пробные цвета светоотражателей в том же виде (жёлтым на маске; пусто — без них, нет параметра — как в настройках);
+        fill / empty — пробные образцы цвета уровнемера-столбика «L,a,b;…», tol — допуск цвета (нет параметра — как в настройках)."""
         def hsv(txt, default, name, pair_ok):
             return None if not txt.strip() else engine._hsv4([float(x) for x in txt.split(",")], default, name, pair_ok)
         try:
             r, b = hsv(red, None, "red", True), hsv(blue, None, "blue", False)
             more = lambda txt, name: None if txt is None else engine._more([[float(x) for x in item.split(",")] for item in txt.split(";") if item.strip()], name)   # noqa: E731 — «H1,H2,S,V;H1,H2,S,V»; пусто — без дополнительных
             nots = lambda txt, name: None if txt is None else engine._nots([[float(x) for x in item.split(",")] for item in txt.split(";") if item.strip()], name)   # noqa: E731
+            colors = lambda txt, name: None if txt is None else engine._colors([[float(x) for x in item.split(",")] for item in txt.split(";") if item.strip()], name)   # noqa: E731
+            if tol is not None and not (math.isfinite(tol) and 1 <= tol <= 60):
+                raise ValueError("tol: от 1 до 60")
             data = mgr.worker(cid).rod_mask_jpeg(zone, r, b, max(120, min(int(w), 1600)), bool(raw), more(red_more, "red_more"), more(blue_more, "blue_more"),
-                                                 nots(red_not, "red_not"), nots(blue_not, "blue_not"), nots(tip, "tip"))
+                                                 nots(red_not, "red_not"), nots(blue_not, "blue_not"), nots(tip, "tip"),
+                                                 colors(fill, "fill"), colors(empty, "empty"), tol)
         except ValueError as e:
             raise HTTPException(400, str(e))
         if data is None:

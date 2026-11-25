@@ -37,13 +37,26 @@ FB = dict(pyr_scale=0.5, levels=3, winsize=15, iterations=3, poly_n=5, poly_sigm
 MIN_FLOW_SIDE = 16       # зона меньше этого (px) для Farneback не годится — поток = 0
 ID_RE = re.compile(r"^[A-Za-z0-9_\-]{1,40}$")
 
-ZONE_TYPES = ("motion", "presence", "cycle", "level", "clarity", "gate")
-# Шибер (25.11): цветной указатель ездит рядом с линейкой, значение — на какой высоте линейки он стоит, 0..100 %.
+ZONE_TYPES = ("motion", "presence", "cycle", "level", "clarity", "gate", "tube")
+# Уровнемеры — значение 0..100 % по картинке. gate («стрелка», бывший шибер): цветной указатель ездит рядом с линейкой. tube («столбик»): уровень виден
+# цветом — от начала шкалы «заполнено», дальше «пусто» (магнитный указатель, стекло). Удержание, «нет данных», сценарии и тренды у них общие.
+GAUGE_TYPES = ("gate", "tube")
+GAUGE_HOLD_S = 60.0                     # не видно (закрыли, нет кадров, картинка стоит) — держим последнее значение столько секунд, потом «нет данных»
+GAUGE_STALE_S = 15.0                    # значение в состоянии камеры старее этого (и «держать») сценарий не берёт: поток камеры мог зависнуть на переоткрытии
+GAUGE_SMOOTH = 5                        # значение — медиана стольких последних удачных кадров
+GAUGE_GAP_S = 10.0                      # перерыв в удачных кадрах дольше этого — прежние в медиану не идут
+GAUGE_STILL_S = 3.0                     # неизменившийся кадр (дубль потока) даёт значение ещё столько секунд и при малом «держать»; дальше — по «держать»
+TUBE_DIRECTIONS = ("up", "down", "right", "left")   # куда растёт уровень: снизу вверх / сверху вниз / слева направо / справа налево
+TUBE_TOL = 12.0                         # допуск цвета: расстояние в Lab до образца (яркость с весом TUBE_L_WEIGHT)
+TUBE_L_WEIGHT = 0.5                     # тень и свет меняют в основном яркость — она в расстоянии весит вдвое меньше оттенка
+TUBE_QUALITY = 80                       # столько % строк должно сходиться с «до уровня заполнено, дальше пусто», иначе колонку не видно
+TUBE_ROW_PIX = 3                        # меньше стольких точек цвета строку не заполняют (узкая колонка в широком прямоугольнике)
+TUBE_ROW_SHARES = (0.0, 0.35, 0.5)      # …и не меньше такой доли от типичной заполненной строки (тень сбоку даёт лишь несколько точек): берётся доля, при которой картина сходится лучше
+TUBE_MAX_H, TUBE_MAX_W = 600, 160       # полоска вдоль шкалы не крупнее этого
+TUBE_MAX_COLORS = 6
+TUBE_MAX_GAP = 0.07                      # границу уровня «размазало» шире этой доли шкалы (часть колонки у границы не видна) — значения нет
 GATE_RED_HSV = (10, 165, 100, 70)       # лента указателя [h_max, h_min, S_min, V_min]: строже, чем красный палки, — ржавчину рядом не берём
-GATE_NO_DATA = 65535                    # что уходит в ПЛК, когда указателя не видно: 0 — это настоящие «0 %», путать нельзя
 GATE_MIN_AREA = 200                     # пятно меньше этого (точек кадра разметки) за указатель не принимаем
-GATE_SMOOTH = 5                         # значение — медиана стольких последних кадров с указателем
-GATE_HOLD_S = 10.0                      # указатель пропал — держим последнее значение столько секунд, потом «нет данных»
 GATE_CLOSE_DIV = 128                    # разрывы ленты по горизонтали склеиваем ядром «ширина кадра / 128» (15 точек на 1920)
 CLARITY_DIRTY_MODES = ("shared", "own")   # «грязный» цвет зоны: общий сдвиг камеры от «чистого» этой зоны / свой собственный
 CLARITY_REFS = ("shared", "own")            # эталоны камеры: общие на все стаканы / у каждого свои
@@ -172,6 +185,8 @@ def _norm_zone(z: dict, cam_id: str) -> dict:
         return _norm_clarity(z, zid, where)
     if ztype == "gate":
         return _norm_gate(z, zid, where)
+    if ztype == "tube":
+        return _norm_tube(z, zid, where)
     metric = z.get("metric", "flow")
     if metric not in METRICS:
         raise ValueError("%s: метрика %r не из %s" % (where, metric, list(METRICS)))
@@ -239,9 +254,9 @@ def order_ruler(pts) -> list:
 
 
 def _norm_gate(z: dict, zid: str, where: str) -> dict:
-    """Зона-«шибер»: ruler — четыре угла линейки (нижняя сторона = 0 %, верхняя = 100 %; flip — наоборот), points — многоугольник, где ходит
+    """Уровнемер «стрелка» (бывший шибер): ruler — четыре угла линейки (нижняя сторона = 0 %, верхняя = 100 %; flip — наоборот), points — многоугольник, где ходит
     указатель, цвет указателя — теми же полями, что красный конец палки (red_hsv / red_more / red_not). Значение — заполнение линейки 0..100 %
-    (flow = %, diff = площадь найденного пятна, bit = значение есть). В ПЛК — только сценарием: % × 10, нет данных — 65535."""
+    (flow = %, diff = площадь найденного пятна, bit = значение есть). В ПЛК — только сценарием: % × 10 или целые %, нет данных — −1."""
     def pairs(v, name):
         try:
             return [[float(p[0]), float(p[1])] for p in v]
@@ -267,7 +282,7 @@ def _norm_gate(z: dict, zid: str, where: str) -> dict:
         "metric": "flow",
         "points": pts,
         "on": 0.0, "off": 0.0, "invert": False, "track_flow": False,
-        "smooth": _num(z.get("smooth", GATE_SMOOTH), where + ".smooth", 1, 100, True),
+        "smooth": _num(z.get("smooth", GAUGE_SMOOTH), where + ".smooth", 1, 100, True),
         "frames_to_on": 1, "frames_to_off": 1, "blur": 0, "flicker_comp": False,
         "out": None,
         "ruler": ruler,
@@ -275,11 +290,70 @@ def _norm_gate(z: dict, zid: str, where: str) -> dict:
         # Ключ отдаётся всегда: по нему страница понимает, что сервис вырез не потеряет
         "cut": order_ruler(cut) if cut else None,
         "flip": bool(z.get("flip", False)),
-        "hold_s": _num(z.get("hold_s", GATE_HOLD_S), where + ".hold_s", 0, 3600),
+        "hold_s": _num(z.get("hold_s", GAUGE_HOLD_S), where + ".hold_s", 0, 3600),
         "min_area": _num(z.get("min_area", GATE_MIN_AREA), where + ".min_area", 1, 10 ** 7, True),
         "red_hsv": _hsv4(z.get("red_hsv"), GATE_RED_HSV, where + ".red_hsv", True),
         "red_more": _more(z.get("red_more"), where + ".red_more"),
         "red_not": _nots(z.get("red_not"), where + ".red_not"),
+    }
+
+
+def _colors(v, name) -> list:
+    """Образцы цвета уровнемера-столбика: [[L, a, b], …] (L 0..100, a и b −128..127), не больше TUBE_MAX_COLORS; пусто — цвета ещё не взяты."""
+    if v in (None, ""):
+        return []
+    if not isinstance(v, (list, tuple)) or len(v) > TUBE_MAX_COLORS:
+        raise ValueError("%s: список не длиннее %d цветов" % (name, TUBE_MAX_COLORS))
+    out = []
+    for c in v:
+        x = _lab3(c, name)
+        if x is None:
+            raise ValueError("%s: нужно три числа [L, a, b]" % name)
+        out.append(x)
+    return out
+
+
+def _uv(pts, direction: str) -> np.ndarray:
+    """Точки кадра → (u поперёк шкалы, v вдоль неё: растёт от 0 % к 100 %)."""
+    p = np.asarray(pts, float).reshape(-1, 2)
+    x, y = p[:, 0], p[:, 1]
+    u, v = {"up": (x, -y), "down": (x, y), "right": (y, x), "left": (y, -x)}[direction]
+    return np.stack([u, v], axis=1)
+
+
+def _norm_tube(z: dict, zid: str, where: str) -> dict:
+    """Уровнемер «столбик»: points — разметка шкалы (4 точки — линии уровня соединяют боковые стороны, учитывается наклон; 3 или 5+ — многоугольник,
+    уровень по срезам поперёк направления), direction — куда растёт уровень, fill_colors / empty_colors — образцы цвета «заполнено» и «пусто» (Lab),
+    tol — допуск цвета, min_quality — сколько % строк должно сходиться. Значение — 0..100 % разметки (flow = %, diff = качество, bit = значение есть)."""
+    try:
+        pts = [[float(p[0]), float(p[1])] for p in z.get("points") or []]
+    except Exception:
+        raise ValueError("%s: точки разметки должны быть парами [x, y]" % where)
+    if len(pts) < 3:
+        raise ValueError("%s: в разметке меньше трёх точек" % where)
+    direction = z.get("direction") or "up"
+    if direction not in TUBE_DIRECTIONS:
+        raise ValueError("%s: направление %r не из %s" % (where, direction, list(TUBE_DIRECTIONS)))
+    uv = _uv(pts, direction)
+    if np.ptp(uv[:, 1]) < 4 or np.ptp(uv[:, 0]) < 1:
+        raise ValueError("%s: разметка слишком мала вдоль или поперёк шкалы" % where)
+    return {
+        "id": zid,
+        "name": str(z.get("name") or zid),
+        "enabled": bool(z.get("enabled", True)),
+        "type": "tube",
+        "metric": "flow",
+        "points": pts,
+        "on": 0.0, "off": 0.0, "invert": False, "track_flow": False,
+        "smooth": _num(z.get("smooth", GAUGE_SMOOTH), where + ".smooth", 1, 100, True),
+        "frames_to_on": 1, "frames_to_off": 1, "blur": 0, "flicker_comp": False,
+        "out": None,
+        "direction": direction,
+        "fill_colors": _colors(z.get("fill_colors"), where + ".fill_colors"),
+        "empty_colors": _colors(z.get("empty_colors"), where + ".empty_colors"),
+        "tol": _num(z.get("tol", TUBE_TOL), where + ".tol", 1, 60),
+        "min_quality": _num(z.get("min_quality", TUBE_QUALITY), where + ".min_quality", 50, 100, True),
+        "hold_s": _num(z.get("hold_s", GAUGE_HOLD_S), where + ".hold_s", 0, 3600),
     }
 
 
@@ -599,21 +673,21 @@ def _norm_scenario(sc: dict, cams: list) -> dict:
         if zone in zones.get(cam, ()) and not any(x["camera"] == cam and x.get("zone") == zone for x in srcs):
             srcs.append({"camera": cam, "zone": zone})
     mb = sc.get("modbus")
-    # шибер — число, а не бит: складывать его с окнами нельзя. Сценарий с шибером берёт его одного (rule value) и пишет проценты:
+    # уровнемер — число, а не бит: складывать его с окнами нельзя. Сценарий с уровнемером берёт его одного (rule value) и пишет проценты:
     # scale 10 — с десятыми (54,3 % → 543, так и без поля), 1 — целые (54,3 % → 54).
-    gates = {c["id"]: {z["id"] for z in c["zones"] if z["type"] == "gate"} for c in cams}
-    analog = [s for s in srcs if s.get("zone") in gates.get(s["camera"], ())]
+    gauges = {c["id"]: {z["id"] for z in c["zones"] if z["type"] in GAUGE_TYPES} for c in cams}
+    analog = [s for s in srcs if s.get("zone") in gauges.get(s["camera"], ())]
     if analog:
         rule, srcs = "value", analog[:1]
     elif rule == "value" and srcs:
-        rule = "or"                 # шибер из источников убрали, остались обычные окна
+        rule = "or"                 # уровнемер из источников убрали, остались обычные окна
     out = _out(sc.get("out"), ZONE_OUT_KINDS, where + ".out")
     if rule == "value" and out and out["kind"] != "holding":
-        raise ValueError("%s: значение шибера пишется только в регистр" % where)
+        raise ValueError("%s: значение уровнемера пишется только в регистр" % where)
     res = {"id": sid, "name": str(sc.get("name") or sid), "rule": rule, "signal": signal, "sources": srcs,
            "out": out,
            "modbus": normalize_modbus(mb, base=None) if mb else None}
-    if rule == "value":                 # формат значения есть только у шибера
+    if rule == "value":                 # формат значения есть только у уровнемера
         scale = 10 if sc.get("scale") is None else sc["scale"]
         if scale not in (1, 10):
             raise ValueError("%s: формат значения %r не из 10/1" % (where, scale))
@@ -1738,10 +1812,10 @@ def ruler_level(ruler, pt) -> float:
     return 0.5 * (lo + hi)
 
 
-class GateRT:
-    """Шибер: самое крупное пятно цвета указателя внутри его зоны (саму линейку с её красными метками вырезаем) → высота центра пятна по
-    линейке → заполнение 0..100 %. Значение — медиана последних smooth кадров. Указатель пропал — hold_s секунд держим последнее значение
-    (held), потом «нет данных» (valid = False)."""
+class GaugeRT:
+    """Общее у уровнемеров: доля шкалы t (0..1) → медиана последних smooth удачных кадров. Не видно — hold_s секунд держим последнее значение
+    (held), потом «нет данных» (valid = False). Память о последнем удачном кадре переживает reset(): удержание действует и после обрыва потока.
+    Настройки читаются из cfg на каждом кадре: «мягкие» (цвета, допуск, удержание…) меняются без перезапуска камеры."""
 
     def __init__(self, zcfg: dict, frame_size, cur_wh):
         self.cfg = zcfg
@@ -1749,6 +1823,87 @@ class GateRT:
         W, H = cur_wh
         self.sx = W / float(frame_size[0]) if frame_size else 1.0
         self.sy = H / float(frame_size[1]) if frame_size else 1.0
+        self.hist: deque = deque(maxlen=zcfg["smooth"])
+        self.good: Optional[tuple] = None       # (время, t, подробности) последнего удачного кадра
+        self.fresh = True                       # False — картинка не изменилась с прошлого кадра: такой кадр удержание не продлевает
+        self._sig: Optional[str] = None         # настройки детектора, которыми получено значение
+        self.reset()
+
+    def reset(self):
+        self.hist.clear()
+        self.valid = self.held = False
+        self.t = 0.0                    # доля шкалы 0..1 от начала разметки (у стрелки — от нижней стороны линейки, без учёта flip)
+        self.why = ""                   # почему на последнем кадре значения не получилось
+        self.seen: Optional[float] = None   # время последнего удачного кадра с изменившейся картинкой
+
+    def pct_of(self, t: float) -> float:
+        return 100.0 * t
+
+    @property
+    def pct(self) -> float:
+        return self.pct_of(self.t)
+
+    def _extra(self):
+        """Что запомнить вместе с удачным значением (для рисования во время удержания)."""
+        return None
+
+    detector: tuple = ()                # поля настроек, от которых зависит прочитанное значение
+
+    def _check_settings(self):
+        """Сменили цвета, допуск и т. п. (без перезапуска камеры) — значение, полученное прежними настройками, не держим и в медиану не берём."""
+        sig = repr([self.cfg.get(k) for k in self.detector])
+        if self._sig is not None and sig != self._sig:
+            self.hist.clear()
+            self.good = None
+            self.valid = self.held = False
+        self._sig = sig
+
+    def _found(self, t: float, now: float):
+        if self.hist.maxlen != self.cfg["smooth"]:
+            self.hist = deque(self.hist, maxlen=self.cfg["smooth"])
+        if self.seen is not None and now - self.seen > GAUGE_GAP_S:
+            self.hist.clear()
+        self.hist.append(t)
+        self.t = float(np.median(self.hist))
+        self.valid, self.held, self.why = True, False, ""
+        if self.fresh or self.good is None:                # застывшая картинка читается, но «держать» считается от последней живой
+            self.seen = now
+            self.good = (now, self.t, self._extra())
+
+    def _fresh(self, now: float) -> bool:
+        return self.good is not None and now - self.good[0] <= self.cfg["hold_s"]
+
+    def _lost(self, now: float, why: str):
+        self.why = why
+        fresh = self._fresh(now)
+        self.valid = self.held = fresh
+        if fresh:
+            self.t = self.good[1]
+        else:
+            self.hist.clear()                              # после долгой пропажи старые значения в медиану не идут
+
+    def snapshot(self, now: float, alive: bool) -> Optional[dict]:
+        """Что отдавать сейчас: None — «нет данных», иначе {t, held, hold_left, until, extra}. Камера не жива (обрыв, картинка стоит, каша) —
+        последнее удачное значение, пока не вышло hold_s. until — после этого момента значение из состояния брать нельзя (поток мог зависнуть)."""
+        hold = self.cfg["hold_s"]
+        live = (alive and self.valid and not self.held and self.good is not None
+                and (self.fresh or now - self.good[0] <= max(hold, GAUGE_STILL_S)))      # застывшая картинка читается, но не вечно
+        if not live and not self._fresh(now):
+            return None
+        at, t, extra = self.good
+        return {"t": self.t if live else t, "held": not live, "hold_left": 0 if live else max(0, int(round(at + hold - now))),
+                "until": at + max(hold, GAUGE_STALE_S), "extra": extra}
+
+
+class GateRT(GaugeRT):
+    """«Стрелка»: самое крупное пятно цвета указателя внутри его зоны (саму линейку с её красными метками вырезаем) → высота центра пятна по
+    линейке → 0..100 %."""
+
+    detector = ("red_hsv", "red_more", "red_not", "min_area")
+
+    def __init__(self, zcfg: dict, frame_size, cur_wh):
+        super().__init__(zcfg, frame_size, cur_wh)
+        W, H = cur_wh
         trk = np.round(np.array(scale_points(zcfg["points"], frame_size, cur_wh))).astype(np.int32)
         trk[:, 0] = np.clip(trk[:, 0], 0, W - 1)
         trk[:, 1] = np.clip(trk[:, 1], 0, H - 1)
@@ -1763,23 +1918,18 @@ class GateRT:
         pad = max(8, int(round(0.08 * max(w, h))))                                       # превью и пипетка: зона указателя с полями
         self.view = (max(0, x - pad), max(0, y - pad), min(W, x + w + pad), min(H, y + h + pad))
         self.ker = cv2.getStructuringElement(cv2.MORPH_RECT, (max(3, int(round(W / float(GATE_CLOSE_DIV)))) | 1, 3))
-        self.min_area = zcfg["min_area"] * self.sx * self.sy
-        self.hist: deque = deque(maxlen=zcfg["smooth"])
-        self.reset()
 
     def reset(self):
-        self.hist.clear()
-        self.valid = self.held = False
-        self.t = 0.0                    # высота по линейке 0..1 (0 — низ), без учёта flip
+        super().reset()
         self.area = 0                   # площадь самого крупного пятна на последнем кадре, точек кадра разметки (и когда оно мало)
         self.ptr = None                 # центр указателя, точки текущего кадра
         self.box = None                 # его прямоугольник (x0, y0, x1, y1)
-        self.last_t: Optional[float] = None
 
-    @property
-    def pct(self) -> float:
-        t = 1.0 - self.t if self.cfg["flip"] else self.t
-        return 100.0 * t
+    def pct_of(self, t: float) -> float:
+        return 100.0 * (1.0 - t if self.cfg["flip"] else t)
+
+    def _extra(self):
+        return self.ptr, self.box
 
     def _color(self, bgr: np.ndarray, red_hsv=None, red_more=None, red_not=None) -> np.ndarray:
         """Маска цвета указателя 0/255. Параметры — пробные значения вместо настроенных (превью на панели). Смысл полей — как у палки."""
@@ -1797,6 +1947,7 @@ class GateRT:
 
     def step(self, frame: Optional[np.ndarray], now: float = 0.0) -> bool:
         """Новый цветной кадр (now — его время, с). True — указатель найден на этом кадре."""
+        self._check_settings()
         x, y, w, h = self.bbox
         best = None
         if frame is not None and frame.ndim == 3:
@@ -1808,22 +1959,17 @@ class GateRT:
                 best = (int(st[i, cv2.CC_STAT_AREA]), float(cen[i][0]) + x, float(cen[i][1]) + y,
                         (int(st[i, 0]) + x, int(st[i, 1]) + y, int(st[i, 0] + st[i, 2]) + x, int(st[i, 1] + st[i, 3]) + y))
         self.area = int(round(best[0] / (self.sx * self.sy))) if best else 0
-        fresh = self.last_t is not None and now - self.last_t <= self.cfg["hold_s"]
-        if best and best[0] >= self.min_area:
+        if best and best[0] >= self.cfg["min_area"] * self.sx * self.sy:
             self.ptr, self.box = (best[1], best[2]), best[3]
-            self.hist.append(ruler_level(self.ruler, self.ptr))
-            self.t = float(np.median(self.hist))
-            self.valid, self.held, self.last_t = True, False, now
+            self._found(ruler_level(self.ruler, self.ptr), now)
             return True
-        self.valid = self.held = bool(fresh)
-        if not fresh:
-            self.hist.clear()                              # после долгой пропажи старые значения в медиану не идут
+        self._lost(now, "указатель не найден")
         return False
 
     def mask_preview(self, frame: np.ndarray, red_hsv=None, blue_hsv=None, max_w: int = 640, raw: bool = False, red_more=None, blue_more=None, red_not=None,
                      blue_not=None, tip_hsv=None) -> np.ndarray:
         """Что видит детектор: зона указателя с полями. Красным — то, что принято за цвет указателя (только внутри зоны и вне линейки),
-        жёлтым — границы зоны, голубым — линейка. raw — сам кадр (для пипетки). Вызов — как у палки (CycleRT.mask_preview), синего у шибера нет."""
+        жёлтым — границы зоны, голубым — линейка. raw — сам кадр (для пипетки). Вызов — как у палки (CycleRT.mask_preview), синего у стрелки нет."""
         vx0, vy0, vx1, vy1 = self.view
         crop = frame[vy0:vy1, vx0:vx1]
         sc = max_w / float(max(1, crop.shape[1]))
@@ -1840,6 +1986,166 @@ class GateRT:
         if max_w == img.shape[1]:
             return img
         return cv2.resize(img, (max_w, max(2, int(round(img.shape[0] * sc)))), interpolation=cv2.INTER_AREA if sc < 1 else cv2.INTER_NEAREST if not raw else cv2.INTER_CUBIC)
+
+
+def tube_grid(points, direction: str) -> tuple:
+    """Разметка столбика (точки текущего кадра) → (map_x, map_y, inside): откуда брать точки полоски H × W, строка 0 — начало шкалы (0 %).
+    Четыре точки: пара с меньшим «вдоль шкалы» — начало, пара с большим — конец; строка соединяет точки на боковых сторонах (наклон учтён,
+    высота линейна вдоль сторон, без перспективы). Иначе — многоугольник: строки поперёк направления, вне многоугольника точки не считаются."""
+    uv = _uv(points, direction)
+    if len(uv) == 4:
+        by_v = uv[np.argsort(uv[:, 1], kind="stable")]
+        s0, s1 = sorted(by_v[:2].tolist(), key=lambda q: q[0])
+        e0, e1 = sorted(by_v[2:].tolist(), key=lambda q: q[0])
+        s0, s1, e0, e1 = (np.array(q) for q in (s0, s1, e0, e1))
+        H = int(np.clip(round(max(np.linalg.norm(e0 - s0), np.linalg.norm(e1 - s1))), 8, TUBE_MAX_H))
+        W = int(np.clip(round(max(np.linalg.norm(s1 - s0), np.linalg.norm(e1 - e0))) + 1, 3, TUBE_MAX_W))
+        t = ((np.arange(H) + 0.5) / H)[:, None, None]
+        s = ((np.arange(W) + 0.5) / W)[None, :, None]
+        left, right = s0 + t * (e0 - s0), s1 + t * (e1 - s1)
+        g = left + s * (right - left)
+        inside = np.ones((H, W), bool)
+    else:
+        lo, hi = uv.min(axis=0), uv.max(axis=0)
+        du, dv = max(1e-6, hi[0] - lo[0]), max(1e-6, hi[1] - lo[1])
+        H = int(np.clip(round(dv), 8, TUBE_MAX_H))
+        W = int(np.clip(round(du) + 1, 3, TUBE_MAX_W))
+        u = lo[0] + (np.arange(W) + 0.5) / W * du
+        v = lo[1] + (np.arange(H) + 0.5) / H * dv
+        g = np.stack(np.meshgrid(u, v), axis=-1)
+        poly = np.stack([(uv[:, 0] - lo[0]) / du * W - 0.5, (uv[:, 1] - lo[1]) / dv * H - 0.5], axis=1)
+        m = np.zeros((H, W), np.uint8)
+        cv2.fillPoly(m, [np.round(poly * 16).astype(np.int32)], 255, cv2.LINE_8, 4)
+        inside = m > 0
+    gu, gv = g[..., 0], g[..., 1]
+    x, y = {"up": (gu, -gv), "down": (gu, gv), "right": (gv, gu), "left": (-gv, gu)}[direction]
+    return x.astype(np.float32), y.astype(np.float32), inside
+
+
+def tube_step(filled: np.ndarray, empty: np.ndarray) -> tuple:
+    """Строки полоски от начала шкалы → (t, quality, ragged): граница, при которой «до неё заполнено, дальше пусто» сходится у наибольшего
+    числа строк. ragged — почти так же хорошо подходят границы на широком участке шкалы: часть колонки у уровня не видна (рука, труба),
+    и где он на самом деле, неизвестно."""
+    n = len(filled)
+    below = np.concatenate([[0], np.cumsum(filled)])
+    above = np.concatenate([[0], np.cumsum(empty)])
+    score = below + (above[-1] - above)
+    k = int(np.argmax(score))
+    slack = max(1, int(round(0.01 * n)))
+    near = np.nonzero(score >= score[k] - slack)[0]
+    ragged = bool(near[-1] - near[0] > max(2 * slack + 1, int(round(TUBE_MAX_GAP * n))))
+    return k / float(n), float(score[k]) / n, ragged
+
+
+class TubeRT(GaugeRT):
+    """«Столбик»: каждая точка внутри разметки похожа на образец «заполнено», на образец «пусто» или ни на что; строка поперёк шкалы — заполнена,
+    пуста или чужая. Уровень — граница между заполненными и пустыми строками. Строк, согласных с такой картиной, мало (закрыли, пар, блик,
+    не те цвета) — значения нет. Один залипший флажок или блик границу не сдвигает."""
+
+    detector = ("fill_colors", "empty_colors", "tol", "min_quality")
+
+    def __init__(self, zcfg: dict, frame_size, cur_wh):
+        super().__init__(zcfg, frame_size, cur_wh)
+        W, H = cur_wh
+        pts = np.array(scale_points(zcfg["points"], frame_size, cur_wh), float)
+        self.pts = pts
+        self.map_x, self.map_y, self.inside = tube_grid(pts, zcfg["direction"])
+        x0, y0 = pts.min(axis=0)
+        x1, y1 = pts.max(axis=0)
+        pad = max(8, int(round(0.06 * max(x1 - x0, y1 - y0))))
+        self.view = (max(0, int(x0) - pad), max(0, int(y0) - pad), min(W, int(math.ceil(x1)) + pad + 1), min(H, int(math.ceil(y1)) + pad + 1))
+
+    def reset(self):
+        super().reset()
+        self.quality = 0                # сколько % строк последнего кадра согласны с найденным уровнем
+
+    def classify(self, bgr: np.ndarray, fill=None, empty=None, tol=None) -> tuple:
+        """Маски (заполнено, пусто) по точкам картинки BGR. Параметры — пробные значения вместо настроенных (превью на панели)."""
+        fill = self.cfg["fill_colors"] if fill is None else fill
+        empty = self.cfg["empty_colors"] if empty is None else empty
+        tol = self.cfg["tol"] if tol is None else tol
+        lab = cv2.cvtColor(bgr.astype(np.float32) / 255.0, cv2.COLOR_BGR2Lab)
+        w = np.array([TUBE_L_WEIGHT, 1.0, 1.0], np.float32)
+
+        def dist(colors):
+            d = np.full(lab.shape[:2], np.inf, np.float32)
+            for c in colors:
+                d = np.minimum(d, np.linalg.norm((lab - np.array(c, np.float32)) * w, axis=2))
+            return d
+
+        df, de = dist(fill), dist(empty)
+        return (df < tol) & (df <= de), (de < tol) & (de < df)
+
+    def read(self, frame: np.ndarray, fill=None, empty=None, tol=None) -> tuple:
+        """(t, quality, ragged) по одному кадру без сглаживания и порога качества. Цвета и допуск — пробные вместо настроенных (превью)."""
+        strip = cv2.remap(frame, self.map_x, self.map_y, cv2.INTER_LINEAR, borderMode=cv2.BORDER_REPLICATE)
+        f, e = self.classify(strip, fill, empty, tol)
+        base = max(1, min(TUBE_ROW_PIX, int(round(0.3 * strip.shape[1]))))
+        nf, ne = (f & self.inside).sum(axis=1), (e & self.inside).sum(axis=1)
+        typical = nf[nf >= base]
+        best = None
+        for share in TUBE_ROW_SHARES:                              # при равенстве — порог строже
+            need = max(base, int(share * np.percentile(typical, 80))) if share and len(typical) else base
+            filled = nf >= need
+            found = tube_step(filled, ~filled & (ne >= base))
+            if best is None or found[1] >= best[1]:
+                best = found
+        return best
+
+    def step(self, frame: Optional[np.ndarray], now: float = 0.0) -> bool:
+        """Новый цветной кадр (now — его время, с). True — уровень прочитан на этом кадре."""
+        self._check_settings()
+        if not self.cfg["fill_colors"] or not self.cfg["empty_colors"]:
+            self.quality = 0
+            self.valid = self.held = False
+            self.good = None                               # цвета убрали — старое значение держать нечем
+            self.hist.clear()
+            self.why = "не заданы цвета «заполнено» и «пусто»"
+            return False
+        if frame is None or frame.ndim != 3:
+            self.quality = 0
+            self._lost(now, "нет цветного кадра")
+            return False
+        t, q, ragged = self.read(frame)
+        self.quality = int(math.floor(q * 100 + 1e-9))
+        if self.quality < self.cfg["min_quality"]:
+            self._lost(now, "колонка не читается: сходится %d %% строк из нужных %d %%" % (self.quality, self.cfg["min_quality"]))
+            return False
+        if ragged:
+            self._lost(now, "колонка не читается: часть шкалы у границы уровня не видна")
+            return False
+        self._found(t, now)
+        return True
+
+    def preview(self, frame: np.ndarray, max_w: int = 640, raw: bool = False, fill=None, empty=None, tol=None) -> np.ndarray:
+        """Что видит детектор: разметка с полями, вписанная в квадрат max_w. Красным — «заполнено», голубым — «пусто» (внутри разметки), остальное
+        притемнено; жёлтым — разметка, белым — уровень на этом кадре (когда он читается). raw — сам кадр без рисунка (для пипетки)."""
+        vx0, vy0, vx1, vy1 = self.view
+        crop = frame[vy0:vy1, vx0:vx1]
+        sc = max_w / float(max(1, crop.shape[0], crop.shape[1]))
+        size = (max(2, int(round(crop.shape[1] * sc))), max(2, int(round(crop.shape[0] * sc))))
+        interp = cv2.INTER_AREA if sc < 1 else cv2.INTER_NEAREST               # увеличенное — без смешивания цветов: пипетка берёт настоящие
+        if raw:
+            return cv2.resize(crop, size, interpolation=interp)
+        poly = np.round(self.pts - [vx0, vy0]).astype(np.int32)
+        if len(poly) == 4:
+            poly = cv2.convexHull(poly).reshape(-1, 2)
+        area = np.zeros(crop.shape[:2], np.uint8)
+        cv2.fillPoly(area, [poly], 255)
+        f, e = self.classify(crop, fill, empty, tol)
+        img = (crop.astype(np.float32) * 0.5).astype(np.uint8)
+        img[f & (area > 0)] = (40, 40, 255)
+        img[e & (area > 0)] = (235, 200, 40)
+        img = cv2.resize(img, size, interpolation=interp)
+        k = np.array([size[0] / float(crop.shape[1]), size[1] / float(crop.shape[0])])
+        cv2.polylines(img, [np.round(poly * k).astype(np.int32)], True, (0, 220, 255), 1, cv2.LINE_AA)
+        t, q, ragged = self.read(frame, fill, empty, tol)
+        if q * 100 >= self.cfg["min_quality"] and not ragged:
+            row = min(len(self.map_x) - 1, int(t * len(self.map_x)))
+            ends = np.array([[self.map_x[row, 0], self.map_y[row, 0]], [self.map_x[row, -1], self.map_y[row, -1]]])
+            a, b = np.round((ends - [vx0, vy0]) * k).astype(int)
+            cv2.line(img, tuple(a), tuple(b), (255, 255, 255), 2, cv2.LINE_AA)
+        return img
 
 
 def flow_metric(a: np.ndarray, b: np.ndarray, mask: np.ndarray, dt: float) -> float:
@@ -1966,7 +2272,7 @@ class CameraEngine:
                         for g in cam_cfg["groups"] if g["type"] == "mirror"}
         self.cycles: dict = {}                  # id зоны-цикла → CycleRT (строятся вместе с зонами, на первом кадре)
         self.clarity: dict = {}                 # id зоны-прозрачности → ClarityRT (там же)
-        self.gates: dict = {}                   # id зоны-шибера → GateRT (там же)
+        self.gauges: dict = {}                  # id уровнемера → GateRT / TubeRT (там же)
         zl ={z["id"]: z for z in cam_cfg["zones"] if z["type"] == "level"}
         self.levels = {g["id"]: LevelRT(g, [zl[x] for x in g["zones"] if x in zl], cam_cfg["frame_size"])
                        for g in cam_cfg["groups"] if g["type"] == "level"}     # уровни живут от потока модели (LevelInfer), не от кадров камеры
@@ -2018,7 +2324,7 @@ class CameraEngine:
             c.reset()
         for c in self.clarity.values():
             c.reset()
-        for c in self.gates.values():
+        for c in self.gauges.values():
             c.reset()
         for t in self.timers.values():
             t.reset()
@@ -2030,9 +2336,14 @@ class CameraEngine:
     def _build(self, gray):
         h, w = gray.shape[:2]
         self.frame_wh = (w, h)
-        self.zones = [ZoneRT(z, self.cfg["frame_size"], (w, h)) for z in self.cfg["zones"] if z["enabled"] and z["type"] not in ("cycle", "level", "clarity", "gate")]
+        self.zones = [ZoneRT(z, self.cfg["frame_size"], (w, h)) for z in self.cfg["zones"] if z["enabled"] and z["type"] not in ("cycle", "level", "clarity") + GAUGE_TYPES]
         self.cycles = {z["id"]: CycleRT(z, self.cfg["frame_size"], (w, h)) for z in self.cfg["zones"] if z["enabled"] and z["type"] == "cycle"}
-        self.gates = {z["id"]: GateRT(z, self.cfg["frame_size"], (w, h)) for z in self.cfg["zones"] if z["enabled"] and z["type"] == "gate"}
+        old = self.gauges
+        self.gauges = {z["id"]: (GateRT if z["type"] == "gate" else TubeRT)(z, self.cfg["frame_size"], (w, h))
+                       for z in self.cfg["zones"] if z["enabled"] and z["type"] in GAUGE_TYPES}
+        for zid, c in self.gauges.items():                  # сменилось разрешение потока — последнее значение и удержание не теряем
+            if zid in old and old[zid].good is not None:
+                c.good = (old[zid].good[0], old[zid].good[1], None)
         cz = [z for z in self.cfg["zones"] if z["enabled"] and z["type"] == "clarity"]
         base = self.cfg.get("clarity_clean")
         if base is None:                                    # общего нет — медиана «чистых» других стаканов (снятых хотя бы у одного)
@@ -2042,9 +2353,10 @@ class CameraEngine:
         for m in self.mirrors.values():
             m.reset()
 
-    def process(self, gray: np.ndarray, now: float, frame: Optional[np.ndarray] = None) -> Optional[dict]:
+    def process(self, gray: np.ndarray, now: float, frame: Optional[np.ndarray] = None, fresh: bool = True) -> Optional[dict]:
         """Следующий (уже отобранный по proc_fps) серый кадр → состояние. None, пока копится буфер для FRAME_GAP.
-        frame — тот же кадр в цвете: нужен зонам-циклам (цвет палки); без него (серый поток) они «палку не видят»."""
+        frame — тот же кадр в цвете: нужен зонам-циклам (цвет палки); без него (серый поток) они «палку не видят».
+        fresh = False — картинка не изменилась с прошлого кадра: уровнемеры по такому кадру удержание не продлевают."""
         if self.zones is None or self.frame_wh != (gray.shape[1], gray.shape[0]):
             self._build(gray)
             self.buf.clear()
@@ -2064,11 +2376,12 @@ class CameraEngine:
             c.step_move(frame, now)                         # сначала движение: пустой стакан цвет в мутность не пускает
             bits[c.id] = int(c.step(frame, now))
         t3 = time.perf_counter()
-        for c in self.gates.values():
+        for c in self.gauges.values():
+            c.fresh = fresh
             bits[c.id] = int(c.step(frame, now))
-        if self.gates:
-            PERF.record(cid + ":gate", (time.perf_counter() - t3) * 1000.0, got=sum(1 for c in self.gates.values() if c.valid and not c.held),
-                        of=len(self.gates), budget_ms=budget)
+        if self.gauges:
+            PERF.record(cid + ":gate", (time.perf_counter() - t3) * 1000.0, got=sum(1 for c in self.gauges.values() if c.valid and not c.held),
+                        of=len(self.gauges), budget_ms=budget)
         if self.zones:
             PERF.record(cid + ":zones", (t1 - t0) * 1000.0, got=sum(1 for z in self.zones if bits[z.id]), of=len(self.zones), budget_ms=budget)
         if self.cycles:
@@ -2124,8 +2437,8 @@ class CameraEngine:
             if zc["type"] == "clarity":
                 zones.append(self._clarity_zone(zc, alive))
                 continue
-            if zc["type"] == "gate":
-                zones.append(self._gate_zone(zc, alive))
+            if zc["type"] in GAUGE_TYPES:
+                zones.append(self._gauge_zone(zc, now, alive))
                 continue
             z = zs.get(zc["id"])
             zones.append({"id": zc["id"], "name": zc["name"], "type": zc["type"], "metric": zc["metric"],
@@ -2196,21 +2509,34 @@ class CameraEngine:
                 "ref_default": bool(c and c.clean_default),
                 "move": move, "juice": (None if (c is None or c.juice is None or not c.cfg["mv_on"]) else int(c.juice)), "empty": empty}
 
-    def _gate_zone(self, zc: dict, alive: bool) -> dict:
-        """Зона-шибер → запись состояния. pct — заполнение линейки 0..100 % (flow = pct — для историй, трендов и CSV), diff = площадь пятна
-        указателя, bit/valid — значение есть (в том числе удержанное, held). t — высота по линейке от низа 0..1, ptr и box — где указатель,
-        в точках кадра разметки (для рисования на плитке)."""
-        c = self.gates.get(zc["id"])
-        ok = bool(alive and c and c.valid)
-        pct = round(c.pct, 1) if ok else 0.0
+    def _gauge_zone(self, zc: dict, now: float, alive: bool) -> dict:
+        """Уровнемер → запись состояния. pct — 0..100 % (flow = pct — для историй, трендов и CSV), bit/valid — значение есть (в том числе
+        удержанное, held: осталось hold_left с), until — после этого времени значение брать нельзя. t — доля шкалы от начала разметки.
+        Стрелка: diff = площадь пятна указателя, ptr и box — где он, в точках кадра разметки. Столбик: diff = quality, % сходящихся строк."""
+        c = self.gauges.get(zc["id"])
+        s = c.snapshot(now, alive) if c else None
+        ok = s is not None
+        pct = round(c.pct_of(s["t"]), 1) if ok else 0.0
+        reason = "" if ok and not s["held"] else ("нет кадров" if not alive else (c.why if c else "зона выключена"))
+        out = {"id": zc["id"], "name": zc["name"], "type": zc["type"], "metric": "flow", "enabled": zc["enabled"],
+               "bit": int(ok), "flow": pct, "value": pct, "on": 0.0, "off": 0.0,
+               "pct": pct, "valid": ok, "held": bool(ok and s["held"]), "hold_left": s["hold_left"] if ok else 0,
+               "until": round(s["until"], 1) if ok else None, "reason": reason, "t": round(s["t"], 4) if ok else 0.0}
+        if zc["type"] == "tube":
+            quality = c.quality if (c and alive) else 0
+            out.update(diff=quality, quality=quality)
+            return out
         area = c.area if (c and alive) else 0
-        return {"id": zc["id"], "name": zc["name"], "type": "gate", "metric": "flow", "enabled": zc["enabled"],
-                "bit": int(ok), "flow": pct, "diff": area, "value": pct, "on": 0.0, "off": 0.0,
-                "pct": pct, "valid": ok, "held": bool(ok and c.held), "area": area,
-                "reason": "" if ok else ("нет кадров" if not alive else "указатель не найден"),
-                "t": round(c.t, 4) if ok else 0.0,
-                "ptr": [round(c.ptr[0] / c.sx, 1), round(c.ptr[1] / c.sy, 1)] if ok else None,
-                "box": [round(c.box[0] / c.sx), round(c.box[1] / c.sy), round(c.box[2] / c.sx), round(c.box[3] / c.sy)] if ok else None}
+        ptr, box = s["extra"] if ok and s["extra"] else (None, None)
+        out.update(diff=area, area=area,
+                   ptr=[round(ptr[0] / c.sx, 1), round(ptr[1] / c.sy, 1)] if ptr else None,
+                   box=[round(box[0] / c.sx), round(box[1] / c.sy), round(box[2] / c.sx), round(box[3] / c.sy)] if box else None)
+        return out
+
+    def held_zones(self, zones: list, now: float) -> list:
+        """Битые кадры: прошлое состояние повторяется как есть, а уровнемеры отдают удержанное по своим «держать» (или «нет данных»)."""
+        own = {z["id"]: z for z in self.cfg["zones"]}
+        return [self._gauge_zone(own[z["id"]], now, False) if z.get("type") in GAUGE_TYPES and z["id"] in own else z for z in zones]
 
     def clarity_sample(self, zone_ids, seconds: float) -> dict:
         """Эталон цвета по последним `seconds` секундам для зон-прозрачности: {id: {lab, n, spread}} или {id: {error}}. zone_ids пуст — все."""

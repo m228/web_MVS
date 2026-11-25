@@ -505,7 +505,11 @@
           <button type="button" class="md-tab" role="tab" data-mm-kind="rods" title="Два вала диффузии с палками: углы красного конца и рассинхрон от зеркальности">Валы</button>
           <button type="button" class="md-tab" role="tab" data-mm-kind="glass" title="Два мерных стекла: уровень жидкости по модели — нижнее, потом верхнее">Стёкла</button>
           <button type="button" class="md-tab" role="tab" data-mm-kind="juice" title="Стаканы с соком: кружок на каждом, по цвету считается мутность 0–100">Стаканы</button>
-          <button type="button" class="md-tab" role="tab" data-mm-kind="gate" title="Шибер: линейка и цветной указатель рядом с ней — заполнение 0–100 %">Шибер</button>
+          <button type="button" class="md-tab" role="tab" data-mm-kind="gauge" title="Уровень 0–100 % по картинке: столбик (уровень виден цветом) или стрелка (указатель рядом с линейкой)">Уровнемер</button>
+        </div>
+        <div class="motion-mark__gauge" id="mmGauge" hidden>
+          <div class="sh-seg"><button type="button" data-ggk="tube" title="Уровень виден цветом: от начала шкалы «заполнено», дальше «пусто» — магнитный указатель, стекло">Столбик</button><button type="button" data-ggk="gate" title="Неподвижная линейка и цветной указатель, который ходит рядом (шибер)">Стрелка</button></div>
+          <label class="net-hint" id="mmDirBox">растёт <select id="mmDir"><option value="up">снизу вверх</option><option value="down">сверху вниз</option><option value="right">слева направо</option><option value="left">справа налево</option></select></label>
         </div>
         <div class="motion-mark__stage" id="mmStage"><img id="mmImg" alt="Кадр камеры" /><canvas id="mmCanvas"></canvas><canvas id="mmLoupe" class="motion-mark__loupe" hidden></canvas></div>
         <p class="net-hint" id="mmHint">Кликайте по углам зоны. ПКМ — убрать точку. «Замкнуть» или Enter — готово (минимум 3 точки).</p>
@@ -545,7 +549,7 @@
   <script src="/static/js/multi/16-shafts.js"></script>
   <script src="/static/js/multi/17-zone-learn.js"></script>
   <script src="/static/js/multi/18-juice.js"></script>
-  <script src="/static/js/multi/19-gate.js"></script>
+  <script src="/static/js/multi/19-gauge.js"></script>
   <script src="/static/js/multi/12-autostart.js"></script>
   <script src="/static/js/multi/13-journal.js"></script>
   <script src="/static/js/multi/14-update.js"></script>

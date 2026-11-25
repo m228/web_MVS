@@ -4938,11 +4938,29 @@ body.micro-rep-doc .micro-cmp-strips { grid-template-columns: repeat(6, 1fr); ga
 .motion-mark__stage .motion-mark__loupe[hidden] { display: none; }
 .motion-mark__form { display: flex; gap: 14px; flex-wrap: wrap; margin-top: 10px; font-size: 13px; }
 .motion-mark__form[hidden] { display: none; }
-.md-gate__v { font-size: 22px; font-variant-numeric: tabular-nums; }
-.md-gate .md-zone__row { flex-wrap: wrap; }
-.md-gate__chk { display: inline-flex; flex-direction: row; align-items: center; gap: 6px; margin: 0; }
-.md-gate__chk input { width: 15px; height: 15px; min-height: 0; padding: 0; margin: 0; flex: none; }
-.md-gate__col { margin-top: 6px; }
+.md-gauge__v { font-size: 22px; font-variant-numeric: tabular-nums; }
+.md-gauge .md-zone__row { flex-wrap: wrap; }
+.md-gauge__chk { display: inline-flex; flex-direction: row; align-items: center; gap: 6px; margin: 0; }
+.md-gauge__chk input { width: 15px; height: 15px; min-height: 0; padding: 0; margin: 0; flex: none; }
+.md-gauge__col { margin-top: 6px; }
+.gg-kind { font-size: 11px; color: var(--muted); border: 1px solid var(--border); border-radius: 999px; padding: 1px 9px; white-space: nowrap; }
+.gg-prev img { max-height: 360px; margin: 0 auto; }
+.gg-prev { text-align: center; }
+.gg-side { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 12px; }
+.gg-crow { display: grid; grid-template-columns: 90px minmax(0, 1fr) auto; gap: 10px; align-items: center; }
+.gg-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.gg-crow > b::first-letter { text-transform: uppercase; }
+.gg-x { border: 0; background: transparent; color: var(--muted); font-size: 14px; line-height: 1; padding: 0 0 0 2px; min-height: 0; cursor: pointer; }
+.gg-x:hover { color: var(--danger, #ef4444); }
+.gg-tol { display: flex; flex-direction: row; align-items: center; gap: 10px; margin: 0; font-size: 12px; color: var(--muted); }
+.gg-tol input { flex: 1; max-width: 260px; }
+.gg-tol output { min-width: 24px; color: var(--text); }
+.motion-mark__gauge { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; margin-bottom: 10px; }
+.motion-mark__gauge[hidden] { display: none; }
+.motion-mark__gauge .sh-seg { margin-top: 0; }
+.motion-mark__gauge label { display: inline-flex; flex-direction: row; align-items: center; gap: 8px; margin: 0; }
+.motion-mark__gauge label[hidden] { display: none; }
+.motion-mark__gauge select { background: var(--input-bg); border: 1px solid var(--input-border); color: var(--text); border-radius: 6px; padding: 4px 8px; font: inherit; }
 .md-sr__gate { grid-column: span 2; }
 .md-sr__fmt { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; }
 .motion-mark__form input, .motion-mark__form select { background: var(--input-bg); border: 1px solid var(--input-border); color: var(--text); border-radius: 6px; padding: 4px 8px; font: inherit; }

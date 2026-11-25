@@ -1,4 +1,4 @@
-"""Подгонка линейки шибера кнопками «это 0 %» / «это 100 %» (page/static/js/multi/19-gate.js).
+"""Подгонка линейки шибера кнопками «это 0 %» / «это 100 %» (page/static/js/multi/19-gauge.js, вид «стрелка»).
 
 Расчёт живёт в странице, а проценты считает сервис — поэтому JS гоняется настоящим node, а результат проверяется боевым ruler_level.
 """
@@ -20,7 +20,7 @@ import test_motion_gate as tg  # noqa: E402  синтетический кадр
 
 NODE = shutil.which("node")
 pytestmark = pytest.mark.skipif(NODE is None, reason="нет node")
-JS = ROOT / "page" / "static" / "js" / "multi" / "19-gate.js"
+JS = ROOT / "page" / "static" / "js" / "multi" / "19-gauge.js"
 # разметка с настоящего ролика: [низ слева, низ справа, верх справа, верх слева]; стороны наклонены и чуть сходятся
 RULER = [[918, 787], [990, 786], [1046, 136], [975, 131]]
 
@@ -42,7 +42,7 @@ def point(level, x=1100.0, ruler=RULER):
 
 
 def cal(pt, full, flip=False, ruler=RULER):
-    return js("gtCalibrate(data.z, data.pt, data.full)", {"z": {"ruler": ruler, "flip": flip}, "pt": pt, "full": full})
+    return js("ggCalibrate(data.z, data.pt, data.full)", {"z": {"ruler": ruler, "flip": flip}, "pt": pt, "full": full})
 
 
 def pct(ruler, pt, flip=False):
@@ -52,11 +52,11 @@ def pct(ruler, pt, flip=False):
 
 def test_level_matches_service_and_goes_beyond_edges():
     for level in (0.04, 0.3, 0.77, 0.99):
-        got = js("gtLevelOf(data.r, data.p)", {"r": RULER, "p": point(level)})
+        got = js("ggLevelOf(data.r, data.p)", {"r": RULER, "p": point(level)})
         assert got == pytest.approx(me.ruler_level(RULER, point(level)), abs=1e-4)
     for level in (-0.2, 1.15):                                  # за краем сервис зажимает в 0..1, странице нужна настоящая высота
-        assert js("gtLevelOf(data.r, data.p)", {"r": RULER, "p": point(level)}) == pytest.approx(level, abs=1e-4)
-    assert js("gtLevelOf(data.r, data.p)", {"r": RULER, "p": point(-0.4)}) is None
+        assert js("ggLevelOf(data.r, data.p)", {"r": RULER, "p": point(level)}) == pytest.approx(level, abs=1e-4)
+    assert js("ggLevelOf(data.r, data.p)", {"r": RULER, "p": point(-0.4)}) is None
 
 
 @pytest.mark.parametrize("full,level", [(False, 0.249), (True, 0.751)])
@@ -68,7 +68,7 @@ def test_biggest_mistake_is_undone_by_same_button(full, level):
 
 
 def run_button(states, flip=False, answer=True, dirty=False, full=False, zone=None):
-    """gtOnCal целиком: states[0] — что на экране в момент нажатия, states[1] — что ответил сервис после вопроса."""
+    """ggOnCal целиком: states[0] — что на экране в момент нажатия, states[1] — что ответил сервис после вопроса."""
     zone = dict({"id": "g", "ruler": RULER, "flip": flip, "cut": None}, **(zone or {}))
     zone = {k: v for k, v in zone.items() if v != "нет ключа"}
     code = (
@@ -78,7 +78,7 @@ def run_button(states, flip=False, answer=True, dirty=False, full=False, zone=No
         "globalThis.alert = (m) => out.alerts.push(m); globalThis.confirm = (m) => { out.asked.push(m); return data.answer; };"
         "globalThis.mvApi = async () => data.states[1]; globalThis.mvCam = () => ({id: 'c', zones: [zone]});"
         "globalThis.mdEdit = (f) => { f(); out.edits += 1; }; globalThis.log = {success: () => {}};"
-        "await gtOnCal({id: 'c', zones: [zone]}, zone, data.full); out.ruler = zone.ruler; out.cut = zone.cut; return out; })()")
+        "await ggOnCal({id: 'c', zones: [zone]}, zone, data.full); out.ruler = zone.ruler; out.cut = zone.cut; return out; })()")
     return js_async(code, {"zone": zone, "states": states, "answer": answer, "dirty": dirty, "full": full})
 
 
@@ -145,7 +145,8 @@ def test_button_refuses_on_old_service():
 def test_new_marking_drops_remembered_ruler(old, expect):
     code = ("(() => { const zone = Object.assign({id: 'g', type: 'gate'}, data.old); const cam = {id: 'c', frame_size: [1920, 1080], zones: [zone]};"
             "globalThis.mdEdit = (f) => f(); globalThis.log = {success: () => {}}; globalThis.closeMarkModal = () => {};"
-            "gtMarkSave({polys: [data.ruler], pts: [[1025, 520], [1210, 520], [1210, 800]]}, cam, 1920, 1080); return zone; })()")
+            "globalThis.MD = {}; globalThis.renderMotionDock = () => {};"
+            "ggMarkSave({gk: 'gate', replace: 'g', ruler: data.ruler, pts: [[1025, 520], [1210, 520], [1210, 800]]}, cam, 1920, 1080); return zone; })()")
     zone = js_async(code, {"old": old, "ruler": RULER})
     assert zone["ruler"] == RULER and zone.get("cut", "нет ключа") == expect
 

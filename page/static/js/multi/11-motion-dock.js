@@ -109,6 +109,7 @@ function mdFmtWin(s) {
 
 function setMotionDock(open) {
   MV.dockOpen = open;
+  saveView({ dock: open });
   const dock = mdEl('motionDock');
   if (dock) dock.hidden = !open;
   document.getElementById('multiMotionBtn')?.classList.toggle('is-dock', open);
@@ -292,6 +293,7 @@ function renderMotionDock() {
   mdPaintSave();
   if (key === MD.key) return;
   MD.key = key;
+  saveView({ tab: MD.tab });
 
   const body = mdEl('mdBody');
   const restoreUi = mdSnapUi(body);

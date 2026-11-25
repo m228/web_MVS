@@ -2051,7 +2051,12 @@ def rtsp_autostart(url: str, enabled: int, serial_number: str = ""):
 
 @app.get("/api/rtsp/remove_saved")
 def rtsp_remove_saved(url: str):
+    gone = {manager._saved_rtsp_serial(e) for e in rtsp_store.load() if e.get("url") == url}
     items = rtsp_store.remove(url)
+    # новая камера может получить освободившийся серийник — чужое приближение ей доставаться не должно
+    for serial in gone - {manager._saved_rtsp_serial(e) for e in items}:
+        if save_settings.get(serial).get("zoom"):
+            save_settings.update(serial, zoom={"factor": 1.0, "pan_x": 0.5, "pan_y": 0.5})
     api_log("api.rtsp.remove_saved", "RTSP-камера удалена из базы", payload={"url": url, "count": len(items)})
     return {"items": items}
 

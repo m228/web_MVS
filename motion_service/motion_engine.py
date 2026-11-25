@@ -593,7 +593,8 @@ def _norm_scenario(sc: dict, cams: list) -> dict:
         if zone in zones.get(cam, ()) and not any(x["camera"] == cam and x.get("zone") == zone for x in srcs):
             srcs.append({"camera": cam, "zone": zone})
     mb = sc.get("modbus")
-    # шибер — число, а не бит: складывать его с окнами нельзя. Сценарий с шибером берёт его одного и пишет значение как есть (rule value).
+    # шибер — число, а не бит: складывать его с окнами нельзя. Сценарий с шибером берёт его одного (rule value) и пишет проценты:
+    # scale 10 — с десятыми (54,3 % → 543, так и без поля), 1 — целые (54,3 % → 54).
     gates = {c["id"]: {z["id"] for z in c["zones"] if z["type"] == "gate"} for c in cams}
     analog = [s for s in srcs if s.get("zone") in gates.get(s["camera"], ())]
     if analog:
@@ -603,9 +604,15 @@ def _norm_scenario(sc: dict, cams: list) -> dict:
     out = _out(sc.get("out"), ZONE_OUT_KINDS, where + ".out")
     if rule == "value" and out and out["kind"] != "holding":
         raise ValueError("%s: значение шибера пишется только в регистр" % where)
-    return {"id": sid, "name": str(sc.get("name") or sid), "rule": rule, "signal": signal, "sources": srcs,
-            "out": out,
-            "modbus": normalize_modbus(mb, base=None) if mb else None}
+    res = {"id": sid, "name": str(sc.get("name") or sid), "rule": rule, "signal": signal, "sources": srcs,
+           "out": out,
+           "modbus": normalize_modbus(mb, base=None) if mb else None}
+    if rule == "value":                 # формат значения есть только у шибера
+        scale = 10 if sc.get("scale") is None else sc["scale"]
+        if scale not in (1, 10):
+            raise ValueError("%s: формат значения %r не из 10/1" % (where, scale))
+        res["scale"] = int(scale)
+    return res
 
 
 def normalize_shafts(raw: Optional[dict]) -> dict:

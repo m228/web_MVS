@@ -19,7 +19,7 @@ NO_DATA = 65535                 # value (шибер): значения нет �
 
 def evaluate(rule: str, bits: list) -> int:
     """Значения источников → значение сценария: or — хоть одно > 0, and — все > 0, sum — сумма значений (бит зоны 0/1, у группы — её значение),
-    value — значение единственного источника как есть (шибер: % × 10, нет данных — 65535)."""
+    value — значение единственного источника как есть (шибер: % × 10 или целые %, нет данных — 65535)."""
     if rule == "value":
         return int(bits[0]) if bits else NO_DATA
     if rule == "and":
@@ -29,10 +29,11 @@ def evaluate(rule: str, bits: list) -> int:
     return 1 if any(bits) else 0
 
 
-def source_bits(sources: list, states: dict, signal: str = "move", analog: bool = False) -> list:
+def source_bits(sources: list, states: dict, signal: str = "move", analog: bool = False, scale: int = 10) -> list:
     """[{camera, zone | group}] + {id камеры: state()} → значения; камеры/зоны/группы нет или она не жива → 0. Зона: signal move —
     бит движения, pulp — «жом есть» (z["fill"] == 1; у зоны без вида окна или без порогов решения нет → 0). Группа: её значение.
-    analog (правило value, шибер): значение зоны % × 10; нет камеры, кадра или указателя → 65535."""
+    analog (правило value, шибер): проценты зоны × scale (10 — 54,3 % → 543, 1 — 54), половина округляется вверх;
+    нет камеры, кадра или указателя → 65535 при любом scale."""
     out = []
     for s in sources:
         res = (states.get(s["camera"]) or {}).get("result") or {}
@@ -40,7 +41,7 @@ def source_bits(sources: list, states: dict, signal: str = "move", analog: bool 
         if analog:
             z = next((q for q in res.get("zones") or [] if q["id"] == s.get("zone")), None) if res.get("alive") else None
             if z and z.get("valid"):
-                bit = int(round(z["pct"] * 10))
+                bit = int(z["pct"] * scale + 0.5)     # не round(): тот даёт 54,5 → 54
         elif res.get("alive") and s.get("group") is not None:
             for g in res.get("groups") or []:
                 if g["id"] == s["group"]:
@@ -77,11 +78,13 @@ class ScenarioRunner(threading.Thread):
         live_ids = set()
         for sc in cfg.get("scenarios", []):
             live_ids.add(sc["id"])
-            bits = source_bits(sc["sources"], states, sc.get("signal", "move"), sc["rule"] == "value")
+            scale = sc.get("scale", 10)
+            bits = source_bits(sc["sources"], states, sc.get("signal", "move"), sc["rule"] == "value", scale)
             value = evaluate(sc["rule"], bits)
             mb = sc.get("modbus") or cfg["modbus"]
             st = self.status.setdefault(sc["id"], {"ok": None, "error": ""})
-            st.update(name=sc["name"], value=value, bits=bits, plc=bool(mb.get("enable")), out=sc["out"], signal=sc.get("signal", "move"))
+            # scale — в статусе рядом с value: интерфейс переводит число в проценты тем форматом, которым оно посчитано
+            st.update(name=sc["name"], value=value, bits=bits, plc=bool(mb.get("enable")), out=sc["out"], signal=sc.get("signal", "move"), scale=scale)
             if not mb.get("enable") or not sc["out"]:
                 st.update(ok=None, error="")
                 continue

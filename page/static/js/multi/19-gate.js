@@ -68,7 +68,7 @@ function gtScenarios(camId, zoneId) {
 function gtPlcHtml(cam, z, a) {
   const list = gtScenarios(cam.id, z.id);
   const txt = list.map((s) => escapeHtml(s.name) + ' → ' + (s.out ? 'рег. ' + s.out.address : 'регистр не задан')).join('; ');
-  return `<div class="md-zone__row"><span class="md-lbl" title="В ПЛК значение пишет сценарий (вкладка «ПЛК»): заполнение × 10, то есть 54,3 % → 543; нет данных — 65535">в ПЛК</span>` +
+  return `<div class="md-zone__row"><span class="md-lbl" title="В ПЛК значение пишет сценарий (вкладка «ПЛК»): × 10 (54,3 % → 543) или как есть, целые проценты (54) — выбирается в сценарии; нет данных — 65535">в ПЛК</span>` +
     (list.length ? `<span class="net-hint">${txt}</span>` : `<button type="button" class="btn-secondary md-x" ${a} data-f="gtsc" title="Создать сценарий записи этого шибера и открыть его: останется задать регистр">создать сценарий</button>`) + '</div>';
 }
 

@@ -301,6 +301,7 @@ function setFocus(index) {
   state.focused = index;
   highlightFocus();
   updateToolbar();
+  if (AS.ready) saveView({ focus: index });   // во время восстановления фокус прыгает по ячейкам — это не выбор человека
 }
 
 function highlightFocus() {

@@ -9,6 +9,7 @@ import cv2
 from logger import log_event
 import dahua_control
 import plate_config
+import save_settings
 
 from .utils import DEFAULT_VIDEO_FPS, RTSP_RECONNECT_BACKOFF, RTSP_RECONNECT_LOG_EVERY, RTSP_STALL_SECONDS, substream_url
 from .base_worker import BaseCameraWorker
@@ -42,6 +43,7 @@ class RtspCameraWorker(BaseCameraWorker):
         # положение окна кропа (панорамирование): 0.5,0.5 = центр; 0,0 = левый верх; 1,1 = правый низ
         self.zoom_pan_x = 0.5
         self.zoom_pan_y = 0.5
+        self._restore_zoom()
         # кэш возможностей камеры (белый свет / оптический зум), заполняется по запросу
         self._caps = None
 
@@ -700,6 +702,19 @@ class RtspCameraWorker(BaseCameraWorker):
 
     # ---------- цифровой зум ----------
 
+    def _restore_zoom(self):
+        """Вернуть приближение, заданное до перезапуска (save_settings). Битую запись пропускаем — останется 1×."""
+        saved = save_settings.get(self.serial_number).get("zoom")
+        if not saved:
+            return
+        try:
+            factor, pan_x, pan_y = (float(saved[k]) for k in ("factor", "pan_x", "pan_y"))
+        except (KeyError, TypeError, ValueError):
+            return
+        self.zoom_factor = max(1.0, min(4.0, factor))
+        self.zoom_pan_x = max(0.0, min(1.0, pan_x))
+        self.zoom_pan_y = max(0.0, min(1.0, pan_y))
+
     def _apply_digital_zoom(self, frame):
         """Кроп области 1/factor (с учётом панорамирования) и растяжение к размеру кадра."""
         factor = self.zoom_factor
@@ -741,6 +756,8 @@ class RtspCameraWorker(BaseCameraWorker):
                 self.zoom_pan_y = max(0.0, min(1.0, float(pan_y)))
             except (TypeError, ValueError):
                 pass
+        save_settings.update(self.serial_number, zoom={"factor": self.zoom_factor,
+                                                       "pan_x": self.zoom_pan_x, "pan_y": self.zoom_pan_y})
         log_event("camera_core.rtsp_zoom", "Цифровой зум", "info",
                   {"serial_number": self.serial_number, "factor": self.zoom_factor,
                    "pan_x": self.zoom_pan_x, "pan_y": self.zoom_pan_y})

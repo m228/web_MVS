@@ -164,6 +164,7 @@ async function initMultiPage() {
   // быстро: сохранённые RTSP-камеры (локальный файл) — сразу в ячейки; долгий опрос GigE после, их ячейки добираем в конце
   await loadSavedRtsp();
   restoreMultiLayout();
+  restoreMotionDock().catch(() => {});
   await loadCameras();
   restoreMultiLayout();
   AS.ready = true;

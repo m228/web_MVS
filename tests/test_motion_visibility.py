@@ -47,6 +47,28 @@ def test_coast_without_confidence_is_not_counted_as_found(app):
     assert sum(f for _, f in raw["R"].values()) == 600
 
 
+def test_rod_found_by_reflectors_without_colour_confidence_is_counted(app, tmp_path):
+    """Палку ведут отражатели, цвет в части оборота не различается (бит 1, уверенность 0): отражатель виден — «найдена».
+    Без отражателя, без бита (удержание) или с отражателем только у другого вала — по-прежнему не найдена."""
+    import motion_autocal_report as rep
+    w = app.state.mgr.workers["dif"]
+    base = (int(time.time()) // 600 - 3) * 600
+    for i in range(0, 600, 10):         # случаи разнесены на 10 с, чтобы отражатель одного не засчитался соседу
+        k = i // 10 % 5                 # 0 — виден в ту же секунду; 1 — виден в следующей (точка тренда шире секунды); дальше — не считать:
+        bit = int(k != 2)               # 2 — удержание (бит 0); 3 — отражателя нет (строка «не виден»); 4 — виден только через 2 с
+        w._store.add_trend("dif", base + i + 0.6, {"L": (200.0, 0.0, bit), "R": (10.0, 0.0, 1)}, 1)
+        sec = base + i + {1: 1, 4: 2}.get(k, 0)
+        w._store.add_tip("dif", sec, {"L": (k == 1, k not in (1, 3)), "R": (False, False)})
+    raw = w._store.visibility("dif", {"L", "R"}, base, base + 600, 600)
+    assert [sum(x) for x in zip(*raw["L"].values())] == [60, 24]          # k == 0 и k == 1
+    assert sum(f for _, f in raw["R"].values()) == 0                      # отражатель левого вала правому не помогает
+    loss = w._store.loss_map("dif", {"L", "R"}, base, base + 600)
+    assert sum(f for _, f in loss["L"].values()) == 24 and sum(f for _, f in loss["R"].values()) == 0
+    w._store.flush()
+    slots = rep.load_trend(tmp_path / "data" / "motion.db", "dif", base, base + 600)
+    assert sum(f for _, f in slots["L"].values()) == 24 and sum(f for _, f in slots["R"].values()) == 0
+
+
 def test_visibility_share_and_dead_camera_is_not_counted_as_lost_rod(app):
     w = app.state.mgr.workers["dif"]
     base = _fill(w)

@@ -4938,6 +4938,12 @@ body.micro-rep-doc .micro-cmp-strips { grid-template-columns: repeat(6, 1fr); ga
 .motion-mark__stage .motion-mark__loupe[hidden] { display: none; }
 .motion-mark__form { display: flex; gap: 14px; flex-wrap: wrap; margin-top: 10px; font-size: 13px; }
 .motion-mark__form[hidden] { display: none; }
+.md-gate__v { font-size: 22px; font-variant-numeric: tabular-nums; }
+.md-gate .md-zone__row { flex-wrap: wrap; }
+.md-gate__chk { display: inline-flex; flex-direction: row; align-items: center; gap: 6px; margin: 0; }
+.md-gate__chk input { width: 15px; height: 15px; min-height: 0; padding: 0; margin: 0; flex: none; }
+.md-gate__col { margin-top: 6px; }
+.md-sr__gate { grid-column: span 2; }
 .motion-mark__form input, .motion-mark__form select { background: var(--input-bg); border: 1px solid var(--input-border); color: var(--text); border-radius: 6px; padding: 4px 8px; font: inherit; }
 
 /* журнал камер: фильтры в одну строку, ниже лента эпизодов (время · длительность · камера · что было) */

@@ -197,7 +197,35 @@ def test_scenario_value_and_no_data():
     assert ms.evaluate("value", []) == 65535
 
 
-def test_scenario_runner_writes_percent_times_ten():
+def test_scenario_scale_default_saved_and_validated():
+    assert full([G])["scale"] == full([G], scale=None)["scale"] == 10, "поля нет (сценарии 3.0.41) — пишем × 10, как раньше"
+    assert full([G], scale=1)["scale"] == 1 and full([G], scale=10)["scale"] == 10
+    assert full([], rule="value", scale=1)["scale"] == 1, "сняли галочку с шибера — формат остаётся"
+    assert "scale" not in full([Z], scale=1), "формат значения есть только у шибера"
+    for bad in (0, 100, "1"):
+        with pytest.raises(ValueError, match="формат значения"):
+            full([G], scale=bad)
+
+
+@pytest.mark.parametrize("pct, x10, raw", [(0.0, 0, 0), (54.3, 543, 54), (54.5, 545, 55), (54.7, 547, 55), (99.9, 999, 100), (100.0, 1000, 100)])
+def test_scenario_value_in_both_scales(pct, x10, raw):
+    states = {"sh": {"result": {"alive": True, "zones": [{"id": "g1", "valid": True, "pct": pct}]}}}
+    assert ms.source_bits([G], states, analog=True) == [x10]
+    assert ms.source_bits([G], states, analog=True, scale=10) == [x10]
+    assert ms.source_bits([G], states, analog=True, scale=1) == [raw]
+
+
+@pytest.mark.parametrize("scale", [10, 1])
+def test_scenario_no_data_is_65535_in_both_scales(scale):
+    lost = {"sh": {"result": {"alive": True, "zones": [{"id": "g1", "valid": False, "pct": 0.0}]}}}
+    dead = {"sh": {"result": {"alive": False, "zones": [{"id": "g1", "valid": True, "pct": 50.0}]}}}
+    for states in (lost, dead, {}):
+        assert ms.evaluate("value", ms.source_bits([G], states, analog=True, scale=scale)) == 65535
+    assert ms.evaluate("value", ms.source_bits([], lost, analog=True, scale=scale)) == 65535
+
+
+@pytest.mark.parametrize("extra, scale", [({}, 10), ({"scale": 10}, 10), ({"scale": 1}, 1)])
+def test_scenario_runner_writes_percent_in_chosen_scale(extra, scale):
     written = []
 
     class Link:
@@ -220,12 +248,13 @@ def test_scenario_runner_writes_percent_times_ten():
     class Mgr:
         links = Links()
         workers = {"sh": Worker()}
-        cfg = {"modbus": {"enable": True, "host": "p", "port": 502, "device_id": 1, "write_period_s": 1}, "scenarios": [full([G])]}
+        cfg = {"modbus": {"enable": True, "host": "p", "port": 502, "device_id": 1, "write_period_s": 1}, "scenarios": [full([G], **extra)]}
 
     r = ms.ScenarioRunner(Mgr())
     r.tick(1.0)
     kind, addr, value = written[0]
-    assert (kind, addr) == ("holding", 7) and value == pytest.approx(100, abs=6)
+    assert (kind, addr) == ("holding", 7) and value == pytest.approx(10 * scale, abs=0.6 * scale + 0.5)
+    assert r.snapshot()[0]["scale"] == scale, "интерфейс берёт формат из статуса вместе со значением"
 
 
 # ───────────────────────────── настоящие ролики ─────────────────────────────

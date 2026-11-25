@@ -1201,12 +1201,15 @@ function mdPlcHtml() {
 
 const MD_SC_SIGNALS = [['pulp', 'Жом есть'], ['move', 'Движение']];
 const MD_SC_RULES = [['or', 'Хоть одно'], ['and', 'Все'], ['sum', 'Сколько']];
+const MD_SC_SCALES = [[10, '× 10'], [1, 'как есть']];      // формат значения шибера; поля нет (старый сценарий) — × 10
+const mdScScale = (s) => (s.scale === 1 ? 1 : 10);
+const mdScScaleHint = (s) => '54,3 % → ' + (mdScScale(s) === 1 ? '54' : '543') + ' · нет данных → 65535';
 function mdScenarioSummary(s, cams) {
   const pulp = s.signal === 'pulp';
   const what = { or: pulp ? 'хоть в одном жом' : 'хоть одно крутится', and: pulp ? 'жом во всех' : 'все крутятся', sum: pulp ? 'сколько окон с жомом' : 'сколько крутится' }[s.rule] || '';
   const names = s.sources.map((x) => { const c = cams.find((q) => q.id === x.camera), z = c && (x.group ? (c.groups || []).find((q) => q.id === x.group) : c.zones.find((q) => q.id === x.zone)); return z ? z.name : null; }).filter(Boolean);
   const tags = names.slice(0, 5).map((n) => `<span class="md-sr__tag">${escapeHtml(n)}</span>`).join('') + (names.length > 5 ? `<span class="md-sr__tag">+${names.length - 5}</span>` : '');
-  if (s.rule === 'value') return `<span>шибер · заполнение × 10</span>${tags || '<span class="md-sr__tag">нет источников</span>'}`;
+  if (s.rule === 'value') return `<span>шибер · заполнение${mdScScale(s) === 1 ? ', целые %' : ' × 10'}</span>${tags || '<span class="md-sr__tag">нет источников</span>'}`;
   return `<span>${pulp ? 'жом' : 'движение'} · ${what}</span>${tags || '<span class="md-sr__tag">нет источников</span>'}`;
 }
 
@@ -1232,7 +1235,7 @@ function mdScenarioHtml(s, i) {
       <div><div class="md-zr__t">Название</div><input type="text" ${a} data-f="name" value="${escapeHtml(s.name)}" /></div>
       <div><div class="md-zr__t">Источники</div><div class="md-sr__chips">${src}</div></div>
       <div class="md-sr__g3">
-        ${s.rule === 'value' ? '<div class="md-sr__gate"><div class="md-zr__t">Значение</div><span class="net-hint">заполнение × 10: 54,3 % → 543 · нет данных → 65535</span></div>'
+        ${s.rule === 'value' ? `<div class="md-sr__gate"><div class="md-zr__t">Значение</div><div class="md-sr__fmt">${seg('sk-' + sid, MD_SC_SCALES, mdScScale(s), 'scale')}<span class="net-hint" id="md-sk-${sid}">${mdScScaleHint(s)}</span></div></div>`
           : `<div><div class="md-zr__t">Что считать</div>${seg('sg-' + sid, MD_SC_SIGNALS, s.signal || 'move', 'signal')}</div>
         <div><div class="md-zr__t">Правило</div>${seg('rl-' + sid, MD_SC_RULES, s.rule, 'rule')}</div>`}
         <div><div class="md-zr__t">Выход</div><div class="md-out"><select ${a} data-f="okind">${mdSel([['', 'не писать'], ['holding', 'регистр']].concat(s.rule === 'value' ? [] : [['coil', 'coil']]), s.out ? s.out.kind : '')}</select>
@@ -1289,6 +1292,7 @@ function mdOnScenario(t) {
     if (f === 'name') s.name = t.value;
     else if (f === 'rule') s.rule = t.value;
     else if (f === 'signal') s.signal = t.value;
+    else if (f === 'scale') s.scale = Number(t.value);
     else if (f === 'okind') s.out = t.value ? { kind: t.value, address: (s.out && s.out.address) || typed } : null;
     else if (f === 'oaddr') { if (s.out) s.out.address = parseInt(t.value, 10) || 0; }
     else if (f === 'src') {
@@ -1308,6 +1312,10 @@ function mdOnScenario(t) {
       }
     }
   }, redraw);
+  if (f === 'scale') {        // без перерисовки: адрес, набранный до выбора «регистр», не должен пропасть
+    mdEl('md-sk-' + s.id).textContent = mdScScaleHint(s);
+    mdEl('md-sr-' + s.id).querySelector('.md-sr__sum').innerHTML = mdScenarioSummary(s, mdCfgCams());
+  }
 }
 
 function mdBindPlc() {
@@ -1560,7 +1568,8 @@ function paintMotionDockLive() {
     const b = mdEl('md-sv-' + s.id);
     const sc = ((MV.cfg && MV.cfg.scenarios) || []).find((q) => q.id === s.id);
     const gate = !!sc && sc.rule === 'value', none = gate && s.value === GT_NO_DATA;
-    if (b) b.textContent = gate ? (none ? '—' : gtFmt(s.value / 10)) : s.value;
+    // формат — из статуса, а не из конфига: число посчитано им; старый сервис поля не шлёт и пишет × 10
+    if (b) b.textContent = gate ? (none ? '—' : s.scale === 1 ? s.value + ' %' : gtFmt(s.value / 10)) : s.value;
     const bits = s.bits || [];
     const pulp = s.signal === 'pulp';
     const row = mdEl('md-sr-' + s.id);

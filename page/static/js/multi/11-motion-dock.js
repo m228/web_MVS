@@ -922,6 +922,7 @@ function mdPaintZoneStats() {
       const el = mdEl('md-st-' + c.id + '-' + z.id);
       if (!el) return;
       el.innerHTML = mdZoneStatHtml(z, live[z.id], sr && sr.zones && sr.zones[z.id]);
+      if (z.type === 'gate') ggCalPaint(c, z);                // «это 0 % / 100 %» активны, пока указатель виден
       // накоплено меньше, чем просили (сервис недавно стартовал): честно говорим, за сколько на самом деле
       if (z.type !== 'cycle' && sr && sr.zones && sr.zones[z.id] && sr.span_s < sr.window_s * 0.9) {
         const n = document.createElement('div');

@@ -15,7 +15,7 @@ const GG_PREV_W = 480, GG_PIP_W = 900, GG_PIP_EVERY = 5;
 const ggIs = (z) => !!z && GG_TYPES.includes(z.type);
 const ggFmt = (v) => Number(v).toFixed(1).replace('.', ',') + ' %';
 const ggNum = (v, d) => (v == null ? d : v);
-const ggNoData = (v) => v < 0 || v === 65535;                // −1 — нет данных; сервис движения до 3.0.44 слал 65535
+const ggNoData = (v) => v < 0 || v === 65535;                // −1 — нет данных; сервис движения до 3.0.45 слал 65535
 const ggHoldText = (lz) => (lz.hold_left == null ? 'держу' : 'держу ' + lz.hold_left + ' с');      // старый сервис срока не шлёт
 
 // ---------- геометрия ----------
@@ -52,6 +52,78 @@ function ggFrame(pts, dir) {
 }
 
 const ggPath = (ctx, pts) => { ctx.beginPath(); pts.forEach((p, i) => (i ? ctx.lineTo(p[0], p[1]) : ctx.moveTo(p[0], p[1]))); ctx.closePath(); };
+
+// ---------- стрелка: подгонка линейки под настоящий ход: «это 0 %» / «это 100 %» ----------
+// пределы сдвига стороны, доли длины линейки: дальше — это промах кнопкой или чужое красное. Наружу чуть больше, чем внутрь,
+// чтобы любую одну подгонку внутрь можно было вернуть той же кнопкой (0,25 / 0,75)
+const GG_CAL_IN = 0.25, GG_CAL_OUT = 0.34;
+const GG_CAL_STILL = 0.02;                                   // положение на кадре и значение (медиана кадров) расходятся сильнее — указатель движется или скачет
+const GG_CAL_AGE = 3;                                        // состояние камеры старше этого, с, — не по чему подгонять
+
+// высота точки по линейке без зажима: 0 — нижняя сторона, 1 — верхняя, меньше нуля — под линейкой. Линии уровня — как ruler_level в сервисе;
+// null — точка дальше GG_CAL_OUT за краем
+function ggLevelOf(r, p) {
+  const side = (t) => { const [a, b] = ggLine(r, t); return (b[0] - a[0]) * (p[1] - a[1]) - (b[1] - a[1]) * (p[0] - a[0]); };   // < 0 — точка выше линии
+  let lo = -GG_CAL_OUT, hi = 1 + GG_CAL_OUT;
+  if (side(lo) >= 0 || side(hi) <= 0) return null;
+  for (let i = 0; i < 40; i += 1) { const mid = (lo + hi) / 2; if (side(mid) < 0) lo = mid; else hi = mid; }
+  return (lo + hi) / 2;
+}
+
+// сторона линейки со значением 0 % (full = false) или 100 % (true) переезжает на высоту указателя pt, вторая стоит.
+// → { ruler, pct: что там было по старой разметке } или null — указатель слишком далеко от этой стороны
+function ggCalibrate(z, pt, full) {
+  const bottom = full === !!z.flip;                          // обычно 0 % снизу, с «0 % сверху» — наоборот
+  const k = ggLevelOf(z.ruler, pt);
+  if (k === null) return null;
+  const inward = bottom ? k : 1 - k;                         // больше нуля — линейка укорачивается
+  if (inward > GG_CAL_IN || inward < -GG_CAL_OUT) return null;
+  const r = z.ruler, side = ggLine(r, k).map((q) => q.map((v) => Math.round(v * 10) / 10));
+  const ruler = bottom ? [side[0], side[1], r[2], r[3]] : [r[0], r[1], side[1], side[0]];
+  return ggRulerOk(ruler) ? { ruler, pct: 100 * (z.flip ? 1 - k : k) } : null;
+}
+
+// запись зоны из состояния камеры st, по которой можно подгонять: свежая, камера жива, поток не битый, указатель виден на этом кадре
+// (не удержание), несохранённых правок нет (иначе сервис ищет указатель ещё по старым настройкам)
+function ggLive(st, zoneId) {
+  const res = MV.online && !MV.dirty && st && !(st.age_s > GG_CAL_AGE) ? st.result : null;
+  const z = res && res.alive && !res.corrupt ? (res.zones || []).find((q) => q.id === zoneId) : null;
+  return z && z.valid && !z.held && z.ptr ? z : null;
+}
+
+// что сделает кнопка по этому состоянию: { ruler, pct } или { error }
+function ggCalPlan(zone, live, full) {
+  if (!live) return { error: 'Сейчас подгонять нельзя: указателя не видно, камера не отвечает или настройки ещё сохраняются.' };
+  const res = ggCalibrate(zone, live.ptr, full);
+  if (!res) return { error: 'Указатель слишком далеко от стороны «' + (full ? '100 %' : '0 %') + '» (линейку можно укоротить не больше чем на четверть). Поставьте указатель в нужное положение или переразметьте линейку.' };
+  const now = Math.max(0, Math.min(100, res.pct)) / 100, med = (zone.flip ? 1 - live.t : live.t);
+  if (Math.abs(now - med) > GG_CAL_STILL) return { error: 'Указатель движется или значение скачет. Дождитесь, пока оно установится, и нажмите ещё раз.' };
+  return res;
+}
+
+function ggCalPaint(cam, z) {
+  const el = mdEl('md-ggc-' + cam.id + '-' + z.id);
+  if (el) el.querySelectorAll('button').forEach((b) => { b.disabled = !ggLive(MV.states[cam.id], z.id); });
+}
+
+async function ggOnCal(cam, z, full) {
+  const name = full ? '100 %' : '0 %';
+  // ключ cut сервис 3.0.43+ отдаёт всегда; старый выбросил бы запомненную линейку, и после подгонки её метки могли бы читаться как указатель
+  if (!('cut' in z)) { alert('Сервис движения старый: подгонка требует motion 3.0.43 или новее. Обновите программу и попробуйте ещё раз.'); return; }
+  const plan = ggCalPlan(z, ggLive(MV.states[cam.id], z.id), full);
+  if (plan.error) { alert(plan.error); return; }
+  if (!confirm('Сейчас по разметке ' + ggFmt(plan.pct) + '. Считать это положение за ' + name + '?\n\nСдвинется сторона «' + name +
+      '» линейки. Значение в ПЛК изменится, на несколько секунд уйдёт −1 («нет данных»).')) return;
+  // пока висел вопрос, указатель мог уехать: спрашиваем сервис заново; пока ждали, опрос мог подменить конфиг — зону берём снова
+  const st = await mvApi('/api/motion/camera_state?camera=' + encodeURIComponent(cam.id));
+  const zone = ((mvCam(cam.id) || {}).zones || []).find((q) => q.id === z.id);
+  if (!zone) return;
+  const fresh = ggCalPlan(zone, ggLive(st, z.id), full);
+  if (fresh.error) { alert(fresh.error); return; }
+  if (Math.abs(fresh.pct - plan.pct) > 100 * GG_CAL_STILL) { alert('Указатель сдвинулся, пока был открыт вопрос. Нажмите кнопку ещё раз.'); return; }
+  mdEdit(() => { zone.cut = zone.cut || zone.ruler; zone.ruler = fresh.ruler; });   // метки вырезаются там, где линейка висит на самом деле
+  log.success('КЗ: стрелка подогнана — текущее положение теперь ' + name, { serial: cam.id });
+}
 
 // ---------- плитка ----------
 function drawGaugeOnTile(ctx, z, cam, g, lz, problem) {
@@ -191,6 +263,13 @@ function ggTubeColorsHtml(cam, z, a) {
     </div></details></div>`;
 }
 
+// строка «подгонка» в карточке стрелки; кнопки включает ggCalPaint, пока указатель виден
+function ggCalRowHtml(a, k) {
+  return `<div class="md-zone__row" id="md-ggc-${k}"><span class="md-lbl" title="Подогнать линейку под настоящий ход: поставьте указатель в крайнее положение и нажмите кнопку — эта сторона линейки встанет на высоту указателя. Кнопки активны, пока указатель виден">подгонка</span>
+        <button type="button" class="btn-secondary md-x" ${a} data-f="ggcal0" disabled title="Указатель сейчас в нуле: считать это положение за 0 %">это 0 %</button>
+        <button type="button" class="btn-secondary md-x" ${a} data-f="ggcal1" disabled title="Указатель сейчас в максимуме: считать это положение за 100 %">это 100 %</button></div>`;
+}
+
 function ggCardHtml(cam, z, i) {
   const a = `data-md="z" data-cam="${escapeHtml(cam.id)}" data-i="${i}"`;
   const k = escapeHtml(cam.id + '-' + z.id);
@@ -212,6 +291,7 @@ function ggCardHtml(cam, z, i) {
         ${own}
         <span class="md-lbl" title="Значение — медиана стольких последних кадров: гасит дрожание, но запаздывает примерно на половину этих кадров">кадров</span>${mdNum(a + ' data-f="ggsmooth"', ggNum(z.smooth, 5), 'min="1" max="100" step="1"')}</div>
       <div class="md-zone__row">${way}</div>
+      ${tube ? '' : ggCalRowHtml(a, k)}
       ${ggPlcHtml(cam, z, a)}
     </div>
     <div class="md-zone__chart"><canvas id="md-ch-${k}" height="84"></canvas></div>
@@ -251,6 +331,7 @@ function ggOnZone(t, cam, z) {
     return true;
   }
   if (f === 'ggremark') { openMarkModal('gauge', { camera: cam.id, replace: z.id }); return true; }
+  if (f === 'ggcal0' || f === 'ggcal1') { ggOnCal(cam, z, f === 'ggcal1'); return true; }
   if (f === 'ggflip') { mdEdit(() => { z.flip = t.checked; }); return true; }
   if (f === 'ggdir') { mdEdit(() => { z.direction = t.value; }, true); return true; }
   if (f === 'ggview') {
@@ -604,7 +685,7 @@ function ggMarkSave(m, cam, fw, fh) {
     const pts = (shape.length === 4 ? ggQuad(shape, dir) : shape).map(sc);
     const geo = m.gk === 'tube' ? { points: pts, direction: dir } : { ruler: ggQuad(m.ruler.map(sc), 'up'), points: pts };
     const old = m.replace && cam.zones.find((z) => z.id === m.replace);
-    if (old) { Object.assign(old, geo, { enabled: true }); return; }
+    if (old) { Object.assign(old, geo, { enabled: true }); if (old.cut) old.cut = null; return; }   // новая разметка стрелки — это и есть настоящая линейка
     const used = (id) => cam.zones.some((z) => z.id === id) || (cam.groups || []).some((q) => q.id === id);
     let n = 1;
     while (used(m.gk + n)) n += 1;

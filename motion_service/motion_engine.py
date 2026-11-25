@@ -271,6 +271,9 @@ def _norm_gate(z: dict, zid: str, where: str) -> dict:
     bl, br, tr, tl = ruler
     if min(bl[1], br[1]) - max(tl[1], tr[1]) < 4 or br[0] - bl[0] < 1 or tr[0] - tl[0] < 1:
         raise ValueError("%s: линейка должна стоять вертикально: два угла внизу, два вверху" % where)
+    cut = pairs(z.get("cut") or [], "выреза линейки")
+    if cut and len(cut) != 4:
+        raise ValueError("%s: у выреза линейки нужны четыре угла или ни одного" % where)
     return {
         "id": zid,
         "name": str(z.get("name") or zid),
@@ -283,6 +286,9 @@ def _norm_gate(z: dict, zid: str, where: str) -> dict:
         "frames_to_on": 1, "frames_to_off": 1, "blur": 0, "flicker_comp": False,
         "out": None,
         "ruler": ruler,
+        # линейка, как она висит на кадре (её метки вырезаются из маски); ruler после подгонки «это 0 % / 100 %» — только шкала. None — совпадают.
+        # Ключ отдаётся всегда: по нему страница понимает, что сервис вырез не потеряет
+        "cut": order_ruler(cut) if cut else None,
         "flip": bool(z.get("flip", False)),
         "hold_s": _num(z.get("hold_s", GAUGE_HOLD_S), where + ".hold_s", 0, 3600),
         "min_area": _num(z.get("min_area", GATE_MIN_AREA), where + ".min_area", 1, 10 ** 7, True),
@@ -1906,7 +1912,8 @@ class GateRT(GaugeRT):
         self.bbox = (x, y, max(1, w), max(1, h))
         m = np.zeros((self.bbox[3], self.bbox[2]), np.uint8)
         cv2.fillPoly(m, [trk - [x, y]], 255)
-        cv2.fillPoly(m, [np.round(np.array(self.ruler)).astype(np.int32) - [x, y]], 0)   # метки линейки — того же цвета, их не берём
+        cut = scale_points(zcfg.get("cut") or zcfg["ruler"], frame_size, cur_wh)
+        cv2.fillPoly(m, [np.round(np.array(cut)).astype(np.int32) - [x, y]], 0)          # метки линейки — того же цвета, их не берём
         self.mask, self.track = m, trk
         pad = max(8, int(round(0.08 * max(w, h))))                                       # превью и пипетка: зона указателя с полями
         self.view = (max(0, x - pad), max(0, y - pad), min(W, x + w + pad), min(H, y + h + pad))

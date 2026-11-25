@@ -77,6 +77,8 @@ function gtCalPaint(cam, z) {
 
 async function gtOnCal(cam, z, full) {
   const name = full ? '100 %' : '0 %';
+  // ключ cut сервис 3.0.43+ отдаёт всегда; старый выбросил бы запомненную линейку, и после подгонки её метки могли бы читаться как указатель
+  if (!('cut' in z)) { alert('Сервис движения старый: подгонка требует motion 3.0.43 или новее. Обновите программу и попробуйте ещё раз.'); return; }
   const plan = gtCalPlan(z, gtLive(MV.states[cam.id], z.id), full);
   if (plan.error) { alert(plan.error); return; }
   if (!confirm('Сейчас по разметке ' + gtFmt(plan.pct) + '. Считать это положение за ' + name + '?\n\nСдвинется сторона «' + name +
@@ -88,7 +90,7 @@ async function gtOnCal(cam, z, full) {
   const fresh = gtCalPlan(zone, gtLive(st, z.id), full);
   if (fresh.error) { alert(fresh.error); return; }
   if (Math.abs(fresh.pct - plan.pct) > 100 * GT_CAL_STILL) { alert('Указатель сдвинулся, пока был открыт вопрос. Нажмите кнопку ещё раз.'); return; }
-  mdEdit(() => { zone.ruler = fresh.ruler; });
+  mdEdit(() => { zone.cut = zone.cut || zone.ruler; zone.ruler = fresh.ruler; });   // метки вырезаются там, где линейка висит на самом деле
   log.success('КЗ: шибер подогнан — текущее положение теперь ' + name, { serial: cam.id });
 }
 
@@ -253,7 +255,7 @@ function gtMarkSave(m, cam, fw, fh) {
     const sc = (p) => [Math.round(p[0] * fs[0] / fw), Math.round(p[1] * fs[1] / fh)];
     const geo = { ruler: gtOrder(m.polys[0].map(sc)), points: m.pts.map(sc) };
     const old = cam.zones.find((z) => z.type === 'gate');     // шибер на камере один: повторная разметка меняет только геометрию
-    if (old) { Object.assign(old, geo, { enabled: true }); return; }
+    if (old) { Object.assign(old, geo, { enabled: true }); if (old.cut) old.cut = null; return; }   // новая разметка — это и есть настоящая линейка
     let n = 1;
     while (cam.zones.some((z) => z.id === 'gate' + n) || (cam.groups || []).some((q) => q.id === 'gate' + n)) n += 1;
     cam.zones.push(Object.assign({ id: 'gate' + n, name: 'Шибер', enabled: true, type: 'gate', metric: 'flow', on: 0, off: 0, invert: false, track_flow: false, out: null,

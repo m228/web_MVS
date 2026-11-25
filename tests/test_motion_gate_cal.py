@@ -15,6 +15,9 @@ sys.path.insert(0, str(ROOT / "motion_service"))
 
 import motion_engine as me  # noqa: E402
 
+sys.path.insert(0, str(ROOT / "tests"))
+import test_motion_gate as tg  # noqa: E402  синтетический кадр шибера: линейка с метками и полоска-указатель
+
 NODE = shutil.which("node")
 pytestmark = pytest.mark.skipif(NODE is None, reason="нет node")
 JS = ROOT / "page" / "static" / "js" / "multi" / "19-gate.js"
@@ -64,20 +67,25 @@ def test_biggest_mistake_is_undone_by_same_button(full, level):
         assert a == pytest.approx(b, abs=0.3)
 
 
-def run_button(states, flip=False, answer=True, dirty=False, full=False):
+def run_button(states, flip=False, answer=True, dirty=False, full=False, zone=None):
     """gtOnCal целиком: states[0] — что на экране в момент нажатия, states[1] — что ответил сервис после вопроса."""
+    zone = dict({"id": "g", "ruler": RULER, "flip": flip, "cut": None}, **(zone or {}))
+    zone = {k: v for k, v in zone.items() if v != "нет ключа"}
     code = (
         "(async () => { const out = {alerts: [], asked: [], edits: 0};"
-        "const zone = {id: 'g', ruler: data.ruler, flip: data.flip};"
+        "const zone = data.zone;"
         "globalThis.MV = {online: true, dirty: data.dirty, states: {c: data.states[0]}};"
         "globalThis.alert = (m) => out.alerts.push(m); globalThis.confirm = (m) => { out.asked.push(m); return data.answer; };"
         "globalThis.mvApi = async () => data.states[1]; globalThis.mvCam = () => ({id: 'c', zones: [zone]});"
         "globalThis.mdEdit = (f) => { f(); out.edits += 1; }; globalThis.log = {success: () => {}};"
-        "await gtOnCal({id: 'c', zones: [zone]}, zone, data.full); out.ruler = zone.ruler; return out; })()")
+        "await gtOnCal({id: 'c', zones: [zone]}, zone, data.full); out.ruler = zone.ruler; out.cut = zone.cut; return out; })()")
+    return js_async(code, {"zone": zone, "states": states, "answer": answer, "dirty": dirty, "full": full})
+
+
+def js_async(code, data):
     wrapper = ("const vm=require('vm'),fs=require('fs');const c={data:%s};vm.createContext(c);"
-               "vm.runInContext(fs.readFileSync(%s,'utf8'),c);vm.runInContext(%s,c).then((r)=>process.stdout.write(JSON.stringify(r)));"
-               % (json.dumps({"ruler": RULER, "flip": flip, "states": states, "answer": answer, "dirty": dirty, "full": full}),
-                  json.dumps(str(JS)), json.dumps(code)))
+               "vm.runInContext(fs.readFileSync(%s,'utf8'),c);Promise.resolve(vm.runInContext(%s,c)).then((r)=>process.stdout.write(JSON.stringify(r)));"
+               % (json.dumps(data), json.dumps(str(JS)), json.dumps(code)))
     return json.loads(subprocess.run([NODE, "-e", wrapper], capture_output=True, check=True, encoding="utf-8").stdout)
 
 
@@ -119,6 +127,66 @@ def test_button_with_flip():
     out = run_button([state(0.95), state(0.95)], flip=True)
     assert out["edits"] == 1 and out["ruler"][:2] == RULER[:2]
     assert pct(out["ruler"], point(0.95), flip=True) == pytest.approx(0.0, abs=0.05)
+
+
+def test_button_remembers_real_ruler_once():
+    first = run_button([state(0.05), state(0.05)])
+    assert first["cut"] == RULER and first["ruler"] != RULER
+    again = run_button([state(0.05, t=0.0), state(0.05, t=0.0)], zone={"ruler": first["ruler"], "cut": first["cut"]})
+    assert again["edits"] == 1 and again["cut"] == RULER          # повторная подгонка не подменяет настоящую линейку шкалой
+
+
+def test_button_refuses_on_old_service():
+    out = run_button([state(0.05), state(0.05)], zone={"cut": "нет ключа"})
+    assert "3.0.43" in out["alerts"][0] and not out["asked"] and out["edits"] == 0
+
+
+@pytest.mark.parametrize("old,expect", [({"cut": RULER}, None), ({"cut": None}, None), ({}, "нет ключа")])
+def test_new_marking_drops_remembered_ruler(old, expect):
+    code = ("(() => { const zone = Object.assign({id: 'g', type: 'gate'}, data.old); const cam = {id: 'c', frame_size: [1920, 1080], zones: [zone]};"
+            "globalThis.mdEdit = (f) => f(); globalThis.log = {success: () => {}}; globalThis.closeMarkModal = () => {};"
+            "gtMarkSave({polys: [data.ruler], pts: [[1025, 520], [1210, 520], [1210, 800]]}, cam, 1920, 1080); return zone; })()")
+    zone = js_async(code, {"old": old, "ruler": RULER})
+    assert zone["ruler"] == RULER and zone.get("cut", "нет ключа") == expect
+
+
+def real_zone(ruler, cut=None, track=None):
+    cfg = me.normalize_camera({"id": "sh", "url": "x", "frame_size": [960, 540], "zones": [{
+        "id": "g", "type": "gate", "ruler": ruler, "cut": cut, "points": track or tg.TRACK}]})
+    return cfg["zones"][0]
+
+
+@pytest.mark.parametrize("remembered", [False, True])
+def test_marks_stay_cut_after_calibration(remembered):
+    """Зона указателя заезжает на линейку, линейку укоротили на четверть, указателя на кадре нет."""
+    short = [list(p) for p in tg.RULER]
+    short[0][1] = short[1][1] = 370
+    zone = real_zone(short, cut=tg.RULER if remembered else None)
+    rt = me.GateRT(zone, [960, 540], (960, 540))
+    found = rt.step(tg.frame(None), 0.0)
+    assert found is (not remembered)                              # без cut метка за новой стороной читается как указатель
+    if remembered:
+        assert not rt.valid and rt.area == 0
+        assert rt.step(tg.frame(370), 1.0) and rt.pct == pytest.approx(0.0, abs=1.0)    # сам указатель виден, шкала новая
+
+
+def test_longer_ruler_does_not_cut_pointer():
+    """Линейку удлинили (указатель ниже старой стороны) и он заходит на её ширину: вырез остаётся прежним, пятно целое."""
+    long = [list(p) for p in tg.RULER]
+    long[0][1] = long[1][1] = 520
+    track = [[300, 40], [560, 40], [560, 535], [300, 535]]
+    img = tg.frame(None)
+    img[488:502, 330:520] = tg.RED                                # ниже настоящей линейки (низ y=470)
+    full, cut = (me.GateRT(real_zone(long, cut=c, track=track), [960, 540], (960, 540)) for c in (tg.RULER, None))
+    assert full.step(img, 0.0) and cut.step(img, 0.0)
+    assert full.area > cut.area
+
+
+def test_cut_validation():
+    assert real_zone(tg.RULER)["cut"] is None
+    assert real_zone(tg.RULER, cut=[tg.RULER[2], tg.RULER[0], tg.RULER[3], tg.RULER[1]])["cut"] == real_zone(tg.RULER)["ruler"]
+    with pytest.raises(ValueError):
+        real_zone(tg.RULER, cut=tg.RULER[:3])
 
 
 @pytest.mark.parametrize("level", [0.04, -0.06, 0.2])

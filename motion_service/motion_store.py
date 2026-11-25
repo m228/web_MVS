@@ -32,6 +32,12 @@ SCALE = 10000                          # значения хранятся це�
 _LIM = 1e11                            # защита: «бесконечные» заглушки (min = 1e30) не должны переполнить 64-битное целое
 MAX_BUF = 300_000                      # строк в памяти при сбое диска: дальше отбрасываем самое старое, а не растём без предела
 PURGE_CHUNK_S = 3600                   # уборка режется на куски по часу: замок хранилища на время куска, камеры не встают
+# Секунда «палка найдена» (условие по строке trend): бит и уверенность по цвету > 0. Когда палку ведут отражатели, цвет в части оборота может
+# не различаться (уверенность 0), хотя угол найден верно, — поэтому засчитываем и секунду, где на найденном угле виден отражатель (таблица tip).
+# Точка тренда чуть длиннее секунды и захватывает две соседние секунды tip. CASE, а не OR: подзапрос идёт только по секундам без уверенности
+# (с OR SQLite выполнял его на каждой строке, и запрос видимости за 7 суток держал замок хранилища вдвое дольше).
+FOUND_SQL = ("CASE WHEN NOT trend.bit THEN 0 WHEN trend.diff > 0 THEN 1 ELSE EXISTS (SELECT 1 FROM tip WHERE tip.cam = trend.cam "
+             "AND tip.zone = trend.zone AND tip.ts BETWEEN trend.ts / 10 AND trend.ts / 10 + 1 AND (tip.tr OR tip.tb)) END")
 
 _REG: dict = {}
 _REG_LOCK = threading.Lock()
@@ -251,8 +257,8 @@ class MotionStore:
     def visibility(self, cam: str, zone_ids: set, t0: float, t1: float, step_s: int) -> dict:
         """Сколько секунд из каждого окна step_s палка была найдена: {зона: {номер окна: (секунд с данными, секунд «найдена»)}}.
         Считаем только секунды, когда камера отдавала нормальную картинку (ok=1): обрыв связи не считается «палку не видно».
-        Номер окна = время // step_s. Источник — секундные тренды (бит секунды = «найдена хотя бы в одном кадре секунды»; у палки diff = уверенность, при удержании угла она 0,
-        поэтому удержание без реальной находки палкой «найденной» не считаем)."""
+        Номер окна = время // step_s. Источник — секундные тренды (бит секунды = «найдена хотя бы в одном кадре секунды»; у палки diff = уверенность
+        по цвету, при удержании угла она 0). «Найдена» — FOUND_SQL: удержание угла не считается, а находка по отражателям без цвета — считается."""
         step = max(1, int(step_s))
         with self._lock:
             self.flush()
@@ -260,7 +266,7 @@ class MotionStore:
             ids = {self._id(z): z for z in zone_ids}
             out: dict = {z: {} for z in zone_ids}
             for k, z, n, f in self._c.execute(
-                    "SELECT ts / ? AS k, zone, COUNT(*), SUM(bit AND diff > 0) FROM trend WHERE cam=? AND ts>=? AND ts<? AND ok=1 GROUP BY k, zone",
+                    "SELECT ts / ? AS k, zone, COUNT(*), SUM(%s) FROM trend WHERE cam=? AND ts>=? AND ts<? AND ok=1 GROUP BY k, zone" % FOUND_SQL,
                     (step * 10, c, int(t0 * 10), int(t1 * 10))):
                 if z in ids:
                     out[ids[z]][int(k)] = (int(n), int(f or 0))
@@ -286,7 +292,7 @@ class MotionStore:
         """Карта потерь палки: {зона: {(час суток, сектор угла или -1): (секунд с данными, секунд «найдена»)}}.
         Сектор — угол красного конца из тренда (flow, 0..360 → сектор шириной sector_deg); при полной потере угла нет (flow = 0 и бита нет) —
         такие секунды идут в сектор −1 (в часах учитываются, в секторах нет). Час — местный. Считаем только секунды с нормальной картинкой (ok=1);
-        «найдена» — как в видимости: бит и уверенность > 0 (удержание угла не считается)."""
+        «найдена» — как в видимости (FOUND_SQL)."""
         sec = max(1, int(sector_deg))
         nsec = 360 // sec
         with self._lock:
@@ -296,7 +302,7 @@ class MotionStore:
             out: dict = {z: {} for z in zone_ids}
             for z, h, s, n, f in self._c.execute(
                     "SELECT zone, CAST(strftime('%H', ts / 10, 'unixepoch', 'localtime') AS INTEGER) AS h, "
-                    "CASE WHEN bit = 0 AND flow = 0 THEN -1 ELSE (flow / ?) % ? END AS s, COUNT(*), SUM(bit AND diff > 0) "
+                    "CASE WHEN bit = 0 AND flow = 0 THEN -1 ELSE (flow / ?) % ? END AS s, COUNT(*), SUM(" + FOUND_SQL + ") "
                     "FROM trend WHERE cam=? AND ts>=? AND ts<? AND ok=1 GROUP BY zone, h, s",
                     (sec * SCALE, nsec, c, int(t0 * 10), int(t1 * 10))):
                 if z in ids:

@@ -22,6 +22,7 @@ import cv2
 import numpy as np
 
 import motion_engine as me
+import motion_store
 
 DAY_FROM, DAY_TO = 8, 20            # день 08:00–20:00, ночь 20:00–08:00 (как в отчёте по частям суток)
 SLOT_S = 1800                       # окно статистики
@@ -54,8 +55,10 @@ def load_trend(db: Path, cam: str, t0: float, t1: float) -> dict:
         out: dict = defaultdict(dict)
         if cid is None:
             return out
+        tips = c.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='tip'").fetchone()     # в старых копиях базы таблицы нет
+        found = motion_store.FOUND_SQL if tips else "(bit AND diff > 0)"
         for k, z, n, f in c.execute(
-                "SELECT ts / ? AS k, zone, COUNT(*), SUM(bit AND diff > 0) FROM trend WHERE cam=? AND ts>=? AND ts<? AND ok=1 GROUP BY k, zone",
+                "SELECT ts / ? AS k, zone, COUNT(*), SUM(%s) FROM trend WHERE cam=? AND ts>=? AND ts<? AND ok=1 GROUP BY k, zone" % found,
                 (SLOT_S * 10, cid, int(t0 * 10), int(t1 * 10))):
             out[names.get(z, str(z))][int(k)] = (int(n), int(f or 0))
         return out

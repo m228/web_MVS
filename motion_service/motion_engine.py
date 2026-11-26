@@ -2355,7 +2355,7 @@ class CameraEngine:
         if not any(m.dirty for m in self.learners.values()):
             return
         try:
-            tables = {g["id"]: g["table"] for g in self.cfg["groups"]}
+            tables = {g["id"]: g.get("table") for g in self.cfg["groups"]}      # поле есть только у синхронности: рядом бывают другие группы
             data = {gid: {"shape": [round(v, 2) for v in m.shape], "table": tables.get(gid)} for gid, m in self.learners.items()}
             tmp = str(self.learn_path) + ".tmp"
             with open(tmp, "w", encoding="utf-8") as f:

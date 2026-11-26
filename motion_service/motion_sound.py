@@ -7,6 +7,7 @@
     этап       первое событие — сброс; следующее через 8–45 с после него — засыпка; прокрутку по звуку не слышно.
 Код этапа держится, пока идёт звук, и не меньше 3 с (сценарий пишет в ПЛК раз в секунду). Звук громче порога дольше
 30 с — не камни (дождь, пар, техника): код снимается до тишины. Нет звука — код 0. От картинки это вычисление не зависит.
+История для графика: на каждую секунду — максимум уровня над фоном и самый «старший» этап, уходит в sink (база motion.db).
 Проверено на записях 26.11: ночь 4 сброса и 4 засыпки, день 3 и 3, лишних нет; порог от +24 до +34 дБ даёт то же.
 """
 from __future__ import annotations
@@ -40,6 +41,7 @@ HIST_S = 180                     # сколько секунд уровня от
 STALL_S = 20.0                   # звука нет дольше — ffmpeg перезапускается
 SILENT_DB = -100.0               # тише этого — не звук, а нули (микрофон камеры выключен): в фон не берём
 STAGE_NAMES = {"listen": "слушаю фон", "wait": "ожидание", "drop": "сброс", "load": "засыпка", "noise": "долгий шум"}
+HIST_STAGES = ("wait", "drop", "load", "noise")     # номер этапа в истории (таблица sound); при прореживании берётся больший
 DEFAULT_CODES = {"wait": 0, "drop": 1, "load": 2}
 _WINDOW = np.hanning(NFFT).astype(np.float32)
 _STARTS = (0, (BLOCK - NFFT) // 2, BLOCK - NFFT)
@@ -148,9 +150,13 @@ def build_cmd(ffmpeg: str, url: str) -> list:
 class Listener(threading.Thread):
     """Держит ffmpeg со звуком одной камеры и кормит детектор; после обрыва перезапускает."""
 
-    def __init__(self, cid: str, url: str, threshold_db: float, ffmpeg: str, stall_s: float = STALL_S, clock: Callable = time.time):
+    def __init__(self, cid: str, url: str, threshold_db: float, ffmpeg: str, stall_s: float = STALL_S, clock: Callable = time.time,
+                 sink: Optional[Callable] = None):
         super().__init__(daemon=True, name="sound-" + cid)
         self.cid, self.url, self.ffmpeg, self.stall_s, self.clock = cid, url, ffmpeg, stall_s, clock
+        self.sink = sink                   # (камера, секунда, уровень над фоном, номер этапа) — история на диск
+        self._point: Optional[list] = None # набирающаяся секунда истории [секунда, максимум уровня, этап]
+        self._sink_failed = False
         self.detector = SoundDetector(threshold_db)
         self.error = ""
         self._last = 0.0                   # monotonic последнего блока звука
@@ -187,6 +193,30 @@ class Listener(threading.Thread):
                 self.detector.step(t, db)
                 self._last = time.monotonic()
                 self.error = ""
+                done = self._collect(t, db)
+            self._save(done)                # вне замка: медленный диск не задерживает состояние камеры
+
+    def _collect(self, t: float, db: float) -> Optional[list]:
+        """Добавить блок в секунду истории; вернуть предыдущую секунду, когда началась следующая. Звать под self._lock."""
+        d = self.detector
+        if d.stage == "listen" or d.bg is None or db <= SILENT_DB:      # фона ещё нет или вместо звука нули — на графике пусто
+            return None
+        sec, code, cur = int(t), HIST_STAGES.index(d.stage), self._point
+        if cur is not None and cur[0] == sec:
+            cur[1], cur[2] = max(cur[1], float(d.rel)), max(cur[2], code)
+            return None
+        self._point = [sec, float(d.rel), code]
+        return cur
+
+    def _save(self, point: Optional[list]):
+        if point is None or self.sink is None:
+            return
+        try:
+            self.sink(self.cid, *point)
+        except Exception as e:  # noqa: BLE001 — диск не должен ронять приём звука
+            if not self._sink_failed:          # один раз: пачка уходит раз в несколько секунд, иначе журнал забьётся
+                self._sink_failed = True
+                log.warning("[%s] история звука на диск не пишется: %s", self.cid, e)
 
     def _run_once(self):
         with self._lock:
@@ -217,6 +247,9 @@ class Listener(threading.Thread):
                     pass
             for r in readers:
                 r.join(2)
+            with self._lock:
+                done, self._point = self._point, None
+            self._save(done)                    # последняя неполная секунда перед обрывом
             for pipe in (proc.stdout, proc.stderr):
                 try:
                     pipe.close()
@@ -273,8 +306,9 @@ def group_state(group: dict, listener: Optional[Listener], now: float, blocked: 
 class SoundHub:
     """Слушатели камер: следит за настройками (камера включена и у неё есть вычисление по звуку) и отдаёт состояния групп."""
 
-    def __init__(self, cameras: Callable[[], list], ffmpeg: Callable[[], Optional[str]] = vr.find_ffmpeg, tick_s: float = 2.0):
-        self.cameras, self.ffmpeg, self.tick_s = cameras, ffmpeg, tick_s
+    def __init__(self, cameras: Callable[[], list], ffmpeg: Callable[[], Optional[str]] = vr.find_ffmpeg, tick_s: float = 2.0,
+                 sink: Optional[Callable] = None):
+        self.cameras, self.ffmpeg, self.tick_s, self.sink = cameras, ffmpeg, tick_s, sink
         self.listeners: dict[str, Listener] = {}
         self._blocked = ""
         self._lock = threading.RLock()
@@ -304,7 +338,7 @@ class SoundHub:
                 if x:
                     x.set_threshold(thr)                 # порог меняется на ходу: фон не теряется
                     continue
-                x = self.listeners[cid] = Listener(cid, url, thr, exe)
+                x = self.listeners[cid] = Listener(cid, url, thr, exe, sink=self.sink)
                 x.start()
                 log.info("[%s] слушаю звук камеры: %s", cid, vr.mask(url))
 

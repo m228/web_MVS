@@ -111,19 +111,23 @@ def _hot_keys(zone: dict) -> tuple:
 
 
 def _strip_hot(cam: dict) -> dict:
-    """Камера без «мягких» полей стаканов и уровнемеров — для сравнения «изменилось только мягкое?»."""
+    """Камера без «мягких» полей стаканов и уровнемеров и без вычисления по звуку — для сравнения «изменилось только мягкое?»."""
     out = dict(cam)
     out.pop("autocal_watch", None)              # настройка сторожа подгонки читается из конфига сервиса, потоку камеры не нужна
     out["zones"] = [{k: v for k, v in z.items() if k not in _hot_keys(z)} for z in cam["zones"]]
+    out["groups"] = [g for g in cam["groups"] if g["type"] != "kiln_sound"]   # звук считает свой поток: галочка и порог не рвут видео
     return out
 
 
 def _hot_update(worker, new_cam: dict) -> bool:
-    """Камера отличается от работающей только мягкими полями стаканов и уровнемеров → записать их в конфиг рабочего потока на месте (True); иначе False."""
+    """Камера отличается от работающей только мягкими полями (стаканы, уровнемеры, звук) → записать их в конфиг рабочего потока на месте (True);
+    иначе False."""
     old = worker.cfg
     if _strip_hot(old) != _strip_hot(new_cam):
         return False
     old["autocal_watch"] = new_cam["autocal_watch"]
+    kept = {g["id"]: g for g in old["groups"] if g["type"] != "kiln_sound"}   # объекты остальных групп оставляем те же
+    old["groups"] = [g if g["type"] == "kiln_sound" else kept[g["id"]] for g in new_cam["groups"]]
     for oz, nz in zip(old["zones"], new_cam["zones"]):
         for k in _hot_keys(oz):
             if k in nz:
@@ -161,13 +165,37 @@ class Manager:
         self.watch = AutocalWatch(self)            # сторож видимости палок: сам запускает подгонку при просадке и откатывает, если стало хуже
         self.video = motion_videorec.VideoRec(self.dir, lambda: self.cfg["cameras"],   # запись видео со звуком на диск (data\video_rec)
                                               activity=self._motion_activity)
-        self.sound = motion_sound.SoundHub(lambda: self.cfg["cameras"])                # этапы печи по звуку камеры
+        self.sound = motion_sound.SoundHub(lambda: self.cfg["cameras"], sink=self._sound_point)   # этапы печи по звуку камеры
 
     def _motion_activity(self, cid: str, t0: float, t1: float) -> Optional[list]:
         """Для нарезки записи: секундные строки движения камеры за [t0, t1] или None, если у неё нет окон движения."""
         cam = next((c for c in self.cfg["cameras"] if c["id"] == cid), None)
         zones = engine.motion_zones(cam) if cam else {}
         return motion_store.store_for(self.dir).activity(cid, zones, t0, t1) if zones else None
+
+    # --- звук камер: история для графика ---
+    def _sound_point(self, cid: str, ts: int, level: float, stage: int):
+        """Секунда звука → data\\motion.db (пачками, как тренды). Ошибку диска ловит и пишет в журнал поток звука."""
+        if self._halt.is_set():                  # база уже закрывается: не открывать её заново
+            return
+        store = motion_store.store_for(self.dir)
+        store.add_sound(cid, ts, level, stage)
+        store.maybe_flush(ts)
+
+    def sound_history(self, cid: str, window: float, points: int) -> Optional[dict]:
+        """Звук камеры за последние window секунд, не больше ~points точек (максимум в корзине). None — у камеры звук не слушается."""
+        cam = next((c for c in self.cfg["cameras"] if c["id"] == cid), None)
+        if cam is None or not any(g["type"] == "kiln_sound" for g in cam["groups"]):
+            return None
+        now = time.time()
+        step = max(1, math.ceil(window / points))
+        try:
+            rows = motion_store.store_for(self.dir).sound_history(cid, now - window, now + 5, step)
+        except (OSError, sqlite3.Error) as e:                  # диск не должен ронять графики движения и яркости
+            log.warning("[%s] история звука не прочиталась: %s", cid, e)
+            rows = []
+        return {"now": round(now, 2), "step": step, "t": [r[0] for r in rows], "level": [round(r[1], 1) for r in rows],
+                "stage": [r[2] for r in rows]}
 
     # --- автоподгонка валов ---
     def autocal_start(self, cid: str, zones: list, seconds: float) -> dict:
@@ -643,7 +671,12 @@ def create_app(data_dir: Optional[Path] = None, capture_factory: Callable = open
     @app.get("/cameras/{cid}/history")
     def history(cid: str, n: int = 300, window: float = 0, points: int = 600):
         # window > 0 — последние window секунд из длинной истории (до 2 ч), ужатые до points точек; иначе последние n кадров
-        return mgr.worker(cid).history(max(1, min(int(n), 900)), max(0.0, min(float(window), 7200.0)), max(10, min(int(points), 2000)))
+        window, points = max(0.0, min(float(window), 7200.0)), max(10, min(int(points), 2000))
+        out = mgr.worker(cid).history(max(1, min(int(n), 900)), window, points)
+        sound = mgr.sound_history(cid, window, points) if window > 0 else None   # звук — из базы: есть и ночью, и при мёртвой картинке
+        if sound is not None:
+            out["sound"] = sound
+        return out
 
     @app.get("/cameras/{cid}/visibility")
     def cam_visibility(cid: str, window: float = 86400.0):

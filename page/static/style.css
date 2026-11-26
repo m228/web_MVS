@@ -4687,10 +4687,18 @@ body.micro-rep-doc .micro-cmp-strips { grid-template-columns: repeat(6, 1fr); ga
 .md-zr.is-open .md-zr__head .md-zone__chart { visibility: hidden; height: 0; overflow: hidden; }
 .md-zr__chev { width: 24px; height: 24px; border-radius: 50%; border: 1px solid var(--border); display: inline-flex; align-items: center; justify-content: center; font-size: 12px; color: var(--muted); transition: transform .15s; }
 .md-zr.is-open .md-zr__chev { transform: rotate(180deg); }
-/* раскрытая карточка: окно «Движение», окно «Яркость» (шире) и справа их графики; у выключенного блока окно узкое */
-.md-zr__det { display: none; grid-template-columns: minmax(0, 360px) minmax(0, 470px) minmax(260px, 1fr); gap: 12px; padding: 2px 8px 12px 18px; }
-.md-zr__det.no-mot { grid-template-columns: minmax(0, 260px) minmax(0, 520px) minmax(260px, 1fr); }
-.md-zr__det.no-fill { grid-template-columns: minmax(0, 360px) minmax(0, 220px) minmax(260px, 1fr); }
+/* раскрытая карточка: окна «Движение», «Яркость» (шире), «Звук» и справа их графики друг под другом; у выключенного блока окно узкое */
+.md-zr__det { --md-m: 360px; --md-f: 470px; --md-s: 250px; display: none; grid-template-columns: minmax(0, var(--md-m)) minmax(0, var(--md-f)) minmax(0, var(--md-s)) minmax(300px, 1fr); gap: 12px; padding: 2px 8px 12px 18px; }
+.md-zr__det.no-mot { --md-m: 260px; --md-f: 520px; }
+.md-zr__det.no-fill { --md-f: 220px; }
+.md-zr__det.no-snd { --md-s: 100px; }
+/* со звуком окна настроек чуть уже — графикам должно остаться место */
+.md-zr__det:not(.no-snd) { --md-f: 400px; --md-s: 230px; }
+.md-zr__det:not(.no-snd).no-mot { --md-m: 240px; --md-f: 450px; }
+.md-zr__det:not(.no-snd).no-fill { --md-f: 200px; }
+.md-zr__det--snd { grid-template-columns: minmax(0, var(--md-s)) minmax(300px, 1fr); }
+.md-zr__col.md-sndcol .md-lbl:first-child { min-width: 0; }
+.md-sndcol .md-zone__row { flex-wrap: wrap; row-gap: 4px; }
 .md-zr.is-open .md-zr__det { display: grid; }
 .md-zr__col { display: flex; flex-direction: column; gap: 6px; min-width: 0; padding: 8px 10px; border: 1px solid var(--border); border-radius: 12px; }
 .md-zr__sw { display: flex; align-items: center; gap: 12px; }
@@ -4816,8 +4824,23 @@ body.micro-rep-doc .micro-cmp-strips { grid-template-columns: repeat(6, 1fr); ga
 .md-sr__foot .md-x { flex: none; }
 .md-openall, .md-zr__col label.md-lbl { flex-direction: row; align-items: center; gap: 5px; }
 .md-openall input[type=checkbox], .md-zr__col input[type=checkbox] { width: 15px; height: 15px; margin: 0; flex: none; }
-@media (max-width: 1280px) { .md-zr__det, .md-zr__det.no-mot, .md-zr__det.no-fill { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); } .md-zr__charts { grid-column: 1 / -1; } }
-@media (max-width: 900px) { .md-zr__head { grid-template-columns: 4px 110px minmax(0, 1fr) 26px; } .md-zr__head .md-zone__chart { display: none; } .md-zr__det, .md-zr__det.no-mot, .md-zr__det.no-fill { grid-template-columns: 1fr; } }
+/* со звуком четыре колонки помещаются только на широком экране: графики уходят под три колонки настроек; без звука — на экране поуже */
+@media (max-width: 1599px) {
+  .md-zr__det:not(.no-snd):not(.md-zr__det--snd) { grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr) minmax(0, .8fr); }
+  .md-zr__det:not(.no-snd):not(.md-zr__det--snd) .md-zr__charts { grid-column: 1 / -1; }
+}
+@media (max-width: 1280px) {
+  .md-zr__det.no-snd { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto; }
+  .md-zr__det.no-snd .md-zr__charts { grid-column: 1 / -1; }
+}
+@media (max-width: 1150px) {      /* третьей колонке уже тесно: «Звук» — отдельной строкой под «Движением» и «Яркостью» */
+  .md-zr__det.no-snd, .md-zr__det:not(.no-snd):not(.md-zr__det--snd) { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+  .md-zr__det:not(.md-zr__det--snd) .md-sndcol { grid-column: 1 / -1; }
+}
+@media (max-width: 900px) {
+  .md-zr__head { grid-template-columns: 4px 110px minmax(0, 1fr) 26px; } .md-zr__head .md-zone__chart { display: none; }
+  .md-zr__det.no-snd, .md-zr__det:not(.no-snd):not(.md-zr__det--snd), .md-zr__det.md-zr__det--snd { grid-template-columns: minmax(0, 1fr); }
+}
 @media (max-width: 900px) { .md-zone { grid-template-columns: 1fr; } }
 
 .md-det { margin-top: 12px; }
@@ -4913,6 +4936,21 @@ body.micro-rep-doc .micro-cmp-strips { grid-template-columns: repeat(6, 1fr); ga
 .md-ge label.md-chk { display: inline-flex; flex-direction: row; align-items: center; gap: 4px; margin: 0 6px 0 0; }
 .md-ge label.md-code { display: inline-flex; flex-direction: row; align-items: center; gap: 6px; }       /* коды этапов печи — компактно в строку */
 .md-ge .md-code input[type=number] { width: 64px; }
+/* звук в карточке (23-sound.js): колонка, легенда этапов над графиком, строка «включить звук» у камеры без окон */
+.md-gl--wide { grid-template-columns: minmax(0, 1fr); }
+.md-snd-pill { font-size: 11px; padding: 1px 9px; border-radius: 999px; background: var(--surface-strong); color: var(--muted); white-space: nowrap; }
+.md-snd-pill[data-s="1"] { color: var(--warning); background: var(--warning-soft); font-weight: 600; }
+.md-snd-pill[data-s="2"] { color: var(--success); background: var(--success-soft); font-weight: 600; }
+.md-snd-pill[data-s="3"] { color: #a78bfa; background: rgba(167, 139, 250, .18); font-weight: 600; }
+.md-snd-pill[data-s="off"] { color: var(--danger); background: var(--danger-soft); }
+.md-snd-cnt { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.md-snd-err { font-size: 12px; color: var(--danger); overflow-wrap: anywhere; }
+.md-snd-cnt:empty, .md-snd-err:empty { display: none; }
+.md-snd-lg { display: inline-flex; gap: 10px; margin-left: 12px; text-transform: none; letter-spacing: 0; }
+.md-snd-lg span { display: inline-flex; align-items: center; gap: 4px; }
+.md-snd-lg i { width: 8px; height: 8px; border-radius: 2px; }
+.md-snd-off { padding: 8px 8px 8px 18px; }
+.md-snd-off .md-sndcol { display: inline-flex; padding: 6px 10px; }
 .md-snd { width: 100%; height: 90px; display: block; margin-bottom: 6px; background: var(--surface-muted); border-radius: 10px; }   /* уровень звука печи с порогом */
 .md-ge label > span:first-child, .md-fields label > span:first-child, .md-ge__zones > span:first-child { color: var(--muted); font-weight: 600; }
 .md-ge input[type=text], .md-ge input[type=number], .md-ge select, .md-fields input[type=text], .md-fields select { width: 100%; }

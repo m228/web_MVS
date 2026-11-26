@@ -146,13 +146,14 @@ const MD_CH = mdLoadChartH();
 function mdLoadChartH() {
   let d = {};
   try { d = JSON.parse(localStorage.getItem(MD_CH_KEY)) || {}; } catch (err) { /* не критично */ }
-  return { motion: mdClampH(Number(d.motion) || MD_CH_DEF), fill: mdClampH(Number(d.fill) || MD_CH_DEF) };
+  return { motion: mdClampH(Number(d.motion) || MD_CH_DEF), fill: mdClampH(Number(d.fill) || MD_CH_DEF), sound: mdClampH(Number(d.sound) || MD_CH_DEF) };
 }
 
-// график раскрытой карточки: kind — motion | fill; колесо мыши и подсказка работают как у остальных (.md-zone__chart)
-function mdBigChartHtml(kind, id, title) {
-  return `<div class="md-zc"><div class="md-zr__t">${title}</div>` +
-    `<div class="md-zone__chart"><canvas id="${id}" data-h="${kind}" height="${MD_CH[kind]}" style="height:${MD_CH[kind]}px"></canvas></div>` +
+// график раскрытой карточки: kind — motion | fill | sound; колесо мыши и подсказка работают как у остальных (.md-zone__chart).
+// attrs — атрибуты холста, extra — приписка к заголовку (легенда)
+function mdBigChartHtml(kind, id, title, attrs = '', extra = '') {
+  return `<div class="md-zc"><div class="md-zr__t">${title}${extra}</div>` +
+    `<div class="md-zone__chart"><canvas id="${id}" data-h="${kind}" ${attrs} height="${MD_CH[kind]}" style="height:${MD_CH[kind]}px"></canvas></div>` +
     `<div class="md-grip" data-grip="${kind}" title="Потяните вверх или вниз — высота графика «${title}», запоминается. Двойной щелчок — как было"></div></div>`;
 }
 

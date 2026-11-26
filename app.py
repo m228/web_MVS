@@ -1601,6 +1601,25 @@ def motion_records_zip(days: float = 7.0):
                     headers={"Content-Disposition": 'attachment; filename="motion_records_%s.zip"' % time.strftime("%Y%m%d_%H%M")})
 
 
+@app.get("/api/motion/video_rec")
+def motion_video_rec():
+    """Запись видео со звуком на диск (материал для разметки звуков): настройки и ход по камерам."""
+    return motion_client.video_rec(_motion_url())
+
+
+@app.post("/api/motion/video_rec")
+def motion_video_rec_set(req: dict = Body(...)):
+    """{"camera", on?, stream?, area?, fps?} — запись одной камеры; {"limit_gb"} без камеры — общий лимит места."""
+    cam = str(req.get("camera") or "")
+    if not cam:
+        return motion_client.video_rec_limit(_motion_url(), req.get("limit_gb"))
+    patch = {k: req[k] for k in ("on", "stream", "area", "fps") if k in req}
+    r = motion_client.video_rec_camera(_motion_url(), cam, patch)
+    if "error" not in r and "on" in patch:
+        log_event("motion", "Запись видео %s: %s" % ("включена" if patch["on"] else "выключена", cam), "info")
+    return r
+
+
 @app.post("/api/motion/modbus_ping")
 def motion_modbus_ping(req: dict = Body(...)):
     """Проверка связи с ПЛК: сервис читает ОДИН регистр, ничего не пишет."""

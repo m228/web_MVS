@@ -44,9 +44,10 @@ def source_bits(sources: list, states: dict, signal: str = "move", analog: bool 
             z = next((q for q in res.get("zones") or [] if q["id"] == s.get("zone")), None)
             if z and z.get("valid") and not (now is not None and z.get("until") is not None and now > z["until"]):
                 bit = int(z["pct"] * scale + 0.5)     # не round(): тот даёт 54,5 → 54
-        elif res.get("alive") and s.get("group") is not None:
+        elif s.get("group") is not None:
             for g in res.get("groups") or []:
-                if g["id"] == s["group"]:
+                # self_alive — значение считается без картинки (этапы по звуку): мёртвое видео его не обнуляет
+                if g["id"] == s["group"] and (res.get("alive") or g.get("self_alive")):
                     bit = int(g["value"])
         elif res.get("alive"):
             for z in res.get("zones") or []:

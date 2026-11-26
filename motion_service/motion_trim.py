@@ -38,6 +38,7 @@ KEEP_WHOLE = 0.9             # событиями занята такая дол
 MIN_QUIET_BLOCKS = 100       # меньше 10 с настоящего звука — фон не определить
 CUT_SLACK_S = 2.5            # на столько вырезанный файл может быть короче заказанного (опорные кадры, звук)
 RUN_TIMEOUT_S = 180.0
+STAGED = ".trim"             # добавка к имени исходника на время выкладки вырезанных файлов
 
 
 class Aborted(Exception):
@@ -203,14 +204,27 @@ def _sync(path: Path):
         os.fsync(f.fileno())
 
 
+def recover(folder: Path) -> list:
+    """Куски, чья выкладка оборвалась (сбой, выключение питания), остаются целиком: …_kept.mkv. -> что вернули."""
+    back = []
+    for src in folder.glob("*" + STAGED):
+        try:
+            back.append(keep_whole(src).name)
+        except (OSError, ValueError) as e:
+            log.warning("кусок %s после прерванной нарезки не переименовать: %s", src.name, e)
+    return back
+
+
 def _commit(piece: Path, parts: list, full_h: float) -> list:
-    """Исходный кусок → полная копия, вырезанные части → итоговые имена. Всё или ничего: при сбое имена возвращаются.
-    Исходник переименовывается первым: если его кто-то держит открытым, копии не наплодятся. -> имена выложенных файлов."""
+    """Вырезанные части → итоговые имена, исходный кусок → полная копия (или удаляется). При сбое имена возвращаются.
+    Пока не выложено всё, исходник лежит под промежуточным именем: его не трогают ни лимит места, ни срок полных копий,
+    а после сбоя или выключения recover() вернёт его целым куском. Переименовывается он первым: занят другой программой —
+    копии не наплодятся. -> имена выложенных файлов."""
     folder, t0 = piece.parent, start_time(piece.name)
     for part, _, _ in parts:
         _sync(part)                                   # отключат питание — не должно быть пустых отрезков без исходника
-    full = _free_name(folder, t0, "_full.mkv")
-    os.replace(piece, full)
+    staged = folder / (piece.name + STAGED)
+    os.replace(piece, staged)
     made: list = []
     try:
         for part, t, suffix in parts:
@@ -218,17 +232,20 @@ def _commit(piece: Path, parts: list, full_h: float) -> list:
             os.replace(part, target)
             made.append((part, target))
     except OSError:
-        for part, target in made:
-            os.replace(target, part)
-        os.replace(full, piece)
+        for src, dst in [(target, part) for part, target in made] + [(staged, piece)]:
+            try:
+                os.replace(src, dst)                  # каждый шаг сам по себе: сбой одного не отменяет остальные
+            except OSError as e:
+                log.warning("откат нарезки: %s не переименовать (%s)", src.name, e)
         raise
-    if full_h > 0:
-        os.utime(full)                                # срок хранения полного куска считаем от разбора
-    else:
-        try:
-            full.unlink()
-        except OSError as e:                          # занят — удалит уборка по сроку
-            log.warning("полный кусок %s не удалить: %s", full.name, e)
+    try:
+        if full_h > 0:
+            os.utime(staged)                          # срок хранения полного куска считаем от разбора
+            os.replace(staged, _free_name(folder, t0, "_full.mkv"))
+        else:
+            staged.unlink()
+    except OSError as e:                              # занят — всё вырезано, а исходник recover() оставит целым куском
+        log.warning("исходный кусок %s после нарезки занят: %s", piece.name, e)
     return [target.name for _, target in made]
 
 

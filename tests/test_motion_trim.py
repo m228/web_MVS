@@ -317,6 +317,64 @@ def test_failed_publish_is_rolled_back(tmp_path, monkeypatch):
 
 
 @needs_ffmpeg
+@pytest.mark.parametrize("full_h", [0, 24])
+def test_double_failure_never_leaves_piece_deletable(tmp_path, monkeypatch, full_h):
+    """Выкладка сорвалась и откат тоже: исходник не должен выглядеть лишней копией — потом он возвращается целым куском."""
+    rec = vr.VideoRec(tmp_path, lambda: [])
+    folder = rec.cam_dir("c1")
+    folder.mkdir(parents=True)
+    piece = make_piece(folder / "20260101_120000.mkv", 60, loud=((30, 3),))
+    size = piece.stat().st_size
+    real = os.replace
+
+    def broken(src, dst):
+        if str(dst).endswith("_audio.mka") or (str(src).endswith(mt.STAGED) and Path(dst) == piece) or str(src).endswith("_clip.mkv"):
+            raise OSError("файл взял антивирус")
+        real(src, dst)
+
+    monkeypatch.setattr(mt.os, "replace", broken)
+    with pytest.raises(OSError):
+        mt.trim_piece(media(), piece, dict(CFG, full_h=full_h), None)
+    monkeypatch.setattr(mt.os, "replace", real)
+    rec.limit_gb = 0.0                                       # лимит и срок полных копий его не берут
+    rec.purge()
+    rec._expire_full("c1", {"full_h": 0})
+    left = folder / ("20260101_120000.mkv" + mt.STAGED)
+    assert left.exists() and left.stat().st_size == size
+    rec.limit_gb = 20.0
+    rec.trim_once()
+    kept = list(folder.glob("*_kept.mkv"))
+    assert len(kept) == 1 and kept[0].stat().st_size == size and not left.exists()
+
+
+@needs_ffmpeg
+def test_power_cut_during_publish_keeps_the_piece(tmp_path, monkeypatch):
+    """«Выключили питание» сразу после переименования исходника, полные куски не хранятся: после запуска кусок цел."""
+    rec = vr.VideoRec(tmp_path, lambda: [], ffmpeg=lambda: FFMPEG)
+    folder = rec.cam_dir("c1")
+    folder.mkdir(parents=True)
+    piece = make_piece(folder / "20260101_120000.mkv", 60, loud=((30, 3),))
+    size = piece.stat().st_size
+    real = os.replace
+
+    class PowerCut(BaseException):
+        pass
+
+    def cut(src, dst):
+        if str(src).endswith(".part"):
+            raise PowerCut()
+        real(src, dst)
+
+    monkeypatch.setattr(mt.os, "replace", cut)
+    with pytest.raises(PowerCut):
+        mt.trim_piece(media(), piece, dict(CFG, full_h=0), None)
+    monkeypatch.setattr(mt.os, "replace", real)
+    rec.settings["c1"] = vr.normalize_camera({"keep": "events", "trim_from": 0, "full_h": 0})
+    rec.trim_once()
+    assert [p.stat().st_size for p in folder.glob("*_kept.mkv")] == [size]
+
+
+@needs_ffmpeg
 def test_existing_files_are_not_overwritten(tmp_path):
     """Часы перевели назад: имена совпали со старыми — старые файлы остаются нетронутыми."""
     for suffix in ("_full.mkv", "_audio.mka", "_kept.mkv"):

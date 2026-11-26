@@ -564,6 +564,11 @@ class VideoRec:
     def trim_once(self) -> int:
         """Один проход нарезки: по одному куску на камеру. -> сколько кусков разобрано."""
         done = 0
+        if self.root.is_dir():
+            with self._lock:
+                for folder in [d for d in self.root.iterdir() if d.is_dir()]:
+                    for name in trim.recover(folder):
+                        log.warning("запись видео: нарезка куска прерывалась — он оставлен целиком: %s", name)
         for cid, cfg in list(self.settings.items()):
             if cfg.get("keep") != "events" or self._halt.is_set():
                 continue

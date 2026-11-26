@@ -1,6 +1,6 @@
 // ---------- раскладка ----------
 function newTile() {
-  return { serial: null, kind: null, connected: false, photo: false, video: false, light: false, zoomFactor: 1, live: true, hidden: false, el: null };
+  return { serial: null, kind: null, connected: false, photo: false, video: false, light: false, zoomFactor: 1, live: true, hidden: false, markupOff: false, el: null };
 }
 
 function setLayout(n) {
@@ -45,25 +45,39 @@ function createTileEl() {
   el.innerHTML = `
     <div class="multi-tile__head">
       <select class="multi-tile__serial" data-tile-serial title="Камера в ячейке"></select>
-      <span class="multi-tile__badge" data-tile-badge></span>
-      <span class="tile-cv-badge" data-tile-cv hidden title="КЗ — компьютерное зрение">КЗ</span>
+      <div class="multi-tile__right">
+        <div class="multi-tile__right-row">
+          <span class="multi-tile__badge" data-tile-badge></span>
+          <span class="tile-cv-badge" data-tile-cv hidden title="КЗ — компьютерное зрение">КЗ</span>
+        </div>
+        <div class="tile-view-seg" data-tile-viewseg hidden role="tablist" aria-label="Что показывать в окне">
+          <button type="button" class="tile-view-seg__btn is-active" data-view="cam" title="Живой поток камеры">Камера</button>
+          <button type="button" class="tile-view-seg__btn" data-view="kz" title="Снимки КЗ с разметкой (лента слева)">КЗ</button>
+        </div>
+      </div>
     </div>
+    <div class="multi-tile__body">
+    <div class="tile-lv-strip" data-tile-lvstrip hidden><div class="tile-lv-strip__list" data-tile-lvlist></div></div>
     <div class="multi-tile__screen" data-tile-screen>
+      <button type="button" class="tile-lv-back" data-tile-lvback hidden title="Вернуться к живой картинке"></button>
       <div class="multi-tile__tools">
         <button type="button" class="tile-region-btn" data-tile-region title="Зум областью — выделите рамку" aria-label="Зум областью" hidden>${REGION_SVG}</button>
         <button type="button" class="tile-region-btn tile-eye-btn" data-tile-eye title="Скрыть картинку (поток, фото и КЗ продолжают работать)" aria-label="Скрыть картинку" hidden>${EYE_SVG}</button>
+        <button type="button" class="tile-region-btn tile-mask-btn" data-tile-mask title="Скрыть разметку КЗ (зоны, палки, подписи) — останется чистая картинка" aria-label="Скрыть разметку" hidden>${MARK_SVG}</button>
       </div>
       <img class="multi-tile__frame hidden" alt="Кадр камеры" data-tile-frame />
+      <img class="multi-tile__shot hidden" alt="Снимок уровня" data-tile-shot />
       <div class="multi-tile__placeholder" data-tile-placeholder>NO CAMERA</div>
       <canvas class="tile-motion-layer" data-tile-motion></canvas>
       <div class="tile-marquee-layer" data-tile-marquee hidden>
         <div class="tile-marquee-box" data-tile-marquee-box hidden></div>
       </div>
     </div>
+    </div>
     <div class="multi-tile__status">
-      <span>FPS<strong data-metric="fps">0.00</strong></span>
+      <span title="Кадров в секунду. RTSP: показ в приложении / приходит от камеры; «—» — картинка скрыта, «выкл» — приложение камеру не берёт">FPS<strong data-metric="fps">0.00</strong></span>
       <span>Кадры<strong data-metric="images">0</strong></span>
-      <span>Мбит/с<strong data-metric="bandwidth">0.0</strong></span>
+      <span title="Поток JPEG в браузер, не битрейт камеры">Мбит/с ↗<strong data-metric="bandwidth">0.0</strong></span>
       <span>Разрешение<strong data-metric="resolution">0 × 0</strong></span>
       <span>Ошибки<strong data-metric="errors">0</strong></span>
       <span>Фото<strong data-metric="photo_count">0</strong></span>
@@ -111,6 +125,29 @@ function createTileEl() {
     setFocus(idx());
     toggleTileHidden(idx());
   });
+  // «разметка»: спрятать рисунок КЗ (окружности, палки, подписи, Δ), чтобы посмотреть на чистую картинку
+  el.querySelector('[data-tile-mask]').addEventListener('click', (event) => {
+    event.stopPropagation();
+    setFocus(idx());
+    const t = state.tiles[idx()];
+    if (!t) return;
+    t.markupOff = !t.markupOff;
+    drawMotionTile(idx());
+  });
+  // снимок уровня из ленты слева показан вместо живой картинки — кнопка возвращает поток (15-level.js)
+  el.querySelector('[data-tile-lvback]').addEventListener('click', (event) => {
+    event.stopPropagation();
+    lvTileLive(idx());
+  });
+  // переключатель «Камера | КЗ» под значком КЗ: КЗ — снимки с разметкой (последний), Камера — живой поток (15-level.js)
+  el.querySelector('[data-tile-viewseg]').addEventListener('click', (event) => {
+    event.stopPropagation();
+    const b = event.target.closest('[data-view]');
+    if (!b) return;
+    setFocus(idx());
+    if (b.dataset.view === 'kz') lvTileShowLast(idx()); else lvTileLive(idx());
+  });
+  el.querySelector('[data-tile-shot]').addEventListener('load', () => drawMotionTile(idx()));
   const marquee = el.querySelector('[data-tile-marquee]');
   marquee.addEventListener('mousedown', (event) => {
     const tile = state.tiles[idx()];
@@ -207,6 +244,7 @@ function renderTile(index) {
 
   if (!tile.connected) {
     tile.hidden = false;
+    tile.markupOff = false;
     if (frame) { frame.classList.add('hidden'); frame.src = ''; }
     if (placeholder) { placeholder.textContent = 'NO CAMERA'; placeholder.classList.remove('hidden'); }
     tile.regionMode = false;
@@ -263,6 +301,7 @@ function setFocus(index) {
   state.focused = index;
   highlightFocus();
   updateToolbar();
+  if (AS.ready) saveView({ focus: index });   // во время восстановления фокус прыгает по ячейкам — это не выбор человека
 }
 
 function highlightFocus() {

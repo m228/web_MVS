@@ -12,6 +12,7 @@ from .gentl_env import (
     FRAME_FETCH_TIMEOUT,
     MAX_FRAME_TIMEOUTS,
     SDK_GRAB_TIMEOUT_MS,
+    SDK_MAX_BAD_FRAMES,
     SDK_STREAM_STALL_SECONDS,
     _gentl_code,
     _decode_gentl_message,

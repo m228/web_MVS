@@ -140,6 +140,88 @@ def test_plate_client_reboot_writes_only_the_reboot_constant():
     assert (BOARD_CMD_REG, BOARD_REBOOT) == (1570, 0xAAAA)
 
 
+def _pc(**over):
+    cfg = {"unit": 1, "read_base": 1270, "write_base": 1250, "block_len": 10, "poll_interval_ms": 100, "host": "h", "port": 502,
+           "out": {"led_bright": 7, "led_on": 8}, "led": {"bright": 1257, "freq": 1202, "on_bit": 1258},
+           "led_bright": 40, "led_on": True, "led_freq": 1500}
+    cfg.update(over)
+    return PlateClient(cfg)
+
+
+def test_restart_restores_last_led_brightness_and_frequency():
+    pc = _pc()
+    pc._out[7], pc._out[8] = 0, 0                 # РУЧНОЙ режим: автомат OUT не обновлял, там старые слова
+    pc._out_last[7] = pc._out_last[8] = 0
+    pc._restore_after_restart()
+    assert pc._out[7] == 40 and pc._out[8] & 1, "яркость и «вкл» вернулись из конфига"
+    assert pc._pending == [(1202, 1500)], "частота (вне OUT-блока) записана одиночной записью"
+    assert pc._out_last[7] is None and pc._out_last[8] is None, "слова OUT уйдут в плату заново"
+
+
+def test_restart_does_not_write_unset_frequency():
+    pc = _pc(led_freq=0)
+    pc._restore_after_restart()
+    assert pc._pending == []
+
+
+def test_uptime_drop_means_restart_and_restores_led():
+    pc = _pc()
+    pc._check_restart({"uptime_s": 5000})
+    assert pc._pending == [], "первое чтение — просто запомнили"
+    pc._check_restart({"uptime_s": 5010})
+    assert pc._pending == []
+    pc._check_restart({"uptime_s": 3})            # плата перезапустилась
+    assert pc._pending == [(1202, 1500)]
+    assert pc._out[7] == 40
+
+
+def test_uptime_missing_is_ignored():
+    pc = _pc()
+    pc._check_restart({})
+    pc._check_restart({"uptime_s": None})
+    assert pc._pending == []
+
+
+def test_black_frame_checks_light_before_reboot():
+    g = make_guard()
+    calls = []
+    g.src["light"] = lambda: calls.append(1) or {"freq": (1500, 0)}
+    assert g.tick() == "light", "свет разошёлся с сохранённым -> пишем заново, плату не трогаем"
+    assert g.board.sent == 0 and g.light["diff"] == {"freq": (1500, 0)}
+    g.clk.t += board_guard.TICK_S
+    assert g.tick() is None and g.board.sent == 0 and len(calls) == 1, "ждём живой кадр, свет второй раз не переписываем"
+    g.clk.t += board_guard.LIGHT_WAIT_S
+    assert g.tick() == "returned" and g.board.sent == 1, "кадр так и остался чёрным -> тогда ребут платы"
+
+
+def test_light_matches_goes_straight_to_reboot():
+    g = make_guard()
+    g.src["light"] = lambda: {}
+    assert g.tick() == "returned" and g.board.sent == 1 and g.light is None
+
+
+def test_live_frame_rearms_light_check():
+    g = make_guard()
+    g.src["light"] = lambda: {"bright": (12, 0)}
+    assert g.tick() == "light" and g.light_at is not None
+    g.cam["live"], g.cam["black_s"] = True, 0.0
+    g.tick()
+    assert g.light_at is None
+
+
+def test_plate_led_mismatch_compares_saved_with_board():
+    pc = _pc()
+    pc._ext = {"led_bright": 40, "led_freq": 1500}
+    assert pc.led_mismatch() == {} and pc.reapply_led() == {} and pc._pending == []
+    pc._ext = {"led_bright": 0, "led_freq": 0}        # после «Сохранить» плата осталась с нулями, на странице 40 %
+    assert pc.led_mismatch() == {"bright": (40, 0), "freq": (1500, 0)}
+    pc._out_last[7] = 40                              # автомат думает, что яркость уже записана
+    assert pc.reapply_led() and pc._out_last[7] is None, "яркость уйдёт в плату снова"
+    assert pc._pending == [(1202, 1500)]
+    pc._ext = {}                                      # плата ничего не отдала -> не гадаем
+    assert pc.led_mismatch() == {}
+
+
 def test_black_watch_live():
     clk = FakeClock()
     w = camera_params.BlackWatch(clock=clk)

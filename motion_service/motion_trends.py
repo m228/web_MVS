@@ -57,6 +57,13 @@ class TrendLog:
             self.store.maybe_flush(ts)
         self._guard(go)
 
+    def add_tip(self, ts: float, zones: dict):
+        """Секунда видимости отражателей: zones = {зона: (красный конец виден, синий виден)}."""
+        def go():
+            self.store.add_tip(self.cam, ts, zones)
+            self.store.maybe_flush(ts)
+        self._guard(go)
+
     def add_stats(self, bucket: list):
         """Корзина статистики: [ключ 10-секундки, {зона: [n, Σflow, min, max, Σdiff, min, max]}]."""
         def go():

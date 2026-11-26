@@ -6,6 +6,7 @@ const MV = {
   online: false,
   cfg: null,          // последний конфиг сервиса (камеры, ПЛК, сценарии)
   states: {},         // id камеры -> состояние из /api/motion/state
+  perf: {},           // замеры времени на кадр из /api/motion/state: ключ «<камера>:<этап>» (вкладка «Камеры» панели КЗ)
   scen: [],           // состояние сценариев записи в ПЛК
   dockOpen: false,
   tick: 0,
@@ -40,12 +41,29 @@ async function mvRefreshConfig() {
   MV.online = !!(h && h.online);
   if (!MV.online) return;
   const cfg = await mvApi('/api/motion/config');
-  if (cfg && !cfg.error && !MV.dirty) MV.cfg = cfg;
+  if (cfg && !cfg.error && !MV.dirty) { MV.cfg = cfg; mvSyncUrls(cfg); }
+}
+
+// адрес потока камеры в сервисе КЗ берём из базы камер: он пишется только при включении КЗ и со временем расходится
+// (камеру пересохранили, серийники менялись) — тогда кадр и разметка относятся к чужой камере. Расхождение лечим сразу.
+const mvUrlFixed = new Set();
+function mvSyncUrls(cfg) {
+  (cfg.cameras || []).forEach((c) => {
+    const src = c.enabled && typeof getSource === 'function' ? getSource(c.id) : null;
+    const url = src && src.kind === 'rtsp' && src.connection && src.connection.url;
+    const key = c.id + '|' + url;
+    if (!url || url === c.url || mvUrlFixed.has(key)) return;
+    mvUrlFixed.add(key);
+    mvJson('/api/motion/vision', { serial: c.id, enabled: true, name: src.label || c.id, url }).then((r) => {
+      if (r && !r.error) { MV.cfg = r; log.warn('КЗ: адрес потока камеры исправлен по базе камер', { serial: c.id }); }
+    });
+  });
 }
 
 // состояние камеры для рисования: 'on' | 'off' | 'dead' (нет связи, фриз, битый поток)
 function mvZoneMode(st, zoneLive) {
   if (!MV.online || !st || !st.alive || st.corrupt || !zoneLive) return 'dead';
+  if (zoneLive.motion === false && zoneLive.fill == null) return 'dead';      // зона по яркости без порогов: решения нет — серая, а не «нет»
   return zoneLive.bit === 1 ? 'on' : 'off';
 }
 
@@ -86,8 +104,16 @@ function tileFrameGeom(index) {
   if (!nat) return null;
   const w = screen.clientWidth, h = screen.clientHeight;
   const nw = nat[0], nh = nat[1];
-  const k = Math.min(w / nw, h / nh);
-  return { w, h, nw, nh, k, ox: (w - nw * k) / 2, oy: (h - nh * k) / 2 };
+  let k = Math.min(w / nw, h / nh);
+  let ox = (w - nw * k) / 2, oy = (h - nh * k) / 2;
+  // цифровой зум камеры (rtsp_worker._apply_digital_zoom) отдаёт в ячейку кроп 1/zf кадра, а КЗ считает по полному кадру:
+  // разметку приводим к тому же кропу — масштаб ×zf и сдвиг на левый верхний угол окна (pan 0..1 → [0 .. 1 − 1/zf])
+  const zf = Number(tile.zoomFactor) || 1;
+  if (zf > 1) {
+    const x0 = (1 - 1 / zf) * (tile.zoomPanX ?? 0.5), y0 = (1 - 1 / zf) * (tile.zoomPanY ?? 0.5);
+    ox -= x0 * zf * nw * k; oy -= y0 * zf * nh * k; k *= zf;
+  }
+  return { w, h, nw, nh, k, ox, oy };
 }
 
 // точки зоны хранятся в пикселях кадра, на котором размечали (frame_size), поэтому приводим к кадру ячейки
@@ -95,6 +121,9 @@ function zonePointsOnTile(z, cam, g) {
   const fs = cam.frame_size || [g.nw, g.nh];
   return z.points.map((p) => [g.ox + p[0] * (g.nw / fs[0]) * g.k, g.oy + p[1] * (g.nh / fs[1]) * g.k]);
 }
+
+// зона только по яркости: что в ней сейчас
+const mvPresence = (lz) => (lz.fill == null ? 'не настроено' : lz.fill ? 'есть' : 'нет');
 
 function tileMotionStatusText(st) {
   if (!MV.online) return 'сервис КЗ не запущен';
@@ -115,6 +144,17 @@ function drawMotionTile(index) {
   const on = !!(cam && cam.enabled);
   const st = on ? (MV.states[tile.serial] || {}).result : null;
   const problem = on ? tileMotionStatusText(st) : '';
+  const maskBtn = el.querySelector('[data-tile-mask]');         // кнопка «разметка» — только у камеры с включённым КЗ
+  if (maskBtn) {
+    maskBtn.hidden = !on;
+    const off = !!tile.markupOff;
+    if (maskBtn.dataset.off !== String(off)) {
+      maskBtn.dataset.off = String(off);
+      maskBtn.classList.toggle('is-eye-off', off);
+      maskBtn.innerHTML = off ? MARK_OFF_SVG : MARK_SVG;
+      maskBtn.title = off ? 'Показать разметку КЗ' : 'Скрыть разметку КЗ (зоны, палки, подписи) — останется чистая картинка';
+    }
+  }
 
   // картинка скрыта, а зоны КЗ есть — на чёрном экране только они (с названием и значением), надпись «картинка скрыта» не мешает
   const ph = el.querySelector('[data-tile-placeholder]');
@@ -131,13 +171,16 @@ function drawMotionTile(index) {
     }
   }
 
+  // лента снимков уровня слева и открытый из неё снимок (15-level.js): пока снимок открыт, рисуется его разметка, а не живая
+  if (lvTileDraw(index, el, canvas, cam, on)) return;
+
   const g = tileFrameGeom(index);
   const w = g ? g.w : el.querySelector('[data-tile-screen]').clientWidth;
   const h = g ? g.h : el.querySelector('[data-tile-screen]').clientHeight;
   if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; }
   const ctx = canvas.getContext('2d');
   ctx.clearRect(0, 0, canvas.width, canvas.height);
-  if (!g || !tile.connected || !on) return;
+  if (!g || !tile.connected || !on || tile.markupOff) return;       // разметка скрыта кнопкой — чистая картинка
 
   const live = {};
   ((st && st.zones) || []).forEach((z) => { live[z.id] = z; });
@@ -146,6 +189,9 @@ function drawMotionTile(index) {
   cam.zones.forEach((z) => {
     if (z.enabled === false) return;
     if (z.type === 'cycle') { drawCycleOnTile(ctx, z, cam, g, live[z.id], mvZoneMode(st, live[z.id])); return; }
+    if (z.type === 'clarity') { drawClarityOnTile(ctx, z, cam, g, live[z.id], !!problem); return; }
+    if (ggIs(z)) { drawGaugeOnTile(ctx, z, cam, g, live[z.id], problem); return; }
+    if (z.type === 'level') return;                 // стёкла уровня рисует drawLevelOnTile ниже
     const pts = zonePointsOnTile(z, cam, g);
     const lz = live[z.id];
     const [stroke, fill] = MV_COLORS[mvZoneMode(st, lz)];
@@ -154,7 +200,7 @@ function drawMotionTile(index) {
     ctx.beginPath();
     pts.forEach((p, i) => (i ? ctx.lineTo(p[0], p[1]) : ctx.moveTo(p[0], p[1])));
     ctx.closePath(); ctx.fill(); ctx.stroke();
-    const label = z.name + (lz && !problem ? '  ' + Number(lz.value).toFixed(2) : '');
+    const label = z.name + (lz && !problem ? '  ' + (lz.motion === false ? mvPresence(lz) : Number(lz.value).toFixed(2)) : '');
     ctx.lineWidth = 3; ctx.strokeStyle = '#000'; ctx.strokeText(label, pts[0][0] + 4, pts[0][1] + 15);
     ctx.fillStyle = '#fff'; ctx.fillText(label, pts[0][0] + 4, pts[0][1] + 15); ctx.lineWidth = 2;
   });
@@ -167,6 +213,159 @@ function drawMotionTile(index) {
     ctx.lineWidth = 4; ctx.strokeStyle = '#000'; ctx.strokeText(txt, g.w / 2, 26 + k * 24);
     ctx.fillStyle = bad ? '#9ca3af' : lg.alarm ? '#f87171' : '#4ade80'; ctx.fillText(txt, g.w / 2, 26 + k * 24);
     ctx.textAlign = 'left'; ctx.font = 'bold 13px sans-serif'; ctx.lineWidth = 2;
+  });
+  // этапы печи: текущий этап и сколько он идёт — по центру снизу; зелёный — сброс / засыпка / прокрутка, серый — ожидание и «нет данных»
+  ((st && st.groups) || []).filter((lg) => lg.type === 'kiln' || lg.type === 'kiln_sound').forEach((lg, k) => {
+    const off = (problem && lg.type === 'kiln') || !lg.stage;       // этапам по звуку беда с картинкой не мешает
+    const txt = lg.name + ': ' + (off ? 'нет данных' : lg.stage_name + '  ' + mdKilnTime(lg.since_s));
+    ctx.font = 'bold 16px sans-serif'; ctx.textAlign = 'center';
+    ctx.lineWidth = 4; ctx.strokeStyle = '#000'; ctx.strokeText(txt, g.w / 2, g.h - 10 - k * 22);
+    ctx.fillStyle = !off && (lg.bits || []).some(Boolean) ? '#4ade80' : '#e5e7eb'; ctx.fillText(txt, g.w / 2, g.h - 10 - k * 22);
+    ctx.textAlign = 'left'; ctx.font = 'bold 13px sans-serif'; ctx.lineWidth = 2;
+  });
+  // разности валов в ряду и между рядами (вкладка «Валы»): строка на пару, в которой есть вал этой камеры; красная — тревога
+  const prs = typeof shPairsOfCamera === 'function' ? shPairsOfCamera(cam.id) : [];
+  if (prs.length) {
+    const mirrors = ((st && st.groups) || []).filter((lg) => lg.type === 'mirror').length;
+    ctx.font = 'bold 13px sans-serif'; ctx.textAlign = 'center';
+    prs.forEach((p, k) => {
+      const txt = p.short + (p.valid ? '   Δ ' + shSgn(p.angle_diff, 1) + '°   Δv ' + shSgn(p.rpm_diff, 2) : '   —');
+      const y = 26 + mirrors * 24 + 16 + k * 17;
+      ctx.lineWidth = 3; ctx.strokeStyle = '#000'; ctx.strokeText(txt, g.w / 2, y);
+      ctx.fillStyle = !p.valid || problem || p.stale ? '#9ca3af' : (p.alarm_angle || p.alarm_rpm) ? '#f87171' : '#e5e7eb'; ctx.fillText(txt, g.w / 2, y);       // stale — кадры камер в очереди, Δ недостоверна
+    });
+    ctx.textAlign = 'left'; ctx.lineWidth = 2;
+  }
+  drawLevelOnTile(ctx, cam, g, st, problem);
+}
+
+// уровень жидкости (декантатор): стёкла нижнее — голубое, верхнее — жёлтое; на каждом его заполнение, сверху по центру Total и вклад стёкол.
+// opts.labels === false — без надписей (миниатюры в ленте снимков: рамки, заливка, линия уровня и контур жидкости)
+const MV_LEVEL_COL = ['#38bdf8', '#fbbf24'];
+function drawLevelOnTile(ctx, cam, g, st, problem, opts) {
+  const cg = (cam.groups || []).find((x) => x.type === 'level');
+  if (!cg) return;
+  const labels = !(opts && opts.labels === false);
+  const lg = ((st && st.groups) || []).find((x) => x.id === cg.id);
+  const live = {};
+  ((st && st.zones) || []).forEach((z) => { live[z.id] = z; });
+  const ok = !problem && !!lg && !!lg.valid;
+  ctx.lineWidth = 2; ctx.font = 'bold 13px sans-serif';
+  cg.zones.forEach((zid, i) => {
+    const z = cam.zones.find((q) => q.id === zid);
+    if (!z || z.enabled === false) return;
+    const pts = zonePointsOnTile(z, cam, g);
+    const lz = live[zid];
+    const col = ok ? MV_LEVEL_COL[i % 2] : '#9ca3af';
+    const path = () => { ctx.beginPath(); pts.forEach((p, k) => (k ? ctx.lineTo(p[0], p[1]) : ctx.moveTo(p[0], p[1]))); ctx.closePath(); };
+    ctx.lineWidth = 2; ctx.strokeStyle = col; ctx.fillStyle = col + '1a';
+    path(); ctx.fill(); ctx.stroke();
+    if (!ok || !lz) return;
+    // «палка» уровня: линия на измеренной высоте внутри стекла и заливка под ней — двигаются вместе с жидкостью, как палка вала с углом
+    const xs = pts.map((p) => p[0]), ys = pts.map((p) => p[1]);
+    const x0 = Math.min(...xs), x1 = Math.max(...xs), y0 = Math.min(...ys), y1 = Math.max(...ys);
+    const yl = y1 - (y1 - y0) * Math.max(0, Math.min(100, lz.level)) / 100;
+    ctx.save();
+    path(); ctx.clip();
+    ctx.fillStyle = col + '55'; ctx.fillRect(x0, yl, x1 - x0, y1 - yl);
+    ctx.lineWidth = 3; ctx.strokeStyle = '#fff'; ctx.beginPath(); ctx.moveTo(x0, yl); ctx.lineTo(x1, yl); ctx.stroke();
+    ctx.restore();
+    if (!labels) return;
+    // подпись справа от стекла на высоте уровня: стрелка и заполнение стекла
+    const label = Math.round(lz.level) + ' %';
+    ctx.fillStyle = col;
+    ctx.beginPath(); ctx.moveTo(x1 + 3, yl); ctx.lineTo(x1 + 11, yl - 5); ctx.lineTo(x1 + 11, yl + 5); ctx.closePath(); ctx.fill();
+    ctx.lineWidth = 3; ctx.strokeStyle = '#000'; ctx.strokeText(label, x1 + 14, yl + 5);
+    ctx.fillStyle = '#fff'; ctx.fillText(label, x1 + 14, yl + 5); ctx.lineWidth = 2;
+  });
+  if (ok && lg.contour && lg.contour_wh) {          // тонкий контур найденной жидкости
+    const cw = lg.contour_wh[0], kx = (g.nw / cw) * g.k;
+    ctx.strokeStyle = '#4ade80'; ctx.lineWidth = 1.5;
+    lg.contour.forEach((poly) => {
+      ctx.beginPath();
+      poly.forEach((p, k) => (k ? ctx.lineTo(g.ox + p[0] * kx, g.oy + p[1] * kx) : ctx.moveTo(g.ox + p[0] * kx, g.oy + p[1] * kx)));
+      ctx.closePath(); ctx.stroke();
+    });
+    ctx.lineWidth = 2;
+  }
+  if (!labels) return;
+  const main = ok ? lvFmt(lg.total) + ' %' : '—';
+  ctx.textAlign = 'center';
+  ctx.font = 'bold 20px sans-serif';
+  ctx.lineWidth = 4; ctx.strokeStyle = '#000'; ctx.strokeText(main, g.w / 2, 28);
+  ctx.fillStyle = ok ? '#fff' : '#9ca3af'; ctx.fillText(main, g.w / 2, 28);
+  if (ok) {
+    const sub = lvFmt(lg.g1) + ' + ' + lvFmt(lg.g2);
+    ctx.font = 'bold 13px sans-serif';
+    ctx.lineWidth = 3; ctx.strokeText(sub, g.w / 2, 46);
+    ctx.fillStyle = '#d1d5db'; ctx.fillText(sub, g.w / 2, 46);
+  }
+  ctx.textAlign = 'left'; ctx.font = 'bold 13px sans-serif'; ctx.lineWidth = 2;
+}
+
+// прозрачность сока: круг на стакане, цвет по состоянию (прозрачный — зелёный, мутный — оранжевый, грязный — красный), подпись «название  число · слово»;
+// нет значения — серый и «—». Состояние считает сервис по порогам зоны (t_turb / t_dirty), здесь только показ.
+// Пустой стакан (нет движения, включено на вкладке «Сок»): уровень 3 — тёмно-серый пунктирный кружок и «пусто»; от серого «нет значения» (#9ca3af, сплошной) отличается
+// цветом и пунктиром.
+const MV_CLARITY_COLORS = ['#22c55e', '#f59e0b', '#ef4444', '#64748b'];
+const MV_CLARITY_WORDS = ['прозрачный', 'мутный', 'грязный', 'пусто'];
+const MV_CLARITY_SHORT = ['чист', 'мутн', 'гряз', 'пусто'];       // короткие слова для подписи на кадре
+const mvClarityEmpty = (lz) => !!(lz && lz.empty);
+const mvClarityLevel = (lz) => (mvClarityEmpty(lz) ? 3 : Math.max(0, Math.min(2, Number(lz && lz.level) || 0)));
+const mvClarityColor = (lz) => MV_CLARITY_COLORS[mvClarityLevel(lz)];
+function drawClarityOnTile(ctx, z, cam, g, lz, problem) {
+  const fs = cam.frame_size || [g.nw, g.nh];
+  const sx = (g.nw / fs[0]) * g.k, sy = (g.nh / fs[1]) * g.k;
+  const cx = g.ox + z.center[0] * sx, cy = g.oy + z.center[1] * sy, r = z.radius * (sx + sy) / 2;
+  const empty = !problem && mvClarityEmpty(lz);
+  const ok = !problem && !!lz && !!lz.valid;
+  const col = ok || empty ? mvClarityColor(lz) : '#9ca3af';
+  ctx.lineWidth = 3; ctx.strokeStyle = col;
+  if (empty) ctx.setLineDash([6, 4]);
+  ctx.beginPath(); ctx.arc(cx, cy, r, 0, 7); ctx.stroke();
+  ctx.setLineDash([]);
+  if (ok || empty) { ctx.globalAlpha = 0.22; ctx.fillStyle = col; ctx.fill(); ctx.globalAlpha = 1; }
+  ctx.font = 'bold 13px sans-serif'; ctx.textAlign = 'center'; ctx.lineWidth = 3; ctx.strokeStyle = '#000';
+  const put = (t, y, c) => { ctx.strokeText(t, cx, y); ctx.fillStyle = c; ctx.fillText(t, cx, y); };
+  put(empty ? 'пусто' : ok ? 'мут ' + Math.round(lz.turb) : '—', cy - r - 6, '#fff');            // над кружком в два ряда: название, под ним мутность
+  put(z.name, cy - r - 21, '#fff');
+  if (lz && lz.lab && !empty) {                                // под кружком в два ряда: яркость L, под ней короткое слово состояния (цветом состояния)
+    put('L ' + Math.round(lz.lab[0]), cy + r + 15, ok ? col : '#fff');
+    if (ok) put(MV_CLARITY_SHORT[mvClarityLevel(lz)], cy + r + 30, col);
+  }
+  ctx.textAlign = 'left'; ctx.lineWidth = 2;
+}
+
+// круг прозрачности под курсором (по видимому радиусу): { index, z, cam } — для подсказки и переименования двойным кликом
+function clarityHit(event) {
+  const screen = event.target.closest && event.target.closest('[data-tile-screen]');
+  const tileEl = screen && screen.closest('.multi-tile');
+  if (!screen || !tileEl) return null;
+  const index = Number(tileEl.dataset.tile);
+  const tile = state.tiles[index];
+  const cam = tile && tile.serial && tile.kind === 'rtsp' ? mvCam(tile.serial) : null;
+  const g = cam && cam.enabled && !tile.markupOff ? tileFrameGeom(index) : null;
+  if (!g) return null;
+  const fs = cam.frame_size || [g.nw, g.nh];
+  const sx = (g.nw / fs[0]) * g.k, sy = (g.nh / fs[1]) * g.k;
+  const box = screen.getBoundingClientRect();
+  const px = event.clientX - box.left, py = event.clientY - box.top;
+  const z = cam.zones.find((q) => q.type === 'clarity' && q.enabled !== false && Math.hypot(px - (g.ox + q.center[0] * sx), py - (g.oy + q.center[1] * sy)) <= q.radius * (sx + sy) / 2);
+  return z ? { index, z, cam } : null;
+}
+
+// двойной клик по кружку стакана — сменить название сборника (имя в панели «Сок» то же)
+function initClarityRename() {
+  const grid = document.getElementById('multiGrid');
+  if (!grid) return;
+  grid.addEventListener('dblclick', (e) => {
+    const hit = clarityHit(e);
+    if (!hit) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const name = prompt('Название сборника', hit.z.name);
+    if (name === null || !name.trim()) return;
+    mdEdit(() => { hit.z.name = name.trim(); }, true);
   });
 }
 
@@ -181,6 +380,25 @@ const mvBlueAngle = (red) => (Number(red) + 180) % 360;
 
 const MV_ROD_RED = '#ef4444';
 const MV_ROD_BLUE = '#38bdf8';
+const MV_ROD_TIP = '#facc15';                                // светоотражатели на концах палки
+const MV_ROD_TIP_OFF = '#5b4d12';                            // отражатель настроен, но сейчас не виден — тёмно-жёлтая точка
+const MV_TIP_SEEN = 0.3;                                     // сила кончика (0..1), с которой отражатель конца считается видимым
+
+// отражатели концов стрелки → [красный конец виден, синий виден] или null (не настроены — точки не рисуем).
+// Сервис до 3.0.35 не знает концов по отдельности (нет tip_on): обе точки — по общей силе lvl_t, как раньше.
+function mvTipEnds(lz) {
+  if (!lz) return null;
+  if (lz.tip_on === undefined) return !lz.coast && Number(lz.lvl_t) >= 0.25 ? [true, true] : null;
+  if (!lz.tip_on) return null;
+  return lz.coast ? [false, false] : [Number(lz.lvl_tr) >= MV_TIP_SEEN, Number(lz.lvl_tb) >= MV_TIP_SEEN];
+}
+
+// чем держится угол вала: какие половины палки сейчас видны. Сервер без src (старый) — считаем, что обе.
+// both — обе, red — только красная, blue — только синяя, tip — только светоотражатели на концах, hold — не видно (угол по скорости)
+function mvRodUse(lz) {
+  const s = lz && lz.src;
+  return { red: s !== 'blue', blue: s !== 'red' };
+}
 
 // зона-цикл: окружность поиска вокруг оси вала и палка — красный конец на найденном угле, синий напротив
 function drawCycleOnTile(ctx, z, cam, g, lz, mode) {
@@ -193,16 +411,26 @@ function drawCycleOnTile(ctx, z, cam, g, lz, mode) {
   const a = (lz.angle * Math.PI) / 180, dx = Math.sin(a) * r, dy = -Math.cos(a) * r;
   ctx.lineWidth = 3;
   if (lz.coast) ctx.setLineDash([6, 5]);                   // палки не видно — угол держится по скорости вращения (пунктир)
+  const use = mvRodUse(lz);                                  // половина, которой угол не держится, бледнее — видно, на чём стоит стрелка
+  ctx.globalAlpha = use.red ? 1 : 0.3;
   ctx.strokeStyle = MV_ROD_RED; ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(cx + dx, cy + dy); ctx.stroke();
+  ctx.globalAlpha = use.blue ? 1 : 0.3;
   ctx.strokeStyle = MV_ROD_BLUE; ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(cx - dx, cy - dy); ctx.stroke();
-  ctx.setLineDash([]);
+  ctx.globalAlpha = 1; ctx.setLineDash([]);
+  const tips = mvTipEnds(lz);                                // светоотражатели на концах: виден — жёлтая точка, не виден — тёмная
+  if (tips) {
+    [[cx + dx, cy + dy, tips[0]], [cx - dx, cy - dy, tips[1]]].forEach(([px, py, on]) => { ctx.fillStyle = on ? MV_ROD_TIP : MV_ROD_TIP_OFF; ctx.beginPath(); ctx.arc(px, py, 4, 0, 7); ctx.fill(); });
+  }
   // подпись под окружностью: вал со значком направления, ниже значения красного и синего концов (0–360° от вертикали по часовой)
   const x = cx - r * 0.55, y = cy + r + 16;
-  [[z.name + '  ' + mvDirIcon(lz.rpm) + (lz.coast ? '  ~' : ''), '#fff'], ['красный ' + Number(lz.angle).toFixed(1) + '°', MV_ROD_RED], ['синий ' + mvBlueAngle(lz.angle).toFixed(1) + '°', MV_ROD_BLUE]].forEach(([txt, col], i) => {
+  const sh = typeof shShaftOf === 'function' ? shShaftOf(cam.id, z.id) : null;          // вал назначен рядом камеры: НЛВ… и скорость
+  const rpmTxt = sh && lz.valid ? '  ' + Math.abs(lz.rpm).toFixed(1) + ' об/мин' : '';
+  [[(sh ? sh.short : z.name) + '  ' + mvDirIcon(lz.rpm) + rpmTxt + (lz.coast ? '  ~' : ''), '#fff'], ['красный ' + Number(lz.angle).toFixed(1) + '°', MV_ROD_RED], ['синий ' + mvBlueAngle(lz.angle).toFixed(1) + '°', MV_ROD_BLUE]].forEach(([txt, col], i) => {
+    ctx.globalAlpha = i === 1 && !use.red || i === 2 && !use.blue ? 0.45 : 1;      // строка половины, по которой угол не считается, бледнее
     ctx.lineWidth = 3; ctx.strokeStyle = '#000'; ctx.strokeText(txt, x, y + i * 17);
     ctx.fillStyle = col; ctx.fillText(txt, x, y + i * 17);
   });
-  ctx.lineWidth = 2;
+  ctx.globalAlpha = 1; ctx.lineWidth = 2;
 }
 
 function drawAllMotionTiles() {
@@ -227,20 +455,169 @@ function onMotionHover(event) {
   const index = tileEl ? Number(tileEl.dataset.tile) : -1;
   const tile = state.tiles[index];
   const cam = tile && tile.serial && tile.kind === 'rtsp' ? mvCam(tile.serial) : null;
-  const g = cam && cam.enabled ? tileFrameGeom(index) : null;
+  const g = cam && cam.enabled && !tile.lvView ? tileFrameGeom(index) : null;     // открыт снимок уровня — живые значения не подсказываем
   if (!g) { tip.hidden = true; return; }
   const r = screen.getBoundingClientRect();
   const pt = [event.clientX - r.left, event.clientY - r.top];
   const st = (MV.states[tile.serial] || {}).result;
-  const hit = cam.zones.find((z) => z.enabled !== false && pointInPoly(pt, zonePointsOnTile(z, cam, g)));
+  const jc = clarityHit(event);
+  const hit = jc ? jc.z : cam.zones.find((z) => z.enabled !== false && pointInPoly(pt, zonePointsOnTile(z, cam, g)));
   if (!hit) { tip.hidden = true; return; }
   const lz = ((st && st.zones) || []).find((z) => z.id === hit.id);
   const problem = tileMotionStatusText(st);
-  tip.textContent = hit.name + (problem ? ' — ' + problem : lz
-    ? ' · ' + (lz.bit ? 'крутится' : 'стоит') + ' · diff ' + Number(lz.diff).toFixed(2) + ' · flow ' + Number(lz.flow).toFixed(2) : '');
+  tip.textContent = hit.type === 'clarity'
+    ? hit.name + (problem ? ' — ' + problem : mvClarityEmpty(lz) ? ' · пусто (движение ' + Number(lz.move).toFixed(2) + ' ниже ' + Number(hit.mv_lo != null ? hit.mv_lo : 0.9).toFixed(2) + ') · мутность 0' : lz && lz.valid ? ' · ' + MV_CLARITY_WORDS[mvClarityLevel(lz)] + ' · мутность ' + Math.round(lz.turb) + ' из 100' :' · нет значения: ' + ((lz && lz.reason) || 'нет данных')) + ' · двойной клик — переименовать'
+    : ggIs(hit)
+    ? ggTipText(hit, lz, problem)
+    : hit.name + (problem ? ' — ' + problem : lz && hit.type === 'level'
+    ? ' · заполнено ' + Number(lz.level).toFixed(1) + ' % · сырое ' + Number(lz.raw).toFixed(1) + ' %' : lz && lz.motion === false
+    ? ' · ' + mvPresence(lz) + ' · ' + MD_FILL_NAME[lz.fill_metric] + ' ' + mdFillFmt(lz.fill_metric, lz[lz.fill_metric]) : lz
+    ?' · ' + (lz.bit ? 'крутится' : 'стоит') + ' · diff ' + Number(lz.diff).toFixed(2) + ' · flow ' + Number(lz.flow).toFixed(2) : '');
   tip.style.left = Math.min(event.clientX + 14, window.innerWidth - 260) + 'px';
   tip.style.top = event.clientY + 16 + 'px';
   tip.hidden = false;
+}
+
+// ---------- подгонка радиуса вала: тянем за край окружности прямо на плитке ----------
+// Геометрия считается от реального кадра потока (tileFrameGeom), поэтому с цифровым зумом камеры работает так же:
+// радиус хранится в пикселях кадра, на котором идёт анализ.
+const ROD_GRAB_PX = 9;           // насколько близко к линии окружности курсор «цепляет» её
+
+function rodHit(event) {
+  const screen = event.target.closest && event.target.closest('[data-tile-screen]');
+  const tileEl = screen && screen.closest('.multi-tile');
+  if (!screen || !tileEl) return null;
+  const index = Number(tileEl.dataset.tile);
+  const tile = state.tiles[index];
+  const cam = tile && tile.serial && tile.kind === 'rtsp' ? mvCam(tile.serial) : null;
+  const g = cam && cam.enabled ? tileFrameGeom(index) : null;
+  if (!g) return null;
+  const fs = cam.frame_size || [g.nw, g.nh];
+  const sx = (g.nw / fs[0]) * g.k, sy = (g.nh / fs[1]) * g.k, s = (sx + sy) / 2;
+  const box = screen.getBoundingClientRect();
+  const px = event.clientX - box.left, py = event.clientY - box.top;
+  let best = null;
+  cam.zones.forEach((z) => {
+    if (z.type !== 'cycle' || z.enabled === false) return;
+    const cx = g.ox + z.center[0] * sx, cy = g.oy + z.center[1] * sy;
+    const off = Math.abs(Math.hypot(px - cx, py - cy) - z.radius * s);
+    if (off <= ROD_GRAB_PX && (!best || off < best.off)) best = { index, screen, cam, z, cx, cy, s, fs, off };
+  });
+  return best;
+}
+
+function initRodRadiusDrag() {
+  const grid = document.getElementById('multiGrid');
+  if (!grid) return;
+  let drag = null;
+
+  grid.addEventListener('mousemove', (e) => {
+    if (drag) return;
+    const hit = rodHit(e);
+    const screen = e.target.closest && e.target.closest('[data-tile-screen]');
+    if (screen) screen.style.cursor = hit ? 'nwse-resize' : '';
+  });
+
+  grid.addEventListener('mousedown', (e) => {
+    if (e.button !== 0) return;
+    const hit = rodHit(e);
+    if (!hit) return;
+    e.preventDefault();
+    e.stopPropagation();
+    drag = hit;
+    const box = hit.screen.getBoundingClientRect();
+    const move = (ev) => {
+      const r = Math.hypot(ev.clientX - box.left - drag.cx, ev.clientY - box.top - drag.cy) / drag.s;
+      drag.z.radius = Math.round(Math.max(20, Math.min(drag.fs[0], r)));
+      drawMotionTile(drag.index);
+    };
+    const up = () => {
+      document.removeEventListener('mousemove', move);
+      document.removeEventListener('mouseup', up, true);
+      const swallow = (ev) => { ev.stopPropagation(); };            // после перетаскивания не считаем клик кликом по плитке
+      document.addEventListener('click', swallow, { capture: true, once: true });
+      setTimeout(() => document.removeEventListener('click', swallow, true), 0);
+      drag = null;
+      if (typeof mdCommit === 'function') mdCommit();             // сохранить конфиг в сервис КЗ
+      if (typeof MD !== 'undefined' && MD) { MD.key = ''; if (typeof renderMotionDock === 'function') renderMotionDock(); }
+    };
+    document.addEventListener('mousemove', move);
+    document.addEventListener('mouseup', up, true);
+  }, true);
+}
+
+// сдвиг стакана: берём кружок мышью и тащим по кадру. Центр хранится в пикселях кадра анализа; эталоны («чистый» / «грязный») остаются
+function initClarityDrag() {
+  const grid = document.getElementById('multiGrid');
+  if (!grid) return;
+  grid.addEventListener('mousemove', (e) => {
+    const screen = e.target.closest && e.target.closest('[data-tile-screen]');
+    if (screen && !e.buttons) screen.style.cursor = clarityHit(e) ? 'move' : (screen.style.cursor === 'move' ? '' : screen.style.cursor);
+  });
+  grid.addEventListener('mousedown', (e) => {
+    if (e.button !== 0) return;
+    const hit = clarityHit(e);
+    if (!hit) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const g = tileFrameGeom(hit.index);
+    if (!g) return;
+    const fs = hit.cam.frame_size || [g.nw, g.nh];
+    const sx = (g.nw / fs[0]) * g.k, sy = (g.nh / fs[1]) * g.k;
+    const box = e.target.closest('[data-tile-screen]').getBoundingClientRect();
+    const dx = (e.clientX - box.left - g.ox) / sx - hit.z.center[0], dy = (e.clientY - box.top - g.oy) / sy - hit.z.center[1];   // где в кружке схватили
+    let moved = false;
+    const move = (ev) => {
+      const x = (ev.clientX - box.left - g.ox) / sx - dx, y = (ev.clientY - box.top - g.oy) / sy - dy;
+      hit.z.center = [Math.round(Math.max(0, Math.min(fs[0], x))), Math.round(Math.max(0, Math.min(fs[1], y)))];
+      moved = true;
+      drawMotionTile(hit.index);
+    };
+    const up = () => {
+      document.removeEventListener('mousemove', move);
+      document.removeEventListener('mouseup', up, true);
+      const swallow = (ev) => { ev.stopPropagation(); };            // после перетаскивания не считаем клик кликом по плитке
+      document.addEventListener('click', swallow, { capture: true, once: true });
+      setTimeout(() => document.removeEventListener('click', swallow, true), 0);
+      if (!moved) return;
+      if (typeof mdCommit === 'function') mdCommit();
+      if (typeof MD !== 'undefined' && MD) { MD.key = ''; if (typeof renderMotionDock === 'function') renderMotionDock(); }
+    };
+    document.addEventListener('mousemove', move);
+    document.addEventListener('mouseup', up, true);
+  }, true);
+}
+
+// ---------- быстрое обновление разметки на плитках с палками (~8 Гц) ----------
+// Полный /state с секундным шагом остаётся для всего остального; тут только состояние одной камеры и только для плиток,
+// где есть палки валов. Запросы идут строго по очереди, на скрытой вкладке — пауза.
+const MV_FAST_MS = 125;
+function mvFastTiles() {
+  const out = [];
+  state.tiles.forEach((tile, i) => {
+    if (!tile || !tile.serial || tile.kind !== 'rtsp' || !tile.connected || tile.markupOff) return;
+    const cam = mvCam(tile.serial);
+    if (!cam || !cam.enabled) return;
+    const pairs = typeof shPairsOfCamera === 'function' && shPairsOfCamera(cam.id).length > 0;
+    if (pairs || cam.zones.some((z) => z.enabled !== false && z.type === 'cycle')) out.push({ i, id: cam.id, pairs });
+  });
+  return out;
+}
+
+async function mvFastLoop() {
+  const t0 = performance.now();
+  try {
+    if (MV.online && !document.hidden) {
+      const items = mvFastTiles();
+      if (items.length) {
+        const rs = await Promise.all(items.map((it) => mvApi('/api/motion/camera_state?camera=' + encodeURIComponent(it.id))));
+        rs.forEach((c, k) => { if (c && c.id && !c.error) MV.states[items[k].id] = c; });
+        if (items.some((it) => it.pairs) && typeof shLiveFetch === 'function') await shLiveFetch();
+        items.forEach((it) => drawMotionTile(it.i));
+      }
+    }
+  } catch (e) { /* опрос не должен падать */ }
+  setTimeout(mvFastLoop, Math.max(0, MV_FAST_MS - (performance.now() - t0)));
 }
 
 // ---------- опрос и инициализация ----------
@@ -249,19 +626,26 @@ function startMotionPolling() {
     try {
       MV.tick += 1;
       if (MV.tick % 10 === 1) await mvRefreshConfig();          // конфиг подтягиваем раз в ~10 с
-      const any = MV.dockOpen || state.tiles.some((t) => t.serial && t.kind === 'rtsp' && mvEnabled(t.serial));
+      if (MV.tick % 15 === 2 && MV.online) lvStripsRefresh();    // лента снимков уровня (новый снимок раз в минуту) — без ожидания
+      const any = MV.dockOpen || (typeof SHW !== 'undefined' && SHW.open) || state.tiles.some((t) => t.serial && t.kind === 'rtsp' && mvEnabled(t.serial));
       if (MV.online && any) {
         const st = await mvApi('/api/motion/state');
-        if (st && st.cameras) st.cameras.forEach((c) => { MV.states[c.id] = c; });
+        if (st && st.cameras) st.cameras.forEach((c) => {         // быстрый опрос плиток мог уже принести более свежий кадр — назад не откатываем
+          const cur = MV.states[c.id];
+          if (!cur || !cur.result || !c.result || !(c.result.ts < cur.result.ts)) MV.states[c.id] = c;
+        });
         if (st && st.scenarios) MV.scen = st.scenarios;
+        if (st && st.perf) MV.perf = st.perf;
+        if (st && st.shafts) MV.shafts = st.shafts;       // скорости и разности валов (вкладка «Валы», подписи на плитке)
         if (typeof paintMotionDockLive === 'function') paintMotionDockLive();
       }
+      if (typeof shwUpdate === 'function') shwUpdate();           // плавающий виджет «разность валов» (16-shafts.js)
       drawAllMotionTiles();
       updateMotionButton(focusedSource());
     } catch (e) { /* опрос не должен падать */ }
     setTimeout(loop, 1000);
   };
-  mvRefreshConfig().then(() => { drawAllMotionTiles(); loop(); });
+  mvRefreshConfig().then(() => { drawAllMotionTiles(); loop(); mvFastLoop(); });
   window.addEventListener('resize', drawAllMotionTiles);
 }
 
@@ -271,5 +655,9 @@ function initMotionVision() {
   btn.addEventListener('click', (e) => { e.stopPropagation(); toggleMotionDock(); });
   document.getElementById('multiGrid')?.addEventListener('mousemove', onMotionHover);
   document.getElementById('multiGrid')?.addEventListener('mouseleave', () => { const t = document.getElementById('mvTip'); if (t) t.hidden = true; });
+  initRodRadiusDrag();
+  initClarityRename();
+  initClarityDrag();
   if (typeof initMotionDock === 'function') initMotionDock();
+  if (typeof shwInit === 'function') shwInit();                 // значок и плавающий виджет «разность валов»
 }

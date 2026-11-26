@@ -5,27 +5,28 @@
 
   const $ = (id) => document.getElementById(id);
   const POLL_MS = 600;
+  const POLL_TIMEOUT_MS = 8000;     // опрос телеметрии: дольше не ждём — следующий такт спросит заново
 
-  // Стадии варки (M.mode) — расшифровка для показа "2 (Набор)". SubMode показываем числом как есть.
-  const STAGE_NAMES = {
-    1: "Остановлен", 2: "Набор", 3: "Сгущение", 4: "Затравка", 5: "Подкачка",
-    6: "Стабилизация", 7: "Рост", 8: "Уваривание", 9: "Готовность", 10: "Выгрузка",
-    11: "Пропарка", 12: "Надвыгрузка", 13: "Собрать аппарат", 14: "Термоудар",
-    20: "УНВ", 21: "Пауза",
-  };
+  // Стадии варки (M.mode) — расшифровка для показа "2 (Набор)". Одна таблица на приложение — substages.py,
+  // приходит с сервера (stage-names.js); пока не пришла, показываем номер. Объекты заполняются на месте.
+  const STAGE_NAMES = window.StageNames.titles;
   const stageLabel = (m) => {
     if (m == null || m === "") return "(—)";
-    const n = STAGE_NAMES[Number(m)];
+    const n = stageNameOf(Number(m));
     return n ? `${m} (${n})` : String(m);
   };
 
-  // Подстадии (регистр Submode = этап·10 + подэтап: 73 → рост 2). Названия — как в SCADA, таблица та же, что substages.py
-  const SUBSTAGE_NAMES = { 10: "останов", 20: "набор", 21: "набор", 22: "набор 1", 23: "набор 2", 24: "набор 3", 25: "набор 4", 26: "набор 5", 27: "набор 6", 28: "донабор", 30: "сгущение", 31: "сгущение", 32: "сгущение 1", 33: "сгущение 2", 34: "сгущение 3", 35: "сгущение 4", 36: "сгущение 5", 37: "сгущение 6", 38: "сгущение 7", 39: "сгущение 8", 40: "затравка", 41: "затравка: подтверждение", 42: "затравка: внесение", 50: "подкачка", 51: "подкачка", 52: "подкачка 1", 53: "подкачка 2", 54: "подкачка 3", 55: "подкачка 4", 56: "подкачка 5", 57: "подкачка 6", 58: "подкачка 7", 59: "расчистка", 60: "стабилизация", 61: "стабилизация", 62: "стабилизация 1", 63: "стабилизация 2", 64: "стабилизация 3", 65: "стабилизация 4", 66: "стабилизация 5", 67: "стабилизация 6", 68: "стабилизация 7", 69: "стабилизация 8", 70: "рост", 71: "рост", 72: "рост 1", 73: "рост 2", 74: "рост 3", 75: "рост 4", 76: "рост 5", 77: "рост 6", 78: "рост БП", 79: "рост ЗП", 80: "уваривание", 90: "готовность", 100: "выгрузка: подтверждение", 101: "выгрузка: закрытие вакуума", 102: "выгрузка: ожидание сброса", 105: "выгрузка", 106: "выгрузка L", 107: "выгрузка T", 108: "выгрузка", 110: "пропарка", 111: "пропарка", 112: "пропарка", 113: "пропарка", 114: "пропарка", 115: "пропарка", 116: "пропарка", 117: "пропарка", 118: "пропарка", 119: "пропарка", 120: "надвыгрузка", 130: "собрать ВА", 140: "термоудар", 141: "термоудар", 142: "термоудар 1", 143: "термоудар 2", 144: "термоудар 3", 145: "термоудар 4", 146: "термоудар 5", 147: "термоудар 6", 148: "термоудар 7", 149: "термоудар 8" };
-  const SUBSTAGE_STAGES = { 1: "останов", 2: "набор", 3: "сгущение", 4: "затравка", 5: "подкачка", 6: "стабилизация", 7: "рост", 8: "уваривание", 9: "готовность", 10: "выгрузка", 11: "пропарка", 12: "надвыгрузка", 13: "собрать ВА", 14: "термоудар", 20: "УНВ" };
+  // Подстадии (регистр Submode = этап·10 + подэтап: 73 → рост 2). Названия — как в SCADA, с сервера (substages.NAMES)
+  const SUBSTAGE_NAMES = window.StageNames.substages;
+  const SUBSTAGE_STAGES = window.StageNames.stages;      // «сгущение» — основа имени подстадии по формуле
   // нет кода в таблице — имя по формуле «этап·10 + подэтап» (73 → «рост 3», 114 → «пропарка 4»)
   const substageName = (c) => {
     if (c == null || c === "") return null;
     const n = Math.round(Number(c)); if (isNaN(n)) return null;
+    if (n >= 10 && Object.keys(stageMapRows).length) {                  // чужой контроллер: имя из таблицы карты стадий, своя строка или строка десятка + подэтап («ВАРКА 4»)
+      const own = stageMapRows[n], base = stageMapRows[Math.floor(n / 10) * 10];
+      if (own || base) return own || base + (n % 10 ? " " + (n % 10) : "");
+    }
     if (SUBSTAGE_NAMES[n]) return SUBSTAGE_NAMES[n];
     const st = Math.floor(n / 10), sub = n % 10, base = SUBSTAGE_STAGES[st];
     return base ? base + (sub ? " " + sub : "") : "подстадия " + n;
@@ -34,27 +35,51 @@
 
   // пояснения к стадиям — как их называл Макс (память varka-stages); чего нет в списке, не придумываем
   const STAGE_HELP = { 5: "набор уровня", 6: "набор СВ", 7: "(!!!)", 8: "набор СВ" };
-  const PC_EXTRA_STAGES = [20];   // как CYCLE_EXTRA_STAGES в microscope_fsm.py: 20 УНВ (удержание на воде) — пробы берутся и там
+  // карта стадий чужого контроллера (вкладка «ПЛК»): {наша стадия: {name, codes}} — её названия важнее зашитых наших; пусто — наши
+  let stageMapNames = {}, stageMapRows = {};
+  const stageNameOf = (k) => { const t = stageMapNames[k]; return (t && t.name) || STAGE_NAMES[k]; };
+  // «плюс» стадии (вне диапазона «от — до», пробы берутся и там): поле «Плюс стадии», по умолчанию 20 УНВ (удержание на воде); как parse_stage_list в microscope_fsm.py
+  function pcExtraStages() {
+    const e = $("pcStageExtra"); if (!e) return [20];
+    const out = [];
+    String(e.value || "").split(/[\s,;]+/).forEach((x) => { const n = parseInt(x, 10); if (n >= 1 && n <= 21 && !out.includes(n)) out.push(n); });
+    return out.sort((p, q) => p - q);
+  }
   function pcStageInfoBuild(x, y) {
     const pop = $("pcStageInfoPop"); if (!pop) return;
+    const extra = pcExtraStages();
     pop.innerHTML = '<b>Стадии варки (M.mode)</b>' + Object.keys(STAGE_NAMES).map((k) => {
-      const inR = (Number(k) >= x && Number(k) <= y) || PC_EXTRA_STAGES.includes(Number(k));
-      return '<div class="' + (inR ? "in" : "") + '"><i>' + k + '</i> ' + STAGE_NAMES[k] + (STAGE_HELP[k] ? ' <em>— ' + STAGE_HELP[k] + '</em>' : '') + '</div>';
+      const inR = (Number(k) >= x && Number(k) <= y) || extra.includes(Number(k));
+      const t = stageMapNames[k], help = [STAGE_HELP[k], t && t.codes && t.codes.length ? "коды " + t.codes.join(", ") : ""].filter(Boolean).join(" · ");
+      return '<div class="' + (inR ? "in" : "") + '"><i>' + k + '</i> ' + stageNameOf(k) + (help ? ' <em>— ' + help + '</em>' : '') + '</div>';
     }).join("") + '<small>Подсвечено — стадии, в которых идёт авто-цикл пробы (поля слева)</small>';
   }
-  // подпись под полями «Стадии от — до»: «3 Сгущение → 9 Готовность»; полный список стадий — в подсказке
+  // подпись под полями «Стадии от — до»: «3 СГУЩЕНИЕ → 9 Готовность + 20 УНВ»; полный список стадий — в подсказке
   function pcStageHintUpdate() {
     const a = $("pcStageFrom"), b = $("pcStageTo"), h = $("pcStageHint"); if (!a || !b || !h) return;
-    const nm = (v) => { const n = STAGE_NAMES[Number(v)]; return n ? v + " " + n : (v || "—"); };
+    const nm = (v) => { const n = stageNameOf(Number(v)); return n ? v + " " + n : (v || "—"); };
     let x = Number(a.value), y = Number(b.value); if (x > y) [x, y] = [y, x];
-    h.textContent = nm(x) + " → " + nm(y) + " · + 20 УНВ";
+    const extra = pcExtraStages();
+    h.textContent = nm(x) + " → " + nm(y) + (extra.length ? " · + " + extra.map(nm).join(", ") : "");
     pcStageInfoBuild(x, y);
   }
+  // названия стадий из карты: при загрузке страницы и сразу после сохранения карты на вкладке «ПЛК» (plc-source.js шлёт stagemap-changed)
+  const stageMapApply = (sm) => {
+    sm = sm || {};
+    stageMapNames = sm.names || {};
+    stageMapRows = {};                                                    // названия кодов чужого контроллера — для подстадий (профиль «другая»)
+    if (sm.profile === "custom") (sm.rows || []).forEach((r) => { if (r && r.name) stageMapRows[Number(r.code)] = r.name; });
+  };
+  async function pcStageNamesLoad() {
+    try { stageMapApply(((await api("/api/plc/source")).config || {}).stage_map); } catch (e) { }
+    await window.StageNames.ready;          // подписи «3 Сгущение → 9 Готовность» — когда названия пришли с сервера
+    pcStageHintUpdate();
+  }
+  window.addEventListener("stagemap-changed", (ev) => { stageMapApply(ev.detail); pcStageHintUpdate(); });
 
   let manualOn = false;
   let cfg = null;
   let camSerial = "";
-  let manualConfirmShown = false;   // показан ли диалог «варка началась, выйти из ручного?»
   let autostartDone = false;        // автосеквенция «автостарт цикла» уже запущена?
 
   // авто-доводка мотора «Идти в позицию»: плата за одно нажатие делает лишь ОДИН шаг к цели,
@@ -64,11 +89,22 @@
   const DRIVE_STOP_UM = 20;                    // ближе этого к цели — стоп (мкм)
   const DRIVE_TICK_MS = 700;
 
-  async function api(path, params) {
+  // запрос к серверу с таймаутом: зависший сервер (перезапуск, обновление) не должен вешать fetch навсегда.
+  // 60 с по умолчанию — с запасом для долгих (разбор CV, отчёт, сравнение); опрос телеметрии ждёт меньше (POLL_TIMEOUT_MS)
+  async function api(path, params, timeoutMs = 60000) {
     const q = params ? "?" + new URLSearchParams(params).toString() : "";
-    const res = await fetch(path + q);
-    if (!res.ok) throw new Error("HTTP " + res.status);
-    return res.json();
+    const ctl = new AbortController();
+    const timer = setTimeout(() => ctl.abort(), timeoutMs);
+    try {
+      const res = await fetch(path + q, { signal: ctl.signal });
+      if (!res.ok) throw new Error("HTTP " + res.status);
+      return await res.json();
+    } catch (e) {
+      if (e.name === "AbortError") throw new Error("сервер не ответил за " + Math.round(timeoutMs / 1000) + " с");
+      throw e;
+    } finally {
+      clearTimeout(timer);
+    }
   }
 
   function sentCmd(label) {
@@ -76,8 +112,24 @@
     if (el) el.textContent = label + " · " + new Date().toLocaleTimeString("ru-RU");
   }
 
+  // плашка «Началась варка — перейти в Автомат?» (видна, пока сервер держит manual_confirm; показ — в pollOnce)
+  function wireAutoConfirm() {
+    const answer = async (yes) => {
+      try {
+        await api("/api/micro/" + (yes ? "confirm_auto" : "decline_auto"));
+        if (yes) { const mt = $("manualToggle"); if (mt) mt.checked = false; }
+        const ac = $("autoConfirm"); if (ac) ac.hidden = true;
+        sentCmd(yes ? "Варка: перешли в Автомат" : "Варка: остаёмся в ручном");
+      } catch (e) { sentCmd("ошибка: " + e.message); }
+    };
+    const yes = $("autoConfirmYes"), no = $("autoConfirmNo");
+    if (yes) yes.addEventListener("click", () => answer(true));
+    if (no) no.addEventListener("click", () => answer(false));
+  }
+
   // вкладка «Цикл»: кнопка «Взять пробу» + сохранение параметров цикла
   function wireCycle() {
+    wireAutoConfirm();
     const take = $("takeSampleBtn");
     if (take) take.addEventListener("click", async () => {
       try {
@@ -101,8 +153,9 @@
       try { await api("/api/micro/cycle_reset"); sentCmd("Цикл: сброс"); const h = $("cycHint"); if (h) h.textContent = "цикл сброшен"; }
       catch (e) { const h = $("cycHint"); if (h) h.textContent = "ошибка: " + e.message; }
     });
-    ["pcStageFrom", "pcStageTo"].forEach((id) => { const e = $(id); if (e) e.addEventListener("input", pcStageHintUpdate); });
+    ["pcStageFrom", "pcStageTo", "pcStageExtra"].forEach((id) => { const e = $(id); if (e) e.addEventListener("input", pcStageHintUpdate); });
     pcStageHintUpdate();
+    pcStageNamesLoad();
     const save = $("pcSave");
     if (save) save.addEventListener("click", async () => {
       if (!cfgLoaded) { loadHint("настройки ещё не загружены — подожди"); return; }
@@ -113,7 +166,10 @@
         photo_format: $("pcFormatSw").checked ? "jpg" : "png",
         trigger_mode: pcTrigMode, arrive_sensor: pcArriveMode,
         sv_from: $("pcSvFrom").value, sv_to: $("pcSvTo").value,
-        stage_from: $("pcStageFrom").value, stage_to: $("pcStageTo").value,
+        stage_from: $("pcStageFrom").value, stage_to: $("pcStageTo").value, stage_extra: pcExtraStages().join(","),
+        glass_settle_sec: $("pcGlassSettle").value,
+        arrive_tol_um: $("pcArriveTol").value,
+        glass_wash_every: $("pcGlassWashEvery").value,
         fast_enabled: $("pcFastOn").checked ? 1 : 0, fast_frames: $("pcFastFrames").value, fast_gap_sec: $("pcFastGap").value,
         fast_pre_wash_sec: $("pcFastPreWash").value, fast_post_wash_sec: $("pcFastPostWash").value,
       };
@@ -921,7 +977,12 @@
           sv("pcRetract", pc.retract_pos); sv("pcPreWash", pc.pre_wash_sec);
           sv("pcDwell", pc.dwell_sec); sv("pcShotInterval", pc.shot_interval_sec);
           sv("pcPause", pc.pause_sec); sv("pcSvFrom", pc.sv_from); sv("pcSvTo", pc.sv_to);
-          sv("pcStageFrom", pc.stage_from); sv("pcStageTo", pc.stage_to); pcStageHintUpdate();
+          sv("pcStageFrom", pc.stage_from); sv("pcStageTo", pc.stage_to);
+          sv("pcGlassSettle", pc.glass_settle_sec != null ? pc.glass_settle_sec : 5);     // осадка у стекла после подвода
+          sv("pcArriveTol", pc.arrive_tol_um != null ? pc.arrive_tol_um : 50);            // допуск прихода подвода, мкм
+          sv("pcGlassWashEvery", pc.glass_wash_every != null ? pc.glass_wash_every : 1);    // стекло промывать раз в N проб
+          if ($("pcStageExtra")) $("pcStageExtra").value = (pc.stage_extra || [20]).join(", ");    // нет ключа — по умолчанию 20 УНВ
+          pcStageHintUpdate();
           const fp = pc.fast || {};                                        // быстрый цикл на подкачке
           const fo = $("pcFastOn"); if (fo) fo.checked = fp.enabled !== false;
           sv("pcFastFrames", fp.frames != null ? fp.frames : 1); sv("pcFastGap", fp.gap_sec != null ? fp.gap_sec : 2);
@@ -943,20 +1004,18 @@
         const sfS = $("sensorFilterSec");
         if (sfS) { if (sf.avg_sec != null) sfS.value = sf.avg_sec; sfS.disabled = !(sfT && sfT.checked); }
         const sds = $("sensorDisplayScale"); if (sds && cfg.sensor_display_scale != null) sds.value = cfg.sensor_display_scale;
-        // довод по абсолютнику (гибридный доезд подвода): галочка + допуски/повторы/пауза
-        const fa = cfg.fine_approach || {};
-        const faT = $("fineApproachToggle"); if (faT) faT.checked = !!fa.enabled;
+        // числовое поле из конфига (нет значения — не трогаем). Без этой строки (снесена в 3.0.7 вместе с доводом) загрузка
+        // настроек падала на ReferenceError, и кнопки «Сохранить» оставались запертыми
         const faSet = (id, v) => { const e = $(id); if (e && v != null) e.value = v; };
-        faSet("faCoarse", fa.coarse_tol_um); faSet("faFine", fa.fine_tol_um);
-        faSet("faRetry", fa.max_retry); faSet("faPause", fa.pause_sec);
         // автокалибровка нуля М1
         const ac = cfg.autocal || {};
         const acT = $("autocalToggle"); if (acT) acT.checked = !!ac.enabled;
         faSet("acEveryN", ac.every_n); faSet("acTimeout", ac.timeout_sec);
+        faSet("faM1Timeouts", (cfg.fault_guard || {}).m1_timeouts);   // порог Аварии «М1 не доехал подряд»
         cfgSerial = cfg.camera_serial || "";
         loadedOk = true;
       }
-    } catch (e) { /* конфиг недоступен */ }
+    } catch (e) { console.warn("загрузка настроек:", e); }   // сеть или ошибка в коде — не глотаем молча
     if (!loadedOk) {
       cfgLoaded = false; lockSaves(true);
       loadHint("загрузка настроек с сервера… (попытка " + (cfgTries + 1) + ")");
@@ -1081,6 +1140,7 @@
     if (!plc || !plc.enabled) { wrap.classList.add("is-off"); if (el) el.textContent = "ПЛК: выкл"; }
     else if (plc.connected) { wrap.classList.add("is-on"); if (el) el.textContent = "ПЛК: обмен"; }
     else { wrap.classList.add("is-warn"); if (el) el.textContent = "ПЛК: нет связи"; }
+    wrap.title = plc && plc.enabled ? "Источник данных аппарата: " + (plc.protocol === "opcua" ? "OPC UA" : "Modbus TCP") + (plc.error ? " — " + plc.error : "") : "Связь с ПЛК аппарата (данные варки)";
   }
 
   const num = (v) => (v == null ? "—" : v);
@@ -1104,22 +1164,28 @@
   }
 
   // ---- опрос ----
+  // poll зовётся раз в POLL_MS (04-init.js): пока прошлый опрос не вернулся, новый не запускаем — иначе при зависшем
+  // сервере запросы копятся друг поверх друга
+  let pollBusy = false;
   async function poll() {
+    if (pollBusy) return;
+    pollBusy = true;
+    try { await pollOnce(); } finally { pollBusy = false; }
+  }
+
+  async function pollOnce() {
     try {
-      const d = await api("/api/micro/telemetry");
+      const d = await api("/api/micro/telemetry", null, POLL_TIMEOUT_MS);
       const t = d.telemetry || {}, f = d.fsm || {}, e = d.ext || {};
       setConn(d.connection || {});
 
-      // подтверждение перехода в Автомат: варка вошла в стадию 3, а мы в ручном
-      if (f.manual_confirm && !manualConfirmShown) {
-        manualConfirmShown = true;
-        const yes = confirm("Началась варка (стадия " + (f.stage != null ? f.stage : 3) +
-          "). Выйти из ручного режима и запустить авто-цикл?");
-        api("/api/micro/" + (yes ? "confirm_auto" : "decline_auto")).then(() => {
-          if (yes) { const mt = $("manualToggle"); if (mt) mt.checked = false; }
-        }).catch(() => {});
+      // варка вошла в рабочие стадии, а включён Ручной: плашка «Перейти в Автомат?» с кнопками (wireAutoConfirm).
+      // Не системный confirm(): тот замораживал вкладку, пока оператор не ответит
+      const askEl = $("autoConfirm");
+      if (askEl) {
+        askEl.hidden = !f.manual_confirm;
+        if (f.manual_confirm) set("autoConfirmStage", stageLabel(f.stage));
       }
-      if (!f.manual_confirm) manualConfirmShown = false;
 
       // позиции (сверху и в пульте)
       set("tPos1", um(t.pos1)); set("tPos2", um(t.pos2));
@@ -1214,12 +1280,6 @@
       setValve("cycTube", f.valve_tube);
       setValve("cycGlass", f.valve_glass);
 
-      // DEBUG live-строка (обратная связь ручного ввода СВ): шаг/СВ/зазор/позиция
-      set("dbgStep", f.step == null ? "—" : f.step + " (" + f.mode + ")");
-      set("dbgSv", f.sv == null ? "—" : Number(f.sv).toFixed(2));
-      set("dbgSp", f.m1_sp == null ? "—" : um(f.m1_sp));
-      set("dbgPos", um(t.pos1));
-
       // система
       set("tSerial", num(e.serial));
       // регистр секунд 16-битный и обнуляется каждые 18 ч 12 мин; круги считает отдельный регистр
@@ -1293,6 +1353,7 @@
 
       // ручной режим (синхронизируем UI с состоянием автомата)
       if (!!f.manual !== manualOn) syncManual(!!f.manual);
+      syncAutoIdle(f);
     } catch (e) {
       setConn({ connected: false, reconnecting: false });
     }
@@ -1318,6 +1379,20 @@
     const sw = document.querySelector(".micro-switch--manual");
     if (sw) sw.classList.toggle("is-manual", on);
     $("microPult").classList.toggle("is-locked", !on);   // гейт панелей М1/М2/LED/DQ
+  }
+
+  // Тумблер «Автомат» = ручной снят, но авто-цикл (cyclic) включается отдельно. Если цикл не идёт (после аварии, перезапуска) —
+  // не врём зелёным «Автомат»: подпись «Автомат · цикл выкл». Лечится переключением в «Ручной» и обратно.
+  function syncAutoIdle(f) {
+    if (manualOn) return;
+    const idle = !f.cyclic && !f.fault && !(f.autocal && f.autocal.active);
+    const sw = document.querySelector(".micro-switch--manual");
+    if (sw) {
+      if (!sw.dataset.title) sw.dataset.title = sw.title;   // исходная подсказка из html
+      sw.classList.toggle("is-idle", idle);
+      sw.title = idle ? "Автомат не запущен: цикл проб выключен. Переключите в «Ручной» и обратно — цикл включится." : sw.dataset.title;
+    }
+    $("manualState").textContent = idle ? "Автомат · цикл выкл" : "Автомат";
   }
 
   // ---- кнопки ----
@@ -1354,25 +1429,18 @@
       } catch (e) { if (h) h.textContent = "ошибка: " + e.message; }
     });
 
-    // довод по абсолютнику: галочка + поля (каждое по change шлёт настройку) + сброс аварии
-    const faT = $("fineApproachToggle");
-    if (faT) faT.addEventListener("change", () => {
-      api("/api/micro/fine_approach", { enabled: faT.checked ? 1 : 0 }).catch(() => {});
-      if (cfg) (cfg.fine_approach = cfg.fine_approach || {}).enabled = faT.checked;
-      sentCmd("Довод по абсолютнику: " + (faT.checked ? "вкл" : "выкл"));
-    });
-    [["faCoarse", "coarse_tol_um"], ["faFine", "fine_tol_um"], ["faRetry", "max_retry"], ["faPause", "pause_sec"]]
-      .forEach(([id, key]) => {
-        const el = $(id);
-        if (el) el.addEventListener("change", () => {
-          const p = {}; p[key] = el.value;
-          api("/api/micro/fine_approach", p).catch(() => {});
-          if (cfg) (cfg.fine_approach = cfg.fine_approach || {})[key] = Number(el.value);
-        });
-      });
+    // сброс аварии автомата
     const faCF = $("faClearFault");
     if (faCF) faCF.addEventListener("click", () => {
-      api("/api/micro/clear_fault").then(() => sentCmd("Авария сброшена")).catch(() => {});
+      faCF.hidden = true;                       // прячем сразу, опрос подтвердит
+      api("/api/micro/clear_fault").then(() => sentCmd("Авария сброшена — «Автомат» включите сами")).catch((e) => sentCmd("ошибка: " + e.message));
+    });
+    // порог Аварии «М1 N раз подряд не доехал за таймаут шага» (0 — выкл.)
+    const faTo = $("faM1Timeouts");
+    if (faTo) faTo.addEventListener("change", () => {
+      api("/api/micro/fault_guard", { m1_timeouts: faTo.value })
+        .then((r) => { faTo.value = r.m1_timeouts; if (cfg) cfg.fault_guard = { m1_timeouts: r.m1_timeouts }; sentCmd("Авария по таймаутам М1: " + (r.m1_timeouts ? r.m1_timeouts + " подряд" : "выкл")); })
+        .catch((e) => sentCmd("ошибка: " + e.message));
     });
 
     // автокалибровка нуля М1: галочка + поля + ручной старт + сброс счётчика
@@ -1444,34 +1512,6 @@
     if (ifT) ifT.addEventListener("change", () => {
       api("/api/micro/ignore_focus", { on: ifT.checked ? 1 : 0 }).catch(() => {});
       sentCmd("Фокус по таблице: " + (ifT.checked ? "не использовать" : "использовать"));
-    });
-
-    // DEBUG: ручной ввод СВ/стадии для отладки цикла (убрать после отладки)
-    const svOv = $("svOverrideToggle");
-    if (svOv) svOv.addEventListener("change", async () => {
-      try {
-        await api("/api/micro/sv_override", { on: svOv.checked ? 1 : 0 });
-        const h = $("svDebugHint");
-        if (h) h.textContent = svOv.checked ? "ПЛК перехвачен — ручной СВ держится" : "ПЛК ведёт СВ";
-        sentCmd("DEBUG перехват ПЛК: " + (svOv.checked ? "вкл" : "выкл"));
-      } catch (e) { const h = $("svDebugHint"); if (h) h.textContent = "ошибка: " + e.message; }
-    });
-    if ($("svManualApply")) $("svManualApply").addEventListener("click", async () => {
-      const sv = $("svManualInp").value, stage = $("stageManualInp").value;
-      try {
-        await api("/api/micro/sv", { value: sv });
-        await api("/api/micro/stage", { value: stage });
-        const h = $("svDebugHint"); if (h) h.textContent = "применено: СВ " + sv + ", стадия " + stage;
-        sentCmd("DEBUG СВ " + sv + " / стадия " + stage);
-      } catch (e) { const h = $("svDebugHint"); if (h) h.textContent = "ошибка: " + e.message; }
-    });
-    // DEBUG: запустить цикл немедленно (cmd=100 -> отвод SP[0] -> подвод по СВ)
-    if ($("svCycleNow")) $("svCycleNow").addEventListener("click", async () => {
-      try {
-        await api("/api/micro/command", { cmd: 100 });
-        const h = $("svDebugHint"); if (h) h.textContent = "цикл запущен — смотри «Шаг» ниже (20→21→22→23→24)";
-        sentCmd("DEBUG запуск цикла (cmd 100)");
-      } catch (e) { const h = $("svDebugHint"); if (h) h.textContent = "ошибка: " + e.message; }
     });
 
     // режим съёмки камеры — галочка (слева поток / справа автомат)

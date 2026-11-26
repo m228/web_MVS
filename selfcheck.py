@@ -361,12 +361,12 @@ MODULES = [
     "paths", "logger", "camera_core", "camera_core.gentl_env", "camera_core.utils", "camera_core.imaging",
     "camera_core.base_worker", "camera_core.gige_worker", "camera_core.rtsp_worker", "camera_core.camera_manager",
     "sdk_gige", "camera_params", "board_guard", "dahua_control", "net_tools", "rtsp_store",
-    "save_settings", "plate_config", "sv_source", "microscope_plc", "microscope_fsm",
-    "microscope_service", "cv_analyzer", "cv_volume", "substages", "db", "report", "boil_compare", "cv_fracture", "cv_client", "video_client", "motion_client", "services", "delta_update", "cv_store", "boil_archive", "fracture_lab", "cv_pipeline", "model_check", "boil_anomaly", "other_plants", "cam_events", "cam_monitor", "cam_report", "sysmon",
+    "save_settings", "plate_config", "sv_source", "opcua_client", "plc_source", "stage_map", "microscope_plc", "m1_blackbox", "microscope_fsm",
+    "microscope_service", "cv_analyzer", "cv_volume", "substages", "db", "report", "boil_compare", "cv_fracture", "cv_client", "video_client", "motion_client", "level_client", "services", "delta_update", "cv_store", "boil_archive", "fracture_lab", "approach_advice", "cv_pipeline", "model_check", "boil_anomaly", "other_plants", "cam_events", "cam_monitor", "cam_report", "sysmon", "motion_sync", "camera_core.mjpeg", "host_load",
     "updater", "update_health", "auto_update", "autostart", "diag", "app", "mvsdk",
 ]
 THIRD_PARTY = ["cv2", "numpy", "fastapi", "starlette", "uvicorn", "pymodbus", "harvesters", "genicam",
-               "pydantic", "multipart"]
+               "pydantic", "multipart", "asyncua", "asyncua.sync", "cryptography"]
 
 # имя модуля -> имена, которые от него ждут другие модули / диагностика
 API = {
@@ -378,6 +378,8 @@ API = {
     "microscope_plc": ["PlateClient"],
     "microscope_fsm": ["MicroscopeFSM"],
     "sv_source": ["SvSource"],
+    "opcua_client": ["OpcUaConn", "get_endpoints", "with_conn", "scan", "ensure_client_cert", "load_secret", "save_secret", "secret_public"],
+    "plc_source": ["normalize", "public", "conn_from_body", "modbus_read_test"],
     "plate_config": ["load", "save", "replace_all", "backup", "DEFAULTS", "CONFIG_PATH"],
     "cv_analyzer": ["analyze", "measure_objects", "summarize", "draw_overlay", "blur_score"],
     "db": ["upsert_row", "read_rows", "rebuild_boils", "is_new_boil"],
@@ -387,6 +389,7 @@ API = {
                  "trend_range", "history_days", "get_objects", "overlay_path", "thumb_path"],
     "cv_client": ["health", "infer", "model_info", "model_upload", "model_load"],
     "fracture_lab": ["save_frame", "list_frames", "set_label", "delete", "zones", "all_zones", "jpeg"],
+    "approach_advice": ["compute"],
     "rtsp_store": ["load", "save", "set_autostart", "remove"],
     "save_settings": ["load", "get", "update"],
     "updater": ["check_latest", "download_latest", "apply_update", "_version_tuple"],
@@ -465,7 +468,7 @@ SAFE_API = [
     "/api/version", "/api/debug/info", "/api/debug/logs",
     "/api/micro/enabled", "/api/micro/status", "/api/micro/telemetry", "/api/micro/config_dump",
     "/api/micro/config_snapshots",
-    "/api/cv/settings", "/api/cv/fracture/settings", "/api/cv/approach/settings",
+    "/api/cv/settings", "/api/cv/fracture/settings", "/api/cv/approach/settings", "/api/cv/approach/advice",
     "/api/cv/last", "/api/cv/prev", "/api/cv/samples", "/api/cv/trend", "/api/cv/trend/days",
     "/api/cv/fracture/lab/list",
     "/api/rtsp/saved", "/api/autostart/status", "/api/net/status",
@@ -931,6 +934,38 @@ def _sv_source():
     return "sv=52.5 stage=7, 1 запрос на опрос"
 
 
+@check("Микроскоп", "SvSource: читает СВ и стадию по OPC UA (эмулятор, шифрование + логин)")
+def _sv_source_opcua():
+    # эмулятор лежит в scripts\ (в exe — _internal\scripts\): заодно проверяет, что asyncua и cryptography собраны в бандл
+    import paths
+    sys.path.insert(0, str(paths.BUNDLE_DIR / "scripts"))
+    try:
+        from opcua_sim import start_sim
+    except ImportError as e:
+        raise Skip("нет эмулятора OPC UA: %s" % e)
+    import opcua_client
+    from sv_source import SvSource
+    sock = socket.socket(); sock.bind(("127.0.0.1", 0)); port = sock.getsockname()[1]; sock.close()
+    sim = start_sim(port, secure=True, users={"op": "123"}, animate=False)
+    try:
+        opcua_client.save_secret("op", "123")                          # песочница: data\ во временной папке
+        src = SvSource({"protocol": "opcua", "period_s": 0.2, "glitch_filter": False,
+                        "opcua": {"endpoint": sim.url, "security": "Basic256Sha256", "mode": "SignAndEncrypt", "auth": "user",
+                                  "fields": {"sv": {"node": sim.node_id("Brix")}, "stage": {"node": sim.node_id("Mode")},
+                                             "level": {"node": sim.node_id("Broken")}}}})
+        src.start()
+        try:
+            assert _wait(lambda: src.status()["connected"], 15), "нет связи с эмулятором: %s" % src.status().get("error")
+            v = src.status()["values"]
+            assert abs(v["sv"] - 86.4) < 0.01 and v["stage"] == 5, "values=%s" % v
+            assert v["level"] is None, "тег с плохим статусом должен быть None, а не %r" % v["level"]
+        finally:
+            src.stop()
+    finally:
+        sim.stop()
+    return "sv=86.4 stage=5 по Basic256Sha256/SignAndEncrypt, плохой тег → (—)"
+
+
 class _FwM1:
     """Мотор М1 так, как его ведёт прошивка платы (разбор fw-crc-l.bin, tasks/todo.md п. 2b): x — где он на самом деле
     (датчик = gain·x + s_off), упор у стекла x_stop (дальше шаги теряются), calc — расчётная (шаги, не ниже 0),
@@ -1203,6 +1238,17 @@ def _fsm():
         for st, ok in ((20, True), (10, False), (19, False), (21, False)):
             fsm.set_stage(st); fsm.tick()
             assert fsm.state["stage_ok"] is ok, "стадия %d: stage_ok должно быть %s (3..9 и 20 УНВ)" % (st, ok)
+        # «плюс» стадии настраиваются (probe_cycle.stage_extra): 21 добавили — идёт, УНВ убрали — не идёт; пусто — только диапазон
+        cfg3 = copy.deepcopy(cfg)
+        cfg3.setdefault("probe_cycle", {})["stage_extra"] = [21]
+        fsm3 = MicroscopeFSM(plate, cfg3)
+        for st, ok in ((21, True), (20, False), (9, True), (10, False)):
+            fsm3.set_stage(st); fsm3.tick()
+            assert fsm3.state["stage_ok"] is ok, "«плюс» [21]: стадия %d, stage_ok должно быть %s" % (st, ok)
+        cfg3["probe_cycle"]["stage_extra"] = []
+        fsm4 = MicroscopeFSM(plate, cfg3)
+        fsm4.set_stage(20); fsm4.tick()
+        assert fsm4.state["stage_ok"] is False, "«плюс» пуст, а стадия 20 всё ещё разрешает цикл"
         # ежечасная промывка: только когда варки не было целый час (пока варка/час после неё — клапаны не трогаем)
         import datetime as _dt, microscope_fsm
         class _At3(_dt.datetime):
@@ -1389,7 +1435,7 @@ def _services_supervisor():
     (cvd / ".venv" / "Scripts" / "python.exe").write_bytes(b"")
     (cvd / "server.py").write_text("", encoding="utf-8")
     cfg = {"cv": {"enabled": False, "service_url": "http://127.0.0.1:8766"}, "video": {"service_url": "http://127.0.0.1:8767"}}
-    clock, spawned, healthy = [1000.0], [], {"cv": False, "video": False, "motion": False}
+    clock, spawned, healthy = [1000.0], [], {"cv": False, "video": False, "motion": False, "level": False}
 
     class Proc:                                       # вместо настоящего процесса: poll() — None, пока «жив»
         code = None
@@ -1408,7 +1454,7 @@ def _services_supervisor():
     try:
         sup = services.Supervisor(base=base, spawn_fn=fake_spawn, now=lambda: clock[0], load_cfg=lambda: cfg)
         r = sup.check_once()
-        assert r == {"cv": "off", "video": "absent", "motion": "absent"}, "CV выключен тумблером, видео и движение не установлены: %s" % r
+        assert r == {"cv": "off", "video": "absent", "motion": "absent", "level": "absent"}, "CV выключен тумблером, видео, движение и уровень не установлены: %s" % r
         cfg["cv"]["enabled"] = True
         import logger
 
@@ -1478,7 +1524,7 @@ def _motion_service():
     assert "error" in motion_client.record_all("http://127.0.0.1:1", True) and motion_client.records_zip("http://127.0.0.1:1", timeout=0.5)[0] is None, "запись всех и архив без сервиса — ошибка, не исключение"
     import app as _app
     paths = {getattr(r, "path", "") for r in _app.app.routes}
-    need = {"/motion", "/api/motion/health", "/api/motion/config", "/api/motion/state", "/api/motion/snapshot", "/api/motion/history",
+    need = {"/motion", "/api/motion/health", "/api/motion/config", "/api/motion/state", "/api/motion/snapshot", "/api/motion/rod_mask", "/api/motion/loss_map", "/api/motion/history",
             "/api/motion/record", "/api/motion/record_all", "/api/motion/records.zip", "/api/motion/modbus_ping", "/api/motion/logs", "/api/motion/vision"}
     assert need <= paths, "нет маршрутов: %s" % sorted(need - paths)
     assert not (Path(BUNDLE_DIR) / "page" / "motion.html").exists(), "отдельной страницы «Движение» больше нет — всё в мультипросмотре"
@@ -2554,14 +2600,23 @@ def _cv_fines_latch():
     return "порог по варке: с первого достижения до конца, пропуски СВ линию не рвут"
 
 
-@check("CV", "фазы варки: порядок стадий 5/7 → p1 g1 p2 g2; сита и порог муки в масштабе фазы (20/40/40/80 %), свой порог фазы, режим сторона/объём")
+@check("CV", "фазы варки: подкачка / стабилизация / рост — каждая своя (p<N> s<N> g<N>; номер из подстадии, иначе по порядку стадий); сита и порог муки в масштабе фазы (20/40/40/80 %), свой порог фазы, режим сторона/объём")
 def _cv_phases():
     import cv_store, cv_volume, substages
     # 1. фазы по порядку стадий (рецепт: затравка → подкачка 1 → рост 1 → подкачка 2 → рост 2 → уваривание)
     seq = [3, 4, 5, 5, 7, 7, 7, 5, 5, 7, 7, 8, 9]
     got = cv_store.phases_for_boil(seq)
     assert got == [None, None, "p1", "p1", "g1", "g1", "g1", "p2", "p2", "g2", "g2", None, None], got
-    assert cv_store.phases_for_boil([5, 7, 5, 7, 5, 7]) == ["p1", "g1", "p2", "g2", "p2", "g2"], "третья подкачка/рост вливаются во вторую"
+    assert cv_store.phases_for_boil([5, 7, 5, 7, 5, 7]) == ["p1", "g1", "p2", "g2", "p3", "g3"], "третья подкачка/рост — свои фазы, не вливаются во вторую"
+    assert cv_store.phases_for_boil([5, 6, 6, 7, 6, 7]) == ["p1", "s1", "s1", "g1", "s2", "g2"], "стабилизация — своя фаза, у каждой стабилизации свой номер"
+    # номер из подстадии ПЛК (номер = подэтап − 1): 72 → рост 1, 73 → рост 2; 70 / 71 / пусто / чужой этап — по порядку входа в стадию
+    assert cv_store.phases_for_boil([7, 7, 7, 7], [70, 72, 73, 74]) == ["g1", "g1", "g2", "g3"], "рост по подстадии"
+    assert cv_store.phases_for_boil([5, 6, 7], [53, 62, 71]) == ["p2", "s1", "g1"], "подкачка 2 по 53, стабилизация 1 по 62, 71 — без номера"
+    assert cv_store.phases_for_boil([5, 5, 7, 7], [50, 59, 78, 79]) == ["p1", "clr", "gbp", "gzp"], "расчистка / рост БП / рост ЗП — свои фазы только по подстадии"
+    assert cv_store.phases_for_boil([6, 7], [70, 60]) == ["s1", "g1"], "подстадия другого этапа (отстаёт от стадии) — игнорируем, считаем по порядку"
+    assert cv_store.phases_for_boil([7, 7, 7], [73, None, 70]) == ["g2", "g1", "g1"], "смешанный случай: где номера нет — счётчик входов (1-й рост)"
+    assert substages.phase_from_sub(7, 72) == "g1" and substages.phase_from_sub(5, 52) == "p1" and substages.phase_from_sub(7, 70) is None
+    assert cv_store.phases_for_boil([5, 7, 5, 7], [None] * 4) == ["p1", "g1", "p2", "g2"], "подстадии нет — как раньше, по стадиям"
     assert cv_store.phases_for_boil([5, None, 5, 7]) == ["p1", "p1", "p1", "g1"], "стадия неизвестна — как у предыдущей пробы"
     # УНВ (20) / пауза (21) посреди роста — не новый рост (Кир 17.10 06:20: 7 → 20 → 7 давало g1 → None → g2)
     assert cv_store.phases_for_boil([5, 7, 20, 7, 8]) == ["p1", "g1", "g1", "g1", None], cv_store.phases_for_boil([5, 7, 20, 7, 8])
@@ -2573,6 +2628,12 @@ def _cv_phases():
     assert vc(None)["size_scale"] == 1.0 and vc(None)["fines_um"] == base and vc("zzz")["phase"] is None, "нет фазы — обычные сита и порог"
     assert [round(vc(ph)["size_scale"], 2) for ph in cv_volume.PHASES] == [0.2, 0.4, 0.4, 0.8], "масштаб по умолчанию 20/40/40/80 %"
     assert abs(vc("p1")["fines_um"] - base * 0.2) < 1e-6 and abs(vc("g2")["fines_um"] - base * 0.8) < 1e-6, "порог муки уменьшается вместе с ситами"
+    # новые фазы берут настройки своего семейства: подкачка 3 и расчистка = подкачка 2, рост 3 / БП / ЗП = рост 2; стабилизация — общие сита (как раньше)
+    assert [round(vc(ph)["size_scale"], 2) for ph in ("p3", "clr", "g3", "gbp", "gzp", "s1", "s2")] == [0.4, 0.4, 0.8, 0.8, 0.8, 1.0, 1.0], "масштаб новых фаз по семейству"
+    assert vc("s1")["fines_um"] == base and vc("s1")["phase"] == "s1", "стабилизация: порог общий, но фаза запомнена"
+    assert all(cv_volume.fines_always(p) for p in ("p3", "g1", "s1", "clr")) and not cv_volume.fines_always(None), "мука с начала — на любой фазе"
+    assert cv_volume.in_boil_total(None) and cv_volume.in_boil_total("s2") and not any(cv_volume.in_boil_total(p) for p in ("p1", "g2", "gbp")), "в итог варки — стабилизация, но не подкачка/рост"
+    assert [cv_volume.phase_title(p) for p in ("p3", "s2", "g1", "clr", "gbp", "gzp")] == ["подкачка 3", "стабилизация 2", "рост 1", "расчистка", "рост БП", "рост ЗП"]
     cfg = {"volume": {"phase_scale_g1": 50, "fines_side_p2": 0.05}}
     assert abs(vc("g1")["fines_um"] - base * 0.5) < 1e-6, "свой масштаб фазы"
     assert abs(vc("p2")["fines_um"] - cv_volume.fines_diameter_um(0.05)) < 1e-6, "свой порог фазы — как задан (мм), без масштаба"
@@ -2825,6 +2886,29 @@ def _cv_export_rotate():
     finally:
         shutil.rmtree(dest2, ignore_errors=True)
     return "архив по варкам, PNG-кадры без потерь и потолок по размеру работают"
+
+
+@check("CV", "approach_advice: разлом на строке таблицы → совет SP+шаг, потолок 1500, чистая строка без совета, проба при другом SP не считается")
+def _approach_advice():
+    import approach_advice
+    SP = [40000, 100, 600, 1400, 1600]
+    SVSP = [0.0, 75.0, 81.0, 85.0, 90.0]
+    rows = [
+        {"ts": "a", "ap_row": 2, "ap_sp": 600, "ap_ai": 640, "frac_zones": 1},
+        {"ts": "b", "ap_row": 2, "ap_sp": 600, "ap_ai": 610, "frac_zones": 0},
+        {"ts": "c", "ap_row": 2, "ap_sp": 500, "ap_ai": 500, "frac_zones": 3},      # другой SP — не считается
+        {"ts": "d", "ap_row": 3, "ap_sp": 1400, "ap_ai": 1450, "frac_zones": 2},    # 1400+100 = 1500 — ровно потолок
+        {"ts": "e", "ap_row": 4, "ap_sp": 1600, "ap_ai": 1650, "frac_zones": 1},    # SP уже выше потолка
+        {"ts": "f", "ap_row": 1, "ap_sp": 100, "ap_ai": 90, "frac_zones": 0},
+    ]
+    res = approach_advice.compute(rows, SP, SVSP, step_um=100, min_zones=1, max_gap_um=1500)
+    by = {r["row"]: r for r in res["rows"]}
+    assert by[2]["n"] == 2 and by[2]["n_frac"] == 1 and by[2]["status"] == "advice" and by[2]["proposed"] == 700, by[2]
+    assert by[2]["ai_frac"] == 640.0 and by[2]["ai_ok"] == 610.0, by[2]
+    assert by[3]["proposed"] == 1500, by[3]
+    assert by[4]["status"] == "ceiling" and by[4]["proposed"] is None, by[4]
+    assert by[1]["status"] == "ok" and by[1]["proposed"] is None, by[1]
+    return "совет по строке, потолок и фильтр по SP работают"
 
 
 @check("CV", "fracture_lab: кадр → метка → список → зоны → удаление (песочница)")
@@ -3194,10 +3278,10 @@ def _service_phases():
     ms = MicroscopeService()
     ms._phase_ready = True                                       # без журнала: считаем только по ходу стадий
     got = []
-    for st in (2, 3, 4, 5, 5, 7, 7, 5, 5, 7, 8, 9, 10, 3, 4, 5, 7):
+    for st in (2, 3, 4, 5, 5, 6, 7, 7, 6, 7, 5, 5, 7, 8, 9, 10, 3, 4, 5, 7):
         ms._note_stage(st)
         got.append(ms._current_phase(st))
-    assert got == [None, None, None, "p1", "p1", "g1", "g1", "p2", "p2", "g2", None, None, None, None, None, "p1", "g1"], got
+    assert got == [None, None, None, "p1", "p1", "s1", "g1", "g1", "s2", "g2", "p2", "p2", "g3", None, None, None, None, None, "p1", "g1"], got
     got = []                                                     # УНВ посреди роста: проба на 20 — фаза роста, после неё рост тот же
     for st in (7, 20, 20, 7, 5):
         ms._note_stage(st)
@@ -3225,7 +3309,12 @@ def _service_phases():
         assert ms2._seed_ts is not None and abs(ms2._seed_ts - (now - 730)) < 1, "после перезапуска заводка восстановлена (иначе порог муки падает на порог фазы)"
         ms2._note_stage(7)
         assert ms2._current_phase(7) == "g2", "после 2-й подкачки — 2-й рост"
-        assert cv_store.phase_state("NOSUCH") == {"pump": 0, "grow": 0, "last": None, "seed_ts": None, "boil_t_s": None}
+        assert cv_store.phase_state("NOSUCH") == {"pump": 0, "stab": 0, "grow": 0, "last": None, "seed_ts": None, "boil_t_s": None}
+        # подстадия ПЛК главнее счётчика: по 74 — рост 3, хотя счётчик на 2-м росте; без номера (70) или без подстадии — по счётчику (2-й рост)
+        assert ms2._current_phase(7, 74) == "g3" and ms2._current_phase(7, 70) == "g2" and ms2._current_phase(7, None) == "g2"
+        assert ms2._current_phase(5, 59) == "clr" and ms2._current_phase(8, 80) is None, "расчистка по 59; уваривание — без фазы"
+        ms2._note_stage(6)
+        assert ms2._current_phase(6, 60) == "s1" and ms2._current_phase(6, 62) == "s1", "стабилизация: первая по счётчику / по подстадии 62"
     finally:
         db.set_path(old_path)
     return "p1 g1 p2 g2 по ходу стадий; сгущение — новая варка; перезапуск — из журнала"

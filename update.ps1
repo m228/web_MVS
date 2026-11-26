@@ -11,12 +11,17 @@
 #   -Port <порт>      порт приложения для проверки запуска (по умолчанию 8000)
 #   -Root <папка>     папка установки (по умолчанию — рядом со скриптом)
 #   -NoElevate        не запрашивать права администратора (для проверок)
-#   -Components <список>  что обновлять: main (основное приложение), cv (CV микроскопа), video (видео-ролик), motion (CV RTSP / движение),
+#   -Components <список>  что обновлять: main (основное приложение), cv (CV микроскопа), video (видео-ролик), motion (CV RTSP / движение), level (уровень жидкости / YOLO),
 #                     через запятую или all. Без параметра — меню с выбором (прошлый выбор помнится в update_choice.json)
 #   -ZipDir <папка>   папка с готовыми архивами релиза (web_MVS_v*.zip, cv_service_v*.zip, ...) вместо скачивания
-#   -Yes              подтвердить тяжёлую первую установку CV (torch, несколько ГБ) без вопроса
+#   -Yes              подтвердить тяжёлую первую установку (CV микроскопа или уровень: torch, несколько ГБ) без вопроса
 #   -NoMenu           меню не показывать (без -Components обновляется только основное приложение, как раньше)
 #   -NoBrowser        запускать приложение с --no-open: страницу в браузере оно не открывает (её перезагружает вкладка, с которой нажали «обновить»)
+#   -StableSec <с>    сколько секунд следить за приложением после того, как оно ответило (по умолчанию 45): упало или зависло —
+#                     перезапуск, второй раз не вышло — откат прежней версии; 0 — не следить
+#   -PythonInstaller <файл>  готовый установщик Python (python-3.12.*-amd64.exe) вместо скачивания с python.org (когда с завода python.org недоступен).
+#                     Python нужен только дополнениям (cv, video, motion): первая установка дополнения сама найдёт или поставит Python 3.12.
+#   -NoPython         не искать и не ставить Python (для проверок: setup.bat запускается как есть)
 [CmdletBinding()]
 param(
     [string]$Root = '',
@@ -31,7 +36,10 @@ param(
     [string]$ZipDir = '',
     [switch]$Yes,
     [switch]$NoMenu,
-    [switch]$NoBrowser
+    [switch]$NoBrowser,
+    [int]$StableSec = 45,
+    [string]$PythonInstaller = '',
+    [switch]$NoPython
 )
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'   # без полосы прогресса: в Windows PowerShell 5.1 она сильно тормозит скачивание
@@ -72,6 +80,8 @@ if (-not $NoElevate -and -not (Test-Admin)) {
     if ($Yes) { $argList += '-Yes' }
     if ($NoMenu) { $argList += '-NoMenu' }
     if ($NoBrowser) { $argList += '-NoBrowser' }
+    if ($PythonInstaller) { $argList += @('-PythonInstaller', "`"$PythonInstaller`"") }
+    if ($NoPython) { $argList += '-NoPython' }
     try {
         $p = Start-Process -FilePath 'powershell.exe' -ArgumentList $argList -Verb RunAs -Wait -PassThru
         exit $p.ExitCode
@@ -250,30 +260,82 @@ function Stop-App([string]$exePath) {
     throw 'приложение не остановилось за 20 секунд'
 }
 
-function Start-AppAndWait([string]$root, [string]$expectVersion) {
-    # запускает exe и ждёт ответа сервера нужной версии; $true — поднялось
+function Write-CrashDiag([string]$root, [datetime]$since, $proc) {
+    # Что известно о сбое приложения: код выхода, хвост его журнала (logs\app.log) и запись Windows об аварийном завершении.
+    # Раньше текст ошибки оставался только в окне консоли приложения и исчезал вместе с ним.
+    try { if ($proc -and $proc.HasExited) { Log ("код выхода процесса: {0} (0x{1:X})" -f $proc.ExitCode, $proc.ExitCode) 'Yellow' } } catch {}
+    $tail = @()
+    $f = Join-Path $root 'logs\app.log'
+    if (Test-Path -LiteralPath $f) { try { $tail = @(Get-Content -LiteralPath $f -Tail 12 -Encoding UTF8 -ErrorAction Stop) } catch {} }
+    if ($tail.Count -gt 0) {
+        Log 'последние строки журнала приложения (logs\app.log):' 'Yellow'
+        foreach ($l in $tail) { Log ('    ' + $l) }
+    } else { Log 'журнала приложения (logs\app.log) нет — приложение ничего не успело записать или это версия без журнала' 'Yellow' }
+    try {
+        $ev = Get-WinEvent -FilterHashtable @{ LogName = 'Application'; ProviderName = 'Application Error'; StartTime = $since } -MaxEvents 10 -ErrorAction Stop |
+            Where-Object { $_.Message -match 'web_MVS' } | Select-Object -First 1
+        if ($ev) { Log ('запись Windows о падении: ' + ((($ev.Message -split "`r?`n") | Select-Object -First 4) -join ' | ')) 'Yellow' }
+    } catch {}
+}
+
+function Start-AppAndWait([string]$root, [string]$expectVersion, [int]$stableSec = 0) {
+    # Запускает exe и ждёт ответа сервера нужной версии, затем $stableSec секунд следит, что процесс жив и отвечает.
+    # $true — поднялось и держится. При сбое пишет в update.log, что известно о причине (Write-CrashDiag).
     $exe = Join-Path $root 'web_MVS.exe'
     if (-not (Test-Path -LiteralPath $exe)) { Log 'ОШИБКА: web_MVS.exe не найден' 'Red'; return $false }
     Log 'запускаю приложение...'
-    if ($NoBrowser) { Start-Process -FilePath $exe -WorkingDirectory $root -ArgumentList '--no-open' | Out-Null }
-    else { Start-Process -FilePath $exe -WorkingDirectory $root | Out-Null }
-    $deadline = (Get-Date).AddSeconds(90)
+    $started = Get-Date
+    # Окно консоли приложения — СВЁРНУТЫМ. Обычное всплывало поверх экрана ровно тогда, когда оператор смотрит на страницу, клик
+    # попадал в консоль, включался QuickEdit и приложение замирало на записи в консоль («Failed to fetch», пульса нет).
+    $sp = @{ FilePath = $exe; WorkingDirectory = $root; WindowStyle = 'Minimized'; PassThru = $true }
+    if ($NoBrowser) { $sp.ArgumentList = @('--no-open') }
+    try { $p = Start-Process @sp } catch { Log ("не удалось запустить web_MVS.exe: " + $_.Exception.Message) 'Yellow'; return $false }
+    $null = $p.Handle                                    # без этого Windows PowerShell 5.1 не отдаёт ExitCode после выхода процесса
+    $deadline = $started.AddSeconds(90)
+    $answered = $false
     while ((Get-Date) -lt $deadline) {
         Start-Sleep -Seconds 2
-        if (@(Get-Process -Name 'web_MVS' -ErrorAction SilentlyContinue).Count -eq 0) {
-            if ((Get-Date) -gt $deadline.AddSeconds(-80)) { Log 'процесс web_MVS завершился сразу после запуска' 'Yellow'; return $false }
+        if ($p.HasExited) {
+            Log ("процесс web_MVS завершился через {0:N0} с после запуска" -f ((Get-Date) - $started).TotalSeconds) 'Yellow'
+            Write-CrashDiag $root $started $p
+            return $false
         }
         try {
             $v = [string](Get-LocalJson "http://127.0.0.1:$Port/api/debug/info").version
             if ($v) {
                 if ($expectVersion -and $v -ne $expectVersion) { Log "приложение отвечает, но версия $v (ждали $expectVersion)" 'Yellow'; return $false }
                 Log "приложение запущено, версия $v" 'Green'
-                return $true
+                $answered = $true
+                break
             }
         } catch {}
     }
-    Log 'приложение не ответило за 90 секунд' 'Yellow'
-    return $false
+    if (-not $answered) { Log 'приложение не ответило за 90 секунд' 'Yellow'; Write-CrashDiag $root $started $p; return $false }
+    if ($stableSec -le 0) { return $true }
+
+    # Ответило — ещё не значит «поднялось»: после обновления приложение бывало пропадало или зависало через секунды.
+    Log "слежу за приложением $stableSec с: не упадёт ли и не зависнет ли..."
+    $until = (Get-Date).AddSeconds($stableSec)
+    $silent = 0
+    while ((Get-Date) -lt $until) {
+        Start-Sleep -Seconds 3
+        if ($p.HasExited) {
+            Log ("приложение завершилось через {0:N0} с после запуска (сразу после того, как ответило)" -f ((Get-Date) - $started).TotalSeconds) 'Yellow'
+            Write-CrashDiag $root $started $p
+            return $false
+        }
+        try { $null = Get-LocalJson "http://127.0.0.1:$Port/api/version" 4000; $silent = 0 }
+        catch {
+            $silent++
+            if ($silent -ge 3) {
+                Log 'приложение работает, но не отвечает 3 проверки подряд (около 20 с) — зависло' 'Yellow'
+                Write-CrashDiag $root $started $p
+                return $false
+            }
+        }
+    }
+    Log 'приложение стабильно ✓' 'Green'
+    return $true
 }
 
 # ---------- основной поток ----------
@@ -307,9 +369,14 @@ function Invoke-Update {
         Log 'смотрю последний релиз на GitHub...'
         try {
             $rel = Invoke-WithRetry { Invoke-RestMethod -Uri "https://api.github.com/repos/$repo/releases/latest" -Headers @{ 'User-Agent' = 'web_MVS-update' } -UseBasicParsing }
-            $asset = $rel.assets | Where-Object { $_.name -like 'web_MVS_*.zip' } | Select-Object -First 1
-            if (-not $asset) { throw 'в последнем релизе нет файла web_MVS_*.zip' }
             $latest = ([string]$rel.tag_name).Trim().TrimStart('v', 'V')
+            $script:relCache = $rel; $script:relTried = $true      # тот же ответ GitHub пригодится дополнениям
+            $mv = Get-ManifestVersion 'main'                        # версия приложения по манифесту релиза; без манифеста — тег
+            if ($mv) { $latest = $mv }
+            elseif (-not ($rel.assets | Where-Object { $_.name -like 'web_MVS_*.zip' })) {
+                # релиз частичный (приложения в нём нет), а манифест не прочитался: версию приложения по тегу не определить
+                throw 'в последнем релизе нет web_MVS_*.zip, а components.json не прочитан — версию приложения определить нельзя'
+            }
         } catch {
             Log 'последняя версия: NaN (не удалось определить)' 'Yellow'
             Log ("причина: " + $_.Exception.Message) 'Yellow'
@@ -336,6 +403,8 @@ function Invoke-Update {
 
     # --- скачать и проверить ---
     if (-not $zipFile) {
+        $asset = Get-ComponentAsset (Get-ComponentDef 'main')       # архив приложения: по манифесту (может лежать в одном из прошлых релизов), иначе по маске в последнем
+        if (-not $asset) { throw 'не нашёл архив web_MVS_*.zip ни в последнем релизе, ни в релизе из манифеста' }
         $zipFile = Join-Path $tmp $asset.name
         Log ("скачиваю {0} ({1:N1} МБ)..." -f $asset.name, ($asset.size / 1MB))
         Save-Download $asset.browser_download_url $zipFile ([int64]$asset.size) (Get-AssetSha $asset)
@@ -365,7 +434,16 @@ function Invoke-Update {
 
     # --- запустить и убедиться, что поднялось ---
     $up = $true
-    if (-not $NoRestart) { $up = Start-AppAndWait $Root $installed }
+    if (-not $NoRestart) {
+        $up = Start-AppAndWait $Root $installed $StableSec
+        if (-not $up) {
+            # одна повторная попытка: после обновления приложение бывало пропадало разово, помогал обычный перезапуск;
+            # откатывать прежнюю версию из-за разового сбоя не нужно, а если упало и второй раз — откат ниже
+            Log 'приложение не удержалось после запуска — останавливаю и запускаю ещё раз' 'Yellow'
+            Stop-App (Join-Path $Root 'web_MVS.exe')
+            $up = Start-AppAndWait $Root $installed $StableSec
+        }
+    }
     if (-not $up) {
         Log 'новая версия не поднялась — возвращаю прежнюю' 'Red'
         Stop-App (Join-Path $Root 'web_MVS.exe')
@@ -392,14 +470,104 @@ function Invoke-Update {
     Log "ГОТОВО: было $current  →  стало $installed" 'Green'
 }
 
+# ---------- Python для дополнений ----------
+# Основному приложению (exe) Python не нужен: он вшит. Нужен только дополнениям (cv, video, motion): setup.bat создаёт .venv
+# командой python -m venv. Нет подходящего Python на машине — ставим официальный установщик с python.org молча, для всех пользователей.
+# Установщик закреплён по версии и sha256 (на странице релиза python.org только MD5), плюс проверяется подпись Python Software Foundation.
+$PyVersion = '3.12.10'
+$PyInstallerName = "python-$PyVersion-amd64.exe"
+$PyUrl = "https://www.python.org/ftp/python/$PyVersion/$PyInstallerName"
+$PySize = 26964224
+$PySha256 = '67b5635e80ea51072b87941312d00ec8927c4db9ba18938f7ad2d27b328b95fb'
+
+function Test-PythonExe([string]$exe) {
+    # запускается и умеет создавать venv (в установке есть pip и модуль venv)
+    if (-not $exe -or -not (Test-Path -LiteralPath $exe)) { return $false }
+    try {
+        $o = & $exe -c "import sys, venv, ensurepip; print('ok' if sys.version_info[:2] in [(3,10),(3,11),(3,12)] else 'ver')"
+        return ([string]$o).Trim() -eq 'ok'
+    } catch { return $false }
+}
+
+function Find-Python {
+    # ищет установленный Python 3.12 / 3.11 / 3.10 (в таком порядке): реестр (как пишет установщик python.org), потом PATH.
+    # Заглушка Microsoft Store (WindowsApps\python.exe) не годится — она открывает магазин, а не Python
+    foreach ($ver in @('3.12', '3.11', '3.10')) {
+        foreach ($key in @("HKLM:\SOFTWARE\Python\PythonCore\$ver\InstallPath", "HKCU:\SOFTWARE\Python\PythonCore\$ver\InstallPath",
+                           "HKLM:\SOFTWARE\WOW6432Node\Python\PythonCore\$ver\InstallPath")) {
+            try {
+                $item = Get-ItemProperty -LiteralPath $key -ErrorAction Stop
+                $exe = [string]$item.ExecutablePath
+                if (-not $exe -and $item.'(default)') { $exe = Join-Path ([string]$item.'(default)') 'python.exe' }
+                if (Test-PythonExe $exe) { return $exe }
+            } catch {}
+        }
+    }
+    $cmd = Get-Command python.exe -ErrorAction SilentlyContinue | Where-Object { $_.Source -notlike '*\WindowsApps\*' } | Select-Object -First 1
+    if ($cmd -and (Test-PythonExe $cmd.Source)) { return $cmd.Source }
+    return $null
+}
+
+function Test-PythonInstallerSignature([string]$file) {
+    $s = Get-AuthenticodeSignature -LiteralPath $file
+    if ($s.Status -ne 'Valid' -or [string]$s.SignerCertificate.Subject -notmatch 'O=Python Software Foundation') {
+        throw ("подпись установщика Python не подтверждена ({0}): {1}" -f $s.Status, $file)
+    }
+}
+
+function Ensure-Python {
+    # возвращает путь к python.exe: найденный на машине или только что установленный
+    $exe = Find-Python
+    if ($exe) { Log "Python найден: $exe"; return $exe }
+    Log "подходящего Python (3.10–3.12) на машине нет — ставлю Python $PyVersion с python.org" 'Cyan'
+    $inst = $null
+    if ($PythonInstaller) {
+        if (-not (Test-Path -LiteralPath $PythonInstaller)) { throw "установщик Python не найден: $PythonInstaller" }
+        $inst = (Resolve-Path -LiteralPath $PythonInstaller).Path
+        Log "установщик Python из файла: $inst"
+    } elseif ($ZipDir -and (Test-Path -LiteralPath $ZipDir)) {
+        $f = Get-ChildItem -LiteralPath $ZipDir -Filter 'python-3.12.*-amd64.exe' -File -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+        if ($f) { $inst = $f.FullName; Log "установщик Python из папки: $($f.Name)" }
+    }
+    if (-not $inst) {
+        $inst = Join-Path $tmp $PyInstallerName
+        Log ("скачиваю {0} ({1:N1} МБ) с python.org..." -f $PyInstallerName, ($PySize / 1MB))
+        try { Save-Download $PyUrl $inst $PySize $PySha256 }
+        catch {
+            Log ("python.org недоступен: " + $_.Exception.Message) 'Yellow'
+            Log "Скачайте $PyUrl на другом компьютере и запустите: update.ps1 -PythonInstaller <путь к файлу>" 'Yellow'
+            throw 'не удалось скачать установщик Python'
+        }
+    }
+    Test-PythonInstallerSignature $inst
+    $pylog = Join-Path $Root 'python_install.log'
+    Log 'устанавливаю Python (тихо, для всех пользователей) — около минуты...'
+    $p = Start-Process -FilePath $inst -ArgumentList ('/quiet InstallAllUsers=1 PrependPath=1 Include_test=0 Include_launcher=0 Include_doc=0 /log "' + $pylog + '"') -Wait -PassThru
+    $exe = Find-Python
+    if (-not $exe) { throw "Python не установился (код $($p.ExitCode)); подробности в $pylog" }
+    Log "Python установлен: $exe" 'Green'
+    return $exe
+}
+
+function Test-VenvBroken([string]$venvDir) {
+    # venv привязан к тому Python, из которого создан (home в pyvenv.cfg); Python удалили — venv мёртв и его надо создать заново
+    $cfg = Join-Path $venvDir 'pyvenv.cfg'
+    if (-not (Test-Path -LiteralPath $cfg)) { return $false }
+    foreach ($line in (Get-Content -LiteralPath $cfg -ErrorAction SilentlyContinue)) {
+        if ($line -match '^\s*home\s*=\s*(.+?)\s*$') { return -not (Test-Path -LiteralPath (Join-Path $Matches[1] 'python.exe')) }
+    }
+    return $false
+}
+
 # ---------- компоненты: основное приложение + дополнения (сервисы рядом) ----------
-# Один релиз GitHub несёт все архивы одной версии: web_MVS_v*.zip, cv_service_v*.zip, video_service_v*.zip, motion_service_v*.zip.
-# Что обновлять — выбирает меню (или -Components main,cv,video,motion); прошлый выбор помнится в update_choice.json.
+# Один релиз GitHub несёт все архивы одной версии: web_MVS_v*.zip, cv_service_v*.zip, video_service_v*.zip, motion_service_v*.zip, level_service_v*.zip.
+# Что обновлять — выбирает меню (или -Components main,cv,video,motion,level); прошлый выбор помнится в update_choice.json.
 $ComponentDefs = @(
     @{ Key = 'main';   Title = 'Основное приложение (web_MVS)';           Dir = '';               Asset = 'web_MVS_*.zip';       Marker = '';                Heavy = $false },
     @{ Key = 'cv';     Title = 'CV микроскопа (cv_service)';               Dir = 'cv_service';     Asset = 'cv_service_*.zip';    Marker = 'detector.py';     Heavy = $true },
     @{ Key = 'video';  Title = 'Видео-ролик микроскопа (video_service)';   Dir = 'video_service';  Asset = 'video_service_*.zip'; Marker = 'render.py';       Heavy = $false },
-    @{ Key = 'motion'; Title = 'CV RTSP / движение (motion_service)';      Dir = 'motion_service'; Asset = 'motion_service_*.zip'; Marker = 'motion_engine.py'; Heavy = $false }
+    @{ Key = 'motion'; Title = 'CV RTSP / движение (motion_service)';      Dir = 'motion_service'; Asset = 'motion_service_*.zip'; Marker = 'motion_engine.py'; Heavy = $false },
+    @{ Key = 'level';  Title = 'Уровень жидкости / YOLO (level_service)';  Dir = 'level_service';  Asset = 'level_service_*.zip';  Marker = 'seg_model.py';     Heavy = $true }
 )
 $script:addonResults = New-Object System.Collections.ArrayList
 $script:relCache = $null
@@ -422,6 +590,65 @@ function Get-Release {
     try { $script:relCache = Invoke-WithRetry { Invoke-RestMethod -Uri "https://api.github.com/repos/$repo/releases/latest" -Headers @{ 'User-Agent' = 'web_MVS-update' } -UseBasicParsing } }
     catch { $script:relCache = $null; Log ("релиз GitHub недоступен: " + $_.Exception.Message) 'Yellow' }
     return $script:relCache
+}
+
+$script:manifest = $null
+$script:manifestTried = $false
+function Get-Manifest {
+    # components.json последнего релиза: версии компонентов (у каждого своя). Нет файла или релиза — $null, тогда версия = тег релиза, как раньше
+    if ($script:manifestTried) { return $script:manifest }
+    $script:manifestTried = $true
+    $rel = Get-Release
+    if (-not $rel) { return $null }
+    $a = $rel.assets | Where-Object { $_.name -eq 'components.json' } | Select-Object -First 1
+    if (-not $a) { return $null }
+    try {
+        $r = Invoke-WithRetry { Invoke-WebRequest -Uri $a.browser_download_url -Headers @{ 'User-Agent' = 'web_MVS-update' } -UseBasicParsing }
+        $txt = $r.Content
+        if ($txt -is [byte[]]) { $txt = [System.Text.Encoding]::UTF8.GetString($txt) }
+        $script:manifest = ([string]$txt).TrimStart([char]0xFEFF) | ConvertFrom-Json
+    } catch { Log ("components.json не прочитан, версии по тегу релиза: " + $_.Exception.Message) 'Yellow' }
+    return $script:manifest
+}
+
+function Get-ManifestVersion([string]$key) {
+    # версия компонента в последнем релизе по манифесту; $null — манифеста нет или версия не разобралась
+    $m = Get-Manifest
+    if ($m -and $m.components) {
+        $c = $m.components.$key
+        if ($c) { $v = ([string]$c.version).Trim().TrimStart('v', 'V'); if (Test-VersionString $v) { return $v } }
+    }
+    return $null
+}
+
+$script:tagRelCache = @{}
+function Get-ComponentAsset($d) {
+    # архив компонента. Релизы частичные: у каждого компонента в манифесте есть tag и asset — в каком релизе лежит его актуальный архив
+    # (не обязательно в последнем). Нет записи в манифесте (старый релиз) — по маске имени в последнем релизе. $null — архива не нашли
+    $rel = Get-Release
+    $m = Get-Manifest
+    $c = $null
+    if ($m -and $m.components) { $c = $m.components.($d.Key) }
+    if ($c -and $c.tag -and $c.asset) {
+        $tag = [string]$c.tag
+        $name = [string]$c.asset
+        $r = $null
+        if ($rel -and ([string]$rel.tag_name) -eq $tag) { $r = $rel }
+        else {
+            if (-not $script:tagRelCache.ContainsKey($tag)) {
+                try { $script:tagRelCache[$tag] = Invoke-WithRetry { Invoke-RestMethod -Uri "https://api.github.com/repos/$repo/releases/tags/$tag" -Headers @{ 'User-Agent' = 'web_MVS-update' } -UseBasicParsing } }
+                catch { $script:tagRelCache[$tag] = $null; Log ("релиз $tag недоступен: " + $_.Exception.Message) 'Yellow' }
+            }
+            $r = $script:tagRelCache[$tag]
+        }
+        if ($r) {
+            $a = $r.assets | Where-Object { $_.name -eq $name } | Select-Object -First 1
+            if ($a) { return $a }
+        }
+        Log ("архив $name в релизе $tag не найден — ищу по маске в последнем релизе") 'Yellow'
+    }
+    if ($rel) { return ($rel.assets | Where-Object { $_.name -like $d.Asset } | Select-Object -First 1) }
+    return $null
 }
 
 function Get-ZipDirVersion([string]$zip) {
@@ -448,6 +675,8 @@ function Get-LatestVersionFor($d) {
     if ($z) { return (Get-ZipDirVersion $z.FullName) }
     if ($ZipDir) { return 'NaN' }
     $rel = Get-Release
+    $mv = Get-ManifestVersion $d.Key
+    if ($mv) { return $mv }
     if ($rel) { $v = ([string]$rel.tag_name).Trim().TrimStart('v', 'V'); if (Test-VersionString $v) { return $v } }
     return 'NaN'
 }
@@ -467,7 +696,7 @@ function Read-ComponentList([string]$text) {
         $t = $t.Trim().ToLower()
         if (-not $t) { continue }
         if ($t -eq 'all') { return @($ComponentDefs | ForEach-Object { $_.Key }) }
-        if (Get-ComponentDef $t) { $keys += $t } else { throw "неизвестный компонент '$t' (допустимо: main, cv, video, motion, all)" }
+        if (Get-ComponentDef $t) { $keys += $t } else { throw "неизвестный компонент '$t' (допустимо: main, cv, video, motion, level, all)" }
     }
     return @($keys | Select-Object -Unique)
 }
@@ -547,9 +776,9 @@ function Update-Addon($d) {
         else {
             $rel = Get-Release
             if (-not $rel) { throw 'не удалось получить релиз GitHub (нет связи?). Скачайте архивы на другом компьютере и запустите с -ZipDir <папка>' }
-            $asset = $rel.assets | Where-Object { $_.name -like $d.Asset } | Select-Object -First 1
-            if (-not $asset) { throw "в последнем релизе нет файла $($d.Asset)" }
             $latest = ([string]$rel.tag_name).Trim().TrimStart('v', 'V')
+            $mv = Get-ManifestVersion $d.Key            # у каждого компонента своя версия (манифест релиза); без манифеста — тег
+            if ($mv) { $latest = $mv }
         }
         Log "доступно: $latest"
         if ($installed -and (Test-VersionString $latest) -and (Test-VersionString $cur) -and -not $Force) {
@@ -563,12 +792,14 @@ function Update-Addon($d) {
         # --- тяжёлая первая установка — только с подтверждением ---
         if (-not $installed -and $d.Heavy -and -not $Yes) {
             if ($NoMenu) { throw 'первая установка тяжёлая (несколько ГБ: torch) — подтвердите её (галочка/ключ -Yes)' }
-            $ans = Read-Host 'Первая установка CV тянет несколько ГБ (torch, ultralytics) и занимает время. Установить сейчас? [y/N]'
+            $ans = Read-Host 'Первая установка тянет несколько ГБ (torch, ultralytics) и занимает время. Установить сейчас? [y/N]'
             if ($ans.Trim().ToLower() -notin @('y', 'yes', 'д', 'да')) { Log 'пропускаю по вашему решению'; Add-AddonResult $d.Key 'skip' 'пропущено'; return }
         }
 
         # --- скачать и проверить ---
         if (-not $zip) {
+            $asset = Get-ComponentAsset $d                  # по манифесту (tag/asset — в каком релизе лежит архив), иначе по маске в последнем релизе
+            if (-not $asset) { throw "не нашёл архив $($d.Asset) ни в последнем релизе, ни в релизе из манифеста" }
             $zip = Join-Path $tmp $asset.name
             Log ("скачиваю {0} ({1:N1} МБ)..." -f $asset.name, ($asset.size / 1MB))
             Save-Download $asset.browser_download_url $zip ([int64]$asset.size) (Get-AssetSha $asset)
@@ -605,7 +836,13 @@ function Update-Addon($d) {
         # --- окружение (venv): первый раз — setup.bat; потом — только если изменился requirements.txt ---
         $py = Join-Path $dir '.venv\Scripts\python.exe'
         $reqNew = if (Test-Path -LiteralPath (Join-Path $dir 'requirements.txt')) { (Get-FileHash -LiteralPath (Join-Path $dir 'requirements.txt')).Hash } else { '' }
+        $venvDir = Join-Path $dir '.venv'
+        if ((Test-Path -LiteralPath $py) -and (Test-VenvBroken $venvDir)) {
+            Log 'окружение (.venv) привязано к удалённому Python — создаю заново' 'Yellow'
+            Remove-Item -LiteralPath $venvDir -Recurse -Force
+        }
         if (-not (Test-Path -LiteralPath $py)) {
+            if (-not $NoPython) { $env:PYTHON_EXE = Ensure-Python }   # setup.bat берёт этот Python (PATH после установки в этом процессе не обновится)
             Log 'первая установка: создаю окружение и ставлю зависимости (setup.bat) — это может занять время...' 'Cyan'
             $nul = Join-Path $tmp 'empty_stdin.txt'; New-Item -ItemType File -Force -Path $nul | Out-Null
             # stdin из пустого файла: pause в конце setup.bat не ждёт нажатия клавиши; внешние кавычки снимет сам cmd /c

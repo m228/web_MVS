@@ -18,6 +18,9 @@
 #   поэтому тянем все его подмодули + локальные модули как hiddenimports.
 # * рядом с web_MVS.exe собирается ОТДЕЛЬНЫЙ SelfCheck.exe (selfcheck.py) — проверка всех модулей
 #   ТЕМ ЖЕ бандлом (общие _internal\): оба exe в одном COLLECT, зависимости не дублируются (MERGE).
+# * asyncua (OPC UA, только чтение — opcua_client.py) импортируется лениво внутри функций: PyInstaller его сам не
+#   увидит, поэтому collect_all('asyncua') (+ cryptography тянется его хуком). scripts\opcua_sim.py кладём в бандл —
+#   SelfCheck.exe на нём проверяет, что OPC UA с шифрованием реально работает из собранного exe.
 # * PySide6/shiboken6 исключены — в коде не используются (лишние ~150-200 МБ).
 
 import os
@@ -29,12 +32,14 @@ datas = [('page', 'page'), ('Driver', 'Driver'), ('VERSION', '.')]
 if os.path.exists('enroll_key.txt'):
     datas.append(('enroll_key.txt', '.'))
 binaries = []
-hiddenimports = ['app', 'camera_core', 'rtsp_store', 'net_tools', 'paths', 'logger', 'updater', 'diag',
-                 'dahua_control', 'sdk_gige', 'camera_params', 'board_guard',
+hiddenimports = ['app', 'camera_core', 'rtsp_store', 'net_tools', 'paths', 'logger', 'updater', 'diag', 'net_diag',
+                 'dahua_control', 'sdk_gige', 'camera_params', 'board_guard', 'console_guard',
                  # микроскоп (страница /microscope): плата по Modbus TCP + автомат
-                 'microscope_service', 'microscope_plc', 'microscope_fsm', 'plate_config', 'sv_source']
+                 'microscope_service', 'microscope_plc', 'microscope_fsm', 'plate_config', 'sv_source',
+                 # источник данных аппарата по OPC UA (вкладка «ПЛК»)
+                 'opcua_client', 'plc_source', 'stage_map']
 # selfcheck.py грузит модули по имени строкой (importlib) — PyInstaller их не увидит сам
-selfcheck_imports = ['selfcheck', 'cv_analyzer', 'cv_fracture', 'cv_client', 'video_client', 'services', 'cv_store', 'fracture_lab', 'boil_archive',
+selfcheck_imports = ['selfcheck', 'cv_analyzer', 'cv_fracture', 'cv_client', 'video_client', 'services', 'cv_store', 'fracture_lab', 'approach_advice', 'boil_archive',
                      'autostart', 'multipart', 'starlette', 'fastapi', 'pydantic']
 hiddenimports += collect_submodules('uvicorn')
 # вложенная обёртка MVS SDK (mvsdk/) — динамические импорты, тянем все подмодули
@@ -42,7 +47,7 @@ hiddenimports += collect_submodules('mvsdk')
 # camera_core — пакет (бывший camera_core.py): подмодули тоже явно, чтобы ничего не потерялось
 hiddenimports += collect_submodules('camera_core')
 
-for pkg in ('genicam', 'harvesters'):
+for pkg in ('genicam', 'harvesters', 'asyncua'):
     d, b, h = collect_all(pkg)
     datas += d
     binaries += b
@@ -51,6 +56,7 @@ for pkg in ('genicam', 'harvesters'):
 # pymodbus — копируем всю папку пакета в _internal\pymodbus (см. шапку файла)
 import pymodbus as _pymodbus
 datas += [(os.path.dirname(_pymodbus.__file__), 'pymodbus')]
+datas += [('scripts/opcua_sim.py', 'scripts')]       # эмулятор OPC UA для SelfCheck.exe
 
 a = Analysis(
     ['run.py'],

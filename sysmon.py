@@ -37,6 +37,7 @@ from typing import Callable, Optional
 from urllib.parse import urlparse
 
 import enroll_client
+import substages
 from logger import log_event, mask_secrets
 from paths import DATA_DIR, read_version
 
@@ -46,6 +47,8 @@ CONFIG_PATH = DATA_DIR / "monitor.json"
 SCHEMA = 1
 DEFAULTS = {"enabled": False, "url": "", "token": "", "plant": "", "interval_s": 300, "system_proxy": True, "no_probe_min": 30, "auto_off_min": 10, "allow_http": False,
             "auto_enroll": True,       # нет токена — самому просить его у приёмника (enroll_client); нужен ключ в сборке
+            "motion_sync": True,       # раз в motion_sync_h часов слать остановки лент и сбои камер движения за 5 суток (motion_sync.py)
+            "motion_sync_h": 3,
             # датчики микроскопа (правятся в monitor.json): допуски расхождения трёх датчиков, мкм — на отводе и на подводе; «ноль уполз» — |датчик − энкодер|
             # до автокалибровки, мкм. Везде 200 по решению Макса 04.11 (до этого отвод 150, подвод 200, ноль 100: сообщения с разными допусками путали);
             # автокалибровки нет дольше overdue_h часов работы; bad_streak плохих проб подряд — жёлтое предупреждение становится красной тревогой
@@ -55,6 +58,9 @@ OLD_TUNING_DEFAULTS = {"gap_far_um": 150, "gap_near_um": 200, "drift_um": 100}  
 
 BOOT_TOL_S = 120            # время загрузки Windows у двух запусков расходится больше — это была перезагрузка ПК
 BEAT_EVERY_S = 30           # как часто пишем на диск «я жив» (по нему считаем, сколько не работали)
+STOP_SEND_TIMEOUT_S = 3     # сколько ждём приёмник при закрытии приложения
+UPDATE_RESTART_S = 600      # закрытие в пределах этого времени после запуска апдейтера — «для обновления»
+MOTION_CAMS_MAX = 24        # сколько камер движения кладём в пульс
 WATCH_EVERY_S = 15          # как часто проверяем правила тревог
 TICK_S = 5                  # шаг фонового потока
 STARTUP_DELAY_S = 20        # первый пульс не раньше, чем через столько после старта (пока поднимаются плата, камера, сервисы)
@@ -62,10 +68,13 @@ RETRY_S = (15, 30, 60, 120)  # пауза перед повтором после
 HTTP_TIMEOUT_S = 10
 BATCH_MAX = 100             # событий в одном запросе
 OUTBOX_MAX = 500            # дольше сервер не отвечает — самые старые события отбрасываем
+MOTION_KEEP = 600           # эпизодов движения в очереди (отдельно от общего предела)
+MOTION_FIRST_DELAY_S = 90   # первая выгрузка движения — не раньше, чем через столько после старта
 RECENT_MAX = 50
 POS_KEEP = 200              # записей положений датчиков в outbox: поток проб не должен вытеснить важные события при долгом обрыве
 POS_MEM = 20                # последних записей положений держим в памяти для правил
 POS_STALE_S = 6 * 3600      # плохая проба старше — уже не повод держать тревогу
+M1_EVENT_HOLD_S = 30 * 60   # «чёрный ящик» М1 поймал уход головы: тревога держится 30 мин, потом снимается сама
 STEP_KEYS = {"отвод": "retract", "подвод": "approach"}
 PUSH_CODES = ("pos_", "autocal_drift")     # жёлтые (не срочные) предупреждения, которые всё равно уходят сразу
 URGENT = ("critical", "high")
@@ -73,9 +82,7 @@ URGENT = ("critical", "high")
 CONFIRM = {"service_cv": 2, "service_video": 2, "service_motion": 2, "plate_down": 4, "camera_exposure": 2, "cv_fail": 2, "black": 2}
 NEAR_MEDIAN_N = 3           # подвод: расхождение датчиков судим по медиане стольких последних проб, а не по одной (у Kir бывают одиночные пики)
 
-STAGE_NAMES = {1: "Остановлен", 2: "Набор", 3: "Сгущение", 4: "Затравка", 5: "Подкачка", 6: "Стабилизация", 7: "Рост", 8: "Уваривание",
-               9: "Готовность", 10: "Выгрузка", 11: "Пропарка", 12: "Надвыгрузка", 13: "Собрать аппарат", 14: "Термоудар",
-               20: "УНВ", 21: "Пауза"}
+STAGE_NAMES = {n: substages.stage_title(n) for n in substages.STAGE_NAMES}   # одна таблица на приложение (substages.py)
 START_LEVEL = {"pc_reboot": "critical", "app_restart": "critical", "app_update": "info", "first": "info"}
 PARAM_LABELS = {"exposure_time": "экспозиция", "gain": "усиление", "exposure_auto": "авто-экспозиция", "gain_auto": "авто-усиление",
                 "pixel_format": "формат кадра", "width": "ширина кадра", "height": "высота кадра", "offset_x": "смещение X",
@@ -256,7 +263,8 @@ def _clean_cfg(cfg: dict) -> dict:
     out["system_proxy"] = bool(cfg.get("system_proxy", True))
     out["allow_http"] = bool(cfg.get("allow_http", False))
     out["auto_enroll"] = bool(cfg.get("auto_enroll", True))
-    for k, lo, hi in (("interval_s", 60, 3600), ("no_probe_min", 5, 240), ("auto_off_min", 2, 240), ("gap_far_um", 10, 2000), ("gap_near_um", 10, 2000),
+    out["motion_sync"] = bool(cfg.get("motion_sync", True))
+    for k, lo, hi in (("motion_sync_h", 1, 24), ("interval_s", 60, 3600), ("no_probe_min", 5, 240), ("auto_off_min", 2, 240), ("gap_far_um", 10, 2000), ("gap_near_um", 10, 2000),
                       ("drift_um", 10, 5000), ("overdue_h", 1, 168), ("bad_streak", 1, 10)):
         try:
             out[k] = max(lo, min(hi, int(cfg.get(k, DEFAULTS[k]))))
@@ -344,6 +352,8 @@ def _db() -> sqlite3.Connection:
         c.execute("CREATE TABLE IF NOT EXISTS outbox (eid TEXT PRIMARY KEY, t REAL NOT NULL, kind TEXT NOT NULL, level TEXT NOT NULL, "
                   "text TEXT NOT NULL, data TEXT NOT NULL DEFAULT '{}')")
         c.execute("CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT)")
+        # что из эпизодов движения уже положено в очередь (sig — «чем кончился»), ok=1 — сервер подтвердил; не подтверждённое и пропавшее из очереди уйдёт заново
+        c.execute("CREATE TABLE IF NOT EXISTS motion_sent (eid TEXT PRIMARY KEY, sig TEXT NOT NULL, t REAL NOT NULL, ok INTEGER NOT NULL DEFAULT 0)")
         c.commit()
         _conn, _conn_path = c, DB_PATH
     return _conn
@@ -430,14 +440,19 @@ def beat(now: float) -> None:
         _db().commit()
 
 
-def outbox_add(kind: str, level: str, text: str, data: Optional[dict] = None, t: Optional[float] = None) -> dict:
-    ev = {"eid": uuid.uuid4().hex, "t": time.time() if t is None else t, "kind": kind, "level": level,
+def outbox_add(kind: str, level: str, text: str, data: Optional[dict] = None, t: Optional[float] = None, eid: Optional[str] = None) -> dict:
+    """eid задан — запись «по месту»: повтор с тем же eid заменяет прежнюю (эпизоды движения), сервер тоже обновляет, а не дублирует."""
+    ev = {"eid": eid or uuid.uuid4().hex, "t": time.time() if t is None else t, "kind": kind, "level": level,
           "text": mask_secrets(text), "data": mask_secrets(data or {})}
     with _lock:
         c = _db()
-        c.execute("INSERT INTO outbox (eid, t, kind, level, text, data) VALUES (?,?,?,?,?,?)",
+        c.execute("INSERT OR REPLACE INTO outbox (eid, t, kind, level, text, data) VALUES (?,?,?,?,?,?)",
                   (ev["eid"], ev["t"], kind, level, ev["text"], json.dumps(ev["data"], ensure_ascii=False)))
-        c.execute("DELETE FROM outbox WHERE rowid <= (SELECT MAX(rowid) FROM outbox) - ?", (OUTBOX_MAX,))
+        # движение — лавина при первой отправке: у неё свой предел, а общий не считает её, чтобы не вытеснить срочные события
+        if kind.startswith("motion"):
+            c.execute("DELETE FROM outbox WHERE kind LIKE 'motion%' AND rowid <= (SELECT MAX(rowid) FROM outbox WHERE kind LIKE 'motion%') - ?", (MOTION_KEEP,))
+        else:
+            c.execute("DELETE FROM outbox WHERE kind NOT LIKE 'motion%' AND rowid <= (SELECT MAX(rowid) FROM outbox WHERE kind NOT LIKE 'motion%') - ?", (OUTBOX_MAX,))
         if kind == "positions":
             c.execute("DELETE FROM outbox WHERE kind='positions' AND rowid <= (SELECT MAX(rowid) FROM outbox WHERE kind='positions') - ?", (POS_KEEP,))
         c.commit()
@@ -446,7 +461,7 @@ def outbox_add(kind: str, level: str, text: str, data: Optional[dict] = None, t:
 
 def outbox_batch(limit: int = BATCH_MAX) -> list[dict]:
     with _lock:
-        rows = _db().execute("SELECT * FROM outbox ORDER BY rowid LIMIT ?", (int(limit),)).fetchall()
+        rows = _db().execute("SELECT * FROM outbox ORDER BY (kind LIKE 'motion%'), rowid LIMIT ?", (int(limit),)).fetchall()     # срочное — вперёд движения
     return [{"eid": r["eid"], "t": r["t"], "kind": r["kind"], "level": r["level"], "text": r["text"], "data": json.loads(r["data"] or "{}")}
             for r in rows]
 
@@ -457,6 +472,7 @@ def outbox_done(eids: list[str]) -> None:
     with _lock:
         c = _db()
         c.executemany("DELETE FROM outbox WHERE eid=?", [(e,) for e in eids])
+        c.executemany("UPDATE motion_sent SET ok=1 WHERE eid=?", [(e,) for e in eids if e.startswith("mo-")])
         c.commit()
 
 
@@ -471,6 +487,7 @@ def default_sources() -> dict:
     """Откуда берём данные. Всё — функции без аргументов, только чтение; тесты подменяют их целиком."""
     import camera_params
     import db
+    import paths
     import plate_config
     import services
     from camera_core import manager
@@ -492,13 +509,41 @@ def default_sources() -> dict:
         last = c.execute("SELECT MAX(t) last FROM journal WHERE serial=?", (serial,)).fetchone()["last"]
         return {"last_t": last, "today": n}
 
+    def motion():
+        """Камеры сервиса движения. Сервис не запущен — None: блока в панели не будет."""
+        import motion_client
+        cfg = plate_config.load()
+        if services.states().get("motion") not in ("healthy", "remote"):
+            return None
+        st = motion_client.state((cfg.get("motion") or {}).get("service_url") or motion_client.DEFAULT_URL, timeout=2.0)
+        cams = st.get("cameras") if isinstance(st, dict) else None
+        if not cams:
+            return None
+        return {"cameras": cams}
+
+    def disk():
+        """Свободное место на диске приложения: там лежат база, кадры, видео и записи — у всех заводов одинаково."""
+        import shutil
+
+        du = shutil.disk_usage(str(paths.DATA_DIR))
+        return {"free": du.free, "total": du.total}
+
+    def motion_episodes():
+        """Остановки лент и сбои камер движения за 5 суток из базы сервиса движения (только чтение). Сервис не установлен — None."""
+        import motion_sync
+        d = paths.DATA_DIR / "motion_service" / "data"
+        return motion_sync.collect(d / "motion.db", d / "motion_config.json") if (d / "motion.db").is_file() else None
+
     return {
         "cfg": plate_config.load,
+        "motion_episodes": motion_episodes,
         "micro_on": lambda: services.micro_enabled(plate_config.load()),
         "state": micro.state, "status": micro.status, "ext": micro.ext, "cv": micro.cv_status, "guard": micro.guard_status,
         "services": services.states,
         "camera": camera,
         "probes": probes,
+        "motion": motion,
+        "disk": disk,
     }
 
 
@@ -517,16 +562,20 @@ class Agent:
         self._seen: dict = {}               # code -> сколько проверок подряд правило срабатывало
         self._ready_since: Optional[float] = None
         self._auto_off_since: Optional[float] = None      # с какого момента варка идёт, а «Автомат» выключен / стоит «Ручной»
+        self._stage_off_t = 0.0      # последняя проверка, когда стадия была вне зоны цикла: статус CV старше — с прошлой варки, не тревога
         self._work_since: Optional[float] = None      # с какого момента автомат в работе (для «автокалибровки давно не было»)
         self._plate_up: Optional[float] = None
         self._plate_up_exact = False                   # _plate_up посчитан с кругами (иначе — голый 16-битный регистр)
         self.positions: deque = deque(maxlen=POS_MEM)  # положения датчиков на отводе/подводе (с оценкой), старые — слева
+        self._m1_event: Optional[dict] = None          # последнее событие «чёрного ящика» М1 (t, reason)
         self._ac_seen_ts: Optional[float] = None       # какую по счёту автокалибровку уже учли в истории дрейфа нуля
         self._ac_drift: deque = deque(maxlen=5)        # (ноль уползал больше допуска?, на сколько мкм) по последним калибровкам
         self.recent: deque = deque(maxlen=RECENT_MAX)
         self.last_data: Optional[dict] = None
         self.status = {"ok": None, "last_ok_t": None, "last_try_t": None, "error": "", "http": None, "fails": 0}
         self._next_send = 0.0
+        self._motion_next = 0.0                         # когда в следующий раз выгружать остановки движения
+        self.motion_last: dict = {}                     # итог последней выгрузки движения (для страницы «Мониторинг»)
         self._stop = threading.Event()
         self._kick = threading.Event()
         self._thread: Optional[threading.Thread] = None
@@ -554,7 +603,20 @@ class Agent:
         t = self._thread
         if t is not None:
             t.join(timeout=3)
+            self._report_stop()
         mark_clean_stop()
+
+    def _report_stop(self) -> None:
+        """Приложение закрывают: пишем событие и пробуем сразу отправить (коротко, выход не задерживаем). Закрыли руками — это красное,
+        закрыли ради обновления — просто запись в историю. Не ушло — событие лежит в очереди и уйдёт со следующим стартом."""
+        try:
+            now = self.clock()
+            upd = _update_restart_t is not None and now - _update_restart_t < UPDATE_RESTART_S
+            self._emit("app_stop", "info" if upd else "critical", "Приложение закрыто" + (" для обновления" if upd else ""), {"update": upd}, t=now)
+            if configured(self._cfg):
+                self.send(now=now, timeout=STOP_SEND_TIMEOUT_S)
+        except Exception as e:                        # закрытие не должно падать из-за мониторинга
+            log_event("sysmon", "Мониторинг: не удалось отправить «приложение закрыто»: %s" % e, "warn")
 
     def _loop(self) -> None:
         next_watch = 0.0
@@ -570,12 +632,51 @@ class Agent:
                     self._sync_schedule()
                     self.tick(now)
                     next_watch = now + WATCH_EVERY_S
+                self.sync_motion(now)
                 if self._send_due(now):
                     self.send(now=now)
                 self._enroll(now)
             except Exception as e:                  # агент не должен умирать от случайной ошибки
                 log_event("sysmon", "Мониторинг: ошибка цикла: %s" % e, "error")
             self._stop.wait(TICK_S)
+
+    def sync_motion(self, now: float, force: bool = False) -> dict:
+        """Выгрузка остановок лент и сбоев камер движения (motion_sync.py): раз в motion_sync_h часов, первая — через MOTION_FIRST_DELAY_S после старта.
+        В очередь кладём только новое или изменившееся (журнал motion_sent): первая выгрузка — полная за 5 суток, дальше дописывается.
+        Уходит со следующим пульсом; нет связи — лежит в очереди и уйдёт в следующее окно. Возвращает итог (пусто, если сейчас не время)."""
+        cfg = self._cfg
+        if not force and (not configured(cfg) or not cfg.get("motion_sync") or now < self._motion_next
+                          or now < self.started_at + MOTION_FIRST_DELAY_S):
+            return {}
+        if "motion_episodes" not in (self.src or {}):
+            return {}
+        if _safe((self.src or {}).get("micro_on") or (lambda: False), False, [], "micro_on"):      # завод с микроскопом: остановки лент не нужны
+            return {}
+        self._motion_next = now + cfg["motion_sync_h"] * 3600
+        errs: list = []
+        res = _safe(self.src["motion_episodes"], None, errs, "motion_episodes")
+        if not res or not res.get("cams"):
+            self.motion_last = {"t": now, "ok": False, "error": "; ".join(map(str, errs)) or "нет базы или зон движения"}
+            return self.motion_last
+        queued = 0
+        with _lock:
+            c = _db()
+            for e in res["episodes"]:
+                sig = "%d|%d" % (int(e["t1"]), 1 if e.get("open") else 0)
+                row = c.execute("SELECT sig, ok FROM motion_sent WHERE eid=?", (e["eid"],)).fetchone()
+                pending = c.execute("SELECT 1 FROM outbox WHERE eid=?", (e["eid"],)).fetchone() is not None
+                if row and row["sig"] == sig and (row["ok"] or pending):
+                    continue
+                outbox_add("motion", "info", text_for_episode(e), e, e["t0"], eid=e["eid"])
+                c.execute("INSERT OR REPLACE INTO motion_sent (eid, sig, t, ok) VALUES (?,?,?,0)", (e["eid"], sig, now))
+                queued += 1
+            c.execute("DELETE FROM motion_sent WHERE t < ?", (now - 14 * 86400,))
+            c.commit()
+        kinds = {k: sum(1 for e in res["episodes"] if e["kind"] == k) for k in ("stop", "near", "camera")}
+        outbox_add("motion_sync", "info", "", {"from": res["from"], "to": res["to"], "cams": res["cams"], **{"n_" + k: v for k, v in kinds.items()}},
+                   now, eid="mo-sync-%d" % int(now))
+        self.motion_last = {"t": now, "ok": True, "queued": queued, "episodes": len(res["episodes"]), "cams": len(res["cams"])}
+        return self.motion_last
 
     def _enroll(self, now: float) -> None:
         """Токена нет — просим его у приёмника (раз в минуту, см. enroll_client). Получили — сохраняем и сразу шлём первый пульс."""
@@ -629,6 +730,11 @@ class Agent:
                 self._kick.set()
         return ev
 
+    def add_m1_event(self, reason: str) -> None:
+        """Событие «чёрного ящика» М1 (m1_blackbox.py): запомнить; тревога откроется на ближайшей проверке правил."""
+        self._m1_event = {"t": self.clock(), "reason": str(reason)[:160]}
+        self._kick.set()
+
     def add_positions(self, info: dict) -> None:
         """Положения трёх датчиков на доезде отвода/подвода (колбэк автомата): оценить, запомнить для правил и положить в очередь —
         уйдёт с ближайшим пульсом. Срочно не отправляем: срочное — это тревога по плохой пробе (см. _position_rules)."""
@@ -640,6 +746,7 @@ class Agent:
         rec["timeout"] = bool(rec["timeout"])
         rec.update(position_verdict(rec, cfg))
         self.positions.append(rec)
+        log_event("sysmon", position_text(rec), "info" if rec["ok"] else "warn", rec)       # каждый подвод/отвод в журнал: по ним видно, как часто и на сколько не доезжает
         if configured(cfg):
             outbox_add("positions", "info", position_text(rec), rec, rec["t"])
 
@@ -665,6 +772,8 @@ class Agent:
         d["camera"] = g("camera", {}) or {}
         d["guard"] = g("guard", {}) or {}
         d["services"] = g("services", {}) or {}
+        d["motion"] = g("motion", None)
+        d["disk"] = g("disk", None)
         d["positions"] = list(self.positions)
         return d
 
@@ -720,6 +829,10 @@ class Agent:
             else:
                 keep.add("camera_exposure")           # камера не открыта — не знаем, остаётся как было
 
+        m1 = self._m1_event
+        if m1 and now - m1["t"] < M1_EVENT_HOLD_S:    # голова М1 ушла не туда — регистры вокруг момента лежат в m1_blackbox.log
+            found["m1_blackbox"] = ("high", "Голова М1: %s (регистры — m1_blackbox.log на заводе)" % m1["reason"])
+
         for name, st in (d.get("services") or {}).items():
             if st in ("gave_up", "spawn_error") and name in SERVICE_LABELS:
                 found["service_" + name] = ("medium", "%s не поднимается" % SERVICE_LABELS[name])
@@ -733,12 +846,21 @@ class Agent:
                 found["black"] = ("high", black)
             elif cam.get("serial") and not cam.get("streaming"):
                 keep.add("black")                     # камера не стримит — не знаем, вернулся ли свет, тревога остаётся как была
-            if cv.get("state") == "black" and d.get("cv_enabled") and stage_ok:
+            # статус CV живёт до следующей пробы: отказ с прошлой варки (Усп 12.11 19:45) не тревога, пока новая проба его не повторит
+            if not stage_ok:
+                self._stage_off_t = now
+            cv_on = bool(d.get("cv_enabled") and stage_ok and (cv.get("t") is None or cv["t"] >= self._stage_off_t))
+            if cv.get("state") == "black" and cv_on:
                 found["black"] = ("high", self._black_text(d, "Проба пропущена: кадр абсолютно чёрный"))
-            elif cv.get("state") == "overexposed" and d.get("cv_enabled") and stage_ok:
+            elif cv.get("state") == "overexposed" and cv_on:
                 found["overexposed"] = ("high", "Кадры пересвечены, пробы пропускаются")
-            elif cv.get("state") in ("no_camera", "no_frames", "sidecar_offline") and d.get("cv_enabled") and stage_ok:
-                found["cv_fail"] = ("high", "Проба не разобрана: " + str(cv.get("message") or cv.get("state"))[:120])
+            elif cv.get("state") == "no_camera" and cam.get("streaming"):
+                pass                                  # «не стримит», а камера уже стримит — следующая проба возьмёт кадр
+            elif cv.get("state") in ("no_camera", "no_frames", "sidecar_offline") and cv_on:
+                msg = str(cv.get("message") or cv.get("state"))
+                if not msg.lower().startswith("проба не разобрана"):
+                    msg = "проба не разобрана: " + msg
+                found["cv_fail"] = ("high", (msg[:1].upper() + msg[1:])[:140])
 
             conn = (d.get("status") or {}).get("connected")
             if conn is False:
@@ -853,12 +975,25 @@ class Agent:
                 if now - ref >= cfg["overdue_h"] * 3600:
                     found["autocal_overdue"] = ("medium", "Автокалибровка включена, а успешной не было уже %s" % fmt_dur(now - ref))
 
+    @staticmethod
+    def _log_ctx(d: dict) -> dict:
+        """Коротко, при каких показаниях сработало правило (для журнала): статус CV, поток камеры, стадия, связь с платой."""
+        cv, cam, st = d.get("cv") or {}, d.get("camera") or {}, d.get("state") or {}
+        return {"cv": cv.get("state"), "cv_msg": str(cv.get("message") or "")[:100], "cv_age_s": round(d["t"] - cv["t"]) if isinstance(cv.get("t"), (int, float)) else None,
+                "cam_streaming": cam.get("streaming"), "stage": st.get("stage"), "auto": bool(st.get("cyclic")) and not st.get("manual"),
+                "plate": (d.get("status") or {}).get("connected")}
+
     def evaluate(self, d: dict, now: float) -> list[dict]:
         """Применить правила: открыть/снять тревоги, отметить перезагрузку платы. Возвращает новые события."""
         events: list = []
         found, keep = self._rules(d, now)
         for code in found:                               # подтверждение: открыть тревогу можно, когда правило сработало CONFIRM проверок подряд
             self._seen[code] = self._seen.get(code, 0) + 1
+            if code not in self.active and self._seen[code] == 1:     # правило сработало впервые — в журнал, даже если тревога ещё не откроется
+                log_event("sysmon", "Правило сработало [%s]: %s (подтверждение 1 из %d)" % (code, found[code][1], CONFIRM.get(code, 1)),
+                          "info", self._log_ctx(d))
+        for code in [c for c in self._seen if c not in found and c not in keep and c not in self.active]:
+            log_event("sysmon", "Правило [%s] перестало срабатывать до подтверждения (ложное срабатывание отсеяно)" % code, "info", self._log_ctx(d))
         for code in [c for c in self._seen if c not in found and c not in keep]:
             self._seen.pop(code, None)
         for code, (level, text) in found.items():
@@ -867,14 +1002,17 @@ class Agent:
                 if self._seen[code] < CONFIRM.get(code, 1):
                     continue
                 self.active[code] = {"level": level, "text": text, "since": now}
+                log_event("sysmon", "ТРЕВОГА открыта [%s, %s]: %s" % (code, level, text), "warn", self._log_ctx(d))
                 events.append(self._emit("alert", level, text, {"code": code, "state": "open"}, t=now, push=push))
             elif self.active[code]["level"] != level:         # жёлтое предупреждение стало красной тревогой (повтор) — сообщаем ещё раз
                 self.active[code].update(level=level, text=text)
+                log_event("sysmon", "ТРЕВОГА усилена [%s, %s]: %s" % (code, level, text), "warn", self._log_ctx(d))
                 events.append(self._emit("alert", level, text, {"code": code, "state": "open"}, t=now, push=push))
             else:
                 self.active[code]["text"] = text
         for code in [c for c in self.active if c not in found and c not in keep]:
             old = self.active.pop(code)
+            log_event("sysmon", "Тревога снята [%s]: %s (держалась %s)" % (code, old["text"], fmt_dur(now - old["since"])), "info", self._log_ctx(d))
             events.append(self._emit("alert", "info", "Снято: " + old["text"], {"code": code, "state": "closed"}, t=now))
         up, exact = plate_uptime(d.get("ext") or {})
         if up is not None:
@@ -914,6 +1052,12 @@ class Agent:
         }
         if d.get("micro_on"):
             snap["micro"] = _micro_block(d, now)
+        disk = _disk_block(d.get("disk"))
+        if disk:
+            snap["disk"] = disk
+        motion = _motion_block(d["motion"]) if d.get("motion") else None
+        if motion:
+            snap["motion"] = motion
         snap["text"] = summary_text(snap)
         return mask_secrets(snap)
 
@@ -927,7 +1071,7 @@ class Agent:
                 "enroll": {**self.enroller.status, "auto": cfg["auto_enroll"] and not cfg["token"]}}
 
     # ---- отправка
-    def send(self, now: Optional[float] = None, force: bool = False) -> dict:
+    def send(self, now: Optional[float] = None, force: bool = False, timeout: Optional[float] = None) -> dict:
         """Одна отправка: снимок + накопленные события. Успех — HTTP 2xx; неуспех — события остаются, повтор позже.
         force — «Проверить связь»: слать, даже если галочка «Отправлять» ещё не включена (адрес и токен нужны всё равно)."""
         with self._send_lock:
@@ -951,7 +1095,7 @@ class Agent:
             events = outbox_batch()
             body = {"schema": SCHEMA, "sent_t": now, "snapshot": self.snapshot(None, cfg), "events": events}
             via_proxy = cfg["system_proxy"] and not closed_network(cfg["url"], cfg["allow_http"])
-            ok, code, err = _post(cfg["url"] + "/ingest", cfg["token"], body, via_proxy)
+            ok, code, err = _post(cfg["url"] + "/ingest", cfg["token"], body, via_proxy, **({"timeout": timeout} if timeout else {}))
             st = self.status
             st.update({"last_try_t": now, "http": code})
             if ok:
@@ -968,6 +1112,11 @@ class Agent:
                 self._next_send = now + min(cfg["interval_s"], RETRY_S[min(st["fails"] - 1, len(RETRY_S) - 1)])
                 self._kick.clear()
             return {"ok": ok, "http": code, "error": err, "sent_events": len(events) if ok else 0}
+
+
+def text_for_episode(e: dict) -> str:
+    import motion_sync
+    return motion_sync.text(e)
 
 
 def _fmt_val(v) -> str:
@@ -989,6 +1138,27 @@ def _camera_block(cam: dict) -> dict:
         if saved.get(k) is not None:
             out[k + "_saved"] = _num(saved.get(k), 2)
     return out
+
+
+def _motion_block(m: dict) -> Optional[dict]:
+    """Камеры движения для панели: имя, работает ли, кадров в секунду, сколько секунд назад был последний кадр, пишется ли запись."""
+    cams = []
+    for c in (m.get("cameras") or [])[:MOTION_CAMS_MAX]:
+        if not isinstance(c, dict):
+            continue
+        cams.append({"name": str(c.get("name") or c.get("id") or "?")[:40], "on": bool(c.get("enabled", True)), "ok": bool(c.get("connected")),
+                     "fps": _num(c.get("fps"), 1), "age_s": _num(c.get("age_s"), 0), "rec": bool(c.get("recording")),
+                     "error": str(c.get("error") or "")[:80] or None})
+    if not cams:
+        return None
+    return {"cameras": cams}
+
+
+def _disk_block(disk: Optional[dict]) -> Optional[dict]:
+    """Свободно / всего на диске приложения, ГБ."""
+    if not isinstance(disk, dict) or not disk.get("total"):
+        return None
+    return {"free_gb": round(disk["free"] / 1e9, 1), "total_gb": round(disk["total"] / 1e9, 1)}
 
 
 def _micro_block(d: dict, now: float) -> dict:
@@ -1066,6 +1236,13 @@ def summary_text(s: dict) -> str:
                 if cam.get("exposure_time_saved") is not None:
                     txt += " (сохранено %g)" % cam["exposure_time_saved"]
             lines.append(txt)
+    mo = s.get("motion")
+    if mo:
+        cams = mo["cameras"]
+        lines.append("Камеры движения: %d из %d работают" % (sum(1 for c in cams if c["on"] and c["ok"]), sum(1 for c in cams if c["on"])))
+    dk = s.get("disk")
+    if dk:
+        lines.append("Диск: свободно %g ГБ из %g" % (dk["free_gb"], dk["total_gb"]))
     svc = s.get("services") or {}
     shown = [("%s %s" % (SERVICE_LABELS.get(k, k), {"ok": "ок", "starting": "запускается", "down": "не работает"}.get(v, v)))
              for k, v in svc.items() if v in ("ok", "starting", "down")]
@@ -1102,6 +1279,15 @@ def _post(url: str, token: str, body: dict, system_proxy: bool = True, timeout: 
 _agent: Optional[Agent] = None
 
 
+_update_restart_t: Optional[float] = None
+
+
+def note_update_restart() -> None:
+    """Апдейтер запущен и сейчас закроет приложение: закрытие не тревога (его вызвал сам завод)."""
+    global _update_restart_t
+    _update_restart_t = time.time()
+
+
 def start() -> Agent:
     """Запустить агента (один на процесс; повторный вызов ничего не делает). Вызывается из lifespan приложения."""
     global _agent
@@ -1134,6 +1320,13 @@ def start_reason() -> Optional[str]:
     """Почему стартовало это приложение (pc_reboot / app_restart / app_update / first) — по записи, которую агент сделал при старте."""
     ag = _agent
     return (ag.start_info or {}).get("reason") if ag is not None and ag.start_info else None
+
+
+def record_m1_event(reason: str) -> None:
+    """Событие чёрного ящика М1 -> тревога в мониторинге. Агент не запущен — молча ничего."""
+    ag = _agent
+    if ag is not None:
+        ag.add_m1_event(reason)
 
 
 def record_positions(info: dict) -> None:

@@ -28,16 +28,24 @@ SCHEMA = 1                       # версия формата пульса (sna
 LEVELS = ("critical", "high", "medium", "info")
 DEFAULT_INTERVAL_S = 300
 OFFLINE_GRACE_S = 120            # запас к двум пропущенным пульсам
-EVENT_MAX = 200                  # событий принимаем из одного пульса
+OFFLINE_AFTER_S = 1800           # «нет пульса» не раньше чем через полчаса молчания: пропавший пульс — ещё не беда (закрытое приложение сообщает само)
+MOTION_KINDS = ("stop", "near", "camera")        # виды эпизодов движения (motion_sync.py на заводе)
+EVENT_MAX = 200                 # событий принимаем из одного пульса
 TEXT_MAX = 300
 RETENTION_DAYS = 90
 SKEW_MAX_S = 7 * 86400           # время события от завода дальше недели от сейчас — часы врут, берём время приёма
 NAME_MAX = 40
+ERROR_KINDS = ("alert", "plate_reboot", "offline", "app_stop")                   # какие события журнала считаются ошибками (фильтр «Тревоги»)
+VIEW_BLOCKS = ["pc", "disk", "services", "camera", "motion", "stops", "brew", "autocal", "sensors", "plate"]      # общие для всех заводов, затем микроскопные
+PLANT_SETTINGS = {"offline_after_min": (5, 1440), "offline_repeat_min": (0, 10080)}     # настройки завода и допустимые границы (минуты); повтор 0 — не напоминать
+DEFAULT_HIDDEN = ["plate"]                                          # что скрыто, пока Макс не настроил «Вид» (подробности про плату — по желанию)       # блоки карточки, которые можно скрыть в «Виде» (тревоги скрыть нельзя)
 ALERT_DEDUP_S = 120              # событие тревоги от завода и достроенное из снимка — одно и то же, если время рядом
 NOTIFY_LEVELS = ("critical", "high")                              # в Telegram идут только они (жёлтое «medium» — только в панели)
-NOTIFY_KINDS = ("start", "alert", "plate_reboot", "offline")      # какие события бывают «открытием» тревоги
+NOTIFY_KINDS = ("start", "alert", "plate_reboot", "offline", "app_stop")      # какие события бывают «открытием» тревоги
 OFFLINE_KINDS = ("offline", "offline_repeat")
 OUTAGE_MIN_S = 180               # приёмник молчал дольше — это перерыв (перезапуск занимает секунды)
+MUTE_MAX_MIN = 1440              # «Не беспокоить» не дольше суток: тишину нельзя забыть включённой навсегда
+MUTE_REASON = "не беспокоить"    # пометка у сообщений, которые не ушли в Telegram из-за тишины
 ENROLL_PENDING_MAX = 30          # заявок «ждут решения» не больше: ключ регистрации не должен позволять забить панель
 ENROLL_KEEP_DAYS = 14            # заявку, от которой 2 недели нет вестей, забываем
 
@@ -46,9 +54,10 @@ def hash_token(token: str) -> str:
     return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
 
-def offline_limit(interval_s: Optional[float]) -> float:
-    """Сколько можно молчать до тревоги: два пропущенных пульса и запас."""
-    return 2 * (interval_s or DEFAULT_INTERVAL_S) + OFFLINE_GRACE_S
+def offline_limit(interval_s: Optional[float], after_s: Optional[float] = None) -> float:
+    """Сколько можно молчать до сообщения «нет пульса»: два пропущенных пульса с запасом, но не меньше after_s (по умолчанию полчаса;
+    у завода с нестабильным интернетом Макс ставит больше в настройках завода)."""
+    return max(2 * (interval_s or DEFAULT_INTERVAL_S) + OFFLINE_GRACE_S, after_s or OFFLINE_AFTER_S)
 
 
 def _num(v) -> Optional[float]:
@@ -92,6 +101,13 @@ class Store:
                 target REAL, calc REAL, enc REAL, ai REAL, gap REAL, ok INTEGER NOT NULL DEFAULT 1, timeout INTEGER NOT NULL DEFAULT 0,
                 why TEXT NOT NULL DEFAULT '', sv REAL, stage INTEGER, UNIQUE (plant_id, eid));
             CREATE INDEX IF NOT EXISTS ix_positions_plant ON positions (plant_id, t);
+            CREATE TABLE IF NOT EXISTS motion_episode (
+                id INTEGER PRIMARY KEY AUTOINCREMENT, plant_id INTEGER NOT NULL, eid TEXT NOT NULL, kind TEXT NOT NULL, cam TEXT NOT NULL,
+                cam_name TEXT NOT NULL DEFAULT '', zone TEXT NOT NULL DEFAULT '', zone_name TEXT NOT NULL DEFAULT '', t0 REAL NOT NULL, t1 REAL NOT NULL,
+                open INTEGER NOT NULL DEFAULT 0, vmin REAL, vmean REAL, on_v REAL, off_v REAL, reason TEXT NOT NULL DEFAULT '', UNIQUE (plant_id, eid));
+            CREATE INDEX IF NOT EXISTS ix_motion_plant ON motion_episode (plant_id, t0);
+            CREATE TABLE IF NOT EXISTS motion_cover (plant_id INTEGER PRIMARY KEY, from_t REAL NOT NULL, to_t REAL NOT NULL, cams TEXT NOT NULL DEFAULT '[]',
+                recv_t REAL NOT NULL);
             CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS outages (start_t REAL NOT NULL, end_t REAL NOT NULL);
             CREATE TABLE IF NOT EXISTS enroll (
@@ -101,6 +117,9 @@ class Store:
         """)
         if not any(r["name"] == "machine" for r in self.db.execute("PRAGMA table_info(plants)")):
             self.db.execute("ALTER TABLE plants ADD COLUMN machine TEXT")      # какой ПК зарегистрировался под этим заводом (авто-регистрация)
+        if not any(r["name"] == "acked_t" for r in self.db.execute("PRAGMA table_info(alerts)")):
+            self.db.execute("ALTER TABLE alerts ADD COLUMN acked_t REAL")      # когда Макс сбросил тревогу в панели (NULL — не сбрасывал)
+            self.db.execute("ALTER TABLE alerts ADD COLUMN ack_level TEXT")    # какой она была тяжести в момент сброса: стала хуже — откроется снова
         self.db.commit()
         self._note_outage()
 
@@ -185,11 +204,193 @@ class Store:
             raise LookupError("Завода нет")
         return token
 
+    def rename_plant(self, plant_id: int, name: str) -> str:
+        """Переименовать завод (кнопка в панели): токен, журнал и датчики остаются. ValueError — название пустое, длинное или занято;
+        LookupError — завода нет. Возвращает новое название."""
+        name = " ".join((name or "").split())
+        if not name or len(name) > NAME_MAX:
+            raise ValueError("Название завода — от 1 до %d символов" % NAME_MAX)
+        with self._lock:
+            try:
+                n = self.db.execute("UPDATE plants SET name=? WHERE id=?", (name, plant_id)).rowcount
+                if n:
+                    self.db.execute("UPDATE notify SET plant_name=? WHERE plant_id=?", (name, plant_id))     # ещё не отправленные сообщения — с новым названием
+                self.db.commit()
+            except sqlite3.IntegrityError:
+                self.db.rollback()
+                raise ValueError("Завод с таким названием уже есть")
+        if not n:
+            raise LookupError("Завода нет")
+        return name
+
+    def hidden_blocks(self, plant_id: int) -> list[str]:
+        """Какие блоки карточки Макс скрыл через «Вид» (хранится в приёмнике, поэтому одинаково на всех устройствах)."""
+        raw = self.meta_get("view:%d" % plant_id)
+        if raw is None:
+            return list(DEFAULT_HIDDEN)
+        try:
+            v = json.loads(raw)
+        except ValueError:
+            return list(DEFAULT_HIDDEN)
+        return [b for b in v if b in VIEW_BLOCKS] if isinstance(v, list) else list(DEFAULT_HIDDEN)
+
+    def set_hidden_blocks(self, plant_id: int, hidden) -> list[str]:
+        """Запомнить скрытые блоки завода. ValueError — список кривой или блок неизвестен; LookupError — завода нет."""
+        if not isinstance(hidden, list) or any(b not in VIEW_BLOCKS for b in hidden):
+            raise ValueError("Неизвестный блок карточки")
+        with self._lock:
+            if not self.db.execute("SELECT 1 FROM plants WHERE id=?", (plant_id,)).fetchone():
+                raise LookupError("Завода нет")
+            clean = sorted(set(hidden), key=VIEW_BLOCKS.index)
+            self.meta_set("view:%d" % plant_id, json.dumps(clean))
+        return clean
+
+    def plant_overrides(self, plant_id: int) -> dict:
+        """Что Макс поменял для этого завода (остальное — общие значения). Битую запись не слушаем."""
+        try:
+            v = json.loads(self.meta_get("pcfg:%d" % plant_id) or "{}")
+        except ValueError:
+            return {}
+        out = {}
+        if isinstance(v, dict):
+            for k, (lo, hi) in PLANT_SETTINGS.items():
+                if isinstance(v.get(k), int) and not isinstance(v.get(k), bool) and lo <= v[k] <= hi:
+                    out[k] = v[k]
+            if isinstance(v.get("offline_notify"), bool):
+                out["offline_notify"] = v["offline_notify"]
+        return out
+
+    def plant_settings(self, plant_id: int) -> dict:
+        """Действующие настройки завода: свои, а где не менялись — общие (полчаса до «нет пульса», напоминание раз в 6 часов, сообщения включены)."""
+        return {**self._base_settings(), **self.plant_overrides(plant_id)}
+
+    def _base_settings(self) -> dict:
+        return {"offline_after_min": OFFLINE_AFTER_S // 60, "offline_repeat_min": round(((self.notify_cfg or {}).get("offline_repeat_s") or 21600) / 60),
+                "offline_notify": True}
+
+    def set_plant_settings(self, plant_id: int, changes) -> dict:
+        """Поменять настройки завода. changes — {ключ: значение}; значение None возвращает ключу общее значение. ValueError — ключ неизвестен или
+        значение вне границ; LookupError — завода нет. Возвращает действующие настройки."""
+        if not isinstance(changes, dict) or not changes:
+            raise ValueError("Нет настроек для сохранения")
+        cur = self.plant_overrides(plant_id)
+        for k, v in changes.items():
+            if k == "offline_notify":
+                if v is not None and not isinstance(v, bool):
+                    raise ValueError("«Слать в Telegram» — да или нет")
+            elif k in PLANT_SETTINGS:
+                lo, hi = PLANT_SETTINGS[k]
+                if v is not None and (not isinstance(v, int) or isinstance(v, bool) or not lo <= v <= hi):
+                    raise ValueError("%s: от %d до %d минут" % ("Нет пульса через" if k == "offline_after_min" else "Напоминать раз в", lo, hi))
+            else:
+                raise ValueError("Неизвестная настройка: %s" % k)
+            if v is None or v == self._base_settings()[k]:           # то же, что общее значение, — значит, у завода своей настройки нет
+                cur.pop(k, None)
+            else:
+                cur[k] = v
+        with self._lock:
+            if not self.db.execute("SELECT 1 FROM plants WHERE id=?", (plant_id,)).fetchone():
+                raise LookupError("Завода нет")
+            self.meta_set("pcfg:%d" % plant_id, json.dumps(cur))
+        return self.plant_settings(plant_id)
+
+    # --- «Не беспокоить»: пока идёт тишина, события завода не уходят в Telegram (панель и журнал — как обычно)
+
+    def _mute_rec(self, plant_id: int) -> Optional[dict]:
+        """Запись тишины завода: {"from", "until", "done"}. Битую не слушаем."""
+        try:
+            v = json.loads(self.meta_get("mute:%d" % plant_id) or "null")
+        except ValueError:
+            return None
+        if not isinstance(v, dict) or any(isinstance(v.get(k), bool) or not isinstance(v.get(k), (int, float)) for k in ("from", "until")):
+            return None
+        return v
+
+    def mute_until(self, plant_id: int, now: Optional[float] = None) -> Optional[float]:
+        """До какого времени (unix) у завода тишина; None — её нет или она кончилась."""
+        now = self.clock() if now is None else now
+        v = self._mute_rec(plant_id)
+        return float(v["until"]) if v is not None and v["until"] > now else None
+
+    def mute_morning_due(self, now: Optional[float] = None) -> float:
+        """Когда наступит «утро» (время утренней сводки, по умолчанию 08:00 по часам ПК приёмника): ближайшее, но не дальше суток."""
+        now = self.clock() if now is None else now
+        hm = (self.notify_cfg or {}).get("morning") or (8, 0)
+        lt = time.localtime(now)
+        due = time.mktime((lt.tm_year, lt.tm_mon, lt.tm_mday, hm[0], hm[1], 0, 0, 0, -1))
+        if due <= now + 60:
+            due += 86400
+        return min(due, now + MUTE_MAX_MIN * 60)
+
+    def set_mute(self, plant_id: int, minutes) -> Optional[float]:
+        """Включить тишину на minutes минут (1…сутки) или до утра ("morning"); None — снять. Возвращает время конца (или None, если снято).
+        ValueError — срок не тот; LookupError — завода нет. Включение и снятие остаются строкой в журнале завода."""
+        if minutes != "morning" and minutes is not None and (not isinstance(minutes, int) or isinstance(minutes, bool) or not 1 <= minutes <= MUTE_MAX_MIN):
+            raise ValueError("Тишина: от 1 минуты до суток")
+        now = self.clock()
+        with self._lock, self.db:
+            if not self.db.execute("SELECT 1 FROM plants WHERE id=?", (plant_id,)).fetchone():
+                raise LookupError("Завода нет")
+            rec = self._mute_rec(plant_id)
+            active = rec is not None and rec["until"] > now
+            if minutes is None:
+                if active:                                      # снимаем: итог по тишине отправит Notifier
+                    self.meta_set("mute:%d" % plant_id, json.dumps({"from": rec["from"], "until": now, "done": False}))
+                    self._insert_event(plant_id, "srv-unmute-%d-%d" % (plant_id, int(now * 1000)), now, now, "mute", "info", "Тихий режим снят")
+                return None
+            until = self.mute_morning_due(now) if minutes == "morning" else now + minutes * 60
+            since = rec["from"] if rec is not None and not rec.get("done") else now      # итог прошлой тишины ещё не ушёл — считаем вместе
+            self.meta_set("mute:%d" % plant_id, json.dumps({"from": since, "until": until, "done": False}))
+            self._insert_event(plant_id, "srv-mute-%d-%d" % (plant_id, int(now * 1000)), now, now, "mute", "info",
+                               "Тихий режим до %s" % time.strftime("%H:%M", time.localtime(until)))
+            return until
+
+    def mute_finished(self, now: float) -> list:
+        """Тишины, которые кончились (по сроку или «Снять»), а итог ещё не отправлен: [{plant_id, name, since, until, count}].
+        count — сколько важных событий промолчали (тихие записи об обновлении не в счёт, кроме «обновлён, но что-то не поднялось»)."""
+        out = []
+        with self._lock:
+            for r in self.db.execute("SELECT key FROM meta WHERE key LIKE 'mute:%'").fetchall():
+                try:
+                    pid = int(r["key"].split(":", 1)[1])
+                except ValueError:
+                    continue
+                v = self._mute_rec(pid)
+                if v is None or v.get("done") or v["until"] > now:
+                    continue
+                p = self.db.execute("SELECT name FROM plants WHERE id=?", (pid,)).fetchone()
+                if p is None:
+                    continue
+                n = self.db.execute("SELECT COUNT(*) n FROM notify WHERE plant_id=? AND status='muted' AND reason=? AND COALESCE(sent_t, created_t)>=? AND COALESCE(sent_t, created_t)<=? "
+                                    "AND NOT (kind='update' AND state!='warn')", (pid, MUTE_REASON, v["from"], v["until"] + 1)).fetchone()["n"]
+                out.append({"plant_id": pid, "name": p["name"], "since": v["from"], "until": v["until"], "count": n})
+        return out
+
+    def mute_reported(self, plant_id: int, since: float) -> None:
+        """Итог тишины отправлен (или отправлять поздно): больше не напоминать о ней. Новую тишину, начатую за это время, не трогаем."""
+        with self._lock:
+            v = self._mute_rec(plant_id)
+            if v is not None and v["from"] == since and v["until"] <= self.clock() + 1:
+                self.meta_set("mute:%d" % plant_id, json.dumps({**v, "done": True}))
+
+    def set_hidden_blocks_all(self, hidden) -> list[str]:
+        """Один набор скрытых блоков всем заводам сразу («для всех» в «Виде»): единый стандарт. ValueError — блок неизвестен."""
+        if not isinstance(hidden, list) or any(b not in VIEW_BLOCKS for b in hidden):
+            raise ValueError("Неизвестный блок карточки")
+        clean = sorted(set(hidden), key=VIEW_BLOCKS.index)
+        with self._lock, self.db:
+            for r in self.db.execute("SELECT id FROM plants").fetchall():
+                self.meta_set("view:%d" % r["id"], json.dumps(clean))
+        return clean
+
     def delete_plant(self, plant_id: int) -> bool:
         with self._lock, self.db:
+            self.db.execute("DELETE FROM meta WHERE key IN (?, ?, ?)", ("view:%d" % plant_id, "pcfg:%d" % plant_id, "mute:%d" % plant_id))
             self.db.execute("DELETE FROM events WHERE plant_id=?", (plant_id,))
             self.db.execute("DELETE FROM alerts WHERE plant_id=?", (plant_id,))
             self.db.execute("DELETE FROM positions WHERE plant_id=?", (plant_id,))
+            self.db.execute("DELETE FROM motion_episode WHERE plant_id=?", (plant_id,))
+            self.db.execute("DELETE FROM motion_cover WHERE plant_id=?", (plant_id,))
             self.db.execute("DELETE FROM notify WHERE plant_id=?", (plant_id,))
             self.db.execute("DELETE FROM enroll WHERE plant_id=?", (plant_id,))        # удалённый завод может зарегистрироваться заново
             return self.db.execute("DELETE FROM plants WHERE id=?", (plant_id,)).rowcount > 0
@@ -288,8 +489,9 @@ class Store:
 
     def _last_notified(self, plant_id: int, kinds: tuple, code: Optional[str] = None) -> Optional[sqlite3.Row]:
         marks = ",".join("?" * len(kinds))
-        sql = "SELECT * FROM notify WHERE plant_id=? AND kind IN (%s) AND status IN ('pending','sent')" % marks
-        args = [plant_id, *kinds]
+        # промолчанное в «Не беспокоить» тоже считается: Макс прочтёт об этом в итоге тишины, а «снято» / «связь восстановилась» должны прийти потом
+        sql = "SELECT * FROM notify WHERE plant_id=? AND kind IN (%s) AND (status IN ('pending','sent') OR (status='muted' AND reason=?))" % marks
+        args = [plant_id, *kinds, MUTE_REASON]
         if code is not None:
             sql += " AND code=?"
             args.append(code)
@@ -300,6 +502,8 @@ class Store:
         красные тревоги, перезагрузка платы), «снято» и «связь восстановилась» — только если об открытии мы сообщали. Жёлтое — никогда.
         Старое событие (после обрыва связи пришла пачка) — только в журнал."""
         if now - t > self.notify_cfg.get("fresh_s", 900):
+            return
+        if kind in OFFLINE_KINDS and not self.plant_settings(plant_id)["offline_notify"]:      # у этого завода «нет пульса» в Telegram выключено: только панель и журнал
             return
         if level in NOTIFY_LEVELS and kind in NOTIFY_KINDS and state != "closed":
             pass
@@ -316,8 +520,10 @@ class Store:
         else:
             return
         row = self.db.execute("SELECT name FROM plants WHERE id=?", (plant_id,)).fetchone()
-        self.db.execute("INSERT OR IGNORE INTO notify (plant_id, plant_name, eid, t, created_t, level, kind, code, state, text) VALUES (?,?,?,?,?,?,?,?,?,?)",
-                        (plant_id, row["name"] if row else "?", eid, t, now, level, kind, code, state, text))
+        quiet = self.mute_until(plant_id, now) is not None          # «Не беспокоить»: в очередь для отправки не кладём, но помним — для итога
+        self.db.execute("INSERT OR IGNORE INTO notify (plant_id, plant_name, eid, t, created_t, level, kind, code, state, text, status, reason) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                        (plant_id, row["name"] if row else "?", eid, t, now, level, kind, code, state, text,
+                         "muted" if quiet else "pending", MUTE_REASON if quiet else ""))
 
     def notify_pending(self, now: float, limit: int = 100) -> list:
         with self._lock:
@@ -332,6 +538,11 @@ class Store:
             self.db.executemany("UPDATE notify SET status=?, reason=?, sent_t=? WHERE id=?",
                                 [(status, reason, now if status == "sent" else None, i) for i in ids])
 
+    def notify_hush(self, ids: list, now: float) -> None:
+        """Строки, что уже лежали в очереди, когда включили тишину: не отправляем, но помним для итога (время — когда замолчали, оно же в sent_t)."""
+        with self._lock, self.db:
+            self.db.executemany("UPDATE notify SET status='muted', reason=?, sent_t=? WHERE id=?", [(MUTE_REASON, now, i) for i in ids])
+
     def notify_retry(self, ids: list, next_try_t: float, reason: str) -> None:
         with self._lock, self.db:
             self.db.executemany("UPDATE notify SET tries=tries+1, next_try_t=?, reason=? WHERE id=?", [(next_try_t, reason[:200], i) for i in ids])
@@ -341,15 +552,28 @@ class Store:
         n = 0
         with self._lock, self.db:
             for p in self.db.execute("SELECT * FROM plants WHERE offline_since IS NOT NULL").fetchall():
+                st = self.plant_settings(p["id"])
+                repeat_s = st["offline_repeat_min"] * 60
+                if not st["offline_notify"] or repeat_s <= 0:                       # напоминания выключены для этого завода
+                    continue
+                if self.mute_until(p["id"], now) is not None:                       # «Не беспокоить»: напоминания молчат
+                    continue
                 last = self._last_notified(p["id"], OFFLINE_KINDS)
-                if last is None or last["status"] != "sent" or now - (last["sent_t"] or now) < every_s:
+                if last is None or last["status"] not in ("sent", "muted"):
+                    continue
+                if last["status"] == "sent":
+                    anchor = last["sent_t"] or now
+                else:                                                               # об отключении промолчали в тишине: отсчёт — от конца тишины (итог тоже о нём скажет)
+                    rec = self._mute_rec(p["id"])
+                    anchor = max(last["created_t"], rec["until"] if rec is not None else 0)
+                if now - anchor < repeat_s:
                     continue
                 if self.db.execute("SELECT 1 FROM notify WHERE plant_id=? AND kind IN ('offline','offline_repeat') AND status='pending'", (p["id"],)).fetchone():
                     continue
                 hours = (now - p["offline_since"]) / 3600
                 text = "Всё ещё нет пульса (уже %s)" % ("%d ч" % round(hours) if hours >= 1.5 else "%d мин" % round(hours * 60))
                 n += self.db.execute("INSERT OR IGNORE INTO notify (plant_id, plant_name, eid, t, created_t, level, kind, code, state, text) VALUES (?,?,?,?,?,?,?,?,?,?)",
-                                     (p["id"], p["name"], "srv-offline-rep-%d" % int(now), now, now, "critical", "offline_repeat", "", "open", text)).rowcount
+                                     (p["id"], p["name"], "srv-offline-rep-%d" % int(now), now, now, "high", "offline_repeat", "", "open", text)).rowcount
         return n
 
     def _insert_position(self, plant_id: int, eid: str, t: float, d: dict) -> None:
@@ -363,10 +587,43 @@ class Store:
              0 if d.get("ok") is False else 1, 1 if d.get("timeout") else 0, str(d.get("why") or "")[:TEXT_MAX], _num(d.get("sv")),
              int(stage) if isinstance(stage, int) and not isinstance(stage, bool) else None))
 
+    @staticmethod
+    def _motion_t_ok(t: float, now: float) -> bool:
+        """Время эпизода: история за дни — норма (общий _clamp_t подменил бы её на «сейчас»), отбрасываем только будущее и давнее хранения."""
+        return now - RETENTION_DAYS * 86400 <= t <= now + SKEW_MAX_S
+
+    def _insert_motion(self, plant_id: int, eid: str, d: dict, now: float) -> None:
+        """Эпизод движения (остановка ленты / «близко к порогу» / сбой камеры) с завода. Повтор с тем же eid обновляет конец и значения (остановка ещё шла)."""
+        kind = d.get("kind")
+        t0, t1 = _num(d.get("t0")), _num(d.get("t1"))
+        if kind not in MOTION_KINDS or t0 is None or t1 is None or t1 < t0 or not self._motion_t_ok(t0, now) or not self._motion_t_ok(t1, now):
+            return
+        s = lambda k, n=60: str(d.get(k) or "")[:n]
+        self.db.execute(
+            "INSERT INTO motion_episode (plant_id, eid, kind, cam, cam_name, zone, zone_name, t0, t1, open, vmin, vmean, on_v, off_v, reason) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) "
+            "ON CONFLICT (plant_id, eid) DO UPDATE SET t1=excluded.t1, open=excluded.open, vmin=excluded.vmin, vmean=excluded.vmean, reason=excluded.reason",
+            (plant_id, eid[:64], kind, s("cam"), s("cam_name"), s("zone"), s("zone_name"), t0, t1, 1 if d.get("open") else 0,
+             _num(d.get("min")), _num(d.get("mean")), _num(d.get("on")), _num(d.get("off")), s("reason", TEXT_MAX)))
+
+    def _set_motion_cover(self, plant_id: int, d: dict, now: float) -> None:
+        """Завод сообщил, за какой период он просмотрел движение и по каким камерам: «остановок не было» можно говорить только в этих границах."""
+        a, b = _num(d.get("from")), _num(d.get("to"))
+        if a is None or b is None or not self._motion_t_ok(a, now) or not self._motion_t_ok(b, now):
+            return
+        cams = [str(c)[:40] for c in (d.get("cams") or [])[:50]] if isinstance(d.get("cams"), list) else []
+        self.db.execute("INSERT OR REPLACE INTO motion_cover (plant_id, from_t, to_t, cams, recv_t) VALUES (?,?,?,?,?)",
+                        (plant_id, a, b, json.dumps(cams, ensure_ascii=False), now))
+
     def _client_event(self, plant_id: int, e, now: float) -> int:
         if not isinstance(e, dict) or not e.get("eid"):
             return 0
         data = e.get("data") if isinstance(e.get("data"), dict) else {}
+        if e.get("kind") == "motion":                   # не событие журнала: эпизод для блока «Движение»
+            self._insert_motion(plant_id, str(e["eid"]), data, now)
+            return 0
+        if e.get("kind") == "motion_sync":
+            self._set_motion_cover(plant_id, data, now)
+            return 0
         if e.get("kind") == "positions":                # не событие журнала: запись для таблицы и графика проб
             self._insert_position(plant_id, str(e["eid"]), self._clamp_t(e.get("t"), now), data)
             return 0
@@ -398,7 +655,10 @@ class Store:
             level = level if level in LEVELS else "info"
             text = str(a.get("text") or code)[:TEXT_MAX]
             if code in open_rows:
+                r = open_rows[code]
                 self.db.execute("UPDATE alerts SET level=?, text=? WHERE plant_id=? AND code=?", (level, text, plant_id, code))
+                if r["acked_t"] is not None and LEVELS.index(level) < LEVELS.index(r["ack_level"] or "info"):      # стало хуже, чем при сбросе
+                    self.db.execute("UPDATE alerts SET acked_t=NULL, ack_level=NULL WHERE plant_id=? AND code=?", (plant_id, code))
                 continue
             since = self._clamp_t(a.get("since"), now)
             self.db.execute("INSERT INTO alerts (plant_id, code, level, text, since_t) VALUES (?,?,?,?,?)", (plant_id, code, level, text, since))
@@ -414,6 +674,21 @@ class Store:
                 new += self._insert_event(plant_id, "srv-alert-%s-%d-closed" % (code, int(r["since_t"])), now, now, "alert", "info",
                                           "Снято: " + r["text"], code, "closed")
         return new
+
+    def ack_alerts(self, plant_id: int, code: Optional[str] = None) -> int:
+        """Сбросить открытую тревогу в панели (code=None — все открытые у завода): она уходит с карточки и из сводки, но остаётся в журнале.
+        Вернётся сама, если завод перестанет её присылать и пришлёт снова, или если она станет тяжелее. Возвращает, сколько сброшено."""
+        now = self.clock()
+        n = 0
+        with self._lock, self.db:
+            sql, args = "SELECT * FROM alerts WHERE plant_id=? AND acked_t IS NULL", [plant_id]
+            if code is not None:
+                sql, args = sql + " AND code=?", args + [code]
+            for r in self.db.execute(sql, args).fetchall():
+                self.db.execute("UPDATE alerts SET acked_t=?, ack_level=? WHERE plant_id=? AND code=?", (now, r["level"], plant_id, r["code"]))
+                self._insert_event(plant_id, "srv-ack-%s-%d" % (r["code"], int(now * 1000)), now, now, "alert", "info", "Сброшено: " + r["text"], r["code"], "ack")
+                n += 1
+        return n
 
     def ingest(self, plant_id: int, payload) -> dict:
         """Принять пульс. ValueError — формат не тот (завод получит 400), LookupError — завод удалили."""
@@ -450,10 +725,15 @@ class Store:
             return "waiting"
         if p["offline_since"] is not None:
             return "offline"
-        limit = offline_limit(p["interval_s"])
+        limit = offline_limit(p["interval_s"], self.plant_settings(p["id"])["offline_after_min"] * 60)
         if now - p["last_seen_t"] > limit:
             return "offline" if now - self.started_at > limit else "checking"
         return "online"
+
+    def _last_stop(self, plant_id: int):
+        """Последнее событие «приложение закрыто», если после него приложение ещё не запускалось (иначе None)."""
+        r = self.db.execute("SELECT kind, level, t FROM events WHERE plant_id=? AND kind IN ('app_stop','start') ORDER BY t DESC, id DESC LIMIT 1", (plant_id,)).fetchone()
+        return r if r is not None and r["kind"] == "app_stop" else None
 
     def check_offline(self) -> list[dict]:
         """Объявить недоступными заводы, которые молчат дольше допустимого. Возвращает новые события (для оповещений)."""
@@ -465,14 +745,22 @@ class Store:
                     continue
                 self.db.execute("UPDATE plants SET offline_since=? WHERE id=?", (now, p["id"]))
                 text = "Нет пульса уже %d мин" % round((now - p["last_seen_t"]) / 60)
-                if self._insert_event(p["id"], "srv-offline-%d" % int(p["last_seen_t"]), now, now, "offline", "critical", text):
-                    out.append({"plant": p["name"], "plant_id": p["id"], "level": "critical", "kind": "offline", "text": text, "t": now})
+                level = "high"                                   # пропавший пульс сам по себе не критичен: сообщение, но не «красное»
+                stop = self._last_stop(p["id"])
+                if stop is not None:
+                    if stop["level"] == "critical":              # приложение закрыли — об этом уже писали сразу, тут только запись в журнал
+                        level, text = "info", "Приложение закрыто, пульса нет уже %d мин" % round((now - p["last_seen_t"]) / 60)
+                    else:                                        # закрылось ради обновления и не вернулось — вот это серьёзно
+                        level, text = "critical", "После обновления приложение не вернулось: пульса нет уже %d мин" % round((now - p["last_seen_t"]) / 60)
+                if self._insert_event(p["id"], "srv-offline-%d" % int(p["last_seen_t"]), now, now, "offline", level, text):
+                    out.append({"plant": p["name"], "plant_id": p["id"], "level": level, "kind": "offline", "text": text, "t": now})
         return out
 
     def purge(self) -> int:
         with self._lock, self.db:
             cutoff = self.clock() - self.retention_days * 86400
             self.db.execute("DELETE FROM positions WHERE t < ?", (cutoff,))
+            self.db.execute("DELETE FROM motion_episode WHERE t1 < ?", (cutoff,))
             self.db.execute("DELETE FROM notify WHERE t < ? AND status!='pending'", (cutoff,))
             self.db.execute("DELETE FROM enroll WHERE last_t < ?", (self.clock() - ENROLL_KEEP_DAYS * 86400,))      # давно молчащие заявки (в т.ч. непринятые)
             return self.db.execute("DELETE FROM events WHERE t < ?", (cutoff,)).rowcount
@@ -484,14 +772,17 @@ class Store:
         return {"id": r["id"], "t": r["t"], "recv_t": r["recv_t"], "kind": r["kind"], "level": r["level"], "text": r["text"],
                 "code": r["code"], "state": r["state"]}
 
-    def events(self, plant_id: int, limit: int = 100, before_id: Optional[int] = None) -> list[dict]:
+    def events(self, plant_id: int, limit: int = 100, before_id: Optional[int] = None, errors_only: bool = False) -> list[dict]:
+        """Журнал завода, новые первыми. errors_only — только ошибки: тревоги (открыты, сняты, сброшены), перезагрузки платы, «нет пульса»."""
         limit = max(1, min(int(limit), 500))
+        sql, args = "SELECT * FROM events WHERE plant_id=?", [plant_id]
+        if before_id:
+            sql, args = sql + " AND id<?", args + [before_id]
+        if errors_only:
+            sql += " AND kind IN (%s)" % ",".join("?" * len(ERROR_KINDS))
+            args += list(ERROR_KINDS)
         with self._lock:
-            if before_id:
-                rows = self.db.execute("SELECT * FROM events WHERE plant_id=? AND id<? ORDER BY t DESC, id DESC LIMIT ?",
-                                       (plant_id, before_id, limit)).fetchall()
-            else:
-                rows = self.db.execute("SELECT * FROM events WHERE plant_id=? ORDER BY t DESC, id DESC LIMIT ?", (plant_id, limit)).fetchall()
+            rows = self.db.execute(sql + " ORDER BY t DESC, id DESC LIMIT ?", args + [limit]).fetchall()
         return [self._event_row(r) for r in rows]
 
     def positions(self, plant_id: int, limit: int = 100) -> list[dict]:
@@ -501,6 +792,33 @@ class Store:
             rows = self.db.execute("SELECT * FROM positions WHERE plant_id=? ORDER BY t DESC, id DESC LIMIT ?", (plant_id, limit)).fetchall()
         return [{"t": r["t"], "step": r["step"], "target": r["target"], "calc": r["calc"], "enc": r["enc"], "ai": r["ai"], "gap": r["gap"],
                  "ok": bool(r["ok"]), "timeout": bool(r["timeout"]), "why": r["why"], "sv": r["sv"], "stage": r["stage"]} for r in rows]
+
+    def motion(self, plant_id: int, days: Optional[float] = 5.0, limit: int = 30) -> dict:
+        """Движение завода за days суток: что просмотрено ({from, to, cams, recv_t} — None, если завод ещё не присылал) и эпизоды трёх видов,
+        новые первыми (по limit каждого), плюс общие числа и «сколько стояла лента»."""
+        now = self.clock()
+        limit = max(1, min(int(limit), 200))
+        with self._lock:
+            c = self.db.execute("SELECT * FROM motion_cover WHERE plant_id=?", (plant_id,)).fetchone()
+            if days is None:                                # «за всё, что завод просмотрел»: глубина зависит от его базы (12 сут, 30 сут)
+                days = max(0.1, (now - c["from_t"]) / 86400) if c is not None else 5.0
+            days = max(0.1, min(float(days), 90.0))
+            t_from = now - days * 86400
+            out = {"days": days, "cover": None, "stop": [], "near": [], "camera": [], "count": {}, "stop_s": 0.0}
+            if c is not None:
+                out["cover"] = {"from": c["from_t"], "to": c["to_t"], "recv_t": c["recv_t"], "cams": json.loads(c["cams"] or "[]")}
+            for kind in MOTION_KINDS:
+                rows = self.db.execute("SELECT * FROM motion_episode WHERE plant_id=? AND kind=? AND t1>=? ORDER BY t0 DESC LIMIT ?",
+                                       (plant_id, kind, t_from, limit)).fetchall()
+                out[kind] = [{"cam": r["cam"], "cam_name": r["cam_name"], "zone": r["zone"], "zone_name": r["zone_name"], "t0": r["t0"], "t1": r["t1"],
+                              "dur_s": r["t1"] - r["t0"], "open": bool(r["open"]), "min": r["vmin"], "mean": r["vmean"], "on": r["on_v"], "off": r["off_v"],
+                              "reason": r["reason"]} for r in rows]
+                tot = self.db.execute("SELECT COUNT(*) n, COALESCE(SUM(t1-t0),0) s FROM motion_episode WHERE plant_id=? AND kind=? AND t1>=?",
+                                      (plant_id, kind, t_from)).fetchone()
+                out["count"][kind] = tot["n"]
+                if kind == "stop":
+                    out["stop_s"] = tot["s"]
+        return out
 
     def plant_names(self) -> list:
         with self._lock:
@@ -512,7 +830,7 @@ class Store:
         out = []
         with self._lock:
             for p in self.db.execute("SELECT * FROM plants ORDER BY name").fetchall():
-                alerts = [{"code": a["code"], "level": a["level"], "text": a["text"], "since": a["since_t"]}
+                alerts = [{"code": a["code"], "level": a["level"], "text": a["text"], "since": a["since_t"], "acked": a["acked_t"] is not None}
                           for a in self.db.execute("SELECT * FROM alerts WHERE plant_id=? ORDER BY since_t", (p["id"],))]
                 try:
                     snap = json.loads(p["snapshot"]) if p["snapshot"] else None
@@ -521,5 +839,6 @@ class Store:
                 out.append({
                     "id": p["id"], "name": p["name"], "status": self._status(p, now), "created_t": p["created_t"],
                     "last_seen_t": p["last_seen_t"], "interval_s": p["interval_s"], "offline_since": p["offline_since"],
-                    "snapshot": snap, "alerts": alerts, "events": self.events(p["id"], 5)})
+                    "snapshot": snap, "motion5": self.motion(p["id"], None, 8), "alerts": alerts, "events": self.events(p["id"], 5), "hidden_blocks": self.hidden_blocks(p["id"]), "settings": self.plant_settings(p["id"]), "settings_custom": sorted(self.plant_overrides(p["id"])), "mute_until": self.mute_until(p["id"], now),
+                    "closed_t": (lambda st: st["t"] if st is not None and st["level"] == "critical" else None)(self._last_stop(p["id"]))})
         return out

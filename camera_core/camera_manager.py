@@ -11,6 +11,7 @@ from logger import log_event
 import sdk_gige
 import save_settings
 import rtsp_store
+import plate_config
 
 from .gentl_env import (
     _OPEN_FLAKY_RETRIES,
@@ -40,6 +41,8 @@ class CameraManager:
         self.workers = {}
         # серийник -> RtspCameraWorker (RTSP)
         self.rtsp_workers = {}
+        # «Только анализ» (plate_config.rtsp.analysis_only): приложение не держит RTSP-камеры без зрителей и записи
+        self.analysis_only = False
         # реестр воркеров общий на все потоки. Под многопоточный режим (несколько
         # камер стримятся одновременно) создание воркера сериализуем, чтобы два
         # запроса по одному серийнику не создали два конкурирующих объекта.
@@ -364,6 +367,7 @@ class CameraManager:
     # поднять камеры с галочкой «автоподключение» и возобновить их автосохранение.
     # Зовётся из lifespan: после перезагрузки ПК съёмка продолжается сама, без браузера.
     def resume_rtsp_autostart(self):
+        self.analysis_only = bool((plate_config.load().get("rtsp") or {}).get("analysis_only"))
         started = []
         for entry in rtsp_store.load():
             if not entry.get("autostart"):
@@ -394,8 +398,20 @@ class CameraManager:
 
         if started:
             log_event("camera_core.rtsp_autostart", "Автоподключение сохранённых RTSP-камер", "success",
-                      {"count": len(started), "cameras": started})
+                      {"count": len(started), "analysis_only": self.analysis_only, "cameras": started})
         return {"started": started}
+
+    # включить/выключить «Только анализ» на ходу. Включили — захваты без зрителей и записи останавливаются сами
+    # (воркер проверяет это на каждом кадре); выключили — камеры с автостартом поднимаем заново
+    def set_analysis_only(self, on):
+        self.analysis_only = bool(on)
+        if not self.analysis_only:
+            with self._registry_lock:
+                workers = list(self.rtsp_workers.values())
+            for worker in workers:
+                if worker.autostart:
+                    worker.ensure_capture()
+        return self.analysis_only
 
     # создать/получить RTSP-камеру (rtsp_url нужен при первом обращении)
     def get_rtsp(self, serial_number, rtsp_url=None):

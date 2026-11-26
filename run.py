@@ -98,12 +98,43 @@ def _warmup():
             pass
 
 
+def run_net_diag():
+    """Диагностика связи с приёмником мониторинга: web_MVS.exe --net-diag (или NetDiag.bat). Отчёт — net_diag_<время>.txt рядом с exe."""
+    os.chdir(BUNDLE_DIR)
+    code = 1
+    try:
+        import net_diag
+        code = net_diag.main([a for a in sys.argv[1:] if a != "--net-diag"])
+    except SystemExit:
+        pass
+    except Exception:
+        import traceback
+        traceback.print_exc()
+    try:
+        input("Нажми Enter, чтобы закрыть окно...")
+    except Exception:
+        pass
+    sys.exit(code)
+
+
 def main():
+    if "--net-diag" in sys.argv:
+        run_net_diag()
+        return
     if "--diag" in sys.argv or os.environ.get("WEB_MVS_DIAG"):
         run_diag()
         return
     # ассеты (page/) ищутся относительно CWD -> переходим в каталог бандла
     os.chdir(BUNDLE_DIR)
+    # собранный exe: консоль без QuickEdit (клик по окну не замораживает сервер) + журнал на диске logs\app.log и crash.log;
+    # раньше при падении текст ошибки исчезал вместе с окном консоли (см. console_guard). Включаем до прогрева — он ходит в драйвер камер
+    if getattr(sys, "frozen", False):
+        import console_guard
+        console_guard.install(DATA_DIR, read_version())
+    # журнал событий приложения на диске (logs\events.log): память держит лишь 1000 последних и теряет их при перезапуске
+    import logger
+    logger.enable_file(DATA_DIR / "logs" / "events.log")
+    logger.log_event("run", "Запуск web_MVS %s" % read_version(), "info", {"pid": os.getpid()})
     # прогрев продюсера в главном потоке до uvicorn — иначе в exe рабочие потоки
     # видят 0 камер (см. _warmup)
     _warmup()

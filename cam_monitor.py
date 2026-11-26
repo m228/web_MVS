@@ -53,6 +53,7 @@ class Monitor:
         self._rtsp_seen: set = set()
         self._cv_seen: set = set()
         self._motion_retry_at = 0.0
+        self._ac_seen: Optional[int] = None     # id последнего события сторожа подгонки, уже попавшего в журнал
         self._last_purge = 0.0
         self._halt = threading.Event()
         self._thread: Optional[threading.Thread] = None
@@ -85,6 +86,7 @@ class Monitor:
         if now < self._motion_retry_at:
             return
         st = self.motion_state_fn(self.motion_url_fn())
+        self._journal_autocal(st)
         cams = st.get("cameras") if isinstance(st, dict) else None
         if not cams:
             # сервис не запущен или камер нет: что шло — закрываем, повторный опрос не сразу
@@ -108,6 +110,22 @@ class Monitor:
             cam_events.sync(gone, CV_KINDS, {}, now)
             self._forget_shots(gone)
         self._cv_seen = seen
+
+    def _journal_autocal(self, st) -> None:
+        """События сторожа подгонки валов (сервис КЗ отдаёт их в /state) → журнал приложения (logs\\events.log). Каждое — один раз;
+        после перезапуска приложения подхватываем только свежие (за последние 10 минут), старые уже были в журнале."""
+        evs = st.get("autocal_events") if isinstance(st, dict) else None
+        if not evs:
+            return
+        if self._ac_seen is None:
+            self._ac_seen = int((time.time() - 600.0) * 1000)
+        for e in evs:
+            eid = int(e.get("id") or 0)
+            if eid <= self._ac_seen:
+                continue
+            self._ac_seen = max(self._ac_seen, eid)
+            log_event("motion", "Автоподгонка валов (%s): %s" % (e.get("cam", "?"), e.get("msg", "")),
+                      "warn" if e.get("level") == "warn" else "info", {"kind": e.get("kind"), **(e.get("data") or {})})
 
     # ---------- снимок по событию ----------
     def _cfg(self, now: float) -> dict:
@@ -194,8 +212,17 @@ class Monitor:
         if not res.get("alive"):
             reason = res.get("reason") or c.get("error") or "нет связи"
             return {("cv_frozen" if "застыл" in reason else "cv_dead", ""): reason}
-        return {("zone_on" if z.get("bit") else "zone_off", str(z.get("id"))): z.get("name") or str(z.get("id"))
-                for z in res.get("zones") or [] if z.get("enabled", True)}
+        out = {}
+        for z in res.get("zones") or []:
+            # прозрачность сока, уровнемеры и зоны «по яркости» (motion=False) — не «крутится / стоит»: событий движения нет
+            if not z.get("enabled", True) or z.get("type") in ("clarity", "gate", "tube") or z.get("motion") is False:
+                continue
+            # у зоны-цикла (палка на валу) bit = «палка найдена», а «крутится / стоит» — отдельное поле moving (None — пока неизвестно)
+            on = z.get("moving") if z.get("type") == "cycle" else bool(z.get("bit"))
+            if on is None:
+                continue
+            out[("zone_on" if on else "zone_off", str(z.get("id")))] = z.get("name") or str(z.get("id"))
+        return out
 
     # ---------- поток ----------
     def start(self) -> None:

@@ -6,8 +6,13 @@
 """
 import threading
 import time
+from copy import deepcopy
 
+import microscope_fsm
 import plate_config
+import stage_map
+import substages
+from perf_stats import PERF
 from board_guard import BoardGuard
 from microscope_plc import PlateClient
 from microscope_fsm import MicroscopeFSM
@@ -16,7 +21,7 @@ from logger import log_event
 
 
 # поля ПЛК (sv_source), которые пишем в запись пробы CV — режим варки на момент пробы
-PLC_KEYS = ("temp_app", "level", "current", "press_top", "cook_time", "substage", "v_syrup", "v_water", "v_product")
+PLC_KEYS = ("temp_app", "level", "current", "press_top", "cook_time", "substage", "v_syrup", "v_water", "v_product", "seed_qty", "seed_slurry", "seed_mu")
 
 
 class MicroscopeService:
@@ -29,6 +34,7 @@ class MicroscopeService:
         # заводка: момент перехода «Сгущение(3) → Затравка и далее(4..9)»; None — варка не отслеживается
         self._last_stage = None
         self._pump_runs = 0              # сколько раз началась подкачка (стадия 5) в идущей варке
+        self._stab_runs = 0              # сколько раз началась стабилизация (стадия 6)
         self._grow_runs = 0              # сколько раз начался рост (стадия 7)
         self._phase_last = None          # прошлая стадия для счёта фаз
         self._phase_ready = False        # счётчики подтянуты из журнала (перезапуск посреди варки)
@@ -37,10 +43,8 @@ class MicroscopeService:
         self._boil_t_s = None           # время с заводки до «готовности» идущей варки (известно с первой пробы стадии 9)
         self._refit_busy = False
         self._started = False
+        self._last_approach = None       # последний приход подвода {row, sp_row, ai, enc, calc, …} — уходит в ближайшую пробу
         self._lock = threading.Lock()
-        # DEBUG (убрать после отладки цикла): перехват ПЛК — при True данные СВ/стадии
-        # из sv_source игнорируются, работает ручной ввод со страницы (см. sv_override).
-        self._sv_override = False
         # CV: сессия пробы — фоновый поток «кадр → разбор → следующий» на время выдержки
         self._probe_collecting = False            # сессия сейчас набирает кадры у стекла
         self._cv_run_lock = threading.Lock()      # один разбор за раз
@@ -67,11 +71,9 @@ class MicroscopeService:
             self.fsm.on_varka_count = self._persist_varka   # persist счётчика варок (автокалибровка)
             self.fsm.on_mode_change = self._log_mode        # режим автомата (Автомат / выключен / Ручной / авария) -> журнал режима
             self.fsm.on_autocal_done = self._log_autocal    # итог автокалибровки -> autocal.log + «последняя»
-            self.fsm.on_approach_fail = self._log_approach_fail   # «довод не сошёлся» -> отдельный лог
             self.fsm.on_probe_positions = self._on_probe_positions   # три датчика на отводе/подводе -> мониторинг
-            # довод по абсолютнику ушёл в прошивку — гасим в рантайме (конфиг не перезаписываем),
-            # доезд цикла идёт по энкодеру. Автокалибровка нуля работает в ПК (см. set_autocal).
-            self.fsm.set_fine_approach(enabled=False)
+            # довод по датчику делает прошивка платы, доезд цикла идёт по выбранному датчику (энкодер/аналог).
+            # Автокалибровка нуля работает в ПК (см. set_autocal).
             self._sync_cv_fsm()                    # выдержка «по CV» (N кадров), если CV включён
             self.plate.start()
             self.fsm.start()
@@ -85,7 +87,8 @@ class MicroscopeService:
                                           fallback_host=self.cfg.get("host", ""))
                 self.sv_source.start()
             self.guard = BoardGuard({"camera": self._guard_camera, "state": lambda: self.fsm.state, "status": lambda: self.plate.status,
-                                     "ext": lambda: self.plate.ext, "reboot": self.plate.reboot})
+                                     "ext": lambda: self.plate.ext, "reboot": self.plate.reboot,
+                                     "light": self.plate.reapply_led})
             self.guard.start()
             self._started = True
             if self._zip_thread is None or not self._zip_thread.is_alive():
@@ -165,13 +168,11 @@ class MicroscopeService:
 
     def restart_window(self):
         """Окно для перезапуска приложения (автообновление): (True, "") или (False, причина). Кроме автомата смотрит связь с ПЛК
-        (стадия без связи «залипает»), перехват ПЛК, набор/разбор пробы и проверку модели."""
+        (стадия без связи «залипает»), набор/разбор пробы и проверку модели."""
         import model_check
         fsm = self.fsm
         if not self._started or fsm is None:
             return False, "микроскоп выключен"
-        if self._sv_override:
-            return False, "включён перехват ПЛК"
         if self.sv_source is None or not self.sv_source.status().get("connected"):
             return False, "нет связи с ПЛК"
         if self._probe_collecting or self._cv_run_lock.locked():
@@ -327,7 +328,11 @@ class MicroscopeService:
     def _set_cv_status(self, state, message=""):
         """Статус разбора для UI: idle / running / ok / no_camera / no_frames / overexposed / black /
         sidecar_offline / error. Любой отказ виден на странице, а не только в логе."""
-        self._cv_status = {"state": state, "message": message, "ts": time.strftime("%H:%M:%S")}
+        # t — эпоха: мониторинг по ней отличает свежий отказ от залипшего с прошлой варки
+        self._cv_status = {"state": state, "message": message, "ts": time.strftime("%H:%M:%S"), "t": time.time()}
+        if state != "running":      # «разобрано кадров N из M» идёт на каждый кадр — в журнал не пишем; остальное (итог пробы, отказы) — да
+            log_event("cv_status", "CV: %s — %s" % (state, message), "info" if state in ("idle", "ok") else "warn",
+                      {"state": state, "stage": getattr(self.fsm, "stage", None)})
 
     def cv_status(self):
         return dict(self._cv_status)
@@ -559,7 +564,7 @@ class MicroscopeService:
             "svs": [],       # СВ на момент каждого кадра: от него зависит, идёт ли брак в рассев
             "plc": [],       # снимки полей ПЛК (PLC_KEYS) на момент каждого кадра — в запись пробы
             "t0": time.time(),
-            "phase": self._current_phase(self.fsm.stage if self.fsm else None),    # фаза на начало пробы: она же и остаётся у пробы
+            "phase": self._current_phase(self.fsm.stage if self.fsm else None, (self._plc_snapshot() or {}).get("substage")),    # фаза на начало пробы (стадия + подстадия ПЛК): она же и остаётся у пробы
             "stage": self.fsm.stage if self.fsm else None,                          # стадия на начало пробы (9 = «готовность»: длительность варки становится известной)
         }
 
@@ -576,6 +581,7 @@ class MicroscopeService:
             run["plc"].append(snap)
         # --- кристаллы (сайдкар YOLO), если он поднят ---
         summary, objects = None, []
+        t_cv = time.perf_counter()
         if run["sidecar_ok"]:
             det = cv_pipeline.detect(run["url"], img, cv)
             if det:
@@ -595,8 +601,14 @@ class MicroscopeService:
                                           phase=run.get("phase"), seed_age_s=seed_age_s,
                                           boil_t_s=self._boil_t_s if self._seed_ts is not None else None)
                 summary, objects = res["summary"], res["objects"]
+                tm = run.get("timing") or {}
+                PERF.record("microscope:cv", (time.perf_counter() - t_cv) * 1000.0, got=len(objects),
+                            note="сайдкар %d мс (infer %d, NMS %d), частей %s" % (tm.get("total_ms") or 0, tm.get("infer_ms") or 0, tm.get("nms_ms") or 0, tm.get("tiles", "—")))
         # --- разломы (чистый OpenCV, всегда) ---
+        t_fr = time.perf_counter()
         run["zones"].append(cv_fracture.detect_zones(img, run["fr_cfg"]) if run["fr_on"] else [])
+        if run["fr_on"]:
+            PERF.record("microscope:fracture", (time.perf_counter() - t_fr) * 1000.0, got=len(run["zones"][-1]))
         run["frame_recs"].append({"file": "frame_%d" % len(run["overlays"]),
                                   "summary": summary, "objects": objects})
         run["overlays"].append(img)
@@ -635,7 +647,7 @@ class MicroscopeService:
                                      sv=(sum(x for x in run["svs"] if x is not None) / max(1, len([x for x in run["svs"] if x is not None]))
                                          if any(x is not None for x in run["svs"]) else None),
                                      plc=self._plc_summary(run), phase=run.get("phase"),
-                                     detector=run.get("detector"), infer=run.get("infer"))
+                                     detector=run.get("detector"), infer=run.get("infer"), approach=self._take_approach())
         if saved and stage == 9 and self._fit_key != self._seed_ts:
             self._fit_key = self._seed_ts                 # первая проба «готовности» этой варки: длительность известна — растягиваем порог муки и пересчитываем варку
             self._spawn_refit(serial)
@@ -680,7 +692,7 @@ class MicroscopeService:
         try:
             import cv_store
             st = cv_store.phase_state(serial)
-            self._pump_runs, self._grow_runs, self._phase_last = st["pump"], st["grow"], st["last"]
+            self._pump_runs, self._stab_runs, self._grow_runs, self._phase_last = st["pump"], st["stab"], st["grow"], st["last"]
             if self._seed_ts is None and st.get("seed_ts") is not None:
                 self._seed_ts = st["seed_ts"]                  # заводка идущей варки — из журнала: иначе после перезапуска порог муки скачет на пороге фазы
                 self._boil_t_s = st.get("boil_t_s")
@@ -689,26 +701,27 @@ class MicroscopeService:
             log_event("microscope_service", "Счётчики фаз из журнала не подтянулись", "warn", {"error": str(e)})
 
     def _count_phases(self, stage):
-        """Фазы варки по порядку стадий: каждая новая «5» — новая подкачка, каждая новая «7» — новый рост; сгущение (2–3) — новая варка."""
+        """Фазы варки по порядку стадий: каждая новая «5» — новая подкачка, каждая новая «6» — новая стабилизация, каждая новая «7» — новый рост;
+        сгущение (2–3) — новая варка. Счёт нужен как запасной путь, когда подстадия ПЛК номера не несёт (50 / 70)."""
         self._phase_init()
         prev, self._phase_last = self._phase_last, stage
         if stage in (2, 3) and prev not in (2, 3):
-            self._pump_runs = self._grow_runs = 0
+            self._pump_runs = self._stab_runs = self._grow_runs = 0
         elif stage == 5 and prev != 5:
             self._pump_runs += 1
+        elif stage == 6 and prev != 6:
+            self._stab_runs += 1
         elif stage == 7 and prev != 7:
             self._grow_runs += 1
 
-    def _current_phase(self, stage):
-        """Фаза пробы, начатой на стадии stage: p1/p2 (подкачка), g1/g2 (рост) или None. 3-я и далее вливаются во 2-ю.
-        УНВ / пауза посреди варки — фаза последней настоящей стадии."""
+    def _current_phase(self, stage, sub=None):
+        """Фаза пробы, начатой на стадии stage (sub — подстадия ПЛК на этот момент): p<N> подкачка, s<N> стабилизация, g<N> рост, clr / gbp / gzp
+        или None. Номер — из подстадии (72 → g1), а нет его — по порядку входа в стадию. УНВ / пауза посреди варки — фаза последней настоящей стадии."""
         import cv_store
         if stage in cv_store.PAUSE_STAGES:
-            stage = self._phase_last
-        if stage == 5:
-            return "p%d" % min(max(self._pump_runs, 1), 2)
-        if stage == 7:
-            return "g%d" % min(max(self._grow_runs, 1), 2)
+            stage, sub = self._phase_last, None
+        if stage in (5, 6, 7):
+            return cv_store.phase_key(stage, {5: self._pump_runs, 6: self._stab_runs, 7: self._grow_runs}, sub)
         return None
 
     def _note_stage(self, stage):
@@ -753,7 +766,7 @@ class MicroscopeService:
                 continue
             # разрежение — до тысячных (на экране так же), остальное до десятых; время варки и подстадия — последнее
             out[k] = (int(vals[-1]) if k in ("cook_time", "substage")
-                      else round(sum(vals) / len(vals), 3 if k == "press_top" else 1))
+                      else round(sum(vals) / len(vals), 3 if k in ("press_top", "seed_qty", "seed_slurry", "seed_mu") else 1))
         try:                                                    # доза клапанов с прошлой записанной пробы (sv_source копит каждую секунду)
             out.update(self.sv_source.take_valves() if self.sv_source else {})
         except Exception as e:
@@ -764,10 +777,7 @@ class MicroscopeService:
 
     def _on_sv(self, sv, stage):
         # СВ/стадия из ПЛК -> в автомат (заменяет ручной ввод, пока источник жив)
-        self._note_stage(stage)      # заводку отслеживаем всегда, даже при перехвате ПЛК
-        # DEBUG: при перехвате ПЛК не затираем ручной ввод со страницы
-        if self._sv_override:
-            return
+        self._note_stage(stage)
         if self.fsm:
             if sv is not None:
                 self.fsm.set_sv(sv)
@@ -794,9 +804,13 @@ class MicroscopeService:
         """Перечитать plate_config.json и перезапустить плату+автомат с новыми настройками
         (чтобы правки SP/SVSP/периодов/адресов применялись без перезапуска приложения)."""
         was = self._started
+        manual = self.is_manual()        # до stop(): новый автомат всегда «Автомат», цикл выключен (кроме camera_mode auto)
         self.stop()
         if was:
             self.start()   # start() сам вызывает plate_config.load()
+            # «Сохранить» (параметры цикла, таблица подвода, «Применить») не должно гасить автомат: возвращаем как было —
+            # Ручной остаётся Ручным, Автомат — с включённым циклом (иначе на странице «Автомат · цикл выкл» и проб нет)
+            self.manual_mode(manual)
         return {"status": "reloaded", "host": self.cfg.get("host") if self.cfg else None}
 
     # ---------- чтение для эндпоинтов ----------
@@ -821,8 +835,39 @@ class MicroscopeService:
             return {"enabled": True, **self.sv_source.status()}
         return {"enabled": False, "connected": False, "values": {}}
 
-    CYCLE_LABELS = {"ignore_stage": "варить без стадии", "stage_from": "стадия от", "stage_to": "стадия до", "sv_from": "СВ от", "sv_to": "СВ до", "trigger_mode": "триггер",
-                    "pause_sec": "пауза, с", "dwell_sec": "выдержка, с", "arrive_sensor": "датчик прихода", "retract_pos": "отвод, мкм",
+    def set_plc_source(self, patch):
+        """Вкладка «ПЛК»: сохранить источник данных аппарата (Modbus / OPC UA) и перезапустить ТОЛЬКО его —
+        плата и автомат не трогаются, цикл пробы не прерывается. Микроскоп выключен — только сохраняем."""
+        old_sv = deepcopy((self.cfg or {}).get("sv_source") or {})
+        cfg = plate_config.save({"sv_source": patch})
+        svc = cfg.get("sv_source", {}) or {}
+        if "stage_map" in patch:
+            self._log_stage_map_change(old_sv, svc)
+        old = new = None
+        with self._lock:                      # под замком только подмена источника; старый гасим вне замка (закрытие сессии ждёт сеть)
+            if self.cfg is not None:
+                self.cfg["sv_source"] = svc
+            if self._started:
+                old, self.sv_source = self.sv_source, None
+                if svc.get("enabled"):
+                    new = SvSource(svc, on_update=self._on_sv, fallback_host=cfg.get("host", ""))
+                    new.adopt_valves(old)     # доза клапанов с прошлой пробы не теряется
+                    self.sv_source = new
+        if old is not None:
+            old.stop()                        # остановленный не зовёт on_update — новые значения не перетрёт
+        if new is not None:
+            with self._lock:
+                if self._started and self.sv_source is new:   # пока гасили старый, микроскоп могли выключить
+                    new.start()
+        log_event("microscope_service", "Источник данных аппарата: настройки применены", "info",
+                  {"protocol": svc.get("protocol"), "enabled": bool(svc.get("enabled")), "running": self._started})
+
+    def plc_running(self):
+        """Работает ли микроскоп (источник ПЛК живёт внутри него)."""
+        return bool(self._started)
+
+    CYCLE_LABELS = {"ignore_stage": "варить без стадии", "stage_from": "стадия от", "stage_to": "стадия до", "stage_extra": "плюс стадии", "sv_from": "СВ от", "sv_to": "СВ до", "trigger_mode": "триггер",
+                    "pause_sec": "пауза, с", "dwell_sec": "выдержка, с", "arrive_sensor": "датчик прихода", "arrive_tol_um": "допуск подвода, мкм", "retract_pos": "отвод, мкм",
                     "pre_wash_sec": "промывка, с", "shot_interval_sec": "скрин каждые, с", "photo_format": "формат кадра"}
     MODE_LABELS = {"auto": "Автомат включён", "off": "Автомат выключен — проб нет", "manual": "Ручной режим", "fault": "Авария автомата"}
 
@@ -840,14 +885,34 @@ class MicroscopeService:
         import db
         old = ((self.cfg or {}).get("probe_cycle") or {})
         new = patch.get("probe_cycle") or {}
-        show = lambda x: "—" if x is None else "вкл" if x is True else "выкл" if x is False else x
-        ch = ["%s %s → %s" % (self.CYCLE_LABELS.get(k, k), show(old.get(k)), show(v))
-              for k, v in new.items() if not isinstance(v, dict) and old.get(k) != v]
+        sm = (self.cfg or {}).get("sv_source")
+        stage = lambda x: stage_map.label(sm, x, substages.STAGE_NAMES)      # «3 СГУЩЕНИЕ»: название из карты стадий, иначе наше
+        def show(x, k=None):
+            if k in ("stage_from", "stage_to") and x is not None:
+                return stage(x)
+            if k == "stage_extra":
+                return ", ".join(stage(n) for n in x) if x else "нет"
+            return "—" if x is None else "вкл" if x is True else "выкл" if x is False else x
+        # «плюс» по умолчанию — 20 УНВ (ключа в старых настройках нет)
+        was = lambda k: old.get(k, list(microscope_fsm.CYCLE_EXTRA_STAGES) if k == "stage_extra" else None)
+        ch = ["%s %s → %s" % (self.CYCLE_LABELS.get(k, k), show(was(k), k), show(v, k))
+              for k, v in new.items() if not isinstance(v, dict) and was(k) != v]
         if patch.get("camera_mode") is not None and patch["camera_mode"] != (self.cfg or {}).get("camera_mode"):
             ch.append("режим камеры %s → %s" % ((self.cfg or {}).get("camera_mode") or "—", patch["camera_mode"]))
         if ch:
             fsm = self.fsm
             db.mode_add(time.time(), "setting", None, fsm.stage if fsm is not None and fsm._stage_seen else None, "Настройки цикла: " + ", ".join(ch))
+
+    def _log_stage_map_change(self, old_sv, new_sv):
+        """Правка карты стадий (вкладка «ПЛК») → в журнал режима: названия и состав стадий поменялись, на тренде видно когда."""
+        try:
+            import db
+            what = stage_map.describe_change(old_sv, new_sv)
+            if what:
+                fsm = self.fsm
+                db.mode_add(time.time(), "setting", None, fsm.stage if fsm is not None and fsm._stage_seen else None, "Карта стадий изменена: " + what)
+        except Exception as e:
+            log_event("microscope_service", "Не удалось записать правку карты стадий в журнал режима", "warn", {"error": str(e)})
 
     def _log_cycle_patch_safe(self, patch):
         try:
@@ -903,11 +968,80 @@ class MicroscopeService:
         return res
 
     def approach_config(self):
-        """Блок автоподвода по разломам (Часть C, по умолчанию выкл)."""
+        """Блок советов по подводу от разломов (шаг, порог зон, предельный зазор)."""
         return (self.cfg or {}).get("approach_correction", {}) if self.cfg else {}
 
+    def approach_advice(self, serial):
+        """Советы по подводу: пробы за 30 суток по строкам СВ-таблицы → «дальше» (был разлом) или «ближе» (подряд чистые). Только расчёт, ничего не двигает."""
+        import approach_advice
+        import cv_store
+        cfg = self.cfg or plate_config.load()          # микроскоп выключен (cfg не загружен) — таблица всё равно читается из конфига
+        ap = cfg.get("approach_correction") or {}
+        res = approach_advice.compute(cv_store.approach_rows(serial), cfg.get("SP") or [], cfg.get("SVSP") or [],
+                                      step_um=ap.get("step_um", 50), min_zones=ap.get("min_zones", 1), max_gap_um=ap.get("max_gap_um", 1500),
+                                      min_gap_um=ap.get("min_gap_um", 500), clean_n=ap.get("clean_n", 5), weak_pct=ap.get("weak_pct", 15))
+        res["mode"] = "advise"
+        applied = ap.get("applied") or {}
+        SP = cfg.get("SP") or []
+        for r in res["rows"]:                          # совет уже применён и стоит в таблице → галочка отмечена (снять = вернуть прежний SP)
+            if r.get("status") in ("advice", "closer"):
+                continue                               # на новом зазоре набрался новый совет (ещё дальше/ближе) — он важнее старой отметки
+            a = applied.get(str(r["row"]))
+            if a and a.get("active") and r["row"] < len(SP) and abs(float(SP[r["row"]]) - float(a.get("to", -1))) <= 0.5:
+                r["applied"] = {"from": a.get("from"), "to": a.get("to"), "ts": a.get("ts")}
+        return res
+
+    def approach_apply(self, row, sp_from, sp_to, on=True):
+        """Галочка у совета: on — записать sp_to в SP строки СВ-таблицы (sp_from — SP, от которого считался совет), off — вернуть прежний SP.
+        Без reload автомата: правим конфиг и живой список SP автомата — следующий подвод пойдёт уже по новому зазору."""
+        cfg = self.cfg or plate_config.load()
+        SP = [float(x) for x in (cfg.get("SP") or [])]
+        SVSP = cfg.get("SVSP") or []
+        try:
+            row = int(row)
+        except (TypeError, ValueError):
+            return {"status": "error", "error": "нет номера строки"}
+        if not (1 <= row < len(SP) and row < len(SVSP) and SVSP[row] > 0):
+            return {"status": "error", "error": "такой строки нет в таблице подвода"}
+        ap = cfg.get("approach_correction") or {}
+        cap = float(ap.get("max_gap_um", 1500))
+        rec = dict((ap.get("applied") or {}).get(str(row)) or {})
+        if on:
+            try:
+                sp_from, sp_to = float(sp_from), float(sp_to)
+            except (TypeError, ValueError):
+                return {"status": "error", "error": "нет значений зазора"}
+            if abs(SP[row] - sp_from) > 0.5:
+                return {"status": "error", "error": "таблица изменилась: зазор строки сейчас %d, совет считался от %d — обнови список" % (SP[row], sp_from)}
+            if abs(sp_to - SP[row]) <= 0.5:
+                return {"status": "error", "error": "зазор и так %d — менять нечего" % SP[row]}
+            if sp_to > SP[row] and sp_to > cap:
+                return {"status": "error", "error": "выше предельного зазора %d мкм" % cap}
+            low = float(ap.get("min_gap_um", 500))
+            if sp_to < SP[row] and sp_to < low:
+                return {"status": "error", "error": "ниже минимального зазора %d мкм" % low}
+            new = int(round(sp_to))
+            rec = {"from": int(SP[row]), "to": new, "sv": SVSP[row], "ts": time.time(), "active": True}
+        else:
+            if not rec.get("active") or abs(SP[row] - float(rec.get("to", -1))) > 0.5:
+                return {"status": "error", "error": "зазор строки менялся после совета — вернуть нечего, правь таблицу руками"}
+            new = int(rec["from"])
+            rec["active"] = False
+        SP[row] = new
+        out = [int(round(x)) for x in SP]
+        plate_config.save({"SP": out, "approach_correction": {"applied": {str(row): rec}}})
+        if self.cfg is not None:
+            self.cfg["SP"] = out
+            self.cfg.setdefault("approach_correction", {}).setdefault("applied", {})[str(row)] = rec
+        if self.fsm is not None and row < len(self.fsm.SP):
+            self.fsm.SP[row] = new                     # живая правка: автомат читает SP[i] на каждом подводе
+        log_event("microscope_service", "Совет по подводу %s: строка %d (СВ от %s), зазор %s → %s мкм" % (
+            "применён" if on else "снят", row, SVSP[row], int(rec["from"]) if on else int(rec["to"]), new), "info",
+            {"row": row, "from": rec.get("from"), "to": rec.get("to"), "on": bool(on)})
+        return {"status": "ok", "row": row, "sp": new, "on": bool(on)}
+
     def set_approach(self, patch):
-        """Живое обновление настроек автоподвода (галочка/шаг мкм/пороги)."""
+        """Живое обновление настроек советов по подводу (шаг мкм / порог зон / предельный зазор)."""
         res = self._live_patch("approach_correction", patch)
         log_event("microscope_service", "Настройки автоподвода обновлены", "info", {"patch": patch})
         return res
@@ -1131,34 +1265,21 @@ class MicroscopeService:
         log_event("microscope_service", "Фильтр датчика 1271", "info", patch)
         return {"status": "ok", **patch}
 
-    def set_fine_approach(self, enabled=None, coarse_tol_um=None, fine_tol_um=None,
-                          max_retry=None, pause_sec=None):
-        """Гибридный доезд подвода (грубо по 1274 → точно по датчику 1271): вкл/выкл + допуски/
-        повторы/пауза. Сразу, без reload; persist в конфиг."""
-        patch = {}
-        if enabled is not None:
-            patch["enabled"] = bool(enabled)
-        if coarse_tol_um is not None:
-            patch["coarse_tol_um"] = int(coarse_tol_um)
-        if fine_tol_um is not None:
-            patch["fine_tol_um"] = int(fine_tol_um)
-        if max_retry is not None:
-            patch["max_retry"] = int(max_retry)
-        if pause_sec is not None:
-            patch["pause_sec"] = max(0.5, float(pause_sec))
-        res = self.fsm.set_fine_approach(**patch) if self.fsm else patch
-        if patch:
-            plate_config.save({"fine_approach": patch})
-            if self.cfg is not None:
-                self.cfg.setdefault("fine_approach", {}).update(patch)
-        log_event("microscope_service", "Довод по абсолютнику", "info", patch)
-        return {"status": "ok", **res}
-
     def clear_fault(self):
-        """Сброс аварии оператором (подгон не сошёлся и т.п.): снять запрет, погасить флаг."""
+        """Сброс аварии оператором: снять запрет, погасить флаг."""
         if self.fsm:
             return self.fsm.clear_fault()
         return {"status": "no_fsm"}
+
+    def set_fault_guard(self, m1_timeouts):
+        """Порог Аварии «М1 не доехал N раз подряд» (0 — выкл.): сразу в автомат + persist в конфиг."""
+        patch = {"m1_timeouts": max(0, min(20, int(m1_timeouts)))}
+        res = self.fsm.set_fault_guard(**patch) if self.fsm else patch
+        plate_config.save({"fault_guard": patch})
+        if self.cfg is not None:
+            self.cfg.setdefault("fault_guard", {}).update(patch)
+        log_event("microscope_service", "Порог аварии по таймаутам М1", "info", patch)
+        return {"status": "ok", **res}
 
     def _persist_varka(self, count):
         """Колбэк FSM: сохранить счётчик варок в конфиг (переживает перезапуск)."""
@@ -1182,6 +1303,12 @@ class MicroscopeService:
             path.parent.mkdir(parents=True, exist_ok=True)
             with open(path, "a", encoding="utf-8") as f:
                 f.write(line)
+            trace = info.get("trace") or []
+            if trace:                                    # трасса хода (раз в секунду) — разбор «куда поехал мотор»
+                with open(path.with_name("autocal_trace.log"), "a", encoding="utf-8") as f:
+                    f.write("# %s\t%s\t%s\tretract_pos=%s\n" % (info.get("ts"), info.get("trigger"),
+                                                                 info.get("result"), info.get("retract_pos")))
+                    f.write("\n".join(trace) + "\n")
         except Exception as e:
             log_event("microscope_service", "Не удалось записать журнал автокалибровки", "warn", {"error": str(e)})
         last = info.get("last")
@@ -1190,27 +1317,19 @@ class MicroscopeService:
             if self.cfg is not None:
                 self.cfg.setdefault("autocal", {})["last"] = last
 
-    def _log_approach_fail(self, info):
-        """Колбэк FSM: подгон по датчику не сошёлся — пошли на след. этап. Пишем момент в
-        ОТДЕЛЬНЫЙ файл (approach_fails.log в каталоге данных), чтобы разобрать/починить потом."""
-        from datetime import datetime
-        from paths import DATA_DIR
-        try:
-            line = "%s\ttarget=%s\tsensor=%s\tdelta=%s\tretry=%s\tsv=%s\n" % (
-                datetime.now().isoformat(timespec="seconds"),
-                info.get("target"), info.get("sensor"), info.get("delta"),
-                info.get("retry"), info.get("sv"))
-            path = DATA_DIR / "approach_fails.log"
-            path.parent.mkdir(parents=True, exist_ok=True)
-            with open(path, "a", encoding="utf-8") as f:
-                f.write(line)
-        except Exception as e:
-            log_event("microscope_service", "Не удалось записать лог довода", "warn", {"error": str(e)})
-
     def _on_probe_positions(self, info):
         """Колбэк FSM: три датчика на доезде отвода/подвода -> мониторинг заводских ПК (sysmon). Только чтение."""
         import sysmon
+        if info.get("step") == "подвод":                  # положение подвода уйдёт в ближайшую пробу (галерея, советы по разломам)
+            self._last_approach = dict(info)
         sysmon.record_positions(info)
+
+    def _take_approach(self, max_age_s=900):
+        """Последний приход подвода для пробы: берём один раз и только свежий (иначе проба без подвода — ручной снимок и т.п.)."""
+        info, self._last_approach = self._last_approach, None
+        if not info or time.time() - float(info.get("t") or 0) > max_age_s:
+            return None
+        return {k: info.get(k) for k in ("row", "sp_row", "target", "ai", "enc", "calc", "sv", "timeout")}
 
     def set_autocal(self, enabled=None, every_n=None, sensor_lo=None, sensor_hi=None, timeout_sec=None):
         """Автокалибровка нуля М1: вкл/выкл + через сколько варок + пороги датчика + таймаут.
@@ -1387,12 +1506,6 @@ class MicroscopeService:
         if self.fsm:
             return self.fsm.skip_step()
         return {"status": "no_fsm"}
-
-    def sv_override(self, on):
-        """DEBUG (убрать после отладки): перехват ПЛК. При True sv_source перестаёт
-        затирать ручной СВ/стадию со страницы — можно вбивать значения и смотреть цикл."""
-        self._sv_override = bool(on)
-        return {"sv_override": self._sv_override}
 
     def stop_movement(self, on):
         if self.fsm:

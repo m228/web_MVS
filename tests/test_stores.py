@@ -32,6 +32,26 @@ def test_rtsp_second_save_preserves_autostart(data_dir):
     assert item["autostart"] is True and item["scale"] == 50
 
 
+def test_rtsp_url_edit_keeps_serial_and_autostart(data_dir):
+    # регрессия: правка адреса в /multi выдавала камере новый serial (ключ КЗ, раскладки и проекта):
+    # старая запись ещё держала его в момент сохранения новой
+    old, new = "rtsp://127.0.0.1/a", "rtsp://127.0.0.1/b"
+    rtsp_store.save({"url": old, "serial": "rtsp_3", "autostart": True})
+    rtsp_store.save({"url": new, "serial": "rtsp_3"}, old_url=old)
+    items = rtsp_store.load()
+    assert [(i["url"], i["serial"], i["autostart"]) for i in items] == [(new, "rtsp_3", True)]
+
+
+def test_rtsp_url_edit_does_not_take_serial_of_another_camera(data_dir):
+    # замена адреса освобождает только свою старую запись: чужой serial по-прежнему занят
+    rtsp_store.save({"url": "rtsp://127.0.0.1/a", "serial": "rtsp_1"})
+    rtsp_store.save({"url": "rtsp://127.0.0.1/c", "serial": "rtsp_3"})
+    rtsp_store.save({"url": "rtsp://127.0.0.1/b", "serial": "rtsp_3"}, old_url="rtsp://127.0.0.1/a")
+    serials = {i["url"]: i["serial"] for i in rtsp_store.load()}
+    assert set(serials) == {"rtsp://127.0.0.1/b", "rtsp://127.0.0.1/c"}
+    assert serials["rtsp://127.0.0.1/c"] == "rtsp_3" and serials["rtsp://127.0.0.1/b"] != "rtsp_3"
+
+
 def test_save_settings_update_get(data_dir):
     save_settings.update("CAM1", photo_project="p1", photo_interval=5)
     got = save_settings.get("CAM1")

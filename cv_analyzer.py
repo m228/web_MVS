@@ -787,9 +787,10 @@ def measure_objects(objects: list[dict], cv_cfg: Optional[dict] = None,
                     sv: Optional[float] = None, img_shape: Optional[tuple] = None) -> list[CrystalMeasure]:
     """Посчитать геометрию/форму/группу для каждого объекта. Мелочь < min_size_um отсекаем.
 
-    sv — текущее СВ пробы: пока оно ниже reject_from_sv (и не стоит reject_always), кристаллы с
-    дефектом формы НЕ идут в группу «брак» (считаются по размеру), но причина дефекта всё равно
-    определяется и сохраняется — в окне CV всегда видно, что это.
+    sv — текущее СВ пробы. Брак по форме (сросток/игла/кривой) идёт в группу «брак», пока СВ не выше
+    reject_to_sv (или стоит reject_always, или СВ неизвестно) — см. is_counting. Выше порога дефектные
+    кристаллы в расчёт не берутся, но причина дефекта всё равно определяется и сохраняется — в окне CV
+    всегда видно, что это. Брак по размеру — только при СВ ≥ reject_from_sv (у готового кристалла).
     """
     cfg = _cfg(cv_cfg)
     upp = cfg["um_per_px"]
@@ -913,7 +914,7 @@ def summarize(measures: list[CrystalMeasure], image_shape: tuple,
     n = len(measures) - n_cut - n_bubble - n_excl
     area_mm2 = (w * cfg["um_per_px"] / 1000.0) * (h * cfg["um_per_px"] / 1000.0)
     sizes_np = np.array(sizes) if sizes else np.array([0.0])
-    vol_sums = cv_volume.sums_for(measures, cfg, cv_volume.fines_on(cfg, sv) or phase is not None, phase, seed_age_s, boil_t_s)    # на фазе (подкачка/рост) мука считается всегда
+    vol_sums = cv_volume.sums_for(measures, cfg, cv_volume.fines_on(cfg, sv) or cv_volume.fines_always(phase), phase, seed_age_s, boil_t_s)    # на фазе (подкачка / стабилизация / рост) мука считается всегда
     quality = "ok"
     if blur is not None and blur < cfg["blur_min"]:
         quality = "low"

@@ -17,8 +17,9 @@ STORE = DATA_DIR / "save_settings.json"
 # поля, которые храним на камеру.
 # photo_autostart — возобновлять ли автосохранение фото при старте приложения
 # photo_format — формат автосохранения фото: "jpg" или "png" (без потерь)
+# zoom — цифровой зум RTSP-камеры {factor, pan_x, pan_y}: после перезапуска камера открывается с тем же приближением
 _FIELDS = ("photo_project", "photo_interval", "video_project", "video_duration",
-           "photo_autostart", "photo_format")
+           "photo_autostart", "photo_format", "zoom")
 
 # сериализуем read-modify-write: фронт может дублировать запросы параллельно,
 # и без лока один запрос затрёт результат другого

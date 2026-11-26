@@ -8,6 +8,10 @@
 Источники (src) — функции без аргументов; тесты подменяют их и часы.
   camera() -> {serial, streaming, current, black_s, live}   state() -> состояние автомата
   status() -> статус связи PlateClient   ext() -> доп. телеметрия платы   reboot() -> послать команду
+  light() -> {} | {что расходилось}: сверить яркость/частоту LED в плате с сохранёнными и, если разошлись, записать заново
+
+Порядок при чёрном кадре: сначала проверка света (после «Сохранить»/перезапуска частота или яркость в плате могли слететь,
+а на странице всё как было) — расходятся -> пишем сохранённые заново и ждём LIGHT_WAIT_S; кадр остался чёрным — тогда ребут платы.
 """
 import threading
 import time
@@ -19,6 +23,7 @@ TICK_S = 5.0
 COOLDOWN_S = 1800.0       # между перезапусками платы минимум столько
 DOWN_WAIT_S = 15.0        # после команды плата должна пропасть за это время, иначе команду не приняла
 RETURN_WAIT_S = 45.0      # и вернуться за это время (на деле ~5 с)
+LIGHT_WAIT_S = 20.0       # после повторной записи света ждём живой кадр столько, потом уже ребут платы
 POLL_S = 0.5
 
 RESULT_TEXT = {
@@ -35,6 +40,8 @@ class BoardGuard:
         self.sleep = sleep
         self.armed = True            # после перезапуска false, пока не появится живой кадр
         self.last = None             # {"t", "result", "took_s", "text"} — последний перезапуск
+        self.light = None            # {"t", "diff", "text"} — последний раз, когда свет в плате разошёлся с сохранённым
+        self.light_at = None         # когда при этом чёрном кадре уже переписывали свет (None — ещё нет)
         self.busy = False
         self._stop = threading.Event()
         self._thread = None
@@ -74,6 +81,7 @@ class BoardGuard:
         cam = self.src["camera"]() or {}
         if cam.get("live"):
             self.armed = True
+            self.light_at = None
         if self.last and self.last["result"] == "no_return" and (self.src["status"]() or {}).get("connected"):
             self.last.update(result="late_return", text="плата вернулась только позже")   # тревога «не поднялась» снимается
         if not self.armed or self.busy:
@@ -87,7 +95,30 @@ class BoardGuard:
             return None
         if self._blocked():
             return None
+        chk = self._light_check(now)
+        if chk:
+            return "light" if chk == "fixed" else None       # "wait" — ждём живой кадр после повторной записи света
         return self.reboot(now, cam.get("black_s"))
+
+    def _light_check(self, now):
+        """"fixed" — свет только что переписали, "wait" — ждём живой кадр (плату пока не трогаем). False — ребут."""
+        fn = self.src.get("light")
+        if fn is None:
+            return False
+        if self.light_at is not None:
+            return "wait" if now - self.light_at < LIGHT_WAIT_S else False
+        try:
+            diff = fn() or {}
+        except Exception as e:
+            log_event("board_guard", "Не удалось сверить свет с платой: %s" % e, "warn")
+            return False
+        if not diff:
+            return False
+        text = ", ".join("%s: должно %s, в плате %s" % (k, v[0], v[1]) for k, v in sorted(diff.items()))
+        self.light_at = now
+        self.light = {"t": now, "diff": diff, "text": text}
+        log_event("board_guard", "Кадр чёрный, свет в плате не тот (%s) — записал сохранённый заново" % text, "warn", {"diff": diff})
+        return "fixed"
 
     def reboot(self, now, black_s=None):
         self.busy = True

@@ -5,10 +5,13 @@
 Сообщения об обновлении завода (вид update: скачана, обновлён и всё поднялось, откат) приходят «в историю» — без звука; со звуком
 только «обновлён, но не всё поднялось» (is_quiet). Тревоги и «в историю» уходят отдельными сообщениями, тихие потолок не едят.
 Старые события (пачка после обрыва связи) в чат не идут. Несколько событий одного завода в одном проходе — одно сообщение. Не больше
-max_per_hour сообщений в час: остальное одной строкой «ещё N событий, смотри панель».
+max_per_hour сообщений в час С КАЖДОГО ЗАВОДА (лавина на одном не глушит тревоги другого): остальное одной строкой «ещё N событий,
+смотри панель».
 
 Кроме уведомлений бот отвечает на вопросы: кнопки с названиями заводов (Кир, Буи, «Все заводы») — нажал, пришла текстовая сводка
-по заводу: статус, тревоги, датчики последней пробы, последние события. Отвечает только чатам из chat_ids; вопросы, заданные пока приёмник
+по заводу: статус, диск, тревоги, датчики последней пробы, последние события — и кнопки управления тем же, что на карточке в панели:
+журнал, диск, сбросить тревоги, настройки «нет пульса», переименовать, новый токен (токен стирается из чата через 5 минут), удалить
+(с подтверждением); «🆕 Заявки» — кто ждёт токена. Отвечает только чатам из chat_ids; вопросы, заданные пока приёмник
 не работал, не отвечаются (старое не новость).
 
 Очередь живёт в monitor.db (таблица notify): перезапуск приёмника и обрыв Telegram ничего не теряют и не дублируют.
@@ -16,8 +19,10 @@ max_per_hour сообщений в час: остальное одной стр�
 """
 from __future__ import annotations
 
+import html
 import json
 import logging
+import math
 import os
 import threading
 import time
@@ -28,6 +33,7 @@ from pathlib import Path
 from typing import Callable, Optional
 
 import monitor_release
+import monitor_store
 
 log = logging.getLogger("monitor.telegram")
 
@@ -35,7 +41,7 @@ API_BASE = "https://api.telegram.org"
 HTTP_TIMEOUT_S = 10
 RETRY_MAX_S = 1800
 WATCH_EVERY_S = 30
-DEFAULTS = {"fresh_s": 900, "max_per_hour": 20, "offline_repeat_s": 7200, "max_age_s": 7200, "morning": (8, 0)}
+DEFAULTS = {"fresh_s": 900, "max_per_hour": 20, "offline_repeat_s": 21600, "max_age_s": 7200, "morning": (8, 0)}
 MORNING_WINDOW_S = 2 * 3600          # утреннюю сводку после этого срока уже не шлём (приёмник включили днём — это не «утро»)
 MORNING_SPAN_S = 12 * 3600           # за сколько часов до отправки смотрим: 08:00 -> с 20:00 (граница смен Макса)
 TEST_TEXT = "✅ web_MVS панель: Telegram подключён. Сюда придут тревоги заводов: перезапуск ПК или приложения, нет связи, красные тревоги."
@@ -146,6 +152,31 @@ def is_quiet(r: dict) -> bool:
     return r.get("kind") == "update" and r.get("state") in QUIET_UPDATE_STATES
 
 
+MUTE_QUICK_MIN = 120                      # кнопка «🔕 Тихо 2 ч» под сообщением о тревоге
+MUTE_SUMMARY_MAX_AGE_S = 86400            # итог тишины, которая кончилась больше суток назад, не шлём
+MUTE_RETRY_S = 60                         # если итог не ушёл — пауза перед новой попыткой (не меньше, чем просит Telegram)
+
+
+def wants_mute_button(rows: list) -> bool:
+    """Кнопка «Тихо» нужна там, где завод беспокоит: тревога, нет пульса, старт. «Снято» и «связь восстановилась» — хорошие вести, кнопка лишняя."""
+    return any(r.get("state") != "closed" and r.get("kind") not in ("online", "update") for r in rows)
+
+
+def format_mute_end(m: dict, p: Optional[dict], now: float) -> str:
+    """Итог тишины: что промолчали и что открыто сейчас (чтобы после тишины ничего не потерялось)."""
+    head = "🔔 %s — тишина закончилась (%s–%s)." % (m["name"], time.strftime("%H:%M", time.localtime(m["since"])), time.strftime("%H:%M", time.localtime(m["until"])))
+    n = m["count"]
+    lines = [head, "Пока молчали: %d %s." % (n, "событие" if n % 10 == 1 and n % 100 != 11 else "события" if 2 <= n % 10 <= 4 and not 12 <= n % 100 <= 14 else "событий")
+             if n else "Пока молчали: важных событий не было."]
+    now_open = []
+    if p is not None:
+        if p.get("status") == "offline":
+            now_open.append("🔴 нет связи")
+        now_open += ["🔴 " + a["text"] for a in p.get("alerts") or [] if not a.get("acked") and a.get("level") in ("critical", "high")]
+    lines.append("Сейчас открыто: " + "; ".join(now_open) if now_open else "Сейчас открытых красных тревог нет.")
+    return "\n".join(lines)
+
+
 def format_line(r: dict) -> str:
     """Одна строка сообщения: «🔴 Кир — текст · 19:40». Снятие и восстановление — зелёные, обновление — свой значок."""
     hm = time.strftime("%H:%M", time.localtime(r["t"]))
@@ -157,7 +188,8 @@ def format_line(r: dict) -> str:
     if r["state"] == "closed":
         text = text[len("Снято: "):] if text.startswith("Снято: ") else text
         return "🟢 %s — снято: %s · %s" % (r["plant_name"], text, hm)
-    return "🔴 %s — %s · %s" % (r["plant_name"], text, hm)
+    icon = "🟠" if r["kind"] in ("offline", "offline_repeat") and r.get("level") == "high" else "🔴"      # пропал пульс — оранжевый, не красный
+    return "%s %s — %s · %s" % (icon, r["plant_name"], text, hm)
 
 
 class Notifier:
@@ -166,8 +198,9 @@ class Notifier:
     def __init__(self, store, client: TelegramClient, cfg: dict, clock: Callable[[], float] = time.time, releases=None):
         self.store, self.client, self.cfg, self.clock, self.releases = store, client, cfg, clock, releases
         self.state = {"last_ok_t": None, "last_error": "", "last_try_t": None, "sent_messages": 0}
-        self._sent_times: deque = deque()       # когда ушли последние сообщения (потолок max_per_hour)
-        self._summary_t = 0.0
+        self._sent_times: dict = {}             # завод -> deque моментов отправки тревог (потолок max_per_hour — на КАЖДЫЙ завод)
+        self._summary_t: dict = {}              # завод -> когда последний раз писали «слишком много событий»
+        self._mute_retry_t = 0.0                # раньше этого времени итог тишины заново не шлём (Telegram не ответил / просил подождать)
         self._kick = threading.Event()
         self._stop = threading.Event()
         self._thread: Optional[threading.Thread] = None
@@ -198,27 +231,38 @@ class Notifier:
             self._kick.wait(WATCH_EVERY_S)
             self._kick.clear()
 
-    def _send_all(self, text: str, silent: bool = False) -> tuple:
+    def _send_all(self, text: str, silent: bool = False, markup: Optional[dict] = None) -> tuple:
         wait, err = 0.0, ""
         for chat in self.cfg["chat_ids"]:
-            ok, w, e = self.client.send(chat, text, silent=silent)
+            ok, w, e = self.client.send(chat, text, markup, silent=silent)
             if not ok:
                 return False, max(wait, w), e
         return True, 0.0, ""
 
-    def _recent(self, now: float) -> int:
-        while self._sent_times and now - self._sent_times[0] > 3600:
-            self._sent_times.popleft()
-        return len(self._sent_times)
+    def _recent(self, plant_id, now: float) -> int:
+        """Сколько тревог завода ушло за последний час. Потолок свой у каждого завода: лавина на одном не глушит другой."""
+        times = self._sent_times.setdefault(plant_id, deque())
+        while times and now - times[0] > 3600:
+            times.popleft()
+        return len(times)
 
     def flush(self) -> int:
         """Один проход: напоминания «нет связи», затем отправка очереди. Возвращает, сколько сообщений ушло."""
         with self._lock:
             now = self.clock()
+            try:
+                sent = self._mute_summaries(now)
+            except Exception:                                    # итог тишины не должен останавливать остальные сообщения
+                log.exception("итог тишины")
+                sent = 0
             self.store.notify_offline_reminders(now, self.cfg["offline_repeat_s"])
             rows = self.store.notify_pending(now, 100)
+            hush = [r["id"] for r in rows if self.store.mute_until(r["plant_id"], now) is not None]
+            if hush:                                             # встали в очередь до того, как включили тишину: тоже молчим (и помним для итога)
+                self.store.notify_hush(hush, now)
+                rows = [r for r in rows if r["id"] not in hush]
             if not rows:
-                return 0
+                return sent
             old = [r["id"] for r in rows if now - r["t"] > self.cfg["max_age_s"]]
             if old:                                              # Telegram долго не отвечал — давнее уже не новость
                 self.store.notify_mark(old, "muted", now, "устарело")
@@ -226,7 +270,7 @@ class Notifier:
             by_plant: dict = {}
             for r in rows:
                 by_plant.setdefault(r["plant_id"], []).append(r)
-            sent, muted = 0, 0
+            muted: dict = {}                                     # завод -> [название, сколько заглушено потолком]
             groups = []                                          # (строки, тихо?): у завода тревоги и «история» уходят отдельными сообщениями
             for plant_rows in by_plant.values():
                 loud = [r for r in plant_rows if not is_quiet(r)]
@@ -234,16 +278,19 @@ class Notifier:
                 groups += [(g, silent) for g, silent in ((loud, False), (quiet, True)) if g]
             for group_rows, silent in groups:
                 ids = [r["id"] for r in group_rows]
-                if not silent and self._recent(now) >= self.cfg["max_per_hour"]:      # тихие потолок не едят: бюджет — для тревог
+                pid = group_rows[0]["plant_id"]
+                if not silent and self._recent(pid, now) >= self.cfg["max_per_hour"]:      # тихие потолок не едят: бюджет — для тревог
                     self.store.notify_mark(ids, "muted", now, "потолок сообщений в час")
-                    muted += len(ids)
+                    muted.setdefault(pid, [group_rows[0]["plant_name"], 0])[1] += len(ids)
                     continue
-                ok, wait, err = self._send_all("\n".join(format_line(r) for r in group_rows), silent)
+                markup = None if silent or not wants_mute_button(group_rows) else {"inline_keyboard": [[
+                    {"text": "🔕 Тихо %d ч" % (MUTE_QUICK_MIN // 60), "callback_data": "mt:%d:%d" % (group_rows[0]["plant_id"], MUTE_QUICK_MIN)}]]}
+                ok, wait, err = self._send_all("\n".join(format_line(r) for r in group_rows), silent, markup)
                 self.state["last_try_t"] = now
                 if ok:
                     self.store.notify_mark(ids, "sent", now)
                     if not silent:
-                        self._sent_times.append(now)
+                        self._sent_times.setdefault(pid, deque()).append(now)
                     self.state.update(last_ok_t=now, last_error="", sent_messages=self.state["sent_messages"] + 1)
                     sent += 1
                 else:
@@ -253,12 +300,36 @@ class Notifier:
                     self.state["last_error"] = err
                     log.warning("Telegram: %s (повтор через %d с)", err, delay)
                     break                                        # связи нет — остальные заводы тоже не уйдут, не долбим
-            if muted and now - self._summary_t > 3600:
-                self._summary_t = now
-                ok, _, err = self._send_all("⚠ Слишком много событий за час: ещё %d не отправлено. Смотри панель." % muted)
-                if ok:
-                    sent += 1
+            for pid, (name, n) in muted.items():                 # итог — раз в час на завод, с его названием
+                if now - self._summary_t.get(pid, 0.0) > 3600:
+                    self._summary_t[pid] = now
+                    ok, _, err = self._send_all("⚠ %s: слишком много событий за час, ещё %d не отправлено. Смотри панель." % (name, n))
+                    if ok:
+                        sent += 1
             return sent
+
+    def _mute_summaries(self, now: float) -> int:
+        """Тишина кончилась (по сроку или «Снять»): одно сообщение «что пропустили и что сейчас открыто». Не ушло — повторим на следующем проходе.
+        Если тишина кончилась давно (приёмник не работал), итог уже не новость — молча закрываем."""
+        sent = 0
+        if now < self._mute_retry_t:
+            return 0
+        for m in self.store.mute_finished(now):
+            if now - m["until"] > MUTE_SUMMARY_MAX_AGE_S:
+                self.store.mute_reported(m["plant_id"], m["since"])
+                continue
+            p = next((x for x in self.store.plants_view() if x["id"] == m["plant_id"]), None)
+            ok, wait, err = self._send_all(format_mute_end(m, p, now))
+            self.state["last_try_t"] = now
+            if not ok:
+                self._mute_retry_t = now + max(wait, MUTE_RETRY_S)
+                self.state["last_error"] = err
+                log.warning("Telegram: итог тишины не ушёл — %s (повтор через %d с)", err, max(wait, MUTE_RETRY_S))
+                break
+            self.store.mute_reported(m["plant_id"], m["since"])
+            self.state.update(last_ok_t=now, last_error="", sent_messages=self.state["sent_messages"] + 1)
+            sent += 1
+        return sent
 
     def morning(self) -> bool:
         """Утренняя сводка: раз в сутки после заданного времени (по умолчанию 08:00 по часам ПК приёмника), одним сообщением на все заводы.
@@ -306,6 +377,9 @@ class Notifier:
 STATUS_RU = {"online": "в сети", "offline": "нет связи", "waiting": "ещё не выходил на связь", "checking": "проверяю связь"}
 STATUS_ICON = {"online": "🟢", "offline": "🔴", "waiting": "⚪", "checking": "🟡"}
 ALL_BUTTON = "Все заводы"
+REQ_BUTTON = "🆕 Заявки"
+REQ_WORDS = ("заявки", "🆕 заявки")
+CANCEL_WORDS = ("отмена", "cancel")
 MENU_WORDS = ("start", "help", "menu", "заводы", "меню", "помощь")
 ALL_WORDS = ("all", "status", "все", "всё", "все заводы")
 MESSAGE_MAX = 3800
@@ -338,6 +412,23 @@ def _head(p: dict, now: float) -> str:
     return head
 
 
+def disk_of(snap: dict) -> Optional[dict]:
+    """Диск из снимка завода. У клиентов 2.1.27 он лежал внутри блока камер движения; нет данных — None."""
+    motion = snap.get("motion")
+    d = snap.get("disk") or (motion.get("disk") if isinstance(motion, dict) else None)
+    if not isinstance(d, dict):
+        return None
+    total, free = d.get("total_gb"), d.get("free_gb")
+    nums = all(isinstance(x, (int, float)) and not isinstance(x, bool) and math.isfinite(x) for x in (total, free))     # снимок пишет клиент: ему не доверяем
+    return d if nums and total > 0 and 0 <= free <= total else None
+
+
+def disk_line(d: dict) -> str:
+    free = d["free_gb"] / d["total_gb"]
+    icon = "🔴 " if free < 0.05 else "⚠ " if free < 0.1 else ""
+    return "%sДиск: свободно %d из %d ГБ (%d %%)" % (icon, round(d["free_gb"]), round(d["total_gb"]), round(free * 100))
+
+
 def _old_version(p: dict, latest: Optional[str]) -> str:
     """«2.0.43 → есть 2.0.50», если завод на более старой версии, иначе пусто. Версию не додумываем: нет данных — нет и пометки."""
     ver = (p.get("snapshot") or {}).get("app_version")
@@ -352,13 +443,17 @@ def format_all(plants: list, now: float, latest: Optional[str] = None) -> str:
     for p in plants:
         n = len(p.get("alerts") or [])
         old = _old_version(p, latest)
-        lines.append(_head(p, now) + (", тревог: %d" % n if n else "") + (", старая версия %s" % old if old else ""))
+        d = disk_of(p.get("snapshot") or {})
+        lines.append(_head(p, now) + (", тревог: %d" % n if n else "") + (", " + disk_line(d).replace("Диск: свободно", "диск свободно").replace(" из ", "/") if d else "") +
+                     (", старая версия %s" % old if old else "") + (", 🔕 тихо до %s" % _hm(p["mute_until"]) if p.get("mute_until") else ""))
     return "\n".join(lines)[:MESSAGE_MAX]
 
 
 def format_plant(p: dict, now: float, latest: Optional[str] = None) -> str:
     """Вся текстовая сводка по заводу: статус, строка «как дела» из снимка, тревоги с временем, датчики последней пробы, последние события."""
     lines = [_head(p, now)]
+    if p.get("mute_until"):
+        lines.append("🔕 Не беспокоить до %s (события — в панели и журнале)" % _hm(p["mute_until"]))
     snap = p.get("snapshot") or {}
     if p.get("status") == "waiting" or not snap:
         return "\n".join(lines)
@@ -369,10 +464,14 @@ def format_plant(p: dict, now: float, latest: Optional[str] = None) -> str:
     if body and snap.get("plant") and body[0].startswith(str(snap["plant"]) + " · "):
         body[0] = body[0][len(str(snap["plant"])) + 3:]           # имя завода уже в заголовке
     lines += body
+    d = disk_of(snap)
+    if d:
+        lines.append(disk_line(d))
     alerts = p.get("alerts") or []
     if alerts:
         lines.append("Тревоги:")
-        lines += ["%s %s (с %s)" % ("🔴" if a.get("level") in ("critical", "high") else "🟡", a["text"], _hm(a["since"])) for a in alerts]
+        lines += ["%s %s (с %s)%s" % ("🔴" if a.get("level") in ("critical", "high") else "🟡", a["text"], _hm(a["since"]),
+                                     " · сброшена в панели" if a.get("acked") else "") for a in alerts]
     else:
         lines.append("Тревог нет")
     pos = ((snap.get("micro") or {}).get("positions")) or {}
@@ -433,7 +532,7 @@ def format_morning(plants: list, facts: dict, outages: list, t0: float, t1: floa
             lines.append("• Тревоги за ночь: %s" % none)
         open_now = p.get("alerts") or []
         if open_now:
-            lines.append("• Сейчас открыто: " + "; ".join("%s (с %s)" % (a["text"], _dhm(a["since"])) for a in open_now[:4]))
+            lines.append("• Сейчас открыто: " + "; ".join("%s (с %s)%s" % (a["text"], _dhm(a["since"]), ", сброшена в панели" if a.get("acked") else "") for a in open_now[:4]))
         else:
             lines.append("• Сейчас открытых тревог нет")
         probes = (snap.get("micro") or {}).get("probes_today")
@@ -443,10 +542,28 @@ def format_morning(plants: list, facts: dict, outages: list, t0: float, t1: floa
 
 
 class Bot:
-    """Отвечает на сообщения в Telegram: кнопки заводов → сводка по заводу. Свой поток, длинный опрос getUpdates (наружу порты не открываем).
-    Отвечает только чатам из chat_ids: чужим — молчание (в журнал только номер чата)."""
+    """Отвечает на сообщения в Telegram: кнопки заводов → сводка по заводу с кнопками управления (то же, что на карточке в панели: журнал, диск,
+    сбросить тревоги, настройки «нет пульса», переименовать, новый токен, удалить) и заявки новых клиентов. Свой поток, длинный опрос
+    getUpdates (наружу порты не открываем). Отвечает только чатам из chat_ids: чужим — молчание (в журнал только номер чата).
+
+    Опасное — через подтверждение (новый токен, удаление). Токен уходит в чат одним сообщением и стирается оттуда через TOKEN_TTL_S секунд;
+    что ещё надо стереть, лежит в БД (meta), поэтому перезапуск приёмника ничего не оставит в переписке. callback_data — «действие:id завода[:параметры]»."""
 
     POLL_S = 25
+    PENDING_S = 300                  # сколько бот ждёт название после «Переименовать»
+    TOKEN_TTL_S = 300                # через сколько стирать из чата сообщение с токеном
+    DELETE_KEEP_S = 47 * 3600        # Telegram не даёт стирать сообщения бота старше 48 часов: дольше не пытаемся
+    DELETE_KEY = "tg_delete"         # meta: что ещё стереть из чата — [[chat_id, message_id, когда], …]
+    GONE = "Такого завода уже нет."
+    # действие -> метод; pid обязателен у всех, кроме xx (отмена)
+    ACTIONS = {"lg": "_act_log", "dk": "_act_disk", "ak": "_act_ack", "st": "_act_settings", "sv": "_act_set", "rn": "_act_rename",
+               "tk": "_act_token_ask", "tky": "_act_token", "dl": "_act_delete_ask", "dly": "_act_delete", "xx": "_act_cancel",
+               "mu": "_act_mute_menu", "ms": "_act_mute_set", "mt": "_act_mute_quick", "mc": "_act_mute_cancel"}
+    MUTE_PRESETS = ((60, "1 ч"), (120, "2 ч"), (240, "4 ч"), ("m", "до утра"))      # «Не беспокоить»; "m" — до утра, 0 — снять
+    CONFIRMS = ("tky", "dly")                # «Да» под вопросом: действует CONFIRM_TTL_S и только один раз (см. _once)
+    CONFIRM_TTL_S = 600
+    AFTER_PRESETS = (15, 30, 60, 120, 240)                       # «нет пульса через», мин
+    REPEAT_PRESETS = ((0, "не напоминать"), (60, "1 ч"), (120, "2 ч"), (360, "6 ч"), (720, "12 ч"))
 
     def __init__(self, store, client: TelegramClient, poll_client: TelegramClient, chat_ids: list, clock: Callable[[], float] = time.time,
                  releases=None):
@@ -454,48 +571,395 @@ class Bot:
         self.allowed = {str(c) for c in chat_ids}
         self.offset: Optional[int] = None
         self.state = {"last_error": "", "answered": 0}
+        self._pending: dict = {}                     # chat -> {"pid", "t"}: ждём новое название завода
+        self._used: dict = {}                        # (chat, message_id) подтверждений, которые уже отработали
         self._stop = threading.Event()
         self._thread: Optional[threading.Thread] = None
 
     def keyboard(self) -> dict:
         names = self.store.plant_names()
         rows = [[{"text": n} for n in names[i:i + 2]] for i in range(0, len(names), 2)]
-        rows.append([{"text": ALL_BUTTON}])
+        rows.append([{"text": ALL_BUTTON}, {"text": REQ_BUTTON}])
         return {"keyboard": rows, "resize_keyboard": True, "is_persistent": True}
+
+    # ------------------------------------------------------------------------------------------------------------ отправка
+
+    def _say(self, chat, text: str, markup: Optional[dict] = None) -> bool:
+        ok, _, err = self.client.send(chat, text, markup)
+        if ok:
+            self.state["answered"] += 1
+        else:
+            self.state["last_error"] = err
+            log.warning("Telegram: ответ не ушёл — %s", err)
+        return ok
+
+    def _edit(self, chat, mid, text: str, markup: Optional[dict] = None) -> None:
+        """Переписать сообщение. Без markup кнопки под ним исчезают."""
+        payload = {"chat_id": chat, "message_id": mid, "text": text[:4000], "disable_web_page_preview": True}
+        if markup is not None:
+            payload["reply_markup"] = markup
+        self.client.call("editMessageText", payload)
+
+    def _plant(self, pid: int) -> Optional[dict]:
+        return next((p for p in self.store.plants_view() if p["id"] == pid), None)
+
+    @staticmethod
+    def _btn(text: str, kind: str, pid: Optional[int] = None, *extra) -> dict:
+        return {"text": text, "callback_data": ":".join([kind] + ([str(pid)] if pid is not None else []) + [str(x) for x in extra])}
+
+    def plant_markup(self, p: dict) -> dict:
+        """Кнопки под сводкой завода. «Сбросить тревоги» — только если есть что сбрасывать."""
+        pid, b = p["id"], self._btn
+        rows = [[b("📜 Журнал", "lg", pid), b("💾 Диск", "dk", pid)]]
+        until = p.get("mute_until")
+        rows.append([b("🔔 Снять тишину (до %s)" % _hm(until), "mc", pid) if until else b("🔕 Не беспокоить", "mu", pid)])
+        if any(not a.get("acked") for a in p.get("alerts") or []):
+            rows.append([b("🔕 Сбросить тревоги", "ak", pid)])
+        rows += [[b("⚙ Настройки", "st", pid), b("✏ Переименовать", "rn", pid)], [b("🔑 Новый токен", "tk", pid), b("🗑 Удалить", "dl", pid)]]
+        return {"inline_keyboard": rows}
+
+    # ------------------------------------------------------------------------------------------------------------ заявки
+
+    @staticmethod
+    def _enroll_message(req_id: int, name: str, version: str, ip: str) -> tuple:
+        text = "🆕 Новый клиент просит токен: «%s»\nВерсия %s · адрес %s\nПринять — токен уйдёт ему сам." % (name, version or "—", ip or "—")
+        markup = {"inline_keyboard": [[{"text": "✅ Принять", "callback_data": "ea:%d" % req_id}, {"text": "✖ Отклонить", "callback_data": "er:%d" % req_id}]]}
+        return text, markup
 
     def announce_enroll(self, req_id: int, name: str, version: str, ip: str) -> None:
         """Новая заявка клиента: сообщение со звуком и кнопками «Принять / Отклонить» во все разрешённые чаты."""
-        text = "🆕 Новый клиент просит токен: «%s»\nВерсия %s · адрес %s\nПринять — токен уйдёт ему сам." % (name, version or "—", ip or "—")
-        markup = {"inline_keyboard": [[{"text": "✅ Принять", "callback_data": "ea:%d" % req_id}, {"text": "✖ Отклонить", "callback_data": "er:%d" % req_id}]]}
+        text, markup = self._enroll_message(req_id, name, version, ip)
         for chat in sorted(self.allowed):
             ok, _, err = self.client.send(chat, text, markup)
             if not ok:
                 log.warning("Telegram: заявка клиента не ушла в чат — %s", err)
 
+    def _enroll_answer(self, kind: str, req_id: int) -> str:
+        if kind == "ea":
+            try:
+                res = self.store.enroll_approve(req_id)
+                return "✅ Принят: «%s». Токен уйдёт клиенту при его следующей заявке (до минуты)." % res["name"]
+            except LookupError:
+                return "Заявка уже решена или устарела."
+            except ValueError as e:
+                return "Не принял: %s. Прими в панели под другим названием." % e
+        return "✖ Отклонено." if self.store.enroll_reject(req_id) else "Заявка уже решена или устарела."
+
+    # ------------------------------------------------------------------------------------------------------------ кнопки
+
     def _callback(self, cb: dict) -> Optional[str]:
-        """Нажатие кнопки под заявкой: ea:<id> — принять, er:<id> — отклонить. Чужие чаты — молчание."""
+        """Нажатие инлайн-кнопки. Чужие чаты — молчание. Заявки: ea:<id> принять, er:<id> отклонить; остальное — ACTIONS."""
         msg = cb.get("message") or {}
         chat = msg.get("chat") or {}
         if str(chat.get("id")) not in self.allowed or chat.get("type") != "private":
             log.info("Telegram: кнопка из чужого чата %s проигнорирована", chat.get("id"))
             return None
-        kind, _, num = str(cb.get("data") or "").partition(":")
-        if kind not in ("ea", "er") or not num.isdigit():
+        kind, _, rest = str(cb.get("data") or "").partition(":")
+        mid = msg.get("message_id")
+        if kind in ("ea", "er") and rest.isdigit():
+            reply = self._enroll_answer(kind, int(rest))
+            self.client.call("answerCallbackQuery", {"callback_query_id": cb.get("id"), "text": reply[:190]})
+            old = str(msg.get("text") or "").split("\n")[0]
+            self._edit(chat["id"], mid, old + "\n" + reply)
+            return reply
+        method = self.ACTIONS.get(kind)
+        parts = rest.split(":") if rest else []
+        pid = int(parts[0]) if parts and parts[0].isdigit() else None
+        if method is None or (pid is None and kind != "xx"):
             return None
-        if kind == "ea":
-            try:
-                res = self.store.enroll_approve(int(num))
-                reply = "✅ Принят: «%s». Токен уйдёт клиенту при его следующей заявке (до минуты)." % res["name"]
-            except LookupError:
-                reply = "Заявка уже решена или устарела."
-            except ValueError as e:
-                reply = "Не принял: %s. Прими в панели под другим названием." % e
+        date = msg.get("date")
+        if kind in self.CONFIRMS and isinstance(date, (int, float)) and self.clock() - date > self.CONFIRM_TTL_S:      # «Да» под старым вопросом не действует
+            reply = "Вопрос устарел — нажми кнопку заново."
+            self._edit(chat["id"], mid, reply)
         else:
-            reply = "✖ Отклонено." if self.store.enroll_reject(int(num)) else "Заявка уже решена или устарела."
+            try:
+                reply = getattr(self, method)(chat["id"], mid, pid, parts[1:]) or ""
+            except LookupError:                                    # завод удалили из панели между нажатием и действием
+                reply = self.GONE
+            except Exception:
+                log.exception("Telegram: кнопка %s не сработала", kind)
+                reply = "Не получилось, смотри панель."
         self.client.call("answerCallbackQuery", {"callback_query_id": cb.get("id"), "text": reply[:190]})
-        old = str(msg.get("text") or "").split("\n")[0]
-        self.client.call("editMessageText", {"chat_id": chat["id"], "message_id": msg.get("message_id"), "text": (old + "\n" + reply)[:4000]})
+        return reply or None
+
+    def _act_log(self, chat, mid, pid, args) -> Optional[str]:
+        p = self._plant(pid)
+        if p is None:
+            return self.GONE
+        events = self.store.events(pid, 10)
+        icons = {"critical": "🔴", "high": "🔴", "medium": "🟡"}
+        lines = ["📜 %s — последние события:" % p["name"]] + ["%s %s %s" % (icons.get(e["level"], "•"), _dhm(e["t"]), e["text"]) for e in events]
+        self._say(chat, "\n".join(lines if events else lines + ["Записей пока нет."])[:MESSAGE_MAX])
+        return None
+
+    def _act_disk(self, chat, mid, pid, args) -> Optional[str]:
+        p = self._plant(pid)
+        if p is None:
+            return self.GONE
+        d = disk_of(p.get("snapshot") or {})
+        if d is None:
+            self._say(chat, "💾 %s — данных о диске нет. Их присылают клиенты версии 2.1.31 и новее." % p["name"])
+        else:
+            self._say(chat, "💾 %s\n%s\nЗанято %d ГБ" % (p["name"], disk_line(d), round(d["total_gb"] - d["free_gb"])))
+        return None
+
+    def _act_ack(self, chat, mid, pid, args) -> str:
+        if self._plant(pid) is None:
+            return self.GONE
+        n = self.store.ack_alerts(pid)
+        p = self._plant(pid)
+        if p is not None:
+            self.client.call("editMessageReplyMarkup", {"chat_id": chat, "message_id": mid, "reply_markup": self.plant_markup(p)})
+        return "Сброшено тревог: %d (в журнале останутся)" % n
+
+    # --- «Не беспокоить»: на время работы (калибровка, перезагрузки) события завода не идут в Telegram, в панели и журнале остаются
+
+    def _mute_menu(self, p: dict) -> tuple:
+        pid, b = p["id"], self._btn
+        until = p.get("mute_until")
+        text = ("🔕 %s — тишина до %s. Продлить или снять?" % (p["name"], _hm(until))) if until else \
+               ("🔕 %s — на сколько не беспокоить? События останутся в панели и журнале, а когда тишина кончится, я пришлю итог." % p["name"])
+        rows = [[b(label, "ms", pid, m) for m, label in self.MUTE_PRESETS]]
+        if until:
+            rows.append([b("🔔 Снять тишину", "ms", pid, 0)])
+        return text, {"inline_keyboard": rows}
+
+    def _mute_apply(self, pid: int, how: str) -> tuple:
+        """how: минуты, "m" (до утра) или "0" (снять). Возвращает (короткий ответ, время конца тишины или None)."""
+        if how == "0":
+            self.store.set_mute(pid, None)
+            return "🔔 Тишина снята", None
+        if how == "m" or how.isdigit():
+            until = self.store.set_mute(pid, "morning" if how == "m" else int(how))
+            return "🔕 Тихо до %s" % _hm(until), until
+        raise ValueError("bad mute arg")
+
+    def _act_mute_menu(self, chat, mid, pid, args) -> Optional[str]:
+        p = self._plant(pid)
+        if p is None:
+            return self.GONE
+        text, markup = self._mute_menu(p)
+        self._say(chat, text, markup)
+        return None
+
+    def _act_mute_set(self, chat, mid, pid, args) -> Optional[str]:
+        """Выбор срока в меню «Не беспокоить»: сообщение с меню переписывается."""
+        try:
+            reply, until = self._mute_apply(pid, args[0] if args else "")
+        except ValueError:
+            return None
+        p = self._plant(pid)
+        if p is None:
+            return self.GONE
+        self._edit(chat, mid, "🔕 %s — тихо до %s." % (p["name"], _hm(until)) if until else "🔔 %s — тишина снята." % p["name"],
+                   {"inline_keyboard": [[self._btn("🔔 Снять тишину", "ms", pid, 0)]]} if until else None)
         return reply
+
+    def _act_mute_cancel(self, chat, mid, pid, args) -> Optional[str]:
+        """«🔔 Снять тишину» на сводке завода: сводка остаётся, у неё обновляются кнопки (как после «Сбросить тревоги»)."""
+        self.store.set_mute(pid, None)
+        p = self._plant(pid)
+        if p is None:
+            return self.GONE
+        self.client.call("editMessageReplyMarkup", {"chat_id": chat, "message_id": mid, "reply_markup": self.plant_markup(p)})
+        return "🔔 Тишина снята"
+
+    def _act_mute_quick(self, chat, mid, pid, args) -> Optional[str]:
+        """Кнопка прямо под сообщением о тревоге: «🔕 Тихо 2 ч» → «🔔 Снять тишину» (и обратно)."""
+        try:
+            reply, until = self._mute_apply(pid, args[0] if args else "")
+        except ValueError:
+            return None
+        markup = {"inline_keyboard": [[self._btn("🔔 Снять тишину", "mt", pid, 0)]]} if until else \
+                 {"inline_keyboard": [[self._btn("🔕 Тихо %d ч" % (MUTE_QUICK_MIN // 60), "mt", pid, MUTE_QUICK_MIN)]]}
+        self.client.call("editMessageReplyMarkup", {"chat_id": chat, "message_id": mid, "reply_markup": markup})
+        return reply
+
+    # --- настройки «нет пульса»
+
+    def _settings_view(self, p: dict) -> tuple:
+        s = self.store.plant_settings(p["id"])
+        custom = self.store.plant_overrides(p["id"])
+        pid, b = p["id"], self._btn
+        mark = lambda on, text: ("✓ " if on else "") + text
+        rows = [[b(mark(s["offline_after_min"] == m, "%d мин" % m), "sv", pid, "a", m) for m in self.AFTER_PRESETS],
+                [b(mark(s["offline_repeat_min"] == m, label), "sv", pid, "r", m) for m, label in self.REPEAT_PRESETS],
+                [b("🔔 Сообщения: %s — %s" % ("вкл" if s["offline_notify"] else "выкл", "выключить" if s["offline_notify"] else "включить"), "sv", pid, "n",
+                   0 if s["offline_notify"] else 1)]]
+        if custom:
+            rows.append([b("↩ Вернуть общие значения", "sv", pid, "z")])
+        text = ("⚙ %s — настройки «нет пульса»%s\nНет пульса через: %d мин (сверху)\nНапоминать: %s (ниже)\nСообщения в Telegram: %s" %
+                (p["name"], " (свои)" if custom else " (общие)", s["offline_after_min"],
+                 "раз в %d мин" % s["offline_repeat_min"] if s["offline_repeat_min"] else "не напоминать", "да" if s["offline_notify"] else "нет"))
+        return text, {"inline_keyboard": rows}
+
+    def _act_settings(self, chat, mid, pid, args) -> Optional[str]:
+        p = self._plant(pid)
+        if p is None:
+            return self.GONE
+        text, markup = self._settings_view(p)
+        self._say(chat, text, markup)
+        return None
+
+    def _act_set(self, chat, mid, pid, args) -> Optional[str]:
+        if self._plant(pid) is None:
+            return self.GONE
+        what = args[0] if args else ""
+        val = int(args[1]) if len(args) > 1 and args[1].lstrip("-").isdigit() else None
+        if what == "z":
+            changes = {"offline_after_min": None, "offline_repeat_min": None, "offline_notify": None}
+        elif what == "a" and val is not None:
+            changes = {"offline_after_min": val}
+        elif what == "r" and val is not None:
+            changes = {"offline_repeat_min": val}
+        elif what == "n" and val in (0, 1):
+            changes = {"offline_notify": bool(val)}
+        else:
+            return None
+        try:
+            self.store.set_plant_settings(pid, changes)
+        except ValueError as e:
+            return str(e)
+        p = self._plant(pid)
+        if p is None:
+            return self.GONE
+        text, markup = self._settings_view(p)
+        self._edit(chat, mid, text, markup)
+        return "Сохранено"
+
+    # --- переименование
+
+    def _act_rename(self, chat, mid, pid, args) -> Optional[str]:
+        p = self._plant(pid)
+        if p is None:
+            return self.GONE
+        self._pending[str(chat)] = {"pid": pid, "t": self.clock()}
+        self._say(chat, "✏ Как назвать «%s»? Пришли новое название (до %d символов)." % (p["name"], monitor_store.NAME_MAX),
+                  {"inline_keyboard": [[self._btn("Отмена", "xx")]]})
+        return None
+
+    def _do_rename(self, chat, pend: dict, text: str) -> str:
+        p = self._plant(pend["pid"])
+        if p is None:
+            self._pending.pop(str(chat), None)
+            return self.GONE
+        try:
+            name = self.store.rename_plant(pend["pid"], text)
+        except ValueError as e:                                   # занято / пусто / длинное: ждём ещё одну попытку
+            return "Не вышло: %s. Пришли другое название или «Отмена»." % e
+        except LookupError:                                       # завод удалили из панели, пока бот ждал название
+            self._pending.pop(str(chat), None)
+            return self.GONE
+        self._pending.pop(str(chat), None)
+        return "✏ Готово: «%s» → «%s». Токен, журнал и датчики остались. Имя сменилось только в панели и в боте — на самом заводе оно прежнее." % (p["name"], name)
+
+    def _act_cancel(self, chat, mid, pid, args) -> str:
+        self._pending.pop(str(chat), None)
+        self._edit(chat, mid, "Отменено.")
+        return "Отменено"
+
+    # --- новый токен: подтверждение → выдача → стирание из чата
+
+    def _act_token_ask(self, chat, mid, pid, args) -> Optional[str]:
+        p = self._plant(pid)
+        if p is None:
+            return self.GONE
+        self._say(chat, "🔑 Новый токен для «%s»?\nСтарый сразу перестанет работать: завод будет «нет связи», пока ты не вставишь новый на его странице «Мониторинг»." % p["name"],
+                  {"inline_keyboard": [[self._btn("🔑 Да, выдать", "tky", pid), self._btn("Отмена", "xx")]]})
+        return None
+
+    def _act_token(self, chat, mid, pid, args) -> str:
+        p = self._plant(pid)
+        if p is None:
+            self._edit(chat, mid, self.GONE)
+            return self.GONE
+        if not self._once(chat, mid):                              # второе нажатие того же «Да» (или повторная доставка) токен не меняет
+            return "Уже выдан."
+        self._edit(chat, mid, "🔑 Выдаю новый токен для «%s»…" % p["name"])         # кнопки под вопросом исчезают сразу
+        try:
+            token = self.store.rotate_token(pid)
+        except LookupError:
+            self._edit(chat, mid, self.GONE)
+            return self.GONE
+        ok, body, _, err = self.client.call("sendMessage", {
+            "chat_id": chat, "parse_mode": "HTML", "protect_content": True, "disable_web_page_preview": True,
+            "text": "🔑 Токен «%s» (старый больше не работает):\n<code>%s</code>\nНажми на токен — скопируется. Сообщение сотрётся через %d мин." %
+                    (html.escape(p["name"]), html.escape(token), self.TOKEN_TTL_S // 60)})
+        sent = ((body or {}).get("result") or {}).get("message_id") if ok else None
+        if not ok:
+            self.state["last_error"] = err
+            log.warning("Telegram: токен не ушёл в чат — %s", err)
+            msg = "⚠ Токен «%s» сменён, но в чат не дошёл. Старый уже не работает: нажми «Новый токен» ещё раз или возьми токен в панели." % p["name"]
+            self._edit(chat, mid, msg)
+            return "Токен не дошёл, выдай новый"
+        if sent is not None:
+            self._track_delete(chat, sent, self.clock() + self.TOKEN_TTL_S)
+        else:
+            log.warning("Telegram: у сообщения с токеном нет номера — стереть его из чата не смогу")
+        self._edit(chat, mid, "🔑 Новый токен для «%s» выдан." % p["name"])
+        return "Токен выдан"
+
+    def _once(self, chat, mid) -> bool:
+        """True — это сообщение с подтверждением ещё не отрабатывали. Помним последние 200: хватает против двойного нажатия и повторной доставки."""
+        key = (chat, mid)
+        if key in self._used:
+            return False
+        self._used[key] = True
+        while len(self._used) > 200:
+            self._used.pop(next(iter(self._used)))
+        return True
+
+    # --- удаление завода: подтверждение → удаление
+
+    def _act_delete_ask(self, chat, mid, pid, args) -> Optional[str]:
+        p = self._plant(pid)
+        if p is None:
+            return self.GONE
+        self._say(chat, "🗑 Удалить «%s» вместе с журналом, тревогами и датчиками? Вернуть нельзя.\nТокен завода перестанет приниматься." % p["name"],
+                  {"inline_keyboard": [[self._btn("🗑 Да, удалить", "dly", pid), self._btn("Отмена", "xx")]]})
+        return None
+
+    def _act_delete(self, chat, mid, pid, args) -> str:
+        p = self._plant(pid)
+        if p is None or not self._once(chat, mid) or not self.store.delete_plant(pid):
+            self._edit(chat, mid, self.GONE)
+            return self.GONE
+        self._edit(chat, mid, "🗑 Удалён: «%s»." % p["name"])
+        self._say(chat, "Заводов осталось: %d." % len(self.store.plant_names()), self.keyboard())      # кнопки с названиями обновились
+        return "Удалён"
+
+    # --- стирание сообщений с токенами
+
+    def _deletes(self) -> list:
+        try:
+            v = json.loads(self.store.meta_get(self.DELETE_KEY) or "[]")
+        except ValueError:
+            return []
+        return [x for x in v if isinstance(x, list) and len(x) == 3] if isinstance(v, list) else []
+
+    def _track_delete(self, chat, mid, due: float) -> None:
+        self.store.meta_set(self.DELETE_KEY, json.dumps(self._deletes() + [[chat, mid, due]]))
+
+    def sweep_deletes(self) -> int:
+        """Стереть из чата сообщения, у которых вышел срок. Нет связи с Telegram — оставляем на следующий раз (до DELETE_KEEP_S). Возвращает, сколько стёрто."""
+        now, keep, done = self.clock(), [], 0
+        items = self._deletes()
+        for chat, mid, due in items:
+            if due > now:
+                keep.append([chat, mid, due])
+                continue
+            ok, body, _, _ = self.client.call("deleteMessage", {"chat_id": chat, "message_id": mid})
+            if ok:
+                done += 1
+            elif (body or {}).get("error_code") not in (400, 403) and now - due < self.DELETE_KEEP_S:       # отказ Telegram окончательный; сбой связи — повторим
+                keep.append([chat, mid, due])
+            else:
+                log.warning("Telegram: сообщение %s не стёрто из чата (Telegram отказал или прошло больше суток) — сотри его вручную", mid)
+        if keep != items:
+            self.store.meta_set(self.DELETE_KEY, json.dumps(keep))
+        return done
+
+    # ------------------------------------------------------------------------------------------------------------ текст
 
     def handle(self, update: dict) -> Optional[str]:
         """Один входящий апдейт. Возвращает текст ответа (или None, если отвечать не надо)."""
@@ -515,28 +979,52 @@ class Bot:
         plants = self.store.plants_view()
         by_name = {p["name"].lower(): p for p in plants}
         now = self.clock()
-        if key in MENU_WORDS:
-            reply = "Нажми кнопку с названием завода внизу — пришлю всё по нему текстом. «%s» — коротко по каждому." % ALL_BUTTON
+        latest = self.releases.latest if self.releases else None
+        cid = str(chat["id"])
+        pend = self._pending.get(cid)
+        if pend and now - pend["t"] > self.PENDING_S:
+            self._pending.pop(cid, None)
+            pend = None
+        if key in MENU_WORDS or key in ALL_WORDS or key in REQ_WORDS or key in by_name:        # нажал кнопку меню — ожидание названия снимается
+            self._pending.pop(cid, None)
+            pend = None
+        markup, requests = self.keyboard(), []
+        if pend:
+            if key in CANCEL_WORDS:
+                self._pending.pop(cid, None)
+                reply = "Отменено."
+            else:
+                reply = self._do_rename(cid, pend, text)
+                markup = self.keyboard()                           # название на кнопке могло измениться
+        elif key in by_name:                                       # название завода важнее служебных слов: завод «Все» не должен пропасть
+            reply = format_plant(by_name[key], now, latest)
+            markup = self.plant_markup(by_name[key])
+        elif key in MENU_WORDS:
+            reply = ("Нажми кнопку с названием завода внизу — пришлю всё по нему текстом и кнопками управления. «%s» — коротко по каждому, «%s» — кто ждёт токена." %
+                     (ALL_BUTTON, REQ_BUTTON))
         elif key in ALL_WORDS:
-            reply = format_all(plants, now, self.releases.latest if self.releases else None)
-        elif key in by_name:
-            reply = format_plant(by_name[key], now, self.releases.latest if self.releases else None)
+            reply = format_all(plants, now, latest)
+        elif key in REQ_WORDS:
+            requests = self.store.enroll_pending()
+            reply = "Ждут решения: %d." % len(requests) if requests else "Заявок на токен нет."
         else:
             reply = "Не понял. Нажми кнопку с названием завода внизу."
-        ok, _, err = self.client.send(chat["id"], reply, self.keyboard())
-        if ok:
-            self.state["answered"] += 1
-        else:
-            self.state["last_error"] = err
-            log.warning("Telegram: ответ не ушёл — %s", err)
+        if self._say(chat["id"], reply, markup):
+            for r in requests:
+                self._say(chat["id"], *self._enroll_message(r["id"], r["name"], r["version"], r["ip"]))
         return reply
 
-    def skip_backlog(self) -> None:
-        """Вопросы, заданные пока приёмник не работал, не отвечаем: после простоя они уже не новость и ответ придёт не вовремя."""
-        ok, body, _, _ = self.poll_client.call("getUpdates", {"offset": -1, "timeout": 0, "allowed_updates": ["message", "callback_query"]})
-        res = (body or {}).get("result") if ok else None
+    def skip_backlog(self) -> bool:
+        """Вопросы и нажатия, сделанные пока приёмник не работал, не выполняем: после простоя они уже не новость, а старое «Да, удалить» нельзя исполнять
+        задним числом. True — очередь пропущена (или пуста); False — Telegram не ответил, повторить: пока не получилось, бот не опрашивается."""
+        ok, body, _, err = self.poll_client.call("getUpdates", {"offset": -1, "timeout": 0, "allowed_updates": ["message", "callback_query"]})
+        if not ok:
+            self.state["last_error"] = err
+            return False
+        res = (body or {}).get("result")
         if res:
             self.offset = res[-1]["update_id"] + 1
+        return True
 
     def poll_once(self, timeout: int = POLL_S) -> tuple:
         """Один длинный опрос. (успех, сколько секунд подождать до следующего)."""
@@ -565,12 +1053,23 @@ class Bot:
         self._stop.set()
 
     def _loop(self) -> None:
-        try:
-            self.skip_backlog()
-        except Exception:
-            log.exception("Telegram: не удалось пропустить старые вопросы")
+        tries = 0
+        while not self._stop.is_set():                               # без пропуска старой очереди не опрашиваем: иначе старые «Да» исполнились бы
+            try:
+                if self.skip_backlog():
+                    break
+            except Exception:
+                log.exception("Telegram: не удалось пропустить старые вопросы")
+            tries += 1
+            if tries == 1 or tries % 20 == 0:
+                log.warning("Telegram: жду связи, чтобы пропустить старые вопросы — %s", self.state["last_error"])
+            self._stop.wait(min(60, 5 * tries))
         fails = 0
         while not self._stop.is_set():
+            try:
+                self.sweep_deletes()
+            except Exception:
+                log.exception("Telegram: стирание сообщений с токенами")
             try:
                 ok, wait = self.poll_once()
             except Exception:

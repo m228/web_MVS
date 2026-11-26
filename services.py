@@ -1,9 +1,9 @@
-"""services — web_MVS сам поднимает сайдкары (cv_service, video_service), которые установлены рядом.
+"""services — web_MVS сам поднимает сайдкары (cv_service, video_service, motion_service, level_service), которые установлены рядом.
 
 Установлен = есть папка <DATA_DIR>\\<сервис> с server.py и .venv\\Scripts\\python.exe (setup.bat отработал). Нет —
 пропускаем (одна запись в журнал). /health уже отвечает (запущен руками run.bat или остался с прошлого запуска web_MVS)
 — не трогаем. Адрес в конфиге не localhost — сервис на другом компе, не наш. CV — только при включённом тумблере CV.
-Выключить по одному: plate_config → services.<cv|video>.autostart = false.
+Выключить по одному: plate_config → services.<cv|video|motion|level>.autostart = false.
 
 Запуск — отдельный процесс без окна, своя группа + CREATE_BREAKAWAY_FROM_JOB с откатом (как helper в updater.py):
 переживает перезапуск и автообновление web_MVS, модель на GPU не перегружается. Вывод — в <папка сервиса>\\service.log.
@@ -21,6 +21,7 @@ from typing import Callable, Optional
 from urllib.parse import urlparse
 
 import cv_client
+import level_client
 import motion_client
 import plate_config
 import video_client
@@ -46,6 +47,11 @@ SPECS = {
                "url": lambda cfg: (cfg.get("motion") or {}).get("service_url"),
                "enabled": lambda cfg: True,
                "health": lambda url: motion_client.health(url, timeout=1.0) is not None},
+    "level": {"title": "Сервис уровня", "dir": "level_service", "default_url": level_client.DEFAULT_URL, "port_env": "LEVEL_PORT",
+              "host_env": "LEVEL_HOST",
+              "url": lambda cfg: (cfg.get("level") or {}).get("service_url"),
+              "enabled": lambda cfg: True,
+              "health": lambda url: level_client.health(url, timeout=1.0) is not None},
 }
 
 

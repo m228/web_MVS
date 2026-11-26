@@ -109,9 +109,10 @@ def test_mirror_alarm_and_signed_delta_when_one_rod_is_off():
     g = st["groups"][0]
     assert 27 <= g["delta"] <= 33 and g["alarm"] == 1 and g["bits"] == [1]
     eng2 = me.CameraEngine(cam_cfg())
-    g2 = run(eng2, 40 - 25, 320, n=12)["groups"][0]
+    st2 = run(eng2, 40 - 25, 320, n=12)
+    g2 = st2["groups"][0]
     assert -28 <= g2["delta"] <= -22 and g2["alarm"] == 1
-    w = dict(((k, a), v) for k, a, v in eng2.compute_writes(run(eng2, 40 - 25, 320, n=12)))
+    w = dict(((k, a), v) for k, a, v in eng2.compute_writes(st2))        # запись — из того же состояния (второй прогон доучил бы смещение синей)
     assert w[("holding", 12)] == (int(round(g2["delta"] * 10)) & 0xFFFF) and w[("holding", 12)] > 60000   # знаковое → дополнительный код
 
 
@@ -516,3 +517,330 @@ def test_mirror_alarm_stays_on_through_a_hold_and_clears_after():
     for k in range(10):
         st = eng.process(cv2.cvtColor(img, cv2.COLOR_BGR2GRAY), 11.0 + k * 0.25, img)
     assert not st["groups"][0]["hold"] and st["groups"][0]["alarm"] == 0
+
+
+# ───────────── крутится / стоит ─────────────
+def drive(eng, plan, fps=4.0, hide_left=False):
+    """plan [(секунд, град/с левого)] — валы крутятся зеркально; возвращает [(время, состояние)]. Время и угол идут сплошным потоком."""
+    out, t, a = [], 0.0, 40.0
+    for seconds, dps in plan:
+        for _ in range(int(seconds * fps)):
+            frames = {(700, 270): (360 - a) % 360}
+            if not hide_left:
+                frames[(250, 270)] = a % 360
+            img = rod_frame(frames)
+            st = eng.process(cv2.cvtColor(img, cv2.COLOR_BGR2GRAY), t, img)
+            if st:
+                out.append((t, st))
+            t += 1.0 / fps
+            a += dps / fps
+    return out
+
+
+def test_moving_and_standing_are_detected_within_about_ten_seconds():
+    eng = me.CameraEngine(cam_cfg())
+    run = drive(eng, [(20, 4.7), (40, 0.0), (30, 4.7)])
+    at = lambda t: zone(next(s for tt, s in run if tt >= t), "L")
+    assert at(19)["moving"] is True and at(19)["rpm"] != 0
+    assert at(20 + 4)["moving"] is True                  # только что остановились: за 4 с ещё не ясно, остаётся «крутится»
+    z = at(20 + 13)
+    assert z["moving"] is False and z["rpm"] == 0.0      # за ~10 с стоит, обороты 0 сразу
+    assert at(59)["moving"] is False
+    assert at(60 + 13)["moving"] is True                 # поехал — через ~10 с снова «крутится»
+
+
+def test_slow_start_after_a_stop_counts_as_moving():
+    eng = me.CameraEngine(cam_cfg())
+    run = drive(eng, [(15, 4.7), (20, 0.0), (40, 1.8)])    # 0,3 об/мин
+    z = zone(next(s for tt, s in run if tt >= 15 + 20 + 14), "L")
+    assert z["moving"] is True
+
+
+def test_hidden_rod_takes_moving_state_from_its_partner_and_does_not_drift_when_partner_stands():
+    eng = me.CameraEngine(cam_cfg())
+    drive(eng, [(20, 4.7)])                              # крутятся, левую видно
+    # дальше левую не видно, а оба вала остановились: ожидаемый угол левой не должен уезжать по прежней скорости
+    out, t = [], 20.0
+    a_stop = 40.0 + 4.7 * 20
+    for i in range(int(25 * 4)):
+        img = rod_frame({(700, 270): (360 - a_stop) % 360})
+        st = eng.process(cv2.cvtColor(img, cv2.COLOR_BGR2GRAY), t, img)
+        out.append((t, st))
+        t += 0.25
+    z = zone(out[-1][1], "L")
+    assert z["coast"] and z["moving"] is False
+    assert abs(me.ang_diff(z["angle"], a_stop)) <= 12.0     # без правки ушёл бы на 4,7°/с × 25 с ≈ 117°
+    assert zone(out[-1][1], "R")["moving"] is False
+
+
+def test_zone_state_has_moving_none_until_known_and_none_when_lost():
+    eng = me.CameraEngine(cam_cfg())
+    st = run(eng, 40, 320)
+    assert zone(st, "L")["moving"] is None               # меньше stop_s данных — не знаем
+    empty = np.full((H, W, 3), (60, 130, 70), np.uint8)
+    for i in range(8):
+        st = eng.process(cv2.cvtColor(empty, cv2.COLOR_BGR2GRAY), 10 + i * 5.0, empty) or st
+    assert zone(st, "L")["moving"] is None and not zone(st, "L")["valid"]
+
+
+def test_rpm_out_register_follows_speed_and_is_zero_when_standing():
+    c = cam_cfg(zones=[{"id": "L", "type": "cycle", "center": [250, 270], "radius": 170, "rpm_out": {"kind": "holding", "address": 20}},
+                       {"id": "R", "type": "cycle", "center": [700, 270], "radius": 170, "rpm_out": {"kind": "holding", "address": 21}}],
+                 groups=[])
+    eng = me.CameraEngine(c)
+    run = drive(eng, [(25, 4.7), (30, 0.0)])
+    w_at = lambda t: {(k, a): v for k, a, v in eng.compute_writes(next(s for tt, s in run if tt >= t))}
+    w = w_at(24)
+    assert 70 <= w[("holding", 20)] <= 85 or 65536 - 85 <= w[("holding", 20)] <= 65536 - 70       # ±0,79 об/мин ×100 (знак по стороне)
+    assert 70 <= w[("holding", 21)] <= 85 or 65536 - 85 <= w[("holding", 21)] <= 65536 - 70
+    w = w_at(25 + 15)                                    # остановились 15 с назад: «стоит», регистр 0 сразу, а не через окно 20 с
+    assert w[("holding", 20)] == 0 and w[("holding", 21)] == 0
+
+
+# ───────────── самоподстройка поправки (скользящее окно, форма без среднего) ─────────────
+class _Rod:
+    """Подставная палка для _mirror_group: только то, что читает группа."""
+    def __init__(self, angle, moving=True):
+        self.angle, self.valid, self.coast, self.moving = angle, True, False, moving
+
+
+def _drive(eng, minutes, t0=0.0, shift=0.0, rpm=0.79, fps=4.0, noise=0.5, outliers=0.0, moving=True, seed=5):
+    """Крутит валы `minutes` минут: слева θ, справа 360 − θ + перекос камеры + сдвиг; возвращает (время, [delta по кадрам])."""
+    rng = np.random.default_rng(seed)
+    g = eng.cfg["groups"][0]
+    out, t, a = [], t0, rpm * 360.0 / 60.0 * t0 % 360
+    for _ in range(int(minutes * 60 * fps)):
+        t += 1.0 / fps
+        a = (a + rpm * 360.0 / 60.0 / fps) % 360
+        right = (360 - a + _bias(a) + shift + rng.normal(0, noise)) % 360
+        if outliers and rng.random() < outliers:
+            right = rng.uniform(0, 360)
+        eng.cycles = {"L": _Rod(a, moving), "R": _Rod(right, moving)}
+        out.append(eng._mirror_group(g, True, t)["delta"])
+    return t, out
+
+
+def _eng(**g):
+    grp = {"id": "sync", "type": "mirror", "zones": ["L", "R"], "tol": 5}
+    grp.update(g)
+    return me.CameraEngine(cam_cfg(groups=[grp]))
+
+
+def test_learn_defaults_and_bounds():
+    g = cam_cfg()["groups"][0]
+    assert g["learn"] is True and g["learn_min"] == 30
+    assert "learn" not in me.CameraEngine(cam_cfg(groups=[{"id": "g", "type": "mirror", "zones": ["L", "R"], "learn": False}])).learners
+    with pytest.raises(ValueError):
+        cam_cfg(groups=[{"id": "g", "type": "mirror", "zones": ["L", "R"], "learn_min": 2}])
+
+
+def test_learning_flattens_the_wave_but_keeps_a_real_shift_visible():
+    eng = _eng()
+    _, d = _drive(eng, 4)                           # первые минуты: форма ещё не выучена, волна ±8° видна
+    assert np.max(np.abs(d)) > 6
+    t, d = _drive(eng, 8, t0=240)                   # дальше: волна выучена, Δ около нуля
+    late = np.abs(d[-4 * 60 * 4:])
+    assert np.percentile(late, 95) <= 2.0, np.percentile(late, 95)
+    st = eng._mirror_group(eng.cfg["groups"][0], True, t)
+    assert st["learn"]["ready"] and st["learn"]["bins"] >= 30 and 10 < st["learn"]["amp"] < 20 and len(st["shape"]) == 36
+    t, d = _drive(eng, 3, t0=t, shift=7.0)           # настоящий сдвиг валов на 7°: виден сразу и не «принимается за норму»
+    assert np.median(d[-4 * 60:]) > 5.0
+    t, d = _drive(eng, 40, t0=t, shift=7.0)          # даже через полное окно сдвиг остаётся в Δ
+    assert 5.5 < np.median(d[-4 * 60:]) < 8.5, np.median(d[-4 * 60:])
+    assert np.percentile(np.abs(np.array(d[-4 * 60:]) - 7.0), 95) <= 2.5     # а волна по-прежнему выучена
+
+
+def test_learning_ignores_wrong_catches_and_stopped_shafts():
+    eng = _eng()
+    t, d = _drive(eng, 12, outliers=0.05)           # 5 % ошибочных захватов палки
+    assert np.percentile(np.abs(d[-4 * 60 * 3:]), 90) <= 2.5
+    shape = list(eng.learners["sync"].shape)
+    _drive(eng, 15, t0=t, moving=False, shift=5.0)   # вал стоит (углы замерли): ничего не учится
+    assert eng.learners["sync"].shape == pytest.approx(shape, abs=0.5)       # новых кадров нет — форма стоит (дрейф лишь от дозревания окна)
+
+
+def test_learned_shape_survives_restart_and_is_dropped_with_another_table(tmp_path):
+    path = tmp_path / "mirror_learn_dif.json"
+    cfg = cam_cfg(groups=[{"id": "sync", "type": "mirror", "zones": ["L", "R"]}])
+    eng = me.CameraEngine(cfg, path)
+    t, _ = _drive(eng, 8)
+    eng._learn_save(t + 100, force=True)
+    assert path.exists()
+    again = me.CameraEngine(cfg, path)
+    assert again.learners["sync"].shape == pytest.approx(eng.learners["sync"].shape, abs=0.01) and not again.learners["sync"].fresh
+    other = cam_cfg(groups=[{"id": "sync", "type": "mirror", "zones": ["L", "R"], "table": [1.0] * 36}])
+    assert me.CameraEngine(other, path).learners["sync"].fresh                  # таблицу сменили — старая форма не подходит
+    path.write_text("мусор", encoding="utf-8")
+    assert me.CameraEngine(cfg, path).learners["sync"].fresh                    # битый файл не роняет сервис
+
+
+def test_static_decoy_is_banned_while_partner_spins_and_real_rod_is_found():
+    """Неподвижная «палка» (рамка, лист) на 198°: пока парная крутится, левая не должна на ней залипать — запрещаем этот угол и ищем настоящую."""
+    eng = me.CameraEngine(cam_cfg())
+    fps, t, a = 4.0, 0.0, 40.0
+    st = None
+    for seconds, real_visible in ((45, False), (45, True)):
+        for _ in range(int(seconds * fps)):
+            frames = {(700, 270): (360 - a) % 360}
+            if real_visible:
+                frames[(250, 270)] = a % 360
+            img = rod_frame(frames)
+            r = math.radians(198)
+            dx, dy = math.sin(r), -math.cos(r)
+            cv2.line(img, (250, 270), (int(250 + 150 * dx), int(270 + 150 * dy)), RED, 3)
+            cv2.line(img, (250, 270), (int(250 - 150 * dx), int(270 - 150 * dy)), BLUE, 3)
+            st = eng.process(cv2.cvtColor(img, cv2.COLOR_BGR2GRAY), t, img) or st
+            t += 1.0 / fps
+            a += 4.7 / fps
+    left, right = zone(st, "L"), zone(st, "R")
+    assert left["moving"] is True
+    d = (left["angle"] + right["angle"] - 360 + 180) % 360 - 180
+    assert abs(d) < 8
+
+
+# ── маски в родном разрешении (v3.0.5): на кадре 2688×1520 палка в ~8 px не должна терять цвет при сжатии ──
+
+HI_W, HI_H = 2688, 1520
+VIDEO_HI = Path(r"E:\grib_dif\val_18_11_2026_09_11_29.avi")       # val_Down 18.11, без вшитой разметки
+
+
+def hi_zone(cx, cy):
+    z = me._norm_cycle({"id": "z", "name": "z", "center": [cx, cy], "radius": 600.0}, "z", "z")
+    return me.CycleRT(z, [HI_W, HI_H], (HI_W, HI_H))
+
+
+def test_native_masks_find_stick_on_full_hd_plus_frame():
+    rt = hi_zone(680, 815)
+    assert rt.k < 0.5                                              # рабочая область сжимается — именно этот путь и проверяем
+    img = np.full((HI_H, HI_W, 3), (150, 140, 60), np.uint8)       # бирюзовый корпус
+    for a in (20.0, 140.0, 300.0):
+        dx, dy = math.sin(math.radians(a)), -math.cos(math.radians(a))
+        f = img.copy()
+        cv2.line(f, (680, 815), (int(680 + 450 * dx), int(815 + 450 * dy)), RED, 8)
+        cv2.line(f, (680, 815), (int(680 - 450 * dx), int(815 - 450 * dy)), BLUE, 8)
+        rt.reset()
+        assert rt.step(f, 0.0)
+        assert abs((rt.angle - a + 180) % 360 - 180) < 3.0
+
+
+def test_native_thin_kernel_scales_with_work_scale():
+    small = me.CycleRT(me._norm_cycle({"id": "z", "name": "z", "center": [100, 100], "radius": 100.0}, "z", "z"), [W, H], (W, H))
+    big = hi_zone(680, 815)
+    assert small.k == 1.0 and small.ker.shape == (9, 9)           # маленький кадр: как раньше
+    assert big.ker.shape[0] > 9 and big.ker.shape[0] % 2 == 1      # большой: ядро растёт в 1/k раз, чтобы «тонкое» осталось тонким
+
+
+@pytest.mark.skipif(not VIDEO_HI.exists(), reason="нет записи val_Down 18.11 на этом компьютере")
+def test_real_val_down_clip_found_rate_not_worse_than_native_masks():
+    """Раньше (сжатие кадра до масок) палка находилась в 79 % / 64 % кадров, в родном разрешении — 88 % / 76 %."""
+    cap = cv2.VideoCapture(str(VIDEO_HI))
+    rts = {"rod1": hi_zone(679, 817), "rod2": hi_zone(1951, 798)}
+    found = {k: 0 for k in rts}
+    n, t = 0, 0.0
+    while n < 300:
+        ok, fr = cap.read()
+        if not ok:
+            break
+        for k, rt in rts.items():
+            found[k] += bool(rt.step(fr, t))
+        n += 1
+        t += 0.45
+    cap.release()
+    assert n >= 200
+    assert found["rod1"] / n >= 0.84
+    assert found["rod2"] / n >= 0.70
+
+
+# ── одна стрелка из двух половин (v3.0.3): src, смещение синей, одна половина вместо двух ──
+
+def half_frame(a, red=True, blue=True, blue_off=0.0):
+    """Палка на оси (250,270) под углом a красным концом; blue_off — на сколько синяя половина довёрнута от прямой."""
+    rng = np.random.default_rng(2)
+    img = np.full((H, W, 3), (60, 130, 70), np.uint8)
+    img = np.clip(img.astype(np.int16) + rng.integers(-10, 10, img.shape), 0, 255).astype(np.uint8)
+    r = math.radians(a)
+    if red:
+        cv2.line(img, (250, 270), (int(250 + 150 * math.sin(r)), int(270 - 150 * math.cos(r))), RED, 3)
+    if blue:
+        rb = math.radians(a + 180.0 + blue_off)
+        cv2.line(img, (250, 270), (int(250 + 150 * math.sin(rb)), int(270 - 150 * math.cos(rb))), BLUE, 3)
+    return img
+
+
+def one_rt(**over):
+    return me.CycleRT(me._norm_cycle({"id": "z", "name": "z", "center": [250, 270], "radius": 170.0, **over}, "z", "z"), [W, H], (W, H))
+
+
+def d_ang(a, b):
+    return (a - b + 180) % 360 - 180
+
+
+def test_both_halves_seen_source_is_both_and_angle_exact():
+    rt = one_rt()
+    for i in range(6):
+        assert rt.step(half_frame(70.0), i * 0.25)
+    assert rt.src == "both" and abs(d_ang(rt.angle, 70.0)) < 2.0
+    assert rt.lvl_r > 0.3 and rt.lvl_b > 0.3
+
+
+def test_red_missing_blue_holds_the_arrow():
+    rt = one_rt()
+    for i in range(6):
+        rt.step(half_frame(70.0), i * 0.25)
+    for i in range(6, 12):
+        assert rt.step(half_frame(70.0, red=False), i * 0.25)           # красного нет — стрелка по синей
+    assert rt.src == "blue" and abs(d_ang(rt.angle, 70.0)) < 3.0 and not rt.coast
+
+
+def test_blue_missing_red_holds_the_arrow():
+    rt = one_rt()
+    for i in range(6):
+        assert rt.step(half_frame(200.0, blue=False), i * 0.25)
+    assert rt.src == "red" and abs(d_ang(rt.angle, 200.0)) < 2.0
+
+
+def test_blue_offset_is_learned_so_single_blue_matches_red():
+    rt = one_rt()
+    for i in range(80):
+        rt.step(half_frame(40.0, blue_off=6.0), i * 0.25)                 # палка «ломаная»: синяя на 6° в стороне
+    assert abs(rt.off_b - 6.0) < 1.5
+    for i in range(80, 86):
+        rt.step(half_frame(40.0, red=False, blue_off=6.0), i * 0.25)
+    assert rt.src == "blue" and abs(d_ang(rt.angle, 40.0)) < 2.5            # без смещения было бы ~6° ошибки
+
+
+def test_halves_that_disagree_do_not_get_averaged():
+    rt = one_rt()
+    for i in range(6):
+        rt.step(half_frame(100.0), i * 0.25)
+    rt.step(half_frame(100.0, blue_off=70.0), 1.5)                         # синяя «уехала» на 70°: это не палка
+    assert rt.src in ("red", "blue") and abs(d_ang(rt.angle, 100.0)) < 3.0
+
+
+def test_state_exposes_source_of_the_arrow():
+    st = run(me.CameraEngine(cam_cfg()), 70, 320)
+    z = zone(st, "L")
+    assert z["src"] in ("both", "red", "blue") and 0.0 <= z["lvl_r"] <= 1.0 and 0.0 <= z["lvl_b"] <= 1.0 and "off_b" in z
+
+
+# ── превью детектора: что попадает в маски красной и синей половин (для подбора цветов на панели) ──
+
+def test_mask_preview_shows_masks_and_respects_trial_thresholds():
+    rt = one_rt()
+    f = half_frame(70.0)
+    img = rt.mask_preview(f)
+    assert img.ndim == 3 and img.shape[2] == 3 and img.shape[1] >= 300
+    red_px = int(((img[..., 2] > 200) & (img[..., 0] < 80)).sum())
+    blue_px = int(((img[..., 0] > 200) & (img[..., 2] < 80) & (img[..., 1] > 150)).sum())
+    assert red_px > 50 and blue_px > 50
+    none = rt.mask_preview(f, red_hsv=[0, 179, 255, 255], blue_hsv=[0, 179, 255, 255])        # невозможные пороги — масок нет
+    assert int(((none[..., 2] > 200) & (none[..., 0] < 80)).sum()) == 0
+    assert rt.cfg["red_hsv"] == me.CYCLE_RED_HSV or list(rt.cfg["red_hsv"]) == list(me.CYCLE_RED_HSV)   # настроенные пороги превью не трогает
+
+
+def test_liks_default_thresholds_unchanged_by_override_args():
+    rt = one_rt()
+    f = half_frame(70.0)[rt.y0:rt.y1, rt.x0:rt.x1]
+    a, b = rt._liks(f)
+    a2, b2 = rt._liks(f, None, None)
+    assert np.array_equal(a, a2) and np.array_equal(b, b2)

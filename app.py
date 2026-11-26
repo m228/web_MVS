@@ -19,6 +19,8 @@ from fastapi.staticfiles import StaticFiles
 from logger import get_events, log_event
 
 from camera_core import manager, build_rtsp_url, replace_host_in_url
+from camera_core.mjpeg import MjpegResponse
+import host_load
 import plate_config
 import camera_params
 import rtsp_store
@@ -27,15 +29,21 @@ import net_tools
 import updater
 import auto_update
 from microscope_service import micro
+import microscope_fsm
+import plc_source
+import opcua_client
 import cv_client
 import video_client
 import motion_client
+import level_client
+from perf_stats import PERF
 import cam_events
 import cam_monitor
 import day_capture
 import cam_report
 import services
 import sysmon
+import substages
 import fracture_lab
 import cv_store
 import db
@@ -67,6 +75,16 @@ def _day_capture_cams() -> list:
     return [{**e, "serial": manager._saved_rtsp_serial(e)} for e in rtsp_store.load() if e.get("url")]
 
 
+def _motion_load_state() -> dict:
+    return motion_client.state(_motion_url(), timeout=1.5)
+
+
+# замер нагрузки ПК для панели на /multi; считает только по запросу страницы, фоновых потоков нет
+_load_meter = host_load.LoadMeter(workers_fn=_rtsp_workers_snapshot, cameras_fn=rtsp_store.load,
+                                  motion_cfg_fn=lambda: motion_client.get_config(_motion_url()),
+                                  motion_state_fn=_motion_load_state, motion_url_fn=lambda: _motion_url())
+
+
 # новая RTSP-камера: сутки кадров раз в 20 минут (data\day_shots), см. day_capture.py
 day_cap = day_capture.DayCapture(_day_capture_cams, lambda c: manager.grab_rtsp_frame(c["serial"], c["url"]),
                                  DATA_DIR / "day_capture.json", DATA_DIR / "day_shots")
@@ -81,7 +99,7 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         api_log("app", "Мониторинг не запустился: %s" % e, "error")
     # автообновление: раз в 30 мин проверяет релиз, качает заранее, перезапускает после варки (окно — micro.restart_window),
-    # а без микроскопа — ночью (auto_update.night_window)
+    # а без микроскопа — днём, 08:00–20:00 (auto_update.hours_window)
     try:
         auto_update.start(window_fn=micro.restart_window, micro_fn=micro.active)
     except Exception as e:
@@ -367,6 +385,113 @@ def micro_status():
     return micro.status()
 
 
+# ---------- Источник данных аппарата (ПЛК): Modbus или OPC UA — ТОЛЬКО чтение (вкладка «ПЛК») ----------
+# POST — в теле бывают логин/пароль OPC UA, им не место в адресе запроса. Пароль наружу не отдаётся.
+
+def _plc_payload():
+    return {"config": plc_source.public(), "live": micro.sv_status(), "running": micro.plc_running()}
+
+
+@app.get("/api/plc/source")
+def plc_source_get():
+    return _plc_payload()
+
+
+@app.post("/api/plc/source")
+def plc_source_save(payload: dict = Body(...)):
+    try:
+        patch, secret = plc_source.normalize(payload)
+        if secret is not None:
+            opcua_client.save_secret(**secret)
+        micro.set_plc_source(patch)
+    except ValueError as e:
+        return {"status": "error", "error": str(e)}
+    api_log("api.plc.source", "Сохранён источник данных аппарата (%s)" % patch.get("protocol", "—"),
+            payload={"patch": patch, "login_changed": secret is not None})
+    return {"status": "ok", **_plc_payload()}
+
+
+@app.post("/api/plc/modbus_test")
+def plc_modbus_test(payload: dict = Body(...)):
+    """«Проверить» на стороне Modbus: прочитать указанные регистры один раз (FC03), ничего не пишем."""
+    try:
+        values = plc_source.modbus_read_test(payload.get("host"), payload.get("port", 502), payload.get("unit", 255),
+                                             payload.get("regs") or [])
+    except Exception as e:
+        return {"ok": False, "error": str(e) or e.__class__.__name__}
+    return {"ok": True, "values": {str(k): v for k, v in values.items()}}
+
+
+def _opcua_error(e):
+    return {"ok": False, "error": opcua_client.explain(e)}
+
+
+@app.post("/api/opcua/endpoints")
+def opcua_endpoints(payload: dict = Body(...)):
+    """Что предлагает сервер (политики, режимы, способы входа) — без входа."""
+    try:
+        return {"ok": True, "endpoints": opcua_client.get_endpoints(payload.get("endpoint"), float(payload.get("timeout_s") or 3))}
+    except Exception as e:
+        return _opcua_error(e)
+
+
+@app.post("/api/opcua/browse")
+def opcua_browse(payload: dict = Body(...)):
+    """Дети узла (node пустой — Objects) с текущими значениями: «проводник» тегов."""
+    try:
+        conn, secret = plc_source.conn_from_body(payload)
+        node = str(payload.get("node") or "").strip() or None
+        find = str(payload.get("find") or "")
+        return {"ok": True, **opcua_client.with_conn(conn, lambda c: c.browse_page(node, find), secret)}
+    except Exception as e:
+        return _opcua_error(e)
+
+
+@app.post("/api/opcua/read")
+def opcua_read(payload: dict = Body(...)):
+    """«Проверить»: прочитать выбранные теги одним запросом (только чтение)."""
+    try:
+        conn, secret = plc_source.conn_from_body(payload)
+        nodes = [str(n).strip() for n in (payload.get("nodes") or []) if str(n or "").strip()][:200]
+        return {"ok": True, "values": opcua_client.with_conn(conn, lambda c: c.read_many(nodes), secret)}
+    except Exception as e:
+        return _opcua_error(e)
+
+
+@app.post("/api/opcua/probe")
+def opcua_probe(payload: dict = Body(...)):
+    """«Проверить тег»: один NodeId → значение, тип, статус, время и причина, если значения нет (только чтение)."""
+    try:
+        conn, secret = plc_source.conn_from_body(payload)
+        node = str(payload.get("node") or "")
+        return {"ok": True, **opcua_client.with_conn(conn, lambda c: c.probe(node), secret)}
+    except Exception as e:
+        return _opcua_error(e)
+
+
+@app.get("/api/opcua/subnets")
+def opcua_subnets():
+    return {"subnets": opcua_client.local_subnets()}
+
+
+@app.get("/api/opcua/scan")
+def opcua_scan(subnet: str, port: int = 4840):
+    """Поиск серверов OPC UA в подсети: у кого открыт порт (по умолчанию 4840). Только попытка соединения."""
+    try:
+        found = opcua_client.scan(subnet, port)
+    except Exception as e:
+        return _opcua_error(e)
+    api_log("api.opcua.scan", "Поиск серверов OPC UA в %s:%d — найдено %d" % (subnet, port, len(found)))
+    return {"ok": True, "servers": found}
+
+
+@app.get("/api/opcua/client_cert")
+def opcua_client_cert():
+    """Сертификат клиента web_MVS (DER) — его один раз «доверяют» на сервере OPC UA для шифрованного подключения."""
+    cert, _ = opcua_client.ensure_client_cert()
+    return FileResponse(str(cert), media_type="application/pkix-cert", filename="web_mvs_client.der")
+
+
 @app.get("/api/micro/command")
 def micro_command(cmd: int):
     micro.command(cmd)
@@ -412,6 +537,45 @@ def multi_config():
     return {"autostart": bool(cfg.get("multi_autostart")), "layout": cfg.get("multi_layout") or {}}
 
 
+@app.get("/api/rtsp/display_stream")
+def rtsp_display_stream():
+    # какой поток камеры идёт на показ в приложении: основной или дополнительный (subtype=1). КЗ от этого не зависит — у него свой выбор («Поток» в панели КЗ)
+    return {"substream": bool((plate_config.load().get("rtsp") or {}).get("substream"))}
+
+
+@app.put("/api/rtsp/display_stream")
+def rtsp_display_stream_set(req: dict = Body(...)):
+    on = bool(req.get("substream"))
+    rcfg = dict(plate_config.load().get("rtsp") or {})
+    rcfg["substream"] = on
+    plate_config.save({"rtsp": rcfg})
+    log_event("rtsp", "Поток для показа: " + ("дополнительный (subtype=1)" if on else "основной") + " — применится при следующем подключении камер", "info")
+    return {"status": "ok", "substream": on}
+
+
+@app.get("/api/rtsp/analysis_only")
+def rtsp_analysis_only():
+    return {"analysis_only": manager.analysis_only}
+
+
+@app.put("/api/rtsp/analysis_only")
+def rtsp_analysis_only_set(req: dict = Body(...)):
+    on = bool(req.get("analysis_only"))
+    rcfg = dict(plate_config.load().get("rtsp") or {})
+    rcfg["analysis_only"] = on
+    plate_config.save({"rtsp": rcfg})
+    manager.set_analysis_only(on)
+    log_event("rtsp", "Только анализ: " + ("вкл — приложение не держит камеры без зрителей и записи" if on else "выкл"), "info")
+    return {"status": "ok", "analysis_only": on}
+
+
+@app.get("/api/host/load")
+def host_load_state():
+    # сеть, процессор, видеоядро этого ПК и примерный запас (панель «Нагрузка» на /multi); заодно режим «Только анализ»,
+    # чтобы все открытые страницы переключались вместе
+    return {**_load_meter.read(), "analysis_only": manager.analysis_only}
+
+
 @app.get("/api/multi/autostart")
 def multi_autostart(on: int):
     # включение гасит «Автостарт цикла» микроскопа (и наоборот, см. set_cycle_autostart): открывается что-то одно
@@ -439,7 +603,7 @@ def multi_layout(layout: int, tiles: str = "[]"):
 
 @app.get("/api/cam/events")
 def cam_events_list(cam: str = "", hours: float = 24, kinds: str = "", min_s: float = 0, limit: int = 500):
-    # эпизоды камер за последние hours часов (до 30 суток), новые сверху; идущие имеют t1 = null
+    # эпизоды камер за последние hours часов (до года — cam_events.RETENTION_DAYS), новые сверху; идущие имеют t1 = null
     now = time.time()
     hours = max(0.01, min(float(hours), cam_events.RETENTION_DAYS * 24))
     items = cam_events.episodes(cam or None, now - hours * 3600, now, [k for k in kinds.split(",") if k], min_s, limit, now)
@@ -447,6 +611,21 @@ def cam_events_list(cam: str = "", hours: float = 24, kinds: str = "", min_s: fl
     for it in items:
         it["label"] = labels.get(it["cam"]) or it["cam"]
     return {"now": now, "events": items}
+
+
+@app.get("/api/cam/day_capture")
+def cam_day_capture(serial: str):
+    # суточная съёмка RTSP-камеры (окно «Фото» на /multi): идёт ли, сколько кадров, сколько осталось
+    st = day_cap.status(serial)
+    return {"status": "ok", **st} if st else {"status": "absent"}
+
+
+@app.post("/api/cam/day_capture/restart")
+def cam_day_capture_restart(serial: str):
+    # «Снять сутки заново»: камеру переставили — раз в 20 мин кадр, ещё сутки
+    ok = day_cap.restart(serial)
+    api_log("api.cam.day_capture", "Суточная съёмка заново", payload={"serial": serial, "ok": ok})
+    return {"status": "ok"} if ok else {"status": "absent"}
 
 
 @app.get("/api/cam/shot")
@@ -511,23 +690,19 @@ def micro_ignore_focus(on: int):
     return micro.set_ignore_focus(bool(on))
 
 
-@app.get("/api/micro/fine_approach")
-def micro_fine_approach(enabled: int | None = None, coarse_tol_um: int | None = None,
-                        fine_tol_um: int | None = None, max_retry: int | None = None,
-                        pause_sec: float | None = None):
-    # гибридный доезд подвода: грубо по расчётной 1274 → точный подгон по датчику 1271
-    res = micro.set_fine_approach(
-        None if enabled is None else bool(enabled),
-        coarse_tol_um, fine_tol_um, max_retry, pause_sec)
-    api_log("api.micro.fine_approach", "Довод по абсолютнику", payload=res)
+@app.get("/api/micro/clear_fault")
+def micro_clear_fault():
+    # сброс аварии автомата
+    res = micro.clear_fault()
+    api_log("api.micro.clear_fault", "Сброс аварии микроскопа", payload=res)
     return res
 
 
-@app.get("/api/micro/clear_fault")
-def micro_clear_fault():
-    # сброс аварии (подгон по датчику не сошёлся и т.п.)
-    res = micro.clear_fault()
-    api_log("api.micro.clear_fault", "Сброс аварии микроскопа", payload=res)
+@app.get("/api/micro/fault_guard")
+def micro_fault_guard(m1_timeouts: int):
+    # Авария, если М1 столько раз подряд не доехал за таймаут шага цикла (0 — выкл.)
+    res = micro.set_fault_guard(m1_timeouts)
+    api_log("api.micro.fault_guard", "Порог аварии по таймаутам М1", payload=res)
     return res
 
 
@@ -613,14 +788,6 @@ def micro_cyclic(on: int):
     micro.set_cyclic(bool(on))
     api_log("api.micro.cyclic", "Циклический режим микроскопа", payload={"on": bool(on)})
     return {"status": "ok", "cyclic": bool(on)}
-
-
-@app.get("/api/micro/sv_override")
-def micro_sv_override(on: int):
-    # DEBUG (убрать после отладки цикла): перехват ПЛК — ручной СВ не затирается sv_source
-    res = micro.sv_override(bool(on))
-    api_log("api.micro.sv_override", "DEBUG: перехват ПЛК (ручной СВ)", payload={"on": bool(on)})
-    return {"status": "ok", **res}
 
 
 @app.get("/api/micro/stop")
@@ -737,6 +904,12 @@ def api_version():
     return {"app": read_version()}
 
 
+@app.get("/api/stage_names")
+def api_stage_names():
+    """Названия стадий (M.mode) и подстадий (Submode) — одна таблица на приложение (substages.py); страницы берут отсюда."""
+    return {"stages": substages.STAGE_NAMES, "substages": substages.NAMES}
+
+
 @app.get("/api/micro/config_snapshots")
 def micro_config_snapshots():
     """Автокопии настроек (с датой) для отката на вкладке «Дамп»."""
@@ -803,6 +976,10 @@ def micro_settings(
     sv_to: float | None = None,
     stage_from: int | None = None,
     stage_to: int | None = None,
+    stage_extra: str | None = None,
+    glass_settle_sec: int | None = None,
+    arrive_tol_um: int | None = None,
+    glass_wash_every: int | None = None,
     fast_enabled: int | None = None,
     fast_frames: int | None = None,
     fast_gap_sec: int | None = None,
@@ -835,6 +1012,10 @@ def micro_settings(
     if sv_to is not None: pc["sv_to"] = sv_to
     if stage_from is not None: pc["stage_from"] = stage_from
     if stage_to is not None: pc["stage_to"] = stage_to
+    if stage_extra is not None: pc["stage_extra"] = list(microscope_fsm.parse_stage_list(stage_extra))     # «20, 21»; пустая строка — без «плюс»
+    if glass_settle_sec is not None: pc["glass_settle_sec"] = max(0, min(60, glass_settle_sec))   # осадка у стекла после подвода, с
+    if arrive_tol_um is not None: pc["arrive_tol_um"] = max(microscope_fsm.ARRIVE_TOL_MIN_UM, min(microscope_fsm.ARRIVE_TOL_MAX_UM, arrive_tol_um))   # допуск прихода подвода, мкм
+    if glass_wash_every is not None: pc["glass_wash_every"] = max(0, min(99, glass_wash_every))   # стекло промывать раз в N проб (0 — никогда)
     fast = {}                                                  # быстрый цикл на подкачке (стадия 5)
     if fast_enabled is not None: fast["enabled"] = bool(fast_enabled)
     if fast_frames is not None: fast["frames"] = max(1, fast_frames)
@@ -1020,8 +1201,23 @@ def cv_approach_get():
 @app.post("/api/cv/approach/settings")
 def cv_approach_set(patch: dict = Body(...)):
     data = micro.set_approach(patch or {})
-    api_log("api.cv.approach", "Изменены настройки автоподвода", payload={"patch": patch})
+    api_log("api.cv.approach", "Изменены настройки советов по подводу", payload={"patch": patch})
     return {"status": "ok", "approach": data}
+
+
+@app.get("/api/cv/approach/advice")
+def cv_approach_advice(serial: str = ""):
+    """Советы по подводу от разломов по строкам СВ-таблицы (расчёт; в таблицу пишет только галочка — /api/cv/approach/apply)."""
+    return micro.approach_advice(_cv_serial(serial or None))
+
+
+@app.post("/api/cv/approach/apply")
+def cv_approach_apply(body: dict = Body(...)):
+    """Галочка у совета: записать предложенный зазор в СВ-таблицу (on=true) или вернуть прежний (on=false)."""
+    res = micro.approach_apply(body.get("row"), body.get("sp_from"), body.get("sp_to"), bool(body.get("on", True)))
+    if res.get("status") != "ok":                      # успех пишет сам сервис; тут — отказы (таблица изменилась, потолок)
+        api_log("api.cv.approach_apply", "Совет по подводу не применён: " + str(res.get("error")), "warn", payload={"body": body})
+    return res
 
 
 # --- калибровка разломов по своим кадрам (см. fracture_lab.py) ---
@@ -1232,6 +1428,13 @@ def motion_put_config(cfg: dict = Body(...)):
     return r
 
 
+@app.get("/api/perf")
+def api_perf():
+    """Сколько времени уходит на обработку картинок везде: приложение (микроскоп, разломы) + сервис движения (валы, зоны, сок, уровень)."""
+    mo = motion_client.perf(_motion_url())
+    return {"app": PERF.snapshot(), "motion": mo if "error" not in mo else None, "motion_error": mo.get("error")}
+
+
 @app.get("/api/motion/state")
 def motion_state():
     return motion_client.state(_motion_url())
@@ -1247,6 +1450,41 @@ def motion_snapshot(camera: str, w: int = 0):
     return Response(content=data, media_type="image/jpeg", headers={"X-Frame-W": str(fw), "X-Frame-H": str(fh), "Cache-Control": "no-store"})
 
 
+@app.get("/api/motion/rod_mask")
+def motion_rod_mask(camera: str, zone: str, red: str = "", blue: str = "", w: int = 640, raw: int = 0, red_more: str | None = None, blue_more: str | None = None,
+                    red_not: str | None = None, blue_not: str | None = None, tip: str | None = None,
+                    fill: str | None = None, empty: str | None = None, tol: float | None = None):
+    """Превью детектора палки или уровнемера с пробными порогами цвета (красный/синий «H1,H2,S,V»; столбик — образцы fill/empty «L,a,b;…» и tol):
+    что именно попадает в маску (светоотражатели — tip)."""
+    data = motion_client.rod_mask(_motion_url(), camera, zone, red, blue, w, raw=bool(raw), red_more=red_more, blue_more=blue_more, red_not=red_not, blue_not=blue_not, tip=tip,
+                                  fill=fill, empty=empty, tol=tol)
+    if data is None:
+        return Response(status_code=404)
+    return Response(content=data, media_type="image/jpeg", headers={"Cache-Control": "no-store"})
+
+
+@app.get("/api/motion/rod_pick")
+def motion_rod_pick(camera: str, zone: str, u: float, v: float):
+    # пипетка на вкладке «Валы»: цвет палки в точке превью (оттенок 0..179 — шкала OpenCV, как в порогах)
+    return motion_client.rod_pick(_motion_url(), camera, zone, u, v)
+
+
+@app.get("/api/motion/level_shot")
+def motion_level_shot(camera: str, group: str, ts: float, dir: int = 0):     # noqa: A002 — имя параметра в адресе
+    """Снимок для графика уровня (декантатор), ближайший к моменту ts (dir −1/1 — соседний раньше/позже). Время снимка — в заголовке X-Shot-Ts."""
+    r = motion_client.level_shot(_motion_url(), camera, group, ts, dir)
+    if r is None:
+        return Response(status_code=404)
+    data, t = r
+    return Response(content=data, media_type="image/jpeg", headers={"X-Shot-Ts": str(t), "Cache-Control": "no-store"})
+
+
+@app.get("/api/motion/level_shots")
+def motion_level_shots(camera: str, group: str, since: float = 0.0):
+    """Снимки уровня с разметкой кадра (лента слева в окне камеры): {"shots": [{ts, meta}]}."""
+    return motion_client.level_shots(_motion_url(), camera, group, since)
+
+
 @app.get("/api/motion/history")
 def motion_history(camera: str, n: int = 300, window: float = 0, points: int = 600):
     return motion_client.history(_motion_url(), camera, n, window, points)
@@ -1258,10 +1496,88 @@ def motion_stats(camera: str, window: float = 10800.0):
     return motion_client.stats(_motion_url(), camera, window)
 
 
+@app.get("/api/motion/visibility")
+def motion_visibility(camera: str, window: float = 86400.0):
+    # видимость палок валов: доля времени, когда палка найдена, окнами за период (до 7 суток)
+    return motion_client.visibility(_motion_url(), camera, window)
+
+
+@app.get("/api/motion/loss_map")
+def motion_loss_map(camera: str, window: float = 7 * 86400.0):
+    # карта потерь палки: где (сектор угла) и когда (час суток) палка пропадает, за период до 14 суток
+    return motion_client.loss_map(_motion_url(), camera, window)
+
+
+@app.post("/api/motion/autocal")
+def motion_autocal_start(req: dict = Body(...)):
+    # «Подогнать валы»: запись вращения палок и подбор цветов/оси/радиуса (сервис движения); результат применяется отдельной кнопкой
+    return motion_client.autocal_start(_motion_url(), str(req.get("camera") or ""), [str(z) for z in (req.get("zones") or [])], float(req.get("seconds") or 150))
+
+
+@app.get("/api/motion/autocal")
+def motion_autocal_status(camera: str):
+    return motion_client.autocal_status(_motion_url(), camera)
+
+
+@app.get("/api/motion/autocal/report")
+def motion_autocal_report(camera: str, days: int = 10, shots: int = 16):
+    # HTML-отчёт «день / ночь» по видимости палок (открывается в новой вкладке из панели «Автоподгонка»)
+    page, err = motion_client.autocal_report(_motion_url(), camera, days, shots)
+    if page is None:
+        return HTMLResponse("<meta charset=utf-8><body style='font:14px sans-serif;padding:24px'>Отчёт не собрался: %s</body>" % str(err or "ошибка").replace("&", "&amp;").replace("<", "&lt;"), status_code=502)
+    return HTMLResponse(page)
+
+
+@app.post("/api/motion/autocal/cancel")
+def motion_autocal_cancel(req: dict = Body(...)):
+    return motion_client.autocal_cancel(_motion_url(), str(req.get("camera") or ""))
+
+
+@app.post("/api/motion/autocal/apply")
+def motion_autocal_apply(req: dict = Body(...)):
+    return motion_client.autocal_apply(_motion_url(), str(req.get("camera") or ""), [str(z) for z in (req.get("zones") or [])])
+
+
 @app.post("/api/motion/mirror_table")
 def motion_mirror_table(req: dict = Body(...)):
     # таблица поправки зеркальности двух валов по последним минутам (снимают, пока валы ровные); сохраняет интерфейс
     return motion_client.mirror_table(_motion_url(), str(req.get("camera") or ""), str(req.get("group") or ""))
+
+
+@app.post("/api/motion/clarity_sample")
+def motion_clarity_sample(req: dict = Body(...)):
+    # цвет кругов прозрачности сока за последние секунды (медиана): эталон «чистый» / «грязный»; сохраняет интерфейс
+    return motion_client.clarity_sample(_motion_url(), str(req.get("camera") or ""), [str(z) for z in (req.get("zones") or [])], float(req.get("seconds") or 30))
+
+
+@app.get("/api/motion/camera_state")
+def motion_camera_state(camera: str):
+    # состояние одной камеры (зоны, палки) — лёгкий быстрый опрос для разметки на плитках
+    return motion_client.camera_state(_motion_url(), camera)
+
+
+@app.get("/api/motion/shafts_live")
+def motion_shafts_live():
+    # лёгкий снимок углов валов для плавающего виджета (опрос несколько раз в секунду)
+    return motion_client.shafts_live(_motion_url())
+
+
+@app.get("/api/motion/shafts_history")
+def motion_shafts_history(pair: str, window: float = 3600.0, points: int = 600):
+    # разности пары валов (угол и скорость) для графика в панели КЗ
+    return motion_client.shafts_history(_motion_url(), pair, window, points)
+
+
+@app.get("/api/motion/shafts_stats")
+def motion_shafts_stats(pair: str, window: float = 3600.0):
+    # среднее / мин / макс разностей пары валов за период (блок «Разности валов»)
+    return motion_client.shafts_stats(_motion_url(), pair, window)
+
+
+@app.post("/api/motion/shafts_calibrate")
+def motion_shafts_calibrate(req: dict = Body(...)):
+    # эталон разности углов пары валов: «ноль» = текущее положение валов, а с window — среднее за период
+    return motion_client.shafts_calibrate(_motion_url(), str(req.get("pair") or ""), req.get("window"))
 
 
 @app.post("/api/motion/record")
@@ -1283,6 +1599,25 @@ def motion_records_zip(days: float = 7.0):
         return Response(content=err or "нет данных", status_code=404, media_type="text/plain; charset=utf-8")
     return Response(content=data, media_type="application/zip",
                     headers={"Content-Disposition": 'attachment; filename="motion_records_%s.zip"' % time.strftime("%Y%m%d_%H%M")})
+
+
+@app.get("/api/motion/video_rec")
+def motion_video_rec():
+    """Запись видео со звуком на диск (материал для разметки звуков): настройки и ход по камерам."""
+    return motion_client.video_rec(_motion_url())
+
+
+@app.post("/api/motion/video_rec")
+def motion_video_rec_set(req: dict = Body(...)):
+    """{"camera", on?, stream?, area?, fps?} — запись одной камеры; {"limit_gb"} без камеры — общий лимит места."""
+    cam = str(req.get("camera") or "")
+    if not cam:
+        return motion_client.video_rec_limit(_motion_url(), req.get("limit_gb"))
+    patch = {k: req[k] for k in ("on", "stream", "area", "fps") if k in req}
+    r = motion_client.video_rec_camera(_motion_url(), cam, patch)
+    if "error" not in r and "on" in patch:
+        log_event("motion", "Запись видео %s: %s" % ("включена" if patch["on"] else "выключена", cam), "info")
+    return r
 
 
 @app.post("/api/motion/modbus_ping")
@@ -1317,6 +1652,8 @@ def motion_vision(req: dict = Body(...)):
     cam["enabled"] = enabled
     if enabled and url:
         cam["url"] = url
+        if req.get("name"):
+            cam["name"] = str(req["name"])
     r = motion_client.put_config(service, cfg)
     if "error" not in r:
         log_event("motion", "CV (мультипросмотр): камера %s — анализ движения %s" % (serial, "включён" if enabled else "выключен"), "info")
@@ -1326,6 +1663,49 @@ def motion_vision(req: dict = Body(...)):
 @app.get("/api/motion/logs")
 def motion_logs(n: int = 100):
     return motion_client.logs(_motion_url(), n)
+
+
+@app.post("/api/motion/level_import")
+def motion_level_import(req: dict = Body(...)):
+    """Вкладка «Уровень»: перенос настроек LVLDec — на входе текст его config.ini, на выходе зоны/пороги/ПЛК для камеры."""
+    return motion_client.level_import(_motion_url(), str(req.get("ini") or ""))
+
+
+# --- сервис уровня (level_service/): YOLO-модель для вкладки «Уровень» панели «КЗ» (декантатор). Модель грузится из браузера ---
+def _level_url() -> str:
+    return (plate_config.load().get("level") or {}).get("service_url") or level_client.DEFAULT_URL
+
+
+@app.get("/api/level/health")
+def level_health():
+    url = _level_url()
+    h = level_client.health(url)
+    return {"service_url": url, "online": h is not None, "service": h}
+
+
+@app.get("/api/level/models")
+def level_models():
+    """Файлы моделей в level_service\\model и какая загружена сейчас."""
+    return level_client.models(_level_url())
+
+
+@app.post("/api/level/model/upload")
+async def level_model_upload(request: Request, name: str = "model.pt"):
+    """Залить .pt/.onnx из браузера → сервис сохранит и горячо загрузит."""
+    raw = await request.body()
+    res = level_client.model_upload(_level_url(), raw, name=name)
+    log_event("level", "Загрузка модели в сервис уровня: %s (%d байт) — %s" % (name, len(raw or b""), "ошибка: %s" % res["error"] if "error" in res else "ок"),
+              "warn" if "error" in res else "info")
+    return res
+
+
+@app.post("/api/level/model/load")
+def level_model_load(req: dict = Body(...)):
+    """Загрузить другую уже лежащую в model\\ модель (по имени файла)."""
+    name = os.path.basename(str(req.get("name") or ""))
+    if not name:
+        return {"error": "не указано имя модели"}
+    return level_client.model_load(_level_url(), os.path.join("model", name))
 
 
 # --- видео-сервис (video_service/): ролик варки. Сервис отвечает — на странице микроскопа видна вкладка «Ролик» ---
@@ -1694,7 +2074,7 @@ def rtsp_saved():
 
 @app.get("/api/rtsp/save")
 def rtsp_save(url: str, label: str = "", ip: str = "", scale: int = 100, fps: float = 0,
-              serial: str = "", autostart: int | None = None):
+              serial: str = "", autostart: int | None = None, old_url: str = ""):
     # проверяем схему уже при сохранении, а не только при стриминге — иначе в базу
     # попадает мусор (напр. file://), который потом отклоняется при попытке смотреть
     if not _is_rtsp_scheme(url):
@@ -1705,7 +2085,7 @@ def rtsp_save(url: str, label: str = "", ip: str = "", scale: int = 100, fps: fl
     # (сменили масштаб/fps) не должно сбрасывать галочку автоподключения
     if autostart is not None:
         entry["autostart"] = bool(autostart)
-    items = rtsp_store.save(entry)
+    items = rtsp_store.save(entry, old_url=old_url or None)
     api_log("api.rtsp.save", "RTSP-камера сохранена в базу", payload={"url": url, "count": len(items)})
     return {"items": items}
 
@@ -1728,7 +2108,12 @@ def rtsp_autostart(url: str, enabled: int, serial_number: str = ""):
 
 @app.get("/api/rtsp/remove_saved")
 def rtsp_remove_saved(url: str):
+    gone = {manager._saved_rtsp_serial(e) for e in rtsp_store.load() if e.get("url") == url}
     items = rtsp_store.remove(url)
+    # новая камера может получить освободившийся серийник — чужое приближение ей доставаться не должно
+    for serial in gone - {manager._saved_rtsp_serial(e) for e in items}:
+        if save_settings.get(serial).get("zoom"):
+            save_settings.update(serial, zoom={"factor": 1.0, "pan_x": 0.5, "pan_y": 0.5})
     api_log("api.rtsp.remove_saved", "RTSP-камера удалена из базы", payload={"url": url, "count": len(items)})
     return {"items": items}
 
@@ -2041,6 +2426,27 @@ def _resolve_rtsp_url(url, ip, username, password, channel, subtype):
     return None
 
 
+@app.get("/api/rtsp/attach")
+def rtsp_attach(
+    serial_number: str,
+    url: str = None,
+    ip: str = None,
+    username: str = "admin",
+    password: str = "",
+    channel: int = 1,
+    subtype: int = 0,
+    scale: int = 100,
+    fps: float = None,
+):
+    # ячейка со скрытой картинкой: камеру регистрируем без просмотра, чтобы работали фото, видео, свет и зум.
+    # Захват поднимется только если его что-то держит (запись или автостарт вне «Только анализ»)
+    worker = manager.get_rtsp(serial_number, _resolve_rtsp_url(url, ip, username, password, channel, subtype))
+    if worker is None:
+        return {"error": "rtsp_url_required"}
+    worker.ensure_capture(scale=scale, target_fps=fps)
+    return {"status": "ok", "capture": worker.stream_state()["capture_active"]}
+
+
 @app.get("/api/rtsp/stream")
 def rtsp_stream(
     serial_number: str,
@@ -2061,10 +2467,8 @@ def rtsp_stream(
 
     api_log("api.rtsp.stream", "Запрошен RTSP-видеопоток",
             payload={"serial_number": serial_number, "rtsp_url": worker.rtsp_url, "scale": scale, "fps": fps})
-    return StreamingResponse(
-        worker.generate(scale=scale, target_fps=fps),
-        media_type="multipart/x-mixed-replace; boundary=frame",
-    )
+    # MjpegResponse закрывает генератор вместе с соединением — зритель сразу снимается со счёта и камера отпускается
+    return MjpegResponse(worker.generate(scale=scale, target_fps=fps))
 
 
 @app.get("/api/rtsp/snapshot")
@@ -2122,6 +2526,8 @@ def rtsp_metrics(serial_number: str):
             "photo_count": worker.photo_saved_count,
             "video_elapsed": worker.video_elapsed(),
             "zoom_factor": worker.zoom_factor,
+            "zoom_pan_x": worker.zoom_pan_x,
+            "zoom_pan_y": worker.zoom_pan_y,
             # состояние фонового захвата и здоровья автосохранения (см. camera_core)
             "reconnecting": worker.reconnecting,
             "autostart": worker.autostart,
@@ -2138,6 +2544,7 @@ def rtsp_on_save_photo(serial_number: str, interval: int, project: str = "", pho
     if worker is None:
         return {"error": "rtsp_not_connected"}
     data = worker.on_photo(interval, project, photo_format or None)
+    worker.ensure_capture()          # плитка скрыта или «Только анализ» — захват поднимаем ради записи
     api_log("api.rtsp.on_save_photo", "Включено автосохранение фото (RTSP)",
             payload={"interval": interval, "project": project,
                      "photo_format": photo_format, "result": data})
@@ -2160,6 +2567,7 @@ def rtsp_on_save_video(serial_number: str, duration: int, project: str = ""):
     if worker is None:
         return {"error": "rtsp_not_connected"}
     data = worker.on_video(duration, project)
+    worker.ensure_capture()
     api_log("api.rtsp.on_save_video", "Включена запись видео (RTSP)",
             payload={"duration": duration, "project": project, "result": data})
     return data

@@ -1,7 +1,8 @@
 """Значок приёмника в области уведомлений Windows (трее) и надзор за сервером.
 
 Запускается вместо server.py (автозапуск — install_autostart.bat): держит server.py дочерним процессом без окна и рисует значок.
-Меню значка: «Открыть панель» (двойной щелчок), «Перезапустить сервер» (после git pull — подхватит новый код), «Выход» (останавливает и сервер).
+Меню значка: «Открыть панель» (двойной щелчок), «Обновить» (подтянуть свежий код приёмника из git и перезапустить сервер), «Перезапустить сервер»
+(подхватит код, который уже лежит на диске), «Выход» (останавливает и сервер).
 Сервер упал — надзор поднимает его снова (пауза растёт, если падает сразу после старта). Не поставилась библиотека значка (pystray / Pillow) —
 сервер всё равно работает, просто без значка: мониторинг важнее картинки.
 Журнал — tray.log; журнал самого сервера по-прежнему service.log.
@@ -28,6 +29,69 @@ CREATE_NO_WINDOW = 0x08000000
 MUTEX_NAME = "Local\\web_MVS_monitor_tray"
 OK_AFTER_S = 10          # дочерний процесс прожил столько — старт считается удачным, счётчик быстрых падений сбрасывается
 BACKOFF_MAX_S = 60
+GIT_TIMEOUT_S = 90
+# что подтягиваем при «Обновить»: только код приёмника и VERSION, а не весь репозиторий (в папке могут идти чужие правки); данные и журналы не трогаем
+UPDATE_PATHS = ("monitor_server", "VERSION")
+UPDATE_KEEP = (":(exclude)monitor_server/data", ":(exclude)monitor_server/tray.log", ":(exclude)monitor_server/service.log",
+               ":(exclude)monitor_server/.venv", ":(exclude)monitor_server/__pycache__")
+
+
+def _git(root: Path, *args: str, git: str = "git") -> subprocess.CompletedProcess:
+    kw = {"capture_output": True, "text": True, "encoding": "utf-8", "errors": "replace", "timeout": GIT_TIMEOUT_S, "stdin": subprocess.DEVNULL,
+          "env": dict(os.environ, GIT_TERMINAL_PROMPT="0")}      # запрос пароля в окне, которого нет, повесил бы обновление
+    if os.name == "nt":
+        kw["creationflags"] = CREATE_NO_WINDOW
+    return subprocess.run([git, "-C", str(root), *args], **kw)
+
+
+def _first_line(text: str) -> str:
+    lines = [ln.strip() for ln in (text or "").splitlines() if ln.strip()]
+    return lines[-1][:200] if lines else "git ничего не ответил"
+
+
+def update_files(root: Path, remote: str = "origin", branch: str = "main", git: str = "git") -> dict:
+    """Кнопка «Обновить»: скачать свежий main и заменить файлы приёмника (monitor_server и VERSION) без переключения веток и без чужих правок
+    в остальном дереве. Возвращает {ok, changed, version, tray_changed, message}; changed — файлы действительно заменены (серверу нужен перезапуск)."""
+    root = Path(root)
+    res = {"ok": False, "changed": False, "version": "", "tray_changed": False, "message": ""}
+    ref = "%s/%s" % (remote, branch)
+    try:
+        if not (root / ".git").exists():
+            res["message"] = "рядом с приёмником нет git-репозитория — обнови файлы вручную"
+            return res
+        f = _git(root, "fetch", "--quiet", remote, branch, git=git)
+        if f.returncode != 0:
+            res["message"] = "не удалось скачать обновление: " + _first_line(f.stderr)
+            return res
+        same = _git(root, "diff", "--quiet", ref, "--", *UPDATE_PATHS, *UPDATE_KEEP, git=git)
+        if same.returncode == 0:
+            res.update(ok=True, version=_read_version(root), message="уже последняя версия")
+            return res
+        if same.returncode != 1:
+            res["message"] = "не удалось сравнить файлы: " + _first_line(same.stderr)
+            return res
+        names = _git(root, "diff", "--name-only", ref, "--", *UPDATE_PATHS, *UPDATE_KEEP, git=git).stdout.split()
+        r = _git(root, "restore", "--source=" + ref, "--worktree", "--", *UPDATE_PATHS, *UPDATE_KEEP, git=git)
+        if r.returncode != 0:
+            res["message"] = "не удалось заменить файлы: " + _first_line(r.stderr)
+            return res
+        res.update(ok=True, changed=True, version=_read_version(root), tray_changed="monitor_server/tray.py" in names,
+                   message="обновлено до v%s" % (_read_version(root) or "?"))
+        return res
+    except FileNotFoundError:
+        res["message"] = "git не найден на этом ПК — обнови файлы вручную"
+    except subprocess.TimeoutExpired:
+        res["message"] = "git не ответил за %d с" % GIT_TIMEOUT_S
+    except Exception as e:
+        res["message"] = "ошибка обновления: %s" % e
+    return res
+
+
+def _read_version(root: Path) -> str:
+    try:
+        return (Path(root) / "VERSION").read_text(encoding="utf-8").strip()
+    except OSError:
+        return ""
 
 
 def panel_url(host: str, port: int) -> str:
@@ -198,6 +262,22 @@ def run_tray(sup: Supervisor, url: str, icon_path: Path, version: str) -> bool:
         sup.restart()
         icon.notify("Сервер перезапускается — через пару секунд будет готов", "web_MVS панель")
 
+    shown_version = [version]
+
+    def update(icon=None, item=None):
+        icon.notify("Проверяю обновление…", "web_MVS панель")
+        res = update_files(HERE.parent)
+        log.info("обновление по кнопке: %s", res["message"])
+        if res["changed"]:
+            shown_version[0] = res["version"]
+            sup.restart()
+            extra = " Значок обновится после следующего запуска." if res["tray_changed"] else ""
+            icon.notify("Обновлено до v%s, сервер перезапускается.%s" % (res["version"] or "?", extra), "web_MVS панель")
+        elif res["ok"]:
+            icon.notify("Уже последняя версия (v%s)" % (res["version"] or "?"), "web_MVS панель")
+        else:
+            icon.notify("Не обновилось: " + res["message"], "web_MVS панель")
+
     def quit_(icon=None, item=None):
         if ask_yes_no("Остановить приёмник мониторинга?\nПока он остановлен, заводы не смогут присылать пульс, а в Telegram ничего не придёт.",
                       "web_MVS панель"):
@@ -206,6 +286,7 @@ def run_tray(sup: Supervisor, url: str, icon_path: Path, version: str) -> bool:
             icon.stop()
 
     menu = pystray.Menu(pystray.MenuItem("Открыть панель", open_panel, default=True),
+                        pystray.MenuItem("Обновить", update),
                         pystray.MenuItem("Перезапустить сервер", restart),
                         pystray.Menu.SEPARATOR,
                         pystray.MenuItem("Выход", quit_))
@@ -213,7 +294,7 @@ def run_tray(sup: Supervisor, url: str, icon_path: Path, version: str) -> bool:
 
     def refresh():                              # подсказка значка («работает / перезапусков: N») обновляется раз в 5 с
         while not sup._stop.wait(5):
-            icon.title = tooltip(sup, version)
+            icon.title = tooltip(sup, shown_version[0])
 
     threading.Thread(target=refresh, name="monitor-tray-title", daemon=True).start()
     icon.run()                                  # блокирует до icon.stop()

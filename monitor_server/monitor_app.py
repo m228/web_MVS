@@ -5,14 +5,23 @@
   GET  /                        — панель (один общий пароль, HTTP Basic: имя любое, пароль — из data\\server.json).
   GET  /api/plants              — карточки заводов: статус, снимок, открытые тревоги, последние события.
   POST /api/plants              — {"name"}: завести завод, в ответе токен (показывается один раз).
-  GET  /api/plants/{id}/events  — журнал завода (?limit=100&before=<id>).
+  GET  /api/plants/{id}/events  — журнал завода (?limit=100&before=<id>&errors=1 — только ошибки).
+  POST /api/plants/{id}/alerts/ack — {"code"?}: сбросить тревогу (без code — все) в панели; в журнале остаётся «Сброшено: …».
   POST /api/plants/{id}/token   — выдать новый токен (старый перестаёт работать).
+  POST /api/plants/{id}/rename  — {"name"}: переименовать завод (токен, журнал и датчики остаются).
+  POST /api/plants/{id}/settings — {"offline_after_min", "offline_repeat_min", "offline_notify"}: настройки «нет пульса» для одного завода (None — вернуть общее значение).
+  POST /api/plants/{id}/mute    — {"minutes": 120 | "morning" | null}: «Не беспокоить» — завод не шлёт в Telegram (панель и журнал как всегда), null — снять;
+                                  когда тишина кончится, в Telegram придёт итог. Ответ: {"mute_until": unix-время или null}.
+  POST /api/plants/view_all     — то же самое, но для всех заводов сразу (кнопка «Для всех заводов» в «Виде»).
+  POST /api/plants/{id}/view    — {"hidden": ["pc", "camera", …]}: какие блоки карточки скрыть («Вид» в панели; хранится в приёмнике).
   DELETE /api/plants/{id}       — удалить завод вместе с журналом.
   POST /enroll                  — заявка нового клиента с ключом регистрации (без пароля панели): {key, machine, name, version, secret}.
                                   Повторяется раз в минуту, пока Макс не решит; «принято» приходит с токеном один раз. 403 — ключ не тот.
   GET  /api/enroll              — заявки, ждущие решения; POST /api/enroll/{id}/approve ({"name"}) и /reject — принять / отклонить.
   GET  /api/telegram            — состояние уведомлений в Telegram (без токена и chat id); POST /api/telegram/test — тестовое сообщение.
   GET  /health                  — жив ли (без пароля, без данных).
+  POST /netcheck                — для диагностики связи (net_diag.py на ПК завода): читает тело до 256 КБ целиком и отвечает {got: сколько байт принял}.
+                                  Без пароля и без хранения: нужна, чтобы проверить, проходят ли по каналу большие запросы (MTU).
   GET  /manifest.webmanifest, /icon-192.png, /icon-512.png, /favicon.ico — иконка и описание приложения (без пароля, секретов нет):
                                   по ним браузер ставит панель отдельным окном («Установить как приложение»).
 
@@ -40,6 +49,7 @@ import monitor_store
 log = logging.getLogger("monitor")
 
 INGEST_MAX_BYTES = 1_000_000
+NETCHECK_MAX_BYTES = 262_144
 AUTH_FAILS_MAX = 8
 AUTH_FAILS_WINDOW_S = 300
 WATCH_EVERY_S = 30
@@ -165,6 +175,15 @@ def create_app(store: monitor_store.Store, password: str, version: str, panel_ht
     @app.get("/health")
     def health():
         return {"ok": True, "service": "monitor", "version": version}
+
+    @app.post("/netcheck")
+    async def netcheck(request: Request):
+        got = 0
+        async for chunk in request.stream():
+            got += len(chunk)
+            if got > NETCHECK_MAX_BYTES:
+                return JSONResponse({"ok": False, "error": "слишком большое тело"}, status_code=413)
+        return {"ok": True, "got": got}
 
     @app.post("/ingest")
     async def ingest(request: Request):
@@ -301,11 +320,11 @@ def create_app(store: monitor_store.Store, password: str, version: str, panel_ht
         return {"id": pid, "token": token}
 
     @app.get("/api/plants/{plant_id}/events")
-    def plant_events(plant_id: int, request: Request, limit: int = 100, before: int = 0):
+    def plant_events(plant_id: int, request: Request, limit: int = 100, before: int = 0, errors: int = 0):
         bad = panel_denied(request)
         if bad is not None:
             return bad
-        return {"events": store.events(plant_id, limit, before or None)}
+        return {"events": store.events(plant_id, limit, before or None, bool(errors))}
 
     @app.get("/api/plants/{plant_id}/positions")
     def plant_positions(plant_id: int, request: Request, limit: int = 60):
@@ -314,6 +333,14 @@ def create_app(store: monitor_store.Store, password: str, version: str, panel_ht
             return bad
         return {"positions": store.positions(plant_id, limit)}
 
+    @app.get("/api/plants/{plant_id}/motion")
+    def plant_motion(plant_id: int, request: Request, days: float = 5.0, limit: int = 30):
+        """Остановки лент / «близко к порогу» / сбои камер движения завода за days суток (присылает завод, motion_sync.py)."""
+        bad = panel_denied(request)
+        if bad is not None:
+            return bad
+        return store.motion(plant_id, days, limit)
+
     @app.post("/api/plants/{plant_id}/token")
     def plant_token(plant_id: int, request: Request):
         bad = write_denied(request)
@@ -321,6 +348,86 @@ def create_app(store: monitor_store.Store, password: str, version: str, panel_ht
             return bad
         try:
             return {"token": store.rotate_token(plant_id)}
+        except LookupError:
+            return JSONResponse({"error": "завода нет"}, status_code=404)
+
+    @app.post("/api/plants/{plant_id}/rename")
+    async def plant_rename(plant_id: int, request: Request):
+        bad = write_denied(request)
+        if bad is not None:
+            return bad
+        try:
+            body = await request.json()
+            return {"name": store.rename_plant(plant_id, str(body.get("name", "")) if isinstance(body, dict) else "")}
+        except ValueError as e:
+            return JSONResponse({"error": str(e)}, status_code=400)
+        except LookupError:
+            return JSONResponse({"error": "завода нет"}, status_code=404)
+
+    @app.post("/api/plants/{plant_id}/alerts/ack")
+    async def plant_alerts_ack(plant_id: int, request: Request):
+        bad = write_denied(request)
+        if bad is not None:
+            return bad
+        try:
+            body = await request.json()
+        except ValueError:
+            body = {}
+        code = body.get("code") if isinstance(body, dict) else None      # без кода — сбросить все открытые тревоги завода
+        return {"acked": store.ack_alerts(plant_id, str(code)[:40] if code else None)}
+
+    @app.post("/api/plants/{plant_id}/settings")
+    async def plant_settings(plant_id: int, request: Request):
+        bad = write_denied(request)
+        if bad is not None:
+            return bad
+        try:
+            body = await request.json()
+            return {"settings": store.set_plant_settings(plant_id, body)}
+        except ValueError as e:
+            return JSONResponse({"error": str(e)}, status_code=400)
+        except LookupError:
+            return JSONResponse({"error": "завода нет"}, status_code=404)
+
+    @app.post("/api/plants/{plant_id}/mute")
+    async def plant_mute(plant_id: int, request: Request):
+        bad = write_denied(request)
+        if bad is not None:
+            return bad
+        try:
+            body = await request.json()
+            if not isinstance(body, dict) or "minutes" not in body:
+                raise ValueError("Нужно поле minutes: минуты, \"morning\" или null (снять)")
+            until = store.set_mute(plant_id, body["minutes"])
+        except ValueError as e:
+            return JSONResponse({"error": str(e)}, status_code=400)
+        except LookupError:
+            return JSONResponse({"error": "завода нет"}, status_code=404)
+        if body["minutes"] is None and notifier is not None:
+            notifier.kick()                                    # итог тишины уйдёт сразу, а не на следующем круге
+        return {"mute_until": until}
+
+    @app.post("/api/plants/view_all")
+    async def plants_view_all(request: Request):
+        bad = write_denied(request)
+        if bad is not None:
+            return bad
+        try:
+            body = await request.json()
+            return {"hidden": store.set_hidden_blocks_all(body.get("hidden") if isinstance(body, dict) else None)}
+        except ValueError as e:
+            return JSONResponse({"error": str(e)}, status_code=400)
+
+    @app.post("/api/plants/{plant_id}/view")
+    async def plant_view(plant_id: int, request: Request):
+        bad = write_denied(request)
+        if bad is not None:
+            return bad
+        try:
+            body = await request.json()
+            return {"hidden": store.set_hidden_blocks(plant_id, body.get("hidden") if isinstance(body, dict) else None)}
+        except ValueError as e:
+            return JSONResponse({"error": str(e)}, status_code=400)
         except LookupError:
             return JSONResponse({"error": "завода нет"}, status_code=404)
 

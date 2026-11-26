@@ -242,6 +242,7 @@ class CameraWorker(threading.Thread):
         self.data_dir = Path(data_dir)
         self.capture_factory = capture_factory
         self.level_post = level_post or post_infer      # запрос к сервису уровня (в тестах подменяется)
+        self.sound_states: Optional[Callable] = None    # (настройки камеры) -> записи групп «этапы по звуку»; задаёт менеджер
         self._hw_off = False                   # аппаратное декодирование не вышло — до остановки воркера декодируем процессором
         self._hw_fail = 0                      # сколько открытий подряд с аппаратным декодированием не дали ни одного кадра
         self._decoder = ""                     # 'gpu' | 'cpu' | '' — чем декодируется поток сейчас
@@ -351,8 +352,14 @@ class CameraWorker(threading.Thread):
         return st, self.engine.compute_writes(st), True
 
     def state(self) -> dict:
+        sound = self.sound_states(self.cfg) if self.sound_states else []   # этапы по звуку живут своим потоком, не от кадров
         st, _writes, stale = self._current()
         with self._lock:
+            if sound:
+                if st is None:
+                    # reason пустой: мониторинг тогда покажет настоящую ошибку подключения камеры
+                    st = {"ts": time.time(), "alive": False, "reason": "", "frame_wh": None, "zones": [], "groups": []}
+                st["groups"] = list(st.get("groups") or []) + sound
             fps = 0.0
             if not stale and len(self._stamps) >= 2 and self._stamps[-1] > self._stamps[0]:
                 fps = (len(self._stamps) - 1) / (self._stamps[-1] - self._stamps[0])

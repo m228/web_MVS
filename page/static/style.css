@@ -4911,6 +4911,9 @@ body.micro-rep-doc .micro-cmp-strips { grid-template-columns: repeat(6, 1fr); ga
 .md-fields label { grid-template-columns: 150px minmax(0, 1fr); }
 .md-fields label.md-wide { grid-column: span 2; }
 .md-ge label.md-chk { display: inline-flex; flex-direction: row; align-items: center; gap: 4px; margin: 0 6px 0 0; }
+.md-ge label.md-code { display: inline-flex; flex-direction: row; align-items: center; gap: 6px; }       /* коды этапов печи — компактно в строку */
+.md-ge .md-code input[type=number] { width: 64px; }
+.md-snd { width: 100%; height: 90px; display: block; margin-bottom: 6px; background: var(--surface-muted); border-radius: 10px; }   /* уровень звука печи с порогом */
 .md-ge label > span:first-child, .md-fields label > span:first-child, .md-ge__zones > span:first-child { color: var(--muted); font-weight: 600; }
 .md-ge input[type=text], .md-ge input[type=number], .md-ge select, .md-fields input[type=text], .md-fields select { width: 100%; }
 .md-fields input[type=checkbox] { justify-self: start; }
@@ -5015,6 +5018,19 @@ body.micro-rep-doc .micro-cmp-strips { grid-template-columns: repeat(6, 1fr); ga
 .md-help { display: inline-flex; align-items: center; justify-content: center; width: 15px; height: 15px; margin-left: 6px; border-radius: 50%; border: 1px solid var(--border); color: var(--muted); font-size: 10px; font-weight: 600; cursor: help; vertical-align: 1px; }
 .md-help:hover { color: var(--accent); border-color: var(--accent); }
 .md-fields .md-sub { grid-column: 1 / -1; margin-top: 4px; font-size: 11px; letter-spacing: .04em; text-transform: uppercase; color: var(--muted); }
+/* запись видео и звука на диск (22-videorec.js) и окно выбора области */
+.vr-box { display: flex; flex-direction: column; gap: 6px; }
+.vr-box p { margin: 0; }
+.vr-area { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.vr-state.is-ok { color: var(--success); }
+.vr-state.is-warn { color: var(--warning); }
+.vr-state.is-bad { color: var(--danger); }
+.vr-warn { font-size: 12px; color: var(--warning); }
+.vr-folder { word-break: break-all; user-select: all; }
+.vr-stage { position: relative; align-self: center; max-width: 100%; min-width: 240px; min-height: 135px; background: #000; line-height: 0; overflow: hidden; cursor: crosshair; user-select: none; touch-action: none; }
+.vr-stage img { display: block; max-width: 100%; max-height: 66vh; }
+.vr-rect { position: absolute; border: 2px solid var(--accent); box-shadow: 0 0 0 9999px rgba(0, 0, 0, .5); pointer-events: none; }
+.vr-rect[hidden] { display: none; }
 .cj-tabs { padding: 0 24px; }
 .cj-bar .md-icon { min-width: 30px; }
 .cj-bar input[type=date] { width: auto; min-height: 0; padding: 4px 8px; font-size: 13px; }

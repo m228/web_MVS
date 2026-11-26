@@ -353,20 +353,22 @@ function mdOutCell(o, attrs, withState, pre = 'o', kinds = [['', 'нет'], ['ho
   // адрес нужен только когда вывод включён — иначе поле лишь теснит соседей по строке; pre — приставка полей (o — основной вывод, r — скорость)
   return `<div class="md-out"><select ${attrs} data-f="${pre}kind">${mdSel(kinds, o ? o.kind : '')}</select>` +
     (o && o.kind ? `<input type="number" min="0" max="65535" ${attrs} data-f="${pre}addr" value="${o.address}" title="Адрес регистра / coil" placeholder="адрес" />` : '') +
-    // что писать — только у зоны с признаком вида окна: бит «движется» или состояние окна 0 пусто / 1 жом стоит / 2 движется
-    (withState && o && o.kind ? `<select ${attrs} data-f="oval" title="Что писать: бит «движется» 0/1 или состояние окна: 0 — пусто, 1 — жом стоит, 2 — движется (пока пороги вида окна не заданы, пишется бит)">${mdSel([['bit', 'движение'], ['state', 'состояние окна']], o.value || 'bit')}</select>` : '') + '</div>';
+    // что писать — только у зоны с признаком яркости: бит зоны или состояние окна 0 пусто / 1 стоит / 2 движется
+    (withState && o && o.kind ? `<select ${attrs} data-f="oval" title="Что писать: бит зоны 0/1 или состояние окна: 0 — пусто, 1 — стоит, 2 — движется (пока пороги яркости не заданы, пишется бит)">${mdSel([['bit', 'движение'], ['state', 'состояние окна']], o.value || 'bit')}</select>` : '') + '</div>';
 }
 
-const MD_FILL_METRICS = [['off', 'нет'], ['rel', 'яркость к металлу'], ['lum', 'яркость'], ['tex', 'зернистость']];
-const MD_FILL_STATE = ['пусто', 'жом стоит', 'движется'];
-const MD_FILL_HELP = 'Вид окна — есть ли в нём жом. По движению пустое окно и окно со стоящим жомом неотличимы; вид окна различает их.\n' +
-  'Яркость к металлу — яркость окна, делённая на яркость металла вокруг него (свет и солнце на неё почти не влияют: жом светлый ≈ 0.9, пустое окно тёмное ≈ 0.65). Яркость — средний свет в окне, зернистость — резкость мелких деталей. Пока пороги on/off равны 0, значения только измеряются (в панели и в записи CSV), решения нет.\n' +
-  'Когда пороги заданы: выше on — жом есть (с галочкой «инверсия» наоборот: ниже off — жом есть). Состояние окна: 0 пусто, 1 жом стоит, 2 движется.\n' +
-  'Под порогами — график признака (2 часа назад, колесо мыши — масштаб; наведите курсор — значение и время) и среднее / мин / макс за выбранный период: так видно, чем «жом есть» отличается от «пусто». Копится в сервисе движения в памяти, после его перезапуска начинается заново.';
+const MD_FILL_METRICS = [['rel', 'яркость к металлу'], ['lum', 'яркость'], ['tex', 'зернистость']];     // «выключено» — снятая галочка блока
+const MD_FILL_STATE = ['пусто', 'стоит', 'движется'];       // зона с движением и яркостью
+const MD_FILL_PRESENCE = ['нет', 'есть'];                   // зона только по яркости
+const MD_FILL_HELP = 'Яркость — есть ли в окне материал (камень, жом). По движению пустое окно и окно со стоящим материалом неотличимы; яркость различает их.\n' +
+  'Яркость — средний свет в окне (0–255; на неё влияют свет и экспозиция камеры — поставьте экспозицию вручную). Яркость к металлу — яркость окна, делённая на яркость металла вокруг (общий свет и солнце почти не влияют). Зернистость — резкость мелких деталей.\n' +
+  'Пока пороги равны 0, значения только измеряются, решения нет (в ПЛК 0). Когда заданы: выше верхнего — есть (с галочкой «инверсия» наоборот: ниже нижнего — есть). Проще всего «обучить»: записать оба состояния.\n' +
+  'С выключенным движением зона пишет в ПЛК бит 0 / 1 по яркости. Движение и яркость вместе: 0 пусто, 1 стоит, 2 движется.\n' +
+  'График справа — 2 часа назад (колесо мыши — масштаб, наведите курсор — значение и время). Копится в сервисе движения в памяти, после его перезапуска начинается заново.';
 const MD_FILL_NAME = { rel: 'яркость к металлу', lum: 'яркость', tex: 'зернистость' };
 const mdFillFmt = (m, v) => (v == null || Number.isNaN(Number(v)) ? '–' : Number(v).toFixed(m === 'lum' ? 0 : 2));
 
-// ср / мин / макс признаков вида окна за период (st — zones[id].fill из /api/motion/stats), главный признак жирным
+// ср / мин / макс признаков яркости за период (st — zones[id].fill из /api/motion/stats), главный признак жирным
 function mdFillStatHtml(z, cur, st) {
   const row = (m) => {
     const s = st && st[m];
@@ -379,7 +381,7 @@ function mdFillStatHtml(z, cur, st) {
 function mdFillText(z) {
   if (!z || z.tex === undefined) return '–';
   const base = z.fill_metric === 'lum' ? 'яркость ' + Number(z.lum).toFixed(0) : z.fill_metric === 'rel' ? 'отн. яркость ' + Number(z.rel).toFixed(2) : 'зерн. ' + Number(z.tex).toFixed(2);
-  return z.state == null ? base + ' · пороги не заданы' : base + ' · ' + MD_FILL_STATE[z.state];
+  return z.state == null ? base + ' · пороги не заданы' : base + ' · ' + (z.motion === false ? MD_FILL_PRESENCE : MD_FILL_STATE)[z.state];
 }
 
 // зона слева, её тренд справа
@@ -403,43 +405,48 @@ function mdZoneCardHtml(cam, z, i) {
   </div>`;
   }
   const open = MD.openAll || MD.open[k];
+  const mot = z.motion !== false;                                   // движение считается (у старых зон поля нет — значит да)
   const fm = z.fill_metric && z.fill_metric !== 'off';
+  // блок «Движение» / «Яркость»: галочка в заголовке; единственный включённый снять нельзя — зоне нечем было бы решать
+  const sw = (f, on, only, title, extra) => `<div class="md-zr__sw"><label class="md-lbl" title="${only ? 'Должен остаться хотя бы один блок: сначала включите другой' : title}"><input type="checkbox" ${a} data-f="${f}"${on ? ' checked' : ''}${only ? ' disabled' : ''} /> <span class="md-zr__t">${f === 'motion' ? 'Движение' : 'Яркость'}</span></label>${extra || ''}</div>`;
   const arrows = (hi, lo, extra) => `<span class="md-ar" title="включить, когда значение ${z.invert ? 'НИЖЕ off' : 'ВЫШЕ on'}">▲</span>${hi}<span class="md-ar" title="выключить, когда значение ${z.invert ? 'выше on' : 'ниже off'}">▼</span>${lo}${extra || ''}`;
-  // пороги вида окна: сначала тот, при котором жом ЕСТЬ. Обычно — выше on; с инверсией — ниже off (стрелки и подписи меняются местами)
+  // пороги яркости: сначала тот, при котором материал ЕСТЬ. Обычно — выше on; с инверсией — ниже off (стрелки и подписи меняются местами)
   const fillArrows = (hi, lo) => (z.fill_invert
-    ? `<span class="md-ar" title="жом есть, когда значение НИЖЕ off">▼</span>${lo}<span class="md-ar" title="жома нет, когда значение выше on">▲</span>${hi}`
-    : `<span class="md-ar" title="жом есть, когда значение ВЫШЕ on">▲</span>${hi}<span class="md-ar" title="жома нет, когда значение ниже off">▼</span>${lo}`);
-  return `<div class="md-zr${open ? ' is-open' : ''}" id="md-zr-${k}" data-st="n">
-    <div class="md-zr__head" data-zt="${k}" title="Нажмите, чтобы раскрыть настройки окна">
-      <span class="md-zr__bar"></span>
-      <div class="md-zr__nm"><b>${escapeHtml(z.name)}</b><span class="md-zr__pill" id="md-zp-${k}">–</span></div>
-      <div class="md-zr__gz"><div class="md-gl"><span>движ.</span><i id="md-gm-${k}"></i><em id="md-zv-${k}">–</em></div>${fm ? `<div class="md-gl"><span>вид</span><i id="md-gf-${k}"></i><em id="md-gfv-${k}">–</em></div>` : ''}</div>
-      <div class="md-zone__chart"><canvas id="md-ch-${k}" height="56"></canvas></div>
-      <span class="md-zr__chev">⌄</span>
-    </div>
-    <div class="md-zr__det">
-      <div class="md-zr__col">
-        <div class="md-zr__t">Движение</div>
-        <div class="md-zone__row"><span class="md-lbl">название</span><input type="text" ${a} data-f="name" value="${escapeHtml(z.name)}" title="${escapeHtml(z.id)}" />
-          <label class="md-lbl" title="Считать оптический поток (flow) для этой зоны. Самое тяжёлое в анализе: если зона решает по diff и flow не нужен, выключите — процессор разгрузится, а flow этой зоны в графиках и записях будет 0"><input type="checkbox" ${a} data-f="trackflow"${z.metric === 'flow' ? ' checked disabled' : (z.track_flow === false ? '' : ' checked')} /> flow</label></div>
+    ? `<span class="md-ar" title="есть, когда значение НИЖЕ нижнего порога">▼</span>${lo}<span class="md-ar" title="нет, когда значение выше верхнего порога">▲</span>${hi}`
+    : `<span class="md-ar" title="есть, когда значение ВЫШЕ верхнего порога">▲</span>${hi}<span class="md-ar" title="нет, когда значение ниже нижнего порога">▼</span>${lo}`);
+  const motBody = mot ? `
         <div class="md-zone__row"><span class="md-lbl">метрика</span><select ${a} data-f="type">${mdSel([['motion', 'motion'], ['presence', 'presence']], z.type)}</select>
           <select ${a} data-f="metric">${mdSel([['diff', 'diff'], ['flow', 'flow']], z.metric)}</select></div>
         <div class="md-zone__row"><span class="md-lbl">порог</span>${arrows(mdNum(a + ' data-f="on"', z.on, 'step="0.05" min="0"'), mdNum(a + ' data-f="off"', z.off, 'step="0.05" min="0"'))}</div>
         <div class="md-zone__row"><span class="md-lbl" title="Защита от одиночных всплесков: бит зоны меняется, только когда порог выполнен столько кадров анализа ПОДРЯД. Один проскочивший кадр счёт сбрасывает.">кадров подряд</span>${arrows(mdNum(a + ' data-f="fon"', z.frames_to_on == null ? 3 : z.frames_to_on, 'min="1" max="1000"'), mdNum(a + ' data-f="foff"', z.frames_to_off == null ? 4 : z.frames_to_off, 'min="1" max="1000"'))}</div>
         ${mdLearnHtml(cam, z, a)}
-        <div class="md-zstat" id="md-st-${k}" title="Значения диффа и потока по зоне: сейчас, среднее, минимум и максимум за выбранный период (только кадры в норме). Жирным — метрика, по которой решает зона."></div>
+        <div class="md-zstat" id="md-st-${k}" title="Значения диффа и потока по зоне: сейчас, среднее, минимум и максимум за выбранный период (только кадры в норме). Жирным — метрика, по которой решает зона."></div>` : '';
+  const fillBody = fm ? `
+        <div class="md-zone__row"><span class="md-lbl">признак</span><select ${a} data-f="fmetric">${mdSel(MD_FILL_METRICS, z.fill_metric)}</select></div>
+        <div class="md-zone__row"><span class="md-lbl">порог</span>${fillArrows(mdNum(a + ' data-f="fllon"', z.fill_on || 0, 'step="0.01" min="0" title="Верхний порог яркости. 0 — пороги не заданы, только измерение"'), mdNum(a + ' data-f="flloff"', z.fill_off || 0, 'step="0.01" min="0" title="Нижний порог яркости"'))}
+          <label class="md-lbl" title="Перевернуть решение: есть, когда значение НИЖЕ нижнего порога (нет — когда выше верхнего). Включайте, если материал в этом окне темнее, чем пустое место. «Обучить» ставит галочку само."><input type="checkbox" ${a} data-f="finvert"${z.fill_invert ? ' checked' : ''} /> инверсия</label></div>
+        ${mdBrightHtml(cam, z, a)}
+        <div class="md-zone__row"><span class="md-lbl md-fill" id="md-zf-${k}">–</span></div>
+        <div class="md-zstat" id="md-fst-${k}" title="Признаки яркости: сейчас, среднее, минимум и максимум за выбранный период (только кадры в норме). Жирным — признак, по которому решает окно."></div>` : '';
+  return `<div class="md-zr${open ? ' is-open' : ''}" id="md-zr-${k}" data-st="n">
+    <div class="md-zr__head" data-zt="${k}" title="Нажмите, чтобы раскрыть настройки окна">
+      <span class="md-zr__bar"></span>
+      <div class="md-zr__nm"><b>${escapeHtml(z.name)}</b><span class="md-zr__pill" id="md-zp-${k}">–</span></div>
+      <div class="md-zr__gz">${mot ? `<div class="md-gl"><span>движ.</span><i id="md-gm-${k}"></i><em id="md-zv-${k}">–</em></div>` : ''}${fm ? `<div class="md-gl"><span>ярк.</span><i id="md-gf-${k}"></i><em id="md-gfv-${k}">–</em></div>` : ''}</div>
+      <div class="md-zone__chart"><canvas id="md-ch-${k}" data-mini="1" height="40"></canvas></div>
+      <span class="md-zr__chev">⌄</span>
+    </div>
+    <div class="md-zr__det${mot ? '' : ' no-mot'}${fm ? '' : ' no-fill'}">
+      <div class="md-zr__col">
+        <div class="md-zone__row"><span class="md-lbl">название</span><input type="text" ${a} data-f="name" value="${escapeHtml(z.name)}" title="${escapeHtml(z.id)}" /></div>
+        ${sw('motion', mot, mot && !fm, 'Смотреть, движется ли что-то в зоне. Выключено — движение не считается, зона решает только по яркости', mot ? `<label class="md-lbl" title="Считать оптический поток (flow) для этой зоны. Самое тяжёлое в анализе: если зона решает по diff и flow не нужен, выключите — процессор разгрузится, а flow этой зоны в графиках и записях будет 0"><input type="checkbox" ${a} data-f="trackflow"${z.metric === 'flow' ? ' checked disabled' : (z.track_flow === false ? '' : ' checked')} /> flow</label>` : '')}${motBody}
       </div>
       <div class="md-zr__col">
-        <div class="md-zr__t">Вид окна ${mdHelp(MD_FILL_HELP)}</div>
-        <div class="md-zone__row"><span class="md-lbl">признак</span><select ${a} data-f="fmetric">${mdSel(MD_FILL_METRICS, z.fill_metric || 'off')}</select></div>` +
-      (fm ? `<div class="md-zone__row"><span class="md-lbl">порог</span>${fillArrows(mdNum(a + ' data-f="fllon"', z.fill_on || 0, 'step="0.01" min="0" title="Верхний порог вида окна. 0 — пороги не заданы, только измерение"'), mdNum(a + ' data-f="flloff"', z.fill_off || 0, 'step="0.01" min="0" title="Нижний порог вида окна"'))}
-          <label class="md-lbl" title="Перевернуть решение: жом есть, когда значение НИЖЕ порога off (пусто — когда выше on). Включайте, если жом в этом окне темнее, чем пустое окно (например, конец засвечен)."><input type="checkbox" ${a} data-f="finvert"${z.fill_invert ? ' checked' : ''} /> инверсия</label></div>
-        <div class="md-zone__row"><span class="md-lbl md-fill" id="md-zf-${k}">–</span></div>
-        <div class="md-zone__chart"><canvas id="md-fch-${k}" height="52"></canvas></div>
-        <div class="md-zstat" id="md-fst-${k}" title="Признаки вида окна: сейчас, среднее, минимум и максимум за выбранный период (только кадры в норме). Жирным — признак, по которому решает окно."></div>` : '') +
+        ${sw('fillon', fm, fm && !mot, 'Смотреть на яркость зоны: есть ли в ней материал', mdHelp(MD_FILL_HELP))}${fillBody}` +
       (z.out ? `<div class="md-zone__row"><span class="md-lbl" title="Прямой вывод из карточки зоны больше не настраивается: пишите в ПЛК через сценарий. Старый вывод продолжает работать, пока его не убрать.">ПЛК (старый вывод): ${z.out.kind === 'coil' ? 'coil' : 'рег.'} ${z.out.address}</span><button type="button" class="btn-secondary md-x" ${a} data-f="oclear" title="Убрать старый вывод из зоны">убрать</button></div>` : '') + `
         <div class="md-zr__del"><button type="button" class="btn-secondary md-x" ${a} data-f="del" title="Удалить зону">удалить окно</button></div>
       </div>
+      <div class="md-zr__charts">${mot ? mdBigChartHtml('motion', 'md-mch-' + k, 'движение') : ''}${fm ? mdBigChartHtml('fill', 'md-fch-' + k, 'яркость') : ''}</div>
     </div>
   </div>`;
 }
@@ -632,7 +639,7 @@ function mdCamsTabHtml() {
   const rows = info.map(({ c, u }) => {
     const ip = mdIp(c.url);
     const twins = (byIp[ip] || []).filter((x) => x.id !== c.id);
-    const flows = c.zones.filter((z) => z.type !== 'level' && z.type !== 'clarity' && !ggIs(z) && (z.metric === 'flow' || z.track_flow !== false)).length;
+    const flows = c.zones.filter((z) => z.type !== 'level' && z.type !== 'clarity' && !ggIs(z) && z.motion !== false && (z.metric === 'flow' || z.track_flow !== false)).length;
     const inUi = state.cameras.some((q) => q.serial === c.id);
     const use = u.used
       ? [u.scen.length ? 'сценарии: ' + u.scen.map(escapeHtml).join(', ') : '', u.plc.length ? 'в ПЛК: ' + u.plc.map(escapeHtml).join(', ') : ''].filter(Boolean).join('<br>')
@@ -695,7 +702,7 @@ function mdZonesTabHtml(mode, cam) {
 function mdOnZone(t, cam) {
   const i = Number(t.dataset.i), f = t.dataset.f, z = cam.zones[i];
   if (!z) return;
-  if (mdOnLearn(t, cam, z)) return;
+  if (mdOnLearn(t, cam, z) || mdOnBright(t, cam, z)) return;
   if (ggIs(z) && ggOnZone(t, cam, z)) return;
   if (f === 'hsvreset') {
     mdEdit(() => { z.red_hsv = SH_RED_DEF.slice(); z.blue_hsv = SH_BLUE_DEF.slice(); z.red_more = []; z.blue_more = []; z.red_not = []; z.blue_not = []; }, true);
@@ -766,6 +773,15 @@ function mdOnZone(t, cam) {
     }, true);
     return;
   }
+  // ключ motion сервис 3.0.46+ отдаёт у сохранённой зоны всегда; старый молча выбросил бы его — галочка «снялась» бы только на экране,
+  // а в ПЛК так и шёл бы бит движения
+  if (f === 'motion' && !('motion' in z)) {
+    t.checked = true;
+    alert(MV.dirty ? 'Подождите пару секунд, пока зона сохранится, и нажмите ещё раз.'
+      : 'Сервис движения старый: зона без движения требует motion 3.0.46 или новее. Обновите программу и попробуйте ещё раз.');
+    return;
+  }
+  if (f === 'fillon' && !t.checked && z.fill_on > 0 && !confirm('Выключить «Яркость» у зоны «' + z.name + '»? Заданные пороги яркости сотрутся.')) { t.checked = true; return; }
   mdEdit(() => {
     if (f === 'radius') z.radius = Math.max(20, parseFloat(t.value) || 20);
     else if (f === 'cx' || f === 'cy') z.center[f === 'cx' ? 0 : 1] = Math.max(0, parseFloat(t.value) || 0);
@@ -780,11 +796,16 @@ function mdOnZone(t, cam) {
     else if (f === 'rkind') z.rpm_out = t.value ? { kind: 'holding', address: (z.rpm_out && z.rpm_out.address) || 0 } : null;
     else if (f === 'raddr' && z.rpm_out) z.rpm_out.address = parseInt(t.value, 10) || 0;
     else if (f === 'oval' && z.out) z.out.value = t.value;
-    else if (f === 'fmetric') { z.fill_metric = t.value; z.fill_invert = t.value === 'tex'; }   // яркость: жом светлее; зернистость: жом гладче
-    else if (f === 'finvert') z.fill_invert = t.checked;
+    else if (f === 'motion') z.motion = t.checked;
+    else if (f === 'fillon' || f === 'fmetric') {                   // другой признак — другие числа: прежние пороги не годятся
+      z.fill_metric = f === 'fmetric' ? t.value : (t.checked ? 'lum' : 'off');
+      z.fill_invert = z.fill_metric === 'tex';                      // яркость: материал светлее; зернистость: жом гладче
+      z.fill_on = 0; z.fill_off = 0;
+    } else if (f === 'finvert') z.fill_invert = t.checked;
     else if (f === 'fllon' || f === 'flloff') z[f === 'fllon' ? 'fill_on' : 'fill_off'] = Math.max(0, parseFloat(t.value) || 0);
     else if (f === 'oclear') z.out = null;
-  }, f === 'type' || f === 'metric' || f === 'okind' || f === 'rkind' || f === 'fmetric' || f === 'finvert' || f === 'oclear');
+  }, f === 'type' || f === 'metric' || f === 'okind' || f === 'rkind' || f === 'motion' || f === 'fillon' || f === 'fmetric' || f === 'finvert' || f === 'oclear');
+  if (f === 'fllon' || f === 'flloff') mdBrRepaint(cam, z);      // порог поправили руками — строка «пороги стоят» больше не про них
 }
 
 // «Проверить связь с сервером»: пульс на сервер мониторинга прямо сейчас (тот же, что шлёт приложение раз в несколько минут) и ответ сервера
@@ -843,8 +864,9 @@ async function mdDrawTrends() {
   if (MD.trendBusy) { MD.trendDirty = true; return; }
   const cams = mdShownCams().filter((c) => c.zones.length);
   if (!cams.length) return;
-  const first = document.querySelector('.md-zone__chart canvas');
-  const pts = Math.max(60, Math.min(1200, first ? first.clientWidth : 500));
+  // точек — по самому широкому графику (первый на странице может быть свёрнутым)
+  const wide = Math.max(0, ...Array.from(document.querySelectorAll('.md-zone__chart canvas'), (c) => c.clientWidth));
+  const pts = Math.max(60, Math.min(1200, wide || 500));
   MD.trendBusy = true;
   const res = await Promise.all(cams.map((c) => mvApi('/api/motion/history?camera=' + encodeURIComponent(c.id) + '&window=' + MD.win + '&points=' + pts)));
   MD.trendBusy = false;
@@ -920,15 +942,16 @@ function mdPaintZoneStats() {
         fe.innerHTML = mdFillStatHtml(z, live[z.id], zs && zs.fill);
       }
       const el = mdEl('md-st-' + c.id + '-' + z.id);
-      if (!el) return;
-      el.innerHTML = mdZoneStatHtml(z, live[z.id], sr && sr.zones && sr.zones[z.id]);
-      if (z.type === 'gate') ggCalPaint(c, z);                // «это 0 % / 100 %» активны, пока указатель виден
-      // накоплено меньше, чем просили (сервис недавно стартовал): честно говорим, за сколько на самом деле
-      if (z.type !== 'cycle' && sr && sr.zones && sr.zones[z.id] && sr.span_s < sr.window_s * 0.9) {
+      if (el) el.innerHTML = mdZoneStatHtml(z, live[z.id], sr && sr.zones && sr.zones[z.id]);
+      if (el && z.type === 'gate') ggCalPaint(c, z);          // «это 0 % / 100 %» активны, пока указатель виден
+      // накоплено меньше, чем просили (сервис недавно стартовал): честно говорим, за сколько на самом деле.
+      // У зоны без движения блока diff / flow нет — пометка идёт под яркостью
+      const box = el || fe;
+      if (box && z.type !== 'cycle' && sr && sr.zones && sr.zones[z.id] && sr.span_s < sr.window_s * 0.9) {
         const n = document.createElement('div');
         n.className = 'md-zstat__note';
         n.textContent = 'накоплено за ' + mdFmtWin(sr.span_s);
-        el.appendChild(n);
+        box.appendChild(n);
       }
     });
   });
@@ -962,12 +985,15 @@ function mdDrawSeries(cv, t, vals, ok, lo, hi, opts) {
   const g = cv.getContext('2d');
   g.clearRect(0, 0, w, hh);
   const strip = opts && opts.strip ? 7 : 0;          // полоска состояния под графиком (цвет на каждую точку)
-  const plotH = hh - 13 - strip, win = (opts && opts.win) || MD.win, n = vals.length;
+  const mini = !!(opts && opts.mini);                // маленький график в шапке карточки: без подписей, всё место — линии
+  const plotH = hh - (mini ? (strip ? 3 : 0) : 13) - strip, win = (opts && opts.win) || MD.win, n = vals.length;     // полоска рисуется на 3 px ниже графика
   const Y = (v) => plotH - ((v - lo) / (hi - lo)) * (plotH - 6) - 1;
   g.fillStyle = '#94a3b8'; g.font = '10px sans-serif';
-  g.fillText(String(hi), 3, 10); g.fillText(String(lo), 3, plotH - 2);
-  g.fillText('−' + mdFmtWin(win), 3, hh - 1);
-  g.textAlign = 'right'; g.fillText('сейчас', w - 3, hh - 1); g.textAlign = 'left';
+  if (!mini) {
+    g.fillText(String(hi), 3, 10); g.fillText(String(lo), 3, plotH - 2);
+    g.fillText('−' + mdFmtWin(win), 3, hh - 1);
+    g.textAlign = 'right'; g.fillText('сейчас', w - 3, hh - 1); g.textAlign = 'left';
+  }
   cv._hv = null;
   if (n < 2) return;
   const tEnd = t[n - 1];
@@ -993,11 +1019,15 @@ function mdDrawSeries(cv, t, vals, ok, lo, hi, opts) {
   g.stroke();
 }
 
-// график признака вида окна (яркость к металлу / яркость / зернистость): линия, пороги, полоска «жом есть / пусто»; fh — h.fill из /api/motion/history
+// график яркости (яркость к металлу / яркость / зернистость): линия, пороги, полоска «есть / нет»; fh — h.fill из /api/motion/history.
+// У зоны без движения тот же график стоит и в шапке карточки
 function mdDrawFillChart(cam, z, fh) {
-  const cv = mdEl('md-fch-' + cam.id + '-' + z.id);
+  const k = cam.id + '-' + z.id;
   const m = z.fill_metric;
-  if (!cv || !m || m === 'off') return;
+  if (!m || m === 'off') return;
+  const cvs = [mdEl('md-fch-' + k), z.motion === false ? mdEl('md-ch-' + k) : null].filter(Boolean);
+  if (!cvs.length) return;
+  const words = z.motion === false ? MD_FILL_PRESENCE : ['пусто', 'есть'];
   const d = fh && fh.zones && fh.zones[z.id];
   const vals = d ? d[m] : [];
   const decide = (z.fill_on || 0) > 0;
@@ -1010,9 +1040,10 @@ function mdDrawFillChart(cam, z, fh) {
   const lines = decide ? [{ v: z.fill_on, color: '#ef4444' }, { v: z.fill_off, color: '#f59e0b' }] : [];
   const tip = (i) => {
     const f = fill[i];
-    return MD_FILL_NAME[m] + ' <b>' + mdFillFmt(m, vals[i]) + '</b>' + (decide && f != null ? ' · ' + (f ? 'жом есть' : 'пусто') : '');
+    return MD_FILL_NAME[m] + ' <b>' + mdFillFmt(m, vals[i]) + '</b>' + (decide && f != null ? ' · ' + words[f] : '');
   };
-  mdDrawSeries(cv, fh ? fh.t || [] : [], vals, fh ? fh.ok || [] : [], lo, hi, { h: cv.height || 72, lines, tip, strip: decide ? fill.map((f) => (f == null ? null : f ? '#4ade80' : '#f87171')) : null });
+  cvs.forEach((cv) => mdDrawSeries(cv, fh ? fh.t || [] : [], vals, fh ? fh.ok || [] : [], lo, hi,
+    { h: cv.height || 72, mini: !!cv.dataset.mini, lines, tip, strip: decide ? fill.map((f) => (f == null ? null : f ? '#4ade80' : '#f87171')) : null }));
 }
 
 // подсказка при наведении на график с _hv: ближайшая точка по времени — значение и время (подсказка и вертикальная линия — два плавающих элемента)
@@ -1084,7 +1115,15 @@ function mdDrawChart(cam, z, d, t, ok) {
   if (!cv || !d) return;
   if (ggIs(z)) { ggDrawChart(cv, d, t, ok); return; }
   if (z.type === 'cycle') { mdDrawSeries(cv, t, d.flow.map((v, i) => (d.bit[i] ? v : null)), ok, 0, 360, { wrap: true, lines: [{ v: 180, color: '#64748b' }] }); return; }
-  const w = cv.clientWidth, hh = cv.height || 84, strip = 7;
+  if (z.motion === false) return;           // без движения: в шапке и справа — график яркости (mdDrawFillChart)
+  mdDrawMotionChart(cv, z, d, t, ok);
+  const big = mdEl('md-mch-' + cam.id + '-' + z.id);
+  if (big) mdDrawMotionChart(big, z, d, t, ok);
+}
+
+// график движения: метрика зоны, пороги, полоска «крутится / стоит»; в шапке карточки (data-mini) — без подписей
+function mdDrawMotionChart(cv, z, d, t, ok) {
+  const w = cv.clientWidth, hh = cv.height || 84, strip = 7, mini = !!cv.dataset.mini;
   if (!w) return;
   if (cv.width !== w) cv.width = w;
   const g = cv.getContext('2d');
@@ -1092,13 +1131,15 @@ function mdDrawChart(cam, z, d, t, ok) {
   cv._hv = null;
   const ys = z.metric === 'flow' ? d.flow : d.diff, n = ys.length;
   const win = MD.win;
-  const plotH = hh - strip - 13;
+  const plotH = hh - strip - (mini ? 3 : 13);
   const top = Math.max(z.on * 1.6, ...ys, 0.0001);
   const Y = (v) => plotH - (v / top) * (plotH - 6) - 1;
   g.fillStyle = '#94a3b8'; g.font = '10px sans-serif';
-  g.fillText(top.toFixed(top < 10 ? 2 : 0), 3, 10);
-  g.fillText('−' + mdFmtWin(win), 3, hh - 1);
-  g.textAlign = 'right'; g.fillText('сейчас', w - 3, hh - 1); g.textAlign = 'left';
+  if (!mini) {
+    g.fillText(top.toFixed(top < 10 ? 2 : 0), 3, 10);
+    g.fillText('−' + mdFmtWin(win), 3, hh - 1);
+    g.textAlign = 'right'; g.fillText('сейчас', w - 3, hh - 1); g.textAlign = 'left';
+  }
   if (n < 2) return;
   const tEnd = t[n - 1];
   const X = (i) => w - 1 - ((tEnd - t[i]) / win) * (w - 2);
@@ -1154,7 +1195,7 @@ function mdPlcWritesRows() {
   mdCfgCams().forEach((c) => {
     const add = (what, name, o) => rows.push({ cam: c, name, what, to: addr(o) });
     c.zones.forEach((z) => {
-      if (z.out && z.enabled !== false) add(MD_WRITE_WHAT[z.type] || (z.out.value === 'state' ? 'состояние окна' : 'движение'), z.name, z.out);
+      if (z.out && z.enabled !== false) add(MD_WRITE_WHAT[z.type] || (z.out.value === 'state' ? 'состояние окна' : z.motion === false ? 'наличие' : 'движение'), z.name, z.out);
       if (z.rpm_out && z.enabled !== false) add('обороты', z.name, z.rpm_out);
     });
     (c.groups || []).forEach((g) => { if (g.out) add(g.type === 'mirror' ? 'рассинхрон валов' : 'вычисление', g.name, g.out); });
@@ -1176,7 +1217,7 @@ function mdPlcHtml() {
   const m = (MV.cfg && MV.cfg.modbus) || { enable: false, host: '', port: 502, device_id: 1, write_period_s: 1 };
   const a = 'data-md="p"';
   const list = ((MV.cfg && MV.cfg.scenarios) || []).map((s, i) => mdScenarioHtml(s, i)).join('');
-  const scens = list ? `<div class="md-sbox">${list}</div>` : '<p class="net-hint">Сценариев нет. Сценарий берёт окна и зоны любых камер или вычисления, считает «хоть одно» / «все» / «сколько» (по жому или по движению) и пишет ОДНО значение в регистр или coil. Только сценарии пишут в ПЛК значения зон.</p>';
+  const scens = list ? `<div class="md-sbox">${list}</div>` : '<p class="net-hint">Сценариев нет. Сценарий берёт окна и зоны любых камер или вычисления, считает «хоть одно» / «все» / «сколько» (по наличию или по движению) и пишет ОДНО значение в регистр или coil. Только сценарии пишут в ПЛК значения зон.</p>';
   return `<div class="md-h md-h--row md-h--sec">Подключение</div>
     <div class="md-sbox md-plcbox ${m.enable ? 'is-on' : 'is-off'}" id="mdPlcBlock"><div class="md-sr${MD.open['plc'] ? ' is-open' : ''}">
       <div class="md-sr__head md-plcbox__head" data-zt="plc" title="Нажмите, чтобы раскрыть настройки подключения">
@@ -1200,18 +1241,18 @@ function mdPlcHtml() {
     ${mdGroupsSectionHtml()}`;
 }
 
-const MD_SC_SIGNALS = [['pulp', 'Жом есть'], ['move', 'Движение']];
+const MD_SC_SIGNALS = [['pulp', 'Наличие'], ['move', 'Движение']];     // у зоны без движения оба сигнала — её бит «есть»
 const MD_SC_RULES = [['or', 'Хоть одно'], ['and', 'Все'], ['sum', 'Сколько']];
 const MD_SC_SCALES = [[10, '× 10'], [1, 'как есть']];      // формат значения уровнемера; поля нет (старый сценарий) — × 10
 const mdScScale = (s) => (s.scale === 1 ? 1 : 10);
 const mdScScaleHint = (s) => '54,3 % → ' + (mdScScale(s) === 1 ? '54' : '543') + ' · нет данных → −1 (в ПЛК тип INT)';
 function mdScenarioSummary(s, cams) {
   const pulp = s.signal === 'pulp';
-  const what = { or: pulp ? 'хоть в одном жом' : 'хоть одно крутится', and: pulp ? 'жом во всех' : 'все крутятся', sum: pulp ? 'сколько окон с жомом' : 'сколько крутится' }[s.rule] || '';
+  const what = { or: pulp ? 'хоть в одном есть' : 'хоть одно крутится', and: pulp ? 'есть во всех' : 'все крутятся', sum: pulp ? 'в скольких есть' : 'сколько крутится' }[s.rule] || '';
   const names = s.sources.map((x) => { const c = cams.find((q) => q.id === x.camera), z = c && (x.group ? (c.groups || []).find((q) => q.id === x.group) : c.zones.find((q) => q.id === x.zone)); return z ? z.name : null; }).filter(Boolean);
   const tags = names.slice(0, 5).map((n) => `<span class="md-sr__tag">${escapeHtml(n)}</span>`).join('') + (names.length > 5 ? `<span class="md-sr__tag">+${names.length - 5}</span>` : '');
   if (s.rule === 'value') return `<span>уровнемер · ${mdScScale(s) === 1 ? 'целые %' : '% × 10'}</span>${tags || '<span class="md-sr__tag">нет источников</span>'}`;
-  return `<span>${pulp ? 'жом' : 'движение'} · ${what}</span>${tags || '<span class="md-sr__tag">нет источников</span>'}`;
+  return `<span>${pulp ? 'наличие' : 'движение'} · ${what}</span>${tags || '<span class="md-sr__tag">нет источников</span>'}`;
 }
 
 function mdScenarioHtml(s, i) {
@@ -1462,13 +1503,16 @@ function mdGauge(v, off, on, lo, hi, color) {
     `<rect x="0" y="3" width="${p(v)}" height="4" rx="2" style="fill:${color}"/><line x1="${p(a)}" x2="${p(a)}" y1="0" y2="10" class="md-g-m"/><line x1="${p(b)}" x2="${p(b)}" y1="0" y2="10" class="md-g-m"/></svg>`;
 }
 
-// строка окна: цвет и плашка состояния (красный — пусто, жёлтый — жом стоит, зелёный — жом едет) и шкалы порогов
-const MD_ZSTATE = { 0: ['e', 'пусто'], 1: ['p', 'жом стоит'], 2: ['m', 'жом едет'] };
-function mdPaintZoneRow(k, zc, zl) {
+// строка окна: цвет и плашка состояния и шкалы порогов. С движением и яркостью: красный — пусто, жёлтый — стоит, зелёный — движется;
+// только по яркости (motion=false): зелёный — есть, красный — нет, серый — нет кадров или пороги не заданы
+const MD_ZSTATE = { 0: ['e', 'пусто'], 1: ['p', 'стоит'], 2: ['m', 'движется'] };
+function mdPaintZoneRow(k, zc, zl, alive) {
   const row = mdEl('md-zr-' + k);
   if (!row) return;
+  const bright = zc.motion === false;
   let st, txt;
-  if (zl.state != null) [st, txt] = MD_ZSTATE[zl.state];
+  if (bright) [st, txt] = !alive ? ['i', 'нет данных'] : zl.state == null ? ['i', 'не настроено'] : zl.state ? ['m', 'есть'] : ['e', 'нет'];
+  else if (zl.state != null) [st, txt] = MD_ZSTATE[zl.state];
   else if (zl.bit) [st, txt] = ['m', 'движется'];
   else [st, txt] = ['i', 'стоит'];
   row.dataset.st = st;
@@ -1483,7 +1527,7 @@ function mdPaintZoneRow(k, zc, zl) {
   if (gf && zl.tex !== undefined) {
     const m = zc.fill_metric, v = Number(m === 'lum' ? zl.lum : m === 'rel' ? zl.rel : zl.tex) || 0;
     const [lo, hi] = m === 'rel' ? [0.4, 1.0] : m === 'lum' ? [0, 255] : [0, Math.max(zc.fill_on * 1.6, v * 1.2, 1)];
-    gf.innerHTML = mdGauge(v, zc.fill_off, zc.fill_on, lo, hi, zl.fill ? 'var(--warning)' : 'var(--danger)');
+    gf.innerHTML = mdGauge(v, zc.fill_off, zc.fill_on, lo, hi, zl.fill ? (bright ? 'var(--success)' : 'var(--warning)') : bright && zl.fill == null ? 'var(--muted)' : 'var(--danger)');
     const gv = mdEl('md-gfv-' + k);
     if (gv) gv.textContent = m === 'lum' ? v.toFixed(0) : v.toFixed(2);
   }
@@ -1519,6 +1563,7 @@ function paintMotionDockLive() {
     const st = MV.states[c.id];
     const res = st && st.result;
     mdLearnTick(c, res);
+    mdBrightTick(c, res);
     ((res && res.zones) || []).forEach((z) => {
       const bit = mdEl('md-zb-' + c.id + '-' + z.id);
       if (bit) { bit.textContent = z.bit; bit.classList.toggle('on', z.bit === 1); }
@@ -1527,7 +1572,7 @@ function paintMotionDockLive() {
       const fl = mdEl('md-zf-' + c.id + '-' + z.id);
       if (fl) fl.textContent = mdFillText(z);
       const zc = c.zones.find((q) => q.id === z.id);
-      if (zc && zc.type !== 'cycle') mdPaintZoneRow(c.id + '-' + z.id, zc, z);
+      if (zc && zc.type !== 'cycle') mdPaintZoneRow(c.id + '-' + z.id, zc, z, !!res.alive);
     });
     ((res && res.groups) || []).forEach((g) => {
       const b = mdEl('md-gv-' + c.id + '-' + g.id);
@@ -1579,7 +1624,7 @@ function paintMotionDockLive() {
     if (un) un.textContent = gauge ? (none ? 'нет данных' : 'пишем ' + s.value) : sc && sc.rule === 'sum' ? 'из ' + bits.length : s.value > 0 ? 'да' : 'нет';
     const info = mdEl('md-ss-' + s.id);
     if (info) {
-      info.textContent = (gauge ? '' : (pulp ? 'жом в ' : 'крутится ') + bits.filter(Boolean).length + ' из ' + bits.length + ' · ') + 'пишем ' + s.value + ' · ' +
+      info.textContent = (gauge ? '' : (pulp ? 'есть в ' : 'крутится ')+ bits.filter(Boolean).length + ' из ' + bits.length + ' · ') + 'пишем ' + s.value + ' · ' +
         (!s.plc ? 'запись в ПЛК выключена' : s.ok === null ? 'ПЛК: ждёт' : s.ok ? 'ПЛК: записано' : 'ПЛК: ошибка ' + (s.error || ''));
     }
   });
@@ -2180,6 +2225,7 @@ function initMotionDock() {
     body.querySelectorAll('.md-zr').forEach((r) => r.classList.toggle('is-open', MD.openAll));
   });
   body?.addEventListener('wheel', mdOnWheel, { passive: false });
+  if (body) mdBindGrips(body);                 // высота графиков в карточке зоны — тянем мышью (20-zone-bright.js)
   body?.addEventListener('mousemove', mdOnChartHover);
   body?.addEventListener('mouseleave', () => { const [tip, line] = mdTipEls(); tip.hidden = true; line.hidden = true; });
   body?.addEventListener('change', (e) => {

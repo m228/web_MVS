@@ -687,7 +687,8 @@ def create_app(data_dir: Optional[Path] = None, capture_factory: Callable = open
         """Записи за последние days суток (CSV собирается из базы) + summary.txt (когда и на сколько камеры пропадали) — одним архивом."""
         for w in list(mgr.workers.values()):
             w.flush_record()
-        names = {c["id"]: {"name": c.get("name"), "zones": {z["id"]: z.get("name") for z in c.get("zones", [])}} for c in mgr.cfg.get("cameras", [])}
+        label = lambda z: z.get("name") if z.get("motion", True) else "%s [по яркости: «крутится» = есть]" % z.get("name")
+        names = {c["id"]: {"name": c.get("name"), "zones": {z["id"]: label(z) for z in c.get("zones", [])}} for c in mgr.cfg.get("cameras", [])}
         data = motion_records.build_zip(mgr.dir, max(0.01, min(float(days), 31.0)), names=names)
         if data is None:
             raise HTTPException(404, "записей ещё нет — включите запись («● все» в общем виде панели КЗ)")

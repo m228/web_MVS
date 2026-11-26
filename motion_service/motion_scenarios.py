@@ -13,7 +13,8 @@ from typing import Optional
 log = logging.getLogger("motion.scenarios")
 
 RULES = ("or", "and", "sum", "value")
-SIGNALS = ("move", "pulp")      # move — бит «движется» зоны, pulp — «жом есть» (вид окна; без включённого вида окна — 0)
+SIGNALS = ("move", "pulp")      # move — бит «движется» зоны, pulp — «есть» (вид окна; без включённого вида окна — 0).
+#                                 У зоны без движения (motion=False) бит зоны и есть «есть»: оба сигнала дают одно и то же
 NO_DATA = -1                    # value (уровнемер): значения нет — не 0, потому что 0 — это настоящие «0 %». В регистре −1 = 65535: в ПЛК читать как INT
 
 

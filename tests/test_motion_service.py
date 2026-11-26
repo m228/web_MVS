@@ -1144,6 +1144,67 @@ def test_fill_rel_decides_pulp_with_thresholds_and_zone_at_frame_edge_still_work
     assert st["zones"][1]["rel"] >= 0, "окно у края кадра: полоса вокруг обрезается, расчёт не падает"
 
 
+def bright_cfg(**kw):
+    """Две зоны только по яркости на тех же половинах кадра: левая светлая крупа (камень), правая серая стенка (металл)."""
+    z = dict(motion=False, fill_metric="lum", fill_smooth=3, fill_frames=3, fill_on=118.0, fill_off=102.0)
+    z.update(kw)
+    return me.normalize_camera({"id": "c", "zones": [
+        dict({"id": "z1", "points": LEFT, "out": {"kind": "holding", "address": 4, "value": "state"}}, **z),
+        dict({"id": "z2", "points": RIGHT, "out": {"kind": "coil", "address": 5}}, **z)]})
+
+
+def test_bright_zone_defaults_and_validation():
+    z = me.normalize_camera({"id": "c", "zones": [{"id": "z1", "points": LEFT}]})["zones"][0]
+    assert z["motion"] is True, "старые зоны: движение считается"
+    assert me.normalize_camera({"id": "c", "zones": [z]})["zones"][0]["motion"] is True
+    with pytest.raises(ValueError, match="признак яркости"):
+        me.normalize_camera({"id": "c", "zones": [{"id": "z1", "points": LEFT, "motion": False}]})
+    z = bright_cfg()["zones"][0]
+    assert me.normalize_camera({"id": "c", "zones": [z]})["zones"][0]["motion"] is False, "настройка переживает повторное чтение"
+
+
+def test_bright_zone_bit_follows_brightness_not_motion_and_skips_motion_math(monkeypatch):
+    """Крупа едет или стоит — бит один и тот же: решает только яркость. diff / flow не считаются вовсе."""
+    def boom(*a, **k):
+        raise AssertionError("у зоны без движения diff / flow не считаются")
+    monkeypatch.setattr(me, "diff_metric", boom)
+    monkeypatch.setattr(me, "flow_metric", boom)
+    for move in (False, True):
+        eng, st = run_engine(bright_cfg(), grain_frames(30, move_left=move))
+        z1, z2 = st["zones"]
+        assert (z1["bit"], z1["fill"], z1["state"], z1["motion"]) == (1, 1, 1, False), (move, z1)
+        assert (z2["bit"], z2["fill"], z2["state"]) == (0, 0, 0), (move, z2)
+        assert z1["diff"] == z1["flow"] == 0.0 and z1["value"] == pytest.approx(z1["lum"], abs=0.01)
+        assert eng.compute_writes(st) == [("holding", 4, 1), ("coil", 5, 0)]
+    dead = eng.dead_state(2000.0, "нет кадров")
+    assert [(z["bit"], z["state"]) for z in dead["zones"]] == [(0, 0), (0, 0)], "камера мёртвая — 0"
+
+
+def test_bright_zone_inverted_and_without_thresholds():
+    _, st = run_engine(bright_cfg(fill_invert=True), grain_frames(30))
+    assert [z["bit"] for z in st["zones"]] == [0, 1], "«есть» при низкой яркости — правая, тёмная"
+    eng, st = run_engine(bright_cfg(fill_on=0, fill_off=0), grain_frames(30))
+    assert [(z["bit"], z["fill"], z["state"]) for z in st["zones"]] == [(0, None, None), (0, None, None)], "пороги не заданы — решения нет"
+    assert eng.compute_writes(st) == [("holding", 4, 0), ("coil", 5, 0)]
+
+
+def test_bright_zone_goes_to_scenarios_but_not_to_stop_reports(tmp_path):
+    """Сценарий берёт бит яркости любым сигналом; журнал камер и мониторинг остановок такую зону «лентой» не считают."""
+    import motion_scenarios as sc
+    import cam_monitor
+    import motion_sync
+    _, st = run_engine(bright_cfg(), grain_frames(30))
+    states = {"c": {"result": st}}
+    srcs = [{"camera": "c", "zone": "z1"}, {"camera": "c", "zone": "z2"}]
+    assert sc.source_bits(srcs, states, "pulp") == sc.source_bits(srcs, states, "move") == [1, 0]
+    assert cam_monitor.Monitor._cv_active({"enabled": True, "result": st}) == {}
+    cfg = {"cameras": [{"id": "c", "zones": [{"id": "a", "metric": "diff", "on": 4, "off": 2},
+                                             {"id": "b", "metric": "diff", "on": 4, "off": 2, "motion": False, "fill_metric": "lum"}]}]}
+    path = tmp_path / "motion_config.json"
+    path.write_text(json.dumps(cfg), encoding="utf-8")
+    assert list(motion_sync.load_zones(path)["c"]["zones"]) == ["a"]
+
+
 def test_scenario_signal_pulp_sums_windows_with_pulp_and_move_ors_motion():
     """Шахта: один сценарий считает окна с жомом (уровень 0..3), другой — есть ли движение в окнах."""
     import motion_scenarios as sc

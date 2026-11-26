@@ -75,7 +75,7 @@ function createTileEl() {
     </div>
     </div>
     <div class="multi-tile__status">
-      <span data-metric-tip="fps" title="Кадров в секунду от камеры">FPS<strong data-metric="fps">0.00</strong></span>
+      <span title="Кадров в секунду. RTSP: показ в приложении / приходит от камеры; «—» — картинка скрыта, «выкл» — приложение камеру не берёт">FPS<strong data-metric="fps">0.00</strong></span>
       <span>Кадры<strong data-metric="images">0</strong></span>
       <span title="Поток JPEG в браузер, не битрейт камеры">Мбит/с ↗<strong data-metric="bandwidth">0.0</strong></span>
       <span>Разрешение<strong data-metric="resolution">0 × 0</strong></span>

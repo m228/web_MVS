@@ -53,6 +53,10 @@
               <input type="checkbox" id="multiDisplaySubToggle" />
               <span class="micro-check__text">Показ — подпоток</span>
             </label>
+            <label class="micro-check" title="Приложение не берёт камеры на показ: меньше нагрузка на этот ПК, КЗ работает как работала. Нужную камеру можно открыть «глазиком», запись фото и видео продолжается. Пока камера не открыта, приложение не пишет для неё в журнал «нет связи» и «серые кадры» (сбои анализа остаются).">
+              <input type="checkbox" id="multiAnalysisToggle" />
+              <span class="micro-check__text">Только анализ</span>
+            </label>
             <a href="/" class="btn btn-secondary">К списку камер</a>
             <button type="button" id="multiUpdateBtn" class="btn btn-secondary" title="Обновить программу до последней версии: основное приложение и дополнения. Через 5 секунд (можно отменить) запустится апдейтер, камеры отключатся примерно на минуту и поднимутся сами">Обновить</button>
             <span class="mu-status" id="multiUpdateStatus" role="status" hidden></span>
@@ -133,6 +137,10 @@
             </div>
             <div class="multi-drawer__list" id="multiDrawerList"></div>
             <p class="multi-drawer__hint">Нажмите камеру — откроются настройки. Перетащите её на ячейку →</p>
+            <div class="host-load" id="hostLoad" hidden>
+              <p class="section-subtitle">Нагрузка этого ПК</p>
+              <div id="hostLoadBody"></div>
+            </div>
           </aside>
 
           <!-- сетка ячеек (заполняется из multi.js) -->
@@ -553,6 +561,7 @@
   <script src="/static/js/multi/12-autostart.js"></script>
   <script src="/static/js/multi/13-journal.js"></script>
   <script src="/static/js/multi/14-update.js"></script>
+  <script src="/static/js/multi/20-load.js"></script>
   <script src="/static/js/stage-names.js"></script>
   <script src="/static/js/multi/09-init.js"></script>
 </body>

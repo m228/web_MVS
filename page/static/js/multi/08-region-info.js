@@ -341,8 +341,9 @@ async function applyRtspEdit(fd, form, error) {
     }
   }
 
-  // эфир: перезапускаем поток с новыми параметрами
+  // эфир: перезапускаем поток с новыми параметрами (скрытой ячейке — только сообщаем серверу новый адрес)
   state.tiles.forEach((tile, i) => {
+    if (tile.serial === cam.serial && tile.connected && tile.hidden) attachHiddenCamera(cam);
     if (tile.serial === cam.serial && tile.connected && !tile.hidden) {
       const frame = getTileEl(i)?.querySelector('[data-tile-frame]');
       if (frame) frame.src = buildStreamUrl(cam);
@@ -406,6 +407,7 @@ function addRtspSource() {
     existing.connection = connection;
     // если уже в эфире — перезапускаем поток с новыми настройками
     state.tiles.forEach((tile, i) => {
+      if (tile.serial === existing.serial && tile.connected && tile.hidden) attachHiddenCamera(existing);
       if (tile.serial === existing.serial && tile.connected && !tile.hidden) {
         const el = getTileEl(i);
         const frame = el?.querySelector('[data-tile-frame]');

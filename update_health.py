@@ -21,6 +21,8 @@ def default_sources() -> dict:
     from microscope_service import micro
 
     def rtsp_running() -> int:
+        if manager.analysis_only:
+            return 0                                      # «Только анализ»: камеры открывает только зритель — сравнивать нечего
         with manager._registry_lock:                       # копия реестра под замком: воркеры создаются из запросов
             ws = list(manager.rtsp_workers.values())
         return sum(1 for w in ws if getattr(w, "running", False))

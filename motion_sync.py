@@ -46,7 +46,7 @@ def load_zones(cfg_path: Path) -> dict:
         for z in c.get("zones") or []:
             if not isinstance(z, dict) or not z.get("id") or z.get("enabled") is False:
                 continue
-            if (z.get("type") or "motion") != "motion" or z.get("invert"):
+            if (z.get("type") or "motion") != "motion" or z.get("invert") or z.get("motion") is False:      # зона «по яркости» — не лента: движения у неё нет
                 continue
             metric = z.get("metric") or "flow"
             if metric not in ("flow", "diff"):
@@ -138,6 +138,8 @@ def zone_episodes(bins: list, zc: dict, now: float) -> list:
 
     for b in bins:
         k = b[0]
+        if b[2] == 0 and b[3] == 0:             # ни flow, ни diff: зона тогда движение не считала (была «по яркости») — это не «стоит», а нет данных
+            continue
         if prev_k is not None and (k - prev_k) * BIN_S - BIN_S > CAM_GAP_S:      # дыра: эпизод закрываем на последней корзине, состояние забываем
             close(False)
             state = None

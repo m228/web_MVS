@@ -2432,11 +2432,15 @@ class CameraEngine:
         """Камеры нет/кадр застыл: биты и уровни = 0, status = 0 (в ПЛК уходят нули и «камера не жива»)."""
         if self.zones is None:
             self.zones = []
-        self.last_state = self._state({z.id: 0 for z in self.zones}, now, alive=False, reason=reason, update_timers=False)
+        self.last_state = self.lost_state(now, reason)
         return self.last_state
 
+    def lost_state(self, now: float, reason: str = "") -> dict:
+        """То же состояние, что dead_state, но движок не запоминает: так его может спросить чужой поток, когда поток камеры молчит."""
+        return self._state({}, now, alive=False, reason=reason, update_timers=False)
+
     def _state(self, bits: dict, now: float, alive: bool, reason: str = "", update_timers: bool = True) -> dict:
-        zs = {z.id: z for z in self.zones}
+        zs = {z.id: z for z in self.zones or []}
         zones = []
         for zc in self.cfg["zones"]:
             if zc["type"] == "cycle":

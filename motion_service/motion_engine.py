@@ -32,6 +32,7 @@ import numpy as np
 from perf_stats import PERF
 from motion_kiln import DEFAULT_CODES as KILN_CODES, STAGES as KILN_STAGES, KilnRT
 from motion_level import DEFAULT_URL as LEVEL_URL, GEOMETRIES as LEVEL_GEOMETRIES, LevelRT
+from motion_sound import DEFAULT_CODES as SOUND_CODES
 
 CALIB_DT = 0.33          # интервал между кадрами, при котором калибровались пороги потока (камеры ~3 fps)
 FB = dict(pyr_scale=0.5, levels=3, winsize=15, iterations=3, poly_n=5, poly_sigma=1.2, flags=0)
@@ -87,7 +88,7 @@ CLARITY_MV_SIGMA = 2.5                  # размытие (в точках N×N
 CLARITY_MV_MIN_FRAMES = 4               # меньше стольких разных кадров в окне — движение не считаем (по два в каждой половине)
 CLARITY_MV_DUP_EPS = 0.05               # кадр, отличающийся от прежнего меньше этого (средний |Δ| серого), — дубль потока, в окно не берём
 METRICS = ("flow", "diff")
-GROUP_TYPES = ("sum", "monotonic", "worktimer", "mirror", "level", "kiln")
+GROUP_TYPES = ("sum", "monotonic", "worktimer", "mirror", "level", "kiln", "kiln_sound")
 MIRROR_MODES = ("mirror", "same")
 BAN_DEG = 15.0           # полуширина запрета вокруг ложной неподвижной цели палки, градусы
 MAX_BANS = 3             # сколько ложных целей помним на палку
@@ -579,11 +580,11 @@ def _norm_group(g: dict, cam_id: str, zone_ids: list, cycle_ids=(), level_ids=()
     gtype = g.get("type", "sum")
     if gtype not in GROUP_TYPES:
         raise ValueError("%s: тип %r не из %s" % (where, gtype, list(GROUP_TYPES)))
-    zs = [str(x) for x in (g.get("zones") or [])]
+    zs = [] if gtype == "kiln_sound" else [str(x) for x in (g.get("zones") or [])]      # по звуку зоны не нужны
     bad = [x for x in zs if x not in zone_ids]
     if bad:
         raise ValueError("%s: нет таких зон: %s" % (where, ", ".join(bad)))
-    if not zs:
+    if not zs and gtype != "kiln_sound":
         raise ValueError("%s: не выбрано ни одной зоны" % where)
     out = {
         "id": gid,
@@ -651,6 +652,12 @@ def _norm_group(g: dict, cam_id: str, zone_ids: list, cycle_ids=(), level_ids=()
                    load_max_s=_num(g.get("load_max_s", 10), where + ".load_max_s", 3, 120),
                    rot_wait_s=_num(g.get("rot_wait_s", 60), where + ".rot_wait_s", 5, 600),
                    codes={s: _num(codes.get(s, KILN_CODES[s]), "%s.codes.%s" % (where, s), 0, 65535, True) for s in KILN_STAGES})
+    if gtype == "kiln_sound":
+        codes = g.get("codes") or {}
+        if not isinstance(codes, dict):
+            raise ValueError("%s: коды этапов — объект «этап: число»" % where)
+        out.update(out=None, threshold_db=_num(g.get("threshold_db", 30), where + ".threshold_db", 10, 60),
+                   codes={s: _num(codes.get(s, SOUND_CODES[s]), "%s.codes.%s" % (where, s), 0, 65535, True) for s in SOUND_CODES})
     if gtype == "monotonic":
         order = [str(x) for x in (g.get("order") or zs)]
         if sorted(order) != sorted(zs):
@@ -701,7 +708,7 @@ def _norm_scenario(sc: dict, cams: list) -> dict:
     elif rule == "value" and srcs:
         rule = "or"                 # уровнемер из источников убрали, остались обычные окна
     # этапы печи — тоже число: «или» превратило бы код этапа в 1. Берём такой источник один и пишем его значение как есть
-    kilns = {c["id"]: {g["id"] for g in c["groups"] if g["type"] == "kiln"} for c in cams}
+    kilns = {c["id"]: {g["id"] for g in c["groups"] if g["type"] in ("kiln", "kiln_sound")} for c in cams}
     stages = [s for s in srcs if s.get("group") in kilns.get(s["camera"], ())]
     if stages and not analog:
         rule, srcs = "sum", stages[:1]
@@ -788,6 +795,8 @@ def normalize_camera(c: dict) -> dict:
     gids = [g["id"] for g in groups]
     if len(set(gids)) != len(gids):
         raise ValueError("камера %s: id групп повторяются" % cid)
+    if sum(g["type"] == "kiln_sound" for g in groups) > 1:
+        raise ValueError("камера %s: вычисление «этапы по звуку» может быть только одно — звук у камеры один" % cid)
     transport = str(c.get("transport", "tcp")).lower()
     if transport not in ("tcp", "udp"):
         raise ValueError("камера %s: transport tcp или udp" % cid)
@@ -2486,6 +2495,8 @@ class CameraEngine:
                           **self._fill_state(zc, z, alive, bool(bits.get(zc["id"], 0)))})
         groups = []
         for g in self.cfg["groups"]:
+            if g["type"] == "kiln_sound":
+                continue                   # от картинки не зависит: его добавляет поток камеры из слушателя звука (motion_sound)
             gb = {zid: (bits.get(zid, 0) if alive else 0) for zid in g["zones"]}
             if g["type"] == "mirror":
                 groups.append(self._mirror_group(g, alive, now))

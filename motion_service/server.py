@@ -59,6 +59,7 @@ os.environ.setdefault("OPENCV_LOG_LEVEL", "ERROR")
 import motion_engine as engine  # noqa: E402
 import motion_lvldec  # noqa: E402
 import motion_records  # noqa: E402
+import motion_sound  # noqa: E402
 import motion_store  # noqa: E402
 import motion_trends  # noqa: E402
 import motion_videorec  # noqa: E402
@@ -159,6 +160,7 @@ class Manager:
         self.autocal: dict[str, AutocalJob] = {}   # подгонка валов по камере (последнее задание; пересоздание воркеров при сохранении настроек его не трогает)
         self.watch = AutocalWatch(self)            # сторож видимости палок: сам запускает подгонку при просадке и откатывает, если стало хуже
         self.video = motion_videorec.VideoRec(self.dir, lambda: self.cfg["cameras"])   # запись видео со звуком на диск (data\video_rec)
+        self.sound = motion_sound.SoundHub(lambda: self.cfg["cameras"])                # этапы печи по звуку камеры
 
     # --- автоподгонка валов ---
     def autocal_start(self, cid: str, zones: list, seconds: float) -> dict:
@@ -278,6 +280,7 @@ class Manager:
             for c in new["cameras"]:
                 if c["id"] not in self.workers:
                     w = CameraWorker(c, new["modbus"], self.links, self.dir, self.capture_factory, self.level_post)
+                    w.sound_states = self.sound.states
                     self.workers[c["id"]] = w
                     if (self.rec_all or c["id"] in self.rec_cams) and c["enabled"] and c["url"]:
                         w.start_record()
@@ -374,6 +377,7 @@ class Manager:
         self.shafts.start()
         self.watch.start()
         self.video.start()
+        self.sound.start()
         if self.auto_record or self.shots_min > 0 or self.keep_days:
             self._hk = threading.Thread(target=self._housekeeping, daemon=True, name="housekeeping")
             self._hk.start()
@@ -381,6 +385,7 @@ class Manager:
     def shutdown(self):
         self._halt.set()
         self.video.shutdown()                    # первым: ffmpeg должен успеть закрыть файлы
+        self.sound.shutdown()
         self.watch.stop()
         for j in self.autocal.values():
             j.cancel()

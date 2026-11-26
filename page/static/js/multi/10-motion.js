@@ -215,11 +215,12 @@ function drawMotionTile(index) {
     ctx.textAlign = 'left'; ctx.font = 'bold 13px sans-serif'; ctx.lineWidth = 2;
   });
   // этапы печи: текущий этап и сколько он идёт — по центру снизу; зелёный — сброс / засыпка / прокрутка, серый — ожидание и «нет данных»
-  ((st && st.groups) || []).filter((lg) => lg.type === 'kiln').forEach((lg, k) => {
-    const txt = lg.name + ': ' + (problem || !lg.stage ? 'нет данных' : lg.stage_name + '  ' + mdKilnTime(lg.since_s));
+  ((st && st.groups) || []).filter((lg) => lg.type === 'kiln' || lg.type === 'kiln_sound').forEach((lg, k) => {
+    const off = (problem && lg.type === 'kiln') || !lg.stage;       // этапам по звуку беда с картинкой не мешает
+    const txt = lg.name + ': ' + (off ? 'нет данных' : lg.stage_name + '  ' + mdKilnTime(lg.since_s));
     ctx.font = 'bold 16px sans-serif'; ctx.textAlign = 'center';
     ctx.lineWidth = 4; ctx.strokeStyle = '#000'; ctx.strokeText(txt, g.w / 2, g.h - 10 - k * 22);
-    ctx.fillStyle = !problem && (lg.bits || []).some(Boolean) ? '#4ade80' : '#e5e7eb'; ctx.fillText(txt, g.w / 2, g.h - 10 - k * 22);
+    ctx.fillStyle = !off && (lg.bits || []).some(Boolean) ? '#4ade80' : '#e5e7eb'; ctx.fillText(txt, g.w / 2, g.h - 10 - k * 22);
     ctx.textAlign = 'left'; ctx.font = 'bold 13px sans-serif'; ctx.lineWidth = 2;
   });
   // разности валов в ряду и между рядами (вкладка «Валы»): строка на пару, в которой есть вал этой камеры; красная — тревога

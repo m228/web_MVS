@@ -88,6 +88,31 @@ const jcBaseClean = (cam) => {
 };
 const jcHasClean = (cam, z) => (jcShared(cam) ? !!jcBaseClean(cam) : Array.isArray(z.clean) || !!jcBaseClean(cam));
 const jcHasDirty = (cam, z) => (!jcShared(cam) && z.dirty_mode === 'own' ? Array.isArray(z.dirty) : Array.isArray(cam.clarity_shift) && jcHasClean(cam, z));
+// sRGB <-> Lab (D65, как cv2.COLOR_BGR2Lab у сервиса: L 0..100): палитра задаёт эталон руками
+const jcLin = (c) => (c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4));
+const jcGam = (c) => (c <= 0.0031308 ? 12.92 * c : 1.055 * Math.pow(c, 1 / 2.4) - 0.055);
+function jcHexToLab(hex) {
+  const r = jcLin(parseInt(hex.slice(1, 3), 16) / 255), g = jcLin(parseInt(hex.slice(3, 5), 16) / 255), b = jcLin(parseInt(hex.slice(5, 7), 16) / 255);
+  const f = (t) => (t > 216 / 24389 ? Math.cbrt(t) : (24389 / 27 * t + 16) / 116);
+  const fx = f((0.412453 * r + 0.357580 * g + 0.180423 * b) / 0.950456), fy = f(0.212671 * r + 0.715160 * g + 0.072169 * b), fz = f((0.019334 * r + 0.119193 * g + 0.950227 * b) / 1.088754);
+  return [116 * fy - 16, 500 * (fx - fy), 200 * (fy - fz)].map((v) => Math.round(v * 100) / 100);
+}
+function jcLabToHex(lab) {
+  const fy = (lab[0] + 16) / 116, fx = fy + lab[1] / 500, fz = fy - lab[2] / 200;
+  const fi = (t) => (t * t * t > 216 / 24389 ? t * t * t : (116 * t - 16) * 27 / 24389);
+  const x = 0.950456 * fi(fx), y = fi(fy), z = 1.088754 * fi(fz);
+  const lin = [3.240479 * x - 1.537150 * y - 0.498535 * z, -0.969256 * x + 1.875992 * y + 0.041556 * z, 0.055648 * x - 0.204043 * y + 1.057311 * z];
+  return '#' + lin.map((v) => Math.round(255 * Math.max(0, Math.min(1, jcGam(Math.max(0, Math.min(1, v)))))).toString(16).padStart(2, '0')).join('');
+}
+// цвет «грязного» сейчас: свой, либо «чистый» + общий сдвиг; нет — null
+function jcDirtyLab(cam, z) {
+  if (!jcShared(cam) && z.dirty_mode === 'own') return Array.isArray(z.dirty) ? z.dirty : null;
+  const cl = jcShared(cam) ? jcBaseClean(cam) : (z.clean || jcBaseClean(cam));
+  return cl && Array.isArray(cam.clarity_shift) ? cl.map((v, k) => v + cam.clarity_shift[k]) : null;
+}
+// палитра: значок 🎨, поверх него невидимый выбор цвета (клик открывает окно выбора); применяется при закрытии окна
+const jcPalette = (a, f, lab, tip) => `<span class="jc-pal" title="${escapeHtml(tip)}">🎨<input type="color" ${a} data-f="${f}" value="${jcLabToHex(lab || [50, 0, 0])}" /></span>`;
+
 const jcCk = (ok) => (ok ? '<i class="jc-ck">✓</i>' : '');                         // зелёная галочка в углу кнопки: эталон задан
 const jcA = (cam, z) => `data-md="jc" data-cam="${escapeHtml(cam.id)}" data-i="${cam.zones.indexOf(z)}"`;
 const jcNum = (a, f, v, extra) => `<input type="number" class="jc-n" ${a} data-f="${f}" value="${escapeHtml(v)}" ${extra || ''} />`;
@@ -106,8 +131,8 @@ function jcRowHtml(cam, z) {
         <span class="jc-v" id="jc-v-${k}" title="Мутность 0–100: «чистый» эталон = 10, «грязный» = 90; чище — ниже, грязнее — выше">—</span><span class="jc-trk"><i id="jc-b-${k}"></i></span>
         <button type="button" class="jc-ib jc-x" ${a} data-f="del" title="Удалить стакан">${jcIcon('x')}</button></div>
       <div class="jc-l2">
-        <button type="button" class="jc-ib" ${a} data-f="clean" title="В этом стакане сейчас чистый сок: его цвет за последние ${JC.sec} с запомнится как «чистый» (10)${shared ? ' — один на все стаканы' : ''}. ${jcHasClean(cam, z) ? 'Задан' : 'Не задан'}">${jcIcon('drop')}${jcCk(jcHasClean(cam, z))}</button>
-        <button type="button" class="jc-ib" ${a} data-f="dirty" title="В этом стакане сейчас самый мутный сок (90). ${shared ? 'Цвет запомнится как «грязный» для всех стаканов' : own ? 'Цвет запомнится как «грязный» только этого стакана' : 'Запомнится сдвиг цвета от «чистого» этого стакана — он общий для всех стаканов в режиме «общий»'}. ${jcHasDirty(cam, z) ? 'Задан' : 'Не задан'}">${jcIcon('half')}${jcCk(jcHasDirty(cam, z))}</button>
+        <button type="button" class="jc-ib" ${a} data-f="clean" title="В этом стакане сейчас чистый сок: его цвет за последние ${JC.sec} с запомнится как «чистый» (10)${shared ? ' — один на все стаканы' : ''}. ${jcHasClean(cam, z) ? 'Задан' : 'Не задан'}">${jcIcon('drop')}${jcCk(jcHasClean(cam, z))}</button>${jcPalette(a, 'clean_pick', jcBaseClean(cam) && (shared ? jcBaseClean(cam) : (z.clean || jcBaseClean(cam))), 'Задать цвет «чистого» руками: темнее или светлее. Сейчас показан текущий эталон')}
+        <button type="button" class="jc-ib" ${a} data-f="dirty" title="В этом стакане сейчас самый мутный сок (90). ${shared ? 'Цвет запомнится как «грязный» для всех стаканов' : own ? 'Цвет запомнится как «грязный» только этого стакана' : 'Запомнится сдвиг цвета от «чистого» этого стакана — он общий для всех стаканов в режиме «общий»'}. ${jcHasDirty(cam, z) ? 'Задан' : 'Не задан'}">${jcIcon('half')}${jcCk(jcHasDirty(cam, z))}</button>${jcPalette(a, 'dirty_pick', jcDirtyLab(cam, z), 'Задать цвет «грязного» руками: чем он дальше от «чистого», тем шире шкала 10–90. Сейчас показан текущий эталон')}
         ${mv ? `<button type="button" class="jc-ib" ${a} data-f="mvcal" title="В этом стакане сейчас пусто: шум движения за последние ${JC.sec} с запомнится, пороги ▲ и ▼ на графике движения встанут сами (шум × ${JC_MV_UP} и × ${JC_MV_DOWN})">${jcIcon('off')}</button>` : ''}
         <label class="jc-ib jc-lab" title="Ваша метка стакана для базы: что в нём на самом деле. Пишется в index.csv вместе с цветом, потом сравним с авто-состоянием${z.label ? ' (сейчас: ' + (JC_LABELS.find((x) => x[0] === z.label) || [0, z.label])[1] + ')' : ''}" ${labCol ? `style="color:${labCol}"` : ''}>${jcIcon('tag')}<select ${a} data-f="label">${mdSel(JC_LABELS, z.label || '')}</select></label>
         <button type="button" class="jc-ib${open ? ' is-on' : ''}" ${a} data-f="gear" title="Положение, отбор точек, ПЛК">${jcIcon('gear')}</button>
@@ -370,6 +395,28 @@ document.addEventListener('dblclick', (e) => {
   inp.addEventListener('blur', () => finish(true));
 });
 
+// ручной эталон из палитры: то же, что снятие с кадра, только цвет задан рукой
+function jcPick(cam, z, kind, lab) {
+  const shared = jcShared(cam);
+  mdEdit(() => {
+    if (kind === 'clean') {
+      if (shared) {
+        const old = jcBaseClean(cam);
+        if (old && Array.isArray(cam.clarity_shift)) cam.clarity_shift = cam.clarity_shift.map((v, k) => Math.round((v - (lab[k] - old[k])) * 100) / 100);   // «грязный» остаётся на месте: сдвиг пересчитан от нового «чистого»
+        cam.clarity_clean = lab;
+      } else { z.clean = lab; if (!Array.isArray(cam.clarity_clean)) cam.clarity_clean = lab; }
+      return;
+    }
+    if (!shared && z.dirty_mode === 'own') { z.dirty = lab; return; }
+    const cl = shared ? jcBaseClean(cam) : (z.clean || jcBaseClean(cam));
+    if (!cl) return;
+    cam.clarity_shift = lab.map((v, k) => Math.round((v - cl[k]) * 100) / 100);
+  }, true);
+  const cl = shared ? jcBaseClean(cam) : (z.clean || jcBaseClean(cam));
+  if (kind === 'dirty' && !cl && !(!shared && z.dirty_mode === 'own')) { jcSay(cam.id, 'сначала задайте «чистый» (снимком или палитрой)', true); return; }
+  jcSay(cam.id, (kind === 'clean' ? '«чистый»' : '«грязный»') + ' задан вручную: L ' + lab[0].toFixed(0) + ' a ' + lab[1].toFixed(0) + ' b ' + lab[2].toFixed(0));
+}
+
 function jcOnEvent(t) {
   const f = t.dataset.f;
   if (f === 'sec') {
@@ -413,6 +460,7 @@ function jcOnEvent(t) {
   const z = cam.zones[Number(t.dataset.i)];
   if (!z || z.type !== 'clarity') return;
   if (f === 'clean' || f === 'dirty') { jcCalibrate(cam, [z.id], f); return; }
+  if (f === 'clean_pick' || f === 'dirty_pick') { jcPick(cam, z, f === 'clean_pick' ? 'clean' : 'dirty', jcHexToLab(t.value)); return; }
   if (f === 'mvcal') { jcCalibrateMove(cam, [z.id]); return; }
   if (f === 'gear') {                                         // настройки стакана: показать / спрятать, состояние помним до перезагрузки страницы
     const k = cam.id + '-' + z.id, box = mdEl('jc-set-' + k);

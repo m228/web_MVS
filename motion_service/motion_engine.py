@@ -171,6 +171,13 @@ def _fill_cfg(z: dict, where: str) -> dict:
             "fill_frames": _num(z.get("fill_frames", 10), where + ".fill_frames", 1, 1000, True)}
 
 
+def motion_zones(cam: dict) -> dict:
+    """Включённые окна камеры, по которым видно движение: {id: перевёрнут ли бит}. Не уровнемеры, не палки, не «яркость без движения».
+    У окон «наличие» и с invert бит 1 значит «метрика НИЗКАЯ» (стоит), то есть движение — это бит 0."""
+    return {z["id"]: bool(z.get("invert", z.get("type") == "presence")) for z in cam.get("zones") or []
+            if z.get("enabled", True) and z.get("type", "motion") in ("motion", "presence") and z.get("motion", True)}
+
+
 def _norm_zone(z: dict, cam_id: str) -> dict:
     zid = str(z.get("id") or "")
     if not ID_RE.match(zid):

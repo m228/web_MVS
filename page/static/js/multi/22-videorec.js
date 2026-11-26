@@ -14,9 +14,15 @@ function vrHtml(cam) {
         ${mdField('Кадров/с в файле', '<input type="number" data-vr="fps" min="1" max="25" step="1" disabled />')}
         ${mdField('Лимит на все записи, ГБ', '<input type="number" data-vr="limit_gb" min="1" max="10000" step="1" disabled />', 'Общий на все камеры. Когда записи его превышают, удаляются самые старые куски.')}
         ${mdField('Область кадра', '<span class="vr-area"><span id="vrAreaTxt">—</span><button type="button" class="btn-secondary md-x" data-vr="pick" disabled>Выбрать</button><button type="button" class="btn-secondary md-x" data-vr="full" hidden>Весь кадр</button></span>', '', 'md-wide')}
+        ${mdField('Что хранить', `<select data-vr="keep" disabled>${mdSel([['all', 'всё видео'], ['events', 'видео только вокруг событий']], 'all')}</select>`, 'Закрытый кусок разбирается: остаются видео вокруг движения в окнах и громких звуков и весь звук отдельным файлом. Если судить нечем (камера не анализировалась, звука нет), кусок остаётся целиком.', 'md-wide')}
+        ${mdField('Секунд до события', '<input type="number" data-vr="pre_s" min="0" max="120" step="1" disabled />', '', 'vr-trim')}
+        ${mdField('Секунд после', '<input type="number" data-vr="post_s" min="0" max="300" step="1" disabled />', '', 'vr-trim')}
+        ${mdField('Порог звука, дБ', '<input type="number" data-vr="sound_db" min="0" max="60" step="1" disabled />', 'На сколько звук камней (2–8 кГц) должен быть громче фона, чтобы видео вокруг него сохранилось. Меньше — сохраняется больше. 0 — звук не слушать, только движение: ночью в темноте события тогда потеряются.', 'vr-trim')}
+        ${mdField('Полные куски хранить, ч', '<input type="number" data-vr="full_h" min="0" max="720" step="1" disabled />', 'Столько часов после нарезки лежит исходный кусок — на случай, если что-то нужное не попало в отрезки. 0 — удалять сразу. При нехватке лимита полные куски удаляются первыми.', 'vr-trim')}
       </div>
       <p class="vr-state net-hint" id="vrState" aria-live="polite">загружаю…</p>
       <p class="vr-warn" id="vrWarn" hidden></p>
+      <p class="net-hint" id="vrTrim" hidden></p>
       <p class="net-hint vr-folder" id="vrFolder"></p>
     </div></details>`;
 }
@@ -46,6 +52,9 @@ function vrPaint() {
   set('stream', c.stream);
   set('fps', c.fps);
   set('limit_gb', d.limit_gb);
+  const trims = c.keep !== undefined;                    // старый сервис движения нарезку не умеет — поля остаются выключенными
+  if (trims) ['keep', 'pre_s', 'post_s', 'sound_db', 'full_h'].forEach((k) => set(k, c[k]));
+  box.querySelectorAll('.vr-trim').forEach((n) => { n.hidden = c.keep !== 'events'; });
   box.querySelector('[data-vr="pick"]').disabled = false;
   box.querySelector('[data-vr="full"]').hidden = !c.area;
   mdEl('vrAreaTxt').textContent = c.area ? Math.round(c.area[2] * 100) + ' × ' + Math.round(c.area[3] * 100) + ' % кадра' : 'весь кадр';
@@ -53,12 +62,17 @@ function vrPaint() {
   if (c.on && c.running) { text = '● идёт запись' + (c.audio ? ' · звук: ' + c.audio : c.audio === '' ? ' · без звука' : ''); cls = c.audio === '' ? 'is-warn' : 'is-ok'; }
   else if (c.on && c.error) { text = 'не пишется: ' + c.error; cls = 'is-bad'; }
   else if (c.on) { text = 'подключаюсь…'; cls = 'is-warn'; }
-  state.textContent = text + ' · кусков: ' + c.files + ', ' + vrSize(c.size_mb) + ' · все камеры: ' + vrSize(d.total_mb) + ' из ' + vrNum(d.limit_gb) + ' ГБ'
+  const kind = c.keep === 'events' ? ' · файлов: ' + c.files + ' (отрезков ' + c.clips + ', полных кусков ' + c.full + '), ' : ' · кусков: ' + c.files + ', ';
+  state.textContent = text + kind + vrSize(c.size_mb) + ' · все камеры: ' + vrSize(d.total_mb) + ' из ' + vrNum(d.limit_gb) + ' ГБ'
     + (d.free_gb == null ? '' : ' · свободно на диске ' + vrNum(d.free_gb) + ' ГБ');
   state.className = 'vr-state net-hint ' + cls;
   const warn = mdEl('vrWarn');
-  warn.hidden = !(c.on && c.warn);
-  warn.textContent = c.warn || '';
+  const note = [c.on ? c.warn : '', c.trim_error].filter(Boolean).join(' · ');
+  warn.hidden = !note;
+  warn.textContent = note;
+  const trimLine = mdEl('vrTrim');
+  trimLine.hidden = !(c.keep === 'events');
+  trimLine.textContent = 'Нарезка: ' + (c.trim || 'ждёт закрытого куска (куски по 10 минут)');
   mdEl('vrFolder').textContent = 'Папка: ' + c.folder;
 }
 
@@ -103,8 +117,24 @@ function vrBind() {
       e.target.value = VR.data.limit_gb;
       return;
     }
+    const cam = VR.data && VR.data.cameras && VR.data.cameras[box.dataset.cam];
+    if (e.target.type === 'number' && e.target.value.trim() === '') {           // стёртое поле — не «0»: возвращаем прежнее
+      e.target.value = name === 'limit_gb' ? (VR.data ? VR.data.limit_gb : '') : (cam ? cam[name] : '');
+      return;
+    }
+    if (name === 'keep' && e.target.value === 'events'
+      && !confirm('Новые куски после разбора будут обрезаны: видео останется только вокруг событий, весь звук сохранится, полные куски удалятся через '
+        + ((cam && cam.full_h) || 0) + ' ч. Записанное раньше не тронется. Включить?')) {
+      e.target.value = 'all';
+      return;
+    }
+    if (name === 'full_h' && cam && Number(e.target.value) < cam.full_h && cam.full
+      && !confirm('Полные куски старше нового срока удалятся сразу и без возврата (сейчас их ' + cam.full + '). Уменьшить?')) {
+      e.target.value = cam.full_h;
+      return;
+    }
     if (name === 'limit_gb') vrSend({ limit_gb: Number(e.target.value) });
-    else vrSend({ camera: box.dataset.cam, [name]: e.target.type === 'checkbox' ? e.target.checked : name === 'fps' ? Number(e.target.value) : e.target.value });
+    else vrSend({ camera: box.dataset.cam, [name]: e.target.type === 'checkbox' ? e.target.checked : ['fps', 'pre_s', 'post_s', 'sound_db', 'full_h'].includes(name) ? Number(e.target.value) : e.target.value });
   });
   body.addEventListener('click', (e) => {
     const b = e.target.closest && e.target.closest('button[data-vr]');

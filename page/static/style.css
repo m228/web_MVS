@@ -5021,6 +5021,7 @@ body.micro-rep-doc .micro-cmp-strips { grid-template-columns: repeat(6, 1fr); ga
 /* запись видео и звука на диск (22-videorec.js) и окно выбора области */
 .vr-box { display: flex; flex-direction: column; gap: 6px; }
 .vr-box p { margin: 0; }
+.vr-box .md-fields label[hidden], .vr-box p[hidden] { display: none; }
 .vr-area { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .vr-state.is-ok { color: var(--success); }
 .vr-state.is-warn { color: var(--warning); }

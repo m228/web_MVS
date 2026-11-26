@@ -216,7 +216,7 @@ function drawMotionTile(index) {
   });
   // этапы печи: текущий этап и сколько он идёт — по центру снизу; зелёный — сброс / засыпка / прокрутка, серый — ожидание и «нет данных»
   ((st && st.groups) || []).filter((lg) => lg.type === 'kiln' || lg.type === 'kiln_sound').forEach((lg, k) => {
-    const off = (problem && lg.type === 'kiln') || !lg.stage;       // этапам по звуку беда с картинкой не мешает
+    const off = !MV.online || (problem && lg.type === 'kiln') || !lg.stage;       // этапам по звуку беда с картинкой не мешает, а без сервиса этап в памяти устарел
     const txt = lg.name + ': ' + (off ? 'нет данных' : lg.stage_name + '  ' + mdKilnTime(lg.since_s));
     ctx.font = 'bold 16px sans-serif'; ctx.textAlign = 'center';
     ctx.lineWidth = 4; ctx.strokeStyle = '#000'; ctx.strokeText(txt, g.w / 2, g.h - 10 - k * 22);

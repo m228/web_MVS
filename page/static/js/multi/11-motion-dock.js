@@ -1182,7 +1182,7 @@ function mdSourceOptions() {
   const out = [];
   mdCfgCams().forEach((c) => {
     c.zones.forEach((z) => { if (z.type !== 'cycle' && z.type !== 'level' && z.type !== 'clarity') out.push({ camera: c.id, zone: z.id, gauge: ggIs(z), key: c.id + '/' + z.id, label: c.name + ' · ' + z.name + (ggIs(z) ? ' (%)' : ''), ip: mdIpTag(c.url) }); });
-    (c.groups || []).forEach((g) => { if (g.type !== 'mirror' && g.type !== 'level') out.push({ camera: c.id, group: g.id, key: 'g:' + c.id + '/' + g.id, label: c.name + ' · ' + g.name, ip: '' }); });
+    (c.groups || []).forEach((g) => { if (g.type !== 'mirror' && g.type !== 'level') out.push({ camera: c.id, group: g.id, kiln: g.type === 'kiln', key: 'g:' + c.id + '/' + g.id, label: c.name + ' · ' + g.name, ip: '' }); });
   });
   return out;
 }
@@ -1246,12 +1246,15 @@ const MD_SC_RULES = [['or', 'Хоть одно'], ['and', 'Все'], ['sum', 'С
 const MD_SC_SCALES = [[10, '× 10'], [1, 'как есть']];      // формат значения уровнемера; поля нет (старый сценарий) — × 10
 const mdScScale = (s) => (s.scale === 1 ? 1 : 10);
 const mdScScaleHint = (s) => '54,3 % → ' + (mdScScale(s) === 1 ? '54' : '543') + ' · нет данных → −1 (в ПЛК тип INT)';
+// сценарий с этапами печи пишет код этапа как есть: «что считать» и «правило» ему не выбирают
+const mdScIsKiln = (s, cams) => s.sources.some((x) => x.group && ((cams.find((c) => c.id === x.camera) || {}).groups || []).some((g) => g.id === x.group && g.type === 'kiln'));
 function mdScenarioSummary(s, cams) {
   const pulp = s.signal === 'pulp';
   const what = { or: pulp ? 'хоть в одном есть' : 'хоть одно крутится', and: pulp ? 'есть во всех' : 'все крутятся', sum: pulp ? 'в скольких есть' : 'сколько крутится' }[s.rule] || '';
   const names = s.sources.map((x) => { const c = cams.find((q) => q.id === x.camera), z = c && (x.group ? (c.groups || []).find((q) => q.id === x.group) : c.zones.find((q) => q.id === x.zone)); return z ? z.name : null; }).filter(Boolean);
   const tags = names.slice(0, 5).map((n) => `<span class="md-sr__tag">${escapeHtml(n)}</span>`).join('') + (names.length > 5 ? `<span class="md-sr__tag">+${names.length - 5}</span>` : '');
   if (s.rule === 'value') return `<span>уровнемер · ${mdScScale(s) === 1 ? 'целые %' : '% × 10'}</span>${tags || '<span class="md-sr__tag">нет источников</span>'}`;
+  if (mdScIsKiln(s, cams)) return `<span>этапы печи · код этапа</span>${tags}`;
   return `<span>${pulp ? 'наличие' : 'движение'} · ${what}</span>${tags || '<span class="md-sr__tag">нет источников</span>'}`;
 }
 
@@ -1278,9 +1281,10 @@ function mdScenarioHtml(s, i) {
       <div><div class="md-zr__t">Источники</div><div class="md-sr__chips">${src}</div></div>
       <div class="md-sr__g3">
         ${s.rule === 'value' ? `<div class="md-sr__gate"><div class="md-zr__t">Значение</div><div class="md-sr__fmt">${seg('sk-' + sid, MD_SC_SCALES, mdScScale(s), 'scale')}<span class="net-hint" id="md-sk-${sid}">${mdScScaleHint(s)}</span></div></div>`
+          : mdScIsKiln(s, cams) ? '<div class="md-sr__gate"><div class="md-zr__t">Значение</div><span class="net-hint">код текущего этапа печи, коды задаются в вычислении · нет кадров → 0</span></div>'
           : `<div><div class="md-zr__t">Что считать</div>${seg('sg-' + sid, MD_SC_SIGNALS, s.signal || 'move', 'signal')}</div>
         <div><div class="md-zr__t">Правило</div>${seg('rl-' + sid, MD_SC_RULES, s.rule, 'rule')}</div>`}
-        <div><div class="md-zr__t">Выход</div><div class="md-out"><select ${a} data-f="okind">${mdSel([['', 'не писать'], ['holding', 'регистр']].concat(s.rule === 'value' ? [] : [['coil', 'coil']]), s.out ? s.out.kind : '')}</select>
+        <div><div class="md-zr__t">Выход</div><div class="md-out"><select ${a} data-f="okind">${mdSel([['', 'не писать'], ['holding', 'регистр']].concat(s.rule === 'value' || mdScIsKiln(s, cams) ? [] : [['coil', 'coil']]), s.out ? s.out.kind : '')}</select>
           <input type="number" min="0" max="65535" ${a} data-f="oaddr" value="${s.out ? s.out.address : 0}" title="Адрес" /></div></div>
       </div>
       <div class="md-sr__foot"><span class="net-hint" id="md-ss-${sid}"></span><button type="button" class="btn-secondary md-x md-sr__del" ${a} data-f="del" title="Удалить сценарий">удалить сценарий</button></div>
@@ -1328,7 +1332,8 @@ function mdOnScenario(t) {
   const gauges = new Set(mdSourceOptions().filter((o) => o.gauge).map((o) => o.key));
   // у уровнемера сценарий создаётся без регистра — после выбора регистра шапка строки («→ рег. N») должна обновиться сразу
   // (пока выход «не писать», по вводу адреса не перерисовываем — набранный адрес не должен пропасть)
-  const redraw = (f === 'src' && (gauges.has(t.value) || s.rule === 'value')) || (s.rule === 'value' && (f === 'okind' || (f === 'oaddr' && !!s.out)));
+  const kilns = new Set(mdSourceOptions().filter((o) => o.kiln).map((o) => o.key));
+  const redraw = (f === 'src' && (gauges.has(t.value) || kilns.has(t.value) || s.sources.some((x) => kilns.has(srcKey(x))) || s.rule === 'value')) || (s.rule === 'value' && (f === 'okind' || (f === 'oaddr' && !!s.out)));
   const typed = f === 'okind' ? parseInt((t.parentElement.querySelector('input[data-f="oaddr"]') || {}).value, 10) || 0 : 0;   // адрес, набранный до выбора выхода
   mdEdit(() => {
     if (f === 'name') s.name = t.value;
@@ -1346,6 +1351,14 @@ function mdOnScenario(t) {
         s.sources = [{ camera, zone: id }];
         s.rule = 'value';
         if (s.out && s.out.kind !== 'holding') s.out = null;
+      } else if (t.checked && kilns.has(t.value)) {          // этапы печи — число: один источник, значение как есть
+        s.sources = [{ camera, group: id }];
+        s.rule = 'sum';
+        s.signal = 'move';
+        if (s.out && s.out.kind !== 'holding') s.out = null;
+      } else if (t.checked && s.sources.some((x) => kilns.has(srcKey(x)))) {
+        s.sources = s.sources.filter((x) => !kilns.has(srcKey(x)));   // выбрали другое вместо этапов печи
+        s.rule = 'or';
       } else if (t.checked && s.rule === 'value') {
         // выбрали обычное окно вместо уровнемера. Просто сняли галочку с него — правило остаётся value: пустой сценарий
         // пишет −1 «нет данных», а не 0 (0 — настоящие «0 %»)
@@ -1370,7 +1383,11 @@ function mdBindPlc() {
 }
 
 // ---------- группы зон (ниже сценариев; по всем камерам) ----------
-const MD_GROUP_TYPES = { sum: 'сумма зон', monotonic: 'уровень снизу вверх', worktimer: 'наработка за окно', mirror: 'синхронность валов', level: 'уровень жидкости' };
+const MD_GROUP_TYPES = { sum: 'сумма зон', monotonic: 'уровень снизу вверх', worktimer: 'наработка за окно', mirror: 'синхронность валов', level: 'уровень жидкости', kiln: 'этапы печи' };
+// этапы печи: [ключ этапа, подпись, код в ПЛК по умолчанию]
+const MD_KILN_STAGES = [['wait_drop', 'Ждём сброс', 0], ['drop', 'Сброс', 1], ['wait_load', 'Ждём засыпку', 0], ['load', 'Засыпка', 2], ['wait_rot', 'Ждём прокрутку', 0], ['rot', 'Прокрутка', 3]];
+const mdKilnCode = (g, k, d) => (g.codes && g.codes[k] != null ? g.codes[k] : d);
+const mdKilnTime = (s) => (s < 60 ? s + ' с' : Math.floor(s / 60) + ' мин ' + (s % 60) + ' с');
 function mdGroupRowHtml(cam, g, i) {
   const a = `data-md="g" data-cam="${escapeHtml(cam.id)}" data-i="${i}"`;
   const k = escapeHtml(cam.id + '-' + g.id);
@@ -1380,12 +1397,17 @@ function mdGroupRowHtml(cam, g, i) {
   const det = [];
   if (g.type === 'worktimer') det.push(`окно ${g.window_s} с · шкала ${g.scale} · мин. зон ${g.min_active}`);
   if (g.type === 'monotonic') det.push('порядок снизу вверх — как зоны в списке');
+  if (g.type === 'kiln') {
+    det.push(`потемнение при сбросе от ${g.drop_pct} % · засыпка до ${g.load_max_s} с · прокрутку ждём ${g.rot_wait_s} с`);
+    det.push(`<span>в ПЛК: ${MD_KILN_STAGES.map(([k, t, d]) => t.toLowerCase() + ' ' + mdKilnCode(g, k, d)).join(' · ')}</span>`);
+    det.push(`<span id="md-gi-${k}"></span>`);
+  }
   if (legacy) det.push(`<span title="Прямой вывод группы больше не настраивается: пишите в ПЛК через сценарий. Старый вывод продолжает работать, пока его не перенесёте.">ПЛК (старый вывод): ${legacy}</span>${g.out.kind === 'holding' ? `<button type="button" class="btn-secondary md-x" ${a} data-f="tosc" title="Создать сценарий с этим выходом и убрать вывод у группы">перенести в сценарий</button>` : ''}`);
   return `<div class="md-sr${open ? ' is-open' : ''}" id="md-gr-${k}" data-st="i">
     <div class="md-sr__head" data-zt="gr-${k}" title="Нажмите, чтобы раскрыть">
       <span class="md-zr__bar"></span>
       <div class="md-sr__nm"><b>${escapeHtml(g.name)}</b><div class="md-sr__sum"><span>${MD_GROUP_TYPES[g.type] || g.type}</span><span class="md-dim">${escapeHtml(cam.name)}</span>${names}</div></div>
-      <div class="md-sr__val"><b id="md-gv-${k}">–</b><span>${legacy ? 'вывод: ' + legacy : 'без вывода'}</span></div>
+      <div class="md-sr__val"><b id="md-gv-${k}">–</b><span id="md-gs-${k}">${legacy ? 'вывод: ' + legacy : g.type === 'kiln' ? 'этап' : 'без вывода'}</span></div>
       <span class="md-zr__chev">⌄</span>
     </div>
     <div class="md-sr__det">
@@ -1398,7 +1420,7 @@ function mdGroupRowHtml(cam, g, i) {
 function mdGroupsSectionHtml() {
   const rows = [];
   mdCfgCams().forEach((cam) => (cam.groups || []).forEach((g, i) => { if (g.type !== 'level') rows.push(mdGroupRowHtml(cam, g, i)); }));   // «уровень» — на своей вкладке
-  const list = rows.length ? `<div class="md-sbox">${rows.join('')}</div>` : '<p class="net-hint">Вычислений нет. Вычисление складывает окна одной камеры: сумма — сколько активно, уровень снизу вверх — шахта, наработка за окно — доля времени в % (лента жома). Результат берёт сценарий и пишет в ПЛК. Зоны из РАЗНЫХ камер объединяйте в сценарии выше.</p>';
+  const list = rows.length ? `<div class="md-sbox">${rows.join('')}</div>` : '<p class="net-hint">Вычислений нет. Вычисление складывает окна одной камеры: сумма — сколько активно, уровень снизу вверх — шахта, наработка за окно — доля времени в % (лента жома), этапы печи — сброс, засыпка, прокрутка по кругу. Результат берёт сценарий и пишет в ПЛК. Зоны из РАЗНЫХ камер объединяйте в сценарии выше.</p>';
   return `<div class="md-groups"><h3 class="md-h md-h--row md-h--sec"><button type="button" class="md-add" data-md="g" data-f="add" title="Добавить вычисление" aria-label="Добавить вычисление">+</button>Вычисления <span class="md-dim">считают окна одной камеры; результат берёт сценарий</span></h3>${list}<div id="mdGrpEd">${MD.editGrp ? mdGroupEditorHtml() : ''}</div></div>`;
 }
 
@@ -1419,7 +1441,12 @@ function mdGroupEditorHtml() {
   return `<div class="md-card md-ge" id="mdGe">
     ${mdField('Камера', `<select id="geCam"${e.i >= 0 ? ' disabled' : ''}>${mdSel(camOpts, cam.id)}</select>`)}
     ${mdField('Название', `<input type="text" id="geName" value="${escapeHtml(g.name)}" placeholder="Уровень шахты / Наработка" />`)}
-    ${mdField('Тип', `<select id="geType">${mdSel([['sum', 'sum — сколько зон активно'], ['monotonic', 'monotonic — уровень снизу вверх'], ['worktimer', 'worktimer — наработка за окно']], g.type)}</select>`)}
+    ${mdField('Тип', `<select id="geType">${mdSel([['sum', 'sum — сколько зон активно'], ['monotonic', 'monotonic — уровень снизу вверх'], ['worktimer', 'worktimer — наработка за окно'], ['kiln', 'этапы печи — сброс, засыпка, прокрутка']], g.type)}</select>`)}
+    <label class="md-gt" data-for="kiln" title="Насколько зона должна потемнеть после движения, чтобы это считалось сбросом (камни ушли)"><span>Потемнение, %</span><input type="number" id="geDrop" min="1" max="60" value="${g.drop_pct || 12}" /></label>
+    <label class="md-gt" data-for="kiln" title="Движение после сброса дольше этого — засыпка кончилась, идёт прокрутка"><span>Засыпка до, с</span><input type="number" id="geLoad" min="3" max="120" value="${g.load_max_s || 10}" /></label>
+    <label class="md-gt" data-for="kiln" title="Сколько ждать прокрутку после засыпки; не началась — ждём следующий сброс"><span>Ждать прокрутку, с</span><input type="number" id="geRot" min="5" max="600" value="${g.rot_wait_s || 60}" /></label>
+    <div class="md-gt md-ge__zones" data-for="kiln"><span>Коды в ПЛК</span>${MD_KILN_STAGES.map(([k, t, d]) => `<label class="md-code"><span>${t}</span><input type="number" min="0" max="65535" data-kiln="${k}" value="${mdKilnCode(g, k, d)}" /></label>`).join('')}</div>
+    <p class="net-hint md-gt md-ge__full" data-for="kiln">Зоны — воронка печи (по движению). У зон включите признак «яркость к металлу»: по потемнению после движения виден сброс, пороги «есть / нет» для этого не нужны. В ПЛК пишет сценарий с этим вычислением; нет кадров — пишется 0.</p>
     <label class="md-gt" data-for="worktimer"><span>Окно, с</span><input type="number" id="geWin" min="1" value="${g.window_s || 60}" /></label>
     <label class="md-gt" data-for="worktimer" title="Минимум активных зон"><span>Мин. зон</span><input type="number" id="geMin" min="1" value="${g.min_active || 1}" /></label>
     <label class="md-gt" data-for="worktimer" title="100 = проценты; 1000 или 4095 — для аналогового выхода"><span>Шкала</span><input type="number" id="geScale" min="1" value="${g.scale || 100}" /></label>
@@ -1482,6 +1509,20 @@ function mdOnGroup(t) {
       out: old ? old.out : null };      // вывод в ПЛК у группы больше не правится: пишет сценарий; старый вывод сохраняем как был
     if (!ng.id) { let n = 1; while ((cam.groups || []).some((q) => q.id === 'g' + n)) n += 1; ng.id = 'g' + n; }
     if (type === 'monotonic') ng.order = cam.zones.map((z) => z.id).filter((id) => ids.includes(id));
+    if (type === 'kiln') {
+      // сервис отклонит такой конфиг целиком — скажем об этом сразу, пока форма открыта
+      const zs = cam.zones.filter((z) => ids.includes(z.id));
+      if (zs.some((z) => z.type !== 'motion' || z.motion === false)) { alert('Этапам печи нужны зоны с движением: в зоне должно быть включено «движение»'); return; }
+      if (!zs.some((z) => (z.fill_metric || 'off') !== 'off')) { alert('Включите хотя бы у одной зоны признак «вид окна» (лучше «яркость к металлу») — по нему виден сброс'); return; }
+      const num = (id, d) => { const v = parseFloat(mdEl(id).value); return Number.isFinite(v) ? v : d; };
+      Object.assign(ng, { drop_pct: num('geDrop', 12), load_max_s: num('geLoad', 10), rot_wait_s: num('geRot', 60),
+        // пустое поле — код по умолчанию, а не молчаливый ноль
+        codes: Object.fromEntries([...document.querySelectorAll('#mdGe input[data-kiln]')].map((x) => {
+          const v = parseInt(x.value, 10), d = MD_KILN_STAGES.find(([k]) => k === x.dataset.kiln)[2];
+          return [x.dataset.kiln, Number.isFinite(v) ? v : d];
+        })) });
+      if (!old && !mdEl('geName').value.trim()) ng.name = 'Этапы печи';
+    }
     if (type === 'worktimer') {
       Object.assign(ng, { window_s: parseInt(mdEl('geWin').value, 10) || 60, min_active: Math.min(ids.length, parseInt(mdEl('geMin').value, 10) || 1),
         agg: mdEl('geAgg').value, scale: parseInt(mdEl('geScale').value, 10) || 100 });
@@ -1579,7 +1620,15 @@ function paintMotionDockLive() {
       const b = mdEl('md-gv-' + c.id + '-' + g.id);
       if (b) { b.textContent = g.type === 'mirror' ? g.alarm : g.value; b.classList.toggle('on', g.type === 'mirror' ? g.alarm === 0 : g.value > 0); }
       const grow = mdEl('md-gr-' + c.id + '-' + g.id);
-      if (grow) grow.dataset.st = g.type === 'mirror' ? (g.alarm ? 'e' : 'm') : g.value > 0 ? 'm' : 'i';
+      // этапы печи: подсвечиваем, пока идёт сброс / засыпка / прокрутка (коды ожидания могут быть и не нулями)
+      const busy = g.type === 'kiln' && (g.bits || []).some(Boolean);
+      if (grow) grow.dataset.st = g.type === 'mirror' ? (g.alarm ? 'e' : 'm') : (g.type === 'kiln' ? busy : g.value > 0) ? 'm' : 'i';
+      if (g.type === 'kiln') {
+        const s = mdEl('md-gs-' + c.id + '-' + g.id);
+        if (s) s.textContent = g.stage ? g.stage_name + ' · ' + mdKilnTime(g.since_s) : g.stage_name;
+        const info = mdEl('md-gi-' + c.id + '-' + g.id);
+        if (info) info.textContent = 'сбросов с запуска: ' + g.cycles + (g.cycles ? ' · при последнем потемнело на ' + g.dark + ' %' : '');
+      }
       if (g.type !== 'mirror') return;
       const k = c.id + '-' + g.id, ok = g.valid && g.delta != null;
       const v = mdEl('md-mxv-' + k);
@@ -1619,13 +1668,14 @@ function paintMotionDockLive() {
     if (b) b.textContent = gauge ? (none ? '−1' : s.scale === 1 ? s.value + ' %' : ggFmt(s.value / 10)) : s.value;
     const bits = s.bits || [];
     const pulp = s.signal === 'pulp';
+    const kiln = !!sc && mdScIsKiln(sc, mdCfgCams());
     const row = mdEl('md-sr-' + s.id);
     if (row) row.dataset.st = gauge ? (none ? 'i' : 'm') : s.value > 0 ? (pulp ? 'p' : 'm') : 'i';
     const un = mdEl('md-su-' + s.id);
-    if (un) un.textContent = gauge ? (none ? 'нет данных' : 'пишем ' + s.value) : sc && sc.rule === 'sum' ? 'из ' + bits.length : s.value > 0 ? 'да' : 'нет';
+    if (un) un.textContent = gauge ? (none ? 'нет данных' : 'пишем ' + s.value) : kiln ? 'этап' : sc && sc.rule === 'sum' ? 'из ' + bits.length : s.value > 0 ? 'да' : 'нет';
     const info = mdEl('md-ss-' + s.id);
     if (info) {
-      info.textContent = (gauge ? '' : (pulp ? 'есть в ' : 'крутится ')+ bits.filter(Boolean).length + ' из ' + bits.length + ' · ') + 'пишем ' + s.value + ' · ' +
+      info.textContent = (gauge || kiln ? '' : (pulp ? 'есть в ' : 'крутится ')+ bits.filter(Boolean).length + ' из ' + bits.length + ' · ') + 'пишем ' + s.value + ' · ' +
         (!s.plc ? 'запись в ПЛК выключена' : s.ok === null ? 'ПЛК: ждёт' : s.ok ? 'ПЛК: записано' : 'ПЛК: ошибка ' + (s.error || ''));
     }
   });

@@ -112,16 +112,17 @@ function vrBind() {
     const box = mdEl('vrBox');
     if (!name || !box) return;
     e.target.blur();
+    if (e.target.type === 'number' && e.target.value.trim() === '') {           // стёртое поле — не «0»: возвращаем прежнее
+      const cur = VR.data && VR.data.cameras && VR.data.cameras[box.dataset.cam];
+      e.target.value = name === 'limit_gb' ? (VR.data ? VR.data.limit_gb : '') : (cur ? cur[name] : '');
+      return;
+    }
     if (name === 'limit_gb' && VR.data && Number(e.target.value) * 1024 < VR.data.total_mb
       && !confirm('Записей уже ' + vrSize(VR.data.total_mb) + '. С лимитом ' + vrNum(e.target.value) + ' ГБ самые старые куски удалятся сразу и без возврата. Уменьшить?')) {
       e.target.value = VR.data.limit_gb;
       return;
     }
     const cam = VR.data && VR.data.cameras && VR.data.cameras[box.dataset.cam];
-    if (e.target.type === 'number' && e.target.value.trim() === '') {           // стёртое поле — не «0»: возвращаем прежнее
-      e.target.value = name === 'limit_gb' ? (VR.data ? VR.data.limit_gb : '') : (cam ? cam[name] : '');
-      return;
-    }
     if (name === 'keep' && e.target.value === 'events'
       && !confirm('Новые куски после разбора будут обрезаны: видео останется только вокруг событий, весь звук сохранится, полные куски удалятся через '
         + ((cam && cam.full_h) || 0) + ' ч. Записанное раньше не тронется. Включить?')) {

@@ -1,5 +1,6 @@
 """Нарезка записи вокруг событий (motion_service/motion_trim.py): отрезки, звук, движение, настоящий ffmpeg и расписание."""
 import os
+import re
 import subprocess
 import sys
 import threading
@@ -61,7 +62,7 @@ def test_sound_events_digital_silence_is_unknown():
 def test_motion_events_and_gaps():
     rows = [(T0 + s, s in (30, 31), True) for s in range(0, 100) if not 60 <= s < 80]
     events, unknown = mt.motion_events(rows, T0, 0.0, 100.0)
-    assert events == [(30, 31.5), (31, 32.5)]
+    assert events == [(30, 31.5 + mt.SKEW_S), (31, 32.5 + mt.SKEW_S)]
     assert len(unknown) == 1 and unknown[0][0] == pytest.approx(60.5) and unknown[0][1] == pytest.approx(80)
     assert mt.motion_events([], T0, 0.0, 100.0) == ([], [(0.0, 100.0)])
     bad = [(T0 + s, False, False) for s in range(100)]                            # камера мертва — это «не знаем», а не «тихо»
@@ -213,6 +214,11 @@ def length(path):
     return media().probe(path)[0]
 
 
+def describe(path):
+    return subprocess.run([FFMPEG, "-hide_banner", "-i", str(path)], capture_output=True, text=True, encoding="utf-8", errors="replace",
+                          timeout=30).stderr
+
+
 @needs_ffmpeg
 def test_cut_around_sound_and_motion(tmp_path):
     piece = make_piece(tmp_path / "20260101_120000.mkv")
@@ -223,11 +229,30 @@ def test_cut_around_sound_and_motion(tmp_path):
     assert "20260101_120000_full.mkv" in names and "20260101_120000_audio.mka" in names and not piece.exists()
     assert not [n for n in names if n.endswith(".part")]
     first, second = (tmp_path / n for n in r["clips"])
-    assert 12 <= length(first) <= 17 and 12 <= length(second) <= 17          # событие 3–4 с и по 5 с запаса (+ до 2 с до опорного кадра)
+    # событие 3–4 с и по 5 с запаса (+ до 2 с до опорного кадра); у отрезка движения «после» ещё SKEW_S — имя куска позже содержимого
+    assert 17 <= length(first) <= 22 and 12 <= length(second) <= 17
     assert media().probe(first)[1:] == (True, True)
     assert length(tmp_path / "20260101_120000_audio.mka") >= 119 and media().probe(tmp_path / "20260101_120000_audio.mka")[1:] == (True, False)
     # в отрезке вокруг «камней» они есть
     assert mt.sound_events(np.concatenate((noise(15, seed=3), media().audio(second))), 20)[0]
+
+
+@needs_ffmpeg
+@pytest.mark.parametrize("late", [2, 3, 6])
+def test_audio_starting_late_keeps_its_place(tmp_path, late):
+    """Звук начался позже картинки (переподключение камеры): в отдельном файле звука события стоят там же, нарезка проходит."""
+    base = make_piece(tmp_path / "base.mkv", 60, loud=((30, 3),))
+    piece = tmp_path / "20260101_120000.mkv"
+    subprocess.run([FFMPEG, "-v", "error", "-y", "-i", str(base), "-itsoffset", str(late), "-i", str(base), "-map", "0:v:0", "-map", "1:a:0",
+                    "-c", "copy", "-t", "60", "-f", "matroska", str(piece)], check=True, timeout=60)
+    base.unlink()
+    events = mt.sound_events(media().audio(piece), 20)[0]
+    assert abs(events[0][0] - (30 + late)) < 0.8, events          # разбор видит событие там, где оно на картинке
+    r = mt.trim_piece(media(), piece, CFG, None)
+    assert r["result"] == "clips" and r["clips"], r                # и нарезка не срывается
+    text = describe(tmp_path / "20260101_120000_audio.mka")
+    start = float(re.search(r"start: (\d+\.\d+)", text).group(1))
+    assert abs(start - late) < 0.5, text                           # место звука в куске записано в метке начала файла
 
 
 @needs_ffmpeg

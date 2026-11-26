@@ -1003,6 +1003,7 @@ class CameraWorker(threading.Thread):
         freeze_time = 0.0
         last_diff = 0.0                        # последняя разница соседних кадров (в лог при «застыла»)
         frozen = False
+        stuck_gray = None                      # последний кадр застывшей камеры (None — не застыла); переживает переоткрытие потока
         bad_since = 0.0                       # когда началась «серая каша» (0 — кадр нормальный)
         bad_until = 0.0                        # пока не истечёт — кадры после каши не считаем
         was_bad = False
@@ -1031,7 +1032,8 @@ class CameraWorker(threading.Thread):
                         self.engine.buf.clear()    # короткий обрыв (короче freeze_timeout_s): сравнивать со старым кадром нельзя, а биты зон держим
                     else:
                         self.engine.reset()
-                    last_proc, freeze_time, frozen = 0.0, 0.0, False      # last_gray остаётся: залипший захват после переоткрытия отдаёт тот же кадр
+                    # last_gray и stuck_gray остаются: залипший захват после переоткрытия отдаёт тот же кадр
+                    last_proc, freeze_time, frozen = 0.0, 0.0, stuck_gray is not None
                     if file_src:
                         fps = cap.get(cv2.CAP_PROP_FPS) or 25.0
                         file_dt = 1.0 / max(1.0, fps)
@@ -1108,8 +1110,12 @@ class CameraWorker(threading.Thread):
                 if was_bad:                        # после каши первый кадр сравнивать не с чем — буфер с нуля, гистерезис не трогаем
                     was_bad = False
                     self.engine.buf.clear()
-                now_frozen = freeze_time >= timeout
+                # застывшую камеру оживляет только изменившийся кадр: счётчик freeze_time обнуляют и переоткрытие потока,
+                # и каша между одинаковыми кадрами, поэтому сверяем ещё и с последним кадром застывшей камеры
+                now_frozen = freeze_time >= timeout or (stuck_gray is not None and stuck_gray.shape == gray.shape
+                                                        and float(cv2.absdiff(stuck_gray, gray).mean()) < cfg["freeze_eps"])
                 if now_frozen:
+                    stuck_gray = gray
                     if not frozen:
                         log.warning("[%s] картинка застыла: разница соседних кадров %.3f < %.3f уже %.0f с", self.id, last_diff, cfg["freeze_eps"], freeze_time)
                     frozen = True
@@ -1125,6 +1131,7 @@ class CameraWorker(threading.Thread):
                         continue
                     self._publish(self.engine.dead_state(now, "картинка застыла"), frame, True)
                     continue
+                stuck_gray = None
                 if frozen:                         # камера ожила — состояния с нуля
                     frozen = False
                     self.engine.reset()

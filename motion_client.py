@@ -166,6 +166,20 @@ def records_zip(service_url: str, days: float = 7.0, timeout: float = 120.0):
         return None, "сервис движения не отвечает (%s)" % _base(service_url)
 
 
+def video_rec(service_url: str) -> dict:
+    """Запись видео со звуком на диск: настройки и ход по камерам."""
+    return _call(service_url, "/video_rec")
+
+
+def video_rec_limit(service_url: str, limit_gb) -> dict:
+    return _call(service_url, "/video_rec", {"limit_gb": limit_gb}, method="PUT", timeout=30.0)
+
+
+def video_rec_camera(service_url: str, cam: str, patch: dict) -> dict:
+    """Включить/выключить запись камеры, поток, область. Сервис ждёт, пока ffmpeg закроет файл, — поэтому таймаут большой."""
+    return _call(service_url, "/cameras/%s/video_rec" % urllib.parse.quote(cam, safe=""), patch, timeout=30.0)
+
+
 def modbus_ping(service_url: str, body: dict) -> dict:
     return _call(service_url, "/modbus/ping", body, timeout=8.0)
 

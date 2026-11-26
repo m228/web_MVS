@@ -662,7 +662,7 @@ function mdOnCamRow(t) {
   const cam = mvCam(t.dataset.cam);
   if (!cam || t.dataset.f !== 'rm') return;
   if (mdCamUsage(cam).used) return;
-  if (!confirm('Убрать камеру «' + cam.name + '» (' + cam.id + ') вместе с её зонами (' + cam.zones.length + ')? Она нигде не используется.')) return;
+  if (!confirm('Убрать камеру «' + cam.name + '» (' + cam.id + ') вместе с её зонами (' + cam.zones.length + ')? Она нигде не используется. Если для неё включена запись видео и звука, запись остановится.')) return;
   mdPeekHide();
   mdEdit(() => { MV.cfg.cameras = MV.cfg.cameras.filter((c) => c.id !== cam.id); }, true);
 }
@@ -695,7 +695,7 @@ function mdZonesTabHtml(mode, cam) {
     });
     html += '</div>';
   }
-  html += all ? mdCamerasListHtml() : mdCameraParamsHtml(cam);
+  html += all ? mdCamerasListHtml() : mdCameraParamsHtml(cam) + (typeof vrHtml === 'function' ? vrHtml(cam) : '');   // запись видео и звука (22-videorec.js)
   return html;
 }
 
@@ -1538,6 +1538,7 @@ function paintMotionDockLive() {
   const mode = mdMode();
   if (mode === 'none') return;
   if (MD.tab === 'shafts' && typeof mdPaintShafts === 'function') mdPaintShafts();
+  if (typeof vrTick === 'function') vrTick();
   const { source, cam } = mdCamera();
   const pe = mdEl('mdPill');
   if (pe) {

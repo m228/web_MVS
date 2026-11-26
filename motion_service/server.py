@@ -27,6 +27,8 @@
   POST /cameras/{id}/record       — {"on": true|false}: писать метрики каждого кадра в базу data\\motion.db.
   POST /record                    — то же сразу для всех включённых камер.
   GET  /records.zip               — CSV записей за последние дни (?days=7, собираются из базы) + summary.txt со сводкой сбоев, одним архивом.
+  GET  /video_rec  PUT /video_rec — запись видео со звуком на диск (data\\video_rec): настройки и ход по камерам; PUT {"limit_gb": 20}.
+  POST /cameras/{id}/video_rec    — {"on": true|false, "stream": "sub"|"main", "area": [x,y,w,h в долях кадра]|null, "fps": 5}: только присланные поля.
   POST /modbus/ping               — {"host","port","device_id","address"}: прочитать один регистр (только чтение).
   GET  /logs                      — последние строки журнала сервиса.
 
@@ -59,6 +61,7 @@ import motion_lvldec  # noqa: E402
 import motion_records  # noqa: E402
 import motion_store  # noqa: E402
 import motion_trends  # noqa: E402
+import motion_videorec  # noqa: E402
 from perf_stats import PERF  # noqa: E402
 from motion_autocal_job import AutocalJob  # noqa: E402
 from motion_autocal_report import build_report  # noqa: E402
@@ -155,6 +158,7 @@ class Manager:
         self._hk: Optional[threading.Thread] = None
         self.autocal: dict[str, AutocalJob] = {}   # подгонка валов по камере (последнее задание; пересоздание воркеров при сохранении настроек его не трогает)
         self.watch = AutocalWatch(self)            # сторож видимости палок: сам запускает подгонку при просадке и откатывает, если стало хуже
+        self.video = motion_videorec.VideoRec(self.dir, lambda: self.cfg["cameras"])   # запись видео со звуком на диск (data\video_rec)
 
     # --- автоподгонка валов ---
     def autocal_start(self, cid: str, zones: list, seconds: float) -> dict:
@@ -369,12 +373,14 @@ class Manager:
         self.scenarios.start()
         self.shafts.start()
         self.watch.start()
+        self.video.start()
         if self.auto_record or self.shots_min > 0 or self.keep_days:
             self._hk = threading.Thread(target=self._housekeeping, daemon=True, name="housekeeping")
             self._hk.start()
 
     def shutdown(self):
         self._halt.set()
+        self.video.shutdown()                    # первым: ffmpeg должен успеть закрыть файлы
         self.watch.stop()
         for j in self.autocal.values():
             j.cancel()
@@ -673,6 +679,26 @@ def create_app(data_dir: Optional[Path] = None, capture_factory: Callable = open
     @app.post("/record")
     def record_all(req: dict = Body(...)):
         return {"recording": mgr.record_all(bool(req.get("on")))}
+
+    @app.get("/video_rec")
+    def video_rec_status():
+        return mgr.video.status()
+
+    @app.put("/video_rec")
+    def video_rec_limit(req: dict = Body(...)):
+        try:
+            return mgr.video.set_limit(req.get("limit_gb"))
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+
+    @app.post("/cameras/{cid}/video_rec")
+    def video_rec_camera(cid: str, req: dict = Body(...)):
+        if not any(c["id"] == cid for c in mgr.cfg["cameras"]):
+            raise HTTPException(404, "нет такой камеры")
+        try:
+            return mgr.video.set_camera(cid, req)
+        except ValueError as e:
+            raise HTTPException(400, str(e))
 
     @app.post("/shots/now")
     def shots_now():

@@ -6,6 +6,8 @@
     уровни = 0, status = 0 — в ПЛК уходят нули и «камера не жива», детекция сама оживает, когда кадры пойдут;
   • отдельный поток записи в ПЛК: недоступный контроллер не тормозит разбор кадров (запись — по изменению и раз в
     write_period_s);
+  • сбой разбора кадра (исключение) пропускает кадр, а не роняет поток; нет свежего результата дольше порога (сбои подряд,
+    поток завис или умер) — камера считается мёртвой: наружу и в ПЛК идёт то же, что при пропаже связи;
   • последний кадр для просмотра (snapshot), история метрик для графиков калибровки и запись в CSV.
 
 Источник — rtsp://… или путь к видеофайлу (для проверки без камеры; файл крутится по кругу, темп — по FPS файла).
@@ -118,6 +120,10 @@ LAG_MAX_WIN_S = 60.0             # «макс очереди» на панели
 PROC_TOLERANCE = 0.85           # кадр берём, если с прошлого прошло ≥ 85 % интервала proc_fps: джиттер камеры иначе «съедает» каждый второй (8 к/с и proc_fps 4 давали ≈3)
 ROD_HIST_LEN = 600               # точек ряда на палку (≈ 3–5 минут при 2–3 к/с)
 FREEZE_REOPEN_S = 30.0           # картинка стоит дольше (и не меньше 2·freeze_timeout_s) — поток открываем заново, потом повторяем так же
+STALE_MIN_S = 5.0                # результат не бывает «старым» раньше этого (больше LAG_MAX_SKIP_S: догонялка очереди — не сбой)
+STALE_REASON = "нет свежих результатов анализа"
+FAIL_REASON = "сбой анализа кадра"
+FAIL_LOG_S = 60.0                # повторяющийся сбой разбора кадра пишем в лог не чаще
 _open_lock = threading.Lock()
 _open_next = 0.0
 
@@ -245,6 +251,9 @@ class CameraWorker(threading.Thread):
         self._lock = threading.Lock()
         self._frame: Optional[np.ndarray] = None
         self._state: Optional[dict] = None
+        self._pub_mono: Optional[float] = None    # когда (monotonic) поток камеры последний раз дал результат; None — анализ не запускался
+        self._fail_n = 0                          # сколько раз разбор кадра упал с исключением
+        self._fail_logged: Optional[float] = None
         self._connected = False
         self._conn_logged: Optional[bool] = None
         self._error = ""
@@ -320,20 +329,43 @@ class CameraWorker(threading.Thread):
         with self._lock:
             self._trend.close()
 
-    def state(self) -> dict:
-        sound = self.sound_states(self.cfg) if self.sound_states else []   # этапы по звуку живут своим потоком, не от кадров
+    def _stale_after(self) -> float:
+        """Сколько секунд без нового результата терпим: как без кадров (freeze_timeout_s), но не меньше времени, за которое
+        исправный поток заведомо успевает дать результат (редкие кадры, набор буфера frame_gap)."""
+        return max(self.cfg["freeze_timeout_s"], STALE_MIN_S, (self.cfg["frame_gap"] + 2) * self.engine.proc_interval)
+
+    def _stale(self) -> bool:
+        return self._pub_mono is not None and time.monotonic() - self._pub_mono > self._stale_after()
+
+    def _current(self) -> tuple:
+        """(состояние, записи в ПЛК, устарело) — единственное, что можно отдавать наружу. Поток камеры молчит дольше порога
+        (завис, умер) — вместо застывшего последнего результата то же, что при пропаже связи: биты и status 0, уровнемеры
+        держат значение свои «держать»."""
         with self._lock:
             st = dict(self._state) if self._state else None
+            writes = list(self._writes) if self._writes is not None else None
+            stale = self._stale()
+        if not stale:
+            return st, writes, False
+        reason = st["reason"] if st and not st["alive"] else STALE_REASON      # уже мёртвая — причину не меняем
+        st = self.engine.lost_state(time.time(), reason)
+        return st, self.engine.compute_writes(st), True
+
+    def state(self) -> dict:
+        sound = self.sound_states(self.cfg) if self.sound_states else []   # этапы по звуку живут своим потоком, не от кадров
+        st, _writes, stale = self._current()
+        with self._lock:
             if sound:
                 if st is None:
                     # reason пустой: мониторинг тогда покажет настоящую ошибку подключения камеры
                     st = {"ts": time.time(), "alive": False, "reason": "", "frame_wh": None, "zones": [], "groups": []}
                 st["groups"] = list(st.get("groups") or []) + sound
             fps = 0.0
-            if len(self._stamps) >= 2 and self._stamps[-1] > self._stamps[0]:
+            if not stale and len(self._stamps) >= 2 and self._stamps[-1] > self._stamps[0]:
                 fps = (len(self._stamps) - 1) / (self._stamps[-1] - self._stamps[0])
+            error = self._error or (st["reason"] if stale else "")
             return {"id": self.id, "name": self.cfg["name"], "enabled": self.cfg["enabled"], "connected": self._connected,
-                    "error": self._error, "decoder": self._decoder, "fps": round(fps, 2), "age_s": round(time.time() - self._last_good, 1) if self._last_good else None,
+                    "error": error, "decoder": self._decoder, "fps": round(fps, 2), "age_s": round(time.time() - self._last_good, 1) if self._last_good else None,
                     "lag_s": None if self._lag_s is None else round(self._lag_s, 2),
                     "recording": self._rec_name, "plc": dict(self.plc), "result": st,
                     "webview": self._web.status() if self._web else None}
@@ -638,11 +670,11 @@ class CameraWorker(threading.Thread):
     def shot(self, max_w: int = 1280) -> dict:
         """Снимок «в один момент» для data\\shots: {"jpeg": байты|None, "info": {связь, статус, значения зон}}. На кадре нарисованы зоны:
         зелёная — «движется» (бит 1), красная — «стоит», рядом diff / flow."""
+        st, _writes, stale = self._current()
         with self._lock:
             f = None if self._frame is None else self._frame.copy()
-            st = dict(self._state) if self._state else None
             fps = 0.0
-            if len(self._stamps) >= 2 and self._stamps[-1] > self._stamps[0]:
+            if not stale and len(self._stamps) >= 2 and self._stamps[-1] > self._stamps[0]:
                 fps = (len(self._stamps) - 1) / (self._stamps[-1] - self._stamps[0])
             conn, err, dec = self._connected, self._error, self._decoder
         zones = {z["id"]: {"flow": round(z["flow"], 3), "diff": round(z["diff"], 3), "bit": int(z["bit"]),
@@ -839,10 +871,14 @@ class CameraWorker(threading.Thread):
                 a[0] += 1; a[1] += d; a[2] = min(a[2], d); a[3] = max(a[3], d)
                 a[4] += cr; a[5] = min(a[5], cr); a[6] = max(a[6], cr)
 
-    def _publish(self, state: dict, frame: Optional[np.ndarray], count_frame: bool):
+    def _publish(self, state: dict, frame: Optional[np.ndarray], count_frame: bool, heartbeat: bool = True):
+        """heartbeat=False — это не результат анализа (сбой): отсчёт свежести не сдвигаем."""
         writes = self.engine.compute_writes(state)
         with self._lock:
             self._state = state
+            self._writes = writes            # вместе с состоянием: сбой ниже (история, запись на диск) не оставит в ПЛК старое
+            if heartbeat:
+                self._pub_mono = time.monotonic()
             if frame is not None:
                 self._frame = frame
             if count_frame:
@@ -873,7 +909,6 @@ class CameraWorker(threading.Thread):
                     bad = {z["id"] for z in state["zones"] if z["type"] in ("clarity",) + GAUGE_TYPES and not z["valid"]}
                     self._stats_add(state["ts"], {k: v for k, v in zones.items() if k not in bad} if bad else zones)
                     self._mirror_stats_add(state["ts"], state.get("groups") or [])
-            self._writes = writes
             self._rec_write(state["ts"], {z["id"]: z for z in state["zones"]}, "ok" if state["alive"] else (state["reason"] or "нет данных"))
         self._writes_evt.set()
         self._juice_tick(state, frame, count_frame)
@@ -905,6 +940,7 @@ class CameraWorker(threading.Thread):
             st["zones"] = self.engine.held_zones(st["zones"], now)
             with self._lock:
                 self._state = st
+                self._pub_mono = time.monotonic()
                 self._stamps.append(now)
                 self._push_history(now, {z["id"]: (z["flow"], z["diff"], z["bit"]) for z in st["zones"]}, 0)
                 self._fill.add(now, self._fill_zones(st["zones"]), False)
@@ -917,15 +953,19 @@ class CameraWorker(threading.Thread):
         last = 0.0
         period = float(self.mb.get("write_period_s", 1.0))
         while not self._halt.is_set():
-            self._writes_evt.wait(timeout=period)
+            self._writes_evt.wait(timeout=min(period, 1.0))      # не реже раза в секунду: замолчавший поток камеры события не пришлёт
             self._writes_evt.clear()
             if self._halt.is_set():
                 break
             if not self.mb.get("enable"):
                 self.plc.update(enabled=False, ok=None, error="")
                 continue
-            with self._lock:
-                writes = list(self._writes) if self._writes is not None else None
+            try:
+                writes = self._current()[1]
+            except Exception:  # noqa: BLE001 — поток записи не должен умирать
+                log.exception("[%s] записи в ПЛК не посчитаны", self.id)
+                self._halt.wait(FAIL_LOG_S)
+                continue
             if not writes:
                 continue
             now = time.time()
@@ -968,131 +1008,154 @@ class CameraWorker(threading.Thread):
         was_bad = False
         got_frame = False                      # с этого открытия потока уже пришёл хоть один кадр
         next_t = 0.0                           # темп чтения файла
+        file_dt = 0.04
+        self._pub_mono = time.monotonic()      # отсчёт свежести: не будет первого результата дольше порога — тоже «мёртвая»
         while not self._halt.is_set():
-            now = time.time()
-            if cap is None or not cap.isOpened():
-                if cap is not None:
-                    cap.release()
-                cap = self._open(url, cfg)
-                if not cap.isOpened():
-                    self._note_conn(False, "нет связи с источником")
-                    self._dead(now, timeout, "нет кадров")
-                    self._halt.wait(cfg["reconnect_delay_s"])
-                    continue
-                self._note_conn(True, "")
-                self._decoder = decoder_kind(cap)
-                self._qlag.reset()                 # поток открыт заново: время потока и очередь начинаются с нуля
-                self._lag_s = None
-                got_frame = False
-                if self._last_good and time.time() - self._last_good < timeout:
-                    self.engine.buf.clear()    # короткий обрыв (короче freeze_timeout_s): сравнивать со старым кадром нельзя, а биты зон держим
-                else:
-                    self.engine.reset()
-                last_proc, freeze_time, frozen = 0.0, 0.0, False      # last_gray остаётся: залипший захват после переоткрытия отдаёт тот же кадр
-                if file_src:
-                    fps = cap.get(cv2.CAP_PROP_FPS) or 25.0
-                    file_dt = 1.0 / max(1.0, fps)
-                    next_t = time.time()
-            if not cap.grab():
-                if file_src and cfg["loop"]:
-                    cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
-                    self.engine.reset()
-                    last_gray = None
-                    continue
-                self._note_conn(False, "поток оборвался")
-                self._hw_giveup_check(got_frame)
-                cap.release()
-                cap = None
-                self._dead(time.time(), timeout, "поток оборвался")
-                self._halt.wait(cfg["reconnect_delay_s"])
-                continue
-            if file_src:                       # без паузы файл читался бы со скоростью диска
-                next_t += file_dt
-                self._halt.wait(max(0.0, next_t - time.time()))
-            now = time.time()
-            # Очередь кадров: цикл медленнее камеры (или просел процессор/диск) — кадры копятся в сокете и декодере, и обрабатываются
-            # ВСЕ по порядку, ничего не пропуская: отставание растёт и тает лишь на запасе скорости (минуты). Берём время потока кадра и,
-            # пока очередь длиннее LAG_CATCHUP_S, выбрасываем кадры без разбора: grab() дёшев, очередь уходит за секунду-две.
-            lag = None if file_src else self._qlag.update(now, stream_pos_ms(cap))
-            if lag is not None and lag > LAG_CATCHUP_S and now - last_proc < LAG_MAX_SKIP_S:
-                self._skipped += 1
-                self._last_good = now
-                continue
-            if now - last_proc < interval * PROC_TOLERANCE:
-                continue
-            self._lag_s = lag
-            t_dec = time.perf_counter()
-            ok, frame = cap.retrieve()
-            if not ok or frame is None:
-                self._dead(now, timeout, "нет кадров")
-                continue
-            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY) if frame.ndim == 3 else frame
-            PERF.record(self.id + ":frame", (time.perf_counter() - t_dec) * 1000.0, budget_ms=interval * 1000.0,
-                        note="%d×%d%s" % (frame.shape[1], frame.shape[0], " · " + self._decoder if self._decoder else ""))
-            dt = now - last_proc if last_proc else interval
-            last_proc = now
-            self._last_good = now
-            got_frame = True
-            self._hw_fail = 0
-            # детектор зависшей картинки: живой поток всегда чуть «дышит» (шум матрицы)
-            still = False                      # картинка не изменилась с прошлого кадра (в том числе кадра до переоткрытия потока)
-            if last_gray is not None and last_gray.shape == gray.shape:
-                last_diff = float(cv2.absdiff(last_gray, gray).mean())
-                if last_diff < cfg["freeze_eps"]:
-                    freeze_time += dt
-                    still = True
-                else:
-                    freeze_time = 0.0
-            last_gray = gray
-            # серая каша: результаты не берём, держим последнее состояние; если затянулось — как мёртвая камера
-            cr = cfg["corrupt_ratio"]
-            if cr > 0 and garbage_ratio(gray) >= cr:
-                if not bad_since:
-                    bad_since = now
-                    log.warning("[%s] битый кадр (серая каша) — результаты не учитываются", self.id)
-                bad_until = now + cfg["corrupt_hold_s"]
-            elif bad_since and now >= bad_until:
-                log.info("[%s] кадры в норме (каша %.1f с)", self.id, now - bad_since)
-                bad_since = 0.0
-            if bad_since:
-                was_bad = True
-                if now - bad_since >= timeout:
-                    frozen = True              # после выхода из каши — состояния с нуля (как после фриза)
-                    self._publish(self.engine.dead_state(now, "битый поток"), frame, True)
-                else:
-                    self._publish_held(now, frame)
-                continue
-            if was_bad:                        # после каши первый кадр сравнивать не с чем — буфер с нуля, гистерезис не трогаем
-                was_bad = False
-                self.engine.buf.clear()
-            now_frozen = freeze_time >= timeout
-            if now_frozen:
-                if not frozen:
-                    log.warning("[%s] картинка застыла: разница соседних кадров %.3f < %.3f уже %.0f с", self.id, last_diff, cfg["freeze_eps"], freeze_time)
-                frozen = True
-                if not file_src and freeze_time >= max(2 * timeout, FREEZE_REOPEN_S):
-                    # залипший захват (декодер отдаёт один и тот же кадр, а grab() успешен) сам не оживает — открываем поток заново
-                    log.warning("[%s] картинка стоит %.0f с — переоткрываю поток", self.id, freeze_time)
-                    with self._lock:
-                        self._rec_write(now, {}, "событие: картинка стоит, переоткрываю поток", event=True)
+            try:
+                now = time.time()
+                if cap is None or not cap.isOpened():
+                    if cap is not None:
+                        cap.release()
+                    cap = self._open(url, cfg)
+                    if not cap.isOpened():
+                        self._note_conn(False, "нет связи с источником")
+                        self._dead(now, timeout, "нет кадров")
+                        self._halt.wait(cfg["reconnect_delay_s"])
+                        continue
+                    self._note_conn(True, "")
+                    self._decoder = decoder_kind(cap)
+                    self._qlag.reset()                 # поток открыт заново: время потока и очередь начинаются с нуля
+                    self._lag_s = None
+                    got_frame = False
+                    if self._last_good and time.time() - self._last_good < timeout:
+                        self.engine.buf.clear()    # короткий обрыв (короче freeze_timeout_s): сравнивать со старым кадром нельзя, а биты зон держим
+                    else:
+                        self.engine.reset()
+                    last_proc, freeze_time, frozen = 0.0, 0.0, False      # last_gray остаётся: залипший захват после переоткрытия отдаёт тот же кадр
+                    if file_src:
+                        fps = cap.get(cv2.CAP_PROP_FPS) or 25.0
+                        file_dt = 1.0 / max(1.0, fps)
+                        next_t = time.time()
+                if not cap.grab():
+                    if file_src and cfg["loop"]:
+                        cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+                        self.engine.reset()
+                        last_gray = None
+                        continue
+                    self._note_conn(False, "поток оборвался")
+                    self._hw_giveup_check(got_frame)
                     cap.release()
                     cap = None
-                    self._publish(self.engine.dead_state(now, "картинка застыла"), frame, True)
+                    self._dead(time.time(), timeout, "поток оборвался")
                     self._halt.wait(cfg["reconnect_delay_s"])
                     continue
-                self._publish(self.engine.dead_state(now, "картинка застыла"), frame, True)
-                continue
-            if frozen:                         # камера ожила — состояния с нуля
-                frozen = False
-                self.engine.reset()
-            st = self.engine.process(gray, now, frame, fresh=not still)
-            if st is not None:
-                self._publish(st, frame, True)
-            else:
-                with self._lock:
-                    self._frame = frame
+                if file_src:                       # без паузы файл читался бы со скоростью диска
+                    next_t += file_dt
+                    self._halt.wait(max(0.0, next_t - time.time()))
+                now = time.time()
+                # Очередь кадров: цикл медленнее камеры (или просел процессор/диск) — кадры копятся в сокете и декодере, и обрабатываются
+                # ВСЕ по порядку, ничего не пропуская: отставание растёт и тает лишь на запасе скорости (минуты). Берём время потока кадра и,
+                # пока очередь длиннее LAG_CATCHUP_S, выбрасываем кадры без разбора: grab() дёшев, очередь уходит за секунду-две.
+                lag = None if file_src else self._qlag.update(now, stream_pos_ms(cap))
+                if lag is not None and lag > LAG_CATCHUP_S and now - last_proc < LAG_MAX_SKIP_S:
+                    self._skipped += 1
+                    self._last_good = now
+                    continue
+                if now - last_proc < interval * PROC_TOLERANCE:
+                    continue
+                self._lag_s = lag
+                t_dec = time.perf_counter()
+                ok, frame = cap.retrieve()
+                if not ok or frame is None:
+                    self._dead(now, timeout, "нет кадров")
+                    continue
+                gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY) if frame.ndim == 3 else frame
+                PERF.record(self.id + ":frame", (time.perf_counter() - t_dec) * 1000.0, budget_ms=interval * 1000.0,
+                            note="%d×%d%s" % (frame.shape[1], frame.shape[0], " · " + self._decoder if self._decoder else ""))
+                dt = now - last_proc if last_proc else interval
+                last_proc = now
+                self._last_good = now
+                got_frame = True
+                self._hw_fail = 0
+                # детектор зависшей картинки: живой поток всегда чуть «дышит» (шум матрицы)
+                still = False                      # картинка не изменилась с прошлого кадра (в том числе кадра до переоткрытия потока)
+                if last_gray is not None and last_gray.shape == gray.shape:
+                    last_diff = float(cv2.absdiff(last_gray, gray).mean())
+                    if last_diff < cfg["freeze_eps"]:
+                        freeze_time += dt
+                        still = True
+                    else:
+                        freeze_time = 0.0
+                last_gray = gray
+                # серая каша: результаты не берём, держим последнее состояние; если затянулось — как мёртвая камера
+                cr = cfg["corrupt_ratio"]
+                if cr > 0 and garbage_ratio(gray) >= cr:
+                    if not bad_since:
+                        bad_since = now
+                        log.warning("[%s] битый кадр (серая каша) — результаты не учитываются", self.id)
+                    bad_until = now + cfg["corrupt_hold_s"]
+                elif bad_since and now >= bad_until:
+                    log.info("[%s] кадры в норме (каша %.1f с)", self.id, now - bad_since)
+                    bad_since = 0.0
+                if bad_since:
+                    was_bad = True
+                    if now - bad_since >= timeout:
+                        frozen = True              # после выхода из каши — состояния с нуля (как после фриза)
+                        self._publish(self.engine.dead_state(now, "битый поток"), frame, True)
+                    else:
+                        self._publish_held(now, frame)
+                    continue
+                if was_bad:                        # после каши первый кадр сравнивать не с чем — буфер с нуля, гистерезис не трогаем
+                    was_bad = False
+                    self.engine.buf.clear()
+                now_frozen = freeze_time >= timeout
+                if now_frozen:
+                    if not frozen:
+                        log.warning("[%s] картинка застыла: разница соседних кадров %.3f < %.3f уже %.0f с", self.id, last_diff, cfg["freeze_eps"], freeze_time)
+                    frozen = True
+                    if not file_src and freeze_time >= max(2 * timeout, FREEZE_REOPEN_S):
+                        # залипший захват (декодер отдаёт один и тот же кадр, а grab() успешен) сам не оживает — открываем поток заново
+                        log.warning("[%s] картинка стоит %.0f с — переоткрываю поток", self.id, freeze_time)
+                        with self._lock:
+                            self._rec_write(now, {}, "событие: картинка стоит, переоткрываю поток", event=True)
+                        cap.release()
+                        cap = None
+                        self._publish(self.engine.dead_state(now, "картинка застыла"), frame, True)
+                        self._halt.wait(cfg["reconnect_delay_s"])
+                        continue
+                    self._publish(self.engine.dead_state(now, "картинка застыла"), frame, True)
+                    continue
+                if frozen:                         # камера ожила — состояния с нуля
+                    frozen = False
+                    self.engine.reset()
+                st = self.engine.process(gray, now, frame, fresh=not still)
+                if st is not None:
+                    self._publish(st, frame, True)
+                else:
+                    with self._lock:
+                        self._frame = frame
+            except Exception:  # noqa: BLE001 — сбой разбора кадра (например, нет памяти в OpenCV) не должен убивать камеру
+                self._note_failure()
+                if self._stale():          # сбои подряд дольше порога: камера мертва, состояния с нуля, поток открываем заново
+                    if cap is not None:
+                        cap.release()
+                        cap = None
+                    try:
+                        self.engine.reset()
+                        self._publish(self.engine.dead_state(time.time(), FAIL_REASON), None, False, heartbeat=False)
+                    except Exception:  # noqa: BLE001 — не вышло и это: наружу всё равно отдаст «мёртвую» _current()
+                        self._note_failure()
+                self._halt.wait(cfg["reconnect_delay_s"] if cap is None else min(interval, 1.0))
         if cap is not None:
             cap.release()
+
+    def _note_failure(self):
+        """Разбор кадра упал (звать из except): в лог — первый раз и дальше не чаще FAIL_LOG_S."""
+        self._fail_n += 1
+        now = time.monotonic()
+        if self._fail_logged is None or now - self._fail_logged >= FAIL_LOG_S:
+            self._fail_logged = now
+            log.exception("[%s] %s (всего сбоев: %d) — кадр пропущен", self.id, FAIL_REASON, self._fail_n)
 
     def _note_conn(self, ok: bool, err: str):
         """Состояние подключения + запись в журнал ТОЛЬКО при смене (мёртвая камера не засоряет журнал каждую попытку)."""

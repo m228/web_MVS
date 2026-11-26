@@ -202,11 +202,16 @@ def _norm_zone(z: dict, cam_id: str) -> dict:
     off = _num(z.get("off", d_off), where + ".off", 0)
     if off > on:
         raise ValueError("%s: порог выключения (off=%s) больше порога включения (on=%s)" % (where, off, on))
+    motion = bool(z.get("motion", True))      # False — зона «по яркости»: движение не считается, бит — «есть / нет» по виду окна
+    fill = _fill_cfg(z, where)
+    if not motion and fill["fill_metric"] == "off":
+        raise ValueError("%s: движение выключено — выберите признак яркости (fill_metric)" % where)
     return {
         "id": zid,
         "name": str(z.get("name") or zid),
         "enabled": bool(z.get("enabled", True)),
         "type": ztype,
+        "motion": motion,
         "metric": metric,
         "points": pts,
         "on": on,
@@ -219,7 +224,7 @@ def _norm_zone(z: dict, cam_id: str) -> dict:
         "blur": _num(z.get("blur", 5), where + ".blur", 0, 31, True),
         "flicker_comp": bool(z.get("flicker_comp", True)),
         "out": _out(z.get("out"), ZONE_OUT_KINDS, where + ".out", values=ZONE_OUT_VALUES),
-        **_fill_cfg(z, where),
+        **fill,
     }
 
 
@@ -872,6 +877,7 @@ class ZoneRT:
         self.hist_diff = deque(maxlen=zcfg["smooth"])
         self.hys = Hysteresis(zcfg["on"], zcfg["off"], zcfg["invert"], zcfg["frames_to_on"], zcfg["frames_to_off"])
         self.flow = self.diff = self.value = 0.0
+        self.motion = zcfg.get("motion", True)
         self.fill_metric = zcfg.get("fill_metric", "off")
         self.hist_fill = deque(maxlen=zcfg.get("fill_smooth", 15))
         # решает «жом есть» только при заданных порогах (fill_on > 0), иначе признак лишь измеряется
@@ -906,8 +912,13 @@ class ZoneRT:
         self.fill = None
 
     def step(self, prev: np.ndarray, cur: np.ndarray, dt: float) -> int:
+        """Следующий кадр → бит зоны: «движется», а у зоны без движения — «есть» по виду окна (пороги не заданы — 0)."""
         x, y, w, h = self.bbox
         a, b = prev[y:y + h, x:x + w], cur[y:y + h, x:x + w]
+        if not self.motion:
+            self._fill_step(b, cur)
+            self.value = {"tex": self.tex, "lum": self.lum, "rel": self.rel}[self.fill_metric]
+            return self.fill or 0
         raw_diff = diff_metric(a, b, self.mask, self.cfg["blur"], self.cfg["flicker_comp"])
         self.hist_diff.append(raw_diff)
         # оптический поток — самое дорогое в анализе (на крупной зоне больше половины процессора): если зона решает по diff и flow
@@ -2445,6 +2456,7 @@ class CameraEngine:
                           "enabled": zc["enabled"], "bit": int(bits.get(zc["id"], 0)) if alive else 0,
                           "flow": round(z.flow, 4) if z else 0.0, "diff": round(z.diff, 4) if z else 0.0,
                           "value": round(z.value, 4) if z else 0.0, "on": zc["on"], "off": zc["off"],
+                          **({} if zc.get("motion", True) else {"motion": False}),      # ключ есть только у зон без движения
                           **self._fill_state(zc, z, alive, bool(bits.get(zc["id"], 0)))})
         groups = []
         for g in self.cfg["groups"]:
@@ -2616,11 +2628,12 @@ class CameraEngine:
 
     @staticmethod
     def _fill_state(zc: dict, z: Optional[ZoneRT], alive: bool, moving: bool) -> dict:
-        """Поля вида окна для состояния зоны. state: 2 — движется, 1 — жом есть и стоит, 0 — пусто и стоит; None — решения нет."""
+        """Поля вида окна для состояния зоны. state: 2 — движется, 1 — жом есть и стоит, 0 — пусто и стоит; None — решения нет.
+        У зоны без движения (motion=False) состояния только 0 нет / 1 есть: там moving — это и есть бит наличия."""
         if zc.get("fill_metric", "off") == "off":
             return {}
         fill = z.fill if (z and alive) else None
-        state = None if fill is None else (2 if moving else fill)
+        state = None if fill is None else (2 if moving and zc.get("motion", True) else fill)
         if not alive:
             state = 0
         return {"fill_metric": zc["fill_metric"], "tex": round(z.tex, 3) if z else 0.0, "lum": round(z.lum, 2) if z else 0.0,

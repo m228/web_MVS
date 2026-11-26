@@ -639,6 +639,7 @@ class CameraWorker(threading.Thread):
                 fps = (len(self._stamps) - 1) / (self._stamps[-1] - self._stamps[0])
             conn, err, dec = self._connected, self._error, self._decoder
         zones = {z["id"]: {"flow": round(z["flow"], 3), "diff": round(z["diff"], 3), "bit": int(z["bit"]),
+                           **({"motion": False} if z.get("motion") is False else {}),
                            **({"tex": z["tex"], "lum": z["lum"], "rel": z["rel"], "state": z["state"]} if "tex" in z else {})} for z in (st or {}).get("zones", [])}
         info = {"name": self.cfg["name"], "connected": bool(conn), "alive": bool(st and st.get("alive")),
                 "status": "ok" if (st and st.get("alive")) else ((st or {}).get("reason") or err or "нет данных"),
@@ -662,7 +663,8 @@ class CameraWorker(threading.Thread):
             pts = np.round(np.array(scale_points(zc["points"], size, (w, h))) * k).astype(np.int32)
             color = (60, 200, 60) if z["bit"] else (50, 50, 230)
             cv2.polylines(f, [pts], True, color, 2)
-            cv2.putText(f, "%s d=%.2f f=%.2f" % (zc["id"], z["diff"], z["flow"]) + (" t=%.1f L=%.0f r=%.2f" % (z["tex"], z["lum"], z["rel"]) if "tex" in z else ""),
+            moved = "" if z.get("motion") is False else " d=%.2f f=%.2f" % (z["diff"], z["flow"])
+            cv2.putText(f, zc["id"] + moved + (" t=%.1f L=%.0f r=%.2f" % (z["tex"], z["lum"], z["rel"]) if "tex" in z else ""),
                         (int(pts[:, 0].min()), max(14, int(pts[:, 1].min()) - 6)),
                         cv2.FONT_HERSHEY_SIMPLEX, max(0.4, fw / 1800.0), color, 1, cv2.LINE_AA)
         for zc in self.cfg["zones"]:                # уровнемеры: шкала с процентами (линейка стрелки или разметка столбика; зону указателя нарисовал общий цикл выше)

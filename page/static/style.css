@@ -4682,15 +4682,27 @@ body.micro-rep-doc .micro-cmp-strips { grid-template-columns: repeat(6, 1fr); ga
 .md-g-bg { fill: var(--surface-strong); }
 .md-g-hy { fill: var(--border-strong); opacity: .55; }
 .md-g-m { stroke: #38bdf8; stroke-width: 1.2; vector-effect: non-scaling-stroke; }
-.md-zr .md-zone__chart canvas { height: 56px; }
+/* маленький график в шапке свёрнутой карточки; в раскрытой он прячется — большие стоят справа (их высота задана в стиле самого графика) */
+.md-zr__head .md-zone__chart canvas { height: 40px; }
+.md-zr.is-open .md-zr__head .md-zone__chart { visibility: hidden; height: 0; overflow: hidden; }
 .md-zr__chev { width: 24px; height: 24px; border-radius: 50%; border: 1px solid var(--border); display: inline-flex; align-items: center; justify-content: center; font-size: 12px; color: var(--muted); transition: transform .15s; }
 .md-zr.is-open .md-zr__chev { transform: rotate(180deg); }
-.md-zr__det { display: none; grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr); gap: 20px; padding: 2px 8px 12px 18px; }
+/* раскрытая карточка: окно «Движение», окно «Яркость» (шире) и справа их графики; у выключенного блока окно узкое */
+.md-zr__det { display: none; grid-template-columns: minmax(0, 360px) minmax(0, 470px) minmax(260px, 1fr); gap: 12px; padding: 2px 8px 12px 18px; }
+.md-zr__det.no-mot { grid-template-columns: minmax(0, 260px) minmax(0, 520px) minmax(260px, 1fr); }
+.md-zr__det.no-fill { grid-template-columns: minmax(0, 360px) minmax(0, 220px) minmax(260px, 1fr); }
 .md-zr.is-open .md-zr__det { display: grid; }
-.md-zr__col { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.md-zr__col { display: flex; flex-direction: column; gap: 6px; min-width: 0; padding: 8px 10px; border: 1px solid var(--border); border-radius: 12px; }
+.md-zr__sw { display: flex; align-items: center; gap: 12px; }
+.md-zr__sw .md-lbl { min-width: 0 !important; cursor: pointer; }
+.md-zr__charts { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.md-zc { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.md-grip { height: 10px; display: flex; align-items: center; justify-content: center; cursor: ns-resize; user-select: none; touch-action: none; }
+.md-grip::after { content: ''; width: 42px; height: 3px; border-radius: 2px; background: var(--border-strong); }
+.md-grip:hover::after { background: var(--accent); }
 .md-zr__t { font-size: 11px; letter-spacing: .05em; text-transform: uppercase; color: var(--muted); }
 .md-zr__col .md-lbl:first-child { min-width: 84px; }
-.md-zr__col .md-zone__row input[type=number] { width: 58px; text-align: center; }
+.md-zr__col .md-zone__row input[type=number] { width: 74px; text-align: center; }
 .md-ar { color: var(--muted); font-size: 11px; cursor: help; }
 .md-zr__del { margin-top: auto; align-self: flex-end; }
 .md-zr__del .md-x, .md-zr__del .md-x[data-f="del"] { color: var(--danger); width: auto; height: auto; border-radius: 10px; padding: 3px 12px; white-space: nowrap; }
@@ -4804,7 +4816,8 @@ body.micro-rep-doc .micro-cmp-strips { grid-template-columns: repeat(6, 1fr); ga
 .md-sr__foot .md-x { flex: none; }
 .md-openall, .md-zr__col label.md-lbl { flex-direction: row; align-items: center; gap: 5px; }
 .md-openall input[type=checkbox], .md-zr__col input[type=checkbox] { width: 15px; height: 15px; margin: 0; flex: none; }
-@media (max-width: 900px) { .md-zr__head { grid-template-columns: 4px 110px minmax(0, 1fr) 26px; } .md-zr__head .md-zone__chart { display: none; } .md-zr__det { grid-template-columns: 1fr; } }
+@media (max-width: 1280px) { .md-zr__det, .md-zr__det.no-mot, .md-zr__det.no-fill { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); } .md-zr__charts { grid-column: 1 / -1; } }
+@media (max-width: 900px) { .md-zr__head { grid-template-columns: 4px 110px minmax(0, 1fr) 26px; } .md-zr__head .md-zone__chart { display: none; } .md-zr__det, .md-zr__det.no-mot, .md-zr__det.no-fill { grid-template-columns: 1fr; } }
 @media (max-width: 900px) { .md-zone { grid-template-columns: 1fr; } }
 
 .md-det { margin-top: 12px; }
@@ -5036,7 +5049,6 @@ body.micro-rep-doc .micro-cmp-strips { grid-template-columns: repeat(6, 1fr); ga
 .md-zstat__row.is-main { color: var(--text); }
 .md-zstat__cur { color: var(--text); }
 .md-zstat__note { font-size: 11px; opacity: .8; }
-.md-zr__col .md-zone__chart canvas { height: 52px; }
 .md-ctip { position: fixed; z-index: 10001; pointer-events: none; padding: 4px 8px; border-radius: 8px; background: rgba(5, 8, 13, .95); color: #e7eefb; font-size: 12px; font-variant-numeric: tabular-nums; white-space: nowrap; box-shadow: 0 4px 16px rgba(0, 0, 0, .4); }
 .md-ctipline { position: fixed; z-index: 10000; pointer-events: none; width: 1px; background: rgba(148, 163, 184, .7); }
 .md-ctip[hidden], .md-ctipline[hidden] { display: none; }

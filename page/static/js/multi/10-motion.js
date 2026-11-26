@@ -63,6 +63,7 @@ function mvSyncUrls(cfg) {
 // состояние камеры для рисования: 'on' | 'off' | 'dead' (нет связи, фриз, битый поток)
 function mvZoneMode(st, zoneLive) {
   if (!MV.online || !st || !st.alive || st.corrupt || !zoneLive) return 'dead';
+  if (zoneLive.motion === false && zoneLive.fill == null) return 'dead';      // зона по яркости без порогов: решения нет — серая, а не «нет»
   return zoneLive.bit === 1 ? 'on' : 'off';
 }
 
@@ -120,6 +121,9 @@ function zonePointsOnTile(z, cam, g) {
   const fs = cam.frame_size || [g.nw, g.nh];
   return z.points.map((p) => [g.ox + p[0] * (g.nw / fs[0]) * g.k, g.oy + p[1] * (g.nh / fs[1]) * g.k]);
 }
+
+// зона только по яркости: что в ней сейчас
+const mvPresence = (lz) => (lz.fill == null ? 'не настроено' : lz.fill ? 'есть' : 'нет');
 
 function tileMotionStatusText(st) {
   if (!MV.online) return 'сервис КЗ не запущен';
@@ -196,7 +200,7 @@ function drawMotionTile(index) {
     ctx.beginPath();
     pts.forEach((p, i) => (i ? ctx.lineTo(p[0], p[1]) : ctx.moveTo(p[0], p[1])));
     ctx.closePath(); ctx.fill(); ctx.stroke();
-    const label = z.name + (lz && !problem ? '  ' + Number(lz.value).toFixed(2) : '');
+    const label = z.name + (lz && !problem ? '  ' + (lz.motion === false ? mvPresence(lz) : Number(lz.value).toFixed(2)) : '');
     ctx.lineWidth = 3; ctx.strokeStyle = '#000'; ctx.strokeText(label, pts[0][0] + 4, pts[0][1] + 15);
     ctx.fillStyle = '#fff'; ctx.fillText(label, pts[0][0] + 4, pts[0][1] + 15); ctx.lineWidth = 2;
   });
@@ -457,8 +461,9 @@ function onMotionHover(event) {
     : ggIs(hit)
     ? ggTipText(hit, lz, problem)
     : hit.name + (problem ? ' — ' + problem : lz && hit.type === 'level'
-    ? ' · заполнено ' + Number(lz.level).toFixed(1) + ' % · сырое ' + Number(lz.raw).toFixed(1) + ' %' : lz
-    ? ' · ' + (lz.bit ? 'крутится' : 'стоит') + ' · diff ' + Number(lz.diff).toFixed(2) + ' · flow ' + Number(lz.flow).toFixed(2) : '');
+    ? ' · заполнено ' + Number(lz.level).toFixed(1) + ' % · сырое ' + Number(lz.raw).toFixed(1) + ' %' : lz && lz.motion === false
+    ? ' · ' + mvPresence(lz) + ' · ' + MD_FILL_NAME[lz.fill_metric] + ' ' + mdFillFmt(lz.fill_metric, lz[lz.fill_metric]) : lz
+    ?' · ' + (lz.bit ? 'крутится' : 'стоит') + ' · diff ' + Number(lz.diff).toFixed(2) + ' · flow ' + Number(lz.flow).toFixed(2) : '');
   tip.style.left = Math.min(event.clientX + 14, window.innerWidth - 260) + 'px';
   tip.style.top = event.clientY + 16 + 'px';
   tip.hidden = false;

@@ -214,7 +214,8 @@ class Monitor:
             return {("cv_frozen" if "застыл" in reason else "cv_dead", ""): reason}
         out = {}
         for z in res.get("zones") or []:
-            if not z.get("enabled", True) or z.get("type") in ("clarity", "gate", "tube"):      # прозрачность сока и уровнемеры — не «крутится / стоит»: событий движения нет
+            # прозрачность сока, уровнемеры и зоны «по яркости» (motion=False) — не «крутится / стоит»: событий движения нет
+            if not z.get("enabled", True) or z.get("type") in ("clarity", "gate", "tube") or z.get("motion") is False:
                 continue
             # у зоны-цикла (палка на валу) bit = «палка найдена», а «крутится / стоит» — отдельное поле moving (None — пока неизвестно)
             on = z.get("moving") if z.get("type") == "cycle" else bool(z.get("bit"))

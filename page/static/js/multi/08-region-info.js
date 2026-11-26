@@ -330,18 +330,20 @@ async function applyRtspEdit(fd, form, error) {
 
   // в базу пишем только то, что там уже есть (не подключённая камера сохранится сама при первом кадре)
   if (cam.saved) {
-    const data = await RtspApi.saveCam({ url: newUrl, label: cam.label, ip: newIp, serial: cam.serial, scale, fps: cam.connection.fps });
+    // запись ключуется по URL: старую заменяет сам сервер тем же запросом (отдельное удаление после сохранения меняло serial)
+    const data = await RtspApi.saveCam({ url: newUrl, oldUrl: urlChanged ? oldUrl : '', label: cam.label, ip: newIp,
+      serial: cam.serial, scale, fps: cam.connection.fps });
     if (!data || data.error) {
       log.warn('Не удалось сохранить правку RTSP-камеры в базу', { serial: cam.serial, error: data?.error });
-    } else if (urlChanged) {
-      // запись ключуется по URL: автостарт переносим на новую, старую убираем
-      if (cam.autostart) await RtspApi.setAutostart(newUrl, true, cam.serial);
-      await RtspApi.removeSaved(oldUrl);
+    } else if (urlChanged && cam.autostart) {
+      // захват погашен выше: повторная отметка автостарта сразу поднимает его с новым адресом
+      await RtspApi.setAutostart(newUrl, true, cam.serial);
     }
   }
 
-  // эфир: перезапускаем поток с новыми параметрами
+  // эфир: перезапускаем поток с новыми параметрами (скрытой ячейке — только сообщаем серверу новый адрес)
   state.tiles.forEach((tile, i) => {
+    if (tile.serial === cam.serial && tile.connected && tile.hidden) attachHiddenCamera(cam);
     if (tile.serial === cam.serial && tile.connected && !tile.hidden) {
       const frame = getTileEl(i)?.querySelector('[data-tile-frame]');
       if (frame) frame.src = buildStreamUrl(cam);
@@ -405,6 +407,7 @@ function addRtspSource() {
     existing.connection = connection;
     // если уже в эфире — перезапускаем поток с новыми настройками
     state.tiles.forEach((tile, i) => {
+      if (tile.serial === existing.serial && tile.connected && tile.hidden) attachHiddenCamera(existing);
       if (tile.serial === existing.serial && tile.connected && !tile.hidden) {
         const el = getTileEl(i);
         const frame = el?.querySelector('[data-tile-frame]');

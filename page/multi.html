@@ -49,6 +49,14 @@
               <input type="checkbox" id="multiAutostartToggle" />
               <span class="micro-check__text">Автостарт</span>
             </label>
+            <label class="micro-check" title="Для показа в приложении брать дополнительный (лёгкий) поток камеры, subtype=1. Анализ КЗ идёт по своему потоку и от этой галочки не зависит (по умолчанию — основной, лучшее качество). Применяется при следующем подключении камер: перезапустите приложение или остановите и запустите потоки. Фото и видео с плитки будут в качестве показа.">
+              <input type="checkbox" id="multiDisplaySubToggle" />
+              <span class="micro-check__text">Показ — подпоток</span>
+            </label>
+            <label class="micro-check" title="Приложение не берёт камеры на показ: меньше нагрузка на этот ПК, КЗ работает как работала. Нужную камеру можно открыть «глазиком», запись фото и видео продолжается. Пока камера не открыта, приложение не пишет для неё в журнал «нет связи» и «серые кадры» (сбои анализа остаются).">
+              <input type="checkbox" id="multiAnalysisToggle" />
+              <span class="micro-check__text">Только анализ</span>
+            </label>
             <a href="/" class="btn btn-secondary">К списку камер</a>
             <button type="button" id="multiUpdateBtn" class="btn btn-secondary" title="Обновить программу до последней версии: основное приложение и дополнения. Через 5 секунд (можно отменить) запустится апдейтер, камеры отключатся примерно на минуту и поднимутся сами">Обновить</button>
             <span class="mu-status" id="multiUpdateStatus" role="status" hidden></span>
@@ -129,6 +137,10 @@
             </div>
             <div class="multi-drawer__list" id="multiDrawerList"></div>
             <p class="multi-drawer__hint">Нажмите камеру — откроются настройки. Перетащите её на ячейку →</p>
+            <div class="host-load" id="hostLoad" hidden>
+              <p class="section-subtitle">Нагрузка этого ПК</p>
+              <div id="hostLoadBody"></div>
+            </div>
           </aside>
 
           <!-- сетка ячеек (заполняется из multi.js) -->
@@ -141,10 +153,12 @@
               <button type="button" class="md-link" id="mdAll" title="Общий вид: все камеры с КЗ — зоны и тренды вместе">все камеры</button></div>
             <div class="motion-dock__tools">
               <span class="motion-dock__save" id="mdSave"></span>
-              <button type="button" class="btn-primary" id="mdMark">Разметить зону</button>
-              <button type="button" class="btn-secondary" id="mdMarkRods" title="Два вала диффузии с палками: углы красного конца и рассинхрон от зеркальности">Разметить валы</button>
-              <button type="button" class="btn-secondary" id="mdMarkGlass" title="Два мерных стекла: уровень жидкости по модели — нижнее, потом верхнее">Разметить стёкла</button>
-              <button type="button" class="btn-secondary" id="mdMarkJuice" title="Стаканы с соком: кружок на каждом, по цвету считается мутность 0–100">Разметить стаканы</button>
+              <div class="md-markcol">
+                <button type="button" class="btn-primary" id="mdMark" title="Разметка на кадре камеры: зона, валы, стёкла, стаканы — вкладки в окне">Разметить</button>
+                <span class="sh-seg sh-seg--lead md-lead" id="mdLead" hidden>
+                  <button type="button" data-v="0" title="Угол — по красной и синей половинам, отражатели уточняют (среднее)">по цвету</button><button type="button" data-v="1" title="Отражатели видны — угол только по ним (точнее, на полном радиусе); цвет нужен, чтобы знать, где красный конец. Не видны — по цвету">по отражателям</button>
+                </span>
+              </div>
               <button type="button" class="btn-secondary md-icon" id="mdRec" title="Писать метрики каждого кадра в CSV (для калибровки порогов)">●</button>
               <button type="button" class="btn-secondary md-icon md-wide" id="mdRecAll" hidden title="Писать метрики всех камер с КЗ в CSV сразу (по файлу на камеру) — чтобы потом разобрать, когда и какая камера пропадала">● все</button>
               <button type="button" class="btn-secondary md-icon md-wide" id="mdRecZip" hidden title="Скачать все записи одним архивом: CSV по камерам + summary.txt (сводка: когда и на сколько камеры пропадали)">⤓ архив</button>
@@ -494,9 +508,20 @@
         <button type="button" class="modal-close-btn" id="mmX" aria-label="Закрыть">×</button>
       </div>
       <div class="network-modal__body">
-        <div class="motion-mark__stage" id="mmStage"><img id="mmImg" alt="Кадр камеры" /><canvas id="mmCanvas"></canvas></div>
+        <div class="motion-dock__tabs motion-mark__tabs" id="mmTabs" role="tablist" aria-label="Что размечаем">
+          <button type="button" class="md-tab is-active" role="tab" data-mm-kind="zone" title="Зона движения / жома: многоугольник по углам">Зона</button>
+          <button type="button" class="md-tab" role="tab" data-mm-kind="rods" title="Два вала диффузии с палками: углы красного конца и рассинхрон от зеркальности">Валы</button>
+          <button type="button" class="md-tab" role="tab" data-mm-kind="glass" title="Два мерных стекла: уровень жидкости по модели — нижнее, потом верхнее">Стёкла</button>
+          <button type="button" class="md-tab" role="tab" data-mm-kind="juice" title="Стаканы с соком: кружок на каждом, по цвету считается мутность 0–100">Стаканы</button>
+          <button type="button" class="md-tab" role="tab" data-mm-kind="gauge" title="Уровень 0–100 % по картинке: столбик (уровень виден цветом) или стрелка (указатель рядом с линейкой)">Уровнемер</button>
+        </div>
+        <div class="motion-mark__gauge" id="mmGauge" hidden>
+          <div class="sh-seg"><button type="button" data-ggk="tube" title="Уровень виден цветом: от начала шкалы «заполнено», дальше «пусто» — магнитный указатель, стекло">Столбик</button><button type="button" data-ggk="gate" title="Неподвижная линейка и цветной указатель, который ходит рядом (шибер)">Стрелка</button></div>
+          <label class="net-hint" id="mmDirBox">растёт <select id="mmDir"><option value="up">снизу вверх</option><option value="down">сверху вниз</option><option value="right">слева направо</option><option value="left">справа налево</option></select></label>
+        </div>
+        <div class="motion-mark__stage" id="mmStage"><img id="mmImg" alt="Кадр камеры" /><canvas id="mmCanvas"></canvas><canvas id="mmLoupe" class="motion-mark__loupe" hidden></canvas></div>
         <p class="net-hint" id="mmHint">Кликайте по углам зоны. ПКМ — убрать точку. «Замкнуть» или Enter — готово (минимум 3 точки).</p>
-        <label class="net-hint" id="mmRodBox" hidden style="display:flex;align-items:center;gap:10px">Радиус окружности
+        <label class="net-hint motion-mark__rod" id="mmRodBox" hidden>Радиус окружности
           <input type="range" id="mmRodR" min="3" max="30" step="1" value="17" style="flex:1" />
           <span id="mmRodRv">17 %</span>
         </label>
@@ -532,9 +557,13 @@
   <script src="/static/js/multi/16-shafts.js"></script>
   <script src="/static/js/multi/17-zone-learn.js"></script>
   <script src="/static/js/multi/18-juice.js"></script>
+  <script src="/static/js/multi/19-gauge.js"></script>
+  <script src="/static/js/multi/20-zone-bright.js"></script>
+  <script src="/static/js/multi/22-videorec.js"></script>
   <script src="/static/js/multi/12-autostart.js"></script>
   <script src="/static/js/multi/13-journal.js"></script>
   <script src="/static/js/multi/14-update.js"></script>
+  <script src="/static/js/multi/21-load.js"></script>
   <script src="/static/js/stage-names.js"></script>
   <script src="/static/js/multi/09-init.js"></script>
 </body>

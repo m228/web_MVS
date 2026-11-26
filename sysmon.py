@@ -746,6 +746,7 @@ class Agent:
         rec["timeout"] = bool(rec["timeout"])
         rec.update(position_verdict(rec, cfg))
         self.positions.append(rec)
+        log_event("sysmon", position_text(rec), "info" if rec["ok"] else "warn", rec)       # каждый подвод/отвод в журнал: по ним видно, как часто и на сколько не доезжает
         if configured(cfg):
             outbox_add("positions", "info", position_text(rec), rec, rec["t"])
 
@@ -974,12 +975,25 @@ class Agent:
                 if now - ref >= cfg["overdue_h"] * 3600:
                     found["autocal_overdue"] = ("medium", "Автокалибровка включена, а успешной не было уже %s" % fmt_dur(now - ref))
 
+    @staticmethod
+    def _log_ctx(d: dict) -> dict:
+        """Коротко, при каких показаниях сработало правило (для журнала): статус CV, поток камеры, стадия, связь с платой."""
+        cv, cam, st = d.get("cv") or {}, d.get("camera") or {}, d.get("state") or {}
+        return {"cv": cv.get("state"), "cv_msg": str(cv.get("message") or "")[:100], "cv_age_s": round(d["t"] - cv["t"]) if isinstance(cv.get("t"), (int, float)) else None,
+                "cam_streaming": cam.get("streaming"), "stage": st.get("stage"), "auto": bool(st.get("cyclic")) and not st.get("manual"),
+                "plate": (d.get("status") or {}).get("connected")}
+
     def evaluate(self, d: dict, now: float) -> list[dict]:
         """Применить правила: открыть/снять тревоги, отметить перезагрузку платы. Возвращает новые события."""
         events: list = []
         found, keep = self._rules(d, now)
         for code in found:                               # подтверждение: открыть тревогу можно, когда правило сработало CONFIRM проверок подряд
             self._seen[code] = self._seen.get(code, 0) + 1
+            if code not in self.active and self._seen[code] == 1:     # правило сработало впервые — в журнал, даже если тревога ещё не откроется
+                log_event("sysmon", "Правило сработало [%s]: %s (подтверждение 1 из %d)" % (code, found[code][1], CONFIRM.get(code, 1)),
+                          "info", self._log_ctx(d))
+        for code in [c for c in self._seen if c not in found and c not in keep and c not in self.active]:
+            log_event("sysmon", "Правило [%s] перестало срабатывать до подтверждения (ложное срабатывание отсеяно)" % code, "info", self._log_ctx(d))
         for code in [c for c in self._seen if c not in found and c not in keep]:
             self._seen.pop(code, None)
         for code, (level, text) in found.items():
@@ -988,14 +1002,17 @@ class Agent:
                 if self._seen[code] < CONFIRM.get(code, 1):
                     continue
                 self.active[code] = {"level": level, "text": text, "since": now}
+                log_event("sysmon", "ТРЕВОГА открыта [%s, %s]: %s" % (code, level, text), "warn", self._log_ctx(d))
                 events.append(self._emit("alert", level, text, {"code": code, "state": "open"}, t=now, push=push))
             elif self.active[code]["level"] != level:         # жёлтое предупреждение стало красной тревогой (повтор) — сообщаем ещё раз
                 self.active[code].update(level=level, text=text)
+                log_event("sysmon", "ТРЕВОГА усилена [%s, %s]: %s" % (code, level, text), "warn", self._log_ctx(d))
                 events.append(self._emit("alert", level, text, {"code": code, "state": "open"}, t=now, push=push))
             else:
                 self.active[code]["text"] = text
         for code in [c for c in self.active if c not in found and c not in keep]:
             old = self.active.pop(code)
+            log_event("sysmon", "Тревога снята [%s]: %s (держалась %s)" % (code, old["text"], fmt_dur(now - old["since"])), "info", self._log_ctx(d))
             events.append(self._emit("alert", "info", "Снято: " + old["text"], {"code": code, "state": "closed"}, t=now))
         up, exact = plate_uptime(d.get("ext") or {})
         if up is not None:

@@ -55,7 +55,7 @@ function mdLossHtml() {
   });
   if (!blocks.length) return '<span class="net-hint">Размеченных валов нет: нужны зоны-цикл («Разметить валы»).</span>';
   return `<div class="md-zone__row"><span class="md-lbl">за</span><select data-md="shloss" title="За какой период показать карту">${mdSel(SH_LOSS_WINS, shLoss.win)}</select>
-    <span class="net-hint" title="Секунда считается «найдена», если палку увидели хотя бы в одном кадре секунды. Время без картинки (обрыв связи) в расчёт не идёт. Секунды полной потери (угла нет) входят в часы, но не в углы.">зелёный — палка найдена, красный — теряется, серый — мало данных</span></div>${blocks.join('')}`;
+    <span class="net-hint" title="Секунда считается «найдена», если стрелку увидели хотя бы в одном кадре секунды. Время без картинки (обрыв связи) в расчёт не идёт. Секунды полной потери (угла нет) входят в часы, но не в углы.">зелёный — стрелка найдена, красный — теряется, серый — мало данных</span></div>${blocks.join('')}`;
 }
 
 const shLossColor = (p) => `hsl(${Math.round(120 * Math.max(0, Math.min(1, p)))}, 62%, 44%)`;
@@ -143,7 +143,8 @@ const SH_HSV_COLS = {
   blue: [['оттенок от', 0, 179, 'Голубой/синий: нижняя граница оттенка (0–179, шкала OpenCV)'], ['оттенок до', 1, 179, 'Верхняя граница оттенка'],
     ['насыщенность от', 2, 255, 'Минимальная насыщенность. Бирюзовый корпус рядом по цвету, поэтому слишком низкое значение захватывает и его'], ['яркость от', 3, 255, 'Минимальная яркость']],
 };
-const SH_END = { red: ['Красный конец', MV_ROD_RED, 0], blue: ['Синий конец', MV_ROD_BLUE, 200] };    // подпись, цвет точки, базовый оттенок (°) для заливки ползунков
+const SH_END = { red: ['Красный конец', MV_ROD_RED, 0], blue: ['Синий конец', MV_ROD_BLUE, 200], tip: ['Светоотражатели', MV_ROD_TIP, 50] };    // подпись, цвет точки, базовый оттенок (°) для заливки ползунков
+const SH_TIP_WHITE = [0, 179, 0, 60, 235, 255];            // «пересвет»: отражатель под прожектором белый, яркость под 255, насыщенность почти 0 (оттенок любой)
 const SH_HUE_TRK = 'linear-gradient(90deg,' + Array.from({ length: 13 }, (_, i) => `hsl(${Math.round(i * 29.8)},85%,50%)`).join(',') + ')';
 const SH_PREV_W = 240;
 const shView = {};                                         // вал → 'mask' | 'raw': что показывать на картинке
@@ -159,12 +160,47 @@ function shTrack(col, base) {
   return col === 2 ? `linear-gradient(90deg,#6b7280,hsl(${base},100%,50%))` : `linear-gradient(90deg,#000,hsl(${base},90%,62%))`;
 }
 
-function shColorRowHtml(w, z, a, key) {
-  const v = shHsvOf(z, w), [name, color, base] = SH_END[w];
+function shColorRowHtml(w, z, a, key, title) {            // title — своя подпись строки (шибер: «Указатель» вместо «Красный конец»)
+  const v = shHsvOf(z, w), [endName, color, base] = SH_END[w], name = title || endName, what = title ? 'указатель' : (w === 'red' ? 'красный' : 'синий') + ' конец палки';
   const cells = SH_HSV_COLS[w].map(([lbl, k, max, tip]) => `<label class="sh-hsv" title="${escapeHtml(tip)}">` +
     `<input type="range" class="sh-rng" style="--trk:${shTrack(k, base)}" ${a} data-f="hsv" data-w="${w}" data-k="${k}" min="0" max="${max}" step="1" value="${v[k]}" /><output>${v[k]}</output></label>`).join('');
   return `<div class="sh-tn"><i class="sh-dot" style="background:${color}"></i>${name}</div>${cells}` +
-    `<div class="sh-tact"><button type="button" class="btn-secondary md-x sh-pipbtn" data-md="shpick" data-w="${w}" data-f="pip" title="Откроется большой кадр: наведите на ${w === 'red' ? 'красный' : 'синий'} конец палки — лупа покажет цвет и «ловится / не ловится», клик добавит цвет отдельной строкой «ещё цвет». Оттенков у одного конца может быть несколько (светлый, тёмный, на солнце)">пипетка</button></div>`;
+    `<div class="sh-tact"><button type="button" class="btn-secondary md-x sh-pipbtn" data-md="shpick" data-w="${w}" data-f="pip" title="Откроется большой кадр: наведите на ${what} — лупа покажет цвет и «ловится / не ловится», клик добавит цвет отдельной строкой «ещё цвет». Оттенков у одного конца может быть несколько (светлый, тёмный, на солнце)">пипетка</button>` +
+    `<button type="button" class="btn-secondary md-x sh-pipbtn" data-md="shpick" data-w="${w}" data-f="pip" data-mode="not" title="Пипетка наоборот: кликните по цвету, который ловить НЕ нужно (корпус, блик, пластина) — он вырежется из маски отдельной строкой «не ловить»">не ловить</button></div>`;
+}
+
+// OpenCV HSV (оттенок 0..179, насыщенность и яркость 0..255) → цвет CSS hsl(): для точки-образца в строке
+function shHsv2Css(h, s, v) {
+  const sv = s / 255, vv = v / 255, l = vv * (1 - sv / 2), sl = (l === 0 || l === 1) ? 0 : (vv - l) / Math.min(l, 1 - l);
+  return `hsl(${Math.round(h * 2)},${Math.round(sl * 100)}%,${Math.round(l * 100)}%)`;
+}
+function shNotMidHue(r) { return r[0] <= r[1] ? (r[0] + r[1]) / 2 : ((r[0] + r[1] + 180) / 2) % 180; }   // середина диапазона оттенка; «от» выше «до» — через ноль круга
+
+// исключённый цвет конца палки (red_not / blue_not): «ящик» оттенок/насыщенность/яркость «от и до», вырезается из маски этого конца. Две строки сетки: оттенок от/до, насыщ. от, ярк. от — и под ними насыщ. до, ярк. до
+// w = 'tip' — та же строка «ящика» для цвета светоотражателя (tip_hsv): он не вырезается, а ловится как кончик палки
+function shNotRowHtml(w, z, a, n) {
+  const tip = w === 'tip', r = (tip ? z.tip_hsv || [] : z[w + '_not'] || [])[n], base = SH_END[w][2];
+  const cell = (k, cap, tt) => `<label class="sh-hsv"${tt ? ` title="${escapeHtml(tt)}"` : ''}>${cap ? `<span class="sh-hsv__cap">${cap}</span>` : ''}<input type="range" class="sh-rng" style="--trk:${shTrack(k < 2 ? 0 : (k < 4 ? 2 : 3), base)}" ${a} data-f="hsvn" data-w="${w}" data-n="${n}" data-k="${k}" min="0" max="${k < 2 ? 179 : 255}" step="1" value="${r[k]}" /><output>${r[k]}</output></label>`;
+  const dot = shHsv2Css(shNotMidHue(r), (r[2] + r[3]) / 2, (r[4] + r[5]) / 2);
+  return `<div class="sh-tn sh-tn--more"><i class="sh-dot${tip ? '' : ' sh-dot--not'}" style="background:${dot}"></i>${tip ? 'отражатель' : 'не ловить'}</div>` +
+    cell(0, '', 'Оттенок «от». Если «от» выше «до» — диапазон идёт через ноль круга оттенков (так лежит красный)' + (tip ? '. Белый пересвет — оттенок любой: 0–179' : '')) + cell(1, '', 'Оттенок «до»') + cell(2, '', 'Насыщенность «от»') + cell(4, '', 'Яркость «от»' + (tip ? ': отражатель под прожектором почти в пересвете, 220–255' : '')) +
+    `<div class="sh-tact"><button type="button" class="btn-secondary md-x" ${a} data-f="hsvndel" data-w="${w}" data-n="${n}" title="${tip ? 'Убрать этот цвет отражателя' : 'Убрать этот цвет из исключений'}">убрать</button></div>` +
+    '<div></div><div></div><div></div>' + cell(3, 'до', 'Насыщенность «до»' + (tip ? ': у белого пересвета — низкая (до 60)' : '')) + cell(5, 'до', 'Яркость «до»') + '<div></div>';
+}
+
+// «вести»: по цвету (отражатели помогают, угол — среднее) / по отражателям (видны — угол по ним, цвет только говорит, где красный конец).
+// Переключается в шапке КЗ под кнопкой «Разметить» (на все валы камеры); здесь — только как сейчас
+function shTipLeadHtml(z) {
+  return `ведёт: <b title="Переключатель — в шапке КЗ под кнопкой «Разметить»">${z.tip_lead ? 'по отражателям' : 'по цвету'}</b>`;
+}
+
+// строка «Светоотражатели»: заголовок с кнопками; цвета отражателя — строками-«ящиками» ниже (shNotRowHtml с w = 'tip')
+function shTipHeadHtml(z, a) {
+  const n = (z.tip_hsv || []).length;
+  return `<div class="sh-tn"><i class="sh-dot" style="background:${MV_ROD_TIP}"></i>Светоотражатели</div>` +
+    `<div class="net-hint sh-tipnote">${n ? shTipLeadHtml(z, a) : 'не заданы: угол только по цвету'}</div>` +
+    `<div class="sh-tact"><button type="button" class="btn-secondary md-x sh-pipbtn" data-md="shpick" data-w="tip" data-f="pip" data-mode="tip" title="Откроется большой кадр: кликните по светоотражателю на конце палки — его цвет добавится строкой «отражатель». Белый пересвет и жёлтый — разные строки">пипетка</button>` +
+    `<button type="button" class="btn-secondary md-x" ${a} data-f="tipwhite" title="Добавить «пересвет»: белое, яркость 235–255, насыщенность до 60 — так выглядит отражатель под прожектором"${(z.tip_hsv || []).some((r) => r.join() === SH_TIP_WHITE.join()) ? ' disabled' : ''}>+ пересвет</button></div>`;
 }
 
 // дополнительный цвет конца палки (red_more / blue_more): обычный диапазон «от и до» с теми же тремя порогами; в маску он добавляется «ИЛИ»
@@ -184,31 +220,37 @@ function mdRodColorsHtml() {
       const sh = shShaftOf(c.id, z.id);
       const k = escapeHtml(c.id + '/' + z.id);
       const head = SH_HSV_COLS.red.map(([lbl, , , tip]) => `<div class="sh-th" title="${escapeHtml(tip)}">${lbl}</div>`).join('');
-      const more = (w) => (z[w + '_more'] || []).map((_, n) => shExtraRowHtml(w, z, a, n)).join('');
+      const more = (w) => (z[w + '_more'] || []).map((_, n) => shExtraRowHtml(w, z, a, n)).join('') + (z[w + '_not'] || []).map((_, n) => shNotRowHtml(w, z, a, n)).join('');
       blocks.push(`<div class="sh-col" data-shcol="${k}" data-cam="${escapeHtml(c.id)}" data-zone="${escapeHtml(z.id)}">
         <div class="sh-col__head"><b>${escapeHtml(sh ? sh.short : z.name)}</b><span class="net-hint">${escapeHtml(c.name)} · ${escapeHtml(z.name)}</span><span class="md-sp"></span>
           <button type="button" class="btn-secondary md-x" ${a} data-f="hsvreset" title="Вернуть пороги цвета этого вала к значениям по умолчанию">по умолчанию</button></div>
         <div class="sh-col__body">
           <div class="sh-prev"><img alt="" width="${SH_PREV_W}" data-shprev="${k}" />
             <div class="sh-seg"><button type="button" class="on" data-md="shpick" data-f="view" data-v="mask" title="Что считает палкой детектор: красные точки — красный конец, голубые — синий">маска</button><button type="button" data-md="shpick" data-f="view" data-v="raw" title="Сам кадр без масок: найти палку и взять цвет пипеткой">кадр</button></div></div>
-          <div class="sh-tbl"><div class="sh-th"></div>${head}<div class="sh-th"></div>${shColorRowHtml('red', z, a, c.id + '/' + z.id)}${more('red')}${shColorRowHtml('blue', z, a, c.id + '/' + z.id)}${more('blue')}</div>
+          <div class="sh-tbl"><div class="sh-th"></div>${head}<div class="sh-th"></div>${shColorRowHtml('red', z, a, c.id + '/' + z.id)}${more('red')}${shColorRowHtml('blue', z, a, c.id + '/' + z.id)}${more('blue')}${shTipHeadHtml(z, a)}${(z.tip_hsv || []).map((_, n) => shNotRowHtml('tip', z, a, n)).join('')}</div>
         </div>
         <div class="net-hint sh-col__note" data-shprevn="${k}"></div>
       </div>`);
     });
   });
   if (!blocks.length) return '<span class="net-hint">Размеченных валов нет: нужны зоны-цикл («Разметить валы»).</span>';
-  return `<div class="net-hint sh-colhint">Палка красно-синяя: ловим её красный и синий конец по цвету. На картинке красные точки — то, что принято за красный конец, голубые — за синий; нужно, чтобы палка светилась целиком, а корпус и фон — нет. Двигайте ползунки или нажмите «пипетка»: откроется большой кадр, наведите на палку и кликните — цвет добавится отдельной строкой «ещё цвет» (у одного конца их может быть до шести: светлый, тёмный, на солнце). Изменения сохраняются сразу.</div><div class="sh-cols">${blocks.join('')}</div>`;
+  return `<div class="net-hint sh-colhint">Палка красно-синяя: ловим её красный и синий конец по цвету. На картинке красные точки — то, что принято за красный конец, голубые — за синий; нужно, чтобы палка светилась целиком, а корпус и фон — нет. Двигайте ползунки или нажмите «пипетка»: откроется большой кадр, наведите на палку и кликните — цвет добавится отдельной строкой «ещё цвет» (у одного конца их может быть до шести: светлый, тёмный, на солнце). Если в маску лезет лишнее (бирюзовый корпус, блик) — «не ловить»: тот же большой кадр, но клик по лишнему цвету вырезает его из маски этого конца. Светоотражатели на концах палки — «+ пересвет» (белое под прожектором) или пипеткой по кончику (жёлтый): они видны и там, где цвет теряется, и держат угол точнее; неподвижные блики (люк, лампа) отсеиваются сами, пока вал крутится. Изменения сохраняются сразу.</div><div class="sh-cols">${blocks.join('')}</div>`;
 }
 
 // превью: пробные пороги берём прямо с ползунков, сервис возвращает кадр вокруг оси с масками; не чаще раза в 4 с на вал, при правке — сразу
 const shPrevAt = {};
 function shHsvStr(block, w) {
+  if (!block.querySelector(`input[data-f="hsv"][data-w="${w}"]`)) return '';      // у шибера синего конца нет — параметр пустой
   return [0, 1, 2, 3].map((k) => { const r = block.querySelector(`input[data-w="${w}"][data-k="${k}"]`); return r ? r.value : ''; }).join(',');
 }
 function shMoreStr(block, w) {                            // «H1,H2,S,V;H1,H2,S,V» по строкам «ещё цвет» — пустая строка тоже посылается: «дополнительных нет»
   const rows = {};
   block.querySelectorAll(`input[data-f="hsvx"][data-w="${w}"]`).forEach((i) => { (rows[i.dataset.n] = rows[i.dataset.n] || [])[Number(i.dataset.k)] = i.value; });
+  return Object.keys(rows).sort((x, y) => x - y).map((n) => rows[n].join(',')).join(';');
+}
+function shNotStr(block, w) {                             // «H1,H2,S1,S2,V1,V2;…» по строкам «не ловить» (w = 'tip' — по строкам «отражатель»); пустая строка тоже посылается: «исключений нет»
+  const rows = {};
+  block.querySelectorAll(`input[data-f="hsvn"][data-w="${w}"]`).forEach((i) => { (rows[i.dataset.n] = rows[i.dataset.n] || [])[Number(i.dataset.k)] = i.value; });
   return Object.keys(rows).sort((x, y) => x - y).map((n) => rows[n].join(',')).join(';');
 }
 function shPrevLoad(block, force) {
@@ -217,7 +259,7 @@ function shPrevLoad(block, force) {
   shPrevAt[k] = Date.now();
   const raw = shView[k] === 'raw' ? '&raw=1' : '';
   const url = '/api/motion/rod_mask?camera=' + encodeURIComponent(block.dataset.cam) + '&zone=' + encodeURIComponent(block.dataset.zone) +
-    '&red=' + shHsvStr(block, 'red') + '&blue=' + shHsvStr(block, 'blue') + '&red_more=' + shMoreStr(block, 'red') + '&blue_more=' + shMoreStr(block, 'blue') + '&w=' + SH_PREV_W * 2 + raw + '&t=' + Date.now();      // вдвое больше, чем показываем: чётче на плотных экранах
+    '&red=' + shHsvStr(block, 'red') + '&blue=' + shHsvStr(block, 'blue') + '&red_more=' + shMoreStr(block, 'red') + '&blue_more=' + shMoreStr(block, 'blue') + '&red_not=' + shNotStr(block, 'red') + '&blue_not=' + shNotStr(block, 'blue') + '&tip=' + shNotStr(block, 'tip') + '&w=' + SH_PREV_W * 2 + raw + '&t=' + Date.now();      // вдвое больше, чем показываем: чётче на плотных экранах
   fetch(url).then((r) => (r.ok ? r.blob() : Promise.reject(r.status))).then((b) => {
     const u = URL.createObjectURL(b);
     const old = img.src;
@@ -227,7 +269,7 @@ function shPrevLoad(block, force) {
   }).catch(() => { if (note) note.textContent = 'картинки нет: камера не подключена или сервис движения старой версии'; });
 }
 function shPrevPaint() {
-  document.querySelectorAll('[data-shcol]').forEach((b) => shPrevLoad(b, false));
+  document.querySelectorAll('[data-shcol]').forEach((b) => { if (!b.closest('details:not([open])')) shPrevLoad(b, false); });     // свёрнутый блок кадры не тянет
 }
 let shSlideTimer = 0;
 function shOnSlide(t) {                                   // ползунок двигают: значение рядом + быстрое обновление картинки
@@ -244,7 +286,7 @@ function shOnSlide(t) {                                   // ползунок д
 // Цвет под курсором считаем здесь, по тому кадру, который виден: палка за 5 с поворачивается на ~24°, цвет с более позднего кадра с сервера был бы чужим.
 const SH_PIP_EVERY = 5;
 const SH_PIP_W = 900;
-const shPip = { el: null, key: '', w: 'red', cv: null, ctx: null, lp: null, lctx: null, timer: 0, left: SH_PIP_EVERY, freeze: false, tint: false, loaded: false, busy: false };
+const shPip = { el: null, key: '', w: 'red', mode: 'add', cv: null, ctx: null, lp: null, lctx: null, timer: 0, left: SH_PIP_EVERY, freeze: false, tint: false, loaded: false, busy: false };
 
 function shRgb2Hsv(r, g, b) {                              // как в OpenCV: оттенок 0..179, насыщенность и яркость 0..255
   const mx = Math.max(r, g, b), mn = Math.min(r, g, b), d = mx - mn;
@@ -280,39 +322,104 @@ function shPipSample(cx, cy) {
   return { h: hue, s: mid(top.map((p) => p.hsv[1])), v: mid(top.map((p) => p.hsv[2])), rgb: [Math.round(top.reduce((a, p) => a + p.R, 0) / top.length), Math.round(top.reduce((a, p) => a + p.G, 0) / top.length), Math.round(top.reduce((a, p) => a + p.B, 0) / top.length)] };
 }
 
+// цвет для режима «не ловить»: лишнее (корпус, блик) — обычно пятно, а не тонкая палка, поэтому берём не «самое отличное от фона», а типичный цвет окна ±4 px:
+// медиана насыщенности и яркости, оттенок усредняем по кругу
+function shPipSampleFlat(cx, cy) {
+  const W = shPip.cv.width, H = shPip.cv.height, r = 4;
+  const x0 = Math.max(0, cx - r), y0 = Math.max(0, cy - r), x1 = Math.min(W, cx + r + 1), y1 = Math.min(H, cy + r + 1);
+  const w = x1 - x0, h = y1 - y0;
+  if (w < 1 || h < 1) return null;
+  const d = shPip.ctx.getImageData(x0, y0, w, h).data, n = w * h, hs = [], ss = [], vs = [];
+  let sx = 0, cxs = 0, R = 0, G = 0, B = 0;
+  for (let i = 0; i < n; i++) {
+    const hsv = shRgb2Hsv(d[i * 4], d[i * 4 + 1], d[i * 4 + 2]);
+    hs.push(hsv[0]); ss.push(hsv[1]); vs.push(hsv[2]);
+    sx += Math.sin(hsv[0] * 2 * Math.PI / 180); cxs += Math.cos(hsv[0] * 2 * Math.PI / 180);
+    R += d[i * 4]; G += d[i * 4 + 1]; B += d[i * 4 + 2];
+  }
+  const mid = (arr) => arr.sort((p, q) => p - q)[arr.length >> 1];
+  return { h: Math.round(((Math.atan2(sx, cxs) * 180 / Math.PI + 360) % 360) / 2) % 180, s: mid(ss), v: mid(vs), rgb: [Math.round(R / n), Math.round(G / n), Math.round(B / n)] };
+}
+// цвет для режима «отражатель»: кончик — самое яркое место (пересвет, часто белый — поэтому не «самое цветное», как у палки):
+// в окне ±3 px берём четверть самых ярких пикселей, медиана насыщенности и яркости, оттенок по кругу
+function shPipSampleBright(cx, cy) {
+  const W = shPip.cv.width, H = shPip.cv.height, r = 3;
+  const x0 = Math.max(0, cx - r), y0 = Math.max(0, cy - r), x1 = Math.min(W, cx + r + 1), y1 = Math.min(H, cy + r + 1);
+  const w = x1 - x0, h = y1 - y0;
+  if (w < 1 || h < 1) return null;
+  const d = shPip.ctx.getImageData(x0, y0, w, h).data, n = w * h, px = [];
+  for (let i = 0; i < n; i++) px.push({ R: d[i * 4], G: d[i * 4 + 1], B: d[i * 4 + 2], hsv: shRgb2Hsv(d[i * 4], d[i * 4 + 1], d[i * 4 + 2]) });
+  px.sort((p, q) => q.hsv[2] - p.hsv[2]);
+  const top = px.slice(0, Math.max(3, Math.round(n / 4)));
+  const sx = top.reduce((a, p) => a + Math.sin(p.hsv[0] * Math.PI / 90), 0), cxs = top.reduce((a, p) => a + Math.cos(p.hsv[0] * Math.PI / 90), 0);
+  const mid = (arr) => arr.sort((p, q) => p - q)[arr.length >> 1];
+  return { h: Math.round(((Math.atan2(sx, cxs) * 180 / Math.PI + 360) % 360) / 2) % 180, s: mid(top.map((p) => p.hsv[1])), v: mid(top.map((p) => p.hsv[2])),
+    rgb: [0, 1, 2].map((c) => Math.round(top.reduce((a, p) => a + [p.R, p.G, p.B][c], 0) / top.length)) };
+}
+const shPipGate = (key) => { const b = document.querySelector(`[data-shcol="${key}"]`); return !!b && b.dataset.shkind === 'gate'; };   // пипетка шибера: «указатель», без концов палки
+const shPipSmp = (x, y) => (shPip.mode === 'not' ? shPipSampleFlat(x, y) : shPip.mode === 'tip' ? shPipSampleBright(x, y) : shPipSample(x, y));
+
+// цвета светоотражателей (строки «отражатель», читаем с ползунков карточки) и в какую строку попадает цвет (номер с 1 или 0)
+function shPipTipBoxes(key) {
+  const block = document.querySelector(`[data-shcol="${key}"]`), rows = {};
+  if (block) block.querySelectorAll('input[data-f="hsvn"][data-w="tip"]').forEach((i) => { (rows[i.dataset.n] = rows[i.dataset.n] || [])[Number(i.dataset.k)] = parseInt(i.value, 10) || 0; });
+  return Object.keys(rows).sort((a, b) => a - b).map((n) => rows[n]);
+}
+const shPipTipHit = (key, h, s, v) => shPipTipBoxes(key).findIndex((r) => shBoxHit(r, h, s, v)) + 1;
+// «ящик» вокруг цвета отражателя: белый (насыщенность < 50) — оттенок любой, насыщенность до s+50; цветной — оттенок ±10, насыщенность от s−70; яркость от v−40 до 255
+function shTipBox(smp) {
+  const cl = (q, hi) => Math.max(0, Math.min(hi, Math.round(q)));
+  if (smp.s < 50) return [0, 179, 0, cl(smp.s + 50, 255), cl(smp.v - 40, 255), 255];
+  return [(smp.h - 10 + 180) % 180, (smp.h + 10) % 180, cl(smp.s - 70, 255), 255, cl(smp.v - 40, 255), 255];
+}
+
 // какие диапазоны сейчас у конца палки (читаем с ползунков карточки: там то, что видит детектор)
 function shPipRanges(key, w) {
   const block = document.querySelector(`[data-shcol="${key}"]`);
-  const out = { main: [0, 0, 0, 0], more: [] };
+  const out = { main: [0, 0, 0, 0], more: [], not: [] };
   if (!block) return out;
   const val = (sel) => { const r = block.querySelector(sel); return r ? parseInt(r.value, 10) || 0 : 0; };
   out.main = [0, 1, 2, 3].map((k) => val(`input[data-f="hsv"][data-w="${w}"][data-k="${k}"]`));
   const rows = {};
   block.querySelectorAll(`input[data-f="hsvx"][data-w="${w}"]`).forEach((i) => { (rows[i.dataset.n] = rows[i.dataset.n] || [])[Number(i.dataset.k)] = parseInt(i.value, 10) || 0; });
   out.more = Object.keys(rows).sort((a, b) => a - b).map((n) => rows[n]);
+  const nrows = {};
+  block.querySelectorAll(`input[data-f="hsvn"][data-w="${w}"]`).forEach((i) => { (nrows[i.dataset.n] = nrows[i.dataset.n] || [])[Number(i.dataset.k)] = parseInt(i.value, 10) || 0; });
+  out.not = Object.keys(nrows).sort((a, b) => a - b).map((n) => nrows[n]);
   return out;
 }
-// ловится ли цвет: '' — нет, иначе чем именно («основной» / «ещё цвет N»)
+// «ящик» исключения [H1, H2, S1, S2, V1, V2]: оттенок «от» выше «до» — через ноль круга (как hsv_box_hit на сервере)
+function shBoxHit(r, h, s, v) {
+  return (r[0] <= r[1] ? (h >= r[0] && h <= r[1]) : (h >= r[0] || h <= r[1])) && s >= r[2] && s <= r[3] && v >= r[4] && v <= r[5];
+}
+// в какое исключение попал цвет: номер строки «не ловить» (с 1) или 0
+function shPipExcluded(key, w, h, s, v) {
+  return shPipRanges(key, w).not.findIndex((r) => shBoxHit(r, h, s, v)) + 1;
+}
+// ловится ли цвет: '' — нет, иначе чем именно («основной» / «ещё цвет N»); исключённый цвет не ловится, что бы ни говорили диапазоны
 function shPipCovered(key, w, h, s, v) {
   const R = shPipRanges(key, w), m = R.main;
+  if (R.not.some((r) => shBoxHit(r, h, s, v))) return '';
   if (s >= m[2] && v >= m[3] && (w === 'red' ? (h <= m[0] || h >= m[1]) : (h >= m[0] && h <= m[1]))) return 'основной диапазон';
   const i = R.more.findIndex((r) => h >= r[0] && h <= r[1] && s >= r[2] && v >= r[3]);
   return i >= 0 ? 'ещё цвет ' + (i + 1) : '';
 }
 
-function shPipOpen(key, w) {
+function shPipOpen(key, w, mode) {
   shPipClose();
   const block = document.querySelector(`[data-shcol="${key}"]`);
   if (!block) return;
   const name = (block.querySelector('.sh-col__head b') || {}).textContent || '';
   const sub = (block.querySelector('.sh-col__head .net-hint') || {}).textContent || '';
   SHP.act = { key, w };
-  Object.assign(shPip, { key, w, left: SH_PIP_EVERY, freeze: false, tint: false, loaded: false });
+  Object.assign(shPip, { key, w, mode: mode === 'not' || mode === 'tip' ? mode : 'add', left: SH_PIP_EVERY, freeze: false, tint: false, loaded: false });
   const el = document.createElement('div');
   el.className = 'sh-pipov';
-  el.innerHTML = `<div class="sh-pipov__box" role="dialog" aria-label="Пипетка">
-    <div class="sh-pipov__head"><b>Пипетка</b><span class="net-hint">${escapeHtml(name)} · ${escapeHtml(sub)}</span>
-      <div class="sh-seg" data-pipend><button type="button" data-w="red">красный конец</button><button type="button" data-w="blue">синий конец</button></div>
+  const notMode = shPip.mode === 'not', tipMode = shPip.mode === 'tip';
+  const title = tipMode ? 'Пипетка · светоотражатель' : notMode ? 'Пипетка · не ловить' : 'Пипетка';
+  el.innerHTML = `<div class="sh-pipov__box" role="dialog" aria-label="${title}">
+    <div class="sh-pipov__head"><b>${title}</b><span class="net-hint">${escapeHtml(name)} · ${escapeHtml(sub)}</span>
+      ${tipMode || shPipGate(key) ? '' : '<div class="sh-seg" data-pipend><button type="button" data-w="red">красный конец</button><button type="button" data-w="blue">синий конец</button></div>'}
       <span class="md-sp"></span>
       <span class="net-hint" data-pipclock></span>
       <label class="sh-chk"><input type="checkbox" data-pipfreeze /> стоп-кадр</label>
@@ -359,14 +466,25 @@ function shPipClock() {
 // какой конец сейчас берём и что в его списке цветов
 function shPipEnd() {
   if (!shPip.el) return;
+  if (shPip.mode === 'tip') {
+    const boxes = shPipTipBoxes(shPip.key);
+    shPip.el.querySelector('[data-pipfoot]').innerHTML = '<span class="net-hint">Цвета светоотражателей:</span>' +
+      (boxes.length ? boxes.map((r, i) => `<span class="sh-chip"><i class="sh-dot" style="background:${shHsv2Css(shNotMidHue(r), (r[2] + r[3]) / 2, (r[4] + r[5]) / 2)}"></i>отражатель ${i + 1}: оттенок ${r[0]}${r[0] > r[1] ? '→' : '–'}${r[1]}, насыщ. ${r[2]}–${r[3]}, ярк. ${r[4]}–${r[5]}</span>`).join('') : '<span class="net-hint">пока нет</span>') +
+      '<span class="net-hint">Наведите на светоотражатель на конце палки: зелёная галочка — такой цвет уже ловится, жёлтый плюс — клик добавит его. «Показать, что ловится» подсветит всё, что сейчас примется за отражатель (неподвижные блики сервис отсеет сам, пока вал крутится).</span>';
+    return;
+  }
   shPip.el.querySelectorAll('[data-pipend] button').forEach((b) => b.classList.toggle('on', b.dataset.w === shPip.w));
   const R = shPipRanges(shPip.key, shPip.w), dotH = (r) => Math.round(r[0] + r[1]);
   const m = R.main, mainDot = shPip.w === 'red' ? 0 : Math.round(m[0] + m[1]);
   const chip = (txt, hue) => `<span class="sh-chip"><i class="sh-dot" style="background:hsl(${hue},75%,48%)"></i>${txt}</span>`;
   const mainTxt = shPip.w === 'red' ? `основной: оттенок ≤ ${m[0]} или ≥ ${m[1]}, насыщ. ≥ ${m[2]}, ярк. ≥ ${m[3]}` : `основной: оттенок ${m[0]}–${m[1]}, насыщ. ≥ ${m[2]}, ярк. ≥ ${m[3]}`;
-  shPip.el.querySelector('[data-pipfoot]').innerHTML = '<span class="net-hint">Что сейчас ловится у ' + (shPip.w === 'red' ? 'красного' : 'синего') + ' конца:</span>' + chip(mainTxt, mainDot) +
+  const gate = shPipGate(shPip.key), obj = gate ? 'указатель' : 'палку';
+  shPip.el.querySelector('[data-pipfoot]').innerHTML = '<span class="net-hint">Что сейчас ловится у ' + (gate ? 'указателя' : (shPip.w === 'red' ? 'красного' : 'синего') + ' конца') + ':</span>' + chip(mainTxt, mainDot) +
     R.more.map((r, i) => chip(`ещё цвет ${i + 1}: оттенок ${r[0]}–${r[1]}, насыщ. ≥ ${r[2]}, ярк. ≥ ${r[3]}`, dotH(r))).join('') +
-    '<span class="net-hint">Наведите на палку: в лупе — цвет, который возьмётся; зелёная галочка — такой цвет уже ловится, красный плюс — клик добавит его.</span>';
+    R.not.map((r, i) => `<span class="sh-chip sh-chip--not"><i class="sh-dot sh-dot--not" style="background:${shHsv2Css(shNotMidHue(r), (r[2] + r[3]) / 2, (r[4] + r[5]) / 2)}"></i>не ловить ${i + 1}: оттенок ${r[0]}${r[0] > r[1] ? '→' : '–'}${r[1]}, насыщ. ${r[2]}–${r[3]}, ярк. ${r[4]}–${r[5]}</span>`).join('') +
+    (shPip.mode === 'not'
+      ? '<span class="net-hint">Наведите на то, что ловиться НЕ должно (корпус, блик): в лупе — цвет, который исключится; красный минус — сейчас ловится, клик вырежет его; зелёная галочка — уже исключён или и так не ловится.</span>'
+      : '<span class="net-hint">Наведите на ' + obj + ': в лупе — цвет, который возьмётся; зелёная галочка — такой цвет уже ловится, красный плюс — клик добавит его.</span>');
 }
 async function shPipLoad() {
   if (!shPip.el || shPip.busy) return;
@@ -398,9 +516,18 @@ function shPipTint() {
   if (!shPip.tint) return;
   const R = shPipRanges(shPip.key, shPip.w), m = R.main, red = shPip.w === 'red';
   const src = shPip.ctx.getImageData(0, 0, tc.width, tc.height), out = t.createImageData(tc.width, tc.height), d = src.data, o = out.data;
+  if (shPip.mode === 'tip') {                              // отражатели — жёлтым
+    const boxes = shPipTipBoxes(shPip.key);
+    for (let i = 0; i < d.length; i += 4) {
+      const [h, s, v] = shRgb2Hsv(d[i], d[i + 1], d[i + 2]);
+      if (boxes.some((r) => shBoxHit(r, h, s, v))) { o[i] = 250; o[i + 1] = 204; o[i + 2] = 21; o[i + 3] = 200; }
+    }
+    t.putImageData(out, 0, 0);
+    return;
+  }
   for (let i = 0; i < d.length; i += 4) {
     const [h, s, v] = shRgb2Hsv(d[i], d[i + 1], d[i + 2]);
-    const hit = (s >= m[2] && v >= m[3] && (red ? (h <= m[0] || h >= m[1]) : (h >= m[0] && h <= m[1]))) || R.more.some((r) => h >= r[0] && h <= r[1] && s >= r[2] && v >= r[3]);
+    const hit = ((s >= m[2] && v >= m[3] && (red ? (h <= m[0] || h >= m[1]) : (h >= m[0] && h <= m[1]))) || R.more.some((r) => h >= r[0] && h <= r[1] && s >= r[2] && v >= r[3])) && !R.not.some((r) => shBoxHit(r, h, s, v));
     if (hit) { o[i] = red ? 255 : 40; o[i + 1] = red ? 40 : 200; o[i + 2] = red ? 40 : 255; o[i + 3] = 175; }
   }
   t.putImageData(out, 0, 0);
@@ -412,16 +539,22 @@ function shPipPos(e) {
 function shPipMove(e) {
   if (!shPip.loaded) return;
   const { x, y, r } = shPipPos(e), loupe = shPip.el.querySelector('[data-piploupe]');
-  const smp = shPipSample(x, y);
+  const smp = shPipSmp(x, y);
   if (!smp) { loupe.hidden = true; return; }
-  const by = shPipCovered(shPip.key, shPip.w, smp.h, smp.s, smp.v);
-  const ok = !!by, N = 15, S = shPip.lp.width;
+  const tipMode = shPip.mode === 'tip';
+  const by = tipMode ? (shPipTipHit(shPip.key, smp.h, smp.s, smp.v) ? 'отражатель ' + shPipTipHit(shPip.key, smp.h, smp.s, smp.v) : '') : shPipCovered(shPip.key, shPip.w, smp.h, smp.s, smp.v);
+  const ex = tipMode ? 0 : shPipExcluded(shPip.key, shPip.w, smp.h, smp.s, smp.v);
+  const notMode = shPip.mode === 'not';
+  // режим «ловить»: ✓ — уже ловится, ＋ — клик добавит, ⊘ — исключён. Режим «не ловить»: ✓ — уже исключён или и так не ловится, － — сейчас ловится, клик вырежет
+  const ok = notMode ? !by : !!by, N = 15, S = shPip.lp.width;
+  const head = notMode ? (ok ? (ex ? '✓ уже исключён' : '✓ и так не ловится') : '－ ловится') : (by ? '✓ ловится' : (ex ? '⊘ исключён' : '＋ не ловится'));
+  const sub = notMode ? (ok ? (ex ? 'не ловить ' + ex : 'исключать нечего') : escapeHtml(by) + ' · клик вырежет') : (by ? escapeHtml(by) : (ex ? 'не ловить ' + ex + ' — уберите строку' : (tipMode ? 'клик добавит цвет отражателя' : 'клик добавит цвет')));
   shPip.lctx.clearRect(0, 0, S, S);
   shPip.lctx.drawImage(shPip.cv, x - (N >> 1), y - (N >> 1), N, N, 0, 0, S, S);     // 15×15 пикселей кадра, увеличенных, без сглаживания
   shPip.lctx.strokeStyle = '#fff'; shPip.lctx.lineWidth = 1;
   shPip.lctx.strokeRect(S / 2 - S / N / 2, S / 2 - S / N / 2, S / N, S / N);
   loupe.className = 'sh-loupe ' + (ok ? 'ok' : 'no');
-  loupe.querySelector('[data-piptag]').innerHTML = `<i class="sh-dot sh-dot--lg" style="background:rgb(${smp.rgb.join(',')})"></i><span><b>${ok ? '✓ ловится' : '＋ не ловится'}</b><br><small>${ok ? escapeHtml(by) : 'клик добавит цвет'} · H ${smp.h} S ${smp.s} V ${smp.v}</small></span>`;
+  loupe.querySelector('[data-piptag]').innerHTML = `<i class="sh-dot sh-dot--lg" style="background:rgb(${smp.rgb.join(',')})"></i><span><b>${head}</b><br><small>${sub} · H ${smp.h} S ${smp.s} V ${smp.v}</small></span>`;
   const st = shPip.el.querySelector('.sh-pipov__stage').getBoundingClientRect();
   loupe.hidden = false;                                    // размер лупы с подписью — после заполнения: у края кадра она переходит на другую сторону курсора
   let lx = e.clientX - st.left + 22, ly = e.clientY - st.top + 24;
@@ -435,19 +568,46 @@ function shPipMove(e) {
 }
 function shPipClick(e) {
   if (!shPip.loaded) return;
-  const { x, y } = shPipPos(e), smp = shPipSample(x, y);
+  const { x, y } = shPipPos(e), smp = shPipSmp(x, y);
   const msg = (html) => { const f = shPip.el && shPip.el.querySelector('[data-pipmsg]'); if (f) { f.hidden = false; f.innerHTML = html; clearTimeout(shPip.msgT); shPip.msgT = setTimeout(() => { f.hidden = true; }, 3500); } };
   if (!smp) return;
-  const key = shPip.key, w = shPip.w, by = shPipCovered(key, w, smp.h, smp.s, smp.v);
-  if (by) { msg('Этот цвет уже ловится (' + escapeHtml(by) + ')'); return; }
+  if (shPip.mode === 'tip') {                              // светоотражатель: «ящик» вокруг цвета кончика строкой «отражатель»
+    const key = shPip.key, hit = shPipTipHit(key, smp.h, smp.s, smp.v);
+    if (hit) { msg('Этот цвет уже ловится (отражатель ' + hit + ')'); return; }
+    const block = document.querySelector(`[data-shcol="${key}"]`);
+    const cam = block && mvCam(block.dataset.cam), z = cam && cam.zones.find((q) => q.id === block.dataset.zone);
+    if (!z) return;
+    if ((z.tip_hsv || []).length >= 6) { msg('Не больше шести цветов отражателя — уберите ненужный в таблице.'); return; }
+    const box = shTipBox(smp);
+    mdEdit(() => { z.tip_hsv = (z.tip_hsv || []).concat([box]); }, true);
+    msg('Добавлен цвет отражателя: H ' + smp.h + ', S ' + smp.s + ', V ' + smp.v);
+    shPipEnd();
+    shPipTint();
+    const nb = document.querySelector(`[data-shcol="${key}"]`);
+    if (nb) shPrevLoad(nb, true);
+    shPipMove(e);
+    return;
+  }
+  const key = shPip.key, w = shPip.w, by = shPipCovered(key, w, smp.h, smp.s, smp.v), ex = shPipExcluded(key, w, smp.h, smp.s, smp.v), notMode = shPip.mode === 'not';
+  if (notMode && !by) { msg(ex ? 'Этот цвет уже исключён (не ловить ' + ex + ')' : 'Этот цвет и так не ловится — исключать нечего'); return; }
+  if (!notMode && by) { msg('Этот цвет уже ловится (' + escapeHtml(by) + ')'); return; }
+  if (!notMode && ex) { msg('Этот цвет исключён (не ловить ' + ex + '): уберите строку в таблице, если он нужен'); return; }
   const block = document.querySelector(`[data-shcol="${key}"]`);
   const cam = block && mvCam(block.dataset.cam), z = cam && cam.zones.find((q) => q.id === block.dataset.zone);
   if (!z) return;
-  if ((z[w + '_more'] || []).length >= 6) { msg('Не больше шести дополнительных цветов на конец палки — уберите ненужный в таблице.'); return; }
   const cl = (q, hi) => Math.max(0, Math.min(hi, Math.round(q)));
-  const range = [cl(smp.h - 6, 179), cl(smp.h + 6, 179), cl(Math.max(10, smp.s - 45), 255), cl(Math.max(10, smp.v - 50), 255)];
-  mdEdit(() => { z[w + '_more'] = (z[w + '_more'] || []).concat([range]); }, true);      // сохраняет и перерисовывает карточки; окно остаётся
-  msg('Добавлен цвет: H ' + smp.h + ', S ' + smp.s + ', V ' + smp.v);
+  if (notMode) {
+    if ((z[w + '_not'] || []).length >= 6) { msg('Не больше шести исключённых цветов — уберите ненужный в таблице.'); return; }
+    // «ящик» вокруг цвета: оттенок ±7 (у края круга — через ноль: «от» выше «до»), насыщенность ±40, яркость ±45
+    const box = [(smp.h - 7 + 180) % 180, (smp.h + 7) % 180, cl(smp.s - 40, 255), cl(smp.s + 40, 255), cl(smp.v - 45, 255), cl(smp.v + 45, 255)];
+    mdEdit(() => { z[w + '_not'] = (z[w + '_not'] || []).concat([box]); }, true);
+    msg('Исключён цвет: H ' + smp.h + ', S ' + smp.s + ', V ' + smp.v);
+  } else {
+    if ((z[w + '_more'] || []).length >= 6) { msg('Не больше шести дополнительных цветов — уберите ненужный в таблице.'); return; }
+    const range = [cl(smp.h - 6, 179), cl(smp.h + 6, 179), cl(Math.max(10, smp.s - 45), 255), cl(Math.max(10, smp.v - 50), 255)];
+    mdEdit(() => { z[w + '_more'] = (z[w + '_more'] || []).concat([range]); }, true);      // сохраняет и перерисовывает карточки; окно остаётся
+    msg('Добавлен цвет: H ' + smp.h + ', S ' + smp.s + ', V ' + smp.v);
+  }
   shPipEnd();
   shPipTint();
   const nb = document.querySelector(`[data-shcol="${key}"]`);
@@ -461,11 +621,11 @@ function mdOnShPick(t) {
   const key = block.dataset.shcol;
   if (t.dataset.f === 'view') {                            // переключатель «маска / кадр» на маленькой картинке карточки
     shView[key] = t.dataset.v;
-    block.querySelectorAll('.sh-seg button').forEach((b) => b.classList.toggle('on', b === t));
+    t.closest('.sh-seg').querySelectorAll('button').forEach((b) => b.classList.toggle('on', b === t));   // только свой переключатель: в карточке есть и «вести»
     shPrevLoad(block, true);
     return;
   }
-  shPipOpen(key, t.dataset.w);                             // пипетка: большое окно
+  shPipOpen(key, t.dataset.w, t.dataset.mode);             // пипетка: большое окно («не ловить» — режим исключения)
 }
 
 function mdShaftsTabHtml() {
@@ -505,14 +665,17 @@ function mdShaftsTabHtml() {
 function mdShTimingHtml(sc, cams) {
   const rows = cams.filter((c) => c.row).map((c) => `<tr><td>${escapeHtml(c.name)}${mdIpTag(c.url)}</td><td class="md-num" id="md-sht-fps-${escapeHtml(c.id)}">–</td>` +
     `<td class="md-num" id="md-sht-dt-${escapeHtml(c.id)}">–</td>` +
+    `<td class="md-num" id="md-sht-q-${escapeHtml(c.id)}">–</td>` +
     `<td>${mdNum(`data-md="c" data-cam="${escapeHtml(c.id)}" data-f="latency_s"`, c.latency_s || 0, 'min="0" max="15" step="0.05"')}</td></tr>`).join('');
   const align = sc.align !== false;
   const avg = sc.avg_s == null ? 4 : sc.avg_s;
+  const stopS = sc.stop_s == null ? 0 : sc.stop_s;
   return `<div class="md-zone__row md-mx-set">
       <label class="switch-toggle md-sw md-sw--sm" title="Сравнивать углы двух камер на ОДИН момент времени съёмки (интерполяция между кадрами) вместо «последнего кадра каждой камеры». Результат запаздывает на задержку камер + 0,6 с — для тревоги это не важно"><span class="switch"><input type="checkbox" data-md="sh" data-id="_" data-f="align"${align ? ' checked' : ''} /><span class="switch-track"></span></span><span class="md-lbl md-lbl--on">по времени съёмки</span></label>
-      <span class="md-lbl" title="Δ угла каждой пары усредняется за это окно: шум распознавания ≈ ±1° сглаживается, настоящий сдвиг не прячется. Тревога и запись в ПЛК идут по среднему. 0 — без усреднения">усреднение Δ, с</span>${mdNum('data-md="sh" data-id="_" data-f="avg_s"', avg, 'min="0" max="60" step="0.5"')}</div>
-    <table class="md-table"><thead><tr><th>Камера</th><th>кадров/с</th><th>шаг кадров p50 / p95, мс</th><th title="Через сколько секунд после съёмки кадр приходит в сервис. Меряется tools\cam_latency_check.py">задержка кадра, с</th></tr></thead><tbody>${rows || '<tr><td colspan="4" class="net-hint">Задайте ряд камеры</td></tr>'}</tbody></table>
-    <div class="net-hint" id="md-sht-lag"></div><div class="md-zstat" id="md-sht-pairs"></div>`;
+      <span class="md-lbl" title="Δ угла каждой пары усредняется за это окно: шум распознавания ≈ ±1° сглаживается, настоящий сдвиг не прячется. Тревога и запись в ПЛК идут по среднему. 0 — без усреднения">усреднение Δ, с</span>${mdNum('data-md="sh" data-id="_" data-f="avg_s"', avg, 'min="0" max="60" step="0.5"')}
+      <span class="md-lbl" title="Тревога «вал стоит»: вал не крутится (за 10 с угол сдвинулся меньше 5°) дольше стольких секунд. Горит отдельно от тревоги по Δ угла и не гасит её. Палку не видно — счёт не сбрасывается. 0 — выключена">тревога «стоит», с</span>${mdNum('data-md="sh" data-id="_" data-f="stop_s"', stopS, 'min="0" max="3600" step="5"')}</div>
+    <table class="md-table"><thead><tr><th>Камера</th><th>кадров/с</th><th>шаг кадров p50 / p95, мс</th><th title="Сколько секунд кадр простоял в очереди: обработка не успевала за камерой (камера даёт кадров больше, чем сервис разбирает). Сервис сам выбрасывает кадры из очереди, пока она длиннее 0,5 с. Дольше 1 с — Δ между камерами не доверяем: тревога стоит как есть, самоподстройка не учится. Растёт или часто красная — снизьте «Кадров/с в анализ» (вал ≈ 4°/с, хватает 4–5)">очередь, с (сейчас / макс за мин.)</th><th title="Через сколько секунд после съёмки кадр приходит в сервис. Меряется tools\cam_latency_check.py">задержка кадра, с</th></tr></thead><tbody>${rows || '<tr><td colspan="5" class="net-hint">Задайте ряд камеры</td></tr>'}</tbody></table>
+    <div class="net-hint" id="md-sht-lag"></div><div class="md-zstat" id="md-sht-pairs"></div><div class="md-zstat" id="md-sht-off"></div>`;
 }
 
 function mdPaintShTiming() {
@@ -524,9 +687,17 @@ function mdPaintShTiming() {
     const f = mdEl('md-sht-fps-' + cid), d = mdEl('md-sht-dt-' + cid);
     if (f) f.textContent = c.fps == null ? '–' : c.fps.toFixed(1);
     if (d) d.textContent = c.dt_p50_ms == null ? '–' : c.dt_p50_ms + ' / ' + c.dt_p95_ms;
+    const q = mdEl('md-sht-q-' + cid);
+    if (q) {                                                  // очередь кадров: null — источник не отдаёт время потока (файл) и очередь не меряется
+      const mx = c.lag_max_s == null ? 0 : c.lag_max_s;
+      q.textContent = c.lag_s == null ? '–' : c.lag_s.toFixed(2) + ' / ' + mx.toFixed(2) + (c.skipped ? ' · выброшено ' + c.skipped : '');
+      q.style.color = mx > 1 ? '#f87171' : mx > 0.5 ? '#f59e0b' : '';
+    }
   });
   const lag = mdEl('md-sht-lag');
   if (lag) lag.textContent = t.aligned ? 'Сравнение на момент «сейчас − ' + t.compare_lag_s + ' с»: кадры обеих камер выровнены по времени съёмки.' : 'Кадры сравниваются «последний с каждой камеры» (выравнивание выключено или ряды ещё копятся).';
+  const off = mdEl('md-sht-off');
+  if (off) off.innerHTML = mdShOffsetHtml(t.offset);
   const p = mdEl('md-sht-pairs');
   if (!p) return;
   const rows = SH_PAIRS.filter((id) => t.pairs && t.pairs[id] && !t.pairs[id].same_camera && t.pairs[id].skew_avg_s != null).map((id) => {
@@ -535,6 +706,18 @@ function mdPaintShTiming() {
     return `<div class="md-zstat__row" title="Разъезд = |время съёмки последнего кадра первой камеры − второй|. Задержки указаны верно — он порядка половины периода кадров (десятые доли секунды); если секунды, задержка камеры в настройке не та">${SH_PAIR_NAME[id]}: разъезд кадров ср <b class="md-zstat__cur">${x.skew_avg_s.toFixed(2)} с</b> (${x.skew_avg_deg.toFixed(1)}°) · макс ${x.skew_max_s.toFixed(2)} с (${x.skew_max_deg.toFixed(1)}°) · <span style="color:${inStep ? '#4ade80' : '#f59e0b'}">${inStep ? 'в такт' : 'не в такт — проверьте задержки'}</span></div>`;
   });
   p.innerHTML = rows.join('');
+}
+
+// Оценка расхождения камер по Δ углов левых/правых валов двух рядов (сервис: motion_shafts.camera_offset): чья камера старше и на сколько секунд
+function mdShOffsetHtml(o) {
+  if (!o) return '';
+  const tip = 'Оценка по Δ углов пар НЛВ–ВЛВ и НПВ–ВПВ за последние 5 минут: Δ делим на скорость вала. Левые и правые валы крутятся навстречу, поэтому задержка камеры даёт Δ с разными знаками, а ошибка эталона или ракурса — с одинаковыми. Δ меряется от эталона: оценка показывает, на сколько камеры разошлись с момента, когда снят эталон. Влияют только секунды, в которые оба вала видны и крутятся.';
+  const s = o.s, name = escapeHtml(o.name);
+  if (s < 0.3) return `<div class="md-zstat__row" title="${tip}">Оценка расхождения камер: <span style="color:#4ade80">в такт (меньше 0,3 с)</span></div>`;
+  if (o.agree === false) return `<div class="md-zstat__row" title="${tip}">Оценка расхождения камер: <span style="color:#f59e0b">пары не согласны — похоже, это не задержка камеры (эталон или ракурс)</span></div>`;
+  const cur = o.latency_s == null ? 0 : o.latency_s;
+  const note = o.agree === true ? 'обе пары согласны' : 'по одной паре';
+  return `<div class="md-zstat__row" title="${tip}">Оценка расхождения камер: кадры «${name}» старше на <b class="md-zstat__cur">${s.toFixed(1)} с</b> (${note}) · <span style="color:#f59e0b">задержка кадра ${name}: сейчас ${cur.toFixed(2)} → ${(cur + s).toFixed(2)} с; после правки снимите эталон заново</span></div>`;
 }
 
 function mdShaftPairHtml(id, p) {
@@ -580,8 +763,8 @@ async function mdOnShafts(t) {
     mdShaftsStats(true);
     return;
   }
-  if (f === 'align' || f === 'avg_s') {                      // настройки блока «Время кадров»: на весь блок валов
-    mdEdit(() => { if (f === 'align') sc.align = t.checked; else sc.avg_s = shClamp(parseFloat(t.value) || 0, 0, 60); });
+  if (f === 'align' || f === 'avg_s' || f === 'stop_s') {    // настройки блока «Время кадров» и тревога «стоит»: на весь блок валов
+    mdEdit(() => { if (f === 'align') sc.align = t.checked; else if (f === 'stop_s') sc.stop_s = shClamp(parseFloat(t.value) || 0, 0, 3600); else sc.avg_s = shClamp(parseFloat(t.value) || 0, 0, 60); });
     return;
   }
   if (f === 'calib') { shCalibrate(id); return; }
@@ -757,8 +940,11 @@ function mdAutocalHtml() {
   const cams = mdCfgCams().filter((c) => (c.zones || []).some((z) => z.type === 'cycle' && z.enabled !== false));
   if (!cams.length) return '<span class="net-hint">Размеченных валов нет: нужны зоны-цикл («Разметить валы»).</span>';
   return `<div class="net-hint">Палки крутятся сами, ничего двигать не надо. Сервис запишет вращение (по умолчанию 150 с — около двух оборотов), подберёт цвета красной и синей половин, центр оси и радиус и покажет, что стало лучше. Применяется кнопкой.</div>` + cams.map((c) => {
-    const k = escapeHtml(c.id);
+    const k = escapeHtml(c.id), w = Object.assign({ on: false, min_pct: 95 }, c.autocal_watch);
     return `<div class="md-zone sh-ac" data-shac="${k}"><div class="md-zone__ctl">
+      <div class="md-zone__row"><label class="switch-toggle md-sw md-sw--sm" title="Раз в 30 минут сервис смотрит, как часто палки находятся. Если реже порога — сам подгоняет цвета, ось и радиус, применяет результат, если он заметно лучше, и через 30 минут сверяет: стало хуже — возвращает прежние настройки. Всё пишется в журнал."><span class="switch"><input type="checkbox" data-md="shac" data-cam="${k}" data-f="watch"${w.on ? ' checked' : ''} /><span class="switch-track"></span></span><span class="md-lbl md-lbl--on">следить и подгонять сам</span></label>
+        <span class="md-lbl" title="Ниже этой видимости палки за 30 минут — подгонка запускается сама">порог, %</span>${mdNum(`data-md="shac" data-cam="${k}" data-f="watchpct"`, w.min_pct, 'min="50" max="100" step="1"')}
+        <a class="net-hint" href="/api/motion/autocal/report?camera=${k}" target="_blank" rel="noopener" title="Видимость палок днём и ночью, проверка текущих настроек на снимках, история подгонок">отчёт день / ночь</a></div>
       <div class="md-zone__row"><b>${escapeHtml(c.name)}</b>${mdIpTag(c.url)}<span class="md-sp"></span>
         <span class="md-lbl" title="Сколько секунд записывать вращение. Вал делает оборот примерно за 75 с; от 75 до 300 с">запись, с</span>${mdNum(`data-md="shac" data-cam="${k}" data-f="sec"`, SHAC.sec, 'min="75" max="300" step="15"')}
         <button type="button" class="btn-secondary md-x" data-md="shac" data-cam="${k}" data-f="start" title="Записать вращение палок и подобрать цвета, центр и радиус">Подогнать валы</button></div>
@@ -777,9 +963,13 @@ function shAcResultHtml(d) {
     const rd = (v) => 'красный H ≤ ' + v[0] + ' или ≥ ' + v[1] + ', S ≥ ' + v[2] + ', V ≥ ' + v[3];
     const tip = `Было: ось ${o.center.map(Math.round).join(', ')}, радиус ${Math.round(o.radius)}; ${rd(o.red_hsv)}; синий ${hs(o.blue_hsv)}.\n` +
       `Стало: ось ${n.center.map(Math.round).join(', ')}, радиус ${Math.round(n.radius)}; ${rd(n.red_hsv)}; синий ${hs(n.blue_hsv)}.\n` +
-      `Кадров в записи ${r.frames}, расчёт ${Math.round(r.seconds)} с. На кадрах, не участвовавших в подборе, найдена ${shPct(r.after_val.found)}.`;
+      `Кадров в записи ${r.frames}, расчёт ${Math.round(r.seconds)} с. На кадрах, не участвовавших в подборе, найдена ${shPct(r.after_val.found)}.` +
+      (n.tip_hsv ? `\nОтражатели: ${n.tip_hsv.length} цв., длина кончика ${n.tip_len}, кольцо ${n.tip_r0}–${n.tip_r1} радиуса${n.tip_thin ? ', «тонкое» ' + n.tip_thin : ''}.` : '');
+    const tp = r.tips || {};                                          // ось по кончикам светоотражателей: найдена — на сколько сдвинули; не нашли — почему
+    const tipNote = tp.applied ? `<span class="net-hint" style="color:${MV_ROD_TIP}" title="Ось найдена по кончикам светоотражателей: ${tp.kept} прямых, разброс ${tp.dist_med} px. Цвета кончика: ${tp.chosen === 'fitted' ? 'подобраны' : 'прежние'}">ось по отражателям: сдвиг ${Math.round(tp.shift_px)} px</span>`
+      : (tp.ran ? `<span class="net-hint" title="${escapeHtml(tp.reason || '')}">отражатели: ось не найдена</span>` : '');
     const verdict = (d.applied || []).includes(zid) ? '<b>применено</b>' : (r.improved ? '' : '<span class="net-hint">лучше не стало — не предлагаю</span>');
-    return `<div class="md-zone__row sh-acrow" title="${escapeHtml(tip)}"><b>${escapeHtml(r.name)}</b>
+    return `<div class="md-zone__row sh-acrow" title="${escapeHtml(tip)}"><b>${escapeHtml(r.name)}</b>${tipNote}
       <span>найдена ${lost ? '<span class="net-hint">до: сбивалась</span>' : '<span class="net-hint">' + shPct(b.found) + '</span>'} → <b>${shPct(a.found)}</b></span>
       <span class="sh-strip">${sect}</span>
       <span class="net-hint">${a.revs.toFixed(1).replace('.', ',')} оборота в записи · ${Math.abs(a.rpm).toFixed(2).replace('.', ',')} об/мин</span>${verdict}</div>`;
@@ -822,6 +1012,17 @@ function shAcPaintAll() {
 async function mdOnShAc(t) {
   const cam = t.dataset.cam, f = t.dataset.f;
   if (f === 'sec') { SHAC.sec = shClamp(parseInt(t.value, 10) || 150, 75, 300); t.value = SHAC.sec; return; }
+  if (f === 'watch' || f === 'watchpct') {                    // сторож подгонки: настройка камеры (сохраняется вместе с конфигом КЗ)
+    const c = mvCam(cam);
+    if (!c) return;
+    const pct = shClamp(parseFloat(t.value) || 95, 50, 100);
+    mdEdit(() => {
+      const w = c.autocal_watch = Object.assign({ on: false, min_pct: 95, check_min: 30, cooldown_h: 2 }, c.autocal_watch);
+      if (f === 'watch') w.on = !!t.checked; else w.min_pct = pct;
+    }, false);
+    if (f === 'watchpct') t.value = pct;
+    return;
+  }
   if (f === 'start') {
     if (MV.dirty) { clearTimeout(MD.saveTimer); await mdFlush(); }
     const r = await mvJson('/api/motion/autocal', { camera: cam, zones: [], seconds: SHAC.sec });
@@ -851,13 +1052,15 @@ const SH_WD = { w: 210, h: 280, r: 40 };
 const SH_WD_CIRCLE = { vl: [56, 82], vp: [154, 82], nl: [56, 198], np: [154, 198] };        // вал → центр круга
 const SH_WD_PAIR = { vlr: [105, 22, 'Верх'], nlr: [105, 258, 'Низ'], lnv: [56, 140, ''], rnv: [154, 140, ''] };   // пара → центр подписи и название
 const SHW_KEY = 'mvs_shafts_widget';
-const SHW = { open: false, x: null, y: null, s: 1.15, el: null, cv: null, drag: null, corr: true };       // corr: разности пар после автокоррекции (около нуля) или сырые
+const SHW_LIVE_MS = 125;          // живой опрос углов для виджета (~8 Гц); полный снимок КЗ приходит раз в секунду
+const SHW = { open: false, x: null, y: null, s: 1.15, el: null, cv: null, drag: null, corr: true, live: null, liveAt: 0, liveT: null };       // corr: разности пар после автокоррекции (около нуля) или сырые
 const SH_WD_TOGGLE = [146, 247, 56, 22];                    // переключатель «авто / сырые»: x, y, ширина, высота в координатах SH_WD
 
 // сам рисунок в координатах SH_WD; off — данных нет (КЗ не работает): везде прочерки
 function shPaintWidget(ctx, s, off, corr) {
   const { w, h, r } = SH_WD, F = (px, b) => (b ? 'bold ' : '') + px + 'px sans-serif';
-  const bad = !off && SH_PAIRS.some((id) => s.pairs[id] && s.pairs[id].valid && s.pairs[id].alarm_angle);        // красное — только настоящий аларм по углу (допуск угла > 0 на вкладке «Валы»)
+  const bad = !off && (SH_PAIRS.some((id) => s.pairs[id] && s.pairs[id].valid && s.pairs[id].alarm_angle)        // красное — только настоящий аларм по углу (допуск угла > 0 на вкладке «Валы»)
+    || SH_IDS.some((id) => s.shafts[id] && s.shafts[id].alarm_stop));                                           // или вал стоит дольше «тревога „стоит“» (0 — выключена)
   ctx.save();
   ctx.clearRect(0, 0, w, h);
   ctx.beginPath(); ctx.roundRect(0, 0, w, h, 18); ctx.fillStyle = 'rgba(15,17,22,.92)'; ctx.fill();
@@ -867,24 +1070,35 @@ function shPaintWidget(ctx, s, off, corr) {
     const p = s.pairs[id], [x, y, name] = SH_WD_PAIR[id], ok = !off && p && p.valid;
     ctx.font = F(22, true); ctx.fillStyle = !ok ? '#9ca3af' : (p.alarm_angle) ? '#f87171' : '#f3f4f6';
     const dv = corr || !Number.isFinite(p && p.angle_diff_raw) ? (p && p.angle_diff) : p.angle_diff_raw;         // «сырые» — до автокоррекции (старый сервис отдаёт только одно значение)
+    ctx.globalAlpha = ok && p.stale ? 0.45 : 1;                // кадры одной из камер стоят в очереди: разность — это задержка, а не вал; цифра тусклая, тревога на это время не меняется
     ctx.fillText(ok ? shSgn(dv, 1) + '°' : '—', x, y);
+    ctx.globalAlpha = 1;
     if (name) { ctx.textAlign = 'left'; ctx.font = F(13); ctx.fillStyle = '#9ca3af'; ctx.fillText(name, 14, y); ctx.textAlign = 'center'; }
   });
   SH_IDS.forEach((id) => {
     const x = s.shafts[id], [cx, cy] = SH_WD_CIRCLE[id], ok = !off && x && x.valid;
     ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2); ctx.fillStyle = 'rgba(255,255,255,.08)'; ctx.fill();
-    ctx.lineWidth = 1.5; ctx.strokeStyle = 'rgba(148,163,184,.55)'; ctx.stroke();
+    const stop = !off && x && x.alarm_stop;                    // вал стоит дольше допуска: красный кружок и подпись (стрелку не прячем — видно, где встал)
+    ctx.lineWidth = stop ? 3 : 1.5; ctx.strokeStyle = stop ? '#f87171' : 'rgba(148,163,184,.55)'; ctx.stroke();
     if (ok) {                                  // стрелка вала: красная половина на угле, синяя напротив
       const a = (x.angle * Math.PI) / 180, dx = Math.sin(a) * (r - 4), dy = -Math.cos(a) * (r - 4);
       ctx.globalAlpha = x.coast ? 0.45 : 1; ctx.lineWidth = 4; ctx.lineCap = 'round';
-      ctx.strokeStyle = MV_ROD_BLUE; ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(cx - dx, cy - dy); ctx.stroke();
-      ctx.strokeStyle = MV_ROD_RED; ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(cx + dx, cy + dy); ctx.stroke();
+      const sr = x.src, litR = sr === 'red' || sr === 'both', litB = sr === 'blue' || sr === 'both';      // половина видна — яркая, не видна — тёмная и тусклая
+      ctx.strokeStyle = litB ? MV_ROD_BLUE : '#1e3a52'; ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(cx - dx, cy - dy); ctx.stroke();
+      ctx.strokeStyle = litR ? MV_ROD_RED : '#5c2323'; ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(cx + dx, cy + dy); ctx.stroke();
+      // светоотражатели на концах: виден — жёлтая точка, не виден — тёмная; старый сервис (без tip) — как раньше, только когда держится по ним
+      const te = Array.isArray(x.tip) ? [!x.coast && x.tip[0] >= MV_TIP_SEEN, !x.coast && x.tip[1] >= MV_TIP_SEEN] : x.tip === undefined && sr === 'tip' ? [true, true] : null;
+      if (te) {
+        ctx.globalAlpha = 1;                   // тёмная точка и так тусклая — прозрачность удержания на неё не накладываем
+        [[cx + dx, cy + dy, te[0]], [cx - dx, cy - dy, te[1]]].forEach(([px, py, on]) => { ctx.fillStyle = on ? MV_ROD_TIP : MV_ROD_TIP_OFF; ctx.beginPath(); ctx.arc(px, py, 3.5, 0, Math.PI * 2); ctx.fill(); });
+      }
       ctx.globalAlpha = 1;
     }
     ctx.beginPath(); ctx.roundRect(cx - 27, cy - 11, 54, 22, 7); ctx.fillStyle = 'rgba(30,41,59,.95)'; ctx.fill();
     ctx.lineWidth = 1; ctx.strokeStyle = 'rgba(148,163,184,.6)'; ctx.stroke();
     ctx.font = F(15, true); ctx.fillStyle = !ok ? '#9ca3af' : x.coast ? '#7b828f' : '#f3f4f6';       // палка не видна (удержание) — угол тусклый, как и стрелка
     ctx.fillText(ok ? (((Math.round(x.angle) % 360) + 360) % 360) + '°' : '—', cx, cy + 1);
+    if (stop) { ctx.font = F(11, true); ctx.fillStyle = '#f87171'; ctx.fillText('СТОИТ', cx, cy + 25); }
   });
   const [tx, ty, tw, th] = SH_WD_TOGGLE;                       // переключатель: с автокоррекцией (значки волны → ровная линия) / без
   ctx.beginPath(); ctx.roundRect(tx, ty, tw, th, th / 2);
@@ -923,7 +1137,8 @@ function shwPlace() {
 
 function shwPaint() {
   if (!SHW.open || !SHW.cv) return;
-  const s = shSnap();
+  const s0 = shSnap(), fresh = SHW.live && performance.now() - SHW.liveAt < 2500;       // живой снимок, пока идёт; иначе секундный
+  const s = fresh ? SHW.live : s0;
   if (!s || !s.shafts || !s.pairs) return;
   const ctx = SHW.cv.getContext('2d'), k = SHW.cv.width / SH_WD.w;
   ctx.setTransform(k, 0, 0, k, 0, 0);
@@ -934,7 +1149,7 @@ function shwBuild() {
   if (SHW.el) return;
   const el = document.createElement('div');
   el.className = 'shw'; el.hidden = true;
-  el.title = 'Разность углов валов, °. «авто» — разности пар после автокоррекции, около нуля; «сырые» — без неё. В кружках всегда угол вала. Переключатель — внизу справа. Перетащи, чтобы подвинуть; колесо мыши — размер.';
+  el.title = 'Разность углов валов, °. «авто» — разности пар после автокоррекции, около нуля; «сырые» — без неё. В кружках всегда угол вала. Тусклая разность — кадры одной из камер стоят в очереди (обработка не успевает), цифра недостоверна, тревога на это время не меняется. Переключатель — внизу справа. Перетащи, чтобы подвинуть; колесо мыши — размер.';
   el.innerHTML = '<canvas class="shw__cv"></canvas><button type="button" class="shw__x" title="Закрыть" aria-label="Закрыть">×</button>';
   document.body.appendChild(el);
   SHW.el = el; SHW.cv = el.querySelector('canvas');
@@ -967,6 +1182,38 @@ function shwBuild() {
   window.addEventListener('resize', () => { if (SHW.open) shwPlace(); });
 }
 
+// живые значения (углы, разности пар, аварии) поверх секундного снимка MV.shafts — для подписей на плитках; остальное (скорости, ссылки на камеры) остаётся от секундного
+function shLiveMerge(r) {
+  const s = MV.shafts;
+  if (!s || !s.shafts || !s.pairs || !r || !r.shafts || !r.pairs) return;
+  Object.keys(r.shafts).forEach((id) => { if (s.shafts[id]) Object.assign(s.shafts[id], { valid: r.shafts[id].valid, angle: r.shafts[id].angle, coast: r.shafts[id].coast, src: r.shafts[id].src, alarm_stop: r.shafts[id].alarm_stop }); });
+  Object.keys(r.pairs).forEach((id) => {
+    const p = r.pairs[id];
+    if (s.pairs[id]) Object.assign(s.pairs[id], { valid: p.valid, angle_diff: p.angle_diff, angle_diff_raw: p.angle_diff_raw, alarm_angle: p.alarm_angle, alarm_rpm: p.alarm_rpm, stale: p.stale });
+  });
+}
+
+// один запрос лёгкого снимка; если виджет открыт и сам только что получил свежий — второй раз не ходим
+async function shLiveFetch() {
+  if (SHW.live && performance.now() - SHW.liveAt < SHW_LIVE_MS) return;
+  const r = await mvApi('/api/motion/shafts_live');
+  if (r && r.shafts && r.pairs && !r.error) { SHW.live = r; SHW.liveAt = performance.now(); shLiveMerge(r); }
+}
+
+// быстрый опрос лёгкого снимка валов: только пока виджет открыт, запросы идут строго по очереди (не копятся)
+async function shwLiveLoop() {
+  clearTimeout(SHW.liveT);
+  if (!SHW.open) return;
+  const t0 = performance.now();
+  try {
+    if (MV.online && !document.hidden) {
+      await shLiveFetch();
+      shwPaint();
+    }
+  } catch (e) { /* следующий шаг попробует снова */ }
+  if (SHW.open) SHW.liveT = setTimeout(shwLiveLoop, Math.max(0, SHW_LIVE_MS - (performance.now() - t0)));
+}
+
 function shwSet(on) {
   SHW.open = !!on;
   shwBuild();
@@ -975,7 +1222,8 @@ function shwSet(on) {
   if (SHW.open) {
     if (SHW.x === null) { SHW.x = window.innerWidth - SH_WD.w * SHW.s - 24; SHW.y = 110; }
     shwPlace();
-  }
+    shwLiveLoop();
+  } else { clearTimeout(SHW.liveT); }
   shwSave();
 }
 

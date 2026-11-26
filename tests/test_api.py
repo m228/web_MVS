@@ -79,6 +79,18 @@ def test_rtsp_save_accepts_rtsp_scheme(data_dir):
     assert "error" not in data and any(i["url"] == "rtsp://127.0.0.1:554/live" for i in data.get("items", []))
 
 
+def test_rtsp_save_with_old_url_moves_camera(data_dir):
+    # так /multi сохраняет правку адреса: один запрос с old_url, serial и автостарт остаются за камерой
+    import json
+    import urllib.parse
+    old, new = "rtsp://127.0.0.1:554/a", "rtsp://127.0.0.1:554/b"
+    get("/api/rtsp/save", urllib.parse.urlencode({"url": old, "serial": "rtsp_3", "autostart": 1}))
+    status, body = get("/api/rtsp/save", urllib.parse.urlencode({"url": new, "serial": "rtsp_3", "old_url": old}))
+    assert status == 200
+    items = json.loads(body)["items"]
+    assert [(i["url"], i["serial"], i["autostart"]) for i in items] == [(new, "rtsp_3", True)]
+
+
 def test_version_payload(data_dir):
     import json
     status, body = get("/api/version")

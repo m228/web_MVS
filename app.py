@@ -19,6 +19,8 @@ from fastapi.staticfiles import StaticFiles
 from logger import get_events, log_event
 
 from camera_core import manager, build_rtsp_url, replace_host_in_url
+from camera_core.mjpeg import MjpegResponse
+import host_load
 import plate_config
 import camera_params
 import rtsp_store
@@ -71,6 +73,16 @@ monitor = cam_monitor.Monitor(_rtsp_workers_snapshot, lambda: _motion_url(), mot
 
 def _day_capture_cams() -> list:
     return [{**e, "serial": manager._saved_rtsp_serial(e)} for e in rtsp_store.load() if e.get("url")]
+
+
+def _motion_load_state() -> dict:
+    return motion_client.state(_motion_url(), timeout=1.5)
+
+
+# замер нагрузки ПК для панели на /multi; считает только по запросу страницы, фоновых потоков нет
+_load_meter = host_load.LoadMeter(workers_fn=_rtsp_workers_snapshot, cameras_fn=rtsp_store.load,
+                                  motion_cfg_fn=lambda: motion_client.get_config(_motion_url()),
+                                  motion_state_fn=_motion_load_state, motion_url_fn=lambda: _motion_url())
 
 
 # новая RTSP-камера: сутки кадров раз в 20 минут (data\day_shots), см. day_capture.py
@@ -525,6 +537,45 @@ def multi_config():
     return {"autostart": bool(cfg.get("multi_autostart")), "layout": cfg.get("multi_layout") or {}}
 
 
+@app.get("/api/rtsp/display_stream")
+def rtsp_display_stream():
+    # какой поток камеры идёт на показ в приложении: основной или дополнительный (subtype=1). КЗ от этого не зависит — у него свой выбор («Поток» в панели КЗ)
+    return {"substream": bool((plate_config.load().get("rtsp") or {}).get("substream"))}
+
+
+@app.put("/api/rtsp/display_stream")
+def rtsp_display_stream_set(req: dict = Body(...)):
+    on = bool(req.get("substream"))
+    rcfg = dict(plate_config.load().get("rtsp") or {})
+    rcfg["substream"] = on
+    plate_config.save({"rtsp": rcfg})
+    log_event("rtsp", "Поток для показа: " + ("дополнительный (subtype=1)" if on else "основной") + " — применится при следующем подключении камер", "info")
+    return {"status": "ok", "substream": on}
+
+
+@app.get("/api/rtsp/analysis_only")
+def rtsp_analysis_only():
+    return {"analysis_only": manager.analysis_only}
+
+
+@app.put("/api/rtsp/analysis_only")
+def rtsp_analysis_only_set(req: dict = Body(...)):
+    on = bool(req.get("analysis_only"))
+    rcfg = dict(plate_config.load().get("rtsp") or {})
+    rcfg["analysis_only"] = on
+    plate_config.save({"rtsp": rcfg})
+    manager.set_analysis_only(on)
+    log_event("rtsp", "Только анализ: " + ("вкл — приложение не держит камеры без зрителей и записи" if on else "выкл"), "info")
+    return {"status": "ok", "analysis_only": on}
+
+
+@app.get("/api/host/load")
+def host_load_state():
+    # сеть, процессор, видеоядро этого ПК и примерный запас (панель «Нагрузка» на /multi); заодно режим «Только анализ»,
+    # чтобы все открытые страницы переключались вместе
+    return {**_load_meter.read(), "analysis_only": manager.analysis_only}
+
+
 @app.get("/api/multi/autostart")
 def multi_autostart(on: int):
     # включение гасит «Автостарт цикла» микроскопа (и наоборот, см. set_cycle_autostart): открывается что-то одно
@@ -927,6 +978,7 @@ def micro_settings(
     stage_to: int | None = None,
     stage_extra: str | None = None,
     glass_settle_sec: int | None = None,
+    arrive_tol_um: int | None = None,
     glass_wash_every: int | None = None,
     fast_enabled: int | None = None,
     fast_frames: int | None = None,
@@ -962,6 +1014,7 @@ def micro_settings(
     if stage_to is not None: pc["stage_to"] = stage_to
     if stage_extra is not None: pc["stage_extra"] = list(microscope_fsm.parse_stage_list(stage_extra))     # «20, 21»; пустая строка — без «плюс»
     if glass_settle_sec is not None: pc["glass_settle_sec"] = max(0, min(60, glass_settle_sec))   # осадка у стекла после подвода, с
+    if arrive_tol_um is not None: pc["arrive_tol_um"] = max(microscope_fsm.ARRIVE_TOL_MIN_UM, min(microscope_fsm.ARRIVE_TOL_MAX_UM, arrive_tol_um))   # допуск прихода подвода, мкм
     if glass_wash_every is not None: pc["glass_wash_every"] = max(0, min(99, glass_wash_every))   # стекло промывать раз в N проб (0 — никогда)
     fast = {}                                                  # быстрый цикл на подкачке (стадия 5)
     if fast_enabled is not None: fast["enabled"] = bool(fast_enabled)
@@ -1398,9 +1451,13 @@ def motion_snapshot(camera: str, w: int = 0):
 
 
 @app.get("/api/motion/rod_mask")
-def motion_rod_mask(camera: str, zone: str, red: str = "", blue: str = "", w: int = 640, raw: int = 0, red_more: str | None = None, blue_more: str | None = None):
-    """Превью детектора палки по зоне-циклу с пробными порогами цвета (красный/синий «H1,H2,S,V»): что именно попадает в маску."""
-    data = motion_client.rod_mask(_motion_url(), camera, zone, red, blue, w, raw=bool(raw), red_more=red_more, blue_more=blue_more)
+def motion_rod_mask(camera: str, zone: str, red: str = "", blue: str = "", w: int = 640, raw: int = 0, red_more: str | None = None, blue_more: str | None = None,
+                    red_not: str | None = None, blue_not: str | None = None, tip: str | None = None,
+                    fill: str | None = None, empty: str | None = None, tol: float | None = None):
+    """Превью детектора палки или уровнемера с пробными порогами цвета (красный/синий «H1,H2,S,V»; столбик — образцы fill/empty «L,a,b;…» и tol):
+    что именно попадает в маску (светоотражатели — tip)."""
+    data = motion_client.rod_mask(_motion_url(), camera, zone, red, blue, w, raw=bool(raw), red_more=red_more, blue_more=blue_more, red_not=red_not, blue_not=blue_not, tip=tip,
+                                  fill=fill, empty=empty, tol=tol)
     if data is None:
         return Response(status_code=404)
     return Response(content=data, media_type="image/jpeg", headers={"Cache-Control": "no-store"})
@@ -1462,6 +1519,15 @@ def motion_autocal_status(camera: str):
     return motion_client.autocal_status(_motion_url(), camera)
 
 
+@app.get("/api/motion/autocal/report")
+def motion_autocal_report(camera: str, days: int = 10, shots: int = 16):
+    # HTML-отчёт «день / ночь» по видимости палок (открывается в новой вкладке из панели «Автоподгонка»)
+    page, err = motion_client.autocal_report(_motion_url(), camera, days, shots)
+    if page is None:
+        return HTMLResponse("<meta charset=utf-8><body style='font:14px sans-serif;padding:24px'>Отчёт не собрался: %s</body>" % str(err or "ошибка").replace("&", "&amp;").replace("<", "&lt;"), status_code=502)
+    return HTMLResponse(page)
+
+
 @app.post("/api/motion/autocal/cancel")
 def motion_autocal_cancel(req: dict = Body(...)):
     return motion_client.autocal_cancel(_motion_url(), str(req.get("camera") or ""))
@@ -1482,6 +1548,18 @@ def motion_mirror_table(req: dict = Body(...)):
 def motion_clarity_sample(req: dict = Body(...)):
     # цвет кругов прозрачности сока за последние секунды (медиана): эталон «чистый» / «грязный»; сохраняет интерфейс
     return motion_client.clarity_sample(_motion_url(), str(req.get("camera") or ""), [str(z) for z in (req.get("zones") or [])], float(req.get("seconds") or 30))
+
+
+@app.get("/api/motion/camera_state")
+def motion_camera_state(camera: str):
+    # состояние одной камеры (зоны, палки) — лёгкий быстрый опрос для разметки на плитках
+    return motion_client.camera_state(_motion_url(), camera)
+
+
+@app.get("/api/motion/shafts_live")
+def motion_shafts_live():
+    # лёгкий снимок углов валов для плавающего виджета (опрос несколько раз в секунду)
+    return motion_client.shafts_live(_motion_url())
 
 
 @app.get("/api/motion/shafts_history")
@@ -1521,6 +1599,25 @@ def motion_records_zip(days: float = 7.0):
         return Response(content=err or "нет данных", status_code=404, media_type="text/plain; charset=utf-8")
     return Response(content=data, media_type="application/zip",
                     headers={"Content-Disposition": 'attachment; filename="motion_records_%s.zip"' % time.strftime("%Y%m%d_%H%M")})
+
+
+@app.get("/api/motion/video_rec")
+def motion_video_rec():
+    """Запись видео со звуком на диск (материал для разметки звуков): настройки и ход по камерам."""
+    return motion_client.video_rec(_motion_url())
+
+
+@app.post("/api/motion/video_rec")
+def motion_video_rec_set(req: dict = Body(...)):
+    """{"camera", on?, stream?, area?, fps?} — запись одной камеры; {"limit_gb"} без камеры — общий лимит места."""
+    cam = str(req.get("camera") or "")
+    if not cam:
+        return motion_client.video_rec_limit(_motion_url(), req.get("limit_gb"))
+    patch = {k: req[k] for k in ("on", "stream", "area", "fps") if k in req}
+    r = motion_client.video_rec_camera(_motion_url(), cam, patch)
+    if "error" not in r and "on" in patch:
+        log_event("motion", "Запись видео %s: %s" % ("включена" if patch["on"] else "выключена", cam), "info")
+    return r
 
 
 @app.post("/api/motion/modbus_ping")
@@ -1977,7 +2074,7 @@ def rtsp_saved():
 
 @app.get("/api/rtsp/save")
 def rtsp_save(url: str, label: str = "", ip: str = "", scale: int = 100, fps: float = 0,
-              serial: str = "", autostart: int | None = None):
+              serial: str = "", autostart: int | None = None, old_url: str = ""):
     # проверяем схему уже при сохранении, а не только при стриминге — иначе в базу
     # попадает мусор (напр. file://), который потом отклоняется при попытке смотреть
     if not _is_rtsp_scheme(url):
@@ -1988,7 +2085,7 @@ def rtsp_save(url: str, label: str = "", ip: str = "", scale: int = 100, fps: fl
     # (сменили масштаб/fps) не должно сбрасывать галочку автоподключения
     if autostart is not None:
         entry["autostart"] = bool(autostart)
-    items = rtsp_store.save(entry)
+    items = rtsp_store.save(entry, old_url=old_url or None)
     api_log("api.rtsp.save", "RTSP-камера сохранена в базу", payload={"url": url, "count": len(items)})
     return {"items": items}
 
@@ -2011,7 +2108,12 @@ def rtsp_autostart(url: str, enabled: int, serial_number: str = ""):
 
 @app.get("/api/rtsp/remove_saved")
 def rtsp_remove_saved(url: str):
+    gone = {manager._saved_rtsp_serial(e) for e in rtsp_store.load() if e.get("url") == url}
     items = rtsp_store.remove(url)
+    # новая камера может получить освободившийся серийник — чужое приближение ей доставаться не должно
+    for serial in gone - {manager._saved_rtsp_serial(e) for e in items}:
+        if save_settings.get(serial).get("zoom"):
+            save_settings.update(serial, zoom={"factor": 1.0, "pan_x": 0.5, "pan_y": 0.5})
     api_log("api.rtsp.remove_saved", "RTSP-камера удалена из базы", payload={"url": url, "count": len(items)})
     return {"items": items}
 
@@ -2324,6 +2426,27 @@ def _resolve_rtsp_url(url, ip, username, password, channel, subtype):
     return None
 
 
+@app.get("/api/rtsp/attach")
+def rtsp_attach(
+    serial_number: str,
+    url: str = None,
+    ip: str = None,
+    username: str = "admin",
+    password: str = "",
+    channel: int = 1,
+    subtype: int = 0,
+    scale: int = 100,
+    fps: float = None,
+):
+    # ячейка со скрытой картинкой: камеру регистрируем без просмотра, чтобы работали фото, видео, свет и зум.
+    # Захват поднимется только если его что-то держит (запись или автостарт вне «Только анализ»)
+    worker = manager.get_rtsp(serial_number, _resolve_rtsp_url(url, ip, username, password, channel, subtype))
+    if worker is None:
+        return {"error": "rtsp_url_required"}
+    worker.ensure_capture(scale=scale, target_fps=fps)
+    return {"status": "ok", "capture": worker.stream_state()["capture_active"]}
+
+
 @app.get("/api/rtsp/stream")
 def rtsp_stream(
     serial_number: str,
@@ -2344,10 +2467,8 @@ def rtsp_stream(
 
     api_log("api.rtsp.stream", "Запрошен RTSP-видеопоток",
             payload={"serial_number": serial_number, "rtsp_url": worker.rtsp_url, "scale": scale, "fps": fps})
-    return StreamingResponse(
-        worker.generate(scale=scale, target_fps=fps),
-        media_type="multipart/x-mixed-replace; boundary=frame",
-    )
+    # MjpegResponse закрывает генератор вместе с соединением — зритель сразу снимается со счёта и камера отпускается
+    return MjpegResponse(worker.generate(scale=scale, target_fps=fps))
 
 
 @app.get("/api/rtsp/snapshot")
@@ -2423,6 +2544,7 @@ def rtsp_on_save_photo(serial_number: str, interval: int, project: str = "", pho
     if worker is None:
         return {"error": "rtsp_not_connected"}
     data = worker.on_photo(interval, project, photo_format or None)
+    worker.ensure_capture()          # плитка скрыта или «Только анализ» — захват поднимаем ради записи
     api_log("api.rtsp.on_save_photo", "Включено автосохранение фото (RTSP)",
             payload={"interval": interval, "project": project,
                      "photo_format": photo_format, "result": data})
@@ -2445,6 +2567,7 @@ def rtsp_on_save_video(serial_number: str, duration: int, project: str = ""):
     if worker is None:
         return {"error": "rtsp_not_connected"}
     data = worker.on_video(duration, project)
+    worker.ensure_capture()
     api_log("api.rtsp.on_save_video", "Включена запись видео (RTSP)",
             payload={"duration": duration, "project": project, "result": data})
     return data

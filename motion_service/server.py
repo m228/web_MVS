@@ -15,6 +15,8 @@
                                     (?zone=id&red=H1,H2,S,V&blue=H1,H2,S,V — пробные пороги цвета; &red_more=H1,H2,S,V;… и &blue_more= — дополнительные цвета конца палки; пусто — настроенные; ?w=640).
   POST /cameras/{id}/autocal      — {"zones": [id…], "seconds": 150}: записать вращение палок и подогнать цвета, ось и радиус (75–300 с, ≥1 оборота).
   GET  /cameras/{id}/autocal      — ход и результат подгонки: до/после по каждой палке (найдена, обороты, сектора), новые настройки.
+  GET  /cameras/{id}/autocal/report — HTML-отчёт «день / ночь» по видимости палок (?days=10&shots=16 — сколько дневных и ночных снимков прогнать).
+  GET  /autocal/watch             — сторож подгонки: состояние по камерам и последние события (включается на камере: autocal_watch.on).
   POST /cameras/{id}/autocal/cancel — отменить.   POST /cameras/{id}/autocal/apply — {"zones": [id…]}: применить результат (сохраняет настройки).
   GET  /cameras/{id}/rod_pick     — пипетка: цвет палки в точке картинки rod_mask (?zone=id&u=0..1&v=0..1) → {h, s, v}; rod_mask принимает ещё ?raw=1 (кадр без масок).
   GET  /cameras/{id}/level_shot   — снимок для графика уровня, ближайший к моменту (?group=lvl&ts=unix-секунды; &dir=-1/1 — соседний
@@ -25,6 +27,8 @@
   POST /cameras/{id}/record       — {"on": true|false}: писать метрики каждого кадра в базу data\\motion.db.
   POST /record                    — то же сразу для всех включённых камер.
   GET  /records.zip               — CSV записей за последние дни (?days=7, собираются из базы) + summary.txt со сводкой сбоев, одним архивом.
+  GET  /video_rec  PUT /video_rec — запись видео со звуком на диск (data\\video_rec): настройки и ход по камерам; PUT {"limit_gb": 20}.
+  POST /cameras/{id}/video_rec    — {"on": true|false, "stream": "sub"|"main", "area": [x,y,w,h в долях кадра]|null, "fps": 5}: только присланные поля.
   POST /modbus/ping               — {"host","port","device_id","address"}: прочитать один регистр (только чтение).
   GET  /logs                      — последние строки журнала сервиса.
 
@@ -55,10 +59,14 @@ os.environ.setdefault("OPENCV_LOG_LEVEL", "ERROR")
 import motion_engine as engine  # noqa: E402
 import motion_lvldec  # noqa: E402
 import motion_records  # noqa: E402
+import motion_sound  # noqa: E402
 import motion_store  # noqa: E402
 import motion_trends  # noqa: E402
+import motion_videorec  # noqa: E402
 from perf_stats import PERF  # noqa: E402
 from motion_autocal_job import AutocalJob  # noqa: E402
+from motion_autocal_report import build_report  # noqa: E402
+from motion_autocal_watch import AutocalWatch  # noqa: E402
 from motion_camera import CameraWorker, open_capture  # noqa: E402
 from motion_modbus import LinkRegistry, ModbusLink  # noqa: E402
 from motion_scenarios import ScenarioRunner  # noqa: E402
@@ -90,6 +98,39 @@ class RingLog(logging.Handler):
             pass
 
 
+# «Мягкие» поля зоны-стакана: движок читает их из конфига на каждом кадре, поэтому смена не требует перезапуска камеры (иначе каждая правка порога
+# = переподключение потока и ~20 с «считаю движение» с 65535 в ПЛК). Геометрия (центр, радиус, ядро), эталоны, вывод в ПЛК, mv_on — перезапуск как раньше.
+HOT_CLARITY_KEYS = ("t_turb", "t_dirty", "hyst", "hold_s", "smooth_s", "glare_pct", "off_max", "mv_hi", "mv_lo", "mv_win_s", "mv_smooth_s", "mv_hold_s", "label", "name")
+# То же у уровнемеров: подбор цвета пипеткой и допуска не должен рвать поток и сбрасывать удерживаемое значение. Разметка и направление — перезапуск.
+HOT_GAUGE_KEYS = ("name", "smooth", "hold_s", "min_area", "flip", "red_hsv", "red_more", "red_not", "fill_colors", "empty_colors", "tol", "min_quality")
+
+
+def _hot_keys(zone: dict) -> tuple:
+    kind = zone.get("type")
+    return HOT_CLARITY_KEYS if kind == "clarity" else HOT_GAUGE_KEYS if kind in engine.GAUGE_TYPES else ()
+
+
+def _strip_hot(cam: dict) -> dict:
+    """Камера без «мягких» полей стаканов и уровнемеров — для сравнения «изменилось только мягкое?»."""
+    out = dict(cam)
+    out.pop("autocal_watch", None)              # настройка сторожа подгонки читается из конфига сервиса, потоку камеры не нужна
+    out["zones"] = [{k: v for k, v in z.items() if k not in _hot_keys(z)} for z in cam["zones"]]
+    return out
+
+
+def _hot_update(worker, new_cam: dict) -> bool:
+    """Камера отличается от работающей только мягкими полями стаканов и уровнемеров → записать их в конфиг рабочего потока на месте (True); иначе False."""
+    old = worker.cfg
+    if _strip_hot(old) != _strip_hot(new_cam):
+        return False
+    old["autocal_watch"] = new_cam["autocal_watch"]
+    for oz, nz in zip(old["zones"], new_cam["zones"]):
+        for k in _hot_keys(oz):
+            if k in nz:
+                oz[k] = nz[k]
+    return True
+
+
 class Manager:
     """Конфиг на диске + рабочие потоки камер."""
 
@@ -117,6 +158,9 @@ class Manager:
         self._halt = threading.Event()
         self._hk: Optional[threading.Thread] = None
         self.autocal: dict[str, AutocalJob] = {}   # подгонка валов по камере (последнее задание; пересоздание воркеров при сохранении настроек его не трогает)
+        self.watch = AutocalWatch(self)            # сторож видимости палок: сам запускает подгонку при просадке и откатывает, если стало хуже
+        self.video = motion_videorec.VideoRec(self.dir, lambda: self.cfg["cameras"])   # запись видео со звуком на диск (data\video_rec)
+        self.sound = motion_sound.SoundHub(lambda: self.cfg["cameras"])                # этапы печи по звуку камеры
 
     # --- автоподгонка валов ---
     def autocal_start(self, cid: str, zones: list, seconds: float) -> dict:
@@ -156,6 +200,7 @@ class Manager:
                     continue
                 z.update(center=r["new"]["center"], radius=r["new"]["radius"], red_hsv=r["new"]["red_hsv"], blue_hsv=r["new"]["blue_hsv"],
                          thin=r["new"]["thin"], blue_alone=r["new"]["blue_alone"])
+                z.update({k: r["new"][k] for k in ("tip_hsv", "tip_len", "tip_r0", "tip_r1", "tip_thin") if k in r["new"]})     # отражатели — если подгонка их считала
                 done.append(zid)
             if done:
                 self.apply(cfg)
@@ -226,7 +271,7 @@ class Manager:
             keep = {}
             for c in new["cameras"]:
                 w = self.workers.get(c["id"])
-                if w and old_cams.get(c["id"]) == c and same_mb and w.is_alive():
+                if w and same_mb and w.is_alive() and (old_cams.get(c["id"]) == c or _hot_update(w, c)):
                     keep[c["id"]] = w
             for cid, w in list(self.workers.items()):
                 if cid not in keep:
@@ -235,6 +280,7 @@ class Manager:
             for c in new["cameras"]:
                 if c["id"] not in self.workers:
                     w = CameraWorker(c, new["modbus"], self.links, self.dir, self.capture_factory, self.level_post)
+                    w.sound_states = self.sound.states
                     self.workers[c["id"]] = w
                     if (self.rec_all or c["id"] in self.rec_cams) and c["enabled"] and c["url"]:
                         w.start_record()
@@ -329,12 +375,18 @@ class Manager:
         self.apply(self.cfg, save=False)
         self.scenarios.start()
         self.shafts.start()
+        self.watch.start()
+        self.video.start()
+        self.sound.start()
         if self.auto_record or self.shots_min > 0 or self.keep_days:
             self._hk = threading.Thread(target=self._housekeeping, daemon=True, name="housekeeping")
             self._hk.start()
 
     def shutdown(self):
         self._halt.set()
+        self.video.shutdown()                    # первым: ffmpeg должен успеть закрыть файлы
+        self.sound.shutdown()
+        self.watch.stop()
         for j in self.autocal.values():
             j.cancel()
         self.scenarios.stop()
@@ -407,7 +459,18 @@ def create_app(data_dir: Optional[Path] = None, capture_factory: Callable = open
     @app.get("/state")
     def state():
         return {"cameras": [w.state() for w in mgr.workers.values()], "scenarios": mgr.scenarios.snapshot(), "shafts": mgr.shafts.snapshot(),
-                "perf": PERF.snapshot()}      # сколько времени уходит на кадр по камерам (панель КЗ, вкладка «Камеры»)
+                "perf": PERF.snapshot(),      # сколько времени уходит на кадр по камерам (панель КЗ, вкладка «Камеры»)
+                "autocal_events": mgr.watch.recent()}      # что сделал сторож подгонки валов (приложение переносит это в свой журнал)
+
+    @app.get("/autocal/watch")
+    def autocal_watch_state():
+        # состояние сторожа подгонки по камерам (фаза, кулдаун, последняя видимость) и последние события, включая тихие проверки
+        return mgr.watch.snapshot()
+
+    @app.get("/shafts/live")
+    def shafts_live():
+        # лёгкий снимок углов и разностей для плавающего виджета (опрос 6–8 раз в секунду, без побочных эффектов)
+        return mgr.shafts.live()
 
     @app.get("/shafts/history")
     def shafts_history(pair: str, window: float = 3600.0, points: int = 600):
@@ -472,14 +535,25 @@ def create_app(data_dir: Optional[Path] = None, capture_factory: Callable = open
         return r
 
     @app.get("/cameras/{cid}/rod_mask")
-    def rod_mask(cid: str, zone: str, red: str = "", blue: str = "", w: int = 640, raw: int = 0, red_more: Optional[str] = None, blue_more: Optional[str] = None):
-        """Что видит детектор палки: кадр вокруг оси с масками красной и синей половин. red/blue — пробные пороги «H1,H2,S,V» (пусто — настроенные)."""
+    def rod_mask(cid: str, zone: str, red: str = "", blue: str = "", w: int = 640, raw: int = 0, red_more: Optional[str] = None, blue_more: Optional[str] = None,
+                 red_not: Optional[str] = None, blue_not: Optional[str] = None, tip: Optional[str] = None,
+                 fill: Optional[str] = None, empty: Optional[str] = None, tol: Optional[float] = None):
+        """Что видит детектор палки или уровнемера: кадр вокруг зоны с масками. red/blue — пробные пороги «H1,H2,S,V» (пусто — настроенные);
+        red_not / blue_not — пробные исключённые цвета «H1,H2,S1,S2,V1,V2;…» (пусто — без них, нет параметра — как в настройках);
+        tip — пробные цвета светоотражателей в том же виде (жёлтым на маске; пусто — без них, нет параметра — как в настройках);
+        fill / empty — пробные образцы цвета уровнемера-столбика «L,a,b;…», tol — допуск цвета (нет параметра — как в настройках)."""
         def hsv(txt, default, name, pair_ok):
             return None if not txt.strip() else engine._hsv4([float(x) for x in txt.split(",")], default, name, pair_ok)
         try:
             r, b = hsv(red, None, "red", True), hsv(blue, None, "blue", False)
             more = lambda txt, name: None if txt is None else engine._more([[float(x) for x in item.split(",")] for item in txt.split(";") if item.strip()], name)   # noqa: E731 — «H1,H2,S,V;H1,H2,S,V»; пусто — без дополнительных
-            data = mgr.worker(cid).rod_mask_jpeg(zone, r, b, max(120, min(int(w), 1600)), bool(raw), more(red_more, "red_more"), more(blue_more, "blue_more"))
+            nots = lambda txt, name: None if txt is None else engine._nots([[float(x) for x in item.split(",")] for item in txt.split(";") if item.strip()], name)   # noqa: E731
+            colors = lambda txt, name: None if txt is None else engine._colors([[float(x) for x in item.split(",")] for item in txt.split(";") if item.strip()], name)   # noqa: E731
+            if tol is not None and not (math.isfinite(tol) and 1 <= tol <= 60):
+                raise ValueError("tol: от 1 до 60")
+            data = mgr.worker(cid).rod_mask_jpeg(zone, r, b, max(120, min(int(w), 1600)), bool(raw), more(red_more, "red_more"), more(blue_more, "blue_more"),
+                                                 nots(red_not, "red_not"), nots(blue_not, "blue_not"), nots(tip, "tip"),
+                                                 colors(fill, "fill"), colors(empty, "empty"), tol)
         except ValueError as e:
             raise HTTPException(400, str(e))
         if data is None:
@@ -502,6 +576,20 @@ def create_app(data_dir: Optional[Path] = None, capture_factory: Callable = open
     def autocal_status(cid: str):
         j = mgr.autocal.get(cid)
         return j.status() if j else {"state": "idle", "camera": cid, "progress": 0.0, "text": "", "results": {}, "applied": []}
+
+    @app.get("/cameras/{cid}/autocal/report")
+    def autocal_report(cid: str, days: int = 10, shots: int = 16):
+        """Отчёт «день / ночь» (HTML): видимость палок по периодам неизменных настроек, текущие настройки на дневных и ночных снимках, журнал сторожа.
+        shots — сколько дневных и сколько ночных снимков прогнать (0 — не прогонять, быстрее)."""
+        cam = next((c for c in mgr.cfg["cameras"] if c["id"] == cid), None)
+        if cam is None:
+            raise HTTPException(404, "нет такой камеры: %s" % cid)
+        try:
+            page = build_report(mgr.dir, cid, cam, max(1, min(int(days), 30)), shots > 0, shots_per_part=max(1, min(int(shots), 200)))
+        except Exception as e:  # noqa: BLE001 — отчёт вспомогательный: причина — в ответ, сервис не страдает
+            log.exception("отчёт день/ночь не собрался")
+            raise HTTPException(500, "отчёт не собрался: %s" % e)
+        return Response(page, media_type="text/html; charset=utf-8")
 
     @app.post("/cameras/{cid}/autocal/cancel")
     def autocal_cancel(cid: str):
@@ -597,6 +685,26 @@ def create_app(data_dir: Optional[Path] = None, capture_factory: Callable = open
     def record_all(req: dict = Body(...)):
         return {"recording": mgr.record_all(bool(req.get("on")))}
 
+    @app.get("/video_rec")
+    def video_rec_status():
+        return mgr.video.status()
+
+    @app.put("/video_rec")
+    def video_rec_limit(req: dict = Body(...)):
+        try:
+            return mgr.video.set_limit(req.get("limit_gb"))
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+
+    @app.post("/cameras/{cid}/video_rec")
+    def video_rec_camera(cid: str, req: dict = Body(...)):
+        if not any(c["id"] == cid for c in mgr.cfg["cameras"]):
+            raise HTTPException(404, "нет такой камеры")
+        try:
+            return mgr.video.set_camera(cid, req)
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+
     @app.post("/shots/now")
     def shots_now():
         """Снять все камеры прямо сейчас (проверка; обычно снимает сам по часам). -> путь папки снимка."""
@@ -610,7 +718,8 @@ def create_app(data_dir: Optional[Path] = None, capture_factory: Callable = open
         """Записи за последние days суток (CSV собирается из базы) + summary.txt (когда и на сколько камеры пропадали) — одним архивом."""
         for w in list(mgr.workers.values()):
             w.flush_record()
-        names = {c["id"]: {"name": c.get("name"), "zones": {z["id"]: z.get("name") for z in c.get("zones", [])}} for c in mgr.cfg.get("cameras", [])}
+        label = lambda z: z.get("name") if z.get("motion", True) else "%s [по яркости: «крутится» = есть]" % z.get("name")
+        names = {c["id"]: {"name": c.get("name"), "zones": {z["id"]: label(z) for z in c.get("zones", [])}} for c in mgr.cfg.get("cameras", [])}
         data = motion_records.build_zip(mgr.dir, max(0.01, min(float(days), 31.0)), names=names)
         if data is None:
             raise HTTPException(404, "записей ещё нет — включите запись («● все» в общем виде панели КЗ)")

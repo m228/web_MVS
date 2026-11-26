@@ -131,6 +131,10 @@ def main():
     if getattr(sys, "frozen", False):
         import console_guard
         console_guard.install(DATA_DIR, read_version())
+    # журнал событий приложения на диске (logs\events.log): память держит лишь 1000 последних и теряет их при перезапуске
+    import logger
+    logger.enable_file(DATA_DIR / "logs" / "events.log")
+    logger.log_event("run", "Запуск web_MVS %s" % read_version(), "info", {"pid": os.getpid()})
     # прогрев продюсера в главном потоке до uvicorn — иначе в exe рабочие потоки
     # видят 0 камер (см. _warmup)
     _warmup()

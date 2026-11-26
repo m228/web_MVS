@@ -214,6 +214,93 @@ def test_runner_alarm_has_debounce_and_tol_zero_means_off():
     assert r.snapshot()["pairs"]["nlr"]["alarm_angle"] == 0
 
 
+def set_moving(M, cam_id, zone_id, moving):
+    for z in M.workers[cam_id].s["result"]["zones"]:
+        if z["id"] == zone_id:
+            z["moving"] = moving
+
+
+def test_stop_alarm_needs_stop_s_and_does_not_touch_delta_alarm():
+    cfg = cfg_two_rows({"shafts": {"stop_s": 30, "pairs": {"nlr": {"tol_angle": 5}}}})
+    r, _, M = runner(cfg, states(dn=(120.0, 260.0, 0, 0)))           # Δ = +20° и вал стоит
+    set_moving(M, "dn", "r_left", False)
+    for t in range(0, 30):
+        r.tick(float(t))
+        assert r.snapshot()["shafts"]["nl"]["alarm_stop"] == 0, t   # ещё не дольше stop_s
+    r.tick(30.0)
+    snap = r.snapshot()
+    assert snap["shafts"]["nl"]["alarm_stop"] == 1 and snap["shafts"]["np"]["alarm_stop"] == 0   # про второй вал ничего не известно
+    assert snap["pairs"]["nlr"]["alarm_angle"] == 1                  # Δ-тревога на остановке горит как обычно
+    assert r.live(31.0)["shafts"]["nl"]["alarm_stop"] == 1           # виджет берёт из последнего тика
+
+
+def test_stop_alarm_off_by_default_unknown_keeps_it_and_resume_clears_it():
+    r, _, M = runner(cfg_two_rows(), states())
+    set_moving(M, "dn", "r_left", False)
+    for t in range(0, 200):
+        r.tick(float(t))
+    assert r.snapshot()["shafts"]["nl"]["alarm_stop"] == 0           # stop_s по умолчанию 0 — выключена
+    cfg = cfg_two_rows({"shafts": {"stop_s": 10}})
+    r, _, M = runner(cfg, states())
+    set_moving(M, "dn", "r_left", False)
+    for t in range(0, 12):
+        r.tick(float(t))
+    assert r.snapshot()["shafts"]["nl"]["alarm_stop"] == 1
+    set_moving(M, "dn", "r_left", None)                              # палку не видно: ни не гасим, ни не сбрасываем счёт
+    for t in range(12, 40):
+        r.tick(float(t))
+    assert r.snapshot()["shafts"]["nl"]["alarm_stop"] == 1
+    set_moving(M, "dn", "r_left", True)
+    r.tick(40.0)
+    r.tick(42.0)
+    assert r.snapshot()["shafts"]["nl"]["alarm_stop"] == 1           # дрожание: «крутится» держится меньше STAND_RESUME_S
+    set_moving(M, "dn", "r_left", False)
+    r.tick(43.0)
+    set_moving(M, "dn", "r_left", True)
+    for t in range(44, 44 + int(ms.STAND_RESUME_S) + 2):
+        r.tick(float(t))
+    assert r.snapshot()["shafts"]["nl"]["alarm_stop"] == 0           # поехал по-настоящему — тревога снята
+
+
+def test_flip_about_180_is_not_an_alarm_for_grace_then_is():
+    cfg = cfg_two_rows({"shafts": {"pairs": {"nlr": {"tol_angle": 5}}}})
+    r, _, M = runner(cfg, states(dn=(300.0, 240.0, 5, -5)))          # 300 + 240 − 360 = +180°: левая палка держит не тот конец
+    for t in range(0, int(ms.FLIP_GRACE_S) - 1):
+        r.tick(float(t))
+        p = r.snapshot()["pairs"]["nlr"]
+        assert p["flip"] is True and p["alarm_angle"] == 0, t
+    for t in range(int(ms.FLIP_GRACE_S), int(ms.FLIP_GRACE_S) + 6):   # не прошло само — настоящий разъезд
+        r.tick(float(t))
+    p = r.snapshot()["pairs"]["nlr"]
+    assert p["flip"] is False and p["alarm_angle"] == 1
+    set_dn(M, (100.0, 260.0, 5, -5))                                  # Δ вернулась к нулю — счёт ложного скачка забыт
+    r.tick(400.0)
+    assert r.snapshot()["pairs"]["nlr"]["flip"] is False
+    set_dn(M, (300.0, 240.0, 5, -5))
+    r.tick(401.0)
+    assert r.snapshot()["pairs"]["nlr"]["flip"] is True              # новый скачок получает новую отсрочку
+
+
+def test_flip_keeps_alarm_state_unchanged():
+    cfg = cfg_two_rows({"shafts": {"pairs": {"nlr": {"tol_angle": 5}}}})
+    r, _, M = runner(cfg, states(dn=(120.0, 260.0, 5, -5)))          # Δ +20°: тревога горит
+    for t in range(1, 6):
+        r.tick(float(t))
+    assert r.snapshot()["pairs"]["nlr"]["alarm_angle"] == 1
+    set_dn(M, (300.0, 240.0, 5, -5))                                  # перепутала конец: состояние тревоги замирает, не гаснет
+    for t in range(6, 20):
+        r.tick(float(t))
+    p = r.snapshot()["pairs"]["nlr"]
+    assert p["flip"] is True and p["alarm_angle"] == 1
+
+
+def test_stop_s_config_validated_and_default_off():
+    assert me.normalize_config({})["shafts"]["stop_s"] == 0
+    assert me.normalize_config({"shafts": {"stop_s": 45}})["shafts"]["stop_s"] == 45
+    with pytest.raises(ValueError, match="stop_s"):
+        me.normalize_config({"shafts": {"stop_s": -1}})
+
+
 def test_history_window_and_downsample():
     r, _, M = runner(cfg_two_rows(), states())
     for i in range(100):
@@ -444,3 +531,46 @@ def test_learn_shape_survives_restart(tmp_path):
     r3 = ms.ShaftRunner(M)                                  # «перезапуск»
     lrn = r3._learner("lnv", M.cfg["shafts"]["pairs"]["lnv"])
     assert lrn.amp() > 8 and not lrn.fresh
+
+
+def test_live_snapshot_has_src_and_is_side_effect_free():
+    """Живой снимок для виджета: src (какая половина видна) доходит до вала; истории и обучения он не трогает."""
+    cfg = cfg_two_rows()
+    st = states()
+    st["dn"]["result"]["zones"][0]["src"] = "red"
+    st["dn"]["result"]["zones"][1]["src"] = "both"
+
+    class W:
+        def __init__(self, s): self.s = s
+        def state(self): return self.s
+
+    class Mgr:
+        pass
+
+    m = Mgr(); m.cfg = cfg; m.workers = {k: W(v) for k, v in st.items()}
+    r = ms.ShaftRunner(m)
+    live = r.live(now=100.0)
+    srcs = {sid: v["src"] for sid, v in live["shafts"].items()}
+    assert sorted(srcs.values()).count("red") == 1 and sorted(srcs.values()).count("both") == 1
+    assert set(live["pairs"]["nlr"]) >= {"valid", "angle_diff", "angle_diff_raw", "alarm_angle"}
+    assert all(len(h) == 0 for h in r.hist.values())
+
+
+def test_live_snapshot_has_tip_ends_only_when_configured():
+    """Отражатели концов [красный, синий] доходят до виджета; у зоны без отражателей — None (точки не рисуются)."""
+    cfg = cfg_two_rows()
+    st = states()
+    st["dn"]["result"]["zones"][0].update({"tip_on": True, "lvl_tr": 0.9, "lvl_tb": 0.1})
+
+    class W:
+        def __init__(self, s): self.s = s
+        def state(self): return self.s
+
+    class Mgr:
+        pass
+
+    m = Mgr(); m.cfg = cfg; m.workers = {k: W(v) for k, v in st.items()}
+    live = ms.ShaftRunner(m).live(now=100.0)
+    tips = [v["tip"] for v in live["shafts"].values() if v["assigned"]]
+    assert [0.9, 0.1] in tips and tips.count(None) == len(tips) - 1
+

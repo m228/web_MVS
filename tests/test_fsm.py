@@ -116,6 +116,47 @@ def test_glass_settle_waits_after_approach_only():
     assert f.mode == 0
 
 
+def _approach_record(arrive_tol, ai_offset):
+    """Цикл с датчиком прихода «ai», который стоит на ai_offset мкм дальше цели (как на Усп); возвращает запись прихода подвода."""
+    cfg = copy.deepcopy(plate_config.DEFAULTS)
+    cfg["probe_cycle"].update({"pause_sec": 1, "trigger_mode": "time", "pre_wash_sec": 0, "arrive_sensor": "ai",
+                               "post_wash_pause_sec": 0, "dwell_sec": 0, "settle_sec": 0, "glass_settle_sec": 0})
+    if arrive_tol is not None:
+        cfg["probe_cycle"]["arrive_tol_um"] = arrive_tol
+    cfg["probe_cycle"]["fast"]["enabled"] = False
+    f = MicroscopeFSM(FakePlate(), cfg)
+    f._step_timeout_ticks = 200                 # таймаут шага (в бою 300 с) — короче, чтобы «не доехал» не крутить 3000 тактов
+    recs = []
+    f.on_probe_positions = recs.append
+    _start_cycle(f)
+    for _ in range(800):
+        v = f.plate.m1_sp
+        if v is not None:
+            # сырой датчик приходит в своих единицах, автомат домножает его на sensor_display_scale (0,1 → мкм)
+            f.plate.telemetry.update({"pos1": v, "pos1_enc": v, "pos1_ai": (v + ai_offset) / f._sensor_scale})
+        f.tick()
+        if any(r["step"] == "подвод" for r in recs):
+            break
+    return [r for r in recs if r["step"] == "подвод"][0]
+
+
+def test_approach_tolerance_default_is_50():
+    assert MicroscopeFSM(FakePlate(), copy.deepcopy(plate_config.DEFAULTS))._arrive_tol_um == 50
+    assert _approach_record(None, 40)["timeout"] is False          # в допуске 50 — доехал
+    assert _approach_record(None, 70)["timeout"] is True           # датчик на 70 дальше цели — «не доехал» (как было на Усп)
+
+
+def test_approach_tolerance_setting_lets_far_sensor_arrive():
+    assert _approach_record(80, 70)["timeout"] is False            # допуск поднят до 80 — тот же сдвиг датчика уже «доехал»
+    assert _approach_record(60, 70)["timeout"] is True             # допуск 60 меньше сдвига — по-прежнему нет
+
+
+def test_approach_tolerance_is_clamped():
+    mk = lambda v: MicroscopeFSM(FakePlate(), {**copy.deepcopy(plate_config.DEFAULTS),
+                                               "probe_cycle": {**plate_config.DEFAULTS["probe_cycle"], "arrive_tol_um": v}})._arrive_tol_um
+    assert mk(1) == 10 and mk(5000) == 300 and mk(120) == 120
+
+
 def test_probe_positions_reported_for_retract_and_approach(fsm):
     # мониторинг: на доезде отвода и подвода уходит запись с тремя датчиками — ровно по одной на шаг
     recs = []

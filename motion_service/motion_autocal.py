@@ -13,15 +13,19 @@ CycleRT.step_profiles по профилям лучей: найденность �
 """
 from __future__ import annotations
 
+import math
 import time
 from typing import Callable, Optional, Sequence
 
 import cv2
 import numpy as np
 
+import motion_autocal_tips as at
 import motion_engine as me
 
-SECTOR_DEG = 30                          # охват углов считаем по секторам такой ширины
+TIP_KEYS = ("tip_hsv", "tip_len", "tip_r0", "tip_r1", "tip_thin")   # настройки отражателей, которые подбирает этап «отражатели»
+TIP_FRAMES = 90                          # кадров записи для этапа «отражатели» (равномерно по всей записи)
+SECTOR_DEG = 30                         # охват углов считаем по секторам такой ширины
 NSEC = 360 // SECTOR_DEG
 RPM_MIN, RPM_MAX = 0.25, 2.0             # обороты вне диапазона — это не вал (залипание на неподвижной цели, шум)
 RED_STEP, RED_LIM = (4, 5, 15, 15), ((4, 30), (140, 178), (10, 200), (10, 160))        # шаг и границы [H_max, H_min, S, V]
@@ -85,7 +89,7 @@ def _compress(m: np.ndarray, k: float) -> np.ndarray:
     return cv2.dilate(m.astype(np.float32), me._K3)
 
 
-def colour_mask(hsv: np.ndarray, kind: str, p: Sequence[int], ker, k: float, fast: bool = True, extra: Sequence = ()) -> np.ndarray:
+def colour_mask(hsv: np.ndarray, kind: str, p: Sequence[int], ker, k: float, fast: bool = True, extra: Sequence = (), excl: Sequence = ()) -> np.ndarray:
     """Маска одной половины палки в рабочем масштабе k (то же, что CycleRT._liks, но один цвет и без повторной конвертации в HSV).
     fast: «открытие» (самое дорогое) считаем на каждом втором пикселе — для перебора; итог всё равно проверяет боевой разбор."""
     if kind == "red":
@@ -96,6 +100,9 @@ def colour_mask(hsv: np.ndarray, kind: str, p: Sequence[int], ker, k: float, fas
         m = cv2.inRange(hsv, (b1, s, v), (b2, 255, 255))
     for h1, h2, s_, v_ in extra:                                        # дополнительные цвета конца палки (red_more / blue_more) — «ИЛИ»
         m |= cv2.inRange(hsv, (h1, s_, v_), (h2, 255, 255))
+    for h1, h2, s1, s2, v1, v2 in excl:                                 # исключённые цвета (red_not / blue_not) вычитаются из итога; H1 > H2 — оттенок через ноль
+        hit = cv2.inRange(hsv, (h1, s1, v1), (h2, s2, v2)) if h1 <= h2 else (cv2.inRange(hsv, (h1, s1, v1), (179, s2, v2)) | cv2.inRange(hsv, (0, s1, v1), (h2, s2, v2)))
+        m &= cv2.bitwise_not(hit)
     m = (m != 0).astype(np.uint8)
     if ker is not None:
         if fast and k <= 0.5 and ker.shape[0] >= 15:
@@ -202,8 +209,19 @@ class RodTuner:
         self.cur = {"center": [float(center[0]), float(center[1])], "radius": float(radius),
                     "red_hsv": list(base["red_hsv"]), "blue_hsv": list(base["blue_hsv"]),
                     "thin": int(base["thin"]), "blue_alone": float(base["blue_alone"])}
-        self.old = {k: (list(v) if isinstance(v, list) else v) for k, v in self.cur.items()}
+        self.tip_on = bool(base.get("tip_hsv")) and float(base.get("tip_w", 1.0)) > 0        # у зоны заданы отражатели — подбираем и их
+        if self.tip_on:
+            self.cur.update(tip_hsv=[[int(x) for x in b] for b in base["tip_hsv"]], tip_len=float(base.get("tip_len", 0.06)), tip_r0=float(base.get("tip_r0", 0.55)),
+                            tip_r1=float(base.get("tip_r1", 1.15)), tip_thin=int(base.get("tip_thin", 0)))
+        self.old = {k: ([list(x) if isinstance(x, list) else x for x in v] if isinstance(v, list) else v) for k, v in self.cur.items()}
+        self.center_locked = False              # ось найдена по кончикам и надёжна — stage_geometry центр не двигает, только радиус
+        self.track: Optional[tuple] = None      # (найдена[bool], угол[°]) по кадрам прогона «до подгонки»: по нему ищем кончики на кадрах
+        self.track_ok = False                   # трек ровный (обороты в диапазоне, ход по прямой) — иначе клин вокруг его угла врёт
+        self.tips: dict = {"ran": False, "applied": False}
+        self.tip_abs: Optional[dict] = None     # размеры кончика в пикселях (длина, ширина, начало, конец) — в доли радиуса переводит _finish_tips
+        self.r_floor = 0.0                      # радиус зоны не меньше этого: иначе кольцо кончиков (≤ 1,5 R) не достаёт до их края
         self.extra = {"red": [tuple(x) for x in (base.get("red_more") or [])], "blue": [tuple(x) for x in (base.get("blue_more") or [])]}   # дополнительные цвета подбор не трогает, но учитывает
+        self.excl = {"red": [tuple(x) for x in (base.get("red_not") or [])], "blue": [tuple(x) for x in (base.get("blue_not") or [])]}      # исключённые цвета — так же: учитывает, не трогает
         self.max_radius = float(max_radius) if max_radius else RADIUS_MAX_K * float(radius)
         self.train, self.val = split_frames(self.n)
         self._progress, self._cancelled = progress, cancelled
@@ -217,8 +235,10 @@ class RodTuner:
             self._progress(max(0.0, min(1.0, frac)), text)
 
     def _cfg(self, P: dict) -> dict:
-        return dict(self.base, center=list(P["center"]), radius=float(P["radius"]), red_hsv=list(P["red_hsv"]), blue_hsv=list(P["blue_hsv"]),
-                    thin=int(P["thin"]), blue_alone=float(P["blue_alone"]))
+        cfg = dict(self.base, center=list(P["center"]), radius=float(P["radius"]), red_hsv=list(P["red_hsv"]), blue_hsv=list(P["blue_hsv"]),
+                   thin=int(P["thin"]), blue_alone=float(P["blue_alone"]))
+        cfg.update({k: P[k] for k in TIP_KEYS if k in P})
+        return cfg
 
     def _sub(self, idx: Sequence[int], cap: int) -> list:
         step = max(1, int(np.ceil(len(idx) / cap)))
@@ -252,10 +272,12 @@ class RodTuner:
             if j % 10 == 0:
                 self._tick(getattr(self, "_p0", 0.0) + getattr(self, "_pw", 0.0) * j / max(1, len(idx)), tag)
         times = [self.times[i] for i in idx]
+        self.track = (found, ang)
         isval = np.zeros(self.n, bool)
         isval[self.val] = True
         out = {"all": score_track(found, ang, times), "val": score_track(found, ang, times, isval) if self.val else None}
         out["all"]["both"] = sum(1 for s_ in src if s_ == "both") / max(1, len(src))
+        self.track_ok = RPM_MIN <= abs(out["all"]["rpm"]) <= RPM_MAX and out["all"]["dev"] <= 6.0       # палка шла по кругу ровно — по её углу можно ставить клин для кончиков
         if out["val"] is None:
             out["val"] = out["all"]
         return out
@@ -292,12 +314,12 @@ class RodTuner:
             bgr = f0 if n_ == 0 else self.store.get(i)
             hsv = cv2.cvtColor(bgr[z.y0:z.y1, z.x0:z.x1], cv2.COLOR_BGR2HSV)
             for q in red_opts:
-                SR[tuple(q)].append(ray_profile(colour_mask(hsv, "red", q, ker, z.k, extra=self.extra["red"]), z.xs, z.ys))
+                SR[tuple(q)].append(ray_profile(colour_mask(hsv, "red", q, ker, z.k, extra=self.extra["red"], excl=self.excl["red"]), z.xs, z.ys))
             for q in blue_opts:
-                SB[tuple(q)].append(ray_profile(colour_mask(hsv, "blue", q, ker, z.k, extra=self.extra["blue"]), z.xs, z.ys))
+                SB[tuple(q)].append(ray_profile(colour_mask(hsv, "blue", q, ker, z.k, extra=self.extra["blue"], excl=self.excl["blue"]), z.xs, z.ys))
             for t, (a, b, kk) in TH.items():
-                a.append(ray_profile(colour_mask(hsv, "red", P["red_hsv"], kk, z.k, extra=self.extra["red"]), z.xs, z.ys))
-                b.append(ray_profile(colour_mask(hsv, "blue", P["blue_hsv"], kk, z.k, extra=self.extra["blue"]), z.xs, z.ys))
+                a.append(ray_profile(colour_mask(hsv, "red", P["red_hsv"], kk, z.k, extra=self.extra["red"], excl=self.excl["red"]), z.xs, z.ys))
+                b.append(ray_profile(colour_mask(hsv, "blue", P["blue_hsv"], kk, z.k, extra=self.extra["blue"], excl=self.excl["blue"]), z.xs, z.ys))
             self._tick(p0 + pw * (n_ + 1) / len(idx), label)
         base_sc = self._score(cfg0, SR[tuple(P["red_hsv"])], SB[tuple(P["blue_hsv"])], times, sel)
         best = base_sc
@@ -348,7 +370,7 @@ class RodTuner:
         for n_, i in enumerate(idx):
             bgr = f0 if n_ == 0 else self.store.get(i)
             hsv = cv2.cvtColor(bgr[Y0:Y1, X0:X1], cv2.COLOR_BGR2HSV)
-            cache.append((colour_mask(hsv, "red", P["red_hsv"], ker, kB, extra=self.extra["red"]).astype(np.float32), colour_mask(hsv, "blue", P["blue_hsv"], ker, kB, extra=self.extra["blue"]).astype(np.float32)))
+            cache.append((colour_mask(hsv, "red", P["red_hsv"], ker, kB, extra=self.extra["red"], excl=self.excl["red"]).astype(np.float32), colour_mask(hsv, "blue", P["blue_hsv"], ker, kB, extra=self.extra["blue"], excl=self.excl["blue"]).astype(np.float32)))
             self._tick(p0 + pw * 0.35 * (n_ + 1) / len(idx), label)
         r_min = self.base["r_min"]
         wB = self.base["blue_w"]
@@ -374,7 +396,7 @@ class RodTuner:
         best_c, best_v = (cx0, cy0), proxy(cx0, cy0)
         v_start = best_v
         rng, step = win, win / 6.0
-        for rnd in range(3):
+        for rnd in range(0 if self.center_locked else 3):                # ось по кончикам надёжна — центр не двигаем, ищем только радиус
             g = np.arange(-rng, rng + 1e-6, step)
             cand = [(best_c[0] + dx, best_c[1] + dy) for dx in g for dy in g]
             vals = []
@@ -389,7 +411,7 @@ class RodTuner:
         # радиус — по оценке хода палки при найденном центре (профили всех радиусов за один проход: суммы вдоль луча)
         nrF = len(rs)
         mx, my = maps(best_c[0], best_c[1], nrF)
-        cands = [R for R in (R0 * f for f in RADIUS_FACTORS) if 40.0 <= R <= Rmax + 1e-6]
+        cands = [R for R in (R0 * f for f in RADIUS_FACTORS) if 40.0 <= R <= Rmax + 1e-6 and R >= self.r_floor]
         if R0 not in cands:
             cands.append(R0)
         cands.sort()
@@ -417,6 +439,106 @@ class RodTuner:
                          "shift_px": round(float(np.hypot(best_c[0] - cx0, best_c[1] - cy0)), 1), "proxy": [round(v_start, 3), round(best_v, 3)]})
         return best_s[1]
 
+    # — этап «отражатели» —
+    def stage_tips(self, p0: float, pw: float, label: str) -> dict:
+        """Ось, цвет и размер кончика по светоотражателям (только у зон с tip_hsv). Три прохода по кадрам: пятна по ящикам посева → пиксели
+        вокруг пятен пар (подобрать ящики) → пятна по подобранным. Ось по кончикам надёжна → центр фиксируем (stage_geometry его не двигает);
+        подобранные ящики берём, если на них прямых не меньше 90 % от посева. Размер кончика — в пикселях (tip_abs), в доли радиуса его
+        переводит _finish_tips: радиус ещё меняется."""
+        info: dict = {"ran": False, "applied": False}
+        if not self.tip_on:
+            info["reason"] = "отражатели не заданы"
+            return info
+        if self.track is None:
+            info["reason"] = "нет прогона до подгонки"
+            return info
+        found, ang = self.track
+        P = self.cur
+        R, center0 = float(P["radius"]), [float(P["center"][0]), float(P["center"][1])]
+        gated = float(np.mean(found)) >= at.GATED_MIN_FOUND and self.track_ok       # клин вокруг угла палки — только если трек «до» ровный
+        idx = self._sub(range(self.n), TIP_FRAMES)
+        seeds = [list(b) for b in P["tip_hsv"]]
+        info.update(ran=True, gated=bool(gated), frames=len(idx))
+        done = [0]
+        n_collect = 2 if at.has_white(seeds) else 3                       # проходов по кадрам: посев, посев + белый, подобранные (+ пиксели)
+
+        def collect(boxes: list) -> list:
+            fr = []
+            for i in idx:
+                hsv = cv2.cvtColor(self.store.get(i), cv2.COLOR_BGR2HSV)
+                bl = [b for b in at.blobs_of(at.boxes_mask(hsv, boxes)) if math.hypot(b["c"][0] - center0[0], b["c"][1] - center0[1]) <= 1.8 * R]
+                fr.append({"blobs": bl, "angle": float(ang[i]) if found[i] else None})
+                done[0] += 1
+                self._tick(p0 + pw * min(1.0, done[0] / ((n_collect + 1.0) * len(idx))), label)
+            for f_, bl in zip(fr, at.drop_static([f["blobs"] for f in fr])):
+                f_["blobs"] = bl
+            return fr
+
+        def short(ax: dict) -> dict:
+            return {k: v for k, v in ax.items() if k not in ("_pairs", "used")}
+
+        def better(ax: dict, ref: Optional[dict], k: float = 1.0) -> bool:
+            """ax лучше ref: надёжная, а у ref нет; обе надёжные — качество не ниже k × качества ref; обе нет — просто качество выше."""
+            if ref is None:
+                return True
+            if ax["reliable"] != ref["reliable"]:
+                return ax["reliable"]
+            return at.quality(ax) >= k * at.quality(ref) if ax["reliable"] else at.quality(ax) > at.quality(ref)
+
+        # наборы ящиков: посев (ящики зоны) и посев + «пересвет» (на val_Down кончик — жёлтая часть + белая, одной жёлтой ловится полкончика)
+        cands = [("seed", seeds)] + ([] if at.has_white(seeds) else [("seed+white", (seeds + [at.WHITE_BOX])[:at.MAX_BOXES])])
+        best, boxes, name, ax_seed = None, seeds, "seed", None
+        for nm, bx in cands:
+            ax = at.axis_best(collect(bx), center0, R, gated)
+            if nm == "seed":
+                ax_seed = ax
+                info["seed"] = short(ax)
+            else:
+                info["seed_white"] = short(ax)
+            if better(ax, best):
+                best, boxes, name = ax, bx, nm
+        pairs_b = best.get("_pairs") or []
+        if pairs_b:                                                   # цвет: пиксели вокруг пятен пар → ящики; ось на них — не хуже, чем на лучшем наборе
+            px = [at.strip_pixels(cv2.cvtColor(self.store.get(idx[k]), cv2.COLOR_BGR2HSV), pr) for k, pr in pairs_b[:60]]
+            done[0] += len(idx)
+            fitted = at.fit_boxes(np.concatenate(px)) if px else []
+            if fitted and fitted != boxes:
+                ax_f = at.axis_best(collect(fitted), center0, R, gated)
+                info["fitted"] = dict(short(ax_f), boxes=fitted)
+                if better(ax_f, best, 0.9):
+                    best, boxes, name = ax_f, fitted, "fitted"
+        info["chosen"] = name
+        if not best["reliable"]:
+            info["reason"] = ("прямых мало (%d) — вал не крутится или кончики не видны" % best["pairs"]) if best["kept"] < at.MIN_PAIRS else \
+                "ось по кончикам ненадёжна (разброс %s px, направлений %d, сдвиг %s px)" % (best["dist_med"], best["sectors"], best["shift_px"])
+            return info
+        c = best["center"]
+        P["center"] = [float(c[0]), float(c[1])]
+        self.center_locked = True
+        P["tip_hsv"] = [[int(x) for x in b] for b in boxes]
+        self.tip_abs = at.tip_size(best, c)
+        if self.tip_abs:
+            self.r_floor = at.radius_floor(self.tip_abs)
+        info.update(applied=True, center=[float(c[0]), float(c[1])], tip_hsv=P["tip_hsv"], shift_px=best["shift_px"], dist_med=best["dist_med"],
+                    kept=best["kept"], pairs=best["pairs"], sectors=best["sectors"])
+        if self.tip_abs:
+            info["size_px"] = {k: round(v, 1) for k, v in self.tip_abs.items()}
+        self.log.append({"stage": label, "chosen": info["chosen"], "center": [round(c[0], 1), round(c[1], 1)], "shift_px": best["shift_px"],
+                         "pairs": best["pairs"], "kept": best["kept"], "dist_med": best["dist_med"], "sectors": best["sectors"],
+                         "size_px": info.get("size_px"), "tip_hsv": P["tip_hsv"]})
+        return info
+
+    def _finish_tips(self):
+        """Размер кончика в пикселях → ключи зоны относительно ИТОГОВОГО радиуса (радиус подбирается после этапа «отражатели»)."""
+        if not (self.tips.get("applied") and self.tip_abs):
+            return
+        R = float(self.cur["radius"])
+        if R < self.r_floor:                                          # исходный радиус уже меньше нужного (кончики за 1,5 R) — поднимаем, чтобы кольцо их достало
+            R = self.cur["radius"] = float(self.r_floor)
+        prm = at.to_params(self.tip_abs, R, int(self.cur["thin"]), min(1.0, me.CYCLE_WORK_R / R))
+        self.cur.update(prm)
+        self.tips["params"] = prm
+
     def _colour_rounds(self, p0: float, pw: float, scales: Sequence[float]):
         for k, scale in enumerate(scales):
             was = (list(self.cur["red_hsv"]), list(self.cur["blue_hsv"]), self.cur["thin"], self.cur["blue_alone"])
@@ -428,20 +550,26 @@ class RodTuner:
     def run(self) -> dict:
         t0 = time.time()
         self._tick(0.0, "до подгонки")
-        self._p0, self._pw = 0.0, 0.15
+        self._p0, self._pw = 0.0, 0.12
         before = self.evaluate(self.old, "до подгонки")
+        self.tips = self.stage_tips(0.12, 0.03, "отражатели")           # ось и цвет по кончикам — раньше цветов половин: центр дальше не двигаем
         self.stage_colors(1.0, 0.15, 0.12, "цвета, круг 1")
         self.stage_geometry(0.27, 0.13, "центр и радиус")
         self._colour_rounds(0.40, 0.17, (1.0, 0.6))                 # после смены оси цвета уточняем, пока что-то улучшается
         self.cur["radius"] = self.old["radius"]                     # радиус заново от заданного: с нормальными цветами оценка радиуса надёжнее
         self.stage_geometry(0.57, 0.12, "центр и радиус, уточнение")
         self._colour_rounds(0.69, 0.04, (0.4,))
+        self._finish_tips()
         self._p0, self._pw = 0.73, 0.27
         after = self.evaluate(self.cur, "после подгонки")
         before_all, before_val, after_all, after_val = before["all"], before["val"], after["all"], after["val"]
         gain = after_val["score"] - before_val["score"]
         # предлагаем, если на всей записи лучше, а на отложенных кадрах не хуже (отложенных мало: у уже неплохой палки они могут оказаться все лёгкими)
         improved = after_all["score"] - before_all["score"] >= MIN_GAIN and gain >= -0.02 and after_val["found"] >= before_val["found"] - 0.03
+        # ось по кончикам надёжна — применяем и без роста оценки (с отражателями видимость уже ~100 %, расти нечему), если не стало хуже
+        if not improved and self.tips.get("applied") and after_all["score"] - before_all["score"] >= -0.01 and gain >= -0.02 and after_val["found"] >= before_val["found"] - 0.03:
+            improved = True
         self._tick(1.0, "готово")
         return {"old": self.old, "new": self.cur, "before": before_all, "after": after_all, "before_val": before_val, "after_val": after_val,
-                "gain_val": round(gain, 3), "improved": bool(improved), "log": self.log, "seconds": round(time.time() - t0, 1), "frames": self.n}
+                "gain_val": round(gain, 3), "improved": bool(improved), "log": self.log, "seconds": round(time.time() - t0, 1), "frames": self.n,
+                "tips": self.tips}

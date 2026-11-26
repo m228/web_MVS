@@ -51,7 +51,9 @@ def _write(items):
         log_event("rtsp_store", "Не удалось сохранить базу RTSP", "warn", {"error": str(e)})
 
 
-def save(entry):
+def save(entry, old_url=None):
+    """Добавить или обновить камеру. old_url — прежний адрес, если его правят: это та же камера,
+    поэтому её старая запись заменяется новой одним действием, а serial и autostart остаются за ней."""
     url = (entry or {}).get("url")
     if not url:
         return load()
@@ -63,8 +65,10 @@ def save(entry):
             log_event("rtsp_store", "Чтение базы перед сохранением не удалось — запись отменена",
                       "error", {"url": url, "error": str(e)})
             return load()
-        previous = next((i for i in existing if i.get("url") == url), {})
-        items = [i for i in existing if i.get("url") != url]
+        by_url = {i.get("url"): i for i in existing}
+        previous = by_url.get(old_url) or by_url.get(url) or {}
+        # старую запись убираем ДО проверки serial, иначе камера «занимала» бы его сама у себя
+        items = [i for i in existing if i.get("url") not in (url, old_url or url)]
         # serial — ключ воркера, КЗ, проекта и разметки: у двух разных камер он совпадать не может
         serial = entry.get("serial") or previous.get("serial") or ""
         taken = {i.get("serial") for i in items if i.get("serial")}
@@ -88,7 +92,8 @@ def save(entry):
             "autostart": bool(entry.get("autostart", previous.get("autostart", False))),
         })
         _write(items)
-    log_event("rtsp_store", "RTSP-камера сохранена в базу", "info", {"url": url})
+    log_event("rtsp_store", "RTSP-камера сохранена в базу", "info",
+              {"url": url, **({"old_url": old_url} if old_url and old_url != url else {})})
     return items
 
 

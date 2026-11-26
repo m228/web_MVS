@@ -68,6 +68,13 @@ def test_camera_gap_is_not_a_stop():
     assert not msy.camera_gaps(sorted({b[0] for b in _bins([(300, 1.0), (60, None), (300, 1.0)])}), NOW, 0)      # минута — не сбой
 
 
+def test_bins_without_any_motion_math_are_not_a_stop():
+    # зону держали «по яркости» (flow = diff = 0), потом вернули движение: за тот отрезок остановок не выдумываем
+    assert not msy.zone_episodes(_bins([(300, 1.0), (1800, 0.0), (300, 1.0)]), ZC, NOW)
+    eps = msy.zone_episodes(_bins([(1800, 0.0), (300, 1.0), (300, 0.05), (300, 1.0)]), ZC, NOW)
+    assert _kinds([e for e in eps if e["kind"] == "stop"]) == [("stop", 300)]
+
+
 def test_open_stop_at_the_end():
     eps = msy.zone_episodes(_bins([(600, 1.0), (300, 0.05)], t0=NOW - 900), ZC, NOW)
     assert eps[0]["kind"] == "stop" and eps[0]["open"] is True

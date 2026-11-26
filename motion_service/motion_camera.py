@@ -27,11 +27,12 @@ import numpy as np
 
 import juice_base
 from perf_stats import PERF
-from motion_engine import CameraEngine, scale_points
+from motion_engine import GAUGE_TYPES, CameraEngine, TubeRT, scale_points
 from motion_level import LevelInfer, nearest_trend_shot, post_infer, trend_shot_list
 from motion_webview import WebView
 from motion_store import store_for
 from motion_trends import TrendLog
+from motion_fill_trend import fill_trend_for
 from motion_modbus import LinkRegistry
 
 log = logging.getLogger("motion.camera")
@@ -39,6 +40,7 @@ log = logging.getLogger("motion.camera")
 HISTORY_LEN = 900                # точек истории на камеру (~5 мин при 3 fps)
 LONG_STEP_S = 1.0                # длинная история: одна точка в секунду (максимум за секунду — всплеск не теряется)
 LONG_LEN = 7200                  # ... на 2 часа назад
+TIP_SEEN = 0.3                   # сила кончика (0..1), с которой отражатель конца считается видимым (как MV_TIP_SEEN в 10-motion.js)
 STATS_STEP_S = 10                # статистика зон (среднее/мин/макс): корзина на 10 с ...
 STATS_LEN = 8640                 # ... и сутки назад (8640 × 10 с)
 _OPEN_LOCK = threading.Lock()    # OPENCV_FFMPEG_CAPTURE_OPTIONS — переменная окружения процесса, выставляем под замком
@@ -105,7 +107,15 @@ def cfg_hw(cfg: dict) -> str:
 
 
 OPEN_GAP_S = 2.0
-PROC_TOLERANCE = 0.85            # кадр берём, если с прошлого прошло ≥ 85 % интервала proc_fps: джиттер камеры иначе «съедает» каждый второй (8 к/с и proc_fps 4 давали ≈3)
+LAG_CATCHUP_S = 0.5              # очередь кадров длиннее — старые кадры выбрасываем (grab без обработки), пока не догоним
+LAG_MAX_SKIP_S = 3.0             # но хоть один кадр в столько секунд обрабатываем: камера не должна выглядеть мёртвой, если декодер не догоняет
+LAG_BASE_WIN_S = 600.0           # «нормальную» задержку потока ищем как минимум за столько секунд (уход часов камеры не копится)
+LAG_BUCKET_S = 30.0              # минимум держим по корзинам такой длины
+LAG_GOOD_N = 5                   # столько кадров подряд время потока должно расти, прежде чем ему верим (файл/заглушка его не дают)
+LAG_JUMP_BACK_MS = 1000.0        # время потока ушло назад больше чем на это, или вперёд больше чем на LAG_JUMP_FWD_MS, — поток начался заново
+LAG_JUMP_FWD_MS = 10000.0
+LAG_MAX_WIN_S = 60.0             # «макс очереди» на панели — за последнюю минуту
+PROC_TOLERANCE = 0.85           # кадр берём, если с прошлого прошло ≥ 85 % интервала proc_fps: джиттер камеры иначе «съедает» каждый второй (8 к/с и proc_fps 4 давали ≈3)
 ROD_HIST_LEN = 600               # точек ряда на палку (≈ 3–5 минут при 2–3 к/с)
 FREEZE_REOPEN_S = 30.0           # картинка стоит дольше (и не меньше 2·freeze_timeout_s) — поток открываем заново, потом повторяем так же
 _open_lock = threading.Lock()
@@ -126,6 +136,64 @@ def wait_open_turn(gap: Optional[float] = None, clock=time.monotonic, sleep=time
     if wait > 0:
         sleep(wait)
     return max(wait, 0.0)
+
+
+class QueueLag:
+    """Отставание обработки от потока: на сколько секунд кадр, взятый сейчас, старше самого свежего, что уже был в этом потоке.
+
+    Время потока кадра (CAP_PROP_POS_MSEC) идёт как часы камеры. Пока кадры берутся вовремя, «часы ПК − время потока» постоянно;
+    очередь в сокете и декодере (обработка медленнее камеры, просадка процессора или диска) поднимает его на свою длину. Постоянную
+    часть (задержку камеры и кодера) мы не знаем — берём минимум за окно: отставание = текущее − минимум. Минимум держим по корзинам
+    (окно LAG_BASE_WIN_S), чтобы уход часов камеры на десятки ppm не копился. Нет времени потока (файл, заглушка: оно не растёт)
+    или оно только что началось заново — None, и вызывающий ничего не пропускает и не считает."""
+
+    def __init__(self, window_s: float = LAG_BASE_WIN_S, bucket_s: float = LAG_BUCKET_S):
+        self.window_s, self.bucket_s = window_s, bucket_s
+        self.reset()
+
+    def reset(self) -> None:
+        self._mins: deque = deque()            # [начало корзины (часы ПК), минимум «часы ПК − время потока»]
+        self._last: Optional[float] = None     # время потока прошлого кадра, мс
+        self._good = 0                         # сколько кадров подряд время потока росло
+        self.lag: Optional[float] = None
+
+    def update(self, wall: float, pos_ms: Optional[float]) -> Optional[float]:
+        """wall — часы ПК в момент grab(), pos_ms — CAP_PROP_POS_MSEC после него. -> отставание, с (≥ 0) или None."""
+        if pos_ms is None or pos_ms != pos_ms:
+            self.lag = None
+            return None
+        pos_ms = float(pos_ms)
+        last, self._last = self._last, pos_ms
+        if last is None:
+            self._good = 0
+        elif pos_ms < last - LAG_JUMP_BACK_MS or pos_ms > last + LAG_JUMP_FWD_MS:
+            self._mins.clear()                 # поток открылся заново / время потока перескочило: прежняя база не годится
+            self._good = 0
+        elif pos_ms > last:
+            self._good = min(self._good + 1, LAG_GOOD_N)
+        else:
+            self._good = 0
+        if self._good < LAG_GOOD_N:
+            self.lag = None
+            return None
+        off = wall - pos_ms / 1000.0
+        if self._mins and wall - self._mins[-1][0] < self.bucket_s:
+            if off < self._mins[-1][1]:
+                self._mins[-1][1] = off
+        else:
+            self._mins.append([wall, off])
+        while self._mins and wall - self._mins[0][0] > self.window_s + self.bucket_s:
+            self._mins.popleft()
+        self.lag = max(0.0, off - min(m[1] for m in self._mins))
+        return self.lag
+
+
+def stream_pos_ms(cap) -> Optional[float]:
+    """Время потока последнего кадра, мс (None — источник его не отдаёт)."""
+    try:
+        return float(cap.get(cv2.CAP_PROP_POS_MSEC))
+    except Exception:
+        return None
 
 
 def decoder_kind(cap) -> str:
@@ -168,6 +236,7 @@ class CameraWorker(threading.Thread):
         self.data_dir = Path(data_dir)
         self.capture_factory = capture_factory
         self.level_post = level_post or post_infer      # запрос к сервису уровня (в тестах подменяется)
+        self.sound_states: Optional[Callable] = None    # (настройки камеры) -> записи групп «этапы по звуку»; задаёт менеджер
         self._hw_off = False                   # аппаратное декодирование не вышло — до остановки воркера декодируем процессором
         self._hw_fail = 0                      # сколько открытий подряд с аппаратным декодированием не дали ни одного кадра
         self._decoder = ""                     # 'gpu' | 'cpu' | '' — чем декодируется поток сейчас
@@ -181,14 +250,22 @@ class CameraWorker(threading.Thread):
         self._error = ""
         self._last_good = 0.0                 # когда последний раз пришёл кадр
         self._stamps: deque = deque(maxlen=12)
-        self._rod_hist: dict = {}                # зона-цикл → deque (время прихода кадра, угол, valid, coast): ряд для сравнения валов по времени съёмки
+        self._qlag = QueueLag()                # отставание обработки от потока (очередь кадров), см. QueueLag
+        self._lag_s: Optional[float] = None    # оно же на последнем обработанном кадре; None — время потока источник не отдаёт
+        self._lag_hist: deque = deque()        # (время, отставание) обработанных кадров за последнюю минуту — «макс очереди» на панели
+        self._skipped = 0                      # сколько кадров выброшено из очереди с запуска (догонялка)
+        self._rod_hist: dict = {}                # зона-цикл → deque (время съёмки кадра, угол, valid, coast): ряд для сравнения валов по времени съёмки
         self._history: deque = deque(maxlen=HISTORY_LEN)
         self._long: deque = deque(maxlen=LONG_LEN)
         self._bucket: Optional[list] = None   # [ts, {зона: (flow, diff, bit)}, ok] — набирающаяся секунда длинной истории
+        self._tipb: Optional[list] = None     # [секунда, {зона: [красный конец виден, синий виден]}] — набирающаяся секунда видимости отражателей
         self._stats: deque = deque(maxlen=STATS_LEN)   # корзины статистики: [номер 10-секундки, {зона: [n, Σflow, min, max, Σdiff, min, max]}]
         self._sbucket: Optional[list] = None  # набирающаяся корзина статистики
-        # зоны-палки (flow — угол) и зоны-прозрачность (flow — мутность): значение не «максимум за секунду», а самое позднее хорошее
-        self._angle_ids = frozenset(z["id"] for z in cam_cfg["zones"] if z["type"] in ("cycle", "clarity"))
+        # тренды признака «вид окна» (tex / lum / rel): только в памяти, живут через пересоздание камеры; см. motion_fill_trend
+        self._fill = fill_trend_for((str(self.data_dir), self.id), {z["id"]: repr((z.get("points"), z["fill_metric"])) for z in cam_cfg["zones"]
+                                                                    if z.get("fill_metric", "off") != "off"})
+        # зоны-палки (flow — угол), прозрачность (flow — мутность) и уровнемеры (flow — %): значение не «максимум за секунду», а самое позднее хорошее
+        self._angle_ids = frozenset(z["id"] for z in cam_cfg["zones"] if z["type"] in ("cycle", "clarity") + GAUGE_TYPES)
         self._mstats: deque = deque(maxlen=STATS_LEN)   # корзины статистики синхронности валов: [номер 10-секундки, {группа: [n, Σ delta, min, max, Σ поправка, min, max]}] (в памяти)
         self._mbucket: Optional[list] = None
         self._juice_last = 0.0                # база «Сок»: когда последний раз писали кадр и когда чистили старое
@@ -244,13 +321,20 @@ class CameraWorker(threading.Thread):
             self._trend.close()
 
     def state(self) -> dict:
+        sound = self.sound_states(self.cfg) if self.sound_states else []   # этапы по звуку живут своим потоком, не от кадров
         with self._lock:
             st = dict(self._state) if self._state else None
+            if sound:
+                if st is None:
+                    # reason пустой: мониторинг тогда покажет настоящую ошибку подключения камеры
+                    st = {"ts": time.time(), "alive": False, "reason": "", "frame_wh": None, "zones": [], "groups": []}
+                st["groups"] = list(st.get("groups") or []) + sound
             fps = 0.0
             if len(self._stamps) >= 2 and self._stamps[-1] > self._stamps[0]:
                 fps = (len(self._stamps) - 1) / (self._stamps[-1] - self._stamps[0])
             return {"id": self.id, "name": self.cfg["name"], "enabled": self.cfg["enabled"], "connected": self._connected,
                     "error": self._error, "decoder": self._decoder, "fps": round(fps, 2), "age_s": round(time.time() - self._last_good, 1) if self._last_good else None,
+                    "lag_s": None if self._lag_s is None else round(self._lag_s, 2),
                     "recording": self._rec_name, "plc": dict(self.plc), "result": st,
                     "webview": self._web.status() if self._web else None}
 
@@ -263,7 +347,9 @@ class CameraWorker(threading.Thread):
         """Как идут обработанные кадры: частота, шаг (p50/p95, мс) и поправка задержки камеры — для панели «Время кадров»."""
         with self._lock:
             st = list(self._stamps)
-        out = {"fps": None, "dt_p50_ms": None, "dt_p95_ms": None, "latency_s": float(self.cfg.get("latency_s", 0.0))}
+            lag, lags, skipped = self._lag_s, [v for _, v in self._lag_hist], self._skipped
+        out = {"fps": None, "dt_p50_ms": None, "dt_p95_ms": None, "latency_s": float(self.cfg.get("latency_s", 0.0)),
+               "lag_s": None if lag is None else round(lag, 2), "lag_max_s": round(max(lags), 2) if lags else None, "skipped": skipped}
         if len(st) >= 3 and st[-1] > st[0]:
             dts = sorted(b - a for a, b in zip(st, st[1:]))
             out["fps"] = round((len(st) - 1) / (st[-1] - st[0]), 2)
@@ -325,16 +411,22 @@ class CameraWorker(threading.Thread):
         ok, buf = cv2.imencode(".jpg", f, [cv2.IMWRITE_JPEG_QUALITY, 80])
         return (buf.tobytes(), (w, h)) if ok else None
 
-    def rod_mask_jpeg(self, zone_id: str, red=None, blue=None, max_w: int = 640, raw: bool = False, red_more=None, blue_more=None) -> Optional[bytes]:
-        """JPEG «что видит детектор» по зоне-циклу с пробными порогами цвета (None — кадра ещё нет); raw — сам кадр без масок. ValueError — нет такой зоны."""
-        cyc = self.engine.cycles.get(zone_id)
+    def rod_mask_jpeg(self, zone_id: str, red=None, blue=None, max_w: int = 640, raw: bool = False, red_more=None, blue_more=None, red_not=None, blue_not=None,
+                      tip=None, fill=None, empty=None, tol=None) -> Optional[bytes]:
+        """JPEG «что видит детектор» по зоне-циклу или уровнемеру с пробными порогами цвета (None — кадра ещё нет); raw — сам кадр без масок.
+        fill / empty / tol — пробные образцы цвета и допуск уровнемера-столбика. ValueError — нет такой зоны."""
+        cyc = self.engine.cycles.get(zone_id) or self.engine.gauges.get(zone_id)
         if cyc is None:
-            raise ValueError("нет зоны-цикла «%s» у камеры" % zone_id)
+            raise ValueError("нет зоны «%s» у камеры" % zone_id)
         with self._lock:
             f = self._frame
         if f is None or f.ndim != 3:
             return None
-        ok, buf = cv2.imencode(".jpg", cyc.mask_preview(f, red, blue, max_w, raw, red_more, blue_more), [cv2.IMWRITE_JPEG_QUALITY, 85])
+        if isinstance(cyc, TubeRT):
+            img = cyc.preview(f, max_w, raw, fill, empty, tol)
+        else:
+            img = cyc.mask_preview(f, red, blue, max_w, raw, red_more, blue_more, red_not, blue_not, tip)
+        ok, buf = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, 92 if raw and isinstance(cyc, TubeRT) else 85])
         return buf.tobytes() if ok else None
 
     def rod_pick(self, zone_id: str, u: float, v: float) -> Optional[dict]:
@@ -389,7 +481,12 @@ class CameraWorker(threading.Thread):
                 d["flow"].append(fl)
                 d["diff"].append(df)
                 d["bit"].append(bit)
-        return {"t": [round(t, 2) for t, _, _ in pts], "ok": [ok for _, _, ok in pts], "zones": zones}
+        out = {"t": [round(t, 2) for t, _, _ in pts], "ok": [ok for _, _, ok in pts], "zones": zones}
+        if window_s and window_s > 0:
+            fill = self._fill.history(window_s, points)       # признак «вид окна» — свой ряд времени: правый край тот же «сейчас»
+            if fill:
+                out["fill"] = fill
+        return out
 
     def clarity_sample(self, zone_ids: list, seconds: float) -> dict:
         """Цвет кругов-прозрачности за последние seconds секунд (медиана) — для калибровки «чистый» / «грязный»; сохраняет интерфейс."""
@@ -421,8 +518,32 @@ class CameraWorker(threading.Thread):
                 vals.append(round(100.0 * f / n, 1) if n >= max(5, step * 0.2) else None)
             series[z["id"]] = vals
             avg[z["id"]] = round(100.0 * tot_f / tot_n, 1) if tot_n else None
-        return {"window_s": window_s, "step_s": step, "t": [k * step for k in range(k0, k1 + 1)],
-                "zones": series, "avg": avg, "names": {z["id"]: z["name"] for z in zones}}
+        out = {"window_s": window_s, "step_s": step, "t": [k * step for k in range(k0, k1 + 1)],
+               "zones": series, "avg": avg, "names": {z["id"]: z["name"] for z in zones}}
+        # отражатели: доля секунд, когда виден отражатель красного (r) и синего (b) конца; только у зон, где отражатели заданы
+        tz = [z for z in zones if z.get("tip_hsv") and float(z.get("tip_w", 1.0)) > 0]
+        tips: dict = {}
+        tavg: dict = {}
+        if tz:
+            try:
+                traw = self._store.tip_visibility(self.id, {z["id"] for z in tz}, k0 * step, (k1 + 1) * step, step)
+            except Exception as e:  # noqa: BLE001
+                traw = {}
+                log.warning("[%s] видимость отражателей не прочиталась: %s", self.id, e)
+            for z in tz:
+                rows = traw.get(z["id"], {})
+                sr, sb, tot = [], [], [0, 0, 0]
+                for k in range(k0, k1 + 1):
+                    n, r, b = rows.get(k, (0, 0, 0))
+                    tot[0] += n; tot[1] += r; tot[2] += b
+                    ok = n >= max(5, step * 0.2)
+                    sr.append(round(100.0 * r / n, 1) if ok else None)
+                    sb.append(round(100.0 * b / n, 1) if ok else None)
+                tips[z["id"]] = {"r": sr, "b": sb}
+                tavg[z["id"]] = {"r": round(100.0 * tot[1] / tot[0], 1) if tot[0] else None, "b": round(100.0 * tot[2] / tot[0], 1) if tot[0] else None}
+            out["tips"] = tips
+            out["tips_avg"] = tavg
+        return out
 
     LOSS_SECTOR_DEG = 15
 
@@ -495,6 +616,9 @@ class CameraWorker(threading.Thread):
                        "flow": {"avg": round(a[1] / a[0], 4), "min": round(a[2], 4), "max": round(a[3], 4)},
                        "diff": {"avg": round(a[4] / a[0], 4), "min": round(a[5], 4), "max": round(a[6], 4)}}
                  for zid, a in acc.items() if a[0]}
+        for zid, f in self._fill.stats(window_s).items():       # вид окна: tex / lum / rel — ср / мин / макс
+            if zid in zones:
+                zones[zid]["fill"] = f
         span = round(min(window_s, time.time() - first * STATS_STEP_S), 1) if first is not None else 0.0
         return {"window_s": window_s, "span_s": max(0.0, span), "zones": zones, "groups": groups}
 
@@ -522,6 +646,7 @@ class CameraWorker(threading.Thread):
                 fps = (len(self._stamps) - 1) / (self._stamps[-1] - self._stamps[0])
             conn, err, dec = self._connected, self._error, self._decoder
         zones = {z["id"]: {"flow": round(z["flow"], 3), "diff": round(z["diff"], 3), "bit": int(z["bit"]),
+                           **({"motion": False} if z.get("motion") is False else {}),
                            **({"tex": z["tex"], "lum": z["lum"], "rel": z["rel"], "state": z["state"]} if "tex" in z else {})} for z in (st or {}).get("zones", [])}
         info = {"name": self.cfg["name"], "connected": bool(conn), "alive": bool(st and st.get("alive")),
                 "status": "ok" if (st and st.get("alive")) else ((st or {}).get("reason") or err or "нет данных"),
@@ -540,13 +665,25 @@ class CameraWorker(threading.Thread):
         size = self.cfg.get("frame_size")
         for zc in self.cfg["zones"]:
             z = zones.get(zc["id"])
-            if not z or not zc.get("points"):
+            if not z or not zc.get("points") or zc["type"] == "tube":
                 continue
             pts = np.round(np.array(scale_points(zc["points"], size, (w, h))) * k).astype(np.int32)
             color = (60, 200, 60) if z["bit"] else (50, 50, 230)
             cv2.polylines(f, [pts], True, color, 2)
-            cv2.putText(f, "%s d=%.2f f=%.2f" % (zc["id"], z["diff"], z["flow"]) + (" t=%.1f L=%.0f r=%.2f" % (z["tex"], z["lum"], z["rel"]) if "tex" in z else ""),
+            moved = "" if z.get("motion") is False else " d=%.2f f=%.2f" % (z["diff"], z["flow"])
+            cv2.putText(f, zc["id"] + moved + (" t=%.1f L=%.0f r=%.2f" % (z["tex"], z["lum"], z["rel"]) if "tex" in z else ""),
                         (int(pts[:, 0].min()), max(14, int(pts[:, 1].min()) - 6)),
+                        cv2.FONT_HERSHEY_SIMPLEX, max(0.4, fw / 1800.0), color, 1, cv2.LINE_AA)
+        for zc in self.cfg["zones"]:                # уровнемеры: шкала с процентами (линейка стрелки или разметка столбика; зону указателя нарисовал общий цикл выше)
+            if zc["type"] not in GAUGE_TYPES:
+                continue
+            zs = next((z for z in (st or {}).get("zones", []) if z["id"] == zc["id"]), None)
+            rl = np.round(np.array(scale_points(zc["ruler" if zc["type"] == "gate" else "points"], size, (w, h))) * k).astype(np.int32)
+            if zc["type"] == "tube" and len(rl) == 4:
+                rl = cv2.convexHull(rl).reshape(-1, 2)
+            color = (60, 200, 60) if zs and zs["valid"] else (150, 150, 150)
+            cv2.polylines(f, [rl], True, color, 2)
+            cv2.putText(f, "%s %s" % (zc["id"], "%.0f%%" % zs["pct"] if zs and zs["valid"] else "--"), (int(rl[:, 0].min()), max(14, int(rl[:, 1].min()) - 6)),
                         cv2.FONT_HERSHEY_SIMPLEX, max(0.4, fw / 1800.0), color, 1, cv2.LINE_AA)
         for zc in self.cfg["zones"]:                # круги прозрачности: цвет по шкале зелёный → красный и число, нет значения — серый
             if zc["type"] != "clarity":
@@ -559,7 +696,7 @@ class CameraWorker(threading.Thread):
             t = zs["turb"]
             color = (150, 150, 150) if not zs["valid"] else (0, int(200 * (1 - t / 100.0) + 55), int(60 + 170 * t / 100.0))
             cv2.circle(f, (cx, cy), rr, color, 2)
-            cv2.putText(f, "%s %s" % (zc["name"], ("%.0f" % t) if zs["valid"] else "--"), (max(0, cx - rr), max(14, cy - rr - 6)),
+            cv2.putText(f, "%s %s" % (zc["name"], "pusto" if zs.get("empty") else ("%.0f" % t) if zs["valid"] else "--"), (max(0, cx - rr), max(14, cy - rr - 6)),
                         cv2.FONT_HERSHEY_SIMPLEX, max(0.4, fw / 1800.0), color, 1, cv2.LINE_AA)
         cv2.putText(f, "%s %s" % (self.id, time.strftime("%Y-%m-%d %H:%M:%S")), (8, fh - 10), cv2.FONT_HERSHEY_SIMPLEX,
                     max(0.45, fw / 1600.0), (255, 255, 255), 1, cv2.LINE_AA)
@@ -639,6 +776,32 @@ class CameraWorker(threading.Thread):
                     b[1][zid] = (max(old[0], fl), max(old[1], df), max(old[2], bit))
             b[2] = min(b[2], ok)
 
+    def _tip_add(self, ts: float, zones: list):
+        """Живой кадр → секунда видимости отражателей (зоны с настроенными отражателями): конец «виден», если хоть в одном кадре секунды
+        сила кончика ≥ TIP_SEEN и угол не достроен по скорости. Звать под self._lock."""
+        seen = {z["id"]: (not z.get("coast") and float(z.get("lvl_tr") or 0.0) >= TIP_SEEN,
+                          not z.get("coast") and float(z.get("lvl_tb") or 0.0) >= TIP_SEEN)
+                for z in zones if z.get("type") == "cycle" and z.get("tip_on")}
+        if not seen:
+            return
+        sec = int(ts)
+        b = self._tipb
+        if b is not None and b[0] != sec:
+            self._trend.add_tip(b[0], {k: tuple(v) for k, v in b[1].items()})
+            b = None
+        if b is None:
+            self._tipb = [sec, {k: list(v) for k, v in seen.items()}]
+            return
+        for k, v in seen.items():
+            o = b[1].setdefault(k, [False, False])
+            o[0] = o[0] or v[0]
+            o[1] = o[1] or v[1]
+
+    @staticmethod
+    def _fill_zones(zones: list) -> dict:
+        """Зоны с включённым признаком «вид окна» (у остальных в состоянии нет tex): {зона: (tex, lum, rel, жом есть|None)}."""
+        return {z["id"]: (z["tex"], z["lum"], z["rel"], z.get("fill")) for z in zones if z.get("tex") is not None}
+
     def _stats_add(self, ts: float, zones: dict):
         """Кадр в норме — в 10-секундную корзину статистики. Звать под self._lock."""
         key = int(ts // STATS_STEP_S)
@@ -684,18 +847,30 @@ class CameraWorker(threading.Thread):
                 self._frame = frame
             if count_frame:
                 self._stamps.append(state["ts"])
+                lag = self._lag_s or 0.0                  # время съёмки = когда взяли − сколько кадр простоял в очереди (время потока монотонно)
+                if self._lag_s is not None:
+                    self._lag_hist.append((state["ts"], self._lag_s))
+                while self._lag_hist and state["ts"] - self._lag_hist[0][0] > LAG_MAX_WIN_S:
+                    self._lag_hist.popleft()
                 if state["alive"]:
                     for z in state["zones"]:
                         if z.get("type") == "cycle":
                             h = self._rod_hist.get(z["id"])
                             if h is None:
                                 h = self._rod_hist[z["id"]] = deque(maxlen=ROD_HIST_LEN)
-                            h.append((state["ts"], z["angle"], bool(z["valid"]), bool(z["coast"])))
+                            t_cap = state["ts"] - lag
+                            if h and t_cap <= h[-1][0]:        # минимум базы мог сдвинуться больше шага кадра: ряд для интерполяции обязан идти строго вперёд
+                                t_cap = h[-1][0] + 1e-3
+                            h.append((t_cap, z["angle"], bool(z["valid"]), bool(z["coast"])))
                 zones = {z["id"]: (z["flow"], z["diff"], z["bit"]) for z in state["zones"]}
                 self._push_history(state["ts"], zones, 1 if state["alive"] else 0)
                 if state["alive"]:
-                    # мутность без значения (нет эталонов, цвет не на шкале) в среднее / мин / макс не идёт: ноль там означал бы «чистый»
-                    bad = {z["id"] for z in state["zones"] if z["type"] == "clarity" and not z["valid"]}
+                    self._tip_add(state["ts"], state["zones"])
+                self._fill.add(state["ts"], self._fill_zones(state["zones"]), bool(state["alive"]))
+                if state["alive"]:
+                    # мутность без значения (нет эталонов, цвет не на шкале) и уровнемер без значения в среднее / мин / макс не идут:
+                    # ноль там означал бы «чистый» / «0 %»
+                    bad = {z["id"] for z in state["zones"] if z["type"] in ("clarity",) + GAUGE_TYPES and not z["valid"]}
                     self._stats_add(state["ts"], {k: v for k, v in zones.items() if k not in bad} if bad else zones)
                     self._mirror_stats_add(state["ts"], state.get("groups") or [])
             self._writes = writes
@@ -727,10 +902,12 @@ class CameraWorker(threading.Thread):
         if st is not None:
             st["corrupt"] = True
             st["ts"] = now
+            st["zones"] = self.engine.held_zones(st["zones"], now)
             with self._lock:
                 self._state = st
                 self._stamps.append(now)
                 self._push_history(now, {z["id"]: (z["flow"], z["diff"], z["bit"]) for z in st["zones"]}, 0)
+                self._fill.add(now, self._fill_zones(st["zones"]), False)
                 self._rec_write(now, {z["id"]: z for z in st["zones"]}, "битый кадр (серая каша)")
 
     def _plc_loop(self):
@@ -804,12 +981,14 @@ class CameraWorker(threading.Thread):
                     continue
                 self._note_conn(True, "")
                 self._decoder = decoder_kind(cap)
+                self._qlag.reset()                 # поток открыт заново: время потока и очередь начинаются с нуля
+                self._lag_s = None
                 got_frame = False
                 if self._last_good and time.time() - self._last_good < timeout:
                     self.engine.buf.clear()    # короткий обрыв (короче freeze_timeout_s): сравнивать со старым кадром нельзя, а биты зон держим
                 else:
                     self.engine.reset()
-                last_gray, last_proc, freeze_time, frozen = None, 0.0, 0.0, False
+                last_proc, freeze_time, frozen = 0.0, 0.0, False      # last_gray остаётся: залипший захват после переоткрытия отдаёт тот же кадр
                 if file_src:
                     fps = cap.get(cv2.CAP_PROP_FPS) or 25.0
                     file_dt = 1.0 / max(1.0, fps)
@@ -831,8 +1010,17 @@ class CameraWorker(threading.Thread):
                 next_t += file_dt
                 self._halt.wait(max(0.0, next_t - time.time()))
             now = time.time()
+            # Очередь кадров: цикл медленнее камеры (или просел процессор/диск) — кадры копятся в сокете и декодере, и обрабатываются
+            # ВСЕ по порядку, ничего не пропуская: отставание растёт и тает лишь на запасе скорости (минуты). Берём время потока кадра и,
+            # пока очередь длиннее LAG_CATCHUP_S, выбрасываем кадры без разбора: grab() дёшев, очередь уходит за секунду-две.
+            lag = None if file_src else self._qlag.update(now, stream_pos_ms(cap))
+            if lag is not None and lag > LAG_CATCHUP_S and now - last_proc < LAG_MAX_SKIP_S:
+                self._skipped += 1
+                self._last_good = now
+                continue
             if now - last_proc < interval * PROC_TOLERANCE:
                 continue
+            self._lag_s = lag
             t_dec = time.perf_counter()
             ok, frame = cap.retrieve()
             if not ok or frame is None:
@@ -847,10 +1035,12 @@ class CameraWorker(threading.Thread):
             got_frame = True
             self._hw_fail = 0
             # детектор зависшей картинки: живой поток всегда чуть «дышит» (шум матрицы)
+            still = False                      # картинка не изменилась с прошлого кадра (в том числе кадра до переоткрытия потока)
             if last_gray is not None and last_gray.shape == gray.shape:
                 last_diff = float(cv2.absdiff(last_gray, gray).mean())
                 if last_diff < cfg["freeze_eps"]:
                     freeze_time += dt
+                    still = True
                 else:
                     freeze_time = 0.0
             last_gray = gray
@@ -895,7 +1085,7 @@ class CameraWorker(threading.Thread):
             if frozen:                         # камера ожила — состояния с нуля
                 frozen = False
                 self.engine.reset()
-            st = self.engine.process(gray, now, frame)
+            st = self.engine.process(gray, now, frame, fresh=not still)
             if st is not None:
                 self._publish(st, frame, True)
             else:

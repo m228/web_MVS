@@ -161,21 +161,25 @@ async function initMultiPage() {
   setLayout(1);
   await loadMultiAutostart();
   initMultiUpdate().catch(() => {});
+  await initAnalysisOnly();
   // быстро: сохранённые RTSP-камеры (локальный файл) — сразу в ячейки; долгий опрос GigE после, их ячейки добираем в конце
   await loadSavedRtsp();
   restoreMultiLayout();
+  restoreMotionDock().catch(() => {});
   await loadCameras();
   restoreMultiLayout();
   AS.ready = true;
   startMetricsPolling();
   startMotionPolling();
+  startHostLoadPolling();
 
   window.addEventListener('beforeunload', () => {
     if (metricsTimer) clearInterval(metricsTimer);
+    // только GigE: RTSP-зрителя сервер снимает сам по обрыву соединения, а принудительное закрытие здесь выключало
+    // запись фото/видео и захват камеры у всех (достаточно было закрыть или перезагрузить одну вкладку)
     state.tiles.forEach((tile) => {
-      if (tile.connected && tile.serial) {
-        const base = tile.kind === 'rtsp' ? '/api/rtsp/close_stream_force' : '/api/camera/close_stream_force';
-        fetch(`${base}?serial_number=${encodeURIComponent(tile.serial)}`, { keepalive: true }).catch(() => {});
+      if (tile.connected && tile.serial && tile.kind !== 'rtsp') {
+        fetch(`/api/camera/close_stream_force?serial_number=${encodeURIComponent(tile.serial)}`, { keepalive: true }).catch(() => {});
       }
     });
   });

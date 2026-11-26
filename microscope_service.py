@@ -330,6 +330,9 @@ class MicroscopeService:
         sidecar_offline / error. Любой отказ виден на странице, а не только в логе."""
         # t — эпоха: мониторинг по ней отличает свежий отказ от залипшего с прошлой варки
         self._cv_status = {"state": state, "message": message, "ts": time.strftime("%H:%M:%S"), "t": time.time()}
+        if state != "running":      # «разобрано кадров N из M» идёт на каждый кадр — в журнал не пишем; остальное (итог пробы, отказы) — да
+            log_event("cv_status", "CV: %s — %s" % (state, message), "info" if state in ("idle", "ok") else "warn",
+                      {"state": state, "stage": getattr(self.fsm, "stage", None)})
 
     def cv_status(self):
         return dict(self._cv_status)
@@ -864,7 +867,7 @@ class MicroscopeService:
         return bool(self._started)
 
     CYCLE_LABELS = {"ignore_stage": "варить без стадии", "stage_from": "стадия от", "stage_to": "стадия до", "stage_extra": "плюс стадии", "sv_from": "СВ от", "sv_to": "СВ до", "trigger_mode": "триггер",
-                    "pause_sec": "пауза, с", "dwell_sec": "выдержка, с", "arrive_sensor": "датчик прихода", "retract_pos": "отвод, мкм",
+                    "pause_sec": "пауза, с", "dwell_sec": "выдержка, с", "arrive_sensor": "датчик прихода", "arrive_tol_um": "допуск подвода, мкм", "retract_pos": "отвод, мкм",
                     "pre_wash_sec": "промывка, с", "shot_interval_sec": "скрин каждые, с", "photo_format": "формат кадра"}
     MODE_LABELS = {"auto": "Автомат включён", "off": "Автомат выключен — проб нет", "manual": "Ручной режим", "fault": "Авария автомата"}
 

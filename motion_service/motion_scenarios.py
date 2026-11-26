@@ -12,12 +12,17 @@ from typing import Optional
 
 log = logging.getLogger("motion.scenarios")
 
-RULES = ("or", "and", "sum")
-SIGNALS = ("move", "pulp")      # move — бит «движется» зоны, pulp — «жом есть» (вид окна; без включённого вида окна — 0)
+RULES = ("or", "and", "sum", "value")
+SIGNALS = ("move", "pulp")      # move — бит «движется» зоны, pulp — «есть» (вид окна; без включённого вида окна — 0).
+#                                 У зоны без движения (motion=False) бит зоны и есть «есть»: оба сигнала дают одно и то же
+NO_DATA = -1                    # value (уровнемер): значения нет — не 0, потому что 0 — это настоящие «0 %». В регистре −1 = 65535: в ПЛК читать как INT
 
 
 def evaluate(rule: str, bits: list) -> int:
-    """Значения источников → значение сценария: or — хоть одно > 0, and — все > 0, sum — сумма значений (бит зоны 0/1, у группы — её значение)."""
+    """Значения источников → значение сценария: or — хоть одно > 0, and — все > 0, sum — сумма значений (бит зоны 0/1, у группы — её значение),
+    value — значение единственного источника как есть (уровнемер: % × 10 или целые %, нет данных — −1)."""
+    if rule == "value":
+        return int(bits[0]) if bits else NO_DATA
     if rule == "and":
         return 1 if bits and all(bits) else 0
     if rule == "sum":
@@ -25,16 +30,24 @@ def evaluate(rule: str, bits: list) -> int:
     return 1 if any(bits) else 0
 
 
-def source_bits(sources: list, states: dict, signal: str = "move") -> list:
+def source_bits(sources: list, states: dict, signal: str = "move", analog: bool = False, scale: int = 10, now: Optional[float] = None) -> list:
     """[{camera, zone | group}] + {id камеры: state()} → значения; камеры/зоны/группы нет или она не жива → 0. Зона: signal move —
-    бит движения, pulp — «жом есть» (z["fill"] == 1; у зоны без вида окна или без порогов решения нет → 0). Группа: её значение."""
+    бит движения, pulp — «жом есть» (z["fill"] == 1; у зоны без вида окна или без порогов решения нет → 0). Группа: её значение.
+    analog (правило value, уровнемер): проценты зоны × scale (10 — 54,3 % → 543, 1 — 54), половина округляется вверх. Камера может быть и не
+    жива: пока не вышло «держать», уровнемер отдаёт последнее значение (valid). Значения нет, нет камеры или состояние устарело (now позже
+    until: поток камеры завис и состояние не обновляется) → −1 при любом scale."""
     out = []
     for s in sources:
         res = (states.get(s["camera"]) or {}).get("result") or {}
-        bit = 0
-        if res.get("alive") and s.get("group") is not None:
+        bit = NO_DATA if analog else 0
+        if analog:
+            z = next((q for q in res.get("zones") or [] if q["id"] == s.get("zone")), None)
+            if z and z.get("valid") and not (now is not None and z.get("until") is not None and now > z["until"]):
+                bit = int(z["pct"] * scale + 0.5)     # не round(): тот даёт 54,5 → 54
+        elif s.get("group") is not None:
             for g in res.get("groups") or []:
-                if g["id"] == s["group"]:
+                # self_alive — значение считается без картинки (этапы по звуку): мёртвое видео его не обнуляет
+                if g["id"] == s["group"] and (res.get("alive") or g.get("self_alive")):
                     bit = int(g["value"])
         elif res.get("alive"):
             for z in res.get("zones") or []:
@@ -68,11 +81,13 @@ class ScenarioRunner(threading.Thread):
         live_ids = set()
         for sc in cfg.get("scenarios", []):
             live_ids.add(sc["id"])
-            bits = source_bits(sc["sources"], states, sc.get("signal", "move"))
+            scale = sc.get("scale", 10)
+            bits = source_bits(sc["sources"], states, sc.get("signal", "move"), sc["rule"] == "value", scale, now)
             value = evaluate(sc["rule"], bits)
             mb = sc.get("modbus") or cfg["modbus"]
             st = self.status.setdefault(sc["id"], {"ok": None, "error": ""})
-            st.update(name=sc["name"], value=value, bits=bits, plc=bool(mb.get("enable")), out=sc["out"], signal=sc.get("signal", "move"))
+            # scale — в статусе рядом с value: интерфейс переводит число в проценты тем форматом, которым оно посчитано
+            st.update(name=sc["name"], value=value, bits=bits, plc=bool(mb.get("enable")), out=sc["out"], signal=sc.get("signal", "move"), scale=scale)
             if not mb.get("enable") or not sc["out"]:
                 st.update(ok=None, error="")
                 continue

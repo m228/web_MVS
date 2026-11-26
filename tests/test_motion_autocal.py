@@ -286,7 +286,71 @@ def test_mask_preview_raw_and_width():
     a, b = z.mask_preview(f, max_w=240, raw=True), z.mask_preview(f, max_w=240)
     assert abs(a.shape[0] - b.shape[0]) <= 1 and a.shape[1] == b.shape[1]
     ca = z.mask_preview(f, max_w=240, raw=True)
-    crop = f[z.y0:z.y1, z.x0:z.x1]
+    crop = f[z.ty0:z.ty1, z.tx0:z.tx1]                                     # область превью — с кольцом светоотражателей (за окружностью поиска)
     assert np.array_equal(ca, cv2.resize(crop, (240, ca.shape[0]), interpolation=cv2.INTER_AREA))      # кадр области как есть: без масок, окружности и оси
     big = z.mask_preview(f, max_w=crop.shape[1] * 2, raw=True)
     assert big.shape[1] == crop.shape[1] * 2 and np.array_equal(z.mask_preview(f, max_w=crop.shape[1], raw=True), crop)    # в родном разрешении — ровно кадр
+
+
+# ───────────── исключённые цвета («не ловить»: red_not / blue_not) ─────────────
+def _not_zone(**kw):
+    return me.normalize_camera({"id": "c", "url": "x", "frame_size": [W, H], "zones": [dict({"id": "r", "type": "cycle", "center": [CX, CY], "radius": R}, **kw)]})["zones"][0]
+
+
+def test_not_colours_normalize():
+    assert _not_zone()["red_not"] == [] and _not_zone()["blue_not"] == []                    # старый конфиг без исключений — как раньше
+    assert _not_zone(blue_not=[[80, 95, 100, 200, 100, 200]])["blue_not"] == [[80, 95, 100, 200, 100, 200]]
+    assert _not_zone(red_not=[[172, 6, 50, 255, 50, 255]])["red_not"][0][:2] == [172, 6]    # красный — через ноль круга: «от» выше «до» допустимо
+    with pytest.raises(ValueError):
+        _not_zone(red_not=[[1, 2, 3, 4, 5, 6]] * 7)                                         # не больше шести
+    with pytest.raises(ValueError):
+        _not_zone(blue_not=[[1, 2, 200, 100, 5, 6]])                                        # насыщенность «от» выше «до»
+    with pytest.raises(ValueError):
+        _not_zone(blue_not=[[1, 2, 3, 4]])                                                  # нужно шесть чисел
+
+
+def _line_img(col):
+    img = np.full((H, W, 3), 110, np.uint8)                                                 # серый фон (насыщенность 0): ни в какой диапазон не входит, тонкая полоска с ним не сливается
+    cv2.line(img, (CX, CY), (CX + 150, CY), col, 5)
+    return img
+
+
+def test_not_colour_cuts_only_its_colour_from_the_mask():
+    teal = hsv_bgr(90, 160, 160)                                                            # тонкая бирюзовая полоска: как блик на корпусе, в синем диапазоне, фильтр «тонкого» её не режет
+    mk = lambda **kw: me.CycleRT(dict(base_cfg(), center=[CX, CY], radius=R, thin=9, **kw), [W, H], (W, H))   # noqa: E731
+    box = [[85, 95, 120, 200, 120, 200]]
+    z0, z1 = mk(), mk(blue_not=box)
+    img = _line_img(teal)
+    crop = lambda z: img[z.y0:z.y1, z.x0:z.x1]                                              # noqa: E731
+    assert z0._liks(crop(z0))[1].sum() > 50                                                 # без исключения лишний цвет в маске
+    assert z1._liks(crop(z1))[1].sum() < 1.0                                                # с исключением — вырезан
+    blue_stick = _line_img(BLUE)                                                            # сама палка (оттенок 100, насыщ. 210) в «ящик» не попадает
+    assert z1._liks(blue_stick[z1.y0:z1.y1, z1.x0:z1.x1])[1].sum() > 50
+    # исключение касается только своего конца: красный не пострадал
+    assert z1._liks(_line_img(RED)[z1.y0:z1.y1, z1.x0:z1.x1])[0].sum() > 50
+    # пробные исключения для превью = настроенные; None — как в настройках, [] — «исключений нет»
+    a = z1._liks(crop(z1), None, None, None, None, None, None)[1].sum()
+    b = z0._liks(crop(z0), None, None, None, None, None, box)[1].sum()
+    c = z1._liks(crop(z1), None, None, None, None, None, [])[1].sum()
+    assert a < 1.0 and b < 1.0 and c > 50
+
+
+def test_not_colour_wraps_through_zero_for_red():
+    mk = lambda **kw: me.CycleRT(dict(base_cfg(), center=[CX, CY], radius=R, thin=9, **kw), [W, H], (W, H))   # noqa: E731
+    z = mk(red_not=[[170, 5, 150, 255, 150, 255]])                                          # оттенки 170..179 и 0..5
+    crop = lambda img: img[z.y0:z.y1, z.x0:z.x1]                                            # noqa: E731
+    assert z._liks(crop(_line_img(hsv_bgr(176, 220, 210))))[0].sum() < 1.0                  # 176 — внутри, вырезан
+    assert z._liks(crop(_line_img(hsv_bgr(10, 220, 210))))[0].sum() > 50                    # 10 — снаружи, остался (красный по-прежнему ловится основным диапазоном)
+
+
+def test_not_colour_preview_and_autocal_mask():
+    z = me.CycleRT(dict(base_cfg(), center=[CX, CY], radius=R, thin=9), [W, H], (W, H))
+    f = frame(90)
+    plain, cut = z.mask_preview(f, max_w=240), z.mask_preview(f, max_w=240, red_not=[[170, 5, 100, 255, 100, 255]])
+    assert plain.shape == cut.shape and not np.array_equal(plain, cut)                      # красный конец пропал с картинки превью
+    hsv = cv2.cvtColor(_line_img(hsv_bgr(90, 160, 160)), cv2.COLOR_BGR2HSV)
+    assert ac.colour_mask(hsv, "blue", [82, 135, 55, 60], None, 1.0).sum() > 50
+    assert ac.colour_mask(hsv, "blue", [82, 135, 55, 60], None, 1.0, excl=[(85, 95, 120, 200, 120, 200)]).sum() < 1.0
+    hsv_r = cv2.cvtColor(_line_img(hsv_bgr(176, 220, 210)), cv2.COLOR_BGR2HSV)
+    assert ac.colour_mask(hsv_r, "red", [16, 165, 50, 55], None, 1.0).sum() > 50
+    assert ac.colour_mask(hsv_r, "red", [16, 165, 50, 55], None, 1.0, excl=[(170, 5, 100, 255, 100, 255)]).sum() < 1.0     # через ноль круга и в подгонке

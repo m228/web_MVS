@@ -63,6 +63,7 @@ function mvSyncUrls(cfg) {
 // состояние камеры для рисования: 'on' | 'off' | 'dead' (нет связи, фриз, битый поток)
 function mvZoneMode(st, zoneLive) {
   if (!MV.online || !st || !st.alive || st.corrupt || !zoneLive) return 'dead';
+  if (zoneLive.motion === false && zoneLive.fill == null) return 'dead';      // зона по яркости без порогов: решения нет — серая, а не «нет»
   return zoneLive.bit === 1 ? 'on' : 'off';
 }
 
@@ -120,6 +121,9 @@ function zonePointsOnTile(z, cam, g) {
   const fs = cam.frame_size || [g.nw, g.nh];
   return z.points.map((p) => [g.ox + p[0] * (g.nw / fs[0]) * g.k, g.oy + p[1] * (g.nh / fs[1]) * g.k]);
 }
+
+// зона только по яркости: что в ней сейчас
+const mvPresence = (lz) => (lz.fill == null ? 'не настроено' : lz.fill ? 'есть' : 'нет');
 
 function tileMotionStatusText(st) {
   if (!MV.online) return 'сервис КЗ не запущен';
@@ -186,6 +190,7 @@ function drawMotionTile(index) {
     if (z.enabled === false) return;
     if (z.type === 'cycle') { drawCycleOnTile(ctx, z, cam, g, live[z.id], mvZoneMode(st, live[z.id])); return; }
     if (z.type === 'clarity') { drawClarityOnTile(ctx, z, cam, g, live[z.id], !!problem); return; }
+    if (ggIs(z)) { drawGaugeOnTile(ctx, z, cam, g, live[z.id], problem); return; }
     if (z.type === 'level') return;                 // стёкла уровня рисует drawLevelOnTile ниже
     const pts = zonePointsOnTile(z, cam, g);
     const lz = live[z.id];
@@ -195,7 +200,7 @@ function drawMotionTile(index) {
     ctx.beginPath();
     pts.forEach((p, i) => (i ? ctx.lineTo(p[0], p[1]) : ctx.moveTo(p[0], p[1])));
     ctx.closePath(); ctx.fill(); ctx.stroke();
-    const label = z.name + (lz && !problem ? '  ' + Number(lz.value).toFixed(2) : '');
+    const label = z.name + (lz && !problem ? '  ' + (lz.motion === false ? mvPresence(lz) : Number(lz.value).toFixed(2)) : '');
     ctx.lineWidth = 3; ctx.strokeStyle = '#000'; ctx.strokeText(label, pts[0][0] + 4, pts[0][1] + 15);
     ctx.fillStyle = '#fff'; ctx.fillText(label, pts[0][0] + 4, pts[0][1] + 15); ctx.lineWidth = 2;
   });
@@ -209,6 +214,15 @@ function drawMotionTile(index) {
     ctx.fillStyle = bad ? '#9ca3af' : lg.alarm ? '#f87171' : '#4ade80'; ctx.fillText(txt, g.w / 2, 26 + k * 24);
     ctx.textAlign = 'left'; ctx.font = 'bold 13px sans-serif'; ctx.lineWidth = 2;
   });
+  // этапы печи: текущий этап и сколько он идёт — по центру снизу; зелёный — сброс / засыпка / прокрутка, серый — ожидание и «нет данных»
+  ((st && st.groups) || []).filter((lg) => lg.type === 'kiln' || lg.type === 'kiln_sound').forEach((lg, k) => {
+    const off = (problem && lg.type === 'kiln') || !lg.stage;       // этапам по звуку беда с картинкой не мешает
+    const txt = lg.name + ': ' + (off ? 'нет данных' : lg.stage_name + '  ' + mdKilnTime(lg.since_s));
+    ctx.font = 'bold 16px sans-serif'; ctx.textAlign = 'center';
+    ctx.lineWidth = 4; ctx.strokeStyle = '#000'; ctx.strokeText(txt, g.w / 2, g.h - 10 - k * 22);
+    ctx.fillStyle = !off && (lg.bits || []).some(Boolean) ? '#4ade80' : '#e5e7eb'; ctx.fillText(txt, g.w / 2, g.h - 10 - k * 22);
+    ctx.textAlign = 'left'; ctx.font = 'bold 13px sans-serif'; ctx.lineWidth = 2;
+  });
   // разности валов в ряду и между рядами (вкладка «Валы»): строка на пару, в которой есть вал этой камеры; красная — тревога
   const prs = typeof shPairsOfCamera === 'function' ? shPairsOfCamera(cam.id) : [];
   if (prs.length) {
@@ -218,7 +232,7 @@ function drawMotionTile(index) {
       const txt = p.short + (p.valid ? '   Δ ' + shSgn(p.angle_diff, 1) + '°   Δv ' + shSgn(p.rpm_diff, 2) : '   —');
       const y = 26 + mirrors * 24 + 16 + k * 17;
       ctx.lineWidth = 3; ctx.strokeStyle = '#000'; ctx.strokeText(txt, g.w / 2, y);
-      ctx.fillStyle = !p.valid || problem ? '#9ca3af' : (p.alarm_angle || p.alarm_rpm) ? '#f87171' : '#e5e7eb'; ctx.fillText(txt, g.w / 2, y);
+      ctx.fillStyle = !p.valid || problem || p.stale ? '#9ca3af' : (p.alarm_angle || p.alarm_rpm) ? '#f87171' : '#e5e7eb'; ctx.fillText(txt, g.w / 2, y);       // stale — кадры камер в очереди, Δ недостоверна
     });
     ctx.textAlign = 'left'; ctx.lineWidth = 2;
   }
@@ -291,25 +305,31 @@ function drawLevelOnTile(ctx, cam, g, st, problem, opts) {
 
 // прозрачность сока: круг на стакане, цвет по состоянию (прозрачный — зелёный, мутный — оранжевый, грязный — красный), подпись «название  число · слово»;
 // нет значения — серый и «—». Состояние считает сервис по порогам зоны (t_turb / t_dirty), здесь только показ.
-const MV_CLARITY_COLORS = ['#22c55e', '#f59e0b', '#ef4444'];
-const MV_CLARITY_WORDS = ['прозрачный', 'мутный', 'грязный'];
-const MV_CLARITY_SHORT = ['чист', 'мутн', 'гряз'];                // короткие слова для подписи на кадре
-const mvClarityLevel = (lz) => Math.max(0, Math.min(2, Number(lz && lz.level) || 0));
+// Пустой стакан (нет движения, включено на вкладке «Сок»): уровень 3 — тёмно-серый пунктирный кружок и «пусто»; от серого «нет значения» (#9ca3af, сплошной) отличается
+// цветом и пунктиром.
+const MV_CLARITY_COLORS = ['#22c55e', '#f59e0b', '#ef4444', '#64748b'];
+const MV_CLARITY_WORDS = ['прозрачный', 'мутный', 'грязный', 'пусто'];
+const MV_CLARITY_SHORT = ['чист', 'мутн', 'гряз', 'пусто'];       // короткие слова для подписи на кадре
+const mvClarityEmpty = (lz) => !!(lz && lz.empty);
+const mvClarityLevel = (lz) => (mvClarityEmpty(lz) ? 3 : Math.max(0, Math.min(2, Number(lz && lz.level) || 0)));
 const mvClarityColor = (lz) => MV_CLARITY_COLORS[mvClarityLevel(lz)];
 function drawClarityOnTile(ctx, z, cam, g, lz, problem) {
   const fs = cam.frame_size || [g.nw, g.nh];
   const sx = (g.nw / fs[0]) * g.k, sy = (g.nh / fs[1]) * g.k;
   const cx = g.ox + z.center[0] * sx, cy = g.oy + z.center[1] * sy, r = z.radius * (sx + sy) / 2;
+  const empty = !problem && mvClarityEmpty(lz);
   const ok = !problem && !!lz && !!lz.valid;
-  const col = ok ? mvClarityColor(lz) : '#9ca3af';
+  const col = ok || empty ? mvClarityColor(lz) : '#9ca3af';
   ctx.lineWidth = 3; ctx.strokeStyle = col;
+  if (empty) ctx.setLineDash([6, 4]);
   ctx.beginPath(); ctx.arc(cx, cy, r, 0, 7); ctx.stroke();
-  if (ok) { ctx.globalAlpha = 0.22; ctx.fillStyle = col; ctx.fill(); ctx.globalAlpha = 1; }
+  ctx.setLineDash([]);
+  if (ok || empty) { ctx.globalAlpha = 0.22; ctx.fillStyle = col; ctx.fill(); ctx.globalAlpha = 1; }
   ctx.font = 'bold 13px sans-serif'; ctx.textAlign = 'center'; ctx.lineWidth = 3; ctx.strokeStyle = '#000';
   const put = (t, y, c) => { ctx.strokeText(t, cx, y); ctx.fillStyle = c; ctx.fillText(t, cx, y); };
-  put(ok ? 'мут ' + Math.round(lz.turb) : '—', cy - r - 6, '#fff');            // над кружком в два ряда: название, под ним мутность
+  put(empty ? 'пусто' : ok ? 'мут ' + Math.round(lz.turb) : '—', cy - r - 6, '#fff');            // над кружком в два ряда: название, под ним мутность
   put(z.name, cy - r - 21, '#fff');
-  if (lz && lz.lab) {                                          // под кружком в два ряда: яркость L, под ней короткое слово состояния (цветом состояния)
+  if (lz && lz.lab && !empty) {                                // под кружком в два ряда: яркость L, под ней короткое слово состояния (цветом состояния)
     put('L ' + Math.round(lz.lab[0]), cy + r + 15, ok ? col : '#fff');
     if (ok) put(MV_CLARITY_SHORT[mvClarityLevel(lz)], cy + r + 30, col);
   }
@@ -360,9 +380,21 @@ const mvBlueAngle = (red) => (Number(red) + 180) % 360;
 
 const MV_ROD_RED = '#ef4444';
 const MV_ROD_BLUE = '#38bdf8';
+const MV_ROD_TIP = '#facc15';                                // светоотражатели на концах палки
+const MV_ROD_TIP_OFF = '#5b4d12';                            // отражатель настроен, но сейчас не виден — тёмно-жёлтая точка
+const MV_TIP_SEEN = 0.3;                                     // сила кончика (0..1), с которой отражатель конца считается видимым
+
+// отражатели концов стрелки → [красный конец виден, синий виден] или null (не настроены — точки не рисуем).
+// Сервис до 3.0.35 не знает концов по отдельности (нет tip_on): обе точки — по общей силе lvl_t, как раньше.
+function mvTipEnds(lz) {
+  if (!lz) return null;
+  if (lz.tip_on === undefined) return !lz.coast && Number(lz.lvl_t) >= 0.25 ? [true, true] : null;
+  if (!lz.tip_on) return null;
+  return lz.coast ? [false, false] : [Number(lz.lvl_tr) >= MV_TIP_SEEN, Number(lz.lvl_tb) >= MV_TIP_SEEN];
+}
 
 // чем держится угол вала: какие половины палки сейчас видны. Сервер без src (старый) — считаем, что обе.
-// both — обе, red — только красная, blue — только синяя, hold — не видно (угол по скорости)
+// both — обе, red — только красная, blue — только синяя, tip — только светоотражатели на концах, hold — не видно (угол по скорости)
 function mvRodUse(lz) {
   const s = lz && lz.src;
   return { red: s !== 'blue', blue: s !== 'red' };
@@ -385,6 +417,10 @@ function drawCycleOnTile(ctx, z, cam, g, lz, mode) {
   ctx.globalAlpha = use.blue ? 1 : 0.3;
   ctx.strokeStyle = MV_ROD_BLUE; ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(cx - dx, cy - dy); ctx.stroke();
   ctx.globalAlpha = 1; ctx.setLineDash([]);
+  const tips = mvTipEnds(lz);                                // светоотражатели на концах: виден — жёлтая точка, не виден — тёмная
+  if (tips) {
+    [[cx + dx, cy + dy, tips[0]], [cx - dx, cy - dy, tips[1]]].forEach(([px, py, on]) => { ctx.fillStyle = on ? MV_ROD_TIP : MV_ROD_TIP_OFF; ctx.beginPath(); ctx.arc(px, py, 4, 0, 7); ctx.fill(); });
+  }
   // подпись под окружностью: вал со значком направления, ниже значения красного и синего концов (0–360° от вертикали по часовой)
   const x = cx - r * 0.55, y = cy + r + 16;
   const sh = typeof shShaftOf === 'function' ? shShaftOf(cam.id, z.id) : null;          // вал назначен рядом камеры: НЛВ… и скорость
@@ -430,10 +466,13 @@ function onMotionHover(event) {
   const lz = ((st && st.zones) || []).find((z) => z.id === hit.id);
   const problem = tileMotionStatusText(st);
   tip.textContent = hit.type === 'clarity'
-    ? hit.name + (problem ? ' — ' + problem : lz && lz.valid ? ' · ' + MV_CLARITY_WORDS[mvClarityLevel(lz)] + ' · мутность ' + Math.round(lz.turb) + ' из 100' :' · нет значения: ' + ((lz && lz.reason) || 'нет данных')) + ' · двойной клик — переименовать'
+    ? hit.name + (problem ? ' — ' + problem : mvClarityEmpty(lz) ? ' · пусто (движение ' + Number(lz.move).toFixed(2) + ' ниже ' + Number(hit.mv_lo != null ? hit.mv_lo : 0.9).toFixed(2) + ') · мутность 0' : lz && lz.valid ? ' · ' + MV_CLARITY_WORDS[mvClarityLevel(lz)] + ' · мутность ' + Math.round(lz.turb) + ' из 100' :' · нет значения: ' + ((lz && lz.reason) || 'нет данных')) + ' · двойной клик — переименовать'
+    : ggIs(hit)
+    ? ggTipText(hit, lz, problem)
     : hit.name + (problem ? ' — ' + problem : lz && hit.type === 'level'
-    ? ' · заполнено ' + Number(lz.level).toFixed(1) + ' % · сырое ' + Number(lz.raw).toFixed(1) + ' %' : lz
-    ? ' · ' + (lz.bit ? 'крутится' : 'стоит') + ' · diff ' + Number(lz.diff).toFixed(2) + ' · flow ' + Number(lz.flow).toFixed(2) : '');
+    ? ' · заполнено ' + Number(lz.level).toFixed(1) + ' % · сырое ' + Number(lz.raw).toFixed(1) + ' %' : lz && lz.motion === false
+    ? ' · ' + mvPresence(lz) + ' · ' + MD_FILL_NAME[lz.fill_metric] + ' ' + mdFillFmt(lz.fill_metric, lz[lz.fill_metric]) : lz
+    ?' · ' + (lz.bit ? 'крутится' : 'стоит') + ' · diff ' + Number(lz.diff).toFixed(2) + ' · flow ' + Number(lz.flow).toFixed(2) : '');
   tip.style.left = Math.min(event.clientX + 14, window.innerWidth - 260) + 'px';
   tip.style.top = event.clientY + 16 + 'px';
   tip.hidden = false;
@@ -549,6 +588,38 @@ function initClarityDrag() {
   }, true);
 }
 
+// ---------- быстрое обновление разметки на плитках с палками (~8 Гц) ----------
+// Полный /state с секундным шагом остаётся для всего остального; тут только состояние одной камеры и только для плиток,
+// где есть палки валов. Запросы идут строго по очереди, на скрытой вкладке — пауза.
+const MV_FAST_MS = 125;
+function mvFastTiles() {
+  const out = [];
+  state.tiles.forEach((tile, i) => {
+    if (!tile || !tile.serial || tile.kind !== 'rtsp' || !tile.connected || tile.markupOff) return;
+    const cam = mvCam(tile.serial);
+    if (!cam || !cam.enabled) return;
+    const pairs = typeof shPairsOfCamera === 'function' && shPairsOfCamera(cam.id).length > 0;
+    if (pairs || cam.zones.some((z) => z.enabled !== false && z.type === 'cycle')) out.push({ i, id: cam.id, pairs });
+  });
+  return out;
+}
+
+async function mvFastLoop() {
+  const t0 = performance.now();
+  try {
+    if (MV.online && !document.hidden) {
+      const items = mvFastTiles();
+      if (items.length) {
+        const rs = await Promise.all(items.map((it) => mvApi('/api/motion/camera_state?camera=' + encodeURIComponent(it.id))));
+        rs.forEach((c, k) => { if (c && c.id && !c.error) MV.states[items[k].id] = c; });
+        if (items.some((it) => it.pairs) && typeof shLiveFetch === 'function') await shLiveFetch();
+        items.forEach((it) => drawMotionTile(it.i));
+      }
+    }
+  } catch (e) { /* опрос не должен падать */ }
+  setTimeout(mvFastLoop, Math.max(0, MV_FAST_MS - (performance.now() - t0)));
+}
+
 // ---------- опрос и инициализация ----------
 function startMotionPolling() {
   const loop = async () => {
@@ -559,7 +630,10 @@ function startMotionPolling() {
       const any = MV.dockOpen || (typeof SHW !== 'undefined' && SHW.open) || state.tiles.some((t) => t.serial && t.kind === 'rtsp' && mvEnabled(t.serial));
       if (MV.online && any) {
         const st = await mvApi('/api/motion/state');
-        if (st && st.cameras) st.cameras.forEach((c) => { MV.states[c.id] = c; });
+        if (st && st.cameras) st.cameras.forEach((c) => {         // быстрый опрос плиток мог уже принести более свежий кадр — назад не откатываем
+          const cur = MV.states[c.id];
+          if (!cur || !cur.result || !c.result || !(c.result.ts < cur.result.ts)) MV.states[c.id] = c;
+        });
         if (st && st.scenarios) MV.scen = st.scenarios;
         if (st && st.perf) MV.perf = st.perf;
         if (st && st.shafts) MV.shafts = st.shafts;       // скорости и разности валов (вкладка «Валы», подписи на плитке)
@@ -571,7 +645,7 @@ function startMotionPolling() {
     } catch (e) { /* опрос не должен падать */ }
     setTimeout(loop, 1000);
   };
-  mvRefreshConfig().then(() => { drawAllMotionTiles(); loop(); });
+  mvRefreshConfig().then(() => { drawAllMotionTiles(); loop(); mvFastLoop(); });
   window.addEventListener('resize', drawAllMotionTiles);
 }
 

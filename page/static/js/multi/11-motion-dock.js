@@ -6,7 +6,7 @@ const MD_WIN_MIN = 30;
 const MD_WIN_MAX = 7200;
 // статистика зон (ср / мин / макс за окно): считает сервис движения, окно до суток
 const MD_STAT_KEY = 'mvStatWin';
-const MD_VIS_WINS = [[7200, '2 ч'], [86400, '24 ч']];
+const MD_VIS_WINS = [[7200, '2 ч'], [14400, '4 ч'], [86400, '24 ч']];
 const MD_VIS_KEY = 'mdVisWin';
 const MD_VIS_COLORS = ['#6c7bff', '#f59e0b', '#34d399', '#f472b6'];     // левая — синяя, правая — оранжевая
 function mdLoadVisWin() {
@@ -45,7 +45,7 @@ const MD = {
   peekKey: '',          // что сейчас показано во всплывающем кадре (пусто — ничего)
   peekFrames: {},       // id камеры → { t, p } кадр для подсказки (кэш на 3 с)
   statWin: mdLoadStatWin(),
-  visWin: mdLoadVisWin(),   // период графика «Видимость палок», с
+  visWin: mdLoadVisWin(),   // период графика «Видимость стрелок», с
   vis: {},              // id камеры → ответ /api/motion/visibility
   visAt: {},            // id камеры → когда и за какой период запрошено
   stats: {},            // id камеры → ответ /api/motion/stats
@@ -109,6 +109,7 @@ function mdFmtWin(s) {
 
 function setMotionDock(open) {
   MV.dockOpen = open;
+  saveView({ dock: open });
   const dock = mdEl('motionDock');
   if (dock) dock.hidden = !open;
   document.getElementById('multiMotionBtn')?.classList.toggle('is-dock', open);
@@ -151,6 +152,33 @@ async function mdFlush() {
 }
 
 // правка → тут же в локальный конфиг, на сервис уйдёт через 3 с после последней правки
+// «вести»: по цвету / по отражателям — одним переключателем на все валы камеры (под кнопкой «Разметить»)
+const mdLeadZones = (cam) => (cam ? cam.zones.filter((z) => z.type === 'cycle' && z.enabled !== false && (z.tip_hsv || []).length) : []);
+
+function mdPaintLead(cam) {
+  const box = mdEl('mdLead');
+  if (!box) return;
+  const cyc = !!cam && cam.zones.some((z) => z.type === 'cycle' && z.enabled !== false);
+  box.hidden = !cyc;
+  if (!cyc) return;
+  const zs = mdLeadZones(cam), n = zs.filter((z) => z.tip_lead).length;
+  const cur = !zs.length ? '' : n === zs.length ? '1' : n === 0 ? '0' : 'mix';
+  box.classList.toggle('is-off', !zs.length || !cam.enabled);
+  box.querySelectorAll('button').forEach((b) => {
+    b.classList.toggle('on', b.dataset.v === cur);
+    b.disabled = !zs.length || !cam.enabled;
+  });
+  box.title = !zs.length ? 'Отражатели не заданы ни у одного вала: угол только по цвету (вкладка «Валы» → «Цвета палок» → «Светоотражатели»)'
+    : cur === 'mix' ? 'У валов по-разному: нажмите, чтобы выровнять' : 'Чем вести угол вала: по цвету (отражатели уточняют) или по отражателям (цвет показывает, где красный конец)';
+}
+
+function mdOnLead(e) {
+  const b = e.target.closest('button[data-v]');
+  const { cam } = mdCamera();
+  if (!b || b.disabled || !cam) return;
+  mdEdit(() => { mdLeadZones(cam).forEach((z) => { z.tip_lead = b.dataset.v === '1'; }); }, true);
+}
+
 function mdEdit(mutate, rerender) {
   mutate();
   mdCommit();
@@ -174,7 +202,7 @@ function mdPill(st, conn) {
 // ---------- замеры: сколько времени уходит на кадр (вкладка «Камеры») ----------
 // Этапы одного кадра идут друг за другом в потоке камеры, поэтому их среднее складываем и сравниваем с интервалом между кадрами.
 const MD_PERF_STAGES = [['frame', 'чтение кадра', 'Забрать кадр из потока и декодировать'], ['zones', 'зоны', 'Зоны «стоит / движется», в том числе шахта жома'],
-  ['shafts', 'валы', 'Поиск палок по цвету'], ['juice', 'сок', 'Мутность сока по кругам']];
+  ['shafts', 'валы', 'Поиск палок по цвету'], ['juice', 'сок', 'Мутность сока по кругам'], ['gate', 'уровнемеры', 'Столбики и стрелки: уровень по цвету']];
 function mdMs(v) { return (v == null ? '—' : (Math.round(v * 10) / 10).toString().replace('.', ',')) + ' мс'; }
 function mdPerfTotal(cid) {
   let sum = 0, mx = 0, budget = null, any = false;
@@ -251,15 +279,11 @@ function renderMotionDock() {
   sw.checked = !!(cam && cam.enabled);
   mdEl('mdSwitchWrap').hidden = all;
   mdEl('mdMark').hidden = all;
-  mdEl('mdMarkRods').hidden = all;
-  mdEl('mdMarkGlass').hidden = all;
-  if (mdEl('mdMarkJuice')) { mdEl('mdMarkJuice').hidden = all; mdEl('mdMarkJuice').disabled = !(cam && cam.enabled); }
   mdEl('mdRec').hidden = all;
   mdEl('mdAll').hidden = all;
   mdEl('mdMark').disabled = !(cam && cam.enabled);
-  mdEl('mdMarkRods').disabled = !(cam && cam.enabled);
-  mdEl('mdMarkGlass').disabled = !(cam && cam.enabled);
   mdEl('mdRec').disabled = !(cam && cam.enabled);
+  mdPaintLead(all ? null : cam);
   mdEl('mdRecAll').hidden = !all;
   mdEl('mdRecZip').hidden = !all;
   mdEl('mdRecAll').disabled = !cams.some((c) => c.enabled);
@@ -269,6 +293,7 @@ function renderMotionDock() {
   mdPaintSave();
   if (key === MD.key) return;
   MD.key = key;
+  saveView({ tab: MD.tab });
 
   const body = mdEl('mdBody');
   const restoreUi = mdSnapUi(body);
@@ -328,25 +353,42 @@ function mdOutCell(o, attrs, withState, pre = 'o', kinds = [['', 'нет'], ['ho
   // адрес нужен только когда вывод включён — иначе поле лишь теснит соседей по строке; pre — приставка полей (o — основной вывод, r — скорость)
   return `<div class="md-out"><select ${attrs} data-f="${pre}kind">${mdSel(kinds, o ? o.kind : '')}</select>` +
     (o && o.kind ? `<input type="number" min="0" max="65535" ${attrs} data-f="${pre}addr" value="${o.address}" title="Адрес регистра / coil" placeholder="адрес" />` : '') +
-    // что писать — только у зоны с признаком вида окна: бит «движется» или состояние окна 0 пусто / 1 жом стоит / 2 движется
-    (withState && o && o.kind ? `<select ${attrs} data-f="oval" title="Что писать: бит «движется» 0/1 или состояние окна: 0 — пусто, 1 — жом стоит, 2 — движется (пока пороги вида окна не заданы, пишется бит)">${mdSel([['bit', 'движение'], ['state', 'состояние окна']], o.value || 'bit')}</select>` : '') + '</div>';
+    // что писать — только у зоны с признаком яркости: бит зоны или состояние окна 0 пусто / 1 стоит / 2 движется
+    (withState && o && o.kind ? `<select ${attrs} data-f="oval" title="Что писать: бит зоны 0/1 или состояние окна: 0 — пусто, 1 — стоит, 2 — движется (пока пороги яркости не заданы, пишется бит)">${mdSel([['bit', 'движение'], ['state', 'состояние окна']], o.value || 'bit')}</select>` : '') + '</div>';
 }
 
-const MD_FILL_METRICS = [['off', 'нет'], ['rel', 'яркость к металлу'], ['lum', 'яркость'], ['tex', 'зернистость']];
-const MD_FILL_STATE = ['пусто', 'жом стоит', 'движется'];
-const MD_FILL_HELP = 'Вид окна — есть ли в нём жом. По движению пустое окно и окно со стоящим жомом неотличимы; вид окна различает их.\n' +
-  'Яркость к металлу — яркость окна, делённая на яркость металла вокруг него (свет и солнце на неё почти не влияют: жом светлый ≈ 0.9, пустое окно тёмное ≈ 0.65). Яркость — средний свет в окне, зернистость — резкость мелких деталей. Пока пороги on/off равны 0, значения только измеряются (в панели и в записи CSV), решения нет.\n' +
-  'Когда пороги заданы: выше on (или ниже off, если выбрано «жом при низком») — жом есть. Состояние окна: 0 пусто, 1 жом стоит, 2 движется.';
+const MD_FILL_METRICS = [['rel', 'яркость к металлу'], ['lum', 'яркость'], ['tex', 'зернистость']];     // «выключено» — снятая галочка блока
+const MD_FILL_STATE = ['пусто', 'стоит', 'движется'];       // зона с движением и яркостью
+const MD_FILL_PRESENCE = ['нет', 'есть'];                   // зона только по яркости
+const MD_FILL_HELP = 'Яркость — есть ли в окне материал (камень, жом). По движению пустое окно и окно со стоящим материалом неотличимы; яркость различает их.\n' +
+  'Яркость — средний свет в окне (0–255; на неё влияют свет и экспозиция камеры — поставьте экспозицию вручную). Яркость к металлу — яркость окна, делённая на яркость металла вокруг (общий свет и солнце почти не влияют). Зернистость — резкость мелких деталей.\n' +
+  'Пока пороги равны 0, значения только измеряются, решения нет (в ПЛК 0). Когда заданы: выше верхнего — есть (с галочкой «инверсия» наоборот: ниже нижнего — есть). Проще всего «обучить»: записать оба состояния.\n' +
+  'С выключенным движением зона пишет в ПЛК бит 0 / 1 по яркости. Движение и яркость вместе: 0 пусто, 1 стоит, 2 движется.\n' +
+  'График справа — 2 часа назад (колесо мыши — масштаб, наведите курсор — значение и время). Копится в сервисе движения в памяти, после его перезапуска начинается заново.';
+const MD_FILL_NAME = { rel: 'яркость к металлу', lum: 'яркость', tex: 'зернистость' };
+const mdFillFmt = (m, v) => (v == null || Number.isNaN(Number(v)) ? '–' : Number(v).toFixed(m === 'lum' ? 0 : 2));
+
+// ср / мин / макс признаков яркости за период (st — zones[id].fill из /api/motion/stats), главный признак жирным
+function mdFillStatHtml(z, cur, st) {
+  const row = (m) => {
+    const s = st && st[m];
+    const c = cur && cur.tex !== undefined ? mdFillFmt(m, cur[m]) : '–';
+    const txt = `${MD_FILL_NAME[m]}: сейчас <b class="md-zstat__cur">${c}</b>` + (s ? ` · ср ${mdFillFmt(m, s.avg)} · мин ${mdFillFmt(m, s.min)} · макс ${mdFillFmt(m, s.max)}` : ' · ср – · мин – · макс –');
+    return `<div class="md-zstat__row${z.fill_metric === m ? ' is-main' : ''}">${txt}</div>`;
+  };
+  return (z.fill_metric === 'rel' ? row('rel') : '') + row('lum') + row('tex');       // «к металлу» считается только когда выбран (кольцо вокруг окна), у остальных он ноль
+}
 function mdFillText(z) {
   if (!z || z.tex === undefined) return '–';
   const base = z.fill_metric === 'lum' ? 'яркость ' + Number(z.lum).toFixed(0) : z.fill_metric === 'rel' ? 'отн. яркость ' + Number(z.rel).toFixed(2) : 'зерн. ' + Number(z.tex).toFixed(2);
-  return z.state == null ? base + ' · пороги не заданы' : base + ' · ' + MD_FILL_STATE[z.state];
+  return z.state == null ? base + ' · пороги не заданы' : base + ' · ' + (z.motion === false ? MD_FILL_PRESENCE : MD_FILL_STATE)[z.state];
 }
 
 // зона слева, её тренд справа
 function mdZoneCardHtml(cam, z, i) {
   const a = `data-md="z" data-cam="${escapeHtml(cam.id)}" data-i="${i}"`;
   const k = escapeHtml(cam.id + '-' + z.id);
+  if (ggIs(z)) return ggCardHtml(cam, z, i);
   if (z.type === 'cycle') {
     return `<div class="md-zone">
     <div class="md-zone__ctl">
@@ -363,51 +405,63 @@ function mdZoneCardHtml(cam, z, i) {
   </div>`;
   }
   const open = MD.openAll || MD.open[k];
+  const mot = z.motion !== false;                                   // движение считается (у старых зон поля нет — значит да)
   const fm = z.fill_metric && z.fill_metric !== 'off';
+  // блок «Движение» / «Яркость»: галочка в заголовке; единственный включённый снять нельзя — зоне нечем было бы решать
+  const sw = (f, on, only, title, extra) => `<div class="md-zr__sw"><label class="md-lbl" title="${only ? 'Должен остаться хотя бы один блок: сначала включите другой' : title}"><input type="checkbox" ${a} data-f="${f}"${on ? ' checked' : ''}${only ? ' disabled' : ''} /> <span class="md-zr__t">${f === 'motion' ? 'Движение' : 'Яркость'}</span></label>${extra || ''}</div>`;
   const arrows = (hi, lo, extra) => `<span class="md-ar" title="включить, когда значение ${z.invert ? 'НИЖЕ off' : 'ВЫШЕ on'}">▲</span>${hi}<span class="md-ar" title="выключить, когда значение ${z.invert ? 'выше on' : 'ниже off'}">▼</span>${lo}${extra || ''}`;
-  return `<div class="md-zr${open ? ' is-open' : ''}" id="md-zr-${k}" data-st="n">
-    <div class="md-zr__head" data-zt="${k}" title="Нажмите, чтобы раскрыть настройки окна">
-      <span class="md-zr__bar"></span>
-      <div class="md-zr__nm"><b>${escapeHtml(z.name)}</b><span class="md-zr__pill" id="md-zp-${k}">–</span></div>
-      <div class="md-zr__gz"><div class="md-gl"><span>движ.</span><i id="md-gm-${k}"></i><em id="md-zv-${k}">–</em></div>${fm ? `<div class="md-gl"><span>вид</span><i id="md-gf-${k}"></i><em id="md-gfv-${k}">–</em></div>` : ''}</div>
-      <div class="md-zone__chart"><canvas id="md-ch-${k}" height="56"></canvas></div>
-      <span class="md-zr__chev">⌄</span>
-    </div>
-    <div class="md-zr__det">
-      <div class="md-zr__col">
-        <div class="md-zr__t">Движение</div>
-        <div class="md-zone__row"><span class="md-lbl">название</span><input type="text" ${a} data-f="name" value="${escapeHtml(z.name)}" title="${escapeHtml(z.id)}" />
-          <label class="md-lbl" title="Считать оптический поток (flow) для этой зоны. Самое тяжёлое в анализе: если зона решает по diff и flow не нужен, выключите — процессор разгрузится, а flow этой зоны в графиках и записях будет 0"><input type="checkbox" ${a} data-f="trackflow"${z.metric === 'flow' ? ' checked disabled' : (z.track_flow === false ? '' : ' checked')} /> flow</label></div>
+  // пороги яркости: сначала тот, при котором материал ЕСТЬ. Обычно — выше on; с инверсией — ниже off (стрелки и подписи меняются местами)
+  const fillArrows = (hi, lo) => (z.fill_invert
+    ? `<span class="md-ar" title="есть, когда значение НИЖЕ нижнего порога">▼</span>${lo}<span class="md-ar" title="нет, когда значение выше верхнего порога">▲</span>${hi}`
+    : `<span class="md-ar" title="есть, когда значение ВЫШЕ верхнего порога">▲</span>${hi}<span class="md-ar" title="нет, когда значение ниже нижнего порога">▼</span>${lo}`);
+  const motBody = mot ? `
         <div class="md-zone__row"><span class="md-lbl">метрика</span><select ${a} data-f="type">${mdSel([['motion', 'motion'], ['presence', 'presence']], z.type)}</select>
           <select ${a} data-f="metric">${mdSel([['diff', 'diff'], ['flow', 'flow']], z.metric)}</select></div>
         <div class="md-zone__row"><span class="md-lbl">порог</span>${arrows(mdNum(a + ' data-f="on"', z.on, 'step="0.05" min="0"'), mdNum(a + ' data-f="off"', z.off, 'step="0.05" min="0"'))}</div>
         <div class="md-zone__row"><span class="md-lbl" title="Защита от одиночных всплесков: бит зоны меняется, только когда порог выполнен столько кадров анализа ПОДРЯД. Один проскочивший кадр счёт сбрасывает.">кадров подряд</span>${arrows(mdNum(a + ' data-f="fon"', z.frames_to_on == null ? 3 : z.frames_to_on, 'min="1" max="1000"'), mdNum(a + ' data-f="foff"', z.frames_to_off == null ? 4 : z.frames_to_off, 'min="1" max="1000"'))}</div>
         ${mdLearnHtml(cam, z, a)}
-        <div class="md-zstat" id="md-st-${k}" title="Значения диффа и потока по зоне: сейчас, среднее, минимум и максимум за выбранный период (только кадры в норме). Жирным — метрика, по которой решает зона."></div>
+        <div class="md-zstat" id="md-st-${k}" title="Значения диффа и потока по зоне: сейчас, среднее, минимум и максимум за выбранный период (только кадры в норме). Жирным — метрика, по которой решает зона."></div>` : '';
+  const fillBody = fm ? `
+        <div class="md-zone__row"><span class="md-lbl">признак</span><select ${a} data-f="fmetric">${mdSel(MD_FILL_METRICS, z.fill_metric)}</select></div>
+        <div class="md-zone__row"><span class="md-lbl">порог</span>${fillArrows(mdNum(a + ' data-f="fllon"', z.fill_on || 0, 'step="0.01" min="0" title="Верхний порог яркости. 0 — пороги не заданы, только измерение"'), mdNum(a + ' data-f="flloff"', z.fill_off || 0, 'step="0.01" min="0" title="Нижний порог яркости"'))}
+          <label class="md-lbl" title="Перевернуть решение: есть, когда значение НИЖЕ нижнего порога (нет — когда выше верхнего). Включайте, если материал в этом окне темнее, чем пустое место. «Обучить» ставит галочку само."><input type="checkbox" ${a} data-f="finvert"${z.fill_invert ? ' checked' : ''} /> инверсия</label></div>
+        ${mdBrightHtml(cam, z, a)}
+        <div class="md-zone__row"><span class="md-lbl md-fill" id="md-zf-${k}">–</span></div>
+        <div class="md-zstat" id="md-fst-${k}" title="Признаки яркости: сейчас, среднее, минимум и максимум за выбранный период (только кадры в норме). Жирным — признак, по которому решает окно."></div>` : '';
+  return `<div class="md-zr${open ? ' is-open' : ''}" id="md-zr-${k}" data-st="n">
+    <div class="md-zr__head" data-zt="${k}" title="Нажмите, чтобы раскрыть настройки окна">
+      <span class="md-zr__bar"></span>
+      <div class="md-zr__nm"><b>${escapeHtml(z.name)}</b><span class="md-zr__pill" id="md-zp-${k}">–</span></div>
+      <div class="md-zr__gz">${mot ? `<div class="md-gl"><span>движ.</span><i id="md-gm-${k}"></i><em id="md-zv-${k}">–</em></div>` : ''}${fm ? `<div class="md-gl"><span>ярк.</span><i id="md-gf-${k}"></i><em id="md-gfv-${k}">–</em></div>` : ''}</div>
+      <div class="md-zone__chart"><canvas id="md-ch-${k}" data-mini="1" height="40"></canvas></div>
+      <span class="md-zr__chev">⌄</span>
+    </div>
+    <div class="md-zr__det${mot ? '' : ' no-mot'}${fm ? '' : ' no-fill'}">
+      <div class="md-zr__col">
+        <div class="md-zone__row"><span class="md-lbl">название</span><input type="text" ${a} data-f="name" value="${escapeHtml(z.name)}" title="${escapeHtml(z.id)}" /></div>
+        ${sw('motion', mot, mot && !fm, 'Смотреть, движется ли что-то в зоне. Выключено — движение не считается, зона решает только по яркости', mot ? `<label class="md-lbl" title="Считать оптический поток (flow) для этой зоны. Самое тяжёлое в анализе: если зона решает по diff и flow не нужен, выключите — процессор разгрузится, а flow этой зоны в графиках и записях будет 0"><input type="checkbox" ${a} data-f="trackflow"${z.metric === 'flow' ? ' checked disabled' : (z.track_flow === false ? '' : ' checked')} /> flow</label>` : '')}${motBody}
       </div>
       <div class="md-zr__col">
-        <div class="md-zr__t">Вид окна ${mdHelp(MD_FILL_HELP)}</div>
-        <div class="md-zone__row"><span class="md-lbl">признак</span><select ${a} data-f="fmetric">${mdSel(MD_FILL_METRICS, z.fill_metric || 'off')}</select></div>` +
-      (fm ? `<div class="md-zone__row"><span class="md-lbl">порог</span>${arrows(mdNum(a + ' data-f="fllon"', z.fill_on || 0, 'step="0.01" min="0" title="Верхний порог вида окна. 0 — пороги не заданы, только измерение"'), mdNum(a + ' data-f="flloff"', z.fill_off || 0, 'step="0.01" min="0" title="Нижний порог вида окна"'))}</div>
-        <div class="md-zone__row"><span class="md-lbl md-fill" id="md-zf-${k}">–</span></div>` : '') +
+        ${sw('fillon', fm, fm && !mot, 'Смотреть на яркость зоны: есть ли в ней материал', mdHelp(MD_FILL_HELP))}${fillBody}` +
       (z.out ? `<div class="md-zone__row"><span class="md-lbl" title="Прямой вывод из карточки зоны больше не настраивается: пишите в ПЛК через сценарий. Старый вывод продолжает работать, пока его не убрать.">ПЛК (старый вывод): ${z.out.kind === 'coil' ? 'coil' : 'рег.'} ${z.out.address}</span><button type="button" class="btn-secondary md-x" ${a} data-f="oclear" title="Убрать старый вывод из зоны">убрать</button></div>` : '') + `
         <div class="md-zr__del"><button type="button" class="btn-secondary md-x" ${a} data-f="del" title="Удалить зону">удалить окно</button></div>
       </div>
+      <div class="md-zr__charts">${mot ? mdBigChartHtml('motion', 'md-mch-' + k, 'движение') : ''}${fm ? mdBigChartHtml('fill', 'md-fch-' + k, 'яркость') : ''}</div>
     </div>
   </div>`;
 }
 
-// «Видимость палок»: доля времени, когда палка найдена, окнами за период; смотреть, помогли ли подсветка, свет или сдвиг камеры
+// «Видимость стрелок»: доля времени, когда стрелка найдена, окнами за период; смотреть, помогли ли подсветка, свет или сдвиг камеры
 function mdVisHtml(cam) {
   if (!cam.zones.some((z) => z.type === 'cycle' && z.enabled !== false)) return '';
   const k = escapeHtml(cam.id);
   return `<div class="md-zone md-vis">
     <div class="md-zone__ctl">
-      <div class="md-zone__row"><b>Видимость палок</b><span class="md-sp"></span><span class="md-lbl">за</span><select data-md="vis" title="За какой период показать график и среднее">${mdSel(MD_VIS_WINS, MD.visWin)}</select></div>
+      <div class="md-zone__row"><b>Видимость стрелок и отражателей</b><span class="md-sp"></span><span class="md-lbl">за</span><select data-md="vis" title="За какой период показать график и среднее">${mdSel(MD_VIS_WINS, MD.visWin)}</select></div>
       <div class="md-zstat" id="md-vl-${k}">загружаю…</div>
-      <div class="net-hint" title="Секунда считается «найдена», если палку увидели хотя бы в одном кадре секунды; когда палки нет или она достроена по скорости — «не найдена». Время без картинки (обрыв связи) в расчёт не идёт.">доля времени, когда палка найдена</div>
+      <div class="net-hint" title="Секунда считается «найдена», если стрелку увидели хотя бы в одном кадре секунды; когда стрелки нет или она достроена по скорости — «не найдена». Отражатель конца «виден», если хотя бы в одном кадре секунды сила кончика не меньше 0,3 и угол не достроен по скорости. Красный конец — тот, что по цвету определён как красный. Время без картинки (обрыв связи) в расчёт не идёт. Сплошная линия — стрелка, пунктир — отражатель красного конца, точки — отражатель синего.">доля времени, когда стрелка найдена · сплошная — стрелка, пунктир — красный отражатель, точки — синий</div>
     </div>
-    <div class="md-zone__chart"><canvas id="md-vis-${k}" height="84"></canvas></div>
+    <div class="md-zone__chart"><canvas id="md-vis-${k}" height="110"></canvas></div>
   </div>`;
 }
 
@@ -424,19 +478,23 @@ function mdDrawVis(cam) {
   const ids = d && d.zones ? Object.keys(d.zones) : [];
   if (lg) {
     lg.innerHTML = !d ? 'загружаю…' : d.error ? escapeHtml(d.error)
-      : ids.map((id, n) => `<div style="color:${MD_VIS_COLORS[n % MD_VIS_COLORS.length]}">● ${escapeHtml((d.names && d.names[id]) || id)} <b>${d.avg[id] == null ? '—' : d.avg[id].toFixed(1) + ' %'}</b></div>`).join('');
+      : ids.map((id, n) => {
+        const nm = escapeHtml((d.names && d.names[id]) || id), col = MD_VIS_COLORS[n % MD_VIS_COLORS.length], pc = (v) => (v == null ? '—' : v.toFixed(1) + ' %');
+        const ta = d.tips_avg && d.tips_avg[id];
+        return `<div style="color:${col}">● ${nm} — стрелка <b>${pc(d.avg[id])}</b></div>` +
+          (ta ? `<div style="color:${col}">┄ ${nm} — отражатель красного конца <b>${pc(ta.r)}</b> · синего <b>${pc(ta.b)}</b></div>` : '');
+      }).join('') + (!d.tips && mdCamHasTips(cam) ? '<div class="net-hint">отражатели: обновите сервис движения</div>' : '');
   }
-  const w = cv.clientWidth, hh = cv.height || 84;
+  const w = cv.clientWidth, hh = cv.height || 110;
   if (!w) return;
   if (cv.width !== w) cv.width = w;
   const g = cv.getContext('2d');
   g.clearRect(0, 0, w, hh);
   g.font = '10px sans-serif'; g.fillStyle = '#94a3b8';
-  const vals = ids.flatMap((id) => d.zones[id]).filter((v) => v != null);
+  const vals = ids.flatMap((id) => d.zones[id]).filter((v) => v != null);   // пусто у стрелок — рисуем только если есть хоть какие-то данные
   if (!d || !d.t || !vals.length) { g.fillText(d && d.error ? '' : d ? 'нет данных за период' : 'загружаю…', 8, hh / 2); return; }
   const padL = 30, padB = 14, plotW = w - padL - 4, plotH = hh - padB - 6;
-  const lo = Math.min(90, Math.floor((Math.min(...vals) - 2) / 5) * 5), hi = 100;
-  const stepV = hi - lo > 30 ? 20 : hi - lo > 15 ? 10 : 5;
+  const lo = 0, hi = 100, stepV = 20;                       // шкала всегда 0–100 %
   const X = (i) => padL + (d.t.length > 1 ? (i / (d.t.length - 1)) * plotW : 0);
   const Y = (v) => 3 + plotH - ((v - lo) / (hi - lo)) * plotH;
   g.lineWidth = 1; g.strokeStyle = 'rgba(148,163,184,.22)';
@@ -459,8 +517,24 @@ function mdDrawVis(cam) {
       pen = true;
     });
     g.stroke();
+    const tp = d.tips && d.tips[id];
+    if (!tp) return;
+    [['r', [6, 3], 1.6], ['b', [1.5, 3], 1.3]].forEach(([k, dash, lw]) => {      // отражатель красного конца — пунктир, синего — точки
+      g.strokeStyle = MD_VIS_COLORS[n % MD_VIS_COLORS.length]; g.lineWidth = lw; g.setLineDash(dash); g.beginPath();
+      let on = false;
+      tp[k].forEach((v, i) => {
+        if (v == null) { on = false; return; }
+        if (on) g.lineTo(X(i), Y(v)); else g.moveTo(X(i), Y(v));
+        on = true;
+      });
+      g.stroke();
+    });
+    g.setLineDash([]);
   });
 }
+
+// у камеры есть зона-цикл с отражателями (для подсказки «обновите сервис», если он не прислал tips)
+const mdCamHasTips = (cam) => cam.zones.some((z) => z.type === 'cycle' && z.enabled !== false && (z.tip_hsv || []).length && Number(z.tip_w == null ? 1 : z.tip_w) > 0);
 
 // подтянуть с сервиса (не чаще раза в минуту, сразу при смене периода) и нарисовать
 async function mdVisRefresh(cams, force) {
@@ -565,7 +639,7 @@ function mdCamsTabHtml() {
   const rows = info.map(({ c, u }) => {
     const ip = mdIp(c.url);
     const twins = (byIp[ip] || []).filter((x) => x.id !== c.id);
-    const flows = c.zones.filter((z) => z.type !== 'level' && z.type !== 'clarity' && (z.metric === 'flow' || z.track_flow !== false)).length;
+    const flows = c.zones.filter((z) => z.type !== 'level' && z.type !== 'clarity' && !ggIs(z) && z.motion !== false && (z.metric === 'flow' || z.track_flow !== false)).length;
     const inUi = state.cameras.some((q) => q.serial === c.id);
     const use = u.used
       ? [u.scen.length ? 'сценарии: ' + u.scen.map(escapeHtml).join(', ') : '', u.plc.length ? 'в ПЛК: ' + u.plc.map(escapeHtml).join(', ') : ''].filter(Boolean).join('<br>')
@@ -588,7 +662,7 @@ function mdOnCamRow(t) {
   const cam = mvCam(t.dataset.cam);
   if (!cam || t.dataset.f !== 'rm') return;
   if (mdCamUsage(cam).used) return;
-  if (!confirm('Убрать камеру «' + cam.name + '» (' + cam.id + ') вместе с её зонами (' + cam.zones.length + ')? Она нигде не используется.')) return;
+  if (!confirm('Убрать камеру «' + cam.name + '» (' + cam.id + ') вместе с её зонами (' + cam.zones.length + ')? Она нигде не используется. Если для неё включена запись видео и звука, запись остановится.')) return;
   mdPeekHide();
   mdEdit(() => { MV.cfg.cameras = MV.cfg.cameras.filter((c) => c.id !== cam.id); }, true);
 }
@@ -621,16 +695,42 @@ function mdZonesTabHtml(mode, cam) {
     });
     html += '</div>';
   }
-  html += all ? mdCamerasListHtml() : mdCameraParamsHtml(cam);
+  html += all ? mdCamerasListHtml() : mdCameraParamsHtml(cam) + (typeof vrHtml === 'function' ? vrHtml(cam) : '');   // запись видео и звука (22-videorec.js)
   return html;
 }
 
 function mdOnZone(t, cam) {
   const i = Number(t.dataset.i), f = t.dataset.f, z = cam.zones[i];
   if (!z) return;
-  if (mdOnLearn(t, cam, z)) return;
+  if (mdOnLearn(t, cam, z) || mdOnBright(t, cam, z)) return;
+  if (ggIs(z) && ggOnZone(t, cam, z)) return;
   if (f === 'hsvreset') {
-    mdEdit(() => { z.red_hsv = SH_RED_DEF.slice(); z.blue_hsv = SH_BLUE_DEF.slice(); z.red_more = []; z.blue_more = []; }, true);
+    mdEdit(() => { z.red_hsv = SH_RED_DEF.slice(); z.blue_hsv = SH_BLUE_DEF.slice(); z.red_more = []; z.blue_more = []; z.red_not = []; z.blue_not = []; }, true);
+    return;
+  }
+  if (f === 'tipwhite') {                                         // светоотражатели: добавить «пересвет» (белое под прожектором) одной кнопкой
+    mdEdit(() => { const arr = z.tip_hsv || []; if (arr.length < 6 && !arr.some((r) => r.join() === SH_TIP_WHITE.join())) z.tip_hsv = arr.concat([SH_TIP_WHITE.slice()]); }, true);
+    return;
+  }
+  if (f === 'hsvndel') {                                       // убрать исключённый цвет («не ловить») конца палки или цвет светоотражателя (w = 'tip')
+    mdEdit(() => { (z[t.dataset.w === 'tip' ? 'tip_hsv' : t.dataset.w + '_not'] || []).splice(Number(t.dataset.n), 1); }, true);
+    return;
+  }
+  if (f === 'hsvn') {                                             // порог «ящика» [H1, H2, S1, S2, V1, V2]: исключённый цвет конца (red/blue_not) или светоотражатель (tip_hsv); оттенок «от» выше «до» — через ноль круга
+    const w = t.dataset.w, n = Number(t.dataset.n), k = Number(t.dataset.k), key = w === 'tip' ? 'tip_hsv' : w + '_not';
+    let fixed = false;
+    mdEdit(() => {
+      const arr = (z[key] || []).map((r) => r.slice());
+      const r = arr[n];
+      if (!r) return;
+      r[k] = Math.max(0, Math.min(k < 2 ? 179 : 255, parseInt(t.value, 10) || 0));
+      if (k >= 2) {                                               // «от» насыщенности/яркости не выше «до»: пары (2,3) и (4,5)
+        const lo = k & ~1, hi = lo + 1;
+        if (r[lo] > r[hi]) { if (k === lo) r[hi] = r[lo]; else r[lo] = r[hi]; fixed = true; }
+      }
+      z[key] = arr;
+    }, false);
+    if (fixed) { MD.key = ''; renderMotionDock(); }
     return;
   }
   if (f === 'hsvxdel') {                                          // убрать дополнительный цвет конца палки
@@ -668,11 +768,20 @@ function mdOnZone(t, cam) {
     mdEdit(() => {
       cam.zones.splice(i, 1);
       (cam.groups || []).forEach((g) => { g.zones = g.zones.filter((x) => x !== z.id); if (g.order) g.order = g.order.filter((x) => x !== z.id); });
-      cam.groups = (cam.groups || []).filter((g) => g.zones.length && (g.type !== 'mirror' || g.zones.length === 2));
+      cam.groups = (cam.groups || []).filter((g) => g.type === 'kiln_sound' || (g.zones.length && (g.type !== 'mirror' || g.zones.length === 2)));   // у звука зон нет
       (MV.cfg.scenarios || []).forEach((s) => { s.sources = s.sources.filter((x) => !(x.camera === cam.id && x.zone === z.id)); });
     }, true);
     return;
   }
+  // ключ motion сервис 3.0.46+ отдаёт у сохранённой зоны всегда; старый молча выбросил бы его — галочка «снялась» бы только на экране,
+  // а в ПЛК так и шёл бы бит движения
+  if (f === 'motion' && !('motion' in z)) {
+    t.checked = true;
+    alert(MV.dirty ? 'Подождите пару секунд, пока зона сохранится, и нажмите ещё раз.'
+      : 'Сервис движения старый: зона без движения требует motion 3.0.46 или новее. Обновите программу и попробуйте ещё раз.');
+    return;
+  }
+  if (f === 'fillon' && !t.checked && z.fill_on > 0 && !confirm('Выключить «Яркость» у зоны «' + z.name + '»? Заданные пороги яркости сотрутся.')) { t.checked = true; return; }
   mdEdit(() => {
     if (f === 'radius') z.radius = Math.max(20, parseFloat(t.value) || 20);
     else if (f === 'cx' || f === 'cy') z.center[f === 'cx' ? 0 : 1] = Math.max(0, parseFloat(t.value) || 0);
@@ -687,10 +796,16 @@ function mdOnZone(t, cam) {
     else if (f === 'rkind') z.rpm_out = t.value ? { kind: 'holding', address: (z.rpm_out && z.rpm_out.address) || 0 } : null;
     else if (f === 'raddr' && z.rpm_out) z.rpm_out.address = parseInt(t.value, 10) || 0;
     else if (f === 'oval' && z.out) z.out.value = t.value;
-    else if (f === 'fmetric') { z.fill_metric = t.value; z.fill_invert = t.value === 'tex'; }   // яркость: жом светлее; зернистость: жом гладче
+    else if (f === 'motion') z.motion = t.checked;
+    else if (f === 'fillon' || f === 'fmetric') {                   // другой признак — другие числа: прежние пороги не годятся
+      z.fill_metric = f === 'fmetric' ? t.value : (t.checked ? 'lum' : 'off');
+      z.fill_invert = z.fill_metric === 'tex';                      // яркость: материал светлее; зернистость: жом гладче
+      z.fill_on = 0; z.fill_off = 0;
+    } else if (f === 'finvert') z.fill_invert = t.checked;
     else if (f === 'fllon' || f === 'flloff') z[f === 'fllon' ? 'fill_on' : 'fill_off'] = Math.max(0, parseFloat(t.value) || 0);
     else if (f === 'oclear') z.out = null;
-  }, f === 'type' || f === 'metric' || f === 'okind' || f === 'rkind' || f === 'fmetric' || f === 'oclear');
+  }, f === 'type' || f === 'metric' || f === 'okind' || f === 'rkind' || f === 'motion' || f === 'fillon' || f === 'fmetric' || f === 'finvert' || f === 'oclear');
+  if (f === 'fllon' || f === 'flloff') mdBrRepaint(cam, z);      // порог поправили руками — строка «пороги стоят» больше не про них
 }
 
 // «Проверить связь с сервером»: пульс на сервер мониторинга прямо сейчас (тот же, что шлёт приложение раз в несколько минут) и ответ сервера
@@ -749,14 +864,15 @@ async function mdDrawTrends() {
   if (MD.trendBusy) { MD.trendDirty = true; return; }
   const cams = mdShownCams().filter((c) => c.zones.length);
   if (!cams.length) return;
-  const first = document.querySelector('.md-zone__chart canvas');
-  const pts = Math.max(60, Math.min(1200, first ? first.clientWidth : 500));
+  // точек — по самому широкому графику (первый на странице может быть свёрнутым)
+  const wide = Math.max(0, ...Array.from(document.querySelectorAll('.md-zone__chart canvas'), (c) => c.clientWidth));
+  const pts = Math.max(60, Math.min(1200, wide || 500));
   MD.trendBusy = true;
   const res = await Promise.all(cams.map((c) => mvApi('/api/motion/history?camera=' + encodeURIComponent(c.id) + '&window=' + MD.win + '&points=' + pts)));
   MD.trendBusy = false;
   res.forEach((h, k) => {
     if (!h || h.error || !h.zones) return;
-    cams[k].zones.forEach((z) => mdDrawChart(cams[k], z, h.zones[z.id], h.t || [], h.ok || []));
+    cams[k].zones.forEach((z) => { mdDrawChart(cams[k], z, h.zones[z.id], h.t || [], h.ok || []); mdDrawFillChart(cams[k], z, h.fill); });
     mdDrawMirrorCharts(cams[k], h);
     mdDrawLevelChart(cams[k], h);
   });
@@ -777,12 +893,14 @@ function mdRodAnglesHtml(z) {
 
 // чем держится угол: показываем только когда видна одна половина палки (обе видны — это норма)
 function mdRodSrcHtml(z) {
+  if (z.src === 'tip') return ` · <span style="color:${MV_ROD_TIP}" title="Цветные половины палки сейчас не видны, угол держится по светоотражателям на концах">по светоотражателям</span>`;
   const t = z.src === 'red' ? 'только красная половина' : z.src === 'blue' ? 'только синяя половина' : '';
   const col = z.src === 'red' ? MV_ROD_RED : MV_ROD_BLUE;
   return t ? ` · <span style="color:${col}" title="Вторая половина палки сейчас не видна, угол считается по этой">${t}</span>` : '';
 }
 
 function mdZoneStatHtml(z, cur, st) {
+  if (ggIs(z)) return ggStatHtml(z, cur, st);
   if (z.type === 'cycle') {
     return cur && cur.valid ? `${mdRodAnglesHtml(cur)} · ${cur.coast ? '<span title="Палки не видно (переход по тёмному, блик): угол держится по скорости вращения до coast_s секунд">не видно, держу по скорости</span>' : 'уверенность ' + Number(cur.conf).toFixed(2) + mdRodSrcHtml(cur)}` : 'палка не найдена';
   }
@@ -818,15 +936,22 @@ function mdPaintZoneStats() {
     ((res && res.zones) || []).forEach((z) => { live[z.id] = z; });
     mdLevelCardLive(c, sr);
     c.zones.forEach((z) => {
+      const fe = mdEl('md-fst-' + c.id + '-' + z.id);
+      if (fe && z.fill_metric && z.fill_metric !== 'off') {
+        const zs = sr && sr.zones && sr.zones[z.id];
+        fe.innerHTML = mdFillStatHtml(z, live[z.id], zs && zs.fill);
+      }
       const el = mdEl('md-st-' + c.id + '-' + z.id);
-      if (!el) return;
-      el.innerHTML = mdZoneStatHtml(z, live[z.id], sr && sr.zones && sr.zones[z.id]);
-      // накоплено меньше, чем просили (сервис недавно стартовал): честно говорим, за сколько на самом деле
-      if (z.type !== 'cycle' && sr && sr.zones && sr.zones[z.id] && sr.span_s < sr.window_s * 0.9) {
+      if (el) el.innerHTML = mdZoneStatHtml(z, live[z.id], sr && sr.zones && sr.zones[z.id]);
+      if (el && z.type === 'gate') ggCalPaint(c, z);          // «это 0 % / 100 %» активны, пока указатель виден
+      // накоплено меньше, чем просили (сервис недавно стартовал): честно говорим, за сколько на самом деле.
+      // У зоны без движения блока diff / flow нет — пометка идёт под яркостью
+      const box = el || fe;
+      if (box && z.type !== 'cycle' && sr && sr.zones && sr.zones[z.id] && sr.span_s < sr.window_s * 0.9) {
         const n = document.createElement('div');
         n.className = 'md-zstat__note';
         n.textContent = 'накоплено за ' + mdFmtWin(sr.span_s);
-        el.appendChild(n);
+        box.appendChild(n);
       }
     });
   });
@@ -859,19 +984,27 @@ function mdDrawSeries(cv, t, vals, ok, lo, hi, opts) {
   if (cv.width !== w) cv.width = w;
   const g = cv.getContext('2d');
   g.clearRect(0, 0, w, hh);
-  const plotH = hh - 13, win = (opts && opts.win) || MD.win, n = vals.length;
+  const strip = opts && opts.strip ? 7 : 0;          // полоска состояния под графиком (цвет на каждую точку)
+  const mini = !!(opts && opts.mini);                // маленький график в шапке карточки: без подписей, всё место — линии
+  const plotH = hh - (mini ? (strip ? 3 : 0) : 13) - strip, win = (opts && opts.win) || MD.win, n = vals.length;     // полоска рисуется на 3 px ниже графика
   const Y = (v) => plotH - ((v - lo) / (hi - lo)) * (plotH - 6) - 1;
   g.fillStyle = '#94a3b8'; g.font = '10px sans-serif';
-  g.fillText(String(hi), 3, 10); g.fillText(String(lo), 3, plotH - 2);
-  g.fillText('−' + mdFmtWin(win), 3, hh - 1);
-  g.textAlign = 'right'; g.fillText('сейчас', w - 3, hh - 1); g.textAlign = 'left';
+  if (!mini) {
+    g.fillText(String(hi), 3, 10); g.fillText(String(lo), 3, plotH - 2);
+    g.fillText('−' + mdFmtWin(win), 3, hh - 1);
+    g.textAlign = 'right'; g.fillText('сейчас', w - 3, hh - 1); g.textAlign = 'left';
+  }
+  cv._hv = null;
   if (n < 2) return;
   const tEnd = t[n - 1];
   const X = (i) => w - 1 - ((tEnd - t[i]) / win) * (w - 2);
   const dt = (t[n - 1] - t[0]) / (n - 1);
   const bw = Math.max(1.5, (dt / win) * w + 1);
   const gap = Math.max(dt * 3, 5);
+  if (opts.tip) cv._hv = { t, vals, ok, win, w, tEnd, dt, tip: opts.tip };      // для подсказки при наведении (mdOnChartHover)
   for (let i = 0; i < n; i += 1) if (ok[i] === 0) { g.fillStyle = 'rgba(156,163,175,.30)'; g.fillRect(X(i) - bw, 0, bw, plotH); }
+  if (strip) for (let i = 0; i < n; i += 1) { g.fillStyle = ok[i] === 0 || !opts.strip[i] ? '#9ca3af' : opts.strip[i]; g.fillRect(X(i) - bw, plotH + 3, bw, strip); }
+  if (opts.band) { g.fillStyle = opts.band.color; g.fillRect(0, Y(opts.band.hi), w, Y(opts.band.lo) - Y(opts.band.hi)); }     // подсвеченная полоса между двумя значениями (зона гистерезиса)
   g.setLineDash([4, 3]); g.lineWidth = 1;
   (opts.lines || []).forEach((l) => { g.strokeStyle = l.color; g.beginPath(); g.moveTo(0, Y(l.v)); g.lineTo(w, Y(l.v)); g.stroke(); });
   g.setLineDash([]);
@@ -884,6 +1017,67 @@ function mdDrawSeries(cv, t, vals, ok, lo, hi, opts) {
     pen = true;
   });
   g.stroke();
+}
+
+// график яркости (яркость к металлу / яркость / зернистость): линия, пороги, полоска «есть / нет»; fh — h.fill из /api/motion/history.
+// У зоны без движения тот же график стоит и в шапке карточки
+function mdDrawFillChart(cam, z, fh) {
+  const k = cam.id + '-' + z.id;
+  const m = z.fill_metric;
+  if (!m || m === 'off') return;
+  const cvs = [mdEl('md-fch-' + k), z.motion === false ? mdEl('md-ch-' + k) : null].filter(Boolean);
+  if (!cvs.length) return;
+  const words = z.motion === false ? MD_FILL_PRESENCE : ['пусто', 'есть'];
+  const d = fh && fh.zones && fh.zones[z.id];
+  const vals = d ? d[m] : [];
+  const decide = (z.fill_on || 0) > 0;
+  const seen = vals.filter((v) => v != null).concat(decide ? [z.fill_on, z.fill_off] : []);
+  let lo = seen.length ? Math.min(...seen) : 0, hi = seen.length ? Math.max(...seen) : 1;
+  const pad = Math.max((hi - lo) * 0.1, m === 'lum' ? 2 : 0.02);
+  lo -= pad; hi += pad;
+  if (m === 'lum') { lo = Math.max(0, Math.floor(lo)); hi = Math.min(255, Math.ceil(hi)); } else { lo = Math.max(0, Math.round(lo * 100) / 100); hi = Math.round(hi * 100) / 100; }
+  const fill = d ? d.fill : [];
+  const lines = decide ? [{ v: z.fill_on, color: '#ef4444' }, { v: z.fill_off, color: '#f59e0b' }] : [];
+  const tip = (i) => {
+    const f = fill[i];
+    return MD_FILL_NAME[m] + ' <b>' + mdFillFmt(m, vals[i]) + '</b>' + (decide && f != null ? ' · ' + words[f] : '');
+  };
+  cvs.forEach((cv) => mdDrawSeries(cv, fh ? fh.t || [] : [], vals, fh ? fh.ok || [] : [], lo, hi,
+    { h: cv.height || 72, mini: !!cv.dataset.mini, lines, tip, strip: decide ? fill.map((f) => (f == null ? null : f ? '#4ade80' : '#f87171')) : null }));
+}
+
+// подсказка при наведении на график с _hv: ближайшая точка по времени — значение и время (подсказка и вертикальная линия — два плавающих элемента)
+function mdTipEls() {
+  let tip = document.getElementById('mdChartTip'), line = document.getElementById('mdChartTipLine');
+  if (!tip) {
+    tip = document.createElement('div'); tip.id = 'mdChartTip'; tip.className = 'md-ctip'; tip.hidden = true;
+    line = document.createElement('div'); line.id = 'mdChartTipLine'; line.className = 'md-ctipline'; line.hidden = true;
+    document.body.append(line, tip);
+  }
+  return [tip, line];
+}
+function mdOnChartHover(e) {
+  const cv = e.target.closest && e.target.closest('canvas');
+  const hv = cv && cv._hv;
+  const [tip, line] = mdTipEls();
+  if (!hv) { tip.hidden = true; line.hidden = true; return; }
+  const r = cv.getBoundingClientRect();
+  const x = Math.max(0, Math.min(hv.w - 1, (e.clientX - r.left) * (hv.w / r.width)));
+  const tc = hv.tEnd - ((hv.w - 1 - x) / (hv.w - 2)) * hv.win;
+  let a = 0, b = hv.t.length - 1;                       // ближайшая по времени точка (ряд отсортирован)
+  while (b - a > 1) { const mid = (a + b) >> 1; if (hv.t[mid] < tc) a = mid; else b = mid; }
+  const i = Math.abs(hv.t[a] - tc) <= Math.abs(hv.t[b] - tc) ? a : b;
+  const d = new Date(hv.t[i] * 1000), p2 = (v) => String(v).padStart(2, '0');
+  const when = p2(d.getHours()) + ':' + p2(d.getMinutes()) + ':' + p2(d.getSeconds());
+  const gap = Math.abs(hv.t[i] - tc) > Math.max(hv.dt * 3, 5);
+  tip.innerHTML = gap || hv.vals[i] == null || hv.ok[i] === 0 ? 'нет данных · ' + when : hv.tip(i) + ' · ' + when;
+  tip.hidden = false;
+  tip.style.left = Math.min(e.clientX + 12, window.innerWidth - tip.offsetWidth - 8) + 'px';
+  tip.style.top = Math.max(4, r.top - tip.offsetHeight - 6) + 'px';
+  line.hidden = false;
+  line.style.left = (r.left + (x * r.width) / hv.w) + 'px';
+  line.style.top = r.top + 'px';
+  line.style.height = r.height + 'px';
 }
 
 // поправка по таблице (36 ячеек по 10°, линейно по кругу) — как mirror_corr в сервисе; нет таблицы — 0
@@ -919,27 +1113,40 @@ function mdDrawMirrorCharts(cam, h) {
 function mdDrawChart(cam, z, d, t, ok) {
   const cv = mdEl('md-ch-' + cam.id + '-' + z.id);
   if (!cv || !d) return;
+  if (ggIs(z)) { ggDrawChart(cv, d, t, ok); return; }
   if (z.type === 'cycle') { mdDrawSeries(cv, t, d.flow.map((v, i) => (d.bit[i] ? v : null)), ok, 0, 360, { wrap: true, lines: [{ v: 180, color: '#64748b' }] }); return; }
-  const w = cv.clientWidth, hh = cv.height || 84, strip = 7;
+  if (z.motion === false) return;           // без движения: в шапке и справа — график яркости (mdDrawFillChart)
+  mdDrawMotionChart(cv, z, d, t, ok);
+  const big = mdEl('md-mch-' + cam.id + '-' + z.id);
+  if (big) mdDrawMotionChart(big, z, d, t, ok);
+}
+
+// график движения: метрика зоны, пороги, полоска «крутится / стоит»; в шапке карточки (data-mini) — без подписей
+function mdDrawMotionChart(cv, z, d, t, ok) {
+  const w = cv.clientWidth, hh = cv.height || 84, strip = 7, mini = !!cv.dataset.mini;
   if (!w) return;
   if (cv.width !== w) cv.width = w;
   const g = cv.getContext('2d');
   g.clearRect(0, 0, w, hh);
+  cv._hv = null;
   const ys = z.metric === 'flow' ? d.flow : d.diff, n = ys.length;
   const win = MD.win;
-  const plotH = hh - strip - 13;
+  const plotH = hh - strip - (mini ? 3 : 13);
   const top = Math.max(z.on * 1.6, ...ys, 0.0001);
   const Y = (v) => plotH - (v / top) * (plotH - 6) - 1;
   g.fillStyle = '#94a3b8'; g.font = '10px sans-serif';
-  g.fillText(top.toFixed(top < 10 ? 2 : 0), 3, 10);
-  g.fillText('−' + mdFmtWin(win), 3, hh - 1);
-  g.textAlign = 'right'; g.fillText('сейчас', w - 3, hh - 1); g.textAlign = 'left';
+  if (!mini) {
+    g.fillText(top.toFixed(top < 10 ? 2 : 0), 3, 10);
+    g.fillText('−' + mdFmtWin(win), 3, hh - 1);
+    g.textAlign = 'right'; g.fillText('сейчас', w - 3, hh - 1); g.textAlign = 'left';
+  }
   if (n < 2) return;
   const tEnd = t[n - 1];
   const X = (i) => w - 1 - ((tEnd - t[i]) / win) * (w - 2);
   const dt = (t[n - 1] - t[0]) / (n - 1);
   const bw = Math.max(1.5, (dt / win) * w + 1);
   const gap = Math.max(dt * 3, 5);   // разрыв в данных (камера молчала) — линию не тянем
+  cv._hv = { t, vals: ys, ok, win, w, tEnd, dt, tip: (i) => z.metric + ' <b>' + mdNumFmt(ys[i]) + '</b>' };      // подсказка при наведении
   for (let i = 0; i < n; i += 1) {
     const bad = ok[i] === 0;
     const x = X(i) - bw;
@@ -974,8 +1181,8 @@ function mdOnWheel(e) {
 function mdSourceOptions() {
   const out = [];
   mdCfgCams().forEach((c) => {
-    c.zones.forEach((z) => { if (z.type !== 'cycle' && z.type !== 'level' && z.type !== 'clarity') out.push({ camera: c.id, zone: z.id, key: c.id + '/' + z.id, label: c.name + ' · ' + z.name, ip: mdIpTag(c.url) }); });
-    (c.groups || []).forEach((g) => { if (g.type !== 'mirror' && g.type !== 'level') out.push({ camera: c.id, group: g.id, key: 'g:' + c.id + '/' + g.id, label: c.name + ' · ' + g.name, ip: '' }); });
+    c.zones.forEach((z) => { if (z.type !== 'cycle' && z.type !== 'level' && z.type !== 'clarity') out.push({ camera: c.id, zone: z.id, gauge: ggIs(z), key: c.id + '/' + z.id, label: c.name + ' · ' + z.name + (ggIs(z) ? ' (%)' : ''), ip: mdIpTag(c.url) }); });
+    (c.groups || []).forEach((g) => { if (g.type !== 'mirror' && g.type !== 'level') out.push({ camera: c.id, group: g.id, kiln: mdIsKilnType(g.type), key: 'g:' + c.id + '/' + g.id, label: c.name + ' · ' + g.name, ip: '' }); });
   });
   return out;
 }
@@ -988,7 +1195,7 @@ function mdPlcWritesRows() {
   mdCfgCams().forEach((c) => {
     const add = (what, name, o) => rows.push({ cam: c, name, what, to: addr(o) });
     c.zones.forEach((z) => {
-      if (z.out && z.enabled !== false) add(MD_WRITE_WHAT[z.type] || (z.out.value === 'state' ? 'состояние окна' : 'движение'), z.name, z.out);
+      if (z.out && z.enabled !== false) add(MD_WRITE_WHAT[z.type] || (z.out.value === 'state' ? 'состояние окна' : z.motion === false ? 'наличие' : 'движение'), z.name, z.out);
       if (z.rpm_out && z.enabled !== false) add('обороты', z.name, z.rpm_out);
     });
     (c.groups || []).forEach((g) => { if (g.out) add(g.type === 'mirror' ? 'рассинхрон валов' : 'вычисление', g.name, g.out); });
@@ -1010,7 +1217,7 @@ function mdPlcHtml() {
   const m = (MV.cfg && MV.cfg.modbus) || { enable: false, host: '', port: 502, device_id: 1, write_period_s: 1 };
   const a = 'data-md="p"';
   const list = ((MV.cfg && MV.cfg.scenarios) || []).map((s, i) => mdScenarioHtml(s, i)).join('');
-  const scens = list ? `<div class="md-sbox">${list}</div>` : '<p class="net-hint">Сценариев нет. Сценарий берёт окна и зоны любых камер или вычисления, считает «хоть одно» / «все» / «сколько» (по жому или по движению) и пишет ОДНО значение в регистр или coil. Только сценарии пишут в ПЛК значения зон.</p>';
+  const scens = list ? `<div class="md-sbox">${list}</div>` : '<p class="net-hint">Сценариев нет. Сценарий берёт окна и зоны любых камер или вычисления, считает «хоть одно» / «все» / «сколько» (по наличию или по движению) и пишет ОДНО значение в регистр или coil. Только сценарии пишут в ПЛК значения зон.</p>';
   return `<div class="md-h md-h--row md-h--sec">Подключение</div>
     <div class="md-sbox md-plcbox ${m.enable ? 'is-on' : 'is-off'}" id="mdPlcBlock"><div class="md-sr${MD.open['plc'] ? ' is-open' : ''}">
       <div class="md-sr__head md-plcbox__head" data-zt="plc" title="Нажмите, чтобы раскрыть настройки подключения">
@@ -1034,14 +1241,21 @@ function mdPlcHtml() {
     ${mdGroupsSectionHtml()}`;
 }
 
-const MD_SC_SIGNALS = [['pulp', 'Жом есть'], ['move', 'Движение']];
+const MD_SC_SIGNALS = [['pulp', 'Наличие'], ['move', 'Движение']];     // у зоны без движения оба сигнала — её бит «есть»
 const MD_SC_RULES = [['or', 'Хоть одно'], ['and', 'Все'], ['sum', 'Сколько']];
+const MD_SC_SCALES = [[10, '× 10'], [1, 'как есть']];      // формат значения уровнемера; поля нет (старый сценарий) — × 10
+const mdScScale = (s) => (s.scale === 1 ? 1 : 10);
+const mdScScaleHint = (s) => '54,3 % → ' + (mdScScale(s) === 1 ? '54' : '543') + ' · нет данных → −1 (в ПЛК тип INT)';
+// сценарий с этапами печи пишет код этапа как есть: «что считать» и «правило» ему не выбирают
+const mdScIsKiln = (s, cams) => s.sources.some((x) => x.group && ((cams.find((c) => c.id === x.camera) || {}).groups || []).some((g) => g.id === x.group && mdIsKilnType(g.type)));
 function mdScenarioSummary(s, cams) {
   const pulp = s.signal === 'pulp';
-  const what = { or: pulp ? 'хоть в одном жом' : 'хоть одно крутится', and: pulp ? 'жом во всех' : 'все крутятся', sum: pulp ? 'сколько окон с жомом' : 'сколько крутится' }[s.rule] || '';
+  const what = { or: pulp ? 'хоть в одном есть' : 'хоть одно крутится', and: pulp ? 'есть во всех' : 'все крутятся', sum: pulp ? 'в скольких есть' : 'сколько крутится' }[s.rule] || '';
   const names = s.sources.map((x) => { const c = cams.find((q) => q.id === x.camera), z = c && (x.group ? (c.groups || []).find((q) => q.id === x.group) : c.zones.find((q) => q.id === x.zone)); return z ? z.name : null; }).filter(Boolean);
   const tags = names.slice(0, 5).map((n) => `<span class="md-sr__tag">${escapeHtml(n)}</span>`).join('') + (names.length > 5 ? `<span class="md-sr__tag">+${names.length - 5}</span>` : '');
-  return `<span>${pulp ? 'жом' : 'движение'} · ${what}</span>${tags || '<span class="md-sr__tag">нет источников</span>'}`;
+  if (s.rule === 'value') return `<span>уровнемер · ${mdScScale(s) === 1 ? 'целые %' : '% × 10'}</span>${tags || '<span class="md-sr__tag">нет источников</span>'}`;
+  if (mdScIsKiln(s, cams)) return `<span>этапы печи · код этапа</span>${tags}`;
+  return `<span>${pulp ? 'наличие' : 'движение'} · ${what}</span>${tags || '<span class="md-sr__tag">нет источников</span>'}`;
 }
 
 function mdScenarioHtml(s, i) {
@@ -1066,9 +1280,11 @@ function mdScenarioHtml(s, i) {
       <div><div class="md-zr__t">Название</div><input type="text" ${a} data-f="name" value="${escapeHtml(s.name)}" /></div>
       <div><div class="md-zr__t">Источники</div><div class="md-sr__chips">${src}</div></div>
       <div class="md-sr__g3">
-        <div><div class="md-zr__t">Что считать</div>${seg('sg-' + sid, MD_SC_SIGNALS, s.signal || 'move', 'signal')}</div>
-        <div><div class="md-zr__t">Правило</div>${seg('rl-' + sid, MD_SC_RULES, s.rule, 'rule')}</div>
-        <div><div class="md-zr__t">Выход</div><div class="md-out"><select ${a} data-f="okind">${mdSel([['', 'не писать'], ['holding', 'регистр'], ['coil', 'coil']], s.out ? s.out.kind : '')}</select>
+        ${s.rule === 'value' ? `<div class="md-sr__gate"><div class="md-zr__t">Значение</div><div class="md-sr__fmt">${seg('sk-' + sid, MD_SC_SCALES, mdScScale(s), 'scale')}<span class="net-hint" id="md-sk-${sid}">${mdScScaleHint(s)}</span></div></div>`
+          : mdScIsKiln(s, cams) ? '<div class="md-sr__gate"><div class="md-zr__t">Значение</div><span class="net-hint">код текущего этапа печи, коды задаются в вычислении · нет данных → 0</span></div>'
+          : `<div><div class="md-zr__t">Что считать</div>${seg('sg-' + sid, MD_SC_SIGNALS, s.signal || 'move', 'signal')}</div>
+        <div><div class="md-zr__t">Правило</div>${seg('rl-' + sid, MD_SC_RULES, s.rule, 'rule')}</div>`}
+        <div><div class="md-zr__t">Выход</div><div class="md-out"><select ${a} data-f="okind">${mdSel([['', 'не писать'], ['holding', 'регистр']].concat(s.rule === 'value' || mdScIsKiln(s, cams) ? [] : [['coil', 'coil']]), s.out ? s.out.kind : '')}</select>
           <input type="number" min="0" max="65535" ${a} data-f="oaddr" value="${s.out ? s.out.address : 0}" title="Адрес" /></div></div>
       </div>
       <div class="md-sr__foot"><span class="net-hint" id="md-ss-${sid}"></span><button type="button" class="btn-secondary md-x md-sr__del" ${a} data-f="del" title="Удалить сценарий">удалить сценарий</button></div>
@@ -1111,19 +1327,50 @@ function mdOnScenario(t) {
     mdEdit(() => list.splice(Number(t.dataset.i), 1), true);
     return;
   }
+  // уровнемер — число: он в сценарии один (rule value); выбрали обычное окно — уровнемер уходит из источников
+  const srcKey = (x) => (x.group ? 'g:' + x.camera + '/' + x.group : x.camera + '/' + x.zone);
+  const gauges = new Set(mdSourceOptions().filter((o) => o.gauge).map((o) => o.key));
+  // у уровнемера сценарий создаётся без регистра — после выбора регистра шапка строки («→ рег. N») должна обновиться сразу
+  // (пока выход «не писать», по вводу адреса не перерисовываем — набранный адрес не должен пропасть)
+  const kilns = new Set(mdSourceOptions().filter((o) => o.kiln).map((o) => o.key));
+  const redraw = (f === 'src' && (gauges.has(t.value) || kilns.has(t.value) || s.sources.some((x) => kilns.has(srcKey(x))) || s.rule === 'value')) || (s.rule === 'value' && (f === 'okind' || (f === 'oaddr' && !!s.out)));
+  const typed = f === 'okind' ? parseInt((t.parentElement.querySelector('input[data-f="oaddr"]') || {}).value, 10) || 0 : 0;   // адрес, набранный до выбора выхода
   mdEdit(() => {
     if (f === 'name') s.name = t.value;
     else if (f === 'rule') s.rule = t.value;
     else if (f === 'signal') s.signal = t.value;
-    else if (f === 'okind') s.out = t.value ? { kind: t.value, address: (s.out && s.out.address) || 0 } : null;
+    else if (f === 'scale') s.scale = Number(t.value);
+    else if (f === 'okind') s.out = t.value ? { kind: t.value, address: (s.out && s.out.address) || typed } : null;
     else if (f === 'oaddr') { if (s.out) s.out.address = parseInt(t.value, 10) || 0; }
     else if (f === 'src') {
       const isGrp = t.value.startsWith('g:');
       const [camera, id] = (isGrp ? t.value.slice(2) : t.value).split('/');
       s.sources = s.sources.filter((x) => !(x.camera === camera && (isGrp ? x.group === id : x.zone === id)));
       if (t.checked) s.sources.push(isGrp ? { camera, group: id } : { camera, zone: id });
+      if (t.checked && gauges.has(t.value)) {
+        s.sources = [{ camera, zone: id }];
+        s.rule = 'value';
+        if (s.out && s.out.kind !== 'holding') s.out = null;
+      } else if (t.checked && kilns.has(t.value)) {          // этапы печи — число: один источник, значение как есть
+        s.sources = [{ camera, group: id }];
+        s.rule = 'sum';
+        s.signal = 'move';
+        if (s.out && s.out.kind !== 'holding') s.out = null;
+      } else if (t.checked && s.sources.some((x) => kilns.has(srcKey(x)))) {
+        s.sources = s.sources.filter((x) => !kilns.has(srcKey(x)));   // выбрали другое вместо этапов печи
+        s.rule = 'or';
+      } else if (t.checked && s.rule === 'value') {
+        // выбрали обычное окно вместо уровнемера. Просто сняли галочку с него — правило остаётся value: пустой сценарий
+        // пишет −1 «нет данных», а не 0 (0 — настоящие «0 %»)
+        s.sources = s.sources.filter((x) => !gauges.has(srcKey(x)));
+        s.rule = 'or';
+      }
     }
-  });
+  }, redraw);
+  if (f === 'scale') {        // без перерисовки: адрес, набранный до выбора «регистр», не должен пропасть
+    mdEl('md-sk-' + s.id).textContent = mdScScaleHint(s);
+    mdEl('md-sr-' + s.id).querySelector('.md-sr__sum').innerHTML = mdScenarioSummary(s, mdCfgCams());
+  }
 }
 
 function mdBindPlc() {
@@ -1136,7 +1383,15 @@ function mdBindPlc() {
 }
 
 // ---------- группы зон (ниже сценариев; по всем камерам) ----------
-const MD_GROUP_TYPES = { sum: 'сумма зон', monotonic: 'уровень снизу вверх', worktimer: 'наработка за окно', mirror: 'синхронность валов', level: 'уровень жидкости' };
+const MD_GROUP_TYPES = { sum: 'сумма зон', monotonic: 'уровень снизу вверх', worktimer: 'наработка за окно', mirror: 'синхронность валов', level: 'уровень жидкости', kiln: 'этапы печи', kiln_sound: 'этапы по звуку' };
+// этапы печи по картинке и по звуку: оба — число-код этапа
+const mdIsKilnType = (t) => t === 'kiln' || t === 'kiln_sound';
+const MD_SOUND_STAGES = [['wait', 'Ожидание', 0], ['drop', 'Сброс', 1], ['load', 'Засыпка', 2]];
+const mdSoundCodes = (g) => MD_SOUND_STAGES.map(([k, t, d]) => t.toLowerCase() + ' ' + mdKilnCode(g, k, d)).join(' · ');
+// этапы печи: [ключ этапа, подпись, код в ПЛК по умолчанию]
+const MD_KILN_STAGES = [['wait_drop', 'Ждём сброс', 0], ['drop', 'Сброс', 1], ['wait_load', 'Ждём засыпку', 0], ['load', 'Засыпка', 2], ['wait_rot', 'Ждём прокрутку', 0], ['rot', 'Прокрутка', 3]];
+const mdKilnCode = (g, k, d) => (g.codes && g.codes[k] != null ? g.codes[k] : d);
+const mdKilnTime = (s) => (s < 60 ? s + ' с' : Math.floor(s / 60) + ' мин ' + (s % 60) + ' с');
 function mdGroupRowHtml(cam, g, i) {
   const a = `data-md="g" data-cam="${escapeHtml(cam.id)}" data-i="${i}"`;
   const k = escapeHtml(cam.id + '-' + g.id);
@@ -1146,15 +1401,25 @@ function mdGroupRowHtml(cam, g, i) {
   const det = [];
   if (g.type === 'worktimer') det.push(`окно ${g.window_s} с · шкала ${g.scale} · мин. зон ${g.min_active}`);
   if (g.type === 'monotonic') det.push('порядок снизу вверх — как зоны в списке');
+  if (g.type === 'kiln') {
+    det.push(`потемнение при сбросе от ${g.drop_pct} % · засыпка до ${g.load_max_s} с · прокрутку ждём ${g.rot_wait_s} с`);
+    det.push(`<span>в ПЛК: ${MD_KILN_STAGES.map(([k, t, d]) => t.toLowerCase() + ' ' + mdKilnCode(g, k, d)).join(' · ')}</span>`);
+    det.push(`<span id="md-gi-${k}"></span>`);
+  }
+  if (g.type === 'kiln_sound') {
+    det.push(`порог ${g.threshold_db} дБ над фоном · в ПЛК: ${mdSoundCodes(g)}`);
+    det.push(`<span id="md-gi-${k}"></span>`);
+  }
   if (legacy) det.push(`<span title="Прямой вывод группы больше не настраивается: пишите в ПЛК через сценарий. Старый вывод продолжает работать, пока его не перенесёте.">ПЛК (старый вывод): ${legacy}</span>${g.out.kind === 'holding' ? `<button type="button" class="btn-secondary md-x" ${a} data-f="tosc" title="Создать сценарий с этим выходом и убрать вывод у группы">перенести в сценарий</button>` : ''}`);
   return `<div class="md-sr${open ? ' is-open' : ''}" id="md-gr-${k}" data-st="i">
     <div class="md-sr__head" data-zt="gr-${k}" title="Нажмите, чтобы раскрыть">
       <span class="md-zr__bar"></span>
       <div class="md-sr__nm"><b>${escapeHtml(g.name)}</b><div class="md-sr__sum"><span>${MD_GROUP_TYPES[g.type] || g.type}</span><span class="md-dim">${escapeHtml(cam.name)}</span>${names}</div></div>
-      <div class="md-sr__val"><b id="md-gv-${k}">–</b><span>${legacy ? 'вывод: ' + legacy : 'без вывода'}</span></div>
+      <div class="md-sr__val"><b id="md-gv-${k}">–</b><span id="md-gs-${k}">${legacy ? 'вывод: ' + legacy : mdIsKilnType(g.type) ? 'этап' : 'без вывода'}</span></div>
       <span class="md-zr__chev">⌄</span>
     </div>
     <div class="md-sr__det">
+      ${g.type === 'kiln_sound' ? `<canvas class="md-snd" id="md-snd-${k}" height="90" title="Уровень звука 2–8 кГц над фоном за последние 3 минуты. Пунктир — порог: всё, что выше, считается событием"></canvas>` : ''}
       ${det.length ? `<div class="md-sr__foot">${det.join('')}</div>` : ''}
       <div class="md-sr__foot">${g.type === 'mirror' ? '' : `<button type="button" class="btn-secondary md-x" ${a} data-f="edit">Изменить</button>`}<button type="button" class="btn-secondary md-x md-sr__del" ${a} data-f="del" title="Удалить вычисление">удалить</button></div>
     </div>
@@ -1164,12 +1429,12 @@ function mdGroupRowHtml(cam, g, i) {
 function mdGroupsSectionHtml() {
   const rows = [];
   mdCfgCams().forEach((cam) => (cam.groups || []).forEach((g, i) => { if (g.type !== 'level') rows.push(mdGroupRowHtml(cam, g, i)); }));   // «уровень» — на своей вкладке
-  const list = rows.length ? `<div class="md-sbox">${rows.join('')}</div>` : '<p class="net-hint">Вычислений нет. Вычисление складывает окна одной камеры: сумма — сколько активно, уровень снизу вверх — шахта, наработка за окно — доля времени в % (лента жома). Результат берёт сценарий и пишет в ПЛК. Зоны из РАЗНЫХ камер объединяйте в сценарии выше.</p>';
+  const list = rows.length ? `<div class="md-sbox">${rows.join('')}</div>` : '<p class="net-hint">Вычислений нет. Вычисление складывает окна одной камеры: сумма — сколько активно, уровень снизу вверх — шахта, наработка за окно — доля времени в % (лента жома), этапы печи — сброс, засыпка, прокрутка по кругу. Результат берёт сценарий и пишет в ПЛК. Зоны из РАЗНЫХ камер объединяйте в сценарии выше.</p>';
   return `<div class="md-groups"><h3 class="md-h md-h--row md-h--sec"><button type="button" class="md-add" data-md="g" data-f="add" title="Добавить вычисление" aria-label="Добавить вычисление">+</button>Вычисления <span class="md-dim">считают окна одной камеры; результат берёт сценарий</span></h3>${list}<div id="mdGrpEd">${MD.editGrp ? mdGroupEditorHtml() : ''}</div></div>`;
 }
 
 function mdGeZonesHtml(cam, g) {
-  const zs = cam.zones.filter((z) => z.type !== 'level' && z.type !== 'clarity');
+  const zs = cam.zones.filter((z) => z.type !== 'level' && z.type !== 'clarity' && !ggIs(z));
   if (!zs.length) return '<span class="net-hint">у камеры нет зон</span>';
   return zs.map((z) => `<label class="md-chk"><input type="checkbox" value="${escapeHtml(z.id)}"${g.zones.includes(z.id) ? ' checked' : ''} />${escapeHtml(z.name)}</label>`).join('');
 }
@@ -1180,17 +1445,25 @@ function mdGroupEditorHtml() {
   if (!cam) return '';
   const g = e.i >= 0 ? cam.groups[e.i] : { id: '', name: '', type: 'sum', zones: [], out: { kind: 'holding', address: 0 }, window_s: 60, min_active: 1, agg: 'any', scale: 100 };
   if (!g) return '';
-  const camOpts = mdCfgCams().filter((c) => c.zones.length).map((c) => [c.id, escapeHtml(c.name)]);
+  const camOpts = mdCfgCams().map((c) => [c.id, escapeHtml(c.name)]);       // этапам по звуку зоны не нужны — камера годится любая
   // сетка 2–3 колонки: подпись слева, поле справа; зоны, подсказка и кнопки — на всю ширину
   return `<div class="md-card md-ge" id="mdGe">
     ${mdField('Камера', `<select id="geCam"${e.i >= 0 ? ' disabled' : ''}>${mdSel(camOpts, cam.id)}</select>`)}
     ${mdField('Название', `<input type="text" id="geName" value="${escapeHtml(g.name)}" placeholder="Уровень шахты / Наработка" />`)}
-    ${mdField('Тип', `<select id="geType">${mdSel([['sum', 'sum — сколько зон активно'], ['monotonic', 'monotonic — уровень снизу вверх'], ['worktimer', 'worktimer — наработка за окно']], g.type)}</select>`)}
+    ${mdField('Тип', `<select id="geType">${mdSel([['sum', 'sum — сколько зон активно'], ['monotonic', 'monotonic — уровень снизу вверх'], ['worktimer', 'worktimer — наработка за окно'], ['kiln', 'этапы печи — сброс, засыпка, прокрутка'], ['kiln_sound', 'этапы по звуку — сброс, засыпка']], g.type)}</select>`)}
+    <label class="md-gt" data-for="kiln_sound" title="На сколько звук в полосе камней (2–8 кГц) должен быть громче фона, чтобы это было событием"><span>Порог, дБ</span><input type="number" id="geSndThr" min="10" max="60" value="${g.threshold_db || 30}" /></label>
+    <div class="md-gt md-ge__zones" data-for="kiln_sound"><span>Коды в ПЛК</span>${MD_SOUND_STAGES.map(([k, t, d]) => `<label class="md-code"><span>${t}</span><input type="number" min="0" max="65535" data-snd="${k}" value="${mdKilnCode(g, k, d)}" /></label>`).join('')}</div>
+    <p class="net-hint md-gt md-ge__full" data-for="kiln_sound">Слушает звук этой камеры, картинка и зоны не нужны — работает и ночью. Первое громкое событие — сброс, следующее через 8–45 с — засыпка; прокрутку по звуку не слышно. Первые 30 с слушает фон. В ПЛК пишет сценарий с этим вычислением; нет звука — пишется 0.</p>
+    <label class="md-gt" data-for="kiln" title="Насколько зона должна потемнеть после движения, чтобы это считалось сбросом (камни ушли)"><span>Потемнение, %</span><input type="number" id="geDrop" min="1" max="60" value="${g.drop_pct || 12}" /></label>
+    <label class="md-gt" data-for="kiln" title="Движение после сброса дольше этого — засыпка кончилась, идёт прокрутка"><span>Засыпка до, с</span><input type="number" id="geLoad" min="3" max="120" value="${g.load_max_s || 10}" /></label>
+    <label class="md-gt" data-for="kiln" title="Сколько ждать прокрутку после засыпки; не началась — ждём следующий сброс"><span>Ждать прокрутку, с</span><input type="number" id="geRot" min="5" max="600" value="${g.rot_wait_s || 60}" /></label>
+    <div class="md-gt md-ge__zones" data-for="kiln"><span>Коды в ПЛК</span>${MD_KILN_STAGES.map(([k, t, d]) => `<label class="md-code"><span>${t}</span><input type="number" min="0" max="65535" data-kiln="${k}" value="${mdKilnCode(g, k, d)}" /></label>`).join('')}</div>
+    <p class="net-hint md-gt md-ge__full" data-for="kiln">Зоны — воронка печи (по движению). У зон включите признак «яркость к металлу»: по потемнению после движения виден сброс, пороги «есть / нет» для этого не нужны. В ПЛК пишет сценарий с этим вычислением; нет кадров — пишется 0.</p>
     <label class="md-gt" data-for="worktimer"><span>Окно, с</span><input type="number" id="geWin" min="1" value="${g.window_s || 60}" /></label>
     <label class="md-gt" data-for="worktimer" title="Минимум активных зон"><span>Мин. зон</span><input type="number" id="geMin" min="1" value="${g.min_active || 1}" /></label>
     <label class="md-gt" data-for="worktimer" title="100 = проценты; 1000 или 4095 — для аналогового выхода"><span>Шкала</span><input type="number" id="geScale" min="1" value="${g.scale || 100}" /></label>
     <label class="md-gt" data-for="worktimer"><span>Рабочая, если</span><select id="geAgg">${mdSel([['any', 'хоть один кадр активен'], ['majority', 'не меньше половины кадров'], ['all', 'все кадры активны']], g.agg || 'any')}</select></label>
-    <div class="md-ge__zones"><span>Зоны</span><span class="md-ge__chk" id="geZones">${mdGeZonesHtml(cam, g)}</span></div>
+    <div class="md-ge__zones" id="geZonesRow"><span>Зоны</span><span class="md-ge__chk" id="geZones">${mdGeZonesHtml(cam, g)}</span></div>
     <p class="net-hint md-gt md-ge__full" data-for="monotonic">Порядок «снизу вверх» = порядок зон в списке (первая зона — низ шахты).</p>
     <div class="md-ge__btns"><button type="button" class="btn-primary" data-md="g" data-f="ok">Готово</button><button type="button" class="btn-secondary" data-md="g" data-f="cancel">Отмена</button></div></div>`;
 }
@@ -1199,14 +1472,16 @@ function mdSyncGroupEditor() {
   const t = mdEl('geType');
   if (!t) return;
   document.querySelectorAll('#mdGe .md-gt').forEach((n) => { n.hidden = n.dataset.for !== t.value; });
+  const zones = mdEl('geZonesRow');
+  if (zones) zones.hidden = t.value === 'kiln_sound';
 }
 
 function mdOnGroup(t) {
   const f = t.dataset.f;
   if (f === 'add') {
     const { cam: focused } = mdCamera();
-    const first = focused && focused.zones.length ? focused : mdCfgCams().find((c) => c.zones.length);
-    if (!first) { alert('Сначала разметьте хотя бы одну зону'); return; }
+    const first = focused && focused.zones.length ? focused : mdCfgCams().find((c) => c.zones.length) || focused || mdCfgCams()[0];
+    if (!first) { alert('Сначала включите КЗ хотя бы для одной камеры'); return; }
     MD.editGrp = { cam: first.id, i: -1 };
     MD.key = '';
     renderMotionDock();
@@ -1239,17 +1514,41 @@ function mdOnGroup(t) {
     return;
   }
   if (f === 'ok') {
-    const ids = [...document.querySelectorAll('#mdGe #geZones input[type=checkbox]:checked')].map((x) => x.value);
-    if (!ids.length) { alert('Выберите хотя бы одну зону'); return; }
     const type = mdEl('geType').value;
+    const ids = type === 'kiln_sound' ? [] : [...document.querySelectorAll('#mdGe #geZones input[type=checkbox]:checked')].map((x) => x.value);
+    if (!ids.length && type !== 'kiln_sound') { alert('Выберите хотя бы одну зону'); return; }
     const idx = MD.editGrp.i;
     const old = idx >= 0 ? cam.groups[idx] : null;
+    if (type === 'kiln_sound' && (cam.groups || []).some((q, n) => q.type === 'kiln_sound' && n !== idx)) { alert('У этой камеры вычисление «этапы по звуку» уже есть: звук у камеры один'); return; }
     const ng = { id: old ? old.id : '', name: mdEl('geName').value.trim() || 'Вычисление', type, zones: ids,
       out: old ? old.out : null };      // вывод в ПЛК у группы больше не правится: пишет сценарий; старый вывод сохраняем как был
     if (!ng.id) { let n = 1; while ((cam.groups || []).some((q) => q.id === 'g' + n)) n += 1; ng.id = 'g' + n; }
     if (type === 'monotonic') ng.order = cam.zones.map((z) => z.id).filter((id) => ids.includes(id));
+    if (type === 'kiln') {
+      // сервис отклонит такой конфиг целиком — скажем об этом сразу, пока форма открыта
+      const zs = cam.zones.filter((z) => ids.includes(z.id));
+      if (zs.some((z) => z.type !== 'motion' || z.motion === false)) { alert('Этапам печи нужны зоны с движением: в зоне должно быть включено «движение»'); return; }
+      if (!zs.some((z) => (z.fill_metric || 'off') !== 'off')) { alert('Включите хотя бы у одной зоны признак «вид окна» (лучше «яркость к металлу») — по нему виден сброс'); return; }
+      const num = (id, d) => { const v = parseFloat(mdEl(id).value); return Number.isFinite(v) ? v : d; };
+      Object.assign(ng, { drop_pct: num('geDrop', 12), load_max_s: num('geLoad', 10), rot_wait_s: num('geRot', 60),
+        // пустое поле — код по умолчанию, а не молчаливый ноль
+        codes: Object.fromEntries([...document.querySelectorAll('#mdGe input[data-kiln]')].map((x) => {
+          const v = parseInt(x.value, 10), d = MD_KILN_STAGES.find(([k]) => k === x.dataset.kiln)[2];
+          return [x.dataset.kiln, Number.isFinite(v) ? v : d];
+        })) });
+      if (!old && !mdEl('geName').value.trim()) ng.name = 'Этапы печи';
+    }
+    if (type === 'kiln_sound') {
+      const thr = parseFloat(mdEl('geSndThr').value);
+      Object.assign(ng, { threshold_db: Number.isFinite(thr) ? Math.min(60, Math.max(10, thr)) : 30,
+        codes: Object.fromEntries([...document.querySelectorAll('#mdGe input[data-snd]')].map((x) => {
+          const v = parseInt(x.value, 10), d = MD_SOUND_STAGES.find(([k]) => k === x.dataset.snd)[2];
+          return [x.dataset.snd, Number.isFinite(v) ? v : d];
+        })) });
+      if (!old && !mdEl('geName').value.trim()) ng.name = 'Этапы по звуку';
+    }
     if (type === 'worktimer') {
-      Object.assign(ng, { window_s: parseInt(mdEl('geWin').value, 10) || 60, min_active: Math.min(ids.length, parseInt(mdEl('geMin').value, 10) || 1),
+      Object.assign(ng,{ window_s: parseInt(mdEl('geWin').value, 10) || 60, min_active: Math.min(ids.length, parseInt(mdEl('geMin').value, 10) || 1),
         agg: mdEl('geAgg').value, scale: parseInt(mdEl('geScale').value, 10) || 100 });
     }
     mdEdit(() => {
@@ -1258,6 +1557,33 @@ function mdOnGroup(t) {
       MD.editGrp = null;
     }, true);
   }
+}
+
+// этапы по звуку: этап в шапке строки, счётчики, и график уровня за 3 минуты с линией порога
+function mdPaintSound(k, g) {
+  const s = mdEl('md-gs-' + k);
+  if (s) s.textContent = g.stage ? g.stage_name + ' · ' + mdKilnTime(g.since_s) : g.stage_name;
+  const info = mdEl('md-gi-' + k);
+  if (info) {
+    info.textContent = !g.stage ? (g.error || 'нет звука') : (g.level == null ? 'уровень: копится фон' : 'сейчас ' + Math.round(g.level) + ' дБ над фоном')
+      + ' · сбросов ' + g.drops + ', засыпок ' + g.loads + (g.drop_ago_s == null ? '' : ' · последний сброс ' + mdKilnTime(g.drop_ago_s) + ' назад');
+  }
+  const cv = mdEl('md-snd-' + k);
+  const w = cv ? cv.clientWidth : 0;
+  if (!w) return;
+  if (cv.width !== w) cv.width = w;
+  const h = cv.height, x = cv.getContext('2d'), hi = Math.max(60, g.threshold + 15), lo = -10;
+  const Y = (v) => h - 2 - ((Math.max(lo, Math.min(hi, v)) - lo) / (hi - lo)) * (h - 4);
+  x.clearRect(0, 0, w, h);
+  const data = g.series || [], n = 180, step = (w - 30) / (n - 1);
+  x.fillStyle = '#94a3b8'; x.font = '10px sans-serif';
+  x.fillText(Math.round(g.threshold) + ' дБ', 2, Y(g.threshold) - 3);
+  x.setLineDash([5, 4]); x.strokeStyle = '#f87171'; x.lineWidth = 1;
+  x.beginPath(); x.moveTo(30, Y(g.threshold)); x.lineTo(w, Y(g.threshold)); x.stroke();
+  x.setLineDash([]);
+  x.strokeStyle = '#6c7bff'; x.lineWidth = 1.5; x.beginPath();
+  data.forEach((v, i) => { const px = w - (data.length - 1 - i) * step; if (i) x.lineTo(px, Y(v)); else x.moveTo(px, Y(v)); });
+  x.stroke();
 }
 
 // ---------- живые значения ----------
@@ -1269,13 +1595,16 @@ function mdGauge(v, off, on, lo, hi, color) {
     `<rect x="0" y="3" width="${p(v)}" height="4" rx="2" style="fill:${color}"/><line x1="${p(a)}" x2="${p(a)}" y1="0" y2="10" class="md-g-m"/><line x1="${p(b)}" x2="${p(b)}" y1="0" y2="10" class="md-g-m"/></svg>`;
 }
 
-// строка окна: цвет и плашка состояния (красный — пусто, жёлтый — жом стоит, зелёный — жом едет) и шкалы порогов
-const MD_ZSTATE = { 0: ['e', 'пусто'], 1: ['p', 'жом стоит'], 2: ['m', 'жом едет'] };
-function mdPaintZoneRow(k, zc, zl) {
+// строка окна: цвет и плашка состояния и шкалы порогов. С движением и яркостью: красный — пусто, жёлтый — стоит, зелёный — движется;
+// только по яркости (motion=false): зелёный — есть, красный — нет, серый — нет кадров или пороги не заданы
+const MD_ZSTATE = { 0: ['e', 'пусто'], 1: ['p', 'стоит'], 2: ['m', 'движется'] };
+function mdPaintZoneRow(k, zc, zl, alive) {
   const row = mdEl('md-zr-' + k);
   if (!row) return;
+  const bright = zc.motion === false;
   let st, txt;
-  if (zl.state != null) [st, txt] = MD_ZSTATE[zl.state];
+  if (bright) [st, txt] = !alive ? ['i', 'нет данных'] : zl.state == null ? ['i', 'не настроено'] : zl.state ? ['m', 'есть'] : ['e', 'нет'];
+  else if (zl.state != null) [st, txt] = MD_ZSTATE[zl.state];
   else if (zl.bit) [st, txt] = ['m', 'движется'];
   else [st, txt] = ['i', 'стоит'];
   row.dataset.st = st;
@@ -1290,7 +1619,7 @@ function mdPaintZoneRow(k, zc, zl) {
   if (gf && zl.tex !== undefined) {
     const m = zc.fill_metric, v = Number(m === 'lum' ? zl.lum : m === 'rel' ? zl.rel : zl.tex) || 0;
     const [lo, hi] = m === 'rel' ? [0.4, 1.0] : m === 'lum' ? [0, 255] : [0, Math.max(zc.fill_on * 1.6, v * 1.2, 1)];
-    gf.innerHTML = mdGauge(v, zc.fill_off, zc.fill_on, lo, hi, zl.fill ? 'var(--warning)' : 'var(--danger)');
+    gf.innerHTML = mdGauge(v, zc.fill_off, zc.fill_on, lo, hi, zl.fill ? (bright ? 'var(--success)' : 'var(--warning)') : bright && zl.fill == null ? 'var(--muted)' : 'var(--danger)');
     const gv = mdEl('md-gfv-' + k);
     if (gv) gv.textContent = m === 'lum' ? v.toFixed(0) : v.toFixed(2);
   }
@@ -1301,6 +1630,7 @@ function paintMotionDockLive() {
   const mode = mdMode();
   if (mode === 'none') return;
   if (MD.tab === 'shafts' && typeof mdPaintShafts === 'function') mdPaintShafts();
+  if (typeof vrTick === 'function') vrTick();
   const { source, cam } = mdCamera();
   const pe = mdEl('mdPill');
   if (pe) {
@@ -1326,21 +1656,31 @@ function paintMotionDockLive() {
     const st = MV.states[c.id];
     const res = st && st.result;
     mdLearnTick(c, res);
+    mdBrightTick(c, res);
     ((res && res.zones) || []).forEach((z) => {
       const bit = mdEl('md-zb-' + c.id + '-' + z.id);
       if (bit) { bit.textContent = z.bit; bit.classList.toggle('on', z.bit === 1); }
       const val = mdEl('md-zv-' + c.id + '-' + z.id);
-      if (val) val.textContent = Number(z.value).toFixed(2);
+      if (val) val.textContent = ggIs(z) ? ggValueText(z) : Number(z.value).toFixed(2);
       const fl = mdEl('md-zf-' + c.id + '-' + z.id);
       if (fl) fl.textContent = mdFillText(z);
       const zc = c.zones.find((q) => q.id === z.id);
-      if (zc && zc.type !== 'cycle') mdPaintZoneRow(c.id + '-' + z.id, zc, z);
+      if (zc && zc.type !== 'cycle') mdPaintZoneRow(c.id + '-' + z.id, zc, z, !!res.alive);
     });
     ((res && res.groups) || []).forEach((g) => {
       const b = mdEl('md-gv-' + c.id + '-' + g.id);
       if (b) { b.textContent = g.type === 'mirror' ? g.alarm : g.value; b.classList.toggle('on', g.type === 'mirror' ? g.alarm === 0 : g.value > 0); }
       const grow = mdEl('md-gr-' + c.id + '-' + g.id);
-      if (grow) grow.dataset.st = g.type === 'mirror' ? (g.alarm ? 'e' : 'm') : g.value > 0 ? 'm' : 'i';
+      // этапы печи: подсвечиваем, пока идёт сброс / засыпка / прокрутка (коды ожидания могут быть и не нулями)
+      const busy = mdIsKilnType(g.type) && (g.bits || []).some(Boolean);
+      if (grow) grow.dataset.st = g.type === 'mirror' ? (g.alarm ? 'e' : 'm') : (mdIsKilnType(g.type) ? busy : g.value > 0) ? 'm' : 'i';
+      if (g.type === 'kiln_sound') mdPaintSound(c.id + '-' + g.id, g);
+      if (g.type === 'kiln') {
+        const s = mdEl('md-gs-' + c.id + '-' + g.id);
+        if (s) s.textContent = g.stage ? g.stage_name + ' · ' + mdKilnTime(g.since_s) : g.stage_name;
+        const info = mdEl('md-gi-' + c.id + '-' + g.id);
+        if (info) info.textContent = 'сбросов с запуска: ' + g.cycles + (g.cycles ? ' · при последнем потемнело на ' + g.dark + ' %' : '');
+      }
       if (g.type !== 'mirror') return;
       const k = c.id + '-' + g.id, ok = g.valid && g.delta != null;
       const v = mdEl('md-mxv-' + k);
@@ -1374,17 +1714,20 @@ function paintMotionDockLive() {
   });
   (MV.scen || []).forEach((s) => {
     const b = mdEl('md-sv-' + s.id);
-    if (b) b.textContent = s.value;
+    const sc = ((MV.cfg && MV.cfg.scenarios) || []).find((q) => q.id === s.id);
+    const gauge = !!sc && sc.rule === 'value', none = gauge && ggNoData(s.value);
+    // формат — из статуса, а не из конфига: число посчитано им; старый сервис поля не шлёт и пишет × 10
+    if (b) b.textContent = gauge ? (none ? '−1' : s.scale === 1 ? s.value + ' %' : ggFmt(s.value / 10)) : s.value;
     const bits = s.bits || [];
     const pulp = s.signal === 'pulp';
+    const kiln = !!sc && mdScIsKiln(sc, mdCfgCams());
     const row = mdEl('md-sr-' + s.id);
-    if (row) row.dataset.st = s.value > 0 ? (pulp ? 'p' : 'm') : 'i';
+    if (row) row.dataset.st = gauge ? (none ? 'i' : 'm') : s.value > 0 ? (pulp ? 'p' : 'm') : 'i';
     const un = mdEl('md-su-' + s.id);
-    const sc = ((MV.cfg && MV.cfg.scenarios) || []).find((q) => q.id === s.id);
-    if (un) un.textContent = sc && sc.rule === 'sum' ? 'из ' + bits.length : s.value > 0 ? 'да' : 'нет';
+    if (un) un.textContent = gauge ? (none ? 'нет данных' : 'пишем ' + s.value) : kiln ? 'этап' : sc && sc.rule === 'sum' ? 'из ' + bits.length : s.value > 0 ? 'да' : 'нет';
     const info = mdEl('md-ss-' + s.id);
     if (info) {
-      info.textContent = (pulp ? 'жом в ' : 'крутится ') + bits.filter(Boolean).length + ' из ' + bits.length + ' · пишем ' + s.value + ' · ' +
+      info.textContent = (gauge || kiln ? '' : (pulp ? 'есть в ' : 'крутится ')+ bits.filter(Boolean).length + ' из ' + bits.length + ' · ') + 'пишем ' + s.value + ' · ' +
         (!s.plc ? 'запись в ПЛК выключена' : s.ok === null ? 'ПЛК: ждёт' : s.ok ? 'ПЛК: записано' : 'ПЛК: ошибка ' + (s.error || ''));
     }
   });
@@ -1431,6 +1774,7 @@ function paintMotionDockLive() {
   if (MD.tab === 'level') mdLevelPaintLive();
   if (MD.tab === 'juice') jcPaintLive();
   if (MD.tab === 'zones') mdPaintZoneStats();
+  if (MD.tab === 'zones') { shPrevPaint(); ggPrevPaint(); }      // превью цветов уровнемеров (только в раскрытом блоке)
   if (MD.tab === 'zones' && (MV.tick % 2 === 0)) mdDrawTrends();
 }
 
@@ -1626,16 +1970,34 @@ async function mdLoadMarkFrame() {
   } catch (e) { /* ждём следующий кадр */ } finally { m.busy = false; }
 }
 
-function openMarkModal(kind) {
-  const { source, cam } = mdCamera();
+// вкладки окна разметки: одна кнопка «Разметить», внутри — что размечаем
+function mdMarkKindOf(kind) { return kind === true || kind === 'rods' ? 'rods' : kind === 'glass' || kind === 'juice' || kind === 'gauge' ? kind : 'zone'; }   // false/событие click → зона
+
+function openMarkModal(kind, opts) {                      // opts: { camera, replace } — «разметить заново» из карточки уровнемера (в том числе из общего вида)
+  const own = opts && opts.camera ? mvCam(opts.camera) : null;
+  const { source, cam } = own ? { source: state.cameras.find((q) => q.serial === own.id) || { serial: own.id, label: own.name }, cam: own } : mdCamera();
   if (!source || !cam || !cam.enabled) return;
-  const rods = kind === true, glass = kind === 'glass', juice = kind === 'juice';       // слушатель click передаёт событие, а не флаг
-  MD.mark = { cam: cam.id, pts: [], cursor: null, fw: 0, fh: 0, closed: false, busy: false, rods, glass, juice, polys: [] };
+  MD.mark = { cam: cam.id, fw: 0, fh: 0, busy: false, opts: opts || null };
   mdEl('mmCam').textContent = source.label || source.serial;
-  mdEl('mmTitle').textContent = rods ? 'Разметка валов' : glass ? 'Разметка стёкол' : juice ? 'Разметка стаканов' : 'Разметка зоны';
+  mdEl('mmImg').removeAttribute('src');
+  mdMarkSetKind(mdMarkKindOf(kind));
+  const modal = mdEl('motionMarkModal');
+  modal.classList.add('show');
+  modal.setAttribute('aria-hidden', 'false');
+  mdLoadMarkFrame();
+  MD.markTimer = setInterval(mdLoadMarkFrame, 1000);
+  mdMarkUi();
+}
+
+// переключить вид разметки (вкладка): точки и форма сбрасываются, кадр и камера остаются
+function mdMarkSetKind(kind) {
+  const rods = kind === 'rods', glass = kind === 'glass', juice = kind === 'juice', gauge = kind === 'gauge';
+  Object.assign(MD.mark, { kind, pts: [], cursor: null, closed: false, rods, glass, juice, gauge, ruler: null, polys: [] });   // тот же объект: загрузка кадра держит на него ссылку
+  if (gauge) ggMarkReset(MD.mark, MD.mark.opts);
+  document.querySelectorAll('#mmTabs [data-mm-kind]').forEach((b) => b.classList.toggle('is-active', b.dataset.mmKind === kind));
+  mdEl('mmTitle').textContent = gauge ? 'Разметка уровнемера' : rods ? 'Разметка валов' : glass ? 'Разметка стёкол' : juice ? 'Разметка стаканов' : 'Разметка зоны';
   mdEl('mmOk').textContent = rods ? 'Добавить валы' : glass ? 'Готово' : juice ? 'Добавить стаканы' : 'Добавить зону';
   mdEl('mmClose').textContent = 'Замкнуть (Enter)';
-  mdEl('mmImg').removeAttribute('src');
   mdEl('mmForm').hidden = true;
   mdEl('mmOk').hidden = true;
   mdEl('mmClose').hidden = rods || juice;
@@ -1646,17 +2008,14 @@ function openMarkModal(kind) {
     : glass
       ? 'Обведите НИЖНЕЕ (рабочее) стекло: клики по углам внутри стекла. ПКМ — убрать точку. Enter — замкнуть (минимум 3 точки). Потом обведите верхнее; если стекло одно — «Готово».'
       : 'Кликайте по углам зоны. ПКМ — убрать точку. «Замкнуть» или Enter — готово (минимум 3 точки). Кадр замирает после первой точки.';
+  if (gauge) { mdEl('mmHint').textContent = ggMarkHint(MD.mark); mdEl('mmOk').textContent = 'Готово'; }
+  ggMarkSetSub(MD.mark);
   MD.mark.hint = mdEl('mmHint').textContent;
   MD.mark.rodPct = juice ? 2 : 17;                 // стакан — маленький кружок (2 % ширины кадра: ролик 19.11, 1920 px — стакан ≈ 40 px), вал — большая окружность
   mdEl('mmRodR').min = juice ? 1 : 3;
   mdEl('mmRodR').step = juice ? 0.5 : 1;
   mdEl('mmRodR').value = MD.mark.rodPct; mdEl('mmRodRv').textContent = MD.mark.rodPct + ' %';
   mdEl('mmRodBox').hidden = !(rods || juice);
-  const modal = mdEl('motionMarkModal');
-  modal.classList.add('show');
-  modal.setAttribute('aria-hidden', 'false');
-  mdLoadMarkFrame();
-  MD.markTimer = setInterval(mdLoadMarkFrame, 1000);
   mdMarkUi();
 }
 
@@ -1673,7 +2032,9 @@ function closeMarkModal() {
 function mdMarkUi() {
   const m = MD.mark;
   if (!m) return;
-  if (m.rods) {
+  if (m.gauge) {
+    ggMarkUi(m);
+  } else if (m.rods) {
     mdEl('mmOk').hidden = m.pts.length < 2;
     mdEl('mmUndo').disabled = !m.pts.length;
   } else if (m.juice) {
@@ -1702,12 +2063,20 @@ function mdDrawMark() {
   if (cv.width !== w || cv.height !== h) { cv.width = w; cv.height = h; }
   const g = cv.getContext('2d');
   g.clearRect(0, 0, w, h);
+  mdPaintMark(g, 1);
+  mdDrawLoupe();
+}
+
+// метки разметки (зоны-ориентиры, точки, окружности) в координатах отображаемого кадра; u — толщина «единицы» (1/увеличение в лупе)
+function mdPaintMark(g, u) {
+  const m = MD.mark, img = mdEl('mmImg');
+  const w = img.clientWidth, h = img.clientHeight;
   const cam = mvCam(m.cam);
   const fw = m.fw || img.naturalWidth, fh = m.fh || img.naturalHeight;
   if (!fw || !fh) return;
   const sx = w / fw, sy = h / fh;
   const rs = (cam && cam.frame_size) || [fw, fh];
-  g.lineWidth = 2; g.font = 'bold 14px sans-serif';
+  g.lineWidth = 2 * u; g.font = 'bold ' + 14 * u + 'px sans-serif';
   ((cam && cam.zones) || []).forEach((z) => {      // уже размеченные зоны — для ориентира
     g.strokeStyle = '#9ca3af'; g.fillStyle = 'rgba(156,163,175,.14)';
     g.beginPath();
@@ -1717,15 +2086,20 @@ function mdDrawMark() {
     }
     z.points.forEach((p, i) => { const x = p[0] * (fw / rs[0]) * sx, y = p[1] * (fh / rs[1]) * sy; if (i) g.lineTo(x, y); else g.moveTo(x, y); });
     g.closePath(); g.fill(); g.stroke();
+    if (z.type === 'gate' && z.ruler) {
+      g.beginPath();
+      z.ruler.forEach((p, i) => { const x = p[0] * (fw / rs[0]) * sx, y = p[1] * (fh / rs[1]) * sy; if (i) g.lineTo(x, y); else g.moveTo(x, y); });
+      g.closePath(); g.stroke();
+    }
   });
   if (m.juice) {                                   // стаканы: номер и кружок выбранного радиуса у каждой точки
     const n0 = jcNextNumber(cam);
     g.strokeStyle = '#34d399'; g.fillStyle = '#34d399'; g.textAlign = 'center';
     m.pts.forEach((p, i) => {
       const x = p[0] * sx, y = p[1] * sy;
-      g.beginPath(); g.arc(x, y, 3, 0, 7); g.fill();
+      g.beginPath(); g.arc(x, y, 3 * u, 0, 7); g.fill();
       g.beginPath(); g.arc(x, y, mdRodRadius(rs, m.rodPct) * (fw / rs[0]) * sx, 0, 7); g.stroke();
-      g.fillText(String(n0 + i), x, y - mdRodRadius(rs, m.rodPct) * (fw / rs[0]) * sx - 5);
+      g.fillText(String(n0 + i), x, y - mdRodRadius(rs, m.rodPct) * (fw / rs[0]) * sx - 5 * u);
     });
     g.textAlign = 'left';
     return;
@@ -1733,7 +2107,7 @@ function mdDrawMark() {
   if (m.rods) {                                    // валы: точка оси и окружность поиска стандартного радиуса
     g.strokeStyle = '#38bdf8'; g.fillStyle = '#38bdf8';
     m.pts.forEach((p) => {
-      g.beginPath(); g.arc(p[0] * sx, p[1] * sy, 4, 0, 7); g.fill();
+      g.beginPath(); g.arc(p[0] * sx, p[1] * sy, 4 * u, 0, 7); g.fill();
       g.beginPath(); g.arc(p[0] * sx, p[1] * sy, mdRodRadius(rs, m.rodPct) * (fw / rs[0]) * sx, 0, 7); g.stroke();
     });
     return;
@@ -1744,13 +2118,48 @@ function mdDrawMark() {
     poly.forEach((p, i) => (i ? g.lineTo(p[0] * sx, p[1] * sy) : g.moveTo(p[0] * sx, p[1] * sy)));
     g.closePath(); g.fill(); g.stroke();
   });
+  if (m.gauge) { ggPaintMark(g, u, m, sx, sy); return; }
   g.strokeStyle = m.glass && m.polys.length ? '#fbbf24' : '#38bdf8'; g.fillStyle = g.strokeStyle;
   g.beginPath();
   m.pts.forEach((p, i) => (i ? g.lineTo(p[0] * sx, p[1] * sy) : g.moveTo(p[0] * sx, p[1] * sy)));
   if (m.closed) g.closePath();
   else if (m.cursor) g.lineTo(m.cursor[0] * sx, m.cursor[1] * sy);
   g.stroke();
-  m.pts.forEach((p) => { g.beginPath(); g.arc(p[0] * sx, p[1] * sy, 4, 0, 7); g.fill(); });
+  m.pts.forEach((p) => { g.beginPath(); g.arc(p[0] * sx, p[1] * sy, 4 * u, 0, 7); g.fill(); });
+}
+
+// лупа справа сверху: кусок кадра вокруг курсора в MD_LOUPE_K раз крупнее, с метками и прицелом — чтобы ставить точки точно
+const MD_LOUPE = 220, MD_LOUPE_K = 4;
+function mdDrawLoupe() {
+  const m = MD.mark, lp = mdEl('mmLoupe'), img = mdEl('mmImg');
+  if (!lp) return;
+  if (!m || m.closed || !m.mouse || !img.clientWidth || !img.naturalWidth) { lp.hidden = true; return; }
+  const w = img.clientWidth, h = img.clientHeight;
+  const fw = m.fw || img.naturalWidth, fh = m.fh || img.naturalHeight;
+  const sx = w / fw, sy = h / fh;
+  const cx = m.mouse[0] * sx, cy = m.mouse[1] * sy;            // центр лупы в отображаемых пикселях
+  const dpr = window.devicePixelRatio || 1, L = Math.round(MD_LOUPE * dpr);
+  if (lp.width !== L) { lp.width = L; lp.height = L; }
+  lp.hidden = false;
+  lp.classList.toggle('left', cx > w - MD_LOUPE - 40 && cy < MD_LOUPE + 40);      // курсор подошёл к лупе — она уходит влево
+  const g = lp.getContext('2d');
+  g.setTransform(1, 0, 0, 1, 0, 0);
+  g.fillStyle = '#000'; g.fillRect(0, 0, L, L);
+  const hx = MD_LOUPE / (2 * MD_LOUPE_K) / sx, hy = MD_LOUPE / (2 * MD_LOUPE_K) / sy;   // полуразмер области в пикселях кадра
+  const kx = img.naturalWidth / fw, ky = img.naturalHeight / fh;
+  g.imageSmoothingEnabled = true;
+  g.drawImage(img, (m.mouse[0] - hx) * kx, (m.mouse[1] - hy) * ky, 2 * hx * kx, 2 * hy * ky, 0, 0, L, L);
+  const k = MD_LOUPE_K * dpr;                                   // метки: из отображаемых пикселей в пиксели лупы
+  g.setTransform(k, 0, 0, k, L / 2 - cx * k, L / 2 - cy * k);
+  mdPaintMark(g, 1 / MD_LOUPE_K);
+  g.setTransform(1, 0, 0, 1, 0, 0);                             // прицел по центру: тёмная подложка + белая линия, с зазором вокруг точки
+  const c = L / 2, gap = 7 * dpr, len = 22 * dpr;
+  [['#000', 3 * dpr], ['#fff', 1.2 * dpr]].forEach(([col, lw]) => {
+    g.strokeStyle = col; g.lineWidth = lw; g.beginPath();
+    g.moveTo(c - gap - len, c); g.lineTo(c - gap, c); g.moveTo(c + gap, c); g.lineTo(c + gap + len, c);
+    g.moveTo(c, c - gap - len); g.lineTo(c, c - gap); g.moveTo(c, c + gap); g.lineTo(c, c + gap + len);
+    g.stroke();
+  });
 }
 
 function mdMarkPoint(event) {
@@ -1764,12 +2173,14 @@ function mdMarkUndo() {
   const m = MD.mark;
   if (!m || m.closed) return;
   if (m.glass && !m.pts.length && m.polys.length) m.pts = m.polys.pop();
+  else if (m.gauge) ggMarkUndo(m);
   else m.pts.pop();
   mdMarkUi();
 }
 
 function mdMarkClose() {
   const m = MD.mark;
+  if (m && m.gauge) { ggMarkNext(m); return; }
   if (m && m.glass) {                                  // стёкла: замкнули полигон — следующий; второй замкнут — сохраняем
     if (m.pts.length < 3) return;
     m.polys.push(m.pts);
@@ -1817,6 +2228,7 @@ function mdMarkSave() {
   if (!cam) return;
   const fw = m.fw || mdEl('mmImg').naturalWidth, fh = m.fh || mdEl('mmImg').naturalHeight;
   if (m.rods) { mdMarkSaveRods(m, cam, fw, fh); return; }
+  if (m.gauge) { ggMarkSave(m, cam, fw, fh); return; }
   if (m.juice) { jcMarkSave(m, cam, fw, fh); return; }
   if (m.glass) { lvMarkSave(m, cam, fw, fh); return; }
   const metric = mdEl('mmMetric').value, type = mdEl('mmType').value;
@@ -1850,10 +2262,12 @@ function initMotionDock() {
     if (source) mdSetEnabled(source.serial, e.target.checked, () => { e.target.checked = !e.target.checked; });
   });
   mdEl('mdAll')?.addEventListener('click', () => setFocus(-1));   // общий вид: фокус снимаем
-  mdEl('mdMark')?.addEventListener('click', () => openMarkModal(false));
-  mdEl('mdMarkRods')?.addEventListener('click', () => openMarkModal(true));
-  mdEl('mdMarkGlass')?.addEventListener('click', () => openMarkModal('glass'));
-  mdEl('mdMarkJuice')?.addEventListener('click', () => openMarkModal('juice'));
+  mdEl('mdMark')?.addEventListener('click', () => openMarkModal('zone'));
+  mdEl('mdLead')?.addEventListener('click', mdOnLead);
+  mdEl('mmTabs')?.addEventListener('click', (e) => {
+    const b = e.target.closest('[data-mm-kind]');
+    if (b && MD.mark && MD.mark.kind !== b.dataset.mmKind) mdMarkSetKind(b.dataset.mmKind);
+  });
   mdEl('mdRec')?.addEventListener('click', mdOnRec);
   mdEl('mdRecAll')?.addEventListener('click', mdOnRecAll);
   mdEl('mdRecZip')?.addEventListener('click', mdOnRecZip);
@@ -1887,7 +2301,7 @@ function initMotionDock() {
     else if (kind === 'cs') mdSetEnabled(t.dataset.serial, t.checked, () => { t.checked = !t.checked; });
   };
   body?.addEventListener('change', (e) => { if (e.target.tagName !== 'BUTTON') dispatch(e); });
-  body?.addEventListener('input', (e) => { if (e.target.dataset && (e.target.dataset.f === 'hsv' || e.target.dataset.f === 'hsvx') && typeof shOnSlide === 'function') shOnSlide(e.target); });
+  body?.addEventListener('input', (e) => { if (e.target.dataset && (e.target.dataset.f === 'hsv' || e.target.dataset.f === 'hsvx' || e.target.dataset.f === 'hsvn') && typeof shOnSlide === 'function') shOnSlide(e.target); else if (e.target.dataset && e.target.dataset.f === 'ggtol') ggOnSlide(e.target); });
   body?.addEventListener('click', (e) => { if (e.target.tagName === 'BUTTON' && e.target.dataset.md) dispatch(e); });
   body?.addEventListener('change', (e) => {
     if (e.target.id === 'geType') mdSyncGroupEditor();
@@ -1914,6 +2328,9 @@ function initMotionDock() {
     body.querySelectorAll('.md-zr').forEach((r) => r.classList.toggle('is-open', MD.openAll));
   });
   body?.addEventListener('wheel', mdOnWheel, { passive: false });
+  if (body) mdBindGrips(body);                 // высота графиков в карточке зоны — тянем мышью (20-zone-bright.js)
+  body?.addEventListener('mousemove', mdOnChartHover);
+  body?.addEventListener('mouseleave', () => { const [tip, line] = mdTipEls(); tip.hidden = true; line.hidden = true; });
   body?.addEventListener('change', (e) => {
     if (e.target.id !== 'mdStatWin') return;
     MD.statWin = Number(e.target.value);
@@ -1929,9 +2346,11 @@ function initMotionDock() {
     const m = MD.mark;
     if (!m || m.closed || (m.rods && m.pts.length >= 2)) return;
     m.pts.push(mdMarkPoint(e));
+    if (m.gauge) ggMarkClicked(m);
     mdMarkUi();
   });
-  cv?.addEventListener('mousemove', (e) => { if (MD.mark && !MD.mark.closed) { MD.mark.cursor = mdMarkPoint(e); mdDrawMark(); } });
+  cv?.addEventListener('mousemove', (e) => { if (MD.mark && !MD.mark.closed) { MD.mark.cursor = MD.mark.mouse = mdMarkPoint(e); mdDrawMark(); } });
+  cv?.addEventListener('mouseleave', () => { if (MD.mark) MD.mark.mouse = null; mdDrawLoupe(); });
   cv?.addEventListener('contextmenu', (e) => { e.preventDefault(); mdMarkUndo(); });
   mdEl('mmImg')?.addEventListener('load', mdDrawMark);
   mdEl('mmUndo')?.addEventListener('click', mdMarkUndo);
@@ -1941,6 +2360,14 @@ function initMotionDock() {
     mdEl('mmRodRv').textContent = MD.mark.rodPct + ' %';
     mdDrawMark();
   });
+  mdEl('mmGauge')?.addEventListener('click', (e) => {              // вид уровнемера: смена начинает разметку заново
+    const b = e.target.closest('[data-ggk]');
+    const m = MD.mark;
+    if (!b || b.disabled || !m || m.gk === b.dataset.ggk) return;
+    Object.assign(m, { gk: b.dataset.ggk, pts: [], ruler: null, cursor: null, dirTouched: false, dir: 'up' });
+    mdMarkUi();
+  });
+  mdEl('mmDir')?.addEventListener('change', (e) => { const m = MD.mark; if (!m) return; m.dir = e.target.value; m.dirTouched = true; e.target.blur(); mdMarkUi(); });
   mdEl('mmCancel')?.addEventListener('click', closeMarkModal);
   mdEl('mmX')?.addEventListener('click', closeMarkModal);
   mdEl('mmClose')?.addEventListener('click', mdMarkClose);
@@ -1950,6 +2377,7 @@ function initMotionDock() {
     if (e.key === 'Escape') closeMarkModal();
     else if (MD.mark.glass) { if (e.key === 'Enter') { if (MD.mark.pts.length >= 3) mdMarkClose(); else if (MD.mark.polys.length) mdMarkSave(); } }
     else if (MD.mark.rods) { if (e.key === 'Enter' && MD.mark.pts.length >= 2) mdMarkSave(); }
+    else if (MD.mark.gauge) { if (e.key === 'Enter') { e.preventDefault(); ggMarkEnter(MD.mark); } }
     else if (MD.mark.juice) { if (e.key === 'Enter' && MD.mark.pts.length) mdMarkSave(); }
     else if (e.key === 'Enter' && !MD.mark.closed && !/INPUT|SELECT|TEXTAREA/.test((e.target || {}).tagName || '')) mdMarkClose();
     else if (e.key === 'Enter' && MD.mark.closed) mdMarkSave();

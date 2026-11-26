@@ -254,6 +254,20 @@ class MotionStore:
                     stats.setdefault(key, {})[zn] = [n] + [_f(x) for x in (sf, mnf, mxf, sd, mnd, mxd)]
         return [(ts, longs[ts][0], longs[ts][1]) for ts in sorted(longs)], [[k, stats[k]] for k in sorted(stats)]
 
+    def activity(self, cam: str, zones: dict, t0: float, t1: float) -> list:
+        """Секундные тренды окон {id: перевёрнут ли бит} за [t0, t1]: [(время, движение хоть в одном, картинка в норме)] по порядку."""
+        with self._lock:
+            self.flush()
+            c = self._id(cam)
+            ids = [self._id(z) for z in zones]
+            flip = [self._id(z) for z, inverted in zones.items() if inverted] or [-1]
+            if not ids:
+                return []
+            rows = self._c.execute("SELECT ts, MAX(CASE WHEN zone IN (%s) THEN 1 - bit ELSE bit END), MIN(ok) FROM trend "
+                                   "WHERE cam=? AND ts>=? AND ts<=? AND zone IN (%s) GROUP BY ts ORDER BY ts"
+                                   % (",".join("?" * len(flip)), ",".join("?" * len(ids))), (*flip, c, int(t0 * 10), int(t1 * 10), *ids)).fetchall()
+        return [(ts / 10.0, bool(bit), bool(ok)) for ts, bit, ok in rows]
+
     def visibility(self, cam: str, zone_ids: set, t0: float, t1: float, step_s: int) -> dict:
         """Сколько секунд из каждого окна step_s палка была найдена: {зона: {номер окна: (секунд с данными, секунд «найдена»)}}.
         Считаем только секунды, когда камера отдавала нормальную картинку (ok=1): обрыв связи не считается «палку не видно».

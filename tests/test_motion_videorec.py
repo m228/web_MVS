@@ -80,7 +80,7 @@ def test_settings_saved_and_partial_patch(tmp_path):
     rec.set_limit(7)
     again = vr.VideoRec(tmp_path, lambda: cams, ffmpeg=lambda: None)
     again.load()
-    assert again.settings["c1"] == {"on": False, "stream": "main", "area": [0.1, 0.1, 0.5, 0.5], "fps": 3} and again.limit_gb == 7
+    assert again.settings["c1"] == {**vr.CAM_DEFAULTS, "stream": "main", "area": [0.1, 0.1, 0.5, 0.5], "fps": 3} and again.limit_gb == 7
     with pytest.raises(ValueError):
         again.set_camera("c1", {"fps": 99})
     assert again.settings["c1"]["fps"] == 3

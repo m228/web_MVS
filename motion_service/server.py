@@ -159,8 +159,15 @@ class Manager:
         self._hk: Optional[threading.Thread] = None
         self.autocal: dict[str, AutocalJob] = {}   # подгонка валов по камере (последнее задание; пересоздание воркеров при сохранении настроек его не трогает)
         self.watch = AutocalWatch(self)            # сторож видимости палок: сам запускает подгонку при просадке и откатывает, если стало хуже
-        self.video = motion_videorec.VideoRec(self.dir, lambda: self.cfg["cameras"])   # запись видео со звуком на диск (data\video_rec)
+        self.video = motion_videorec.VideoRec(self.dir, lambda: self.cfg["cameras"],   # запись видео со звуком на диск (data\video_rec)
+                                              activity=self._motion_activity)
         self.sound = motion_sound.SoundHub(lambda: self.cfg["cameras"])                # этапы печи по звуку камеры
+
+    def _motion_activity(self, cid: str, t0: float, t1: float) -> Optional[list]:
+        """Для нарезки записи: секундные строки движения камеры за [t0, t1] или None, если у неё нет окон движения."""
+        cam = next((c for c in self.cfg["cameras"] if c["id"] == cid), None)
+        zones = engine.motion_zones(cam) if cam else {}
+        return motion_store.store_for(self.dir).activity(cid, zones, t0, t1) if zones else None
 
     # --- автоподгонка валов ---
     def autocal_start(self, cid: str, zones: list, seconds: float) -> dict:

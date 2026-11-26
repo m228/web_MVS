@@ -4911,6 +4911,8 @@ body.micro-rep-doc .micro-cmp-strips { grid-template-columns: repeat(6, 1fr); ga
 .md-fields label { grid-template-columns: 150px minmax(0, 1fr); }
 .md-fields label.md-wide { grid-column: span 2; }
 .md-ge label.md-chk { display: inline-flex; flex-direction: row; align-items: center; gap: 4px; margin: 0 6px 0 0; }
+.md-ge label.md-code { display: inline-flex; flex-direction: row; align-items: center; gap: 6px; }       /* коды этапов печи — компактно в строку */
+.md-ge .md-code input[type=number] { width: 64px; }
 .md-ge label > span:first-child, .md-fields label > span:first-child, .md-ge__zones > span:first-child { color: var(--muted); font-weight: 600; }
 .md-ge input[type=text], .md-ge input[type=number], .md-ge select, .md-fields input[type=text], .md-fields select { width: 100%; }
 .md-fields input[type=checkbox] { justify-self: start; }

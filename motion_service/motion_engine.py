@@ -30,6 +30,7 @@ import cv2
 import numpy as np
 
 from perf_stats import PERF
+from motion_kiln import DEFAULT_CODES as KILN_CODES, STAGES as KILN_STAGES, KilnRT
 from motion_level import DEFAULT_URL as LEVEL_URL, GEOMETRIES as LEVEL_GEOMETRIES, LevelRT
 
 CALIB_DT = 0.33          # интервал между кадрами, при котором калибровались пороги потока (камеры ~3 fps)
@@ -86,7 +87,7 @@ CLARITY_MV_SIGMA = 2.5                  # размытие (в точках N×N
 CLARITY_MV_MIN_FRAMES = 4               # меньше стольких разных кадров в окне — движение не считаем (по два в каждой половине)
 CLARITY_MV_DUP_EPS = 0.05               # кадр, отличающийся от прежнего меньше этого (средний |Δ| серого), — дубль потока, в окно не берём
 METRICS = ("flow", "diff")
-GROUP_TYPES = ("sum", "monotonic", "worktimer", "mirror", "level")
+GROUP_TYPES = ("sum", "monotonic", "worktimer", "mirror", "level", "kiln")
 MIRROR_MODES = ("mirror", "same")
 BAN_DEG = 15.0           # полуширина запрета вокруг ложной неподвижной цели палки, градусы
 MAX_BANS = 3             # сколько ложных целей помним на палку
@@ -570,7 +571,7 @@ def _norm_cycle(z: dict, zid: str, where: str) -> dict:
     }
 
 
-def _norm_group(g: dict, cam_id: str, zone_ids: list, cycle_ids=(), level_ids=()) -> dict:
+def _norm_group(g: dict, cam_id: str, zone_ids: list, cycle_ids=(), level_ids=(), kiln_zones=None) -> dict:
     gid = str(g.get("id") or "")
     if not ID_RE.match(gid):
         raise ValueError("камера %s: id группы %r — только латиница, цифры, _ и -" % (cam_id, gid))
@@ -637,6 +638,19 @@ def _norm_group(g: dict, cam_id: str, zone_ids: list, cycle_ids=(), level_ids=()
             frames_every_s=_num(g.get("frames_every_s", 60), where + ".frames_every_s", 1, 86400),
             frames_hours=_num(g.get("frames_hours", 24), where + ".frames_hours", 0.01, 720),
             frames_keep=_num(g.get("frames_keep", 1000), where + ".frames_keep", 10, 100000, True))
+    if gtype == "kiln":
+        known = kiln_zones or {}      # id → зона: этапы печи берут у зон и движение, и вид окна
+        if any(x not in known for x in zs):
+            raise ValueError("%s: этапам печи нужны зоны с движением (тип motion, движение не выключено)" % where)
+        if not any(known[x].get("fill_metric", "off") != "off" and known[x].get("enabled", True) for x in zs):
+            raise ValueError("%s: включите у зоны признак «вид окна» (лучше «яркость к металлу») — по нему виден сброс" % where)
+        codes = g.get("codes") or {}
+        if not isinstance(codes, dict):
+            raise ValueError("%s: коды этапов — объект «этап: число»" % where)
+        out.update(drop_pct=_num(g.get("drop_pct", 12), where + ".drop_pct", 1, 60),
+                   load_max_s=_num(g.get("load_max_s", 10), where + ".load_max_s", 3, 120),
+                   rot_wait_s=_num(g.get("rot_wait_s", 60), where + ".rot_wait_s", 5, 600),
+                   codes={s: _num(codes.get(s, KILN_CODES[s]), "%s.codes.%s" % (where, s), 0, 65535, True) for s in KILN_STAGES})
     if gtype == "monotonic":
         order = [str(x) for x in (g.get("order") or zs)]
         if sorted(order) != sorted(zs):
@@ -686,9 +700,16 @@ def _norm_scenario(sc: dict, cams: list) -> dict:
         rule, srcs = "value", analog[:1]
     elif rule == "value" and srcs:
         rule = "or"                 # уровнемер из источников убрали, остались обычные окна
+    # этапы печи — тоже число: «или» превратило бы код этапа в 1. Берём такой источник один и пишем его значение как есть
+    kilns = {c["id"]: {g["id"] for g in c["groups"] if g["type"] == "kiln"} for c in cams}
+    stages = [s for s in srcs if s.get("group") in kilns.get(s["camera"], ())]
+    if stages and not analog:
+        rule, srcs = "sum", stages[:1]
     out = _out(sc.get("out"), ZONE_OUT_KINDS, where + ".out")
     if rule == "value" and out and out["kind"] != "holding":
         raise ValueError("%s: значение уровнемера пишется только в регистр" % where)
+    if stages and not analog and out and out["kind"] != "holding":
+        raise ValueError("%s: код этапа печи пишется только в регистр" % where)       # в coil любой этап стал бы единицей
     res = {"id": sid, "name": str(sc.get("name") or sid), "rule": rule, "signal": signal, "sources": srcs,
            "out": out,
            "modbus": normalize_modbus(mb, base=None) if mb else None}
@@ -762,7 +783,8 @@ def normalize_camera(c: dict) -> dict:
         raise ValueError("камера %s: id зон повторяются" % cid)
     cycle_ids = [z["id"] for z in zones if z["type"] == "cycle"]
     level_ids = [z["id"] for z in zones if z["type"] == "level"]
-    groups = [_norm_group(g, cid, ids, cycle_ids, level_ids) for g in (c.get("groups") or [])]
+    kiln_zones = {z["id"]: z for z in zones if z["type"] == "motion" and z.get("motion", True)}
+    groups = [_norm_group(g, cid, ids, cycle_ids, level_ids, kiln_zones) for g in (c.get("groups") or [])]
     gids = [g["id"] for g in groups]
     if len(set(gids)) != len(gids):
         raise ValueError("камера %s: id групп повторяются" % cid)
@@ -2281,6 +2303,8 @@ class CameraEngine:
         self.timers = {g["id"]: WorkTimer(g["window_s"], g["agg"]) for g in cam_cfg["groups"] if g["type"] == "worktimer"}
         self.mirrors = {g["id"]: Hysteresis(g["tol"], g["tol"] * 0.7, False, g["frames_to_on"], g["frames_to_off"])
                         for g in cam_cfg["groups"] if g["type"] == "mirror"}
+        self.kilns = {g["id"]: KilnRT(g["drop_pct"], g["load_max_s"], g["rot_wait_s"], g["codes"], "%s/%s" % (cam_cfg["id"], g["id"]))
+                      for g in cam_cfg["groups"] if g["type"] == "kiln"}
         self.cycles: dict = {}                  # id зоны-цикла → CycleRT (строятся вместе с зонами, на первом кадре)
         self.clarity: dict = {}                 # id зоны-прозрачности → ClarityRT (там же)
         self.gauges: dict = {}                  # id уровнемера → GateRT / TubeRT (там же)
@@ -2339,6 +2363,8 @@ class CameraEngine:
             c.reset()
         for t in self.timers.values():
             t.reset()
+        for k in self.kilns.values():
+            k.reset()
         for m in self.mirrors.values():
             m.reset()
         for lv in self.levels.values():
@@ -2467,6 +2493,9 @@ class CameraEngine:
             if g["type"] == "level":
                 groups.append(self._level_group(g, now, alive))
                 continue
+            if g["type"] == "kiln":
+                groups.append(self._kiln_group(g, gb, zs, now, alive and update_timers))
+                continue
             if g["type"] == "monotonic":
                 gb, value = monotonic_level(gb, g["order"])
             elif g["type"] == "sum":
@@ -2482,6 +2511,19 @@ class CameraEngine:
                            "bits": [int(gb[zid]) for zid in g["zones"]]})
         return {"ts": now, "alive": alive, "reason": reason, "frame_wh": list(self.frame_wh) if self.frame_wh else None,
                 "zones": zones, "groups": groups}
+
+    def _kiln_group(self, g: dict, bits: dict, zones: dict, now: float, alive: bool) -> dict:
+        """Этапы печи: «движется» — хоть одна зона группы, вид окна — у зон с этим признаком. value — код этапа для ПЛК,
+        bits — идут сейчас сброс / засыпка / прокрутка. Камеры нет — value 0 и этапа нет; место в цикле не сбрасываем
+        (короткое замирание кадра), это делают пределы этапов и переоткрытие потока."""
+        k = self.kilns[g["id"]]
+        look = {zid: getattr(zones[zid], zones[zid].fill_metric) for zid in g["zones"] if zid in zones and zones[zid].fill_metric != "off"}
+        if alive:
+            k.step(now, any(bits.values()), look)
+        s = k.snapshot(now)
+        if not alive:
+            s.update(stage=None, stage_name="нет данных", value=0, since_s=0)
+        return {"id": g["id"], "name": g["name"], "type": "kiln", "bits": [int(s["stage"] == x) for x in ("drop", "load", "rot")], **s}
 
     def _cycle_zone(self, zc: dict, alive: bool) -> dict:
         """Зона-цикл → запись состояния. angle — градусы 0..360 красного конца от вертикали по часовой; bit — палка найдена.

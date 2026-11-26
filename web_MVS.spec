@@ -57,6 +57,7 @@ for pkg in ('genicam', 'harvesters', 'asyncua'):
 import pymodbus as _pymodbus
 datas += [(os.path.dirname(_pymodbus.__file__), 'pymodbus')]
 datas += [('scripts/opcua_sim.py', 'scripts')]       # эмулятор OPC UA для SelfCheck.exe
+datas += [('scripts/migrate_to_sqlite.py', 'scripts')]   # перенос журналов в SQLite — его проверяет SelfCheck.exe
 
 a = Analysis(
     ['run.py'],

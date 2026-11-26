@@ -33,6 +33,7 @@ RAW_RE = re.compile(r"^(\d{8}_\d{6})\.mkv$")          # ещё не разобр
 SOUND_MIN_S = 0.5            # звук громче порога не меньше этого — событие (короче — щелчок)
 GAP_S = 5.0                  # данных анализа или звука нет дольше — там могло быть что угодно
 ROW_S = 1.5                  # строка тренда движения покрывает столько секунд
+SKEW_S = 5.0                 # имя куска позже его содержимого (на стенде до 4,5 с): на столько растягиваем отрезок движения «после»
 MERGE_GAP_S = 5.0            # отрезки ближе этого склеиваются
 KEEP_WHOLE = 0.9             # событиями занята такая доля куска — резать незачем
 MIN_QUIET_BLOCKS = 100       # меньше 10 с настоящего звука — фон не определить
@@ -90,7 +91,7 @@ def motion_events(rows: list, t0: float, lo: float, hi: float) -> tuple:
             continue
         a = ts - t0
         if moving:
-            events.append((a, a + ROW_S))
+            events.append((a, a + ROW_S + SKEW_S))
         if a >= hi or a + ROW_S <= lo:
             continue
         if a - seen > GAP_S:
@@ -179,7 +180,9 @@ class Media:
         if seconds is not None:
             args += ["-t", "%.3f" % seconds]
         args += ["-map", "0:a:0"] if audio_only else ["-map", "0"]
-        code, text = self.run(args + ["-c", "copy", "-avoid_negative_ts", "make_zero", "-f", "matroska", str(dst)])
+        # у одной звуковой дорожки начало не прижимаем к нулю: звук, начавшийся позже картинки, должен остаться на своём месте
+        shift = "make_non_negative" if audio_only else "make_zero"
+        code, text = self.run(args + ["-c", "copy", "-avoid_negative_ts", shift, "-f", "matroska", str(dst)])
         if code:
             raise RuntimeError("ffmpeg: " + (text.strip().splitlines() or ["код %s" % code])[-1][:200])
 

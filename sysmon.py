@@ -61,6 +61,10 @@ BEAT_EVERY_S = 30           # как часто пишем на диск «я ж
 STOP_SEND_TIMEOUT_S = 3     # сколько ждём приёмник при закрытии приложения
 UPDATE_RESTART_S = 600      # закрытие в пределах этого времени после запуска апдейтера — «для обновления»
 MOTION_CAMS_MAX = 24        # сколько камер движения кладём в пульс
+MOTION_BAD_S = 90           # камера движения неисправна, когда плохие проверки растянулись на столько: короткий обрыв и запуск камер сюда не доходят
+MOTION_RECOVER_S = 60       # в порядке столько подряд — счёт сброшен; короче нельзя: камера с застывшей картинкой после переоткрытия потока ненадолго «оживает»
+MOTION_GAP_S = 60           # о камере столько не было данных (сервис движения молчал) — считаем заново, иначе его запуск выглядел бы поломкой
+MOTION_TEXT_CAMS = 3        # сколько неисправных камер называем в тексте «как дела»
 WATCH_EVERY_S = 15          # как часто проверяем правила тревог
 TICK_S = 5                  # шаг фонового потока
 STARTUP_DELAY_S = 20        # первый пульс не раньше, чем через столько после старта (пока поднимаются плата, камера, сервисы)
@@ -568,6 +572,7 @@ class Agent:
         self._plate_up_exact = False                   # _plate_up посчитан с кругами (иначе — голый 16-битный регистр)
         self.positions: deque = deque(maxlen=POS_MEM)  # положения датчиков на отводе/подводе (с оценкой), старые — слева
         self._m1_event: Optional[dict] = None          # последнее событие «чёрного ящика» М1 (t, reason)
+        self._motion_bad: dict = {}                    # камеры движения под наблюдением: id -> {since, last_bad, seen, reason}
         self._ac_seen_ts: Optional[float] = None       # какую по счёту автокалибровку уже учли в истории дрейфа нуля
         self._ac_drift: deque = deque(maxlen=5)        # (ноль уползал больше допуска?, на сколько мкм) по последним калибровкам
         self.recent: deque = deque(maxlen=RECENT_MAX)
@@ -773,9 +778,31 @@ class Agent:
         d["guard"] = g("guard", {}) or {}
         d["services"] = g("services", {}) or {}
         d["motion"] = g("motion", None)
+        d["motion_faults"] = self._motion_faults(d["motion"], now)
         d["disk"] = g("disk", None)
         d["positions"] = list(self.positions)
         return d
+
+    def _motion_faults(self, m: Optional[dict], now: float) -> dict:
+        """Какие камеры движения неисправны: {id: причина}. Одна плохая проверка ничего не значит — плохие должны растянуться на MOTION_BAD_S
+        (между ними камера не должна быть в порядке дольше MOTION_RECOVER_S). Нет данных сервиса — прежние наблюдения не трогаем."""
+        if not isinstance(m, dict):
+            return {}
+        seen: dict = {}
+        for c in (m.get("cameras") or [])[:MOTION_CAMS_MAX]:
+            if not isinstance(c, dict) or not c.get("enabled", True):
+                continue
+            key = _motion_key(c)
+            old = self._motion_bad.get(key)
+            if old and now - old["seen"] > MOTION_GAP_S:
+                old = None
+            why = motion_problem(c)
+            if why:
+                seen[key] = {"since": old["since"] if old else now, "last_bad": now, "seen": now, "reason": why}
+            elif old and now - old["last_bad"] < MOTION_RECOVER_S:
+                seen[key] = {**old, "seen": now}
+        self._motion_bad = seen                  # целиком одним присваиванием: collect() зовут и цикл агента, и страница «Мониторинг»
+        return {k: v["reason"] for k, v in seen.items() if v["last_bad"] - v["since"] >= MOTION_BAD_S}
 
     def _black_text(self, d: dict, head: str) -> str:
         """Текст тревоги «чёрный кадр» с тем, что видно по плате (свет, 12V, статус, сбросы): по Telegram сразу ясно, куда смотреть."""
@@ -1055,7 +1082,7 @@ class Agent:
         disk = _disk_block(d.get("disk"))
         if disk:
             snap["disk"] = disk
-        motion = _motion_block(d["motion"]) if d.get("motion") else None
+        motion = _motion_block(d["motion"], d.get("motion_faults") or {}) if d.get("motion") else None
         if motion:
             snap["motion"] = motion
         snap["text"] = summary_text(snap)
@@ -1140,15 +1167,33 @@ def _camera_block(cam: dict) -> dict:
     return out
 
 
-def _motion_block(m: dict) -> Optional[dict]:
-    """Камеры движения для панели: имя, работает ли, кадров в секунду, сколько секунд назад был последний кадр, пишется ли запись."""
+def _motion_key(c: dict) -> str:
+    return str(c.get("id") or c.get("name") or "?")
+
+
+def motion_problem(c: dict) -> str:
+    """Чем камера движения плоха прямо сейчас ('' — в порядке). Судит сам сервис движения: result.alive — то, что он отдаёт в ПЛК. Открытый поток
+    (connected) ничего не гарантирует: картинка застыла, битый поток, сбой анализа. И наоборот, на коротком обрыве поток уже закрыт, а камера ещё жива."""
+    res = c.get("result")
+    if isinstance(res, dict):
+        if res.get("alive") is not False:
+            return ""
+        return str(c.get("error") or res.get("reason") or "нет данных")
+    # результата ещё нет: камера запускается — или так и не смогла
+    return str(c.get("error") or ("нет результата анализа" if c.get("connected") else "нет связи"))
+
+
+def _motion_block(m: dict, faults: dict) -> Optional[dict]:
+    """Камеры движения для панели: имя, работает ли (faults — неисправные и почему), кадров в секунду, сколько секунд назад был последний кадр,
+    пишется ли запись."""
     cams = []
     for c in (m.get("cameras") or [])[:MOTION_CAMS_MAX]:
         if not isinstance(c, dict):
             continue
-        cams.append({"name": str(c.get("name") or c.get("id") or "?")[:40], "on": bool(c.get("enabled", True)), "ok": bool(c.get("connected")),
+        on, why = bool(c.get("enabled", True)), faults.get(_motion_key(c))
+        cams.append({"name": str(c.get("name") or c.get("id") or "?")[:40], "on": on, "ok": on and not why,
                      "fps": _num(c.get("fps"), 1), "age_s": _num(c.get("age_s"), 0), "rec": bool(c.get("recording")),
-                     "error": str(c.get("error") or "")[:80] or None})
+                     "error": why[:80] if why else None})
     if not cams:
         return None
     return {"cameras": cams}
@@ -1239,7 +1284,13 @@ def summary_text(s: dict) -> str:
     mo = s.get("motion")
     if mo:
         cams = mo["cameras"]
-        lines.append("Камеры движения: %d из %d работают" % (sum(1 for c in cams if c["on"] and c["ok"]), sum(1 for c in cams if c["on"])))
+        txt = "Камеры движения: %d из %d работают" % (sum(1 for c in cams if c["on"] and c["ok"]), sum(1 for c in cams if c["on"]))
+        bad = [c for c in cams if c["on"] and not c["ok"]]
+        if bad:
+            txt += " · не работают: " + "; ".join("%s — %s" % (c["name"], c["error"]) for c in bad[:MOTION_TEXT_CAMS])
+            if len(bad) > MOTION_TEXT_CAMS:
+                txt += "; и ещё %d" % (len(bad) - MOTION_TEXT_CAMS)
+        lines.append(txt)
     dk = s.get("disk")
     if dk:
         lines.append("Диск: свободно %g ГБ из %g" % (dk["free_gb"], dk["total_gb"]))

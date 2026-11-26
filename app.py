@@ -19,6 +19,8 @@ from fastapi.staticfiles import StaticFiles
 from logger import get_events, log_event
 
 from camera_core import manager, build_rtsp_url, replace_host_in_url
+from camera_core.mjpeg import MjpegResponse
+import host_load
 import plate_config
 import camera_params
 import rtsp_store
@@ -71,6 +73,16 @@ monitor = cam_monitor.Monitor(_rtsp_workers_snapshot, lambda: _motion_url(), mot
 
 def _day_capture_cams() -> list:
     return [{**e, "serial": manager._saved_rtsp_serial(e)} for e in rtsp_store.load() if e.get("url")]
+
+
+def _motion_load_state() -> dict:
+    return motion_client.state(_motion_url(), timeout=1.5)
+
+
+# замер нагрузки ПК для панели на /multi; считает только по запросу страницы, фоновых потоков нет
+_load_meter = host_load.LoadMeter(workers_fn=_rtsp_workers_snapshot, cameras_fn=rtsp_store.load,
+                                  motion_cfg_fn=lambda: motion_client.get_config(_motion_url()),
+                                  motion_state_fn=_motion_load_state, motion_url_fn=lambda: _motion_url())
 
 
 # новая RTSP-камера: сутки кадров раз в 20 минут (data\day_shots), см. day_capture.py
@@ -539,6 +551,29 @@ def rtsp_display_stream_set(req: dict = Body(...)):
     plate_config.save({"rtsp": rcfg})
     log_event("rtsp", "Поток для показа: " + ("дополнительный (subtype=1)" if on else "основной") + " — применится при следующем подключении камер", "info")
     return {"status": "ok", "substream": on}
+
+
+@app.get("/api/rtsp/analysis_only")
+def rtsp_analysis_only():
+    return {"analysis_only": manager.analysis_only}
+
+
+@app.put("/api/rtsp/analysis_only")
+def rtsp_analysis_only_set(req: dict = Body(...)):
+    on = bool(req.get("analysis_only"))
+    rcfg = dict(plate_config.load().get("rtsp") or {})
+    rcfg["analysis_only"] = on
+    plate_config.save({"rtsp": rcfg})
+    manager.set_analysis_only(on)
+    log_event("rtsp", "Только анализ: " + ("вкл — приложение не держит камеры без зрителей и записи" if on else "выкл"), "info")
+    return {"status": "ok", "analysis_only": on}
+
+
+@app.get("/api/host/load")
+def host_load_state():
+    # сеть, процессор, видеоядро этого ПК и примерный запас (панель «Нагрузка» на /multi); заодно режим «Только анализ»,
+    # чтобы все открытые страницы переключались вместе
+    return {**_load_meter.read(), "analysis_only": manager.analysis_only}
 
 
 @app.get("/api/multi/autostart")
@@ -2372,6 +2407,27 @@ def _resolve_rtsp_url(url, ip, username, password, channel, subtype):
     return None
 
 
+@app.get("/api/rtsp/attach")
+def rtsp_attach(
+    serial_number: str,
+    url: str = None,
+    ip: str = None,
+    username: str = "admin",
+    password: str = "",
+    channel: int = 1,
+    subtype: int = 0,
+    scale: int = 100,
+    fps: float = None,
+):
+    # ячейка со скрытой картинкой: камеру регистрируем без просмотра, чтобы работали фото, видео, свет и зум.
+    # Захват поднимется только если его что-то держит (запись или автостарт вне «Только анализ»)
+    worker = manager.get_rtsp(serial_number, _resolve_rtsp_url(url, ip, username, password, channel, subtype))
+    if worker is None:
+        return {"error": "rtsp_url_required"}
+    worker.ensure_capture(scale=scale, target_fps=fps)
+    return {"status": "ok", "capture": worker.stream_state()["capture_active"]}
+
+
 @app.get("/api/rtsp/stream")
 def rtsp_stream(
     serial_number: str,
@@ -2392,10 +2448,8 @@ def rtsp_stream(
 
     api_log("api.rtsp.stream", "Запрошен RTSP-видеопоток",
             payload={"serial_number": serial_number, "rtsp_url": worker.rtsp_url, "scale": scale, "fps": fps})
-    return StreamingResponse(
-        worker.generate(scale=scale, target_fps=fps),
-        media_type="multipart/x-mixed-replace; boundary=frame",
-    )
+    # MjpegResponse закрывает генератор вместе с соединением — зритель сразу снимается со счёта и камера отпускается
+    return MjpegResponse(worker.generate(scale=scale, target_fps=fps))
 
 
 @app.get("/api/rtsp/snapshot")
@@ -2471,6 +2525,7 @@ def rtsp_on_save_photo(serial_number: str, interval: int, project: str = "", pho
     if worker is None:
         return {"error": "rtsp_not_connected"}
     data = worker.on_photo(interval, project, photo_format or None)
+    worker.ensure_capture()          # плитка скрыта или «Только анализ» — захват поднимаем ради записи
     api_log("api.rtsp.on_save_photo", "Включено автосохранение фото (RTSP)",
             payload={"interval": interval, "project": project,
                      "photo_format": photo_format, "result": data})
@@ -2493,6 +2548,7 @@ def rtsp_on_save_video(serial_number: str, duration: int, project: str = ""):
     if worker is None:
         return {"error": "rtsp_not_connected"}
     data = worker.on_video(duration, project)
+    worker.ensure_capture()
     api_log("api.rtsp.on_save_video", "Включена запись видео (RTSP)",
             payload={"duration": duration, "project": project, "result": data})
     return data

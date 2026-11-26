@@ -215,6 +215,8 @@ function applyChipParam(cam, param, value) {
     const el = getTileEl(idx);
     const frame = el?.querySelector('[data-tile-frame]');
     if (frame) frame.src = buildStreamUrl(cam);
+  } else if (idx >= 0 && state.tiles[idx].connected && cam.kind === 'rtsp') {
+    attachHiddenCamera(cam);                  // скрытая ячейка: идущая запись берёт новые параметры
   }
   if (cam.saved && c.url) {
     RtspApi.saveCam({ url: c.url, label: cam.label, ip: cam.ip, serial: cam.serial, scale: c.scale, fps: c.fps });

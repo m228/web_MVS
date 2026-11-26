@@ -75,26 +75,40 @@ function doStartStream(index) {
   if (!frame) return;
 
   tile.connected = true;
-  tile.hidden = false;
+  // «Только анализ»: сохранённую камеру не открываем. Новую (ещё не в базе) показываем — в базу она попадает по первым кадрам
+  tile.hidden = HOST_LOAD.analysisOnly && source.kind === 'rtsp' && !!source.saved;
   tile.live = true;
   tile._lastImages = undefined;
   tile._lastFrameTs = Date.now();
-  frame.src = buildStreamUrl(source);
+  frame.src = tile.hidden ? '' : buildStreamUrl(source);
+  if (tile.hidden) attachHiddenCamera(source);
 
   renderTile(index);
   updateToolbar();
   log.success('Старт потока в ячейке', { tile: index, serial: tile.serial, kind: tile.kind });
 }
 
-// «глазик»: скрыть/показать картинку RTSP-камеры. Закрывается только HTTP-поток в браузер
-// (ни трафика MJPEG, ни декодирования у зрителя); сам захват камеры не гасим — его держат
-// автосохранение фото/видео, автостарт и КЗ. Без них захват остановится сам, при показе поднимется заново.
+// камера скрытой ячейки должна быть известна серверу и без просмотра — иначе фото, видео, свет и зум отвечают «не подключена»
+function attachHiddenCamera(source) {
+  const url = buildStreamUrl(source).replace('/api/rtsp/stream?', '/api/rtsp/attach?');
+  // «авто» в карточке — это fps=0: без параметра сервер оставил бы прежний лимит идущей записи
+  fetch((source.connection || {}).fps ? url : `${url}&fps=0`).catch(() => {});
+}
+
+// «глазик»: скрыть/показать картинку RTSP-камеры. Закрывается HTTP-поток в браузер, и сервер сразу снимает зрителя.
+// Захват камеры в приложении продолжается, только пока его держит запись фото/видео или автостарт (не в «Только анализ»);
+// КЗ берёт камеру сам и от этого не зависит. При показе захват поднимается заново.
 function toggleTileHidden(index) {
   const tile = state.tiles[index];
-  const source = tile && tile.serial ? getSource(tile.serial) : null;
-  if (!tile || !source || source.kind !== 'rtsp' || !tile.connected) return;
+  if (tile) setTileHidden(index, !tile.hidden);
+}
 
-  tile.hidden = !tile.hidden;
+function setTileHidden(index, hidden) {
+  const tile = state.tiles[index];
+  const source = tile && tile.serial ? getSource(tile.serial) : null;
+  if (!tile || !source || source.kind !== 'rtsp' || !tile.connected || !!tile.hidden === !!hidden) return;
+
+  tile.hidden = !!hidden;
   tile.regionMode = false;
   const frame = getTileEl(index)?.querySelector('[data-tile-frame]');
   if (frame) frame.src = tile.hidden ? '' : buildStreamUrl(source);
@@ -144,12 +158,19 @@ function setMetric(el, name, value) {
 // секунды -> «M:SS» (или «H:MM:SS»)
 // formatDuration / showSavePath вынесены в ui.js (общие для camera/multi/rtsp)
 
+// RTSP: «показ / камера», к/с. «—» — картинка скрыта, «выкл» — приложение камеру сейчас не берёт. GigE — одна частота, как раньше
+function tileFpsText(tile, m) {
+  const cam = Number(m.fps ?? 0);
+  if (!tile || tile.kind !== 'rtsp' || m.fps_out === undefined) return cam.toFixed(2);
+  if (cam <= 0) return tile.hidden ? 'выкл' : '0';
+  const short = (v) => (v < 10 ? v.toFixed(1) : String(Math.round(v)));
+  return `${tile.hidden ? '—' : short(Number(m.fps_out))} / ${short(cam)}`;
+}
+
 function updateTileMetrics(index, m) {
   const el = getTileEl(index);
   if (!el) return;
-  setMetric(el, 'fps', Number(m.fps ?? 0).toFixed(2));
-  const fpsTip = el.querySelector('[data-metric-tip="fps"]');
-  if (fpsTip) fpsTip.title = `Кадров в секунду от камеры. В браузер и запись уходит ${Number(m.fps_out ?? 0).toFixed(1)}`;
+  setMetric(el, 'fps', tileFpsText(state.tiles[index], m));
   setMetric(el, 'images', m.image_number ?? 0);
   setMetric(el, 'bandwidth', Number(m.bandwidth_mbps ?? 0).toFixed(1));
   setMetric(el, 'resolution', `${m.width ?? 0} × ${m.height ?? 0}`);
@@ -216,6 +237,9 @@ function startMetricsPolling() {
           const live = (now - (tile._lastFrameTs || now)) < LIVENESS_MS;
           if (live !== tile.live) { tile.live = live; renderTile(i); }
           rtspStreamWatchdog(i, tile, now, null);
+        } else if (tile.kind === 'rtsp' && metrics && metrics.error) {
+          const source = getSource(tile.serial);       // сервер перезапускался и забыл камеру скрытой ячейки
+          if (source) attachHiddenCamera(source);
         }
         continue;
       }
@@ -255,10 +279,11 @@ function startMetricsPolling() {
         if (zf !== tile.zoomFactor) { tile.zoomFactor = zf; renderTile(i); }
       }
 
+      updateTileMetrics(i, metrics);
+
       // скрытая ячейка кадров в браузер не получает — «живость» по ним не считаем
       if (tile.hidden) continue;
 
-      updateTileMetrics(i, metrics);
 
       // живость определяем по росту счётчика кадров
       const images = Number(metrics.image_number ?? 0);

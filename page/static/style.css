@@ -2438,6 +2438,19 @@ body.modal-open {
   color: var(--muted);
 }
 
+/* панель «Нагрузка этого ПК» под списком камер */
+.host-load { margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--border); }
+.host-load[hidden] { display: none; }
+.host-load__row { margin-top: 10px; font-size: 12px; }
+.host-load__head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+.host-load__head span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); }
+.host-load__head strong { flex: none; font-variant-numeric: tabular-nums; color: var(--text); }
+.host-load__bar { height: 4px; margin-top: 4px; border-radius: 2px; background: var(--border); overflow: hidden; }
+.host-load__bar i { display: block; height: 100%; border-radius: 2px; background: #4ade80; }
+.host-load__bar.is-warn i { background: #fbbf24; }
+.host-load__bar.is-bad i { background: #f87171; }
+.host-load__sub { margin-top: 3px; font-size: 11px; color: var(--muted); }
+
 .camera-chip {
   display: flex;
   flex-direction: column;

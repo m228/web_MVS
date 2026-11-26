@@ -359,12 +359,22 @@ class BaseCameraWorker:
 
     def off_video(self):
         if self.save_video == 1:
-            self.save_video = 2
+            if self.video_writer is None:      # ни одного кадра ещё не записано — закрывать нечего
+                self._clear_video_state()
+            else:
+                self.save_video = 2
         log_event("camera_core.off_video", "Выкл. автосохранение видео")
         return {"status": "ok", "video_enabled": False}
 
+    def _clear_video_state(self):
+        self.save_video = 0
+        self.video_duration = None
+        self.video_start = None
+        self.video_project = None
+
     def _check_video_finished(self):
-        if self.save_video == 1 and self.video_duration is not None:
+        # длительность считаем только у начатого файла: камера могла ещё подключаться, когда запись включили
+        if self.save_video == 1 and self.video_duration is not None and self.video_writer is not None:
             if time.time() - self.video_start >= self.video_duration:
                 self.save_video = 2
 
@@ -391,6 +401,7 @@ class BaseCameraWorker:
                 return
 
             self.video_writer = writer
+            self.video_start = time.time()      # отсчёт — с первого записанного кадра
 
         try:
             self.video_writer.write(img)
@@ -469,7 +480,4 @@ class BaseCameraWorker:
         if self.video_writer is not None:
             self.video_writer.release()
             self.video_writer = None
-            self.save_video = 0
-            self.video_duration = None
-            self.video_start = None
-            self.video_project = None
+        self._clear_video_state()

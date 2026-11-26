@@ -174,7 +174,7 @@ function initRtspPage() {
   }
 
   function updateMetricsUI(data) {
-    if (metricFps) metricFps.textContent = `${Number(data.fps ?? 0).toFixed(2)} fps`;
+    if (metricFps) metricFps.textContent = `${Number(data.fps_out ?? 0).toFixed(1)} / ${Number(data.fps ?? 0).toFixed(1)} fps`;
     if (metricImageNumber) metricImageNumber.textContent = data.image_number ?? 0;
     if (metricBandwidth) metricBandwidth.textContent = `${Number(data.bandwidth_mbps ?? 0).toFixed(1)} Mbps`;
     if (metricResolution) metricResolution.textContent = `${data.width ?? 0} × ${data.height ?? 0}`;

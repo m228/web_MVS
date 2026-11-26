@@ -362,8 +362,8 @@ MODULES = [
     "camera_core.base_worker", "camera_core.gige_worker", "camera_core.rtsp_worker", "camera_core.camera_manager",
     "sdk_gige", "camera_params", "board_guard", "dahua_control", "net_tools", "rtsp_store",
     "save_settings", "plate_config", "sv_source", "opcua_client", "plc_source", "stage_map", "microscope_plc", "m1_blackbox", "microscope_fsm",
-    "microscope_service", "cv_analyzer", "cv_volume", "substages", "db", "report", "boil_compare", "cv_fracture", "cv_client", "video_client", "motion_client", "level_client", "services", "delta_update", "cv_store", "boil_archive", "fracture_lab", "approach_advice", "cv_pipeline", "model_check", "boil_anomaly", "other_plants", "cam_events", "cam_monitor", "cam_report", "sysmon", "motion_sync", "camera_core.mjpeg", "host_load",
-    "updater", "update_health", "auto_update", "autostart", "diag", "app", "mvsdk",
+    "microscope_service", "cv_analyzer", "cv_volume", "substages", "db", "report", "boil_compare", "cv_fracture", "cv_client", "video_client", "motion_client", "level_client", "services", "delta_update", "cv_store", "boil_archive", "fracture_lab", "approach_advice", "cv_pipeline", "model_check", "boil_anomaly", "other_plants", "cam_events", "cam_monitor", "cam_report", "sysmon", "motion_sync", "camera_core.mjpeg", "host_load", "perf_stats", "day_capture", "enroll_client",
+    "updater", "update_health", "auto_update", "autostart", "diag", "net_diag", "console_guard", "app", "mvsdk",
 ]
 THIRD_PARTY = ["cv2", "numpy", "fastapi", "starlette", "uvicorn", "pymodbus", "harvesters", "genicam",
                "pydantic", "multipart", "asyncua", "asyncua.sync", "cryptography"]
@@ -868,6 +868,7 @@ def _plate_out_resync():
     out_regs = range(base, base + cfg["block_len"])
     sp = base + int(cfg["out"]["m1_sp"])
     led = base + int(cfg["out"]["led_bright"])
+    led_on = base + int(cfg["out"]["led_on"])
     cmd = int(cfg["motor"]["cmd_reg"]["1"])
     # 1) живой цикл: плата перезагрузилась (регистры 0, TCP порван) — pymodbus переподключается сам,
     #    _connected не падает; цель М1 и яркость должны вернуться в плату без новых команд
@@ -876,12 +877,16 @@ def _plate_out_resync():
     try:
         assert _wait(lambda: client.status["connected"]), "нет связи: %s" % client.status.get("error")
         client.write_m1_sp(40000)
-        client.set_led(bright=37)
-        assert _wait(lambda: fake.regs[sp] == 4000 and fake.regs[led] == 37), "OUT не записан до перезагрузки"
+        # свет — как его меняет страница (MicroscopeService.led_native): в cfg клиента и в OUT. С 2.1.61 после перезапуска платы
+        # яркость и «вкл» возвращаются из cfg (PlateClient._restore_led), мимо cfg программа их не меняет
+        cfg.update({"led_bright": 37, "led_on": True})
+        client.set_led(bright=37, on=True)
+        lit = lambda: fake.regs[sp] == 4000 and fake.regs[led] == 37 and fake.regs[led_on] == 1
+        assert _wait(lit), "OUT не записан до перезагрузки"
         n = len(fake.writes)
         fake.reboot(out_regs)
-        assert _wait(lambda: fake.regs[sp] == 4000 and fake.regs[led] == 37), \
-            "после переподключения OUT не переписан: 1253=%s 1257=%s" % (fake.regs[sp], fake.regs[led])
+        assert _wait(lit), "после переподключения OUT не переписан: 1253=%s 1257=%s 1258=%s" % (
+            fake.regs[sp], fake.regs[led], fake.regs[led_on])
         owned = {base + int(i) for i in cfg["out"].values()}
         alien = [w for w in fake.writes[n:] if w[0] in out_regs and w[0] not in owned]
         assert not alien, "переписаны слова OUT вне карты out (смысл в прошивке не разобран): %s" % alien
@@ -1511,10 +1516,8 @@ def _services_supervisor():
     assert "PYTHONHOME" not in e and "_MEIPASS2" not in e and e["CV_PORT"] == "1", "окружение exe не утекает в venv сервиса"
 
 
-@check("Служебные", "сервис движения (motion_service): адрес по умолчанию; клиент без сервиса не падает; страница и маршруты на месте; "
-                    "ядро: конфиг проверяется, бегущая текстура → 1, неподвижная → 0")
+@check("Служебные", "сервис движения (motion_service): адрес по умолчанию; клиент без сервиса не падает; страница и маршруты на месте")
 def _motion_service():
-    import numpy as np
     import motion_client
     import plate_config
     assert plate_config.DEFAULTS["motion"]["service_url"] == motion_client.DEFAULT_URL == "http://127.0.0.1:8768", "адрес по умолчанию"
@@ -1543,7 +1546,17 @@ def _motion_service():
     assert "drawMiniTrend" not in (mj / "10-motion.js").read_text(encoding="utf-8") and "tile._nat" in (mj / "10-motion.js").read_text(encoding="utf-8") and "drawMotionTile(index)" in (mj / "03-layout.js").read_text(encoding="utf-8"), "мини-тренда на ячейке нет; при скрытой «глазиком» картинке зоны КЗ рисуются на чёрном экране"
     assert "initMotionVision()" in (mj / "09-init.js").read_text(encoding="utf-8") and "updateMotionButton(source)" in (mj / "04-stream.js").read_text(encoding="utf-8") and "data-tile-motion" in (mj / "03-layout.js").read_text(encoding="utf-8"), "CV вшит в init, меню и ячейки"
     assert "rtspStreamWatchdog(i, tile, now, metrics)" in (mj / "04-stream.js").read_text(encoding="utf-8"), "автовосстановление RTSP-ячейки вшито в опрос метрик"
-    ms = Path(BUNDLE_DIR) / "motion_service"
+    return "маршрутов %d" % len(need)
+
+
+@check("Служебные", "сервис движения (motion_service), ядро: конфиг проверяется, бегущая текстура → 1, неподвижная → 0")
+def _motion_core():
+    import numpy as np
+    # ядро — часть дополнения motion_service и в бандл приложения не входит (build.bat пакует его отдельным архивом).
+    # REAL_DATA_DIR: из исходников — корень репозитория, из exe — папка установки, где лежит дополнение, работающее на заводе
+    ms = REAL_DATA_DIR / "motion_service"
+    if getattr(sys, "frozen", False) and not (ms / "motion_engine.py").is_file():
+        raise Skip("дополнение motion_service рядом с программой не установлено")
     if str(ms) not in sys.path:
         sys.path.insert(0, str(ms))
     import motion_engine as me
@@ -1564,7 +1577,7 @@ def _motion_service():
         st = eng.process(f, 100.0 + i / 3) or st
     bits = {z["id"]: z["bit"] for z in st["zones"]}
     assert bits == {"m": 1, "s": 0}, "бегущая текстура → 1, неподвижная → 0: %s" % bits
-    return "маршрутов %d, зоны: %s" % (len(need), bits)
+    return "зоны: %s" % bits
     return "запусков %d (лимит %d за %d мин), остальное — пропуск/ожидание" % (len(spawned), services.RESTART_MAX, services.RESTART_WIN_S // 60)
 
 
@@ -3074,10 +3087,10 @@ def _report():
     old_path = db.DB_PATH
     db.set_path(tmp)
     try:
-        def probe(day, i, sv, sub, cook, fines):
+        def probe(day, i, sv, sub, cook, fines, stage=7):
             ts = "%s_%02d_%02d_00" % (day, 8 + i // 60, i % 60)
             t = time.mktime(time.strptime(ts, cv_store.TS_FMT))
-            r = {"ts": ts, "t": t, "stage": 7, "sv": sv, "cook_time": cook, "substage": sub, "count": 100.0, "mean": 150.0, "reject_pct": 2.0,
+            r = {"ts": ts, "t": t, "stage": stage, "sv": sv, "cook_time": cook, "substage": sub, "count": 100.0, "mean": 150.0, "reject_pct": 2.0,
                  "frac_zones": 1, "frac_pct": 0.5, "good_n": 100, "rej_n": 2, "fines_um": 226.0, "fines_from_sv": 86.0, "temp": 70.0 + i, "vac": -0.8}
             for m in ("m1", "m2", "m3"):
                 r["fines_" + m], r["vtot_" + m] = fines, 1.0
@@ -3085,11 +3098,13 @@ def _report():
                 r["sieve_%s_b2" % m] = 40.0
             return r
         rows = []
+        # порог «Мука с СВ» действует только на пробах без фазы (уваривание, стадия 8); у подкачки / стабилизации / роста (стадии 5–7)
+        # мука идёт с начала (v3.0.21). Подстадии у варки 1 — только для таблицы подстадий
         for i in range(8):                  # варка 1: СВ растёт 80 → 90,5; мука только с проб, где СВ уже ≥ 88 (порог по варке)
-            rows.append(probe("2026-10-06", i, 80.0 + 1.5 * i, 72 if i < 4 else 73, 600 + 90 * i, 5.0 + i))
+            rows.append(probe("2026-10-06", i, 80.0 + 1.5 * i, 72 if i < 4 else 73, 600 + 90 * i, 5.0 + i, stage=8))
         rows[-1].update(stage=11, temp=99.0, vac=0.0)     # ручная проба на пропарке: в среднюю температуру / разрежение варки не идёт
-        for i in range(6):                  # варка 2 — на следующий день, подкачка
-            rows.append(probe("2026-10-07", i, 81.0 + i * 1.2, 52, 600 + 90 * i, 3.0))
+        for i in range(6):                  # варка 2 — на следующий день, подкачка (СВ до порога не доходит)
+            rows.append(probe("2026-10-07", i, 81.0 + i * 1.2, 52, 600 + 90 * i, 3.0, stage=5))
         for i in range(2):                  # обрывок (2 пробы) — в отчёт не попадает
             rows.append(probe("2026-10-08", i, 80.0, 71, 100 + 90 * i, 1.0))
         db.upsert_many("REP", rows)
@@ -3099,6 +3114,8 @@ def _report():
         b1, b2 = rep["boils"]
         assert b1["probes"] == 8 and b1["sv_min"] == 80.0 and b1["sv_max"] == 90.5, b1
         assert b1["finish_probes"] == 2 and b1["fines_min"] == 11.0 and b1["fines_max"] == 12.0, "мука — только с порога СВ 88: %r" % ({k: b1[k] for k in ("finish_probes", "fines_min", "fines_max")},)
+        assert (b2["finish_probes"], b2["fines_min"], b2["fines_max"]) == (4, 3.0, 3.0), \
+            "на фазе подкачки порог СВ муку не гасит: %r" % ({k: b2[k] for k in ("finish_probes", "fines_min", "fines_max")},)
         assert b1["sieve"][2] == 40.0, "рассев: %r" % (b1["sieve"],)
         assert {s["group"] for s in rep["substages"]} >= {"подкачка", "рост 1", "рост 2"}, rep["substages"]
         assert len(rep["weeks"]) >= 1 and rep["totals"]["frac_zones"] == 14, rep["totals"]
@@ -3917,13 +3934,15 @@ def _updater():
 def _update_script():
     import shutil
     import subprocess
-    ps1 = BUNDLE_DIR / "update.ps1"
+    # update.ps1 / update.bat в сборке лежат рядом с exe, не в _internal (build.bat; оттуда же их берёт updater) —
+    # REAL_DATA_DIR: из исходников корень репозитория, из exe папка установки
+    ps1 = REAL_DATA_DIR / "update.ps1"
     text = ps1.read_text(encoding="utf-8-sig")
     for must in ("Get-InstalledVersion", "'NaN'", "Stop-App", "Start-AppAndWait", "api/debug/info", "-ZipPath", "Move-Item", "откат"):
         assert must in text, "в update.ps1 нет: %s" % must
     import codecs
     assert ps1.read_bytes()[:3] == codecs.BOM_UTF8, "update.ps1 должен быть в UTF-8 с BOM (иначе PowerShell 5.1 ломает русский текст)"
-    bat = (BUNDLE_DIR / "update.bat").read_bytes()
+    bat = (REAL_DATA_DIR / "update.bat").read_bytes()
     assert all(b < 128 for b in bat), "update.bat должен быть ASCII (кириллица в .bat рвётся под cp866)"
     assert b"%*" in bat and b"update.ps1" in bat, "update.bat должен передавать параметры в update.ps1"
     ps = shutil.which("powershell")

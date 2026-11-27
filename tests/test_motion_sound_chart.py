@@ -105,6 +105,8 @@ def test_listener_writes_one_point_per_second():
     got = []
     lis = listener(lambda *a: got.append(a))
     lis._read(pcm((40, 0.002), (3, 0.2), (4, 0.002), (3, 0.0), (3, 0.002)))
+    assert not got                                    # приём звука на диск сам не ходит
+    lis.flush()
     secs = [p[1] for p in got]
     assert secs == sorted(set(secs)) and all(p[0] == "c1" for p in got)
     assert min(secs) >= 5000 + ms.BG_MIN_S - 1                                   # пока копится фон — на графике пусто
@@ -124,8 +126,41 @@ def test_listener_survives_broken_disk(caplog):
 
     lis = listener(sink)
     lis._read(pcm((45, 0.002)))                     # не падает
+    lis.flush()
     assert len(calls) > 5 and lis.detector.bg is not None
     assert sum("история звука" in r.getMessage() for r in caplog.records) == 1    # в журнал — один раз
+
+
+@pytest.mark.parametrize("case", ["пачка после замирания", "часы назад"])
+def test_listener_time_never_jumps_back_on_a_burst(case):
+    """Звук замер и пришёл пачкой: время детектора не прыгает назад (иначе забылся бы сброс перед засыпкой).
+    Перевод часов ПК назад — другое дело: встаём по новым часам."""
+    now = [5000.0]
+    lis = ms.Listener("c1", "x", 30, "ffmpeg", clock=lambda: now[0])
+    seen = []
+    step = lis.detector.step
+    lis.detector.step = lambda t, db: (seen.append(t), step(t, db))[1]
+
+    class Pipe:
+        def __init__(self):
+            self.data, self.blocks = pcm((60, 0.002)), 0
+
+        def read(self, n):
+            self.blocks += 1
+            if self.blocks == 50:                  # замерло на 12 с, дальше всё накопленное разом (часы почти стоят)
+                now[0] += 12.0 if case.startswith("пачка") else -3600.0
+            elif self.blocks < 50:
+                now[0] += 0.1
+            else:
+                now[0] += 0.001 if case.startswith("пачка") else 0.1
+            return self.data.read(n)
+
+    lis._read(Pipe())
+    back = [b - a for a, b in zip(seen, seen[1:]) if b < a]
+    if case.startswith("пачка"):
+        assert not back and seen[-1] - seen[0] > 50
+    else:
+        assert len(back) == 1 and abs(seen[-1] - now[0]) < 3
 
 
 # ─── эндпоинт и конфиг ───

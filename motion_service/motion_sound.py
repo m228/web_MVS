@@ -39,6 +39,7 @@ LONG_S = 30.0                    # громче порога дольше — э
 PAIR_S = (8.0, 45.0)             # засыпка начинается через столько секунд после начала сброса
 HIST_S = 180                     # сколько секунд уровня отдаём панели (по точке в секунду)
 STALL_S = 20.0                   # звука нет дольше — ffmpeg перезапускается
+PENDING_MAX = 600                # столько секунд истории держим в памяти, если диск не успевает
 SILENT_DB = -100.0               # тише этого — не звук, а нули (микрофон камеры выключен): в фон не берём
 STAGE_NAMES = {"listen": "слушаю фон", "wait": "ожидание", "drop": "сброс", "load": "засыпка", "noise": "долгий шум"}
 HIST_STAGES = ("wait", "drop", "load", "noise")     # номер этапа в истории (таблица sound); при прореживании берётся больший
@@ -157,6 +158,7 @@ class Listener(threading.Thread):
         self.sink = sink                   # (камера, секунда, уровень над фоном, номер этапа) — история на диск
         self._point: Optional[list] = None # набирающаяся секунда истории [секунда, максимум уровня, этап]
         self._sink_failed = False
+        self.pending: deque = deque(maxlen=PENDING_MAX)   # готовые секунды ждут записи: диск не должен задерживать приём звука
         self.detector = SoundDetector(threshold_db)
         self.error = ""
         self._last = 0.0                   # monotonic последнего блока звука
@@ -174,7 +176,7 @@ class Listener(threading.Thread):
         self.detector.threshold = float(db)
 
     def _read(self, pipe):
-        t, buf = None, b""
+        t, was, buf = None, 0.0, b""
         need = BLOCK * 2
         while True:
             chunk = pipe.read(need - len(buf))
@@ -186,8 +188,14 @@ class Listener(threading.Thread):
             x = np.frombuffer(buf, dtype="<i2").astype(np.float32) / 32768.0
             buf = b""
             now = self.clock()
-            # время ведём по числу отсчётов: звук приходит пачками; разъехались с часами больше чем на 5 с — подравниваем
-            t = now if t is None or abs(now - t) > 5.0 else t + 0.1
+            # время ведём по числу отсчётов: звук приходит пачками. Отстали от часов больше чем на 5 с или часы перевели назад —
+            # встаём по часам. Убежали вперёд (пачка после замирания) — назад не прыгаем (детектор принял бы это за перевод часов
+            # и забыл бы сброс перед засыпкой), а идём чуть медленнее, пока не сравняемся
+            if t is None or now - t > 5.0 or now < was - 1.0:
+                t = now
+            else:
+                t += 0.09 if t - now > 2.0 else 0.1
+            was = now
             db = level_db(x)
             with self._lock:
                 self.detector.step(t, db)
@@ -209,14 +217,22 @@ class Listener(threading.Thread):
         return cur
 
     def _save(self, point: Optional[list]):
-        if point is None or self.sink is None:
-            return
-        try:
-            self.sink(self.cid, *point)
-        except Exception as e:  # noqa: BLE001 — диск не должен ронять приём звука
-            if not self._sink_failed:          # один раз: пачка уходит раз в несколько секунд, иначе журнал забьётся
-                self._sink_failed = True
-                log.warning("[%s] история звука на диск не пишется: %s", self.cid, e)
+        if point is not None and self.sink is not None:
+            self.pending.append(point)
+
+    def flush(self):
+        """Записать накопленные секунды истории. Зовёт отдельный поток: медленный диск задерживает только его."""
+        while self.pending:
+            try:
+                point = self.pending.popleft()
+            except IndexError:                 # забрал другой поток
+                return
+            try:
+                self.sink(self.cid, *point)
+            except Exception as e:  # noqa: BLE001 — диск не должен ронять приём звука
+                if not self._sink_failed:      # один раз: пачка уходит раз в несколько секунд, иначе журнал забьётся
+                    self._sink_failed = True
+                    log.warning("[%s] история звука на диск не пишется: %s", self.cid, e)
 
     def _run_once(self):
         with self._lock:
@@ -348,6 +364,7 @@ class SoundHub:
             x.stop()
         for x in gone:
             x.join(10)
+            x.flush()
             log.info("[%s] звук камеры больше не слушаю", x.cid)
 
     def states(self, cam: dict, now: Optional[float] = None) -> list:
@@ -366,10 +383,16 @@ class SoundHub:
                 log.warning("звук камер: сбой присмотра: %s", vr.mask(e))
             self._halt.wait(self.tick_s)
 
+    def _store_loop(self):
+        while not self._halt.wait(1.0):
+            for x in list(self.listeners.values()):
+                x.flush()
+
     def start(self):
         self._halt.clear()
         self._thread = threading.Thread(target=self._loop, daemon=True, name="sound-hub")
         self._thread.start()
+        threading.Thread(target=self._store_loop, daemon=True, name="sound-store").start()
 
     def shutdown(self):
         self._halt.set()

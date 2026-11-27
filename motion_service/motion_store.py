@@ -1,8 +1,9 @@
-"""store — хранилище сервиса движения в одном файле SQLite (data\\motion.db): тренды, записи метрик по кадрам, снимки.
+"""store — хранилище сервиса движения в одном файле SQLite (data\\motion.db): тренды, звук камер, записи метрик по кадрам, снимки.
 
 Таблицы (компактно: имена камер/зон/статусов — числами из names, время — целым, значения — целыми ×10000):
   trend    — точка раз в секунду на зону (cam, ts в 0,1 с, zone) → flow, diff, bit, ok          — «сырое», хранится keep_days
   tip      — видимость отражателей: секунда на вал (cam, ts в секундах, zone) → красный конец виден, синий виден — «сырое», хранится keep_days
+  sound    — звук камеры по секундам (cam, ts в секундах) → уровень над фоном, этап (0 ожидание, 1 сброс, 2 засыпка, 3 долгий шум) — «сырое»
   stat     — корзина 10 с на зону (cam, key, zone) → n, Σflow, min, max, Σdiff, min, max        — навсегда (на порядок меньше сырого)
   rec_run  — один запуск записи камеры (t0 … t1; t1 пусто — идёт); rec — строка на кадр (cam, ts в мс) → alive, status;
   rec_zone — значения зон кадра                                                                 — «сырое», хранится keep_days
@@ -111,6 +112,8 @@ class MotionStore:
                 diff INTEGER NOT NULL, bit INTEGER NOT NULL, ok INTEGER NOT NULL, PRIMARY KEY (cam, ts, zone)) WITHOUT ROWID;
             CREATE TABLE IF NOT EXISTS tip (cam INTEGER NOT NULL, ts INTEGER NOT NULL, zone INTEGER NOT NULL, tr INTEGER NOT NULL,
                 tb INTEGER NOT NULL, PRIMARY KEY (cam, ts, zone)) WITHOUT ROWID;
+            CREATE TABLE IF NOT EXISTS sound (cam INTEGER NOT NULL, ts INTEGER NOT NULL, level INTEGER NOT NULL, stage INTEGER NOT NULL,
+                PRIMARY KEY (cam, ts)) WITHOUT ROWID;
             CREATE TABLE IF NOT EXISTS stat (cam INTEGER NOT NULL, key INTEGER NOT NULL, zone INTEGER NOT NULL, n INTEGER NOT NULL,
                 sum_flow INTEGER NOT NULL, min_flow INTEGER NOT NULL, max_flow INTEGER NOT NULL,
                 sum_diff INTEGER NOT NULL, min_diff INTEGER NOT NULL, max_diff INTEGER NOT NULL, PRIMARY KEY (cam, key, zone)) WITHOUT ROWID;
@@ -129,6 +132,7 @@ class MotionStore:
         self._by_id: dict = {i: n for n, i in self._names.items()}
         self._tr: list = []
         self._tp: list = []
+        self._sd: list = []
         self._st: list = []
         self._rc: list = []
         self._rz: list = []
@@ -178,6 +182,8 @@ class MotionStore:
                     c.executemany("INSERT OR REPLACE INTO trend VALUES (?,?,?,?,?,?,?)", self._tr)
                 if self._tp:
                     c.executemany("INSERT OR REPLACE INTO tip VALUES (?,?,?,?,?)", self._tp)
+                if self._sd:
+                    c.executemany("INSERT OR REPLACE INTO sound VALUES (?,?,?,?)", self._sd)
                 if self._st:
                     c.executemany("INSERT OR REPLACE INTO stat VALUES (?,?,?,?,?,?,?,?,?,?)", self._st)
                 if self._rc:
@@ -190,13 +196,13 @@ class MotionStore:
                     c.rollback()
                 except sqlite3.Error:
                     pass
-                for name in ("_tr", "_tp", "_st", "_rc", "_rz"):    # диск не принимает — держим хвост в памяти, но не бесконечно
+                for name in ("_tr", "_tp", "_sd", "_st", "_rc", "_rz"):    # диск не принимает — держим хвост в памяти, но не бесконечно
                     buf = getattr(self, name)
                     if len(buf) > MAX_BUF:
                         log.warning("буфер %s переполнен (диск не пишется): отбрасываю старые строки", name[1:])
                         del buf[:len(buf) - MAX_BUF]
                 raise
-            self._tr, self._tp, self._st, self._rc, self._rz = [], [], [], [], []
+            self._tr, self._tp, self._sd, self._st, self._rc, self._rz = [], [], [], [], [], []
 
     def close(self) -> None:
         with self._lock:
@@ -223,6 +229,26 @@ class MotionStore:
             c = self._id(cam)
             sec = int(ts)
             self._tp += [(c, sec, self._id(z), int(bool(v[0])), int(bool(v[1]))) for z, v in zones.items()]
+
+    def add_sound(self, cam: str, ts: float, level: float, stage: int) -> None:
+        """Секунда звука камеры: уровень над фоном (дБ, максимум за секунду) и номер этапа."""
+        with self._lock:
+            self._sd.append((self._id(cam), int(ts), _q(level), int(stage)))
+
+    def sound_history(self, cam: str, t0: float, t1: float, step_s: int) -> list:
+        """Звук камеры за [t0, t1] корзинами по step_s секунд: [(время последней секунды корзины, максимум уровня, старший этап)]."""
+        step = max(1, int(step_s))
+        with self._lock:
+            try:
+                self.flush()
+            except sqlite3.Error:
+                pass                                   # диск не пишется — отдаём то, что уже лежит
+            c = self._names.get(cam)
+            if c is None:
+                return []
+            rows = self._c.execute("SELECT MAX(ts), MAX(level), MAX(stage) FROM sound WHERE cam=? AND ts>=? AND ts<=? "
+                                   "GROUP BY ts / ? ORDER BY ts / ?", (c, int(t0), int(t1), step, step)).fetchall()
+        return [(ts, _f(level), stage) for ts, level, stage in rows]
 
     def add_stat(self, cam: str, key: int, zones: dict) -> None:
         """zones = {зона: [n, Σflow, min, max, Σdiff, min, max]}"""
@@ -253,6 +279,20 @@ class MotionStore:
                 if zn in zone_ids:
                     stats.setdefault(key, {})[zn] = [n] + [_f(x) for x in (sf, mnf, mxf, sd, mnd, mxd)]
         return [(ts, longs[ts][0], longs[ts][1]) for ts in sorted(longs)], [[k, stats[k]] for k in sorted(stats)]
+
+    def activity(self, cam: str, zones: dict, t0: float, t1: float) -> list:
+        """Секундные тренды окон {id: перевёрнут ли бит} за [t0, t1]: [(время, движение хоть в одном, картинка в норме)] по порядку."""
+        with self._lock:
+            self.flush()
+            c = self._id(cam)
+            ids = [self._id(z) for z in zones]
+            flip = [self._id(z) for z, inverted in zones.items() if inverted] or [-1]
+            if not ids:
+                return []
+            rows = self._c.execute("SELECT ts, MAX(CASE WHEN zone IN (%s) THEN 1 - bit ELSE bit END), MIN(ok) FROM trend "
+                                   "WHERE cam=? AND ts>=? AND ts<=? AND zone IN (%s) GROUP BY ts ORDER BY ts"
+                                   % (",".join("?" * len(flip)), ",".join("?" * len(ids))), (*flip, c, int(t0 * 10), int(t1 * 10), *ids)).fetchall()
+        return [(ts / 10.0, bool(bit), bool(ok)) for ts, bit, ok in rows]
 
     def visibility(self, cam: str, zone_ids: set, t0: float, t1: float, step_s: int) -> dict:
         """Сколько секунд из каждого окна step_s палка была найдена: {зона: {номер окна: (секунд с данными, секунд «найдена»)}}.
@@ -454,14 +494,14 @@ class MotionStore:
 
     # ───────────── уборка ─────────────
     def purge_raw(self, edge: float, vacuum_pages: int = 5000) -> int:
-        """Удалить сырое (секундные тренды, кадры записи, закончившиеся запуски) старше edge. Корзины и снимки не трогаем.
+        """Удалить сырое (секундные тренды, звук, кадры записи, закончившиеся запуски) старше edge. Корзины и снимки не трогаем.
         Режет по часу: замок хранилища берётся на каждый кусок, между кусками камеры пишут. vacuum_pages — сколько страниц вернуть диску."""
         with self._lock:
             self.flush()
             cams = [r[0] for r in self._c.execute("SELECT id FROM names").fetchall()]
         n = 0
         for c in cams:
-            for table, unit in (("trend", 10), ("tip", 1), ("rec", 1000), ("rec_zone", 1000)):
+            for table, unit in (("trend", 10), ("tip", 1), ("sound", 1), ("rec", 1000), ("rec_zone", 1000)):
                 cut = int(edge * unit)
                 step = PURGE_CHUNK_S * unit
                 while True:

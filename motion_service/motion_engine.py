@@ -171,6 +171,13 @@ def _fill_cfg(z: dict, where: str) -> dict:
             "fill_frames": _num(z.get("fill_frames", 10), where + ".fill_frames", 1, 1000, True)}
 
 
+def motion_zones(cam: dict) -> dict:
+    """Включённые окна камеры, по которым видно движение: {id: перевёрнут ли бит}. Не уровнемеры, не палки, не «яркость без движения».
+    У окон «наличие» и с invert бит 1 значит «метрика НИЗКАЯ» (стоит), то есть движение — это бит 0."""
+    return {z["id"]: bool(z.get("invert", z.get("type") == "presence")) for z in cam.get("zones") or []
+            if z.get("enabled", True) and z.get("type", "motion") in ("motion", "presence") and z.get("motion", True)}
+
+
 def _norm_zone(z: dict, cam_id: str) -> dict:
     zid = str(z.get("id") or "")
     if not ID_RE.match(zid):
@@ -2348,7 +2355,7 @@ class CameraEngine:
         if not any(m.dirty for m in self.learners.values()):
             return
         try:
-            tables = {g["id"]: g["table"] for g in self.cfg["groups"]}
+            tables = {g["id"]: g.get("table") for g in self.cfg["groups"]}      # поле есть только у синхронности: рядом бывают другие группы
             data = {gid: {"shape": [round(v, 2) for v in m.shape], "table": tables.get(gid)} for gid, m in self.learners.items()}
             tmp = str(self.learn_path) + ".tmp"
             with open(tmp, "w", encoding="utf-8") as f:
@@ -2467,11 +2474,15 @@ class CameraEngine:
         """Камеры нет/кадр застыл: биты и уровни = 0, status = 0 (в ПЛК уходят нули и «камера не жива»)."""
         if self.zones is None:
             self.zones = []
-        self.last_state = self._state({z.id: 0 for z in self.zones}, now, alive=False, reason=reason, update_timers=False)
+        self.last_state = self.lost_state(now, reason)
         return self.last_state
 
+    def lost_state(self, now: float, reason: str = "") -> dict:
+        """То же состояние, что dead_state, но движок не запоминает: так его может спросить чужой поток, когда поток камеры молчит."""
+        return self._state({}, now, alive=False, reason=reason, update_timers=False)
+
     def _state(self, bits: dict, now: float, alive: bool, reason: str = "", update_timers: bool = True) -> dict:
-        zs = {z.id: z for z in self.zones}
+        zs = {z.id: z for z in self.zones or []}
         zones = []
         for zc in self.cfg["zones"]:
             if zc["type"] == "cycle":

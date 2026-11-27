@@ -1609,11 +1609,12 @@ def motion_video_rec():
 
 @app.post("/api/motion/video_rec")
 def motion_video_rec_set(req: dict = Body(...)):
-    """{"camera", on?, stream?, area?, fps?} — запись одной камеры; {"limit_gb"} без камеры — общий лимит места."""
+    """{"camera", on?, stream?, area?, fps?, keep?, pre_s?, post_s?, sound_db?, full_h?} — запись одной камеры;
+    {"limit_gb"} без камеры — общий лимит места."""
     cam = str(req.get("camera") or "")
     if not cam:
         return motion_client.video_rec_limit(_motion_url(), req.get("limit_gb"))
-    patch = {k: req[k] for k in ("on", "stream", "area", "fps") if k in req}
+    patch = {k: req[k] for k in ("on", "stream", "area", "fps", "keep", "pre_s", "post_s", "sound_db", "full_h") if k in req}
     r = motion_client.video_rec_camera(_motion_url(), cam, patch)
     if "error" not in r and "on" in patch:
         log_event("motion", "Запись видео %s: %s" % ("включена" if patch["on"] else "выключена", cam), "info")

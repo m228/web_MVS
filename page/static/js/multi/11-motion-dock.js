@@ -265,8 +265,8 @@ function renderMotionDock() {
   dock.querySelectorAll('[data-md-tab]').forEach((b) => { if (b.dataset.mdTab in has) b.hidden = !has[b.dataset.mdTab]; });
   if (MD.tab in has && !has[MD.tab] && MV.cfg) MD.tab = 'zones';
   const camKey = all
-    ? cams.map((c) => c.id + (c.enabled ? '1' : '0') + c.zones.length + '/' + (c.groups || []).length).join(',')
-    : (cam ? [cam.enabled ? 1 : 0, cam.zones.length, (cam.groups || []).length].join('/') : 'x');
+    ? cams.map((c) => c.id + (c.enabled ? '1' : '0') + c.zones.length + '/' + (c.groups || []).length + (mdSndGroup(c) ? 's' : '')).join(',')
+    : (cam ? [cam.enabled ? 1 : 0, cam.zones.length, (cam.groups || []).length, mdSndGroup(cam) ? 's' : ''].join('/') : 'x');
   const key = [mode, source ? source.serial : '', MD.tab, MV.online, camKey, JSON.stringify(MD.editGrp),
     ((MV.cfg && MV.cfg.scenarios) || []).length, state.cameras.length, cams.length,
     MD.tab === 'plc' ? mdPlcWritesRows().map((r) => r.name + r.to).join(',') : ''].join('|');
@@ -407,6 +407,7 @@ function mdZoneCardHtml(cam, z, i) {
   const open = MD.openAll || MD.open[k];
   const mot = z.motion !== false;                                   // движение считается (у старых зон поля нет — значит да)
   const fm = z.fill_metric && z.fill_metric !== 'off';
+  const snd = !!mdSndGroup(cam);                                    // звук — свойство камеры, колонка одна и та же во всех её окнах
   // блок «Движение» / «Яркость»: галочка в заголовке; единственный включённый снять нельзя — зоне нечем было бы решать
   const sw = (f, on, only, title, extra) => `<div class="md-zr__sw"><label class="md-lbl" title="${only ? 'Должен остаться хотя бы один блок: сначала включите другой' : title}"><input type="checkbox" ${a} data-f="${f}"${on ? ' checked' : ''}${only ? ' disabled' : ''} /> <span class="md-zr__t">${f === 'motion' ? 'Движение' : 'Яркость'}</span></label>${extra || ''}</div>`;
   const arrows = (hi, lo, extra) => `<span class="md-ar" title="включить, когда значение ${z.invert ? 'НИЖЕ off' : 'ВЫШЕ on'}">▲</span>${hi}<span class="md-ar" title="выключить, когда значение ${z.invert ? 'выше on' : 'ниже off'}">▼</span>${lo}${extra || ''}`;
@@ -432,11 +433,11 @@ function mdZoneCardHtml(cam, z, i) {
     <div class="md-zr__head" data-zt="${k}" title="Нажмите, чтобы раскрыть настройки окна">
       <span class="md-zr__bar"></span>
       <div class="md-zr__nm"><b>${escapeHtml(z.name)}</b><span class="md-zr__pill" id="md-zp-${k}">–</span></div>
-      <div class="md-zr__gz">${mot ? `<div class="md-gl"><span>движ.</span><i id="md-gm-${k}"></i><em id="md-zv-${k}">–</em></div>` : ''}${fm ? `<div class="md-gl"><span>ярк.</span><i id="md-gf-${k}"></i><em id="md-gfv-${k}">–</em></div>` : ''}</div>
+      <div class="md-zr__gz">${mot ? `<div class="md-gl"><span>движ.</span><i id="md-gm-${k}"></i><em id="md-zv-${k}">–</em></div>` : ''}${fm ? `<div class="md-gl"><span>ярк.</span><i id="md-gf-${k}"></i><em id="md-gfv-${k}">–</em></div>` : ''}${mdSndGlHtml(cam)}</div>
       <div class="md-zone__chart"><canvas id="md-ch-${k}" data-mini="1" height="40"></canvas></div>
       <span class="md-zr__chev">⌄</span>
     </div>
-    <div class="md-zr__det${mot ? '' : ' no-mot'}${fm ? '' : ' no-fill'}">
+    <div class="md-zr__det${mot ? '' : ' no-mot'}${fm ? '' : ' no-fill'}${snd ? '' : ' no-snd'}">
       <div class="md-zr__col">
         <div class="md-zone__row"><span class="md-lbl">название</span><input type="text" ${a} data-f="name" value="${escapeHtml(z.name)}" title="${escapeHtml(z.id)}" /></div>
         ${sw('motion', mot, mot && !fm, 'Смотреть, движется ли что-то в зоне. Выключено — движение не считается, зона решает только по яркости', mot ? `<label class="md-lbl" title="Считать оптический поток (flow) для этой зоны. Самое тяжёлое в анализе: если зона решает по diff и flow не нужен, выключите — процессор разгрузится, а flow этой зоны в графиках и записях будет 0"><input type="checkbox" ${a} data-f="trackflow"${z.metric === 'flow' ? ' checked disabled' : (z.track_flow === false ? '' : ' checked')} /> flow</label>` : '')}${motBody}
@@ -446,7 +447,8 @@ function mdZoneCardHtml(cam, z, i) {
       (z.out ? `<div class="md-zone__row"><span class="md-lbl" title="Прямой вывод из карточки зоны больше не настраивается: пишите в ПЛК через сценарий. Старый вывод продолжает работать, пока его не убрать.">ПЛК (старый вывод): ${z.out.kind === 'coil' ? 'coil' : 'рег.'} ${z.out.address}</span><button type="button" class="btn-secondary md-x" ${a} data-f="oclear" title="Убрать старый вывод из зоны">убрать</button></div>` : '') + `
         <div class="md-zr__del"><button type="button" class="btn-secondary md-x" ${a} data-f="del" title="Удалить зону">удалить окно</button></div>
       </div>
-      <div class="md-zr__charts">${mot ? mdBigChartHtml('motion', 'md-mch-' + k, 'движение') : ''}${fm ? mdBigChartHtml('fill', 'md-fch-' + k, 'яркость') : ''}</div>
+      ${mdSndColHtml(cam)}
+      <div class="md-zr__charts">${mot ? mdBigChartHtml('motion', 'md-mch-' + k, 'движение') : ''}${fm ? mdBigChartHtml('fill', 'md-fch-' + k, 'яркость') : ''}${snd ? mdSndChartHtml(cam, 'md-sch-' + k) : ''}</div>
     </div>
   </div>`;
 }
@@ -680,15 +682,19 @@ function mdZonesTabHtml(mode, cam) {
   let html = '';
   if (!shown.length) {
     html += '<p class="net-hint">КЗ ещё ни у одной камеры не включено. Включите его ниже или выберите ячейку с RTSP-камерой и нажмите тумблер справа сверху.</p>';
-  } else if (shown.every((c) => !mdHasZoneCards(c))) {
-    html += '<p class="net-hint">Зон нет. Нажмите «Разметить зону» и обведите на кадре то, что должно двигаться (лента, шнек).</p>';
   } else {
-    html += `<div class="md-trendbar"><label class="md-lbl md-openall" title="Раскрыть настройки всех окон"><input type="checkbox" id="mdOpenAll"${MD.openAll ? ' checked' : ''} /> подробно</label><span>Тренды за последние <b id="mdWinLbl">${mdFmtWin(MD.win)}</b> ${mdHelp(MD_TREND_HELP)}</span>` +
-      `<span class="md-statwin">Среднее / мин / макс за <select id="mdStatWin">${mdSel(MD_STAT_WINS, MD.statWin)}</select> ${mdHelp('Среднее, минимум и максимум diff и flow каждой зоны за выбранный период, только по кадрам в норме. Копятся в сервисе движения и лежат на диске (data\\trends): после обновления или перезапуска сервиса не обнуляются; хранятся 10 суток. Подробно — CSV-запись и архив. Значения сглажены, как на графиках.')}</span></div><div class="md-zones">`;
-    shown.forEach((c) => {
-      if (!mdHasZoneCards(c)) return;
+    if (shown.every((c) => !mdHasZoneCards(c) && !mdSndGroup(c))) {
+      html += '<p class="net-hint">Зон нет. Нажмите «Разметить зону» и обведите на кадре то, что должно двигаться (лента, шнек).</p>';
+    }
+    const cards = shown.filter((c) => mdHasZoneCards(c) || mdSndOwnCard(c, all));
+    // графиков нет (только строка «включить звук») — шапка трендов не нужна
+    if (cards.some((c) => mdHasZoneCards(c) || mdSndGroup(c))) html += `<div class="md-trendbar"><label class="md-lbl md-openall" title="Раскрыть настройки всех окон"><input type="checkbox" id="mdOpenAll"${MD.openAll ? ' checked' : ''} /> подробно</label><span>Тренды за последние <b id="mdWinLbl">${mdFmtWin(MD.win)}</b> ${mdHelp(MD_TREND_HELP)}</span>` +
+      `<span class="md-statwin">Среднее / мин / макс за <select id="mdStatWin">${mdSel(MD_STAT_WINS, MD.statWin)}</select> ${mdHelp('Среднее, минимум и максимум diff и flow каждой зоны за выбранный период, только по кадрам в норме. Копятся в сервисе движения и лежат на диске (data\\trends): после обновления или перезапуска сервиса не обнуляются; хранятся 10 суток. Подробно — CSV-запись и архив. Значения сглажены, как на графиках.')}</span></div>`;
+    html += '<div class="md-zones">';
+    cards.forEach((c) => {
       if (all) html += `<div class="md-camhead"><b>${escapeHtml(c.name)}${mdIpTag(c.url)}</b><span class="motion-dock__pill" id="md-cp-${escapeHtml(c.id)}"></span></div>`;
       html += c.zones.map((z, i) => (z.type === 'level' || z.type === 'clarity' ? '' : mdZoneCardHtml(c, z, i))).join('');      // стёкла уровня — на вкладке «Уровень»
+      if (mdSndOwnCard(c, all)) html += mdSndCardHtml(c);
       html += mdVisHtml(c);
       html += mdLevelCardHtml(c);
       html += (c.groups || []).filter((g) => g.type === 'mirror').map((g) => mdMirrorCardHtml(c, g)).join('');
@@ -862,7 +868,7 @@ function mdOnCamera(t, cam) {
 async function mdDrawTrends() {
   if (MD.tab !== 'zones' || !MV.dockOpen) return;
   if (MD.trendBusy) { MD.trendDirty = true; return; }
-  const cams = mdShownCams().filter((c) => c.zones.length);
+  const cams = mdShownCams().filter((c) => c.zones.length || mdSndGroup(c));
   if (!cams.length) return;
   // точек — по самому широкому графику (первый на странице может быть свёрнутым)
   const wide = Math.max(0, ...Array.from(document.querySelectorAll('.md-zone__chart canvas'), (c) => c.clientWidth));
@@ -872,7 +878,10 @@ async function mdDrawTrends() {
   MD.trendBusy = false;
   res.forEach((h, k) => {
     if (!h || h.error || !h.zones) return;
-    cams[k].zones.forEach((z) => { mdDrawChart(cams[k], z, h.zones[z.id], h.t || [], h.ok || []); mdDrawFillChart(cams[k], z, h.fill); });
+    // со звуком правый край общий — часы сервиса: без кадров движение и яркость не «прилипают» к правому краю рядом с живым звуком
+    const end = h.sound ? Math.max(h.sound.now || 0, (h.t || [])[(h.t || []).length - 1] || 0) : 0;
+    cams[k].zones.forEach((z) => { mdDrawChart(cams[k], z, h.zones[z.id], h.t || [], h.ok || [], end); mdDrawFillChart(cams[k], z, h.fill, end); });
+    mdDrawSound(cams[k], h, end);
     mdDrawMirrorCharts(cams[k], h);
     mdDrawLevelChart(cams[k], h);
   });
@@ -996,7 +1005,7 @@ function mdDrawSeries(cv, t, vals, ok, lo, hi, opts) {
   }
   cv._hv = null;
   if (n < 2) return;
-  const tEnd = t[n - 1];
+  const tEnd = (opts && opts.end) || t[n - 1];
   const X = (i) => w - 1 - ((tEnd - t[i]) / win) * (w - 2);
   const dt = (t[n - 1] - t[0]) / (n - 1);
   const bw = Math.max(1.5, (dt / win) * w + 1);
@@ -1021,7 +1030,7 @@ function mdDrawSeries(cv, t, vals, ok, lo, hi, opts) {
 
 // график яркости (яркость к металлу / яркость / зернистость): линия, пороги, полоска «есть / нет»; fh — h.fill из /api/motion/history.
 // У зоны без движения тот же график стоит и в шапке карточки
-function mdDrawFillChart(cam, z, fh) {
+function mdDrawFillChart(cam, z, fh, end) {
   const k = cam.id + '-' + z.id;
   const m = z.fill_metric;
   if (!m || m === 'off') return;
@@ -1043,7 +1052,7 @@ function mdDrawFillChart(cam, z, fh) {
     return MD_FILL_NAME[m] + ' <b>' + mdFillFmt(m, vals[i]) + '</b>' + (decide && f != null ? ' · ' + words[f] : '');
   };
   cvs.forEach((cv) => mdDrawSeries(cv, fh ? fh.t || [] : [], vals, fh ? fh.ok || [] : [], lo, hi,
-    { h: cv.height || 72, mini: !!cv.dataset.mini, lines, tip, strip: decide ? fill.map((f) => (f == null ? null : f ? '#4ade80' : '#f87171')) : null }));
+    { h: cv.height || 72, mini: !!cv.dataset.mini, end, lines, tip, strip: decide ? fill.map((f) => (f == null ? null : f ? '#4ade80' : '#f87171')) : null }));
 }
 
 // подсказка при наведении на график с _hv: ближайшая точка по времени — значение и время (подсказка и вертикальная линия — два плавающих элемента)
@@ -1110,19 +1119,19 @@ function mdDrawMirrorCharts(cam, h) {
   });
 }
 
-function mdDrawChart(cam, z, d, t, ok) {
+function mdDrawChart(cam, z, d, t, ok, end) {
   const cv = mdEl('md-ch-' + cam.id + '-' + z.id);
   if (!cv || !d) return;
   if (ggIs(z)) { ggDrawChart(cv, d, t, ok); return; }
   if (z.type === 'cycle') { mdDrawSeries(cv, t, d.flow.map((v, i) => (d.bit[i] ? v : null)), ok, 0, 360, { wrap: true, lines: [{ v: 180, color: '#64748b' }] }); return; }
   if (z.motion === false) return;           // без движения: в шапке и справа — график яркости (mdDrawFillChart)
-  mdDrawMotionChart(cv, z, d, t, ok);
+  mdDrawMotionChart(cv, z, d, t, ok, end);
   const big = mdEl('md-mch-' + cam.id + '-' + z.id);
-  if (big) mdDrawMotionChart(big, z, d, t, ok);
+  if (big) mdDrawMotionChart(big, z, d, t, ok, end);
 }
 
 // график движения: метрика зоны, пороги, полоска «крутится / стоит»; в шапке карточки (data-mini) — без подписей
-function mdDrawMotionChart(cv, z, d, t, ok) {
+function mdDrawMotionChart(cv, z, d, t, ok, end) {
   const w = cv.clientWidth, hh = cv.height || 84, strip = 7, mini = !!cv.dataset.mini;
   if (!w) return;
   if (cv.width !== w) cv.width = w;
@@ -1141,7 +1150,7 @@ function mdDrawMotionChart(cv, z, d, t, ok) {
     g.textAlign = 'right'; g.fillText('сейчас', w - 3, hh - 1); g.textAlign = 'left';
   }
   if (n < 2) return;
-  const tEnd = t[n - 1];
+  const tEnd = end || t[n - 1];
   const X = (i) => w - 1 - ((tEnd - t[i]) / win) * (w - 2);
   const dt = (t[n - 1] - t[0]) / (n - 1);
   const bw = Math.max(1.5, (dt / win) * w + 1);
@@ -1213,6 +1222,9 @@ function mdPlcWritesHtml(m) {
   return `<h3 class="md-h md-h--row md-h--sec">Что пишем в ПЛК <span class="md-dim">${to}</span></h3>${list}`;
 }
 
+// заголовок блока «Подключение»: адрес и порт из полей ниже
+const mdPlcTitle = (m) => 'ПЛК ' + escapeHtml(m.host || '—') + ' : ' + escapeHtml(m.port);
+
 function mdPlcHtml() {
   const m = (MV.cfg && MV.cfg.modbus) || { enable: false, host: '', port: 502, device_id: 1, write_period_s: 1 };
   const a = 'data-md="p"';
@@ -1222,7 +1234,7 @@ function mdPlcHtml() {
     <div class="md-sbox md-plcbox ${m.enable ? 'is-on' : 'is-off'}" id="mdPlcBlock"><div class="md-sr${MD.open['plc'] ? ' is-open' : ''}">
       <div class="md-sr__head md-plcbox__head" data-zt="plc" title="Нажмите, чтобы раскрыть настройки подключения">
         <span class="md-zr__bar"></span>
-        <div class="md-sr__nm"><b>ПЛК ${escapeHtml(m.host || '—')} : ${escapeHtml(m.port)}</b><div class="md-sr__sum"><span id="mdPlcState">${m.enable ? 'включено' : 'выключено — в ПЛК ничего не пишется'}</span><span id="md-plcsum"></span></div></div>
+        <div class="md-sr__nm"><b id="mdPlcTitle">${mdPlcTitle(m)}</b><div class="md-sr__sum"><span id="mdPlcState">${m.enable ? 'включено' : 'выключено — в ПЛК ничего не пишется'}</span><span id="md-plcsum"></span></div></div>
         <label class="switch-toggle md-sw" title="Включить связь с ПЛК: сценарии начнут записывать значения в контроллер"><span class="switch"><input type="checkbox" ${a} data-f="enable"${m.enable ? ' checked' : ''} /><span class="switch-track"></span></span></label>
         <span class="md-zr__chev">⌄</span>
       </div>
@@ -1307,6 +1319,9 @@ function mdOnPlc(t) {
     else if (f === 'host') m.host = t.value.trim();
     else if (f === 'write_period_s') m.write_period_s = parseFloat(t.value) || 1;
     else m[f] = parseInt(t.value, 10) || (f === 'port' ? 502 : 0);
+    // заголовок следует за полями IP/порт сразу, без перерисовки вкладки
+    const ttl = mdEl('mdPlcTitle');
+    if (ttl) ttl.innerHTML = mdPlcTitle(m);
   });
 }
 
@@ -1657,6 +1672,7 @@ function paintMotionDockLive() {
     const res = st && st.result;
     mdLearnTick(c, res);
     mdBrightTick(c, res);
+    if (MD.tab === 'zones') mdSndPaint(c);
     ((res && res.zones) || []).forEach((z) => {
       const bit = mdEl('md-zb-' + c.id + '-' + z.id);
       if (bit) { bit.textContent = z.bit; bit.classList.toggle('on', z.bit === 1); }
@@ -2286,6 +2302,7 @@ function initMotionDock() {
     if (!kind) return;
     if (kind === 'z') { const cam = mvCam(t.dataset.cam); if (cam) mdOnZone(t, cam); }
     else if (kind === 'g') mdOnGroup(t);
+    else if (kind === 'snd') { const cam = mvCam(t.dataset.cam); if (cam) mdOnSound(t, cam); }
     else if (kind === 'vis') mdOnVis(t);
     else if (kind === 'mg') { const cam = mvCam(t.dataset.cam); if (cam) mdOnMirror(t, cam); }
     else if (kind === 'c') { const cam = mvCam(t.dataset.cam); if (cam) mdOnCamera(t, cam); }
@@ -2326,6 +2343,7 @@ function initMotionDock() {
     try { localStorage.setItem(MD_OPEN_KEY, MD.openAll ? '1' : '0'); } catch (err) { /* не критично */ }
     MD.open = {};
     body.querySelectorAll('.md-zr').forEach((r) => r.classList.toggle('is-open', MD.openAll));
+    if (MD.openAll) mdDrawTrends();
   });
   body?.addEventListener('wheel', mdOnWheel, { passive: false });
   if (body) mdBindGrips(body);                 // высота графиков в карточке зоны — тянем мышью (20-zone-bright.js)
